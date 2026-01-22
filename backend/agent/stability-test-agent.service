@@ -1,0 +1,47 @@
+[Unit]
+Description=Stability Test Platform Agent
+Documentation=https://github.com/yourusername/stability-test-platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=stability-test
+Group=stability-test
+WorkingDirectory=/opt/stability-test-agent
+
+# 环境变量配置
+EnvironmentFile=-/opt/stability-test-agent/.env
+
+# 使用虚拟环境
+ExecStart=/opt/stability-test-agent/venv/bin/python -m agent.main
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 自动重启配置
+Restart=always
+RestartSec=10
+StartLimitInterval=300
+StartLimitBurst=5
+
+# 安全配置
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/stability-test-agent/logs
+ReadWritePaths=/opt/stability-test-agent/tmp
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# 日志配置
+StandardOutput=append:/opt/stability-test-agent/logs/agent.log
+StandardError=append:/opt/stability-test-agent/logs/agent_error.log
+SyslogIdentifier=stability-test-agent
+
+[Install]
+WantedBy=multi-user.target
