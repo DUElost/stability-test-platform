@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import heartbeat_router, hosts_router, tasks_router
 from .api.routes.devices import router as devices_router
+from .api.routes.websocket import router as websocket_router
 from .core.database import Base, engine
 from .scheduler.recycler import start_recycler
 
@@ -21,6 +22,7 @@ app.include_router(heartbeat_router)
 app.include_router(hosts_router)
 app.include_router(tasks_router)
 app.include_router(devices_router)
+app.include_router(websocket_router)
 
 
 @app.on_event("startup")
