@@ -96,7 +96,7 @@ def send_heartbeat(api_url, host_id, devices):
 
 
 def main():
-    API_URL = os.getenv("API_URL", "http://172.21.10.21:8000")
+    API_URL = os.getenv("API_URL", "http://172.21.10.5:8000")
     HOST_ID = int(os.getenv("HOST_ID", "1"))
     ADB_PATH = os.getenv("ADB_PATH", "adb")
 

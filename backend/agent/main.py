@@ -81,13 +81,15 @@ def main() -> None:
                     "serial": dev["serial"],
                     "model": dev.get("model"),
                     "state": dev["adb_state"],  # device, offline, unauthorized
+                    "adb_state": info.get("adb_state", dev.get("adb_state", "unknown")),
+                    "adb_connected": info.get("adb_connected", False),
                     "battery_level": info.get("battery_level"),
                     "temperature": info.get("temperature"),
                     "network_latency": info.get("network_latency"),
                 }
                 devices_list.append(device_data)
                 # 记录设备数据用于调试
-                logger.info(f"device_collected: {dev['serial']}, network_latency={info.get('network_latency')}, battery={info.get('battery_level')}, temp={info.get('temperature')}")
+                logger.info(f"device_collected: {dev['serial']}, adb_connected={info.get('adb_connected')}, network_latency={info.get('network_latency')}, battery={info.get('battery_level')}, temp={info.get('temperature')}")
             logger.debug(f"discovered_{len(devices_list)}_devices")
         except Exception as e:
             logger.warning(f"device_discovery_failed: {e}")

@@ -87,12 +87,14 @@ def collect_device_info(adb_path: str, serial: str) -> Dict[str, Any]:
         if result.returncode == 0:
             info["adb_state"] = "device"
             info["adb_connected"] = True
+            logger.info(f"adb_check_success: {serial}, adb_connected=True")
         else:
             info["adb_state"] = "offline"
             info["adb_connected"] = False
+            logger.warning(f"adb_check_failed: {serial}, returncode={result.returncode}, adb_connected=False")
             return info
     except Exception as e:
-        logger.warning(f"adb_check_failed: {serial}, error={e}")
+        logger.warning(f"adb_check_exception: {serial}, error={e}, adb_connected=False")
         info["adb_state"] = "offline"
         info["adb_connected"] = False
         return info

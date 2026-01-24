@@ -82,7 +82,7 @@ def send_heartbeat_with_devices(
 def main():
     """主测试流程"""
     # 配置
-    API_URL = os.getenv("API_URL", "http://172.21.10.21:8000")
+    API_URL = os.getenv("API_URL", "http://172.21.10.5:8000")
     HOST_ID = int(os.getenv("HOST_ID", "1"))
     ADB_PATH = os.getenv("ADB_PATH", "adb")
     HOSTNAME = os.getenv("HOSTNAME", None)
