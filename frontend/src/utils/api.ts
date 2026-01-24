@@ -53,7 +53,23 @@ export interface Device {
   status: 'ONLINE' | 'OFFLINE' | 'BUSY';
   last_seen: string | null;
   tags: string[];
-  extra?: Record<string, any>; // 设备扩展数据：battery_level, temperature, network_latency
+  extra?: Record<string, any>;
+  // ADB 连接状态
+  adb_state?: string | null;
+  adb_connected?: boolean | null;
+  // 硬件信息
+  battery_level?: number | null;
+  battery_temp?: number | null;
+  temperature?: number | null;
+  wifi_rssi?: number | null;
+  wifi_ssid?: string | null;
+  network_latency?: number | null;  // 网络延迟 (ms)
+  // 系统资源
+  cpu_usage?: number | null;
+  mem_total?: number | null;
+  mem_used?: number | null;
+  disk_total?: number | null;
+  disk_used?: number | null;
 }
 
 export interface Task {

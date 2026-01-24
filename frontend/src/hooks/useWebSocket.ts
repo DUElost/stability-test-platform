@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+type TimeoutType = ReturnType<typeof setTimeout>;
+
 interface WebSocketMessage<T = unknown> {
   type: string;
   payload: T;
@@ -15,10 +17,20 @@ export const useWebSocket = <T = unknown>(url: string): UseWebSocketReturn<T> =>
   const [isConnected, setIsConnected] = useState(false);
   const [lastMessage, setLastMessage] = useState<WebSocketMessage<T> | null>(null);
   const ws = useRef<WebSocket | null>(null);
-  const reconnectTimeout = useRef<NodeJS.Timeout>();
+  const reconnectTimeout = useRef<TimeoutType | undefined>();
+  const urlRef = useRef(url);
+
+  // 更新 URL ref（避免依赖 url）
+  useEffect(() => {
+    urlRef.current = url;
+  }, [url]);
 
   const connect = useCallback(() => {
-    ws.current = new WebSocket(url);
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      return; // 已经连接，不重复连接
+    }
+
+    ws.current = new WebSocket(urlRef.current);
 
     ws.current.onopen = () => {
       setIsConnected(true);
@@ -33,21 +45,29 @@ export const useWebSocket = <T = unknown>(url: string): UseWebSocketReturn<T> =>
 
     ws.current.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data) as WebSocketMessage;
+        const data = JSON.parse(event.data) as WebSocketMessage<T>;
         setLastMessage(data);
       } catch (e) {
         console.error('Failed to parse WS message', e);
       }
     };
-  }, [url]);
+
+    ws.current.onerror = (error) => {
+      console.error('WS Error:', error);
+    };
+  }, []); // 空依赖数组，只创建一次
 
   useEffect(() => {
     connect();
     return () => {
-      ws.current?.close();
-      clearTimeout(reconnectTimeout.current);
+      if (ws.current) {
+        ws.current.close();
+      }
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+      }
     };
-  }, [connect]);
+  }, [connect]); // 依赖 connect
 
   const sendMessage = useCallback((msg: object) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
