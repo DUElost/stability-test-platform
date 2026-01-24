@@ -1,1 +1,6 @@
 .ace-tool/
+
+# 环境变量
+.env
+.env.local
+.env.production
