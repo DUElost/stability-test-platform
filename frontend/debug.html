@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Page</title>
+</head>
+<body>
+    <h1>Debug Page</h1>
+    <div id="output">Loading...</div>
+
+    <script>
+        fetch('/api/v1/devices')
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('output').innerHTML = `
+                    <h2>API Test Passed!</h2>
+                    <p>Found ${data.length} devices</p>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+            })
+            .catch(err => {
+                document.getElementById('output').innerHTML = `
+                    <h2>API Test Failed!</h2>
+                    <p>${err.message}</p>
+                `;
+            });
+    </script>
+</body>
+</html>
