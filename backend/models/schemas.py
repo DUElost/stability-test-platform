@@ -7,6 +7,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
+    Float,
     ForeignKey,
     Integer,
     JSON,
@@ -81,7 +82,29 @@ class Device(Base):
     lock_expires_at = Column(DateTime)
     last_seen = Column(DateTime)
     tags = Column(JSON, default=list)
-    extra = Column(JSON, default=dict)  # 设备监控数据：battery_level, temperature, wifi_signal_level, wifi_link_speed
+    extra = Column(JSON, default=dict)
+
+    # ADB 连接状态
+    adb_state = Column(String(32))
+    adb_connected = Column(Boolean, default=False)
+
+    # 硬件信息
+    battery_level = Column(Integer)
+    battery_temp = Column(Integer)
+    temperature = Column(Integer)
+    wifi_rssi = Column(Integer)
+    wifi_ssid = Column(String(128))
+    network_latency = Column(Float)  # 网络延迟 (ms, ping 223.5.5.5 / 8.8.8.8)
+
+    # 系统资源
+    cpu_usage = Column(Float)
+    mem_total = Column(BigInteger)
+    mem_used = Column(BigInteger)
+    disk_total = Column(BigInteger)
+    disk_used = Column(BigInteger)
+
+    # 硬件信息更新时间
+    hardware_updated_at = Column(DateTime)
 
     host = relationship("Host", back_populates="devices")
     runs = relationship("TaskRun", back_populates="device")

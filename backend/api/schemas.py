@@ -139,3 +139,22 @@ class DeviceOut(ORMBaseModel):
     last_seen: Optional[datetime] = None
     tags: List[str] = Field(default_factory=list)
     extra: Dict[str, Any] = Field(default_factory=dict)
+
+    # ADB 连接状态
+    adb_state: Optional[str] = None
+    adb_connected: Optional[bool] = None
+
+    # 硬件信息
+    battery_level: Optional[int] = None
+    battery_temp: Optional[int] = None
+    temperature: Optional[int] = None
+    wifi_rssi: Optional[int] = None
+    wifi_ssid: Optional[str] = None
+    network_latency: Optional[float] = None  # 网络延迟 (ms)
+
+    # 系统资源
+    cpu_usage: Optional[float] = None
+    mem_total: Optional[int] = None
+    mem_used: Optional[int] = None
+    disk_total: Optional[int] = None
+    disk_used: Optional[int] = None
