@@ -1,5 +1,6 @@
 import React from 'react';
 import { ConnectivityBadge } from './ConnectivityBadge';
+import { Smartphone } from 'lucide-react';
 
 export interface Host {
   ip: string;
@@ -8,6 +9,7 @@ export interface Host {
   ram_usage: number;
   disk_usage: number;
   mount_status: boolean;
+  device_count?: number; // 新增：连接的设备数量
 }
 
 interface ProgressBarProps {
@@ -37,10 +39,22 @@ const ProgressBar: React.FC<ProgressBarProps> = ({ label, value, colorClass = "b
 
 export const HostCard: React.FC<{ host: Host }> = ({ host }) => {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 w-full max-w-sm">
+    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 w-full card-hover">
       <div className="flex justify-between items-start mb-4">
-        <div>
-          <h3 className="font-semibold text-slate-900">{host.ip}</h3>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-semibold text-slate-900">{host.ip}</h3>
+            {/* 设备数量 Badge */}
+            {typeof host.device_count === 'number' && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full font-medium"
+                title={`${host.device_count} device${host.device_count !== 1 ? 's' : ''} connected`}
+              >
+                <Smartphone size={10} />
+                {host.device_count}
+              </span>
+            )}
+          </div>
           <p className="text-xs text-slate-500 mt-0.5">Host Node</p>
         </div>
         <ConnectivityBadge status={host.status} />

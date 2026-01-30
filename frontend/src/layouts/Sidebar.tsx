@@ -1,38 +1,39 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Smartphone, ListTodo, Activity } from 'lucide-react';
+import { LayoutDashboard, Smartphone, ListTodo, Server } from 'lucide-react';
 import { clsx } from 'clsx';
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/tasks', label: 'Tasks', icon: ListTodo },
+  { path: '/hosts', label: 'Hosts', icon: Server },
   { path: '/devices', label: 'Devices', icon: Smartphone },
+  { path: '/tasks', label: 'Tasks', icon: ListTodo },
 ];
 
-export default function Sidebar() {
-  return (
-    <aside className="w-64 bg-slate-900 text-white flex flex-col">
-      <div className="h-16 flex items-center px-6 border-b border-slate-800">
-        <Activity className="text-blue-500 mr-2" />
-        <span className="font-bold text-lg">StabilityPro</span>
-      </div>
+interface SidebarProps {
+  onNavigate?: () => void;
+}
 
-      <nav className="flex-1 py-6 px-3 space-y-1">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.path}
-            to={item.path}
-            className={({ isActive }) =>
-              clsx(
-                'flex items-center gap-3 px-3 py-2 rounded-md transition-colors text-sm font-medium',
-                isActive ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-              )
-            }
-          >
-            <item.icon size={20} />
-            {item.label}
-          </NavLink>
-        ))}
-      </nav>
-    </aside>
+export default function Sidebar({ onNavigate }: SidebarProps) {
+  return (
+    <nav className="flex-1 py-6 px-3 space-y-1">
+      {navItems.map((item) => (
+        <NavLink
+          key={item.path}
+          to={item.path}
+          onClick={onNavigate}
+          className={({ isActive }) =>
+            clsx(
+              'flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 text-sm font-medium',
+              isActive
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+            )
+          }
+        >
+          <item.icon size={20} />
+          {item.label}
+        </NavLink>
+      ))}
+    </nav>
   );
 }

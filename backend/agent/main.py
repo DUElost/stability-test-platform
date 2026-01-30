@@ -38,7 +38,6 @@ def complete_run(api_url: str, run_id: int, payload: Dict[str, Any]) -> None:
 
 def get_host_info() -> Dict[str, Any]:
     """获取本机信息"""
-    hostname = socket.gethostname()
     try:
         # 获取本机 IP（连接到服务器的 IP）
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -50,7 +49,6 @@ def get_host_info() -> Dict[str, Any]:
         ip = "127.0.0.1"
 
     return {
-        "hostname": hostname,
         "ip": ip,
     }
 
@@ -64,7 +62,7 @@ def main() -> None:
 
     # 获取本机信息
     host_info = get_host_info()
-    logger.info("agent_started", extra={"host_id": host_id, "api_url": api_url, "hostname": host_info["hostname"], "ip": host_info["ip"]})
+    logger.info("agent_started", extra={"host_id": host_id, "api_url": api_url, "ip": host_info["ip"]})
 
     adb = AdbWrapper(adb_path=adb_path)
     executor = TaskExecutor(adb)

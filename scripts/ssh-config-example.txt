@@ -1,0 +1,90 @@
+# SSH 配置文件示例
+# 复制此文件到: C:\Users\YourName\.ssh\config
+# 注意: 将 YourName 替换为你的 Windows 用户名
+
+# ============================================================================
+# 稳定性测试平台 - Linux Agent 主机配置
+# ============================================================================
+
+# 全局默认设置
+Host *
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
+    TCPKeepAlive yes
+
+# ============================================================================
+# 单个主机配置 (使用 IP)
+# ============================================================================
+
+Host linux-agent-1
+    HostName 172.21.15.101
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+    # StrictHostKeyChecking no  # 首次连接时取消注释，连接后建议注释掉
+
+Host linux-agent-2
+    HostName 172.21.15.102
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+
+Host linux-agent-3
+    HostName 172.21.15.103
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+
+Host linux-agent-4
+    HostName 172.21.15.104
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+
+# ============================================================================
+# 通配符配置 (匹配所有 linux-agent-* 主机)
+# ============================================================================
+
+Host linux-*
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+
+# ============================================================================
+# VS Code Remote SSH 快捷配置
+# ============================================================================
+
+Host agent1
+    HostName 172.21.15.101
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+    # VS Code Remote SSH 使用的路径配置
+    RemoteCommand cd /opt/stability-test-agent && bash --login
+
+Host agent2
+    HostName 172.21.15.102
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+
+Host agent3
+    HostName 172.21.15.103
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+
+Host agent4
+    HostName 172.21.15.104
+    User root
+    IdentityFile C:\Users\YourName\.ssh\id_ed25519
+
+# ============================================================================
+# 使用说明
+# ============================================================================
+#
+# 配置完成后，可以使用别名连接主机:
+#
+#   ssh linux-agent-1      # 连接到 172.21.15.101
+#   ssh agent1             # 连接到 172.21.15.101 (VS Code Remote)
+#   scp file.txt agent1:/tmp/  # 复制文件到 172.21.15.101
+#
+# VS Code Remote SSH:
+#   1. 按 Ctrl+Shift+P
+#   2. 输入 "Remote-SSH: Connect to Host"
+#   3. 选择 agent1, agent2, 等
+#   4. 打开 /opt/stability-test-agent/ 目录直接编辑
+#
+# ============================================================================

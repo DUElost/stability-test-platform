@@ -138,6 +138,12 @@ def _release_device_lock(db: Session, device_id: int, run_id: int) -> None:
     )
 
 
+@router.get("/tasks", response_model=List[TaskOut])
+def list_tasks(db: Session = Depends(get_db)):
+    """获取任务列表"""
+    return db.query(Task).order_by(Task.id.desc()).all()
+
+
 @router.post("/tasks", response_model=TaskOut)
 def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
     task = Task(

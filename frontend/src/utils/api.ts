@@ -112,6 +112,8 @@ export const api = {
   devices: {
     list: () => apiClient.get<Device[]>('/devices'),
     get: (id: number) => apiClient.get<Device>(`/devices/${id}`),
+    create: (data: { serial: string; model?: string; host_id?: number; tags?: string[] }) =>
+      apiClient.post<Device>('/devices', data),
   },
 
   // 任务相关

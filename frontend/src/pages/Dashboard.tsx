@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { HostCard, Host } from '../components/network/HostCard';
 import { Device } from '../components/device/DeviceCard';
 import { DeviceGrid } from '../components/device/DeviceGrid';
+import { PageContainer, StatsGrid } from '../components/layout';
 import { useRealtimeDashboard } from '../hooks/useRealtimeDashboard';
 import { api } from '../utils/api';
 import { WS_DASHBOARD_ENDPOINT } from '../config';
@@ -86,55 +87,57 @@ export default function Dashboard() {
 
   // 条件返回移到所有 Hooks 之后
   if (hostsLoading || devicesLoading) {
-    return <div className="p-8 text-center text-slate-500">Loading dashboard data...</div>;
+    return (
+      <PageContainer>
+        <div className="flex items-center justify-center h-64 text-slate-500">
+          <div className="flex flex-col items-center">
+            <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-3"></div>
+            Loading dashboard data...
+          </div>
+        </div>
+      </PageContainer>
+    );
   }
 
   if (hostsError || devicesError) {
     return (
-      <div className="p-4 bg-red-50 text-red-700 rounded-lg border border-red-200">
-        Error loading data. Please check backend connection.
-      </div>
+      <PageContainer>
+        <div className="p-4 bg-red-50 text-red-700 rounded-lg border border-red-200">
+          Error loading data. Please check backend connection.
+        </div>
+      </PageContainer>
     );
   }
 
+  const statsItems: { label: string; value: string | number; suffix?: string; color?: 'default' | 'green' | 'blue' | 'red' | 'amber' | 'slate' }[] = [
+    { label: 'Total Hosts', value: hosts?.length || 0 },
+    {
+      label: 'Online Devices',
+      value: stats.online,
+      suffix: `/ ${stats.total}`,
+      color: 'green'
+    },
+    { label: 'Active Testing', value: stats.testing, color: 'blue' },
+    {
+      label: 'Alerts',
+      value: stats.error > 0 ? stats.error : stats.lowBattery > 0 ? stats.lowBattery : stats.highTemp > 0 ? stats.highTemp : 'All Good',
+      color: stats.error > 0 ? 'red' : stats.lowBattery > 0 || stats.highTemp > 0 ? 'amber' : 'green'
+    },
+  ];
+
   return (
-    <div className="space-y-6">
+    <PageContainer>
       <div className="flex justify-between items-center text-sm text-slate-500 px-1">
         <div className="flex items-center gap-2">
-          <span className={`w-2.5 h-2.5 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-red-500'}`}></span>
+          <span className={`w-2.5 h-2.5 rounded-full ${wsConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}></span>
           <span>{wsConnected ? 'Realtime Connected' : 'Disconnected'}</span>
         </div>
-        <div>
+        <div className="text-slate-400">
           Updated: {lastUpdateTime.toLocaleTimeString()}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
-          <h3 className="text-sm font-medium text-slate-500">Total Hosts</h3>
-          <p className="text-2xl font-bold text-slate-900 mt-1">{hosts?.length || 0}</p>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
-          <h3 className="text-sm font-medium text-slate-500">Online Devices</h3>
-          <div className="flex items-baseline gap-2 mt-1">
-             <p className="text-2xl font-bold text-green-600">{stats.online}</p>
-             <span className="text-xs text-slate-400">/ {stats.total}</span>
-          </div>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
-          <h3 className="text-sm font-medium text-slate-500">Active Testing</h3>
-          <p className="text-2xl font-bold text-blue-600 mt-1">{stats.testing}</p>
-        </div>
-        <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200">
-          <h3 className="text-sm font-medium text-slate-500">Alerts</h3>
-          <div className="flex gap-3 mt-1 text-sm">
-            {stats.error > 0 && <span className="text-red-600 font-bold">{stats.error} Errors</span>}
-            {stats.lowBattery > 0 && <span className="text-orange-500 font-bold">{stats.lowBattery} Low Bat</span>}
-            {stats.highTemp > 0 && <span className="text-red-500 font-bold">{stats.highTemp} Hot</span>}
-            {stats.error === 0 && stats.lowBattery === 0 && stats.highTemp === 0 && <span className="text-green-500">All Good</span>}
-          </div>
-        </div>
-      </div>
+      <StatsGrid stats={statsItems} columns={4} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1 space-y-4">
@@ -173,6 +176,6 @@ export default function Dashboard() {
           <DeviceGrid devices={filteredDevices} />
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }

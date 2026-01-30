@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { TaskList as TaskListComponent } from '../../components/task/TaskList';
+import { PageContainer, PageHeader } from '../../components/layout';
 import { api } from '../../utils/api';
 
 export default function TaskList() {
@@ -36,22 +37,25 @@ export default function TaskList() {
     };
   }) || [];
 
+  const actionButton = (
+    <Link
+      to="/tasks/new"
+      className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-all shadow-sm hover:shadow btn-press"
+    >
+      <Plus size={18} />
+      New Task
+    </Link>
+  );
+
   return (
-    <div>
-      <div className="mb-6 flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Task Management</h1>
-          <p className="text-slate-500">View and manage stability test tasks</p>
-        </div>
-        <Link
-          to="/tasks/new"
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-        >
-          <Plus size={18} />
-          New Task
-        </Link>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="Task Management"
+        subtitle="View and manage stability test tasks"
+        action={actionButton}
+        breadcrumbs={[{ label: 'Tasks' }]}
+      />
       <TaskListComponent tasks={formattedTasks} />
-    </div>
+    </PageContainer>
   );
 }

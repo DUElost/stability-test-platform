@@ -53,15 +53,10 @@ def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db)):
             host = db.query(Host).filter(Host.ip == ip).first()
 
         if not host:
-            hostname = host_info.get("hostname", f"Host-{payload.host_id}")
-            base_name = hostname
-            counter = 1
-            while db.query(Host).filter(Host.name == hostname).first():
-                hostname = f"{base_name}-{counter}"
-                counter += 1
+            host_name = ip or f"Host-{payload.host_id}"
 
             host = Host(
-                name=hostname,
+                name=host_name,
                 ip=ip or f"unknown-{payload.host_id}",
                 status=HostStatus(payload.status),
                 ssh_port=22,

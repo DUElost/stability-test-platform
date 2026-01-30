@@ -23,7 +23,6 @@ def send_heartbeat_with_devices(
     api_url: str,
     host_id: int,
     adb_path: str,
-    hostname: str = None,
     ip: str = None
 ):
     """
@@ -33,7 +32,6 @@ def send_heartbeat_with_devices(
         api_url: 后端 API 地址
         host_id: 主机 ID
         adb_path: adb 命令路径
-        hostname: 主机名（可选）
         ip: 主机 IP（可选）
     """
     logger.info(f"开始设备发现... (adb_path={adb_path})")
@@ -56,7 +54,6 @@ def send_heartbeat_with_devices(
         "host_id": host_id,
         "status": "ONLINE",
         "host": {
-            "hostname": hostname or os.uname().nodename,
             "ip": ip or "unknown",
         },
         "devices": device_infos
@@ -85,7 +82,6 @@ def main():
     API_URL = os.getenv("API_URL", "http://172.21.10.5:8000")
     HOST_ID = int(os.getenv("HOST_ID", "1"))
     ADB_PATH = os.getenv("ADB_PATH", "adb")
-    HOSTNAME = os.getenv("HOSTNAME", None)
     HOST_IP = os.getenv("HOST_IP", None)
 
     logger.info("=" * 50)
@@ -115,7 +111,6 @@ def main():
         api_url=API_URL,
         host_id=HOST_ID,
         adb_path=ADB_PATH,
-        hostname=HOSTNAME,
         ip=HOST_IP
     )
 
