@@ -1,4 +1,6 @@
 @echo off
+setlocal enabledelayedexpansion
+
 echo Starting Stability Test Platform - Backend Service...
 echo.
 
@@ -13,41 +15,56 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-REM Upgrade pip first
-echo Upgrading pip...
-python -m pip install --upgrade pip --quiet
-
 REM Check if virtual environment exists
 if not exist "venv" (
     echo Creating virtual environment...
     python -m venv venv
+    set "NEW_VENV=1"
+) else (
+    set "NEW_VENV=0"
 )
 
 REM Activate virtual environment
 call venv\Scripts\activate.bat
 
-REM Upgrade pip in virtual environment
-echo Upgrading pip in virtual environment...
-python -m pip install --upgrade pip --quiet
+REM Define required packages
+set "PACKAGES=fastapi uvicorn sqlalchemy pydantic requests python-multipart"
+set "MISSING_PACKAGES="
 
-REM Install dependencies (without bcrypt on Windows)
-echo Installing Python dependencies...
-echo Installing fastapi...
-pip install -q fastapi
-echo Installing uvicorn...
-pip install -q uvicorn[standard]
-echo Installing sqlalchemy...
-pip install -q sqlalchemy
-echo Installing pydantic...
-pip install -q pydantic
-echo Installing paramiko...
-pip install -q paramiko
-echo Installing requests...
-pip install -q requests
-echo Installing aiohttp...
-pip install -q aiohttp
-echo.
-echo All dependencies installed successfully!
+REM Check if any package is missing (skip check if venv was just created)
+if "%NEW_VENV%"=="1" (
+    set "MISSING_PACKAGES=%PACKAGES%"
+) else (
+    echo Checking dependencies...
+    for %%p in (%PACKAGES%) do (
+        pip show %%p >nul 2>&1
+        if !ERRORLEVEL! neq 0 (
+            if "!MISSING_PACKAGES!"=="" (
+                set "MISSING_PACKAGES=%%p"
+            ) else (
+                set "MISSING_PACKAGES=!MISSING_PACKAGES! %%p"
+            )
+        )
+    )
+)
+
+REM Install only missing packages
+if not "!MISSING_PACKAGES!"=="" (
+    echo.
+    echo Installing missing dependencies: !MISSING_PACKAGES!
+    for %%p in (!MISSING_PACKAGES!) do (
+        echo   - Installing %%p...
+        if "%%p"=="uvicorn" (
+            pip install -q uvicorn[standard]
+        ) else (
+            pip install -q %%p
+        )
+    )
+    echo.
+    echo All dependencies installed successfully!
+) else (
+    echo All dependencies are already installed. Skipping installation.
+)
 
 REM Start the server
 echo.
