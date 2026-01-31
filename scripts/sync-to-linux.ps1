@@ -57,6 +57,14 @@ $SyncItems = @(
     "backend/requirements.txt"
 )
 
+# AIMONKEY 资源文件目录
+$AimonkeyResources = @(
+    "../Monkey_test/AIMonkeyTest_2025mtk/aim",
+    "../Monkey_test/AIMonkeyTest_2025mtk/aimwd",
+    "../Monkey_test/AIMonkeyTest_2025mtk/aim.jar",
+    "../Monkey_test/AIMonkeyTest_2025mtk/blacklist.txt"
+)
+
 # SCP 参数
 $SCPCommonArgs = @(
     "-r",                           # 递归复制
@@ -157,6 +165,41 @@ function Sync-ToHost {
             $success = $false
         }
     }
+
+    # 同步 Monkey 资源文件
+    Write-Info "同步 AIMONKEY 资源..."
+    $resourceDir = "$TargetHost`:$LinuxPath/resources/aimonkey"
+
+    # 先在远程创建目录
+    $sshArgs = @(
+        "-o", "BatchMode=yes"
+    )
+    if (Test-Path $IdentityFile) {
+        $sshArgs += @("-i", $IdentityFile)
+    }
+    $sshArgs += $TargetHost, "mkdir -p $LinuxPath/resources/aimonkey"
+    $null = & ssh @sshArgs 2>&1
+
+    foreach ($resource in $AimonkeyResources) {
+        if (Test-Path $resource) {
+            Write-Info "  同步: $(Split-Path $resource -Leaf)"
+            $scpArgs = $SCPCommonArgs + $resource, $resourceDir
+            $output = & scp @scpArgs 2>&1
+
+            if ($LASTEXITCODE -eq 0) {
+                Write-Success "    成功"
+            } else {
+                Write-Warning "    失败 - 文件可能不存在"
+            }
+        } else {
+            Write-Warning "  跳过 - 源文件不存在: $resource"
+        }
+    }
+
+    # 设置资源文件可执行权限
+    Write-Info "设置 Monkey 资源权限..."
+    $sshArgs = $TargetHost, "chmod +x $LinuxPath/resources/aimonkey/aim $LinuxPath/resources/aimonkey/aimwd 2>/dev/null || true"
+    $null = & ssh @sshArgs 2>&1
 
     # 可选：重启 Agent 服务
     if ($Restart -and $success) {
