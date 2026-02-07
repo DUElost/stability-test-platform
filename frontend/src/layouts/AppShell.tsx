@@ -2,17 +2,20 @@ import { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
-import { X } from 'lucide-react';
+import { X, ChevronRight } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
   // 监听窗口大小变化
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 1024);
-      // 如果是大屏，自动关闭移动端侧边栏
       if (window.innerWidth >= 1024) {
         setSidebarOpen(false);
       }
@@ -35,63 +38,91 @@ export default function AppShell() {
   }, []);
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
+  const toggleSidebarCollapse = () => setSidebarCollapsed(!sidebarCollapsed);
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
-      {/* 移动端遮罩层 */}
-      {isMobile && sidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-20 transition-opacity duration-300"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
+    <TooltipProvider>
+      <div className="flex h-screen bg-background overflow-hidden">
+        {/* 移动端遮罩层 */}
+        {isMobile && sidebarOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 z-20 transition-opacity duration-300"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
 
-      {/* Sidebar - 移动端抽屉模式 */}
-      <aside
-        className={`fixed inset-y-0 left-0 z-30 w-64 bg-slate-900 text-white transform transition-transform duration-300 ease-in-out
-          lg:relative lg:translate-x-0
-          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-        `}
-      >
-        <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800">
-          <div className="flex items-center">
-            <svg
-              className="w-6 h-6 text-blue-500 mr-2"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M13 10V3L4 14h7v7l9-11h-7z"
-              />
-            </svg>
-            <span className="font-bold text-lg">StabilityPro</span>
-          </div>
-          {/* 移动端关闭按钮 */}
-          {isMobile && (
-            <button
-              onClick={() => setSidebarOpen(false)}
-              className="lg:hidden p-2 text-slate-400 hover:text-white"
-            >
-              <X size={20} />
-            </button>
+        {/* Sidebar - 桌面端 */}
+        <aside
+          className={cn(
+            "hidden lg:flex flex-col border-r border-border/50 bg-card",
+            "transition-all duration-300 ease-in-out"
           )}
-        </div>
-        <Sidebar onNavigate={() => isMobile && setSidebarOpen(false)} />
-      </aside>
+          style={{ width: sidebarCollapsed ? 72 : 256 }}
+        >
+          <Sidebar
+            onNavigate={() => isMobile && setSidebarOpen(false)}
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={toggleSidebarCollapse}
+          />
+        </aside>
 
-      {/* 主内容区 */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <Header onMenuClick={toggleSidebar} showMenuButton={isMobile} />
-        <main className="flex-1 overflow-x-hidden overflow-y-auto custom-scrollbar">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 page-enter">
-            <Outlet />
+        {/* Sidebar - 移动端抽屉模式 */}
+        <aside
+          className={cn(
+            "fixed inset-y-0 left-0 z-30 w-64 bg-card border-r border-border/50 transform transition-transform duration-300 ease-in-out lg:hidden",
+            sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          )}
+        >
+          <div className="h-full flex flex-col">
+            {/* 移动端关闭按钮 */}
+            <div className="absolute top-4 right-4 lg:hidden">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setSidebarOpen(false)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X size={20} />
+              </Button>
+            </div>
+            <Sidebar
+              onNavigate={() => setSidebarOpen(false)}
+              collapsed={false}
+            />
           </div>
-        </main>
+        </aside>
+
+        {/* 桌面端悬浮展开按钮 (当侧边栏折叠时) */}
+        {!isMobile && sidebarCollapsed && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleSidebarCollapse}
+                className="fixed left-[72px] top-6 z-40 h-6 w-6 rounded-full border border-border/50 bg-card shadow-sm hover:bg-accent"
+              >
+                <ChevronRight size={14} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Expand sidebar</TooltipContent>
+          </Tooltip>
+        )}
+
+        {/* 主内容区 */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <Header
+            onMenuClick={toggleSidebar}
+            showMenuButton={isMobile}
+            sidebarCollapsed={sidebarCollapsed}
+          />
+          <main className="flex-1 overflow-x-hidden overflow-y-auto custom-scrollbar">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 page-enter">
+              <Outlet />
+            </div>
+          </main>
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }

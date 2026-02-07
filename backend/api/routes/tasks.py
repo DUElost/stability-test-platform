@@ -1,8 +1,10 @@
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 
+import paramiko
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -10,6 +12,8 @@ from sqlalchemy.orm import Session
 from ...core.database import get_db
 from ...models.schemas import Device, DeviceStatus, Host, LogArtifact, RunStatus, Task, TaskRun, TaskStatus
 from ..schemas import (
+    AgentLogOut,
+    AgentLogQuery,
     LogArtifactIn,
     RunAgentOut,
     RunCompleteIn,
@@ -169,6 +173,16 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
     return task
 
 
+@router.get("/tasks/{task_id}/runs", response_model=List[RunOut])
+def get_task_runs(task_id: int, db: Session = Depends(get_db)):
+    """获取任务的所有运行记录"""
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+    runs = db.query(TaskRun).filter(TaskRun.task_id == task_id).order_by(TaskRun.id.desc()).all()
+    return runs
+
+
 @router.post("/tasks/{task_id}/dispatch", response_model=RunOut)
 def dispatch_task(task_id: int, payload: TaskDispatch, db: Session = Depends(get_db)):
     host = db.get(Host, payload.host_id)
@@ -279,6 +293,50 @@ def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(g
             task.status = TaskStatus.RUNNING
         _extend_device_lock(db, run.device_id, run.id)
     db.commit()
+
+    # Broadcast log lines to WebSocket if provided
+    if payload.log_lines:
+        try:
+            # Lazy import to avoid circular dependency
+            from .websocket import manager
+            # Get device serial for log context
+            device = db.get(Device, run.device_id)
+            device_serial = device.serial if device else "unknown"
+            timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Broadcast each log line
+            for line in payload.log_lines:
+                asyncio.create_task(
+                    manager.broadcast(
+                        f"/ws/logs/{run_id}",
+                        {
+                            "type": "LOG",
+                            "payload": {
+                                "timestamp": timestamp,
+                                "level": "INFO",
+                                "device": device_serial,
+                                "message": line,
+                            },
+                        },
+                    )
+                )
+
+            # Also broadcast progress if provided
+            if payload.progress is not None:
+                asyncio.create_task(
+                    manager.broadcast(
+                        f"/ws/logs/{run_id}",
+                        {
+                            "type": "PROGRESS",
+                            "payload": {"progress": payload.progress},
+                        },
+                    )
+                )
+        except ImportError:
+            logger.warning("websocket_manager_not_available")
+        except Exception as e:
+            logger.warning(f"log_broadcast_failed: {e}")
+
     return {"ok": True}
 
 
@@ -327,3 +385,92 @@ def agent_run_complete(
     _release_device_lock(db, run.device_id, run.id)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/agent/logs", response_model=AgentLogOut)
+def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db)):
+    """通过SSH查询Linux host上的agent日志"""
+    host = db.get(Host, query.host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    # 构建SSH连接参数
+    ssh_host = host.ip
+    ssh_port = host.ssh_port or 22
+    ssh_user = host.ssh_user or "root"
+    ssh_password = host.extra.get("ssh_password") if host.extra else None
+    ssh_key_path = host.extra.get("ssh_key_path") if host.extra else None
+
+    try:
+        # 建立SSH连接
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        connect_kwargs = {
+            "hostname": ssh_host,
+            "port": ssh_port,
+            "username": ssh_user,
+            "timeout": 10,
+        }
+
+        if ssh_key_path and os.path.exists(ssh_key_path):
+            connect_kwargs["key_filename"] = ssh_key_path
+        elif ssh_password:
+            connect_kwargs["password"] = ssh_password
+        else:
+            # 尝试使用默认密钥
+            pass
+
+        client.connect(**connect_kwargs)
+
+        # 执行命令读取日志
+        cmd = f"tail -n {query.lines} {query.log_path} 2>/dev/null || echo 'LOG_FILE_NOT_FOUND'"
+        stdin, stdout, stderr = client.exec_command(cmd)
+        content = stdout.read().decode("utf-8", errors="replace")
+        error = stderr.read().decode("utf-8", errors="replace")
+
+        client.close()
+
+        if content.strip() == "LOG_FILE_NOT_FOUND":
+            return AgentLogOut(
+                host_id=query.host_id,
+                log_path=query.log_path,
+                content="",
+                lines_read=0,
+                error=f"Log file not found: {query.log_path}",
+            )
+
+        lines_read = len([l for l in content.split("\n") if l.strip()])
+
+        return AgentLogOut(
+            host_id=query.host_id,
+            log_path=query.log_path,
+            content=content,
+            lines_read=lines_read,
+            error=error if error else None,
+        )
+
+    except paramiko.AuthenticationException:
+        return AgentLogOut(
+            host_id=query.host_id,
+            log_path=query.log_path,
+            content="",
+            lines_read=0,
+            error="SSH authentication failed. Please check ssh_user and ssh_password/ssh_key.",
+        )
+    except paramiko.SSHException as e:
+        return AgentLogOut(
+            host_id=query.host_id,
+            log_path=query.log_path,
+            content="",
+            lines_read=0,
+            error=f"SSH connection error: {str(e)}",
+        )
+    except Exception as e:
+        return AgentLogOut(
+            host_id=query.host_id,
+            log_path=query.log_path,
+            content="",
+            lines_read=0,
+            error=f"Failed to query agent logs: {str(e)}",
+        )

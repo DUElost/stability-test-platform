@@ -110,6 +110,10 @@ class RunUpdate(BaseModel):
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     log_summary: Optional[str] = None
+    # 新增：日志行列表，用于实时推送
+    log_lines: Optional[List[str]] = None
+    # 新增：日志进度百分比
+    progress: Optional[int] = None
 
 
 class LogArtifactIn(BaseModel):
@@ -158,3 +162,18 @@ class DeviceOut(ORMBaseModel):
     mem_used: Optional[int] = None
     disk_total: Optional[int] = None
     disk_used: Optional[int] = None
+
+
+# Agent日志查询
+class AgentLogQuery(BaseModel):
+    host_id: int
+    log_path: str = "/tmp/agent.log"  # 默认日志路径
+    lines: int = 100  # 默认读取最后100行
+
+
+class AgentLogOut(BaseModel):
+    host_id: int
+    log_path: str
+    content: str
+    lines_read: int
+    error: Optional[str] = None

@@ -148,11 +148,23 @@ class TaskDispatcher:
                 )
                 return True, False
             except Exception as exc:
-                logger.warning("dispatch_attempt_failed", extra={"task_id": task.id, "error": str(exc)})
+                logger.warning(
+                    "dispatch_attempt_failed",
+                    extra={"task_id": task.id, "error": str(exc), "error_type": type(exc).__name__},
+                    exc_info=True,
+                )
                 return False, True
 
     def _pick_device(self, db: Session, task: Task) -> Tuple[Optional[Device], Optional[Host]]:
         """选择可用设备与主机"""
+        # 先查询所有设备状态用于调试
+        all_devices = db.query(Device).all()
+        for d in all_devices:
+            logger.info(
+                f"device_check: id={d.id}, serial={d.serial}, status={d.status}, "
+                f"lock_run_id={d.lock_run_id}, host_id={d.host_id}"
+            )
+
         query = (
             db.query(Device)
             .join(Host, Device.host_id == Host.id)
@@ -167,6 +179,12 @@ class TaskDispatcher:
         device: Optional[Device] = (
             query.order_by(Device.last_seen.desc().nullslast(), Device.id).first()
         )
+
+        if device:
+            logger.info(f"device_selected: id={device.id}, serial={device.serial}")
+        else:
+            logger.warning(f"no_device_available: task_id={task.id}")
+
         return device, device.host if device else None
 
     def _host_capacity(self, db: Session, host: Host) -> Tuple[bool, int, int]:
@@ -188,7 +206,8 @@ class TaskDispatcher:
         """开启事务，更新任务状态、创建 run 并占用设备，内含主机并发保护"""
         now = datetime.utcnow()
         expires_at = now + timedelta(seconds=DEVICE_LOCK_LEASE_SECONDS)
-        with db.begin():
+        # 使用 begin_nested() 创建保存点，支持嵌套事务
+        with db.begin_nested():
             active = (
                 db.query(TaskRun)
                 .filter(

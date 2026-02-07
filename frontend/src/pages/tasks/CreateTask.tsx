@@ -31,11 +31,17 @@ export default function CreateTask() {
 
   const handleSubmit = async (taskData: any) => {
     try {
-      await api.tasks.create({
-        name: taskData.name || `Task-${Date.now()}`,
-        type: taskData.type,
-        params: { duration: taskData.duration, ...taskData.params },
-      });
+      // Create a task for each selected device
+      const promises = taskData.devices.map((deviceSerial: string) =>
+        api.tasks.create({
+          name: `${taskData.type}-${deviceSerial}-${Date.now()}`,
+          type: taskData.type,
+          device_serial: deviceSerial,
+          params: taskData.config,
+        })
+      );
+
+      await Promise.all(promises);
       navigate('/tasks');
     } catch (error) {
       console.error('Failed to create task:', error);

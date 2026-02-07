@@ -13,14 +13,20 @@ from unittest.mock import MagicMock, patch, call
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from backend.agent.task_executor import TaskExecutor, TaskResult
-from backend.agent.adb_wrapper import AdbError
+# 兼容 WSL 和 Windows 导入
+try:
+    from backend.agent.task_executor import TaskExecutor, TaskResult
+    from backend.agent.adb_wrapper import AdbError
+except ModuleNotFoundError:
+    from agent.task_executor import TaskExecutor, TaskResult
+    from agent.adb_wrapper import AdbError
 
 
 class MockAdbWrapper:
     """Mock ADB 包装器"""
 
     def __init__(self):
+        self.adb_path = "adb"
         self.shell_responses = {}
         self.push_responses = {}
         self.pull_responses = {}
@@ -143,7 +149,7 @@ class TestAIMonkeyTask(unittest.TestCase):
 
         result = self.executor._aimonkey_start_monkey("test_serial", params)
 
-        # 由于资源文件不存在，应该回退到 get_pid
+        # 由于资源文件不存在,应该回退到 get_pid
         self.assertEqual(result, "1234")
 
     def test_fill_storage_calculation(self):
@@ -163,7 +169,7 @@ class TestAIMonkeyTask(unittest.TestCase):
 
         self.mock_adb.shell = mock_shell
 
-        # 目标 60%，当前 40%，需要填充 20% = 200000 KB
+        # 目标 60%,当前 40%,需要填充 20% = 200000 KB
         self.executor._fill_storage("test_serial", 60)
         # 验证 dd 命令被调用（bs=1024k count=195 约等于 200MB）
 
@@ -216,7 +222,7 @@ class TestAIMonkeyIntegration(unittest.TestCase):
 
         try:
             executor._aimonkey_setup(serial, params)
-            print(f"✓ 设备 {serial} 配置成功")
+            print(f"OK 设备 {serial} 配置成功")
         except Exception as e:
             self.fail(f"设备配置失败: {e}")
 
@@ -224,7 +230,7 @@ class TestAIMonkeyIntegration(unittest.TestCase):
 def run_quick_check():
     """快速检查 - 验证代码结构和基本逻辑"""
     print("=" * 60)
-    print("AIMONKEY 快速检查")
+    print("AIMONKEY Quick Check")
     print("=" * 60)
 
     # 1. 验证类方法存在
@@ -242,6 +248,9 @@ def run_quick_check():
         '_fill_storage',
         '_clear_device_logs',
         '_send_heartbeat',
+    '_adb_push_with_timeout',
+    '_adb_shell_with_timeout',
+    '_start_aimonkey_process',
     ]
 
     mock_adb = MockAdbWrapper()
@@ -253,15 +262,15 @@ def run_quick_check():
             missing_methods.append(method)
 
     if missing_methods:
-        print(f"❌ 缺少方法: {missing_methods}")
+        print(f"FAIL 缺少方法: {missing_methods}")
         return False
-    print(f"✓ 所有 {len(executor_methods)} 个方法已定义")
+    print(f"OK 所有 {len(executor_methods)} 个方法已定义")
 
     # 2. 验证任务类型路由
     result_types = []
     test_types = ["AIMONKEY", "aimonkey", "Aimonkey"]
     for tt in test_types:
-        # 只检查路由逻辑，不实际执行
+        # 只检查路由逻辑,不实际执行
         with patch.object(executor, '_aimonkey_setup'), \
              patch.object(executor, '_aimonkey_start_monkey', return_value="1234"), \
              patch.object(executor, '_aimonkey_monitor', return_value=("test", "1234")), \
@@ -273,7 +282,7 @@ def run_quick_check():
             except Exception as e:
                 result_types.append((tt, f"ERROR: {e}"))
 
-    print(f"✓ 任务类型路由测试: {result_types}")
+    print(f"OK 任务类型路由测试: {result_types}")
 
     # 3. 验证参数处理
     test_params = {
@@ -291,17 +300,17 @@ def run_quick_check():
     assert int(test_params.get("runtime_minutes", 10080)) == 120
     assert int(test_params.get("throttle_ms", 500)) == 300
     assert bool(test_params.get("enable_fill_storage", True)) is True
-    print("✓ 参数处理正确")
+    print("OK 参数处理正确")
 
     # 4. 验证日志目录生成
     log_dir = executor._aimonkey_log_dir(123)
     assert "123" in log_dir
     log_dir2 = executor._aimonkey_log_dir(None)
     assert "aimonkey_" in log_dir2
-    print("✓ 日志目录生成正确")
+    print("OK 日志目录生成正确")
 
     print("=" * 60)
-    print("✅ 快速检查通过!")
+    print("OK 快速检查通过!")
     print("=" * 60)
     return True
 
@@ -313,5 +322,5 @@ if __name__ == "__main__":
         print("\n运行单元测试...\n")
         unittest.main(verbosity=2, exit=False)
     else:
-        print("\n❌ 快速检查失败，请检查代码实现")
+        print("\nFAIL 快速检查失败,请检查代码实现")
         sys.exit(1)

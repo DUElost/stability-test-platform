@@ -5,7 +5,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -27,6 +27,40 @@ class TaskExecutor:
         self._safe_pattern = re.compile(r"^[\w@%:/._+\-]+$")
         self._logger = logging.getLogger(__name__)
         self._heartbeat_interval = 60
+        # 实时日志收集器
+        self._log_buffer: List[str] = []
+        self._api_url: str = ""
+        self._run_id: Optional[int] = None
+
+    def _log(self, message: str, level: str = "INFO") -> None:
+        """记录日志并发送到后端"""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        log_line = f"[{timestamp}] [{level}] {message}"
+        self._logger.info(message)
+        self._log_buffer.append(log_line)
+        # 保持缓冲区大小
+        if len(self._log_buffer) > 200:
+            self._log_buffer = self._log_buffer[-100:]
+        # 立即发送日志
+        self._flush_logs()
+
+    def _flush_logs(self) -> None:
+        """将缓冲区日志发送到后端"""
+        if not self._api_url or not self._run_id or not self._log_buffer:
+            return
+        try:
+            payload = {
+                "status": "RUNNING",
+                "log_lines": self._log_buffer[-50:],
+            }
+            requests.post(
+                f"{self._api_url}/api/v1/agent/runs/{self._run_id}/heartbeat",
+                json=payload,
+                timeout=5,
+            )
+            self._log_buffer = []
+        except Exception:
+            pass  # 发送失败不影响主流程
 
     def execute_task(self, task_type: str, params: Dict[str, Any], device_serial: str) -> TaskResult:
         try:
@@ -202,33 +236,56 @@ class TaskExecutor:
         api_url = params.get("api_url", "")
         log_dir = params.get("log_dir") or self._aimonkey_log_dir(run_id)
 
+        # 设置日志上下文
+        self._api_url = api_url
+        self._run_id = run_id
+        self._log_buffer = []
+
         runtime_minutes = int(params.get("runtime_minutes", 10080))
         throttle_ms = int(params.get("throttle_ms", 500))
         max_restarts = int(params.get("max_restarts", 1))
 
+        self._log(f"AIMONKEY任务开始: device={serial}, runtime={runtime_minutes}min", "INFO")
+
         try:
+            self._log("开始设备配置...", "INFO")
             self._aimonkey_setup(serial, params)
+            self._log("设备配置完成", "INFO")
+
+            self._log("开始推送资源并启动Monkey...", "INFO")
             pid = self._aimonkey_start_monkey(serial, params)
             if not pid:
+                error_msg = "Failed to start monkey or capture PID"
+                self._log(f"启动失败: {error_msg}", "ERROR")
                 return TaskResult(
                     status="FAILED",
                     exit_code=1,
                     error_code="MONKEY_START_FAILED",
-                    error_message="Failed to start monkey or capture PID",
+                    error_message=error_msg,
                 )
+            self._log(f"Monkey进程已启动: PID={pid}", "INFO")
 
+            self._log("开始监控Monkey运行...", "INFO")
             summary, final_pid = self._aimonkey_monitor(
                 serial, pid, runtime_minutes, throttle_ms, max_restarts, log_dir, params, api_url, run_id
             )
+            self._log(f"监控结束: {summary}", "INFO")
 
+            self._log("停止Monkey进程...", "INFO")
             self._aimonkey_stop_monkey(serial, final_pid or pid)
+
+            self._log("收集日志文件...", "INFO")
             self._aimonkey_collect_logs(serial, log_dir)
 
+            self._log("任务完成", "INFO")
             return TaskResult(status="FINISHED", exit_code=0, log_summary=self._tail(summary))
         except AdbError as exc:
-            return TaskResult(status="FAILED", exit_code=1, error_code="ADB_ERROR", error_message=str(exc))
+            error_msg = str(exc)
+            self._log(f"ADB错误: {error_msg}", "ERROR")
+            return TaskResult(status="FAILED", exit_code=1, error_code="ADB_ERROR", error_message=error_msg)
         except Exception as exc:
             self._logger.exception("aimonkey_failed")
+            self._log(f"未知错误: {str(exc)}", "ERROR")
             return TaskResult(status="FAILED", exit_code=1, error_code="UNKNOWN", error_message=str(exc))
 
     def _aimonkey_log_dir(self, run_id: Optional[int]) -> str:
@@ -241,40 +298,67 @@ class TaskExecutor:
 
     def _aimonkey_setup(self, serial: str, params: Dict[str, Any]) -> None:
         """设备前置配置：root 权限、开发者选项、日志服务、WiFi、存储填充、清理日志"""
+        self._log("检查root权限...", "INFO")
         self._ensure_root_access(serial)
+        self._log("Root权限已获取", "INFO")
+
+        self._log("启用开发者选项...", "INFO")
         self._enable_dev_settings(serial)
+
+        self._log("启动mobile logger...", "INFO")
         self._start_mobile_logger(serial)
 
         wifi_ssid = params.get("wifi_ssid", "")
         if wifi_ssid:
+            self._log(f"连接WiFi: {wifi_ssid}...", "INFO")
             self._connect_wifi(serial, wifi_ssid, params.get("wifi_password", ""))
 
         if bool(params.get("enable_fill_storage", True)):
             target_pct = int(params.get("target_fill_percentage", 60))
+            self._log(f"填充存储到{target_pct}%...", "INFO")
             self._fill_storage(serial, target_pct)
+            self._log("存储填充完成", "INFO")
 
         if bool(params.get("enable_clear_logs", True)):
+            self._log("清理设备日志...", "INFO")
             self._clear_device_logs(serial)
 
     def _ensure_root_access(self, serial: str, max_attempts: int = 3) -> None:
         """确保设备具有 root 权限，失败则抛出 AdbError"""
+        import subprocess
+
         for attempt in range(max_attempts):
             try:
+                # 检查当前是否已有 root 权限
                 result = self.adb.shell(serial, ["id", "-u"])
                 if result.stdout.strip() == "0":
+                    self._logger.debug("already_root: %s", serial)
                     return
 
-                self.adb.shell(serial, ["root"])
-                time.sleep(3)
+                # 尝试通过 adb root 命令获取 root（这是客户端命令，不是 shell 命令）
+                try:
+                    subprocess.run(
+                        [self.adb.adb_path, "-s", serial, "root"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    time.sleep(3)
+                except (subprocess.TimeoutExpired, Exception) as e:
+                    self._logger.debug("adb_root_command_failed: %s", e)
+                    # 继续尝试，某些设备可能不支持 adb root 命令
 
+                # 再次检查权限
                 result = self.adb.shell(serial, ["id", "-u"])
                 if result.stdout.strip() == "0":
+                    self._logger.info("root_access_granted: %s", serial)
                     return
-            except AdbError:
+            except AdbError as exc:
+                self._logger.debug("root_check_failed: %s - %s", serial, exc)
                 if attempt == max_attempts - 1:
                     raise
                 time.sleep(2)
-        raise AdbError("Failed to obtain root access")
+        raise AdbError(f"Failed to obtain root access for {serial}")
 
     def _enable_dev_settings(self, serial: str) -> None:
         """开启开发者选项和 ADB 调试"""
@@ -357,6 +441,11 @@ class TaskExecutor:
     def _aimonkey_start_monkey(self, serial: str, params: Dict[str, Any]) -> Optional[str]:
         """推送资源并启动 Monkey，返回进程 PID"""
         resource_dir = params.get("resource_dir", "")
+        # 如果 resource_dir 是 Windows 格式路径（如 /d/... 或 D:\...），在 Linux 上使用环境变量
+        if resource_dir and (resource_dir.startswith("/mnt/") or ":" in resource_dir or
+                             (len(resource_dir) > 2 and resource_dir[0] == "/" and resource_dir[2] == "/")):
+            self._log(f"检测到Windows路径格式: {resource_dir}, 使用环境变量", "INFO")
+            resource_dir = ""
         if not resource_dir:
             # 优先从环境变量读取，支持 Linux/Windows 不同部署路径
             resource_dir = os.environ.get("AIMONKEY_RESOURCE_DIR", "")
@@ -367,6 +456,9 @@ class TaskExecutor:
             except Exception:
                 resource_dir = "/opt/stability-test-agent/resources/aimonkey"
 
+        self._log(f"资源目录: {resource_dir}", "INFO")
+
+        # 基础文件推送
         files_to_push = [
             ("aim", "/data/local/tmp/aim"),
             ("aimwd", "/data/local/tmp/aimwd"),
@@ -374,22 +466,99 @@ class TaskExecutor:
             ("blacklist.txt", "/sdcard/blacklist.txt"),
         ]
 
+        self._log("推送基础文件...", "INFO")
         for fname, remote in files_to_push:
             local_path = os.path.join(resource_dir, fname)
             if os.path.exists(local_path):
                 try:
-                    self.adb.push(serial, local_path, remote)
+                    self._log(f"推送 {fname}...", "INFO")
+                    self._adb_push_with_timeout(serial, local_path, remote, timeout=300)
                     self.adb.shell(serial, ["chmod", "755", remote])
+                    self._log(f"推送 {fname} 成功", "INFO")
                 except AdbError as exc:
-                    self._logger.debug("push_failed: %s - %s", fname, exc)
+                    self._log(f"推送 {fname} 失败: {exc}", "WARN")
+            else:
+                self._log(f"文件不存在: {local_path}", "WARN")
 
+        # 推送架构库 (arm64-v8a, armeabi-v7a)
+        self._log("推送架构库...", "INFO")
+        for arch_dir in ["arm64-v8a", "armeabi-v7a"]:
+            local_arch_path = os.path.join(resource_dir, arch_dir)
+            if os.path.isdir(local_arch_path):
+                try:
+                    remote_arch_path = f"/data/local/tmp/{arch_dir}"
+                    self._log(f"推送 {arch_dir}...", "INFO")
+                    self._adb_push_with_timeout(serial, local_arch_path, remote_arch_path, timeout=300)
+                    self._log(f"推送 {arch_dir} 成功", "INFO")
+                except AdbError as exc:
+                    self._log(f"推送 {arch_dir} 失败: {exc}", "WARN")
+
+        # 推送 aimonkey.apk
+        apk_path = os.path.join(resource_dir, "aimonkey.apk")
+        self._log(f"检查APK: {apk_path}", "INFO")
+        if os.path.exists(apk_path):
+            try:
+                remote_apk_path = "/data/local/tmp/monkey.apk"
+                self._log("推送 aimonkey.apk...", "INFO")
+                self._adb_push_with_timeout(serial, apk_path, remote_apk_path, timeout=300)
+                self._log("推送 aimonkey.apk 成功", "INFO")
+            except AdbError as exc:
+                self._log(f"推送 aimonkey.apk 失败: {exc}", "WARN")
+        else:
+            self._log(f"APK不存在: {apk_path}", "WARN")
+
+        # 启动 aimwd
+        self._log("启动 aimwd...", "INFO")
         try:
-            self.adb.shell(serial, ["sh", "-c", "nohup /data/local/tmp/aimwd >/dev/null 2>&1 &"])
-        except AdbError:
-            pass
+            self._adb_shell_with_timeout(serial, ["sh", "-c", "nohup /data/local/tmp/aimwd >/dev/null 2>&1 &"], timeout=30)
+            self._log("启动 aimwd 成功", "INFO")
+        except AdbError as exc:
+            self._log(f"启动 aimwd 失败: {exc}", "WARN")
 
+        # 启动 aimonkey 并返回 PID
+        self._log("启动 aimonkey 进程...", "INFO")
+        return self._start_aimonkey_process(serial, params)
+
+    def _adb_shell_with_timeout(
+        self, serial: str, cmd: List[str], timeout: float = 60.0
+    ) -> subprocess.CompletedProcess:
+        """执行 ADB shell 命令，带超时控制"""
+        import subprocess
+
+        full_cmd = [self.adb.adb_path, "-s", serial, "shell"] + cmd
+        result = subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            raise AdbError(result.stderr.strip() or result.stdout.strip())
+        return result
+
+    def _adb_push_with_timeout(
+        self, serial: str, local_path: str, remote_path: str, timeout: float = 300.0
+    ) -> subprocess.CompletedProcess:
+        """推送文件到设备，带超时控制"""
+        import subprocess
+
+        full_cmd = [self.adb.adb_path, "-s", serial, "push", local_path, remote_path]
+        result = subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode != 0:
+            raise AdbError(result.stderr.strip() or result.stdout.strip())
+        return result
+
+    def _start_aimonkey_process(self, serial: str, params: Dict[str, Any]) -> Optional[str]:
+        """启动 aimonkey 进程，返回 PID"""
         throttle_ms = int(params.get("throttle_ms", 500))
         runtime_minutes = int(params.get("runtime_minutes", 10080))
+
+        self._log(f"配置参数: throttle={throttle_ms}ms, runtime={runtime_minutes}min", "INFO")
 
         monkey_cmd = (
             f"nohup /data/local/tmp/aim --pkg-blacklist-file /sdcard/blacklist.txt "
@@ -398,15 +567,26 @@ class TaskExecutor:
             f"--switchuimode -v >/dev/null 2>&1 & echo $!"
         )
 
+        self._log("执行启动命令...", "INFO")
         try:
-            result = self.adb.shell(serial, ["sh", "-c", monkey_cmd])
+            result = self._adb_shell_with_timeout(serial, ["sh", "-c", monkey_cmd], timeout=60)
             pid = result.stdout.strip().splitlines()[-1] if result.stdout else ""
+            self._log(f"命令输出: {result.stdout}", "INFO")
             if pid and pid.isdigit():
+                self._log(f"获取到PID: {pid}", "INFO")
                 return pid
+            else:
+                self._log(f"PID格式异常: {pid}", "WARN")
         except AdbError as exc:
-            self._logger.warning("start_monkey_failed: %s", exc)
+            self._log(f"启动命令执行失败: {exc}", "ERROR")
 
-        return self.adb.get_pid(serial, "com.android.commands.monkey.transsion")
+        self._log("尝试从进程列表获取PID...", "INFO")
+        fallback_pid = self.adb.get_pid(serial, "com.android.commands.monkey.transsion")
+        if fallback_pid:
+            self._log(f"从进程列表获取到PID: {fallback_pid}", "INFO")
+        else:
+            self._log("未能从进程列表获取PID", "ERROR")
+        return fallback_pid
 
     def _aimonkey_stop_monkey(self, serial: str, pid: str) -> None:
         """停止 Monkey 进程"""
@@ -429,7 +609,7 @@ class TaskExecutor:
         api_url: str,
         run_id: Optional[int],
     ) -> Tuple[str, Optional[str]]:
-        """监控 Monkey 运行：5秒存活检测、60秒心跳、自动重启，返回(摘要, 最终PID)"""
+        """监控 Monkey 运行：5秒存活检测、10秒心跳、自动重启，返回(摘要, 最终PID)"""
         start_time = time.time()
         end_time = start_time + runtime_minutes * 60
         last_heartbeat = start_time
@@ -437,9 +617,13 @@ class TaskExecutor:
         current_pid = pid
         process_name = params.get("process_name", "com.android.commands.monkey.transsion")
         events: list[str] = []
+        recent_log_lines: list[str] = []  # 存储最近的日志行
+        last_log_send = start_time  # 上次发送日志时间
 
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         logcat_path = Path(log_dir) / "logcat.txt"
+
+        self._log(f"开始监控: PID={pid}, runtime={runtime_minutes}min", "INFO")
 
         while time.time() < end_time:
             time.sleep(5)
@@ -447,44 +631,76 @@ class TaskExecutor:
 
             alive = self.adb.get_pid(serial, process_name)
             if not alive:
+                self._log(f"进程未存活 (restart_count={restart_count})", "WARN")
                 if restart_count >= max_restarts:
-                    events.append(f"monkey died after {restart_count} restarts")
+                    msg = f"monkey died after {restart_count} restarts"
+                    events.append(msg)
+                    self._log(msg, "ERROR")
                     break
                 restart_count += 1
+                self._log(f"尝试重启 ({restart_count}/{max_restarts})...", "INFO")
                 events.append(f"restart {restart_count}")
                 new_pid = self._aimonkey_start_monkey(serial, params)
                 if new_pid:
                     current_pid = new_pid
+                    self._log(f"重启成功: new PID={new_pid}", "INFO")
+                else:
+                    self._log("重启失败", "ERROR")
                 continue
 
-            self._collect_realtime_logcat(serial, logcat_path)
+            # 收集日志并获取新行
+            new_lines = self._collect_realtime_logcat(serial, logcat_path)
+            if new_lines:
+                recent_log_lines.extend(new_lines)
+                # 保持最多100行
+                if len(recent_log_lines) > 100:
+                    recent_log_lines = recent_log_lines[-100:]
 
-            if now - last_heartbeat >= self._heartbeat_interval:
+            # 每10秒发送一次心跳（原来是60秒）
+            if now - last_heartbeat >= 10:
                 elapsed_min = int((now - start_time) / 60)
                 progress = min(int((now - start_time) / (end_time - start_time) * 100), 100)
-                self._send_heartbeat(api_url, run_id, progress, f"running {elapsed_min}min")
+                self._log(f"进度: {progress}%, 运行时间: {elapsed_min}min", "INFO")
+                self._send_heartbeat(api_url, run_id, progress, f"running {elapsed_min}min", recent_log_lines)
                 last_heartbeat = now
+                recent_log_lines = []  # 发送后清空
 
         if time.time() >= end_time:
-            events.append("runtime completed")
+            msg = "runtime completed"
+            events.append(msg)
+            self._log(msg, "INFO")
 
         return ("; ".join(events) if events else "completed", current_pid)
 
-    def _collect_realtime_logcat(self, serial: str, log_path: Path) -> None:
-        """收集实时 logcat 追加到文件"""
+    def _collect_realtime_logcat(self, serial: str, log_path: Path) -> List[str]:
+        """收集实时 logcat 追加到文件，返回新的日志行"""
         try:
             result = self.adb.shell(serial, ["logcat", "-d", "-t", "100"])
+            if not result.stdout:
+                return []
+
+            lines = result.stdout.strip().splitlines()
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(result.stdout)
-        except AdbError:
-            pass
 
-    def _send_heartbeat(self, api_url: str, run_id: Optional[int], progress: int, message: str) -> None:
-        """向后端发送进度心跳"""
+            # 返回新的日志行（过滤掉空行）
+            return [line.strip() for line in lines if line.strip()]
+        except AdbError:
+            return []
+
+    def _send_heartbeat(self, api_url: str, run_id: Optional[int], progress: int, message: str, log_lines: Optional[List[str]] = None) -> None:
+        """向后端发送进度心跳，附带日志行用于实时推送"""
         if not api_url or not run_id:
             return
         try:
-            payload = {"status": "RUNNING", "progress": progress, "log_summary": message}
+            payload = {
+                "status": "RUNNING",
+                "progress": progress,
+                "log_summary": message,
+            }
+            # 添加日志行用于实时 WebSocket 推送
+            if log_lines:
+                payload["log_lines"] = log_lines[-50:]  # 限制最多发送最近50行
             requests.post(
                 f"{api_url}/api/v1/agent/runs/{run_id}/heartbeat",
                 json=payload,

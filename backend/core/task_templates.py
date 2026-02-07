@@ -20,7 +20,7 @@ class TaskTemplateDef:
     script_paths: Dict[str, str]
 
 
-# 五类稳定性测试模板定义
+# 六类稳定性测试模板定义
 TEMPLATES: Dict[str, TaskTemplateDef] = {
     "MONKEY": TaskTemplateDef(
         type="MONKEY",
@@ -31,6 +31,26 @@ TEMPLATES: Dict[str, TaskTemplateDef] = {
             "event_count": 20000,
             "throttle": 100,
             "seed": None,
+            "script_path": _tool_path("Monkey_test", "AIMonkeyTest_2025mtk", "MonkeyTest.sh"),
+        },
+        script_paths={
+            "default": _tool_path("Monkey_test", "AIMonkeyTest_2025mtk", "MonkeyTest.sh"),
+        },
+    ),
+    "AIMONKEY": TaskTemplateDef(
+        type="AIMONKEY",
+        name="AI Monkey 智能压测",
+        description="智能化随机事件压测，支持存储填充、日志清理和 WiFi 配置。",
+        default_params={
+            "runtime_minutes": 60,
+            "throttle_ms": 500,
+            "max_restarts": 1,
+            "enable_fill_storage": False,
+            "enable_clear_logs": False,
+            "wifi_ssid": "",
+            "wifi_password": "",
+            "target_fill_percentage": 60,
+            "run_id": "",
             "script_path": _tool_path("Monkey_test", "AIMonkeyTest_2025mtk", "MonkeyTest.sh"),
         },
         script_paths={

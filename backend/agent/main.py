@@ -1,15 +1,25 @@
 import logging
 import os
 import socket
+import sys
 import time
 from typing import Any, Dict, List
 
 import requests
 
-from .adb_wrapper import AdbWrapper
-from .heartbeat import send_heartbeat
-from .task_executor import TaskExecutor
-from . import device_discovery
+# 支持直接运行和作为包运行
+if __name__ == "__main__" and __package__ is None:
+    # 直接运行时的导入路径处理
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from agent.adb_wrapper import AdbWrapper
+    from agent.heartbeat import send_heartbeat
+    from agent.task_executor import TaskExecutor
+    from agent import device_discovery
+else:
+    from .adb_wrapper import AdbWrapper
+    from .heartbeat import send_heartbeat
+    from .task_executor import TaskExecutor
+    from . import device_discovery
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -103,7 +113,11 @@ def main() -> None:
                     extra={"run_id": run_id, "task_id": run.get("task_id"), "device_id": run.get("device_id")},
                 )
                 update_run(api_url, run_id, {"status": "RUNNING", "started_at": time.strftime("%Y-%m-%dT%H:%M:%S")})
-                result = executor.execute_task(run["task_type"], run.get("task_params", {}), run.get("device_serial", ""))
+                # 准备任务参数，添加api_url和run_id用于日志上报
+                task_params = run.get("task_params", {})
+                task_params["api_url"] = api_url
+                task_params["run_id"] = run_id
+                result = executor.execute_task(run["task_type"], task_params, run.get("device_serial", ""))
                 complete_run(
                     api_url,
                     run_id,

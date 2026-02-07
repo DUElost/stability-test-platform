@@ -151,7 +151,38 @@ npm run dev
 
 ---
 
-## 启动 Host Agent（Linux 主机）
+## 配置新的 Host 主机（Linux Agent）
+
+### 部署步骤
+
+1. **复制 Agent 文件到 Host 主机**
+
+   将 `stability-test-platform\backend\agent` 中的文件转移至对应 Host 的 `/home/android/stability-agent` 文件夹中：
+   ```bash
+   # 使用 scp 或其他方式复制文件
+   scp -r stability-test-platform/backend/agent/* android@<host-ip>:/home/android/stability-agent/
+   ```
+
+2. **在 Linux Host 上执行安装脚本**
+   ```bash
+   cd /home/android/stability-agent
+
+   # 处理 Windows 换行符（如从 Windows 复制文件）
+   sed -i 's/\r$//' install_agent.sh
+
+   # 执行安装脚本
+   sudo ./install_agent.sh
+
+   # 重启服务
+   sudo systemctl restart stability-test-agent
+   ```
+
+3. **验证服务状态**
+   ```bash
+   sudo systemctl status stability-test-agent
+   ```
+
+### 手动启动方式（开发调试用）
 
 ```bash
 # 设置环境变量
@@ -161,8 +192,8 @@ export MOUNT_POINTS="/mnt/central-storage"
 export ADB_PATH="/usr/bin/adb"
 
 # 启动 Agent
-cd stability-test-platform
-python -m backend.agent.main
+cd /home/android/stability-agent
+python3 -m agent.main
 ```
 
 ---

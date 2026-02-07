@@ -98,6 +98,14 @@ export interface TaskRun {
   log_summary: string | null;
 }
 
+export interface AgentLogOut {
+  host_id: number;
+  log_path: string;
+  content: string;
+  lines_read: number;
+  error?: string;
+}
+
 // API 函数
 export const api = {
   // 主机相关
@@ -124,6 +132,10 @@ export const api = {
       apiClient.post<Task>('/tasks', data),
     dispatch: (taskId: number, data: { host_id: number; device_id: number }) =>
       apiClient.post<TaskRun>(`/tasks/${taskId}/dispatch`, data),
+    getRuns: (taskId: number) => apiClient.get<TaskRun[]>(`/tasks/${taskId}/runs`),
+    // 查询Agent日志
+    queryAgentLogs: (data: { host_id: number; log_path?: string; lines?: number }) =>
+      apiClient.post<AgentLogOut>('/agent/logs', data),
   },
 
   // 心跳相关

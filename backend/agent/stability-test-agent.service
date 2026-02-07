@@ -6,15 +6,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=stability-test
-Group=stability-test
+User=android
+Group=android
 WorkingDirectory=/opt/stability-test-agent
 
 # 环境变量配置
 EnvironmentFile=-/opt/stability-test-agent/.env
+Environment="PYTHONPATH=/opt/stability-test-agent"
 
-# 使用虚拟环境
-ExecStart=/opt/stability-test-agent/venv/bin/python -m agent.main
+# 使用虚拟环境 - 直接执行main.py而不是模块
+ExecStart=/opt/stability-test-agent/venv/bin/python /opt/stability-test-agent/agent/main.py
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=mixed
 KillSignal=SIGTERM
@@ -27,20 +28,18 @@ StartLimitInterval=300
 StartLimitBurst=5
 
 # 安全配置
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/opt/stability-test-agent/logs
-ReadWritePaths=/opt/stability-test-agent/tmp
+NoNewPrivileges=false
+PrivateTmp=false
+ProtectSystem=no
+ProtectHome=no
 
 # 资源限制
 LimitNOFILE=65536
 LimitNPROC=4096
 
 # 日志配置
-StandardOutput=append:/opt/stability-test-agent/logs/agent.log
-StandardError=append:/opt/stability-test-agent/logs/agent_error.log
+StandardOutput=append:/tmp/agent_service.log
+StandardError=append:/tmp/agent_service_error.log
 SyslogIdentifier=stability-test-agent
 
 [Install]

@@ -1,6 +1,10 @@
 import React from 'react';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ConnectivityBadge } from './ConnectivityBadge';
-import { Smartphone } from 'lucide-react';
+import { Smartphone, HardDrive } from 'lucide-react';
 
 export interface Host {
   ip: string;
@@ -9,69 +13,96 @@ export interface Host {
   ram_usage: number;
   disk_usage: number;
   mount_status: boolean;
-  device_count?: number; // 新增：连接的设备数量
+  device_count?: number;
 }
 
-interface ProgressBarProps {
+interface ResourceBarProps {
   label: string;
   value: number;
-  colorClass?: string;
+  warningThreshold?: number;
+  criticalThreshold?: number;
 }
 
-const ProgressBar: React.FC<ProgressBarProps> = ({ label, value, colorClass = "bg-blue-600" }) => (
-  <div className="mb-2">
-    <div className="flex justify-between text-xs mb-1">
-      <span className="text-slate-500">{label}</span>
-      <span className="font-medium text-slate-700">{value}%</span>
+const ResourceBar: React.FC<ResourceBarProps> = ({ label, value, warningThreshold = 70, criticalThreshold = 85 }) => {
+  const getColorClass = (val: number) => {
+    if (val >= criticalThreshold) return 'text-destructive';
+    if (val >= warningThreshold) return 'text-warning';
+    return 'text-foreground';
+  };
+
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between text-xs">
+        <span className="text-muted-foreground uppercase tracking-wider">{label}</span>
+        <span className={`font-mono font-semibold ${getColorClass(value)}`}>{value}%</span>
+      </div>
+      <Progress
+        value={value}
+        className={`h-1.5 ${value >= criticalThreshold ? '[&>div]:bg-destructive' : value >= warningThreshold ? '[&>div]:bg-warning' : ''}`}
+      />
     </div>
-    <div
-      className="w-full bg-slate-200 rounded-full h-1.5"
-      role="progressbar"
-      aria-valuenow={value}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-label={label}
-    >
-      <div className={`${colorClass} h-1.5 rounded-full transition-all`} style={{ width: `${value}%` }}></div>
-    </div>
-  </div>
-);
+  );
+};
 
 export const HostCard: React.FC<{ host: Host }> = ({ host }) => {
   return (
-    <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-4 w-full card-hover">
-      <div className="flex justify-between items-start mb-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h3 className="font-semibold text-slate-900">{host.ip}</h3>
-            {/* 设备数量 Badge */}
-            {typeof host.device_count === 'number' && (
-              <span
-                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full font-medium"
-                title={`${host.device_count} device${host.device_count !== 1 ? 's' : ''} connected`}
-              >
-                <Smartphone size={10} />
-                {host.device_count}
-              </span>
-            )}
+    <TooltipProvider>
+      <Card className="transition-all duration-200 hover:shadow-md">
+        <CardHeader className="p-4 pb-3">
+          <div className="flex justify-between items-start">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-semibold text-card-foreground">{host.ip}</h3>
+                {typeof host.device_count === 'number' && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge variant="secondary" className="text-[10px] gap-1 px-2">
+                        <Smartphone size={10} />
+                        {host.device_count}
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{host.device_count} device{host.device_count !== 1 ? 's' : ''} connected</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">Host Node</p>
+            </div>
+            <ConnectivityBadge status={host.status} />
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">Host Node</p>
-        </div>
-        <ConnectivityBadge status={host.status} />
-      </div>
+        </CardHeader>
 
-      <div className="space-y-3">
-        <ProgressBar label="CPU Load" value={host.cpu_load} colorClass={host.cpu_load > 80 ? 'bg-red-500' : 'bg-blue-500'} />
-        <ProgressBar label="RAM Usage" value={host.ram_usage} colorClass={host.ram_usage > 80 ? 'bg-yellow-500' : 'bg-purple-500'} />
-        <ProgressBar label="Disk Usage" value={host.disk_usage} />
-      </div>
+        <CardContent className="p-4 pt-0 space-y-4">
+          <div className="space-y-3">
+            <ResourceBar
+              label="CPU Load"
+              value={host.cpu_load}
+            />
+            <ResourceBar
+              label="RAM Usage"
+              value={host.ram_usage}
+            />
+            <ResourceBar
+              label="Disk Usage"
+              value={host.disk_usage}
+            />
+          </div>
 
-      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-sm">
-        <span className="text-slate-600">Storage Mount</span>
-        <span className={`px-2 py-0.5 rounded text-xs font-medium ${host.mount_status ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-          {host.mount_status ? 'MOUNTED' : 'UNMOUNTED'}
-        </span>
-      </div>
-    </div>
+          <div className="pt-3 border-t border-border flex items-center justify-between">
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <HardDrive size={14} />
+              <span className="text-xs">Storage Mount</span>
+            </div>
+            <Badge
+              variant={host.mount_status ? 'success' : 'destructive'}
+              className="text-[10px] uppercase"
+            >
+              {host.mount_status ? 'Mounted' : 'Unmounted'}
+            </Badge>
+          </div>
+        </CardContent>
+      </Card>
+    </TooltipProvider>
   );
 };

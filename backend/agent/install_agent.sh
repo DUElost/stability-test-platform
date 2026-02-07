@@ -21,8 +21,8 @@ NC='\033[0m' # No Color
 # 配置
 INSTALL_DIR="/opt/stability-test-agent"
 SERVICE_NAME="stability-test-agent"
-USER="stability-test"
-GROUP="stability-test"
+USER="android"
+GROUP="android"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -138,9 +138,9 @@ except:
 }
 
 # 提示用户输入 API_URL
-echo_info "请输入中心服务器的 API 地址 (默认: http://172.21.10.5:8000)"
+echo_info "请输入中心服务器的 API 地址 (默认: http://172.21.10.15:8000)"
 read -r -p "API_URL: " api_url_input
-API_URL="${api_url_input:-http://172.21.10.5:8000}"
+API_URL="${api_url_input:-http://172.21.10.15:8000}"
 
 # 获取本机信息用于生成唯一标识
 HOSTNAME=$(hostname)
@@ -195,8 +195,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=stability-test
-Group=stability-test
+User=android
+Group=android
 WorkingDirectory=/opt/stability-test-agent
 EnvironmentFile=-/opt/stability-test-agent/.env
 ExecStart=/opt/stability-test-agent/venv/bin/python -m agent.main

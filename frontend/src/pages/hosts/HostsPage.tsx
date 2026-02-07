@@ -54,12 +54,12 @@ export default function HostsPage() {
     },
   });
 
-  // 计算每个主机的设备数量
+  // 计算每个主机的设备数量（只统计在线设备）
   const deviceCountMap = useMemo(() => {
     if (!devices) return new Map<number, number>();
     const countMap = new Map<number, number>();
     devices.forEach((device: any) => {
-      if (device.host_id) {
+      if (device.host_id && device.status !== 'OFFLINE') {
         const current = countMap.get(device.host_id) || 0;
         countMap.set(device.host_id, current + 1);
       }

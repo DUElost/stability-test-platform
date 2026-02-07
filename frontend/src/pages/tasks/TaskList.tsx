@@ -24,9 +24,13 @@ export default function TaskList() {
   }
 
   const formattedTasks = tasks?.map(t => {
-    let status: 'running' | 'completed' | 'failed' = 'running';
-    if (t.status === 'COMPLETED') status = 'completed';
-    if (['FAILED', 'CANCELED'].includes(t.status)) status = 'failed';
+    // Map backend status to frontend display status
+    let status: 'running' | 'completed' | 'failed' | 'queued' | 'pending' = 'pending';
+    if (t.status === 'RUNNING') status = 'running';
+    else if (t.status === 'COMPLETED') status = 'completed';
+    else if (['FAILED', 'CANCELED'].includes(t.status)) status = 'failed';
+    else if (t.status === 'QUEUED') status = 'queued';
+    else if (t.status === 'PENDING') status = 'pending';
 
     return {
       id: String(t.id),

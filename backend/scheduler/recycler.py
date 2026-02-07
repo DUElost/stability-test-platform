@@ -7,13 +7,44 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, text
 
 from ..core.database import SessionLocal
-from ..models.schemas import DeviceStatus, RunStatus, Task, TaskRun, TaskStatus
+from ..models.schemas import DeviceStatus, HostStatus, RunStatus, Task, TaskRun, TaskStatus
 
 logger = logging.getLogger(__name__)
 
 DISPATCHED_TIMEOUT_SECONDS = int(os.getenv("RUN_DISPATCHED_TIMEOUT_SECONDS", "120"))
 RUNNING_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("RUN_HEARTBEAT_TIMEOUT_SECONDS", "900"))
+HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "300"))
 RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
+
+
+def _check_host_heartbeat_timeout(db, now: datetime) -> None:
+    """Mark hosts as OFFLINE if no heartbeat received within timeout period."""
+    from ..models.schemas import Host
+
+    offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
+
+    expired_hosts = (
+        db.query(Host)
+        .filter(
+            Host.status == HostStatus.ONLINE,
+            or_(
+                Host.last_heartbeat.is_(None),
+                Host.last_heartbeat < offline_deadline,
+            ),
+        )
+        .all()
+    )
+
+    for host in expired_hosts:
+        host.status = HostStatus.OFFLINE
+        logger.info(
+            "host_offline_by_heartbeat_timeout",
+            extra={
+                "host_id": host.id,
+                "host_name": host.name,
+                "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
+            },
+        )
 
 
 def _release_device_lock(db, device_id: int, run_id: int) -> None:
@@ -65,7 +96,10 @@ def recycle_once() -> None:
     now = datetime.utcnow()
     dispatched_deadline = now - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
     running_deadline = now - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
+
     with SessionLocal() as db:
+        # Check host heartbeat timeout first
+        _check_host_heartbeat_timeout(db, now)
         expired_dispatched = (
             db.query(TaskRun)
             .filter(TaskRun.status == RunStatus.DISPATCHED, TaskRun.created_at < dispatched_deadline)

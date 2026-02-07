@@ -4,3 +4,4 @@ sqlalchemy
 requests
 pydantic
 python-multipart
+paramiko
