@@ -1,11 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Device } from '../device/DeviceCard';
 import { DeviceSelector } from '../device/DeviceSelector';
 import { FileJson, Play } from 'lucide-react';
 
+interface TaskTemplate {
+  type: string;
+  name: string;
+  description: string;
+  default_params: Record<string, any>;
+}
+
 interface TaskFormProps {
   devices: Device[];
-  onSubmit: (task: any) => void;
+  templates?: TaskTemplate[];
+  onSubmit: (task: {
+    type: string;
+    deviceIds: number[];
+    config: Record<string, any>;
+  }) => void;
 }
 
 type TaskType = 'MONKEY' | 'AIMONKEY' | 'MTBF' | 'DDR' | 'GPU' | 'STANDBY';
@@ -18,6 +30,15 @@ const TASK_TYPES = [
   { id: 'GPU', name: 'GPU Stress', icon: '🎮', desc: 'Graphics performance test' },
   { id: 'STANDBY', name: 'Standby Power', icon: '🔋', desc: 'Power consumption test' },
 ];
+
+const TASK_TYPE_ICON_MAP: Record<string, string> = {
+  MONKEY: '🐵',
+  AIMONKEY: '🤖',
+  MTBF: '⚡',
+  DDR: '💾',
+  GPU: '🎮',
+  STANDBY: '🔋',
+};
 
 const DEFAULT_CONFIGS: Record<TaskType, any> = {
   MONKEY: { package: '', event_count: 10000, throttle: 300, seed: 0 },
@@ -38,15 +59,57 @@ const DEFAULT_CONFIGS: Record<TaskType, any> = {
   STANDBY: { video_url: '', standby_seconds: 60, screen_off: true },
 };
 
-export const CreateTaskForm: React.FC<TaskFormProps> = ({ devices, onSubmit }) => {
-  const [taskType, setTaskType] = useState<TaskType>('MONKEY');
-  const [selectedDevices, setSelectedDevices] = useState<string[]>([]);
-  const [config, setConfig] = useState(DEFAULT_CONFIGS.MONKEY);
+const cloneConfig = (value: Record<string, any>): Record<string, any> =>
+  JSON.parse(JSON.stringify(value || {}));
+
+export const CreateTaskForm: React.FC<TaskFormProps> = ({ devices, templates, onSubmit }) => {
+  const templateMap = useMemo(() => {
+    const map = new Map<string, TaskTemplate>();
+    (templates || []).forEach((tpl) => map.set(tpl.type.toUpperCase(), tpl));
+    return map;
+  }, [templates]);
+
+  const taskOptions = useMemo(() => {
+    if (!templates || templates.length === 0) {
+      return TASK_TYPES.map((item) => ({ ...item, id: item.id.toUpperCase() }));
+    }
+    return templates.map((tpl) => {
+      const key = tpl.type.toUpperCase();
+      return {
+        id: key,
+        name: tpl.name || key,
+        icon: TASK_TYPE_ICON_MAP[key] || '🧪',
+        desc: tpl.description || key,
+      };
+    });
+  }, [templates]);
+
+  const [taskType, setTaskType] = useState<string>('MONKEY');
+  const [selectedDevices, setSelectedDevices] = useState<number[]>([]);
+  const [config, setConfig] = useState<Record<string, any>>(cloneConfig(DEFAULT_CONFIGS.MONKEY));
   const [showJson, setShowJson] = useState(false);
 
+  const getDefaultConfig = (type: string): Record<string, any> => {
+    const templateDefault = templateMap.get(type)?.default_params;
+    if (templateDefault && Object.keys(templateDefault).length > 0) {
+      return cloneConfig(templateDefault);
+    }
+    const fallback = DEFAULT_CONFIGS[type as TaskType] || {};
+    return cloneConfig(fallback);
+  };
+
   useEffect(() => {
-    setConfig(DEFAULT_CONFIGS[taskType]);
-  }, [taskType]);
+    if (taskOptions.length === 0) {
+      return;
+    }
+    if (!taskOptions.find((option) => option.id === taskType)) {
+      setTaskType(taskOptions[0].id);
+    }
+  }, [taskOptions, taskType]);
+
+  useEffect(() => {
+    setConfig(getDefaultConfig(taskType));
+  }, [taskType, templateMap]);
 
   const handleConfigChange = (key: string, value: any) => {
     setConfig((prev: any) => ({ ...prev, [key]: value }));
@@ -54,15 +117,25 @@ export const CreateTaskForm: React.FC<TaskFormProps> = ({ devices, onSubmit }) =
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    const normalizedConfig: Record<string, any> = { ...config };
+    if (taskType === 'MONKEY') {
+      const packageName = (normalizedConfig.package || '').trim();
+      if (packageName) {
+        normalizedConfig.packages = [packageName];
+      }
+      delete normalizedConfig.package;
+    }
+
     onSubmit({
       type: taskType,
-      devices: selectedDevices,
-      config
+      deviceIds: selectedDevices,
+      config: normalizedConfig,
     });
   };
 
   const renderConfigFields = () => {
-    switch (taskType) {
+    switch (taskType as TaskType) {
       case 'MONKEY':
         return (
           <>
@@ -72,7 +145,7 @@ export const CreateTaskForm: React.FC<TaskFormProps> = ({ devices, onSubmit }) =
                 <input
                   type="text"
                   required
-                  value={config.package || ''}
+                  value={config.package || (Array.isArray(config.packages) ? config.packages[0] : '')}
                   onChange={e => handleConfigChange('package', e.target.value)}
                   placeholder="com.example.app"
                   className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -295,11 +368,11 @@ export const CreateTaskForm: React.FC<TaskFormProps> = ({ devices, onSubmit }) =
       <section>
         <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">1. Select Task Type</h3>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {TASK_TYPES.map(type => (
+          {taskOptions.map(type => (
             <button
               key={type.id}
               type="button"
-              onClick={() => setTaskType(type.id as TaskType)}
+              onClick={() => setTaskType(type.id)}
               className={`p-4 rounded-lg border text-center transition-all ${
                 taskType === type.id
                   ? 'border-indigo-600 bg-indigo-50 text-indigo-700 ring-2 ring-indigo-100'
@@ -335,7 +408,7 @@ export const CreateTaskForm: React.FC<TaskFormProps> = ({ devices, onSubmit }) =
 
       <section>
         <h3 className="text-sm font-semibold text-slate-500 uppercase tracking-wider mb-3">3. Target Devices ({selectedDevices.length})</h3>
-        <DeviceSelector devices={devices} selectedSerials={selectedDevices} onChange={setSelectedDevices} />
+        <DeviceSelector devices={devices} selectedDeviceIds={selectedDevices} onChange={setSelectedDevices} />
       </section>
 
       <div className="pt-4 border-t border-slate-100 flex justify-end">

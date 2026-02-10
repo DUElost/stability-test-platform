@@ -11,6 +11,11 @@ const apiClient = axios.create({
 // 请求拦截器
 apiClient.interceptors.request.use(
   (config) => {
+    // 添加认证 token
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
     console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
@@ -26,8 +31,41 @@ apiClient.interceptors.response.use(
     console.log(`[API] Response:`, response.data);
     return response;
   },
-  (error) => {
+  async (error) => {
     console.error('[API] Response error:', error);
+
+    // 处理 401 未授权错误
+    if (error.response?.status === 401) {
+      const refreshToken = localStorage.getItem('refresh_token');
+      if (refreshToken && error.config && !error.config.__retry) {
+        error.config.__retry = true;
+        try {
+          // 尝试刷新 token
+          const response = await axios.post('/api/v1/auth/refresh', {
+            refresh_token: refreshToken,
+          });
+          const { access_token, refresh_token } = response.data;
+          localStorage.setItem('access_token', access_token);
+          localStorage.setItem('refresh_token', refresh_token);
+
+          // 重试原请求
+          error.config.headers.Authorization = `Bearer ${access_token}`;
+          return apiClient(error.config);
+        } catch (refreshError) {
+          // 刷新失败，清除 token 并跳转登录
+          localStorage.removeItem('access_token');
+          localStorage.removeItem('refresh_token');
+          window.location.href = '/login';
+          return Promise.reject(refreshError);
+        }
+      } else {
+        // 没有 refresh token，直接跳转登录
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        window.location.href = '/login';
+      }
+    }
+
     return Promise.reject(error);
   }
 );
@@ -96,6 +134,85 @@ export interface TaskRun {
   error_code: string | null;
   error_message: string | null;
   log_summary: string | null;
+  artifacts: LogArtifact[];
+  risk_summary?: RunRiskSummary | null;
+}
+
+export interface LogArtifact {
+  id: number;
+  run_id: number;
+  storage_uri: string;
+  size_bytes: number | null;
+  checksum: string | null;
+  created_at: string;
+}
+
+export interface RunRiskSummary {
+  generated_at?: string;
+  risk_level?: 'LOW' | 'MEDIUM' | 'HIGH' | string;
+  monitor_summary?: string;
+  counts?: {
+    events_total?: number;
+    aee_entries?: number;
+    restart_count?: number;
+    by_type?: Record<string, number>;
+  };
+}
+
+export interface RunRiskAlert {
+  code: string;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  message: string;
+  metric?: string | null;
+  value?: number | null;
+  threshold?: number | null;
+}
+
+export interface RunReport {
+  generated_at: string;
+  run: TaskRun;
+  task: Task;
+  host: {
+    id: number;
+    name: string;
+    ip: string;
+    status: string;
+  } | null;
+  device: {
+    id: number;
+    serial: string;
+    model: string | null;
+    host_id: number | null;
+    status: string;
+  } | null;
+  summary_metrics: Record<string, any>;
+  risk_summary: RunRiskSummary | null;
+  alerts: RunRiskAlert[];
+}
+
+export interface JiraDraft {
+  run_id: number;
+  task_id: number;
+  project_key: string;
+  issue_type: string;
+  priority: 'Critical' | 'Major' | 'Minor';
+  component?: string | null;
+  fix_version?: string | null;
+  assignee?: string | null;
+  summary: string;
+  description: string;
+  labels: string[];
+  environment: Record<string, any>;
+  custom_fields: Record<string, any>;
+  extra: Record<string, any>;
+}
+
+export interface TaskTemplate {
+  type: string;
+  name: string;
+  description: string;
+  default_params: Record<string, any>;
+  script_paths: Record<string, string>;
 }
 
 export interface AgentLogOut {
@@ -128,11 +245,26 @@ export const api = {
   tasks: {
     list: () => apiClient.get<Task[]>('/tasks'),
     get: (id: number) => apiClient.get<Task>(`/tasks/${id}`),
-    create: (data: { name: string; type: string; params?: Record<string, any>; priority?: number }) =>
+    listTemplates: () => apiClient.get<TaskTemplate[]>('/task-templates'),
+    create: (data: {
+      name: string;
+      type: string;
+      template_id?: number;
+      target_device_id?: number;
+      device_serial?: string;
+      params?: Record<string, any>;
+      priority?: number;
+    }) =>
       apiClient.post<Task>('/tasks', data),
     dispatch: (taskId: number, data: { host_id: number; device_id: number }) =>
       apiClient.post<TaskRun>(`/tasks/${taskId}/dispatch`, data),
     getRuns: (taskId: number) => apiClient.get<TaskRun[]>(`/tasks/${taskId}/runs`),
+    getRunReport: (runId: number) => apiClient.get<RunReport>(`/runs/${runId}/report`),
+    getRunReportExportUrl: (runId: number, format: 'markdown' | 'json' = 'markdown') =>
+      `/api/v1/runs/${runId}/report/export?format=${format}`,
+    createRunJiraDraft: (runId: number) => apiClient.post<JiraDraft>(`/runs/${runId}/jira-draft`),
+    artifactDownloadUrl: (taskId: number, runId: number, artifactId: number) =>
+      `/api/v1/tasks/${taskId}/runs/${runId}/artifacts/${artifactId}/download`,
     // 查询Agent日志
     queryAgentLogs: (data: { host_id: number; log_path?: string; lines?: number }) =>
       apiClient.post<AgentLogOut>('/agent/logs', data),

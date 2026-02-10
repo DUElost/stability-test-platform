@@ -1,4 +1,5 @@
 import { Bell, Menu, Search, User } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -18,6 +19,13 @@ interface HeaderProps {
 }
 
 export default function Header({ onMenuClick, showMenuButton = false }: HeaderProps) {
+  const navigate = useNavigate();
+
+  const handleLogout = () => {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    navigate('/login');
+  };
   return (
     <header className="h-16 px-4 sm:px-6 flex items-center justify-between shrink-0 border-b border-border/50 bg-card/50 backdrop-blur-sm">
       <div className="flex items-center gap-4">
@@ -97,10 +105,16 @@ export default function Header({ onMenuClick, showMenuButton = false }: HeaderPr
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>My Account</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>Profile</DropdownMenuItem>
-            <DropdownMenuItem>Settings</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => alert('Profile功能待实现')}>
+              Profile
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => alert('Settings功能待实现')}>
+              Settings
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem className="text-destructive">Log out</DropdownMenuItem>
+            <DropdownMenuItem onClick={handleLogout} className="text-destructive">
+              Log out
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

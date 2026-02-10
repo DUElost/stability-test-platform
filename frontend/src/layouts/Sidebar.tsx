@@ -8,8 +8,10 @@ import {
   FileText,
   ChevronLeft,
   ChevronRight,
-  Zap
+  Zap,
+  LogOut
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -61,7 +63,14 @@ interface SidebarProps {
 
 export default function Sidebar({ onNavigate, collapsed = false, onToggleCollapse }: SidebarProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const [isMobile, setIsMobile] = useState(false);
+
+  const handleLogout = () => {
+    localStorage.removeItem('access_token');
+    localStorage.removeItem('refresh_token');
+    navigate('/login');
+  };
 
   useEffect(() => {
     const checkMobile = () => setIsMobile(window.innerWidth < 1024);
@@ -202,6 +211,20 @@ export default function Sidebar({ onNavigate, collapsed = false, onToggleCollaps
 
             return linkContent;
           })}
+
+          {/* Logout Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleLogout}
+            className={cn(
+              "w-full mt-2 flex items-center gap-2 text-muted-foreground hover:text-red-600 hover:bg-red-50",
+              collapsed && "justify-center px-2"
+            )}
+          >
+            <LogOut size={16} />
+            {!collapsed && <span className="text-xs">退出登录</span>}
+          </Button>
 
           {/* Collapse Toggle Button (Desktop only) */}
           {!isMobile && onToggleCollapse && (

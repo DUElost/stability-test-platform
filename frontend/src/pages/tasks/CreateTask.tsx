@@ -13,6 +13,7 @@ const deviceStatusMap: Record<string, Device['status']> = {
 
 function toComponentDevice(device: any): Device {
   return {
+    id: device.id,
     serial: device.serial,
     model: device.model || 'Unknown',
     status: deviceStatusMap[device.status] || 'offline',
@@ -29,14 +30,19 @@ export default function CreateTask() {
     queryFn: () => api.devices.list().then(res => res.data),
   });
 
-  const handleSubmit = async (taskData: any) => {
+  const { data: templates } = useQuery({
+    queryKey: ['task-templates'],
+    queryFn: () => api.tasks.listTemplates().then(res => res.data),
+  });
+
+  const handleSubmit = async (taskData: { type: string; deviceIds: number[]; config: Record<string, any> }) => {
     try {
       // Create a task for each selected device
-      const promises = taskData.devices.map((deviceSerial: string) =>
+      const promises = taskData.deviceIds.map((deviceId: number) =>
         api.tasks.create({
-          name: `${taskData.type}-${deviceSerial}-${Date.now()}`,
+          name: `${taskData.type}-device-${deviceId}-${Date.now()}`,
           type: taskData.type,
-          device_serial: deviceSerial,
+          target_device_id: deviceId,
           params: taskData.config,
         })
       );
@@ -58,6 +64,7 @@ export default function CreateTask() {
 
       <CreateTaskForm
         devices={devices ? devices.map(toComponentDevice) : []}
+        templates={templates}
         onSubmit={handleSubmit}
       />
     </div>

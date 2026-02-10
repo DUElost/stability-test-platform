@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { LogViewer } from '../../components/log/LogViewer';
-import { api, AgentLogOut } from '../../utils/api';
+import { api, AgentLogOut, JiraDraft } from '../../utils/api';
 
 export default function TaskDetails() {
   const { taskId } = useParams();
   const id = Number(taskId);
   const [agentLogContent, setAgentLogContent] = useState<string>('');
   const [showAgentLog, setShowAgentLog] = useState(false);
+  const [jiraDraftContent, setJiraDraftContent] = useState<string>('');
 
   const { data: task } = useQuery({
     queryKey: ['tasks', id],
@@ -26,6 +27,18 @@ export default function TaskDetails() {
 
   // 获取当前活跃的 run（最新的运行记录）
   const activeRun = runs?.[0];
+  const riskSummary = activeRun?.risk_summary;
+  const { data: runReport } = useQuery({
+    queryKey: ['runs', activeRun?.id, 'report'],
+    queryFn: () => api.tasks.getRunReport(activeRun!.id).then(res => res.data),
+    enabled: !!activeRun?.id,
+    refetchInterval: task?.status === 'RUNNING' ? 5000 : false,
+  });
+  const reportRiskSummary = runReport?.risk_summary;
+  const riskAlerts = runReport?.alerts || [];
+  const latestArtifact = activeRun?.artifacts?.length
+    ? activeRun.artifacts[activeRun.artifacts.length - 1]
+    : null;
 
   // 查询Agent日志
   const queryAgentLogMutation = useMutation({
@@ -51,6 +64,31 @@ export default function TaskDetails() {
     onError: (error: Error) => {
       setAgentLogContent(`Error: ${error.message}`);
       setShowAgentLog(true);
+    },
+  });
+
+  const createJiraDraftMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeRun?.id) {
+        throw new Error('No run_id available');
+      }
+      const response = await api.tasks.createRunJiraDraft(activeRun.id);
+      return response.data;
+    },
+    onSuccess: (data: JiraDraft) => {
+      setJiraDraftContent(
+        `Project: ${data.project_key}\n` +
+        `Component: ${data.component || '-'}\n` +
+        `Fix Version: ${data.fix_version || '-'}\n` +
+        `Assignee: ${data.assignee || '-'}\n` +
+        `Summary: ${data.summary}\n` +
+        `Priority: ${data.priority}\n` +
+        `Labels: ${(data.labels || []).join(', ')}\n\n` +
+        `${data.description}`
+      );
+    },
+    onError: (error: Error) => {
+      setJiraDraftContent(`Error: ${error.message}`);
     },
   });
 
@@ -93,6 +131,51 @@ export default function TaskDetails() {
                 <label className="text-slate-500 block">Host ID</label>
                 <span className="font-mono">{activeRun.host_id}</span>
               </div>
+              <div>
+                <label className="text-slate-500 block">Artifacts</label>
+                <span className="font-mono">{activeRun.artifacts?.length || 0}</span>
+              </div>
+              <div>
+                <label className="text-slate-500 block">Risk Level</label>
+                <span className="font-mono">{reportRiskSummary?.risk_level || riskSummary?.risk_level || 'N/A'}</span>
+              </div>
+              <div>
+                <label className="text-slate-500 block">Risk Events</label>
+                <span className="font-mono">{reportRiskSummary?.counts?.events_total ?? riskSummary?.counts?.events_total ?? 0}</span>
+              </div>
+              <div>
+                <label className="text-slate-500 block">Alerts</label>
+                <span className="font-mono">{riskAlerts.length}</span>
+              </div>
+              <div>
+                <label className="text-slate-500 block">Run Summary</label>
+                <div className="text-xs break-all font-mono">{activeRun.log_summary || '-'}</div>
+              </div>
+              {riskAlerts.length > 0 && (
+                <div>
+                  <label className="text-slate-500 block">Top Alert</label>
+                  <div className="text-xs break-all font-mono text-amber-700">
+                    [{riskAlerts[0].severity}] {riskAlerts[0].message}
+                  </div>
+                </div>
+              )}
+              {latestArtifact && (
+                <div>
+                  <label className="text-slate-500 block">Latest Artifact</label>
+                  <div className="text-xs break-all font-mono">{latestArtifact.storage_uri}</div>
+                  <button
+                    className="mt-2 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-500"
+                    onClick={() => {
+                      window.open(
+                        api.tasks.artifactDownloadUrl(task.id, activeRun.id, latestArtifact.id),
+                        '_blank'
+                      );
+                    }}
+                  >
+                    Download Latest Artifact
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -111,6 +194,24 @@ export default function TaskDetails() {
             <p className="text-xs text-slate-500 mt-2">
               Query agent logs from Linux host via SSH
             </p>
+            <button
+              onClick={() => window.open(api.tasks.getRunReportExportUrl(activeRun.id, 'markdown'), '_blank')}
+              className="mt-3 w-full px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500 transition-colors"
+            >
+              Export Run Report (Markdown)
+            </button>
+            <button
+              onClick={() => createJiraDraftMutation.mutate()}
+              disabled={createJiraDraftMutation.isPending}
+              className="mt-2 w-full px-4 py-2 bg-amber-600 text-white text-sm rounded hover:bg-amber-500 disabled:bg-slate-400 disabled:cursor-not-allowed transition-colors"
+            >
+              {createJiraDraftMutation.isPending ? 'Generating Draft...' : 'Generate JIRA Draft'}
+            </button>
+            {jiraDraftContent && (
+              <pre className="mt-3 p-2 bg-slate-100 border border-slate-200 text-[11px] whitespace-pre-wrap break-all max-h-40 overflow-auto">
+                {jiraDraftContent}
+              </pre>
+            )}
           </div>
         )}
       </div>
