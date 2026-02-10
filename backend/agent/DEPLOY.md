@@ -2,6 +2,10 @@
 
 本文档介绍如何在 Linux 主机上部署和运行 Stability Test Platform Agent。
 
+说明：
+- 本文档仅覆盖 Agent 部署，安装入口在 `backend/agent/install_agent.sh`。
+- 控制平面（后端+前端+Nginx）模板位于 `deploy/control-plane/`。
+
 ---
 
 ## 前提条件

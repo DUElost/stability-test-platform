@@ -3,13 +3,18 @@ import os
 import re
 import subprocess
 import time
+import tarfile
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
 from .adb_wrapper import AdbError, AdbWrapper
+from .aimonkey_aee import AEEEntry, scan_aee_entries, scan_and_pull_aee_entries
+from .aimonkey_risk import build_risk_summary, write_risk_summary
+from .aimonkey_stages import AIMonkeyStage, stage_progress
 
 
 @dataclass
@@ -19,6 +24,7 @@ class TaskResult:
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     log_summary: Optional[str] = None
+    artifact: Optional[Dict[str, Any]] = None
 
 
 class TaskExecutor:
@@ -111,6 +117,78 @@ class TaskExecutor:
         if not self._safe_pattern.match(sval):
             raise ValueError(f"{field} contains unsafe characters")
         return sval
+
+    def _to_bool(self, value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"1", "true", "yes", "on"}:
+                return True
+            if lowered in {"0", "false", "no", "off"}:
+                return False
+        return default
+
+    def _validate_aimonkey_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        runtime_minutes = int(params.get("runtime_minutes", 10080))
+        if runtime_minutes <= 0:
+            raise ValueError("runtime_minutes must be > 0")
+
+        throttle_ms = int(params.get("throttle_ms", 500))
+        if throttle_ms <= 0:
+            raise ValueError("throttle_ms must be > 0")
+
+        max_restarts = int(params.get("max_restarts", 1))
+        if max_restarts < 0:
+            raise ValueError("max_restarts must be >= 0")
+
+        target_fill_percentage = int(params.get("target_fill_percentage", 60))
+        if target_fill_percentage < 1 or target_fill_percentage > 95:
+            raise ValueError("target_fill_percentage must be between 1 and 95")
+
+        raw_run_id = params.get("run_id")
+        run_id: Optional[int] = None
+        if raw_run_id not in (None, ""):
+            run_id = int(raw_run_id)
+            if run_id <= 0:
+                raise ValueError("run_id must be > 0 when provided")
+
+        validated = dict(params)
+        validated["runtime_minutes"] = runtime_minutes
+        validated["throttle_ms"] = throttle_ms
+        validated["max_restarts"] = max_restarts
+        validated["target_fill_percentage"] = target_fill_percentage
+        validated["run_id"] = run_id
+        validated["api_url"] = str(params.get("api_url", "")).strip()
+        validated["process_name"] = self._safe(
+            params.get("process_name", "com.android.commands.monkey.transsion"),
+            "process_name",
+        )
+        validated["wifi_ssid"] = self._safe_optional(params.get("wifi_ssid"), "wifi_ssid") or ""
+        validated["wifi_password"] = self._safe_optional(params.get("wifi_password"), "wifi_password") or ""
+        validated["enable_fill_storage"] = self._to_bool(params.get("enable_fill_storage"), True)
+        validated["enable_clear_logs"] = self._to_bool(params.get("enable_clear_logs"), True)
+        return validated
+
+    def _aimonkey_stage_update(
+        self,
+        stage: AIMonkeyStage,
+        api_url: str,
+        run_id: Optional[int],
+        message: str,
+    ) -> None:
+        progress = stage_progress(stage)
+        self._log(f"[{stage.value}] {message}", "INFO")
+        self._send_heartbeat(
+            api_url,
+            run_id,
+            progress,
+            f"{stage.value}: {message}",
+        )
 
     def _run_monkey(self, serial: str, params: Dict[str, Any]) -> TaskResult:
         packages = params.get("packages") or []
@@ -232,53 +310,107 @@ class TaskExecutor:
 
     def _run_aimonkey(self, serial: str, params: Dict[str, Any]) -> TaskResult:
         """AIMONKEY 主流程：设备配置 → 启动 Monkey → 监控 → 日志收集"""
-        run_id = params.get("run_id")
-        api_url = params.get("api_url", "")
-        log_dir = params.get("log_dir") or self._aimonkey_log_dir(run_id)
+        try:
+            validated_params = self._validate_aimonkey_params(params)
+        except ValueError as exc:
+            return TaskResult(status="FAILED", exit_code=1, error_code="INVALID_PARAM", error_message=str(exc))
+
+        run_id = validated_params.get("run_id")
+        api_url = validated_params.get("api_url", "")
+        log_dir = validated_params.get("log_dir") or self._aimonkey_log_dir(run_id)
 
         # 设置日志上下文
         self._api_url = api_url
         self._run_id = run_id
         self._log_buffer = []
 
-        runtime_minutes = int(params.get("runtime_minutes", 10080))
-        throttle_ms = int(params.get("throttle_ms", 500))
-        max_restarts = int(params.get("max_restarts", 1))
+        runtime_minutes = validated_params["runtime_minutes"]
+        throttle_ms = validated_params["throttle_ms"]
+        max_restarts = validated_params["max_restarts"]
 
-        self._log(f"AIMONKEY任务开始: device={serial}, runtime={runtime_minutes}min", "INFO")
+        self._aimonkey_stage_update(
+            AIMonkeyStage.PRECHECK,
+            api_url,
+            run_id,
+            f"AIMONKEY任务开始: device={serial}, runtime={runtime_minutes}min",
+        )
 
         try:
-            self._log("开始设备配置...", "INFO")
-            self._aimonkey_setup(serial, params)
-            self._log("设备配置完成", "INFO")
+            self._aimonkey_stage_update(AIMonkeyStage.PREPARE, api_url, run_id, "开始设备前置准备")
+            if validated_params["enable_fill_storage"]:
+                self._aimonkey_stage_update(
+                    AIMonkeyStage.FILL_STORAGE,
+                    api_url,
+                    run_id,
+                    f"资源填充已启用，目标占用={validated_params['target_fill_percentage']}%",
+                )
+            self._aimonkey_setup(serial, validated_params)
+            self._aimonkey_stage_update(AIMonkeyStage.PREPARE, api_url, run_id, "设备前置准备完成")
 
-            self._log("开始推送资源并启动Monkey...", "INFO")
-            pid = self._aimonkey_start_monkey(serial, params)
+            self._aimonkey_stage_update(AIMonkeyStage.RUN, api_url, run_id, "开始推送资源并启动Monkey")
+            pid = self._aimonkey_start_monkey(serial, validated_params)
             if not pid:
                 error_msg = "Failed to start monkey or capture PID"
-                self._log(f"启动失败: {error_msg}", "ERROR")
+                self._log(f"[{AIMonkeyStage.RUN.value}] 启动失败: {error_msg}", "ERROR")
                 return TaskResult(
                     status="FAILED",
                     exit_code=1,
                     error_code="MONKEY_START_FAILED",
                     error_message=error_msg,
                 )
-            self._log(f"Monkey进程已启动: PID={pid}", "INFO")
+            self._aimonkey_stage_update(AIMonkeyStage.RUN, api_url, run_id, f"Monkey进程已启动: PID={pid}")
 
-            self._log("开始监控Monkey运行...", "INFO")
+            self._aimonkey_stage_update(AIMonkeyStage.MONITOR, api_url, run_id, "开始监控Monkey运行")
             summary, final_pid = self._aimonkey_monitor(
-                serial, pid, runtime_minutes, throttle_ms, max_restarts, log_dir, params, api_url, run_id
+                serial, pid, runtime_minutes, throttle_ms, max_restarts, log_dir, validated_params, api_url, run_id
             )
-            self._log(f"监控结束: {summary}", "INFO")
+            self._aimonkey_stage_update(AIMonkeyStage.MONITOR, api_url, run_id, f"监控结束: {summary}")
 
-            self._log("停止Monkey进程...", "INFO")
+            self._aimonkey_stage_update(AIMonkeyStage.RISK_SCAN, api_url, run_id, "执行风险问题检查")
+            aee_entries = scan_aee_entries(self.adb, serial)
+            risk_summary = build_risk_summary(
+                monitor_summary=summary,
+                logcat_path=Path(log_dir) / "logcat.txt",
+                aee_entries=aee_entries,
+                restart_warn_threshold=int(validated_params.get("restart_warn_threshold", 1)),
+            )
+            risk_summary_path = Path(log_dir) / "risk_summary.json"
+            write_risk_summary(risk_summary, risk_summary_path)
+            self._log(
+                f"风险检查完成: level={risk_summary['risk_level']}, events={risk_summary['counts']['events_total']}",
+                "INFO",
+            )
+            self._aimonkey_stage_update(
+                AIMonkeyStage.TEARDOWN,
+                api_url,
+                run_id,
+                "结束测试，停止Monkey进程",
+            )
             self._aimonkey_stop_monkey(serial, final_pid or pid)
 
-            self._log("收集日志文件...", "INFO")
-            self._aimonkey_collect_logs(serial, log_dir)
+            self._aimonkey_stage_update(AIMonkeyStage.EXPORT, api_url, run_id, "日志回传导出中")
+            export_meta = self._aimonkey_collect_logs(serial, log_dir, aee_entries=aee_entries)
+            self._log(
+                f"日志导出完成: aee_scanned={export_meta['aee_scanned']}, "
+                f"aee_pulled={export_meta['aee_pulled']}, bugreport={export_meta['bugreport_exported']}",
+                "INFO",
+            )
+            artifact = self._build_log_artifact(log_dir, run_id)
+            if artifact:
+                self._log(
+                    f"日志产物打包完成: {artifact['storage_uri']} ({artifact.get('size_bytes')} bytes)",
+                    "INFO",
+                )
+            self._aimonkey_stage_update(AIMonkeyStage.TEARDOWN, api_url, run_id, "测试后置完成")
 
             self._log("任务完成", "INFO")
-            return TaskResult(status="FINISHED", exit_code=0, log_summary=self._tail(summary))
+            final_summary = self._aimonkey_result_summary(summary, risk_summary)
+            return TaskResult(
+                status="FINISHED",
+                exit_code=0,
+                log_summary=self._tail(final_summary),
+                artifact=artifact,
+            )
         except AdbError as exc:
             error_msg = str(exc)
             self._log(f"ADB错误: {error_msg}", "ERROR")
@@ -385,7 +517,7 @@ class TaskExecutor:
         """连接 WiFi，失败仅记录日志不中断"""
         try:
             safe_ssid = self._safe(ssid, "wifi_ssid")
-            safe_pwd = self._safe_optional(password) or ""
+            safe_pwd = self._safe_optional(password, "wifi_password") or ""
             self.adb.shell(serial, ["svc", "wifi", "enable"])
             time.sleep(1)
             cmd = f'cmd -w wifi connect-network "{safe_ssid}" wpa2 "{safe_pwd}"'
@@ -709,27 +841,87 @@ class TaskExecutor:
         except requests.RequestException as exc:
             self._logger.debug("heartbeat_failed: %s", exc)
 
-    def _aimonkey_collect_logs(self, serial: str, log_dir: str) -> None:
+    def _aimonkey_collect_logs(
+        self,
+        serial: str,
+        log_dir: str,
+        aee_entries: Optional[Sequence[AEEEntry]] = None,
+    ) -> Dict[str, Any]:
         """收集 AEE、mobilelog、bugreport 等日志"""
         Path(log_dir).mkdir(parents=True, exist_ok=True)
+        export_meta: Dict[str, Any] = {
+            "aee_scanned": 0,
+            "aee_pulled": 0,
+            "bugreport_exported": False,
+        }
 
-        pull_targets = [
-            ("/data/aee_exp", "aee_exp"),
-            ("/data/vendor/aee_exp", "aee_exp_vendor"),
-            ("/data/debuglogger", "debuglogger"),
-        ]
+        scanned_entries, pulled_records = scan_and_pull_aee_entries(
+            self.adb,
+            serial,
+            log_dir,
+            entries=aee_entries,
+        )
+        export_meta["aee_scanned"] = len(scanned_entries)
+        export_meta["aee_pulled"] = sum(1 for item in pulled_records if item.get("pulled"))
 
-        for remote, local_name in pull_targets:
-            try:
-                local_path = Path(log_dir) / local_name
-                local_path.mkdir(exist_ok=True)
-                self.adb.pull(serial, remote, str(local_path))
-            except AdbError as exc:
-                self._logger.debug("pull_failed: %s - %s", remote, exc)
+        try:
+            debuglogger_path = Path(log_dir) / "debuglogger"
+            debuglogger_path.mkdir(exist_ok=True)
+            self.adb.pull(serial, "/data/debuglogger", str(debuglogger_path))
+        except AdbError as exc:
+            self._logger.debug("pull_failed: /data/debuglogger - %s", exc)
 
         try:
             bugreport_path = "/sdcard/bugreport-aimonkey.txt"
             self.adb.shell(serial, ["bugreport", bugreport_path])
             self.adb.pull(serial, bugreport_path, str(Path(log_dir) / "bugreport.txt"))
+            export_meta["bugreport_exported"] = True
         except AdbError as exc:
             self._logger.debug("bugreport_failed: %s", exc)
+        return export_meta
+
+    def _build_log_artifact(self, log_dir: str, run_id: Optional[int]) -> Optional[Dict[str, Any]]:
+        base_dir = Path(log_dir)
+        if not base_dir.exists() or not base_dir.is_dir():
+            return None
+        archive_name = str(run_id) if run_id else base_dir.name
+        archive_path = base_dir.parent / f"{archive_name}.tar.gz"
+        try:
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(base_dir, arcname=base_dir.name)
+
+            checksum = self._sha256_file(archive_path)
+            return {
+                "storage_uri": f"file://{archive_path.resolve()}",
+                "size_bytes": archive_path.stat().st_size,
+                "checksum": checksum,
+            }
+        except Exception as exc:
+            self._logger.warning("build_log_artifact_failed: %s", exc)
+            return None
+
+    def _aimonkey_result_summary(self, monitor_summary: str, risk_summary: Dict[str, Any]) -> str:
+        counts = risk_summary.get("counts") if isinstance(risk_summary, dict) else {}
+        if not isinstance(counts, dict):
+            counts = {}
+        risk_level = str(risk_summary.get("risk_level", "UNKNOWN")) if isinstance(risk_summary, dict) else "UNKNOWN"
+        events_total = counts.get("events_total", 0)
+        restart_count = counts.get("restart_count", 0)
+        aee_entries = counts.get("aee_entries", 0)
+        return (
+            f"monitor={monitor_summary}; "
+            f"risk={risk_level}; "
+            f"events={events_total}; "
+            f"restarts={restart_count}; "
+            f"aee_entries={aee_entries}"
+        )
+
+    def _sha256_file(self, file_path: Path) -> str:
+        hasher = hashlib.sha256()
+        with file_path.open("rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                hasher.update(chunk)
+        return hasher.hexdigest()

@@ -5,6 +5,8 @@ AIMONKEY 任务单元测试
 import os
 import sys
 import time
+import tarfile
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
@@ -17,9 +19,11 @@ sys.path.insert(0, str(project_root))
 try:
     from backend.agent.task_executor import TaskExecutor, TaskResult
     from backend.agent.adb_wrapper import AdbError
+    from backend.agent.aimonkey_stages import AIMonkeyStage, stage_progress
 except ModuleNotFoundError:
     from agent.task_executor import TaskExecutor, TaskResult
     from agent.adb_wrapper import AdbError
+    from agent.aimonkey_stages import AIMonkeyStage, stage_progress
 
 
 class MockAdbWrapper:
@@ -106,8 +110,15 @@ class TestAIMonkeyTask(unittest.TestCase):
             result = self.executor.execute_task("AIMONKEY", params, "test_serial")
 
             # 验证所有步骤被调用
-            mock_setup.assert_called_once_with("test_serial", params)
-            mock_start.assert_called_once_with("test_serial", params)
+            mock_setup.assert_called_once()
+            setup_args = mock_setup.call_args[0]
+            self.assertEqual(setup_args[0], "test_serial")
+            self.assertEqual(setup_args[1]["runtime_minutes"], 1)
+            mock_start.assert_called_once()
+            start_args = mock_start.call_args[0]
+            self.assertEqual(start_args[0], "test_serial")
+            self.assertEqual(start_args[1]["runtime_minutes"], 1)
+            self.assertEqual(start_args[1]["throttle_ms"], 100)
             mock_monitor.assert_called_once()
             mock_stop.assert_called_once_with("test_serial", "1234")
             mock_collect.assert_called_once()
@@ -198,6 +209,104 @@ class TestAIMonkeyTask(unittest.TestCase):
         self.assertEqual(result.status, "FAILED")
         self.assertEqual(result.error_code, "ADB_ERROR")
         self.assertIn("device offline", result.error_message)
+
+    def test_invalid_aimonkey_params(self):
+        """测试 AIMONKEY 参数校验失败"""
+        result = self.executor.execute_task(
+            "AIMONKEY",
+            {"runtime_minutes": 0, "throttle_ms": 100},
+            "test_serial",
+        )
+        self.assertEqual(result.status, "FAILED")
+        self.assertEqual(result.error_code, "INVALID_PARAM")
+        self.assertIn("runtime_minutes", result.error_message)
+
+    def test_connect_wifi_safe_optional_signature(self):
+        """测试 WiFi 密码安全处理参数完整"""
+        with patch.object(self.executor, "_safe_optional", wraps=self.executor._safe_optional) as mock_safe_opt:
+            self.executor._connect_wifi("test_serial", "WiFi-5G", "pass123")
+            mock_safe_opt.assert_called_once_with("pass123", "wifi_password")
+
+    def test_aimonkey_stage_heartbeat_emitted(self):
+        """测试 AIMONKEY 阶段化心跳上报"""
+        params = {
+            "runtime_minutes": 1,
+            "throttle_ms": 100,
+            "enable_fill_storage": False,
+            "enable_clear_logs": False,
+            "api_url": "http://127.0.0.1:8000",
+            "run_id": 99,
+        }
+        with patch.object(self.executor, "_send_heartbeat") as mock_stage_heartbeat, \
+             patch.object(self.executor, "_aimonkey_setup"), \
+             patch.object(self.executor, "_aimonkey_start_monkey", return_value="1234"), \
+             patch.object(self.executor, "_aimonkey_monitor", return_value=("completed", "1234")), \
+             patch.object(self.executor, "_aimonkey_stop_monkey"), \
+             patch.object(self.executor, "_aimonkey_collect_logs"):
+            result = self.executor._run_aimonkey("test_serial", params)
+
+        self.assertEqual(result.status, "FINISHED")
+        progress_values = [args[2] for args, _ in mock_stage_heartbeat.call_args_list]
+        self.assertIn(stage_progress(AIMonkeyStage.PRECHECK), progress_values)
+        self.assertIn(stage_progress(AIMonkeyStage.RUN), progress_values)
+        self.assertIn(stage_progress(AIMonkeyStage.EXPORT), progress_values)
+
+    def test_aimonkey_returns_artifact_metadata(self):
+        params = {
+            "runtime_minutes": 1,
+            "throttle_ms": 100,
+            "enable_fill_storage": False,
+            "enable_clear_logs": False,
+        }
+        artifact = {
+            "storage_uri": "file:///tmp/1.tar.gz",
+            "size_bytes": 1024,
+            "checksum": "a" * 64,
+        }
+        with patch.object(self.executor, "_aimonkey_setup"), \
+             patch.object(self.executor, "_aimonkey_start_monkey", return_value="1234"), \
+             patch.object(self.executor, "_aimonkey_monitor", return_value=("completed", "1234")), \
+             patch.object(self.executor, "_aimonkey_stop_monkey"), \
+             patch.object(self.executor, "_aimonkey_collect_logs"), \
+             patch.object(self.executor, "_build_log_artifact", return_value=artifact):
+            result = self.executor._run_aimonkey("test_serial", params)
+        self.assertEqual(result.status, "FINISHED")
+        self.assertEqual(result.artifact, artifact)
+
+    def test_build_log_artifact_archives_logs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir) / "runs" / "77"
+            run_dir.mkdir(parents=True)
+            (run_dir / "logcat.txt").write_text("line1\nline2\n", encoding="utf-8")
+
+            artifact = self.executor._build_log_artifact(str(run_dir), 77)
+            self.assertIsNotNone(artifact)
+            assert artifact is not None
+            self.assertTrue(artifact["storage_uri"].startswith("file://"))
+            self.assertGreater(artifact["size_bytes"], 0)
+            self.assertEqual(len(artifact["checksum"]), 64)
+
+            archive_path = Path(artifact["storage_uri"].replace("file://", ""))
+            self.assertTrue(archive_path.exists())
+            with tarfile.open(archive_path, "r:gz") as tar:
+                names = tar.getnames()
+            self.assertTrue(any(name.endswith("logcat.txt") for name in names))
+
+    def test_aimonkey_result_summary_format(self):
+        text = self.executor._aimonkey_result_summary(
+            "restart 1",
+            {
+                "risk_level": "MEDIUM",
+                "counts": {
+                    "events_total": 3,
+                    "restart_count": 1,
+                    "aee_entries": 2,
+                },
+            },
+        )
+        self.assertIn("monitor=restart 1", text)
+        self.assertIn("risk=MEDIUM", text)
+        self.assertIn("events=3", text)
 
 
 class TestAIMonkeyIntegration(unittest.TestCase):
