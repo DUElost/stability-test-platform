@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
 import logging
+from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -23,7 +24,7 @@ def _update_if_not_none(device: Device, field: str, value) -> bool:
 
 def _mark_missing_devices_offline(
     db: Session, host_id: int, seen_serials: set, timeout: int = 180
-) -> None:
+) -> List[Device]:
     """Mark devices not seen in current heartbeat as offline"""
     offline_threshold = datetime.utcnow() - timedelta(seconds=timeout)
     missing_devices = (
@@ -39,10 +40,11 @@ def _mark_missing_devices_offline(
             device.status = DeviceStatus.OFFLINE
             device.adb_connected = False
             device.adb_state = "offline"
+    return missing_devices
 
 
 @router.post("/heartbeat")
-def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db)):
+async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db)):
     host = db.get(Host, payload.host_id)
 
     # Auto-create host if not exists (for testing)
@@ -82,6 +84,7 @@ def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db)):
     # Process devices array
     devices_data = getattr(payload, "devices", None) or []
     seen_serials = set()
+    ws_device_updates: List[Dict[str, Any]] = []
 
     if devices_data:
         # Batch query existing devices to avoid N+1
@@ -168,8 +171,51 @@ def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db)):
                 device.status = DeviceStatus.ONLINE
                 logger.info(f"device_status_online: serial={serial}, adb_connected=true, no_lock")
 
+            ws_device_updates.append(
+                {
+                    "serial": device.serial,
+                    "status": device.status.value,
+                    "battery_level": device.battery_level,
+                    "temperature": device.temperature,
+                    "network_latency": device.network_latency,
+                    "adb_state": device.adb_state,
+                    "adb_connected": device.adb_connected,
+                    "host_id": device.host_id,
+                    "last_seen": device.last_seen.isoformat() if device.last_seen else None,
+                }
+            )
+
     # Mark missing devices as offline
-    _mark_missing_devices_offline(db, host.id, seen_serials, timeout=180)
+    missing_devices = _mark_missing_devices_offline(db, host.id, seen_serials, timeout=180)
+    for device in missing_devices:
+        if device.serial in seen_serials:
+            continue
+        ws_device_updates.append(
+            {
+                "serial": device.serial,
+                "status": device.status.value,
+                "battery_level": device.battery_level,
+                "temperature": device.temperature,
+                "network_latency": device.network_latency,
+                "adb_state": device.adb_state,
+                "adb_connected": device.adb_connected,
+                "host_id": device.host_id,
+                "last_seen": device.last_seen.isoformat() if device.last_seen else None,
+            }
+        )
 
     db.commit()
+
+    if ws_device_updates:
+        try:
+            from .websocket import manager
+
+            for update in ws_device_updates:
+                await manager.broadcast(
+                    "/ws/dashboard",
+                    {"type": "DEVICE_UPDATE", "payload": update},
+                )
+        except Exception as exc:
+            logger.warning(f"device_update_broadcast_failed: {exc}")
+
     return {"ok": True, "host_id": host.id, "devices_count": len(seen_serials)}

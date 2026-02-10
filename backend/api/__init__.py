@@ -4,6 +4,7 @@ from .schemas import (
     HostCreate,
     HostOut,
     LogArtifactIn,
+    LogArtifactOut,
     RunAgentOut,
     RunOut,
     RunUpdate,
@@ -12,6 +13,9 @@ from .schemas import (
     TaskOut,
     DeviceCreate,
     DeviceOut,
+    JiraDraftOut,
+    RunReportOut,
+    RiskAlertOut,
 )
 
 __all__ = [
@@ -20,6 +24,7 @@ __all__ = [
     "HostCreate",
     "HostOut",
     "LogArtifactIn",
+    "LogArtifactOut",
     "RunAgentOut",
     "RunOut",
     "RunUpdate",
@@ -28,4 +33,7 @@ __all__ = [
     "TaskOut",
     "DeviceCreate",
     "DeviceOut",
+    "JiraDraftOut",
+    "RunReportOut",
+    "RiskAlertOut",
 ]

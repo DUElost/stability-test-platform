@@ -1,16 +1,18 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import heartbeat_router, hosts_router, tasks_router
+from .api.routes import auth_router, heartbeat_router, hosts_router, tasks_router
 from .api.routes.devices import router as devices_router
 from .api.routes.websocket import router as websocket_router
 from .core.database import Base, engine
+from .core.limiter import RateLimitMiddleware
 from .scheduler.recycler import start_recycler
 from .scheduler.dispatcher import start_dispatcher
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Stability Test Platform")
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,6 +21,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(heartbeat_router)
 app.include_router(hosts_router)
 app.include_router(tasks_router)

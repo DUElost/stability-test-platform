@@ -8,7 +8,9 @@ from typing import Optional, Set, Tuple
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..core.database import SessionLocal
+from ..core.database import SessionLocal, get_raw_db
+from ..core.database_adapter import get_adapter_from_engine
+from ..core.database import engine
 from ..models.schemas import (
     Device,
     DeviceStatus,
@@ -29,6 +31,9 @@ WORKER_COUNT = int(os.getenv("DISPATCHER_WORKERS", "2"))
 QUEUE_CAPACITY = int(os.getenv("DISPATCH_QUEUE_CAPACITY", "200"))
 DEFAULT_MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_TASKS", "1"))
 DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
+
+# 初始化数据库适配器
+db_adapter = get_adapter_from_engine(engine)
 
 
 class TaskDispatcher:
@@ -109,7 +114,7 @@ class TaskDispatcher:
         try:
             self.queue.put_nowait(task_id)
         except asyncio.QueueFull:
-            logger.warning("dispatch_requeue_dropped", extra={"task_id": task.id})
+            logger.warning("dispatch_requeue_dropped", extra={"task_id": task_id})
 
     def _dispatch_once(self, task_id: int) -> Tuple[bool, bool]:
         """
@@ -156,36 +161,47 @@ class TaskDispatcher:
                 return False, True
 
     def _pick_device(self, db: Session, task: Task) -> Tuple[Optional[Device], Optional[Host]]:
-        """选择可用设备与主机"""
-        # 先查询所有设备状态用于调试
-        all_devices = db.query(Device).all()
-        for d in all_devices:
-            logger.info(
-                f"device_check: id={d.id}, serial={d.serial}, status={d.status}, "
-                f"lock_run_id={d.lock_run_id}, host_id={d.host_id}"
-            )
+        """
+        原子性选择可用设备与主机
+        使用数据库原子操作确保并发安全，防止竞态条件
+        """
+        now = datetime.utcnow()
 
-        query = (
-            db.query(Device)
-            .join(Host, Device.host_id == Host.id)
-            .filter(
-                Host.status == HostStatus.ONLINE,
-                Device.status == DeviceStatus.ONLINE,
-                Device.lock_run_id.is_(None),
-            )
-        )
+        # 构建基础查询条件
+        base_conditions = [
+            Host.status == HostStatus.ONLINE,
+            Device.status == DeviceStatus.ONLINE,
+        ]
         if task.target_device_id:
-            query = query.filter(Device.id == task.target_device_id)
-        device: Optional[Device] = (
-            query.order_by(Device.last_seen.desc().nullslast(), Device.id).first()
+            base_conditions.append(Device.id == task.target_device_id)
+
+        # 原子查询：查找可用设备（无锁或锁已过期）
+        # 使用数据库适配器应用 FOR UPDATE
+        query = (
+            db.query(Device, Host)
+            .join(Host, Device.host_id == Host.id)
+            .filter(*base_conditions)
+            .filter(
+                (Device.lock_run_id.is_(None)) |
+                (Device.lock_expires_at.is_(None)) |
+                (Device.lock_expires_at < now)
+            )
+            .order_by(Device.last_seen.desc().nullslast(), Device.id)
         )
 
-        if device:
-            logger.info(f"device_selected: id={device.id}, serial={device.serial}")
-        else:
-            logger.warning(f"no_device_available: task_id={task.id}")
+        # 应用数据库特定的 FOR UPDATE
+        query = db_adapter.apply_for_update(query, skip_locked=db_adapter.supports_skip_locked())
 
-        return device, device.host if device else None
+        available_device = query.first()
+
+        if not available_device:
+            logger.warning(f"no_device_available: task_id={task.id}")
+            return None, None
+
+        device, host = available_device
+        logger.info(f"device_selected: id={device.id}, serial={device.serial}, host_id={host.id}")
+
+        return device, host
 
     def _host_capacity(self, db: Session, host: Host) -> Tuple[bool, int, int]:
         """检查主机并发上限"""

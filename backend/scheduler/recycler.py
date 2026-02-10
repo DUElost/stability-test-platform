@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, text
 
 from ..core.database import SessionLocal
-from ..models.schemas import DeviceStatus, HostStatus, RunStatus, Task, TaskRun, TaskStatus
+from ..models.schemas import Device, DeviceStatus, HostStatus, RunStatus, Task, TaskRun, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS",
 RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
 
 
-def _check_host_heartbeat_timeout(db, now: datetime) -> None:
+def _check_host_heartbeat_timeout(db, now: datetime) -> int:
     """Mark hosts as OFFLINE if no heartbeat received within timeout period."""
     from ..models.schemas import Host
 
@@ -45,6 +45,7 @@ def _check_host_heartbeat_timeout(db, now: datetime) -> None:
                 "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
             },
         )
+    return len(expired_hosts)
 
 
 def _release_device_lock(db, device_id: int, run_id: int) -> None:
@@ -92,6 +93,54 @@ def _mark_timeout(db, run: TaskRun, now: datetime, reason: str) -> None:
     )
 
 
+def _check_device_lock_expiration(db, now: datetime) -> int:
+    """
+    检查并释放过期的设备锁
+    当 Agent 续期失败或崩溃时，锁会过期，需要回收
+    """
+    expired_locks = (
+        db.query(Device)
+        .filter(
+            Device.lock_run_id.isnot(None),
+            or_(
+                Device.lock_expires_at.is_(None),
+                Device.lock_expires_at < now,
+            ),
+        )
+        .all()
+    )
+
+    released_count = 0
+    for device in expired_locks:
+        run_id = device.lock_run_id
+
+        # 查找关联的 RUNNING 任务并标记为失败
+        if run_id:
+            run = db.get(TaskRun, run_id)
+            if run and run.status == RunStatus.RUNNING:
+                _mark_timeout(
+                    db, run, now,
+                    "device lock expired, agent may be offline"
+                )
+
+        # 释放设备锁
+        device.status = DeviceStatus.ONLINE
+        device.lock_run_id = None
+        device.lock_expires_at = None
+        released_count += 1
+
+        logger.warning(
+            "device_lock_expired_released",
+            extra={
+                "device_id": device.id,
+                "device_serial": device.serial,
+                "run_id": run_id,
+            },
+        )
+
+    return released_count
+
+
 def recycle_once() -> None:
     now = datetime.utcnow()
     dispatched_deadline = now - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
@@ -99,7 +148,11 @@ def recycle_once() -> None:
 
     with SessionLocal() as db:
         # Check host heartbeat timeout first
-        _check_host_heartbeat_timeout(db, now)
+        offline_hosts = _check_host_heartbeat_timeout(db, now)
+
+        # Check device lock expiration (for lock renewal mechanism)
+        expired_locks = _check_device_lock_expiration(db, now)
+
         expired_dispatched = (
             db.query(TaskRun)
             .filter(TaskRun.status == RunStatus.DISPATCHED, TaskRun.created_at < dispatched_deadline)
@@ -121,7 +174,7 @@ def recycle_once() -> None:
         for run in expired_runs:
             reason = "dispatched timeout" if run.status == RunStatus.DISPATCHED else "running heartbeat timeout"
             _mark_timeout(db, run, now, reason)
-        if expired_runs:
+        if expired_runs or offline_hosts or expired_locks:
             db.commit()
 
 

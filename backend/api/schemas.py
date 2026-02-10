@@ -58,6 +58,8 @@ class TaskCreate(BaseModel):
     template_id: Optional[int] = None
     params: Dict[str, Any] = Field(default_factory=dict)
     target_device_id: Optional[int] = None
+    # legacy compatibility for older UI/agents
+    device_serial: Optional[str] = None
     priority: int = 0
 
 
@@ -73,9 +75,26 @@ class TaskOut(ORMBaseModel):
     created_at: datetime
 
 
+class TaskTemplateOut(BaseModel):
+    type: str
+    name: str
+    description: str
+    default_params: Dict[str, Any] = Field(default_factory=dict)
+    script_paths: Dict[str, str] = Field(default_factory=dict)
+
+
 class TaskDispatch(BaseModel):
     host_id: int
     device_id: int
+
+
+class LogArtifactOut(ORMBaseModel):
+    id: int
+    run_id: int
+    storage_uri: str
+    size_bytes: Optional[int] = None
+    checksum: Optional[str] = None
+    created_at: datetime
 
 
 class RunOut(ORMBaseModel):
@@ -90,6 +109,60 @@ class RunOut(ORMBaseModel):
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     log_summary: Optional[str] = None
+    artifacts: List["LogArtifactOut"] = Field(default_factory=list)
+    risk_summary: Optional[Dict[str, Any]] = None
+
+
+class HostLiteOut(ORMBaseModel):
+    id: int
+    name: str
+    ip: str
+    status: str
+
+
+class DeviceLiteOut(ORMBaseModel):
+    id: int
+    serial: str
+    model: Optional[str] = None
+    host_id: Optional[int] = None
+    status: str
+
+
+class RiskAlertOut(BaseModel):
+    code: str
+    severity: Literal["HIGH", "MEDIUM", "LOW"]
+    message: str
+    metric: Optional[str] = None
+    value: Optional[int] = None
+    threshold: Optional[int] = None
+
+
+class RunReportOut(BaseModel):
+    generated_at: datetime
+    run: RunOut
+    task: TaskOut
+    host: Optional[HostLiteOut] = None
+    device: Optional[DeviceLiteOut] = None
+    summary_metrics: Dict[str, Any] = Field(default_factory=dict)
+    risk_summary: Optional[Dict[str, Any]] = None
+    alerts: List[RiskAlertOut] = Field(default_factory=list)
+
+
+class JiraDraftOut(BaseModel):
+    run_id: int
+    task_id: int
+    project_key: str
+    issue_type: str = "Bug"
+    priority: Literal["Critical", "Major", "Minor"]
+    component: Optional[str] = None
+    fix_version: Optional[str] = None
+    assignee: Optional[str] = None
+    summary: str
+    description: str
+    labels: List[str] = Field(default_factory=list)
+    environment: Dict[str, Any] = Field(default_factory=dict)
+    custom_fields: Dict[str, Any] = Field(default_factory=dict)
+    extra: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RunAgentOut(BaseModel):
