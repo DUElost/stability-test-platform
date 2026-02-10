@@ -1,29 +1,19 @@
 @echo off
-echo Starting Stability Test Platform - Frontend...
-echo.
+setlocal
 
-cd /d "%~dp0frontend"
+cd /d "%~dp0"
 
-REM Check if Node.js is installed
-node --version >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo ERROR: Node.js is not installed or not in PATH
-    echo Please install Node.js 16+ and add to PATH
-    pause
+for /f "delims=" %%i in ('wsl wslpath -a "%cd%"') do set "WSL_PROJECT_DIR=%%i"
+
+if not defined WSL_PROJECT_DIR (
+    echo ERROR: Failed to resolve WSL path.
     exit /b 1
 )
 
-REM Install dependencies if needed
-if not exist "node_modules" (
-    echo Installing Node.js dependencies...
-    npm install
+set "WSL_CMD=cd '%WSL_PROJECT_DIR%' && chmod +x ./start-frontend-wsl.sh && ./start-frontend-wsl.sh"
+
+if defined WSL_DISTRO (
+    wsl -d "%WSL_DISTRO%" -e bash -lc "%WSL_CMD%"
+) else (
+    wsl -e bash -lc "%WSL_CMD%"
 )
-
-REM Start the dev server
-echo.
-echo Starting Vite dev server on http://localhost:5173
-echo.
-echo Press Ctrl+C to stop the server
-echo.
-
-npm run dev
