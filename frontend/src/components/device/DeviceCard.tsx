@@ -7,6 +7,7 @@ import { ConnectivityBadge } from '../network/ConnectivityBadge';
 import { AlertTriangle, Activity, Server } from 'lucide-react';
 
 export interface Device {
+  id?: number;
   serial: string;
   model: string;
   status: 'idle' | 'testing' | 'offline' | 'error';

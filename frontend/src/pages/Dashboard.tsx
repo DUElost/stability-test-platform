@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Wifi, WifiOff, Clock, Server, Smartphone, Activity, AlertCircle, CheckCircle2, Search, BarChart3 } from 'lucide-react';
 import { DeviceStatusChart, HostResourceChart, ActivityChart } from '@/components/charts';
+import { type HostDTO, type DeviceDTO, mapHostToViewModel, mapDeviceToViewModel } from '@/mappers';
 
 const hostStatusMap: Record<string, Host['status']> = {
   'ONLINE': 'online',
@@ -20,14 +21,15 @@ const hostStatusMap: Record<string, Host['status']> = {
   'DEGRADED': 'warning'
 };
 
-function toComponentHost(host: any): Host {
+function toComponentHost(host: HostDTO): Host {
+  const viewModel = mapHostToViewModel(host);
   return {
-    ip: host.ip,
-    status: hostStatusMap[host.status] || 'offline',
-    cpu_load: host.extra?.cpu_load || 0,
-    ram_usage: host.extra?.ram_usage || 0,
-    disk_usage: host.extra?.disk_usage?.usage_percent || 0,
-    mount_status: Object.values(host.mount_status || {}).every((v: any) => v.ok || v === true),
+    ip: viewModel.ip,
+    status: hostStatusMap[viewModel.status] || 'offline',
+    cpu_load: viewModel.extra?.cpu_load as number || 0,
+    ram_usage: viewModel.extra?.ram_usage as number || 0,
+    disk_usage: (viewModel.extra?.disk_usage as { usage_percent?: number })?.usage_percent || 0,
+    mount_status: viewModel.mountStatusOk,
   };
 }
 
@@ -38,14 +40,15 @@ const deviceStatusMap: Record<string, Device['status']> = {
   'ERROR': 'error'
 };
 
-function toComponentDevice(device: any): Device {
+function toComponentDevice(device: DeviceDTO): Device {
+  const viewModel = mapDeviceToViewModel(device);
   return {
-    serial: device.serial,
-    model: device.model || 'Unknown',
-    status: deviceStatusMap[device.status as keyof typeof deviceStatusMap] || 'offline',
-    battery_level: device.battery_level ?? 0,
-    temperature: device.temperature ?? 0,
-    network_latency: device.network_latency ?? null,
+    serial: viewModel.serial,
+    model: viewModel.model || 'Unknown',
+    status: deviceStatusMap[viewModel.status] || 'offline',
+    battery_level: viewModel.battery_level ?? 0,
+    temperature: viewModel.temperature ?? 0,
+    network_latency: viewModel.network_latency ?? null,
   };
 }
 
@@ -152,11 +155,11 @@ export default function Dashboard() {
 
   const hostResourceData = useMemo(() => {
     if (!hosts) return [];
-    return hosts.map((host: any) => ({
+    return (hosts as HostDTO[]).map((host) => ({
       ip: host.ip,
-      cpu_load: host.extra?.cpu_load || 0,
-      ram_usage: host.extra?.ram_usage || 0,
-      disk_usage: host.extra?.disk_usage?.usage_percent || 0,
+      cpu_load: (host.extra?.cpu_load as number) || 0,
+      ram_usage: (host.extra?.ram_usage as number) || 0,
+      disk_usage: (host.extra?.disk_usage as { usage_percent?: number })?.usage_percent || 0,
     }));
   }, [hosts]);
 
@@ -258,7 +261,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="space-y-3">
-              {hosts?.map((host: any) => (
+              {(hosts as HostDTO[] | undefined)?.map((host) => (
                 <HostCard key={host.id} host={toComponentHost(host)} />
               ))}
             </div>

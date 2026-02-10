@@ -9,17 +9,37 @@ interface LogEntry {
   message: string;
 }
 
+interface ProgressPayload {
+  progress: number;
+}
+
 export const LogViewer: React.FC<{ wsUrl: string }> = ({ wsUrl }) => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [progress, setProgress] = useState<number>(0);
   const [filter, setFilter] = useState('');
   const [levelFilter, setLevelFilter] = useState<string>('ALL');
   const [autoScroll, setAutoScroll] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const { lastMessage } = useWebSocket<LogEntry>(wsUrl);
+  const { lastMessage } = useWebSocket<LogEntry | ProgressPayload>(wsUrl);
 
   useEffect(() => {
-    if (lastMessage && lastMessage.type === 'LOG') {
-      setLogs(prev => [...prev.slice(-1000), lastMessage.payload]);
+    if (!lastMessage) {
+      return;
+    }
+
+    if (lastMessage.type === 'LOG') {
+      const payload = lastMessage.payload as LogEntry;
+      if (payload?.message) {
+        setLogs(prev => [...prev.slice(-1000), payload]);
+      }
+    }
+
+    if (lastMessage.type === 'PROGRESS') {
+      const payload = lastMessage.payload as ProgressPayload;
+      if (typeof payload?.progress === 'number') {
+        const nextValue = Math.max(0, Math.min(100, payload.progress));
+        setProgress(nextValue);
+      }
     }
   }, [lastMessage]);
 
@@ -95,6 +115,19 @@ export const LogViewer: React.FC<{ wsUrl: string }> = ({ wsUrl }) => {
             {autoScroll ? <Pause size={12} /> : <Play size={12} />}
             {autoScroll ? 'Auto' : 'Paused'}
           </button>
+        </div>
+      </div>
+
+      <div className="px-3 py-2 bg-slate-800/60 border-b border-slate-700">
+        <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+          <span className="uppercase tracking-wider">Progress</span>
+          <span className="font-mono">{progress}%</span>
+        </div>
+        <div className="w-full h-1.5 bg-slate-700 rounded">
+          <div
+            className="h-1.5 bg-indigo-500 rounded transition-all duration-300"
+            style={{ width: `${progress}%` }}
+          />
         </div>
       </div>
 
