@@ -5,6 +5,15 @@
 
 ---
 
+## 项目目标愿景（请先阅读）
+
+- 项目目标：通过 Linux Host Agent 集群，无人值守运行大规模 Android Device 稳定性自动化测试。
+- 稳定性专项统一流程：设备连接检测 -> 前置准备 -> 资源填充 -> 开始运行测试 -> 日志检测 -> 风险问题检查 -> 日志回传导出 -> 结束测试 -> 测试后置。
+- 全流程自动化衔接：结果收取 -> 数据报告生成 -> JIRA 问题提交 -> 测试报告生成。
+- 详细说明：`docs/project-vision.md`
+
+---
+
 ## 快速启动
 
 ### 方式一：Windows 批处理脚本（推荐）
@@ -85,7 +94,7 @@ npm run dev
 ## 环境要求
 
 ### 后端
-- **Python**：3.8+
+- **Python**：3.10+（推荐 3.11）
 - **依赖包**：
   - fastapi
   - uvicorn
@@ -98,12 +107,12 @@ npm run dev
   - aiohttp
 
 ### 前端
-- **Node.js**：16+
-- **npm**：8.0+
+- **Node.js**：20+
+- **npm**：10.0+
 
 ### 可选（Linux Agent 主机）
 - **ADB**：Android Debug Bridge
-- **Python 3.8+**
+- **Python 3.10+**
 - **SSH 访问权限**
 
 ---
@@ -140,6 +149,7 @@ npm run dev
 - `POST /api/v1/heartbeat` - 接收 Agent 心跳
 
 ### 任务管理
+- `GET /api/v1/task-templates` - 获取任务模板
 - `POST /api/v1/tasks` - 创建任务
 - `GET /api/v1/tasks/{task_id}` - 获取任务详情
 - `POST /api/v1/tasks/{task_id}/dispatch` - 分发任务
@@ -220,17 +230,27 @@ curl -X POST http://localhost:8000/api/v1/hosts \
   -d "{\"name\": \"test-host\", \"ip\": \"172.21.15.10\"}"
 ```
 
+### 4. 本地一致性校验（建议每次改动后执行）
+
+```bash
+# 后端语法检查
+python -m compileall backend
+
+# 前端类型检查（Node.js 20+）
+cd frontend && npm run type-check
+```
+
 ---
 
 ## 故障排除
 
 ### 后端无法启动
-- 检查 Python 版本：`python --version`（需要 3.8+）
+- 检查 Python 版本：`python --version`（需要 3.10+）
 - 检查端口占用：`netstat -ano | findstr :8000`
 - 检查防火墙设置
 
 ### 前端无法启动
-- 检查 Node.js 版本：`node --version`（需要 16+）
+- 检查 Node.js 版本：`node --version`（需要 20+）
 - 删除 `node_modules` 重新安装：`rm -rf node_modules && npm install`
 - 检查代理配置
 
@@ -253,10 +273,18 @@ Vite 默认支持热模块替换（HMR），修改组件后自动刷新。
 
 ## 生产部署
 
-### 后端（使用 Gunicorn）
+生产最小可用部署（主 Linux Host + 多 Linux Agent）请优先使用：
+
+- `docs/production-minimum-deployment-checklist.md`
+- `docs/preprod-drill-runbook.md`（预发布逐条执行）
+- 控制平面模板目录：`deploy/control-plane/systemd/`、`deploy/control-plane/nginx/`、`deploy/control-plane/env/`
+- Agent 安装目录：`backend/agent/`（使用 `install_agent.sh`）
+
+仅用于快速验证的最小命令如下：
+
+### 后端（单进程，避免重复调度）
 ```bash
-pip install gunicorn
-gunicorn backend.main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### 前端（构建静态文件）
