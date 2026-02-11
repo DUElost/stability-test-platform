@@ -8,3 +8,7 @@ paramiko
 asyncssh
 aiohttp
 psutil
+prometheus-client
+hypothesis
+pytest
+pytest-asyncio

@@ -7,6 +7,15 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, text
 
 from ..core.database import SessionLocal
+from ..core.metrics import (
+    recycler_runs,
+    recycler_timeouts,
+    recycler_duration,
+    device_lock_released,
+    host_heartbeat_missed,
+    task_run_state_changes,
+    task_run_total,
+)
 from ..models.schemas import Device, DeviceStatus, HostStatus, RunStatus, Task, TaskRun, TaskStatus
 
 logger = logging.getLogger(__name__)
@@ -37,6 +46,8 @@ def _check_host_heartbeat_timeout(db, now: datetime) -> int:
 
     for host in expired_hosts:
         host.status = HostStatus.OFFLINE
+        host_heartbeat_missed.labels(host_id=str(host.id)).inc()
+        recycler_timeouts.labels(timeout_type="host").inc()
         logger.info(
             "host_offline_by_heartbeat_timeout",
             extra={
@@ -74,6 +85,7 @@ def _release_device_lock(db, device_id: int, run_id: int) -> None:
 def _mark_timeout(db, run: TaskRun, now: datetime, reason: str) -> None:
     if run.status in {RunStatus.FINISHED, RunStatus.FAILED, RunStatus.CANCELED}:
         return
+    old_status = run.status
     run.status = RunStatus.FAILED
     run.error_code = "TIMEOUT"
     run.error_message = reason
@@ -82,6 +94,14 @@ def _mark_timeout(db, run: TaskRun, now: datetime, reason: str) -> None:
     if task and task.status not in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED}:
         task.status = TaskStatus.FAILED
     _release_device_lock(db, run.device_id, run.id)
+    # Record metrics
+    task_run_state_changes.labels(from_state=old_status.value, to_state="failed").inc()
+    task_run_total.labels(status="failed", task_type=task.type if task else "unknown").inc()
+    device_lock_released.labels(reason="timeout").inc()
+    if "dispatched" in reason:
+        recycler_timeouts.labels(timeout_type="dispatched").inc()
+    else:
+        recycler_timeouts.labels(timeout_type="running").inc()
     logger.warning(
         "run_timeout",
         extra={
@@ -129,6 +149,10 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
         device.lock_expires_at = None
         released_count += 1
 
+        # Record metrics
+        device_lock_released.labels(reason="expired").inc()
+        recycler_timeouts.labels(timeout_type="device_lock").inc()
+
         logger.warning(
             "device_lock_expired_released",
             extra={
@@ -142,6 +166,7 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
 
 
 def recycle_once() -> None:
+    start_time = time.time()
     now = datetime.utcnow()
     dispatched_deadline = now - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
     running_deadline = now - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
@@ -176,6 +201,11 @@ def recycle_once() -> None:
             _mark_timeout(db, run, now, reason)
         if expired_runs or offline_hosts or expired_locks:
             db.commit()
+
+    # Record recycler metrics
+    duration = time.time() - start_time
+    recycler_duration.observe(duration)
+    recycler_runs.inc()
 
 
 def _recycler_loop() -> None:

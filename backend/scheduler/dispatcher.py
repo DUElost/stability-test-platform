@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Set, Tuple
 
@@ -11,6 +12,15 @@ from sqlalchemy.orm import Session
 from ..core.database import SessionLocal, get_raw_db
 from ..core.database_adapter import get_adapter_from_engine
 from ..core.database import engine
+from ..core.metrics import (
+    task_dispatch_latency,
+    task_dispatch_total,
+    task_dispatch_errors,
+    device_lock_acquired,
+    device_lock_conflicts,
+    task_run_total,
+    task_run_state_changes,
+)
 from ..models.schemas import (
     Device,
     DeviceStatus,
@@ -122,6 +132,7 @@ class TaskDispatcher:
         finished=True 表示无需再次排队（成功或状态已变）
         retry=True  表示保持 PENDING 需后续重试
         """
+        start_time = time.time()
         with SessionLocal() as db:
             task = db.get(Task, task_id)
             if not task or task.status != TaskStatus.PENDING:
@@ -130,6 +141,7 @@ class TaskDispatcher:
             device, host = self._pick_device(db, task)
             if not device or not host:
                 logger.info("no_available_device", extra={"task_id": task.id})
+                task_dispatch_total.labels(status="retry").inc()
                 return False, True
 
             capacity_ok, active, limit = self._host_capacity(db, host)
@@ -138,10 +150,16 @@ class TaskDispatcher:
                     "host_at_capacity",
                     extra={"host_id": host.id, "active": active, "limit": limit, "task_id": task.id},
                 )
+                task_dispatch_total.labels(status="retry").inc()
                 return False, True
 
             try:
                 run_id = self._create_run_with_lock(db, task, device, host, limit)
+                duration = time.time() - start_time
+                task_dispatch_latency.observe(duration)
+                task_dispatch_total.labels(status="success").inc()
+                task_run_total.labels(status="queued", task_type=task.type).inc()
+                task_run_state_changes.labels(from_state="pending", to_state="queued").inc()
                 logger.info(
                     "task_dispatched",
                     extra={
@@ -149,10 +167,27 @@ class TaskDispatcher:
                         "run_id": run_id,
                         "host_id": host.id,
                         "device_id": device.id,
+                        "duration": duration,
                     },
                 )
                 return True, False
+            except RuntimeError as exc:
+                duration = time.time() - start_time
+                task_dispatch_latency.observe(duration)
+                task_dispatch_total.labels(status="failure").inc()
+                error_type = str(exc).replace(" ", "_")
+                task_dispatch_errors.labels(error_type=error_type).inc()
+                logger.warning(
+                    "dispatch_attempt_failed",
+                    extra={"task_id": task.id, "error": str(exc), "error_type": type(exc).__name__},
+                    exc_info=True,
+                )
+                return False, True
             except Exception as exc:
+                duration = time.time() - start_time
+                task_dispatch_latency.observe(duration)
+                task_dispatch_total.labels(status="failure").inc()
+                task_dispatch_errors.labels(error_type="unexpected").inc()
                 logger.warning(
                     "dispatch_attempt_failed",
                     extra={"task_id": task.id, "error": str(exc), "error_type": type(exc).__name__},
@@ -278,7 +313,11 @@ class TaskDispatcher:
                 },
             )
             if locked.rowcount != 1:
+                device_lock_conflicts.inc()
                 raise RuntimeError("device_lock_failed")
+
+            # Record lock acquisition
+            device_lock_acquired.labels(host_id=str(host.id)).inc()
         return run.id
 
 
