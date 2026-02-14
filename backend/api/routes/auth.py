@@ -1,30 +1,62 @@
 """Authentication API routes."""
+import os
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Header, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ...core.database import get_db
-from ...core.security import (
+from backend.core.database import get_db
+from backend.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
     get_password_hash,
     verify_password,
 )
-from ...models.schemas import User
+from backend.models.schemas import User
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
+
+# Agent callback authentication
+AGENT_SECRET = os.getenv("AGENT_SECRET", "")
+
+
+def verify_agent_secret(x_agent_secret: Optional[str] = Header(None)) -> bool:
+    """Verify agent secret for callback endpoints.
+
+    Returns True if secret is valid or not configured (for development).
+    Raises 401 if secret is invalid.
+    """
+    if not AGENT_SECRET:
+        # No secret configured - allow all (development mode)
+        return True
+
+    if not x_agent_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Agent secret required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if x_agent_secret != AGENT_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent secret",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return True
 
 
 class UserCreate(BaseModel):
     username: str
     password: str
-    role: str = "user"
+    # role is intentionally excluded to prevent privilege escalation
+    # new users are always created with "user" role
 
 
 class UserOut(BaseModel):
@@ -122,7 +154,7 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     user = User(
         username=payload.username,
         hashed_password=get_password_hash(payload.password),
-        role=payload.role,
+        role="user",  # Force default role to prevent privilege escalation
     )
     db.add(user)
     db.commit()

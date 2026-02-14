@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 
-from ...core.database import get_db
-from ...models.schemas import Host, HostStatus
-from ..schemas import HostCreate, HostOut
+from backend.core.database import get_db
+from backend.models.schemas import Host, HostStatus
+from backend.api.schemas import HostCreate, HostOut
+from backend.api.routes.auth import get_current_active_user, User
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
 
 @router.post("", response_model=HostOut)
-def create_host(payload: HostCreate, db: Session = Depends(get_db)):
+def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     host = Host(
         name=payload.name,
         ip=payload.ip,

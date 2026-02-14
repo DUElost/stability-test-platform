@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from ...core.database import get_db
-from ...models.schemas import Host, HostStatus, Device, DeviceStatus
-from ..schemas import HeartbeatIn
+from backend.core.database import get_db
+from backend.models.schemas import Host, HostStatus, Device, DeviceStatus
+from backend.api.schemas import HeartbeatIn
+from backend.api.routes.auth import verify_agent_secret
 
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def _mark_missing_devices_offline(
 
 
 @router.post("/heartbeat")
-async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db)):
+async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool = Depends(verify_agent_secret)):
     host = db.get(Host, payload.host_id)
 
     # Auto-create host if not exists (for testing)
@@ -208,7 +209,7 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db)):
 
     if ws_device_updates:
         try:
-            from .websocket import manager
+            from backend.api.routes.websocket import manager
 
             for update in ws_device_updates:
                 await manager.broadcast(

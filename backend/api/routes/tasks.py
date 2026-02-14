@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import tarfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,10 +16,10 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 
-from ...core.database import get_db
-from ...core.task_templates import list_templates as list_core_templates
-from ...models.schemas import Device, DeviceStatus, Host, HostStatus, LogArtifact, RunStatus, Task, TaskRun, TaskStatus
-from ..schemas import (
+from backend.core.database import get_db
+from backend.core.task_templates import list_templates as list_core_templates
+from backend.models.schemas import Device, DeviceStatus, Host, HostStatus, LogArtifact, RunStatus, Task, TaskRun, TaskStatus
+from backend.api.schemas import (
     AgentLogOut,
     AgentLogQuery,
     DeviceLiteOut,
@@ -36,6 +37,7 @@ from ..schemas import (
     TaskTemplateOut,
     TaskOut,
 )
+from backend.api.routes.auth import get_current_active_user, User, verify_agent_secret
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 logger = logging.getLogger(__name__)
@@ -668,7 +670,7 @@ def list_task_templates():
 
 
 @router.post("/tasks", response_model=TaskOut)
-def create_task(payload: TaskCreate, db: Session = Depends(get_db)):
+def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     resolved_target_device_id = payload.target_device_id
     if resolved_target_device_id is None and payload.device_serial:
         device = db.query(Device).filter(Device.serial == payload.device_serial).first()
@@ -794,42 +796,42 @@ def download_run_artifact(task_id: int, run_id: int, artifact_id: int, db: Sessi
 
 
 @router.post("/tasks/{task_id}/dispatch", response_model=RunOut)
-def dispatch_task(task_id: int, payload: TaskDispatch, db: Session = Depends(get_db)):
+def dispatch_task(task_id: int, payload: TaskDispatch, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     host = db.get(Host, payload.host_id)
     device = db.get(Device, payload.device_id)
     if not host or not device:
         raise HTTPException(status_code=400, detail="host or device not found")
 
-    with db.begin():
-        task = db.get(Task, task_id)
-        if not task:
-            raise HTTPException(status_code=404, detail="task not found")
-        if task.target_device_id and task.target_device_id != payload.device_id:
-            raise HTTPException(status_code=409, detail="task target device mismatch")
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+    if task.target_device_id and task.target_device_id != payload.device_id:
+        raise HTTPException(status_code=409, detail="task target device mismatch")
 
-        # Atomic status update to prevent concurrent dispatch
-        updated = db.execute(
-            text(
-                "UPDATE tasks SET status = :queued WHERE id = :task_id AND status = :pending"
-            ),
-            {
-                "task_id": task.id,
-                "queued": TaskStatus.QUEUED.value,
-                "pending": TaskStatus.PENDING.value,
-            },
-        )
-        if updated.rowcount != 1:
-            raise HTTPException(status_code=409, detail="task not pending")
+    # Atomic status update to prevent concurrent dispatch
+    updated = db.execute(
+        text(
+            "UPDATE tasks SET status = :queued WHERE id = :task_id AND status = :pending"
+        ),
+        {
+            "task_id": task.id,
+            "queued": TaskStatus.QUEUED.value,
+            "pending": TaskStatus.PENDING.value,
+        },
+    )
+    if updated.rowcount != 1:
+        raise HTTPException(status_code=409, detail="task not pending")
 
-        run = TaskRun(
-            task_id=task.id,
-            host_id=host.id,
-            device_id=device.id,
-            status=RunStatus.QUEUED,
-        )
-        db.add(run)
-        db.flush()
-        _acquire_device_lock(db, device.id, run.id)
+    run = TaskRun(
+        task_id=task.id,
+        host_id=host.id,
+        device_id=device.id,
+        status=RunStatus.QUEUED,
+    )
+    db.add(run)
+    db.flush()
+    _acquire_device_lock(db, device.id, run.id)
+    db.commit()
     db.refresh(run)
     return run
 
@@ -839,6 +841,7 @@ def agent_pending_runs(
     host_id: int = Query(...),
     limit: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
+    _: bool = Depends(verify_agent_secret),
 ):
     runs = (
         db.query(TaskRun)
@@ -870,7 +873,7 @@ def agent_pending_runs(
 
 
 @router.post("/agent/runs/{run_id}/heartbeat")
-def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(get_db)):
+def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(get_db), _: bool = Depends(verify_agent_secret)):
     run = db.get(TaskRun, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
@@ -909,7 +912,7 @@ def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(g
     if payload.log_lines:
         try:
             # Lazy import to avoid circular dependency
-            from .websocket import manager
+            from backend.api.routes.websocket import manager
             # Get device serial for log context
             device = db.get(Device, run.device_id)
             device_serial = device.serial if device else "unknown"
@@ -956,6 +959,7 @@ def agent_run_complete(
     run_id: int,
     payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db),
+    _: bool = Depends(verify_agent_secret),
 ):
     parsed_payload: RunCompleteIn
     if "update" in payload:
@@ -1044,6 +1048,7 @@ def agent_run_complete(
 def extend_device_lock(
     run_id: int,
     db: Session = Depends(get_db),
+    _: bool = Depends(verify_agent_secret),
 ):
     """
     延长设备锁租期
@@ -1102,11 +1107,17 @@ def extend_device_lock(
 
 
 @router.post("/agent/logs", response_model=AgentLogOut)
-def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db)):
+def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db), _: bool = Depends(verify_agent_secret)):
     """通过SSH查询Linux host上的agent日志"""
     host = db.get(Host, query.host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
+
+    # Validate log_path to prevent command injection
+    # Only allow alphanumeric, dash, underscore, dot, slash, and space
+    import re
+    if not re.match(r'^[a-zA-Z0-9_./\-\s]+$', query.log_path):
+        raise HTTPException(status_code=400, detail="Invalid log_path: contains disallowed characters")
 
     # 构建SSH连接参数
     ssh_host = host.ip
@@ -1138,7 +1149,7 @@ def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db)):
         client.connect(**connect_kwargs)
 
         # 执行命令读取日志
-        cmd = f"tail -n {query.lines} {query.log_path} 2>/dev/null || echo 'LOG_FILE_NOT_FOUND'"
+        cmd = f"tail -n {query.lines} {shlex.quote(query.log_path)} 2>/dev/null || echo 'LOG_FILE_NOT_FOUND'"
         stdin, stdout, stderr = client.exec_command(cmd)
         content = stdout.read().decode("utf-8", errors="replace")
         error = stderr.read().decode("utf-8", errors="replace")
@@ -1188,3 +1199,91 @@ def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db)):
             lines_read=0,
             error=f"Failed to query agent logs: {str(e)}",
         )
+
+
+@router.post("/tasks/{task_id}/cancel", response_model=RunOut)
+def cancel_task(task_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """
+    Cancel a pending or queued task.
+    If the task is already running, it will be marked for cancellation.
+    """
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+
+    # Can only cancel tasks that are pending, queued, or running
+    if task.status not in (TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING):
+        raise HTTPException(
+            status_code=409,
+            detail=f"cannot cancel task in status {task.status.value}"
+        )
+
+    # Get the latest run for this task
+    run = (
+        db.query(TaskRun)
+        .filter(TaskRun.task_id == task_id)
+        .order_by(TaskRun.id.desc())
+        .first()
+    )
+
+    # Update task status
+    _ensure_task_transition(task, TaskStatus.CANCELED)
+    task.status = TaskStatus.CANCELED
+
+    # Update run status if exists and not already finished
+    if run and run.status in (RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING):
+        run.status = RunStatus.CANCELED
+        run.finished_at = datetime.utcnow()
+        # Release device lock if held
+        if run.device_id:
+            _release_device_lock(db, run.device_id, run.id)
+
+    db.commit()
+    db.refresh(run if run else task)
+    if run:
+        return run
+    # Return a synthetic RunOut for tasks without runs
+    return RunOut(
+        id=0,
+        task_id=task.id,
+        host_id=0,
+        device_id=task.target_device_id or 0,
+        status=RunStatus.CANCELED,
+        started_at=None,
+        finished_at=datetime.utcnow(),
+        exit_code=None,
+        error_message="Task canceled by user",
+    )
+
+
+@router.post("/tasks/{task_id}/retry", response_model=TaskOut)
+def retry_task(task_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+    """
+    Retry a failed or canceled task.
+    Resets task to PENDING status - dispatcher will create new run when assigning host/device.
+    """
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+
+    # Can only retry failed or canceled tasks
+    if task.status not in (TaskStatus.FAILED, TaskStatus.CANCELED):
+        raise HTTPException(
+            status_code=409,
+            detail=f"cannot retry task in status {task.status.value}"
+        )
+
+    # Check if target device is available (if specified)
+    if task.target_device_id:
+        device = db.get(Device, task.target_device_id)
+        if not device or device.status != DeviceStatus.ONLINE:
+            raise HTTPException(
+                status_code=409,
+                detail="target device is not available"
+            )
+
+    # Reset task status to pending - dispatcher will handle creating the run
+    task.status = TaskStatus.PENDING
+    db.commit()
+    db.refresh(task)
+    return task

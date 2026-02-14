@@ -6,9 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
-from ...core.database import get_db
-from ...models.schemas import Device, DeviceStatus, Host, HostStatus
-from ..schemas import DeviceCreate, DeviceOut
+from backend.core.database import get_db
+from backend.models.schemas import Device, DeviceStatus, Host, HostStatus
+from backend.api.schemas import DeviceCreate, DeviceOut
+from backend.api.routes.auth import get_current_active_user, User
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 
 
 @router.post("", response_model=DeviceOut)
-def create_device(payload: DeviceCreate, db: Session = Depends(get_db)):
+def create_device(payload: DeviceCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     # 检查序列号是否已存在
     existing = db.query(Device).filter(Device.serial == payload.serial).first()
     if existing:
