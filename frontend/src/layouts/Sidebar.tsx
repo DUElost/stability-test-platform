@@ -4,18 +4,18 @@ import {
   Smartphone,
   ListTodo,
   Server,
-  Settings,
-  FileText,
   ChevronLeft,
   ChevronRight,
   Zap,
-  LogOut
+  X,
+  TestTube2,
+  Network,
+  Wifi,
+  FileSearch,
+  Users,
+  Workflow
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { useState, useEffect } from 'react';
 
 interface NavItem {
   path: string;
@@ -28,65 +28,68 @@ interface NavGroup {
   items: NavItem[];
 }
 
+// 样板风格的导航配置
 const navGroups: NavGroup[] = [
   {
-    label: 'Overview',
+    label: '概览',
     items: [
-      { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+      { path: '/', label: '仪表盘', icon: LayoutDashboard },
     ],
   },
   {
-    label: 'Infrastructure',
+    label: '基础设施',
     items: [
-      { path: '/hosts', label: 'Hosts', icon: Server },
-      { path: '/devices', label: 'Devices', icon: Smartphone },
+      { path: '/hosts', label: '主机管理', icon: Server },
+      { path: '/devices', label: '设备管理', icon: Smartphone },
+      { path: '/wifi', label: 'WiFi管理', icon: Wifi },
     ],
   },
   {
-    label: 'Operations',
+    label: '运营',
     items: [
-      { path: '/tasks', label: 'Tasks', icon: ListTodo },
+      { path: '/tasks', label: '任务管理', icon: ListTodo },
+      { path: '/workflows', label: '工作流管理', icon: Workflow },
+      { path: '/results', label: '测试结果', icon: TestTube2 },
+      { path: '/logs', label: '日志监控', icon: FileSearch },
     ],
   },
-];
-
-const bottomNavItems: NavItem[] = [
-  { path: '/docs', label: 'Documentation', icon: FileText },
-  { path: '/settings', label: 'Settings', icon: Settings },
+  {
+    label: '系统',
+    items: [
+      { path: '/mapreduce', label: 'Map-Reduce', icon: Network },
+      { path: '/users', label: '用户管理', icon: Users },
+    ],
+  },
 ];
 
 interface SidebarProps {
   onNavigate?: () => void;
   collapsed?: boolean;
   onToggleCollapse?: () => void;
+  isMobile?: boolean;
+  onCloseMobile?: () => void;
 }
 
-export default function Sidebar({ onNavigate, collapsed = false, onToggleCollapse }: SidebarProps) {
+/**
+ * 侧边栏 - 源自 web 样板设计风格
+ */
+export default function Sidebar({
+  onNavigate,
+  collapsed = false,
+  onToggleCollapse,
+  isMobile = false,
+  onCloseMobile
+}: SidebarProps) {
   const location = useLocation();
-  const navigate = useNavigate();
-  const [isMobile, setIsMobile] = useState(false);
-
-  const handleLogout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
-    navigate('/login');
-  };
-
-  useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 1024);
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
 
   const NavItemContent = ({ item, isActive }: { item: NavItem; isActive: boolean }) => (
     <>
-      <item.icon size={18} className={cn(
-        "flex-shrink-0 transition-colors",
-        isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+      <item.icon className={cn(
+        "w-4 h-4 flex-shrink-0 transition-colors",
+        isActive ? "text-gray-900" : "text-gray-500 group-hover:text-gray-900"
       )} />
       <span className={cn(
-        "font-medium transition-all duration-200",
+        "font-medium transition-all duration-200 truncate",
         collapsed ? "opacity-0 w-0 overflow-hidden" : "opacity-100"
       )}>
         {item.label}
@@ -95,160 +98,100 @@ export default function Sidebar({ onNavigate, collapsed = false, onToggleCollaps
   );
 
   return (
-    <TooltipProvider delayDuration={0}>
-      <div className="flex flex-col h-full">
-        {/* Logo */}
-        <div className="h-16 flex items-center px-4 border-b border-border/50">
-          <div className="flex items-center gap-3 overflow-hidden">
-            <div className={cn(
-              "flex items-center justify-center rounded-lg bg-primary/10 transition-all duration-300",
-              collapsed ? "w-8 h-8" : "w-8 h-8"
-            )}>
-              <Zap size={18} className="text-primary" />
-            </div>
-            <span className={cn(
-              "font-bold text-lg text-foreground whitespace-nowrap transition-all duration-300",
-              collapsed ? "opacity-0 w-0 overflow-hidden" : "opacity-100"
-            )}>
-              StabilityPro
-            </span>
+    <div className="flex flex-col h-full bg-white">
+      {/* Logo */}
+      <div className="h-16 flex items-center px-5 border-b border-gray-100">
+        <div className="flex items-center gap-3 overflow-hidden">
+          <div className={cn(
+            "flex items-center justify-center rounded-lg bg-gray-50 transition-all duration-300",
+            collapsed ? "w-8 h-8" : "w-8 h-8"
+          )}>
+            <Zap size={18} className="text-gray-700" />
           </div>
+          <span className={cn(
+            "font-semibold text-base text-gray-900 whitespace-nowrap transition-all duration-300",
+            collapsed ? "opacity-0 w-0 overflow-hidden" : "opacity-100"
+          )}>
+            北极星目标
+          </span>
         </div>
+        {isMobile && onCloseMobile && (
+          <button
+            onClick={onCloseMobile}
+            className="ml-auto lg:hidden p-1 text-gray-400 hover:text-gray-600"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
+      </div>
 
-        {/* Navigation Groups */}
-        <nav className="flex-1 py-4 px-3 space-y-6 overflow-y-auto custom-scrollbar">
-          {navGroups.map((group) => (
-            <div key={group.label}>
-              <div className={cn(
-                "px-3 mb-2 text-xs font-medium text-muted-foreground/70 uppercase tracking-wider transition-all duration-200",
-                collapsed ? "opacity-0 h-0 overflow-hidden" : "opacity-100"
-              )}>
-                {group.label}
-              </div>
-              <div className="space-y-1">
-                {group.items.map((item) => {
-                  const isActive = location.pathname === item.path ||
-                    (item.path !== '/' && location.pathname.startsWith(item.path));
-
-                  const linkContent = (
-                    <NavLink
-                      key={item.path}
-                      to={item.path}
-                      onClick={onNavigate}
-                      className={cn(
-                        "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group",
-                        isActive
-                          ? "bg-primary/10 text-primary"
-                          : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                      )}
-                    >
-                      <NavItemContent item={item} isActive={isActive} />
-                    </NavLink>
-                  );
-
-                  if (collapsed) {
-                    return (
-                      <Tooltip key={item.path}>
-                        <TooltipTrigger asChild>
-                          {linkContent}
-                        </TooltipTrigger>
-                        <TooltipContent side="right">
-                          {item.label}
-                        </TooltipContent>
-                      </Tooltip>
-                    );
-                  }
-
-                  return linkContent;
-                })}
-              </div>
+      {/* Navigation Groups */}
+      <nav className="p-3 space-y-0.5 overflow-y-auto flex-1">
+        {navGroups.map((group) => (
+          <div key={group.label}>
+            <div className={cn(
+              "px-3 mb-2 text-xs font-medium text-gray-400 uppercase tracking-wider transition-all duration-200",
+              collapsed ? "opacity-0 h-0 overflow-hidden" : "opacity-100"
+            )}>
+              {group.label}
             </div>
-          ))}
-        </nav>
+            <div className="space-y-0.5">
+              {group.items.map((item) => {
+                const isActive = location.pathname === item.path ||
+                  (item.path !== '/' && location.pathname.startsWith(item.path));
 
-        {/* Bottom Navigation */}
-        <div className="p-3 border-t border-border/50 space-y-1">
-          {bottomNavItems.map((item) => {
-            const isActive = location.pathname === item.path;
+                const linkContent = (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    onClick={onNavigate}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group",
+                      isActive
+                        ? "bg-gray-50 text-gray-900 font-medium"
+                        : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
+                    )}
+                  >
+                    <NavItemContent item={item} isActive={isActive} />
+                  </NavLink>
+                );
 
-            const linkContent = (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                onClick={onNavigate}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200 group",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                )}
-              >
-                <item.icon size={18} className={cn(
-                  "flex-shrink-0 transition-colors",
-                  isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
-                )} />
-                <span className={cn(
-                  "font-medium transition-all duration-200",
-                  collapsed ? "opacity-0 w-0 overflow-hidden" : "opacity-100"
-                )}>
-                  {item.label}
-                </span>
-              </NavLink>
-            );
+                if (collapsed && !isMobile) {
+                  return (
+                    <div key={item.path} title={item.label}>
+                      {linkContent}
+                    </div>
+                  );
+                }
 
-            if (collapsed) {
-              return (
-                <Tooltip key={item.path}>
-                  <TooltipTrigger asChild>
-                    {linkContent}
-                  </TooltipTrigger>
-                  <TooltipContent side="right">
-                    {item.label}
-                  </TooltipContent>
-                </Tooltip>
-              );
-            }
+                return linkContent;
+              })}
+            </div>
+          </div>
+        ))}
+      </nav>
 
-            return linkContent;
-          })}
-
-          {/* Logout Button */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleLogout}
+      {/* Collapse Toggle Button - Desktop only */}
+      {!isMobile && onToggleCollapse && (
+        <div className="p-3 border-t border-gray-100">
+          <button
+            onClick={onToggleCollapse}
             className={cn(
-              "w-full mt-2 flex items-center gap-2 text-muted-foreground hover:text-red-600 hover:bg-red-50",
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-500 hover:bg-gray-50 hover:text-gray-900 transition-all duration-200",
               collapsed && "justify-center px-2"
             )}
           >
-            <LogOut size={16} />
-            {!collapsed && <span className="text-xs">退出登录</span>}
-          </Button>
-
-          {/* Collapse Toggle Button (Desktop only) */}
-          {!isMobile && onToggleCollapse && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onToggleCollapse}
-              className={cn(
-                "w-full mt-2 flex items-center gap-2 text-muted-foreground hover:text-foreground",
-                collapsed && "justify-center px-2"
-              )}
-            >
-              {collapsed ? (
-                <ChevronRight size={16} />
-              ) : (
-                <>
-                  <ChevronLeft size={16} />
-                  <span className="text-xs">Collapse</span>
-                </>
-              )}
-            </Button>
-          )}
+            {collapsed ? (
+              <ChevronRight className="w-4 h-4" />
+            ) : (
+              <>
+                <ChevronLeft className="w-4 h-4" />
+                <span className="font-medium">收起</span>
+              </>
+            )}
+          </button>
         </div>
-      </div>
-    </TooltipProvider>
+      )}
+    </div>
   );
 }

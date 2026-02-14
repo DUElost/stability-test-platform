@@ -9,6 +9,8 @@ asyncssh
 aiohttp
 psutil
 prometheus-client
+python-jose
+passlib
 hypothesis
 pytest
 pytest-asyncio

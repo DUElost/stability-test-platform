@@ -35,6 +35,8 @@ class HostOut(ORMBaseModel):
     ip: str
     ssh_port: int
     ssh_user: Optional[str] = None
+    ssh_auth_type: Optional[str] = None
+    # Note: ssh_key_path is intentionally excluded for security
     status: str
     last_heartbeat: Optional[datetime] = None
     extra: Dict[str, Any] = {}
@@ -250,3 +252,30 @@ class AgentLogOut(BaseModel):
     content: str
     lines_read: int
     error: Optional[str] = None
+
+
+# Deployment API
+class DeploymentCreate(BaseModel):
+    install_path: str = "/opt/stability-test-agent"
+
+
+class DeploymentOut(ORMBaseModel):
+    id: int
+    host_id: int
+    status: str
+    install_path: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    logs: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+
+
+class DeploymentStatusOut(BaseModel):
+    deployment_id: int
+    host_id: int
+    status: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    steps: List[Dict[str, Any]] = Field(default_factory=list)
+    error_message: Optional[str] = None

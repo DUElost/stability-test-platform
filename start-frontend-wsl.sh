@@ -64,14 +64,20 @@ fi
 
 cd "$FRONTEND_DIR"
 
-if [ -d "node_modules/@esbuild/win32-x64" ]; then
+# Enhanced detection: support both npm flat structure and pnpm content-addressable store
+if [ -d "node_modules/@esbuild/win32-x64" ] || [ -n "$(find node_modules/.pnpm -maxdepth 1 -name "*win32-x64*" 2>/dev/null)" ]; then
   echo "Detected Windows node_modules in WSL, reinstalling dependencies for Linux..."
   rm -rf node_modules
 fi
 
 if [ ! -d "node_modules" ]; then
   echo "Installing Node.js dependencies..."
-  npm install
+  # Use pnpm if pnpm-lock.yaml exists and pnpm is available
+  if [ -f "pnpm-lock.yaml" ] && command -v pnpm >/dev/null 2>&1; then
+    pnpm install
+  else
+    npm install
+  fi
 fi
 
 echo

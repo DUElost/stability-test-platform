@@ -45,8 +45,7 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-@router.websocket("/ws/dashboard")
-async def websocket_dashboard(websocket: WebSocket):
+async def _dashboard_socket_loop(websocket: WebSocket):
     path = "/ws/dashboard"
     await manager.connect(websocket, path)
     try:
@@ -63,6 +62,17 @@ async def websocket_dashboard(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error on {path}: {e}")
         manager.disconnect(websocket, path)
+
+
+@router.websocket("/ws/dashboard")
+async def websocket_dashboard(websocket: WebSocket):
+    await _dashboard_socket_loop(websocket)
+
+
+@router.websocket("/dashboard")
+async def websocket_dashboard_legacy(websocket: WebSocket):
+    logger.warning("Deprecated websocket endpoint '/dashboard' connected, use '/ws/dashboard' instead.")
+    await _dashboard_socket_loop(websocket)
 
 
 @router.websocket("/ws/logs/{run_id}")

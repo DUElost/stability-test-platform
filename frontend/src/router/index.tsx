@@ -8,6 +8,12 @@ import HostsPage from '../pages/hosts/HostsPage';
 import DevicesPage from '../pages/devices/DevicesPage';
 import LoginPage from '../pages/auth/LoginPage';
 import RegisterPage from '../pages/auth/RegisterPage';
+import WorkflowsPage from '../pages/workflows/WorkflowsPage';
+import ResultsPage from '../pages/results/ResultsPage';
+import MapReducePage from '../pages/mapreduce/MapReducePage';
+import WifiPage from '../pages/wifi/WifiPage';
+import LogsPage from '../pages/logs/LogsPage';
+import UsersPage from '../pages/users/UsersPage';
 
 // 检查是否已登录
 function isAuthenticated() {
@@ -47,6 +53,12 @@ export default function AppRouter() {
 
             <Route path="hosts" element={<HostsPage />} />
             <Route path="devices" element={<DevicesPage />} />
+            <Route path="wifi" element={<WifiPage />} />
+            <Route path="workflows" element={<WorkflowsPage />} />
+            <Route path="results" element={<ResultsPage />} />
+            <Route path="logs" element={<LogsPage />} />
+            <Route path="mapreduce" element={<MapReducePage />} />
+            <Route path="users" element={<UsersPage />} />
           </Route>
         </Route>
 

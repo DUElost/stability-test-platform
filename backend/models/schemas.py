@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 
-from ..core.database import Base
+from backend.core.database import Base
 
 
 class User(Base):
@@ -61,6 +61,13 @@ class RunStatus(str, PyEnum):
     FINISHED = "FINISHED"
     FAILED = "FAILED"
     CANCELED = "CANCELED"
+
+
+class DeploymentStatus(str, PyEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
 
 
 class Host(Base):
@@ -188,3 +195,19 @@ class LogArtifact(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     run = relationship("TaskRun", back_populates="artifacts")
+
+
+class Deployment(Base):
+    __tablename__ = "deployments"
+
+    id = Column(Integer, primary_key=True)
+    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
+    status = Column(Enum(DeploymentStatus), default=DeploymentStatus.PENDING, nullable=False)
+    install_path = Column(String(256), default="/opt/stability-test-agent")
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime)
+    logs = Column(Text)
+    error_message = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    host = relationship("Host")

@@ -1,5 +1,5 @@
-from . import routes
-from .schemas import (
+from backend.api import routes
+from backend.api.schemas import (
     HeartbeatIn,
     HostCreate,
     HostOut,

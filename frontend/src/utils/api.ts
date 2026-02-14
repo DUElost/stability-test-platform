@@ -223,8 +223,35 @@ export interface AgentLogOut {
   error?: string;
 }
 
+export interface User {
+  id: number;
+  username: string;
+  role: string;
+  is_active: string;
+  created_at: string;
+  last_login: string | null;
+}
+
 // API 函数
 export const api = {
+  // 认证相关
+  auth: {
+    me: () => apiClient.get<User>('/auth/me'),
+    login: (username: string, password: string) =>
+      apiClient.post<{ access_token: string; refresh_token: string; token_type: string }>(
+        '/auth/login',
+        new URLSearchParams({ username, password }),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+      ),
+    register: (data: { username: string; password: string; role?: string }) =>
+      apiClient.post<User>('/auth/register', data),
+    refresh: (refreshToken: string) =>
+      apiClient.post<{ access_token: string; refresh_token: string; token_type: string }>(
+        '/auth/refresh',
+        { refresh_token: refreshToken }
+      ),
+  },
+
   // 主机相关
   hosts: {
     list: () => apiClient.get<Host[]>('/hosts'),
@@ -256,6 +283,8 @@ export const api = {
       priority?: number;
     }) =>
       apiClient.post<Task>('/tasks', data),
+    cancel: (id: number) => apiClient.post(`/tasks/${id}/cancel`),
+    retry: (id: number) => apiClient.post(`/tasks/${id}/retry`),
     dispatch: (taskId: number, data: { host_id: number; device_id: number }) =>
       apiClient.post<TaskRun>(`/tasks/${taskId}/dispatch`, data),
     getRuns: (taskId: number) => apiClient.get<TaskRun[]>(`/tasks/${taskId}/runs`),
@@ -274,6 +303,30 @@ export const api = {
   heartbeat: {
     send: (hostId: number, data: { status: string; mount_status?: Record<string, any> }) =>
       apiClient.post(`/heartbeat`, { host_id: hostId, ...data }),
+  },
+
+  // 部署相关
+  deploy: {
+    trigger: (hostId: number, installPath: string = '/opt/stability-test-agent') =>
+      apiClient.post<{ id: number; host_id: number; status: string; started_at: string }>(
+        `/deploy/hosts/${hostId}`,
+        { install_path: installPath }
+      ),
+    getHistory: (hostId: number, limit: number = 10) =>
+      apiClient.get<any[]>(`/deploy/hosts/${hostId}/history?limit=${limit}`),
+    getLatest: (hostId: number) => apiClient.get<any>(`/deploy/hosts/${hostId}/latest`),
+  },
+
+  // 用户管理相关
+  users: {
+    list: () => apiClient.get<User[]>('/users'),
+    get: (id: number) => apiClient.get<User>(`/users/${id}`),
+    create: (data: { username: string; password: string; role: string }) =>
+      apiClient.post<User>('/users', data),
+    update: (id: number, data: { username?: string; password?: string; role?: string; is_active?: string }) =>
+      apiClient.put<User>(`/users/${id}`, data),
+    delete: (id: number) => apiClient.delete<void>(`/users/${id}`),
+    toggleActive: (id: number) => apiClient.post<User>(`/users/${id}/toggle-active`),
   },
 };
 

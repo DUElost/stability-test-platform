@@ -9,10 +9,10 @@ from typing import Optional, Set, Tuple
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from ..core.database import SessionLocal, get_raw_db
-from ..core.database_adapter import get_adapter_from_engine
-from ..core.database import engine
-from ..core.metrics import (
+from backend.core.database import SessionLocal, get_raw_db
+from backend.core.database_adapter import get_adapter_from_engine
+from backend.core.database import engine
+from backend.core.metrics import (
     task_dispatch_latency,
     task_dispatch_total,
     task_dispatch_errors,
@@ -21,7 +21,7 @@ from ..core.metrics import (
     task_run_total,
     task_run_state_changes,
 )
-from ..models.schemas import (
+from backend.models.schemas import (
     Device,
     DeviceStatus,
     Host,

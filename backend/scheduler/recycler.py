@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import or_, text
 
-from ..core.database import SessionLocal
-from ..core.metrics import (
+from backend.core.database import SessionLocal
+from backend.core.metrics import (
     recycler_runs,
     recycler_timeouts,
     recycler_duration,
@@ -16,7 +16,7 @@ from ..core.metrics import (
     task_run_state_changes,
     task_run_total,
 )
-from ..models.schemas import Device, DeviceStatus, HostStatus, RunStatus, Task, TaskRun, TaskStatus
+from backend.models.schemas import Device, DeviceStatus, HostStatus, RunStatus, Task, TaskRun, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
 
 def _check_host_heartbeat_timeout(db, now: datetime) -> int:
     """Mark hosts as OFFLINE if no heartbeat received within timeout period."""
-    from ..models.schemas import Host
+    from backend.models.schemas import Host
 
     offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
 

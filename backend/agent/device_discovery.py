@@ -3,7 +3,7 @@
 """
 import logging
 import subprocess
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +180,7 @@ def _parse_wifi_info(text: str) -> Dict[str, Any]:
     return info
 
 
-def _parse_ping_time(text: str) -> float | None:
+def _parse_ping_time(text: str) -> Optional[float]:
     """
     从 ping 输出中解析平均延迟时间
 
@@ -228,7 +228,7 @@ def _parse_ping_time(text: str) -> float | None:
     return None
 
 
-def _ping_with_fallback(adb_path: str, serial: str, target: str, fallback: str | None = None) -> float | None:
+def _ping_with_fallback(adb_path: str, serial: str, target: str, fallback: Optional[str] = None) -> Optional[float]:
     """
     使用 ping 检测网络延迟，支持备用目标切换
 
@@ -241,7 +241,7 @@ def _ping_with_fallback(adb_path: str, serial: str, target: str, fallback: str |
     Returns:
         平均延迟时间（毫秒），失败返回 None
     """
-    def _ping(host: str) -> tuple[float | None, bool]:
+    def _ping(host: str) -> Tuple[Optional[float], bool]:
         """执行 ping 并返回 (延迟, 是否成功)"""
         try:
             result = subprocess.run(

@@ -1,8 +1,5 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { HostCard, Host } from '../components/network/HostCard';
-import { Device } from '../components/device/DeviceCard';
-import { DeviceGrid } from '../components/device/DeviceGrid';
 import { PageContainer } from '../components/layout';
 import { useRealtimeDashboard } from '../hooks/useRealtimeDashboard';
 import { api } from '../utils/api';
@@ -10,37 +7,20 @@ import { WS_DASHBOARD_ENDPOINT } from '../config';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Wifi, WifiOff, Clock, Server, Smartphone, Activity, AlertCircle, CheckCircle2, Search, BarChart3 } from 'lucide-react';
+import { Wifi, WifiOff, Clock, Server, Smartphone, AlertCircle, BarChart3, Gauge, Cpu, HardDrive, MemoryStick, Zap } from 'lucide-react';
 import { DeviceStatusChart, HostResourceChart, ActivityChart } from '@/components/charts';
-import { type HostDTO, type DeviceDTO, mapHostToViewModel, mapDeviceToViewModel } from '@/mappers';
+import { type DeviceDTO, mapDeviceToViewModel } from '@/mappers';
+import { CleanCard } from '../components/ui/clean-card';
+import { useNavigate } from 'react-router-dom';
 
-const hostStatusMap: Record<string, Host['status']> = {
-  'ONLINE': 'online',
-  'OFFLINE': 'offline',
-  'DEGRADED': 'warning'
-};
-
-function toComponentHost(host: HostDTO): Host {
-  const viewModel = mapHostToViewModel(host);
-  return {
-    ip: viewModel.ip,
-    status: hostStatusMap[viewModel.status] || 'offline',
-    cpu_load: viewModel.extra?.cpu_load as number || 0,
-    ram_usage: viewModel.extra?.ram_usage as number || 0,
-    disk_usage: (viewModel.extra?.disk_usage as { usage_percent?: number })?.usage_percent || 0,
-    mount_status: viewModel.mountStatusOk,
-  };
-}
-
-const deviceStatusMap: Record<string, Device['status']> = {
+const deviceStatusMap: Record<string, 'idle' | 'testing' | 'offline' | 'error'> = {
   'ONLINE': 'idle',
   'BUSY': 'testing',
   'OFFLINE': 'offline',
   'ERROR': 'error'
 };
 
-function toComponentDevice(device: DeviceDTO): Device {
+function toComponentDevice(device: DeviceDTO) {
   const viewModel = mapDeviceToViewModel(device);
   return {
     serial: viewModel.serial,
@@ -52,55 +32,17 @@ function toComponentDevice(device: DeviceDTO): Device {
   };
 }
 
-function StatCard({
-  title,
-  value,
-  suffix,
-  icon: Icon,
-  color,
-  isLoading
-}: {
-  title: string;
-  value: string | number;
-  suffix?: string;
-  icon: React.ElementType;
-  color: 'primary' | 'success' | 'destructive' | 'warning';
-  isLoading?: boolean;
-}) {
-  const colorClasses = {
-    primary: 'bg-primary/10 text-primary border-primary/20',
-    success: 'bg-success/10 text-success border-success/20',
-    destructive: 'bg-destructive/10 text-destructive border-destructive/20',
-    warning: 'bg-warning/10 text-warning border-warning/20',
-  };
-
-  return (
-    <Card className="border-l-4 border-l-transparent hover:shadow-md transition-shadow">
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">{title}</p>
-            {isLoading ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className="flex items-baseline gap-1">
-                <span className="text-2xl font-bold text-card-foreground">{value}</span>
-                {suffix && <span className="text-sm text-muted-foreground">{suffix}</span>}
-              </div>
-            )}
-          </div>
-          <div className={`p-2 rounded-lg border ${colorClasses[color]}`}>
-            <Icon size={20} />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
+interface Device {
+  serial: string;
+  model: string;
+  status: 'idle' | 'testing' | 'offline' | 'error';
+  battery_level: number;
+  temperature: number;
+  network_latency: number | null;
 }
 
 export default function Dashboard() {
-  const [filterText, setFilterText] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const navigate = useNavigate();
 
   const { data: hosts, isLoading: hostsLoading, error: hostsError } = useQuery({
     queryKey: ['hosts'],
@@ -121,9 +63,22 @@ export default function Dashboard() {
     return rawDevices.map(toComponentDevice);
   }, [rawDevices]);
 
+  // 计算主机统计
+  const hostStats = useMemo(() => {
+    if (!hosts) return { total: 0, online: 0, offline: 0, degraded: 0 };
+    const hostArray = hosts as any[];
+    return {
+      total: hostArray.length,
+      online: hostArray.filter((h: any) => h.status === 'ONLINE').length,
+      offline: hostArray.filter((h: any) => h.status === 'OFFLINE').length,
+      degraded: hostArray.filter((h: any) => h.status === 'DEGRADED').length,
+    };
+  }, [hosts]);
+
+  // 计算设备统计
   const stats = useMemo(() => ({
     total: devices.length,
-    online: devices.filter((d: Device) => d.status === 'idle').length,
+    idle: devices.filter((d: Device) => d.status === 'idle').length,
     offline: devices.filter((d: Device) => d.status === 'offline').length,
     testing: devices.filter((d: Device) => d.status === 'testing').length,
     error: devices.filter((d: Device) => d.status === 'error').length,
@@ -131,23 +86,15 @@ export default function Dashboard() {
     highTemp: devices.filter((d: Device) => d.temperature > 45).length,
   }), [devices]);
 
-  const filteredDevices = useMemo(() => devices.filter((d: Device) => {
-    const matchesStatus = statusFilter === 'all' || d.status === statusFilter;
-    const matchesSearch = d.serial.toLowerCase().includes(filterText.toLowerCase()) ||
-                          d.model.toLowerCase().includes(filterText.toLowerCase());
-    return matchesStatus && matchesSearch;
-  }), [devices, statusFilter, filterText]);
+  // 计算告警数量
+  const alertsCount = stats.error + stats.lowBattery + stats.highTemp;
 
   const isLoading = hostsLoading || devicesLoading;
   const hasError = hostsError || devicesError;
 
-  // Calculate alerts count
-  const alertsCount = stats.error + stats.lowBattery + stats.highTemp;
-  const alertsLabel = alertsCount > 0 ? alertsCount : 'All Good';
-
-  // Prepare chart data
+  // 准备图表数据
   const deviceStatusData = useMemo(() => ({
-    idle: stats.online,
+    idle: stats.idle,
     testing: stats.testing,
     offline: stats.offline,
     error: stats.error,
@@ -155,7 +102,7 @@ export default function Dashboard() {
 
   const hostResourceData = useMemo(() => {
     if (!hosts) return [];
-    return (hosts as HostDTO[]).map((host) => ({
+    return (hosts as any[]).map((host) => ({
       ip: host.ip,
       cpu_load: (host.extra?.cpu_load as number) || 0,
       ram_usage: (host.extra?.ram_usage as number) || 0,
@@ -166,153 +113,263 @@ export default function Dashboard() {
   if (hasError) {
     return (
       <PageContainer>
-        <Card className="border-destructive/50 bg-destructive/5">
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3 text-destructive">
-              <AlertCircle size={24} />
-              <div>
-                <h3 className="font-semibold">Error loading data</h3>
-                <p className="text-sm text-destructive/80">Please check backend connection.</p>
+        <div className="space-y-6">
+          <div>
+            <h2 className="text-2xl font-semibold text-gray-900 mb-1">仪表盘</h2>
+            <p className="text-sm text-gray-400">系统运行状态总览</p>
+          </div>
+          <Card className="border-red-200 bg-red-50">
+            <CardContent className="p-6">
+              <div className="flex items-center gap-3 text-red-600">
+                <AlertCircle size={24} />
+                <div>
+                  <h3 className="font-semibold">Error loading data</h3>
+                  <p className="text-sm text-red-600/80">Please check backend connection.</p>
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
       </PageContainer>
     );
   }
 
   return (
     <PageContainer>
-      {/* Connection Status Bar */}
-      <div className="flex justify-between items-center text-sm px-1 mb-4">
-        <div className="flex items-center gap-2">
-          <Badge
-            variant={wsConnected ? 'success' : 'destructive'}
-            className="gap-1.5"
-          >
-            {wsConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
-            {wsConnected ? 'Realtime Connected' : 'Disconnected'}
-          </Badge>
+      <div className="space-y-6">
+        {/* Page Header */}
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900 mb-1">仪表盘</h2>
+          <p className="text-sm text-gray-400">系统运行状态总览</p>
         </div>
-        <div className="flex items-center gap-2 text-muted-foreground">
-          <Clock size={14} />
-          <span>Updated: {lastUpdateTime.toLocaleTimeString()}</span>
-        </div>
-      </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard
-          title="Total Hosts"
-          value={hosts?.length || 0}
-          icon={Server}
-          color="primary"
-          isLoading={isLoading}
-        />
-        <StatCard
-          title="Online Devices"
-          value={stats.online}
-          suffix={`/ ${stats.total}`}
-          icon={CheckCircle2}
-          color="success"
-          isLoading={isLoading}
-        />
-        <StatCard
-          title="Active Testing"
-          value={stats.testing}
-          icon={Activity}
-          color="primary"
-          isLoading={isLoading}
-        />
-        <StatCard
-          title="Alerts"
-          value={alertsLabel}
-          icon={AlertCircle}
-          color={alertsCount > 0 ? 'destructive' : 'success'}
-          isLoading={isLoading}
-        />
-      </div>
-
-      {/* Charts Section */}
-      <div className="mb-6">
-        <div className="flex items-center gap-2 mb-4">
-          <BarChart3 size={18} className="text-primary" />
-          <h2 className="text-lg font-semibold text-card-foreground">Analytics</h2>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <DeviceStatusChart data={deviceStatusData} isLoading={isLoading} />
-          <HostResourceChart hosts={hostResourceData} isLoading={isLoading} />
-          <ActivityChart isLoading={isLoading} />
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Hosts Section */}
-        <div className="lg:col-span-1 space-y-4">
+        {/* Connection Status Bar */}
+        <div className="flex justify-between items-center text-sm">
           <div className="flex items-center gap-2">
-            <Server size={18} className="text-primary" />
-            <h2 className="text-lg font-semibold text-card-foreground">Hosts</h2>
+            <Badge
+              variant={wsConnected ? 'default' : 'destructive'}
+              className="gap-1.5 bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+            >
+              {wsConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
+              {wsConnected ? '实时连接' : '已断开'}
+            </Badge>
           </div>
-          {isLoading ? (
-            <div className="space-y-3">
-              <Skeleton className="h-32" />
-              <Skeleton className="h-32" />
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {(hosts as HostDTO[] | undefined)?.map((host) => (
-                <HostCard key={host.id} host={toComponentHost(host)} />
-              ))}
-            </div>
-          )}
+          <div className="flex items-center gap-2 text-gray-400">
+            <Clock size={14} />
+            <span>更新于: {lastUpdateTime.toLocaleTimeString()}</span>
+          </div>
         </div>
 
-        {/* Devices Section */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <div className="flex items-center gap-2">
-              <Smartphone size={18} className="text-primary" />
-              <h2 className="text-lg font-semibold text-card-foreground">Devices</h2>
-            </div>
-
-            <div className="flex gap-2 w-full sm:w-auto">
-              <div className="relative flex-1 sm:w-48">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  type="text"
-                  placeholder="Search serial or model..."
-                  aria-label="Search devices by serial or model"
-                  value={filterText}
-                  onChange={(e) => setFilterText(e.target.value)}
-                  className="pl-9"
-                />
+        {/* Stats Grid - 简洁版 */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* 主机统计 */}
+          <CleanCard
+            className="p-4 cursor-pointer hover:shadow-md transition-shadow"
+            onClick={() => navigate('/hosts')}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">主机总数</p>
+                <div className="flex items-baseline gap-1 mt-1">
+                  {isLoading ? <Skeleton className="h-8 w-12" /> : (
+                    <>
+                      <span className="text-2xl font-bold text-gray-900">{hostStats.total}</span>
+                      <span className="text-xs text-gray-400">
+                        (在线{hostStats.online})
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
-              <select
-                aria-label="Filter devices by status"
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-3 py-1.5 text-sm border border-input rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="all">All Status</option>
-                <option value="idle">Idle</option>
-                <option value="testing">Testing</option>
-                <option value="offline">Offline</option>
-                <option value="error">Error</option>
-              </select>
+              <div className="w-12 h-12 rounded-xl bg-gray-50 flex items-center justify-center">
+                <Server className="w-6 h-6 text-gray-600" />
+              </div>
             </div>
-          </div>
+          </CleanCard>
 
-          {isLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Skeleton className="h-48" />
-              <Skeleton className="h-48" />
-              <Skeleton className="h-48" />
-              <Skeleton className="h-48" />
+          {/* 设备统计 */}
+          <CleanCard
+            className="p-4 cursor-pointer hover:shadow-md transition-shadow"
+            onClick={() => navigate('/devices')}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">设备总数</p>
+                <div className="flex items-baseline gap-1 mt-1">
+                  {isLoading ? <Skeleton className="h-8 w-12" /> : (
+                    <>
+                      <span className="text-2xl font-bold text-gray-900">{stats.total}</span>
+                      <span className="text-xs text-gray-400">
+                        (空闲{stats.idle})
+                      </span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center">
+                <Smartphone className="w-6 h-6 text-emerald-600" />
+              </div>
             </div>
-          ) : (
-            <DeviceGrid devices={filteredDevices} />
-          )}
+          </CleanCard>
+
+          {/* 测试中 */}
+          <CleanCard
+            className="p-4 cursor-pointer hover:shadow-md transition-shadow"
+            onClick={() => navigate('/tasks')}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">测试中</p>
+                <div className="flex items-baseline gap-1 mt-1">
+                  {isLoading ? <Skeleton className="h-8 w-12" /> : (
+                    <span className="text-2xl font-bold text-blue-600">{stats.testing}</span>
+                  )}
+                </div>
+              </div>
+              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center">
+                <Zap className="w-6 h-6 text-blue-600" />
+              </div>
+            </div>
+          </CleanCard>
+
+          {/* 告警 */}
+          <CleanCard
+            className="p-4 cursor-pointer hover:shadow-md transition-shadow"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-gray-500 uppercase tracking-wider">告警</p>
+                <div className="flex items-baseline gap-1 mt-1">
+                  {isLoading ? <Skeleton className="h-8 w-12" /> : (
+                    <span className={`text-2xl font-bold ${alertsCount > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                      {alertsCount > 0 ? alertsCount : '无'}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${alertsCount > 0 ? 'bg-red-50' : 'bg-emerald-50'}`}>
+                <AlertCircle className={`w-6 h-6 ${alertsCount > 0 ? 'text-red-600' : 'text-emerald-600'}`} />
+              </div>
+            </div>
+          </CleanCard>
+        </div>
+
+        {/* Alert Details - 当有告警时显示 */}
+        {alertsCount > 0 && (
+          <CleanCard className="p-4">
+            <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-red-500" />
+                <span className="text-sm font-medium text-gray-700">告警详情</span>
+              </div>
+              <div className="flex items-center gap-4 text-xs">
+                {stats.error > 0 && (
+                  <span className="flex items-center gap-1 text-red-600">
+                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                    错误: {stats.error}
+                  </span>
+                )}
+                {stats.lowBattery > 0 && (
+                  <span className="flex items-center gap-1 text-amber-600">
+                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                    低电量: {stats.lowBattery}
+                  </span>
+                )}
+                {stats.highTemp > 0 && (
+                  <span className="flex items-center gap-1 text-orange-600">
+                    <span className="w-2 h-2 rounded-full bg-orange-500" />
+                    高温: {stats.highTemp}
+                  </span>
+                )}
+              </div>
+            </div>
+          </CleanCard>
+        )}
+
+        {/* Charts Section */}
+        <div>
+          <div className="flex items-center gap-2 mb-4">
+            <BarChart3 size={18} className="text-gray-600" />
+            <h3 className="text-lg font-semibold text-gray-900">数据统计</h3>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <CleanCard className="p-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-3">设备状态分布</h4>
+              {isLoading ? <Skeleton className="h-40" /> : <DeviceStatusChart data={deviceStatusData} />}
+            </CleanCard>
+            <CleanCard className="p-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-3">主机资源概览</h4>
+              {isLoading ? <Skeleton className="h-40" /> : <HostResourceChart hosts={hostResourceData} />}
+            </CleanCard>
+            <CleanCard className="p-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-3">活动趋势</h4>
+              {isLoading ? <Skeleton className="h-40" /> : <ActivityChart />}
+            </CleanCard>
+          </div>
+        </div>
+
+        {/* Quick Info Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <CleanCard className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
+                <Cpu className="w-5 h-5 text-gray-500" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">主机CPU平均</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {hostResourceData.length > 0
+                    ? `${(hostResourceData.reduce((sum, h) => sum + h.cpu_load, 0) / hostResourceData.length).toFixed(1)}%`
+                    : '-'}
+                </p>
+              </div>
+            </div>
+          </CleanCard>
+          <CleanCard className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
+                <MemoryStick className="w-5 h-5 text-gray-500" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">主机内存平均</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {hostResourceData.length > 0
+                    ? `${(hostResourceData.reduce((sum, h) => sum + h.ram_usage, 0) / hostResourceData.length).toFixed(1)}%`
+                    : '-'}
+                </p>
+              </div>
+            </div>
+          </CleanCard>
+          <CleanCard className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
+                <HardDrive className="w-5 h-5 text-gray-500" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">主机磁盘平均</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {hostResourceData.length > 0
+                    ? `${(hostResourceData.reduce((sum, h) => sum + h.disk_usage, 0) / hostResourceData.length).toFixed(1)}%`
+                    : '-'}
+                </p>
+              </div>
+            </div>
+          </CleanCard>
+          <CleanCard className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
+                <Gauge className="w-5 h-5 text-gray-500" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">在线率</p>
+                <p className="text-lg font-semibold text-gray-900">
+                  {stats.total > 0
+                    ? `${((stats.idle + stats.testing) / stats.total * 100).toFixed(1)}%`
+                    : '-'}
+                </p>
+              </div>
+            </div>
+          </CleanCard>
         </div>
       </div>
     </PageContainer>

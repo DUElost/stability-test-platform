@@ -6,7 +6,7 @@ Exposes Prometheus metrics at /metrics endpoint.
 
 from fastapi import APIRouter, Response
 
-from ...core.metrics import get_metrics_response, is_prometheus_available
+from backend.core.metrics import get_metrics_response, is_prometheus_available
 
 router = APIRouter()
 

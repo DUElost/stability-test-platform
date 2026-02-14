@@ -22,3 +22,9 @@ node_modules/
 venv-wsl/
 logs/
 .claude/
+*.db-wal
+*.db-shm
+/frontend/20
+/frontend/20)
+/nul
+/frontend/nul

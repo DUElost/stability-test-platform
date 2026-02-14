@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type TimeoutType = ReturnType<typeof setTimeout>;
+
+/** WebSocket 连接状态 */
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 /** WebSocket 消息格式 */
 export interface WebSocketMessage<T = unknown> {
@@ -32,6 +35,8 @@ const DEFAULT_RECONNECT_CONFIG: ReconnectConfig = {
 };
 
 interface UseWebSocketOptions {
+  /** 是否启用 WebSocket */
+  enabled?: boolean;
   /** 重连配置 */
   reconnectConfig?: Partial<ReconnectConfig>;
   /** 连接成功回调 */
@@ -40,11 +45,20 @@ interface UseWebSocketOptions {
   onDisconnect?: () => void;
   /** 消息接收回调 */
   onMessage?: <T>(message: WebSocketMessage<T>) => void;
+  /** 重连间隔 */
+  reconnectInterval?: number;
+  /** 最大重连尝试次数 */
+  maxReconnectAttempts?: number;
 }
 
 interface UseWebSocketReturn<T = unknown> {
+  /** 是否已连接 */
   isConnected: boolean;
+  /** 连接状态 */
+  connectionStatus: ConnectionStatus;
+  /** 最后接收的消息 */
   lastMessage: WebSocketMessage<T> | null;
+  /** 发送消息 */
   sendMessage: (msg: object) => void;
   /** 当前重连尝试次数 */
   reconnectAttempt: number;
@@ -61,148 +75,242 @@ interface UseWebSocketReturn<T = unknown> {
  * - 消息序列号跟踪
  * - 连接状态管理
  * - 手动连接/断开控制
+ * - 防止重复连接
  */
 export const useWebSocket = <T = unknown>(
   url: string,
   options: UseWebSocketOptions = {}
 ): UseWebSocketReturn<T> => {
   const {
+    enabled = true,
     reconnectConfig: userReconnectConfig,
     onConnect,
     onDisconnect,
     onMessage,
   } = options;
 
-  const reconnectConfig = { ...DEFAULT_RECONNECT_CONFIG, ...userReconnectConfig };
+  const reconnectConfig = useMemo(
+    () => ({ ...DEFAULT_RECONNECT_CONFIG, ...userReconnectConfig }),
+    [
+      userReconnectConfig?.initialDelay,
+      userReconnectConfig?.maxDelay,
+      userReconnectConfig?.exponent,
+      userReconnectConfig?.maxRetries,
+    ]
+  );
 
-  const [isConnected, setIsConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
   const [lastMessage, setLastMessage] = useState<WebSocketMessage<T> | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
 
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<TimeoutType | undefined>();
+  const urlReconnectTimeout = useRef<TimeoutType | undefined>();
   const urlRef = useRef(url);
   const lastSeqRef = useRef<number>(0);
   const missedMessagesRef = useRef<WebSocketMessage<T>[]>([]);
   const isManualDisconnect = useRef(false);
+  const isConnecting = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+
+  const isConnected = connectionStatus === 'connected';
+
+  // 稳定化的回调引用
+  const callbacksRef = useRef({ onConnect, onDisconnect, onMessage });
+  useEffect(() => {
+    callbacksRef.current = { onConnect, onDisconnect, onMessage };
+  }, [onConnect, onDisconnect, onMessage]);
 
   // 计算重连延迟
   const getReconnectDelay = useCallback((): number => {
     const delay =
       reconnectConfig.initialDelay *
-      Math.pow(reconnectConfig.exponent, reconnectAttempt);
+      Math.pow(reconnectConfig.exponent, reconnectAttemptRef.current);
     return Math.min(delay, reconnectConfig.maxDelay);
-  }, [reconnectAttempt, reconnectConfig]);
+  }, [reconnectConfig.exponent, reconnectConfig.initialDelay, reconnectConfig.maxDelay]);
 
-  // 更新 URL ref
-  useEffect(() => {
-    urlRef.current = url;
-  }, [url]);
-
+  // 断开连接
   const disconnect = useCallback(() => {
     isManualDisconnect.current = true;
-    if (ws.current) {
-      ws.current.close();
-    }
+    isConnecting.current = false;
     if (reconnectTimeout.current) {
       clearTimeout(reconnectTimeout.current);
+      reconnectTimeout.current = undefined;
     }
+    if (urlReconnectTimeout.current) {
+      clearTimeout(urlReconnectTimeout.current);
+      urlReconnectTimeout.current = undefined;
+    }
+    if (ws.current) {
+      // 只关闭连接，不清理事件处理器，让它们自然处理
+      if (ws.current.readyState === WebSocket.OPEN || ws.current.readyState === WebSocket.CONNECTING) {
+        ws.current.close();
+      }
+      ws.current = null;
+    }
+    setConnectionStatus('disconnected');
   }, []);
 
+  // 建立连接
   const connect = useCallback(() => {
-    if (ws.current?.readyState === WebSocket.OPEN) {
+    if (
+      !enabled ||
+      !urlRef.current ||
+      isConnecting.current ||
+      ws.current?.readyState === WebSocket.OPEN ||
+      ws.current?.readyState === WebSocket.CONNECTING
+    ) {
       return;
     }
 
+    isConnecting.current = true;
     isManualDisconnect.current = false;
-    ws.current = new WebSocket(urlRef.current);
+    setConnectionStatus('connecting');
 
-    ws.current.onopen = () => {
-      setIsConnected(true);
-      setReconnectAttempt(0);
-      console.log('[WS] Connected');
+    try {
+      const socket = new WebSocket(urlRef.current);
+      ws.current = socket;
 
-      // 处理重连期间丢失的消息（如果服务器支持）
-      if (missedMessagesRef.current.length > 0) {
-        console.log(`[WS] Processing ${missedMessagesRef.current.length} missed messages`);
-        missedMessagesRef.current.forEach((msg) => {
-          setLastMessage(msg);
-          onMessage?.(msg);
-        });
-        missedMessagesRef.current = [];
-      }
+      socket.onopen = () => {
+        isConnecting.current = false;
+        setConnectionStatus('connected');
+        reconnectAttemptRef.current = 0;
+        setReconnectAttempt(0);
+        console.log('[WS] Connected to', urlRef.current);
 
-      onConnect?.();
-    };
-
-    ws.current.onclose = (event) => {
-      setIsConnected(false);
-      onDisconnect?.();
-
-      // 手动断开不重连
-      if (isManualDisconnect.current) {
-        console.log('[WS] Manually disconnected');
-        return;
-      }
-
-      // 检查是否超过最大重试次数
-      if (
-        reconnectConfig.maxRetries > 0 &&
-        reconnectAttempt >= reconnectConfig.maxRetries
-      ) {
-        console.error('[WS] Max reconnect attempts reached');
-        return;
-      }
-
-      const delay = getReconnectDelay();
-      console.log(`[WS] Disconnected, reconnecting in ${delay}ms (attempt ${reconnectAttempt + 1})`);
-
-      setReconnectAttempt((prev) => prev + 1);
-      reconnectTimeout.current = setTimeout(connect, delay);
-    };
-
-    ws.current.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as WebSocketMessage<T>;
-
-        // 检查消息序列号
-        if (data.seq !== undefined) {
-          if (data.seq !== lastSeqRef.current + 1 && lastSeqRef.current !== 0) {
-            console.warn(`[WS] Message gap detected: expected ${lastSeqRef.current + 1}, got ${data.seq}`);
-            // 这里可以实现消息回补逻辑
-          }
-          lastSeqRef.current = data.seq;
+        // 处理重连期间丢失的消息
+        if (missedMessagesRef.current.length > 0) {
+          console.log(`[WS] Processing ${missedMessagesRef.current.length} missed messages`);
+          missedMessagesRef.current.forEach((msg) => {
+            setLastMessage(msg);
+            callbacksRef.current.onMessage?.(msg);
+          });
+          missedMessagesRef.current = [];
         }
 
-        setLastMessage(data);
-        onMessage?.(data);
-      } catch (e) {
-        console.error('[WS] Failed to parse message:', e);
-      }
-    };
+        callbacksRef.current.onConnect?.();
+      };
 
-    ws.current.onerror = (error) => {
-      console.error('[WS] Error:', error);
-    };
-  }, [getReconnectDelay, reconnectAttempt, reconnectConfig.maxRetries, onConnect, onDisconnect, onMessage]);
+      socket.onclose = (event) => {
+        isConnecting.current = false;
+        ws.current = null;
+        setConnectionStatus('disconnected');
+        callbacksRef.current.onDisconnect?.();
 
+        // 手动断开不重连
+        if (isManualDisconnect.current) {
+          console.log('[WS] Manually disconnected');
+          return;
+        }
+
+        // 正常关闭（code 1000）且不是手动断开，不重连
+        if (event.code === 1000 && !isManualDisconnect.current) {
+          console.log('[WS] Connection closed normally');
+          return;
+        }
+
+        // 检查是否超过最大重试次数
+        if (
+          reconnectConfig.maxRetries > 0 &&
+          reconnectAttemptRef.current >= reconnectConfig.maxRetries
+        ) {
+          console.error('[WS] Max reconnect attempts reached');
+          setConnectionStatus('error');
+          return;
+        }
+
+        const delay = getReconnectDelay();
+        reconnectAttemptRef.current += 1;
+        setReconnectAttempt(reconnectAttemptRef.current);
+        console.log(`[WS] Disconnected (code: ${event.code}), reconnecting in ${delay}ms (attempt ${reconnectAttemptRef.current})`);
+
+        reconnectTimeout.current = setTimeout(() => {
+          if (!isManualDisconnect.current) {
+            connect();
+          }
+        }, delay);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as WebSocketMessage<T>;
+
+          // 检查消息序列号
+          if (data.seq !== undefined) {
+            if (data.seq !== lastSeqRef.current + 1 && lastSeqRef.current !== 0) {
+              console.warn(`[WS] Message gap detected: expected ${lastSeqRef.current + 1}, got ${data.seq}`);
+            }
+            lastSeqRef.current = data.seq;
+          }
+
+          setLastMessage(data);
+          callbacksRef.current.onMessage?.(data);
+        } catch (e) {
+          console.error('[WS] Failed to parse message:', e);
+        }
+      };
+
+      socket.onerror = (error) => {
+        console.error('[WS] Error:', error);
+        setConnectionStatus('error');
+        isConnecting.current = false;
+      };
+    } catch (error) {
+      console.error('[WS] Failed to create connection:', error);
+      setConnectionStatus('error');
+      isConnecting.current = false;
+    }
+  }, [enabled, reconnectConfig.maxRetries, getReconnectDelay]);
+
+  // 初始连接
   useEffect(() => {
-    connect();
+    if (enabled) {
+      connect();
+    }
     return () => {
       disconnect();
     };
-  }, [connect, disconnect]);
+  }, [enabled, connect, disconnect]);
+
+  // URL 变化时重新连接
+  useEffect(() => {
+    if (urlRef.current !== url) {
+      urlRef.current = url;
+      if (enabled) {
+        // 重置手动断开状态，允许重连
+        isManualDisconnect.current = false;
+        disconnect();
+        // 短暂延迟后重新连接，确保清理完成
+        urlReconnectTimeout.current = setTimeout(() => {
+          if (!isManualDisconnect.current) {
+            connect();
+          }
+        }, 100);
+      }
+    }
+    return () => {
+      if (urlReconnectTimeout.current) {
+        clearTimeout(urlReconnectTimeout.current);
+        urlReconnectTimeout.current = undefined;
+      }
+    };
+  }, [url, enabled, connect, disconnect]);
 
   const sendMessage = useCallback((msg: object) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify(msg));
     } else {
       console.warn('[WS] Cannot send message, not connected');
+      // Queue message for later if connection is available but not open
+      if (ws.current?.readyState === WebSocket.CONNECTING) {
+        missedMessagesRef.current.push({ type: 'QUEUED', payload: msg });
+      }
     }
   }, []);
 
   return {
     isConnected,
+    connectionStatus,
     lastMessage,
     sendMessage,
     reconnectAttempt,

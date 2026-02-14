@@ -15,11 +15,14 @@ def _create_engine(database_url: str):
 
     if database_url.startswith("sqlite"):
         connect_args = {"check_same_thread": False}
+        # SQLite 不支持多线程连接池，使用 NullPool
+        from sqlalchemy.pool import NullPool
         engine = create_engine(
             database_url,
             pool_pre_ping=True,
             future=True,
             connect_args=connect_args,
+            poolclass=NullPool,
         )
     elif database_url.startswith("postgresql"):
         # PostgreSQL 连接池配置
