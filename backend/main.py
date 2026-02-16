@@ -8,6 +8,7 @@ from backend.api.routes.websocket import router as websocket_router
 from backend.api.routes.metrics import router as metrics_router
 from backend.api.routes.deploy import router as deploy_router
 from backend.api.routes.users import router as users_router
+from backend.api.routes.tools import router as tools_router
 from backend.core.database import Base, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
@@ -42,6 +43,7 @@ app.include_router(websocket_router)
 app.include_router(metrics_router)
 app.include_router(deploy_router)
 app.include_router(users_router)
+app.include_router(tools_router)
 
 
 @app.on_event("startup")

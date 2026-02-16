@@ -13,7 +13,8 @@ import {
   Wifi,
   FileSearch,
   Users,
-  Workflow
+  Workflow,
+  Wrench
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -48,6 +49,7 @@ const navGroups: NavGroup[] = [
     label: '运营',
     items: [
       { path: '/tasks', label: '任务管理', icon: ListTodo },
+      { path: '/tools', label: '工具专项', icon: Wrench },
       { path: '/workflows', label: '工作流管理', icon: Workflow },
       { path: '/results', label: '测试结果', icon: TestTube2 },
       { path: '/logs', label: '日志监控', icon: FileSearch },

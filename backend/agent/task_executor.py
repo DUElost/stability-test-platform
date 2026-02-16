@@ -5,7 +5,7 @@ import subprocess
 import time
 import tarfile
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -15,6 +15,20 @@ from .adb_wrapper import AdbError, AdbWrapper
 from .aimonkey_aee import AEEEntry, scan_aee_entries, scan_and_pull_aee_entries
 from .aimonkey_risk import build_risk_summary, write_risk_summary
 from .aimonkey_stages import AIMonkeyStage, stage_progress
+
+
+@dataclass
+class ExecutionContext:
+    """Agent 执行上下文，包含执行所需的运行时信息"""
+    api_url: str
+    run_id: int
+    host_id: int
+    device_serial: str
+    log_dir: str = ""
+
+    def __post_init__(self):
+        if not self.log_dir:
+            self.log_dir = f"logs/runs/{self.run_id}"
 
 
 @dataclass
@@ -33,10 +47,24 @@ class TaskExecutor:
         self._safe_pattern = re.compile(r"^[\w@%:/._+\-]+$")
         self._logger = logging.getLogger(__name__)
         self._heartbeat_interval = 60
-        # 实时日志收集器
+        self._context: Optional[ExecutionContext] = None
         self._log_buffer: List[str] = []
-        self._api_url: str = ""
-        self._run_id: Optional[int] = None
+        self._progress: int = 0
+        self._progress_message: str = ""
+
+    @property
+    def _api_url(self) -> str:
+        return self._context.api_url if self._context else ""
+
+    @property
+    def _run_id(self) -> Optional[int]:
+        return self._context.run_id if self._context else None
+
+    def set_progress(self, progress: int, message: str = "") -> None:
+        """设置进度并发送心跳"""
+        self._progress = progress
+        self._progress_message = message
+        self._flush_logs()
 
     def _log(self, message: str, level: str = "INFO") -> None:
         """记录日志并发送到后端"""
@@ -52,37 +80,50 @@ class TaskExecutor:
 
     def _flush_logs(self) -> None:
         """将缓冲区日志发送到后端"""
-        if not self._api_url or not self._run_id or not self._log_buffer:
+        if not self._api_url or not self._run_id:
             return
         try:
-            payload = {
+            payload: Dict[str, Any] = {
                 "status": "RUNNING",
-                "log_lines": self._log_buffer[-50:],
             }
-            requests.post(
-                f"{self._api_url}/api/v1/agent/runs/{self._run_id}/heartbeat",
-                json=payload,
-                timeout=5,
-            )
-            self._log_buffer = []
+            # 添加日志行
+            if self._log_buffer:
+                payload["log_lines"] = self._log_buffer[-50:]
+                self._log_buffer = []
+            # 添加进度信息
+            if self._progress > 0 or self._progress_message:
+                payload["progress"] = self._progress
+                payload["progress_message"] = self._progress_message
+            # 发送请求
+            if len(payload) > 1:  # 至少有 status 和其他字段
+                requests.post(
+                    f"{self._api_url}/api/v1/agent/runs/{self._run_id}/heartbeat",
+                    json=payload,
+                    timeout=5,
+                )
         except Exception:
             pass  # 发送失败不影响主流程
 
-    def execute_task(self, task_type: str, params: Dict[str, Any], device_serial: str) -> TaskResult:
+    def execute_task(self, task_type: str, params: Dict[str, Any], context: ExecutionContext) -> TaskResult:
+        self._context = context
         try:
+            tool_id = params.get("tool_id")
+            if tool_id:
+                return self._execute_tool(tool_id, params)
+
             task_name = task_type.upper()
             if task_name == "MONKEY":
-                return self._run_monkey(device_serial, params)
+                return self._run_monkey(context.device_serial, params)
             if task_name == "MTBF":
-                return self._run_mtbf(device_serial, params)
+                return self._run_mtbf(context.device_serial, params)
             if task_name == "DDR":
-                return self._run_ddr(device_serial, params)
+                return self._run_ddr(context.device_serial, params)
             if task_name == "GPU":
-                return self._run_gpu_stress(device_serial, params)
+                return self._run_gpu_stress(context.device_serial, params)
             if task_name == "STANDBY":
-                return self._run_standby(device_serial, params)
+                return self._run_standby(context.device_serial, params)
             if task_name == "AIMONKEY":
-                return self._run_aimonkey(device_serial, params)
+                return self._run_aimonkey_test(context.device_serial, params)
             return self._run_local_script(params)
         except ValueError as exc:
             return TaskResult(status="FAILED", exit_code=1, error_code="INVALID_PARAM", error_message=str(exc))
@@ -92,6 +133,108 @@ class TaskExecutor:
             return TaskResult(status="FAILED", exit_code=1, error_code="TIMEOUT", error_message="command timeout")
         except Exception as exc:
             return TaskResult(status="FAILED", exit_code=1, error_code="UNKNOWN", error_message=str(exc))
+        finally:
+            self._context = None
+
+    def _execute_tool(self, tool_id: int, params: Dict[str, Any]) -> TaskResult:
+        """通过工具 ID 执行测试"""
+        import importlib.util
+        from backend.agent.test_framework import BaseTestCase, TestResult
+
+        script_path = params.get("script_path")
+        script_class = params.get("script_class")
+
+        if not script_path or not script_class:
+            return TaskResult(
+                status="FAILED",
+                exit_code=1,
+                error_code="TOOL_NOT_FOUND",
+                error_message="tool_id requires script_path and script_class"
+            )
+
+        tool_class = self._load_tool_class(script_path, script_class)
+        if not tool_class:
+            return TaskResult(
+                status="FAILED",
+                exit_code=1,
+                error_code="TOOL_LOAD_FAILED",
+                error_message=f"Failed to load {script_class} from {script_path}"
+            )
+
+        default_params = params.get("default_params", {})
+        exec_params = {**default_params, **params}
+        exec_params = {**exec_params, **self._context_to_dict()}
+
+        os.makedirs(self._context.log_dir, exist_ok=True)
+
+        test_case = tool_class(
+            adb_wrapper=self.adb,
+            api_url=self._context.api_url,
+            run_id=self._context.run_id,
+            host_id=self._context.host_id,
+            device_serial=self._context.device_serial,
+            log_dir=self._context.log_dir,
+        )
+
+        result = test_case.run(self._context.device_serial, exec_params)
+
+        return TaskResult(
+            status=result.status,
+            exit_code=result.exit_code,
+            error_code=result.error_code,
+            error_message=result.error_message,
+            log_summary=result.log_summary,
+            artifact=result.artifact,
+        )
+
+    def _context_to_dict(self) -> Dict[str, Any]:
+        """将执行上下文转换为字典，供工具使用"""
+        if not self._context:
+            return {}
+        return {
+            "api_url": self._context.api_url,
+            "run_id": self._context.run_id,
+            "host_id": self._context.host_id,
+            "device_serial": self._context.device_serial,
+            "log_dir": self._context.log_dir,
+        }
+
+    def _load_tool_class(self, script_path: str, class_name: str):
+        """动态加载工具类"""
+        import importlib.util
+
+        # 简单的缓存
+        cache_key = f"{script_path}:{class_name}"
+        if hasattr(self, '_tool_class_cache') and cache_key in self._tool_class_cache:
+            return self._tool_class_cache[cache_key]
+
+        if not hasattr(self, '_tool_class_cache'):
+            self._tool_class_cache = {}
+
+        try:
+            # 从文件加载模块
+            spec = importlib.util.spec_from_file_location("tool_module", script_path)
+            if spec is None or spec.loader is None:
+                return None
+
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            # 获取类
+            tool_class = getattr(module, class_name, None)
+
+            # 检查是否继承 BaseTestCase
+            from backend.agent.test_framework import BaseTestCase
+            if tool_class and issubclass(tool_class, BaseTestCase):
+                self._tool_class_cache[cache_key] = tool_class
+                return tool_class
+
+            return None
+        except Exception as e:
+            print(f"加载工具类失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def _tail(self, text: str, limit: int = 2000) -> str:
         return (text or "")[-limit:]
@@ -925,3 +1068,39 @@ class TaskExecutor:
                     break
                 hasher.update(chunk)
         return hasher.hexdigest()
+
+    def _run_aimonkey_test(self, device_serial: str, params: Dict[str, Any]) -> TaskResult:
+        """使用 AIMonkeyTest 类执行 AIMONKEY 任务"""
+        try:
+            from .tools.aimonkey_test import AIMonkeyTest
+
+            log_dir = f"logs/runs/{self._context.run_id}"
+            os.makedirs(log_dir, exist_ok=True)
+
+            test_case = AIMonkeyTest(
+                adb_wrapper=self.adb,
+                api_url=self._api_url,
+                run_id=self._context.run_id,
+                host_id=self._context.host_id,
+                device_serial=device_serial,
+                log_dir=log_dir,
+            )
+
+            result = test_case.run(device_serial, params)
+
+            return TaskResult(
+                status=result.status,
+                exit_code=result.exit_code,
+                error_code=result.error_code,
+                error_message=result.error_message,
+                log_summary=result.log_summary,
+                artifact=result.artifact,
+            )
+        except Exception as e:
+            self._logger.exception("aimonkey_test_failed")
+            return TaskResult(
+                status="FAILED",
+                exit_code=1,
+                error_code="AIMONKEY_TEST_ERROR",
+                error_message=str(e),
+            )

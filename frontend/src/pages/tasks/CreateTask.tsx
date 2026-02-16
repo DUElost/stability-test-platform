@@ -30,11 +30,6 @@ export default function CreateTask() {
     queryFn: () => api.devices.list().then(res => res.data),
   });
 
-  const { data: templates } = useQuery({
-    queryKey: ['task-templates'],
-    queryFn: () => api.tasks.listTemplates().then(res => res.data),
-  });
-
   const handleSubmit = async (taskData: { type: string; deviceIds: number[]; config: Record<string, any> }) => {
     try {
       // Create a task for each selected device
@@ -64,7 +59,6 @@ export default function CreateTask() {
 
       <CreateTaskForm
         devices={devices ? devices.map(toComponentDevice) : []}
-        templates={templates}
         onSubmit={handleSubmit}
       />
     </div>

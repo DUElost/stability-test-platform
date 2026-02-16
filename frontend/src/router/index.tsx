@@ -14,6 +14,7 @@ import MapReducePage from '../pages/mapreduce/MapReducePage';
 import WifiPage from '../pages/wifi/WifiPage';
 import LogsPage from '../pages/logs/LogsPage';
 import UsersPage from '../pages/users/UsersPage';
+import ToolsPage from '../pages/tools/ToolsPage';
 
 // 检查是否已登录
 function isAuthenticated() {
@@ -50,6 +51,8 @@ export default function AppRouter() {
               <Route path="new" element={<CreateTask />} />
               <Route path=":taskId" element={<TaskDetails />} />
             </Route>
+
+            <Route path="tools" element={<ToolsPage />} />
 
             <Route path="hosts" element={<HostsPage />} />
             <Route path="devices" element={<DevicesPage />} />

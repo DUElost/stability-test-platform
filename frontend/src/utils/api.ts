@@ -120,6 +120,11 @@ export interface Task {
   status: 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELED';
   priority: number;
   created_at: string;
+
+  // 分布式任务支持
+  group_id?: string;
+  is_distributed?: boolean;
+  runs_count?: number;
 }
 
 export interface TaskRun {
@@ -128,6 +133,13 @@ export interface TaskRun {
   host_id: number;
   device_id: number;
   status: string;
+
+  // 分布式任务支持
+  group_id?: string;
+
+  // 进度信息
+  progress?: number;
+  progress_message?: string;
   started_at: string | null;
   finished_at: string | null;
   exit_code: number | null;
@@ -205,6 +217,36 @@ export interface JiraDraft {
   environment: Record<string, any>;
   custom_fields: Record<string, any>;
   extra: Record<string, any>;
+}
+
+// 工具管理类型
+export interface ToolCategory {
+  id: number;
+  name: string;
+  description?: string;
+  icon?: string;
+  order: number;
+  enabled: boolean;
+  created_at: string;
+  tools_count?: number;
+}
+
+export interface Tool {
+  id: number;
+  category_id: number;
+  category_name?: string;
+  name: string;
+  description?: string;
+  script_path: string;
+  script_class?: string;
+  script_type: string;
+  default_params: Record<string, any>;
+  param_schema: Record<string, any>;
+  timeout: number;
+  need_device: boolean;
+  enabled: boolean;
+  created_at: string;
+  updated_at?: string;
 }
 
 export interface TaskTemplate {
@@ -327,6 +369,53 @@ export const api = {
       apiClient.put<User>(`/users/${id}`, data),
     delete: (id: number) => apiClient.delete<void>(`/users/${id}`),
     toggleActive: (id: number) => apiClient.post<User>(`/users/${id}/toggle-active`),
+  },
+
+  // 工具管理相关
+  tools: {
+    // 专项分类
+    listCategories: () => apiClient.get<ToolCategory[]>('/tools/categories'),
+    getCategory: (id: number) => apiClient.get<ToolCategory>(`/tools/categories/${id}`),
+    createCategory: (data: { name: string; description?: string; icon?: string; order?: number; enabled?: boolean }) =>
+      apiClient.post<ToolCategory>('/tools/categories', data),
+    updateCategory: (id: number, data: { name: string; description?: string; icon?: string; order?: number; enabled?: boolean }) =>
+      apiClient.put<ToolCategory>(`/tools/categories/${id}`, data),
+    deleteCategory: (id: number) => apiClient.delete<void>(`/tools/categories/${id}`),
+
+    // 工具
+    list: (categoryId?: number) => apiClient.get<Tool[]>('/tools', { params: { category_id: categoryId } }),
+    get: (id: number) => apiClient.get<Tool>(`/tools/${id}`),
+    create: (data: {
+      category_id: number;
+      name: string;
+      description?: string;
+      script_path: string;
+      script_class?: string;
+      script_type?: string;
+      default_params?: Record<string, any>;
+      param_schema?: Record<string, any>;
+      timeout?: number;
+      need_device?: boolean;
+      enabled?: boolean;
+    }) => apiClient.post<Tool>('/tools', data),
+    update: (id: number, data: {
+      category_id: number;
+      name: string;
+      description?: string;
+      script_path: string;
+      script_class?: string;
+      script_type?: string;
+      default_params?: Record<string, any>;
+      param_schema?: Record<string, any>;
+      timeout?: number;
+      need_device?: boolean;
+      enabled?: boolean;
+    }) => apiClient.put<Tool>(`/tools/${id}`, data),
+    delete: (id: number) => apiClient.delete<void>(`/tools/${id}`),
+
+    // 扫描
+    scan: () => apiClient.post<{ message: string; result: { categories: number; tools: number } }>('/tools/scan'),
+    previewScan: () => apiClient.get<{ tools: any[]; count: number }>('/tools/scan/preview'),
   },
 };
 

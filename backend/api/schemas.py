@@ -58,11 +58,17 @@ class TaskCreate(BaseModel):
     name: str
     type: str
     template_id: Optional[int] = None
+    tool_id: Optional[int] = None
     params: Dict[str, Any] = Field(default_factory=dict)
+    tool_snapshot: Optional[Dict[str, Any]] = None
     target_device_id: Optional[int] = None
     # legacy compatibility for older UI/agents
     device_serial: Optional[str] = None
     priority: int = 0
+
+    # 分布式任务支持
+    is_distributed: bool = False  # 是否为分布式任务
+    device_ids: Optional[List[int]] = None  # 多个设备ID（分布式任务用）
 
 
 class TaskOut(ORMBaseModel):
@@ -70,10 +76,18 @@ class TaskOut(ORMBaseModel):
     name: str
     type: str
     template_id: Optional[int] = None
+    tool_id: Optional[int] = None
     params: Dict[str, Any] = {}
+    tool_snapshot: Optional[Dict[str, Any]] = None
     target_device_id: Optional[int] = None
     status: str
     priority: int
+
+    # 分布式任务支持
+    group_id: Optional[str] = None
+    is_distributed: bool = False
+    runs_count: Optional[int] = None  # 关联的 TaskRun 数量
+
     created_at: datetime
 
 
@@ -105,6 +119,14 @@ class RunOut(ORMBaseModel):
     host_id: int
     device_id: int
     status: str
+
+    # 分布式任务支持
+    group_id: Optional[str] = None
+
+    # 进度信息
+    progress: int = 0
+    progress_message: Optional[str] = None
+
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     exit_code: Optional[int] = None
@@ -175,6 +197,8 @@ class RunAgentOut(BaseModel):
     device_serial: Optional[str] = None
     task_type: str
     task_params: Dict[str, Any] = Field(default_factory=dict)
+    tool_id: Optional[int] = None
+    tool_snapshot: Optional[Dict[str, Any]] = None
 
 
 class RunUpdate(BaseModel):
@@ -189,6 +213,8 @@ class RunUpdate(BaseModel):
     log_lines: Optional[List[str]] = None
     # 新增：日志进度百分比
     progress: Optional[int] = None
+    # 新增：进度描述信息
+    progress_message: Optional[str] = None
 
 
 class LogArtifactIn(BaseModel):
@@ -279,3 +305,81 @@ class DeploymentStatusOut(BaseModel):
     finished_at: Optional[datetime] = None
     steps: List[Dict[str, Any]] = Field(default_factory=list)
     error_message: Optional[str] = None
+
+
+# ==================== 工具管理模块 ====================
+
+class ToolCategoryCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    order: int = 0
+    enabled: bool = True
+
+
+class ToolCategoryOut(ORMBaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    order: int
+    enabled: bool
+    tools_count: Optional[int] = None  # 关联工具数量
+
+
+class ToolCreate(BaseModel):
+    category_id: int
+    name: str
+    description: Optional[str] = None
+    script_path: str
+    script_class: Optional[str] = None
+    script_type: str = "python"
+    default_params: Dict[str, Any] = Field(default_factory=dict)
+    param_schema: Dict[str, Any] = Field(default_factory=dict)
+    timeout: int = 3600
+    need_device: bool = True
+    enabled: bool = True
+
+
+class ToolOut(ORMBaseModel):
+    id: int
+    category_id: int
+    category_name: Optional[str] = None
+    name: str
+    description: Optional[str] = None
+    script_path: str
+    script_class: Optional[str] = None
+    script_type: str
+    default_params: Dict[str, Any]
+    param_schema: Dict[str, Any]
+    timeout: int
+    need_device: bool
+    enabled: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class ToolRunCreate(BaseModel):
+    tool_id: int
+    device_id: Optional[int] = None
+    device_serial: Optional[str] = None
+    host_id: Optional[int] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolRunOut(ORMBaseModel):
+    id: int
+    tool_id: int
+    tool_name: Optional[str] = None
+    task_run_id: Optional[int] = None
+    host_id: Optional[int] = None
+    device_id: Optional[int] = None
+    device_serial: Optional[str] = None
+    status: str
+    params: Dict[str, Any]
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    exit_code: Optional[int] = None
+    error_message: Optional[str] = None
+    log_summary: Optional[str] = None
+    created_at: datetime

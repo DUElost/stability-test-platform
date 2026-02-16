@@ -119,13 +119,33 @@ export default function TaskDetails() {
           </div>
           {activeRun && (
             <>
-              <div>
-                <label className="text-slate-500 block">Run ID</label>
-                <span className="font-mono">{activeRun.id}</span>
+              <div className="pt-4 mt-2 border-t border-slate-100">
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-slate-500 text-xs font-semibold uppercase">Execution Progress</label>
+                  <span className="text-indigo-600 font-bold text-xs">{activeRun.progress || 0}%</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200">
+                  <div 
+                    className="bg-indigo-600 h-full transition-all duration-500 ease-out" 
+                    style={{ width: `${activeRun.progress || 0}%` }}
+                  />
+                </div>
+                {activeRun.progress_message && (
+                  <p className="text-[10px] text-slate-400 mt-1 italic">{activeRun.progress_message}</p>
+                )}
               </div>
-              <div>
-                <label className="text-slate-500 block">Run Status</label>
-                <span className="font-medium">{activeRun.status}</span>
+              <div className="grid grid-cols-2 gap-3 pt-4">
+                <div>
+                  <label className="text-slate-500 block text-[10px] uppercase">Run ID</label>
+                  <span className="font-mono text-xs">{activeRun.id}</span>
+                </div>
+                <div>
+                  <label className="text-slate-500 block text-[10px] uppercase">Run Status</label>
+                  <span className={`text-xs font-semibold ${
+                    activeRun.status === 'RUNNING' ? 'text-green-600 animate-pulse' : 
+                    activeRun.status === 'FINISHED' ? 'text-indigo-600' : 'text-slate-600'
+                  }`}>{activeRun.status}</span>
+                </div>
               </div>
               <div>
                 <label className="text-slate-500 block">Host ID</label>

@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.core.database import get_db
 from backend.core.task_templates import list_templates as list_core_templates
-from backend.models.schemas import Device, DeviceStatus, Host, HostStatus, LogArtifact, RunStatus, Task, TaskRun, TaskStatus
+from backend.models.schemas import Device, DeviceStatus, Host, HostStatus, LogArtifact, RunStatus, Task, TaskRun, TaskStatus, Tool
 from backend.api.schemas import (
     AgentLogOut,
     AgentLogQuery,
@@ -578,6 +578,31 @@ def _ensure_run_transition(run: TaskRun, target_status: RunStatus) -> None:
         )
 
 
+def _update_distributed_task_status(db: Session, task_id: int) -> None:
+    """更新分布式任务的整体状态"""
+    task = db.get(Task, task_id)
+    if not task:
+        return
+
+    runs = db.query(TaskRun).filter(TaskRun.task_id == task_id).all()
+
+    # 检查所有 TaskRun 的状态
+    all_finished = all(r.status in [RunStatus.FINISHED, RunStatus.FAILED] for r in runs)
+    any_failed = any(r.status == RunStatus.FAILED for r in runs)
+    any_running = any(r.status == RunStatus.RUNNING for r in runs)
+
+    if any_failed:
+        task.status = TaskStatus.FAILED
+    elif all_finished:
+        task.status = TaskStatus.COMPLETED
+    elif any_running:
+        task.status = TaskStatus.RUNNING
+    else:
+        task.status = TaskStatus.QUEUED
+
+    db.commit()
+
+
 def _acquire_device_lock(db: Session, device_id: int, run_id: int) -> None:
     now = datetime.utcnow()
     expires_at = now + timedelta(seconds=DEVICE_LOCK_LEASE_SECONDS)
@@ -672,12 +697,19 @@ def list_task_templates():
 @router.post("/tasks", response_model=TaskOut)
 def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
     resolved_target_device_id = payload.target_device_id
+
+    # 生成 group_id（分布式任务用）
+    import uuid
+    group_id = str(uuid.uuid4())[:8] if payload.is_distributed else None
+
+    # 处理单设备场景
     if resolved_target_device_id is None and payload.device_serial:
         device = db.query(Device).filter(Device.serial == payload.device_serial).first()
         if not device:
             raise HTTPException(status_code=400, detail="target device serial not found")
         resolved_target_device_id = device.id
 
+    # 验证设备（单设备场景）
     if resolved_target_device_id is not None:
         target_device = db.get(Device, resolved_target_device_id)
         if not target_device:
@@ -690,18 +722,79 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user
         if not host or host.status != HostStatus.ONLINE:
             raise HTTPException(status_code=409, detail="target device host is not online")
 
+    # 验证设备列表（分布式场景）
+    device_ids = payload.device_ids or []
+    if payload.is_distributed and not device_ids:
+        raise HTTPException(status_code=400, detail="分布式任务需要提供设备列表 device_ids")
+
+    # 验证分布式任务的所有设备
+    if payload.is_distributed and device_ids:
+        for device_id in device_ids:
+            device = db.get(Device, device_id)
+            if not device:
+                raise HTTPException(status_code=400, detail=f"设备 {device_id} 不存在")
+            if device.status != DeviceStatus.ONLINE:
+                raise HTTPException(status_code=409, detail=f"设备 {device_id} 不在线")
+            if not device.host_id:
+                raise HTTPException(status_code=409, detail=f"设备 {device_id} 未绑定主机")
+
+    tool_snapshot = None
+    if payload.tool_id:
+        tool = db.query(Tool).filter(Tool.id == payload.tool_id).first()
+        if not tool:
+            raise HTTPException(status_code=400, detail="tool not found")
+        if not tool.enabled:
+            raise HTTPException(status_code=400, detail="tool is disabled")
+        tool_snapshot = {
+            "id": tool.id,
+            "name": tool.name,
+            "description": tool.description,
+            "script_path": tool.script_path,
+            "script_class": tool.script_class,
+            "script_type": tool.script_type,
+            "default_params": tool.default_params,
+            "param_schema": tool.param_schema,
+            "timeout": tool.timeout,
+            "need_device": tool.need_device,
+        }
+
     task = Task(
         name=payload.name,
         type=payload.type,
         template_id=payload.template_id,
+        tool_id=payload.tool_id,
         params=payload.params,
+        tool_snapshot=tool_snapshot,
         target_device_id=resolved_target_device_id,
         status=TaskStatus.PENDING,
         priority=payload.priority,
+        group_id=group_id,
+        is_distributed=payload.is_distributed,
     )
     db.add(task)
     db.commit()
     db.refresh(task)
+
+    # 分布式任务：自动为每个设备创建 TaskRun
+    if payload.is_distributed and device_ids:
+        for device_id in device_ids:
+            device = db.get(Device, device_id)
+            run = TaskRun(
+                task_id=task.id,
+                host_id=device.host_id,
+                device_id=device_id,
+                group_id=group_id,
+                status=RunStatus.QUEUED,
+            )
+            db.add(run)
+            # 锁定设备
+            device.status = DeviceStatus.BUSY
+            device.lock_run_id = None  # 将在调度时设置
+
+        # 自动更新任务状态为 QUEUED
+        task.status = TaskStatus.QUEUED
+        db.commit()
+
     logger.info(
         "task_created",
         extra={
@@ -709,6 +802,8 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user
             "type": task.type,
             "target_device_id": task.target_device_id,
             "priority": task.priority,
+            "is_distributed": task.is_distributed,
+            "group_id": task.group_id,
         },
     )
     return task
@@ -719,7 +814,26 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
-    return task
+
+    # 计算关联的 TaskRun 数量
+    runs_count = db.query(TaskRun).filter(TaskRun.task_id == task_id).count()
+
+    return TaskOut(
+        id=task.id,
+        name=task.name,
+        type=task.type,
+        template_id=task.template_id,
+        tool_id=task.tool_id,
+        params=task.params,
+        tool_snapshot=task.tool_snapshot,
+        target_device_id=task.target_device_id,
+        status=task.status.value,
+        priority=task.priority,
+        group_id=task.group_id,
+        is_distributed=task.is_distributed,
+        runs_count=runs_count,
+        created_at=task.created_at,
+    )
 
 
 @router.get("/tasks/{task_id}/runs", response_model=List[RunOut])
@@ -867,6 +981,8 @@ def agent_pending_runs(
                 device_serial=device.serial if device else None,
                 task_type=task.type if task else "",
                 task_params=task.params if task else {},
+                tool_id=task.tool_id if task else None,
+                tool_snapshot=task.tool_snapshot if task else None,
             )
         )
     return payload
@@ -877,6 +993,13 @@ def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(g
     run = db.get(TaskRun, run_id)
     if not run:
         raise HTTPException(status_code=404, detail="run not found")
+
+    # 更新进度信息
+    if payload.progress is not None:
+        run.progress = payload.progress
+    if payload.progress_message:
+        run.progress_message = payload.progress_message
+
     normalized_status = _normalize_run_status(payload.status)
     if normalized_status:
         try:
@@ -906,6 +1029,13 @@ def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(g
             _ensure_task_transition(task, TaskStatus.RUNNING)
             task.status = TaskStatus.RUNNING
         _extend_device_lock(db, run.device_id, run.id)
+
+    # 任务完成时，更新分布式任务的整体状态
+    if run.status in [RunStatus.FINISHED, RunStatus.FAILED]:
+        task = db.get(Task, run.task_id)
+        if task and task.is_distributed:
+            _update_distributed_task_status(db, task.id)
+
     db.commit()
 
     # Broadcast log lines to WebSocket if provided
@@ -918,34 +1048,39 @@ def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(g
             device_serial = device.serial if device else "unknown"
             timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-            # Broadcast each log line
+            # Broadcast each log line to run_id channel
             for line in payload.log_lines:
-                asyncio.create_task(
-                    manager.broadcast(
-                        f"/ws/logs/{run_id}",
-                        {
-                            "type": "LOG",
-                            "payload": {
-                                "timestamp": timestamp,
-                                "level": "INFO",
-                                "device": device_serial,
-                                "message": line,
-                            },
-                        },
-                    )
-                )
+                log_data = {
+                    "type": "LOG",
+                    "payload": {
+                        "timestamp": timestamp,
+                        "level": "INFO",
+                        "device": device_serial,
+                        "message": line,
+                        "run_id": run_id,
+                    },
+                }
+                asyncio.create_task(manager.broadcast(f"/ws/logs/{run_id}", log_data))
+
+                # 如果是分布式任务，同时广播到 group_id channel
+                if run.group_id:
+                    asyncio.create_task(manager.broadcast(f"/ws/logs/group/{run.group_id}", log_data))
 
             # Also broadcast progress if provided
             if payload.progress is not None:
-                asyncio.create_task(
-                    manager.broadcast(
-                        f"/ws/logs/{run_id}",
-                        {
-                            "type": "PROGRESS",
-                            "payload": {"progress": payload.progress},
-                        },
-                    )
-                )
+                progress_data = {
+                    "type": "PROGRESS",
+                    "payload": {
+                        "progress": payload.progress,
+                        "progress_message": payload.progress_message or "",
+                        "run_id": run_id,
+                        "device": device_serial,
+                    },
+                }
+                asyncio.create_task(manager.broadcast(f"/ws/logs/{run_id}", progress_data))
+
+                if run.group_id:
+                    asyncio.create_task(manager.broadcast(f"/ws/logs/group/{run.group_id}", progress_data))
         except ImportError:
             logger.warning("websocket_manager_not_available")
         except Exception as e:

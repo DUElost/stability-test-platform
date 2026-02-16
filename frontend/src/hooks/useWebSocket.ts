@@ -303,7 +303,7 @@ export const useWebSocket = <T = unknown>(
       console.warn('[WS] Cannot send message, not connected');
       // Queue message for later if connection is available but not open
       if (ws.current?.readyState === WebSocket.CONNECTING) {
-        missedMessagesRef.current.push({ type: 'QUEUED', payload: msg });
+        missedMessagesRef.current.push({ type: 'QUEUED', payload: msg } as any);
       }
     }
   }, []);

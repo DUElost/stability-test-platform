@@ -15,12 +15,12 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
     from agent.heartbeat import send_heartbeat
-    from agent.task_executor import TaskExecutor
+    from agent.task_executor import TaskExecutor, ExecutionContext
     from agent import device_discovery
 else:
     from .adb_wrapper import AdbWrapper
     from .heartbeat import send_heartbeat
-    from .task_executor import TaskExecutor
+    from .task_executor import TaskExecutor, ExecutionContext
     from . import device_discovery
 
 logging.basicConfig(
@@ -223,25 +223,21 @@ def _load_required_host_id() -> int:
 
 
 def _execute_run_with_lock_renewal(
-    api_url: str,
-    run_id: int,
     task_type: str,
     task_params: Dict[str, Any],
-    device_serial: str,
     executor: TaskExecutor,
+    context: ExecutionContext,
 ) -> Any:
     """执行任务并管理锁续期"""
     global _active_run_ids
 
-    # 将任务加入活跃列表，触发锁续期
-    _active_run_ids.add(run_id)
+    _active_run_ids.add(context.run_id)
 
     try:
-        result = executor.execute_task(task_type, task_params, device_serial)
+        result = executor.execute_task(task_type, task_params, context)
         return result
     finally:
-        # 任务完成，从活跃列表移除
-        _active_run_ids.discard(run_id)
+        _active_run_ids.discard(context.run_id)
 
 
 def main() -> None:
@@ -316,19 +312,21 @@ def main() -> None:
                         run_id,
                         {"status": "RUNNING", "started_at": datetime.utcnow().isoformat()},
                     )
-                    # 准备任务参数，添加api_url和run_id用于日志上报
                     task_params = run.get("task_params", {})
-                    task_params["api_url"] = api_url
-                    task_params["run_id"] = run_id
+                    device_serial = run.get("device_serial", "")
 
-                    # 执行任务（带锁续期）
+                    context = ExecutionContext(
+                        api_url=api_url,
+                        run_id=run_id,
+                        host_id=host_id,
+                        device_serial=device_serial,
+                    )
+
                     result = _execute_run_with_lock_renewal(
-                        api_url,
-                        run_id,
                         run["task_type"],
                         task_params,
-                        run.get("device_serial", ""),
                         executor,
+                        context,
                     )
 
                     complete_run(
