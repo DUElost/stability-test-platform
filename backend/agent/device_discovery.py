@@ -127,7 +127,7 @@ def _parse_battery_level(text: str) -> int:
         if "level:" in line:
             try:
                 return int(line.split(":")[1].strip())
-            except:
+            except (ValueError, IndexError):
                 pass
     return 0
 
@@ -140,44 +140,9 @@ def _parse_battery_temp(text: str) -> int:
                 # 温度通常是 0.1摄氏度为单位
                 temp = int(line.split(":")[1].strip()) / 10
                 return int(temp)
-            except:
+            except (ValueError, IndexError):
                 pass
     return 0
-
-
-def _parse_wifi_info(text: str) -> Dict[str, Any]:
-    """
-    从 dumpsys wifi 输出中解析 WiFi 信息
-
-    Returns:
-        包含 signal_level (dBm), link_speed (Mbps) 的字典
-    """
-    info = {"signal_level": None, "link_speed": None}
-
-    for line in text.splitlines():
-        # 信号强度：rssi=-55, signal_level=4
-        if "rssi=" in line.lower():
-            try:
-                for part in line.split():
-                    if part.startswith("rssi="):
-                        rssi = int(part.split("=")[1].strip(","))
-                        info["signal_level"] = rssi
-                        break
-            except:
-                pass
-
-        # 链路速度：link_speed=65, linkSpeedMbps=65
-        if "link_speed" in line.lower():
-            try:
-                for part in line.split():
-                    if "link_speed" in part.lower() and "=" in part:
-                        speed = int(part.split("=")[1].strip(","))
-                        info["link_speed"] = speed
-                        break
-            except:
-                pass
-
-    return info
 
 
 def _parse_ping_time(text: str) -> Optional[float]:
@@ -216,7 +181,7 @@ def _parse_ping_time(text: str) -> Optional[float]:
                         time_str = part.split("=")[1].replace("ms", "").strip()
                         try:
                             last_time = float(time_str)
-                        except:
+                        except (ValueError, TypeError):
                             pass
 
         if last_time is not None:

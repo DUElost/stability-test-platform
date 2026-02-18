@@ -77,15 +77,17 @@ interface TaskDataTableProps {
   onCancelTask?: (taskId: number) => void;
   onRetryTask?: (taskId: number) => void;
   loading?: boolean;
+  selectedIds?: Set<number>;
+  onSelectionChange?: (ids: Set<number>) => void;
 }
 
 const statusConfig: Record<TaskStatus, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning'; icon: React.ReactNode }> = {
-  PENDING: { label: 'Pending', variant: 'secondary', icon: <Clock className="w-3 h-3" /> },
-  QUEUED: { label: 'Queued', variant: 'warning', icon: <Clock className="w-3 h-3" /> },
-  RUNNING: { label: 'Running', variant: 'default', icon: <Loader2 className="w-3 h-3 animate-spin" /> },
-  COMPLETED: { label: 'Completed', variant: 'success', icon: <CheckCircle2 className="w-3 h-3" /> },
-  FAILED: { label: 'Failed', variant: 'destructive', icon: <AlertCircle className="w-3 h-3" /> },
-  CANCELED: { label: 'Canceled', variant: 'outline', icon: <Ban className="w-3 h-3" /> },
+  PENDING: { label: '待处理', variant: 'secondary', icon: <Clock className="w-3 h-3" /> },
+  QUEUED: { label: '排队中', variant: 'warning', icon: <Clock className="w-3 h-3" /> },
+  RUNNING: { label: '运行中', variant: 'default', icon: <Loader2 className="w-3 h-3 animate-spin" /> },
+  COMPLETED: { label: '已完成', variant: 'success', icon: <CheckCircle2 className="w-3 h-3" /> },
+  FAILED: { label: '已失败', variant: 'destructive', icon: <AlertCircle className="w-3 h-3" /> },
+  CANCELED: { label: '已取消', variant: 'outline', icon: <Ban className="w-3 h-3" /> },
 };
 
 const typeColors: Record<TaskType, string> = {
@@ -103,11 +105,14 @@ export function TaskDataTable({
   onCancelTask,
   onRetryTask,
   loading = false,
+  selectedIds,
+  onSelectionChange,
 }: TaskDataTableProps) {
   const [sorting, setSorting] = useState<SortingState>([{ id: 'created_at', desc: true }]);
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'ALL'>('ALL');
   const [typeFilter, setTypeFilter] = useState<TaskType | 'ALL'>('ALL');
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 10 });
+  const selectable = !!onSelectionChange;
 
   const filteredData = useMemo(() => {
     return tasks.filter((task) => {
@@ -119,9 +124,42 @@ export function TaskDataTable({
 
   const columns = useMemo<ColumnDef<Task>[]>(
     () => [
+      ...(selectable ? [{
+        id: 'select',
+        header: () => (
+          <input
+            type="checkbox"
+            checked={selectedIds ? selectedIds.size === filteredData.length && filteredData.length > 0 : false}
+            onChange={() => {
+              if (!onSelectionChange || !selectedIds) return;
+              if (selectedIds.size === filteredData.length) {
+                onSelectionChange(new Set());
+              } else {
+                onSelectionChange(new Set(filteredData.map(t => t.id)));
+              }
+            }}
+            className="rounded border-gray-300"
+          />
+        ),
+        cell: ({ row }: { row: any }) => (
+          <input
+            type="checkbox"
+            checked={selectedIds?.has(row.original.id) ?? false}
+            onChange={() => {
+              if (!onSelectionChange || !selectedIds) return;
+              const next = new Set(selectedIds);
+              if (next.has(row.original.id)) next.delete(row.original.id);
+              else next.add(row.original.id);
+              onSelectionChange(next);
+            }}
+            className="rounded border-gray-300"
+          />
+        ),
+        enableSorting: false,
+      } as ColumnDef<Task>] : []),
       {
         accessorKey: 'name',
-        header: 'Task Name',
+        header: '任务名称',
         cell: ({ row }) => (
           <div className="flex flex-col">
             <span className="font-medium text-sm">{row.original.name}</span>
@@ -131,7 +169,7 @@ export function TaskDataTable({
       },
       {
         accessorKey: 'type',
-        header: 'Type',
+        header: '类型',
         cell: ({ row }) => (
           <Badge variant="outline" className={cn('text-xs', typeColors[row.original.type])}>
             {row.original.type}
@@ -140,7 +178,7 @@ export function TaskDataTable({
       },
       {
         accessorKey: 'status',
-        header: 'Status',
+        header: '状态',
         cell: ({ row }) => {
           const config = statusConfig[row.original.status];
           return (
@@ -153,7 +191,7 @@ export function TaskDataTable({
       },
       {
         accessorKey: 'priority',
-        header: 'Priority',
+        header: '优先级',
         cell: ({ row }) => (
           <div className="flex items-center gap-1">
             <span className={cn(
@@ -169,16 +207,16 @@ export function TaskDataTable({
       },
       {
         accessorKey: 'target_device_serial',
-        header: 'Target Device',
+        header: '目标设备',
         cell: ({ row }) => (
           <span className="text-xs font-mono text-muted-foreground">
-            {row.original.target_device_serial || 'Auto-assign'}
+            {row.original.target_device_serial || '自动分配'}
           </span>
         ),
       },
       {
         accessorKey: 'created_at',
-        header: 'Created',
+        header: '创建时间',
         cell: ({ row }) => (
           <span className="text-xs text-muted-foreground">
             {format(new Date(row.original.created_at), 'MM-dd HH:mm')}
@@ -187,7 +225,7 @@ export function TaskDataTable({
       },
       {
         accessorKey: 'progress',
-        header: 'Progress',
+        header: '进度',
         cell: ({ row }) => {
           const progress = row.original.progress;
           if (progress === undefined || progress === null) return <span className="text-xs text-muted-foreground">-</span>;
@@ -226,18 +264,18 @@ export function TaskDataTable({
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => onViewDetail?.(task)}>
                   <Eye className="mr-2 h-4 w-4" />
-                  View Details
+                  查看详情
                 </DropdownMenuItem>
                 {canCancel && (
                   <DropdownMenuItem onClick={() => onCancelTask?.(task.id)} className="text-destructive">
                     <Ban className="mr-2 h-4 w-4" />
-                    Cancel Task
+                    取消任务
                   </DropdownMenuItem>
                 )}
                 {canRetry && (
                   <DropdownMenuItem onClick={() => onRetryTask?.(task.id)}>
                     <Play className="mr-2 h-4 w-4" />
-                    Retry Task
+                    重试任务
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>
@@ -246,7 +284,7 @@ export function TaskDataTable({
         },
       },
     ],
-    [onViewDetail, onCancelTask, onRetryTask]
+    [onViewDetail, onCancelTask, onRetryTask, selectable, selectedIds, onSelectionChange, filteredData]
   );
 
   const table = useReactTable({
@@ -272,15 +310,15 @@ export function TaskDataTable({
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
           <Filter className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm text-muted-foreground">Filters:</span>
+          <span className="text-sm text-muted-foreground">筛选:</span>
         </div>
 
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as TaskStatus | 'ALL')}>
           <SelectTrigger className="w-32 h-8 text-xs">
-            <SelectValue placeholder="Status" />
+            <SelectValue placeholder="状态" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="ALL">All Status</SelectItem>
+            <SelectItem value="ALL">全部状态</SelectItem>
             {Object.entries(statusConfig).map(([status, config]) => (
               <SelectItem key={status} value={status}>
                 <div className="flex items-center gap-2">
@@ -294,10 +332,10 @@ export function TaskDataTable({
 
         <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as TaskType | 'ALL')}>
           <SelectTrigger className="w-32 h-8 text-xs">
-            <SelectValue placeholder="Type" />
+            <SelectValue placeholder="类型" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="ALL">All Types</SelectItem>
+            <SelectItem value="ALL">全部类型</SelectItem>
             {Object.keys(typeColors).map((type) => (
               <SelectItem key={type} value={type}>
                 {type}
@@ -317,12 +355,12 @@ export function TaskDataTable({
             }}
           >
             <X className="mr-1 h-3 w-3" />
-            Clear
+            清除
           </Button>
         )}
 
         <div className="ml-auto text-xs text-muted-foreground">
-          {filteredData.length} tasks
+          {filteredData.length} 条任务
         </div>
       </div>
 
@@ -365,14 +403,14 @@ export function TaskDataTable({
                 <TableCell colSpan={columns.length} className="h-32 text-center">
                   <div className="flex items-center justify-center gap-2 text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading tasks...
+                    加载中...
                   </div>
                 </TableCell>
               </TableRow>
             ) : table.getRowModel().rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-32 text-center text-muted-foreground">
-                  No tasks found
+                  暂无任务
                 </TableCell>
               </TableRow>
             ) : (
@@ -393,9 +431,9 @@ export function TaskDataTable({
       {/* Pagination */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}</span>
+          <span>第 {table.getState().pagination.pageIndex + 1} / {table.getPageCount()} 页</span>
           <span className="text-muted-foreground/50">|</span>
-          <span>{table.getFilteredRowModel().rows.length} total</span>
+          <span>共 {table.getFilteredRowModel().rows.length} 条</span>
         </div>
 
         <div className="flex items-center gap-1">
@@ -466,7 +504,7 @@ export function TaskDataTable({
           <SelectContent>
             {[10, 20, 50].map((size) => (
               <SelectItem key={size} value={String(size)}>
-                {size} / page
+                {size} 条/页
               </SelectItem>
             ))}
           </SelectContent>

@@ -46,6 +46,8 @@ interface ExpandableHostTableProps {
   hosts: HostTableData[];
   onDeploy?: (hostId: number) => void;
   isDeploying?: (hostId: number) => boolean;
+  selectedIds?: Set<number>;
+  onSelectionChange?: (ids: Set<number>) => void;
 }
 
 const statusConfig = {
@@ -80,8 +82,26 @@ function getProgressColor(percentage: number): string {
   return 'bg-emerald-500';
 }
 
-export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _isDeploying }: ExpandableHostTableProps) {
+export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _isDeploying, selectedIds, onSelectionChange }: ExpandableHostTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const selectable = !!onSelectionChange;
+
+  const toggleSelect = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onSelectionChange || !selectedIds) return;
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    onSelectionChange(next);
+  };
+
+  const toggleAll = () => {
+    if (!onSelectionChange || !selectedIds) return;
+    if (selectedIds.size === hosts.length) {
+      onSelectionChange(new Set());
+    } else {
+      onSelectionChange(new Set(hosts.map(h => h.id)));
+    }
+  };
 
   const toggleRow = (id: number) => {
     const newExpanded = new Set(expandedRows);
@@ -148,6 +168,16 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
           <Table>
             <TableHeader>
               <TableRow className="bg-gray-50 hover:bg-gray-50">
+                {selectable && (
+                  <TableHead className="w-10 p-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedIds ? selectedIds.size === hosts.length && hosts.length > 0 : false}
+                      onChange={toggleAll}
+                      className="rounded border-gray-300"
+                    />
+                  </TableHead>
+                )}
                 <TableHead className="w-10"></TableHead>
                 <TableHead className="font-medium">主机名称</TableHead>
                 <TableHead className="font-medium">IP地址</TableHead>
@@ -176,6 +206,17 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                       )}
                       onClick={() => toggleRow(host.id)}
                     >
+                      {selectable && (
+                        <TableCell className="p-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds?.has(host.id) ?? false}
+                            onClick={(e) => toggleSelect(host.id, e)}
+                            onChange={() => {}}
+                            className="rounded border-gray-300"
+                          />
+                        </TableCell>
+                      )}
                       <TableCell className="p-3">
                         <ChevronDown
                           className={cn(
@@ -273,7 +314,7 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                     {/* Expanded Details */}
                     {isExpanded && (
                       <TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
-                        <TableCell colSpan={10} className="p-4">
+                        <TableCell colSpan={selectable ? 11 : 10} className="p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             {/* CPU Details */}
                             <div className="bg-white rounded-lg border border-gray-100 p-3">

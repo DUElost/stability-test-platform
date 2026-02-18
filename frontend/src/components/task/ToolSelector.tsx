@@ -64,7 +64,7 @@ export const ToolSelector: React.FC<ToolSelectorProps> = ({ tools, categories, s
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[400px] overflow-y-auto pr-1">
         {filteredTools.length === 0 ? (
           <div className="col-span-full py-10 text-center text-slate-400 bg-slate-50 rounded-lg border border-dashed border-slate-200">
-            No tools found matching your criteria.
+            未找到匹配的工具。
           </div>
         ) : (
           filteredTools.map(tool => (

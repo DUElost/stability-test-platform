@@ -43,6 +43,7 @@ export interface DeviceTableData {
 
 interface ExpandableDeviceTableProps {
   devices: DeviceTableData[];
+  onViewMetrics?: (device: DeviceTableData) => void;
 }
 
 const statusConfig = {
@@ -52,7 +53,7 @@ const statusConfig = {
   error: { label: '错误', variant: 'destructive' as const, icon: AlertTriangle, bgColor: 'bg-red-50', textColor: 'text-red-600' },
 };
 
-export function ExpandableDeviceTable({ devices }: ExpandableDeviceTableProps) {
+export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDeviceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -383,6 +384,15 @@ export function ExpandableDeviceTable({ devices }: ExpandableDeviceTableProps) {
                             <div className="text-xs text-gray-500">
                               {device.current_task || '无任务'}
                             </div>
+                            {onViewMetrics && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); onViewMetrics(device); }}
+                                className="mt-2 text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                              >
+                                <Activity className="w-3 h-3" />
+                                查看指标历史
+                              </button>
+                            )}
                           </div>
                         </div>
                       </TableCell>

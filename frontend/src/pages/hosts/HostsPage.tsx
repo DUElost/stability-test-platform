@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Loader2 } from 'lucide-react';
+import { Plus, Loader2, Rocket } from 'lucide-react';
+import { useToast } from '../../components/ui/toast';
+import { useConfirm } from '../../hooks/useConfirm';
 import { ExpandableHostTable, type HostTableData } from '../../components/network/ExpandableHostTable';
 import { AddHostModal } from './components/AddHostModal';
 import { api } from '../../utils/api';
@@ -9,23 +11,26 @@ import { CleanButton } from '../../components/ui/clean-button';
 
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedHostIds, setSelectedHostIds] = useState<Set<number>>(new Set());
   const queryClient = useQueryClient();
+  const toast = useToast();
+  const confirmDialog = useConfirm();
 
   const { data: hosts, isLoading, error } = useQuery({
     queryKey: ['hosts'],
-    queryFn: () => api.hosts.list().then(res => res.data),
+    queryFn: () => api.hosts.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
 
   const { data: devices } = useQuery({
     queryKey: ['devices'],
-    queryFn: () => api.devices.list().then(res => res.data),
+    queryFn: () => api.devices.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
 
   const { data: tasks } = useQuery({
     queryKey: ['tasks'],
-    queryFn: () => api.tasks.list().then(res => res.data),
+    queryFn: () => api.tasks.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
 
@@ -35,10 +40,10 @@ export default function HostsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['hosts'] });
       setIsModalOpen(false);
-      alert('Host added successfully');
+      toast.success('主机添加成功');
     },
     onError: (error: any) => {
-      alert(`Failed to add host: ${error.response?.data?.detail || error.message}`);
+      toast.error(`添加主机失败: ${error.response?.data?.detail || error.message}`);
     },
   });
 
@@ -47,19 +52,40 @@ export default function HostsPage() {
   const deployMutation = useMutation({
     mutationFn: (hostId: number) => api.deploy.trigger(hostId),
     onSuccess: (_data, hostId) => {
-      alert(`Deployment started for host ${hostId}. Check status for updates.`);
+      toast.success(`主机 ${hostId} 部署已启动`);
       setDeployingHostId(null);
     },
     onError: (error: any) => {
-      alert(`Deployment failed: ${error.response?.data?.detail || error.message}`);
+      toast.error(`部署失败: ${error.response?.data?.detail || error.message}`);
       setDeployingHostId(null);
     },
   });
 
-  const handleDeploy = (hostId: number) => {
-    if (confirm(`Are you sure you want to deploy to host ${hostId}?`)) {
+  const handleDeploy = async (hostId: number) => {
+    const ok = await confirmDialog({ description: `确定要部署到主机 ${hostId} 吗？` });
+    if (ok) {
       setDeployingHostId(hostId);
       deployMutation.mutate(hostId);
+    }
+  };
+
+  const batchDeployMutation = useMutation({
+    mutationFn: (hostIds: number[]) => api.deploy.batchDeploy(hostIds),
+    onSuccess: () => {
+      toast.success(`已启动 ${selectedHostIds.size} 台主机的批量部署`);
+      setSelectedHostIds(new Set());
+      queryClient.invalidateQueries({ queryKey: ['hosts'] });
+    },
+    onError: (error: any) => {
+      toast.error(`批量部署失败: ${error.response?.data?.detail || error.message}`);
+    },
+  });
+
+  const handleBatchDeploy = async () => {
+    if (selectedHostIds.size === 0) return;
+    const ok = await confirmDialog({ description: `确定要部署到 ${selectedHostIds.size} 台选中主机吗？` });
+    if (ok) {
+      batchDeployMutation.mutate(Array.from(selectedHostIds));
     }
   };
 
@@ -148,7 +174,7 @@ export default function HostsPage() {
           <p className="text-sm text-gray-400">管理和监控测试执行节点</p>
         </div>
         <div className="p-4 bg-red-50 text-red-600 rounded-lg border border-red-100">
-          Error loading hosts. Please check backend connection.
+          加载主机失败，请检查后端服务连接。
         </div>
       </div>
     );
@@ -162,10 +188,22 @@ export default function HostsPage() {
           <h2 className="text-2xl font-semibold text-gray-900 mb-1">主机管理</h2>
           <p className="text-sm text-gray-400">管理和监控测试执行节点</p>
         </div>
-        <CleanButton variant="primary" onClick={() => setIsModalOpen(true)}>
-          <Plus className="w-4 h-4" />
-          添加主机
-        </CleanButton>
+        <div className="flex items-center gap-2">
+          {selectedHostIds.size > 0 && (
+            <CleanButton
+              variant="default"
+              onClick={handleBatchDeploy}
+              disabled={batchDeployMutation.isPending}
+            >
+              <Rocket className="w-4 h-4" />
+              {batchDeployMutation.isPending ? '部署中...' : `批量部署 (${selectedHostIds.size})`}
+            </CleanButton>
+          )}
+          <CleanButton variant="primary" onClick={() => setIsModalOpen(true)}>
+            <Plus className="w-4 h-4" />
+            添加主机
+          </CleanButton>
+        </div>
       </div>
 
       {/* Host Table */}
@@ -174,6 +212,8 @@ export default function HostsPage() {
           hosts={tableData}
           onDeploy={handleDeploy}
           isDeploying={(hostId: number) => deployMutation.isPending && deployingHostId === hostId}
+          selectedIds={selectedHostIds}
+          onSelectionChange={setSelectedHostIds}
         />
       ) : (
         <CleanCard className="p-12 text-center">

@@ -1,0 +1,16 @@
+node_modules/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+venv*/
+*.db
+*.sqlite
+*.egg-info/
+dist/
+build/
+.env
+.env.*
+*.tar.gz
+logs/
+.claude/

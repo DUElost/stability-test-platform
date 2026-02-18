@@ -2,13 +2,13 @@ from datetime import datetime, timedelta
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
 
 from backend.core.database import get_db
 from backend.models.schemas import Host, HostStatus
-from backend.api.schemas import HostCreate, HostOut
+from backend.api.schemas import HostCreate, HostOut, PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
 
 logger = logging.getLogger(__name__)
@@ -59,9 +59,15 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
     return host
 
 
-@router.get("", response_model=List[HostOut])
-def list_hosts(db: Session = Depends(get_db)):
-    hosts = db.query(Host).order_by(Host.id).all()
+@router.get("", response_model=PaginatedResponse)
+def list_hosts(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Host).order_by(Host.id)
+    total = query.count()
+    hosts = query.offset(skip).limit(limit).all()
     # Update status for hosts with expired heartbeat
     needs_commit = False
     for host in hosts:
@@ -69,7 +75,11 @@ def list_hosts(db: Session = Depends(get_db)):
             needs_commit = True
     if needs_commit:
         db.commit()
-    return hosts
+    items = [
+        HostOut.model_validate(h) if hasattr(HostOut, "model_validate") else HostOut.from_orm(h)
+        for h in hosts
+    ]
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{host_id}", response_model=HostOut)
@@ -79,4 +89,28 @@ def get_host(host_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="host not found")
     if _ensure_host_status_up_to_date(host):
         db.commit()
+    return host
+
+
+@router.put("/{host_id}", response_model=HostOut)
+def update_host(
+    host_id: int,
+    payload: HostCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """更新主机信息"""
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    host.name = payload.name
+    host.ip = payload.ip
+    host.ssh_port = payload.ssh_port
+    host.ssh_user = payload.ssh_user
+    host.ssh_auth_type = payload.ssh_auth_type
+    host.ssh_key_path = payload.ssh_key_path
+
+    db.commit()
+    db.refresh(host)
     return host

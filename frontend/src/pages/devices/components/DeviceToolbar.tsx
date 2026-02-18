@@ -9,11 +9,11 @@ interface DeviceToolbarProps {
 }
 
 const STATUS_OPTIONS = [
-  { value: 'all', label: 'All Status' },
-  { value: 'idle', label: 'Idle' },
-  { value: 'testing', label: 'Testing' },
-  { value: 'offline', label: 'Offline' },
-  { value: 'error', label: 'Error' },
+  { value: 'all', label: '全部状态' },
+  { value: 'idle', label: '空闲' },
+  { value: 'testing', label: '测试中' },
+  { value: 'offline', label: '离线' },
+  { value: 'error', label: '异常' },
 ];
 
 export function DeviceToolbar({

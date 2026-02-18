@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { CreateTaskForm } from '../../components/task/CreateTaskForm';
 import { api } from '../../utils/api';
+import { useToast } from '../../components/ui/toast';
 import { Device } from '../../components/device/DeviceCard';
 
 const deviceStatusMap: Record<string, Device['status']> = {
@@ -24,10 +25,11 @@ function toComponentDevice(device: any): Device {
 
 export default function CreateTask() {
   const navigate = useNavigate();
+  const toast = useToast();
 
   const { data: devices } = useQuery({
     queryKey: ['devices'],
-    queryFn: () => api.devices.list().then(res => res.data),
+    queryFn: () => api.devices.list(0, 200).then(res => res.data.items),
   });
 
   const handleSubmit = async (taskData: { type: string; deviceIds: number[]; config: Record<string, any> }) => {
@@ -46,7 +48,7 @@ export default function CreateTask() {
       navigate('/tasks');
     } catch (error) {
       console.error('Failed to create task:', error);
-      alert('Failed to create task');
+      toast.error('创建任务失败');
     }
   };
 

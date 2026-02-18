@@ -21,7 +21,7 @@ export const TaskList: React.FC<{ tasks: Task[] }> = ({ tasks }) => {
   if (tasks.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow-sm border border-slate-200 p-8 text-center text-slate-500">
-        No tasks found. Create a new task to get started.
+        暂无任务，请创建新任务开始测试。
       </div>
     );
   }
@@ -31,11 +31,11 @@ export const TaskList: React.FC<{ tasks: Task[] }> = ({ tasks }) => {
       <table className="min-w-full divide-y divide-slate-200">
         <thead className="bg-slate-50">
           <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Type</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Start Time</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Devices</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Status</th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">Action</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">类型</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">开始时间</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">设备</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">状态</th>
+            <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase tracking-wider">操作</th>
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-slate-200">

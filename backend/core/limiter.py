@@ -4,6 +4,7 @@ from typing import Dict, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 # Rate limit configuration
 RATE_LIMIT_REQUESTS = 100  # requests
@@ -69,7 +70,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip rate limiting for certain paths
         path = request.url.path
-        if path in ["/", "/docs", "/openapi.json", "/health"]:
+        _SKIP_EXACT = {"/", "/docs", "/openapi.json", "/health", "/redoc"}
+        _SKIP_PREFIXES = ("/api/v1/heartbeat", "/api/v1/agent/", "/ws/", "/ws")
+        if path in _SKIP_EXACT or any(path.startswith(p) for p in _SKIP_PREFIXES):
             return await call_next(request)
 
         # Get client IP
@@ -79,22 +82,25 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         else:
             ip = request.client.host if request.client else "unknown"
 
-        # Check rate limit
+        # Check rate limit BEFORE processing the request
         allowed, remaining, reset_time = rate_limiter.is_allowed(ip)
 
-        # Add rate limit headers
+        if not allowed:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": f"Rate limit exceeded. Try again in {reset_time} seconds."},
+                headers={
+                    "Retry-After": str(reset_time),
+                    "X-RateLimit-Limit": str(RATE_LIMIT_REQUESTS),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(reset_time),
+                },
+            )
+
         response = await call_next(request)
         response.headers["X-RateLimit-Limit"] = str(RATE_LIMIT_REQUESTS)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
         response.headers["X-RateLimit-Reset"] = str(reset_time)
-
-        if not allowed:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Rate limit exceeded. Try again in {reset_time} seconds.",
-                headers={"Retry-After": str(reset_time)},
-            )
-
         return response
 
 

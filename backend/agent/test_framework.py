@@ -23,9 +23,11 @@ import subprocess
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, FrozenSet, Optional, List
 from pathlib import Path
 from datetime import datetime
+
+from .test_stages import TestStage, stage_progress, STANDARD_STAGES
 
 
 # ==================== 基础数据类 ====================
@@ -70,6 +72,9 @@ class BaseTestCase(ABC):
 
     TEST_TYPE: str = "BASE"  # 子类必须定义
 
+    # Stages this test type uses. Subclasses override to skip stages.
+    STAGES: FrozenSet[TestStage] = STANDARD_STAGES
+
     # 运行时上下文（由 Agent 注入）
     api_url: str = ""
     run_id: int = 0
@@ -104,6 +109,23 @@ class BaseTestCase(ABC):
         # 确保日志目录存在
         if self.log_dir:
             os.makedirs(self.log_dir, exist_ok=True)
+
+        # Stage tracking
+        self._current_stage: Optional[TestStage] = None
+
+    def enter_stage(self, stage: TestStage, message: str = "") -> bool:
+        """
+        Transition to a new stage.
+        Returns False (and skips) if the stage is not in this test's STAGES set.
+        """
+        if stage not in self.STAGES:
+            return False
+        self._current_stage = stage
+        progress = stage_progress(stage)
+        display_msg = message or stage.value
+        self.set_progress(progress, f"{stage.value}: {display_msg}")
+        self._log(f"[{stage.value}] {display_msg}")
+        return True
 
     # ==================== 抽象方法（子类必须实现） ====================
 
@@ -388,47 +410,55 @@ class BaseTestCase(ABC):
 
     def run(self, serial: str, params: Dict[str, Any]) -> TestResult:
         """
-        运行测试的完整流程
+        运行测试的完整流程（stage-aware）
 
-        1. setup() - 前置配置
-        2. execute() - 执行测试
-        3. scan_risks() - 风险扫描
-        4. collect() - 结果收集
-        5. teardown() - 后置处理
+        1. PRECHECK   - 设备连接检测
+        2. PREPARE    - 前置配置 (setup)
+        3. RUN        - 执行测试 (execute)
+        4. RISK_SCAN  - 风险扫描 (scan_risks)
+        5. EXPORT     - 结果收集 (collect)
+        6. TEARDOWN   - 后置处理 (teardown)
+        7. POST_TEST  - 测试后置清理
         """
         try:
             self._log(f"[{self.TEST_TYPE}] 测试开始", "INFO")
 
-            # 1. 前置配置
-            self._log("执行前置配置...")
+            # 1. PRECHECK
+            self.enter_stage(TestStage.PRECHECK, "设备连接检测")
+
+            # 2. PREPARE + setup (always called)
+            self.enter_stage(TestStage.PREPARE, "执行前置配置")
             self.setup(serial, params)
 
-            # 2. 执行测试（在后台启动心跳线程）
-            self._log("执行测试...")
+            # 3. RUN + execute (with heartbeat thread)
+            self.enter_stage(TestStage.RUN, "开始执行测试")
             heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
             heartbeat_thread.start()
 
             result = self.execute(serial, params)
 
-            # 3. 风险扫描
-            self._log("执行风险扫描...")
-            risks = self.scan_risks(serial)
-            if risks:
-                self._log(f"发现 {len(risks)} 个风险事件", "WARN")
-                result.metrics["risk_count"] = len(risks)
-                result.metrics["risks"] = [
-                    {"type": r.event_type, "desc": r.description}
-                    for r in risks
-                ]
+            # 4. RISK_SCAN (conditional)
+            if self.enter_stage(TestStage.RISK_SCAN, "执行风险扫描"):
+                risks = self.scan_risks(serial)
+                if risks:
+                    self._log(f"发现 {len(risks)} 个风险事件", "WARN")
+                    result.metrics["risk_count"] = len(risks)
+                    result.metrics["risks"] = [
+                        {"type": r.event_type, "desc": r.description}
+                        for r in risks
+                    ]
 
-            # 4. 结果收集
-            if self.log_dir:
-                self._log("收集测试结果...")
-                result.metrics.update(self.collect(serial, self.log_dir))
+            # 5. EXPORT (conditional)
+            if self.enter_stage(TestStage.EXPORT, "收集测试结果"):
+                if self.log_dir:
+                    result.metrics.update(self.collect(serial, self.log_dir))
 
-            # 5. 后置处理
-            self._log("执行后置处理...")
+            # 6. TEARDOWN (always called)
+            self.enter_stage(TestStage.TEARDOWN, "执行后置处理")
             self.teardown(serial, params)
+
+            # 7. POST_TEST
+            self.enter_stage(TestStage.POST_TEST, "测试后置清理")
 
             self._log(f"[{self.TEST_TYPE}] 测试完成: {result.status}", "INFO")
 

@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Loader2, AlertCircle } from 'lucide-react';
 import { CleanCard } from '@/components/ui/clean-card';
 import { CleanButton } from '@/components/ui/clean-button';
+import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/hooks/useConfirm';
 import { UserTable } from './components/UserTable';
 import { UserModal } from './components/UserModal';
 import { api, type User } from '@/utils/api';
@@ -12,6 +14,8 @@ export default function UsersPage() {
   const [editUser, setEditUser] = useState<User | null>(null);
   const [currentUserId, setCurrentUserId] = useState<number>(0);
   const queryClient = useQueryClient();
+  const toast = useToast();
+  const confirmDialog = useConfirm();
 
   // Get current user info
   useEffect(() => {
@@ -29,7 +33,7 @@ export default function UsersPage() {
   // Fetch users list
   const { data: users, isLoading, error } = useQuery({
     queryKey: ['users'],
-    queryFn: () => api.users.list().then(res => res.data),
+    queryFn: () => api.users.list(0, 200).then(res => res.data.items),
   });
 
   // Create user mutation
@@ -39,10 +43,10 @@ export default function UsersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setIsModalOpen(false);
-      alert('User created successfully');
+      toast.success('用户创建成功');
     },
     onError: (error: any) => {
-      alert(`Failed to create user: ${error.response?.data?.detail || error.message}`);
+      toast.error(`创建用户失败: ${error.response?.data?.detail || error.message}`);
     },
   });
 
@@ -53,10 +57,10 @@ export default function UsersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setEditUser(null);
-      alert('User updated successfully');
+      toast.success('用户更新成功');
     },
     onError: (error: any) => {
-      alert(`Failed to update user: ${error.response?.data?.detail || error.message}`);
+      toast.error(`更新用户失败: ${error.response?.data?.detail || error.message}`);
     },
   });
 
@@ -65,10 +69,10 @@ export default function UsersPage() {
     mutationFn: (id: number) => api.users.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
-      alert('User deleted successfully');
+      toast.success('用户删除成功');
     },
     onError: (error: any) => {
-      alert(`Failed to delete user: ${error.response?.data?.detail || error.message}`);
+      toast.error(`删除用户失败: ${error.response?.data?.detail || error.message}`);
     },
   });
 
@@ -79,7 +83,7 @@ export default function UsersPage() {
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
     onError: (error: any) => {
-      alert(`Failed to toggle user status: ${error.response?.data?.detail || error.message}`);
+      toast.error(`切换用户状态失败: ${error.response?.data?.detail || error.message}`);
     },
   });
 
@@ -87,8 +91,9 @@ export default function UsersPage() {
     setEditUser(user);
   };
 
-  const handleDelete = (userId: number) => {
-    if (confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
+  const handleDelete = async (userId: number) => {
+    const ok = await confirmDialog({ description: '确定要删除此用户吗？此操作无法撤销。', variant: 'destructive' });
+    if (ok) {
       deleteMutation.mutate(userId);
     }
   };

@@ -16,11 +16,11 @@ apiClient.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`);
+    if (import.meta.env.DEV) console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
   (error) => {
-    console.error('[API] Request error:', error);
+    if (import.meta.env.DEV) console.error('[API] Request error:', error);
     return Promise.reject(error);
   }
 );
@@ -28,11 +28,11 @@ apiClient.interceptors.request.use(
 // 响应拦截器
 apiClient.interceptors.response.use(
   (response) => {
-    console.log(`[API] Response:`, response.data);
+    if (import.meta.env.DEV) console.log(`[API] Response:`, response.data);
     return response;
   },
   async (error) => {
-    console.error('[API] Response error:', error);
+    if (import.meta.env.DEV) console.error('[API] Response error:', error);
 
     // 处理 401 未授权错误
     if (error.response?.status === 401) {
@@ -274,6 +274,158 @@ export interface User {
   last_login: string | null;
 }
 
+// Results summary types
+export interface RunsByStatus {
+  finished: number;
+  failed: number;
+  canceled: number;
+  running: number;
+  total: number;
+}
+
+export interface TestTypeStat {
+  type: string;
+  finished: number;
+  failed: number;
+  total: number;
+}
+
+export interface RiskDistribution {
+  high: number;
+  medium: number;
+  low: number;
+  unknown: number;
+}
+
+export interface RecentRun {
+  run_id: number;
+  task_name: string;
+  task_type: string;
+  status: string;
+  risk_level: string;
+  duration_seconds: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface ResultsSummary {
+  runs_by_status: RunsByStatus;
+  test_type_stats: TestTypeStat[];
+  risk_distribution: RiskDistribution;
+  recent_runs: RecentRun[];
+}
+
+// Workflow types
+export interface WorkflowStep {
+  id: number;
+  workflow_id: number;
+  order: number;
+  name: string;
+  tool_id?: number | null;
+  task_type?: string | null;
+  params: Record<string, any>;
+  target_device_id?: number | null;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
+  task_run_id?: number | null;
+  error_message?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface Workflow {
+  id: number;
+  name: string;
+  description?: string | null;
+  status: 'DRAFT' | 'READY' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELED';
+  created_by?: number | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  steps: WorkflowStep[];
+}
+
+export interface WorkflowStepCreate {
+  name: string;
+  tool_id?: number | null;
+  task_type?: string | null;
+  params?: Record<string, any>;
+  target_device_id?: number | null;
+}
+
+export interface WorkflowCreate {
+  name: string;
+  description?: string;
+  steps: WorkflowStepCreate[];
+}
+
+// Stats types
+export interface ActivityPoint {
+  hour: string;
+  started: number;
+  completed: number;
+  failed: number;
+}
+
+export interface ActivityResponse {
+  points: ActivityPoint[];
+  hours: number;
+}
+
+export interface DeviceMetricPoint {
+  timestamp: string;
+  battery_level: number | null;
+  temperature: number | null;
+  network_latency: number | null;
+  cpu_usage: number | null;
+  mem_used: number | null;
+}
+
+export interface DeviceMetricsResponse {
+  device_id: number;
+  points: DeviceMetricPoint[];
+  hours: number;
+}
+
+export interface CompletionTrendPoint {
+  date: string;
+  passed: number;
+  failed: number;
+}
+
+export interface CompletionTrendResponse {
+  points: CompletionTrendPoint[];
+  days: number;
+}
+
+// Notification types
+export interface NotificationChannel {
+  id: number;
+  name: string;
+  type: 'WEBHOOK' | 'EMAIL' | 'DINGTALK';
+  config: Record<string, any>;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface AlertRule {
+  id: number;
+  name: string;
+  event_type: 'RUN_COMPLETED' | 'RUN_FAILED' | 'RISK_HIGH' | 'DEVICE_OFFLINE';
+  channel_id: number;
+  channel_name?: string;
+  filters: Record<string, any>;
+  enabled: boolean;
+  created_at: string;
+}
+
+// Paginated response type
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
 // API 函数
 export const api = {
   // 认证相关
@@ -296,23 +448,27 @@ export const api = {
 
   // 主机相关
   hosts: {
-    list: () => apiClient.get<Host[]>('/hosts'),
+    list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<Host>>('/hosts', { params: { skip, limit } }),
     get: (id: number) => apiClient.get<Host>(`/hosts/${id}`),
     create: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
       apiClient.post<Host>('/hosts', data),
+    update: (id: number, data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
+      apiClient.put<Host>(`/hosts/${id}`, data),
   },
 
   // 设备相关
   devices: {
-    list: () => apiClient.get<Device[]>('/devices'),
+    list: (skip = 0, limit = 50, tags?: string) => apiClient.get<PaginatedResponse<Device>>('/devices', { params: { skip, limit, ...(tags ? { tags } : {}) } }),
     get: (id: number) => apiClient.get<Device>(`/devices/${id}`),
     create: (data: { serial: string; model?: string; host_id?: number; tags?: string[] }) =>
       apiClient.post<Device>('/devices', data),
+    updateTags: (id: number, tags: string[]) =>
+      apiClient.put<Device>(`/devices/${id}/tags`, tags),
   },
 
   // 任务相关
   tasks: {
-    list: () => apiClient.get<Task[]>('/tasks'),
+    list: (skip = 0, limit = 50, status?: string) => apiClient.get<PaginatedResponse<Task>>('/tasks', { params: { skip, limit, ...(status ? { status } : {}) } }),
     get: (id: number) => apiClient.get<Task>(`/tasks/${id}`),
     listTemplates: () => apiClient.get<TaskTemplate[]>('/task-templates'),
     create: (data: {
@@ -326,14 +482,21 @@ export const api = {
     }) =>
       apiClient.post<Task>('/tasks', data),
     cancel: (id: number) => apiClient.post(`/tasks/${id}/cancel`),
+    delete: (id: number) => apiClient.delete<void>(`/tasks/${id}`),
     retry: (id: number) => apiClient.post(`/tasks/${id}/retry`),
+    batchCancel: (taskIds: number[]) =>
+      apiClient.post<{ success: number[]; failed: any[]; total: number }>('/tasks/batch/cancel', { task_ids: taskIds }),
+    batchRetry: (taskIds: number[]) =>
+      apiClient.post<{ success: number[]; failed: any[]; total: number }>('/tasks/batch/retry', { task_ids: taskIds }),
     dispatch: (taskId: number, data: { host_id: number; device_id: number }) =>
       apiClient.post<TaskRun>(`/tasks/${taskId}/dispatch`, data),
-    getRuns: (taskId: number) => apiClient.get<TaskRun[]>(`/tasks/${taskId}/runs`),
+    getRuns: (taskId: number, skip = 0, limit = 50) => apiClient.get<PaginatedResponse<TaskRun>>(`/tasks/${taskId}/runs`, { params: { skip, limit } }),
     getRunReport: (runId: number) => apiClient.get<RunReport>(`/runs/${runId}/report`),
     getRunReportExportUrl: (runId: number, format: 'markdown' | 'json' = 'markdown') =>
       `/api/v1/runs/${runId}/report/export?format=${format}`,
     createRunJiraDraft: (runId: number) => apiClient.post<JiraDraft>(`/runs/${runId}/jira-draft`),
+    getCachedReport: (runId: number) => apiClient.get<RunReport>(`/runs/${runId}/report/cached`),
+    getCachedJiraDraft: (runId: number) => apiClient.get<JiraDraft>(`/runs/${runId}/jira-draft/cached`),
     artifactDownloadUrl: (taskId: number, runId: number, artifactId: number) =>
       `/api/v1/tasks/${taskId}/runs/${runId}/artifacts/${artifactId}/download`,
     // 查询Agent日志
@@ -357,11 +520,13 @@ export const api = {
     getHistory: (hostId: number, limit: number = 10) =>
       apiClient.get<any[]>(`/deploy/hosts/${hostId}/history?limit=${limit}`),
     getLatest: (hostId: number) => apiClient.get<any>(`/deploy/hosts/${hostId}/latest`),
+    batchDeploy: (hostIds: number[], installPath: string = '/opt/stability-test-agent') =>
+      apiClient.post<{ deployments: any[]; total: number }>('/deploy/batch', { host_ids: hostIds, install_path: installPath }),
   },
 
   // 用户管理相关
   users: {
-    list: () => apiClient.get<User[]>('/users'),
+    list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<User>>('/users', { params: { skip, limit } }),
     get: (id: number) => apiClient.get<User>(`/users/${id}`),
     create: (data: { username: string; password: string; role: string }) =>
       apiClient.post<User>('/users', data),
@@ -369,12 +534,14 @@ export const api = {
       apiClient.put<User>(`/users/${id}`, data),
     delete: (id: number) => apiClient.delete<void>(`/users/${id}`),
     toggleActive: (id: number) => apiClient.post<User>(`/users/${id}/toggle-active`),
+    changePassword: (data: { old_password: string; new_password: string }) =>
+      apiClient.post('/users/change-password', data),
   },
 
   // 工具管理相关
   tools: {
     // 专项分类
-    listCategories: () => apiClient.get<ToolCategory[]>('/tools/categories'),
+    listCategories: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<ToolCategory>>('/tools/categories', { params: { skip, limit } }),
     getCategory: (id: number) => apiClient.get<ToolCategory>(`/tools/categories/${id}`),
     createCategory: (data: { name: string; description?: string; icon?: string; order?: number; enabled?: boolean }) =>
       apiClient.post<ToolCategory>('/tools/categories', data),
@@ -383,7 +550,7 @@ export const api = {
     deleteCategory: (id: number) => apiClient.delete<void>(`/tools/categories/${id}`),
 
     // 工具
-    list: (categoryId?: number) => apiClient.get<Tool[]>('/tools', { params: { category_id: categoryId } }),
+    list: (categoryId?: number, skip = 0, limit = 50) => apiClient.get<PaginatedResponse<Tool>>('/tools', { params: { category_id: categoryId, skip, limit } }),
     get: (id: number) => apiClient.get<Tool>(`/tools/${id}`),
     create: (data: {
       category_id: number;
@@ -416,6 +583,78 @@ export const api = {
     // 扫描
     scan: () => apiClient.post<{ message: string; result: { categories: number; tools: number } }>('/tools/scan'),
     previewScan: () => apiClient.get<{ tools: any[]; count: number }>('/tools/scan/preview'),
+  },
+
+  // 结果汇总
+  results: {
+    summary: (limit?: number) =>
+      apiClient.get<ResultsSummary>('/results/summary', { params: limit ? { limit } : {} }),
+  },
+
+  // 工作流管理
+  workflows: {
+    list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<Workflow>>('/workflows', { params: { skip, limit } }),
+    get: (id: number) => apiClient.get<Workflow>(`/workflows/${id}`),
+    create: (data: WorkflowCreate) => apiClient.post<Workflow>('/workflows', data),
+    start: (id: number) => apiClient.post<Workflow>(`/workflows/${id}/start`),
+    cancel: (id: number) => apiClient.post<Workflow>(`/workflows/${id}/cancel`),
+    delete: (id: number) => apiClient.delete<void>(`/workflows/${id}`),
+    clone: (id: number) => apiClient.post<Workflow>(`/workflows/${id}/clone`),
+    toggleTemplate: (id: number) => apiClient.post<Workflow>(`/workflows/${id}/toggle-template`),
+  },
+
+  // 统计数据
+  stats: {
+    activity: (hours: number = 24) =>
+      apiClient.get<ActivityResponse>('/stats/activity', { params: { hours } }),
+    deviceMetrics: (deviceId: number, hours: number = 24) =>
+      apiClient.get<DeviceMetricsResponse>(`/stats/device/${deviceId}/metrics`, { params: { hours } }),
+    completionTrend: (days: number = 7) =>
+      apiClient.get<CompletionTrendResponse>('/stats/completion-trend', { params: { days } }),
+  },
+
+  // 通知管理
+  notifications: {
+    listChannels: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<NotificationChannel>>('/notifications/channels', { params: { skip, limit } }),
+    createChannel: (data: { name: string; type: string; config: Record<string, any>; enabled?: boolean }) =>
+      apiClient.post<NotificationChannel>('/notifications/channels', data),
+    updateChannel: (id: number, data: Partial<{ name: string; type: string; config: Record<string, any>; enabled: boolean }>) =>
+      apiClient.put<NotificationChannel>(`/notifications/channels/${id}`, data),
+    deleteChannel: (id: number) => apiClient.delete<void>(`/notifications/channels/${id}`),
+    testChannel: (id: number) => apiClient.post<{ ok: boolean; message: string }>(`/notifications/channels/${id}/test`),
+
+    listRules: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<AlertRule>>('/notifications/rules', { params: { skip, limit } }),
+    createRule: (data: { name: string; event_type: string; channel_id: number; filters?: Record<string, any>; enabled?: boolean }) =>
+      apiClient.post<AlertRule>('/notifications/rules', data),
+    updateRule: (id: number, data: Partial<{ name: string; event_type: string; channel_id: number; filters: Record<string, any>; enabled: boolean }>) =>
+      apiClient.put<AlertRule>(`/notifications/rules/${id}`, data),
+    deleteRule: (id: number) => apiClient.delete<void>(`/notifications/rules/${id}`),
+  },
+
+  // 定时任务
+  schedules: {
+    list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<any>>('/schedules', { params: { skip, limit } }),
+    get: (id: number) => apiClient.get<any>(`/schedules/${id}`),
+    create: (data: any) => apiClient.post<any>('/schedules', data),
+    update: (id: number, data: any) => apiClient.put<any>(`/schedules/${id}`, data),
+    delete: (id: number) => apiClient.delete<void>(`/schedules/${id}`),
+    toggle: (id: number) => apiClient.post<any>(`/schedules/${id}/toggle`),
+    runNow: (id: number) => apiClient.post<{ message: string; task_id: number }>(`/schedules/${id}/run-now`),
+  },
+
+  // 任务模板
+  templates: {
+    list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<any>>('/templates', { params: { skip, limit } }),
+    get: (id: number) => apiClient.get<any>(`/templates/${id}`),
+    create: (data: any) => apiClient.post<any>('/templates', data),
+    update: (id: number, data: any) => apiClient.put<any>(`/templates/${id}`, data),
+    delete: (id: number) => apiClient.delete<void>(`/templates/${id}`),
+  },
+
+  // 审计日志
+  audit: {
+    list: (skip = 0, limit = 50, filters?: { resource_type?: string; action?: string; user_id?: number }) =>
+      apiClient.get<PaginatedResponse<any>>('/audit-logs', { params: { skip, limit, ...filters } }),
   },
 };
 

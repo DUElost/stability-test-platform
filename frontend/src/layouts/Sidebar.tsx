@@ -14,7 +14,12 @@ import {
   FileSearch,
   Users,
   Workflow,
-  Wrench
+  Wrench,
+  Bell,
+  Settings,
+  Clock,
+  FileBox,
+  Shield
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -51,6 +56,8 @@ const navGroups: NavGroup[] = [
       { path: '/tasks', label: '任务管理', icon: ListTodo },
       { path: '/tools', label: '工具专项', icon: Wrench },
       { path: '/workflows', label: '工作流管理', icon: Workflow },
+      { path: '/schedules', label: '定时任务', icon: Clock },
+      { path: '/templates', label: '任务模板', icon: FileBox },
       { path: '/results', label: '测试结果', icon: TestTube2 },
       { path: '/logs', label: '日志监控', icon: FileSearch },
     ],
@@ -58,8 +65,11 @@ const navGroups: NavGroup[] = [
   {
     label: '系统',
     items: [
+      { path: '/notifications', label: '通知管理', icon: Bell },
       { path: '/mapreduce', label: 'Map-Reduce', icon: Network },
       { path: '/users', label: '用户管理', icon: Users },
+      { path: '/audit', label: '操作日志', icon: Shield },
+      { path: '/settings', label: '系统设置', icon: Settings },
     ],
   },
 ];

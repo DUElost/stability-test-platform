@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, text
 
 from backend.core.database import SessionLocal
+from backend.api.routes.websocket import schedule_broadcast
 from backend.core.metrics import (
     recycler_runs,
     recycler_timeouts,
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 DISPATCHED_TIMEOUT_SECONDS = int(os.getenv("RUN_DISPATCHED_TIMEOUT_SECONDS", "120"))
 RUNNING_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("RUN_HEARTBEAT_TIMEOUT_SECONDS", "900"))
+METRIC_RETENTION_DAYS = int(os.getenv("METRIC_RETENTION_DAYS", "7"))
 HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "300"))
 RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
 
@@ -111,6 +113,33 @@ def _mark_timeout(db, run: TaskRun, now: datetime, reason: str) -> None:
             "reason": reason,
         },
     )
+    # Broadcast timeout event via WebSocket
+    schedule_broadcast("/ws/dashboard", {
+        "type": "RUN_UPDATE",
+        "payload": {
+            "run_id": run.id,
+            "task_id": run.task_id,
+            "status": "FAILED",
+            "error_code": "TIMEOUT",
+            "message": reason,
+        },
+    })
+    # Fire-and-forget: auto-generate report + JIRA draft
+    from backend.services.post_completion import run_post_completion_async
+    run_post_completion_async(run.id)
+
+    # Dispatch RUN_FAILED notification for timeout
+    from backend.services.notification_service import dispatch_notification_async
+    # 获取设备序列号（通过关联的 device 对象）
+    device_serial = run.device.serial if run.device else str(run.device_id)
+    dispatch_notification_async("RUN_FAILED", {
+        "run_id": run.id,
+        "task_id": run.task_id,
+        "task_name": task.name if task else "unknown",
+        "task_type": task.type if task else "unknown",
+        "error_message": reason,
+        "device_serial": device_serial,
+    })
 
 
 def _check_device_lock_expiration(db, now: datetime) -> int:
@@ -202,10 +231,25 @@ def recycle_once() -> None:
         if expired_runs or offline_hosts or expired_locks:
             db.commit()
 
+        # Prune old metric snapshots
+        _prune_metric_snapshots(db, now)
+
     # Record recycler metrics
     duration = time.time() - start_time
     recycler_duration.observe(duration)
     recycler_runs.inc()
+
+
+def _prune_metric_snapshots(db, now: datetime) -> None:
+    """Delete device metric snapshots older than retention period."""
+    cutoff = now - timedelta(days=METRIC_RETENTION_DAYS)
+    result = db.execute(
+        text("DELETE FROM device_metric_snapshots WHERE timestamp < :cutoff"),
+        {"cutoff": cutoff},
+    )
+    if result.rowcount > 0:
+        db.commit()
+        logger.info("metric_snapshots_pruned", extra={"count": result.rowcount})
 
 
 def _recycler_loop() -> None:

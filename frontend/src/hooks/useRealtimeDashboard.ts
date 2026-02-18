@@ -20,12 +20,35 @@ interface DeviceUpdate {
   disk_used?: number;
 }
 
+export interface RunStatusUpdate {
+  run_id: number;
+  task_id: number;
+  status: string;
+  progress?: number;
+  message?: string;
+  error_code?: string;
+}
+
+export interface TaskStatusUpdate {
+  task_id: number;
+  status: string | null;
+}
+
+export interface ReportReadyEvent {
+  run_id: number;
+  task_id: number;
+}
+
 interface WsMessage {
-  type: 'DEVICE_UPDATE' | 'HEARTBEAT';
-  payload: DeviceUpdate | unknown;
+  type: 'DEVICE_UPDATE' | 'HEARTBEAT' | 'RUN_UPDATE' | 'TASK_UPDATE' | 'REPORT_READY' | 'WORKFLOW_UPDATE' | 'DEPLOY_UPDATE';
+  payload: DeviceUpdate | RunStatusUpdate | TaskStatusUpdate | ReportReadyEvent | unknown;
 }
 
 const UPDATE_BATCH_INTERVAL = 500;
+
+// 防重刷节流：在短时间内忽略重复的失效请求
+const INVALIDATE_THROTTLE_MS = 2000;
+let _lastInvalidateTime = 0;
 
 interface Device {
   id: number;
@@ -58,19 +81,53 @@ export function useRealtimeDashboard(wsUrl: string) {
 
   const { data: devices, isError, isLoading } = useQuery({
     queryKey: ['devices'],
-    queryFn: () => api.devices.list().then(res => res.data),
+    queryFn: () => api.devices.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
 
   useEffect(() => {
-    if (lastMessage?.type === 'DEVICE_UPDATE') {
-      const update = lastMessage.payload as unknown;
-      const deviceUpdate = update as DeviceUpdate;
-      if (deviceUpdate.serial) {
-        updateQueue.current.set(deviceUpdate.serial, deviceUpdate);
+    if (!lastMessage) return;
+
+    switch (lastMessage.type) {
+      case 'DEVICE_UPDATE': {
+        const update = lastMessage.payload as unknown as DeviceUpdate;
+        if (update.serial) {
+          updateQueue.current.set(update.serial, update);
+        }
+        break;
       }
+      case 'RUN_UPDATE': {
+        // 防抖：避免高频更新触发大量查询失效
+        const now = Date.now();
+        if (now - _lastInvalidateTime > INVALIDATE_THROTTLE_MS) {
+          _lastInvalidateTime = now;
+          queryClient.invalidateQueries({ queryKey: ['tasks'] });
+          queryClient.invalidateQueries({ queryKey: ['results'] });
+          queryClient.invalidateQueries({ queryKey: ['results-summary'] });
+        }
+        break;
+      }
+      case 'TASK_UPDATE': {
+        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        break;
+      }
+      case 'REPORT_READY': {
+        queryClient.invalidateQueries({ queryKey: ['results'] });
+        queryClient.invalidateQueries({ queryKey: ['results-summary'] });
+        break;
+      }
+      case 'WORKFLOW_UPDATE': {
+        queryClient.invalidateQueries({ queryKey: ['workflows'] });
+        break;
+      }
+      case 'DEPLOY_UPDATE': {
+        queryClient.invalidateQueries({ queryKey: ['deployments'] });
+        break;
+      }
+      default:
+        break;
     }
-  }, [lastMessage]);
+  }, [lastMessage, queryClient]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -97,5 +154,5 @@ export function useRealtimeDashboard(wsUrl: string) {
     return () => clearInterval(interval);
   }, [queryClient]);
 
-  return { devices, isConnected, lastUpdateTime, isError, isLoading };
+  return { devices, isConnected, lastUpdateTime, isError, isLoading, lastMessage };
 }

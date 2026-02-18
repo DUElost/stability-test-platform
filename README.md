@@ -14,6 +14,15 @@
 
 ---
 
+## 架构决策记录（ADR）快速入口
+
+- ADR 总入口与维护规范：`docs/adr/README.md`
+- 已落地架构基线（先读）：`docs/adr/ADR-0001-control-plane-and-agent-architecture.md` ~ `docs/adr/ADR-0007-tool-template-workflow-extension-model.md`
+- 未来扩展/重构路线：`docs/adr/ADR-0008-schema-migration-governance-alembic-only.md` ~ `docs/adr/ADR-0012-post-completion-pipeline-jira-automation.md`
+- 推荐阅读顺序：先 `Accepted`，再 `Proposed`；变更代码前先检索对应 ADR。
+
+---
+
 ## 快速启动
 
 ### 方式一：Windows 批处理脚本（推荐）

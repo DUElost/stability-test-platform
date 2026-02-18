@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..test_framework import BaseTestCase, TestResult, RiskEvent
-from ..aimonkey_stages import AIMonkeyStage, stage_progress
+from ..test_stages import TestStage, stage_progress, FULL_STAGES
 from ..aimonkey_aee import scan_aee_entries, scan_and_pull_aee_entries
 from ..aimonkey_risk import build_risk_summary, write_risk_summary
 
@@ -23,6 +23,7 @@ class AIMonkeyTest(BaseTestCase):
     """AIMonkey 测试用例"""
 
     TEST_TYPE = "AIMONKEY"
+    STAGES = FULL_STAGES
 
     def get_default_params(self) -> Dict[str, Any]:
         return {
@@ -38,13 +39,13 @@ class AIMonkeyTest(BaseTestCase):
     def setup(self, serial: str, params: Dict[str, Any]) -> None:
         """设备前置配置：root 权限、开发者选项、日志服务、WiFi、存储填充、清理日志"""
         self._log("开始设备前置配置...")
-        self.set_progress(stage_progress(AIMonkeyStage.PRECHECK), "AIMONKEY 任务开始")
+        self.set_progress(stage_progress(TestStage.PRECHECK), "AIMONKEY 任务开始")
 
         self._log("检查 root 权限...", "INFO")
         self._ensure_root_access(serial)
         self._log("Root 权限已获取", "INFO")
 
-        self.set_progress(stage_progress(AIMonkeyStage.PREPARE), "设备前置准备中")
+        self.set_progress(stage_progress(TestStage.PREPARE), "设备前置准备中")
 
         self._log("启用开发者选项...", "INFO")
         self._run_shell(serial, ["settings", "put", "global", "development_settings_enabled", "1"])
@@ -68,7 +69,7 @@ class AIMonkeyTest(BaseTestCase):
             self._log("清理设备日志...", "INFO")
             self._clear_device_logs(serial)
 
-        self.set_progress(stage_progress(AIMonkeyStage.PREPARE), "设备前置准备完成")
+        self.set_progress(stage_progress(TestStage.PREPARE), "设备前置准备完成")
 
     def execute(self, serial: str, params: Dict[str, Any]) -> TestResult:
         """执行 AIMonkey 测试"""
@@ -76,7 +77,7 @@ class AIMonkeyTest(BaseTestCase):
         throttle_ms = int(params.get("throttle_ms", 500))
         max_restarts = int(params.get("max_restarts", 1))
 
-        self.set_progress(stage_progress(AIMonkeyStage.RUN), "开始推送资源并启动 Monkey")
+        self.set_progress(stage_progress(TestStage.RUN), "开始推送资源并启动 Monkey")
 
         pid = self._start_monkey(serial, params)
         if not pid:
@@ -87,13 +88,13 @@ class AIMonkeyTest(BaseTestCase):
                 error_message="Failed to start monkey or capture PID",
             )
 
-        self.set_progress(stage_progress(AIMonkeyStage.RUN), f"Monkey 进程已启动: PID={pid}")
+        self.set_progress(stage_progress(TestStage.RUN), f"Monkey 进程已启动: PID={pid}")
 
-        self.set_progress(stage_progress(AIMonkeyStage.MONITOR), "开始监控 Monkey 运行")
+        self.set_progress(stage_progress(TestStage.MONITOR), "开始监控 Monkey 运行")
         summary, final_pid = self._monitor_monkey(
             serial, pid, runtime_minutes, throttle_ms, max_restarts, params
         )
-        self.set_progress(stage_progress(AIMonkeyStage.MONITOR), f"监控结束: {summary}")
+        self.set_progress(stage_progress(TestStage.MONITOR), f"监控结束: {summary}")
 
         self._stop_monkey(serial, final_pid or pid)
 
@@ -105,7 +106,7 @@ class AIMonkeyTest(BaseTestCase):
 
     def scan_risks(self, serial: str) -> List[RiskEvent]:
         """风险扫描"""
-        self.set_progress(stage_progress(AIMonkeyStage.RISK_SCAN), "执行风险问题检查")
+        self.set_progress(stage_progress(TestStage.RISK_SCAN), "执行风险问题检查")
 
         aee_entries = scan_aee_entries(self.adb, serial)
         events = []
@@ -125,7 +126,7 @@ class AIMonkeyTest(BaseTestCase):
 
     def collect(self, serial: str, log_dir: str) -> Dict[str, Any]:
         """收集日志"""
-        self.set_progress(stage_progress(AIMonkeyStage.EXPORT), "日志回传导出中")
+        self.set_progress(stage_progress(TestStage.EXPORT), "日志回传导出中")
 
         export_meta: Dict[str, Any] = {
             "aee_scanned": 0,
@@ -159,7 +160,7 @@ class AIMonkeyTest(BaseTestCase):
         except Exception as e:
             self._log(f"导出 bugreport 失败: {e}", "WARN")
 
-        self.set_progress(stage_progress(AIMonkeyStage.TEARDOWN), "测试后置完成")
+        self.set_progress(stage_progress(TestStage.TEARDOWN), "测试后置完成")
 
         return export_meta
 

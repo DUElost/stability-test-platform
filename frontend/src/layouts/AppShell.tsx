@@ -143,14 +143,16 @@ export default function AppShell() {
                       onClick={() => setShowUserMenu(false)}
                     />
                     <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-100 py-1 z-20">
-                      <NavLink
-                        to="/docs"
+                      <a
+                        href="/docs"
+                        target="_blank"
+                        rel="noopener noreferrer"
                         onClick={() => setShowUserMenu(false)}
                         className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
                       >
                         <FileText className="w-4 h-4" />
                         文档
-                      </NavLink>
+                      </a>
                       <NavLink
                         to="/settings"
                         onClick={() => setShowUserMenu(false)}

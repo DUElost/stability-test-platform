@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Loader2 } from 'lucide-react';
+import { useToast } from '../../components/ui/toast';
 import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '../../components/device/ExpandableDeviceTable';
 import { AddDeviceModal } from './components/AddDeviceModal';
+import { DeviceMetricsModal } from './components/DeviceMetricsModal';
 import { api } from '../../utils/api';
 import { CleanCard } from '../../components/ui/clean-card';
 import { CleanButton } from '../../components/ui/clean-button';
@@ -16,17 +18,19 @@ const deviceStatusMap: Record<string, DeviceStatus> = {
 
 export default function DevicesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [metricsDevice, setMetricsDevice] = useState<{ id: number; serial: string } | null>(null);
   const queryClient = useQueryClient();
+  const toast = useToast();
 
   const { data: devices, isLoading, error } = useQuery({
     queryKey: ['devices'],
-    queryFn: () => api.devices.list().then(res => res.data),
+    queryFn: () => api.devices.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
 
   const { data: hosts } = useQuery({
     queryKey: ['hosts'],
-    queryFn: () => api.hosts.list().then(res => res.data),
+    queryFn: () => api.hosts.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
 
@@ -36,10 +40,10 @@ export default function DevicesPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['devices'] });
       setIsModalOpen(false);
-      alert('Device added successfully');
+      toast.success('设备添加成功');
     },
     onError: (error: any) => {
-      alert(`Failed to add device: ${error.response?.data?.detail || error.message}`);
+      toast.error(`添加设备失败: ${error.response?.data?.detail || error.message}`);
     },
   });
 
@@ -90,7 +94,7 @@ export default function DevicesPage() {
           <p className="text-sm text-gray-400">管理和监控测试设备</p>
         </div>
         <div className="p-4 bg-red-50 text-red-600 rounded-lg border border-red-100">
-          Error loading devices. Please check backend connection.
+          加载设备失败，请检查后端服务连接。
         </div>
       </div>
     );
@@ -112,7 +116,15 @@ export default function DevicesPage() {
 
       {/* Device Table */}
       {formattedDevices.length > 0 ? (
-        <ExpandableDeviceTable devices={formattedDevices} />
+        <div>
+          <div className="flex justify-end mb-2">
+            <span className="text-xs text-gray-400">点击设备行的指标按钮查看历史数据</span>
+          </div>
+          <ExpandableDeviceTable
+            devices={formattedDevices}
+            onViewMetrics={(device) => setMetricsDevice({ id: device.id, serial: device.serial })}
+          />
+        </div>
       ) : (
         <CleanCard className="p-12 text-center">
           <h3 className="text-lg font-medium text-gray-900 mb-2">暂无设备</h3>
@@ -130,6 +142,15 @@ export default function DevicesPage() {
         onSubmit={(data) => createMutation.mutate(data)}
         isSubmitting={createMutation.isPending}
       />
+
+      {metricsDevice && (
+        <DeviceMetricsModal
+          isOpen={!!metricsDevice}
+          onClose={() => setMetricsDevice(null)}
+          deviceId={metricsDevice.id}
+          deviceSerial={metricsDevice.serial}
+        />
+      )}
     </div>
   );
 }

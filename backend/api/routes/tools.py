@@ -5,11 +5,14 @@
 
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
 from backend.models.schemas import ToolCategory, Tool
+from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas import (
+    PaginatedResponse,
     ToolCategoryCreate,
     ToolCategoryOut,
     ToolCreate,
@@ -23,10 +26,12 @@ router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
 
 # ==================== 专项分类管理 ====================
 
-@router.get("/categories", response_model=List[ToolCategoryOut])
+@router.get("/categories", response_model=PaginatedResponse)
 def list_categories(
     db: Session = Depends(get_db),
     enabled: bool = Query(None, description="过滤启用的分类"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
     """获取专项分类列表"""
     query = db.query(ToolCategory)
@@ -34,16 +39,19 @@ def list_categories(
         query = query.filter(ToolCategory.enabled == enabled)
     query = query.order_by(ToolCategory.order, ToolCategory.name)
 
-    categories = query.all()
+    total = query.count()
+    categories = query.offset(skip).limit(limit).all()
 
-    # 统计每个分类的工具数量
+    # 统计每个分类的工具数量 (single GROUP BY instead of N+1)
+    tool_counts = dict(
+        db.query(Tool.category_id, func.count(Tool.id))
+        .filter(Tool.enabled == True)
+        .group_by(Tool.category_id)
+        .all()
+    )
+
     result = []
     for cat in categories:
-        tool_count = db.query(Tool).filter(
-            Tool.category_id == cat.id,
-            Tool.enabled == True
-        ).count()
-
         result.append(ToolCategoryOut(
             id=cat.id,
             name=cat.name,
@@ -52,16 +60,17 @@ def list_categories(
             order=cat.order,
             enabled=cat.enabled,
             created_at=cat.created_at,
-            tools_count=tool_count,
+            tools_count=tool_counts.get(cat.id, 0),
         ))
 
-    return result
+    return PaginatedResponse(items=result, total=total, skip=skip, limit=limit)
 
 
 @router.post("/categories", response_model=ToolCategoryOut)
 def create_category(
     data: ToolCategoryCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """创建专项分类"""
     # 检查名称是否已存在
@@ -97,6 +106,7 @@ def update_category(
     category_id: int,
     data: ToolCategoryCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """更新专项分类"""
     category = db.query(ToolCategory).filter_by(id=category_id).first()
@@ -139,6 +149,7 @@ def update_category(
 def delete_category(
     category_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """删除专项分类（同时删除分类下的工具）"""
     category = db.query(ToolCategory).filter_by(id=category_id).first()
@@ -157,10 +168,12 @@ def delete_category(
 
 # ==================== 工具管理 ====================
 
-@router.get("", response_model=List[ToolOut])
+@router.get("", response_model=PaginatedResponse)
 def list_tools(
     category_id: int = Query(None, description="分类ID"),
     enabled: bool = Query(None, description="过滤启用的工具"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     """获取工具列表"""
@@ -172,15 +185,22 @@ def list_tools(
 
     query = query.order_by(Tool.name)
 
-    tools = query.all()
-    result = []
+    total = query.count()
+    tools = query.offset(skip).limit(limit).all()
 
+    # Prefetch category names in one query (avoid N+1)
+    category_ids = {t.category_id for t in tools if t.category_id}
+    cat_map = {}
+    if category_ids:
+        cats = db.query(ToolCategory).filter(ToolCategory.id.in_(category_ids)).all()
+        cat_map = {c.id: c.name for c in cats}
+
+    result = []
     for tool in tools:
-        category = db.query(ToolCategory).filter_by(id=tool.category_id).first()
         result.append(ToolOut(
             id=tool.id,
             category_id=tool.category_id,
-            category_name=category.name if category else None,
+            category_name=cat_map.get(tool.category_id),
             name=tool.name,
             description=tool.description,
             script_path=tool.script_path,
@@ -195,7 +215,7 @@ def list_tools(
             updated_at=tool.updated_at,
         ))
 
-    return result
+    return PaginatedResponse(items=result, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{tool_id}", response_model=ToolOut)
@@ -233,6 +253,7 @@ def get_tool(
 def create_tool(
     data: ToolCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """创建工具配置"""
     # 验证分类存在
@@ -281,6 +302,7 @@ def update_tool(
     tool_id: int,
     data: ToolCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """更新工具配置"""
     tool = db.query(Tool).filter_by(id=tool_id).first()
@@ -330,6 +352,7 @@ def update_tool(
 def delete_tool(
     tool_id: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """删除工具"""
     tool = db.query(Tool).filter_by(id=tool_id).first()
@@ -345,7 +368,10 @@ def delete_tool(
 # ==================== 工具扫描与同步 ====================
 
 @router.post("/scan")
-def scan_tools(db: Session = Depends(get_db)):
+def scan_tools(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
     """
     扫描工具目录并同步到数据库
     扫描路径: /home/android/sonic_agent/logs/ftp_log/sonic_tinno/Test_Tool

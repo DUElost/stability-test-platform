@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from backend.core.database import get_db
 from backend.core.security import get_password_hash, verify_password, decode_token
 from backend.models.schemas import User as UserModel
+from backend.api.schemas import PaginatedResponse
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
@@ -93,14 +94,22 @@ def require_admin(current_user: UserModel = Depends(get_current_active_user)) ->
     return current_user
 
 
-@router.get("", response_model=List[UserOut])
+@router.get("", response_model=PaginatedResponse)
 def list_users(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(require_admin),
 ):
     """List all users (admin only)."""
-    users = db.query(UserModel).order_by(UserModel.id).all()
-    return users
+    query = db.query(UserModel).order_by(UserModel.id)
+    total = query.count()
+    users = query.offset(skip).limit(limit).all()
+    items = [
+        UserOut.model_validate(u) if hasattr(UserOut, "model_validate") else UserOut.from_orm(u)
+        for u in users
+    ]
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{user_id}", response_model=UserOut)

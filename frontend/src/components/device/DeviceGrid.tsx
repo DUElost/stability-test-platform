@@ -10,7 +10,7 @@ export const DeviceGrid: React.FC<DeviceGridProps> = ({ devices, isLoading }) =>
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64 text-slate-500">
-        Loading devices...
+        加载设备中...
       </div>
     );
   }

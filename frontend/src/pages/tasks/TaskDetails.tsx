@@ -20,7 +20,7 @@ export default function TaskDetails() {
   // 获取任务的运行记录，用于获取 run_id
   const { data: runs } = useQuery({
     queryKey: ['tasks', id, 'runs'],
-    queryFn: () => api.tasks.getRuns(id).then(res => res.data),
+    queryFn: () => api.tasks.getRuns(id, 0, 200).then(res => res.data.items),
     enabled: !!id,
     refetchInterval: task?.status === 'RUNNING' ? 5000 : false,
   });

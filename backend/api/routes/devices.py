@@ -2,13 +2,13 @@ from datetime import datetime, timedelta
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from backend.core.database import get_db
 from backend.models.schemas import Device, DeviceStatus, Host, HostStatus
-from backend.api.schemas import DeviceCreate, DeviceOut
+from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
 
 logger = logging.getLogger(__name__)
@@ -86,9 +86,24 @@ def create_device(payload: DeviceCreate, db: Session = Depends(get_db), current_
     return device
 
 
-@router.get("", response_model=List[DeviceOut])
-def list_devices(db: Session = Depends(get_db)):
-    devices = db.query(Device).order_by(Device.id).all()
+@router.get("", response_model=PaginatedResponse)
+def list_devices(
+    tags: Optional[str] = Query(None, description="Comma-separated tag filter"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    query = db.query(Device).order_by(Device.id)
+
+    # Filter by tags if provided
+    if tags:
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        for tag in tag_list:
+            # SQLite JSON array search: check if tag appears in the JSON column
+            query = query.filter(Device.tags.like(f'%"{tag}"%'))
+
+    total = query.count()
+    devices = query.offset(skip).limit(limit).all()
     # Update device status based on host status
     needs_commit = False
     for device in devices:
@@ -96,7 +111,11 @@ def list_devices(db: Session = Depends(get_db)):
             needs_commit = True
     if needs_commit:
         db.commit()
-    return devices
+    items = [
+        DeviceOut.model_validate(d) if hasattr(DeviceOut, "model_validate") else DeviceOut.from_orm(d)
+        for d in devices
+    ]
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{device_id}", response_model=DeviceOut)
@@ -106,4 +125,21 @@ def get_device(device_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="device not found")
     if _ensure_host_online_for_device(device):
         db.commit()
+    return device
+
+
+@router.put("/{device_id}/tags", response_model=DeviceOut)
+def update_device_tags(
+    device_id: int,
+    tags: List[str],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Update device tags."""
+    device = db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail="device not found")
+    device.tags = tags
+    db.commit()
+    db.refresh(device)
     return device

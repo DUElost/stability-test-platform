@@ -1,6 +1,7 @@
 import { Bell, Menu, Search, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { useToast } from '@/components/ui/toast';
 import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
@@ -20,6 +21,7 @@ interface HeaderProps {
 
 export default function Header({ onMenuClick, showMenuButton = false }: HeaderProps) {
   const navigate = useNavigate();
+  const toast = useToast();
 
   const handleLogout = () => {
     localStorage.removeItem('access_token');
@@ -105,10 +107,10 @@ export default function Header({ onMenuClick, showMenuButton = false }: HeaderPr
           <DropdownMenuContent align="end" className="w-56">
             <DropdownMenuLabel>My Account</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => alert('Profile功能待实现')}>
+            <DropdownMenuItem onClick={() => toast.info('Profile功能待实现')}>
               Profile
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => alert('Settings功能待实现')}>
+            <DropdownMenuItem onClick={() => toast.info('Settings功能待实现')}>
               Settings
             </DropdownMenuItem>
             <DropdownMenuSeparator />

@@ -4,10 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertCircle } from 'lucide-react';
+import { useToast } from '@/components/ui/toast';
 import axios from 'axios';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -33,7 +35,7 @@ export default function RegisterPage() {
       });
 
       // 注册成功，跳转到登录页
-      alert('注册成功，请登录');
+      toast.success('注册成功，请登录');
       navigate('/login');
     } catch (err: any) {
       setError(err.response?.data?.detail || '注册失败');

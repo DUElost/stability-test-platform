@@ -9,6 +9,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -93,6 +94,9 @@ class Host(Base):
 
 class Device(Base):
     __tablename__ = "devices"
+    __table_args__ = (
+        Index('ix_dev_host_status', 'host_id', 'status'),
+    )
 
     id = Column(Integer, primary_key=True)
     serial = Column(String(128), unique=True, index=True, nullable=False)
@@ -131,12 +135,30 @@ class Device(Base):
     runs = relationship("TaskRun", back_populates="device")
 
 
+class DeviceMetricSnapshot(Base):
+    """Historical device metrics — one row per heartbeat per device."""
+    __tablename__ = "device_metric_snapshots"
+    __table_args__ = (
+        Index('ix_dms_device_ts', 'device_id', 'timestamp'),
+    )
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    battery_level = Column(Integer)
+    temperature = Column(Integer)
+    network_latency = Column(Float)
+    cpu_usage = Column(Float)
+    mem_used = Column(BigInteger)
+
+
 class TaskTemplate(Base):
     __tablename__ = "task_templates"
 
     id = Column(Integer, primary_key=True)
     name = Column(String(128), unique=True, nullable=False)
     type = Column(String(32), nullable=False)
+    description = Column(String(256))
     default_params = Column(JSON, default=dict)
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -146,6 +168,9 @@ class TaskTemplate(Base):
 
 class Task(Base):
     __tablename__ = "tasks"
+    __table_args__ = (
+        Index('ix_task_status', 'status'),
+    )
 
     id = Column(Integer, primary_key=True)
     name = Column(String(128), nullable=False)
@@ -171,6 +196,11 @@ class Task(Base):
 
 class TaskRun(Base):
     __tablename__ = "task_runs"
+    __table_args__ = (
+        Index('ix_tr_host_status', 'host_id', 'status'),
+        Index('ix_tr_task_id', 'task_id'),
+        Index('ix_tr_status', 'status'),
+    )
 
     id = Column(Integer, primary_key=True)
     task_id = Column(Integer, ForeignKey("tasks.id"), nullable=False)
@@ -193,6 +223,11 @@ class TaskRun(Base):
     error_message = Column(Text)
     log_summary = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Post-completion pipeline results
+    report_json = Column(JSON, nullable=True)
+    jira_draft_json = Column(JSON, nullable=True)
+    post_processed_at = Column(DateTime, nullable=True)
 
     task = relationship("Task", back_populates="runs")
     host = relationship("Host", back_populates="runs")
@@ -275,3 +310,154 @@ class Tool(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     category = relationship("ToolCategory", back_populates="tools")
+
+
+# ==================== 工作流模块 ====================
+
+
+class WorkflowStatus(PyEnum):
+    DRAFT = "DRAFT"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELED = "CANCELED"
+
+
+class StepStatus(PyEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+
+
+class Workflow(Base):
+    __tablename__ = "workflows"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text)
+    status = Column(Enum(WorkflowStatus), default=WorkflowStatus.DRAFT, nullable=False)
+    is_template = Column(Boolean, default=False)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    steps = relationship(
+        "WorkflowStep",
+        back_populates="workflow",
+        order_by="WorkflowStep.order",
+        cascade="all, delete-orphan",
+    )
+
+
+class WorkflowStep(Base):
+    __tablename__ = "workflow_steps"
+    __table_args__ = (
+        Index('ix_ws_task_run_id', 'task_run_id'),
+    )
+
+    id = Column(Integer, primary_key=True)
+    workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=False)
+    order = Column(Integer, nullable=False)
+    name = Column(String(128), nullable=False)
+    tool_id = Column(Integer, ForeignKey("tools.id"), nullable=True)
+    task_type = Column(String(64))
+    params = Column(JSON, default=dict)
+    target_device_id = Column(Integer, ForeignKey("devices.id"), nullable=True)
+    status = Column(Enum(StepStatus), default=StepStatus.PENDING, nullable=False)
+    task_run_id = Column(Integer, ForeignKey("task_runs.id"), nullable=True)
+    error_message = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+    workflow = relationship("Workflow", back_populates="steps")
+
+
+class ChannelType(str, PyEnum):
+    WEBHOOK = "WEBHOOK"
+    EMAIL = "EMAIL"
+    DINGTALK = "DINGTALK"
+
+
+class EventType(str, PyEnum):
+    RUN_COMPLETED = "RUN_COMPLETED"
+    RUN_FAILED = "RUN_FAILED"
+    RISK_HIGH = "RISK_HIGH"
+    DEVICE_OFFLINE = "DEVICE_OFFLINE"
+
+
+class NotificationChannel(Base):
+    __tablename__ = "notification_channels"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(128), nullable=False)
+    type = Column(Enum(ChannelType), nullable=False)
+    config = Column(JSON, default=dict)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    rules = relationship("AlertRule", back_populates="channel")
+
+
+class AlertRule(Base):
+    __tablename__ = "alert_rules"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(128), nullable=False)
+    event_type = Column(Enum(EventType), nullable=False)
+    channel_id = Column(Integer, ForeignKey("notification_channels.id"), nullable=False)
+    filters = Column(JSON, default=dict)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    channel = relationship("NotificationChannel", back_populates="rules")
+
+
+# ==================== 审计日志 ====================
+
+
+class AuditLog(Base):
+    """Audit log for tracking mutation operations."""
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index('ix_audit_user_ts', 'user_id', 'timestamp'),
+        Index('ix_audit_resource', 'resource_type', 'resource_id'),
+    )
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    username = Column(String(128))
+    action = Column(String(64), nullable=False)  # create, update, delete, start, cancel, etc.
+    resource_type = Column(String(64), nullable=False)  # task, workflow, tool, notification, etc.
+    resource_id = Column(Integer)
+    details = Column(JSON, default=dict)
+    ip_address = Column(String(64))
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ==================== 定时任务 ====================
+
+
+class TaskSchedule(Base):
+    """Cron-based task scheduling."""
+    __tablename__ = "task_schedules"
+    __table_args__ = (
+        Index('ix_sched_enabled_next', 'enabled', 'next_run_at'),
+    )
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(128), nullable=False)
+    cron_expression = Column(String(128), nullable=False)  # e.g. "0 2 * * *"
+    task_template_id = Column(Integer, ForeignKey("task_templates.id"), nullable=True)
+    tool_id = Column(Integer, ForeignKey("tools.id"), nullable=True)
+    task_type = Column(String(32), nullable=False)
+    params = Column(JSON, default=dict)
+    target_device_id = Column(Integer, ForeignKey("devices.id"), nullable=True)
+    enabled = Column(Boolean, default=True)
+    last_run_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

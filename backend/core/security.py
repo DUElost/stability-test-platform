@@ -1,4 +1,5 @@
 """Security utilities for authentication and authorization."""
+import os
 from datetime import datetime, timedelta
 from typing import Optional, Union
 
@@ -6,7 +7,16 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 # Security configuration
-SECRET_KEY = "your-secret-key-here-change-in-production"  # TODO: Move to environment variable
+_PLACEHOLDER = "your-secret-key-here-change-in-production"
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
+if not SECRET_KEY or SECRET_KEY == _PLACEHOLDER:
+    if os.getenv("TESTING") == "1":
+        SECRET_KEY = "test-secret-key-for-testing"
+    else:
+        raise RuntimeError(
+            "JWT_SECRET_KEY environment variable must be set. "
+            "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 15
 REFRESH_TOKEN_EXPIRE_DAYS = 7

@@ -31,15 +31,15 @@ export const CreateTaskForm: React.FC<TaskFormProps> = ({ devices, onSubmit }) =
     const fetchData = async () => {
       try {
         const [toolsRes, catRes] = await Promise.all([
-          api.tools.list(undefined),
-          api.tools.listCategories()
+          api.tools.list(undefined, 0, 200),
+          api.tools.listCategories(0, 200)
         ]);
-        setTools(toolsRes.data);
-        setCategories(catRes.data);
-        
+        setTools(toolsRes.data.items);
+        setCategories(catRes.data.items);
+
         // Auto-select first tool if available
-        if (toolsRes.data.length > 0) {
-          const firstTool = toolsRes.data[0];
+        if (toolsRes.data.items.length > 0) {
+          const firstTool = toolsRes.data.items[0];
           setSelectedTool(firstTool);
           setConfig(cloneConfig(firstTool.default_params));
         }

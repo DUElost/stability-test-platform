@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 # Set test mode before importing app to disable startup background threads
 os.environ["TESTING"] = "1"
+os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-ci"
 
 from backend.models.schemas import Base, Host, HostStatus, Device, DeviceStatus, Task, TaskStatus, TaskRun, RunStatus
 from backend.core.database import Base as CoreBase, get_db

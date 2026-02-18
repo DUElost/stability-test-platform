@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import shlex
-import tarfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -13,6 +12,8 @@ import paramiko
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from pydantic import BaseModel, Field
+from pydantic.fields import PrivateAttr
 from sqlalchemy import text
 from sqlalchemy.orm import Session, selectinload
 
@@ -26,6 +27,7 @@ from backend.api.schemas import (
     HostLiteOut,
     JiraDraftOut,
     LogArtifactIn,
+    PaginatedResponse,
     RiskAlertOut,
     RunAgentOut,
     RunCompleteIn,
@@ -38,16 +40,19 @@ from backend.api.schemas import (
     TaskOut,
 )
 from backend.api.routes.auth import get_current_active_user, User, verify_agent_secret
+from backend.services.report_service import (
+    compose_run_report,
+    build_jira_draft,
+    build_risk_alerts as _build_risk_alerts,
+    parse_run_log_summary as _parse_run_log_summary,
+)
+from backend.services.report_service import _load_risk_summary_from_artifacts, _model_to_dict
+from backend.api.routes.websocket import broadcast_run_update, broadcast_task_update
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 logger = logging.getLogger(__name__)
 
 DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
-REPORT_ALERT_ANR_THRESHOLD = int(os.getenv("RUN_REPORT_ALERT_ANR_THRESHOLD", "1"))
-REPORT_ALERT_CRASH_THRESHOLD = int(os.getenv("RUN_REPORT_ALERT_CRASH_THRESHOLD", "1"))
-REPORT_ALERT_RESTART_THRESHOLD = int(os.getenv("RUN_REPORT_ALERT_RESTART_THRESHOLD", "2"))
-REPORT_JIRA_PROJECT_KEY = os.getenv("RUN_REPORT_JIRA_PROJECT_KEY", "STABILITY")
-REPORT_JIRA_TEMPLATE_JSON = os.getenv("RUN_REPORT_JIRA_TEMPLATE_JSON", "").strip()
 
 TASK_STATUS_TRANSITIONS = {
     TaskStatus.PENDING: {TaskStatus.QUEUED, TaskStatus.CANCELED},
@@ -101,209 +106,6 @@ def _artifact_download_target(storage_uri: str) -> Dict[str, str]:
     return {"kind": "local", "path": str(local_path)}
 
 
-def _artifact_local_path(storage_uri: str) -> Optional[Path]:
-    parsed = urlparse(storage_uri)
-    if parsed.scheme.lower() != "file":
-        return None
-    if parsed.netloc and parsed.path:
-        return Path(f"//{parsed.netloc}{unquote(parsed.path)}")
-    if parsed.netloc and not parsed.path:
-        return Path(unquote(parsed.netloc))
-    return Path(unquote(parsed.path))
-
-
-def _load_json_file(path: Path) -> Optional[Dict[str, Any]]:
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            payload = json.load(fh)
-        return payload if isinstance(payload, dict) else None
-    except Exception:
-        return None
-
-
-def _load_risk_summary_from_tar(path: Path) -> Optional[Dict[str, Any]]:
-    try:
-        with tarfile.open(path, "r:*") as tar:
-            for member in tar.getmembers():
-                if member.isfile() and member.name.endswith("risk_summary.json"):
-                    handle = tar.extractfile(member)
-                    if not handle:
-                        continue
-                    payload = json.loads(handle.read().decode("utf-8", errors="ignore"))
-                    return payload if isinstance(payload, dict) else None
-    except Exception:
-        logger.warning("risk_summary_from_tar_failed", extra={"path": str(path)})
-    return None
-
-
-def _load_risk_summary_from_artifacts(artifacts: List[LogArtifact]) -> Optional[Dict[str, Any]]:
-    if not artifacts:
-        return None
-    ordered = sorted(
-        artifacts,
-        key=lambda item: item.created_at or datetime.min,
-        reverse=True,
-    )
-    for artifact in ordered:
-        local_path = _artifact_local_path(artifact.storage_uri)
-        if not local_path or not local_path.exists() or not local_path.is_file():
-            continue
-
-        if local_path.name == "risk_summary.json":
-            payload = _load_json_file(local_path)
-            if payload:
-                return payload
-            continue
-
-        if local_path.suffix == ".tgz" or local_path.suffixes[-2:] == [".tar", ".gz"]:
-            tar_summary = _load_risk_summary_from_tar(local_path)
-            if tar_summary:
-                return tar_summary
-            if local_path.suffix == ".tgz":
-                base_name = local_path.name[:-4]
-            else:
-                base_name = local_path.name[:-7]
-            sidecar = local_path.parent / base_name / "risk_summary.json"
-            payload = _load_json_file(sidecar)
-            if payload:
-                return payload
-    return None
-
-
-def _parse_run_log_summary(log_summary: Optional[str]) -> Dict[str, Any]:
-    if not log_summary:
-        return {}
-    raw = str(log_summary).strip()
-    if not raw:
-        return {}
-    metrics: Dict[str, Any] = {}
-    for part in raw.split(";"):
-        item = part.strip()
-        if not item or "=" not in item:
-            continue
-        key, value = item.split("=", 1)
-        normalized_key = key.strip()
-        normalized_value = value.strip()
-        if not normalized_key:
-            continue
-        try:
-            metrics[normalized_key] = int(normalized_value)
-        except ValueError:
-            metrics[normalized_key] = normalized_value
-    return metrics
-
-
-def _build_risk_alerts(risk_summary: Optional[Dict[str, Any]], summary_metrics: Dict[str, Any]) -> List[RiskAlertOut]:
-    if not isinstance(risk_summary, dict):
-        return []
-
-    counts = risk_summary.get("counts")
-    if not isinstance(counts, dict):
-        counts = {}
-    by_type = counts.get("by_type")
-    if not isinstance(by_type, dict):
-        by_type = {}
-
-    alerts: List[RiskAlertOut] = []
-    risk_level = str(risk_summary.get("risk_level", "")).upper()
-    if risk_level == "HIGH":
-        alerts.append(
-            RiskAlertOut(
-                code="RISK_LEVEL_HIGH",
-                severity="HIGH",
-                message="Risk level is HIGH",
-                metric="risk_level",
-            )
-        )
-
-    anr_count = int(by_type.get("ANR", 0) or 0)
-    if anr_count >= REPORT_ALERT_ANR_THRESHOLD:
-        alerts.append(
-            RiskAlertOut(
-                code="ANR_DETECTED",
-                severity="HIGH",
-                message=f"ANR count reached {anr_count}",
-                metric="ANR",
-                value=anr_count,
-                threshold=REPORT_ALERT_ANR_THRESHOLD,
-            )
-        )
-
-    crash_count = int(by_type.get("CRASH", 0) or 0)
-    if crash_count >= REPORT_ALERT_CRASH_THRESHOLD:
-        alerts.append(
-            RiskAlertOut(
-                code="CRASH_DETECTED",
-                severity="HIGH",
-                message=f"CRASH count reached {crash_count}",
-                metric="CRASH",
-                value=crash_count,
-                threshold=REPORT_ALERT_CRASH_THRESHOLD,
-            )
-        )
-
-    restart_count = int(summary_metrics.get("restarts", counts.get("restart_count", 0)) or 0)
-    if restart_count >= REPORT_ALERT_RESTART_THRESHOLD:
-        alerts.append(
-            RiskAlertOut(
-                code="RESTART_FREQUENT",
-                severity="MEDIUM",
-                message=f"restart count reached {restart_count}",
-                metric="restart_count",
-                value=restart_count,
-                threshold=REPORT_ALERT_RESTART_THRESHOLD,
-            )
-        )
-    return alerts
-
-
-def _compose_run_report(db: Session, run_id: int) -> RunReportOut:
-    run = (
-        db.query(TaskRun)
-        .options(selectinload(TaskRun.artifacts))
-        .filter(TaskRun.id == run_id)
-        .first()
-    )
-    if not run:
-        raise HTTPException(status_code=404, detail="run not found")
-
-    task = db.get(Task, run.task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="task not found")
-    host = db.get(Host, run.host_id)
-    device = db.get(Device, run.device_id)
-
-    if hasattr(RunOut, "model_validate"):
-        run_out = RunOut.model_validate(run)
-        task_out = TaskOut.model_validate(task)
-        host_out = HostLiteOut.model_validate(host) if host else None
-        device_out = DeviceLiteOut.model_validate(device) if device else None
-    else:
-        run_out = RunOut.from_orm(run)
-        task_out = TaskOut.from_orm(task)
-        host_out = HostLiteOut.from_orm(host) if host else None
-        device_out = DeviceLiteOut.from_orm(device) if device else None
-
-    risk_summary = _load_risk_summary_from_artifacts(run.artifacts)
-    summary_metrics = _parse_run_log_summary(run.log_summary)
-    alerts = _build_risk_alerts(risk_summary, summary_metrics)
-    run_out.risk_summary = risk_summary
-    return RunReportOut(
-        generated_at=datetime.utcnow(),
-        run=run_out,
-        task=task_out,
-        host=host_out,
-        device=device_out,
-        summary_metrics=summary_metrics,
-        risk_summary=risk_summary,
-        alerts=alerts,
-    )
-
-
-def _model_to_dict(payload: Any) -> Dict[str, Any]:
-    if hasattr(payload, "model_dump"):
-        return payload.model_dump()
-    return payload.dict()
 
 
 def _report_to_markdown(report: RunReportOut) -> str:
@@ -355,203 +157,6 @@ def _report_to_markdown(report: RunReportOut) -> str:
     else:
         lines.append("- N/A")
     return "\n".join(lines)
-
-
-def _default_jira_template() -> Dict[str, Any]:
-    return {
-        "default": {
-            "project_key": REPORT_JIRA_PROJECT_KEY,
-            "issue_type": "Bug",
-            "component": "Stability-Core",
-            "fix_version": None,
-            "assignee": None,
-            "labels": ["stability"],
-            "custom_fields": {},
-        },
-        "task_type": {},
-        "risk_level": {},
-    }
-
-
-def _load_jira_template() -> Dict[str, Any]:
-    template = _default_jira_template()
-    if not REPORT_JIRA_TEMPLATE_JSON:
-        return template
-    try:
-        payload = json.loads(REPORT_JIRA_TEMPLATE_JSON)
-    except Exception:
-        logger.warning("invalid_jira_template_json")
-        return template
-    if not isinstance(payload, dict):
-        return template
-    for key in ("default", "task_type", "risk_level"):
-        block = payload.get(key)
-        if isinstance(block, dict):
-            template[key] = block
-    return template
-
-
-def _unique_str_list(values: List[Any]) -> List[str]:
-    result: List[str] = []
-    seen: Set[str] = set()
-    for item in values:
-        text = str(item).strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        result.append(text)
-    return result
-
-
-def _resolve_jira_fields(
-    task_type: str,
-    risk_level: str,
-    computed_priority: str,
-) -> Dict[str, Any]:
-    template = _load_jira_template()
-    default_map = template.get("default", {})
-    task_map = template.get("task_type", {})
-    risk_map = template.get("risk_level", {})
-
-    resolved: Dict[str, Any] = {}
-    if isinstance(default_map, dict):
-        resolved.update(default_map)
-
-    task_block = task_map.get(task_type.upper()) if isinstance(task_map, dict) else None
-    if isinstance(task_block, dict):
-        resolved.update(task_block)
-
-    risk_block = risk_map.get(risk_level.upper()) if isinstance(risk_map, dict) else None
-    if isinstance(risk_block, dict):
-        resolved.update(risk_block)
-
-    merged_labels: List[Any] = []
-    for source in (default_map, task_block, risk_block):
-        if isinstance(source, dict) and isinstance(source.get("labels"), list):
-            merged_labels.extend(source.get("labels", []))
-    resolved["labels"] = _unique_str_list(merged_labels)
-
-    custom_fields: Dict[str, Any] = {}
-    for source in (default_map, task_block, risk_block):
-        if isinstance(source, dict) and isinstance(source.get("custom_fields"), dict):
-            custom_fields.update(source["custom_fields"])
-    resolved["custom_fields"] = custom_fields
-
-    raw_priority = str(resolved.get("priority", computed_priority)).strip().capitalize()
-    if raw_priority not in {"Critical", "Major", "Minor"}:
-        raw_priority = computed_priority
-    resolved["priority"] = raw_priority
-    resolved["project_key"] = str(resolved.get("project_key") or REPORT_JIRA_PROJECT_KEY)
-    resolved["issue_type"] = str(resolved.get("issue_type") or "Bug")
-    resolved["component"] = (
-        str(resolved["component"]).strip() if resolved.get("component") else None
-    )
-    resolved["fix_version"] = (
-        str(resolved["fix_version"]).strip() if resolved.get("fix_version") else None
-    )
-    resolved["assignee"] = str(resolved["assignee"]).strip() if resolved.get("assignee") else None
-    return resolved
-
-
-def _build_jira_draft(report: RunReportOut) -> JiraDraftOut:
-    has_high = any(item.severity == "HIGH" for item in report.alerts)
-    has_medium = any(item.severity == "MEDIUM" for item in report.alerts)
-    priority = "Minor"
-    if has_high:
-        priority = "Critical"
-    elif has_medium:
-        priority = "Major"
-
-    risk_level = "UNKNOWN"
-    if isinstance(report.risk_summary, dict):
-        risk_level = str(report.risk_summary.get("risk_level", "UNKNOWN")).upper()
-
-    resolved = _resolve_jira_fields(report.task.type, risk_level, priority)
-    priority = resolved["priority"]
-    issue_type = resolved["issue_type"]
-    project_key = resolved["project_key"]
-    component = resolved.get("component")
-    fix_version = resolved.get("fix_version")
-    assignee = resolved.get("assignee")
-    custom_fields = resolved.get("custom_fields") or {}
-    mapped_labels = resolved.get("labels") or []
-
-    summary = (
-        f"[{project_key}] [Stability] {report.task.type} run#{report.run.id} "
-        f"{risk_level} on {report.device.serial if report.device else 'UNKNOWN_DEVICE'}"
-    )
-    alert_lines = (
-        [f"- [{item.severity}] {item.code}: {item.message}" for item in report.alerts]
-        if report.alerts
-        else ["- No alerts generated"]
-    )
-    artifact_lines = (
-        [f"- {item.storage_uri}" for item in report.run.artifacts]
-        if report.run.artifacts
-        else ["- N/A"]
-    )
-    summary_lines = (
-        [f"- {k}: {v}" for k, v in report.summary_metrics.items()]
-        if report.summary_metrics
-        else ["- N/A"]
-    )
-
-    description = "\n".join(
-        [
-            "h2. Run Context",
-            f"- task_id: {report.task.id}",
-            f"- run_id: {report.run.id}",
-            f"- task_type: {report.task.type}",
-            f"- status: {report.run.status}",
-            f"- device: {report.device.serial if report.device else 'N/A'}",
-            f"- host: {report.host.name if report.host else 'N/A'}",
-            "",
-            "h2. Summary Metrics",
-            *summary_lines,
-            "",
-            "h2. Alerts",
-            *alert_lines,
-            "",
-            "h2. Artifacts",
-            *artifact_lines,
-        ]
-    )
-
-    labels = [
-        "stability",
-        f"task-{report.task.type.lower()}",
-        f"risk-{risk_level.lower()}",
-        f"run-status-{report.run.status.lower()}",
-    ]
-    labels.extend(mapped_labels)
-    if report.alerts:
-        labels.append("auto-alert")
-    labels = _unique_str_list(labels)
-
-    return JiraDraftOut(
-        run_id=report.run.id,
-        task_id=report.task.id,
-        project_key=project_key,
-        issue_type=issue_type,
-        priority=priority,  # type: ignore[arg-type]
-        component=component,
-        fix_version=fix_version,
-        assignee=assignee,
-        summary=summary,
-        description=description,
-        labels=labels,
-        environment={
-            "host": _model_to_dict(report.host) if report.host else None,
-            "device": _model_to_dict(report.device) if report.device else None,
-        },
-        custom_fields=custom_fields,
-        extra={
-            "risk_summary": report.risk_summary,
-            "summary_metrics": report.summary_metrics,
-            "alert_count": len(report.alerts),
-            "template_resolved": resolved,
-        },
-    )
 
 
 def _ensure_task_transition(task: Task, target_status: TaskStatus) -> None:
@@ -673,10 +278,20 @@ def _release_device_lock(db: Session, device_id: int, run_id: int) -> None:
     )
 
 
-@router.get("/tasks", response_model=List[TaskOut])
-def list_tasks(db: Session = Depends(get_db)):
-    """获取任务列表"""
-    return db.query(Task).order_by(Task.id.desc()).all()
+@router.get("/tasks", response_model=PaginatedResponse)
+def list_tasks(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """获取任务列表（分页）"""
+    query = db.query(Task).order_by(Task.id.desc())
+    if status:
+        query = query.filter(Task.status == status)
+    total = query.count()
+    rows = query.offset(skip).limit(limit).all()
+    return PaginatedResponse(items=rows, total=total, skip=skip, limit=limit)
 
 
 @router.get("/task-templates", response_model=List[TaskTemplateOut])
@@ -836,19 +451,25 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/tasks/{task_id}/runs", response_model=List[RunOut])
-def get_task_runs(task_id: int, db: Session = Depends(get_db)):
-    """获取任务的所有运行记录"""
+@router.get("/tasks/{task_id}/runs", response_model=PaginatedResponse)
+def get_task_runs(
+    task_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """获取任务的所有运行记录（分页）"""
     task = db.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="task not found")
-    runs = (
+    base = (
         db.query(TaskRun)
         .options(selectinload(TaskRun.artifacts))
         .filter(TaskRun.task_id == task_id)
         .order_by(TaskRun.id.desc())
-        .all()
     )
+    total = base.count()
+    runs = base.offset(skip).limit(limit).all()
     run_items: List[RunOut] = []
     for run in runs:
         if hasattr(RunOut, "model_validate"):
@@ -857,17 +478,22 @@ def get_task_runs(task_id: int, db: Session = Depends(get_db)):
             run_out = RunOut.from_orm(run)
         run_out.risk_summary = _load_risk_summary_from_artifacts(run.artifacts)
         run_items.append(run_out)
-    return run_items
+    return PaginatedResponse(items=run_items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/runs/{run_id}/report", response_model=RunReportOut)
 def get_run_report(run_id: int, db: Session = Depends(get_db)):
-    return _compose_run_report(db, run_id)
+    report = compose_run_report(db, run_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return report
 
 
 @router.get("/runs/{run_id}/report/export")
 def export_run_report(run_id: int, format: str = Query("markdown"), db: Session = Depends(get_db)):
-    report = _compose_run_report(db, run_id)
+    report = compose_run_report(db, run_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="run not found")
     fmt = format.strip().lower()
     if fmt == "json":
         return JSONResponse(content=jsonable_encoder(_model_to_dict(report)))
@@ -882,8 +508,41 @@ def export_run_report(run_id: int, format: str = Query("markdown"), db: Session 
 
 @router.post("/runs/{run_id}/jira-draft", response_model=JiraDraftOut)
 def create_run_jira_draft(run_id: int, db: Session = Depends(get_db)):
-    report = _compose_run_report(db, run_id)
-    return _build_jira_draft(report)
+    report = compose_run_report(db, run_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return build_jira_draft(report)
+
+
+@router.get("/runs/{run_id}/report/cached")
+def get_cached_run_report(run_id: int, db: Session = Depends(get_db)):
+    """Return cached report if post-processed, otherwise compute live."""
+    run = db.get(TaskRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.post_processed_at and run.report_json:
+        return JSONResponse(content=run.report_json)
+    # Fallback to live computation
+    report = compose_run_report(db, run_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return JSONResponse(content=jsonable_encoder(_model_to_dict(report)))
+
+
+@router.get("/runs/{run_id}/jira-draft/cached")
+def get_cached_jira_draft(run_id: int, db: Session = Depends(get_db)):
+    """Return cached JIRA draft if post-processed, otherwise compute live."""
+    run = db.get(TaskRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run.post_processed_at and run.jira_draft_json:
+        return JSONResponse(content=run.jira_draft_json)
+    # Fallback to live computation
+    report = compose_run_report(db, run_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    draft = build_jira_draft(report)
+    return JSONResponse(content=jsonable_encoder(_model_to_dict(draft)))
 
 
 @router.get("/tasks/{task_id}/runs/{run_id}/artifacts/{artifact_id}/download")
@@ -1090,7 +749,7 @@ def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(g
 
 
 @router.post("/agent/runs/{run_id}/complete")
-def agent_run_complete(
+async def agent_run_complete(
     run_id: int,
     payload: Dict[str, Any] = Body(...),
     db: Session = Depends(get_db),
@@ -1176,6 +835,18 @@ def agent_run_complete(
             "run_status": run.status.value,
         },
     )
+
+    # Broadcast real-time status updates via WebSocket
+    try:
+        await broadcast_run_update(run.id, run.task_id, run.status.value, 100, "completed")
+        await broadcast_task_update(run.task_id, task.status.value if task else None)
+    except Exception as e:
+        logger.warning(f"ws_broadcast_on_complete_failed: {e}")
+
+    # Fire-and-forget: auto-generate report + JIRA draft in background
+    from backend.services.post_completion import run_post_completion_async
+    run_post_completion_async(run.id)
+
     return {"ok": True}
 
 
@@ -1422,3 +1093,143 @@ def retry_task(task_id: int, db: Session = Depends(get_db), current_user: User =
     db.commit()
     db.refresh(task)
     return task
+
+
+# ---------------------------------------------------------------------------
+# Batch Operations
+# ---------------------------------------------------------------------------
+
+class BatchTaskIds(BaseModel):
+    task_ids: List[int]
+
+
+class BatchResult(BaseModel):
+    success: List[int] = Field(default_factory=list)
+    failed: List[dict] = Field(default_factory=list)
+    total: int = 0
+
+
+@router.post("/tasks/batch/cancel", response_model=BatchResult)
+def batch_cancel_tasks(
+    payload: BatchTaskIds,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Cancel multiple tasks at once."""
+    result = BatchResult(total=len(payload.task_ids))
+
+    for task_id in payload.task_ids:
+        task = db.get(Task, task_id)
+        if not task:
+            result.failed.append({"task_id": task_id, "error": "not found"})
+            continue
+
+        if task.status not in (TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING):
+            result.failed.append({"task_id": task_id, "error": f"cannot cancel in status {task.status.value}"})
+            continue
+
+        try:
+            task.status = TaskStatus.CANCELED
+            # Cancel active runs
+            active_runs = (
+                db.query(TaskRun)
+                .filter(
+                    TaskRun.task_id == task_id,
+                    TaskRun.status.in_([RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING]),
+                )
+                .all()
+            )
+            for run in active_runs:
+                run.status = RunStatus.CANCELED
+                run.finished_at = datetime.utcnow()
+                if run.device_id:
+                    _release_device_lock(db, run.device_id, run.id)
+            result.success.append(task_id)
+            # 每个任务单独提交，确保成功即持久化
+            db.commit()
+        except Exception as exc:
+            # 失败时回滚当前任务的操作
+            db.rollback()
+            result.failed.append({"task_id": task_id, "error": str(exc)})
+
+    return result
+
+
+@router.post("/tasks/batch/retry", response_model=BatchResult)
+def batch_retry_tasks(
+    payload: BatchTaskIds,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Retry multiple failed/canceled tasks at once."""
+    result = BatchResult(total=len(payload.task_ids))
+
+    for task_id in payload.task_ids:
+        task = db.get(Task, task_id)
+        if not task:
+            result.failed.append({"task_id": task_id, "error": "not found"})
+            continue
+
+        if task.status not in (TaskStatus.FAILED, TaskStatus.CANCELED):
+            result.failed.append({"task_id": task_id, "error": f"cannot retry in status {task.status.value}"})
+            continue
+
+        try:
+            task.status = TaskStatus.PENDING
+            result.success.append(task_id)
+            # 每个任务单独提交，确保成功即持久化
+            db.commit()
+        except Exception as exc:
+            # 失败时回滚当前任务的操作
+            db.rollback()
+            result.failed.append({"task_id": task_id, "error": str(exc)})
+
+    return result
+
+
+@router.delete("/tasks/{task_id}")
+def delete_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Delete a task (only allowed for terminal or pending states).
+    Rejects if the task has active (QUEUED/DISPATCHED/RUNNING) runs.
+    """
+    task = db.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="task not found")
+
+    allowed_statuses = {TaskStatus.PENDING, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED}
+    if task.status not in allowed_statuses:
+        raise HTTPException(
+            status_code=409,
+            detail=f"cannot delete task in status {task.status.value}; must be PENDING, COMPLETED, FAILED, or CANCELED",
+        )
+
+    # Check for active runs
+    active_run_count = (
+        db.query(TaskRun)
+        .filter(
+            TaskRun.task_id == task_id,
+            TaskRun.status.in_([RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING]),
+        )
+        .count()
+    )
+    if active_run_count > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"task has {active_run_count} active run(s); cancel them first",
+        )
+
+    # Delete associated runs and artifacts
+    runs = db.query(TaskRun).filter(TaskRun.task_id == task_id).all()
+    for run in runs:
+        db.query(LogArtifact).filter(LogArtifact.run_id == run.id).delete()
+    db.query(TaskRun).filter(TaskRun.task_id == task_id).delete()
+
+    db.delete(task)
+    db.commit()
+
+    return {"message": "删除成功"}

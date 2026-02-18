@@ -1,19 +1,24 @@
 from __future__ import annotations
 import logging
 import os
+import re
 import subprocess
 import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from backend.core.database import get_db
+from backend.core.database import get_db, SessionLocal
 from backend.models.schemas import Deployment, DeploymentStatus, Host
 from backend.api.schemas import DeploymentCreate, DeploymentOut, DeploymentStatusOut
 from backend.api.routes.auth import require_admin, User
+from backend.api.routes.websocket import schedule_broadcast
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +26,42 @@ router = APIRouter(prefix="/api/v1/deploy", tags=["deploy"])
 
 INSTALL_PATH = "/opt/stability-test-agent"
 AGENT_DIR = "backend/agent"
+
+# 批量部署最大并发数
+MAX_DEPLOY_CONCURRENCY = int(os.getenv("MAX_DEPLOY_CONCURRENCY", "5"))
+
+# 安全路径验证：仅允许 POSIX 标准路径字符
+_SAFE_PATH_PATTERN = re.compile(r"^/[a-zA-Z0-9_./-]+$")
+# 禁止的路径模式
+_FORBIDDEN_PATTERNS = ["..", "~", "$", "`", ";", "|", "&&", "||", "\n", "\r"]
+
+
+def _validate_install_path(path: str) -> Tuple[bool, str]:
+    """
+    验证安装路径安全性。
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if not path:
+        return False, "Install path cannot be empty"
+
+    # 检查禁止的模式
+    for pattern in _FORBIDDEN_PATTERNS:
+        if pattern in path:
+            return False, f"Install path contains forbidden pattern: {pattern}"
+
+    # 验证路径格式
+    if not _SAFE_PATH_PATTERN.match(path):
+        return False, "Install path must be an absolute POSIX path (alphanumeric, underscore, dot, slash, hyphen)"
+
+    # 验证路径不以危险前缀开头
+    dangerous_prefixes = ["/etc", "/usr/bin", "/usr/sbin", "/bin", "/sbin", "/root"]
+    for prefix in dangerous_prefixes:
+        if path.startswith(prefix):
+            return False, f"Install path cannot start with {prefix}"
+
+    return True, ""
 
 
 def _get_ssh_alias(host_name: str) -> str:
@@ -68,6 +109,14 @@ def _deploy_to_host(
     install_path: str = INSTALL_PATH,
 ) -> bool:
     """Execute deployment to a single host."""
+    # 验证安装路径安全性
+    is_valid, error_msg = _validate_install_path(install_path)
+    if not is_valid:
+        deployment.status = DeploymentStatus.FAILED
+        deployment.error_message = f"Invalid install path: {error_msg}"
+        logger.error(f"Invalid install path for host {host.name}: {error_msg}")
+        return False
+
     alias = _get_ssh_alias(host.name)
     logs = []
 
@@ -248,3 +297,133 @@ def get_latest_deployment(
         raise HTTPException(status_code=404, detail="No deployment found")
 
     return deployment
+
+
+# ---------------------------------------------------------------------------
+# Batch Deploy
+# ---------------------------------------------------------------------------
+
+class BatchDeployCreate(BaseModel):
+    host_ids: List[int]
+    install_path: str = "/opt/stability-test-agent"
+
+
+class BatchDeployOut(BaseModel):
+    deployments: List[DeploymentOut]
+    total: int
+
+
+def _deploy_with_progress(deployment_id: int, host_id: int, install_path: str) -> None:
+    """Run deployment in background thread, broadcasting progress via WS."""
+    try:
+        db = SessionLocal()
+        try:
+            deployment = db.get(Deployment, deployment_id)
+            host = db.get(Host, host_id)
+            if not deployment or not host:
+                return
+
+            deployment.status = DeploymentStatus.RUNNING
+            db.commit()
+
+            schedule_broadcast("/ws/dashboard", {
+                "type": "DEPLOY_UPDATE",
+                "payload": {
+                    "deployment_id": deployment_id,
+                    "host_id": host_id,
+                    "status": "RUNNING",
+                    "message": f"Starting deployment to {host.name}",
+                },
+            })
+
+            success = _deploy_to_host(db, host, deployment, install_path)
+
+            schedule_broadcast("/ws/dashboard", {
+                "type": "DEPLOY_UPDATE",
+                "payload": {
+                    "deployment_id": deployment_id,
+                    "host_id": host_id,
+                    "status": "SUCCESS" if success else "FAILED",
+                    "message": "Deployment completed" if success else (deployment.error_message or "Deployment failed"),
+                },
+            })
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("deploy_with_progress_failed", extra={"deployment_id": deployment_id})
+        # Ensure deployment is marked FAILED so it doesn't stay stuck in RUNNING
+        try:
+            recover_db = SessionLocal()
+            try:
+                dep = recover_db.get(Deployment, deployment_id)
+                if dep and dep.status not in (DeploymentStatus.SUCCESS, DeploymentStatus.FAILED):
+                    dep.status = DeploymentStatus.FAILED
+                    dep.error_message = "Unexpected error during deployment (see server logs)"
+                    dep.finished_at = datetime.utcnow()
+                    recover_db.commit()
+            finally:
+                recover_db.close()
+        except Exception:
+            logger.exception("deploy_recovery_failed", extra={"deployment_id": deployment_id})
+        schedule_broadcast("/ws/dashboard", {
+            "type": "DEPLOY_UPDATE",
+            "payload": {
+                "deployment_id": deployment_id,
+                "host_id": host_id,
+                "status": "FAILED",
+                "message": "Deployment failed due to unexpected error",
+            },
+        })
+
+
+@router.post("/batch", response_model=BatchDeployOut)
+def batch_deploy(
+    payload: BatchDeployCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """Trigger deployment to multiple hosts in parallel."""
+    if not payload.host_ids:
+        raise HTTPException(status_code=400, detail="No host IDs provided")
+
+    hosts = db.query(Host).filter(Host.id.in_(payload.host_ids)).all()
+    if not hosts:
+        raise HTTPException(status_code=404, detail="No hosts found")
+
+    found_ids = {h.id for h in hosts}
+    missing = set(payload.host_ids) - found_ids
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Hosts not found: {sorted(missing)}")
+
+    deployments = []
+    for host in hosts:
+        deployment = Deployment(
+            host_id=host.id,
+            status=DeploymentStatus.PENDING,
+            install_path=payload.install_path,
+        )
+        db.add(deployment)
+        deployments.append(deployment)
+
+    db.commit()
+    for d in deployments:
+        db.refresh(d)
+
+    # 使用有界线程池限制并发数，避免线程风暴
+    with ThreadPoolExecutor(max_workers=MAX_DEPLOY_CONCURRENCY) as executor:
+        futures = {
+            executor.submit(_deploy_with_progress, deployment.id, deployment.host_id, payload.install_path): deployment
+            for deployment in deployments
+        }
+        # 等待所有任务完成（可选：记录失败的任务）
+        for future in as_completed(futures):
+            deployment = futures[future]
+            try:
+                future.result()  # 抛出异常让调用者知道
+            except Exception as e:
+                logger.error(f"Deployment {deployment.id} failed: {e}")
+
+    return BatchDeployOut(
+        deployments=deployments,
+        total=len(deployments),
+    )

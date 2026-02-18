@@ -42,6 +42,28 @@ class TaskResult:
 
 
 class TaskExecutor:
+    # Registry: task_type → (module_path, class_name)
+    # 使用动态路径解析，兼容两种运行模式：
+    # 1. python -m agent.main (部署模式，包名为 agent)
+    # 2. 直接运行或调试模式 (包名为 backend.agent)
+    @staticmethod
+    def _get_tools_module_path() -> str:
+        """动态解析 tools 模块路径，兼容不同运行形态"""
+        import sys
+        # 检查是否以 agent 包模式运行
+        if "agent.main" in sys.modules or any("agent." in m for m in sys.modules if m.startswith("agent")):
+            return "agent.tools"
+        return "backend.agent.tools"
+
+    _TEST_CLASS_REGISTRY: Dict[str, Tuple[str, str]] = {
+        "MONKEY": ("backend.agent.tools.monkey_test", "MonkeyTest"),
+        "MTBF": ("backend.agent.tools.mtbf_test", "MtbfTest"),
+        "DDR": ("backend.agent.tools.ddr_test", "DdrTest"),
+        "GPU": ("backend.agent.tools.gpu_stress_test", "GpuStressTest"),
+        "STANDBY": ("backend.agent.tools.standby_test", "StandbyTest"),
+        "AIMONKEY": ("backend.agent.tools.aimonkey_test", "AIMonkeyTest"),
+    }
+
     def __init__(self, adb: AdbWrapper) -> None:
         self.adb = adb
         self._safe_pattern = re.compile(r"^[\w@%:/._+\-]+$")
@@ -107,23 +129,17 @@ class TaskExecutor:
     def execute_task(self, task_type: str, params: Dict[str, Any], context: ExecutionContext) -> TaskResult:
         self._context = context
         try:
+            # Priority 1: tool_id → dynamic tool loading
             tool_id = params.get("tool_id")
             if tool_id:
                 return self._execute_tool(tool_id, params)
 
+            # Priority 2: class registry → BaseTestCase subclasses
             task_name = task_type.upper()
-            if task_name == "MONKEY":
-                return self._run_monkey(context.device_serial, params)
-            if task_name == "MTBF":
-                return self._run_mtbf(context.device_serial, params)
-            if task_name == "DDR":
-                return self._run_ddr(context.device_serial, params)
-            if task_name == "GPU":
-                return self._run_gpu_stress(context.device_serial, params)
-            if task_name == "STANDBY":
-                return self._run_standby(context.device_serial, params)
-            if task_name == "AIMONKEY":
-                return self._run_aimonkey_test(context.device_serial, params)
+            if task_name in self._TEST_CLASS_REGISTRY:
+                return self._execute_registered_test(task_name, params)
+
+            # Priority 3: legacy fallback → local script
             return self._run_local_script(params)
         except ValueError as exc:
             return TaskResult(status="FAILED", exit_code=1, error_code="INVALID_PARAM", error_message=str(exc))
@@ -135,6 +151,62 @@ class TaskExecutor:
             return TaskResult(status="FAILED", exit_code=1, error_code="UNKNOWN", error_message=str(exc))
         finally:
             self._context = None
+
+    def _execute_registered_test(self, task_name: str, params: Dict[str, Any]) -> TaskResult:
+        """Instantiate a BaseTestCase subclass from the registry and run it."""
+        import importlib
+
+        module_path, class_name = self._TEST_CLASS_REGISTRY[task_name]
+        # 动态调整模块路径，兼容 agent/main 和 backend.agent 两种运行形态
+        tools_base = self._get_tools_module_path()
+        module_path = module_path.replace("backend.agent.tools", tools_base)
+
+        try:
+            module = importlib.import_module(module_path)
+        except ModuleNotFoundError as e:
+            self._logger.error(f"Failed to import test module {module_path}: {e}")
+            return TaskResult(
+                status="FAILED",
+                exit_code=1,
+                error_code="MODULE_NOT_FOUND",
+                error_message=f"Test module not found: {module_path}",
+            )
+
+        try:
+            test_class = getattr(module, class_name)
+        except AttributeError as e:
+            self._logger.error(f"Failed to get test class {class_name} from {module_path}: {e}")
+            return TaskResult(
+                status="FAILED",
+                exit_code=1,
+                error_code="CLASS_NOT_FOUND",
+                error_message=f"Test class not found: {class_name}",
+            )
+
+        os.makedirs(self._context.log_dir, exist_ok=True)
+
+        test_case = test_class(
+            adb_wrapper=self.adb,
+            api_url=self._context.api_url,
+            run_id=self._context.run_id,
+            host_id=self._context.host_id,
+            device_serial=self._context.device_serial,
+            log_dir=self._context.log_dir,
+        )
+
+        default_params = test_case.get_default_params()
+        exec_params = {**default_params, **params, **self._context_to_dict()}
+
+        result = test_case.run(self._context.device_serial, exec_params)
+
+        return TaskResult(
+            status=result.status,
+            exit_code=result.exit_code,
+            error_code=result.error_code,
+            error_message=result.error_message,
+            log_summary=result.log_summary,
+            artifact=result.artifact,
+        )
 
     def _execute_tool(self, tool_id: int, params: Dict[str, Any]) -> TaskResult:
         """通过工具 ID 执行测试"""
@@ -332,94 +404,6 @@ class TaskExecutor:
             progress,
             f"{stage.value}: {message}",
         )
-
-    def _run_monkey(self, serial: str, params: Dict[str, Any]) -> TaskResult:
-        packages = params.get("packages") or []
-        event_count = int(params.get("event_count", 10000))
-        throttle = int(params.get("throttle", 100))
-        seed = params.get("seed")
-        cmd = ["monkey"]
-        for pkg in packages:
-            cmd += ["-p", pkg]
-        cmd += ["--throttle", str(throttle)]
-        if seed is not None:
-            cmd += ["-s", str(seed)]
-        cmd += [str(event_count)]
-        result = self.adb.shell(serial, cmd)
-        return TaskResult(status="FINISHED", exit_code=result.returncode, log_summary=self._tail(result.stdout))
-
-    def _run_mtbf(self, serial: str, params: Dict[str, Any]) -> TaskResult:
-        """MTBF 测试：推送资源 + 安装 APK + am instrument"""
-        resource_dir = params.get("resource_dir")
-        remote_dir = params.get("remote_dir", "/sdcard/mtbf")
-        apk_path = params.get("apk_path")
-        runner = self._safe(params.get("runner", "com.transsion.stresstest.test/androidx.test.runner.AndroidJUnitRunner"), "runner")
-        instrument_args = params.get("instrument_args") or {}
-
-        if resource_dir and os.path.exists(resource_dir):
-            self._push_resource(serial, resource_dir, remote_dir)
-        if apk_path:
-            self.adb.install(serial, apk_path)
-
-        cmd = ["am", "instrument", "-w"]
-        for key, value in instrument_args.items():
-            cmd += ["-e", self._safe(key, "instrument_arg_key"), self._safe(value, "instrument_arg_value")]
-        cmd.append(runner)
-        result = self.adb.shell(serial, cmd)
-        return TaskResult(status="FINISHED", exit_code=result.returncode, log_summary=self._tail(result.stdout))
-
-    def _run_ddr(self, serial: str, params: Dict[str, Any]) -> TaskResult:
-        """DDR 测试：需 root，推送 memtester 并执行"""
-        uid = self.adb.shell(serial, ["id", "-u"]).stdout.strip()
-        if uid != "0":
-            return TaskResult(status="FAILED", exit_code=1, error_code="NO_ROOT", error_message="device not rooted")
-
-        memtester_path = params.get("memtester_path")
-        remote_path = self._safe(params.get("remote_path", "/data/local/tmp/memtester"), "remote_path")
-        mem_size_mb = int(params.get("mem_size_mb", 512))
-        loops = int(params.get("loops", 1))
-
-        if memtester_path:
-            self.adb.push(serial, memtester_path, remote_path)
-            self.adb.shell(serial, ["chmod", "755", remote_path])
-
-        result = self.adb.shell(serial, [remote_path, str(mem_size_mb), str(loops)])
-        status = "FINISHED" if result.returncode == 0 else "FAILED"
-        err = None if status == "FINISHED" else "memtester_failed"
-        return TaskResult(status=status, exit_code=result.returncode, error_code=err, log_summary=self._tail(result.stdout))
-
-    def _run_gpu_stress(self, serial: str, params: Dict[str, Any]) -> TaskResult:
-        """GPU 压力：循环启动 Antutu GPU 测试 Activity"""
-        apk_path = params.get("apk_path")
-        activity = self._safe(params.get("activity", "com.antutu.ABenchMark/.ABenchMarkStart"), "activity")
-        loops = int(params.get("loops", 3))
-        interval = int(params.get("interval", 120))
-
-        if apk_path:
-            self.adb.install(serial, apk_path)
-
-        summaries = []
-        last_code = 0
-        for idx in range(loops):
-            result = self.adb.shell(serial, ["am", "start", "-n", activity])
-            last_code = result.returncode
-            summaries.append(f"loop={idx+1}, exit={result.returncode}")
-            time.sleep(interval)
-        status = "FINISHED" if last_code == 0 else "FAILED"
-        return TaskResult(status=status, exit_code=last_code, log_summary="; ".join(summaries)[-2000:])
-
-    def _run_standby(self, serial: str, params: Dict[str, Any]) -> TaskResult:
-        """待机测试：播放视频后灭屏保持待机"""
-        video_url = self._safe(params.get("video_url", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"), "video_url")
-        standby_seconds = int(params.get("standby_seconds", 1800))
-        screen_off = bool(params.get("screen_off", True))
-
-        self.adb.shell(serial, ["am", "start", "-a", "android.intent.action.VIEW", "-d", video_url])
-        if screen_off:
-            self.adb.shell(serial, ["input", "keyevent", "26"])
-
-        time.sleep(standby_seconds)
-        return TaskResult(status="FINISHED", exit_code=0, log_summary=f"standby {standby_seconds}s")
 
     def _run_local_script(self, params: Dict[str, Any]) -> TaskResult:
         script_path = params.get("script_path")

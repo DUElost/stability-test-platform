@@ -15,6 +15,13 @@ import WifiPage from '../pages/wifi/WifiPage';
 import LogsPage from '../pages/logs/LogsPage';
 import UsersPage from '../pages/users/UsersPage';
 import ToolsPage from '../pages/tools/ToolsPage';
+import NotificationsPage from '../pages/notifications/NotificationsPage';
+import SettingsPage from '../pages/settings/SettingsPage';
+import SchedulesPage from '../pages/schedules/SchedulesPage';
+import TemplatesPage from '../pages/templates/TemplatesPage';
+import AuditLogPage from '../pages/audit/AuditLogPage';
+import RunReportPage from '../pages/tasks/RunReportPage';
+import NotFoundPage from '../pages/NotFoundPage';
 
 // 检查是否已登录
 function isAuthenticated() {
@@ -52,6 +59,8 @@ export default function AppRouter() {
               <Route path=":taskId" element={<TaskDetails />} />
             </Route>
 
+            <Route path="runs/:runId/report" element={<RunReportPage />} />
+
             <Route path="tools" element={<ToolsPage />} />
 
             <Route path="hosts" element={<HostsPage />} />
@@ -62,10 +71,18 @@ export default function AppRouter() {
             <Route path="logs" element={<LogsPage />} />
             <Route path="mapreduce" element={<MapReducePage />} />
             <Route path="users" element={<UsersPage />} />
+            <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="schedules" element={<SchedulesPage />} />
+            <Route path="templates" element={<TemplatesPage />} />
+            <Route path="audit" element={<AuditLogPage />} />
+
+            {/* 404 */}
+            <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Route>
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
     </BrowserRouter>
   );

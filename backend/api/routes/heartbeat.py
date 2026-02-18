@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import logging
+import os
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends
@@ -13,6 +14,9 @@ from backend.api.routes.auth import verify_agent_secret
 
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
 logger = logging.getLogger(__name__)
+
+# 心跳快照降采样间隔（秒）：减少数据库写入压力
+SNAPSHOT_INTERVAL_SECONDS = int(os.getenv("DEVICE_SNAPSHOT_INTERVAL", "30"))
 
 
 def _update_if_not_none(device: Device, field: str, value) -> bool:
@@ -41,6 +45,13 @@ def _mark_missing_devices_offline(
             device.status = DeviceStatus.OFFLINE
             device.adb_connected = False
             device.adb_state = "offline"
+            # Dispatch DEVICE_OFFLINE notification
+            from backend.services.notification_service import dispatch_notification_async
+            dispatch_notification_async("DEVICE_OFFLINE", {
+                "device_serial": device.serial,
+                "device_id": device.id,
+                "host_id": host_id,
+            })
     return missing_devices
 
 
@@ -158,7 +169,29 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
             _update_if_not_none(device, "disk_total", dev_data.get("disk_total"))
             _update_if_not_none(device, "disk_used", dev_data.get("disk_used"))
 
-            # Update last_seen
+            # Record metric snapshot for historical tracking (with downsampling)
+            # Only write snapshot every SNAPSHOT_INTERVAL_SECONDS to reduce DB load
+            # NOTE: snapshot interval check uses device.last_seen BEFORE updating it
+            if device.adb_connected:
+                should_snapshot = True
+                if device.last_seen:
+                    time_since_last = (now - device.last_seen).total_seconds()
+                    should_snapshot = time_since_last >= SNAPSHOT_INTERVAL_SECONDS
+
+                if should_snapshot:
+                    from backend.models.schemas import DeviceMetricSnapshot
+                    snapshot = DeviceMetricSnapshot(
+                        device_id=device.id,
+                        timestamp=now,
+                        battery_level=device.battery_level,
+                        temperature=device.temperature,
+                        network_latency=device.network_latency,
+                        cpu_usage=device.cpu_usage,
+                        mem_used=device.mem_used,
+                    )
+                    db.add(snapshot)
+
+            # Update last_seen AFTER snapshot check to avoid self-overwrite bug
             device.last_seen = now
 
             # Business status: based on ADB connection and lock

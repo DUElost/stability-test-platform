@@ -383,3 +383,198 @@ class ToolRunOut(ORMBaseModel):
     error_message: Optional[str] = None
     log_summary: Optional[str] = None
     created_at: datetime
+
+
+# ==================== 工作流模块 ====================
+
+
+class WorkflowStepCreate(BaseModel):
+    name: str
+    tool_id: Optional[int] = None
+    task_type: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    target_device_id: Optional[int] = None
+
+
+class WorkflowCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    steps: List[WorkflowStepCreate]
+
+
+class WorkflowStepOut(ORMBaseModel):
+    id: int
+    workflow_id: int
+    order: int
+    name: str
+    tool_id: Optional[int] = None
+    task_type: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    target_device_id: Optional[int] = None
+    status: str
+    task_run_id: Optional[int] = None
+    error_message: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+
+class WorkflowOut(ORMBaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    status: str
+    is_template: bool = False
+    created_by: Optional[int] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    steps: List[WorkflowStepOut] = Field(default_factory=list)
+
+
+# ==================== 通知模块 ====================
+
+
+class NotificationChannelCreate(BaseModel):
+    name: str
+    type: Literal["WEBHOOK", "EMAIL", "DINGTALK"]
+    config: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class NotificationChannelUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[Literal["WEBHOOK", "EMAIL", "DINGTALK"]] = None
+    config: Optional[Dict[str, Any]] = None
+    enabled: Optional[bool] = None
+
+
+class NotificationChannelOut(ORMBaseModel):
+    id: int
+    name: str
+    type: str
+    config: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    created_at: datetime
+
+
+class AlertRuleCreate(BaseModel):
+    name: str
+    event_type: Literal["RUN_COMPLETED", "RUN_FAILED", "RISK_HIGH", "DEVICE_OFFLINE"]
+    channel_id: int
+    filters: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class AlertRuleUpdate(BaseModel):
+    name: Optional[str] = None
+    event_type: Optional[Literal["RUN_COMPLETED", "RUN_FAILED", "RISK_HIGH", "DEVICE_OFFLINE"]] = None
+    channel_id: Optional[int] = None
+    filters: Optional[Dict[str, Any]] = None
+    enabled: Optional[bool] = None
+
+
+class AlertRuleOut(ORMBaseModel):
+    id: int
+    name: str
+    event_type: str
+    channel_id: int
+    channel_name: Optional[str] = None
+    filters: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    created_at: datetime
+
+
+# ==================== 通用分页 ====================
+
+
+class PaginatedResponse(BaseModel):
+    """Generic paginated response wrapper."""
+    items: List[Any]
+    total: int
+    skip: int
+    limit: int
+
+
+# ==================== 审计日志 ====================
+
+
+class AuditLogOut(ORMBaseModel):
+    id: int
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+    action: str
+    resource_type: str
+    resource_id: Optional[int] = None
+    details: Dict[str, Any] = Field(default_factory=dict)
+    ip_address: Optional[str] = None
+    timestamp: datetime
+
+
+# ==================== 定时任务 ====================
+
+
+class TaskScheduleCreate(BaseModel):
+    name: str
+    cron_expression: str
+    task_template_id: Optional[int] = None
+    tool_id: Optional[int] = None
+    task_type: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    target_device_id: Optional[int] = None
+    enabled: bool = True
+
+
+class TaskScheduleUpdate(BaseModel):
+    name: Optional[str] = None
+    cron_expression: Optional[str] = None
+    task_template_id: Optional[int] = None
+    tool_id: Optional[int] = None
+    task_type: Optional[str] = None
+    params: Optional[Dict[str, Any]] = None
+    target_device_id: Optional[int] = None
+    enabled: Optional[bool] = None
+
+
+class TaskScheduleOut(ORMBaseModel):
+    id: int
+    name: str
+    cron_expression: str
+    task_template_id: Optional[int] = None
+    tool_id: Optional[int] = None
+    task_type: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    target_device_id: Optional[int] = None
+    enabled: bool
+    last_run_at: Optional[datetime] = None
+    next_run_at: Optional[datetime] = None
+    created_by: Optional[int] = None
+    created_at: datetime
+
+
+# ==================== 任务模板（DB-backed CRUD）====================
+
+
+class TaskTemplateDBCreate(BaseModel):
+    name: str
+    type: str
+    description: Optional[str] = None
+    default_params: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class TaskTemplateDBUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    description: Optional[str] = None
+    default_params: Optional[Dict[str, Any]] = None
+    enabled: Optional[bool] = None
+
+
+class TaskTemplateDBOut(ORMBaseModel):
+    id: int
+    name: str
+    type: str
+    description: Optional[str] = None
+    default_params: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    created_at: datetime

@@ -2,12 +2,16 @@
 import { useState, useEffect } from 'react';
 import { api, Tool, ToolCategory } from '@/utils/api';
 import { Wrench, Plus, RefreshCw, Trash2, Edit, AlertCircle } from 'lucide-react';
+import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/hooks/useConfirm';
 
 interface ToolPageProps {
   // parent component props
 }
 
 export default function ToolsPage({}: ToolPageProps) {
+  const toast = useToast();
+  const confirmDialog = useConfirm();
   const [categories, setCategories] = useState<ToolCategory[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
@@ -19,8 +23,8 @@ export default function ToolsPage({}: ToolPageProps) {
   // 加载分类
   const loadCategories = async () => {
     try {
-      const response = await api.tools.listCategories();
-      setCategories(response.data);
+      const response = await api.tools.listCategories(0, 200);
+      setCategories(response.data.items);
     } catch (error) {
       console.error('加载分类失败:', error);
     }
@@ -30,8 +34,8 @@ export default function ToolsPage({}: ToolPageProps) {
   const loadTools = async (categoryId?: number) => {
     setLoading(true);
     try {
-      const response = await api.tools.list(categoryId || undefined);
-      setTools(response.data);
+      const response = await api.tools.list(categoryId || undefined, 0, 200);
+      setTools(response.data.items);
     } catch (error) {
       console.error('加载工具失败:', error);
     } finally {
@@ -44,12 +48,12 @@ export default function ToolsPage({}: ToolPageProps) {
     setScanning(true);
     try {
       const response = await api.tools.scan();
-      alert(`扫描完成：新增 ${response.data.result.categories} 个分类，${response.data.result.tools} 个工具`);
+      toast.success(`扫描完成：新增 ${response.data.result.categories} 个分类，${response.data.result.tools} 个工具`);
       loadCategories();
       loadTools(selectedCategory || undefined);
     } catch (error) {
       console.error('扫描失败:', error);
-      alert('扫描失败');
+      toast.error('扫描失败');
     } finally {
       setScanning(false);
     }
@@ -57,13 +61,13 @@ export default function ToolsPage({}: ToolPageProps) {
 
   // 删除工具
   const handleDelete = async (id: number) => {
-    if (!confirm('确定要删除这个工具吗？')) return;
+    if (!(await confirmDialog({ description: '确定要删除这个工具吗？', variant: 'destructive' }))) return;
     try {
       await api.tools.delete(id);
       loadTools(selectedCategory || undefined);
     } catch (error) {
       console.error('删除失败:', error);
-      alert('删除失败');
+      toast.error('删除失败');
     }
   };
 
@@ -234,6 +238,7 @@ interface ToolModalProps {
 }
 
 function ToolModal({ tool, categories, onClose, onSave }: ToolModalProps) {
+  const toast = useToast();
   const [form, setForm] = useState({
     category_id: tool?.category_id || (categories[0]?.id || 0),
     name: tool?.name || '',
@@ -264,7 +269,7 @@ function ToolModal({ tool, categories, onClose, onSave }: ToolModalProps) {
       onSave();
     } catch (error) {
       console.error('保存失败:', error);
-      alert('保存失败');
+      toast.error('保存失败');
     } finally {
       setSaving(false);
     }

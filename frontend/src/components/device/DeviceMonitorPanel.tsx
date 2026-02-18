@@ -270,7 +270,7 @@ export function DeviceMonitorPanel({
           disabled={!onRefresh}
         >
           <RefreshCw className={cn('mr-1 h-3 w-3', !isStale && 'animate-spin')} />
-          Refresh
+          刷新
         </Button>
       </div>
 
@@ -278,7 +278,7 @@ export function DeviceMonitorPanel({
       {isStale && (
         <div className="flex items-center gap-2 p-3 bg-warning/10 border border-warning/20 rounded-lg text-warning text-sm">
           <AlertTriangle className="h-4 w-4" />
-          <span>Data is stale. Last update: {lastUpdate.toLocaleTimeString()}</span>
+          <span>数据已过期，上次更新: {lastUpdate.toLocaleTimeString()}</span>
         </div>
       )}
 
@@ -286,8 +286,8 @@ export function DeviceMonitorPanel({
       {filteredDevices.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
           <Smartphone className="h-12 w-12 mb-4 opacity-50" />
-          <p className="text-lg font-medium">No devices found</p>
-          <p className="text-sm">Try adjusting your filters</p>
+          <p className="text-lg font-medium">暂无设备</p>
+          <p className="text-sm">请调整筛选条件</p>
         </div>
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -314,9 +314,9 @@ export function DeviceMonitorPanel({
       {/* Footer */}
       <div className="flex items-center justify-between text-xs text-muted-foreground pt-2">
         <span>
-          Showing {filteredDevices.length} of {devices.length} devices
+          显示 {filteredDevices.length} / {devices.length} 台设备
         </span>
-        <span>Last updated: {lastUpdate.toLocaleTimeString()}</span>
+        <span>上次更新: {lastUpdate.toLocaleTimeString()}</span>
       </div>
     </div>
   );

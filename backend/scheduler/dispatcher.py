@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from backend.core.database import SessionLocal, get_raw_db
 from backend.core.database_adapter import get_adapter_from_engine
 from backend.core.database import engine
+from backend.api.routes.websocket import schedule_broadcast
 from backend.core.metrics import (
     task_dispatch_latency,
     task_dispatch_total,
@@ -170,6 +171,14 @@ class TaskDispatcher:
                         "duration": duration,
                     },
                 )
+                schedule_broadcast("/ws/dashboard", {
+                    "type": "RUN_UPDATE",
+                    "payload": {
+                        "run_id": run_id,
+                        "task_id": task.id,
+                        "status": "DISPATCHED",
+                    },
+                })
                 return True, False
             except RuntimeError as exc:
                 duration = time.time() - start_time

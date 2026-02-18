@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Loader2 } from 'lucide-react';
+import { Plus, Loader2, Ban, RotateCcw } from 'lucide-react';
+import { useToast } from '../../components/ui/toast';
+import { useConfirm } from '../../hooks/useConfirm';
 import { TaskDataTable, type Task, type TaskStatus, type TaskType } from '../../components/task/TaskDataTable';
 import { api } from '../../utils/api';
 import {
@@ -37,13 +39,16 @@ const typeMap: Record<string, TaskType> = {
 
 export default function TaskList() {
   const queryClient = useQueryClient();
+  const toast = useToast();
+  const confirmDialog = useConfirm();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [taskToCancel, setTaskToCancel] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(new Set());
 
   const { data: tasks, isLoading, isError } = useQuery({
     queryKey: ['tasks'],
-    queryFn: () => api.tasks.list().then(res => res.data),
+    queryFn: () => api.tasks.list(0, 200).then(res => res.data.items),
     refetchInterval: 5000,
   });
 
@@ -62,6 +67,44 @@ export default function TaskList() {
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
+
+  const batchCancelMutation = useMutation({
+    mutationFn: (taskIds: number[]) => api.tasks.batchCancel(taskIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      setSelectedTaskIds(new Set());
+    },
+    onError: (error: any) => {
+      toast.error(`批量取消失败: ${error.response?.data?.detail || error.message}`);
+    },
+  });
+
+  const batchRetryMutation = useMutation({
+    mutationFn: (taskIds: number[]) => api.tasks.batchRetry(taskIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      setSelectedTaskIds(new Set());
+    },
+    onError: (error: any) => {
+      toast.error(`批量重试失败: ${error.response?.data?.detail || error.message}`);
+    },
+  });
+
+  const handleBatchCancel = async () => {
+    if (selectedTaskIds.size === 0) return;
+    const ok = await confirmDialog({ description: `确定要取消 ${selectedTaskIds.size} 个选中任务吗？`, variant: 'destructive' });
+    if (ok) {
+      batchCancelMutation.mutate(Array.from(selectedTaskIds));
+    }
+  };
+
+  const handleBatchRetry = async () => {
+    if (selectedTaskIds.size === 0) return;
+    const ok = await confirmDialog({ description: `确定要重试 ${selectedTaskIds.size} 个选中任务吗？` });
+    if (ok) {
+      batchRetryMutation.mutate(Array.from(selectedTaskIds));
+    }
+  };
 
   const filteredTasks = useMemo(() => {
     if (!tasks) return [];
@@ -155,13 +198,35 @@ export default function TaskList() {
           <h2 className="text-2xl font-semibold text-gray-900 mb-1">任务管理</h2>
           <p className="text-sm text-gray-400">查看和管理稳定性测试任务</p>
         </div>
-        <Link
-          to="/tasks/new"
-          className="inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-medium transition-all"
-        >
-          <Plus className="w-4 h-4" />
-          新建任务
-        </Link>
+        <div className="flex items-center gap-2">
+          {selectedTaskIds.size > 0 && (
+            <>
+              <button
+                onClick={handleBatchCancel}
+                disabled={batchCancelMutation.isPending}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-red-50 text-red-600 hover:bg-red-100 transition-colors disabled:opacity-50"
+              >
+                <Ban className="w-4 h-4" />
+                {batchCancelMutation.isPending ? '取消中...' : `批量取消 (${selectedTaskIds.size})`}
+              </button>
+              <button
+                onClick={handleBatchRetry}
+                disabled={batchRetryMutation.isPending}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors disabled:opacity-50"
+              >
+                <RotateCcw className="w-4 h-4" />
+                {batchRetryMutation.isPending ? '重试中...' : `批量重试 (${selectedTaskIds.size})`}
+              </button>
+            </>
+          )}
+          <Link
+            to="/tasks/new"
+            className="inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-medium transition-all"
+          >
+            <Plus className="w-4 h-4" />
+            新建任务
+          </Link>
+        </div>
       </div>
 
       {/* Stats Grid - Clickable for filtering */}
@@ -259,6 +324,8 @@ export default function TaskList() {
         onCancelTask={handleCancelTask}
         onRetryTask={handleRetryTask}
         loading={isLoading}
+        selectedIds={selectedTaskIds}
+        onSelectionChange={setSelectedTaskIds}
       />
 
       <AlertDialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>

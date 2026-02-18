@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Wifi, WifiOff, Clock, Server, Smartphone, AlertCircle, BarChart3, Gauge, Cpu, HardDrive, MemoryStick, Zap } from 'lucide-react';
-import { DeviceStatusChart, HostResourceChart, ActivityChart } from '@/components/charts';
+import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart } from '@/components/charts';
 import { type DeviceDTO, mapDeviceToViewModel } from '@/mappers';
 import { CleanCard } from '../components/ui/clean-card';
 import { useNavigate } from 'react-router-dom';
@@ -46,7 +46,7 @@ export default function Dashboard() {
 
   const { data: hosts, isLoading: hostsLoading, error: hostsError } = useQuery({
     queryKey: ['hosts'],
-    queryFn: () => api.hosts.list().then(res => res.data),
+    queryFn: () => api.hosts.list(0, 200).then(res => res.data.items),
     refetchInterval: 5000,
   });
 
@@ -57,6 +57,19 @@ export default function Dashboard() {
     isLoading: devicesLoading,
     isError: devicesError
   } = useRealtimeDashboard(WS_DASHBOARD_ENDPOINT);
+
+  // Stats queries
+  const { data: activityData, isLoading: activityLoading } = useQuery({
+    queryKey: ['stats-activity'],
+    queryFn: () => api.stats.activity(24).then(res => res.data),
+    refetchInterval: 60000,
+  });
+
+  const { data: trendData, isLoading: trendLoading } = useQuery({
+    queryKey: ['stats-completion-trend'],
+    queryFn: () => api.stats.completionTrend(7).then(res => res.data),
+    refetchInterval: 60000,
+  });
 
   const devices = useMemo(() => {
     if (!rawDevices || rawDevices.length === 0) return [];
@@ -123,8 +136,8 @@ export default function Dashboard() {
               <div className="flex items-center gap-3 text-red-600">
                 <AlertCircle size={24} />
                 <div>
-                  <h3 className="font-semibold">Error loading data</h3>
-                  <p className="text-sm text-red-600/80">Please check backend connection.</p>
+                  <h3 className="font-semibold">数据加载失败</h3>
+                  <p className="text-sm text-red-600/80">请检查后端服务连接。</p>
                 </div>
               </div>
             </CardContent>
@@ -292,7 +305,7 @@ export default function Dashboard() {
             <BarChart3 size={18} className="text-gray-600" />
             <h3 className="text-lg font-semibold text-gray-900">数据统计</h3>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <CleanCard className="p-4">
               <h4 className="text-sm font-medium text-gray-700 mb-3">设备状态分布</h4>
               {isLoading ? <Skeleton className="h-40" /> : <DeviceStatusChart data={deviceStatusData} />}
@@ -302,8 +315,12 @@ export default function Dashboard() {
               {isLoading ? <Skeleton className="h-40" /> : <HostResourceChart hosts={hostResourceData} />}
             </CleanCard>
             <CleanCard className="p-4">
-              <h4 className="text-sm font-medium text-gray-700 mb-3">活动趋势</h4>
-              {isLoading ? <Skeleton className="h-40" /> : <ActivityChart />}
+              <h4 className="text-sm font-medium text-gray-700 mb-3">活动趋势 (24h)</h4>
+              <ActivityChart data={activityData?.points} isLoading={activityLoading} />
+            </CleanCard>
+            <CleanCard className="p-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-3">完成趋势 (7天)</h4>
+              <CompletionTrendChart data={trendData?.points} isLoading={trendLoading} />
             </CleanCard>
           </div>
         </div>

@@ -14,24 +14,39 @@ from typing import List, Dict, Any, Optional
 # 默认扫描路径
 DEFAULT_TOOL_DIR = "/home/android/sonic_agent/logs/ftp_log/sonic_tinno/Test_Tool"
 
+# 内置工具目录
+BUILTIN_TOOL_DIR = Path(__file__).parent / "tools"
+
 
 class ToolDiscovery:
     """工具自动发现器"""
 
-    def __init__(self, tool_dir: str = DEFAULT_TOOL_DIR):
-        self.tool_dir = Path(tool_dir)
+    def __init__(self, tool_dir: str = DEFAULT_TOOL_DIR, include_builtin: bool = True):
+        self._dirs: List[Path] = []
+        external = Path(tool_dir)
+        if external.exists():
+            self._dirs.append(external)
+        if include_builtin and BUILTIN_TOOL_DIR.exists():
+            self._dirs.append(BUILTIN_TOOL_DIR)
 
     def scan(self) -> List[Dict[str, Any]]:
         """
         扫描工具目录，返回发现的工具列表
 
-        目录结构：
+        支持两种目录结构：
+
+        1) 外部分类目录（Test_Tool/）:
         Test_Tool/
         ├── Monkey/
         │   ├── mtk_monkey.py
         │   └── qcom_monkey.py
-        ├── GPU/
-        │   └── gpu_stress.py
+        └── GPU/
+            └── gpu_stress.py
+
+        2) 内置扁平目录（backend/agent/tools/）:
+        tools/
+        ├── monkey_test.py
+        ├── gpu_stress_test.py
         └── ...
 
         返回：
@@ -47,32 +62,36 @@ class ToolDiscovery:
         """
         tools = []
 
-        if not self.tool_dir.exists():
-            return tools
-
-        # 遍历专项目录
-        for category_dir in self.tool_dir.iterdir():
-            if not category_dir.is_dir():
+        for tool_dir in self._dirs:
+            if not tool_dir.exists():
                 continue
 
-            category_name = category_dir.name
+            # Check if this dir contains sub-category folders or flat scripts
+            has_subdirs = any(p.is_dir() and not p.name.startswith("_") for p in tool_dir.iterdir())
 
-            # 遍历工具脚本
-            for script_file in category_dir.iterdir():
-                if script_file.suffix != ".py":
-                    continue
-
-                if script_file.name.startswith("_"):
-                    continue
-
-                # 解析脚本获取类信息
-                tool_info = self._parse_script(script_file, category_name)
-                if tool_info:
-                    tools.append(tool_info)
+            if has_subdirs:
+                # External layout: category sub-directories
+                for category_dir in tool_dir.iterdir():
+                    if not category_dir.is_dir() or category_dir.name.startswith("_"):
+                        continue
+                    for script_file in category_dir.iterdir():
+                        if script_file.suffix != ".py" or script_file.name.startswith("_"):
+                            continue
+                        tool_info = self._parse_script(script_file, category_dir.name)
+                        if tool_info:
+                            tools.append(tool_info)
+            else:
+                # Built-in flat layout: derive category from TEST_TYPE
+                for script_file in tool_dir.iterdir():
+                    if script_file.suffix != ".py" or script_file.name.startswith("_"):
+                        continue
+                    tool_info = self._parse_script(script_file, None)
+                    if tool_info:
+                        tools.append(tool_info)
 
         return tools
 
-    def _parse_script(self, script_path: Path, category: str) -> Optional[Dict]:
+    def _parse_script(self, script_path: Path, category: Optional[str]) -> Optional[Dict]:
         """解析脚本获取测试类信息"""
         try:
             with open(script_path, "r", encoding="utf-8") as f:
@@ -89,8 +108,10 @@ class ToolDiscovery:
                             # 提取默认参数
                             default_params = self._extract_default_params(node)
 
+                            # 提取 TEST_TYPE 作为 category 回退
+                            resolved_category = category or self._extract_test_type(node) or script_path.stem
                             return {
-                                "category": category,
+                                "category": resolved_category,
                                 "script_path": str(script_path),
                                 "class_name": node.name,
                                 "default_params": default_params,
@@ -101,6 +122,16 @@ class ToolDiscovery:
         except Exception as e:
             print(f"解析脚本失败 {script_path}: {e}")
             return None
+
+    def _extract_test_type(self, class_node: ast.ClassDef) -> Optional[str]:
+        """Extract TEST_TYPE class attribute from a ClassDef AST node."""
+        for node in class_node.body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "TEST_TYPE":
+                        if isinstance(node.value, ast.Constant):
+                            return str(node.value.value)
+        return None
 
     def _extract_default_params(self, class_node: ast.ClassDef) -> Dict[str, Any]:
         """从类中提取默认参数"""
