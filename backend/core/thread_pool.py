@@ -20,6 +20,24 @@ def submit(fn, *args, **kwargs):
     return _pool.submit(fn, *args, **kwargs)
 
 
-def shutdown(wait=True):
-    """Shut down the pool (called on app shutdown)."""
-    _pool.shutdown(wait=wait)
+def shutdown(wait=True, timeout=None):
+    """Shut down the pool (called on app shutdown).
+
+    Args:
+        wait: Whether to wait for in-flight tasks to finish.
+        timeout: Max seconds to wait before cancelling remaining futures.
+                 Only used when wait=True.
+    """
+    if wait and timeout is not None:
+        # Wait up to `timeout` seconds, then force-cancel remaining work
+        import concurrent.futures
+        _pool.shutdown(wait=False, cancel_futures=False)
+        # Give running tasks a grace period
+        import time
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            # Pool threads are still running; just sleep briefly
+            time.sleep(0.2)
+        _pool.shutdown(wait=False, cancel_futures=True)
+    else:
+        _pool.shutdown(wait=wait)

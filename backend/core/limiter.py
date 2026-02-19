@@ -67,12 +67,19 @@ rate_limiter = RateLimiter()
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """FastAPI middleware for rate limiting."""
 
+    _SKIP_EXACT = frozenset({"/", "/docs", "/openapi.json", "/health", "/redoc", "/metrics", "/metrics/health"})
+    _SKIP_PREFIXES = (
+        "/api/v1/heartbeat",
+        "/api/v1/agent/runs/pending",
+        "/api/v1/agent/runs/",  # individual run heartbeat/complete
+        "/ws/",
+        "/ws",
+    )
+
     async def dispatch(self, request: Request, call_next):
         # Skip rate limiting for certain paths
         path = request.url.path
-        _SKIP_EXACT = {"/", "/docs", "/openapi.json", "/health", "/redoc"}
-        _SKIP_PREFIXES = ("/api/v1/heartbeat", "/api/v1/agent/", "/ws/", "/ws")
-        if path in _SKIP_EXACT or any(path.startswith(p) for p in _SKIP_PREFIXES):
+        if path in self._SKIP_EXACT or any(path.startswith(p) for p in self._SKIP_PREFIXES):
             return await call_next(request)
 
         # Get client IP

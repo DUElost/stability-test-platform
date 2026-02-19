@@ -22,12 +22,13 @@ async def metrics():
     return Response(content=data, media_type=content_type)
 
 
-@router.get("/health")
-async def health_check():
+@router.get("/metrics/health")
+async def metrics_health():
     """
-    Health check endpoint.
+    Metrics subsystem health check.
 
-    Returns service health status.
+    Returns whether the Prometheus client library is available.
+    The authoritative /health endpoint (with DB connectivity check) is in main.py.
     """
     return {
         "status": "healthy",

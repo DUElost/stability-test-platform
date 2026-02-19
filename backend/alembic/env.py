@@ -1,4 +1,5 @@
 from logging.config import fileConfig
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,11 @@ if str(backend_path) not in sys.path:
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Override sqlalchemy.url from environment variable if set
+db_url = os.getenv("DATABASE_URL")
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

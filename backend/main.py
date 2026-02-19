@@ -136,7 +136,8 @@ def _startup_background():
 @app.on_event("shutdown")
 def _shutdown_pool():
     from backend.core.thread_pool import shutdown
-    shutdown(wait=False)
+    timeout = int(os.getenv("SHUTDOWN_POOL_TIMEOUT", "5"))
+    shutdown(wait=True, timeout=timeout)
 
 
 @app.get("/")

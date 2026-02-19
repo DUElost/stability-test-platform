@@ -124,6 +124,14 @@ class WorkflowExecutor:
     def _sync_step_status(self, db: Session, step: WorkflowStep) -> None:
         """Sync step status from its linked TaskRun."""
         if not step.task_run_id:
+            # Step is RUNNING but has no linked run — check if it timed out
+            if step.started_at:
+                elapsed = (datetime.utcnow() - step.started_at).total_seconds()
+                if elapsed > 15:
+                    step.status = StepStatus.FAILED
+                    step.error_message = "Dispatcher did not create a task run within timeout"
+                    step.finished_at = datetime.utcnow()
+                    db.commit()
             return
         run = db.get(TaskRun, step.task_run_id)
         if not run:
@@ -163,18 +171,16 @@ class WorkflowExecutor:
         db.add(task)
         db.flush()
 
-        # The dispatcher will pick this up and create a TaskRun.
-        # For now, mark step as RUNNING and record that we've created a task.
-        step.status = StepStatus.RUNNING
+        # Wait for dispatcher to create a TaskRun, then link it.
+        # Keep step PENDING until we have a task_run_id to avoid the race
+        # condition where _sync_step_status skips steps with no run link.
+        task_id = task.id
         step.started_at = datetime.utcnow()
         db.commit()
 
-        # Wait for dispatcher to create a run, then link it
-        # (We'll check on the next tick via _sync_step_status)
-        # For now, poll briefly for the run
-        task_id = task.id
         for _ in range(10):
             time.sleep(1)
+            db.expire(step)
             run = (
                 db.query(TaskRun)
                 .filter(TaskRun.task_id == task_id)
@@ -182,8 +188,15 @@ class WorkflowExecutor:
             )
             if run:
                 step.task_run_id = run.id
+                step.status = StepStatus.RUNNING
                 db.commit()
                 break
+        else:
+            # Timeout — dispatcher never created a run
+            step.status = StepStatus.FAILED
+            step.error_message = "Dispatcher did not create a task run within timeout"
+            step.finished_at = datetime.utcnow()
+            db.commit()
 
         self._broadcast_workflow_update(wf)
         logger.info(
