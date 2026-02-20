@@ -66,8 +66,7 @@ class TestCreateDevice:
             },
             headers=auth_headers,
         )
-        # Should succeed as host_id is not validated in create_device
-        assert response.status_code == 200
+        assert response.status_code == 400
 
 
 class TestListDevices:

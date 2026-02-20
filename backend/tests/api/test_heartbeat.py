@@ -190,10 +190,17 @@ class TestHeartbeat:
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         if project_root not in sys.path:
             sys.path.insert(0, project_root)
-        from backend.models.schemas import Device, DeviceStatus, TaskRun, RunStatus
+        from backend.models.schemas import Device, DeviceStatus, Task, TaskStatus, TaskRun, RunStatus
         device = db_session.query(Device).filter(Device.serial == "BUSY_DEVICE").first()
+        task = Task(
+            name="heartbeat-busy-task",
+            type="MONKEY",
+            status=TaskStatus.RUNNING,
+        )
+        db_session.add(task)
+        db_session.flush()
         run = TaskRun(
-            task_id=1,
+            task_id=task.id,
             host_id=sample_host.id,
             device_id=device.id,
             status=RunStatus.RUNNING,

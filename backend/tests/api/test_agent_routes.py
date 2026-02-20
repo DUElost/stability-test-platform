@@ -467,6 +467,8 @@ class TestExtendDeviceLock:
 
     def test_extend_lock_device_not_found(self, client, sample_running_run, db_session):
         """Test extending lock when device not found"""
+        if db_session.bind and db_session.bind.dialect.name == "postgresql":
+            pytest.skip("PostgreSQL foreign key prevents orphaned run->device reference")
         # Set invalid device id
         sample_running_run.device_id = 99999
         db_session.commit()

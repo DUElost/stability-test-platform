@@ -73,6 +73,8 @@ def create_device(payload: DeviceCreate, db: Session = Depends(get_db), current_
     existing = db.query(Device).filter(Device.serial == payload.serial).first()
     if existing:
         raise HTTPException(status_code=400, detail="Device with this serial already exists")
+    if payload.host_id is not None and db.get(Host, payload.host_id) is None:
+        raise HTTPException(status_code=400, detail="host not found")
 
     device = Device(
         serial=payload.serial,

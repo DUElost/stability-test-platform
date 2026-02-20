@@ -268,15 +268,17 @@ class TaskDispatcher:
         expires_at = now + timedelta(seconds=DEVICE_LOCK_LEASE_SECONDS)
         # 使用 begin_nested() 创建保存点，支持嵌套事务
         with db.begin_nested():
-            active = (
+            # PostgreSQL 不支持 FOR UPDATE + COUNT 聚合，先锁行再在应用层计数
+            active_rows = (
                 db.query(TaskRun)
                 .filter(
                     TaskRun.host_id == host.id,
                     TaskRun.status.in_([RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING]),
                 )
                 .with_for_update()
-                .count()
+                .all()
             )
+            active = len(active_rows)
             if active >= host_limit:
                 raise RuntimeError("host_capacity_exceeded")
 

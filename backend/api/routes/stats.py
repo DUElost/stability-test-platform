@@ -73,16 +73,28 @@ def get_activity(
     """Hourly task-run activity over the past N hours."""
     now = datetime.utcnow()
     since = now - timedelta(hours=hours)
+    dialect = db.bind.dialect.name if db.bind is not None else ""
 
-    rows = db.execute(text("""
-        SELECT
-            strftime('%Y-%m-%dT%H:00:00', started_at) AS hour,
-            status,
-            COUNT(*) AS cnt
-        FROM task_runs
-        WHERE started_at >= :since AND started_at IS NOT NULL
-        GROUP BY hour, status
-    """), {"since": since}).fetchall()
+    if dialect == "postgresql":
+        rows = db.execute(text("""
+            SELECT
+                to_char(date_trunc('hour', started_at), 'YYYY-MM-DD"T"HH24:00:00') AS hour,
+                status,
+                COUNT(*) AS cnt
+            FROM task_runs
+            WHERE started_at >= :since AND started_at IS NOT NULL
+            GROUP BY hour, status
+        """), {"since": since}).fetchall()
+    else:
+        rows = db.execute(text("""
+            SELECT
+                strftime('%Y-%m-%dT%H:00:00', started_at) AS hour,
+                status,
+                COUNT(*) AS cnt
+            FROM task_runs
+            WHERE started_at >= :since AND started_at IS NOT NULL
+            GROUP BY hour, status
+        """), {"since": since}).fetchall()
 
     buckets: dict = {}
     for row in rows:
@@ -155,17 +167,31 @@ def get_completion_trend(
 ):
     """Daily pass/fail counts over the past N days."""
     since = datetime.utcnow() - timedelta(days=days)
-    rows = db.execute(text("""
-        SELECT
-            strftime('%Y-%m-%d', finished_at) AS day,
-            status,
-            COUNT(*) AS cnt
-        FROM task_runs
-        WHERE finished_at >= :since
-          AND finished_at IS NOT NULL
-          AND status IN ('FINISHED', 'FAILED')
-        GROUP BY day, status
-    """), {"since": since}).fetchall()
+    dialect = db.bind.dialect.name if db.bind is not None else ""
+    if dialect == "postgresql":
+        rows = db.execute(text("""
+            SELECT
+                to_char(date_trunc('day', finished_at), 'YYYY-MM-DD') AS day,
+                status,
+                COUNT(*) AS cnt
+            FROM task_runs
+            WHERE finished_at >= :since
+              AND finished_at IS NOT NULL
+              AND status IN ('FINISHED', 'FAILED')
+            GROUP BY day, status
+        """), {"since": since}).fetchall()
+    else:
+        rows = db.execute(text("""
+            SELECT
+                strftime('%Y-%m-%d', finished_at) AS day,
+                status,
+                COUNT(*) AS cnt
+            FROM task_runs
+            WHERE finished_at >= :since
+              AND finished_at IS NOT NULL
+              AND status IN ('FINISHED', 'FAILED')
+            GROUP BY day, status
+        """), {"since": since}).fetchall()
 
     buckets: dict = {}
     for row in rows:
