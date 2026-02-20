@@ -209,11 +209,10 @@ sudo systemctl stop stability-test-agent
   - Agent 端：`journalctl -u stability-test-agent -f`
   - 后端连通性：`curl http://127.0.0.1:8000/api/v1/hosts`
 - 备份：
-  - MVP 使用 SQLite 时，至少每日备份 `/opt/stability-test-platform/stability.db`。
+  - PostgreSQL 日常备份（使用 pg_dump 或 WAL归档）
 
 ## 8. MVP 后续增强（建议排期）
 
-- 数据库迁移到 PostgreSQL（并增加驱动依赖）。
 - Agent 注册与 API Token 鉴权。
 - Nginx HTTPS（证书管理）。
 - 统一日志与监控告警（心跳超时、任务失败率、队列积压）。

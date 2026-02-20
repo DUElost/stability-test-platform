@@ -132,7 +132,7 @@ npm run dev
 
 | 环境变量 | 默认值 | 说明 |
 |----------|--------|------|
-| `DATABASE_URL` | `sqlite:///./stability.db` | 数据库连接字符串 |
+| `DATABASE_URL` | `postgresql://user:pass@localhost:5432/stability` | 数据库连接字符串 |
 | `API_URL` | `http://127.0.0.1:8000` | 后端 API 地址 |
 | `HOST_ID` | `0` | 主机 ID（Agent 使用） |
 | `MOUNT_POINTS` | 空 | 挂载点列表，逗号分隔 |

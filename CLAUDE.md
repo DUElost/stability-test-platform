@@ -30,7 +30,7 @@
 ### Windows 主机（中心服务器）
 - **FastAPI 后端**：端口 8000，提供 REST API 和 WebSocket
 - **React 前端**：端口 5173，Web Dashboard 界面
-- **数据库**：SQLite（可扩展为 PostgreSQL）
+- **数据库**：PostgreSQL
 
 ### Linux Agent 主机
 - **Python Agent**：拉取任务、上报心跳、执行测试
@@ -136,7 +136,7 @@ aiohttp
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DATABASE_URL` | `sqlite:///./stability.db` | 数据库连接 |
+| `DATABASE_URL` | `postgresql://user:pass@localhost:5432/stability` | 数据库连接 |
 | `API_URL` | `http://127.0.0.1:8000` | 后端 API 地址 |
 | `HOST_ID` | `0` | 主机 ID（Agent 使用） |
 | `ADB_PATH` | `adb` | ADB 可执行文件路径 |

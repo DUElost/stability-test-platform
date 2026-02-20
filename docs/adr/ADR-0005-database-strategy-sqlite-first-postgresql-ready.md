@@ -1,16 +1,18 @@
-# ADR-0005: SQLite 起步 + PostgreSQL 兼容演进
-- 状态：Accepted
+# ADR-0005: 数据库策略（已废弃）
+- 状态：Deprecated
 - 日期：2026-02-18
 - 决策者：平台研发组
 - 标签：数据库, 兼容层, 迁移策略
 
-## 背景
+> ⚠️ **本 ADR 已废弃**：项目已确定使用 PostgreSQL 作为唯一数据库，详见后续 ADR。
+
+## 背景（已废弃）
 
 平台需在 MVP 快速可用与生产可扩展之间取得平衡：本地/小规模部署需要低门槛，生产并发又需要更强数据库能力。
 
-## 决策
+## 决策（已废弃）
 
-采用“SQLite 默认 + PostgreSQL 就绪”的双栈策略：
+采用”SQLite 默认 + PostgreSQL 就绪”的双栈策略：
 
 - 默认 `DATABASE_URL` 指向 SQLite，降低部署门槛。
 - 通过 `database_adapter` 抽象方言差异：

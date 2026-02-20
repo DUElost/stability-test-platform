@@ -148,7 +148,7 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
     当 Agent 续期失败或崩溃时，锁会过期，需要回收
     """
     expired_locks = (
-        db.query(Device)
+        db.query(Device.id, Device.serial, Device.lock_run_id)
         .filter(
             Device.lock_run_id.isnot(None),
             or_(
@@ -160,8 +160,30 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
     )
 
     released_count = 0
-    for device in expired_locks:
-        run_id = device.lock_run_id
+    for device_id, device_serial, run_id in expired_locks:
+        # 并发安全：只有一个事务能成功将同一设备锁置空
+        released = db.execute(
+            text(
+                """
+                UPDATE devices
+                SET status = :online_status,
+                    lock_run_id = NULL,
+                    lock_expires_at = NULL
+                WHERE id = :device_id
+                  AND lock_run_id = :run_id
+                  AND (lock_expires_at IS NULL OR lock_expires_at < :now)
+                """
+            ),
+            {
+                "online_status": DeviceStatus.ONLINE.value,
+                "device_id": device_id,
+                "run_id": run_id,
+                "now": now,
+            },
+        )
+        if released.rowcount != 1:
+            continue
+        released_count += 1
 
         # 查找关联的 RUNNING 任务并标记为失败
         if run_id:
@@ -172,12 +194,6 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
                     "device lock expired, agent may be offline"
                 )
 
-        # 释放设备锁
-        device.status = DeviceStatus.ONLINE
-        device.lock_run_id = None
-        device.lock_expires_at = None
-        released_count += 1
-
         # Record metrics
         device_lock_released.labels(reason="expired").inc()
         recycler_timeouts.labels(timeout_type="device_lock").inc()
@@ -185,8 +201,8 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
         logger.warning(
             "device_lock_expired_released",
             extra={
-                "device_id": device.id,
-                "device_serial": device.serial,
+                "device_id": device_id,
+                "device_serial": device_serial,
                 "run_id": run_id,
             },
         )

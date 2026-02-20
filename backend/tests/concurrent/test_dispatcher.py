@@ -8,6 +8,7 @@ Tests the concurrent properties defined in specs.md:
 """
 
 import asyncio
+import os
 import threading
 import time
 import tempfile
@@ -479,16 +480,37 @@ def db_session(monkeypatch):
     """提供数据库会话"""
     global SessionLocal, engine
 
-    # 使用独立临时数据库，避免污染/锁定默认 stability.db
-    tmp = tempfile.NamedTemporaryFile(prefix="stability-concurrent-", suffix=".db", delete=False)
-    tmp_path = Path(tmp.name)
-    tmp.close()
+    test_db_url = os.getenv("TEST_DATABASE_URL")
+    allow_sqlite = os.getenv("ALLOW_SQLITE_TESTS", "0") == "1"
+    tmp_path = None
 
-    engine = create_engine(
-        f"sqlite:///{tmp_path.as_posix()}",
-        connect_args={"check_same_thread": False},
-        future=True,
-    )
+    if not test_db_url:
+        if not allow_sqlite:
+            raise RuntimeError(
+                "TEST_DATABASE_URL is required for concurrent tests (PostgreSQL). "
+                "For local quick SQLite tests only, set ALLOW_SQLITE_TESTS=1."
+            )
+        test_db_url = "sqlite:///:memory:"
+
+    if test_db_url.startswith("sqlite"):
+        # 并发测试使用文件型 SQLite，避免 :memory: 连接隔离导致数据不可见
+        if test_db_url.endswith(":memory:"):
+            tmp = tempfile.NamedTemporaryFile(prefix="stability-concurrent-", suffix=".db", delete=False)
+            tmp_path = Path(tmp.name)
+            tmp.close()
+            test_db_url = f"sqlite:///{tmp_path.as_posix()}"
+        engine = create_engine(
+            test_db_url,
+            connect_args={"check_same_thread": False},
+            future=True,
+        )
+    else:
+        engine = create_engine(
+            test_db_url,
+            pool_pre_ping=True,
+            future=True,
+        )
+
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
 
     # 将调度器/回收器模块切换到测试库
@@ -506,7 +528,8 @@ def db_session(monkeypatch):
         session.close()
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass

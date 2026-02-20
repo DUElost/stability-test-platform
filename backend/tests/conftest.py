@@ -3,7 +3,6 @@ Pytest Configuration and Fixtures
 """
 
 import os
-import sys
 from datetime import datetime, timedelta
 
 import pytest
@@ -15,25 +14,41 @@ from sqlalchemy.orm import sessionmaker
 os.environ["TESTING"] = "1"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-ci"
 
+TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+ALLOW_SQLITE_TESTS = os.getenv("ALLOW_SQLITE_TESTS", "0") == "1"
+
+if not TEST_DATABASE_URL:
+    if ALLOW_SQLITE_TESTS:
+        TEST_DATABASE_URL = "sqlite:///:memory:"
+    else:
+        raise RuntimeError(
+            "TEST_DATABASE_URL is required for tests (PostgreSQL). "
+            "For local quick SQLite tests only, set ALLOW_SQLITE_TESTS=1."
+        )
+
+# Keep runtime modules aligned with the test database.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
 from backend.models.schemas import Base, Host, HostStatus, Device, DeviceStatus, Task, TaskStatus, TaskRun, RunStatus
-from backend.core.database import Base as CoreBase, get_db
+from backend.core.database import get_db
 from backend.core.security import create_access_token
 from backend.main import app
-
-
-# Use in-memory SQLite for testing
-TEST_DATABASE_URL = "sqlite:///:memory:"
 
 
 @pytest.fixture(scope="session")
 def engine():
     """Create a test database engine"""
-    engine = create_engine(
-        TEST_DATABASE_URL,
-        connect_args={"check_same_thread": False},
-    )
+    create_kwargs = {"future": True}
+    if TEST_DATABASE_URL.startswith("sqlite"):
+        create_kwargs["connect_args"] = {"check_same_thread": False}
+    else:
+        create_kwargs["pool_pre_ping"] = True
+
+    engine = create_engine(TEST_DATABASE_URL, **create_kwargs)
     Base.metadata.create_all(bind=engine)
-    return engine
+    yield engine
+    Base.metadata.drop_all(bind=engine)
+    engine.dispose()
 
 
 @pytest.fixture(scope="function")
