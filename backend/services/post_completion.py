@@ -89,6 +89,24 @@ def run_post_completion(run_id: int) -> None:
 
 
 def run_post_completion_async(run_id: int) -> None:
-    """Fire-and-forget wrapper — submits to bounded thread pool."""
-    from backend.core.thread_pool import submit as pool_submit
-    pool_submit(run_post_completion, run_id)
+    """Fire-and-forget wrapper — submits to bounded thread pool.
+
+    In testing mode or when pool is shut down, runs synchronously.
+    """
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    # In testing mode, run synchronously to avoid pool shutdown issues
+    if os.getenv("TESTING") == "1":
+        run_post_completion(run_id)
+        return
+
+    try:
+        from backend.core.thread_pool import submit as pool_submit
+        pool_submit(run_post_completion, run_id)
+    except RuntimeError as e:
+        # Pool is shut down (e.g., during test teardown); run synchronously
+        if "cannot schedule new futures after shutdown" in str(e):
+            run_post_completion(run_id)
+        else:
+            raise
