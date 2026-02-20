@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import { Menu, Bell, ChevronRight, FileText, Settings, LogOut, User, ChevronDown } from 'lucide-react';
+import { Menu, Bell, ChevronRight, FileText, Settings, LogOut, User, ChevronDown, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -180,7 +180,13 @@ export default function AppShell() {
         {/* 主内容区 */}
         <main className="flex-1 overflow-x-hidden overflow-y-auto">
           <div className="p-4 lg:p-8">
-            <Outlet />
+            <Suspense fallback={
+              <div className="flex items-center justify-center h-64">
+                <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+              </div>
+            }>
+              <Outlet />
+            </Suspense>
           </div>
         </main>
       </div>
