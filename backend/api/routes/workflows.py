@@ -54,9 +54,6 @@ def create_workflow(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    if not payload.steps:
-        raise HTTPException(status_code=400, detail="workflow must have at least one step")
-
     wf = Workflow(
         name=payload.name,
         description=payload.description,

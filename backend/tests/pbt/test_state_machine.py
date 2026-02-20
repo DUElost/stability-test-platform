@@ -203,7 +203,6 @@ class TaskStateMachine(RuleBasedStateMachine):
         self.state_history[task_id] = [TaskStatus.PENDING]
 
     @rule(task_id=st.integers(min_value=1, max_value=100))
-    @precondition(lambda self: task_id in self.tasks and self.tasks.get(task_id) == TaskStatus.PENDING)
     def dispatch_task(self, task_id: int):
         """分发任务: PENDING -> QUEUED"""
         assume(task_id in self.tasks)
@@ -212,7 +211,6 @@ class TaskStateMachine(RuleBasedStateMachine):
         self.state_history[task_id].append(TaskStatus.QUEUED)
 
     @rule(task_id=st.integers(min_value=1, max_value=100))
-    @precondition(lambda self: task_id in self.tasks and self.tasks.get(task_id) == TaskStatus.QUEUED)
     def start_task(self, task_id: int):
         """开始任务: QUEUED -> RUNNING"""
         assume(task_id in self.tasks)
@@ -221,7 +219,6 @@ class TaskStateMachine(RuleBasedStateMachine):
         self.state_history[task_id].append(TaskStatus.RUNNING)
 
     @rule(task_id=st.integers(min_value=1, max_value=100))
-    @precondition(lambda self: task_id in self.tasks and self.tasks.get(task_id) == TaskStatus.RUNNING)
     def complete_task(self, task_id: int):
         """完成任务: RUNNING -> COMPLETED"""
         assume(task_id in self.tasks)
@@ -230,7 +227,6 @@ class TaskStateMachine(RuleBasedStateMachine):
         self.state_history[task_id].append(TaskStatus.COMPLETED)
 
     @rule(task_id=st.integers(min_value=1, max_value=100))
-    @precondition(lambda self: task_id in self.tasks and self.tasks.get(task_id) == TaskStatus.RUNNING)
     def fail_task(self, task_id: int):
         """任务失败: RUNNING -> FAILED"""
         assume(task_id in self.tasks)
@@ -239,9 +235,6 @@ class TaskStateMachine(RuleBasedStateMachine):
         self.state_history[task_id].append(TaskStatus.FAILED)
 
     @rule(task_id=st.integers(min_value=1, max_value=100))
-    @precondition(lambda self: task_id in self.tasks and self.tasks.get(task_id) in {
-        TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING
-    })
     def cancel_task(self, task_id: int):
         """取消任务: PENDING/QUEUED/RUNNING -> CANCELED"""
         assume(task_id in self.tasks)

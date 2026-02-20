@@ -2,9 +2,9 @@ from datetime import datetime, timedelta
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from backend.core.database import get_db
 from backend.models.schemas import Device, DeviceStatus, Host, HostStatus
@@ -86,8 +86,9 @@ def create_device(payload: DeviceCreate, db: Session = Depends(get_db), current_
     return device
 
 
-@router.get("", response_model=PaginatedResponse)
+@router.get("", response_model=Any)
 def list_devices(
+    request: Request,
     tags: Optional[str] = Query(None, description="Comma-separated tag filter"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
@@ -115,6 +116,9 @@ def list_devices(
         DeviceOut.model_validate(d) if hasattr(DeviceOut, "model_validate") else DeviceOut.from_orm(d)
         for d in devices
     ]
+    # 兼容旧接口：未显式传分页参数时返回数组
+    if "skip" not in request.query_params and "limit" not in request.query_params:
+        return items
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 

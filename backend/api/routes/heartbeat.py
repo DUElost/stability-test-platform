@@ -126,6 +126,8 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
                     model=dev_data.get("model"),
                 )
                 db.add(device)
+                # 立即 flush，确保后续快照写入时 device_id 可用
+                db.flush()
                 existing_devices[serial] = device
 
             device.host_id = host.id

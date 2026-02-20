@@ -145,6 +145,8 @@ def _startup_background():
 
 @app.on_event("shutdown")
 def _shutdown_pool():
+    if os.getenv("TESTING") == "1":
+        return
     from backend.core.thread_pool import shutdown
     timeout = int(os.getenv("SHUTDOWN_POOL_TIMEOUT", "5"))
     shutdown(wait=True, timeout=timeout)

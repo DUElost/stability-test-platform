@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote, urlparse
 
 import paramiko
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -278,8 +278,9 @@ def _release_device_lock(db: Session, device_id: int, run_id: int) -> None:
     )
 
 
-@router.get("/tasks", response_model=PaginatedResponse)
+@router.get("/tasks", response_model=Any)
 def list_tasks(
+    request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     status: Optional[str] = Query(None),
@@ -291,7 +292,16 @@ def list_tasks(
         query = query.filter(Task.status == status)
     total = query.count()
     rows = query.offset(skip).limit(limit).all()
-    return PaginatedResponse(items=rows, total=total, skip=skip, limit=limit)
+    items: List[TaskOut] = []
+    for row in rows:
+        if hasattr(TaskOut, "model_validate"):
+            items.append(TaskOut.model_validate(row))
+        else:
+            items.append(TaskOut.from_orm(row))
+    # 兼容旧接口：未显式传分页参数时返回数组
+    if "skip" not in request.query_params and "limit" not in request.query_params:
+        return items
+    return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
 @router.get("/task-templates", response_model=List[TaskTemplateOut])
@@ -451,9 +461,10 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/tasks/{task_id}/runs", response_model=PaginatedResponse)
+@router.get("/tasks/{task_id}/runs", response_model=Any)
 def get_task_runs(
     task_id: int,
+    request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -478,6 +489,9 @@ def get_task_runs(
             run_out = RunOut.from_orm(run)
         run_out.risk_summary = _load_risk_summary_from_artifacts(run.artifacts)
         run_items.append(run_out)
+    # 兼容旧接口：未显式传分页参数时返回数组
+    if "skip" not in request.query_params and "limit" not in request.query_params:
+        return run_items
     return PaginatedResponse(items=run_items, total=total, skip=skip, limit=limit)
 
 

@@ -514,35 +514,54 @@ class AuditLogOut(ORMBaseModel):
 
 
 class TaskScheduleCreate(BaseModel):
+    if _HAS_CONFIG_DICT:
+        model_config = ConfigDict(populate_by_name=True)
+    else:
+        class Config:
+            allow_population_by_field_name = True
+
     name: str
-    cron_expression: str
+    cron_expression: str = Field(alias="cron_expr")
     task_template_id: Optional[int] = None
     tool_id: Optional[int] = None
     task_type: str
-    params: Dict[str, Any] = Field(default_factory=dict)
+    params: Dict[str, Any] = Field(default_factory=dict, alias="task_params")
     target_device_id: Optional[int] = None
     enabled: bool = True
 
 
 class TaskScheduleUpdate(BaseModel):
+    if _HAS_CONFIG_DICT:
+        model_config = ConfigDict(populate_by_name=True)
+    else:
+        class Config:
+            allow_population_by_field_name = True
+
     name: Optional[str] = None
-    cron_expression: Optional[str] = None
+    cron_expression: Optional[str] = Field(default=None, alias="cron_expr")
     task_template_id: Optional[int] = None
     tool_id: Optional[int] = None
     task_type: Optional[str] = None
-    params: Optional[Dict[str, Any]] = None
+    params: Optional[Dict[str, Any]] = Field(default=None, alias="task_params")
     target_device_id: Optional[int] = None
     enabled: Optional[bool] = None
 
 
 class TaskScheduleOut(ORMBaseModel):
+    if _HAS_CONFIG_DICT:
+        model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    else:
+        class Config:
+            orm_mode = True
+            allow_population_by_field_name = True
+
     id: int
     name: str
-    cron_expression: str
+    cron_expression: str = Field(alias="cron_expr")
     task_template_id: Optional[int] = None
     tool_id: Optional[int] = None
     task_type: str
-    params: Dict[str, Any] = Field(default_factory=dict)
+    params: Dict[str, Any] = Field(default_factory=dict, alias="task_params")
     target_device_id: Optional[int] = None
     enabled: bool
     last_run_at: Optional[datetime] = None
@@ -555,26 +574,45 @@ class TaskScheduleOut(ORMBaseModel):
 
 
 class TaskTemplateDBCreate(BaseModel):
+    if _HAS_CONFIG_DICT:
+        model_config = ConfigDict(populate_by_name=True)
+    else:
+        class Config:
+            allow_population_by_field_name = True
+
     name: str
-    type: str
+    type: str = Field(alias="task_type")
     description: Optional[str] = None
-    default_params: Dict[str, Any] = Field(default_factory=dict)
+    default_params: Dict[str, Any] = Field(default_factory=dict, alias="params")
     enabled: bool = True
 
 
 class TaskTemplateDBUpdate(BaseModel):
+    if _HAS_CONFIG_DICT:
+        model_config = ConfigDict(populate_by_name=True)
+    else:
+        class Config:
+            allow_population_by_field_name = True
+
     name: Optional[str] = None
-    type: Optional[str] = None
+    type: Optional[str] = Field(default=None, alias="task_type")
     description: Optional[str] = None
-    default_params: Optional[Dict[str, Any]] = None
+    default_params: Optional[Dict[str, Any]] = Field(default=None, alias="params")
     enabled: Optional[bool] = None
 
 
 class TaskTemplateDBOut(ORMBaseModel):
+    if _HAS_CONFIG_DICT:
+        model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    else:
+        class Config:
+            orm_mode = True
+            allow_population_by_field_name = True
+
     id: int
     name: str
-    type: str
+    type: str = Field(alias="task_type")
     description: Optional[str] = None
-    default_params: Dict[str, Any] = Field(default_factory=dict)
+    default_params: Dict[str, Any] = Field(default_factory=dict, alias="params")
     enabled: bool
     created_at: datetime

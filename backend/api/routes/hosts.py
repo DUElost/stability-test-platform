@@ -2,9 +2,9 @@ from datetime import datetime, timedelta
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
-from typing import List
+from typing import Any, List
 
 from backend.core.database import get_db
 from backend.models.schemas import Host, HostStatus
@@ -59,8 +59,9 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
     return host
 
 
-@router.get("", response_model=PaginatedResponse)
+@router.get("", response_model=Any)
 def list_hosts(
+    request: Request,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -79,6 +80,9 @@ def list_hosts(
         HostOut.model_validate(h) if hasattr(HostOut, "model_validate") else HostOut.from_orm(h)
         for h in hosts
     ]
+    # 兼容旧接口：未显式传分页参数时返回数组
+    if "skip" not in request.query_params and "limit" not in request.query_params:
+        return items
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 

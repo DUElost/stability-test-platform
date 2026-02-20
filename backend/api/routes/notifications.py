@@ -47,7 +47,7 @@ def list_channels(
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
-@router.post("/channels", response_model=NotificationChannelOut, status_code=201)
+@router.post("/channels", response_model=NotificationChannelOut)
 def create_channel(
     body: NotificationChannelCreate,
     db: Session = Depends(get_db),
@@ -148,7 +148,7 @@ def list_rules(
     return PaginatedResponse(items=result, total=total, skip=skip, limit=limit)
 
 
-@router.post("/rules", response_model=AlertRuleOut, status_code=201)
+@router.post("/rules", response_model=AlertRuleOut)
 def create_rule(
     body: AlertRuleCreate,
     db: Session = Depends(get_db),

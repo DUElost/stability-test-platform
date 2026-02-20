@@ -17,6 +17,7 @@ from typing import List, Optional, Tuple
 import pytest
 
 from ...models.schemas import (
+    Base,
     Device, DeviceStatus, Host, HostStatus,
     Task, TaskStatus, TaskRun, RunStatus
 )
@@ -468,9 +469,13 @@ class TestDatabaseConcurrency:
 @pytest.fixture
 def db_session():
     """提供数据库会话"""
+    # 并发测试使用 core.database.SessionLocal，需要在该引擎上显式建表
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
     session = SessionLocal()
     try:
         yield session
     finally:
         session.rollback()
         session.close()
+        Base.metadata.drop_all(bind=engine)

@@ -125,7 +125,7 @@ def get_user(
     return user
 
 
-@router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=UserOut)
 def create_user(
     payload: UserCreate,
     db: Session = Depends(get_db),

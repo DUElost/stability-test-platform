@@ -110,9 +110,12 @@ class SQLiteAdapter(DatabaseAdapter):
         """设置 SQLite 特定参数"""
         # 启用外键约束
         dbapi_conn.execute("PRAGMA foreign_keys = ON")
-        # 设置 WAL 模式提高并发性能
-        dbapi_conn.execute("PRAGMA journal_mode = WAL")
-        dbapi_conn.execute("PRAGMA synchronous = NORMAL")
+        # 设置 WAL 模式提高并发性能（部分环境/文件系统不支持，失败时降级）
+        try:
+            dbapi_conn.execute("PRAGMA journal_mode = WAL")
+            dbapi_conn.execute("PRAGMA synchronous = NORMAL")
+        except Exception as exc:
+            logger.warning("SQLite WAL unavailable, fallback to default journal mode: %s", exc)
 
 
 def get_adapter(dialect_name: str) -> DatabaseAdapter:
