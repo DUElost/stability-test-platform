@@ -20,7 +20,7 @@ node_modules/
 .DS_Store
 *.log
 venv-wsl/
-logs/
+/logs/
 .claude/
 *.db-wal
 *.db-shm
