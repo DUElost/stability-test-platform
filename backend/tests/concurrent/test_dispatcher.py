@@ -10,11 +10,15 @@ Tests the concurrent properties defined in specs.md:
 import asyncio
 import threading
 import time
+import tempfile
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from ...models.schemas import (
     Base,
@@ -22,8 +26,12 @@ from ...models.schemas import (
     Task, TaskStatus, TaskRun, RunStatus
 )
 from ...scheduler.dispatcher import TaskDispatcher
-from ...core.database import SessionLocal, engine
+import backend.scheduler.dispatcher as dispatcher_module
+import backend.scheduler.recycler as recycler_module
 from ...core.database_adapter import get_adapter_from_engine
+
+SessionLocal = None
+engine = None
 
 
 class TestConcurrentDeviceDispatch:
@@ -467,10 +475,28 @@ class TestDatabaseConcurrency:
 
 
 @pytest.fixture
-def db_session():
+def db_session(monkeypatch):
     """提供数据库会话"""
-    # 并发测试使用 core.database.SessionLocal，需要在该引擎上显式建表
-    Base.metadata.drop_all(bind=engine)
+    global SessionLocal, engine
+
+    # 使用独立临时数据库，避免污染/锁定默认 stability.db
+    tmp = tempfile.NamedTemporaryFile(prefix="stability-concurrent-", suffix=".db", delete=False)
+    tmp_path = Path(tmp.name)
+    tmp.close()
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path.as_posix()}",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, future=True)
+
+    # 将调度器/回收器模块切换到测试库
+    monkeypatch.setattr(dispatcher_module, "engine", engine)
+    monkeypatch.setattr(dispatcher_module, "SessionLocal", SessionLocal)
+    monkeypatch.setattr(dispatcher_module, "db_adapter", get_adapter_from_engine(engine))
+    monkeypatch.setattr(recycler_module, "SessionLocal", SessionLocal)
+
     Base.metadata.create_all(bind=engine)
     session = SessionLocal()
     try:
@@ -479,3 +505,8 @@ def db_session():
         session.rollback()
         session.close()
         Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
