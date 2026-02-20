@@ -1,6 +1,5 @@
-import { lazy, Suspense } from 'react';
+import { lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
-import { Loader2 } from 'lucide-react';
 import AppShell from '../layouts/AppShell';
 
 // Auth pages stay as static imports (always needed on first load)
@@ -28,14 +27,6 @@ const SchedulesPage = lazy(() => import('../pages/schedules/SchedulesPage'));
 const TemplatesPage = lazy(() => import('../pages/templates/TemplatesPage'));
 const AuditLogPage = lazy(() => import('../pages/audit/AuditLogPage'));
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage'));
-
-function LazyFallback() {
-  return (
-    <div className="flex items-center justify-center h-64">
-      <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
-    </div>
-  );
-}
 
 // 检查是否已登录
 function isAuthenticated() {
@@ -65,36 +56,34 @@ export default function AppRouter() {
         {/* 受保护的路由 */}
         <Route element={<ProtectedRoute />}>
           <Route path="/" element={<AppShell />}>
-            <Suspense fallback={<LazyFallback />}>
-              <Route index element={<Dashboard />} />
+            <Route index element={<Dashboard />} />
 
-              <Route path="tasks">
-                <Route index element={<TaskList />} />
-                <Route path="new" element={<CreateTask />} />
-                <Route path=":taskId" element={<TaskDetails />} />
-              </Route>
+            <Route path="tasks">
+              <Route index element={<TaskList />} />
+              <Route path="new" element={<CreateTask />} />
+              <Route path=":taskId" element={<TaskDetails />} />
+            </Route>
 
-              <Route path="runs/:runId/report" element={<RunReportPage />} />
+            <Route path="runs/:runId/report" element={<RunReportPage />} />
 
-              <Route path="tools" element={<ToolsPage />} />
+            <Route path="tools" element={<ToolsPage />} />
 
-              <Route path="hosts" element={<HostsPage />} />
-              <Route path="devices" element={<DevicesPage />} />
-              <Route path="wifi" element={<WifiPage />} />
-              <Route path="workflows" element={<WorkflowsPage />} />
-              <Route path="results" element={<ResultsPage />} />
-              <Route path="logs" element={<LogsPage />} />
-              <Route path="mapreduce" element={<MapReducePage />} />
-              <Route path="users" element={<UsersPage />} />
-              <Route path="notifications" element={<NotificationsPage />} />
-              <Route path="settings" element={<SettingsPage />} />
-              <Route path="schedules" element={<SchedulesPage />} />
-              <Route path="templates" element={<TemplatesPage />} />
-              <Route path="audit" element={<AuditLogPage />} />
+            <Route path="hosts" element={<HostsPage />} />
+            <Route path="devices" element={<DevicesPage />} />
+            <Route path="wifi" element={<WifiPage />} />
+            <Route path="workflows" element={<WorkflowsPage />} />
+            <Route path="results" element={<ResultsPage />} />
+            <Route path="logs" element={<LogsPage />} />
+            <Route path="mapreduce" element={<MapReducePage />} />
+            <Route path="users" element={<UsersPage />} />
+            <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="schedules" element={<SchedulesPage />} />
+            <Route path="templates" element={<TemplatesPage />} />
+            <Route path="audit" element={<AuditLogPage />} />
 
-              {/* 404 */}
-              <Route path="*" element={<NotFoundPage />} />
-            </Suspense>
+            {/* 404 */}
+            <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Route>
 
