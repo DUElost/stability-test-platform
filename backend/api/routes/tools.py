@@ -9,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
+from backend.core.tool_bootstrap import ensure_monkey_aee_tool
 from backend.models.schemas import ToolCategory, Tool
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas import (
@@ -387,6 +388,36 @@ def scan_tools(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"扫描失败: {str(e)}")
+
+
+@router.post("/bootstrap/monkey-aee", response_model=ToolOut)
+def bootstrap_monkey_aee_tool(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """幂等创建/更新 MONKEY_AEE 工具。"""
+    try:
+        tool, _created = ensure_monkey_aee_tool(db)
+        category = db.query(ToolCategory).filter_by(id=tool.category_id).first()
+        return ToolOut(
+            id=tool.id,
+            category_id=tool.category_id,
+            category_name=category.name if category else None,
+            name=tool.name,
+            description=tool.description,
+            script_path=tool.script_path,
+            script_class=tool.script_class,
+            script_type=tool.script_type,
+            default_params=tool.default_params,
+            param_schema=tool.param_schema,
+            timeout=tool.timeout,
+            need_device=tool.need_device,
+            enabled=tool.enabled,
+            created_at=tool.created_at,
+            updated_at=tool.updated_at,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"bootstrap failed: {str(e)}")
 
 
 @router.get("/scan/preview")

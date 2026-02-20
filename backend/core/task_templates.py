@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from backend.agent.tools.config.monkey_aee_defaults import build_monkey_aee_defaults
+
 # 工具根目录：后端目录向上三级即仓库根
 TOOLS_ROOT = Path(__file__).resolve().parents[3]
 
@@ -35,6 +37,15 @@ TEMPLATES: Dict[str, TaskTemplateDef] = {
         },
         script_paths={
             "default": _tool_path("Monkey_test", "AIMonkeyTest_2025mtk", "MonkeyTest.sh"),
+        },
+    ),
+    "MONKEY_AEE": TaskTemplateDef(
+        type="MONKEY_AEE",
+        name="Monkey AEE 稳定性专项",
+        description="兼容旧版 MonkeyAEE 脚本的稳定性专项，支持日志回传与产物打包。",
+        default_params=build_monkey_aee_defaults(),
+        script_paths={
+            "legacy_script": r"F:\AEE\MonkeyAEEinfo_Stability_20250901.py",
         },
     ),
     "AIMONKEY": TaskTemplateDef(

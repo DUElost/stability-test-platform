@@ -28,9 +28,10 @@ from backend.api.routes.notifications import router as notifications_router
 from backend.api.routes.audit import router as audit_router
 from backend.api.routes.schedules import router as schedules_router
 from backend.api.routes.templates import router as templates_router
-from backend.core.database import Base, engine
+from backend.core.database import Base, engine, SessionLocal
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
+from backend.core.tool_bootstrap import ensure_monkey_aee_tool
 from backend.scheduler.recycler import start_recycler
 from backend.scheduler.dispatcher import start_dispatcher
 from backend.scheduler.workflow_executor import start_workflow_executor
@@ -122,6 +123,15 @@ def _startup_background():
     # Skip startup background tasks in testing mode
     if os.getenv("TESTING") == "1":
         return
+    try:
+        with SessionLocal() as db:
+            tool, created = ensure_monkey_aee_tool(db)
+            logger.info(
+                "monkey_aee_tool_bootstrap",
+                extra={"tool_id": tool.id, "created": created},
+            )
+    except Exception:
+        logger.exception("monkey_aee_tool_bootstrap_failed")
     # 启动回收器与调度器
     start_recycler()
     start_dispatcher()

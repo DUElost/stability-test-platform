@@ -57,6 +57,7 @@ class TaskExecutor:
 
     _TEST_CLASS_REGISTRY: Dict[str, Tuple[str, str]] = {
         "MONKEY": ("backend.agent.tools.monkey_test", "MonkeyTest"),
+        "MONKEY_AEE": ("backend.agent.tools.monkey_aee_stability_test", "MonkeyAEEStabilityTest"),
         "MTBF": ("backend.agent.tools.mtbf_test", "MtbfTest"),
         "DDR": ("backend.agent.tools.ddr_test", "DdrTest"),
         "GPU": ("backend.agent.tools.gpu_stress_test", "GpuStressTest"),
