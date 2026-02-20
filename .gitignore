@@ -26,5 +26,6 @@ venv-wsl/
 *.db-shm
 /frontend/20
 /frontend/20)
+.hypothesis/
 /nul
 /frontend/nul
