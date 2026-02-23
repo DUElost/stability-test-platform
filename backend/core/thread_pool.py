@@ -57,16 +57,23 @@ def shutdown(wait=True, timeout=None):
             return
         _pool = None
 
+    import sys
     if wait and timeout is not None:
         # Wait up to `timeout` seconds, then force-cancel remaining work
-        import concurrent.futures
-        pool.shutdown(wait=False, cancel_futures=False)
+        # cancel_futures is available in Python 3.9+
+        if sys.version_info >= (3, 9):
+            pool.shutdown(wait=False, cancel_futures=False)
+        else:
+            pool.shutdown(wait=False)
         # Give running tasks a grace period
         import time
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             # Pool threads are still running; just sleep briefly
             time.sleep(0.2)
-        pool.shutdown(wait=False, cancel_futures=True)
+        if sys.version_info >= (3, 9):
+            pool.shutdown(wait=False, cancel_futures=True)
+        else:
+            pool.shutdown(wait=False)
     else:
         pool.shutdown(wait=wait)

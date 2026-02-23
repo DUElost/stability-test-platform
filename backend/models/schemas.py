@@ -64,6 +64,15 @@ class RunStatus(str, PyEnum):
     CANCELED = "CANCELED"
 
 
+class RunStepStatus(str, PyEnum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    SKIPPED = "SKIPPED"
+    CANCELED = "CANCELED"
+
+
 class DeploymentStatus(str, PyEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -189,6 +198,9 @@ class Task(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # Pipeline 定义（JSON Schema validated）
+    pipeline_def = Column(JSON, nullable=True)
+
     template = relationship("TaskTemplate", back_populates="tasks")
     tool = relationship("Tool")
     runs = relationship("TaskRun", back_populates="task")
@@ -233,6 +245,33 @@ class TaskRun(Base):
     host = relationship("Host", back_populates="runs")
     device = relationship("Device", back_populates="runs")
     artifacts = relationship("LogArtifact", back_populates="run")
+    steps = relationship("RunStep", back_populates="run", order_by="RunStep.phase, RunStep.step_order", cascade="all, delete-orphan")
+
+
+class RunStep(Base):
+    """Pipeline step execution record within a TaskRun."""
+    __tablename__ = "run_steps"
+    __table_args__ = (
+        Index('ix_rs_run_id', 'run_id'),
+        Index('ix_rs_run_status', 'run_id', 'status'),
+    )
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(Integer, ForeignKey("task_runs.id", ondelete="CASCADE"), nullable=False)
+    phase = Column(String(64), nullable=False)
+    step_order = Column(Integer, nullable=False)
+    name = Column(String(128), nullable=False)
+    action = Column(String(256), nullable=False)
+    params = Column(JSON, default=dict)
+    status = Column(Enum(RunStepStatus), default=RunStepStatus.PENDING, nullable=False)
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    exit_code = Column(Integer)
+    error_message = Column(Text)
+    log_line_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    run = relationship("TaskRun", back_populates="steps")
 
 
 class LogArtifact(Base):

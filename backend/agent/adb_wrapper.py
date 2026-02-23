@@ -1,5 +1,6 @@
+import shlex
 import subprocess
-from typing import List, Optional
+from typing import List, Optional, Union
 
 
 class AdbError(Exception):
@@ -32,8 +33,15 @@ class AdbWrapper:
                 serials.append(parts[0])
         return serials
 
-    def shell(self, serial: str, cmd: List[str]) -> subprocess.CompletedProcess:
-        return self._run(["-s", serial, "shell"] + cmd)
+    def shell(self, serial: str, cmd: Union[str, List[str]], timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+        """Run an adb shell command.
+
+        Accepts either a string (split via shlex) or a pre-tokenized list of args,
+        so pipeline actions can call shell() with plain shell strings.
+        """
+        if isinstance(cmd, str):
+            cmd = shlex.split(cmd)
+        return self._run(["-s", serial, "shell"] + cmd, timeout=timeout)
 
     def install(self, serial: str, apk_path: str) -> subprocess.CompletedProcess:
         return self._run(["-s", serial, "install", "-r", "-g", "-t", apk_path])

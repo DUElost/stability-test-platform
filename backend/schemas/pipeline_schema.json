@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PipelineDefinition",
+  "description": "Defines an ordered set of phases, each containing steps, for TaskRun execution.",
+  "type": "object",
+  "required": ["version", "phases"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema version. Must be 1."
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/Phase"
+      }
+    }
+  },
+  "definitions": {
+    "Phase": {
+      "type": "object",
+      "required": ["name", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Phase name, e.g. 'prepare', 'execute', 'post_process'."
+        },
+        "parallel": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true, steps within this phase execute concurrently."
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/Step"
+          }
+        }
+      }
+    },
+    "Step": {
+      "type": "object",
+      "required": ["name", "action"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Step display name."
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(builtin:|tool:|shell:).+",
+          "description": "Action reference: 'builtin:<name>', 'tool:<id>', or 'shell:<command>'."
+        },
+        "params": {
+          "type": "object",
+          "default": {},
+          "description": "Parameters passed to the action."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 300,
+          "description": "Step timeout in seconds."
+        },
+        "on_failure": {
+          "type": "string",
+          "enum": ["stop", "continue", "retry"],
+          "default": "stop",
+          "description": "Failure policy: stop aborts the run, continue proceeds, retry retries up to max_retries."
+        },
+        "max_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 0,
+          "description": "Max retry attempts when on_failure is 'retry'."
+        }
+      }
+    }
+  }
+}

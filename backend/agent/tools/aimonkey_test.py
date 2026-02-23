@@ -17,6 +17,7 @@ from ..test_framework import BaseTestCase, TestResult, RiskEvent
 from ..test_stages import TestStage, stage_progress, FULL_STAGES
 from ..aimonkey_aee import scan_aee_entries, scan_and_pull_aee_entries
 from ..aimonkey_risk import build_risk_summary, write_risk_summary
+from ..config import get_aimonkey_resource_dir
 
 
 class AIMonkeyTest(BaseTestCase):
@@ -268,13 +269,7 @@ class AIMonkeyTest(BaseTestCase):
             resource_dir = ""
 
         if not resource_dir:
-            resource_dir = os.environ.get("AIMONKEY_RESOURCE_DIR", "")
-
-        if not resource_dir:
-            try:
-                resource_dir = str(Path(__file__).resolve().parents[3] / "Monkey_test" / "AIMonkeyTest_2025mtk")
-            except Exception:
-                resource_dir = "/opt/stability-test-agent/resources/aimonkey"
+            resource_dir = get_aimonkey_resource_dir()
 
         self._log(f"资源目录: {resource_dir}", "INFO")
 

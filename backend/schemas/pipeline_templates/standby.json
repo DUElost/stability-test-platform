@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "description": "Standby test: play video, optionally turn off screen, wait for standby duration",
+  "phases": [
+    {
+      "name": "prepare",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "check_device",
+          "action": "builtin:check_device",
+          "params": {},
+          "timeout": 30,
+          "on_failure": "stop"
+        }
+      ]
+    },
+    {
+      "name": "execute",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "start_video",
+          "action": "builtin:start_process",
+          "params": {
+            "command": "am start -a android.intent.action.VIEW -d {video_url}",
+            "background": false,
+            "timeout": 30
+          },
+          "timeout": 30,
+          "on_failure": "continue"
+        },
+        {
+          "name": "standby_wait",
+          "action": "shell:sleep {standby_seconds}",
+          "params": {},
+          "timeout": 7200,
+          "on_failure": "stop"
+        }
+      ]
+    },
+    {
+      "name": "teardown",
+      "parallel": false,
+      "steps": []
+    }
+  ]
+}

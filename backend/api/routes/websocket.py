@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +64,30 @@ async def _validate_ws_token(websocket: WebSocket, token: Optional[str]) -> bool
         await websocket.close(code=4001, reason="Authentication required")
         return False
 
-    # 验证 token（开发模式下允许默认 token）
-    if token != _WS_TOKEN:
+    # 验证 token：接受 WS_TOKEN 或有效的 JWT token
+    if token:
+        if token == _WS_TOKEN:
+            return True
+
+        # 尝试验证 JWT token
+        try:
+            from backend.core.security import decode_token
+            payload = decode_token(token)
+            if payload:
+                # JWT token 验证成功
+                return True
+        except Exception:
+            pass
+
+        # JWT 验证失败，拒绝连接
         logger.warning(f"WebSocket connection rejected: invalid token")
         await websocket.close(code=4001, reason="Invalid token")
+        return False
+
+    # 没有 token 但在生产环境
+    if os.getenv("ENV") == "production":
+        logger.warning("WebSocket connection rejected: no token in production")
+        await websocket.close(code=4001, reason="Authentication required")
         return False
 
     return True
@@ -214,3 +235,264 @@ async def broadcast_report_ready(run_id: int, task_id: int) -> None:
             "task_id": task_id,
         },
     })
+
+
+# ---------------------------------------------------------------------------
+# Agent WebSocket Endpoint (WS /ws/agent/{host_id})
+# ---------------------------------------------------------------------------
+# Accepts persistent connections from agents for real-time log streaming
+# and step status updates. Relays log messages to frontend subscribers.
+
+_AGENT_SECRET = os.getenv("AGENT_SECRET", "")
+_agent_connections: Dict[int, WebSocket] = {}  # host_id -> WebSocket
+
+
+def get_agent_connections() -> Dict[int, WebSocket]:
+    """Get the current agent WebSocket connections map."""
+    return _agent_connections
+
+
+@router.websocket("/ws/agent/{host_id}")
+async def websocket_agent(websocket: WebSocket, host_id: int):
+    """WebSocket endpoint for agent connections. Authenticates via AGENT_SECRET."""
+    await websocket.accept()
+
+    # Wait for auth message (first message must be auth)
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
+        auth_msg = json.loads(raw)
+    except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
+        logger.warning(f"Agent WS auth timeout/parse error for host_id={host_id}: {e}")
+        await websocket.close(code=4001, reason="Auth timeout or invalid message")
+        return
+
+    if auth_msg.get("type") != "auth":
+        await websocket.close(code=4001, reason="First message must be auth")
+        return
+
+    # Validate agent_secret
+    provided_secret = auth_msg.get("agent_secret", "")
+    if _AGENT_SECRET:
+        if provided_secret != _AGENT_SECRET:
+            logger.warning(f"Agent WS auth failed for host_id={host_id}: invalid secret")
+            await websocket.close(code=4001, reason="Invalid agent secret")
+            return
+    else:
+        # No AGENT_SECRET configured — allow in dev, reject in production
+        if os.getenv("ENV", "").lower() == "production":
+            logger.warning(f"Agent WS rejected for host_id={host_id}: AGENT_SECRET not configured in production")
+            await websocket.close(code=4001, reason="AGENT_SECRET not configured")
+            return
+        logger.warning(f"Agent WS auth skipped for host_id={host_id}: AGENT_SECRET not configured (dev mode)")
+
+    # Auth successful
+    _agent_connections[host_id] = websocket
+    logger.info(f"Agent WS connected: host_id={host_id}, total agents: {len(_agent_connections)}")
+
+    # Send auth acknowledgment
+    await websocket.send_json({"type": "auth_ack", "status": "ok"})
+
+    # Set up keepalive ping task
+    last_pong = time.time()
+
+    async def ping_loop():
+        nonlocal last_pong
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await websocket.send_json({"type": "ping"})
+            except Exception:
+                break
+
+    ping_task = asyncio.create_task(ping_loop())
+
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+
+            msg_type = msg.get("type", "")
+
+            if msg_type == "pong":
+                last_pong = time.time()
+
+            elif msg_type == "log":
+                # Relay log message to frontend subscribers
+                run_id = msg.get("run_id")
+                if run_id:
+                    # Wrap in {type, payload} envelope to match frontend protocol
+                    log_data = {
+                        "type": "STEP_LOG",
+                        "payload": {
+                            "step_id": msg.get("step_id"),
+                            "seq": msg.get("seq"),
+                            "level": msg.get("level", "INFO"),
+                            "ts": msg.get("ts", ""),
+                            "msg": msg.get("msg", ""),
+                        },
+                    }
+                    await manager.broadcast(f"/ws/logs/{run_id}", log_data)
+
+            elif msg_type == "step_update":
+                # Update RunStep in DB and broadcast to frontend
+                run_id = msg.get("run_id")
+                step_id = msg.get("step_id")
+                if run_id and step_id:
+                    # DB update happens asynchronously via thread pool
+                    try:
+                        _handle_agent_step_update(msg, agent_host_id=host_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to handle step_update: {e}")
+
+                    # Broadcast to frontend immediately (wrapped in {type, payload} envelope)
+                    step_data = {
+                        "type": "STEP_UPDATE",
+                        "payload": {
+                            "step_id": step_id,
+                            "status": msg.get("status"),
+                            "progress": msg.get("progress"),
+                            "started_at": msg.get("started_at"),
+                            "finished_at": msg.get("finished_at"),
+                            "exit_code": msg.get("exit_code"),
+                            "error_message": msg.get("error_message"),
+                        },
+                    }
+                    await manager.broadcast(f"/ws/logs/{run_id}", step_data)
+
+            elif msg_type == "heartbeat":
+                # Process heartbeat from agent (reuse existing heartbeat logic)
+                try:
+                    _handle_agent_heartbeat(host_id, msg)
+                except Exception as e:
+                    logger.warning(f"Failed to handle agent heartbeat via WS: {e}")
+
+    except WebSocketDisconnect:
+        logger.info(f"Agent WS disconnected: host_id={host_id}")
+    except Exception as e:
+        logger.error(f"Agent WS error for host_id={host_id}: {e}")
+    finally:
+        ping_task.cancel()
+        _agent_connections.pop(host_id, None)
+        logger.info(f"Agent WS cleaned up: host_id={host_id}, remaining agents: {len(_agent_connections)}")
+
+
+def _parse_iso_timestamp(value: str) -> "datetime":
+    """Parse ISO 8601 timestamp, handling both '+00:00' and 'Z' suffixes.
+
+    Python 3.8's datetime.fromisoformat() does not support the 'Z' suffix.
+    """
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
+
+
+def _handle_agent_step_update(msg: dict, agent_host_id: int = 0) -> None:
+    """Update RunStep record in DB from agent WS message. Runs in the main thread."""
+    from backend.core.database import SessionLocal
+    from backend.models.schemas import RunStep, RunStepStatus, TaskRun
+    from datetime import datetime
+
+    step_id = msg.get("step_id")
+    if not step_id:
+        return
+
+    # Expected run_id from the message (for ownership validation)
+    msg_run_id = msg.get("run_id")
+
+    # Valid RunStep status transitions
+    _STEP_TRANSITIONS = {
+        RunStepStatus.PENDING: {RunStepStatus.RUNNING, RunStepStatus.SKIPPED, RunStepStatus.CANCELED},
+        RunStepStatus.RUNNING: {RunStepStatus.COMPLETED, RunStepStatus.FAILED, RunStepStatus.CANCELED},
+        RunStepStatus.COMPLETED: set(),
+        RunStepStatus.FAILED: set(),
+        RunStepStatus.SKIPPED: set(),
+        RunStepStatus.CANCELED: set(),
+    }
+
+    db = SessionLocal()
+    try:
+        step = db.get(RunStep, step_id)
+        if not step:
+            return
+
+        # Validate run_id ownership: step must belong to the run in the message
+        if msg_run_id and step.run_id != msg_run_id:
+            logger.warning(
+                f"step_update ownership mismatch: step {step_id} belongs to run {step.run_id}, "
+                f"but message claims run {msg_run_id} from host {agent_host_id}"
+            )
+            return
+
+        # Validate host ownership: run must be assigned to the connecting agent's host
+        if agent_host_id:
+            run = db.get(TaskRun, step.run_id)
+            if run and run.host_id != agent_host_id:
+                logger.warning(
+                    f"step_update host mismatch: run {step.run_id} is assigned to host {run.host_id}, "
+                    f"but update came from host {agent_host_id}"
+                )
+                return
+
+        status_str = msg.get("status")
+        if status_str:
+            try:
+                target_status = RunStepStatus(status_str)
+                # Validate transition
+                allowed = _STEP_TRANSITIONS.get(step.status, set())
+                if target_status in allowed or step.status == target_status:
+                    step.status = target_status
+                else:
+                    logger.warning(f"Invalid RunStep transition {step.status.value}->{status_str} for step {step_id}")
+            except ValueError:
+                pass
+        if msg.get("started_at"):
+            try:
+                step.started_at = _parse_iso_timestamp(msg["started_at"])
+            except (ValueError, TypeError):
+                pass
+        if msg.get("finished_at"):
+            try:
+                step.finished_at = _parse_iso_timestamp(msg["finished_at"])
+            except (ValueError, TypeError):
+                pass
+        if msg.get("exit_code") is not None:
+            step.exit_code = msg["exit_code"]
+        if msg.get("error_message") is not None:
+            step.error_message = msg["error_message"]
+
+        db.commit()
+    except Exception as e:
+        logger.warning(f"DB update for step {step_id} failed: {e}")
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _handle_agent_heartbeat(host_id: int, msg: dict) -> None:
+    """Process heartbeat received via agent WebSocket."""
+    from backend.core.database import SessionLocal
+    from backend.models.schemas import Host, HostStatus
+    from datetime import datetime
+
+    db = SessionLocal()
+    try:
+        host = db.get(Host, host_id)
+        if not host:
+            return
+
+        host.status = HostStatus.ONLINE
+        host.last_heartbeat = datetime.utcnow()
+
+        stats = msg.get("stats", {})
+        if stats:
+            host.extra = {**(host.extra or {}), **stats}
+
+        db.commit()
+    except Exception as e:
+        logger.warning(f"Agent heartbeat DB update for host {host_id} failed: {e}")
+        db.rollback()
+    finally:
+        db.close()

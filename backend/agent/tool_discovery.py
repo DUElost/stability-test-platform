@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 
-# 默认扫描路径
-DEFAULT_TOOL_DIR = "/home/android/sonic_agent/logs/ftp_log/sonic_tinno/Test_Tool"
+from .config import EXTERNAL_TOOL_DIR, BUILTIN_TOOL_DIR
 
-# 内置工具目录
-BUILTIN_TOOL_DIR = Path(__file__).parent / "tools"
+
+# 默认扫描路径
+DEFAULT_TOOL_DIR = EXTERNAL_TOOL_DIR
 
 
 class ToolDiscovery:
@@ -195,6 +195,8 @@ class ToolDiscoveryService:
         """
         同步发现的工具到数据库
         返回：{"categories": 新增分类数, "tools": 新增工具数}
+
+        注意：此方法为服务端功能（需要 backend.models），Agent 运行时不调用。
         """
         from backend.models.schemas import ToolCategory, Tool
 

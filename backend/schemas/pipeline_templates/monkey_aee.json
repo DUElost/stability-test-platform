@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "description": "Monkey AEE Stability test: run external legacy script via subprocess adapter",
+  "phases": [
+    {
+      "name": "prepare",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "check_device",
+          "action": "builtin:check_device",
+          "params": {},
+          "timeout": 30,
+          "on_failure": "stop"
+        }
+      ]
+    },
+    {
+      "name": "execute",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "run_legacy_script",
+          "action": "builtin:run_tool_script",
+          "params": {
+            "tool_id": null,
+            "script_path": "{legacy_script_path}",
+            "script_class": "MonkeyAEEStabilityTest"
+          },
+          "timeout": 21600,
+          "on_failure": "stop"
+        }
+      ]
+    },
+    {
+      "name": "post_process",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "scan_aee",
+          "action": "builtin:scan_aee",
+          "params": {
+            "aee_dirs": ["/data/aee_exp", "/data/vendor/aee_exp"],
+            "local_dir": "{log_dir}/aee"
+          },
+          "timeout": 120,
+          "on_failure": "continue"
+        },
+        {
+          "name": "log_scan",
+          "action": "builtin:log_scan",
+          "params": {
+            "input_dir": "{log_dir}",
+            "keywords": ["FATAL", "CRASH", "ANR"]
+          },
+          "timeout": 120,
+          "on_failure": "continue"
+        }
+      ]
+    }
+  ]
+}

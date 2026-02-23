@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.core.database import get_db
 from backend.core.task_templates import list_templates as list_core_templates
-from backend.models.schemas import Device, DeviceStatus, Host, HostStatus, LogArtifact, RunStatus, Task, TaskRun, TaskStatus, Tool
+from backend.models.schemas import Device, DeviceStatus, Host, HostStatus, LogArtifact, RunStatus, RunStep, RunStepStatus, Task, TaskRun, TaskStatus, Tool
 from backend.api.schemas import (
     AgentLogOut,
     AgentLogQuery,
@@ -33,6 +33,8 @@ from backend.api.schemas import (
     RunCompleteIn,
     RunOut,
     RunReportOut,
+    RunStepOut,
+    RunStepUpdate,
     RunUpdate,
     TaskCreate,
     TaskDispatch,
@@ -206,6 +208,59 @@ def _update_distributed_task_status(db: Session, task_id: int) -> None:
         task.status = TaskStatus.QUEUED
 
     db.commit()
+
+
+def _create_run_steps_from_pipeline(db: Session, run_id: int, pipeline_def: dict) -> None:
+    """Create PENDING RunStep records from a pipeline definition when a run first starts."""
+    phases = pipeline_def.get("phases", [])
+    for phase in phases:
+        phase_name = phase.get("name", "unknown")
+        steps = phase.get("steps", [])
+        for idx, step in enumerate(steps):
+            run_step = RunStep(
+                run_id=run_id,
+                phase=phase_name,
+                step_order=idx,
+                name=step.get("name", f"step_{idx}"),
+                action=step.get("action", ""),
+                params=step.get("params", {}),
+                status=RunStepStatus.PENDING,
+            )
+            db.add(run_step)
+    db.flush()
+
+
+def _aggregate_run_status_from_steps(db: Session, run: TaskRun, pipeline_def: dict) -> None:
+    """Derive TaskRun status from the aggregate state of its RunStep records."""
+    steps = db.query(RunStep).filter(RunStep.run_id == run.id).all()
+    if not steps:
+        return
+
+    all_completed = all(s.status == RunStepStatus.COMPLETED for s in steps)
+    any_failed_stop = False
+    any_failed = False
+
+    # Build a lookup for step failure policies from pipeline_def
+    step_policies = {}
+    for phase in pipeline_def.get("phases", []):
+        for step_def in phase.get("steps", []):
+            step_policies[step_def.get("name", "")] = step_def.get("on_failure", "stop")
+
+    for s in steps:
+        if s.status == RunStepStatus.FAILED:
+            any_failed = True
+            policy = step_policies.get(s.name, "stop")
+            if policy == "stop":
+                any_failed_stop = True
+
+    if any_failed_stop:
+        run.status = RunStatus.FAILED
+        run.finished_at = datetime.utcnow()
+    elif all_completed:
+        run.status = RunStatus.FINISHED
+        run.finished_at = datetime.utcnow()
+        if any_failed:
+            run.log_summary = (run.log_summary or "") + " [WARNING: some steps failed with on_failure=continue]"
 
 
 def _acquire_device_lock(db: Session, device_id: int, run_id: int) -> None:
@@ -383,6 +438,15 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user
             "need_device": tool.need_device,
         }
 
+    # Validate pipeline_def if provided (even if empty dict)
+    pipeline_def = None
+    if payload.pipeline_def is not None:
+        from backend.core.pipeline_validator import validate_pipeline_def
+        is_valid, errors = validate_pipeline_def(payload.pipeline_def)
+        if not is_valid:
+            raise HTTPException(status_code=422, detail=f"Invalid pipeline definition: {'; '.join(errors)}")
+        pipeline_def = payload.pipeline_def
+
     task = Task(
         name=payload.name,
         type=payload.type,
@@ -395,6 +459,7 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user
         priority=payload.priority,
         group_id=group_id,
         is_distributed=payload.is_distributed,
+        pipeline_def=pipeline_def,
     )
     db.add(task)
     db.commit()
@@ -656,6 +721,7 @@ def agent_pending_runs(
                 task_params=task.params if task else {},
                 tool_id=task.tool_id if task else None,
                 tool_snapshot=task.tool_snapshot if task else None,
+                pipeline_def=task.pipeline_def if task else None,
             )
         )
     return payload
@@ -701,6 +767,11 @@ def agent_run_heartbeat(run_id: int, payload: RunUpdate, db: Session = Depends(g
         if task:
             _ensure_task_transition(task, TaskStatus.RUNNING)
             task.status = TaskStatus.RUNNING
+
+            # Create RunStep records for pipeline tasks on first RUNNING transition
+            if task.pipeline_def and not db.query(RunStep).filter(RunStep.run_id == run.id).first():
+                _create_run_steps_from_pipeline(db, run.id, task.pipeline_def)
+
         _extend_device_lock(db, run.device_id, run.id)
 
     # 任务完成时，更新分布式任务的整体状态
@@ -847,8 +918,15 @@ async def agent_run_complete(
             "host_id": run.host_id,
             "device_id": run.device_id,
             "run_status": run.status.value,
+            "error_code": run.error_code,
+            "error_message": run.error_message,
         },
     )
+    if run.status == RunStatus.FAILED:
+        logger.warning(
+            f"run_failed_detail: run_id={run.id}, error_code={run.error_code}, "
+            f"error_message={run.error_message}, log_summary={run.log_summary}"
+        )
 
     # Broadcast real-time status updates via WebSocket
     try:
@@ -1057,6 +1135,13 @@ def cancel_task(task_id: int, db: Session = Depends(get_db), current_user: User 
         # Release device lock if held
         if run.device_id:
             _release_device_lock(db, run.device_id, run.id)
+        # Cancel all pending/running RunSteps for this run
+        pending_steps = db.query(RunStep).filter(
+            RunStep.run_id == run.id,
+            RunStep.status.in_([RunStepStatus.PENDING, RunStepStatus.RUNNING]),
+        ).all()
+        for step in pending_steps:
+            step.status = RunStepStatus.CANCELED
 
     db.commit()
     db.refresh(run if run else task)
@@ -1247,3 +1332,102 @@ def delete_task(
     db.commit()
 
     return {"message": "删除成功"}
+
+
+# ==================== RunStep API (Pipeline 子步骤) ====================
+
+
+@router.get("/runs/{run_id}/steps", response_model=List[RunStepOut])
+def list_run_steps(run_id: int, db: Session = Depends(get_db)):
+    """List all pipeline steps for a given TaskRun, ordered by phase and step_order."""
+    run = db.get(TaskRun, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="run not found")
+    steps = (
+        db.query(RunStep)
+        .filter(RunStep.run_id == run_id)
+        .order_by(RunStep.phase, RunStep.step_order)
+        .all()
+    )
+    return steps
+
+
+@router.get("/runs/{run_id}/steps/{step_id}", response_model=RunStepOut)
+def get_run_step(run_id: int, step_id: int, db: Session = Depends(get_db)):
+    """Get a single RunStep detail."""
+    step = db.query(RunStep).filter(RunStep.id == step_id, RunStep.run_id == run_id).first()
+    if not step:
+        raise HTTPException(status_code=404, detail="step not found")
+    return step
+
+
+@router.post("/agent/runs/{run_id}/steps/{step_id}/status")
+def agent_update_step_status(
+    run_id: int,
+    step_id: int,
+    payload: RunStepUpdate,
+    db: Session = Depends(get_db),
+    _: bool = Depends(verify_agent_secret),
+):
+    """Agent HTTP fallback for step status updates."""
+    step = db.query(RunStep).filter(RunStep.id == step_id, RunStep.run_id == run_id).first()
+    if not step:
+        raise HTTPException(status_code=404, detail="step not found")
+
+    # Valid RunStep status transitions
+    _STEP_TRANSITIONS = {
+        RunStepStatus.PENDING: {RunStepStatus.RUNNING, RunStepStatus.SKIPPED, RunStepStatus.CANCELED},
+        RunStepStatus.RUNNING: {RunStepStatus.COMPLETED, RunStepStatus.FAILED, RunStepStatus.CANCELED},
+        RunStepStatus.COMPLETED: set(),
+        RunStepStatus.FAILED: set(),
+        RunStepStatus.SKIPPED: set(),
+        RunStepStatus.CANCELED: set(),
+    }
+
+    if payload.status:
+        try:
+            target_status = RunStepStatus(payload.status)
+            allowed = _STEP_TRANSITIONS.get(step.status, set())
+            if target_status not in allowed and step.status != target_status:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"illegal step transition {step.status.value}->{payload.status}",
+                )
+            step.status = target_status
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"invalid step status: {payload.status}")
+    if payload.started_at:
+        step.started_at = payload.started_at
+    if payload.finished_at:
+        step.finished_at = payload.finished_at
+    if payload.exit_code is not None:
+        step.exit_code = payload.exit_code
+    if payload.error_message is not None:
+        step.error_message = payload.error_message
+    if payload.log_line_count is not None:
+        step.log_line_count = payload.log_line_count
+
+    db.commit()
+    db.refresh(step)
+
+    # Broadcast step update to frontend WebSocket subscribers
+    try:
+        from backend.api.routes.websocket import schedule_broadcast
+        # Use {type, payload} envelope to match the WS agent relay protocol
+        schedule_broadcast(f"/ws/logs/{run_id}", {
+            "type": "STEP_UPDATE",
+            "payload": {
+                "step_id": step.id,
+                "name": step.name,
+                "phase": step.phase,
+                "status": step.status.value if hasattr(step.status, 'value') else str(step.status),
+                "started_at": step.started_at.isoformat() if step.started_at else None,
+                "finished_at": step.finished_at.isoformat() if step.finished_at else None,
+                "exit_code": step.exit_code,
+                "error_message": step.error_message,
+            },
+        })
+    except Exception:
+        logger.warning("Failed to broadcast step update via WebSocket", exc_info=True)
+
+    return {"status": "ok"}

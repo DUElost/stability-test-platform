@@ -28,6 +28,7 @@ from backend.api.routes.notifications import router as notifications_router
 from backend.api.routes.audit import router as audit_router
 from backend.api.routes.schedules import router as schedules_router
 from backend.api.routes.templates import router as templates_router
+from backend.api.routes.pipeline import router as pipeline_router
 from backend.core.database import Base, engine, SessionLocal
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
@@ -116,6 +117,7 @@ app.include_router(notifications_router)
 app.include_router(audit_router)
 app.include_router(schedules_router)
 app.include_router(templates_router)
+app.include_router(pipeline_router)
 
 
 @app.on_event("startup")

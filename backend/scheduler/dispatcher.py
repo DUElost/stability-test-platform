@@ -156,6 +156,7 @@ class TaskDispatcher:
 
             try:
                 run_id = self._create_run_with_lock(db, task, device, host, limit)
+                db.commit()
                 duration = time.time() - start_time
                 task_dispatch_latency.observe(duration)
                 task_dispatch_total.labels(status="success").inc()

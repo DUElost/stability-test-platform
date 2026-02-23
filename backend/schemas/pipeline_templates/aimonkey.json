@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "description": "AIMonkey stability test: root, configure, push resources, fill storage, run aim, monitor, collect logs",
+  "phases": [
+    {
+      "name": "prepare",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "check_device",
+          "action": "builtin:check_device",
+          "params": {},
+          "timeout": 30,
+          "on_failure": "stop"
+        },
+        {
+          "name": "ensure_root",
+          "action": "builtin:ensure_root",
+          "params": {},
+          "timeout": 30,
+          "on_failure": "stop"
+        },
+        {
+          "name": "clean_env",
+          "action": "builtin:clean_env",
+          "params": {
+            "clear_logs": true,
+            "log_dirs": ["/data/aee_exp", "/data/vendor/aee_exp", "/data/debuglogger/mobilelog"],
+            "set_properties": {
+              "persist.vendor.debuglogger": "1",
+              "persist.vendor.sys.modemlog.enable": "1",
+              "persist.sys.logkit.ctrlcode": "1"
+            }
+          },
+          "timeout": 60,
+          "on_failure": "continue"
+        },
+        {
+          "name": "connect_wifi",
+          "action": "builtin:connect_wifi",
+          "params": {
+            "ssid": "",
+            "password": ""
+          },
+          "timeout": 30,
+          "on_failure": "continue"
+        },
+        {
+          "name": "push_resources",
+          "action": "builtin:push_resources",
+          "params": {
+            "files": [
+              {"local": "{resource_dir}/aim", "remote": "/data/local/tmp/aim", "chmod": "755"},
+              {"local": "{resource_dir}/aimwd", "remote": "/data/local/tmp/aimwd", "chmod": "755"},
+              {"local": "{resource_dir}/aim.jar", "remote": "/data/local/tmp/aim.jar"},
+              {"local": "{resource_dir}/blacklist.txt", "remote": "/sdcard/blacklist.txt"},
+              {"local": "{resource_dir}/aimonkey.apk", "remote": "/data/local/tmp/monkey.apk"}
+            ]
+          },
+          "timeout": 300,
+          "on_failure": "stop"
+        },
+        {
+          "name": "fill_storage",
+          "action": "builtin:fill_storage",
+          "params": {
+            "target_percentage": 60
+          },
+          "timeout": 300,
+          "on_failure": "continue"
+        }
+      ]
+    },
+    {
+      "name": "execute",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "start_aimwd",
+          "action": "builtin:start_process",
+          "params": {
+            "command": "/data/local/tmp/aimwd",
+            "background": true
+          },
+          "timeout": 30,
+          "on_failure": "continue"
+        },
+        {
+          "name": "start_aimonkey",
+          "action": "builtin:start_process",
+          "params": {
+            "command": "/data/local/tmp/aim --pkg-blacklist-file /sdcard/blacklist.txt --smartuiautomator true --hprof --ignore-crashes --ignore-security-exceptions --ignore-timeouts --throttle 500 --runtime-minutes 10080 --switchuimode -v",
+            "background": true
+          },
+          "timeout": 60,
+          "on_failure": "stop"
+        },
+        {
+          "name": "monitor_aimonkey",
+          "action": "builtin:monitor_process",
+          "params": {
+            "pid_from_step": "start_aimonkey",
+            "duration": 604800,
+            "check_interval": 5,
+            "log_paths": ["/data/aee_exp", "/data/vendor/aee_exp"],
+            "pull_on_error": true
+          },
+          "timeout": 605000,
+          "on_failure": "continue"
+        }
+      ]
+    },
+    {
+      "name": "post_process",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "stop_aimonkey",
+          "action": "builtin:stop_process",
+          "params": {
+            "pid_from_step": "start_aimonkey"
+          },
+          "timeout": 30,
+          "on_failure": "continue"
+        },
+        {
+          "name": "pull_debuglogger",
+          "action": "builtin:adb_pull",
+          "params": {
+            "remote_path": "/data/debuglogger",
+            "local_path": "{log_dir}/debuglogger"
+          },
+          "timeout": 300,
+          "on_failure": "continue"
+        },
+        {
+          "name": "collect_bugreport",
+          "action": "builtin:collect_bugreport",
+          "params": {
+            "remote_path": "/sdcard/bugreport-aimonkey.txt",
+            "local_dir": "{log_dir}"
+          },
+          "timeout": 300,
+          "on_failure": "continue"
+        },
+        {
+          "name": "scan_aee",
+          "action": "builtin:scan_aee",
+          "params": {
+            "aee_dirs": ["/data/aee_exp", "/data/vendor/aee_exp"],
+            "local_dir": "{log_dir}/aee"
+          },
+          "timeout": 120,
+          "on_failure": "continue"
+        },
+        {
+          "name": "aee_extract",
+          "action": "builtin:aee_extract",
+          "params": {
+            "input_dir": "{log_dir}/aee",
+            "output_dir": "{log_dir}/aee_decoded"
+          },
+          "timeout": 300,
+          "on_failure": "continue"
+        },
+        {
+          "name": "log_scan",
+          "action": "builtin:log_scan",
+          "params": {
+            "input_dir": "{log_dir}",
+            "keywords": ["FATAL", "CRASH", "ANR"]
+          },
+          "timeout": 120,
+          "on_failure": "continue"
+        }
+      ]
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 import tarfile
 import hashlib
@@ -11,10 +12,32 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
+from . import config
 from .adb_wrapper import AdbError, AdbWrapper
 from .aimonkey_aee import AEEEntry, scan_aee_entries, scan_and_pull_aee_entries
 from .aimonkey_risk import build_risk_summary, write_risk_summary
 from .aimonkey_stages import AIMonkeyStage, stage_progress
+
+
+def _convert_windows_path(script_path: str) -> str:
+    """将 Windows 路径转换为 Linux 路径（如果是 WSL 环境）"""
+    if not script_path:
+        return script_path
+
+    # 检查是否是 Windows 路径（如 F:\ 或 D:\）
+    if len(script_path) >= 2 and script_path[1] == ":":
+        drive_letter = script_path[0].lower()
+        # 转换为 WSL 路径格式：F:\xxx -> /mnt/f/xxx
+        linux_path = f"/mnt/{drive_letter}{script_path[2:].replace(chr(92), '/')}"
+        # 检查路径是否存在（尝试常见的挂载点）
+        if os.path.exists(linux_path):
+            return linux_path
+
+        # 如果 /mnt/f 不存在，尝试直接使用原始路径
+        # 某些环境下 Windows 驱动器可能通过其他方式挂载
+        return script_path
+
+    return script_path
 
 
 @dataclass
@@ -28,7 +51,7 @@ class ExecutionContext:
 
     def __post_init__(self):
         if not self.log_dir:
-            self.log_dir = f"logs/runs/{self.run_id}"
+            self.log_dir = config.get_run_log_dir(self.run_id)
 
 
 @dataclass
@@ -48,21 +71,17 @@ class TaskExecutor:
     # 2. 直接运行或调试模式 (包名为 backend.agent)
     @staticmethod
     def _get_tools_module_path() -> str:
-        """动态解析 tools 模块路径，兼容不同运行形态"""
-        import sys
-        # 检查是否以 agent 包模式运行
-        if "agent.main" in sys.modules or any("agent." in m for m in sys.modules if m.startswith("agent")):
-            return "agent.tools"
-        return "backend.agent.tools"
+        """动态解析 tools 模块路径，基于当前包名"""
+        return f"{__package__}.tools"
 
     _TEST_CLASS_REGISTRY: Dict[str, Tuple[str, str]] = {
-        "MONKEY": ("backend.agent.tools.monkey_test", "MonkeyTest"),
-        "MONKEY_AEE": ("backend.agent.tools.monkey_aee_stability_test", "MonkeyAEEStabilityTest"),
-        "MTBF": ("backend.agent.tools.mtbf_test", "MtbfTest"),
-        "DDR": ("backend.agent.tools.ddr_test", "DdrTest"),
-        "GPU": ("backend.agent.tools.gpu_stress_test", "GpuStressTest"),
-        "STANDBY": ("backend.agent.tools.standby_test", "StandbyTest"),
-        "AIMONKEY": ("backend.agent.tools.aimonkey_test", "AIMonkeyTest"),
+        "MONKEY": ("tools.monkey_test", "MonkeyTest"),
+        "MONKEY_AEE": ("tools.monkey_aee_stability_test", "MonkeyAEEStabilityTest"),
+        "MTBF": ("tools.mtbf_test", "MtbfTest"),
+        "DDR": ("tools.ddr_test", "DdrTest"),
+        "GPU": ("tools.gpu_stress_test", "GpuStressTest"),
+        "STANDBY": ("tools.standby_test", "StandbyTest"),
+        "AIMONKEY": ("tools.aimonkey_test", "AIMonkeyTest"),
     }
 
     def __init__(self, adb: AdbWrapper) -> None:
@@ -129,18 +148,37 @@ class TaskExecutor:
 
     def execute_task(self, task_type: str, params: Dict[str, Any], context: ExecutionContext) -> TaskResult:
         self._context = context
+        self._logger.info(f"execute_task called: task_type={task_type}, params_keys={list(params.keys())}, tool_id={params.get('tool_id')}")
         try:
             # Priority 1: tool_id → dynamic tool loading
             tool_id = params.get("tool_id")
             if tool_id:
-                return self._execute_tool(tool_id, params)
+                self._logger.info(f"Priority 1: executing via tool_id={tool_id}")
+                result = self._execute_tool(tool_id, params)
+                # 如果脚本加载失败（如 Windows 路径在 Linux 上不可用），回退到注册表
+                if result.error_code != "TOOL_LOAD_FAILED":
+                    return result
+                self._logger.warning(f"tool_id={tool_id} load failed, falling back to registry")
 
             # Priority 2: class registry → BaseTestCase subclasses
             task_name = task_type.upper()
-            if task_name in self._TEST_CLASS_REGISTRY:
-                return self._execute_registered_test(task_name, params)
+            # 支持前缀匹配（如 "MONKEY_AEE Stability" → "MONKEY_AEE"）
+            # 按 key 长度降序匹配，确保 MONKEY_AEE 优先于 MONKEY
+            matched_key = None
+            for key in sorted(self._TEST_CLASS_REGISTRY, key=len, reverse=True):
+                if task_name.startswith(key) or key in task_name:
+                    matched_key = key
+                    break
+            if matched_key:
+                self._logger.info(f"Priority 2: executing via registered test class: {matched_key}")
+                return self._execute_registered_test(matched_key, params)
+
+            # tool_id 加载失败且注册表也没匹配到，返回原始错误
+            if tool_id and result.error_code == "TOOL_LOAD_FAILED":
+                return result
 
             # Priority 3: legacy fallback → local script
+            self._logger.warning(f"Priority 3: falling back to local script (no script_path in params)")
             return self._run_local_script(params)
         except ValueError as exc:
             return TaskResult(status="FAILED", exit_code=1, error_code="INVALID_PARAM", error_message=str(exc))
@@ -158,25 +196,26 @@ class TaskExecutor:
         import importlib
 
         module_path, class_name = self._TEST_CLASS_REGISTRY[task_name]
-        # 动态调整模块路径，兼容 agent/main 和 backend.agent 两种运行形态
-        tools_base = self._get_tools_module_path()
-        module_path = module_path.replace("backend.agent.tools", tools_base)
+        # 使用当前包名作为前缀: backend.agent.tools.xxx 或 agent.tools.xxx
+        full_module_path = f"{__package__}.{module_path}"
+
+        self._logger.info(f"Executing registered test: {task_name}, module_path={full_module_path}, class={class_name}")
 
         try:
-            module = importlib.import_module(module_path)
+            module = importlib.import_module(full_module_path)
         except ModuleNotFoundError as e:
-            self._logger.error(f"Failed to import test module {module_path}: {e}")
+            self._logger.error(f"Failed to import test module {full_module_path}: {e}")
             return TaskResult(
                 status="FAILED",
                 exit_code=1,
                 error_code="MODULE_NOT_FOUND",
-                error_message=f"Test module not found: {module_path}",
+                error_message=f"Test module not found: {full_module_path}",
             )
 
         try:
             test_class = getattr(module, class_name)
         except AttributeError as e:
-            self._logger.error(f"Failed to get test class {class_name} from {module_path}: {e}")
+            self._logger.error(f"Failed to get test class {class_name} from {full_module_path}: {e}")
             return TaskResult(
                 status="FAILED",
                 exit_code=1,
@@ -212,7 +251,7 @@ class TaskExecutor:
     def _execute_tool(self, tool_id: int, params: Dict[str, Any]) -> TaskResult:
         """通过工具 ID 执行测试"""
         import importlib.util
-        from backend.agent.test_framework import BaseTestCase, TestResult
+        from .test_framework import BaseTestCase, TestResult
 
         script_path = params.get("script_path")
         script_class = params.get("script_class")
@@ -284,10 +323,15 @@ class TaskExecutor:
         if not hasattr(self, '_tool_class_cache'):
             self._tool_class_cache = {}
 
+        # 转换 Windows 路径到 Linux 路径（如果是 WSL）
+        script_path = _convert_windows_path(script_path)
+        self._logger.info(f"Loading tool class: {class_name} from {script_path}")
+
         try:
             # 从文件加载模块
             spec = importlib.util.spec_from_file_location("tool_module", script_path)
             if spec is None or spec.loader is None:
+                self._logger.error(f"Failed to create module spec for {script_path}")
                 return None
 
             module = importlib.util.module_from_spec(spec)
@@ -297,14 +341,14 @@ class TaskExecutor:
             tool_class = getattr(module, class_name, None)
 
             # 检查是否继承 BaseTestCase
-            from backend.agent.test_framework import BaseTestCase
+            from .test_framework import BaseTestCase
             if tool_class and issubclass(tool_class, BaseTestCase):
                 self._tool_class_cache[cache_key] = tool_class
                 return tool_class
 
             return None
         except Exception as e:
-            print(f"加载工具类失败: {e}")
+            self._logger.error(f"加载工具类失败: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -550,11 +594,10 @@ class TaskExecutor:
 
     def _aimonkey_log_dir(self, run_id: Optional[int]) -> str:
         """生成日志目录路径"""
-        base_dir = Path("logs") / "runs"
         if run_id:
-            return str(base_dir / str(run_id))
+            return str(config.RUN_LOG_DIR / str(run_id))
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        return str(base_dir / f"aimonkey_{timestamp}")
+        return str(config.RUN_LOG_DIR / f"aimonkey_{timestamp}")
 
     def _aimonkey_setup(self, serial: str, params: Dict[str, Any]) -> None:
         """设备前置配置：root 权限、开发者选项、日志服务、WiFi、存储填充、清理日志"""
@@ -707,14 +750,7 @@ class TaskExecutor:
             self._log(f"检测到Windows路径格式: {resource_dir}, 使用环境变量", "INFO")
             resource_dir = ""
         if not resource_dir:
-            # 优先从环境变量读取，支持 Linux/Windows 不同部署路径
-            resource_dir = os.environ.get("AIMONKEY_RESOURCE_DIR", "")
-        if not resource_dir:
-            # 默认路径：尝试基于当前文件位置推导
-            try:
-                resource_dir = str(Path(__file__).resolve().parents[3] / "Monkey_test" / "AIMonkeyTest_2025mtk")
-            except Exception:
-                resource_dir = "/opt/stability-test-agent/resources/aimonkey"
+            resource_dir = config.get_aimonkey_resource_dir()
 
         self._log(f"资源目录: {resource_dir}", "INFO")
 
@@ -1059,7 +1095,7 @@ class TaskExecutor:
         try:
             from .tools.aimonkey_test import AIMonkeyTest
 
-            log_dir = f"logs/runs/{self._context.run_id}"
+            log_dir = config.get_run_log_dir(self._context.run_id)
             os.makedirs(log_dir, exist_ok=True)
 
             test_case = AIMonkeyTest(

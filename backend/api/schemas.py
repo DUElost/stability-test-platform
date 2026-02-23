@@ -70,6 +70,9 @@ class TaskCreate(BaseModel):
     is_distributed: bool = False  # 是否为分布式任务
     device_ids: Optional[List[int]] = None  # 多个设备ID（分布式任务用）
 
+    # Pipeline 定义
+    pipeline_def: Optional[Dict[str, Any]] = None
+
 
 class TaskOut(ORMBaseModel):
     id: int
@@ -87,6 +90,9 @@ class TaskOut(ORMBaseModel):
     group_id: Optional[str] = None
     is_distributed: bool = False
     runs_count: Optional[int] = None  # 关联的 TaskRun 数量
+
+    # Pipeline 定义
+    pipeline_def: Optional[Dict[str, Any]] = None
 
     created_at: datetime
 
@@ -199,6 +205,45 @@ class RunAgentOut(BaseModel):
     task_params: Dict[str, Any] = Field(default_factory=dict)
     tool_id: Optional[int] = None
     tool_snapshot: Optional[Dict[str, Any]] = None
+    pipeline_def: Optional[Dict[str, Any]] = None
+
+
+# ==================== RunStep (Pipeline 子步骤) ====================
+
+
+class RunStepCreate(BaseModel):
+    run_id: int
+    phase: str
+    step_order: int
+    name: str
+    action: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RunStepUpdate(BaseModel):
+    status: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    exit_code: Optional[int] = None
+    error_message: Optional[str] = None
+    log_line_count: Optional[int] = None
+
+
+class RunStepOut(ORMBaseModel):
+    id: int
+    run_id: int
+    phase: str
+    step_order: int
+    name: str
+    action: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    status: str
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    exit_code: Optional[int] = None
+    error_message: Optional[str] = None
+    log_line_count: int = 0
+    created_at: datetime
 
 
 class RunUpdate(BaseModel):

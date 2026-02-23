@@ -25,8 +25,12 @@ def send_heartbeat(
     status: str = "ONLINE",
     host_info: Optional[Dict[str, Any]] = None,
     devices: Optional[List[Dict[str, Any]]] = None,
-) -> bool:
-    """发送心跳到服务器，包含系统统计信息和设备数据"""
+) -> Optional[Dict[str, Any]]:
+    """发送心跳到服务器，包含系统统计信息和设备数据
+
+    Returns:
+        成功时返回响应字典 (含 host_id, devices_count 等)，失败返回 None
+    """
     from .system_monitor import collect_system_stats
 
     mount_status = check_mounts(mount_points or [])
@@ -45,11 +49,18 @@ def send_heartbeat(
         "host": host_info,  # 包含主机信息用于自动创建
         "devices": devices or [],  # 设备列表
     }
+
+    agent_secret = os.getenv("AGENT_SECRET", "")
+    headers = {}
+    if agent_secret:
+        headers["x-agent-secret"] = agent_secret
+
     try:
-        resp = requests.post(f"{api_url}/api/v1/heartbeat", json=payload, timeout=5)
+        resp = requests.post(f"{api_url}/api/v1/heartbeat", json=payload, headers=headers, timeout=5)
         resp.raise_for_status()
-        logger.info(f"heartbeat_success: host_id={host_id}, devices_count={len(devices or [])}, response={resp.json()}")
-        return True
+        data = resp.json()
+        logger.info(f"heartbeat_success: host_id={host_id}, devices_count={len(devices or [])}, response={data}")
+        return data
     except Exception as e:
         logger.error(f"heartbeat_failed: {e}, payload_devices={len(devices or [])}")
-        return False
+        return None
