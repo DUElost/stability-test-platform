@@ -28,11 +28,11 @@ export default function CreateTask() {
   const toast = useToast();
 
   const { data: devices } = useQuery({
-    queryKey: ['devices'],
-    queryFn: () => api.devices.list(0, 200).then(res => res.data.items),
+    queryKey: ['devices', 'online'],
+    queryFn: () => api.devices.list(0, 200, 'ONLINE').then(res => res.data.items),
   });
 
-  const handleSubmit = async (taskData: { type: string; deviceIds: number[]; config: Record<string, any> }) => {
+  const handleSubmit = async (taskData: { type: string; deviceIds: number[]; config: Record<string, any>; pipelineDef?: Record<string, any> }) => {
     try {
       // Create a task for each selected device
       const promises = taskData.deviceIds.map((deviceId: number) =>
@@ -41,6 +41,7 @@ export default function CreateTask() {
           type: taskData.type,
           target_device_id: deviceId,
           params: taskData.config,
+          pipeline_def: taskData.pipelineDef,
         })
       );
 
@@ -53,7 +54,7 @@ export default function CreateTask() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto">
+    <div className="max-w-4xl mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900">Create New Task</h1>
         <p className="text-slate-500">Configure a new stability test task.</p>

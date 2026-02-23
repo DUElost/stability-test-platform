@@ -116,6 +116,7 @@ export interface Task {
   type: string;
   template_id: number | null;
   params: Record<string, any>;
+  pipeline_def?: Record<string, any> | null;
   target_device_id: number | null;
   status: 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELED';
   priority: number;
@@ -125,6 +126,23 @@ export interface Task {
   group_id?: string;
   is_distributed?: boolean;
   runs_count?: number;
+}
+
+export interface RunStep {
+  id: number;
+  run_id: number;
+  phase: string;
+  step_order: number;
+  name: string;
+  action: string;
+  params: Record<string, any>;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED' | 'CANCELED';
+  started_at: string | null;
+  finished_at: string | null;
+  exit_code: number | null;
+  error_message: string | null;
+  log_line_count: number;
+  created_at: string;
 }
 
 export interface TaskRun {
@@ -255,6 +273,12 @@ export interface TaskTemplate {
   description: string;
   default_params: Record<string, any>;
   script_paths: Record<string, string>;
+}
+
+export interface PipelineTemplate {
+  name: string;
+  description: string;
+  pipeline_def: Record<string, any>;
 }
 
 export interface AgentLogOut {
@@ -458,7 +482,7 @@ export const api = {
 
   // 设备相关
   devices: {
-    list: (skip = 0, limit = 50, tags?: string) => apiClient.get<PaginatedResponse<Device>>('/devices', { params: { skip, limit, ...(tags ? { tags } : {}) } }),
+    list: (skip = 0, limit = 50, status?: string, tags?: string) => apiClient.get<PaginatedResponse<Device>>('/devices', { params: { skip, limit, ...(status ? { status } : {}), ...(tags ? { tags } : {}) } }),
     get: (id: number) => apiClient.get<Device>(`/devices/${id}`),
     create: (data: { serial: string; model?: string; host_id?: number; tags?: string[] }) =>
       apiClient.post<Device>('/devices', data),
@@ -478,6 +502,7 @@ export const api = {
       target_device_id?: number;
       device_serial?: string;
       params?: Record<string, any>;
+      pipeline_def?: Record<string, any>;
       priority?: number;
     }) =>
       apiClient.post<Task>('/tasks', data),
@@ -502,6 +527,11 @@ export const api = {
     // 查询Agent日志
     queryAgentLogs: (data: { host_id: number; log_path?: string; lines?: number }) =>
       apiClient.post<AgentLogOut>('/agent/logs', data),
+    // RunStep API
+    getRunSteps: (runId: number) => apiClient.get<RunStep[]>(`/runs/${runId}/steps`),
+    // Pipeline templates
+    listPipelineTemplates: () => apiClient.get<PipelineTemplate[]>('/pipeline/templates'),
+    getPipelineTemplate: (name: string) => apiClient.get<PipelineTemplate>(`/pipeline/templates/${name}`),
   },
 
   // 心跳相关
