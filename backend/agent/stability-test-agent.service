@@ -14,8 +14,8 @@ WorkingDirectory=/opt/stability-test-agent
 EnvironmentFile=-/opt/stability-test-agent/.env
 Environment="PYTHONPATH=/opt/stability-test-agent"
 
-# 使用虚拟环境 - 直接执行main.py而不是模块
-ExecStart=/opt/stability-test-agent/venv/bin/python /opt/stability-test-agent/agent/main.py
+# 使用虚拟环境 - 模块模式执行
+ExecStart=/opt/stability-test-agent/venv/bin/python -m agent.main
 ExecReload=/bin/kill -HUP $MAINPID
 KillMode=mixed
 KillSignal=SIGTERM
@@ -38,8 +38,8 @@ LimitNOFILE=65536
 LimitNPROC=4096
 
 # 日志配置
-StandardOutput=append:/tmp/agent_service.log
-StandardError=append:/tmp/agent_service_error.log
+StandardOutput=append:/opt/stability-test-agent/logs/agent.log
+StandardError=append:/opt/stability-test-agent/logs/agent_error.log
 SyslogIdentifier=stability-test-agent
 
 [Install]

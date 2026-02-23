@@ -6,6 +6,15 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-02-23
+- Pipeline Editor：新增 `PipelineEditor.tsx` 可视化编辑器（Phase/Step CRUD、拖拽排序、Action 选择器、JSON 预览）
+- Pipeline Templates API：新增 `GET /api/v1/pipeline/templates` 端点服务内置模板
+- CreateTask 集成：Pipeline 编辑器作为第 3 步嵌入任务创建流程
+- 前端类型更新：`Task` 接口和 `api.tasks.create` 新增 `pipeline_def` 字段
+- Log Fold Groups：Agent 发出 OSC 633 折叠标记，前端渲染为样式化区域分隔符
+- Agent `.env.example`：新增 WebSocket 配置变量（WS_URL, AGENT_SECRET, WS_RECONNECT_MAX_DELAY 等）
+- 依赖：新增 `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities`
+
 ### 2026-01-22
 - 设备监控：新增 `network_latency` 指标（ping 8.8.8.8 / 223.5.5.5）
 - 后端：`device_discovery.py` 实现备用 DNS 逻辑
@@ -42,6 +51,12 @@
 - **中心存储**：172.21.15.4（12TB）
 - **访问方式**：SSH (Xshell/Xftp)
 
+> **WSL 部署注意事项**：
+> 1. 必须先 `rsync` 到 WSL 本地文件系统再运行安装脚本（`/mnt/` 下的 drvfs 有 CRLF 和权限问题）
+> 2. 安装前需 `sed -i 's/\r$//' install_agent.sh` 修复 Windows 换行符
+> 3. `API_URL` 使用 `http://127.0.0.1:8000`（安装脚本自动检测 WSL 并设置）
+> 4. 详细步骤参见 `backend/agent/DEPLOY.md`
+
 ---
 
 ## 入口与启动
@@ -62,15 +77,50 @@ npm run dev
 ```
 
 ### Agent 入口
-```bash
-# Linux Agent 主机
-export API_URL="http://<Windows服务器IP>:8000"
-export HOST_ID=1
-export ADB_PATH="/usr/bin/adb"
 
+Agent 有两种运行模式：开发模式（从项目源码运行）和部署模式（通过 `install_agent.sh` 安装到 `/opt/`）。
+
+**开发模式**（从项目根目录直接运行）：
+```bash
 cd stability-test-platform
+export API_URL="http://<Windows服务器IP>:8000"
 python -m backend.agent.main
 ```
+
+**部署模式**（通过安装脚本部署后，systemd 管理）：
+```bash
+# 1. 同步 agent 代码到目标主机
+rsync -av --delete backend/agent/ target-host:/tmp/agent-install/
+
+# 2. 在目标主机上运行安装脚本
+ssh target-host 'cd /tmp/agent-install && sed -i "s/\r$//" install_agent.sh && sudo bash install_agent.sh'
+
+# 3. 启动服务
+sudo systemctl start stability-test-agent
+# 或: agentctl start
+```
+
+**WSL 部署**（同机模拟 Linux Agent）：
+```bash
+# 同步代码（从 Windows 文件系统到 WSL 本地，避免 CRLF 和 I/O 问题）
+rsync -av --delete /mnt/f/stability-test-platform/backend/agent/ /tmp/agent-install/
+
+# 修复 CRLF 换行符后运行安装
+cd /tmp/agent-install
+sed -i 's/\r$//' install_agent.sh
+sudo bash install_agent.sh
+# 交互提示：API_URL 直接回车（自动检测 WSL 使用 127.0.0.1）
+
+# 启动并验证
+sudo systemctl start stability-test-agent
+sudo systemctl status stability-test-agent
+tail -f /opt/stability-test-agent/logs/agent_error.log
+```
+
+> **WSL 注意事项**：
+> - `API_URL` 必须使用 `http://127.0.0.1:8000`（安装脚本自动检测 WSL 并设置）
+> - 必须先 `rsync` 到 WSL 本地再安装，不能直接在 `/mnt/` 下执行（CRLF + drvfs 权限问题）
+> - 安装前需 `sed -i 's/\r$//'` 修复从 Windows 同步过来的 shell 脚本换行符
 
 ---
 
@@ -88,8 +138,12 @@ python -m backend.agent.main
 | GET | `/api/v1/devices` | 列出所有设备 |
 | POST | `/api/v1/devices` | 创建设备 |
 | GET | `/api/v1/tasks` | 列出所有任务 |
-| POST | `/api/v1/tasks` | 创建任务 |
+| POST | `/api/v1/tasks` | 创建任务（支持 `pipeline_def` 字段） |
 | POST | `/api/v1/tasks/{id}/dispatch` | 分发任务 |
+| GET | `/api/v1/runs/{run_id}/steps` | 获取 RunStep 列表 |
+| GET | `/api/v1/runs/{run_id}/steps/{step_id}` | 获取单个 RunStep |
+| GET | `/api/v1/pipeline/templates` | 列出内置 Pipeline 模板 |
+| GET | `/api/v1/pipeline/templates/{name}` | 获取指定 Pipeline 模板 |
 
 ### Agent API 端点
 
@@ -98,6 +152,43 @@ python -m backend.agent.main
 | GET | `/api/v1/agent/runs/pending` | 获取待执行任务 |
 | POST | `/api/v1/agent/runs/{id}/heartbeat` | 更新任务状态 |
 | POST | `/api/v1/agent/runs/{id}/complete` | 完成任务 |
+| POST | `/api/v1/agent/runs/{run_id}/steps/{step_id}/status` | 更新步骤状态（HTTP fallback） |
+
+### WebSocket 端点
+
+| 端点 | 方向 | 说明 |
+|------|------|------|
+| `WS /ws/agent/{host_id}` | Agent→Backend | Agent 实时日志/状态推送 |
+| `WS /ws/logs/{run_id}` | Backend→Frontend | 前端日志订阅 |
+
+### Pipeline 定义格式（pipeline_def）
+
+```json
+{
+  "version": 1,
+  "phases": [
+    {
+      "name": "prepare",
+      "parallel": false,
+      "steps": [
+        {
+          "name": "check_device",
+          "action": "builtin:check_device",
+          "params": {},
+          "timeout": 30,
+          "on_failure": "stop",
+          "max_retries": 0
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Action 类型**:
+- `builtin:<name>` — 内置 action（如 `check_device`, `start_process`）
+- `tool:<id>` — 注册工具 ID
+- `shell:<command>` — ADB shell 命令
 
 ---
 
@@ -255,13 +346,19 @@ class TaskRun(Base):
 - `backend/api/routes/devices.py` - 设备管理
 - `backend/api/routes/tasks.py` - 任务管理
 - `backend/api/routes/heartbeat.py` - 心跳处理
+- `backend/api/routes/websocket.py` - WebSocket 端点（Agent + Frontend）
+- `backend/api/routes/pipeline.py` - Pipeline 模板 API
 
 ### Agent 模块
 - `backend/agent/main.py` - Agent 主程序
+- `backend/agent/config.py` - 集中路径配置
 - `backend/agent/heartbeat.py` - 心跳发送
 - `backend/agent/device_discovery.py` - 设备发现
 - `backend/agent/system_monitor.py` - 系统监控
 - `backend/agent/task_executor.py` - 任务执行
+- `backend/agent/pipeline_engine.py` - Pipeline 执行引擎
+- `backend/agent/ws_client.py` - WebSocket 客户端
+- `backend/agent/actions/` - 内置 Step Action 库
 
 ### 前端核心
 - `frontend/src/main.tsx` - 应用入口
@@ -270,8 +367,14 @@ class TaskRun(Base):
 
 ### 前端组件
 - `frontend/src/pages/Dashboard.tsx` - 仪表盘
+- `frontend/src/pages/tasks/TaskDetails.tsx` - 任务详情（Pipeline 步骤树 + xterm.js）
 - `frontend/src/components/device/DeviceCard.tsx` - 设备卡片
 - `frontend/src/components/network/ConnectivityBadge.tsx` - 连接状态
+- `frontend/src/components/pipeline/PipelineEditor.tsx` - Pipeline 可视化编辑器
+- `frontend/src/components/pipeline/PipelineStepTree.tsx` - Pipeline 步骤树（运行时视图）
+- `frontend/src/components/pipeline/actionCatalog.ts` - 内置 Action 目录
+- `frontend/src/components/pipeline/pipelineTypes.ts` - Pipeline 类型定义
+- `frontend/src/components/log/XTerminal.tsx` - xterm.js 终端日志组件
 - `frontend/src/components/network/HostCard.tsx` - 主机卡片
 
 ### 连通性模块

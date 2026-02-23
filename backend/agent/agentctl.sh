@@ -5,7 +5,7 @@
 #
 
 SERVICE_NAME="stability-test-agent"
-INSTALL_DIR="/opt/stability-test-agent"
+INSTALL_DIR="${AGENT_INSTALL_DIR:-/opt/stability-test-agent}"
 LOG_FILE="$INSTALL_DIR/logs/agent.log"
 
 # 颜色输出

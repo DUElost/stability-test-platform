@@ -18,11 +18,11 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 配置
-INSTALL_DIR="/opt/stability-test-agent"
+# 配置（可通过环境变量覆盖）
+INSTALL_DIR="${AGENT_INSTALL_DIR:-/opt/stability-test-agent}"
 SERVICE_NAME="stability-test-agent"
-USER="android"
-GROUP="android"
+USER="${AGENT_USER:-android}"
+GROUP="${AGENT_GROUP:-android}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
@@ -78,12 +78,24 @@ fi
 
 # 2. 创建目录结构
 echo_info "创建目录结构..."
-mkdir -p "$INSTALL_DIR"/{agent,logs,tmp,venv}
+mkdir -p "$INSTALL_DIR"/{agent,logs,tmp,venv,resources/aimonkey}
 
 # 3. 复制 Agent 代码
 echo_info "复制 Agent 代码..."
+# 只复制 agent 目录（Agent 运行时不依赖 backend/ 其他模块）
 cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/agent/" 2>/dev/null || true
-find "$INSTALL_DIR/agent/" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+# 清理测试文件和非必要文件
+# 注意：test_framework.py 和 test_stages.py 是生产模块，不能删除
+rm -f "$INSTALL_DIR/agent/test_agent"*.py 2>/dev/null || true
+rm -f "$INSTALL_DIR/agent/test_aimonkey"*.py 2>/dev/null || true
+rm -f "$INSTALL_DIR/agent/test_main"*.py 2>/dev/null || true
+rm -rf "$INSTALL_DIR/agent/tests" 2>/dev/null || true
+rm -f "$INSTALL_DIR/agent/install_agent.sh" 2>/dev/null || true
+rm -f "$INSTALL_DIR/agent/agentctl.sh" 2>/dev/null || true
+rm -f "$INSTALL_DIR/agent/DEPLOY.md" 2>/dev/null || true
+rm -f "$INSTALL_DIR/agent/.env.example" 2>/dev/null || true
+rm -f "$INSTALL_DIR/agent/stability-test-agent.service" 2>/dev/null || true
+find "$INSTALL_DIR/" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 
 # 4. 设置权限
 echo_info "设置文件权限..."
@@ -103,7 +115,7 @@ if [ -f "$INSTALL_DIR/agent/requirements.txt" ]; then
     "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/agent/requirements.txt" -q
 else
     # 基础依赖
-    "$INSTALL_DIR/venv/bin/pip" install requests -q
+    "$INSTALL_DIR/venv/bin/pip" install requests python-dotenv "websockets>=12.0" -q
 fi
 
 # 7. 创建 .env 文件
@@ -138,9 +150,16 @@ except:
 }
 
 # 提示用户输入 API_URL
-echo_info "请输入中心服务器的 API 地址 (默认: http://172.21.10.15:8000)"
+# WSL 环境检测：WSL 中 Agent 访问同机 Windows 后端应使用 127.0.0.1
+DEFAULT_API_URL="http://172.21.10.15:8000"
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    DEFAULT_API_URL="http://127.0.0.1:8000"
+    echo_warn "检测到 WSL 环境，默认使用 127.0.0.1 访问同机 Windows 后端"
+fi
+
+echo_info "请输入中心服务器的 API 地址 (默认: $DEFAULT_API_URL)"
 read -r -p "API_URL: " api_url_input
-API_URL="${api_url_input:-http://172.21.10.15:8000}"
+API_URL="${api_url_input:-$DEFAULT_API_URL}"
 
 # 获取本机信息用于生成唯一标识
 HOSTNAME=$(hostname)
@@ -165,17 +184,25 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
 # 主机信息: $HOSTNAME ($IP_ADDR)
 
 API_URL=$API_URL
-HOST_ID=$HOST_ID
+HOST_ID=auto
+AUTO_REGISTER_HOST=true
 POLL_INTERVAL=10
 MOUNT_POINTS=
 ADB_PATH=adb
 LOG_LEVEL=INFO
+
+# AIMONKEY 资源目录（包含 aim, aim.jar 等文件）
+# AIMONKEY_RESOURCE_DIR=$INSTALL_DIR/resources/aimonkey
+
+# 外部测试工具扫描目录
+# EXTERNAL_TOOL_DIR=/home/android/sonic_agent/logs/ftp_log/sonic_tinno/Test_Tool
 EOF
     echo_info "配置文件已创建: $INSTALL_DIR/.env"
 else
     # 更新现有配置文件
     sed -i "s|^API_URL=.*|API_URL=$API_URL|" "$INSTALL_DIR/.env"
-    sed -i "s|^HOST_ID=.*|HOST_ID=$HOST_ID|" "$INSTALL_DIR/.env"
+    sed -i "s|^HOST_ID=.*|HOST_ID=auto|" "$INSTALL_DIR/.env"
+    sed -i "s|^AUTO_REGISTER_HOST=.*|AUTO_REGISTER_HOST=true|" "$INSTALL_DIR/.env"
     echo_info "配置文件已更新: $INSTALL_DIR/.env"
 fi
 
@@ -198,6 +225,7 @@ Type=simple
 User=android
 Group=android
 WorkingDirectory=/opt/stability-test-agent
+Environment="PYTHONPATH=/opt/stability-test-agent"
 EnvironmentFile=-/opt/stability-test-agent/.env
 ExecStart=/opt/stability-test-agent/venv/bin/python -m agent.main
 Restart=always
