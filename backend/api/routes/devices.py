@@ -92,11 +92,16 @@ def create_device(payload: DeviceCreate, db: Session = Depends(get_db), current_
 def list_devices(
     request: Request,
     tags: Optional[str] = Query(None, description="Comma-separated tag filter"),
+    status: Optional[str] = Query(None, description="Filter by device status (ONLINE, OFFLINE, BUSY)"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     query = db.query(Device).order_by(Device.id)
+
+    # Filter by status if provided
+    if status:
+        query = query.filter(Device.status == status)
 
     # Filter by tags if provided
     if tags:
