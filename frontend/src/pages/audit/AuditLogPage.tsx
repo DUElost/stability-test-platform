@@ -24,14 +24,19 @@ export default function AuditLogPage() {
   const [filters, setFilters] = useState({
     resource_type: '',
     action: '',
+    start_time: '',
+    end_time: '',
   });
 
   const loadLogs = async () => {
+    if (filters.start_time && filters.end_time && filters.start_time > filters.end_time) return;
     setLoading(true);
     try {
       const params: any = {};
       if (filters.resource_type) params.resource_type = filters.resource_type;
       if (filters.action) params.action = filters.action;
+      if (filters.start_time) params.start_time = filters.start_time;
+      if (filters.end_time) params.end_time = filters.end_time;
       const res = await api.audit.list(page * pageSize, pageSize, params);
       setLogs(res.data.items);
       setTotal(res.data.total);
@@ -54,7 +59,7 @@ export default function AuditLogPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3">
+      <div className="flex gap-3 flex-wrap">
         <select
           value={filters.resource_type}
           onChange={(e) => { setFilters({ ...filters, resource_type: e.target.value }); setPage(0); }}
@@ -63,10 +68,13 @@ export default function AuditLogPage() {
           <option value="">全部资源</option>
           <option value="workflow">工作流</option>
           <option value="tool">工具</option>
+          <option value="tool_category">工具分类</option>
           <option value="notification_channel">通知渠道</option>
           <option value="notification_rule">告警规则</option>
           <option value="schedule">定时任务</option>
           <option value="template">任务模板</option>
+          <option value="host">主机</option>
+          <option value="task">任务</option>
         </select>
         <select
           value={filters.action}
@@ -77,9 +85,22 @@ export default function AuditLogPage() {
           <option value="create">创建</option>
           <option value="update">更新</option>
           <option value="delete">删除</option>
+          <option value="dispatch">分发</option>
           <option value="start">启动</option>
           <option value="cancel">取消</option>
         </select>
+        <input
+          type="datetime-local"
+          value={filters.start_time}
+          onChange={(e) => { setFilters({ ...filters, start_time: e.target.value }); setPage(0); }}
+          className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+        />
+        <input
+          type="datetime-local"
+          value={filters.end_time}
+          onChange={(e) => { setFilters({ ...filters, end_time: e.target.value }); setPage(0); }}
+          className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+        />
       </div>
 
       {loading ? (

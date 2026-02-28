@@ -450,7 +450,121 @@ export interface PaginatedResponse<T> {
   limit: number;
 }
 
-// API 函数
+// ─── 新编排模型类型 ────────────────────────────────────────────────────────────
+
+export interface ToolEntry {
+  id: number;
+  name: string;
+  version: string;
+  script_path: string;
+  script_class?: string | null;
+  param_schema: Record<string, any>;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface PipelineStep {
+  step_id: string;
+  action: string;
+  version?: string;
+  params?: Record<string, any>;
+  timeout_seconds: number;
+  retry?: number;
+}
+
+export interface PipelineDef {
+  stages: {
+    prepare?: PipelineStep[];
+    execute?: PipelineStep[];
+    post_process?: PipelineStep[];
+  };
+}
+
+export interface TaskTemplateEntry {
+  id: number;
+  workflow_definition_id: number;
+  name: string;
+  sort_order: number;
+  pipeline_def: PipelineDef;
+}
+
+export interface WorkflowDefinition {
+  id: number;
+  name: string;
+  description?: string | null;
+  failure_threshold: number;
+  task_templates?: TaskTemplateEntry[];
+  created_at: string;
+}
+
+export interface WorkflowDefinitionCreate {
+  name: string;
+  description?: string;
+  failure_threshold?: number;
+  task_templates?: Omit<TaskTemplateEntry, 'id' | 'workflow_definition_id'>[];
+}
+
+export type WorkflowStatus = 'RUNNING' | 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED' | 'DEGRADED';
+export type JobStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'ABORTED'
+  | 'UNKNOWN'
+  | 'PENDING_TOOL';
+
+export interface StepTrace {
+  id: number;
+  job_id: number;
+  step_id: string;
+  stage: 'prepare' | 'execute' | 'post_process';
+  event_type: 'STARTED' | 'COMPLETED' | 'FAILED' | 'RETRIED';
+  status: string;
+  output?: string | null;
+  error_message?: string | null;
+  original_ts: string;
+}
+
+export interface JobInstance {
+  id: number;
+  workflow_run_id: number;
+  task_template_id: number;
+  host_id: string;
+  device_id: number;
+  status: JobStatus;
+  status_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+  step_traces?: StepTrace[];
+}
+
+export interface WorkflowRun {
+  id: number;
+  workflow_definition_id: number;
+  status: WorkflowStatus;
+  failure_threshold: number;
+  triggered_by?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  jobs?: JobInstance[];
+}
+
+export interface WorkflowRunCreate {
+  device_ids: number[];
+  failure_threshold?: number;
+}
+
+// 解包后端统一响应格式 { data: T, error: null | { code, message } }
+async function unwrapApiResponse<T>(request: Promise<{ data: { data?: T; error?: { code: string; message: string } | null } }>): Promise<T> {
+  const resp = await request;
+  const body = resp.data as any;
+  if (body?.error) throw new Error(`[${body.error.code}] ${body.error.message}`);
+  return body?.data ?? body;
+}
+
+// ─── API 函数 ───────────────────────────────────────────────────────────────────
+
 export const api = {
   // 认证相关
   auth: {
@@ -683,8 +797,71 @@ export const api = {
 
   // 审计日志
   audit: {
-    list: (skip = 0, limit = 50, filters?: { resource_type?: string; action?: string; user_id?: number }) =>
-      apiClient.get<PaginatedResponse<any>>('/audit-logs', { params: { skip, limit, ...filters } }),
+    list: (
+      skip = 0,
+      limit = 50,
+      filters?: {
+        resource_type?: string;
+        action?: string;
+        user_id?: number;
+        start_time?: string;
+        end_time?: string;
+      }
+    ) => {
+      const params: Record<string, any> = { skip, limit };
+      if (filters) {
+        Object.entries(filters).forEach(([k, v]) => {
+          if (v !== '' && v !== undefined) params[k] = v;
+        });
+      }
+      return apiClient.get<PaginatedResponse<any>>('/audit-logs', { params });
+    },
+  },
+
+  // ─── 新编排层 API ──────────────────────────────────────────────────────────
+
+  // WorkflowDefinition (蓝图) 管理
+  orchestration: {
+    list: (skip = 0, limit = 50) =>
+      unwrapApiResponse<WorkflowDefinition[]>(
+        apiClient.get('/workflows', { params: { skip, limit } })
+      ),
+    get: (id: number) =>
+      unwrapApiResponse<WorkflowDefinition>(apiClient.get(`/workflows/${id}`)),
+    create: (data: WorkflowDefinitionCreate) =>
+      unwrapApiResponse<WorkflowDefinition>(apiClient.post('/workflows', data)),
+    update: (id: number, data: Partial<WorkflowDefinitionCreate & {
+      task_templates?: { name: string; pipeline_def: PipelineDef; sort_order?: number }[];
+    }>) =>
+      unwrapApiResponse<WorkflowDefinition>(apiClient.put(`/workflows/${id}`, data)),
+    delete: (id: number) =>
+      unwrapApiResponse<void>(apiClient.delete(`/workflows/${id}`)),
+    run: (id: number, data: WorkflowRunCreate) =>
+      unwrapApiResponse<WorkflowRun>(apiClient.post(`/workflows/${id}/run`, data)),
+  },
+
+  // WorkflowRun (执行记录) 查询
+  execution: {
+    getRun: (runId: number) =>
+      unwrapApiResponse<WorkflowRun>(apiClient.get(`/workflow-runs/${runId}`)),
+    getRunJobs: (runId: number) =>
+      unwrapApiResponse<JobInstance[]>(apiClient.get(`/workflow-runs/${runId}/jobs`)),
+  },
+
+  // Tool Catalog (新工具目录，Phase 3 格式)
+  toolCatalog: {
+    list: (isActive?: boolean) =>
+      unwrapApiResponse<ToolEntry[]>(
+        apiClient.get('/tools', { params: isActive != null ? { is_active: isActive } : {} })
+      ),
+    get: (id: number) =>
+      unwrapApiResponse<ToolEntry>(apiClient.get(`/tools/${id}`)),
+    create: (data: Omit<ToolEntry, 'id' | 'created_at'>) =>
+      unwrapApiResponse<ToolEntry>(apiClient.post('/tools', data)),
+    update: (id: number, data: Partial<Omit<ToolEntry, 'id' | 'created_at'>>) =>
+      unwrapApiResponse<ToolEntry>(apiClient.put(`/tools/${id}`, data)),
+    remove: (id: number) =>
+      unwrapApiResponse<void>(apiClient.delete(`/tools/${id}`)),
   },
 };
 

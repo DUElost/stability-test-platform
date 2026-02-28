@@ -24,8 +24,6 @@ import { DynamicToolForm } from '../task/DynamicToolForm';
 interface PipelineEditorProps {
   value: PipelineDef;
   onChange: (def: PipelineDef) => void;
-  /** Registered tools from backend (for tool:<id> actions) */
-  tools?: { id: number; name: string; description?: string; param_schema: ParamSchema }[];
   readOnly?: boolean;
 }
 
@@ -46,12 +44,11 @@ interface SortableStepProps {
   onRemove: () => void;
   onDuplicate: () => void;
   readOnly?: boolean;
-  tools?: PipelineEditorProps['tools'];
 }
 
 function SortableStepItem({
   id, step, stepIndex, expanded, onToggle,
-  onUpdate, onRemove, onDuplicate, readOnly, tools,
+  onUpdate, onRemove, onDuplicate, readOnly,
 }: SortableStepProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const style = {
@@ -99,9 +96,6 @@ function SortableStepItem({
   let currentParamSchema: ParamSchema = {};
   if (prefix === 'builtin' && actionDef) {
     currentParamSchema = actionDef.paramSchema;
-  } else if (prefix === 'tool' && tools) {
-    const tool = tools.find((t) => String(t.id) === actionName);
-    if (tool) currentParamSchema = tool.param_schema;
   }
 
   return (
@@ -155,7 +149,6 @@ function SortableStepItem({
               <ActionSelector
                 value={step.action}
                 onChange={handleActionChange}
-                tools={tools}
                 disabled={readOnly}
               />
             </div>
@@ -242,11 +235,10 @@ function SortableStepItem({
 interface ActionSelectorProps {
   value: string;
   onChange: (action: string) => void;
-  tools?: PipelineEditorProps['tools'];
   disabled?: boolean;
 }
 
-function ActionSelector({ value, onChange, tools, disabled }: ActionSelectorProps) {
+function ActionSelector({ value, onChange, disabled }: ActionSelectorProps) {
   return (
     <select
       value={value}
@@ -267,15 +259,6 @@ function ActionSelector({ value, onChange, tools, disabled }: ActionSelectorProp
           </optgroup>
         );
       })}
-      {tools && tools.length > 0 && (
-        <optgroup label="Registered Tools">
-          {tools.map((t) => (
-            <option key={t.id} value={`tool:${t.id}`}>
-              {t.name}
-            </option>
-          ))}
-        </optgroup>
-      )}
       <optgroup label="Custom">
         <option value="shell:">Shell Command</option>
       </optgroup>
@@ -295,12 +278,11 @@ interface PhaseCardProps {
   onRemove: () => void;
   onDuplicate: () => void;
   readOnly?: boolean;
-  tools?: PipelineEditorProps['tools'];
 }
 
 function PhaseCard({
   phase, phaseIndex, expandedSteps, onToggleStep,
-  onUpdate, onRemove, onDuplicate, readOnly, tools, totalPhases,
+  onUpdate, onRemove, onDuplicate, readOnly, totalPhases,
 }: PhaseCardProps) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -411,7 +393,6 @@ function PhaseCard({
                     onRemove={() => removeStep(si)}
                     onDuplicate={() => duplicateStep(si)}
                     readOnly={readOnly}
-                    tools={tools}
                   />
                 );
               })}
@@ -473,7 +454,6 @@ function JsonPreview({ pipeline, validationErrors }: JsonPreviewProps) {
 export const PipelineEditor: React.FC<PipelineEditorProps> = ({
   value,
   onChange,
-  tools,
   readOnly,
 }) => {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
@@ -566,7 +546,6 @@ export const PipelineEditor: React.FC<PipelineEditorProps> = ({
                     onRemove={() => removePhase(pi)}
                     onDuplicate={() => duplicatePhase(pi)}
                     readOnly={readOnly}
-                    tools={tools}
                   />
                 </SortablePhaseWrapper>
               ))}
@@ -633,7 +612,7 @@ function validatePipeline(pipeline: PipelineDef): string[] {
       if (!step.name) errors.push(`Phase "${phase.name}", Step ${si + 1}: name is required.`);
       if (stepNames.has(step.name)) errors.push(`Phase "${phase.name}", Step "${step.name}": duplicate name.`);
       stepNames.add(step.name);
-      if (!step.action || !step.action.match(/^(builtin:|tool:|shell:).+/)) {
+      if (!step.action || !step.action.match(/^(builtin:|shell:).+/)) {
         errors.push(`Phase "${phase.name}", Step "${step.name || si + 1}": invalid action format.`);
       }
       if (step.timeout < 1) {

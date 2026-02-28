@@ -9,17 +9,14 @@ import {
   Zap,
   X,
   TestTube2,
-  Network,
-  Wifi,
   FileSearch,
-  Users,
   Workflow,
-  Wrench,
-  Bell,
-  Settings,
   Clock,
   FileBox,
-  Shield
+  Folder,
+  AlertCircle,
+  Shield,
+  Rocket,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -37,39 +34,46 @@ interface NavGroup {
 // 样板风格的导航配置
 const navGroups: NavGroup[] = [
   {
-    label: '概览',
+    label: '监控总览',
     items: [
       { path: '/', label: '仪表盘', icon: LayoutDashboard },
     ],
   },
   {
-    label: '基础设施',
+    label: '任务编排',
     items: [
-      { path: '/hosts', label: '主机管理', icon: Server },
-      { path: '/devices', label: '设备管理', icon: Smartphone },
-      { path: '/wifi', label: 'WiFi管理', icon: Wifi },
+      { path: '/orchestration/workflows', label: '工作流设计', icon: Workflow },
+      { path: '/templates', label: '任务模板', icon: FileBox },
+      { path: '/schedules', label: '定时任务', icon: Clock },
     ],
   },
   {
-    label: '运营',
+    label: '执行中心',
     items: [
-      { path: '/tasks', label: '任务管理', icon: ListTodo },
-      { path: '/tools', label: '工具专项', icon: Wrench },
-      { path: '/workflows', label: '工作流管理', icon: Workflow },
-      { path: '/schedules', label: '定时任务', icon: Clock },
-      { path: '/templates', label: '任务模板', icon: FileBox },
-      { path: '/results', label: '测试结果', icon: TestTube2 },
+      { path: '/execution/run', label: '发起测试', icon: Rocket },
+      { path: '/task-runs', label: '任务实例', icon: ListTodo },
       { path: '/logs', label: '日志监控', icon: FileSearch },
     ],
   },
   {
-    label: '系统',
+    label: '资源管理',
     items: [
-      { path: '/notifications', label: '通知管理', icon: Bell },
-      { path: '/mapreduce', label: 'Map-Reduce', icon: Network },
-      { path: '/users', label: '用户管理', icon: Users },
+      { path: '/hosts', label: '主机集群', icon: Server },
+      { path: '/devices', label: '物理设备', icon: Smartphone },
+      { path: '/resources', label: '环境资源', icon: Folder },
+    ],
+  },
+  {
+    label: '分析报告',
+    items: [
+      { path: '/results', label: '测试结果', icon: TestTube2 },
+      { path: '/issue-tracker', label: '问题追踪', icon: AlertCircle },
+    ],
+  },
+  {
+    label: '系统管理',
+    items: [
       { path: '/audit', label: '操作日志', icon: Shield },
-      { path: '/settings', label: '系统设置', icon: Settings },
     ],
   },
 ];

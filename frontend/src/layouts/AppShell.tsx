@@ -1,7 +1,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import { Menu, Bell, ChevronRight, FileText, Settings, LogOut, User, ChevronDown, Loader2 } from 'lucide-react';
+import { Menu, Bell, ChevronRight, FileText, Settings, LogOut, User, ChevronDown, Loader2, BellRing, Users, Shield, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -12,6 +12,7 @@ export default function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showSystemMenu, setShowSystemMenu] = useState(false);
   const navigate = useNavigate();
 
   // 监听窗口大小变化
@@ -115,6 +116,61 @@ export default function AppShell() {
 
             {/* Right side: Notifications & User Menu */}
             <div className="flex items-center gap-2">
+              {/* System Menu */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowSystemMenu(!showSystemMenu)}
+                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg"
+                  aria-label="系统管理"
+                >
+                  <Settings className="w-5 h-5" />
+                </button>
+
+                {/* System Menu Dropdown */}
+                {showSystemMenu && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => setShowSystemMenu(false)}
+                    />
+                    <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-100 py-1 z-20">
+                      <div className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wider">
+                        系统管理
+                      </div>
+                      <button
+                        onClick={() => { navigate('/notifications'); setShowSystemMenu(false); }}
+                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                      >
+                        <BellRing className="w-4 h-4" />
+                        通知管理
+                      </button>
+                      <button
+                        onClick={() => { navigate('/users'); setShowSystemMenu(false); }}
+                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                      >
+                        <Users className="w-4 h-4" />
+                        用户管理
+                      </button>
+                      <button
+                        onClick={() => { navigate('/audit'); setShowSystemMenu(false); }}
+                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                      >
+                        <Shield className="w-4 h-4" />
+                        操作日志
+                      </button>
+                      <hr className="my-1 border-gray-100" />
+                      <button
+                        onClick={() => { navigate('/settings'); setShowSystemMenu(false); }}
+                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                      >
+                        <Settings className="w-4 h-4" />
+                        系统设置
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
               {/* Notifications */}
               <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg">
                 <Bell className="w-5 h-5" />
@@ -154,12 +210,12 @@ export default function AppShell() {
                         文档
                       </a>
                       <NavLink
-                        to="/settings"
+                        to="/account/password"
                         onClick={() => setShowUserMenu(false)}
                         className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
                       >
-                        <Settings className="w-4 h-4" />
-                        系统设置
+                        <KeyRound className="w-4 h-4" />
+                        修改密码
                       </NavLink>
                       <hr className="my-1 border-gray-100" />
                       <button

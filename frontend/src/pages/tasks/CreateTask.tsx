@@ -32,7 +32,7 @@ export default function CreateTask() {
     queryFn: () => api.devices.list(0, 200, 'ONLINE').then(res => res.data.items),
   });
 
-  const handleSubmit = async (taskData: { type: string; deviceIds: number[]; config: Record<string, any>; pipelineDef?: Record<string, any> }) => {
+  const handleSubmit = async (taskData: { type: string; deviceIds: number[]; pipelineDef: Record<string, any> }) => {
     try {
       // Create a task for each selected device
       const promises = taskData.deviceIds.map((deviceId: number) =>
@@ -40,7 +40,7 @@ export default function CreateTask() {
           name: `${taskData.type}-device-${deviceId}-${Date.now()}`,
           type: taskData.type,
           target_device_id: deviceId,
-          params: taskData.config,
+          params: {},
           pipeline_def: taskData.pipelineDef,
         })
       );

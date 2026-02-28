@@ -14,7 +14,6 @@ const TaskDetails = lazy(() => import('../pages/tasks/TaskDetails'));
 const RunReportPage = lazy(() => import('../pages/tasks/RunReportPage'));
 const HostsPage = lazy(() => import('../pages/hosts/HostsPage'));
 const DevicesPage = lazy(() => import('../pages/devices/DevicesPage'));
-const WorkflowsPage = lazy(() => import('../pages/workflows/WorkflowsPage'));
 const ResultsPage = lazy(() => import('../pages/results/ResultsPage'));
 const MapReducePage = lazy(() => import('../pages/mapreduce/MapReducePage'));
 const WifiPage = lazy(() => import('../pages/wifi/WifiPage'));
@@ -23,10 +22,20 @@ const UsersPage = lazy(() => import('../pages/users/UsersPage'));
 const ToolsPage = lazy(() => import('../pages/tools/ToolsPage'));
 const NotificationsPage = lazy(() => import('../pages/notifications/NotificationsPage'));
 const SettingsPage = lazy(() => import('../pages/settings/SettingsPage'));
+const ChangePasswordPage = lazy(() => import('../pages/account/ChangePasswordPage'));
 const SchedulesPage = lazy(() => import('../pages/schedules/SchedulesPage'));
 const TemplatesPage = lazy(() => import('../pages/templates/TemplatesPage'));
 const AuditLogPage = lazy(() => import('../pages/audit/AuditLogPage'));
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage'));
+const IssueTrackerPage = lazy(() => import('../pages/issues/IssueTrackerPage'));
+const ResourcesPage = lazy(() => import('../pages/resources/ResourcesPage'));
+const TaskRunsPage = lazy(() => import('../pages/task-runs/TaskRunsPage'));
+
+// 新编排层页面
+const WorkflowDefinitionListPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionListPage'));
+const WorkflowDefinitionEditPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionEditPage'));
+const DispatchEntryPage = lazy(() => import('../pages/execution/DispatchEntryPage'));
+const WorkflowRunMatrixPage = lazy(() => import('../pages/execution/WorkflowRunMatrixPage'));
 
 // 检查是否已登录
 function isAuthenticated() {
@@ -71,16 +80,31 @@ export default function AppRouter() {
             <Route path="hosts" element={<HostsPage />} />
             <Route path="devices" element={<DevicesPage />} />
             <Route path="wifi" element={<WifiPage />} />
-            <Route path="workflows" element={<WorkflowsPage />} />
+            {/* /workflows → redirect to new orchestration page (backend endpoint now returns ApiResponse format) */}
+            <Route path="workflows" element={<Navigate to="/orchestration/workflows" replace />} />
             <Route path="results" element={<ResultsPage />} />
             <Route path="logs" element={<LogsPage />} />
             <Route path="mapreduce" element={<MapReducePage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="account/password" element={<ChangePasswordPage />} />
             <Route path="schedules" element={<SchedulesPage />} />
             <Route path="templates" element={<TemplatesPage />} />
             <Route path="audit" element={<AuditLogPage />} />
+            <Route path="issue-tracker" element={<IssueTrackerPage />} />
+            <Route path="resources" element={<ResourcesPage />} />
+            <Route path="task-runs" element={<TaskRunsPage />} />
+
+            {/* 新编排层路由 */}
+            <Route path="orchestration">
+              <Route path="workflows" element={<WorkflowDefinitionListPage />} />
+              <Route path="workflows/:id" element={<WorkflowDefinitionEditPage />} />
+            </Route>
+            <Route path="execution">
+              <Route path="run" element={<DispatchEntryPage />} />
+              <Route path="runs/:runId" element={<WorkflowRunMatrixPage />} />
+            </Route>
 
             {/* 404 */}
             <Route path="*" element={<NotFoundPage />} />

@@ -5,7 +5,7 @@
 
 export interface PipelineStep {
   name: string;
-  action: string; // "builtin:<name>" | "tool:<id>" | "shell:<command>"
+  action: string; // "builtin:<name>" | "shell:<command>"
   params: Record<string, any>;
   timeout: number;
   on_failure: 'stop' | 'continue' | 'retry';
@@ -52,7 +52,7 @@ export function createEmptyPipeline(): PipelineDef {
   };
 }
 
-/** Extract action type prefix (builtin/tool/shell) */
+/** Extract action type prefix (builtin/shell) */
 export function getActionPrefix(action: string): string {
   const idx = action.indexOf(':');
   return idx > 0 ? action.substring(0, idx) : '';

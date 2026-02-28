@@ -8,7 +8,7 @@ import type { ParamSchema } from '../task/DynamicToolForm';
 export interface ActionDef {
   name: string;
   label: string;
-  category: 'device' | 'process' | 'file' | 'log' | 'tool';
+  category: 'device' | 'process' | 'file' | 'log' | 'script';
   description: string;
   paramSchema: ParamSchema;
 }
@@ -18,7 +18,7 @@ export const ACTION_CATEGORIES: { key: string; label: string }[] = [
   { key: 'process', label: 'Process' },
   { key: 'file', label: 'File' },
   { key: 'log', label: 'Log' },
-  { key: 'tool', label: 'Tool Bridge' },
+  { key: 'script', label: 'Script' },
 ];
 
 export const BUILTIN_ACTIONS: ActionDef[] = [
@@ -191,14 +191,16 @@ export const BUILTIN_ACTIONS: ActionDef[] = [
     },
   },
 
-  // --- Tool bridge ---
+  // --- Script adapter ---
   {
     name: 'run_tool_script',
     label: 'Run Tool Script',
-    category: 'tool',
-    description: 'Execute a registered Tool class as a pipeline step',
+    category: 'script',
+    description: 'Execute a tool class as a pipeline step',
     paramSchema: {
-      tool_snapshot: { type: 'string', label: 'Tool Snapshot (JSON)', description: 'JSON with script_path, script_class, default_params' },
+      script_path: { type: 'string', label: 'Script Path', required: true, placeholder: 'C:\\path\\to\\tool.py or /path/to/tool.py' },
+      script_class: { type: 'string', label: 'Class Name', required: true, placeholder: 'MyToolClass' },
+      default_params: { type: 'string', label: 'Default Params (JSON)', placeholder: '{}', description: 'JSON object for default params' },
     },
   },
 ];

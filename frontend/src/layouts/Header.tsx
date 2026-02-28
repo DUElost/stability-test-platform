@@ -1,4 +1,4 @@
-import { Bell, Menu, Search, User } from 'lucide-react';
+import { Bell, Menu, Search, User, Settings, BellRing, Users, Shield } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
@@ -55,7 +55,40 @@ export default function Header({ onMenuClick, showMenuButton = false }: HeaderPr
       </div>
 
       <div className="flex items-center gap-2">
-        {/* Notifications */}
+        {/* System Menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="System"
+            >
+              <Settings size={20} />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            <DropdownMenuLabel>系统管理</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => navigate('/notifications')}>
+              <BellRing size={16} className="mr-2" />
+              通知管理
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate('/users')}>
+              <Users size={16} className="mr-2" />
+              用户管理
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate('/audit')}>
+              <Shield size={16} className="mr-2" />
+              操作日志
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => navigate('/settings')}>
+              <Settings size={16} className="mr-2" />
+              系统设置
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
