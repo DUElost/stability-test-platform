@@ -29,14 +29,14 @@ const WF_STATUS_BADGE: Record<WorkflowStatus, string> = {
 
 const TERMINAL_STATUSES: WorkflowStatus[] = ['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'DEGRADED'];
 
-function formatTime(iso: string | null) {
+function formatTime(iso: string | null | undefined) {
   if (!iso) return '-';
   return new Date(iso).toLocaleString('zh-CN', {
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
   });
 }
 
-function formatDuration(start: string, end: string | null) {
+function formatDuration(start: string, end: string | null | undefined) {
   if (!end) return 'running...';
   const s = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000);
   if (s < 60) return `${s}s`;
@@ -48,6 +48,7 @@ function formatDuration(start: string, end: string | null) {
 
 function JobBlock({ job, onClick }: { job: JobInstance; onClick: () => void }) {
   const style = JOB_STATUS_STYLE[job.status] ?? JOB_STATUS_STYLE.PENDING;
+  const label = job.device_serial ?? `#${job.device_id}`;
   return (
     <button
       className={`
@@ -57,9 +58,7 @@ function JobBlock({ job, onClick }: { job: JobInstance; onClick: () => void }) {
       `}
       onClick={onClick}
     >
-      <div className="font-mono text-xs font-semibold truncate">
-        {String(job.device_id).slice(-8)}
-      </div>
+      <div className="font-mono text-xs font-semibold truncate">{label}</div>
       <div className="text-xs truncate mt-0.5 opacity-75">{style.label}</div>
       {job.status_reason && (
         <div className="text-xs truncate mt-0.5 opacity-60">{job.status_reason}</div>
@@ -102,10 +101,80 @@ function StepTimeline({ traces }: { traces: StepTrace[] }) {
   );
 }
 
+// ─── Job log stream ───────────────────────────────────────────────────────────
+
+interface LogLine {
+  ts: string;
+  level: string;
+  msg: string;
+  step_id?: string;
+}
+
+function JobLogStream({ jobId }: { jobId: number }) {
+  const [lines, setLines] = useState<LogLine[]>([]);
+  const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting');
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${protocol}://${window.location.host}/ws/jobs/${jobId}/logs`);
+
+    ws.onopen = () => setWsStatus('open');
+    ws.onclose = () => setWsStatus('closed');
+    ws.onerror = () => ws.close();
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'STEP_LOG' && msg.payload) {
+          setLines(prev => [...prev.slice(-499), msg.payload as LogLine]);
+        }
+      } catch {}
+    };
+
+    return () => ws.close();
+  }, [jobId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [lines]);
+
+  const statusColor = wsStatus === 'open' ? 'bg-green-400' : wsStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-300';
+
+  return (
+    <div className="flex flex-col h-64">
+      <div className="flex items-center gap-2 mb-2">
+        <span className={`w-2 h-2 rounded-full ${statusColor}`} />
+        <span className="text-xs text-gray-400">{wsStatus === 'open' ? '实时连接' : wsStatus === 'connecting' ? '连接中…' : '已断开'}</span>
+      </div>
+      <div className="flex-1 overflow-y-auto bg-gray-950 rounded p-2 font-mono text-xs">
+        {lines.length === 0 ? (
+          <span className="text-gray-500">等待日志…</span>
+        ) : (
+          lines.map((l, i) => (
+            <div key={i} className={`whitespace-pre-wrap ${
+              l.level === 'ERROR' ? 'text-red-400' :
+              l.level === 'WARN'  ? 'text-yellow-400' :
+                                     'text-green-300'
+            }`}>
+              <span className="text-gray-500 mr-2">{l.ts?.slice(11, 19)}</span>
+              {l.step_id && <span className="text-blue-400 mr-2">[{l.step_id}]</span>}
+              {l.msg}
+            </div>
+          ))
+        )}
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  );
+}
+
 // ─── Job detail drawer ─────────────────────────────────────────────────────────
+
+type DrawerTab = 'trace' | 'logs';
 
 function JobDrawer({ job, onClose }: { job: JobInstance; onClose: () => void }) {
   const style = JOB_STATUS_STYLE[job.status] ?? JOB_STATUS_STYLE.PENDING;
+  const [tab, setTab] = useState<DrawerTab>('trace');
   return (
     <div className="fixed inset-y-0 right-0 z-50 w-96 bg-white shadow-2xl border-l flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b">
@@ -119,7 +188,7 @@ function JobDrawer({ job, onClose }: { job: JobInstance; onClose: () => void }) 
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-gray-500">设备</span>
-            <span className="font-mono">#{job.device_id}</span>
+            <span className="font-mono">{job.device_serial ?? `#${job.device_id}`}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-gray-500">主机</span>
@@ -143,11 +212,23 @@ function JobDrawer({ job, onClose }: { job: JobInstance; onClose: () => void }) 
           </div>
         </div>
 
-        {/* Step traces */}
-        <div>
-          <h3 className="text-sm font-semibold text-gray-700 mb-2">Step 时间线</h3>
-          <StepTimeline traces={job.step_traces ?? []} />
+        {/* Tabs */}
+        <div className="flex border-b">
+          {(['trace', 'logs'] as DrawerTab[]).map(t => (
+            <button
+              key={t}
+              className={`px-4 py-1.5 text-sm font-medium border-b-2 transition-colors ${
+                tab === t ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+              onClick={() => setTab(t)}
+            >
+              {t === 'trace' ? 'Step 时间线' : '实时日志'}
+            </button>
+          ))}
         </div>
+
+        {tab === 'trace' && <StepTimeline traces={job.step_traces ?? []} />}
+        {tab === 'logs' && <JobLogStream jobId={job.id} />}
       </div>
     </div>
   );
@@ -181,7 +262,7 @@ export default function WorkflowRunMatrixPage() {
     },
   });
 
-  // WebSocket for real-time updates
+  // WebSocket for real-time job status updates
   useEffect(() => {
     if (!runId) return;
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';

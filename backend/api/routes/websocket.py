@@ -129,6 +129,40 @@ async def websocket_dashboard_legacy(websocket: WebSocket, token: Optional[str] 
     await _dashboard_socket_loop(websocket)
 
 
+@router.websocket("/ws/workflow-runs/{run_id}")
+async def websocket_workflow_run(websocket: WebSocket, run_id: int, token: Optional[str] = Query(None)):
+    """Frontend subscribes to real-time job/workflow status updates for a WorkflowRun."""
+    if not await _validate_ws_token(websocket, token):
+        return
+    path = f"/ws/workflow-runs/{run_id}"
+    await manager.connect(websocket, path)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, path)
+    except Exception as e:
+        logger.error(f"WebSocket error on {path}: {e}")
+        manager.disconnect(websocket, path)
+
+
+@router.websocket("/ws/jobs/{job_id}/logs")
+async def websocket_job_logs(websocket: WebSocket, job_id: int, token: Optional[str] = Query(None)):
+    """Frontend subscribes to per-job log stream."""
+    if not await _validate_ws_token(websocket, token):
+        return
+    path = f"/ws/jobs/{job_id}/logs"
+    await manager.connect(websocket, path)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, path)
+    except Exception as e:
+        logger.error(f"WebSocket error on {path}: {e}")
+        manager.disconnect(websocket, path)
+
+
 @router.websocket("/ws/logs/{run_id}")
 async def websocket_logs(websocket: WebSocket, run_id: int, token: Optional[str] = Query(None)):
     """WebSocket logs endpoint with token authentication."""
@@ -192,6 +226,27 @@ async def broadcast_log_message(run_id: int, log_data: Dict[str, Any]):
     await manager.broadcast(f"/ws/logs/{run_id}", {
         "type": "LOG",
         "payload": log_data
+    })
+
+
+async def broadcast_job_log(job_id: int, log_data: Dict[str, Any]):
+    await manager.broadcast(f"/ws/jobs/{job_id}/logs", log_data)
+
+
+async def broadcast_run_job_update(run_id: int, job_id: int, status: str) -> None:
+    """Notify frontend subscribers that a specific job's status changed."""
+    await manager.broadcast(f"/ws/workflow-runs/{run_id}", {
+        "type": "job_status",
+        "job_id": job_id,
+        "status": status,
+    })
+
+
+async def broadcast_run_workflow_status(run_id: int, status: str) -> None:
+    """Notify frontend subscribers that the overall WorkflowRun reached a terminal status."""
+    await manager.broadcast(f"/ws/workflow-runs/{run_id}", {
+        "type": "workflow_status",
+        "status": status,
     })
 
 
@@ -322,19 +377,21 @@ async def websocket_agent(websocket: WebSocket, host_id: int):
             elif msg_type == "log":
                 # Relay log message to frontend subscribers
                 run_id = msg.get("run_id")
+                job_id = msg.get("job_id")
+                log_data = {
+                    "type": "STEP_LOG",
+                    "payload": {
+                        "step_id": msg.get("step_id"),
+                        "seq": msg.get("seq"),
+                        "level": msg.get("level", "INFO"),
+                        "ts": msg.get("ts", ""),
+                        "msg": msg.get("msg", ""),
+                    },
+                }
                 if run_id:
-                    # Wrap in {type, payload} envelope to match frontend protocol
-                    log_data = {
-                        "type": "STEP_LOG",
-                        "payload": {
-                            "step_id": msg.get("step_id"),
-                            "seq": msg.get("seq"),
-                            "level": msg.get("level", "INFO"),
-                            "ts": msg.get("ts", ""),
-                            "msg": msg.get("msg", ""),
-                        },
-                    }
                     await manager.broadcast(f"/ws/logs/{run_id}", log_data)
+                if job_id:
+                    await manager.broadcast(f"/ws/jobs/{job_id}/logs", log_data)
 
             elif msg_type == "step_update":
                 # Update RunStep in DB and broadcast to frontend

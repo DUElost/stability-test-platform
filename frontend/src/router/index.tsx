@@ -36,6 +36,7 @@ const WorkflowDefinitionListPage = lazy(() => import('../pages/orchestration/Wor
 const WorkflowDefinitionEditPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionEditPage'));
 const DispatchEntryPage = lazy(() => import('../pages/execution/DispatchEntryPage'));
 const WorkflowRunMatrixPage = lazy(() => import('../pages/execution/WorkflowRunMatrixPage'));
+const WorkflowRunListPage = lazy(() => import('../pages/execution/WorkflowRunListPage'));
 
 // 检查是否已登录
 function isAuthenticated() {
@@ -103,6 +104,7 @@ export default function AppRouter() {
             </Route>
             <Route path="execution">
               <Route path="run" element={<DispatchEntryPage />} />
+              <Route path="runs" element={<WorkflowRunListPage />} />
               <Route path="runs/:runId" element={<WorkflowRunMatrixPage />} />
             </Route>
 

@@ -211,6 +211,7 @@ class AgentWSClient:
         return self.send({
             "type": "log",
             "run_id": run_id,
+            "job_id": run_id,
             "step_id": step_id,
             "seq": self._next_seq(run_id),
             "level": level,

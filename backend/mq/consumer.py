@@ -149,6 +149,7 @@ async def _persist_job_status(fields: dict) -> None:
     from backend.models.job import JobInstance
     from backend.services.aggregator import WorkflowAggregator
     from backend.services.state_machine import InvalidTransitionError, JobStateMachine
+    from backend.api.routes.websocket import broadcast_run_job_update, broadcast_run_workflow_status
 
     job_id = int(fields.get("job_id", 0))
     status_str = fields.get("status", "").upper()
@@ -167,15 +168,33 @@ async def _persist_job_status(fields: dict) -> None:
         JobStatus.ABORTED.value, JobStatus.UNKNOWN.value,
     }
 
+    workflow_run_id = None
+    workflow_terminal_status = None
+
     async with AsyncSessionLocal() as db:
         job = await db.get(JobInstance, job_id)
         if job is None:
             return
+        workflow_run_id = job.workflow_run_id
         try:
             JobStateMachine.transition(job, new_status, reason)
             if job.status in _TERMINAL:
                 job.ended_at = datetime.utcnow()
                 await WorkflowAggregator.on_job_terminal(job, db)
+                # capture workflow terminal status before commit flushes
+                from backend.models.workflow import WorkflowRun
+                run = await db.get(WorkflowRun, workflow_run_id)
+                if run and run.status != "RUNNING":
+                    workflow_terminal_status = run.status
             await db.commit()
         except InvalidTransitionError:
             pass
+
+    # Broadcast outside the DB session
+    if workflow_run_id:
+        try:
+            await broadcast_run_job_update(workflow_run_id, job_id, new_status.value)
+            if workflow_terminal_status:
+                await broadcast_run_workflow_status(workflow_run_id, workflow_terminal_status)
+        except Exception as e:
+            logger.warning("WS broadcast failed: %s", e)

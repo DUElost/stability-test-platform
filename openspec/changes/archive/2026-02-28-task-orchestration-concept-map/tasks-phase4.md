@@ -329,8 +329,8 @@ WebSocket（Phase 4 内实现，降级方案：30s 轮询）:
 
 ## 遗留项（后续优化）
 
-- 矩阵方块显示设备 serial（当前显示 device_id，需后端 JobInstanceOut 增加 device_serial 字段）
-- Job Drawer 实时日志面板（ws://server/ws/jobs/{job_id}/logs）
+- [x] 矩阵方块显示设备 serial（后端 JobInstanceOut 增加 device_serial + 批量 JOIN Device，前端 JobBlock/JobDrawer 展示）
+- [x] Job Drawer 实时日志面板（ws/jobs/{job_id}/logs，前端 JobLogStream 组件，Tab 切换）
+- [x] 缺失路由：`/execution/runs` 历史列表（WorkflowRunListPage + GET /workflow-runs + api.execution.listRuns）
 - 设备筛选支持 platform/tags（当前仅 serial/model 文本过滤）
-- 缺失路由：`/execution/runs` 历史列表、`/execution/runs/:id/jobs/:job_id` 详情页
 - StagesPipelineEditor params 字段按 param_schema 校验

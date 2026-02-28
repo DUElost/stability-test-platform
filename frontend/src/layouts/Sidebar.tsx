@@ -51,7 +51,7 @@ const navGroups: NavGroup[] = [
     label: '执行中心',
     items: [
       { path: '/execution/run', label: '发起测试', icon: Rocket },
-      { path: '/task-runs', label: '任务实例', icon: ListTodo },
+      { path: '/execution/runs', label: '执行历史', icon: ListTodo },
       { path: '/logs', label: '日志监控', icon: FileSearch },
     ],
   },

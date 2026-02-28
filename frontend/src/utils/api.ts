@@ -532,6 +532,7 @@ export interface JobInstance {
   task_template_id: number;
   host_id: string;
   device_id: number;
+  device_serial?: string | null;
   status: JobStatus;
   status_reason?: string | null;
   created_at: string;
@@ -842,6 +843,8 @@ export const api = {
 
   // WorkflowRun (执行记录) 查询
   execution: {
+    listRuns: (skip = 0, limit = 50) =>
+      unwrapApiResponse<WorkflowRun[]>(apiClient.get('/workflow-runs', { params: { skip, limit } })),
     getRun: (runId: number) =>
       unwrapApiResponse<WorkflowRun>(apiClient.get(`/workflow-runs/${runId}`)),
     getRunJobs: (runId: number) =>

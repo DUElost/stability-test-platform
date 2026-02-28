@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.response import ApiResponse, err, ok
 from backend.core.database import get_async_db
 from backend.models.job import JobInstance, StepTrace, TaskTemplate
+from backend.models.schemas import Device
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
 from backend.services.dispatcher import DispatchError, dispatch_workflow
 
@@ -85,6 +86,7 @@ class JobInstanceOut(BaseModel):
     workflow_run_id: int
     task_template_id: int
     device_id: int
+    device_serial: Optional[str] = None
     host_id: Optional[str]
     status: str
     status_reason: Optional[str]
@@ -259,6 +261,17 @@ async def run_workflow(
 
 # ── WorkflowRun queries ────────────────────────────────────────────────────────
 
+@router.get("/workflow-runs", response_model=ApiResponse[List[WorkflowRunOut]])
+async def list_workflow_runs(
+    skip: int = 0, limit: int = 50,
+    db: AsyncSession = Depends(get_async_db),
+):
+    runs = (await db.execute(
+        select(WorkflowRun).order_by(WorkflowRun.started_at.desc()).offset(skip).limit(limit)
+    )).scalars().all()
+    return ok([_run_out(r, []) for r in runs])
+
+
 @router.get("/workflow-runs/{run_id}", response_model=ApiResponse[WorkflowRunOut])
 async def get_workflow_run(run_id: int, db: AsyncSession = Depends(get_async_db)):
     run = await db.get(WorkflowRun, run_id)
@@ -275,13 +288,23 @@ async def list_run_jobs(run_id: int, db: AsyncSession = Depends(get_async_db)):
     jobs = (await db.execute(
         select(JobInstance).where(JobInstance.workflow_run_id == run_id)
     )).scalars().all()
+
+    # Batch-fetch device serials
+    device_ids = list({j.device_id for j in jobs})
+    devices: dict[int, str] = {}
+    if device_ids:
+        rows = (await db.execute(
+            select(Device.id, Device.serial).where(Device.id.in_(device_ids))
+        )).all()
+        devices = {r.id: r.serial for r in rows}
+
     result = []
     for job in jobs:
         traces = (await db.execute(
             select(StepTrace).where(StepTrace.job_id == job.id)
             .order_by(StepTrace.original_ts)
         )).scalars().all()
-        result.append(_job_out(job, traces))
+        result.append(_job_out(job, traces, devices.get(job.device_id)))
     return ok(result)
 
 
@@ -313,11 +336,12 @@ def _run_out(run: WorkflowRun, jobs: list) -> WorkflowRunOut:
     )
 
 
-def _job_out(job: JobInstance, traces: list) -> JobInstanceOut:
+def _job_out(job: JobInstance, traces: list, device_serial: Optional[str] = None) -> JobInstanceOut:
     return JobInstanceOut(
         id=job.id, workflow_run_id=job.workflow_run_id,
         task_template_id=job.task_template_id, device_id=job.device_id,
-        host_id=job.host_id, status=job.status, status_reason=job.status_reason,
+        device_serial=device_serial, host_id=job.host_id,
+        status=job.status, status_reason=job.status_reason,
         started_at=job.started_at, ended_at=job.ended_at, created_at=job.created_at,
         step_traces=[
             StepTraceOut(
