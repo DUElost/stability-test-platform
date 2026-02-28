@@ -1,0 +1,27 @@
+# 强制 Shell 脚本始终以 LF 格式存储和检出（防止 Windows 环境产生 CRLF）
+# 这样 /mnt/f/... 路径下的 .sh 文件也不需要手动 sed 修复
+*.sh        eol=lf
+*.bash      eol=lf
+
+# Python 文件保持 LF
+*.py        eol=lf
+
+# Windows 可执行文件保持 CRLF
+*.bat       eol=crlf
+*.ps1       eol=crlf
+*.cmd       eol=crlf
+
+# 文本文件自动处理
+*.md        text
+*.json      text
+*.yaml      text
+*.yml       text
+*.txt       text
+*.env       text eol=lf
+*.example   text eol=lf
+
+# 二进制文件不做处理
+*.png       binary
+*.jpg       binary
+*.jar       binary
+*.apk       binary

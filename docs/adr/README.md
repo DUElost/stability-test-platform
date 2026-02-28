@@ -60,15 +60,18 @@
 | [ADR-0009](./ADR-0009-websocket-auth-and-endpoint-config-unification.md) | WebSocket 鉴权与端点配置统一化 | Proposed | P0 | M1 | 预扩展/重构 |
 | [ADR-0010](./ADR-0010-deployment-pipeline-jobification.md) | 部署能力作业化（异步、幂等、可回放） | Proposed | P1 | M2 | 预扩展/重构 |
 | [ADR-0011](./ADR-0011-observability-and-alerting-evolution.md) | 可观测性与告警体系演进 | Proposed | P1 | M2 | 预扩展/重构 |
-| [ADR-0012](./ADR-0012-post-completion-pipeline-jira-automation.md) | 后处理流水线到 JIRA 自动提交演进 | Proposed | P2 | M3 | 预扩展/重构 |
+| [ADR-0012](./ADR-0012-post-completion-pipeline-jira-automation.md) | 后处理流水线到 JIRA 自动提交演进 | Accepted | P2 | M3 | 第 1 层已实现 |
+| [ADR-0013](./ADR-0013-frontend-feature-expansion.md) | 前端功能模块扩展（任务实例、问题追踪、环境资源） | Accepted | P1 | M2 | 已实现 |
+| [ADR-0014](./ADR-0014-pipeline-execution-engine.md) | Pipeline 执行引擎架构 | Accepted | P1 | M2 | 已实现 |
+| [ADR-0015](./ADR-0015-audit-log-system.md) | 审计日志系统 | Accepted | P1 | M2 | 已实现 |
 
 ## Proposed 里程碑看板（2026 上半年）
 
 | 里程碑 | 目标日期 | 包含 ADR |
 |---|---|---|
 | M1 | 2026-03-15 | ADR-0008, ADR-0009 |
-| M2 | 2026-04-15 | ADR-0010, ADR-0011 |
-| M3 | 2026-05-15 | ADR-0012 |
+| M2 | 2026-04-15 | ADR-0010, ADR-0011, ADR-0013, ADR-0014 |
+| M3 | 2026-05-15 | ADR-0012（第 2-3 层） |
 
 ## 维护约定
 
