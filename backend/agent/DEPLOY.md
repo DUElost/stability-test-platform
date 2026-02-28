@@ -279,8 +279,23 @@ sudo ufw status                # Ubuntu
 # 检查 ADB 是否可用
 adb devices
 
-# 检查 ADB 路径配置
-grep ADB_PATH /opt/stability-test-agent/.env
+# 检查 ADB 路径和端口配置
+grep -E "^ADB" /opt/stability-test-agent/.env
+
+# 健康检查（会显示端口和已识别设备数）
+agentctl health
+```
+
+**WSL 环境 ADB 端口冲突**：若默认 5037 端口被占用导致切换为 5039，但 agent 发现设备为 0，
+原因是 `sudo` 运行时会剥离 shell 环境变量。修复方法：
+
+```bash
+# 在 .env 中固化端口配置（一次性操作）
+echo 'ANDROID_ADB_SERVER_PORT=5039' >> /opt/stability-test-agent/.env
+sudo systemctl restart stability-test-agent
+
+# 验证
+agentctl health  # 应显示 "端口: 5039" 和 "已识别设备: N 台"
 ```
 
 ---
@@ -351,6 +366,55 @@ for HOST in "${HOSTS[@]}"; do
 EOF
 done
 ```
+
+---
+
+## 热更新（已部署主机的代码同步）
+
+已部署主机无需重新安装，使用 `sync_agent.sh` 只推送代码变更，**保留 `.env` 和所有数据目录不变**。
+
+### 快速同步
+
+```bash
+# 进入 WSL（如从 Windows 开发机操作）
+wsl
+
+# WSL 本机
+bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh wsl
+
+# 单台远程主机
+bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh root@172.21.15.10
+
+# 批量（多个 IP）
+bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh 172.21.15.10 172.21.15.11 172.21.15.12
+```
+
+### 批量同步（hosts.txt）
+
+在 `backend/agent/` 创建 `hosts.txt`：
+
+```
+# Linux Agent 主机列表
+172.21.15.10
+172.21.15.11
+android@172.21.15.12
+```
+
+然后一键同步全部：
+
+```bash
+bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh --all
+```
+
+### sync_agent.sh 与 install_agent.sh 的区别
+
+| | `install_agent.sh` | `sync_agent.sh` |
+|---|---|---|
+| 用途 | 首次部署 | 代码热更新 |
+| 交互提示 | 需要输入 API_URL / HOST_ID | 无 |
+| `.env` | 创建（若不存在） | **不修改** |
+| venv / logs | 重建 | **不修改** |
+| systemd 服务 | 安装/更新 service 文件 | daemon-reload + restart |
 
 ---
 

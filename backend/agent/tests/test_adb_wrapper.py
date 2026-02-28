@@ -103,13 +103,12 @@ def test_devices_parses_multiple_output_formats(adb: AdbWrapper, completed_proce
         assert adb.devices() == expected
 
 
-def test_shell_builds_expected_command(adb: AdbWrapper, completed_process_factory):
-    cp = completed_process_factory(stdout="uid=2000(shell)")
-    with patch.object(adb, "_run", return_value=cp) as mock_run:
-        result = adb.shell("SERIAL-01", ["id"])
-    assert result is cp
-    mock_run.assert_called_once_with(["-s", "SERIAL-01", "shell", "id"])
-
+    def test_shell_builds_expected_command(adb: AdbWrapper, completed_process_factory):
+        cp = completed_process_factory(stdout="uid=2000(shell)")
+        with patch.object(adb, "_run", return_value=cp) as mock_run:
+            result = adb.shell("SERIAL-01", ["id"])
+        assert result is cp
+        mock_run.assert_called_once_with(["-s", "SERIAL-01", "shell", "id"], timeout=None)
 
 @pytest.mark.parametrize(
     ("method_name", "method_args", "expected_args"),

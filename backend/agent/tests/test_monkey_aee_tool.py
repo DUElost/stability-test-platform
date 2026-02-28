@@ -9,14 +9,12 @@ try:
         LegacyMonkeyAEEConfig,
     )
     from backend.agent.tools.monkey_aee_stability_test import MonkeyAEEStabilityTest
-    from backend.agent.task_executor import TaskExecutor
 except ModuleNotFoundError:  # pragma: no cover
     from agent.tools.adapters.legacy_monkey_aee_adapter import (
         LegacyMonkeyAEEAdapter,
         LegacyMonkeyAEEConfig,
     )
     from agent.tools.monkey_aee_stability_test import MonkeyAEEStabilityTest
-    from agent.task_executor import TaskExecutor
 
 
 class DummyAdb:
@@ -132,6 +130,4 @@ def test_monkey_aee_tool_run_success(tmp_path: Path):
     assert str(result.artifact["storage_uri"]).startswith("file://")
 
 
-def test_task_executor_registry_contains_monkey_aee():
-    assert "MONKEY_AEE" in TaskExecutor._TEST_CLASS_REGISTRY
 

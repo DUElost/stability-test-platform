@@ -244,22 +244,45 @@ class AgentWSClient:
 
 
 class StepLogger:
-    """Per-step logger that sends log lines via WebSocket (or falls back to buffer)."""
+    """Per-step logger that sends log lines via WebSocket (or falls back to buffer).
+    Also optionally writes logs to a local file.
+    """
 
-    def __init__(self, ws_client: AgentWSClient, run_id: int, step_id: int):
+    def __init__(self, ws_client: AgentWSClient, run_id: int, step_id: int, log_file: Optional[str] = None):
         self._ws = ws_client
         self._run_id = run_id
         self._step_id = step_id
+        self._log_file = log_file
         self._line_count = 0
+
+        # Ensure directory exists if log_file is provided
+        if self._log_file:
+            try:
+                os.makedirs(os.path.dirname(self._log_file), exist_ok=True)
+            except Exception as e:
+                logger.warning(f"Failed to create log directory for {self._log_file}: {e}")
 
     @property
     def line_count(self) -> int:
         return self._line_count
 
     def log(self, message: str, level: str = "INFO"):
-        """Log a single line. Sends via WS if connected."""
+        """Log a single line. Sends via WS if connected and writes to file if provided."""
         self._line_count += 1
+        ts = datetime.utcnow().isoformat() + "Z"
+
+        # Send via WebSocket
         self._ws.send_log(self._run_id, self._step_id, level, message)
+
+        # Write to local file
+        if self._log_file:
+            try:
+                with open(self._log_file, "a", encoding="utf-8") as f:
+                    f.write(f"{ts} [{level}] {message}\n")
+            except Exception as e:
+                # Only log error once to avoid flooding
+                if self._line_count == 1:
+                    logger.warning(f"Failed to write to log file {self._log_file}: {e}")
 
     def info(self, message: str):
         self.log(message, "INFO")

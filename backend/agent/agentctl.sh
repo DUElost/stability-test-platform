@@ -152,9 +152,17 @@ health_check() {
     # 检查 ADB
     ADB_PATH=$(grep "^ADB_PATH=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2)
     ADB_PATH=${ADB_PATH:-adb}
+    ADB_PORT=$(grep "^ANDROID_ADB_SERVER_PORT=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2)
     if command -v "$ADB_PATH" &>/dev/null; then
         ADB_VERSION=$($ADB_PATH version | head -1)
-        echo -e "  ADB: ${GREEN}可用${NC} ($ADB_VERSION)"
+        if [ -n "$ADB_PORT" ]; then
+            echo -e "  ADB: ${GREEN}可用${NC} ($ADB_VERSION, 端口: $ADB_PORT)"
+            DEVICE_COUNT=$(ANDROID_ADB_SERVER_PORT="$ADB_PORT" "$ADB_PATH" devices 2>/dev/null | grep -c "device$" || echo 0)
+        else
+            echo -e "  ADB: ${GREEN}可用${NC} ($ADB_VERSION)"
+            DEVICE_COUNT=$("$ADB_PATH" devices 2>/dev/null | grep -c "device$" || echo 0)
+        fi
+        echo -e "  已识别设备: ${GREEN}${DEVICE_COUNT} 台${NC}"
     else
         echo -e "  ADB: ${RED}不可用 ($ADB_PATH)${NC}"
     fi

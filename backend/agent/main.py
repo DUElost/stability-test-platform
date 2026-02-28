@@ -4,6 +4,7 @@ import socket
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -23,17 +24,23 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
     from agent.heartbeat import send_heartbeat
-    from agent.task_executor import TaskExecutor, ExecutionContext
     from agent import device_discovery
-    from agent.config import ensure_dirs
+    from agent.config import ensure_dirs, get_run_log_dir, BASE_DIR
     from agent.ws_client import AgentWSClient
+    from agent.registry.local_db import LocalDB
+    from agent.registry.tool_registry import ToolRegistry
+    from agent.mq.producer import MQProducer
+    from agent.mq.control_listener import ControlListener
 else:
     from .adb_wrapper import AdbWrapper
     from .heartbeat import send_heartbeat
-    from .task_executor import TaskExecutor, ExecutionContext
     from . import device_discovery
-    from .config import ensure_dirs
+    from .config import ensure_dirs, get_run_log_dir, BASE_DIR
     from .ws_client import AgentWSClient
+    from .registry.local_db import LocalDB
+    from .registry.tool_registry import ToolRegistry
+    from .mq.producer import MQProducer
+    from .mq.control_listener import ControlListener
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -47,6 +54,7 @@ LOCK_RENEWAL_INTERVAL = int(os.getenv("AGENT_LOCK_RENEWAL_INTERVAL", "60"))  # �
 
 # 全局锁续期管理
 _active_run_ids: Set[int] = set()
+_active_runs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
 
 
@@ -78,7 +86,8 @@ class LockRenewalManager:
         """续期主循环"""
         while not _lock_renewal_stop_event.is_set():
             # 复制当前活跃任务列表避免并发修改
-            current_runs = list(_active_run_ids)
+            with _active_runs_lock:
+                current_runs = list(_active_run_ids)
 
             for run_id in current_runs:
                 if _lock_renewal_stop_event.is_set():
@@ -109,7 +118,8 @@ class LockRenewalManager:
                 if e.response is not None and e.response.status_code == 409:
                     # 锁丢失，从活跃列表移除
                     logger.error(f"lock_lost for run {run_id}, removing from active runs")
-                    _active_run_ids.discard(run_id)
+                    with _active_runs_lock:
+                        _active_run_ids.discard(run_id)
                     raise RuntimeError(f"Lock lost for run {run_id}")
                 logger.warning(f"lock_extension_attempt_{attempt}_failed for run {run_id}: {e}")
             except requests.RequestException as e:
@@ -397,27 +407,14 @@ def _auto_register_host(api_url: str, host_info: Dict) -> int:
         raise
 
 
-def _execute_run_with_lock_renewal(
-    task_type: str,
-    task_params: Dict[str, Any],
-    executor: TaskExecutor,
-    context: ExecutionContext,
-) -> Any:
-    """执行任务并管理锁续期"""
-    global _active_run_ids
-
-    _active_run_ids.add(context.run_id)
-
-    try:
-        result = executor.execute_task(task_type, task_params, context)
-        return result
-    finally:
-        _active_run_ids.discard(context.run_id)
-
-
-def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, host_id, ws_client=None, tool_snapshot=None):
+def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, host_id,
+                           ws_client=None, mq_producer=None, tool_registry=None):
     """Execute a task using the pipeline engine instead of the legacy executor."""
     from backend.agent.pipeline_engine import PipelineEngine, StepResult
+
+    # Get log directory for this run
+    log_dir = get_run_log_dir(run_id)
+    os.makedirs(log_dir, exist_ok=True)
 
     # Use existing WS client if provided, otherwise create a new one
     own_ws = False
@@ -452,15 +449,12 @@ def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, hos
         adb=adb,
         serial=device_serial,
         run_id=run_id,
+        log_dir=log_dir,
         ws_client=ws_client,
         http_fallback=http_step_fallback,
+        mq_producer=mq_producer,
+        tool_registry=tool_registry,
     )
-
-    # Inject tool_snapshot into engine's shared context for tool:<id> resolution
-    if tool_snapshot and isinstance(tool_snapshot, dict):
-        tool_id = tool_snapshot.get("id")
-        if tool_id:
-            engine._shared["_tool_snapshots"] = {str(tool_id): tool_snapshot}
 
     # Inject DB step IDs into pipeline_def for status reporting
     # Fetch step IDs from the backend
@@ -494,17 +488,100 @@ def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, hos
         if own_ws:
             ws_client.disconnect()
 
-    # Map PipelineEngine result to TaskResult-compatible dict
-    from backend.agent.task_executor import TaskResult
-    return TaskResult(
-        status="FINISHED" if result.success else "FAILED",
-        exit_code=result.exit_code,
-        error_message=result.error_message,
-    )
+    return {
+        "status": "FINISHED" if result.success else "FAILED",
+        "exit_code": result.exit_code,
+        "error_code": None,
+        "error_message": result.error_message,
+        "log_summary": None,
+        "artifact": result.artifact,
+    }
+
+
+def _run_task_wrapper(run, adb, api_url, host_id, ws_client, mq_producer=None, tool_registry=None):
+    """Wrapper to run a single task in a thread and report completion."""
+    run_id = run["id"]
+    task_id = run.get("task_id")
+    device_id = run.get("device_id")
+    device_serial = run.get("device_serial", "")
+    pipeline_def = run.get("pipeline_def")
+
+    logger.info("run_start", extra={"run_id": run_id, "task_id": task_id, "device_id": device_id})
+
+    # Mark as running in backend
+    try:
+        update_run(
+            api_url,
+            run_id,
+            {"status": "RUNNING", "started_at": datetime.utcnow().isoformat()},
+        )
+    except Exception as e:
+        logger.error(f"Failed to mark run {run_id} as RUNNING: {e}")
+        # Continue anyway, pipeline engine will try to report status too
+
+    if not (pipeline_def and isinstance(pipeline_def, dict) and
+            (pipeline_def.get("phases") or pipeline_def.get("stages"))):
+        complete_run(
+            api_url,
+            run_id,
+            {
+                "status": "FAILED",
+                "exit_code": 1,
+                "error_code": "PIPELINE_REQUIRED",
+                "error_message": "pipeline_def is required",
+                "log_summary": None,
+                "artifact": None,
+            },
+        )
+        return
+
+    # Add to active runs for lock renewal
+    with _active_runs_lock:
+        _active_run_ids.add(run_id)
+
+    try:
+        result = _execute_pipeline_run(
+            pipeline_def, run_id, device_serial, adb, api_url,
+            host_id=host_id, ws_client=ws_client,
+            mq_producer=mq_producer, tool_registry=tool_registry,
+        )
+
+        complete_run(
+            api_url,
+            run_id,
+            {
+                "status": result["status"],
+                "exit_code": result["exit_code"],
+                "error_code": result.get("error_code"),
+                "error_message": result.get("error_message"),
+                "log_summary": result.get("log_summary"),
+                "artifact": result.get("artifact"),
+            },
+        )
+        logger.info("run_complete", extra={"run_id": run_id, "status": result["status"]})
+    except Exception as e:
+        logger.exception(f"Unhandled exception during run {run_id}: {e}")
+        try:
+            complete_run(
+                api_url,
+                run_id,
+                {
+                    "status": "FAILED",
+                    "exit_code": 1,
+                    "error_code": "AGENT_ERROR",
+                    "error_message": str(e),
+                },
+            )
+        except Exception:
+            pass
+    finally:
+        with _active_runs_lock:
+            _active_run_ids.discard(run_id)
 
 
 def main() -> None:
     api_url = os.getenv("API_URL", "http://127.0.0.1:8000")
+    max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 
     # 确保运行时目录存在
     ensure_dirs()
@@ -552,14 +629,29 @@ def main() -> None:
     logger.info("agent_started", extra={"host_id": host_id, "api_url": api_url, "ip": host_info["ip"]})
 
     adb = AdbWrapper(adb_path=adb_path)
-    executor = TaskExecutor(adb)
-
     # 启动 WebSocket 客户端（best-effort，失败时降级到 HTTP）
     agent_secret = os.getenv("AGENT_SECRET", "")
     ws_client = AgentWSClient(api_url, host_id, agent_secret)
     ws_client.connect()
     # Start background reconnect loop for auto-recovery on disconnect
     ws_client.start_reconnect_loop()
+
+    # 初始化本地 SQLite WAL 缓存
+    local_db = LocalDB()
+    db_path = str(BASE_DIR / "agent_state.db")
+    local_db.initialize(db_path)
+
+    # 初始化工具注册表
+    tool_registry = ToolRegistry(local_db, api_url, agent_secret)
+    tool_registry.initialize()
+
+    # 初始化 Redis MQ 生产者
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    mq_producer = MQProducer(redis_url, str(host_id), local_db=local_db)
+
+    # 启动控制指令监听器
+    control_listener = ControlListener(redis_url, str(host_id), mq_producer, tool_registry)
+    control_listener.start()
 
     # 启动心跳守护线程（独立于任务执行循环）
     heartbeat_thread = HeartbeatThread(
@@ -577,96 +669,47 @@ def main() -> None:
     lock_manager = LockRenewalManager(api_url)
     lock_manager.start()
 
+    # Create thread pool for parallel task execution
+    executor = ThreadPoolExecutor(max_workers=max_concurrent_tasks, thread_name_prefix="task-worker")
+
     try:
         while True:
             try:
-                runs = fetch_pending_runs(api_url, host_id)
-                logger.info("pending_runs_fetched", extra={"host_id": host_id, "count": len(runs)})
-                for run in runs:
-                    run_id = run["id"]
-                    logger.info(
-                        "run_start",
-                        extra={"run_id": run_id, "task_id": run.get("task_id"), "device_id": run.get("device_id")},
-                    )
-                    logger.info(
-                        f"run_detail: run_id={run_id}, task_type={run.get('task_type')}, "
-                        f"device_serial={run.get('device_serial')}, "
-                        f"tool_id={run.get('tool_id')}, "
-                        f"task_params_keys={list(run.get('task_params', {}).keys())}"
-                    )
-                    update_run(
-                        api_url,
-                        run_id,
-                        {"status": "RUNNING", "started_at": datetime.utcnow().isoformat()},
-                    )
-                    task_params = dict(run.get("task_params", {}))
-                    device_serial = run.get("device_serial", "")
-
-                    # 合并 tool_id 和 tool_snapshot 到 task_params
-                    # RunAgentOut 将这些作为顶层字段返回，executor 需要在 params 中读取
-                    if run.get("tool_id"):
-                        task_params["tool_id"] = run["tool_id"]
-                    tool_snapshot = run.get("tool_snapshot")
-                    if isinstance(tool_snapshot, dict):
-                        for key in ("script_path", "script_class", "default_params", "timeout"):
-                            if key in tool_snapshot and key not in task_params:
-                                task_params[key] = tool_snapshot[key]
-
-                    context = ExecutionContext(
-                        api_url=api_url,
-                        run_id=run_id,
-                        host_id=host_id,
-                        device_serial=device_serial,
-                    )
-
-                    # Route: pipeline engine vs legacy executor
-                    pipeline_def = run.get("pipeline_def")
-                    if pipeline_def and isinstance(pipeline_def, dict) and pipeline_def.get("phases"):
-                        # Register for lock renewal (fix: pipeline bypasses lock renewal)
-                        _active_run_ids.add(run_id)
-                        try:
-                            result = _execute_pipeline_run(
-                                pipeline_def, run_id, device_serial, adb, api_url,
-                                host_id=host_id, ws_client=ws_client,
-                                tool_snapshot=run.get("tool_snapshot"),
-                            )
-                        finally:
-                            _active_run_ids.discard(run_id)
-                    else:
-                        result = _execute_run_with_lock_renewal(
-                            run["task_type"],
-                            task_params,
-                            executor,
-                            context,
-                        )
-
-                    complete_run(
-                        api_url,
-                        run_id,
-                        {
-                            "status": result.status,
-                            "exit_code": result.exit_code,
-                            "error_code": result.error_code,
-                            "error_message": result.error_message,
-                            "log_summary": result.log_summary,
-                            "artifact": result.artifact,
-                        },
-                    )
-                    logger.info("run_complete", extra={"run_id": run_id, "status": result.status})
-                    if result.status == "FAILED":
-                        logger.warning(
-                            f"run_failed_detail: run_id={run_id}, "
-                            f"error_code={result.error_code}, "
-                            f"error_message={result.error_message}, "
-                            f"log_summary={result.log_summary}"
-                        )
+                # Calculate how many slots are available
+                with _active_runs_lock:
+                    active_count = len(_active_run_ids)
+                
+                available_slots = max(0, max_concurrent_tasks - active_count)
+                
+                if available_slots > 0:
+                    runs = fetch_pending_runs(api_url, host_id)
+                    # Limit fetched runs to available slots to avoid over-fetching
+                    runs = runs[:available_slots]
+                    
+                    if runs:
+                        logger.info("pending_runs_fetched", extra={"host_id": host_id, "count": len(runs), "available_slots": available_slots})
+                    
+                    for run in runs:
+                        # Mark as active immediately to reserve the slot
+                        with _active_runs_lock:
+                            _active_run_ids.add(run["id"])
+                        
+                        # Note: _run_task_wrapper also adds it to _active_run_ids, 
+                        # but doing it here prevents the next iteration from fetching same slot.
+                        # The wrapper will also discard it on finish.
+                        executor.submit(_run_task_wrapper, run, adb, api_url, host_id,
+                                        ws_client, mq_producer, tool_registry)
             except Exception:
                 logger.exception("agent_loop_failed", extra={"host_id": host_id})
             time.sleep(poll_interval)
     finally:
         # 确保后台线程停止
+        executor.shutdown(wait=False)
         heartbeat_thread.stop()
         lock_manager.stop()
+        control_listener.stop()
+        mq_producer.close()
+        local_db.close()
         ws_client.disconnect()
 
 
