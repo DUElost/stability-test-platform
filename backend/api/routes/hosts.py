@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from typing import Any, List
 
 from backend.core.database import get_db
+from backend.core.audit import record_audit
 from backend.models.schemas import Host, HostStatus
 from backend.api.schemas import HostCreate, HostOut, PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
@@ -44,7 +45,7 @@ router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
 
 @router.post("", response_model=HostOut)
-def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
     host = Host(
         name=payload.name,
         ip=payload.ip,
@@ -54,6 +55,18 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
         ssh_key_path=payload.ssh_key_path,
     )
     db.add(host)
+    db.flush()
+    record_audit(
+        db,
+        action="create",
+        resource_type="host",
+        resource_id=host.id,
+        details={"name": host.name, "ip": host.ip,
+                 "ssh_port": host.ssh_port, "ssh_auth_type": host.ssh_auth_type},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(host)
     return host
@@ -102,6 +115,7 @@ def update_host(
     payload: HostCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """更新主机信息"""
     host = db.get(Host, host_id)
@@ -115,6 +129,16 @@ def update_host(
     host.ssh_auth_type = payload.ssh_auth_type
     host.ssh_key_path = payload.ssh_key_path
 
+    record_audit(
+        db,
+        action="update",
+        resource_type="host",
+        resource_id=host.id,
+        details={"name": host.name, "ip": host.ip},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(host)
     return host

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from backend.core.database import get_db
 from backend.core.task_templates import list_templates as list_core_templates
-from backend.models.schemas import Device, DeviceStatus, Host, HostStatus, LogArtifact, RunStatus, RunStep, RunStepStatus, Task, TaskRun, TaskStatus, Tool
+from backend.models.schemas import Device, DeviceStatus, Host, HostStatus, LogArtifact, RunStatus, RunStep, RunStepStatus, Task, TaskRun, TaskStatus
 from backend.api.schemas import (
     AgentLogOut,
     AgentLogQuery,
@@ -42,6 +42,7 @@ from backend.api.schemas import (
     TaskOut,
 )
 from backend.api.routes.auth import get_current_active_user, User, verify_agent_secret
+from backend.core.audit import record_audit
 from backend.services.report_service import (
     compose_run_report,
     build_jira_draft,
@@ -375,7 +376,7 @@ def list_task_templates():
 
 
 @router.post("/tasks", response_model=TaskOut)
-def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
     resolved_target_device_id = payload.target_device_id
 
     # 生成 group_id（分布式任务用）
@@ -418,34 +419,21 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user
             if not device.host_id:
                 raise HTTPException(status_code=409, detail=f"设备 {device_id} 未绑定主机")
 
-    tool_snapshot = None
-    if payload.tool_id:
-        tool = db.query(Tool).filter(Tool.id == payload.tool_id).first()
-        if not tool:
-            raise HTTPException(status_code=400, detail="tool not found")
-        if not tool.enabled:
-            raise HTTPException(status_code=400, detail="tool is disabled")
-        tool_snapshot = {
-            "id": tool.id,
-            "name": tool.name,
-            "description": tool.description,
-            "script_path": tool.script_path,
-            "script_class": tool.script_class,
-            "script_type": tool.script_type,
-            "default_params": tool.default_params,
-            "param_schema": tool.param_schema,
-            "timeout": tool.timeout,
-            "need_device": tool.need_device,
-        }
+    # Pipeline-only: require pipeline_def and disable tool management linkage
+    if payload.pipeline_def is None:
+        raise HTTPException(status_code=422, detail="pipeline_def is required")
+    if payload.tool_id is not None or payload.tool_snapshot is not None:
+        raise HTTPException(status_code=400, detail="tool management is disabled; use pipeline_def only")
 
-    # Validate pipeline_def if provided (even if empty dict)
+    tool_snapshot = None
+
+    # Validate pipeline_def
     pipeline_def = None
-    if payload.pipeline_def is not None:
-        from backend.core.pipeline_validator import validate_pipeline_def
-        is_valid, errors = validate_pipeline_def(payload.pipeline_def)
-        if not is_valid:
-            raise HTTPException(status_code=422, detail=f"Invalid pipeline definition: {'; '.join(errors)}")
-        pipeline_def = payload.pipeline_def
+    from backend.core.pipeline_validator import validate_pipeline_def
+    is_valid, errors = validate_pipeline_def(payload.pipeline_def)
+    if not is_valid:
+        raise HTTPException(status_code=422, detail=f"Invalid pipeline definition: {'; '.join(errors)}")
+    pipeline_def = payload.pipeline_def
 
     task = Task(
         name=payload.name,
@@ -462,6 +450,24 @@ def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user
         pipeline_def=pipeline_def,
     )
     db.add(task)
+    db.flush()
+    record_audit(
+        db,
+        action="create",
+        resource_type="task",
+        resource_id=task.id,
+        details={
+            "name": payload.name,
+            "type": payload.type,
+            "tool_id": payload.tool_id,
+            "target_device_id": resolved_target_device_id,
+            "priority": payload.priority,
+            "pipeline_def_present": payload.pipeline_def is not None,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(task)
 
@@ -648,7 +654,7 @@ def download_run_artifact(task_id: int, run_id: int, artifact_id: int, db: Sessi
 
 
 @router.post("/tasks/{task_id}/dispatch", response_model=RunOut)
-def dispatch_task(task_id: int, payload: TaskDispatch, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+def dispatch_task(task_id: int, payload: TaskDispatch, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
     host = db.get(Host, payload.host_id)
     device = db.get(Device, payload.device_id)
     if not host or not device:
@@ -683,6 +689,16 @@ def dispatch_task(task_id: int, payload: TaskDispatch, db: Session = Depends(get
     db.add(run)
     db.flush()
     _acquire_device_lock(db, device.id, run.id)
+    record_audit(
+        db,
+        action="dispatch",
+        resource_type="task",
+        resource_id=task.id,
+        details={"host_id": host.id, "device_id": device.id, "run_id": run.id},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(run)
     return run
@@ -1100,7 +1116,7 @@ def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db), _: boo
 
 
 @router.post("/tasks/{task_id}/cancel", response_model=RunOut)
-def cancel_task(task_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+def cancel_task(task_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
     """
     Cancel a pending or queued task.
     If the task is already running, it will be marked for cancellation.
@@ -1125,6 +1141,7 @@ def cancel_task(task_id: int, db: Session = Depends(get_db), current_user: User 
     )
 
     # Update task status
+    prev_task_status = task.status.value
     _ensure_task_transition(task, TaskStatus.CANCELED)
     task.status = TaskStatus.CANCELED
 
@@ -1143,6 +1160,20 @@ def cancel_task(task_id: int, db: Session = Depends(get_db), current_user: User 
         for step in pending_steps:
             step.status = RunStepStatus.CANCELED
 
+    record_audit(
+        db,
+        action="cancel",
+        resource_type="task",
+        resource_id=task.id,
+        details={
+            "run_id": run.id if run else None,
+            "from_status": prev_task_status,
+            "to_status": TaskStatus.CANCELED.value,
+        },
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(run if run else task)
     if run:

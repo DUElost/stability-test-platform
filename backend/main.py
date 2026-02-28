@@ -1,6 +1,11 @@
+from __future__ import annotations
+
+import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -8,11 +13,11 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
 
+import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import os
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 
 from backend.api.routes import auth_router, heartbeat_router, hosts_router, tasks_router
 from backend.api.routes.devices import router as devices_router
@@ -20,72 +25,84 @@ from backend.api.routes.websocket import router as websocket_router, capture_mai
 from backend.api.routes.metrics import router as metrics_router
 from backend.api.routes.deploy import router as deploy_router
 from backend.api.routes.users import router as users_router
-from backend.api.routes.tools import router as tools_router
 from backend.api.routes.results import router as results_router
-from backend.api.routes.workflows import router as workflows_router
 from backend.api.routes.stats import router as stats_router
 from backend.api.routes.notifications import router as notifications_router
 from backend.api.routes.audit import router as audit_router
 from backend.api.routes.schedules import router as schedules_router
 from backend.api.routes.templates import router as templates_router
 from backend.api.routes.pipeline import router as pipeline_router
-from backend.core.database import Base, engine, SessionLocal
+# Phase 3: new routers replace legacy workflows + tools
+from backend.api.routes.orchestration import router as orchestration_router
+from backend.api.routes.tool_catalog import router as tool_catalog_router
+from backend.api.routes.agent_api import router as agent_api_router
+from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
-from backend.core.tool_bootstrap import ensure_monkey_aee_tool
-from backend.scheduler.recycler import start_recycler
-from backend.scheduler.dispatcher import start_dispatcher
-from backend.scheduler.workflow_executor import start_workflow_executor
-from backend.scheduler.cron_scheduler import start_cron_scheduler
+from backend.mq.consumer import consume_status_stream, monitor_backpressure
+from backend.services.state_machine import InvalidTransitionError
+from backend.tasks.heartbeat_monitor import heartbeat_monitor_loop
 
 logger = logging.getLogger(__name__)
 
-# Skip automatic table creation in testing mode (tests manage their own tables)
-if os.getenv("TESTING") != "1":
-    Base.metadata.create_all(bind=engine)
-    # Migrate existing tables: add missing columns that create_all won't handle
-    # 注意：PostgreSQL 使用 TIMESTAMP 而不是 DATETIME
-    _MIGRATIONS = [
-        # task_runs 新增字段
-        ("task_runs", "report_json", "TEXT"),
-        ("task_runs", "jira_draft_json", "TEXT"),
-        ("task_runs", "post_processed_at", "TIMESTAMP"),
-        ("task_runs", "group_id", "VARCHAR(32)"),
-        ("task_runs", "progress", "INTEGER DEFAULT 0"),
-        ("task_runs", "progress_message", "VARCHAR(256)"),
-        ("task_runs", "last_heartbeat_at", "TIMESTAMP"),
-        ("task_runs", "error_code", "VARCHAR(64)"),
-        # tasks 新增字段
-        ("tasks", "tool_id", "INTEGER"),
-        ("tasks", "tool_snapshot", "TEXT"),
-        ("tasks", "group_id", "VARCHAR(32)"),
-        ("tasks", "is_distributed", "BOOLEAN DEFAULT FALSE"),
-        ("tasks", "template_id", "INTEGER"),
-        # task_templates 新增字段
-        ("task_templates", "description", "VARCHAR(256)"),
-        # workflows 新增字段
-        ("workflows", "is_template", "BOOLEAN DEFAULT FALSE"),
-    ]
-    with engine.connect() as conn:
-        insp = inspect(engine)
-        for table, column, col_type in _MIGRATIONS:
-            if table in insp.get_table_names():
-                existing = {c["name"] for c in insp.get_columns(table)}
-                if column not in existing:
-                    try:
-                        conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"))
-                        logger.info("migration_added_column: %s.%s", table, column)
-                    except Exception as e:
-                        logger.warning("migration_skip_column: %s.%s - %s", table, column, e)
-        conn.commit()
+redis_client: Optional[aioredis.Redis] = None
 
-app = FastAPI(title="Stability Test Platform")
+_STREAM_GROUPS = [
+    ("stp:status",  "server-consumer"),
+    ("stp:logs",    "log-consumer"),
+    ("stp:control", "agent-consumer"),
+]
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global redis_client
+
+    if os.getenv("TESTING") != "1":
+        # Connect Redis
+        redis_client = await aioredis.from_url(
+            os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+            encoding="utf-8",
+            decode_responses=True,
+        )
+        for stream, group in _STREAM_GROUPS:
+            try:
+                await redis_client.xgroup_create(stream, group, id="0", mkstream=True)
+            except Exception:
+                pass  # already exists
+
+        monitor_task = asyncio.create_task(heartbeat_monitor_loop())
+        mq_consumer_task = asyncio.create_task(consume_status_stream(redis_client))
+        mq_bp_task = asyncio.create_task(monitor_backpressure(redis_client))
+        capture_main_loop()
+        init_build_info(version="2.0.0", commit="unknown")
+
+    yield
+
+    if os.getenv("TESTING") != "1":
+        monitor_task.cancel()
+        mq_consumer_task.cancel()
+        mq_bp_task.cancel()
+        if redis_client:
+            await redis_client.aclose()
+        await async_engine.dispose()
+
+
+app = FastAPI(title="Stability Test Platform", lifespan=lifespan)
+
+
+@app.exception_handler(InvalidTransitionError)
+async def invalid_transition_handler(request: Request, exc: InvalidTransitionError):
+    return JSONResponse(
+        status_code=409,
+        content={"data": None, "error": {"code": "INVALID_TRANSITION", "message": str(exc)}},
+    )
 
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return JSONResponse(status_code=500, content={"data": None, "error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}})
 app.add_middleware(RateLimitMiddleware)
 
 # CORS: restrict to specific origins in production
@@ -109,64 +126,29 @@ app.include_router(websocket_router)
 app.include_router(metrics_router)
 app.include_router(deploy_router)
 app.include_router(users_router)
-app.include_router(tools_router)
 app.include_router(results_router)
-app.include_router(workflows_router)
 app.include_router(stats_router)
 app.include_router(notifications_router)
 app.include_router(audit_router)
 app.include_router(schedules_router)
 app.include_router(templates_router)
 app.include_router(pipeline_router)
-
-
-@app.on_event("startup")
-def _startup_background():
-    # Skip startup background tasks in testing mode
-    if os.getenv("TESTING") == "1":
-        return
-    try:
-        with SessionLocal() as db:
-            tool, created = ensure_monkey_aee_tool(db)
-            logger.info(
-                "monkey_aee_tool_bootstrap",
-                extra={"tool_id": tool.id, "created": created},
-            )
-    except Exception:
-        logger.exception("monkey_aee_tool_bootstrap_failed")
-    # 启动回收器与调度器
-    start_recycler()
-    start_dispatcher()
-    start_workflow_executor()
-    start_cron_scheduler()
-    # 捕获主事件循环，供后台线程安全广播
-    capture_main_loop()
-    # 初始化构建信息
-    init_build_info(version="1.0.0", commit="unknown")
-
-
-@app.on_event("shutdown")
-def _shutdown_pool():
-    if os.getenv("TESTING") == "1":
-        return
-    from backend.core.thread_pool import shutdown
-    timeout = int(os.getenv("SHUTDOWN_POOL_TIMEOUT", "5"))
-    shutdown(wait=True, timeout=timeout)
+# Phase 3 routers (replace legacy tools + workflows)
+app.include_router(tool_catalog_router)
+app.include_router(orchestration_router)
+app.include_router(agent_api_router)
 
 
 @app.get("/")
 def root():
-    return {"message": "Stability Test Platform API", "version": "1.0.0"}
+    return {"message": "Stability Test Platform API", "version": "2.0.0"}
 
 
 @app.get("/health")
-def health_check():
-    """Health check endpoint for load balancers and monitoring."""
+async def health_check():
     try:
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return {"status": "healthy", "database": "connected"}
-    except Exception as e:
-        # 不返回具体异常信息，避免泄露内部实现细节
-        logger.error(f"Health check failed: {type(e).__name__}")
-        return JSONResponse(status_code=503, content={"status": "unhealthy", "database": "disconnected"})
+        async with async_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return {"data": {"status": "healthy"}, "error": None}
+    except Exception:
+        return JSONResponse(status_code=503, content={"data": None, "error": {"code": "DB_UNAVAILABLE", "message": "database disconnected"}})

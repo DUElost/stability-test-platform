@@ -3,8 +3,11 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from sqlalchemy import or_, text
+from sqlalchemy.orm import Session
 
 from backend.core.database import SessionLocal
 from backend.api.routes.websocket import schedule_broadcast
@@ -17,13 +20,14 @@ from backend.core.metrics import (
     task_run_state_changes,
     task_run_total,
 )
-from backend.models.schemas import Device, DeviceStatus, HostStatus, RunStatus, Task, TaskRun, TaskStatus
+from backend.models.schemas import Device, DeviceStatus, HostStatus, LogArtifact, RunStatus, Task, TaskRun, TaskStatus
 
 logger = logging.getLogger(__name__)
 
 DISPATCHED_TIMEOUT_SECONDS = int(os.getenv("RUN_DISPATCHED_TIMEOUT_SECONDS", "120"))
 RUNNING_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("RUN_HEARTBEAT_TIMEOUT_SECONDS", "900"))
 METRIC_RETENTION_DAYS = int(os.getenv("METRIC_RETENTION_DAYS", "7"))
+ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
 HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "300"))
 RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
 
@@ -250,6 +254,9 @@ def recycle_once() -> None:
         # Prune old metric snapshots
         _prune_metric_snapshots(db, now)
 
+        # Prune old log artifacts
+        _prune_log_artifacts(db, now)
+
     # Record recycler metrics
     duration = time.time() - start_time
     recycler_duration.observe(duration)
@@ -266,6 +273,52 @@ def _prune_metric_snapshots(db, now: datetime) -> None:
     if result.rowcount > 0:
         db.commit()
         logger.info("metric_snapshots_pruned", extra={"count": result.rowcount})
+
+
+def _prune_log_artifacts(db: Session, now: datetime) -> None:
+    """Delete log artifacts and their files older than retention period."""
+    cutoff = now - timedelta(days=ARTIFACT_RETENTION_DAYS)
+    
+    old_artifacts = (
+        db.query(LogArtifact)
+        .filter(LogArtifact.created_at < cutoff)
+        .all()
+    )
+    
+    if not old_artifacts:
+        return
+        
+    deleted_count = 0
+    file_deleted_count = 0
+    
+    for artifact in old_artifacts:
+        # Try to delete the physical file
+        try:
+            parsed = urlparse(artifact.storage_uri)
+            if parsed.scheme.lower() == "file":
+                if parsed.netloc and parsed.path:
+                    local_path = Path(f"//{parsed.netloc}{unquote(parsed.path)}")
+                elif parsed.netloc and not parsed.path:
+                    local_path = Path(unquote(parsed.netloc))
+                else:
+                    local_path = Path(unquote(parsed.path))
+                
+                if local_path.exists() and local_path.is_file():
+                    os.remove(local_path)
+                    file_deleted_count += 1
+                    # Also try to delete the .log files if it was a directory that got archived
+                    # (Though usually we only archive once at the end)
+        except Exception as e:
+            logger.warning(f"Failed to delete artifact file {artifact.storage_uri}: {e}")
+            
+        db.delete(artifact)
+        deleted_count += 1
+        
+    db.commit()
+    logger.info(
+        "log_artifacts_pruned", 
+        extra={"db_count": deleted_count, "files_count": file_deleted_count}
+    )
 
 
 def _recycler_loop() -> None:

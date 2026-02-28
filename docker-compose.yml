@@ -1,27 +1,64 @@
-version: "3.8"
-
 services:
-  backend:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: stp
+      POSTGRES_USER: stp
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server:
     build:
       context: .
       dockerfile: Dockerfile.backend
+    env_file: .env.server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     ports:
       - "8000:8000"
-    environment:
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - DATABASE_URL=sqlite:////app/data/stability.db
-      - CORS_ORIGINS=http://localhost,http://localhost:80
     volumes:
-      - backend-data:/app/data
+      - ./backend:/app
+      - tool_packages:/opt/stp/tools
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
     ports:
-      - "80:80"
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000
+      - VITE_WS_BASE_URL=ws://localhost:8000
     depends_on:
-      - backend
+      - server
 
 volumes:
-  backend-data:
+  postgres_data:
+  tool_packages:

@@ -5,10 +5,11 @@ Task Schedules API — CRUD + toggle + run-now for cron-based scheduling.
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
+from backend.core.audit import record_audit
 from backend.models.schemas import Task, TaskSchedule, TaskStatus
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas import (
@@ -67,6 +68,7 @@ def create_schedule(
     data: TaskScheduleCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """创建定时任务"""
     _validate_cron(data.cron_expression)
@@ -85,6 +87,19 @@ def create_schedule(
         next_run_at=_compute_next_run(data.cron_expression, now) if data.enabled else None,
     )
     db.add(sched)
+    db.flush()
+    record_audit(
+        db,
+        action="create",
+        resource_type="schedule",
+        resource_id=sched.id,
+        details={"name": sched.name, "cron_expression": sched.cron_expression,
+                 "enabled": sched.enabled, "task_type": sched.task_type,
+                 "tool_id": sched.tool_id, "target_device_id": sched.target_device_id},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(sched)
     return sched
@@ -96,6 +111,7 @@ def update_schedule(
     data: TaskScheduleUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """更新定时任务"""
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
@@ -127,6 +143,17 @@ def update_schedule(
     else:
         sched.next_run_at = None
 
+    record_audit(
+        db,
+        action="update",
+        resource_type="schedule",
+        resource_id=sched.id,
+        details={"name": sched.name, "cron_expression": sched.cron_expression,
+                 "enabled": sched.enabled, "task_type": sched.task_type},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(sched)
     return sched
@@ -137,12 +164,26 @@ def delete_schedule(
     schedule_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """删除定时任务"""
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
     if not sched:
         raise HTTPException(status_code=404, detail="定时任务不存在")
+    sched_name = sched.name
+    sched_cron = sched.cron_expression
+    sched_enabled = sched.enabled
     db.delete(sched)
+    record_audit(
+        db,
+        action="delete",
+        resource_type="schedule",
+        resource_id=schedule_id,
+        details={"name": sched_name, "cron_expression": sched_cron, "enabled": sched_enabled},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     return {"message": "删除成功"}
 

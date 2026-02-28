@@ -6,7 +6,7 @@ Notifications API — CRUD for channels and alert rules.
 import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from backend.api.schemas import (
@@ -19,6 +19,7 @@ from backend.api.schemas import (
     PaginatedResponse,
 )
 from backend.core.database import get_db
+from backend.core.audit import record_audit
 from backend.models.schemas import AlertRule, ChannelType, EventType, NotificationChannel
 from backend.api.routes.auth import get_current_active_user, User
 
@@ -52,6 +53,7 @@ def create_channel(
     body: NotificationChannelCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     channel = NotificationChannel(
         name=body.name,
@@ -60,6 +62,17 @@ def create_channel(
         enabled=body.enabled,
     )
     db.add(channel)
+    db.flush()
+    record_audit(
+        db,
+        action="create",
+        resource_type="notification_channel",
+        resource_id=channel.id,
+        details={"name": channel.name, "type": channel.type, "enabled": channel.enabled},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(channel)
     return channel
@@ -71,6 +84,7 @@ def update_channel(
     body: NotificationChannelUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     channel = db.get(NotificationChannel, channel_id)
     if not channel:
@@ -83,6 +97,16 @@ def update_channel(
         channel.config = body.config
     if body.enabled is not None:
         channel.enabled = body.enabled
+    record_audit(
+        db,
+        action="update",
+        resource_type="notification_channel",
+        resource_id=channel.id,
+        details={"name": channel.name, "type": channel.type, "enabled": channel.enabled},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(channel)
     return channel
@@ -93,13 +117,27 @@ def delete_channel(
     channel_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     channel = db.get(NotificationChannel, channel_id)
     if not channel:
         raise HTTPException(status_code=404, detail="Channel not found")
+    ch_name = channel.name
+    ch_type = channel.type
+    rules_count = db.query(AlertRule).filter(AlertRule.channel_id == channel_id).count()
     # Cascade: delete associated rules first
     db.query(AlertRule).filter(AlertRule.channel_id == channel_id).delete()
     db.delete(channel)
+    record_audit(
+        db,
+        action="delete",
+        resource_type="notification_channel",
+        resource_id=channel_id,
+        details={"name": ch_name, "type": ch_type, "rules_deleted_count": rules_count},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     return {"ok": True}
 
@@ -153,6 +191,7 @@ def create_rule(
     body: AlertRuleCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     # Validate channel exists
     channel = db.get(NotificationChannel, body.channel_id)
@@ -167,6 +206,18 @@ def create_rule(
         enabled=body.enabled,
     )
     db.add(rule)
+    db.flush()
+    record_audit(
+        db,
+        action="create",
+        resource_type="notification_rule",
+        resource_id=rule.id,
+        details={"name": rule.name, "event_type": rule.event_type,
+                 "channel_id": rule.channel_id, "enabled": rule.enabled},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(rule)
     out = AlertRuleOut.model_validate(rule) if hasattr(AlertRuleOut, "model_validate") else AlertRuleOut.from_orm(rule)
@@ -180,6 +231,7 @@ def update_rule(
     body: AlertRuleUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     rule = db.get(AlertRule, rule_id)
     if not rule:
@@ -197,6 +249,17 @@ def update_rule(
         rule.filters = body.filters
     if body.enabled is not None:
         rule.enabled = body.enabled
+    record_audit(
+        db,
+        action="update",
+        resource_type="notification_rule",
+        resource_id=rule.id,
+        details={"name": rule.name, "event_type": rule.event_type,
+                 "channel_id": rule.channel_id, "enabled": rule.enabled},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(rule)
     out = AlertRuleOut.model_validate(rule) if hasattr(AlertRuleOut, "model_validate") else AlertRuleOut.from_orm(rule)
@@ -210,10 +273,24 @@ def delete_rule(
     rule_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     rule = db.get(AlertRule, rule_id)
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
+    rule_name = rule.name
+    rule_event = rule.event_type
+    rule_channel = rule.channel_id
     db.delete(rule)
+    record_audit(
+        db,
+        action="delete",
+        resource_type="notification_rule",
+        resource_id=rule_id,
+        details={"name": rule_name, "event_type": rule_event, "channel_id": rule_channel},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     return {"ok": True}

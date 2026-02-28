@@ -4,6 +4,27 @@ Tests for tasks API routes
 import pytest
 from datetime import datetime, timedelta
 
+def make_pipeline_def():
+    return {
+        "version": 1,
+        "phases": [
+            {
+                "name": "prepare",
+                "parallel": False,
+                "steps": [
+                    {
+                        "name": "check_device",
+                        "action": "builtin:check_device",
+                        "params": {},
+                        "timeout": 30,
+                        "on_failure": "stop",
+                        "max_retries": 0,
+                    }
+                ],
+            }
+        ],
+    }
+
 
 class TestListTasks:
     """Test GET /api/v1/tasks"""
@@ -35,6 +56,7 @@ class TestListTasks:
                     "name": f"order-task-{i}",
                     "type": "MONKEY",
                     "target_device_id": sample_device.id,
+                    "pipeline_def": make_pipeline_def(),
                 },
                 headers=auth_headers,
             )
@@ -84,6 +106,7 @@ class TestCreateTask:
                 "params": {"count": 5000},
                 "target_device_id": sample_device.id,
                 "priority": 5,
+                "pipeline_def": make_pipeline_def(),
             },
             headers=auth_headers,
         )
@@ -105,6 +128,7 @@ class TestCreateTask:
                 "name": "serial-task",
                 "type": "MTBF",
                 "device_serial": sample_device.serial,
+                "pipeline_def": make_pipeline_def(),
             },
             headers=auth_headers,
         )
@@ -231,6 +255,7 @@ class TestCreateTask:
                 "name": "default-priority-task",
                 "type": "MONKEY",
                 "target_device_id": sample_device.id,
+                "pipeline_def": make_pipeline_def(),
             },
             headers=auth_headers,
         )

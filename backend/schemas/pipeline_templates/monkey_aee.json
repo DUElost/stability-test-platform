@@ -23,7 +23,6 @@
           "name": "run_legacy_script",
           "action": "builtin:run_tool_script",
           "params": {
-            "tool_id": null,
             "script_path": "{legacy_script_path}",
             "script_class": "MonkeyAEEStabilityTest"
           },

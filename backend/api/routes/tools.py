@@ -4,12 +4,13 @@
 """
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
 from backend.core.tool_bootstrap import ensure_monkey_aee_tool
+from backend.core.audit import record_audit
 from backend.models.schemas import ToolCategory, Tool
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas import (
@@ -72,6 +73,7 @@ def create_category(
     data: ToolCategoryCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """创建专项分类"""
     # 检查名称是否已存在
@@ -87,6 +89,17 @@ def create_category(
         enabled=data.enabled,
     )
     db.add(category)
+    db.flush()
+    record_audit(
+        db,
+        action="create",
+        resource_type="tool_category",
+        resource_id=category.id,
+        details={"name": category.name, "enabled": category.enabled},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(category)
 
@@ -108,6 +121,7 @@ def update_category(
     data: ToolCategoryCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """更新专项分类"""
     category = db.query(ToolCategory).filter_by(id=category_id).first()
@@ -126,6 +140,16 @@ def update_category(
     category.order = data.order
     category.enabled = data.enabled
 
+    record_audit(
+        db,
+        action="update",
+        resource_type="tool_category",
+        resource_id=category.id,
+        details={"name": category.name, "enabled": category.enabled},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(category)
 
@@ -151,17 +175,31 @@ def delete_category(
     category_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """删除专项分类（同时删除分类下的工具）"""
     category = db.query(ToolCategory).filter_by(id=category_id).first()
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
 
+    cat_name = category.name
+    tool_count = db.query(Tool).filter(Tool.category_id == category_id).count()
+
     # 删除分类下的所有工具
     db.query(Tool).filter_by(category_id=category_id).delete()
 
     # 删除分类
     db.delete(category)
+    record_audit(
+        db,
+        action="delete",
+        resource_type="tool_category",
+        resource_id=category_id,
+        details={"name": cat_name, "tools_deleted_count": tool_count},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
 
     return {"message": "删除成功"}
@@ -255,6 +293,7 @@ def create_tool(
     data: ToolCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """创建工具配置"""
     # 验证分类存在
@@ -276,6 +315,18 @@ def create_tool(
         enabled=data.enabled,
     )
     db.add(tool)
+    db.flush()
+    record_audit(
+        db,
+        action="create",
+        resource_type="tool",
+        resource_id=tool.id,
+        details={"name": tool.name, "category_id": tool.category_id,
+                 "enabled": tool.enabled, "script_path": tool.script_path},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(tool)
 
@@ -304,6 +355,7 @@ def update_tool(
     data: ToolCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """更新工具配置"""
     tool = db.query(Tool).filter_by(id=tool_id).first()
@@ -327,6 +379,16 @@ def update_tool(
     tool.need_device = data.need_device
     tool.enabled = data.enabled
 
+    record_audit(
+        db,
+        action="update",
+        resource_type="tool",
+        resource_id=tool.id,
+        details={"name": tool.name, "category_id": tool.category_id, "enabled": tool.enabled},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(tool)
 
@@ -354,13 +416,26 @@ def delete_tool(
     tool_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     """删除工具"""
     tool = db.query(Tool).filter_by(id=tool_id).first()
     if not tool:
         raise HTTPException(status_code=404, detail="工具不存在")
 
+    tool_name = tool.name
+    tool_category_id = tool.category_id
     db.delete(tool)
+    record_audit(
+        db,
+        action="delete",
+        resource_type="tool",
+        resource_id=tool_id,
+        details={"name": tool_name, "category_id": tool_category_id},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
 
     return {"message": "删除成功"}

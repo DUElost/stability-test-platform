@@ -3,6 +3,7 @@
 Audit Log API — admin-only read access to audit trail.
 """
 
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -21,6 +22,8 @@ def list_audit_logs(
     resource_type: Optional[str] = Query(None),
     action: Optional[str] = Query(None),
     user_id: Optional[int] = Query(None),
+    start_time: Optional[datetime] = Query(None),
+    end_time: Optional[datetime] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -34,6 +37,10 @@ def list_audit_logs(
         query = query.filter(AuditLog.action == action)
     if user_id is not None:
         query = query.filter(AuditLog.user_id == user_id)
+    if start_time:
+        query = query.filter(AuditLog.timestamp >= start_time)
+    if end_time:
+        query = query.filter(AuditLog.timestamp <= end_time)
 
     total = query.count()
     rows = query.order_by(AuditLog.timestamp.desc()).offset(skip).limit(limit).all()

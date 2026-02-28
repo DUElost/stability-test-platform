@@ -9,10 +9,11 @@ import logging
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session, selectinload
 
 from backend.core.database import get_db
+from backend.core.audit import record_audit
 from backend.models.schemas import (
     Workflow,
     WorkflowStatus,
@@ -53,6 +54,7 @@ def create_workflow(
     payload: WorkflowCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     wf = Workflow(
         name=payload.name,
@@ -76,6 +78,16 @@ def create_workflow(
         )
         db.add(step)
 
+    record_audit(
+        db,
+        action="create",
+        resource_type="workflow",
+        resource_id=wf.id,
+        details={"name": wf.name, "steps_count": len(payload.steps)},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(wf)
     logger.info("workflow_created", extra={"workflow_id": wf.id, "steps": len(payload.steps)})
@@ -100,6 +112,7 @@ def start_workflow(
     workflow_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     wf = (
         db.query(Workflow)
@@ -114,8 +127,19 @@ def start_workflow(
             status_code=409,
             detail=f"cannot start workflow in status {wf.status.value}",
         )
+    prev_status = wf.status.value
     wf.status = WorkflowStatus.RUNNING
     wf.started_at = datetime.utcnow()
+    record_audit(
+        db,
+        action="start",
+        resource_type="workflow",
+        resource_id=wf.id,
+        details={"from_status": prev_status},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(wf)
     logger.info("workflow_started", extra={"workflow_id": wf.id})
@@ -127,6 +151,7 @@ def cancel_workflow(
     workflow_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     wf = (
         db.query(Workflow)
@@ -141,13 +166,26 @@ def cancel_workflow(
             status_code=409,
             detail=f"cannot cancel workflow in status {wf.status.value}",
         )
+    prev_status = wf.status.value
     wf.status = WorkflowStatus.CANCELED
     wf.finished_at = datetime.utcnow()
     # Mark pending/running steps as SKIPPED
+    skipped_count = 0
     for step in wf.steps:
         if step.status in (StepStatus.PENDING, StepStatus.RUNNING):
             step.status = StepStatus.SKIPPED
             step.finished_at = datetime.utcnow()
+            skipped_count += 1
+    record_audit(
+        db,
+        action="cancel",
+        resource_type="workflow",
+        resource_id=wf.id,
+        details={"from_status": prev_status, "skipped_steps": skipped_count},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(wf)
     logger.info("workflow_canceled", extra={"workflow_id": wf.id})
@@ -159,6 +197,7 @@ def delete_workflow(
     workflow_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    request: Request = None,
 ):
     wf = db.get(Workflow, workflow_id)
     if not wf:
@@ -168,7 +207,20 @@ def delete_workflow(
             status_code=409,
             detail="can only delete DRAFT workflows",
         )
+    wf_name = wf.name
+    wf_status = wf.status.value
+    wf_steps_count = len(wf.steps)
     db.delete(wf)
+    record_audit(
+        db,
+        action="delete",
+        resource_type="workflow",
+        resource_id=workflow_id,
+        details={"name": wf_name, "status": wf_status, "steps_count": wf_steps_count},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     logger.info("workflow_deleted", extra={"workflow_id": workflow_id})
     return {"ok": True}
