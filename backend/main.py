@@ -23,7 +23,6 @@ from backend.api.routes import auth_router, heartbeat_router, hosts_router, task
 from backend.api.routes.devices import router as devices_router
 from backend.api.routes.websocket import router as websocket_router, capture_main_loop
 from backend.api.routes.metrics import router as metrics_router
-from backend.api.routes.deploy import router as deploy_router
 from backend.api.routes.users import router as users_router
 from backend.api.routes.results import router as results_router
 from backend.api.routes.stats import router as stats_router
@@ -124,7 +123,6 @@ app.include_router(tasks_router)
 app.include_router(devices_router)
 app.include_router(websocket_router)
 app.include_router(metrics_router)
-app.include_router(deploy_router)
 app.include_router(users_router)
 app.include_router(results_router)
 app.include_router(stats_router)

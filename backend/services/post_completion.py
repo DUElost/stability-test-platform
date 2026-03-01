@@ -69,7 +69,8 @@ def run_post_completion(run_id: int) -> None:
 
             # Dispatch notification based on run status
             from backend.services.notification_service import dispatch_notification_async
-            from backend.models.schemas import RunStatus, Task, Device
+            from backend.models.schemas import RunStatus, Task
+            from backend.models.host import Device
             event = "RUN_COMPLETED" if run.status == RunStatus.FINISHED else "RUN_FAILED"
             task_obj = db.get(Task, run.task_id)
             device_obj = db.get(Device, run.device_id) if run.device_id else None

@@ -17,7 +17,8 @@ from urllib.parse import unquote, urlparse
 
 from sqlalchemy.orm import Session, selectinload
 
-from backend.models.schemas import Device, Host, LogArtifact, Task, TaskRun
+from backend.models.schemas import LogArtifact, Task, TaskRun
+from backend.models.host import Device, Host
 from backend.api.schemas import (
     DeviceLiteOut,
     HostLiteOut,
@@ -249,7 +250,7 @@ def compose_run_report(db: Session, run_id: int) -> Optional[RunReportOut]:
     if not task:
         return None
 
-    host = db.get(Host, run.host_id)
+    host = db.get(Host, str(run.host_id)) if run.host_id is not None else None
     device = db.get(Device, run.device_id)
 
     if hasattr(RunOut, "model_validate"):

@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Cron Scheduler Daemon — polls task_schedules and creates Task rows on schedule.
+Cron Scheduler Daemon — polls task_schedules and creates Task rows or dispatches
+WorkflowRuns on schedule.
 """
 
+import asyncio
 import logging
 import os
 import threading
@@ -24,6 +26,23 @@ def _compute_next_run(cron_expression: str, after: datetime) -> datetime:
     from croniter import croniter
     cron = croniter(cron_expression, after)
     return cron.get_next(datetime)
+
+
+async def _dispatch_workflow_async(wf_def_id: int, device_ids: list) -> None:
+    from backend.core.database import AsyncSessionLocal
+    from backend.services.dispatcher import dispatch_workflow, DispatchError
+    async with AsyncSessionLocal() as db:
+        try:
+            await dispatch_workflow(
+                workflow_def_id=wf_def_id,
+                device_ids=device_ids,
+                failure_threshold=0.5,
+                triggered_by="cron",
+                db=db,
+            )
+            await db.commit()
+        except DispatchError as exc:
+            logger.error("cron_dispatch_workflow_error wf_def_id=%s: %s", wf_def_id, exc)
 
 
 class CronScheduler:
@@ -55,34 +74,48 @@ class CronScheduler:
 
             for sched in schedules:
                 try:
-                    self._create_task_from_schedule(db, sched, now)
+                    self._fire_schedule(db, sched, now)
                 except Exception:
                     logger.exception("cron_schedule_execute_error schedule_id=%s", sched.id)
 
             if schedules:
                 db.commit()
-                logger.info("cron_scheduler_created_tasks count=%d", len(schedules))
+                logger.info("cron_scheduler_fired count=%d", len(schedules))
         finally:
             db.close()
 
-    def _create_task_from_schedule(self, db: Session, sched: TaskSchedule, now: datetime) -> None:
-        task = Task(
-            name=f"[cron] {sched.name} - {now.strftime('%Y%m%d_%H%M')}",
-            type=sched.task_type,
-            tool_id=sched.tool_id,
-            template_id=sched.task_template_id,
-            params=sched.params or {},
-            target_device_id=sched.target_device_id,
-            status=TaskStatus.PENDING,
-            priority=0,
-        )
-        db.add(task)
+    def _fire_schedule(self, db: Session, sched: TaskSchedule, now: datetime) -> None:
+        if sched.workflow_definition_id:
+            # New path: dispatch WorkflowRun
+            device_ids = sched.device_ids or []
+            asyncio.run(_dispatch_workflow_async(sched.workflow_definition_id, device_ids))
+            logger.info(
+                "cron_workflow_dispatched schedule_id=%s wf_def_id=%s",
+                sched.id, sched.workflow_definition_id,
+            )
+        else:
+            # Legacy path: create Task row
+            task = Task(
+                name=f"[cron] {sched.name} - {now.strftime('%Y%m%d_%H%M')}",
+                type=sched.task_type,
+                tool_id=sched.tool_id,
+                template_id=sched.task_template_id,
+                params=sched.params or {},
+                target_device_id=sched.target_device_id,
+                status=TaskStatus.PENDING,
+                priority=0,
+            )
+            db.add(task)
+            logger.info(
+                "cron_task_created schedule_id=%s task_name=%s",
+                sched.id, task.name,
+            )
 
         sched.last_run_at = now
         sched.next_run_at = _compute_next_run(sched.cron_expression, now)
         logger.info(
-            "cron_task_created schedule_id=%s task_name=%s next_run=%s",
-            sched.id, task.name, sched.next_run_at,
+            "cron_schedule_updated schedule_id=%s next_run=%s",
+            sched.id, sched.next_run_at,
         )
 
 

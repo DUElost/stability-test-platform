@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
-from backend.models.schemas import DeviceMetricSnapshot, RunStatus
+from backend.models.schemas import RunStatus
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
 logger = logging.getLogger(__name__)
@@ -130,34 +130,8 @@ def get_device_metrics(
     hours: int = Query(24, ge=1, le=168),
     db: Session = Depends(get_db),
 ):
-    """Device metric history from snapshots."""
-    since = datetime.utcnow() - timedelta(hours=hours)
-    snapshots = (
-        db.query(DeviceMetricSnapshot)
-        .filter(
-            DeviceMetricSnapshot.device_id == device_id,
-            DeviceMetricSnapshot.timestamp >= since,
-        )
-        .order_by(DeviceMetricSnapshot.timestamp)
-        .all()
-    )
-    # Downsample if too many points
-    if len(snapshots) > 500:
-        step = len(snapshots) // 500
-        snapshots = snapshots[::step]
-
-    points = [
-        MetricPoint(
-            timestamp=s.timestamp.isoformat(),
-            battery_level=s.battery_level,
-            temperature=s.temperature,
-            network_latency=s.network_latency,
-            cpu_usage=s.cpu_usage,
-            mem_used=s.mem_used,
-        )
-        for s in snapshots
-    ]
-    return DeviceMetricsResponse(device_id=device_id, points=points, hours=hours)
+    """Device metric history — DeviceMetricSnapshot table deprecated; returns empty."""
+    return DeviceMetricsResponse(device_id=device_id, points=[], hours=hours)
 
 
 @router.get("/completion-trend", response_model=CompletionTrendResponse)

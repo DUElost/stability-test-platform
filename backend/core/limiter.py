@@ -70,8 +70,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     _SKIP_EXACT = frozenset({"/", "/docs", "/openapi.json", "/health", "/redoc", "/metrics", "/metrics/health"})
     _SKIP_PREFIXES = (
         "/api/v1/heartbeat",
-        "/api/v1/agent/runs/pending",
-        "/api/v1/agent/runs/",  # individual run heartbeat/complete
+        "/api/v1/agent/jobs/",  # job claim/heartbeat/complete/steps
         "/ws/",
         "/ws",
     )

@@ -3,13 +3,13 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Set, Tuple
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from backend.core.database import SessionLocal, get_raw_db
+from backend.core.database import SessionLocal
 from backend.core.database_adapter import get_adapter_from_engine
 from backend.core.database import engine
 from backend.api.routes.websocket import schedule_broadcast
@@ -22,11 +22,8 @@ from backend.core.metrics import (
     task_run_total,
     task_run_state_changes,
 )
+from backend.models.host import Device, Host
 from backend.models.schemas import (
-    Device,
-    DeviceStatus,
-    Host,
-    HostStatus,
     RunStatus,
     Task,
     TaskRun,
@@ -210,12 +207,12 @@ class TaskDispatcher:
         原子性选择可用设备与主机
         使用数据库原子操作确保并发安全，防止竞态条件
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # 构建基础查询条件
         base_conditions = [
-            Host.status == HostStatus.ONLINE,
-            Device.status == DeviceStatus.ONLINE,
+            Host.status == "ONLINE",
+            Device.status == "ONLINE",
         ]
         if task.target_device_id:
             base_conditions.append(Device.id == task.target_device_id)
@@ -256,7 +253,7 @@ class TaskDispatcher:
         active = (
             db.query(TaskRun)
             .filter(
-                TaskRun.host_id == host.id,
+                TaskRun.host_id == (int(host.id) if isinstance(host.id, str) and host.id.isdigit() else host.id),
                 TaskRun.status.in_([RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING]),
             )
             .count()
@@ -265,15 +262,20 @@ class TaskDispatcher:
 
     def _create_run_with_lock(self, db: Session, task: Task, device: Device, host: Host, host_limit: int) -> int:
         """开启事务，更新任务状态、创建 run 并占用设备，内含主机并发保护"""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=DEVICE_LOCK_LEASE_SECONDS)
-        # 使用 begin_nested() 创建保存点，支持嵌套事务
+        # Phase C pending: host_id in task_runs is Integer FK; host.id is String.
+        # For numeric string IDs (legacy agents), cast to int. Raises for non-numeric IDs.
+        try:
+            host_id_int = int(host.id)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError(f"host_id '{host.id}' is not numeric; Phase C required") from exc
+
         with db.begin_nested():
-            # PostgreSQL 不支持 FOR UPDATE + COUNT 聚合，先锁行再在应用层计数
             active_rows = (
                 db.query(TaskRun)
                 .filter(
-                    TaskRun.host_id == host.id,
+                    TaskRun.host_id == host_id_int,
                     TaskRun.status.in_([RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING]),
                 )
                 .with_for_update()
@@ -296,7 +298,7 @@ class TaskDispatcher:
 
             run = TaskRun(
                 task_id=task.id,
-                host_id=host.id,
+                host_id=host_id_int,
                 device_id=device.id,
                 status=RunStatus.QUEUED,
             )
@@ -306,7 +308,7 @@ class TaskDispatcher:
             locked = db.execute(
                 text(
                     """
-                    UPDATE devices
+                    UPDATE device
                     SET status = :busy_status,
                         lock_run_id = :run_id,
                         lock_expires_at = :expires_at
@@ -320,8 +322,8 @@ class TaskDispatcher:
                     "run_id": run.id,
                     "expires_at": expires_at,
                     "now": now,
-                    "busy_status": DeviceStatus.BUSY.value,
-                    "online_status": DeviceStatus.ONLINE.value,
+                    "busy_status": "BUSY",
+                    "online_status": "ONLINE",
                 },
             )
             if locked.rowcount != 1:

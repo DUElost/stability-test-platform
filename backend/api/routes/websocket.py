@@ -531,7 +531,8 @@ def _handle_agent_step_update(msg: dict, agent_host_id: int = 0) -> None:
 def _handle_agent_heartbeat(host_id: int, msg: dict) -> None:
     """Process heartbeat received via agent WebSocket."""
     from backend.core.database import SessionLocal
-    from backend.models.schemas import Host, HostStatus
+    from backend.models.host import Host
+    from backend.models.schemas import HostStatus
     from datetime import datetime
 
     db = SessionLocal()

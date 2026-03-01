@@ -1,13 +1,16 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import json
 import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import cast
+from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import Session
 from typing import Any, List, Optional
 
 from backend.core.database import get_db
-from backend.models.schemas import Device, DeviceStatus, Host, HostStatus
+from backend.models.host import Host, Device
 from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
 
@@ -26,29 +29,29 @@ def _ensure_host_online_for_device(device: Device) -> bool:
         return False
 
     # Check if host is offline
-    if host.status != HostStatus.ONLINE:
-        if device.status != DeviceStatus.OFFLINE:
-            device.status = DeviceStatus.OFFLINE
+    if host.status != "ONLINE":
+        if device.status != "OFFLINE":
+            device.status = "OFFLINE"
             logger.info(
                 "device_offline_by_host_status",
                 extra={
                     "device_id": device.id,
                     "device_serial": device.serial,
                     "host_id": host.id,
-                    "host_status": host.status.value,
+                    "host_status": host.status,
                 },
             )
             return True
         return False
 
     # Check host heartbeat timeout
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
 
     if host.last_heartbeat is None or host.last_heartbeat < offline_deadline:
-        if device.status != DeviceStatus.OFFLINE:
-            device.status = DeviceStatus.OFFLINE
-            host.status = HostStatus.OFFLINE
+        if device.status != "OFFLINE":
+            device.status = "OFFLINE"
+            host.status = "OFFLINE"
             logger.info(
                 "device_offline_by_host_heartbeat_timeout",
                 extra={
@@ -103,12 +106,11 @@ def list_devices(
     if status:
         query = query.filter(Device.status == status)
 
-    # Filter by tags if provided
+    # Filter by tags using JSONB @> operator
     if tags:
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         for tag in tag_list:
-            # SQLite JSON array search: check if tag appears in the JSON column
-            query = query.filter(Device.tags.like(f'%"{tag}"%'))
+            query = query.filter(Device.tags.op('@>')(cast(json.dumps([tag]), PG_JSONB)))
 
     total = query.count()
     devices = query.offset(skip).limit(limit).all()

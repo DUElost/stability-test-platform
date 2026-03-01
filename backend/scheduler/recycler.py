@@ -2,7 +2,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -20,13 +20,13 @@ from backend.core.metrics import (
     task_run_state_changes,
     task_run_total,
 )
-from backend.models.schemas import Device, DeviceStatus, HostStatus, LogArtifact, RunStatus, Task, TaskRun, TaskStatus
+from backend.models.host import Device, Host
+from backend.models.schemas import LogArtifact, RunStatus, Task, TaskRun, TaskStatus
 
 logger = logging.getLogger(__name__)
 
 DISPATCHED_TIMEOUT_SECONDS = int(os.getenv("RUN_DISPATCHED_TIMEOUT_SECONDS", "120"))
 RUNNING_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("RUN_HEARTBEAT_TIMEOUT_SECONDS", "900"))
-METRIC_RETENTION_DAYS = int(os.getenv("METRIC_RETENTION_DAYS", "7"))
 ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
 HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "300"))
 RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
@@ -34,14 +34,12 @@ RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
 
 def _check_host_heartbeat_timeout(db, now: datetime) -> int:
     """Mark hosts as OFFLINE if no heartbeat received within timeout period."""
-    from backend.models.schemas import Host
-
     offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
 
     expired_hosts = (
         db.query(Host)
         .filter(
-            Host.status == HostStatus.ONLINE,
+            Host.status == "ONLINE",
             or_(
                 Host.last_heartbeat.is_(None),
                 Host.last_heartbeat < offline_deadline,
@@ -51,7 +49,7 @@ def _check_host_heartbeat_timeout(db, now: datetime) -> int:
     )
 
     for host in expired_hosts:
-        host.status = HostStatus.OFFLINE
+        host.status = "OFFLINE"
         host_heartbeat_missed.labels(host_id=str(host.id)).inc()
         recycler_timeouts.labels(timeout_type="host").inc()
         logger.info(
@@ -69,7 +67,7 @@ def _release_device_lock(db, device_id: int, run_id: int) -> None:
     db.execute(
         text(
             """
-            UPDATE devices
+            UPDATE device
             SET status = CASE
                     WHEN status = :busy_status THEN :online_status
                     ELSE status
@@ -82,8 +80,8 @@ def _release_device_lock(db, device_id: int, run_id: int) -> None:
         {
             "device_id": device_id,
             "run_id": run_id,
-            "busy_status": DeviceStatus.BUSY.value,
-            "online_status": DeviceStatus.ONLINE.value,
+            "busy_status": "BUSY",
+            "online_status": "ONLINE",
         },
     )
 
@@ -134,7 +132,6 @@ def _mark_timeout(db, run: TaskRun, now: datetime, reason: str) -> None:
 
     # Dispatch RUN_FAILED notification for timeout
     from backend.services.notification_service import dispatch_notification_async
-    # 获取设备序列号（通过关联的 device 对象）
     device_serial = run.device.serial if run.device else str(run.device_id)
     dispatch_notification_async("RUN_FAILED", {
         "run_id": run.id,
@@ -165,11 +162,10 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
 
     released_count = 0
     for device_id, device_serial, run_id in expired_locks:
-        # 并发安全：只有一个事务能成功将同一设备锁置空
         released = db.execute(
             text(
                 """
-                UPDATE devices
+                UPDATE device
                 SET status = :online_status,
                     lock_run_id = NULL,
                     lock_expires_at = NULL
@@ -179,7 +175,7 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
                 """
             ),
             {
-                "online_status": DeviceStatus.ONLINE.value,
+                "online_status": "ONLINE",
                 "device_id": device_id,
                 "run_id": run_id,
                 "now": now,
@@ -189,16 +185,14 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
             continue
         released_count += 1
 
-        # 查找关联的 RUNNING 任务并标记为失败
         if run_id:
             run = db.get(TaskRun, run_id)
             if run and run.status == RunStatus.RUNNING:
                 _mark_timeout(
-                    db, run, now,
+                    db, run, now.replace(tzinfo=None),
                     "device lock expired, agent may be offline"
                 )
 
-        # Record metrics
         device_lock_released.labels(reason="expired").inc()
         recycler_timeouts.labels(timeout_type="device_lock").inc()
 
@@ -216,16 +210,17 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
 
 def recycle_once() -> None:
     start_time = time.time()
-    now = datetime.utcnow()
-    dispatched_deadline = now - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
-    running_deadline = now - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
+    now_tz = datetime.now(timezone.utc)         # for Host/Device (TZ-aware columns)
+    now_naive = datetime.utcnow()               # for TaskRun/Task (naive DateTime columns)
+    dispatched_deadline = now_naive - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
+    running_deadline = now_naive - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
 
     with SessionLocal() as db:
         # Check host heartbeat timeout first
-        offline_hosts = _check_host_heartbeat_timeout(db, now)
+        offline_hosts = _check_host_heartbeat_timeout(db, now_tz)
 
         # Check device lock expiration (for lock renewal mechanism)
-        expired_locks = _check_device_lock_expiration(db, now)
+        expired_locks = _check_device_lock_expiration(db, now_tz)
 
         expired_dispatched = (
             db.query(TaskRun)
@@ -247,15 +242,12 @@ def recycle_once() -> None:
         expired_runs = expired_dispatched + expired_running
         for run in expired_runs:
             reason = "dispatched timeout" if run.status == RunStatus.DISPATCHED else "running heartbeat timeout"
-            _mark_timeout(db, run, now, reason)
+            _mark_timeout(db, run, now_naive, reason)
         if expired_runs or offline_hosts or expired_locks:
             db.commit()
 
-        # Prune old metric snapshots
-        _prune_metric_snapshots(db, now)
-
         # Prune old log artifacts
-        _prune_log_artifacts(db, now)
+        _prune_log_artifacts(db, now_naive)
 
     # Record recycler metrics
     duration = time.time() - start_time
@@ -263,36 +255,23 @@ def recycle_once() -> None:
     recycler_runs.inc()
 
 
-def _prune_metric_snapshots(db, now: datetime) -> None:
-    """Delete device metric snapshots older than retention period."""
-    cutoff = now - timedelta(days=METRIC_RETENTION_DAYS)
-    result = db.execute(
-        text("DELETE FROM device_metric_snapshots WHERE timestamp < :cutoff"),
-        {"cutoff": cutoff},
-    )
-    if result.rowcount > 0:
-        db.commit()
-        logger.info("metric_snapshots_pruned", extra={"count": result.rowcount})
-
-
 def _prune_log_artifacts(db: Session, now: datetime) -> None:
     """Delete log artifacts and their files older than retention period."""
     cutoff = now - timedelta(days=ARTIFACT_RETENTION_DAYS)
-    
+
     old_artifacts = (
         db.query(LogArtifact)
         .filter(LogArtifact.created_at < cutoff)
         .all()
     )
-    
+
     if not old_artifacts:
         return
-        
+
     deleted_count = 0
     file_deleted_count = 0
-    
+
     for artifact in old_artifacts:
-        # Try to delete the physical file
         try:
             parsed = urlparse(artifact.storage_uri)
             if parsed.scheme.lower() == "file":
@@ -302,21 +281,19 @@ def _prune_log_artifacts(db: Session, now: datetime) -> None:
                     local_path = Path(unquote(parsed.netloc))
                 else:
                     local_path = Path(unquote(parsed.path))
-                
+
                 if local_path.exists() and local_path.is_file():
                     os.remove(local_path)
                     file_deleted_count += 1
-                    # Also try to delete the .log files if it was a directory that got archived
-                    # (Though usually we only archive once at the end)
         except Exception as e:
             logger.warning(f"Failed to delete artifact file {artifact.storage_uri}: {e}")
-            
+
         db.delete(artifact)
         deleted_count += 1
-        
+
     db.commit()
     logger.info(
-        "log_artifacts_pruned", 
+        "log_artifacts_pruned",
         extra={"db_count": deleted_count, "files_count": file_deleted_count}
     )
 

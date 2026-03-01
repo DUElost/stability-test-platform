@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.response import ApiResponse, err, ok
 from backend.core.database import get_async_db
 from backend.models.job import JobInstance, StepTrace, TaskTemplate
-from backend.models.schemas import Device
+from backend.models.host import Device
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
 from backend.services.dispatcher import DispatchError, dispatch_workflow
 

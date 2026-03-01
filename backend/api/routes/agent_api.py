@@ -5,7 +5,7 @@ Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
 _AGENT_SECRET = os.getenv("AGENT_SECRET", "")
+_DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
 _TERMINAL = {
     JobStatus.COMPLETED.value,
     JobStatus.FAILED.value,
@@ -51,6 +52,7 @@ class JobOut(BaseModel):
     workflow_run_id: int
     task_template_id: int
     device_id: int
+    device_serial: Optional[str] = None
     host_id: Optional[str]
     status: str
     pipeline_def: dict
@@ -215,6 +217,182 @@ async def agent_heartbeat(
         tool_catalog_outdated=outdated,
         backpressure=BackpressureInfo(log_rate_limit=backpressure),
     ))
+
+
+# ── RunStatus→JobStatus mapping for compat endpoints ─────────────────────────
+
+_RUN_TO_JOB: Dict[str, JobStatus] = {
+    "RUNNING":   JobStatus.RUNNING,
+    "FINISHED":  JobStatus.COMPLETED,
+    "COMPLETED": JobStatus.COMPLETED,
+    "FAILED":    JobStatus.FAILED,
+    "CANCELED":  JobStatus.ABORTED,
+    "CANCELLED": JobStatus.ABORTED,
+    "ABORTED":   JobStatus.ABORTED,
+}
+
+
+class _JobHeartbeatIn(BaseModel):
+    status: str = "RUNNING"
+    started_at: Optional[str] = None
+
+
+class _RunCompleteIn(BaseModel):
+    update: Dict[str, Any]
+    artifact: Optional[Dict[str, Any]] = None
+
+
+class _StepStatusIn(BaseModel):
+    status: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    exit_code: Optional[int] = None
+    error_message: Optional[str] = None
+
+
+# ── Compat endpoints (mirroring old /runs/* interface under /jobs/*) ──────────
+
+
+@router.get("/jobs/pending", response_model=ApiResponse[List[JobOut]])
+async def get_pending_jobs(
+    host_id: str,
+    limit: int = 10,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """Return PENDING JobInstances for devices on this host (pull model)."""
+    device_ids_result = await db.execute(
+        select(Device.id).where(Device.host_id == host_id)
+    )
+    device_ids = [row[0] for row in device_ids_result.all()]
+    if not device_ids:
+        return ok([])
+
+    jobs = (await db.execute(
+        select(JobInstance)
+        .where(
+            JobInstance.device_id.in_(device_ids),
+            JobInstance.status == JobStatus.PENDING.value,
+        )
+        .order_by(JobInstance.created_at)
+        .limit(limit)
+    )).scalars().all()
+
+    serial_map: Dict[int, str] = {}
+    if jobs:
+        rows = await db.execute(
+            select(Device.id, Device.serial)
+            .where(Device.id.in_([j.device_id for j in jobs]))
+        )
+        serial_map = {row.id: row.serial for row in rows.all()}
+
+    return ok([
+        JobOut(
+            id=j.id, workflow_run_id=j.workflow_run_id,
+            task_template_id=j.task_template_id, device_id=j.device_id,
+            device_serial=serial_map.get(j.device_id),
+            host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
+        )
+        for j in jobs
+    ])
+
+
+@router.post("/jobs/{job_id}/heartbeat", response_model=ApiResponse[dict])
+async def job_heartbeat(
+    job_id: int,
+    payload: _JobHeartbeatIn,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """Keep job alive / transition to RUNNING."""
+    job = await db.get(JobInstance, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    target = _RUN_TO_JOB.get(payload.status.upper(), JobStatus.RUNNING)
+    try:
+        JobStateMachine.transition(job, target, "agent_heartbeat")
+        if target == JobStatus.RUNNING and not job.started_at:
+            job.started_at = datetime.now(timezone.utc)
+    except InvalidTransitionError:
+        pass  # idempotent — already in target state
+
+    await db.commit()
+    return ok({"job_id": job_id, "status": job.status})
+
+
+@router.post("/jobs/{job_id}/complete", response_model=ApiResponse[dict])
+async def complete_job(
+    job_id: int,
+    payload: _RunCompleteIn,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """Transition job to a terminal status."""
+    job = await db.get(JobInstance, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    raw = str(payload.update.get("status", "FAILED")).upper()
+    target = _RUN_TO_JOB.get(raw, JobStatus.FAILED)
+    try:
+        JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
+    except InvalidTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    job.ended_at = datetime.now(timezone.utc)
+    if job.status in _TERMINAL:
+        await WorkflowAggregator.on_job_terminal(job, db)
+
+    await db.commit()
+    return ok({"job_id": job_id, "status": job.status})
+
+
+@router.post("/jobs/{job_id}/extend_lock", response_model=ApiResponse[dict])
+async def extend_job_lock(
+    job_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """Extend device lock lease for a running job."""
+    job = await db.get(JobInstance, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    device = await db.get(Device, job.device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail="device not found")
+
+    if device.lock_run_id and device.lock_run_id != job_id:
+        raise HTTPException(status_code=409, detail="device locked by another job")
+
+    now = datetime.now(timezone.utc)
+    device.lock_expires_at = now + timedelta(seconds=_DEVICE_LOCK_LEASE_SECONDS)
+    await db.commit()
+    return ok({"job_id": job_id, "expires_at": device.lock_expires_at.isoformat()})
+
+
+@router.post("/jobs/{job_id}/steps/{step_id}/status", response_model=ApiResponse[dict])
+async def update_job_step_status(
+    job_id: int,
+    step_id: str,
+    payload: _StepStatusIn,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """Update a single step status — upserted as StepTrace."""
+    from backend.services.reconciler import reconcile_step_traces
+    trace = {
+        "job_id": job_id,
+        "step_id": step_id,
+        "stage": "execute",
+        "event_type": "status_update",
+        "status": payload.status,
+        "error_message": payload.error_message,
+        "original_ts": payload.started_at or datetime.now(timezone.utc).isoformat(),
+    }
+    await reconcile_step_traces("agent", [trace], db)
+    return ok({"job_id": job_id, "step_id": step_id, "status": payload.status})
 
 
 async def _get_backpressure() -> Optional[int]:

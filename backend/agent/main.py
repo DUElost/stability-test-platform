@@ -103,7 +103,7 @@ class LockRenewalManager:
 
     def _extend_lock(self, run_id: int) -> None:
         """向服务器请求延长设备锁"""
-        url = f"{self.api_url}/api/v1/agent/runs/{run_id}/extend_lock"
+        url = f"{self.api_url}/api/v1/agent/jobs/{run_id}/extend_lock"
 
         for attempt in range(1, POST_RETRIES + 1):
             try:
@@ -152,7 +152,7 @@ class HeartbeatThread:
     def __init__(
         self,
         api_url: str,
-        host_id: int,
+        host_id: str,
         adb_path: str,
         mount_points: List[str],
         host_info: Dict[str, Any],
@@ -254,9 +254,9 @@ class HeartbeatThread:
         )
 
 
-def fetch_pending_runs(api_url: str, host_id: int) -> List[Dict[str, Any]]:
+def fetch_pending_runs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
     resp = requests.get(
-        f"{api_url}/api/v1/agent/runs/pending",
+        f"{api_url}/api/v1/agent/jobs/pending",
         params={"host_id": host_id, "limit": 10},
         timeout=10,
     )
@@ -297,7 +297,7 @@ def _post_with_retry(url: str, payload: Dict[str, Any], context: str, timeout: i
 
 def update_run(api_url: str, run_id: int, payload: Dict[str, Any]) -> None:
     _post_with_retry(
-        f"{api_url}/api/v1/agent/runs/{run_id}/heartbeat",
+        f"{api_url}/api/v1/agent/jobs/{run_id}/heartbeat",
         payload,
         context=f"run_heartbeat:{run_id}",
     )
@@ -321,7 +321,7 @@ def complete_run(api_url: str, run_id: int, payload: Dict[str, Any]) -> None:
         complete_payload["artifact"] = artifact
 
     _post_with_retry(
-        f"{api_url}/api/v1/agent/runs/{run_id}/complete",
+        f"{api_url}/api/v1/agent/jobs/{run_id}/complete",
         complete_payload,
         context=f"run_complete:{run_id}",
     )
@@ -344,7 +344,7 @@ def get_host_info() -> Dict[str, Any]:
     }
 
 
-def _load_required_host_id() -> int:
+def _load_required_host_id() -> Optional[str]:
     raw_value = os.getenv("HOST_ID", "").strip()
     if not raw_value:
         raise ValueError("HOST_ID is required and cannot be empty")
@@ -353,16 +353,10 @@ def _load_required_host_id() -> int:
     if raw_value.upper() == "AUTO":
         return None  # 表示需要自动注册
 
-    try:
-        host_id = int(raw_value)
-    except ValueError as exc:
-        raise ValueError(f"HOST_ID must be an integer, got: {raw_value}") from exc
-    if host_id <= 0:
-        raise ValueError(f"HOST_ID must be > 0, got: {host_id}")
-    return host_id
+    return raw_value
 
 
-def _auto_register_host(api_url: str, host_info: Dict) -> int:
+def _auto_register_host(api_url: str, host_info: Dict) -> str:
     """通过心跳端点自动注册主机到后端
 
     心跳端点 /api/v1/heartbeat 已内置主机自动创建逻辑：
@@ -429,7 +423,7 @@ def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, hos
 
     def http_step_fallback(rid, sid, status, **kwargs):
         import requests
-        url = f"{api_url}/api/v1/agent/runs/{rid}/steps/{sid}/status"
+        url = f"{api_url}/api/v1/agent/jobs/{rid}/steps/{sid}/status"
         payload = {"status": status}
         for k in ("started_at", "finished_at", "exit_code", "error_message"):
             if k in kwargs and kwargs[k] is not None:
@@ -647,10 +641,10 @@ def main() -> None:
 
     # 初始化 Redis MQ 生产者
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    mq_producer = MQProducer(redis_url, str(host_id), local_db=local_db)
+    mq_producer = MQProducer(redis_url, host_id, local_db=local_db)
 
     # 启动控制指令监听器
-    control_listener = ControlListener(redis_url, str(host_id), mq_producer, tool_registry)
+    control_listener = ControlListener(redis_url, host_id, mq_producer, tool_registry)
     control_listener.start()
 
     # 启动心跳守护线程（独立于任务执行循环）

@@ -1,6 +1,7 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import os
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -8,7 +9,7 @@ from typing import Any, List
 
 from backend.core.database import get_db
 from backend.core.audit import record_audit
-from backend.models.schemas import Host, HostStatus
+from backend.models.host import Host
 from backend.api.schemas import HostCreate, HostOut, PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
 
@@ -22,14 +23,14 @@ def _ensure_host_status_up_to_date(host: Host) -> bool:
     """Update host status to OFFLINE if heartbeat has expired.
     Returns True if status was changed, False otherwise.
     """
-    if host.status != HostStatus.ONLINE:
+    if host.status != "ONLINE":
         return False
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
 
     if host.last_heartbeat is None or host.last_heartbeat < offline_deadline:
-        host.status = HostStatus.OFFLINE
+        host.status = "OFFLINE"
         logger.info(
             "host_status_marked_offline",
             extra={
@@ -46,9 +47,13 @@ router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
 @router.post("", response_model=HostOut)
 def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
+    host_id = str(uuid.uuid4())
     host = Host(
+        id=host_id,
+        hostname=payload.name,
         name=payload.name,
         ip=payload.ip,
+        ip_address=payload.ip,
         ssh_port=payload.ssh_port,
         ssh_user=payload.ssh_user,
         ssh_auth_type=payload.ssh_auth_type,
@@ -100,7 +105,7 @@ def list_hosts(
 
 
 @router.get("/{host_id}", response_model=HostOut)
-def get_host(host_id: int, db: Session = Depends(get_db)):
+def get_host(host_id: str, db: Session = Depends(get_db)):
     host = db.get(Host, host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
@@ -111,7 +116,7 @@ def get_host(host_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{host_id}", response_model=HostOut)
 def update_host(
-    host_id: int,
+    host_id: str,
     payload: HostCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
@@ -123,7 +128,9 @@ def update_host(
         raise HTTPException(status_code=404, detail="host not found")
 
     host.name = payload.name
+    host.hostname = payload.name
     host.ip = payload.ip
+    host.ip_address = payload.ip
     host.ssh_port = payload.ssh_port
     host.ssh_user = payload.ssh_user
     host.ssh_auth_type = payload.ssh_auth_type

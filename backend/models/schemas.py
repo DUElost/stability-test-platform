@@ -7,7 +7,6 @@ from sqlalchemy import (
     Column,
     DateTime,
     Enum,
-    Float,
     ForeignKey,
     Index,
     Integer,
@@ -73,93 +72,6 @@ class RunStepStatus(str, PyEnum):
     CANCELED = "CANCELED"
 
 
-class DeploymentStatus(str, PyEnum):
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    SUCCESS = "SUCCESS"
-    FAILED = "FAILED"
-
-
-class Host(Base):
-    __tablename__ = "hosts"
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(128), unique=True, nullable=False)
-    ip = Column(String(64), index=True, nullable=False)
-    ssh_port = Column(Integer, default=22)
-    ssh_user = Column(String(64))
-    ssh_auth_type = Column(String(32), default="password")
-    ssh_key_path = Column(String(256))
-    status = Column(Enum(HostStatus), default=HostStatus.OFFLINE, nullable=False)
-    last_heartbeat = Column(DateTime)
-    extra = Column(JSON, default=dict)
-    mount_status = Column(JSON, default=dict)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    devices = relationship("Device", back_populates="host")
-    runs = relationship("TaskRun", back_populates="host")
-
-
-class Device(Base):
-    __tablename__ = "devices"
-    __table_args__ = (
-        Index('ix_dev_host_status', 'host_id', 'status'),
-    )
-
-    id = Column(Integer, primary_key=True)
-    serial = Column(String(128), unique=True, index=True, nullable=False)
-    host_id = Column(Integer, ForeignKey("hosts.id"))
-    model = Column(String(128))
-    status = Column(Enum(DeviceStatus), default=DeviceStatus.OFFLINE, nullable=False)
-    lock_run_id = Column(Integer)
-    lock_expires_at = Column(DateTime)
-    last_seen = Column(DateTime)
-    tags = Column(JSON, default=list)
-    extra = Column(JSON, default=dict)
-
-    # ADB 连接状态
-    adb_state = Column(String(32))
-    adb_connected = Column(Boolean, default=False)
-
-    # 硬件信息
-    battery_level = Column(Integer)
-    battery_temp = Column(Integer)
-    temperature = Column(Integer)
-    wifi_rssi = Column(Integer)
-    wifi_ssid = Column(String(128))
-    network_latency = Column(Float)  # 网络延迟 (ms, ping 223.5.5.5 / 8.8.8.8)
-
-    # 系统资源
-    cpu_usage = Column(Float)
-    mem_total = Column(BigInteger)
-    mem_used = Column(BigInteger)
-    disk_total = Column(BigInteger)
-    disk_used = Column(BigInteger)
-
-    # 硬件信息更新时间
-    hardware_updated_at = Column(DateTime)
-
-    host = relationship("Host", back_populates="devices")
-    runs = relationship("TaskRun", back_populates="device")
-
-
-class DeviceMetricSnapshot(Base):
-    """Historical device metrics — one row per heartbeat per device."""
-    __tablename__ = "device_metric_snapshots"
-    __table_args__ = (
-        Index('ix_dms_device_ts', 'device_id', 'timestamp'),
-    )
-
-    id = Column(Integer, primary_key=True)
-    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
-    battery_level = Column(Integer)
-    temperature = Column(Integer)
-    network_latency = Column(Float)
-    cpu_usage = Column(Float)
-    mem_used = Column(BigInteger)
-
 
 class TaskTemplate(Base):
     __tablename__ = "task_templates"
@@ -172,7 +84,7 @@ class TaskTemplate(Base):
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    tasks = relationship("Task", back_populates="template")
+    tasks = relationship("backend.models.schemas.Task", back_populates="template")
 
 
 class Task(Base):
@@ -201,8 +113,8 @@ class Task(Base):
     # Pipeline 定义（JSON Schema validated）
     pipeline_def = Column(JSON, nullable=True)
 
-    template = relationship("TaskTemplate", back_populates="tasks")
-    tool = relationship("Tool")
+    template = relationship("backend.models.schemas.TaskTemplate", back_populates="tasks")
+    tool = relationship("backend.models.schemas.Tool")
     runs = relationship("TaskRun", back_populates="task")
 
 
@@ -242,8 +154,6 @@ class TaskRun(Base):
     post_processed_at = Column(DateTime, nullable=True)
 
     task = relationship("Task", back_populates="runs")
-    host = relationship("Host", back_populates="runs")
-    device = relationship("Device", back_populates="runs")
     artifacts = relationship("LogArtifact", back_populates="run")
     steps = relationship("RunStep", back_populates="run", order_by="RunStep.phase, RunStep.step_order", cascade="all, delete-orphan")
 
@@ -287,22 +197,6 @@ class LogArtifact(Base):
     run = relationship("TaskRun", back_populates="artifacts")
 
 
-class Deployment(Base):
-    __tablename__ = "deployments"
-
-    id = Column(Integer, primary_key=True)
-    host_id = Column(Integer, ForeignKey("hosts.id"), nullable=False, index=True)
-    status = Column(Enum(DeploymentStatus), default=DeploymentStatus.PENDING, nullable=False)
-    install_path = Column(String(256), default="/opt/stability-test-agent")
-    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    finished_at = Column(DateTime)
-    logs = Column(Text)
-    error_message = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    host = relationship("Host")
-
-
 # ==================== 工具管理模块 ====================
 
 class ToolCategory(Base):
@@ -317,7 +211,7 @@ class ToolCategory(Base):
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    tools = relationship("Tool", back_populates="category")
+    tools = relationship("backend.models.schemas.Tool", back_populates="category")
 
 
 class Tool(Base):
@@ -348,71 +242,7 @@ class Tool(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    category = relationship("ToolCategory", back_populates="tools")
-
-
-# ==================== 工作流模块 ====================
-
-
-class WorkflowStatus(PyEnum):
-    DRAFT = "DRAFT"
-    READY = "READY"
-    RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    CANCELED = "CANCELED"
-
-
-class StepStatus(PyEnum):
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    SKIPPED = "SKIPPED"
-
-
-class Workflow(Base):
-    __tablename__ = "workflows"
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(128), nullable=False)
-    description = Column(Text)
-    status = Column(Enum(WorkflowStatus), default=WorkflowStatus.DRAFT, nullable=False)
-    is_template = Column(Boolean, default=False)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    started_at = Column(DateTime, nullable=True)
-    finished_at = Column(DateTime, nullable=True)
-
-    steps = relationship(
-        "WorkflowStep",
-        back_populates="workflow",
-        order_by="WorkflowStep.order",
-        cascade="all, delete-orphan",
-    )
-
-
-class WorkflowStep(Base):
-    __tablename__ = "workflow_steps"
-    __table_args__ = (
-        Index('ix_ws_task_run_id', 'task_run_id'),
-    )
-
-    id = Column(Integer, primary_key=True)
-    workflow_id = Column(Integer, ForeignKey("workflows.id"), nullable=False)
-    order = Column(Integer, nullable=False)
-    name = Column(String(128), nullable=False)
-    tool_id = Column(Integer, ForeignKey("tools.id"), nullable=True)
-    task_type = Column(String(64))
-    params = Column(JSON, default=dict)
-    target_device_id = Column(Integer, ForeignKey("devices.id"), nullable=True)
-    status = Column(Enum(StepStatus), default=StepStatus.PENDING, nullable=False)
-    task_run_id = Column(Integer, ForeignKey("task_runs.id"), nullable=True)
-    error_message = Column(Text, nullable=True)
-    started_at = Column(DateTime, nullable=True)
-    finished_at = Column(DateTime, nullable=True)
-
-    workflow = relationship("Workflow", back_populates="steps")
+    category = relationship("backend.models.schemas.ToolCategory", back_populates="tools")
 
 
 class ChannelType(str, PyEnum):
@@ -490,13 +320,15 @@ class TaskSchedule(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(128), nullable=False)
     cron_expression = Column(String(128), nullable=False)  # e.g. "0 2 * * *"
-    task_template_id = Column(Integer, ForeignKey("task_templates.id"), nullable=True)
-    tool_id = Column(Integer, ForeignKey("tools.id"), nullable=True)
+    task_template_id = Column(Integer, nullable=True)   # legacy col, old table dropped
+    tool_id = Column(Integer, nullable=True)            # legacy col, old table dropped
     task_type = Column(String(32), nullable=False)
     params = Column(JSON, default=dict)
-    target_device_id = Column(Integer, ForeignKey("devices.id"), nullable=True)
+    target_device_id = Column(Integer, nullable=True)   # legacy col, old table dropped
     enabled = Column(Boolean, default=True)
     last_run_at = Column(DateTime, nullable=True)
     next_run_at = Column(DateTime, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    workflow_definition_id = Column(Integer, ForeignKey("workflow_definition.id"), nullable=True)
+    device_ids = Column(JSON, nullable=True)

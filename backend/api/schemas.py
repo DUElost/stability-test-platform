@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, Optional, Literal, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 try:
     from pydantic import ConfigDict
@@ -30,10 +30,10 @@ class HostCreate(BaseModel):
 
 
 class HostOut(ORMBaseModel):
-    id: int
-    name: str
-    ip: str
-    ssh_port: int
+    id: str
+    name: Optional[str] = None
+    ip: Optional[str] = None
+    ssh_port: Optional[int] = 22
     ssh_user: Optional[str] = None
     ssh_auth_type: Optional[str] = None
     # Note: ssh_key_path is intentionally excluded for security
@@ -42,9 +42,14 @@ class HostOut(ORMBaseModel):
     extra: Dict[str, Any] = {}
     mount_status: Dict[str, Any] = {}
 
+    @field_validator('extra', 'mount_status', mode='before')
+    @classmethod
+    def _coerce_none_to_dict(cls, v):
+        return v or {}
+
 
 class HeartbeatIn(BaseModel):
-    host_id: int
+    host_id: str
     status: Literal["ONLINE", "OFFLINE", "DEGRADED"]
     mount_status: Dict[str, Any] = Field(default_factory=dict)
     extra: Dict[str, Any] = Field(default_factory=dict)
@@ -52,6 +57,11 @@ class HeartbeatIn(BaseModel):
     host: Optional[Dict[str, Any]] = None
     # 设备数组（可选，用于设备上报）
     devices: List[Dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator('host_id', mode='before')
+    @classmethod
+    def coerce_str(cls, v):
+        return str(v)
 
 
 class TaskCreate(BaseModel):
@@ -144,9 +154,9 @@ class RunOut(ORMBaseModel):
 
 
 class HostLiteOut(ORMBaseModel):
-    id: int
-    name: str
-    ip: str
+    id: str
+    name: Optional[str] = None
+    ip: Optional[str] = None
     status: str
 
 
@@ -154,7 +164,7 @@ class DeviceLiteOut(ORMBaseModel):
     id: int
     serial: str
     model: Optional[str] = None
-    host_id: Optional[int] = None
+    host_id: Optional[str] = None
     status: str
 
 
@@ -276,7 +286,7 @@ class RunCompleteIn(BaseModel):
 class DeviceCreate(BaseModel):
     serial: str
     model: Optional[str] = None
-    host_id: Optional[int] = None
+    host_id: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
 
 
@@ -284,7 +294,7 @@ class DeviceOut(ORMBaseModel):
     id: int
     serial: str
     model: Optional[str] = None
-    host_id: Optional[int] = None
+    host_id: Optional[str] = None
     status: str
     last_seen: Optional[datetime] = None
     tags: List[str] = Field(default_factory=list)
@@ -308,6 +318,20 @@ class DeviceOut(ORMBaseModel):
     mem_used: Optional[int] = None
     disk_total: Optional[int] = None
     disk_used: Optional[int] = None
+
+    @field_validator('tags', mode='before')
+    @classmethod
+    def _coerce_tags(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, dict):
+            return []
+        return v
+
+    @field_validator('extra', mode='before')
+    @classmethod
+    def _coerce_extra(cls, v):
+        return v or {}
 
 
 # Agent日志查询
