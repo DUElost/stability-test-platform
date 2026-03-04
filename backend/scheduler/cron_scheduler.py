@@ -9,7 +9,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,8 @@ from backend.models.schemas import Task, TaskSchedule, TaskStatus
 logger = logging.getLogger(__name__)
 
 CRON_POLL_INTERVAL = float(os.getenv("CRON_POLL_INTERVAL", "30"))
+PATROL_TIMEOUT_MINUTES = int(os.getenv("PATROL_TIMEOUT_MINUTES", "10"))
+WORKFLOW_RUN_RETENTION_DAYS = int(os.getenv("WORKFLOW_RUN_RETENTION_DAYS", "3"))
 
 
 def _compute_next_run(cron_expression: str, after: datetime) -> datetime:
@@ -81,12 +83,64 @@ class CronScheduler:
             if schedules:
                 db.commit()
                 logger.info("cron_scheduler_fired count=%d", len(schedules))
+
+            # Cleanup stale completed WorkflowRuns beyond retention period
+            self._cleanup_old_runs(db, now)
         finally:
             db.close()
 
+    def _cleanup_old_runs(self, db: Session, now: datetime) -> None:
+        """Delete completed WorkflowRuns older than WORKFLOW_RUN_RETENTION_DAYS."""
+        try:
+            from backend.models.workflow import WorkflowRun
+            cutoff = now - timedelta(days=WORKFLOW_RUN_RETENTION_DAYS)
+            stale_runs = (
+                db.query(WorkflowRun)
+                .filter(
+                    WorkflowRun.status.in_(["SUCCESS", "FAILED", "PARTIAL_SUCCESS", "DEGRADED"]),
+                    WorkflowRun.started_at < cutoff,
+                )
+                .limit(100)
+                .all()
+            )
+            if stale_runs:
+                for run in stale_runs:
+                    db.delete(run)
+                db.commit()
+                logger.info("cron_cleanup_old_runs deleted=%d", len(stale_runs))
+        except Exception:
+            logger.warning("cron_cleanup_old_runs failed", exc_info=True)
+            db.rollback()
+
     def _fire_schedule(self, db: Session, sched: TaskSchedule, now: datetime) -> None:
         if sched.workflow_definition_id:
-            # New path: dispatch WorkflowRun
+            # Overlap protection: skip if same workflow has a recent RUNNING run
+            # Fail-closed: if the check itself errors, skip dispatch to avoid
+            # amplifying concurrent overlap risk.
+            try:
+                from backend.models.workflow import WorkflowRun
+                stale_cutoff = now - timedelta(minutes=PATROL_TIMEOUT_MINUTES)
+                active_count = db.query(WorkflowRun).filter(
+                    WorkflowRun.workflow_definition_id == sched.workflow_definition_id,
+                    WorkflowRun.status == "RUNNING",
+                    WorkflowRun.started_at > stale_cutoff,
+                ).count()
+                if active_count > 0:
+                    logger.info(
+                        "cron_skip_overlap schedule_id=%s wf_def_id=%s active_runs=%d",
+                        sched.id, sched.workflow_definition_id, active_count,
+                    )
+                    sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+                    return
+            except Exception as e:
+                logger.warning(
+                    "overlap_check_failed schedule_id=%s, skipping dispatch (fail-closed): %s",
+                    sched.id, e,
+                )
+                sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+                return
+
+            # Normal dispatch
             device_ids = sched.device_ids or []
             asyncio.run(_dispatch_workflow_async(sched.workflow_definition_id, device_ids))
             logger.info(

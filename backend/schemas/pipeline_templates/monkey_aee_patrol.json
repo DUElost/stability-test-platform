@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "description": "Monkey AEE stability test - patrol cycle (scheduled every 3-5 min)",
+  "stages": {
+    "prepare": [
+      {
+        "step_id": "check_device",
+        "action": "builtin:check_device",
+        "timeout_seconds": 30,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "ensure_root",
+        "action": "builtin:ensure_root",
+        "timeout_seconds": 30,
+        "retry": 2,
+        "params": { "max_attempts": 3 }
+      }
+    ],
+    "execute": [
+      {
+        "step_id": "guard_monkey",
+        "action": "builtin:guard_process",
+        "timeout_seconds": 60,
+        "retry": 0,
+        "params": {
+          "process_name": "com.android.commands.monkey.transsion",
+          "restart_command": "nohup /data/local/tmp/aim --pkg-blacklist-file /sdcard/blacklist.txt --smartuiautomator true --hprof --ignore-crashes --ignore-security-exceptions --ignore-timeouts --throttle 500 --runtime-minutes 10080 --switchuimode -v >/dev/null 2>&1 &",
+          "pre_restart_commands": ["dumpsys activity appops on"],
+          "resource_check_path": "/data/local/tmp/MonkeyTest.sh",
+          "max_restarts": 1
+        }
+      },
+      {
+        "step_id": "scan_aee",
+        "action": "builtin:scan_aee",
+        "timeout_seconds": 300,
+        "retry": 0,
+        "params": {
+          "aee_dirs": ["/data/aee_exp", "/data/vendor/aee_exp"],
+          "local_dir": "{log_dir}/aee",
+          "incremental": true,
+          "whitelist_file": "{resource_dir}/AEE_whitelist.txt"
+        }
+      },
+      {
+        "step_id": "export_mobilelogs",
+        "action": "builtin:export_mobilelogs",
+        "timeout_seconds": 300,
+        "retry": 0,
+        "params": {
+          "timestamps_from_step": "scan_aee",
+          "local_dir": "{log_dir}/mobilelog"
+        }
+      }
+    ],
+    "post_process": [
+      {
+        "step_id": "decrypt_aee",
+        "action": "builtin:aee_extract",
+        "timeout_seconds": 600,
+        "retry": 0,
+        "params": {
+          "input_dir": "{log_dir}/aee",
+          "tool_path": "{tools_dir}/aee_extract",
+          "batch": true,
+          "max_workers": 4,
+          "min_free_disk_gb": 10
+        }
+      },
+      {
+        "step_id": "log_scan",
+        "action": "builtin:log_scan",
+        "timeout_seconds": 120,
+        "retry": 0,
+        "params": {
+          "input_dir": "{log_dir}",
+          "keywords": ["FATAL", "CRASH", "ANR"]
+        }
+      }
+    ]
+  }
+}

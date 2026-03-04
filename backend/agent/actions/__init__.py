@@ -3,17 +3,19 @@
 Each action is a plain function: (StepContext) -> StepResult
 """
 
-from backend.agent.pipeline_engine import StepContext, StepResult
-from backend.agent.actions.device_actions import (
+from ..pipeline_engine import StepContext, StepResult
+from .device_actions import (
     check_device, clean_env, push_resources,
     ensure_root, fill_storage, connect_wifi, install_apk,
+    setup_device_commands,
 )
-from backend.agent.actions.process_actions import (
+from .process_actions import (
     start_process, monitor_process, stop_process, run_instrument,
+    guard_process,
 )
-from backend.agent.actions.file_actions import adb_pull, collect_bugreport, scan_aee
-from backend.agent.actions.log_actions import aee_extract, log_scan
-from backend.agent.actions.tool_actions import run_tool_script
+from .file_actions import adb_pull, collect_bugreport, scan_aee, export_mobilelogs
+from .log_actions import aee_extract, log_scan
+from .tool_actions import run_tool_script
 
 ACTION_REGISTRY = {
     # Device actions
@@ -24,15 +26,18 @@ ACTION_REGISTRY = {
     "fill_storage": fill_storage,
     "connect_wifi": connect_wifi,
     "install_apk": install_apk,
+    "setup_device_commands": setup_device_commands,
     # Process actions
     "start_process": start_process,
     "monitor_process": monitor_process,
     "stop_process": stop_process,
     "run_instrument": run_instrument,
+    "guard_process": guard_process,
     # File actions
     "adb_pull": adb_pull,
     "collect_bugreport": collect_bugreport,
     "scan_aee": scan_aee,
+    "export_mobilelogs": export_mobilelogs,
     # Log actions
     "aee_extract": aee_extract,
     "log_scan": log_scan,

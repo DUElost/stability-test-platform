@@ -1,0 +1,385 @@
+[
+  {
+    "name": "adb_pull",
+    "label": "ADB Pull",
+    "category": "file",
+    "description": "Pull file/directory from device to local path",
+    "param_schema": {
+      "remote_path": {
+        "type": "string",
+        "label": "Remote Path",
+        "required": true,
+        "placeholder": "/data/logs"
+      },
+      "local_path": {
+        "type": "string",
+        "label": "Local Path",
+        "required": true,
+        "placeholder": "{log_dir}/logs"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:44:43.960574Z"
+  },
+  {
+    "name": "aee_extract",
+    "label": "AEE Extract",
+    "category": "log",
+    "description": "Decrypt AEE DB logs using aee_extract tool",
+    "param_schema": {
+      "input_dir": {
+        "type": "string",
+        "label": "Input Dir",
+        "required": true,
+        "placeholder": "{log_dir}/aee"
+      },
+      "output_dir": {
+        "type": "string",
+        "label": "Output Dir",
+        "required": true,
+        "placeholder": "{log_dir}/aee_decoded"
+      },
+      "tool_path": {
+        "type": "string",
+        "label": "Tool Path",
+        "placeholder": "Auto-detected if empty"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "check_device",
+    "label": "Check Device Updated",
+    "category": "device",
+    "description": "Updated by test",
+    "param_schema": {},
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893726Z"
+  },
+  {
+    "name": "clean_env",
+    "label": "Clean Environment",
+    "category": "device",
+    "description": "Uninstall packages, clear logs, set system properties",
+    "param_schema": {
+      "uninstall_packages": {
+        "type": "string",
+        "label": "Uninstall Packages",
+        "placeholder": "com.app1, com.app2",
+        "description": "Comma-separated package names"
+      },
+      "clear_logs": {
+        "type": "boolean",
+        "label": "Clear Logs",
+        "default": true
+      },
+      "log_dirs": {
+        "type": "string",
+        "label": "Log Directories",
+        "placeholder": "/data/aee_exp, /data/vendor/aee_exp",
+        "description": "Comma-separated directories"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "collect_bugreport",
+    "label": "Collect Bugreport",
+    "category": "file",
+    "description": "Generate and pull Android bugreport",
+    "param_schema": {
+      "remote_path": {
+        "type": "string",
+        "label": "Remote Path",
+        "placeholder": "/sdcard/bugreport.txt"
+      },
+      "local_dir": {
+        "type": "string",
+        "label": "Local Directory",
+        "required": true,
+        "placeholder": "{log_dir}"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "connect_wifi",
+    "label": "Connect WiFi",
+    "category": "device",
+    "description": "Connect device to specified WiFi network",
+    "param_schema": {
+      "ssid": {
+        "type": "string",
+        "label": "SSID",
+        "required": true
+      },
+      "password": {
+        "type": "string",
+        "label": "Password",
+        "required": true
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "ensure_root",
+    "label": "Ensure Root",
+    "category": "device",
+    "description": "Ensure ADB root access with retries",
+    "param_schema": {
+      "max_attempts": {
+        "type": "number",
+        "label": "Max Attempts",
+        "default": 3,
+        "min": 1,
+        "max": 10
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "fill_storage",
+    "label": "Fill Storage",
+    "category": "device",
+    "description": "Fill device storage to target percentage",
+    "param_schema": {
+      "target_percentage": {
+        "type": "number",
+        "label": "Target %",
+        "default": 60,
+        "min": 1,
+        "max": 99
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "install_apk",
+    "label": "Install APK",
+    "category": "device",
+    "description": "Install APK file on device",
+    "param_schema": {
+      "apk_path": {
+        "type": "string",
+        "label": "APK Path",
+        "required": true,
+        "placeholder": "/path/to/app.apk"
+      },
+      "reinstall": {
+        "type": "boolean",
+        "label": "Reinstall",
+        "default": true
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "log_scan",
+    "label": "Log Scan",
+    "category": "log",
+    "description": "Scan log files for keywords, generate report",
+    "param_schema": {
+      "input_dir": {
+        "type": "string",
+        "label": "Input Dir",
+        "required": true,
+        "placeholder": "{log_dir}"
+      },
+      "keywords": {
+        "type": "string",
+        "label": "Keywords",
+        "default": "FATAL, CRASH, ANR",
+        "description": "Comma-separated keywords"
+      },
+      "deduplicate": {
+        "type": "boolean",
+        "label": "Deduplicate",
+        "default": true
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "monitor_process",
+    "label": "Monitor Process",
+    "category": "process",
+    "description": "Monitor running process with periodic alive check",
+    "param_schema": {
+      "pid_from_step": {
+        "type": "string",
+        "label": "PID From Step",
+        "placeholder": "start_process step name",
+        "description": "Step name to get PID from"
+      },
+      "duration": {
+        "type": "number",
+        "label": "Duration (s)",
+        "default": 3600,
+        "min": 1
+      },
+      "check_interval": {
+        "type": "number",
+        "label": "Check Interval (s)",
+        "default": 5,
+        "min": 1
+      },
+      "log_paths": {
+        "type": "string",
+        "label": "Log Paths",
+        "placeholder": "/data/aee_exp, /data/vendor/aee_exp",
+        "description": "Comma-separated paths to monitor"
+      },
+      "pull_on_error": {
+        "type": "boolean",
+        "label": "Pull on Error",
+        "default": false
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "push_resources",
+    "label": "Push Resources",
+    "category": "device",
+    "description": "Push files to device via adb push",
+    "param_schema": {
+      "files": {
+        "type": "string",
+        "label": "Files (JSON)",
+        "placeholder": "[{\"local\":\"...\",\"remote\":\"...\",\"chmod\":\"755\"}]",
+        "description": "JSON array of {local, remote, chmod?}"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "run_instrument",
+    "label": "Run Instrument",
+    "category": "process",
+    "description": "Run Android instrumentation test",
+    "param_schema": {
+      "runner": {
+        "type": "string",
+        "label": "Runner",
+        "required": true,
+        "placeholder": "com.app.test/androidx.test.runner.AndroidJUnitRunner"
+      },
+      "instrument_args": {
+        "type": "string",
+        "label": "Args (JSON)",
+        "placeholder": "{\"class\":\"com.app.Test\"}",
+        "description": "JSON object of instrument arguments"
+      },
+      "timeout": {
+        "type": "number",
+        "label": "Timeout (s)",
+        "default": 3600,
+        "min": 1
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "run_tool_script",
+    "label": "Run Tool Script",
+    "category": "script",
+    "description": "Execute a tool class as a pipeline step",
+    "param_schema": {
+      "script_path": {
+        "type": "string",
+        "label": "Script Path",
+        "required": true,
+        "placeholder": "C:\\path\\to\\tool.py or /path/to/tool.py"
+      },
+      "script_class": {
+        "type": "string",
+        "label": "Class Name",
+        "required": true,
+        "placeholder": "MyToolClass"
+      },
+      "default_params": {
+        "type": "string",
+        "label": "Default Params (JSON)",
+        "placeholder": "{}",
+        "description": "JSON object for default params"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "scan_aee",
+    "label": "Scan AEE",
+    "category": "file",
+    "description": "Scan and pull AEE exception directories",
+    "param_schema": {
+      "aee_dirs": {
+        "type": "string",
+        "label": "AEE Dirs",
+        "placeholder": "/data/aee_exp, /data/vendor/aee_exp",
+        "description": "Comma-separated AEE directories"
+      },
+      "local_dir": {
+        "type": "string",
+        "label": "Local Directory",
+        "required": true,
+        "placeholder": "{log_dir}/aee"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "start_process",
+    "label": "Start Process",
+    "category": "process",
+    "description": "Start command via adb shell, optionally in background",
+    "param_schema": {
+      "command": {
+        "type": "string",
+        "label": "Command",
+        "required": true,
+        "placeholder": "monkey -p com.app --throttle 500 100000"
+      },
+      "background": {
+        "type": "boolean",
+        "label": "Background",
+        "default": true
+      },
+      "timeout": {
+        "type": "number",
+        "label": "Process Timeout (s)",
+        "default": 3600,
+        "min": 1
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "stop_process",
+    "label": "Stop Process",
+    "category": "process",
+    "description": "Kill process by PID via adb shell kill -9",
+    "param_schema": {
+      "pid_from_step": {
+        "type": "string",
+        "label": "PID From Step",
+        "placeholder": "start_process step name"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-03T06:21:49.893191Z"
+  }
+]

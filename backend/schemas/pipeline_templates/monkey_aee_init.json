@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "description": "Monkey AEE stability test - device initialization (run once per test cycle)",
+  "stages": {
+    "prepare": [
+      {
+        "step_id": "check_device",
+        "action": "builtin:check_device",
+        "timeout_seconds": 30,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "ensure_root",
+        "action": "builtin:ensure_root",
+        "timeout_seconds": 30,
+        "retry": 2,
+        "params": { "max_attempts": 3 }
+      },
+      {
+        "step_id": "setup_commands",
+        "action": "builtin:setup_device_commands",
+        "timeout_seconds": 120,
+        "retry": 0,
+        "params": {
+          "commands": [
+            { "cmd": "settings put global development_settings_enabled 1", "timeout": 10 },
+            { "cmd": "setprop persist.vendor.mtk.aee.mode 3", "timeout": 10 },
+            { "cmd": "am broadcast -a com.debug.loggerui.ADB_CMD -e cmd_name start --ei cmd_target 1 -n com.debug.loggerui/.framework.LogReceiver", "timeout": 15 },
+            { "cmd": "am broadcast -a com.debug.loggerui.ADB_CMD -e cmd_name set_total_log_size_4096 --ei cmd_target 1 -n com.debug.loggerui/.framework.LogReceiver", "timeout": 15 },
+            { "cmd": "am broadcast -a com.debug.loggerui.ADB_CMD -e cmd_name set_sublog_4_5_0 --ei cmd_target 1 -n com.debug.loggerui/.framework.LogReceiver", "timeout": 15 },
+            { "cmd": "settings put global development_settings_enabled 0", "timeout": 10 },
+            { "cmd": "cmd wifi set-wifi-enabled enabled", "timeout": 10 },
+            { "cmd": "cmd wifi start-scan", "timeout": 10 }
+          ]
+        }
+      },
+      {
+        "step_id": "connect_wifi",
+        "action": "builtin:connect_wifi",
+        "timeout_seconds": 30,
+        "retry": 1,
+        "params": { "ssid": "{wifi_ssid}", "password": "{wifi_password}" }
+      },
+      {
+        "step_id": "fill_storage",
+        "action": "builtin:fill_storage",
+        "timeout_seconds": 300,
+        "retry": 0,
+        "params": { "target_percentage": 60 }
+      }
+    ],
+    "execute": [
+      {
+        "step_id": "push_monkey_resources",
+        "action": "builtin:push_resources",
+        "timeout_seconds": 600,
+        "retry": 1,
+        "params": {
+          "files": [
+            { "local": "{resource_dir}/aim.jar", "remote": "/data/local/tmp/aim.jar" },
+            { "local": "{resource_dir}/aim", "remote": "/data/local/tmp/aim", "chmod": "777" },
+            { "local": "{resource_dir}/aimwd", "remote": "/data/local/tmp/aimwd", "chmod": "777" },
+            { "local": "{resource_dir}/aimonkey.apk", "remote": "/data/local/tmp/monkey.apk" },
+            { "local": "{resource_dir}/blacklist.txt", "remote": "/sdcard/blacklist.txt" },
+            { "local": "{resource_dir}/MonkeyTestAi.sh", "remote": "/data/local/tmp/MonkeyTest.sh", "chmod": "777" }
+          ]
+        }
+      },
+      {
+        "step_id": "start_aimwd",
+        "action": "builtin:start_process",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": { "command": "/data/local/tmp/aimwd", "background": true }
+      },
+      {
+        "step_id": "start_monkey",
+        "action": "builtin:start_process",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {
+          "command": "/data/local/tmp/aim --pkg-blacklist-file /sdcard/blacklist.txt --smartuiautomator true --hprof --ignore-crashes --ignore-security-exceptions --ignore-timeouts --throttle 500 --runtime-minutes 10080 --switchuimode -v",
+          "background": true
+        }
+      }
+    ],
+    "post_process": []
+  }
+}

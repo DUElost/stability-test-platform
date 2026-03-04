@@ -3,15 +3,31 @@
 import logging
 import subprocess
 import time
-from backend.agent.pipeline_engine import StepContext, StepResult
+from ..pipeline_engine import StepContext, StepResult
 
 logger = logging.getLogger(__name__)
+
+
+def _stdout(result) -> str:
+    """Extract stdout string from subprocess.CompletedProcess or plain string."""
+    if hasattr(result, "stdout"):
+        return result.stdout or ""
+    return str(result) if result is not None else ""
 
 
 def check_device(ctx: StepContext) -> StepResult:
     """Verify device is reachable via ADB."""
     try:
-        output = ctx.adb.shell(ctx.serial, "echo test", timeout=10)
+        # 输出设备标识，便于日志页快速确认连接与设备
+        if ctx.logger:
+            try:
+                prop = ctx.adb.shell(ctx.serial, "getprop ro.serialno", timeout=5)
+                ctx.logger.info(f"adb_check: serial={ctx.serial}, ro.serialno={_stdout(prop).strip()}")
+            except Exception as e:
+                ctx.logger.warn(f"adb_check: failed to read ro.serialno: {e}")
+
+        result = ctx.adb.shell(ctx.serial, "echo test", timeout=10)
+        output = _stdout(result)
         if "test" in output:
             if ctx.logger:
                 ctx.logger.info(f"Device {ctx.serial} is reachable")
@@ -30,9 +46,9 @@ def clean_env(ctx: StepContext) -> StepResult:
     packages = ctx.params.get("uninstall_packages", [])
     for pkg in packages:
         try:
-            output = ctx.adb.shell(ctx.serial, f"pm uninstall {pkg}", timeout=30)
+            result = ctx.adb.shell(ctx.serial, f"pm uninstall {pkg}", timeout=30)
             if ctx.logger:
-                ctx.logger.info(f"Uninstall {pkg}: {output.strip()}")
+                ctx.logger.info(f"Uninstall {pkg}: {_stdout(result).strip()}")
         except Exception as e:
             if "not installed" not in str(e).lower():
                 errors.append(f"Failed to uninstall {pkg}: {e}")
@@ -103,8 +119,9 @@ def ensure_root(ctx: StepContext) -> StepResult:
 
     for attempt in range(1, max_attempts + 1):
         try:
-            output = ctx.adb.shell(ctx.serial, "id -u", timeout=10)
-            if output.strip() == "0":
+            result = ctx.adb.shell(ctx.serial, "id -u", timeout=10)
+            output = _stdout(result).strip()
+            if output == "0":
                 if ctx.logger:
                     ctx.logger.info("Device already has root access")
                 return StepResult(success=True)
@@ -120,8 +137,9 @@ def ensure_root(ctx: StepContext) -> StepResult:
                 logger.debug(f"adb root command: {e}")
 
             # Re-check
-            output = ctx.adb.shell(ctx.serial, "id -u", timeout=10)
-            if output.strip() == "0":
+            result = ctx.adb.shell(ctx.serial, "id -u", timeout=10)
+            output = _stdout(result).strip()
+            if output == "0":
                 if ctx.logger:
                     ctx.logger.info("Root access granted")
                 return StepResult(success=True)
@@ -138,7 +156,8 @@ def fill_storage(ctx: StepContext) -> StepResult:
     target_pct = ctx.params.get("target_percentage", 60)
 
     try:
-        output = ctx.adb.shell(ctx.serial, "df /data", timeout=10)
+        result = ctx.adb.shell(ctx.serial, "df /data", timeout=10)
+        output = _stdout(result)
         lines = output.strip().splitlines()
         if len(lines) < 2:
             return StepResult(success=False, exit_code=1, error_message="Cannot parse df output")
@@ -188,12 +207,59 @@ def connect_wifi(ctx: StepContext) -> StepResult:
         ctx.adb.shell(ctx.serial, "svc wifi enable", timeout=10)
         time.sleep(1)
         cmd = f'cmd -w wifi connect-network "{ssid}" wpa2 "{password}"'
-        output = ctx.adb.shell(ctx.serial, cmd, timeout=30)
+        result = ctx.adb.shell(ctx.serial, cmd, timeout=30)
         if ctx.logger:
-            ctx.logger.info(f"WiFi connect to {ssid}: {output.strip()}")
+            ctx.logger.info(f"WiFi connect to {ssid}: {_stdout(result).strip()}")
         return StepResult(success=True, metrics={"ssid": ssid})
     except Exception as e:
         return StepResult(success=False, exit_code=1, error_message=f"WiFi connect failed: {e}")
+
+
+def setup_device_commands(ctx: StepContext) -> StepResult:
+    """Execute an ordered list of ADB shell commands for device initialization."""
+    commands = ctx.params.get("commands", [])
+    if not commands:
+        return StepResult(success=True, metrics={"executed": 0, "failed": 0, "errors": []})
+
+    executed = 0
+    failed = 0
+    errors = []
+
+    for i, cmd_def in enumerate(commands):
+        cmd = cmd_def.get("cmd", "")
+        timeout = cmd_def.get("timeout", 15)
+        on_failure = cmd_def.get("on_failure", "continue")
+
+        if not cmd:
+            continue
+
+        try:
+            result = ctx.adb.shell(ctx.serial, cmd, timeout=timeout)
+            executed += 1
+            if ctx.logger:
+                output = _stdout(result).strip()
+                ctx.logger.info(f"[{i+1}/{len(commands)}] {cmd} -> {output[:200]}")
+        except Exception as e:
+            failed += 1
+            err_msg = f"Command '{cmd}' failed: {e}"
+            errors.append(err_msg)
+            if ctx.logger:
+                ctx.logger.warn(f"[{i+1}/{len(commands)}] {err_msg}")
+            if on_failure == "stop":
+                return StepResult(
+                    success=False,
+                    exit_code=1,
+                    error_message="; ".join(errors),
+                    metrics={"executed": executed, "failed": failed, "errors": errors},
+                )
+
+    # All failures were on_failure=continue if we reach here
+    return StepResult(
+        success=True,
+        exit_code=0,
+        error_message="; ".join(errors) if errors else "",
+        metrics={"executed": executed, "failed": failed, "errors": errors},
+    )
 
 
 def install_apk(ctx: StepContext) -> StepResult:

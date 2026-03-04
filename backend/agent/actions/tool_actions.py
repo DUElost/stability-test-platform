@@ -7,8 +7,8 @@ import logging
 import os
 
 try:
-    from backend.agent import config
-    from backend.agent.pipeline_engine import StepContext, StepResult
+    from .. import config
+    from ..pipeline_engine import StepContext, StepResult
 except ModuleNotFoundError:  # pragma: no cover
     from agent import config
     from agent.pipeline_engine import StepContext, StepResult

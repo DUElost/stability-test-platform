@@ -1,23 +1,36 @@
 """Log processing pipeline actions: aee_extract, log_scan."""
 
+import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 from collections import defaultdict
-from backend.agent.pipeline_engine import StepContext, StepResult
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from ..pipeline_engine import StepContext, StepResult
 
 logger = logging.getLogger(__name__)
 
 
 def aee_extract(ctx: StepContext) -> StepResult:
-    """Invoke aee_extract tool to decrypt db log files."""
+    """Invoke aee_extract tool to decrypt db log files.
+
+    When batch=true, recursively scans input_dir for .dbg files and decrypts
+    them in parallel with retry tracking via LocalDB.
+    """
     input_dir = ctx.params.get("input_dir", "")
     output_dir = ctx.params.get("output_dir", "")
     tool_path = ctx.params.get("tool_path", "aee_extract")
+    batch = ctx.params.get("batch", False)
 
     if not input_dir:
         return StepResult(success=False, exit_code=1, error_message="No input_dir specified")
+
+    if batch:
+        return _aee_extract_batch(ctx, input_dir, tool_path)
+
+    # Original single-file mode
     if not output_dir:
         output_dir = input_dir + "_decoded"
 
@@ -46,6 +59,110 @@ def aee_extract(ctx: StepContext) -> StepResult:
         return StepResult(success=False, exit_code=124, error_message="aee_extract timed out")
     except Exception as e:
         return StepResult(success=False, exit_code=1, error_message=str(e))
+
+
+def _aee_extract_batch(ctx: StepContext, input_dir: str, tool_path: str) -> StepResult:
+    """Batch mode: recursively find .dbg files and decrypt in parallel."""
+    max_workers = ctx.params.get("max_workers", 4)
+    retry_limit = ctx.params.get("retry_limit", 2)
+    min_free_disk_gb = ctx.params.get("min_free_disk_gb", 10)
+    state_key_prefix = ctx.params.get("state_key_prefix", "aee_decrypt")
+
+    # 1. Disk space check
+    try:
+        usage = shutil.disk_usage(input_dir)
+        free_gb = usage.free / (1024 ** 3)
+        if free_gb < min_free_disk_gb:
+            if ctx.logger:
+                ctx.logger.warn(f"Low disk space: {free_gb:.1f}GB free (min={min_free_disk_gb}GB), skipping decrypt")
+            return StepResult(
+                success=True,
+                metrics={"total_found": 0, "decrypted": 0, "failed": 0, "skipped_retry_limit": 0, "skipped_low_disk": True},
+            )
+    except Exception:
+        pass  # If disk check fails, proceed anyway
+
+    # 2. Find all .dbg files
+    dbg_files = []
+    for root, _dirs, files in os.walk(input_dir):
+        for f in files:
+            if f.endswith(".dbg"):
+                dbg_files.append(os.path.join(root, f))
+
+    if not dbg_files:
+        if ctx.logger:
+            ctx.logger.info("No .dbg files found in input_dir")
+        return StepResult(
+            success=True,
+            metrics={"total_found": 0, "decrypted": 0, "failed": 0, "skipped_retry_limit": 0, "skipped_low_disk": False},
+        )
+
+    # 3. Load failure state from LocalDB
+    failures = {}
+    if ctx.local_db and hasattr(ctx.local_db, "get_state"):
+        try:
+            raw = ctx.local_db.get_state(f"{state_key_prefix}:failures", "{}")
+            failures = json.loads(raw)
+        except Exception:
+            failures = {}
+
+    # Filter out files exceeding retry limit
+    skipped_retry = 0
+    files_to_process = []
+    for path in dbg_files:
+        if failures.get(path, 0) >= retry_limit:
+            skipped_retry += 1
+        else:
+            files_to_process.append(path)
+
+    # 4. Parallel decrypt
+    decrypted = 0
+    failed = 0
+
+    def _decrypt_one(dbg_path):
+        output_path = dbg_path.replace(".dbg", "_decoded")
+        try:
+            result = subprocess.run(
+                [tool_path, dbg_path, output_path],
+                capture_output=True, text=True, timeout=300,
+            )
+            return dbg_path, result.returncode == 0
+        except Exception:
+            return dbg_path, False
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_decrypt_one, p) for p in files_to_process]
+        for future in as_completed(futures):
+            path, success = future.result()
+            if success:
+                decrypted += 1
+            else:
+                failed += 1
+                failures[path] = failures.get(path, 0) + 1
+
+    # 5. Save failures back to LocalDB
+    if ctx.local_db and hasattr(ctx.local_db, "set_state"):
+        try:
+            ctx.local_db.set_state(f"{state_key_prefix}:failures", json.dumps(failures))
+        except Exception:
+            pass
+
+    if ctx.logger:
+        ctx.logger.info(
+            f"AEE decrypt (batch): total={len(dbg_files)}, decrypted={decrypted}, "
+            f"failed={failed}, skipped_retry={skipped_retry}"
+        )
+
+    return StepResult(
+        success=True,
+        metrics={
+            "total_found": len(dbg_files),
+            "decrypted": decrypted,
+            "failed": failed,
+            "skipped_retry_limit": skipped_retry,
+            "skipped_low_disk": False,
+        },
+    )
 
 
 def log_scan(ctx: StepContext) -> StepResult:
