@@ -320,9 +320,29 @@ async def websocket_agent(websocket: WebSocket, host_id: str):
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
         auth_msg = json.loads(raw)
-    except (asyncio.TimeoutError, json.JSONDecodeError, Exception) as e:
-        logger.warning(f"Agent WS auth timeout/parse error for host_id={host_id}: {e}")
-        await websocket.close(code=4001, reason="Auth timeout or invalid message")
+    except asyncio.TimeoutError:
+        logger.warning(f"Agent WS auth timeout for host_id={host_id}")
+        try:
+            await websocket.close(code=4001, reason="Auth timeout")
+        except Exception:
+            pass  # Already closed, ignore
+        return
+    except WebSocketDisconnect:
+        logger.debug(f"Agent WS disconnected before auth for host_id={host_id}")
+        return  # Already closed, nothing to do
+    except json.JSONDecodeError as e:
+        logger.warning(f"Agent WS auth parse error for host_id={host_id}: {e}")
+        try:
+            await websocket.close(code=4001, reason="Invalid JSON")
+        except Exception:
+            pass
+        return
+    except Exception as e:
+        logger.warning(f"Agent WS auth error for host_id={host_id}: {e}")
+        try:
+            await websocket.close(code=4001, reason="Auth error")
+        except Exception:
+            pass
         return
 
     if auth_msg.get("type") != "auth":
