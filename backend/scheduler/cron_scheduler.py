@@ -90,9 +90,13 @@ class CronScheduler:
             db.close()
 
     def _cleanup_old_runs(self, db: Session, now: datetime) -> None:
-        """Delete completed WorkflowRuns older than WORKFLOW_RUN_RETENTION_DAYS."""
+        """Delete completed WorkflowRuns older than WORKFLOW_RUN_RETENTION_DAYS.
+
+        Must delete related JobInstance records first due to FK constraint.
+        """
         try:
             from backend.models.workflow import WorkflowRun
+            from backend.models.job import JobInstance
             cutoff = now - timedelta(days=WORKFLOW_RUN_RETENTION_DAYS)
             stale_runs = (
                 db.query(WorkflowRun)
@@ -104,10 +108,17 @@ class CronScheduler:
                 .all()
             )
             if stale_runs:
-                for run in stale_runs:
-                    db.delete(run)
+                run_ids = [r.id for r in stale_runs]
+                # Delete related JobInstance records first
+                db.query(JobInstance).filter(
+                    JobInstance.workflow_run_id.in_(run_ids)
+                ).delete(synchronize_session=False)
+                # Then delete WorkflowRun records
+                db.query(WorkflowRun).filter(
+                    WorkflowRun.id.in_(run_ids)
+                ).delete(synchronize_session=False)
                 db.commit()
-                logger.info("cron_cleanup_old_runs deleted=%d", len(stale_runs))
+                logger.info("cron_cleanup_old_runs deleted runs=%d", len(stale_runs))
         except Exception:
             logger.warning("cron_cleanup_old_runs failed", exc_info=True)
             db.rollback()
