@@ -1,8 +1,10 @@
 """
 Tests for heartbeat API routes
 """
-import pytest
 from datetime import datetime, timedelta
+
+from backend.models.enums import DeviceStatus, HostStatus
+from backend.models.host import Device
 
 
 class TestHeartbeat:
@@ -116,13 +118,7 @@ class TestHeartbeat:
     def test_heartbeat_updates_host_status(self, client, sample_host, db_session):
         """Test heartbeat updates host status"""
         # Set host to offline
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import HostStatus
-        sample_host.status = HostStatus.OFFLINE
+        sample_host.status = HostStatus.OFFLINE.value
         db_session.commit()
 
         response = client.post(
@@ -135,7 +131,7 @@ class TestHeartbeat:
         assert response.status_code == 200
 
         db_session.refresh(sample_host)
-        assert sample_host.status == HostStatus.ONLINE
+        assert sample_host.status == HostStatus.ONLINE.value
 
     def test_heartbeat_device_offline_when_not_adb_connected(self, client, sample_host, db_session):
         """Test device status becomes OFFLINE when not ADB connected"""
@@ -156,14 +152,8 @@ class TestHeartbeat:
             },
         )
 
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device, DeviceStatus
         device = db_session.query(Device).filter(Device.serial == "OFFLINE_DEVICE").first()
-        assert device.status == DeviceStatus.OFFLINE
+        assert device.status == DeviceStatus.OFFLINE.value
 
     def test_heartbeat_device_busy_when_locked(self, client, sample_host, db_session):
         """Test device status becomes BUSY when locked"""
@@ -185,29 +175,8 @@ class TestHeartbeat:
         )
 
         # Lock the device
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device, DeviceStatus, Task, TaskStatus, TaskRun, RunStatus
         device = db_session.query(Device).filter(Device.serial == "BUSY_DEVICE").first()
-        task = Task(
-            name="heartbeat-busy-task",
-            type="MONKEY",
-            status=TaskStatus.RUNNING,
-        )
-        db_session.add(task)
-        db_session.flush()
-        run = TaskRun(
-            task_id=task.id,
-            host_id=sample_host.id,
-            device_id=device.id,
-            status=RunStatus.RUNNING,
-        )
-        db_session.add(run)
-        db_session.flush()
-        device.lock_run_id = run.id
+        device.lock_run_id = 123456
         device.lock_expires_at = datetime.utcnow() + timedelta(minutes=10)
         db_session.commit()
 
@@ -229,22 +198,15 @@ class TestHeartbeat:
         )
 
         db_session.refresh(device)
-        assert device.status == DeviceStatus.BUSY
+        assert device.status == DeviceStatus.BUSY.value
 
     def test_heartbeat_marks_missing_devices_offline(self, client, sample_host, db_session):
         """Test heartbeat marks missing devices as offline"""
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device, DeviceStatus
-
         # Create an old device that hasn't been seen recently
         old_device = Device(
             serial="OLD_DEVICE",
             host_id=sample_host.id,
-            status=DeviceStatus.ONLINE,
+            status=DeviceStatus.ONLINE.value,
             last_seen=datetime.utcnow() - timedelta(minutes=5),
             adb_connected=True,
         )
@@ -263,7 +225,7 @@ class TestHeartbeat:
         assert response.status_code == 200
 
         db_session.refresh(old_device)
-        assert old_device.status == DeviceStatus.OFFLINE
+        assert old_device.status == DeviceStatus.OFFLINE.value
         assert old_device.adb_connected is False
 
     def test_heartbeat_updates_device_hardware_info(self, client, sample_host, db_session):
@@ -296,12 +258,6 @@ class TestHeartbeat:
         )
         assert response.status_code == 200
 
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device
         device = db_session.query(Device).filter(Device.serial == "HW_DEVICE").first()
         assert device.battery_level == 75
         assert device.battery_temp == 30

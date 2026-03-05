@@ -220,11 +220,11 @@ export default function TaskList() {
             </>
           )}
           <Link
-            to="/tasks/new"
+            to="/orchestration/workflows"
             className="inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-medium transition-all"
           >
             <Plus className="w-4 h-4" />
-            新建任务
+            新建工作流
           </Link>
         </div>
       </div>

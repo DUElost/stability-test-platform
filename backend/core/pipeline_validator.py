@@ -32,9 +32,22 @@ def validate_pipeline_def(pipeline_def: Dict[str, Any]) -> Tuple[bool, List[str]
         # jsonschema not installed — this is a deployment error, not a validation pass
         return False, ["jsonschema library not installed; pipeline validation cannot proceed. Install with: pip install jsonschema"]
 
-    # Reject empty dicts that technically pass schema validation but are meaningless
-    if not pipeline_def.get("phases"):
-        return False, ["(root): pipeline must contain at least one phase in 'phases'"]
+    if not isinstance(pipeline_def, dict):
+        return False, ["(root): pipeline_def must be an object"]
+
+    if "phases" in pipeline_def:
+        return False, ["(root): legacy 'phases' format is not supported; use 'stages'"]
+
+    stages = pipeline_def.get("stages")
+    if not isinstance(stages, dict):
+        return False, ["(root): pipeline must define object field 'stages'"]
+
+    has_any_step = any(
+        isinstance(stages.get(stage_name), list) and len(stages.get(stage_name) or []) > 0
+        for stage_name in ("prepare", "execute", "post_process")
+    )
+    if not has_any_step:
+        return False, ["stages: at least one step is required across prepare/execute/post_process"]
 
     schema = _load_schema()
     validator = Draft7Validator(schema)

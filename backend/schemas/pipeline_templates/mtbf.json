@@ -1,88 +1,83 @@
 {
   "version": 1,
   "description": "MTBF test: push resources, install APK, run instrumentation test, collect logs",
-  "phases": [
-    {
-      "name": "prepare",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "check_device",
-          "action": "builtin:check_device",
-          "params": {},
-          "timeout": 30,
-          "on_failure": "stop"
-        },
-        {
-          "name": "ensure_root",
-          "action": "builtin:ensure_root",
-          "params": {},
-          "timeout": 30,
-          "on_failure": "continue"
-        },
-        {
-          "name": "push_resources",
-          "action": "builtin:push_resources",
-          "params": {
-            "files": []
-          },
-          "timeout": 300,
-          "on_failure": "continue"
-        },
-        {
-          "name": "install_apk",
-          "action": "builtin:install_apk",
-          "params": {
-            "apk_path": "{apk_path}",
-            "reinstall": true
-          },
-          "timeout": 120,
-          "on_failure": "stop"
+  "stages": {
+    "prepare": [
+      {
+        "step_id": "check_device",
+        "action": "builtin:check_device",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {}
+      },
+      {
+        "step_id": "ensure_root",
+        "action": "builtin:ensure_root",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {}
+      },
+      {
+        "step_id": "push_resources",
+        "action": "builtin:push_resources",
+        "timeout_seconds": 300,
+        "retry": 0,
+        "params": {
+          "files": []
         }
-      ]
-    },
-    {
-      "name": "execute",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "run_instrument",
-          "action": "builtin:run_instrument",
-          "params": {
-            "runner": "com.transsion.stresstest.test/androidx.test.runner.AndroidJUnitRunner",
-            "instrument_args": {},
-            "timeout": 86400
-          },
+      },
+      {
+        "step_id": "install_apk",
+        "action": "builtin:install_apk",
+        "timeout_seconds": 120,
+        "retry": 0,
+        "params": {
+          "reinstall": true,
+          "apk_path": "{apk_path}"
+        }
+      }
+    ],
+    "execute": [
+      {
+        "step_id": "run_instrument",
+        "action": "builtin:run_instrument",
+        "timeout_seconds": 86400,
+        "retry": 0,
+        "params": {
           "timeout": 86400,
-          "on_failure": "stop"
+          "runner": "com.transsion.stresstest.test/androidx.test.runner.AndroidJUnitRunner",
+          "instrument_args": {}
         }
-      ]
-    },
-    {
-      "name": "post_process",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "scan_aee",
-          "action": "builtin:scan_aee",
-          "params": {
-            "aee_dirs": ["/data/aee_exp", "/data/vendor/aee_exp"],
-            "local_dir": "{log_dir}/aee"
-          },
-          "timeout": 120,
-          "on_failure": "continue"
-        },
-        {
-          "name": "log_scan",
-          "action": "builtin:log_scan",
-          "params": {
-            "input_dir": "{log_dir}",
-            "keywords": ["FATAL", "CRASH", "ANR"]
-          },
-          "timeout": 120,
-          "on_failure": "continue"
+      }
+    ],
+    "post_process": [
+      {
+        "step_id": "scan_aee",
+        "action": "builtin:scan_aee",
+        "timeout_seconds": 120,
+        "retry": 0,
+        "params": {
+          "local_dir": "{log_dir}/aee",
+          "aee_dirs": [
+            "/data/aee_exp",
+            "/data/vendor/aee_exp"
+          ]
         }
-      ]
-    }
-  ]
+      },
+      {
+        "step_id": "log_scan",
+        "action": "builtin:log_scan",
+        "timeout_seconds": 120,
+        "retry": 0,
+        "params": {
+          "input_dir": "{log_dir}",
+          "keywords": [
+            "FATAL",
+            "CRASH",
+            "ANR"
+          ]
+        }
+      }
+    ]
+  }
 }

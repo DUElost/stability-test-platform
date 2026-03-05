@@ -1,41 +1,29 @@
 {
   "version": 1,
   "description": "Standard Android Monkey test: run monkey with specified packages, event count, and throttle",
-  "phases": [
-    {
-      "name": "prepare",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "check_device",
-          "action": "builtin:check_device",
-          "params": {},
-          "timeout": 30,
-          "on_failure": "stop"
-        }
-      ]
-    },
-    {
-      "name": "execute",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "run_monkey",
-          "action": "builtin:start_process",
-          "params": {
-            "command": "monkey -p {packages} --throttle {throttle} {event_count}",
-            "background": false,
-            "timeout": 3600
-          },
+  "stages": {
+    "prepare": [
+      {
+        "step_id": "check_device",
+        "action": "builtin:check_device",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {}
+      }
+    ],
+    "execute": [
+      {
+        "step_id": "run_monkey",
+        "action": "builtin:start_process",
+        "timeout_seconds": 3600,
+        "retry": 0,
+        "params": {
           "timeout": 3600,
-          "on_failure": "stop"
+          "command": "monkey -p {packages} --throttle {throttle} {event_count}",
+          "background": false
         }
-      ]
-    },
-    {
-      "name": "teardown",
-      "parallel": false,
-      "steps": []
-    }
-  ]
+      }
+    ],
+    "post_process": []
+  }
 }

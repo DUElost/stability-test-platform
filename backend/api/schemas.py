@@ -12,12 +12,17 @@ except Exception:
     _HAS_CONFIG_DICT = False
 
 
+def _isoformat_utc(v: datetime) -> str:
+    return v.isoformat() + "Z" if v.tzinfo is None else v.isoformat()
+
+
 class ORMBaseModel(BaseModel):
     if _HAS_CONFIG_DICT:
-        model_config = ConfigDict(from_attributes=True)
+        model_config = ConfigDict(from_attributes=True, json_encoders={datetime: _isoformat_utc})
     else:
         class Config:
             orm_mode = True
+            json_encoders = {datetime: _isoformat_utc}
 
 
 class HostCreate(BaseModel):
@@ -177,7 +182,7 @@ class RiskAlertOut(BaseModel):
     threshold: Optional[int] = None
 
 
-class RunReportOut(BaseModel):
+class RunReportOut(ORMBaseModel):
     generated_at: datetime
     run: RunOut
     task: TaskOut
@@ -366,7 +371,7 @@ class DeploymentOut(ORMBaseModel):
     created_at: datetime
 
 
-class DeploymentStatusOut(BaseModel):
+class DeploymentStatusOut(ORMBaseModel):
     deployment_id: int
     host_id: int
     status: str
@@ -593,9 +598,11 @@ class TaskScheduleCreate(BaseModel):
     cron_expression: str = Field(alias="cron_expr")
     task_template_id: Optional[int] = None
     tool_id: Optional[int] = None
-    task_type: str
+    task_type: Optional[str] = "WORKFLOW"
     params: Dict[str, Any] = Field(default_factory=dict, alias="task_params")
     target_device_id: Optional[int] = None
+    workflow_definition_id: Optional[int] = None
+    device_ids: List[int] = Field(default_factory=list)
     enabled: bool = True
 
 
@@ -613,6 +620,8 @@ class TaskScheduleUpdate(BaseModel):
     task_type: Optional[str] = None
     params: Optional[Dict[str, Any]] = Field(default=None, alias="task_params")
     target_device_id: Optional[int] = None
+    workflow_definition_id: Optional[int] = None
+    device_ids: Optional[List[int]] = None
     enabled: Optional[bool] = None
 
 
@@ -632,6 +641,8 @@ class TaskScheduleOut(ORMBaseModel):
     task_type: str
     params: Dict[str, Any] = Field(default_factory=dict, alias="task_params")
     target_device_id: Optional[int] = None
+    workflow_definition_id: Optional[int] = None
+    device_ids: Optional[List[int]] = None
     enabled: bool
     last_run_at: Optional[datetime] = None
     next_run_at: Optional[datetime] = None

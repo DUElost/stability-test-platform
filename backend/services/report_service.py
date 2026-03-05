@@ -16,7 +16,10 @@ from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote, urlparse
 
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.exc import ProgrammingError
 
+from backend.models.job import JobInstance, StepTrace, TaskTemplate as JobTaskTemplate
+from backend.models.workflow import WorkflowDefinition, WorkflowRun
 from backend.models.schemas import LogArtifact, Task, TaskRun
 from backend.models.host import Device, Host
 from backend.api.schemas import (
@@ -30,6 +33,24 @@ from backend.api.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+_JOB_STATUS_TO_RUN_STATUS = {
+    "PENDING": "QUEUED",
+    "PENDING_TOOL": "QUEUED",
+    "RUNNING": "RUNNING",
+    "COMPLETED": "FINISHED",
+    "FAILED": "FAILED",
+    "ABORTED": "CANCELED",
+    "UNKNOWN": "FAILED",
+}
+
+_WF_STATUS_TO_TASK_STATUS = {
+    "RUNNING": "RUNNING",
+    "SUCCESS": "COMPLETED",
+    "PARTIAL_SUCCESS": "COMPLETED",
+    "FAILED": "FAILED",
+    "DEGRADED": "FAILED",
+}
 
 # ---------------------------------------------------------------------------
 # Configuration (mirrors tasks.py env vars)
@@ -132,6 +153,163 @@ def _unique_str_list(values: List[Any]) -> List[str]:
         seen.add(text)
         result.append(text)
     return result
+
+
+def _safe_json_loads(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+class _VirtualArtifact:
+    """兼容风险摘要解析与报告输出的轻量 Artifact 结构。"""
+
+    def __init__(
+        self,
+        run_id: int,
+        storage_uri: str,
+        size_bytes: Optional[int] = None,
+        checksum: Optional[str] = None,
+        created_at: Optional[datetime] = None,
+    ) -> None:
+        self.id = 0
+        self.run_id = run_id
+        self.storage_uri = storage_uri
+        self.size_bytes = size_bytes
+        self.checksum = checksum
+        self.created_at = created_at or datetime.utcnow()
+
+
+def _extract_job_completion_snapshot(db: Session, job_id: int) -> Dict[str, Any]:
+    snapshot_trace = (
+        db.query(StepTrace)
+        .filter(
+            StepTrace.job_id == job_id,
+            StepTrace.step_id == "__job__",
+            StepTrace.event_type == "RUN_COMPLETE",
+        )
+        .order_by(StepTrace.id.desc())
+        .first()
+    )
+    if not snapshot_trace:
+        return {}
+    return _safe_json_loads(snapshot_trace.output)
+
+
+def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]:
+    wf_run = db.get(WorkflowRun, job.workflow_run_id)
+    if not wf_run:
+        return None
+    wf_def = db.get(WorkflowDefinition, wf_run.workflow_definition_id)
+    if not wf_def:
+        return None
+    template = db.get(JobTaskTemplate, job.task_template_id)
+
+    host = db.get(Host, str(job.host_id)) if job.host_id is not None else None
+    device = db.get(Device, job.device_id)
+
+    snapshot = _extract_job_completion_snapshot(db, job.id)
+    update = snapshot.get("update") if isinstance(snapshot.get("update"), dict) else {}
+    artifact_payload = snapshot.get("artifact") if isinstance(snapshot.get("artifact"), dict) else None
+
+    artifacts_virtual: List[_VirtualArtifact] = []
+    artifacts_out = []
+    if artifact_payload and artifact_payload.get("storage_uri"):
+        artifact_obj = _VirtualArtifact(
+            run_id=job.id,
+            storage_uri=str(artifact_payload.get("storage_uri")),
+            size_bytes=artifact_payload.get("size_bytes"),
+            checksum=artifact_payload.get("checksum"),
+            created_at=job.ended_at or datetime.utcnow(),
+        )
+        artifacts_virtual.append(artifact_obj)
+        artifacts_out.append(
+            {
+                "id": artifact_obj.id,
+                "run_id": artifact_obj.run_id,
+                "storage_uri": artifact_obj.storage_uri,
+                "size_bytes": artifact_obj.size_bytes,
+                "checksum": artifact_obj.checksum,
+                "created_at": artifact_obj.created_at,
+            }
+        )
+
+    log_summary = update.get("log_summary")
+    if not isinstance(log_summary, str):
+        log_summary = None
+
+    risk_summary = _load_risk_summary_from_artifacts(artifacts_virtual)
+    summary_metrics = parse_run_log_summary(log_summary)
+    alerts = build_risk_alerts(risk_summary, summary_metrics)
+
+    host_id_int = 0
+    if job.host_id is not None:
+        try:
+            host_id_int = int(str(job.host_id))
+        except (TypeError, ValueError):
+            host_id_int = 0
+
+    task_status = _WF_STATUS_TO_TASK_STATUS.get(str(wf_run.status).upper(), "PENDING")
+    task_out = TaskOut(
+        id=wf_def.id,
+        name=wf_def.name if not template else f"{wf_def.name}/{template.name}",
+        type="WORKFLOW",
+        template_id=template.id if template else None,
+        tool_id=None,
+        params={},
+        tool_snapshot=None,
+        target_device_id=job.device_id,
+        status=task_status,
+        priority=0,
+        group_id=None,
+        is_distributed=False,
+        runs_count=None,
+        pipeline_def=job.pipeline_def,
+        created_at=wf_def.created_at or job.created_at or datetime.utcnow(),
+    )
+
+    run_status = _JOB_STATUS_TO_RUN_STATUS.get(str(job.status).upper(), str(job.status))
+    run_out = RunOut(
+        id=job.id,
+        task_id=wf_def.id,
+        host_id=host_id_int,
+        device_id=job.device_id,
+        status=run_status,
+        group_id=None,
+        progress=100 if run_status in {"FINISHED", "FAILED", "CANCELED"} else 0,
+        progress_message=None,
+        started_at=job.started_at,
+        finished_at=job.ended_at,
+        exit_code=update.get("exit_code"),
+        error_code=update.get("error_code"),
+        error_message=update.get("error_message") or job.status_reason,
+        log_summary=log_summary,
+        artifacts=artifacts_out,
+        risk_summary=risk_summary,
+    )
+
+    if hasattr(HostLiteOut, "model_validate"):
+        host_out = HostLiteOut.model_validate(host) if host else None
+        device_out = DeviceLiteOut.model_validate(device) if device else None
+    else:
+        host_out = HostLiteOut.from_orm(host) if host else None
+        device_out = DeviceLiteOut.from_orm(device) if device else None
+    return RunReportOut(
+        generated_at=datetime.utcnow(),
+        run=run_out,
+        task=task_out,
+        host=host_out,
+        device=device_out,
+        summary_metrics=summary_metrics,
+        risk_summary=risk_summary,
+        alerts=alerts,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -237,47 +415,63 @@ def compose_run_report(db: Session, run_id: int) -> Optional[RunReportOut]:
     Returns None if the run or its task is not found (instead of raising
     HTTPException), making it safe for use outside request context.
     """
-    run = (
-        db.query(TaskRun)
-        .options(selectinload(TaskRun.artifacts))
-        .filter(TaskRun.id == run_id)
-        .first()
-    )
-    if not run:
-        return None
+    # 1) 新模型路径（JobInstance）
+    try:
+        job = db.get(JobInstance, run_id)
+    except ProgrammingError:
+        db.rollback()
+        job = None
+    if job:
+        report = _compose_job_report(db, job)
+        if report is not None:
+            return report
 
-    task = db.get(Task, run.task_id)
-    if not task:
-        return None
+    # 2) 旧模型路径（TaskRun）
+    try:
+        run = (
+            db.query(TaskRun)
+            .options(selectinload(TaskRun.artifacts))
+            .filter(TaskRun.id == run_id)
+            .first()
+        )
+    except ProgrammingError:
+        db.rollback()
+        run = None
 
-    host = db.get(Host, str(run.host_id)) if run.host_id is not None else None
-    device = db.get(Device, run.device_id)
+    if run:
+        task = db.get(Task, run.task_id)
+        if not task:
+            return None
 
-    if hasattr(RunOut, "model_validate"):
-        run_out = RunOut.model_validate(run)
-        task_out = TaskOut.model_validate(task)
-        host_out = HostLiteOut.model_validate(host) if host else None
-        device_out = DeviceLiteOut.model_validate(device) if device else None
-    else:
-        run_out = RunOut.from_orm(run)
-        task_out = TaskOut.from_orm(task)
-        host_out = HostLiteOut.from_orm(host) if host else None
-        device_out = DeviceLiteOut.from_orm(device) if device else None
+        host = db.get(Host, str(run.host_id)) if run.host_id is not None else None
+        device = db.get(Device, run.device_id)
 
-    risk_summary = _load_risk_summary_from_artifacts(run.artifacts)
-    summary_metrics = parse_run_log_summary(run.log_summary)
-    alerts = build_risk_alerts(risk_summary, summary_metrics)
-    run_out.risk_summary = risk_summary
-    return RunReportOut(
-        generated_at=datetime.utcnow(),
-        run=run_out,
-        task=task_out,
-        host=host_out,
-        device=device_out,
-        summary_metrics=summary_metrics,
-        risk_summary=risk_summary,
-        alerts=alerts,
-    )
+        if hasattr(RunOut, "model_validate"):
+            run_out = RunOut.model_validate(run)
+            task_out = TaskOut.model_validate(task)
+            host_out = HostLiteOut.model_validate(host) if host else None
+            device_out = DeviceLiteOut.model_validate(device) if device else None
+        else:
+            run_out = RunOut.from_orm(run)
+            task_out = TaskOut.from_orm(task)
+            host_out = HostLiteOut.from_orm(host) if host else None
+            device_out = DeviceLiteOut.from_orm(device) if device else None
+
+        risk_summary = _load_risk_summary_from_artifacts(run.artifacts)
+        summary_metrics = parse_run_log_summary(run.log_summary)
+        alerts = build_risk_alerts(risk_summary, summary_metrics)
+        run_out.risk_summary = risk_summary
+        return RunReportOut(
+            generated_at=datetime.utcnow(),
+            run=run_out,
+            task=task_out,
+            host=host_out,
+            device=device_out,
+            summary_metrics=summary_metrics,
+            risk_summary=risk_summary,
+            alerts=alerts,
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------

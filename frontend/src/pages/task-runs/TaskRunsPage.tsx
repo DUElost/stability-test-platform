@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, type TaskRun } from '@/utils/api';
+import { formatLocalDateTime, parseIsoToDate } from '@/utils/time';
 import { Play, Clock, CheckCircle, XCircle, AlertCircle, ChevronRight } from 'lucide-react';
 
 const STATUS_BADGE: Record<string, string> = {
@@ -35,13 +36,7 @@ function formatDuration(seconds: number | null): string {
 }
 
 function formatTime(iso: string | null): string {
-  if (!iso) return '-';
-  return new Date(iso).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  return formatLocalDateTime(iso);
 }
 
 export default function TaskRunsPage() {
@@ -69,8 +64,8 @@ export default function TaskRunsPage() {
           <h1 className="text-2xl font-semibold text-gray-900">任务实例</h1>
           <p className="text-gray-500 mt-1">查看所有任务执行记录</p>
         </div>
-        <Button onClick={() => navigate('/tasks/new')}>
-          创建新任务
+        <Button onClick={() => navigate('/orchestration/workflows')}>
+          新建工作流
         </Button>
       </div>
 
@@ -119,7 +114,7 @@ export default function TaskRunsPage() {
                     </div>
                     <div className="text-right text-sm text-gray-500">
                       <div>{formatDuration(run.finished_at && run.started_at
-                        ? new Date(run.finished_at).getTime() / 1000 - new Date(run.started_at).getTime() / 1000
+                        ? (parseIsoToDate(run.finished_at)?.getTime() ?? 0) / 1000 - (parseIsoToDate(run.started_at)?.getTime() ?? 0) / 1000
                         : null)}</div>
                       <div>{formatTime(run.started_at)}</div>
                     </div>

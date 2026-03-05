@@ -4,7 +4,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { LogViewer } from '../../components/log/LogViewer';
 import { XTerminal, type XTerminalHandle } from '../../components/log/XTerminal';
 import { PipelineStepTree, type StepUpdateMessage } from '../../components/pipeline/PipelineStepTree';
-import { api, AgentLogOut, JiraDraft, RunStep } from '../../utils/api';
+import { api, AgentLogOut, JiraDraft } from '../../utils/api';
 import { useWebSocket } from '../../hooks/useWebSocket';
 
 // ---------- Types ----------
@@ -28,8 +28,9 @@ export default function TaskDetails() {
 
   // Pipeline state
   const [selectedStepId, setSelectedStepId] = useState<number | null>(null);
+  const [selectedStepName, setSelectedStepName] = useState<string | null>(null);
   const [stepUpdates, setStepUpdates] = useState<StepUpdateMessage[]>([]);
-  const stepLogBuffers = useRef<Map<number, StepLogLine[]>>(new Map());
+  const stepLogBuffers = useRef<Map<string, StepLogLine[]>>(new Map());
   const xtermRef = useRef<XTerminalHandle>(null);
   const manualSelection = useRef(false);
 
@@ -86,18 +87,28 @@ export default function TaskDetails() {
 
     if (lastMessage.type === 'STEP_LOG') {
       const { step_id, msg, level, ts } = lastMessage.payload as any;
-      if (!step_id) return;
+      if (step_id === undefined || step_id === null) return;
+
+      // Resolve to a stable step key (prefer step name for stages format)
+      let stepKey = '';
+      if (typeof step_id === 'number') {
+        const matched = runSteps?.find(s => s.id === step_id);
+        stepKey = matched?.name || String(step_id);
+      } else {
+        stepKey = String(step_id);
+      }
+      if (!stepKey) return;
 
       // Buffer the log line
-      const buffer = stepLogBuffers.current.get(step_id) || [];
+      const buffer = stepLogBuffers.current.get(stepKey) || [];
       buffer.push({ ts, level, msg });
       if (buffer.length > MAX_LINES_PER_STEP) {
         buffer.splice(0, buffer.length - MAX_LINES_PER_STEP);
       }
-      stepLogBuffers.current.set(step_id, buffer);
+      stepLogBuffers.current.set(stepKey, buffer);
 
       // If this step is currently selected, write to XTerminal
-      if (step_id === selectedStepId && xtermRef.current) {
+      if (stepKey === selectedStepName && xtermRef.current) {
         xtermRef.current.writeLine(msg, level);
       }
     }
@@ -124,13 +135,19 @@ export default function TaskDetails() {
 
   // When selected step changes, load buffered logs into XTerminal (12.6)
   useEffect(() => {
-    if (!selectedStepId || !xtermRef.current) return;
-    const buffer = stepLogBuffers.current.get(selectedStepId) || [];
+    if (!selectedStepId || !runSteps?.length) return;
+    const step = runSteps.find(s => s.id === selectedStepId);
+    setSelectedStepName(step?.name || null);
+  }, [selectedStepId, runSteps]);
+
+  useEffect(() => {
+    if (!selectedStepName || !xtermRef.current) return;
+    const buffer = stepLogBuffers.current.get(selectedStepName) || [];
     xtermRef.current.clear();
     if (buffer.length > 0) {
       xtermRef.current.writeLines(buffer.map(l => ({ msg: l.msg, level: l.level })));
     }
-  }, [selectedStepId]);
+  }, [selectedStepName]);
 
   const handleStepSelect = useCallback((stepId: number) => {
     manualSelection.current = true;

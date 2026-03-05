@@ -2,6 +2,7 @@
 Pytest Configuration and Fixtures
 """
 
+import asyncio
 import os
 from datetime import datetime, timedelta
 
@@ -29,8 +30,11 @@ if not TEST_DATABASE_URL:
 # Keep runtime modules aligned with the test database.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
-from backend.models.schemas import Base, Host, HostStatus, Device, DeviceStatus, Task, TaskStatus, TaskRun, RunStatus
-from backend.core.database import get_db
+from backend.core.database import async_engine, get_db
+from backend.core.database import Base
+from backend.models.enums import DeviceStatus, HostStatus
+from backend.models.host import Device, Host
+from backend.models.schemas import RunStatus, Task, TaskRun, TaskStatus
 from backend.core.security import create_access_token
 from backend.main import app
 
@@ -45,9 +49,7 @@ def engine():
         create_kwargs["pool_pre_ping"] = True
 
     engine = create_engine(TEST_DATABASE_URL, **create_kwargs)
-    Base.metadata.create_all(bind=engine)
     yield engine
-    Base.metadata.drop_all(bind=engine)
     engine.dispose()
 
 
@@ -86,15 +88,28 @@ def client(db_session):
 
     app.dependency_overrides.clear()
     app.user_middleware = original_middleware
+    # Windows + asyncpg 下，不同 TestClient 事件循环之间复用连接会触发 loop closed。
+    # 每个用例后释放异步连接池，避免跨用例复用旧 loop 的连接对象。
+    try:
+        asyncio.run(async_engine.dispose())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(async_engine.dispose())
+        finally:
+            loop.close()
 
 
 @pytest.fixture
 def sample_host(db_session):
     """Create a sample host"""
     host = Host(
+        id="101",
+        hostname="test-host-101",
         name="test-host",
         ip="172.21.15.100",
-        status=HostStatus.ONLINE,
+        ip_address="172.21.15.100",
+        status=HostStatus.ONLINE.value,
         last_heartbeat=datetime.utcnow(),
     )
     db_session.add(host)
@@ -106,9 +121,12 @@ def sample_host(db_session):
 def sample_offline_host(db_session):
     """Create a sample offline host"""
     host = Host(
+        id="102",
+        hostname="test-host-102",
         name="test-host-offline",
         ip="172.21.15.101",
-        status=HostStatus.OFFLINE,
+        ip_address="172.21.15.101",
+        status=HostStatus.OFFLINE.value,
         last_heartbeat=datetime.utcnow() - timedelta(minutes=10),
     )
     db_session.add(host)
@@ -120,9 +138,12 @@ def sample_offline_host(db_session):
 def sample_host_expired(db_session):
     """Create a sample host with expired heartbeat"""
     host = Host(
+        id="103",
+        hostname="test-host-103",
         name="test-host-expired",
         ip="172.21.15.102",
-        status=HostStatus.ONLINE,
+        ip_address="172.21.15.102",
+        status=HostStatus.ONLINE.value,
         last_heartbeat=datetime.utcnow() - timedelta(seconds=400),
     )
     db_session.add(host)
@@ -136,7 +157,7 @@ def sample_device(db_session, sample_host):
     device = Device(
         serial="test-device-001",
         host_id=sample_host.id,
-        status=DeviceStatus.ONLINE,
+        status=DeviceStatus.ONLINE.value,
         last_seen=datetime.utcnow(),
         adb_connected=True,
         adb_state="device",
@@ -154,7 +175,7 @@ def sample_offline_device(db_session, sample_host):
     device = Device(
         serial="test-device-002",
         host_id=sample_host.id,
-        status=DeviceStatus.OFFLINE,
+        status=DeviceStatus.OFFLINE.value,
         last_seen=datetime.utcnow() - timedelta(minutes=10),
         adb_connected=False,
         adb_state="offline",
@@ -170,7 +191,7 @@ def sample_busy_device(db_session, sample_host):
     device = Device(
         serial="test-device-003",
         host_id=sample_host.id,
-        status=DeviceStatus.BUSY,
+        status=DeviceStatus.BUSY.value,
         last_seen=datetime.utcnow(),
         adb_connected=True,
         adb_state="device",
@@ -280,13 +301,19 @@ def test_user(db_session):
     from backend.core.security import get_password_hash
     # Import User here to avoid circular imports
     from backend.models.schemas import User
-    user = User(
-        username="testuser",
-        hashed_password=get_password_hash("testpass123"),
-        role="user",
-        is_active="Y",
-    )
-    db_session.add(user)
+    user = db_session.query(User).filter(User.username == "testuser").first()
+    if not user:
+        user = User(
+            username="testuser",
+            hashed_password=get_password_hash("testpass123"),
+            role="user",
+            is_active="Y",
+        )
+        db_session.add(user)
+    else:
+        user.hashed_password = get_password_hash("testpass123")
+        user.role = "user"
+        user.is_active = "Y"
     db_session.commit()
     return user
 
@@ -297,13 +324,19 @@ def admin_user(db_session):
     from backend.core.security import get_password_hash
     # Import User here to avoid circular imports
     from backend.models.schemas import User
-    user = User(
-        username="admin",
-        hashed_password=get_password_hash("adminpass123"),
-        role="admin",
-        is_active="Y",
-    )
-    db_session.add(user)
+    user = db_session.query(User).filter(User.username == "admin").first()
+    if not user:
+        user = User(
+            username="admin",
+            hashed_password=get_password_hash("adminpass123"),
+            role="admin",
+            is_active="Y",
+        )
+        db_session.add(user)
+    else:
+        user.hashed_password = get_password_hash("adminpass123")
+        user.role = "admin"
+        user.is_active = "Y"
     db_session.commit()
     return user
 

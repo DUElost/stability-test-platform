@@ -3,16 +3,19 @@
 Results summary API — aggregated test run statistics for the dashboard.
 """
 
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import case, func
+from sqlalchemy import func
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
-from backend.models.schemas import Task, TaskRun, RunStatus
+from backend.models.job import JobInstance, StepTrace, TaskTemplate
+from backend.models.workflow import WorkflowDefinition, WorkflowRun
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
@@ -61,6 +64,41 @@ class ResultsSummary(BaseModel):
 
 # ---------- Helpers ----------
 
+_JOB_STATUS_TO_RUN_STATUS = {
+    "PENDING": "QUEUED",
+    "PENDING_TOOL": "QUEUED",
+    "RUNNING": "RUNNING",
+    "COMPLETED": "FINISHED",
+    "FAILED": "FAILED",
+    "ABORTED": "CANCELED",
+    "UNKNOWN": "RUNNING",
+}
+
+
+def _normalize_job_status(job_status: Any) -> str:
+    raw = str(job_status or "").upper()
+    return _JOB_STATUS_TO_RUN_STATUS.get(raw, raw or "RUNNING")
+
+
+def _safe_json_loads(payload: Optional[str]) -> Dict[str, Any]:
+    if not payload:
+        return {}
+    try:
+        decoded = json.loads(payload)
+    except Exception:
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _extract_log_summary_from_snapshot(snapshot_output: Optional[str]) -> Optional[str]:
+    payload = _safe_json_loads(snapshot_output)
+    update = payload.get("update")
+    if not isinstance(update, dict):
+        return None
+    log_summary = update.get("log_summary")
+    return log_summary if isinstance(log_summary, str) else None
+
+
 def _parse_risk_level(log_summary: Optional[str]) -> str:
     """Extract risk level from log_summary (format: risk=HIGH;...)."""
     if not log_summary:
@@ -83,93 +121,171 @@ def get_results_summary(
 ) -> ResultsSummary:
     """Return aggregated test run statistics."""
 
-    # --- runs_by_status ---
-    status_counts = (
-        db.query(TaskRun.status, func.count(TaskRun.id))
-        .group_by(TaskRun.status)
-        .all()
-    )
-    status_map: Dict[str, int] = {
-        (s.value if hasattr(s, 'value') else str(s)): c
-        for s, c in status_counts
-    }
-    runs_by_status = RunsByStatus(
-        finished=status_map.get(RunStatus.FINISHED.value, 0),
-        failed=status_map.get(RunStatus.FAILED.value, 0),
-        canceled=status_map.get(RunStatus.CANCELED.value, 0),
-        running=status_map.get(RunStatus.RUNNING.value, 0)
-        + status_map.get(RunStatus.DISPATCHED.value, 0),
-        total=sum(status_map.values()),
-    )
-
-    # --- test_type_stats ---
-    type_rows = (
-        db.query(
-            Task.type,
-            TaskRun.status,
-            func.count(TaskRun.id),
+    def _empty_summary() -> ResultsSummary:
+        return ResultsSummary(
+            runs_by_status=RunsByStatus(),
+            test_type_stats=[],
+            risk_distribution=RiskDistribution(),
+            recent_runs=[],
         )
-        .join(Task, TaskRun.task_id == Task.id)
-        .group_by(Task.type, TaskRun.status)
-        .all()
-    )
-    type_agg: Dict[str, Dict[str, int]] = {}
-    for task_type, run_status, cnt in type_rows:
-        bucket = type_agg.setdefault(task_type, {"finished": 0, "failed": 0, "total": 0})
-        bucket["total"] += cnt
-        status_str = run_status.value if hasattr(run_status, 'value') else str(run_status)
-        if status_str == RunStatus.FINISHED.value:
-            bucket["finished"] += cnt
-        elif status_str == RunStatus.FAILED.value:
-            bucket["failed"] += cnt
-    test_type_stats = [
-        TestTypeStat(type=t, **counts) for t, counts in sorted(type_agg.items())
-    ]
 
-    # --- recent_runs (with risk) ---
-    recent_rows = (
-        db.query(TaskRun, Task.name, Task.type)
-        .join(Task, TaskRun.task_id == Task.id)
-        .order_by(TaskRun.id.desc())
-        .limit(limit)
-        .all()
-    )
-    recent_runs: List[RecentRun] = []
-    for run, task_name, task_type in recent_rows:
-        risk = _parse_risk_level(run.log_summary)
-        duration = None
-        if run.started_at and run.finished_at:
-            duration = (run.finished_at - run.started_at).total_seconds()
-        recent_runs.append(
-            RecentRun(
-                run_id=run.id,
-                task_name=task_name,
-                task_type=task_type,
-                status=str(run.status.value) if hasattr(run.status, "value") else str(run.status),
-                risk_level=risk,
-                duration_seconds=duration,
-                started_at=run.started_at,
-                finished_at=run.finished_at,
+    def _is_missing_orchestration_table(exc: Exception) -> bool:
+        message = str(exc).lower()
+        table_hit = any(
+            t in message for t in (
+                "job_instance",
+                "step_trace",
+                "task_template",
+                "workflow_run",
+                "workflow_definition",
+            )
+        )
+        return (
+            table_hit and (
+                "does not exist" in message
+                or "undefinedtable" in message
+                or "no such table" in message
+                or "不存在" in message
             )
         )
 
-    # --- risk_distribution (across ALL runs — single SQL query) ---
-    risk_row = db.query(
-        func.count(case((TaskRun.log_summary.like('%risk=HIGH%'), 1))).label('high'),
-        func.count(case((TaskRun.log_summary.like('%risk=MEDIUM%'), 1))).label('medium'),
-        func.count(case((TaskRun.log_summary.like('%risk=LOW%'), 1))).label('low'),
-        func.count(TaskRun.id).label('total'),
-    ).first()
-    risk_counts = {
-        "high": risk_row.high or 0,
-        "medium": risk_row.medium or 0,
-        "low": risk_row.low or 0,
-        "unknown": (risk_row.total or 0) - (risk_row.high or 0) - (risk_row.medium or 0) - (risk_row.low or 0),
-    }
+    try:
+        # --- runs_by_status (新链路：JobInstance) ---
+        status_counts = (
+            db.query(JobInstance.status, func.count(JobInstance.id))
+            .group_by(JobInstance.status)
+            .all()
+        )
+        runs_by_status = RunsByStatus()
+        for raw_status, count in status_counts:
+            normalized = _normalize_job_status(raw_status)
+            cnt = int(count or 0)
+            runs_by_status.total += cnt
+            if normalized == "FINISHED":
+                runs_by_status.finished += cnt
+            elif normalized == "FAILED":
+                runs_by_status.failed += cnt
+            elif normalized == "CANCELED":
+                runs_by_status.canceled += cnt
+            else:
+                # QUEUED/RUNNING/UNKNOWN 都视作运行态
+                runs_by_status.running += cnt
 
-    return ResultsSummary(
-        runs_by_status=runs_by_status,
-        test_type_stats=test_type_stats,
-        risk_distribution=RiskDistribution(**risk_counts),
-        recent_runs=recent_runs,
-    )
+        # --- test_type_stats (按 TaskTemplate.name 聚合) ---
+        type_rows = (
+            db.query(
+                TaskTemplate.name,
+                JobInstance.status,
+                func.count(JobInstance.id),
+            )
+            .join(TaskTemplate, JobInstance.task_template_id == TaskTemplate.id)
+            .group_by(TaskTemplate.name, JobInstance.status)
+            .all()
+        )
+        type_agg: Dict[str, Dict[str, int]] = {}
+        for template_name, raw_status, cnt in type_rows:
+            stat_type = str(template_name or "UNKNOWN")
+            bucket = type_agg.setdefault(stat_type, {"finished": 0, "failed": 0, "total": 0})
+            count_i = int(cnt or 0)
+            bucket["total"] += count_i
+            normalized = _normalize_job_status(raw_status)
+            if normalized == "FINISHED":
+                bucket["finished"] += count_i
+            elif normalized == "FAILED":
+                bucket["failed"] += count_i
+        test_type_stats = [TestTypeStat(type=t, **counts) for t, counts in sorted(type_agg.items())]
+
+        # --- recent_runs ---
+        recent_rows = (
+            db.query(JobInstance, WorkflowDefinition.name, TaskTemplate.name)
+            .join(WorkflowRun, JobInstance.workflow_run_id == WorkflowRun.id)
+            .join(WorkflowDefinition, WorkflowRun.workflow_definition_id == WorkflowDefinition.id)
+            .join(TaskTemplate, JobInstance.task_template_id == TaskTemplate.id)
+            .order_by(JobInstance.id.desc())
+            .limit(limit)
+            .all()
+        )
+        recent_job_ids = [job.id for job, _wf_name, _template_name in recent_rows]
+        snapshot_rows = []
+        if recent_job_ids:
+            snapshot_rows = (
+                db.query(StepTrace.job_id, StepTrace.output)
+                .filter(
+                    StepTrace.job_id.in_(recent_job_ids),
+                    StepTrace.step_id == "__job__",
+                    StepTrace.event_type == "RUN_COMPLETE",
+                )
+                .all()
+            )
+        snapshot_map = {int(job_id): output for job_id, output in snapshot_rows}
+
+        recent_runs: List[RecentRun] = []
+        for job, wf_name, template_name in recent_rows:
+            log_summary = _extract_log_summary_from_snapshot(snapshot_map.get(job.id))
+            risk = _parse_risk_level(log_summary)
+            duration = None
+            if job.started_at and job.ended_at:
+                duration = (job.ended_at - job.started_at).total_seconds()
+            workflow_name = str(wf_name or "workflow")
+            template_name_norm = str(template_name or "default")
+            recent_runs.append(
+                RecentRun(
+                    run_id=job.id,
+                    task_name=f"{workflow_name}/{template_name_norm}",
+                    task_type=template_name_norm,
+                    status=_normalize_job_status(job.status),
+                    risk_level=risk,
+                    duration_seconds=duration,
+                    started_at=job.started_at,
+                    finished_at=job.ended_at,
+                )
+            )
+
+        # --- risk_distribution ---
+        total_jobs = int(db.query(func.count(JobInstance.id)).scalar() or 0)
+        risk_counts = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
+        if total_jobs > 0:
+            all_snapshot_rows = (
+                db.query(StepTrace.job_id, StepTrace.output)
+                .filter(
+                    StepTrace.step_id == "__job__",
+                    StepTrace.event_type == "RUN_COMPLETE",
+                )
+                .all()
+            )
+            seen_jobs = set()
+            for job_id, output in all_snapshot_rows:
+                if job_id in seen_jobs:
+                    continue
+                seen_jobs.add(job_id)
+                level = _parse_risk_level(_extract_log_summary_from_snapshot(output))
+                if level == "HIGH":
+                    risk_counts["high"] += 1
+                elif level == "MEDIUM":
+                    risk_counts["medium"] += 1
+                elif level == "LOW":
+                    risk_counts["low"] += 1
+                else:
+                    risk_counts["unknown"] += 1
+            missing_snapshot_jobs = max(total_jobs - len(seen_jobs), 0)
+            risk_counts["unknown"] += missing_snapshot_jobs
+
+        runs_by_status = RunsByStatus(
+            finished=int(runs_by_status.finished),
+            failed=int(runs_by_status.failed),
+            canceled=int(runs_by_status.canceled),
+            running=int(runs_by_status.running),
+            total=int(runs_by_status.total),
+        )
+
+        return ResultsSummary(
+            runs_by_status=runs_by_status,
+            test_type_stats=test_type_stats,
+            risk_distribution=RiskDistribution(**risk_counts),
+            recent_runs=recent_runs,
+        )
+    except ProgrammingError as exc:
+        if not _is_missing_orchestration_table(exc):
+            raise
+        db.rollback()
+        return _empty_summary()

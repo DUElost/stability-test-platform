@@ -1,9 +1,10 @@
 """Backend Redis Stream consumer.
 
 Reads from stp:status → persists StepTrace / JobInstance status to DB.
+Reads from stp:logs   → broadcasts step logs to WebSocket subscribers.
 Monitors stp:status lag → writes backpressure key (read by heartbeat endpoint).
 
-Both functions run as asyncio tasks, started in FastAPI lifespan.
+All functions run as asyncio tasks, started in FastAPI lifespan.
 """
 
 import asyncio
@@ -20,6 +21,12 @@ STATUS_GROUP = "server-consumer"
 CONSUMER_NAME = "server-0"
 BLOCK_MS = 1000
 BATCH_SIZE = 50
+
+LOG_STREAM = "stp:logs"
+LOG_GROUP = "log-consumer"
+LOG_CONSUMER = "log-0"
+LOG_BLOCK_MS = 1000
+LOG_BATCH_SIZE = 200
 
 _LAG_HIGH = int(__import__("os").getenv("BACKPRESSURE_LAG_THRESHOLD", "5000"))
 _LAG_LOW = int(__import__("os").getenv("BACKPRESSURE_RELEASE_THRESHOLD", "500"))
@@ -52,6 +59,34 @@ async def consume_status_stream(redis_client: aioredis.Redis) -> None:
             break
         except Exception as e:
             logger.exception("MQ consumer error: %s", e)
+            await asyncio.sleep(2)
+
+
+async def consume_log_stream(redis_client: aioredis.Redis) -> None:
+    """Continuously read stp:logs and broadcast to WebSocket."""
+    logger.info("MQ log consumer started")
+    while True:
+        try:
+            results = await redis_client.xreadgroup(
+                groupname=LOG_GROUP,
+                consumername=LOG_CONSUMER,
+                streams={LOG_STREAM: ">"},
+                count=LOG_BATCH_SIZE,
+                block=LOG_BLOCK_MS,
+            )
+            if not results:
+                continue
+            for _stream, messages in results:
+                for msg_id, fields in messages:
+                    await _process_log_message(fields)
+                    try:
+                        await redis_client.xack(LOG_STREAM, LOG_GROUP, msg_id)
+                    except Exception as e:
+                        logger.warning("xack log failed: %s", e)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.exception("MQ log consumer error: %s", e)
             await asyncio.sleep(2)
 
 
@@ -117,6 +152,31 @@ async def _process_status_message(fields: dict) -> None:
             await _persist_job_status(fields)
     except Exception as e:
         logger.warning("process_status_message failed (type=%s): %s", msg_type, e)
+
+
+async def _process_log_message(fields: dict) -> None:
+    """Broadcast a single stp:logs message to /ws/logs/{run_id}."""
+    run_id = fields.get("job_id") or fields.get("run_id")
+    if not run_id:
+        return
+
+    log_data = {
+        "type": "STEP_LOG",
+        "payload": {
+            "step_id": fields.get("tag") or "",
+            "seq": None,
+            "level": fields.get("level", "INFO"),
+            "ts": fields.get("timestamp", ""),
+            "msg": fields.get("message", ""),
+        },
+    }
+
+    try:
+        from backend.api.routes.websocket import manager
+        await manager.broadcast(f"/ws/logs/{run_id}", log_data)
+        await manager.broadcast(f"/ws/jobs/{run_id}/logs", log_data)
+    except Exception as e:
+        logger.warning("WS broadcast failed for log message: %s", e)
 
 
 async def _persist_step_trace(fields: dict) -> None:

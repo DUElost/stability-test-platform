@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -19,7 +19,7 @@ _CHECK_INTERVAL  = int(os.getenv("HEARTBEAT_CHECK_INTERVAL_SECONDS", "10"))
 
 
 async def check_heartbeat_timeouts() -> None:
-    threshold = datetime.utcnow() - timedelta(seconds=_TIMEOUT_SECONDS)
+    threshold = datetime.now(timezone.utc) - timedelta(seconds=_TIMEOUT_SECONDS)
     async with AsyncSessionLocal() as db:
         dead_hosts = (await db.execute(
             select(Host).where(
@@ -38,7 +38,7 @@ async def check_heartbeat_timeouts() -> None:
 
             for job in running_jobs:
                 JobStateMachine.transition(job, JobStatus.UNKNOWN, "host_heartbeat_timeout")
-                job.ended_at = datetime.utcnow()
+                job.ended_at = datetime.now(timezone.utc)
                 await WorkflowAggregator.on_job_terminal(job, db)
 
             host.status = HostStatus.OFFLINE.value

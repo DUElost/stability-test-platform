@@ -168,6 +168,22 @@ export interface TaskRun {
   risk_summary?: RunRiskSummary | null;
 }
 
+export interface RuntimeLogEntry {
+  stream_id?: string;
+  job_id?: number | null;
+  step_id?: string;
+  level: string;
+  timestamp: string;
+  message: string;
+}
+
+export interface RuntimeLogQueryResponse {
+  items: RuntimeLogEntry[];
+  next_cursor: string | null;
+  has_more: boolean;
+  scanned: number;
+}
+
 export interface LogArtifact {
   id: number;
   run_id: number;
@@ -442,6 +458,57 @@ export interface AlertRule {
   created_at: string;
 }
 
+// Schedule types
+export interface TaskSchedule {
+  id: number;
+  name: string;
+  cron_expression: string;
+  task_template_id?: number | null;
+  tool_id?: number | null;
+  task_type: string;
+  params: Record<string, any>;
+  target_device_id?: number | null;
+  workflow_definition_id?: number | null;
+  device_ids?: number[] | null;
+  enabled: boolean;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  created_by?: number | null;
+  created_at: string;
+}
+
+export interface TaskScheduleCreatePayload {
+  name: string;
+  cron_expression: string;
+  task_type?: string;
+  params?: Record<string, any>;
+  enabled?: boolean;
+  workflow_definition_id?: number | null;
+  device_ids?: number[];
+  task_template_id?: number | null;
+  tool_id?: number | null;
+  target_device_id?: number | null;
+}
+
+export interface TaskScheduleUpdatePayload {
+  name?: string;
+  cron_expression?: string;
+  task_type?: string;
+  params?: Record<string, any>;
+  enabled?: boolean;
+  workflow_definition_id?: number | null;
+  device_ids?: number[];
+  task_template_id?: number | null;
+  tool_id?: number | null;
+  target_device_id?: number | null;
+}
+
+export interface ScheduleRunNowResult {
+  message: string;
+  task_id?: number | null;
+  workflow_run_id?: number | null;
+}
+
 // Paginated response type
 export interface PaginatedResponse<T> {
   items: T[];
@@ -460,7 +527,63 @@ export interface ToolEntry {
   script_class?: string | null;
   param_schema: Record<string, any>;
   is_active: boolean;
+  description?: string | null;
   created_at: string;
+  updated_at?: string;
+}
+
+export interface BuiltinActionEntry {
+  name: string;
+  label: string;
+  category: 'device' | 'process' | 'file' | 'log' | 'script';
+  description: string;
+  param_schema: Record<string, any>;
+  is_active: boolean;
+  updated_at: string;
+}
+
+export interface BuiltinActionUpdatePayload {
+  label?: string;
+  category?: 'device' | 'process' | 'file' | 'log' | 'script';
+  description?: string;
+  param_schema?: Record<string, any>;
+  is_active?: boolean;
+}
+
+export interface ActionTemplateEntry {
+  id: number;
+  name: string;
+  description?: string | null;
+  action: string;
+  version?: string | null;
+  params: Record<string, any>;
+  timeout_seconds: number;
+  retry: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ActionTemplateCreatePayload {
+  name: string;
+  description?: string;
+  action: string;
+  version?: string | null;
+  params?: Record<string, any>;
+  timeout_seconds?: number;
+  retry?: number;
+  is_active?: boolean;
+}
+
+export interface ActionTemplateUpdatePayload {
+  name?: string;
+  description?: string;
+  action?: string;
+  version?: string | null;
+  params?: Record<string, any>;
+  timeout_seconds?: number;
+  retry?: number;
+  is_active?: boolean;
 }
 
 export interface PipelineStep {
@@ -631,6 +754,25 @@ export const api = {
     dispatch: (taskId: number, data: { host_id: number; device_id: number }) =>
       apiClient.post<TaskRun>(`/tasks/${taskId}/dispatch`, data),
     getRuns: (taskId: number, skip = 0, limit = 50) => apiClient.get<PaginatedResponse<TaskRun>>(`/tasks/${taskId}/runs`, { params: { skip, limit } }),
+    queryLogs: (params: {
+      job_id?: number;
+      job_ids?: number[];
+      level?: string;
+      q?: string;
+      step_id?: string;
+      from_ts?: string;
+      to_ts?: string;
+      cursor?: string;
+      limit?: number;
+    }) => {
+      const reqParams: Record<string, any> = { ...params };
+      if (params.job_ids && params.job_ids.length > 0) {
+        reqParams.job_ids = params.job_ids.join(',');
+      } else {
+        delete reqParams.job_ids;
+      }
+      return apiClient.get<RuntimeLogQueryResponse>('/logs/query', { params: reqParams });
+    },
     getRunReport: (runId: number) => apiClient.get<RunReport>(`/runs/${runId}/report`),
     getRunReportExportUrl: (runId: number, format: 'markdown' | 'json' = 'markdown') =>
       `/api/v1/runs/${runId}/report/export?format=${format}`,
@@ -778,13 +920,13 @@ export const api = {
 
   // 定时任务
   schedules: {
-    list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<any>>('/schedules', { params: { skip, limit } }),
-    get: (id: number) => apiClient.get<any>(`/schedules/${id}`),
-    create: (data: any) => apiClient.post<any>('/schedules', data),
-    update: (id: number, data: any) => apiClient.put<any>(`/schedules/${id}`, data),
+    list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<TaskSchedule>>('/schedules', { params: { skip, limit } }),
+    get: (id: number) => apiClient.get<TaskSchedule>(`/schedules/${id}`),
+    create: (data: TaskScheduleCreatePayload) => apiClient.post<TaskSchedule>('/schedules', data),
+    update: (id: number, data: TaskScheduleUpdatePayload) => apiClient.put<TaskSchedule>(`/schedules/${id}`, data),
     delete: (id: number) => apiClient.delete<void>(`/schedules/${id}`),
-    toggle: (id: number) => apiClient.post<any>(`/schedules/${id}/toggle`),
-    runNow: (id: number) => apiClient.post<{ message: string; task_id: number }>(`/schedules/${id}/run-now`),
+    toggle: (id: number) => apiClient.post<TaskSchedule>(`/schedules/${id}/toggle`),
+    runNow: (id: number) => apiClient.post<ScheduleRunNowResult>(`/schedules/${id}/run-now`),
   },
 
   // 任务模板
@@ -865,6 +1007,34 @@ export const api = {
       unwrapApiResponse<ToolEntry>(apiClient.put(`/tools/${id}`, data)),
     remove: (id: number) =>
       unwrapApiResponse<void>(apiClient.delete(`/tools/${id}`)),
+  },
+
+  // Builtin Action Catalog（可编辑 builtin 元数据）
+  builtinCatalog: {
+    list: (isActive?: boolean) =>
+      unwrapApiResponse<BuiltinActionEntry[]>(
+        apiClient.get('/builtin-actions', { params: isActive != null ? { is_active: isActive } : {} })
+      ),
+    get: (name: string) =>
+      unwrapApiResponse<BuiltinActionEntry>(apiClient.get(`/builtin-actions/${name}`)),
+    update: (name: string, data: BuiltinActionUpdatePayload) =>
+      unwrapApiResponse<BuiltinActionEntry>(apiClient.put(`/builtin-actions/${name}`, data)),
+  },
+
+  // Action Templates (可复用自定义 Action)
+  actionTemplates: {
+    list: (isActive?: boolean) =>
+      unwrapApiResponse<ActionTemplateEntry[]>(
+        apiClient.get('/action-templates', { params: isActive != null ? { is_active: isActive } : {} })
+      ),
+    get: (id: number) =>
+      unwrapApiResponse<ActionTemplateEntry>(apiClient.get(`/action-templates/${id}`)),
+    create: (data: ActionTemplateCreatePayload) =>
+      unwrapApiResponse<ActionTemplateEntry>(apiClient.post('/action-templates', data)),
+    update: (id: number, data: ActionTemplateUpdatePayload) =>
+      unwrapApiResponse<ActionTemplateEntry>(apiClient.put(`/action-templates/${id}`, data)),
+    remove: (id: number) =>
+      unwrapApiResponse<void>(apiClient.delete(`/action-templates/${id}`)),
   },
 };
 

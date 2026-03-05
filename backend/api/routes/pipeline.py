@@ -22,12 +22,20 @@ class PipelineTemplateOut(BaseModel):
     pipeline_def: dict
 
 
+def _extract_pipeline_def(data: dict) -> dict:
+    """Return normalized pipeline_def payload (stages-only) from template JSON."""
+    stages = data.get("stages")
+    if isinstance(stages, dict):
+        return {"stages": stages}
+    return data
+
+
 def _load_template(path: Path) -> PipelineTemplateOut:
     data = json.loads(path.read_text(encoding="utf-8"))
     return PipelineTemplateOut(
         name=path.stem,
         description=data.get("description", ""),
-        pipeline_def=data,
+        pipeline_def=_extract_pipeline_def(data),
     )
 
 

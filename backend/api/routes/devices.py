@@ -47,8 +47,12 @@ def _ensure_host_online_for_device(device: Device) -> bool:
     # Check host heartbeat timeout
     now = datetime.now(timezone.utc)
     offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
+    last_heartbeat = host.last_heartbeat
+    if last_heartbeat and last_heartbeat.tzinfo is None:
+        # 兼容历史/测试数据中的 naive 时间
+        last_heartbeat = last_heartbeat.replace(tzinfo=timezone.utc)
 
-    if host.last_heartbeat is None or host.last_heartbeat < offline_deadline:
+    if last_heartbeat is None or last_heartbeat < offline_deadline:
         if device.status != "OFFLINE":
             device.status = "OFFLINE"
             host.status = "OFFLINE"
@@ -58,7 +62,7 @@ def _ensure_host_online_for_device(device: Device) -> bool:
                     "device_id": device.id,
                     "device_serial": device.serial,
                     "host_id": host.id,
-                    "host_last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
+                    "host_last_heartbeat": last_heartbeat.isoformat() if last_heartbeat else None,
                 },
             )
             return True

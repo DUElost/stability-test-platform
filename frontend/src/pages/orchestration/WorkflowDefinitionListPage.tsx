@@ -1,12 +1,26 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
 import { api, type WorkflowDefinition, type WorkflowDefinitionCreate } from '@/utils/api';
 import { useToast } from '@/components/ui/toast';
-import { Plus, Play, Pencil, Trash2, ChevronRight, Workflow } from 'lucide-react';
+import { useConfirm } from '@/hooks/useConfirm';
+import {
+  Plus,
+  Play,
+  Pencil,
+  Trash2,
+  ChevronRight,
+  Workflow,
+  Search,
+  List,
+  Library,
+  ShieldAlert,
+  X,
+} from 'lucide-react';
 
 function formatThreshold(v: number) {
   return `${Math.round(v * 100)}%`;
@@ -110,7 +124,9 @@ export default function WorkflowDefinitionListPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const toast = useToast();
+  const confirmDialog = useConfirm();
   const [showCreate, setShowCreate] = useState(false);
+  const [query, setQuery] = useState('');
 
   const { data: workflows, isLoading } = useQuery({
     queryKey: ['workflow-definitions'],
@@ -126,8 +142,33 @@ export default function WorkflowDefinitionListPage() {
     onError: (err: any) => toast.error(err.message || '删除失败'),
   });
 
-  const handleDelete = (wf: WorkflowDefinition) => {
-    if (!confirm(`确认删除工作流「${wf.name}」？`)) return;
+  const filteredWorkflows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return workflows ?? [];
+    return (workflows ?? []).filter((wf) => (
+      wf.name.toLowerCase().includes(q) || (wf.description || '').toLowerCase().includes(q)
+    ));
+  }, [workflows, query]);
+
+  const stats = useMemo(() => {
+    const list = workflows ?? [];
+    const total = list.length;
+    const templateCount = list.reduce((acc, wf) => acc + (wf.task_templates?.length ?? 0), 0);
+    const avgFailureThreshold = total > 0
+      ? list.reduce((acc, wf) => acc + (wf.failure_threshold ?? 0), 0) / total
+      : 0;
+    return { total, templateCount, avgFailureThreshold };
+  }, [workflows]);
+
+  const handleDelete = async (wf: WorkflowDefinition) => {
+    const ok = await confirmDialog({
+      title: '删除工作流',
+      description: `确认删除「${wf.name}」？此操作不可恢复。`,
+      confirmText: '删除',
+      cancelText: '取消',
+      variant: 'destructive',
+    });
+    if (!ok) return;
     deleteMutation.mutate(wf.id);
   };
 
@@ -144,12 +185,12 @@ export default function WorkflowDefinitionListPage() {
         <CreateModal onClose={() => setShowCreate(false)} onCreated={handleCreated} />
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">工作流设计</h1>
-          <p className="text-gray-500 mt-1">管理测试蓝图（WorkflowDefinition）</p>
+          <p className="mt-1 text-sm text-gray-500">管理测试蓝图并快速进入编排编辑</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => navigate('/execution/run')}>
             <Play className="w-4 h-4 mr-2" />
             发起测试
@@ -161,9 +202,67 @@ export default function WorkflowDefinitionListPage() {
         </div>
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Card className="border-gray-200/80">
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-100">
+              <List className="h-4 w-4 text-slate-600" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">工作流总数</p>
+              <p className="text-lg font-semibold text-gray-900">{stats.total}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-gray-200/80">
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100">
+              <Library className="h-4 w-4 text-emerald-700" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">任务模板总数</p>
+              <p className="text-lg font-semibold text-gray-900">{stats.templateCount}</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-gray-200/80">
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100">
+              <ShieldAlert className="h-4 w-4 text-amber-700" />
+            </div>
+            <div>
+              <p className="text-xs text-gray-500">平均失败阈值</p>
+              <p className="text-lg font-semibold text-gray-900">{formatThreshold(stats.avgFailureThreshold)}</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       <Card>
-        <CardHeader>
-          <CardTitle>工作流列表</CardTitle>
+        <CardHeader className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle>工作流列表</CardTitle>
+            <span className="text-xs text-gray-500">共 {filteredWorkflows.length} 条</span>
+          </div>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="按名称或描述搜索工作流"
+              className="h-9 pl-9 pr-9"
+            />
+            {query && (
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                onClick={() => setQuery('')}
+                aria-label="清空搜索"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -178,56 +277,74 @@ export default function WorkflowDefinitionListPage() {
               <p>暂无工作流</p>
               <p className="text-sm mt-1">点击「新建工作流」创建第一个测试蓝图</p>
             </div>
+          ) : !filteredWorkflows.length ? (
+            <div className="text-center py-12 text-gray-500">
+              <Search className="mx-auto mb-4 h-10 w-10 text-gray-300" />
+              <p>未找到匹配的工作流</p>
+              <p className="mt-1 text-sm">请调整搜索关键词</p>
+            </div>
           ) : (
-            <div className="divide-y">
-              {workflows.map(wf => (
-                <div key={wf.id} className="flex items-center gap-4 py-4 group">
-                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-50 flex-shrink-0">
-                    <Workflow className="w-5 h-5 text-blue-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-gray-900 truncate">{wf.name}</div>
-                    <div className="text-sm text-gray-500 truncate">
-                      {wf.description || '无描述'}
+            <div className="space-y-3">
+              {filteredWorkflows.map((wf) => (
+                <div
+                  key={wf.id}
+                  className="group rounded-xl border border-gray-200 bg-white p-4 transition-all hover:border-gray-300 hover:shadow-sm"
+                >
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+                    <div className="flex items-center justify-center h-10 w-10 rounded-lg bg-slate-100 flex-shrink-0">
+                      <Workflow className="h-5 w-5 text-slate-700" />
                     </div>
-                    <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
-                      <span>失败阈值 {formatThreshold(wf.failure_threshold)}</span>
-                      {wf.task_templates && (
-                        <span>{wf.task_templates.length} 个任务模板</span>
-                      )}
-                      <span>{formatTime(wf.created_at)}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="truncate text-sm font-semibold text-gray-900">{wf.name}</h3>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">
+                          {formatThreshold(wf.failure_threshold)}
+                        </span>
+                      </div>
+                      <p className="mt-1 truncate text-sm text-gray-500">{wf.description || '无描述'}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-700">
+                          {wf.task_templates?.length ?? 0} 个任务模板
+                        </span>
+                        <span>创建于 {formatTime(wf.created_at)}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/execution/run?workflow=${wf.id}`)}
+                        title="发起测试"
+                      >
+                        <Play className="w-4 h-4 text-slate-600" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/orchestration/workflows/${wf.id}`)}
+                        title="编辑"
+                      >
+                        <Pencil className="w-4 h-4 text-slate-600" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void handleDelete(wf)}
+                        title="删除"
+                        disabled={deleteMutation.isPending}
+                      >
+                        <Trash2 className="w-4 h-4 text-red-500" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => navigate(`/orchestration/workflows/${wf.id}`)}
+                        title="查看详情"
+                      >
+                        <ChevronRight className="w-4 h-4 text-gray-400" />
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => navigate(`/execution/run?workflow=${wf.id}`)}
-                      title="发起测试"
-                    >
-                      <Play className="w-4 h-4 text-blue-500" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => navigate(`/orchestration/workflows/${wf.id}`)}
-                      title="编辑"
-                    >
-                      <Pencil className="w-4 h-4 text-gray-500" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDelete(wf)}
-                      title="删除"
-                    >
-                      <Trash2 className="w-4 h-4 text-red-400" />
-                    </Button>
-                  </div>
-                  <ChevronRight
-                    className="w-5 h-5 text-gray-300 cursor-pointer"
-                    onClick={() => navigate(`/orchestration/workflows/${wf.id}`)}
-                  />
                 </div>
               ))}
             </div>

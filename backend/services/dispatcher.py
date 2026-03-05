@@ -9,6 +9,7 @@ from typing import List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance, TaskTemplate
 from backend.models.tool import Tool
@@ -89,6 +90,12 @@ async def _validate_tool_references(templates: list, db: AsyncSession) -> None:
     """Collect all tool_ids from pipeline_defs and verify they exist and are active."""
     tool_ids: set[int] = set()
     for t in templates:
+        is_valid, errors = validate_pipeline_def(t.pipeline_def or {})
+        if not is_valid:
+            raise DispatchError(
+                f"Invalid pipeline_def for template '{t.name}': {'; '.join(errors)}"
+            )
+
         stages = (t.pipeline_def or {}).get("stages", {})
         for steps in stages.values():
             for step in steps:

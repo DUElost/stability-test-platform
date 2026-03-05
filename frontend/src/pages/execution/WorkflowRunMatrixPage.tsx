@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, type WorkflowRun, type JobInstance, type StepTrace, type JobStatus, type WorkflowStatus } from '@/utils/api';
+import { ensureFreshAccessToken, upsertWsToken } from '@/utils/auth';
+import { formatLocalDateTime, formatLocalTime, parseIsoToDate } from '@/utils/time';
 import { ArrowLeft, RefreshCw, X } from 'lucide-react';
 
 // ─── Status config ────────────────────────────────────────────────────────────
@@ -30,15 +32,14 @@ const WF_STATUS_BADGE: Record<WorkflowStatus, string> = {
 const TERMINAL_STATUSES: WorkflowStatus[] = ['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'DEGRADED'];
 
 function formatTime(iso: string | null | undefined) {
-  if (!iso) return '-';
-  return new Date(iso).toLocaleString('zh-CN', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  });
+  return formatLocalDateTime(iso);
 }
 
 function formatDuration(start: string, end: string | null | undefined) {
-  if (!end) return 'running...';
-  const s = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000);
+  const startDate = parseIsoToDate(start);
+  const endDate = parseIsoToDate(end);
+  if (!startDate || !endDate) return end ? '-' : 'running...';
+  const s = Math.round((endDate.getTime() - startDate.getTime()) / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   return `${m}m ${s % 60}s`;
@@ -71,9 +72,11 @@ function JobBlock({ job, onClick }: { job: JobInstance; onClick: () => void }) {
 
 function StepTimeline({ traces }: { traces: StepTrace[] }) {
   if (!traces.length) return <p className="text-sm text-gray-400 py-2">暂无 Step 数据</p>;
-  const sorted = [...traces].sort((a, b) =>
-    new Date(a.original_ts).getTime() - new Date(b.original_ts).getTime()
-  );
+  const sorted = [...traces].sort((a, b) => {
+    const aTime = parseIsoToDate(a.original_ts)?.getTime() ?? 0;
+    const bTime = parseIsoToDate(b.original_ts)?.getTime() ?? 0;
+    return aTime - bTime;
+  });
   return (
     <div className="space-y-2">
       {sorted.map(t => (
@@ -117,21 +120,56 @@ function JobLogStream({ jobId }: { jobId: number }) {
 
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(`${protocol}://${window.location.host}/ws/jobs/${jobId}/logs`);
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    let attempt = 0;
 
-    ws.onopen = () => setWsStatus('open');
-    ws.onclose = () => setWsStatus('closed');
-    ws.onerror = () => ws.close();
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'STEP_LOG' && msg.payload) {
-          setLines(prev => [...prev.slice(-499), msg.payload as LogLine]);
-        }
-      } catch {}
+    const getReconnectDelay = () => Math.min(1000 * Math.pow(2, attempt), 30000);
+
+    const connect = async () => {
+      if (stopped) return;
+      setWsStatus('connecting');
+
+      const token = await ensureFreshAccessToken();
+      if (import.meta.env.PROD && !token) {
+        setWsStatus('closed');
+        return;
+      }
+      const baseUrl = `${protocol}://${window.location.host}/ws/jobs/${jobId}/logs`;
+      const wsUrl = token ? upsertWsToken(baseUrl, token) : baseUrl;
+      if (stopped) return;
+
+      ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        attempt = 0;
+        setWsStatus('open');
+      };
+      ws.onclose = () => {
+        setWsStatus('closed');
+        if (stopped) return;
+        const delay = getReconnectDelay();
+        attempt += 1;
+        reconnectTimer = setTimeout(connect, delay);
+      };
+      ws.onerror = () => ws?.close();
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'STEP_LOG' && msg.payload) {
+            setLines(prev => [...prev.slice(-499), msg.payload as LogLine]);
+          }
+        } catch {}
+      };
     };
 
-    return () => ws.close();
+    connect();
+
+    return () => {
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
+    };
   }, [jobId]);
 
   useEffect(() => {
@@ -156,7 +194,7 @@ function JobLogStream({ jobId }: { jobId: number }) {
               l.level === 'WARN'  ? 'text-yellow-400' :
                                      'text-green-300'
             }`}>
-              <span className="text-gray-500 mr-2">{l.ts?.slice(11, 19)}</span>
+              <span className="text-gray-500 mr-2">{formatLocalTime(l.ts)}</span>
               {l.step_id && <span className="text-blue-400 mr-2">[{l.step_id}]</span>}
               {l.msg}
             </div>
@@ -207,7 +245,7 @@ function JobDrawer({ job, onClose }: { job: JobInstance; onClose: () => void }) 
             </div>
           )}
           <div className="flex justify-between">
-            <span className="text-gray-500">创建时间</span>
+            <span className="text-gray-500">开始时间</span>
             <span className="text-gray-700">{formatTime(job.created_at)}</span>
           </div>
         </div>
@@ -266,24 +304,44 @@ export default function WorkflowRunMatrixPage() {
   useEffect(() => {
     if (!runId) return;
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = `${protocol}://${window.location.host}/ws/workflow-runs/${runId}`;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    let attempt = 0;
 
-    let ws: WebSocket;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
+    const getReconnectDelay = () => Math.min(1000 * Math.pow(2, attempt), 30000);
 
-    const connect = () => {
+    const connect = async () => {
+      if (stopped) return;
+      setWsStatus('connecting');
+
+      const token = await ensureFreshAccessToken();
+      if (import.meta.env.PROD && !token) {
+        setWsStatus('closed');
+        return;
+      }
+      const baseUrl = `${protocol}://${window.location.host}/ws/workflow-runs/${runId}`;
+      const wsUrl = token ? upsertWsToken(baseUrl, token) : baseUrl;
+      if (stopped) return;
+
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
-      ws.onopen = () => setWsStatus('open');
+      ws.onopen = () => {
+        attempt = 0;
+        setWsStatus('open');
+      };
       ws.onclose = () => {
         setWsStatus('closed');
+        if (stopped) return;
         const runStatus = queryClient.getQueryData<WorkflowRun>(['workflow-run', runId])?.status;
         if (!runStatus || !TERMINAL_STATUSES.includes(runStatus)) {
-          reconnectTimer = setTimeout(connect, 5000);
+          const delay = getReconnectDelay();
+          attempt += 1;
+          reconnectTimer = setTimeout(connect, delay);
         }
       };
-      ws.onerror = () => ws.close();
+      ws.onerror = () => ws?.close();
 
       ws.onmessage = (event) => {
         try {
@@ -297,7 +355,7 @@ export default function WorkflowRunMatrixPage() {
               prev ? { ...prev, status: msg.status } : prev
             );
             if (TERMINAL_STATUSES.includes(msg.status)) {
-              ws.close();
+              ws?.close();
             }
           }
         } catch {}
@@ -307,7 +365,8 @@ export default function WorkflowRunMatrixPage() {
     connect();
 
     return () => {
-      clearTimeout(reconnectTimer);
+      stopped = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       ws?.close();
     };
   }, [runId]);

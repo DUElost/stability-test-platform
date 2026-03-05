@@ -31,18 +31,39 @@ from backend.api.routes.audit import router as audit_router
 from backend.api.routes.schedules import router as schedules_router
 from backend.api.routes.templates import router as templates_router
 from backend.api.routes.pipeline import router as pipeline_router
+from backend.api.routes.builtin_actions import router as builtin_actions_router
 # Phase 3: new routers replace legacy workflows + tools
 from backend.api.routes.orchestration import router as orchestration_router
 from backend.api.routes.tool_catalog import router as tool_catalog_router
+from backend.api.routes.action_templates import router as action_templates_router
 from backend.api.routes.agent_api import router as agent_api_router
 from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
-from backend.mq.consumer import consume_status_stream, monitor_backpressure
+from backend.mq.consumer import consume_log_stream, consume_status_stream, monitor_backpressure
 from backend.services.state_machine import InvalidTransitionError
 from backend.tasks.heartbeat_monitor import heartbeat_monitor_loop
+from backend.scheduler.cron_scheduler import start_cron_scheduler
 
 logger = logging.getLogger(__name__)
+
+# Patch uvicorn loggers to include timestamps while preserving colors
+from uvicorn.logging import AccessFormatter, DefaultFormatter
+
+_datefmt = "%Y-%m-%d %H:%M:%S"
+for _ln in ("uvicorn", "uvicorn.error"):
+    for _h in logging.getLogger(_ln).handlers:
+        _h.setFormatter(DefaultFormatter(
+            "%(asctime)s %(levelprefix)s %(message)s",
+            datefmt=_datefmt,
+            use_colors=True,
+        ))
+for _h in logging.getLogger("uvicorn.access").handlers:
+    _h.setFormatter(AccessFormatter(
+        '%(asctime)s %(levelprefix)s %(client_addr)s - "%(request_line)s" %(status_code)s',
+        datefmt=_datefmt,
+        use_colors=True,
+    ))
 
 redis_client: Optional[aioredis.Redis] = None
 
@@ -56,6 +77,7 @@ _STREAM_GROUPS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client
+    cron_thread = None
 
     if os.getenv("TESTING") != "1":
         # Connect Redis
@@ -72,15 +94,20 @@ async def lifespan(app: FastAPI):
 
         monitor_task = asyncio.create_task(heartbeat_monitor_loop())
         mq_consumer_task = asyncio.create_task(consume_status_stream(redis_client))
+        mq_log_task = asyncio.create_task(consume_log_stream(redis_client))
         mq_bp_task = asyncio.create_task(monitor_backpressure(redis_client))
         capture_main_loop()
         init_build_info(version="2.0.0", commit="unknown")
+        if os.getenv("ENABLE_CRON_SCHEDULER", "1") == "1":
+            cron_thread = start_cron_scheduler()
+            logger.info("cron_scheduler_thread_started name=%s", getattr(cron_thread, "name", "cron-scheduler"))
 
     yield
 
     if os.getenv("TESTING") != "1":
         monitor_task.cancel()
         mq_consumer_task.cancel()
+        mq_log_task.cancel()
         mq_bp_task.cancel()
         if redis_client:
             await redis_client.aclose()
@@ -131,8 +158,10 @@ app.include_router(audit_router)
 app.include_router(schedules_router)
 app.include_router(templates_router)
 app.include_router(pipeline_router)
+app.include_router(builtin_actions_router)
 # Phase 3 routers (replace legacy tools + workflows)
 app.include_router(tool_catalog_router)
+app.include_router(action_templates_router)
 app.include_router(orchestration_router)
 app.include_router(agent_api_router)
 

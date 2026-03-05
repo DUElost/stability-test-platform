@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import require_admin, User
@@ -42,8 +43,21 @@ def list_audit_logs(
     if end_time:
         query = query.filter(AuditLog.timestamp <= end_time)
 
-    total = query.count()
-    rows = query.order_by(AuditLog.timestamp.desc()).offset(skip).limit(limit).all()
+    try:
+        total = query.count()
+        rows = query.order_by(AuditLog.timestamp.desc()).offset(skip).limit(limit).all()
+    except ProgrammingError as exc:
+        # 兼容尚未创建 audit_logs 的环境：返回空结果而不是 500
+        message = str(exc)
+        if "audit_logs" not in message or (
+            "does not exist" not in message.lower()
+            and "undefinedtable" not in message.lower()
+            and "不存在" not in message
+        ):
+            raise
+        db.rollback()
+        return PaginatedResponse(items=[], total=0, skip=skip, limit=limit)
+
     items = [
         AuditLogOut.model_validate(r) if hasattr(AuditLogOut, "model_validate") else AuditLogOut.from_orm(r)
         for r in rows

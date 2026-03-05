@@ -1,18 +1,18 @@
 """Pipeline execution engine for the agent.
 
-Parses pipeline definitions and executes phases/steps according to the
-defined topology: phases run serially, steps within a phase can run
-in parallel via ThreadPoolExecutor.
+Parses stages-format pipeline definitions and executes steps in stage order:
+prepare -> execute -> post_process.
 """
 
+import hashlib
 import importlib.util
+import json
 import logging
 import os
+import shutil
+import tarfile
 import threading
 import time
-import tarfile
-import hashlib
-import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class StepContext:
     """Context passed to each action function."""
+
     adb: Any  # AdbWrapper instance
     serial: str
     params: dict
@@ -32,11 +33,14 @@ class StepContext:
     logger: Any  # StepLogger instance
     # Shared metrics store for cross-step data passing (e.g., PID from start_process)
     shared: dict = field(default_factory=dict)
+    # LocalDB instance for cross-run persistent state (e.g., incremental scan_aee)
+    local_db: Any = None
 
 
 @dataclass
 class StepResult:
     """Result returned by each action function."""
+
     success: bool
     exit_code: int = 0
     error_message: str = ""
@@ -57,6 +61,7 @@ class PipelineEngine:
         http_fallback=None,
         mq_producer=None,
         tool_registry=None,
+        local_db=None,
     ):
         self._adb = adb
         self._serial = serial
@@ -66,6 +71,7 @@ class PipelineEngine:
         self._http_fallback = http_fallback
         self._mq = mq_producer
         self._registry = tool_registry
+        self._local_db = local_db
         self._shared: dict = {}
         self._canceled = False
 
@@ -74,62 +80,14 @@ class PipelineEngine:
         self._canceled = True
 
     def execute(self, pipeline_def: dict) -> StepResult:
-        """Execute the full pipeline. Auto-detects stages (new) vs phases (legacy) format."""
+        """Execute the full pipeline in stages format."""
         if "stages" in pipeline_def:
             return self._execute_stages_format(pipeline_def)
 
-        phases = pipeline_def.get("phases", [])
-        if not phases:
-            return StepResult(success=False, exit_code=1, error_message="Empty pipeline: no phases defined")
-
-        overall_success = True
-        overall_error = ""
-
-        for phase_idx, phase in enumerate(phases):
-            if self._canceled:
-                logger.info(f"Pipeline canceled before phase '{phase.get('name')}'")
-                # Cancel all remaining phases' steps
-                self._cancel_remaining_phases(phases, phase_idx)
-                break
-
-            phase_name = phase.get("name", "unknown")
-            parallel = phase.get("parallel", False)
-            steps = phase.get("steps", [])
-
-            logger.info(f"[Pipeline] Starting phase: {phase_name} (parallel={parallel}, steps={len(steps)})")
-
-            # Emit fold group start marker for frontend rendering
-            self._emit_fold_marker("start", phase_name, len(steps), parallel)
-
-            if parallel:
-                phase_result = self._execute_parallel(phase_name, steps)
-            else:
-                phase_result = self._execute_serial(phase_name, steps)
-
-            # Emit fold group end marker
-            self._emit_fold_marker("end", phase_name, len(steps), parallel, not phase_result.success)
-
-            if not phase_result.success:
-                overall_success = False
-                overall_error = phase_result.error_message
-                # Check if any failed step had on_failure=stop
-                if self._should_stop_pipeline(steps, phase_result):
-                    logger.info(f"[Pipeline] Phase '{phase_name}' failed with stop policy, aborting pipeline")
-                    # Cancel all subsequent phases' steps (fix: #6)
-                    self._cancel_remaining_phases(phases, phase_idx + 1)
-                    break
-                else:
-                    logger.info(f"[Pipeline] Phase '{phase_name}' had failures but continuing (on_failure=continue)")
-
-        artifact = None
-        if overall_success or overall_error:  # Even on failure, try to archive logs
-            artifact = self._archive_logs()
-
         return StepResult(
-            success=overall_success,
-            exit_code=0 if overall_success else 1,
-            error_message=overall_error,
-            artifact=artifact,
+            success=False,
+            exit_code=1,
+            error_message="legacy phases format is unsupported; use pipeline_def.stages",
         )
 
     def _archive_logs(self) -> Optional[dict]:
@@ -140,11 +98,11 @@ class PipelineEngine:
         try:
             # Archive filename
             archive_path = f"{self._log_dir}.tar.gz"
-            
+
             # Create tarball
             with tarfile.open(archive_path, "w:gz") as tar:
                 tar.add(self._log_dir, arcname=os.path.basename(self._log_dir))
-            
+
             # Calculate size and checksum
             size_bytes = os.path.getsize(archive_path)
             sha256 = hashlib.sha256()
@@ -169,7 +127,10 @@ class PipelineEngine:
         """Check if the pipeline should stop based on failure policies."""
         # If any step failed with on_failure=stop, abort
         for step_def in steps:
-            if step_def.get("_failed", False) and step_def.get("on_failure", "stop") == "stop":
+            if (
+                step_def.get("_failed", False)
+                and step_def.get("on_failure", "stop") == "stop"
+            ):
                 return True
         return False
 
@@ -196,7 +157,11 @@ class PipelineEngine:
                 # on_failure=continue: proceed
 
         # on_failure=continue steps may have _failed set, but don't fail the phase
-        stop_failures = [s for s in steps if s.get("_failed") and s.get("on_failure", "stop") == "stop"]
+        stop_failures = [
+            s
+            for s in steps
+            if s.get("_failed") and s.get("on_failure", "stop") == "stop"
+        ]
         return StepResult(success=len(stop_failures) == 0)
 
     def _execute_parallel(self, phase_name: str, steps: list) -> StepResult:
@@ -222,13 +187,17 @@ class PipelineEngine:
                         if policy == "retry":
                             max_retries = step_def.get("max_retries", 0)
                             if max_retries > 0:
-                                retried = self._retry_step(phase_name, idx, step_def, max_retries)
+                                retried = self._retry_step(
+                                    phase_name, idx, step_def, max_retries
+                                )
                                 results[idx] = retried
                                 if retried.success:
                                     step_def["_failed"] = False
                 except Exception as e:
                     step_def["_failed"] = True
-                    results[idx] = StepResult(success=False, exit_code=1, error_message=str(e))
+                    results[idx] = StepResult(
+                        success=False, exit_code=1, error_message=str(e)
+                    )
 
         # Determine phase result:
         # - has_stop_failure: any step with on_failure=stop (or default) failed → phase fails
@@ -250,7 +219,9 @@ class PipelineEngine:
                         continue_error_msgs.append(r.error_message)
 
         if continue_error_msgs:
-            logger.warning(f"[Pipeline] Phase '{phase_name}' had {len(continue_error_msgs)} continue-policy failures: {'; '.join(continue_error_msgs)}")
+            logger.warning(
+                f"[Pipeline] Phase '{phase_name}' had {len(continue_error_msgs)} continue-policy failures: {'; '.join(continue_error_msgs)}"
+            )
 
         return StepResult(
             success=not has_stop_failure,
@@ -260,7 +231,7 @@ class PipelineEngine:
 
     def _execute_step(self, phase_name: str, idx: int, step_def: dict) -> StepResult:
         """Execute a single step: resolve action, run, report status."""
-        from backend.agent.ws_client import StepLogger
+        from .ws_client import StepLogger
 
         step_name = step_def.get("name", f"step_{idx}")
         action_ref = step_def.get("action", "")
@@ -272,10 +243,15 @@ class PipelineEngine:
         log_file = None
         if self._log_dir:
             import re
-            safe_name = re.sub(r'[^\w\-]', '_', step_name)
+
+            safe_name = re.sub(r"[^\w\-]", "_", step_name)
             log_file = os.path.join(self._log_dir, f"step_{idx:02d}_{safe_name}.log")
 
-        step_logger = StepLogger(self._ws, self._run_id, step_id, log_file=log_file) if self._ws else None
+        step_logger = (
+            StepLogger(self._ws, self._run_id, step_id, log_file=log_file)
+            if self._ws
+            else None
+        )
 
         # Report step RUNNING
         self._report_step_status(step_id, "RUNNING", started_at=datetime.utcnow())
@@ -299,7 +275,11 @@ class PipelineEngine:
         try:
             action_fn = self._resolve_action(action_ref)
             if action_fn is None:
-                result = StepResult(success=False, exit_code=1, error_message=f"Unknown action: {action_ref}")
+                result = StepResult(
+                    success=False,
+                    exit_code=1,
+                    error_message=f"Unknown action: {action_ref}",
+                )
             else:
                 # Execute with timeout
                 result = self._run_with_timeout(action_fn, ctx, timeout)
@@ -311,7 +291,8 @@ class PipelineEngine:
         # Report step completion
         status = "COMPLETED" if result.success else "FAILED"
         self._report_step_status(
-            step_id, status,
+            step_id,
+            status,
             finished_at=datetime.utcnow(),
             exit_code=result.exit_code,
             error_message=result.error_message if not result.success else None,
@@ -329,9 +310,10 @@ class PipelineEngine:
     def _resolve_action(self, action_ref: str) -> Optional[Callable]:
         """Resolve an action reference to a callable (legacy phases format)."""
         if action_ref.startswith("builtin:"):
-            action_name = action_ref[len("builtin:"):]
+            action_name = action_ref[len("builtin:") :]
             try:
-                from backend.agent.actions import ACTION_REGISTRY
+                from .actions import ACTION_REGISTRY
+
                 return ACTION_REGISTRY.get(action_name)
             except ImportError:
                 logger.error("Cannot import ACTION_REGISTRY")
@@ -344,14 +326,16 @@ class PipelineEngine:
                 error_message="tool: actions require stages format with ToolRegistry",
             )
         elif action_ref.startswith("shell:"):
-            command = action_ref[len("shell:"):]
+            command = action_ref[len("shell:") :]
             return lambda ctx: self._run_shell_action(ctx, command)
         return None
 
     def _run_shell_action(self, ctx: StepContext, command: str) -> StepResult:
         """Execute an ADB shell command as a pipeline step."""
         try:
-            result = ctx.adb.shell(ctx.serial, command, timeout=ctx.params.get("timeout", 30))
+            result = ctx.adb.shell(
+                ctx.serial, command, timeout=ctx.params.get("timeout", 30)
+            )
             if ctx.logger:
                 for line in (result.stdout or "").splitlines():
                     ctx.logger.info(line)
@@ -362,7 +346,9 @@ class PipelineEngine:
         except Exception as e:
             return StepResult(success=False, exit_code=1, error_message=str(e))
 
-    def _run_with_timeout(self, action_fn: Callable, ctx: StepContext, timeout: int) -> StepResult:
+    def _run_with_timeout(
+        self, action_fn: Callable, ctx: StepContext, timeout: int
+    ) -> StepResult:
         """Run an action with timeout enforcement.
 
         Uses a daemon thread so that on timeout, the calling thread returns
@@ -386,28 +372,41 @@ class PipelineEngine:
             # The daemon thread will be abandoned (cleaned up on process exit).
             logger.warning(f"Step timed out after {timeout}s, abandoning worker thread")
             return StepResult(
-                success=False, exit_code=124,
+                success=False,
+                exit_code=124,
                 error_message=f"Step timed out after {timeout}s",
             )
 
         if error_holder:
-            return StepResult(success=False, exit_code=1, error_message=str(error_holder[0]))
+            return StepResult(
+                success=False, exit_code=1, error_message=str(error_holder[0])
+            )
 
         if result_holder:
             return result_holder[0]
 
-        return StepResult(success=False, exit_code=1, error_message="Action returned no result")
+        return StepResult(
+            success=False, exit_code=1, error_message="Action returned no result"
+        )
 
-    def _retry_step(self, phase_name: str, idx: int, step_def: dict, max_retries: int) -> StepResult:
+    def _retry_step(
+        self, phase_name: str, idx: int, step_def: dict, max_retries: int
+    ) -> StepResult:
         """Retry a failed step up to max_retries times."""
         for attempt in range(1, max_retries + 1):
-            logger.info(f"[Pipeline] Retrying step '{step_def.get('name')}' (attempt {attempt}/{max_retries})")
+            logger.info(
+                f"[Pipeline] Retrying step '{step_def.get('name')}' (attempt {attempt}/{max_retries})"
+            )
             time.sleep(5)  # Fixed delay between retries
             result = self._execute_step(phase_name, idx, step_def)
             if result.success:
                 step_def["_failed"] = False
                 return result
-        return StepResult(success=False, exit_code=1, error_message=f"Step failed after {max_retries} retries")
+        return StepResult(
+            success=False,
+            exit_code=1,
+            error_message=f"Step failed after {max_retries} retries",
+        )
 
     def _mark_remaining_canceled(self, steps: list, start_idx: int):
         """Mark remaining steps as CANCELED."""
@@ -438,8 +437,14 @@ class PipelineEngine:
             except Exception as e:
                 logger.warning(f"HTTP step status fallback failed: {e}")
 
-    def _emit_fold_marker(self, kind: str, phase_name: str, step_count: int,
-                          parallel: bool, failed: bool = False):
+    def _emit_fold_marker(
+        self,
+        kind: str,
+        phase_name: str,
+        step_count: int,
+        parallel: bool,
+        failed: bool = False,
+    ):
         """Emit ANSI fold markers for frontend log grouping.
 
         Protocol (VS Code-style OSC 633):
@@ -450,7 +455,8 @@ class PipelineEngine:
             return
 
         try:
-            from backend.agent.ws_client import StepLogger
+            from .ws_client import StepLogger
+
             # Use step_id=0 as fold markers are phase-level, not step-level
             fold_logger = StepLogger(self._ws, self._run_id, 0)
             if kind == "start":
@@ -469,6 +475,12 @@ class PipelineEngine:
 
     def _execute_stages_format(self, pipeline_def: dict) -> StepResult:
         """Execute new stages-format pipeline: prepare → execute → post_process (serial)."""
+        # Replace {log_dir} placeholders in pipeline params
+        if self._log_dir:
+            raw = json.dumps(pipeline_def)
+            raw = raw.replace("{log_dir}", self._log_dir.replace("\\", "/"))
+            pipeline_def = json.loads(raw)
+
         stages_def = pipeline_def.get("stages", {})
 
         for stage_name in ("prepare", "execute", "post_process"):
@@ -477,7 +489,9 @@ class PipelineEngine:
                 success = self._run_step_with_retry_stages(stage_name, step)
                 if not success:
                     step_id = step.get("step_id", "unknown")
-                    self._report_job_status_mq("FAILED", reason=f"step_failed:{step_id}")
+                    self._report_job_status_mq(
+                        "FAILED", reason=f"step_failed:{step_id}"
+                    )
                     return StepResult(
                         success=False,
                         exit_code=1,
@@ -511,6 +525,7 @@ class PipelineEngine:
         log_file = None
         if self._log_dir:
             import re
+
             safe = re.sub(r"[^\w\-]", "_", step_id)
             log_file = os.path.join(self._log_dir, f"{stage}_{safe}.log")
 
@@ -522,13 +537,17 @@ class PipelineEngine:
             step_id=0,
             logger=self._make_mq_logger(step_id, log_file),
             shared=self._shared,
+            local_db=self._local_db,
         )
 
         try:
             action_fn = self._resolve_action_stages(action, step)
             if action_fn is None:
-                result = StepResult(success=False, exit_code=1,
-                                    error_message=f"Unknown action: {action}")
+                result = StepResult(
+                    success=False,
+                    exit_code=1,
+                    error_message=f"Unknown action: {action}",
+                )
             else:
                 result = self._run_with_timeout(action_fn, ctx, timeout)
         except Exception as e:
@@ -536,18 +555,26 @@ class PipelineEngine:
 
         event_type = "COMPLETED" if result.success else "FAILED"
         self._report_step_trace_mq(
-            step_id, stage, event_type,
+            step_id,
+            stage,
+            event_type,
             "COMPLETED" if result.success else "FAILED",
             error_message=result.error_message if not result.success else None,
         )
+
+        # Store metrics in shared context (mirrors legacy _execute_step behavior)
+        if result.metrics:
+            self._shared[step_id] = result.metrics
+
         return result
 
     def _resolve_action_stages(self, action: str, step: dict) -> Optional[Callable]:
         """Resolve action for stages format. tool: uses ToolRegistry; no shell: allowed."""
         if action.startswith("builtin:"):
-            action_name = action[len("builtin:"):]
+            action_name = action[len("builtin:") :]
             try:
-                from backend.agent.actions import ACTION_REGISTRY
+                from .actions import ACTION_REGISTRY
+
                 return ACTION_REGISTRY.get(action_name)
             except ImportError:
                 logger.error("Cannot import ACTION_REGISTRY")
@@ -558,11 +585,14 @@ class PipelineEngine:
                 tool_id = int(action.split(":", 1)[1])
             except (IndexError, ValueError):
                 return lambda ctx: StepResult(
-                    success=False, exit_code=1,
+                    success=False,
+                    exit_code=1,
                     error_message=f"Invalid tool action format: {action}",
                 )
             required_version = step.get("version", "")
-            return lambda ctx: self._run_tool_action_stages(ctx, tool_id, required_version)
+            return lambda ctx: self._run_tool_action_stages(
+                ctx, tool_id, required_version
+            )
 
         return None
 
@@ -572,12 +602,15 @@ class PipelineEngine:
         """Execute a tool: action via ToolRegistry. Handles version mismatch + PENDING_TOOL."""
         if self._registry is None:
             return StepResult(
-                success=False, exit_code=1,
+                success=False,
+                exit_code=1,
                 error_message="ToolRegistry not available — cannot execute tool: action",
             )
 
-        from backend.agent.registry.tool_registry import (
-            ToolEntry, ToolNotFoundLocally, ToolVersionMismatch,
+        from .registry.tool_registry import (
+            ToolEntry,
+            ToolNotFoundLocally,
+            ToolVersionMismatch,
         )
 
         try:
@@ -590,7 +623,8 @@ class PipelineEngine:
                     reason=f"tool_pull_failed:network tool_id={tool_id} version={required_version}",
                 )
                 return StepResult(
-                    success=False, exit_code=1,
+                    success=False,
+                    exit_code=1,
                     error_message=f"tool_pull_failed: tool_id={tool_id} version={required_version}",
                 )
             try:
@@ -601,12 +635,14 @@ class PipelineEngine:
                     reason=f"tool_version_not_exist:tool_id={tool_id} version={required_version}",
                 )
                 return StepResult(
-                    success=False, exit_code=1,
+                    success=False,
+                    exit_code=1,
                     error_message=f"tool_version_not_exist: tool_id={tool_id} version={required_version}",
                 )
         except ToolNotFoundLocally:
             return StepResult(
-                success=False, exit_code=1,
+                success=False,
+                exit_code=1,
                 error_message=f"tool_not_found: tool_id={tool_id}",
             )
 
@@ -619,7 +655,8 @@ class PipelineEngine:
 
         if not script_path or not os.path.exists(script_path):
             return StepResult(
-                success=False, exit_code=1,
+                success=False,
+                exit_code=1,
                 error_message=f"Tool script not found: {script_path!r}",
             )
 
@@ -660,14 +697,16 @@ class PipelineEngine:
             return
         # WS fallback (best-effort)
         if self._ws:
-            self._ws.send({
-                "type": "step_trace",
-                "run_id": self._run_id,
-                "step_id": step_id,
-                "stage": stage,
-                "event_type": event_type,
-                "status": status,
-            })
+            self._ws.send(
+                {
+                    "type": "step_trace",
+                    "run_id": self._run_id,
+                    "step_id": step_id,
+                    "stage": stage,
+                    "event_type": event_type,
+                    "status": status,
+                }
+            )
 
     def _report_job_status_mq(self, status: str, reason: str = "") -> None:
         """Send job_status event via MQ (primary) or WS fallback."""
@@ -675,12 +714,14 @@ class PipelineEngine:
             self._mq.send_job_status(self._run_id, status, reason)
             return
         if self._ws:
-            self._ws.send({
-                "type": "job_status",
-                "run_id": self._run_id,
-                "status": status,
-                "reason": reason,
-            })
+            self._ws.send(
+                {
+                    "type": "job_status",
+                    "run_id": self._run_id,
+                    "status": status,
+                    "reason": reason,
+                }
+            )
 
     def _make_mq_logger(self, step_id: str, log_file: Optional[str] = None):
         """Create a simple logger that writes to MQ stp:logs and a local file."""
@@ -695,7 +736,9 @@ class PipelineEngine:
 class _MQStepLogger:
     """Lightweight logger that sends lines to stp:logs via MQ and optionally to a file."""
 
-    def __init__(self, mq_producer, run_id: int, step_id_str: str, log_file: Optional[str] = None):
+    def __init__(
+        self, mq_producer, run_id: int, step_id_str: str, log_file: Optional[str] = None
+    ):
         self._mq = mq_producer
         self._run_id = run_id
         self._step_id = step_id_str

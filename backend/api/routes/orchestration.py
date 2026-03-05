@@ -6,11 +6,13 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from backend.api.schemas import ORMBaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
 from backend.core.database import get_async_db
+from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.job import JobInstance, StepTrace, TaskTemplate
 from backend.models.host import Device
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
@@ -48,7 +50,7 @@ class WorkflowRunTrigger(BaseModel):
     failure_threshold: Optional[float] = None
 
 
-class TaskTemplateOut(BaseModel):
+class TaskTemplateOut(ORMBaseModel):
     id: int
     name: str
     pipeline_def: dict
@@ -57,7 +59,7 @@ class TaskTemplateOut(BaseModel):
     created_at: datetime
 
 
-class WorkflowDefOut(BaseModel):
+class WorkflowDefOut(ORMBaseModel):
     id: int
     name: str
     description: Optional[str]
@@ -68,7 +70,7 @@ class WorkflowDefOut(BaseModel):
     task_templates: List[TaskTemplateOut] = []
 
 
-class StepTraceOut(BaseModel):
+class StepTraceOut(ORMBaseModel):
     id: int
     job_id: int
     step_id: str
@@ -81,7 +83,7 @@ class StepTraceOut(BaseModel):
     created_at: datetime
 
 
-class JobInstanceOut(BaseModel):
+class JobInstanceOut(ORMBaseModel):
     id: int
     workflow_run_id: int
     task_template_id: int
@@ -96,7 +98,7 @@ class JobInstanceOut(BaseModel):
     step_traces: List[StepTraceOut] = []
 
 
-class WorkflowRunOut(BaseModel):
+class WorkflowRunOut(ORMBaseModel):
     id: int
     workflow_definition_id: int
     status: str
@@ -110,11 +112,30 @@ class WorkflowRunOut(BaseModel):
 
 # ── WorkflowDefinition CRUD ───────────────────────────────────────────────────
 
+
+def _validate_task_templates(task_templates: List[TaskTemplateIn]) -> None:
+    for idx, template in enumerate(task_templates):
+        is_valid, errors = validate_pipeline_def(template.pipeline_def)
+        if is_valid:
+            continue
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_PIPELINE_DEF",
+                "template_index": idx,
+                "template_name": template.name,
+                "errors": errors,
+            },
+        )
+
+
 @router.post("/workflows", response_model=ApiResponse[WorkflowDefOut])
 async def create_workflow(
     payload: WorkflowDefCreate,
     db: AsyncSession = Depends(get_async_db),
 ):
+    _validate_task_templates(payload.task_templates)
+
     now = datetime.utcnow()
     wf = WorkflowDefinition(
         name=payload.name,
@@ -194,6 +215,8 @@ async def update_workflow(
     wf.updated_at = datetime.utcnow()
 
     if payload.task_templates is not None:
+        _validate_task_templates(payload.task_templates)
+
         # Replace all templates: delete existing, insert new
         from sqlalchemy import delete as sa_delete
         await db.execute(sa_delete(TaskTemplate).where(TaskTemplate.workflow_definition_id == wf_id))

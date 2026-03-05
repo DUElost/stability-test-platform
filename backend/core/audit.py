@@ -5,7 +5,9 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import Request
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.session import object_session
 
 from backend.models.schemas import AuditLog
 
@@ -22,7 +24,7 @@ def record_audit(
     user_id: Optional[int] = None,
     username: Optional[str] = None,
     request: Optional[Request] = None,
-) -> AuditLog:
+) -> Optional[AuditLog]:
     """Record an audit log entry for a mutation operation."""
     ip_address = None
     if request:
@@ -41,9 +43,36 @@ def record_audit(
         details=details or {},
         ip_address=ip_address,
     )
-    db.add(entry)
-    # Flush so the caller's commit will include the audit row
-    db.flush()
+    try:
+        # 使用 savepoint 包裹审计写入，避免审计失败污染主业务事务
+        with db.begin_nested():
+            db.add(entry)
+            db.flush()
+    except (ProgrammingError, OperationalError) as exc:
+        message = str(exc)
+        is_missing_audit_table = (
+            "audit_logs" in message
+            and (
+                "does not exist" in message.lower()
+                or "undefinedtable" in message.lower()
+                or "不存在" in message
+            )
+        )
+        if not is_missing_audit_table:
+            raise
+
+        # 缺少 audit_logs 表时降级：仅记录告警，不阻塞主流程
+        if object_session(entry) is db:
+            db.expunge(entry)
+        logger.warning(
+            "audit_logs_missing_skip: %s %s/%s by %s",
+            action,
+            resource_type,
+            resource_id,
+            username or user_id or "anonymous",
+        )
+        return None
+
     logger.info(
         "audit: %s %s/%s by %s",
         action,

@@ -1,8 +1,10 @@
 """
 Tests for devices API routes
 """
-import pytest
-from datetime import datetime, timedelta
+from datetime import datetime
+from uuid import uuid4
+
+from backend.models.host import Device
 
 
 class TestCreateDevice:
@@ -62,7 +64,7 @@ class TestCreateDevice:
             json={
                 "serial": "INVALID001",
                 "model": "InvalidModel",
-                "host_id": 99999,
+                "host_id": "missing-host",
             },
             headers=auth_headers,
         )
@@ -74,7 +76,7 @@ class TestListDevices:
 
     def test_list_devices_empty(self, client):
         """Test listing devices when empty"""
-        response = client.get("/api/v1/devices")
+        response = client.get("/api/v1/devices?status=__NONE__")
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
@@ -85,18 +87,23 @@ class TestListDevices:
         response = client.get("/api/v1/devices")
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 1
-        assert data[0]["serial"] == sample_device.serial
-        assert data[0]["model"] == sample_device.model
+        device_data = next((d for d in data if d["id"] == sample_device.id), None)
+        assert device_data is not None
+        assert device_data["serial"] == sample_device.serial
+        assert device_data["model"] == sample_device.model
 
     def test_list_devices_ordered_by_id(self, client, sample_host, auth_headers):
         """Test devices are ordered by id"""
         # Create multiple devices
+        prefix = f"ORDER-{uuid4().hex[:8]}"
+        created_serials = []
         for i in range(3):
+            serial = f"{prefix}-{i}"
+            created_serials.append(serial)
             client.post(
                 "/api/v1/devices",
                 json={
-                    "serial": f"ORDER{i}",
+                    "serial": serial,
                     "model": "OrderModel",
                     "host_id": sample_host.id,
                 },
@@ -105,9 +112,10 @@ class TestListDevices:
 
         response = client.get("/api/v1/devices")
         data = response.json()
-        assert len(data) == 3
         ids = [d["id"] for d in data]
         assert ids == sorted(ids)
+        serials = {d["serial"] for d in data}
+        assert set(created_serials).issubset(serials)
 
     def test_list_devices_status_offline_when_host_offline(
         self, client, db_session, sample_device, sample_offline_host
@@ -120,7 +128,9 @@ class TestListDevices:
         response = client.get("/api/v1/devices")
         assert response.status_code == 200
         data = response.json()
-        assert data[0]["status"] == "OFFLINE"
+        device_data = next((d for d in data if d["id"] == sample_device.id), None)
+        assert device_data is not None
+        assert device_data["status"] == "OFFLINE"
 
 
 class TestGetDevice:
@@ -186,16 +196,9 @@ class TestDeviceWithHostRelationship:
 
     def test_device_without_host(self, client, db_session):
         """Test device without host association"""
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device, DeviceStatus
-
         device = Device(
-            serial="NOHOST001",
-            status=DeviceStatus.ONLINE,
+            serial=f"NOHOST-{uuid4().hex[:8]}",
+            status="ONLINE",
             last_seen=datetime.utcnow(),
         )
         db_session.add(device)

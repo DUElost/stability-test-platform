@@ -153,6 +153,8 @@ async def websocket_job_logs(websocket: WebSocket, job_id: int, token: Optional[
         return
     path = f"/ws/jobs/{job_id}/logs"
     await manager.connect(websocket, path)
+    # Send recent logs on connect (best-effort), to avoid missing fast jobs
+    await _send_recent_job_logs(websocket, job_id)
     try:
         while True:
             await websocket.receive_text()
@@ -170,6 +172,8 @@ async def websocket_logs(websocket: WebSocket, run_id: int, token: Optional[str]
         return
     path = f"/ws/logs/{run_id}"
     await manager.connect(websocket, path)
+    # Send recent logs on connect (best-effort), to avoid missing fast jobs
+    await _send_recent_job_logs(websocket, run_id)
     try:
         while True:
             data = await websocket.receive_text()
@@ -299,16 +303,16 @@ async def broadcast_report_ready(run_id: int, task_id: int) -> None:
 # and step status updates. Relays log messages to frontend subscribers.
 
 _AGENT_SECRET = os.getenv("AGENT_SECRET", "")
-_agent_connections: Dict[int, WebSocket] = {}  # host_id -> WebSocket
+_agent_connections: Dict[str, WebSocket] = {}  # host_id -> WebSocket
 
 
-def get_agent_connections() -> Dict[int, WebSocket]:
+def get_agent_connections() -> Dict[str, WebSocket]:
     """Get the current agent WebSocket connections map."""
     return _agent_connections
 
 
 @router.websocket("/ws/agent/{host_id}")
-async def websocket_agent(websocket: WebSocket, host_id: int):
+async def websocket_agent(websocket: WebSocket, host_id: str):
     """WebSocket endpoint for agent connections. Authenticates via AGENT_SECRET."""
     await websocket.accept()
 
@@ -446,7 +450,7 @@ def _parse_iso_timestamp(value: str) -> "datetime":
     return datetime.fromisoformat(value)
 
 
-def _handle_agent_step_update(msg: dict, agent_host_id: int = 0) -> None:
+def _handle_agent_step_update(msg: dict, agent_host_id: Optional[str] = None) -> None:
     """Update RunStep record in DB from agent WS message. Runs in the main thread."""
     from backend.core.database import SessionLocal
     from backend.models.schemas import RunStep, RunStepStatus, TaskRun
@@ -486,7 +490,7 @@ def _handle_agent_step_update(msg: dict, agent_host_id: int = 0) -> None:
         # Validate host ownership: run must be assigned to the connecting agent's host
         if agent_host_id:
             run = db.get(TaskRun, step.run_id)
-            if run and run.host_id != agent_host_id:
+            if run and str(run.host_id) != str(agent_host_id):
                 logger.warning(
                     f"step_update host mismatch: run {step.run_id} is assigned to host {run.host_id}, "
                     f"but update came from host {agent_host_id}"
@@ -528,12 +532,12 @@ def _handle_agent_step_update(msg: dict, agent_host_id: int = 0) -> None:
         db.close()
 
 
-def _handle_agent_heartbeat(host_id: int, msg: dict) -> None:
+def _handle_agent_heartbeat(host_id: str, msg: dict) -> None:
     """Process heartbeat received via agent WebSocket."""
     from backend.core.database import SessionLocal
+    from backend.models.enums import HostStatus
     from backend.models.host import Host
-    from backend.models.schemas import HostStatus
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     db = SessionLocal()
     try:
@@ -541,8 +545,8 @@ def _handle_agent_heartbeat(host_id: int, msg: dict) -> None:
         if not host:
             return
 
-        host.status = HostStatus.ONLINE
-        host.last_heartbeat = datetime.utcnow()
+        host.status = HostStatus.ONLINE.value
+        host.last_heartbeat = datetime.now(timezone.utc)
 
         stats = msg.get("stats", {})
         if stats:
@@ -554,3 +558,41 @@ def _handle_agent_heartbeat(host_id: int, msg: dict) -> None:
         db.rollback()
     finally:
         db.close()
+
+
+async def _send_recent_job_logs(websocket: WebSocket, job_id: int, limit: int = 200) -> None:
+    """Replay recent logs for a job from Redis to avoid missing fast-completing runs."""
+    try:
+        from backend.main import redis_client
+        if not redis_client:
+            return
+
+        # Read a recent window and filter by job_id (log stream is global)
+        window = max(500, limit * 3)
+        entries = await redis_client.xrevrange("stp:logs", max="+", min="-", count=window)
+        if not entries:
+            return
+
+        wanted = []
+        job_id_str = str(job_id)
+        for _msg_id, fields in entries:
+            if fields.get("job_id") == job_id_str:
+                wanted.append(fields)
+                if len(wanted) >= limit:
+                    break
+
+        # Send in chronological order
+        for fields in reversed(wanted):
+            log_data = {
+                "type": "STEP_LOG",
+                "payload": {
+                    "step_id": fields.get("tag") or "",
+                    "seq": None,
+                    "level": fields.get("level", "INFO"),
+                    "ts": fields.get("timestamp", ""),
+                    "msg": fields.get("message", ""),
+                },
+            }
+            await websocket.send_json(log_data)
+    except Exception as e:
+        logger.warning(f"Replay recent logs failed for job {job_id}: {e}")

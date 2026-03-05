@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import React, { createRef } from 'react';
+import { createRef } from 'react';
 
 // Mock terminal instance methods
 const mockWriteln = vi.fn();

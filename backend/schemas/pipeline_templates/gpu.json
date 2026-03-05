@@ -1,58 +1,46 @@
 {
   "version": 1,
   "description": "GPU stress test: install APK, launch benchmark activity in loops",
-  "phases": [
-    {
-      "name": "prepare",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "check_device",
-          "action": "builtin:check_device",
-          "params": {},
-          "timeout": 30,
-          "on_failure": "stop"
-        },
-        {
-          "name": "ensure_root",
-          "action": "builtin:ensure_root",
-          "params": {},
-          "timeout": 30,
-          "on_failure": "continue"
-        },
-        {
-          "name": "install_apk",
-          "action": "builtin:install_apk",
-          "params": {
-            "apk_path": "{apk_path}",
-            "reinstall": true
-          },
-          "timeout": 120,
-          "on_failure": "stop"
+  "stages": {
+    "prepare": [
+      {
+        "step_id": "check_device",
+        "action": "builtin:check_device",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {}
+      },
+      {
+        "step_id": "ensure_root",
+        "action": "builtin:ensure_root",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {}
+      },
+      {
+        "step_id": "install_apk",
+        "action": "builtin:install_apk",
+        "timeout_seconds": 120,
+        "retry": 0,
+        "params": {
+          "reinstall": true,
+          "apk_path": "{apk_path}"
         }
-      ]
-    },
-    {
-      "name": "execute",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "run_gpu_benchmark",
-          "action": "builtin:start_process",
-          "params": {
-            "command": "am start -n {activity}",
-            "background": false,
-            "timeout": 600
-          },
+      }
+    ],
+    "execute": [
+      {
+        "step_id": "run_gpu_benchmark",
+        "action": "builtin:start_process",
+        "timeout_seconds": 600,
+        "retry": 0,
+        "params": {
           "timeout": 600,
-          "on_failure": "continue"
+          "command": "am start -n {activity}",
+          "background": false
         }
-      ]
-    },
-    {
-      "name": "teardown",
-      "parallel": false,
-      "steps": []
-    }
-  ]
+      }
+    ],
+    "post_process": []
+  }
 }

@@ -13,7 +13,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
-from backend.models.schemas import RunStatus
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
 logger = logging.getLogger(__name__)
@@ -81,7 +80,7 @@ def get_activity(
                 to_char(date_trunc('hour', started_at), 'YYYY-MM-DD"T"HH24:00:00') AS hour,
                 status,
                 COUNT(*) AS cnt
-            FROM task_runs
+            FROM job_instance
             WHERE started_at >= :since AND started_at IS NOT NULL
             GROUP BY hour, status
         """), {"since": since}).fetchall()
@@ -91,7 +90,7 @@ def get_activity(
                 strftime('%Y-%m-%dT%H:00:00', started_at) AS hour,
                 status,
                 COUNT(*) AS cnt
-            FROM task_runs
+            FROM job_instance
             WHERE started_at >= :since AND started_at IS NOT NULL
             GROUP BY hour, status
         """), {"since": since}).fetchall()
@@ -102,9 +101,9 @@ def get_activity(
         if h not in buckets:
             buckets[h] = {"started": 0, "completed": 0, "failed": 0}
         buckets[h]["started"] += cnt
-        if status in (RunStatus.FINISHED.value, "FINISHED"):
+        if status == "COMPLETED":
             buckets[h]["completed"] += cnt
-        elif status in (RunStatus.FAILED.value, "FAILED"):
+        elif status in ("FAILED", "ABORTED"):
             buckets[h]["failed"] += cnt
 
     # Fill empty hours
@@ -145,25 +144,25 @@ def get_completion_trend(
     if dialect == "postgresql":
         rows = db.execute(text("""
             SELECT
-                to_char(date_trunc('day', finished_at), 'YYYY-MM-DD') AS day,
+                to_char(date_trunc('day', ended_at), 'YYYY-MM-DD') AS day,
                 status,
                 COUNT(*) AS cnt
-            FROM task_runs
-            WHERE finished_at >= :since
-              AND finished_at IS NOT NULL
-              AND status IN ('FINISHED', 'FAILED')
+            FROM job_instance
+            WHERE ended_at >= :since
+              AND ended_at IS NOT NULL
+              AND status IN ('COMPLETED', 'FAILED', 'ABORTED')
             GROUP BY day, status
         """), {"since": since}).fetchall()
     else:
         rows = db.execute(text("""
             SELECT
-                strftime('%Y-%m-%d', finished_at) AS day,
+                strftime('%Y-%m-%d', ended_at) AS day,
                 status,
                 COUNT(*) AS cnt
-            FROM task_runs
-            WHERE finished_at >= :since
-              AND finished_at IS NOT NULL
-              AND status IN ('FINISHED', 'FAILED')
+            FROM job_instance
+            WHERE ended_at >= :since
+              AND ended_at IS NOT NULL
+              AND status IN ('COMPLETED', 'FAILED', 'ABORTED')
             GROUP BY day, status
         """), {"since": since}).fetchall()
 
@@ -172,9 +171,9 @@ def get_completion_trend(
         d, status, cnt = row[0], row[1], row[2]
         if d not in buckets:
             buckets[d] = {"passed": 0, "failed": 0}
-        if status == "FINISHED":
+        if status == "COMPLETED":
             buckets[d]["passed"] += cnt
-        elif status == "FAILED":
+        elif status in ("FAILED", "ABORTED"):
             buckets[d]["failed"] += cnt
 
     # Fill empty days

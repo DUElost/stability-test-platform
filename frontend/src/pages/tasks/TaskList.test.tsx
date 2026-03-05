@@ -101,7 +101,7 @@ describe('TaskList', () => {
 
     await screen.findByText('任务管理');
     expect(screen.getByText('查看和管理稳定性测试任务')).toBeInTheDocument();
-    expect(screen.getByText('新建任务')).toBeInTheDocument();
+    expect(screen.getByText('新建工作流')).toBeInTheDocument();
   });
 
   it('renders loading state initially', async () => {
@@ -184,13 +184,13 @@ describe('TaskList', () => {
     expect(screen.getByText('取消任务')).toBeInTheDocument();
   });
 
-  it('"新建任务" links to /tasks/new', async () => {
+  it('"新建工作流" links to /orchestration/workflows', async () => {
     const TaskList = (await import('./TaskList')).default;
     render(<TaskList />, { wrapper: createWrapper() });
 
     await screen.findByText('任务管理');
 
-    const link = screen.getByText('新建任务').closest('a');
-    expect(link).toHaveAttribute('href', '/tasks/new');
+    const link = screen.getByText('新建工作流').closest('a');
+    expect(link).toHaveAttribute('href', '/orchestration/workflows');
   });
 });

@@ -434,7 +434,7 @@ export default XTerminal;
 
 // Cleanup utility for unmounting
 export function disposeAllTerminals(): void {
-  for (const [key, entry] of terminalPool) {
+  for (const entry of terminalPool.values()) {
     entry.terminal.dispose();
   }
   terminalPool.clear();

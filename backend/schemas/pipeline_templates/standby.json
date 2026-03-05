@@ -1,48 +1,40 @@
 {
   "version": 1,
   "description": "Standby test: play video, optionally turn off screen, wait for standby duration",
-  "phases": [
-    {
-      "name": "prepare",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "check_device",
-          "action": "builtin:check_device",
-          "params": {},
+  "stages": {
+    "prepare": [
+      {
+        "step_id": "check_device",
+        "action": "builtin:check_device",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {}
+      }
+    ],
+    "execute": [
+      {
+        "step_id": "start_video",
+        "action": "builtin:start_process",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {
           "timeout": 30,
-          "on_failure": "stop"
+          "command": "am start -a android.intent.action.VIEW -d {video_url}",
+          "background": false
         }
-      ]
-    },
-    {
-      "name": "execute",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "start_video",
-          "action": "builtin:start_process",
-          "params": {
-            "command": "am start -a android.intent.action.VIEW -d {video_url}",
-            "background": false,
-            "timeout": 30
-          },
-          "timeout": 30,
-          "on_failure": "continue"
-        },
-        {
-          "name": "standby_wait",
-          "action": "shell:sleep {standby_seconds}",
-          "params": {},
-          "timeout": 7200,
-          "on_failure": "stop"
+      },
+      {
+        "step_id": "standby_wait",
+        "action": "builtin:start_process",
+        "timeout_seconds": 7200,
+        "retry": 0,
+        "params": {
+          "command": "sleep {standby_seconds}",
+          "background": false,
+          "timeout": 7200
         }
-      ]
-    },
-    {
-      "name": "teardown",
-      "parallel": false,
-      "steps": []
-    }
-  ]
+      }
+    ],
+    "post_process": []
+  }
 }

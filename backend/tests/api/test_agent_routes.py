@@ -1,477 +1,394 @@
-"""
-Tests for Agent API routes
-"""
+"""Tests for Agent Jobs API routes."""
+
+import json
+from datetime import datetime, timezone
+from uuid import uuid4
+
 import pytest
-from datetime import datetime, timedelta
+from fastapi import HTTPException
+
+from backend.api.routes.agent_api import (
+    _JobHeartbeatIn,
+    _RunCompleteIn,
+    _StepStatusIn,
+    complete_job,
+    extend_job_lock,
+    get_pending_jobs,
+    job_heartbeat,
+    update_job_step_status,
+)
+from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
+from backend.models.enums import HostStatus, JobStatus, WorkflowStatus
+from backend.models.host import Device, Host
+from backend.models.job import JobInstance, StepTrace, TaskTemplate
+from backend.models.workflow import WorkflowDefinition, WorkflowRun
 
 
-class TestAgentPendingRuns:
-    """Test GET /api/v1/agent/runs/pending"""
+PIPELINE_DEF = {
+    "stages": {
+        "prepare": [
+            {
+                "step_id": "check_device",
+                "action": "builtin:check_device",
+                "timeout_seconds": 30,
+            }
+        ],
+        "execute": [],
+        "post_process": [],
+    }
+}
 
-    def test_get_pending_runs_success(self, client, sample_task, sample_host, sample_device, auth_headers):
-        """Test getting pending runs for a host"""
-        # First dispatch the task (task must be in PENDING status)
-        client.post(
-            f"/api/v1/tasks/{sample_task.id}/dispatch",
-            json={
-                "host_id": sample_host.id,
-                "device_id": sample_device.id,
-            },
-            headers=auth_headers,
+
+def _seed_job(status: str = JobStatus.PENDING.value) -> dict:
+    suffix = uuid4().hex[:8]
+    host_id = f"agent-host-{suffix}"
+    now = datetime.now(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id,
+            hostname=f"host-{suffix}",
+            status=HostStatus.ONLINE.value,
+            created_at=now,
         )
-
-        response = client.get(f"/api/v1/agent/runs/pending?host_id={sample_host.id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-        assert len(data) == 1
-        assert data[0]["host_id"] == sample_host.id
-        assert data[0]["device_id"] == sample_device.id
-        assert data[0]["task_type"] == sample_task.type
-
-    def test_get_pending_runs_empty(self, client, sample_host):
-        """Test getting pending runs when none exist"""
-        response = client.get(f"/api/v1/agent/runs/pending?host_id={sample_host.id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data == []
-
-    def test_get_pending_runs_missing_host_id(self, client):
-        """Test getting pending runs without host_id"""
-        response = client.get("/api/v1/agent/runs/pending")
-        assert response.status_code == 422
-
-    def test_get_pending_runs_status_changed_to_dispatched(
-        self, client, sample_task, sample_host, sample_device, db_session, auth_headers
-    ):
-        """Test that runs status is changed to DISPATCHED when fetched"""
-        # First dispatch the task (task must be in PENDING status)
-        dispatch_resp = client.post(
-            f"/api/v1/tasks/{sample_task.id}/dispatch",
-            json={
-                "host_id": sample_host.id,
-                "device_id": sample_device.id,
-            },
-            headers=auth_headers,
+        device = Device(
+            serial=f"SERIAL-{suffix}",
+            host_id=host_id,
+            status="ONLINE",
+            tags=[],
+            created_at=now,
         )
-        run_id = dispatch_resp.json()["id"]
-
-        # Fetch pending runs
-        client.get(f"/api/v1/agent/runs/pending?host_id={sample_host.id}")
-
-        # Check status was updated
-        from backend.models.schemas import TaskRun
-        run = db_session.get(TaskRun, run_id)
-        assert run.status.value == "DISPATCHED"
-
-    def test_get_pending_runs_with_limit(self, client, sample_host, sample_device):
-        """Test getting pending runs with limit"""
-        response = client.get(f"/api/v1/agent/runs/pending?host_id={sample_host.id}&limit=5")
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-
-    def test_get_pending_runs_invalid_limit(self, client, sample_host):
-        """Test getting pending runs with invalid limit"""
-        response = client.get(f"/api/v1/agent/runs/pending?host_id={sample_host.id}&limit=0")
-        assert response.status_code == 422
-
-
-class TestAgentRunHeartbeat:
-    """Test POST /api/v1/agent/runs/{run_id}/heartbeat"""
-
-    def test_run_heartbeat_success(self, client, sample_running_run):
-        """Test sending heartbeat for a run"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/heartbeat",
-            json={
-                "status": "RUNNING",
-                "log_summary": "progress=50%",
-                "progress": 50,
-            },
+        wf = WorkflowDefinition(
+            name=f"wf-{suffix}",
+            description="pytest workflow",
+            failure_threshold=0.1,
+            created_by="pytest",
+            created_at=now,
+            updated_at=now,
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["ok"] is True
+        db.add_all([host, device, wf])
+        db.flush()
 
-    def test_run_heartbeat_not_found(self, client):
-        """Test heartbeat for non-existent run"""
-        response = client.post(
-            "/api/v1/agent/runs/99999/heartbeat",
-            json={"status": "RUNNING"},
+        tpl = TaskTemplate(
+            workflow_definition_id=wf.id,
+            name=f"tpl-{suffix}",
+            pipeline_def=PIPELINE_DEF,
+            sort_order=0,
+            created_at=now,
         )
-        assert response.status_code == 404
+        db.add(tpl)
+        db.flush()
 
-    def test_run_heartbeat_status_transition(self, client, sample_dispatched_run):
-        """Test status transition via heartbeat"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_dispatched_run.id}/heartbeat",
-            json={"status": "RUNNING"},
+        run = WorkflowRun(
+            workflow_definition_id=wf.id,
+            status=WorkflowStatus.RUNNING.value,
+            failure_threshold=0.1,
+            triggered_by="pytest",
+            started_at=now,
         )
-        assert response.status_code == 200
+        db.add(run)
+        db.flush()
 
-    def test_run_heartbeat_invalid_status(self, client, sample_running_run):
-        """Test heartbeat with invalid status"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/heartbeat",
-            json={"status": "INVALID_STATUS"},
+        job = JobInstance(
+            workflow_run_id=run.id,
+            task_template_id=tpl.id,
+            device_id=device.id,
+            host_id=host_id,
+            status=status,
+            pipeline_def=PIPELINE_DEF,
+            created_at=now,
+            updated_at=now,
+            started_at=now if status == JobStatus.RUNNING.value else None,
         )
-        assert response.status_code == 400
-        assert "invalid run status" in response.json()["detail"]
+        db.add(job)
+        db.commit()
 
-    def test_run_heartbeat_illegal_transition(self, client, sample_running_run):
-        """Test heartbeat with illegal status transition"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/heartbeat",
-            json={"status": "QUEUED"},
+        return {
+            "host_id": host_id,
+            "device_id": device.id,
+            "device_serial": device.serial,
+            "workflow_definition_id": wf.id,
+            "task_template_id": tpl.id,
+            "workflow_run_id": run.id,
+            "job_id": job.id,
+        }
+    finally:
+        db.close()
+
+
+def _seed_host_only() -> dict:
+    suffix = uuid4().hex[:8]
+    now = datetime.now(timezone.utc)
+    host_id = f"agent-empty-{suffix}"
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id,
+            hostname=f"empty-{suffix}",
+            status=HostStatus.ONLINE.value,
+            created_at=now,
         )
-        assert response.status_code == 409
-        assert "illegal run transition" in response.json()["detail"]
-
-    def test_run_heartbeat_with_log_lines(self, client, sample_running_run):
-        """Test heartbeat with log lines"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/heartbeat",
-            json={
-                "status": "RUNNING",
-                "log_lines": ["Log line 1", "Log line 2"],
-            },
-        )
-        assert response.status_code == 200
-
-    def test_run_heartbeat_updates_task_status(self, client, sample_running_run, db_session):
-        """Test that RUNNING heartbeat updates task status to RUNNING"""
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Task
-
-        task = db_session.get(Task, sample_running_run.task_id)
-        original_status = task.status
-
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/heartbeat",
-            json={"status": "RUNNING"},
-        )
-        assert response.status_code == 200
-
-        db_session.refresh(task)
-        assert task.status.value == "RUNNING"
-
-    def test_run_heartbeat_extends_device_lock(self, client, sample_running_run, db_session):
-        """Test that RUNNING heartbeat extends device lock"""
-        # Set up device lock to match the running run
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device
-        device = db_session.get(Device, sample_running_run.device_id)
-        device.lock_run_id = sample_running_run.id
-        device.lock_expires_at = datetime.utcnow() + timedelta(minutes=10)
-        db_session.commit()
-        original_expires = device.lock_expires_at
-
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/heartbeat",
-            json={"status": "RUNNING"},
-        )
-        assert response.status_code == 200
-
-        db_session.refresh(device)
-        # Lock should be extended
-        assert device.lock_expires_at > original_expires or device.lock_expires_at is not None
+        db.add(host)
+        db.commit()
+        return {"host_id": host_id}
+    finally:
+        db.close()
 
 
-class TestAgentRunComplete:
-    """Test POST /api/v1/agent/runs/{run_id}/complete"""
+def _cleanup_seed(seed: dict) -> None:
+    db = SessionLocal()
+    try:
+        job_id = seed.get("job_id")
+        if job_id:
+            db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
+            db.query(JobInstance).filter(JobInstance.id == job_id).delete()
 
-    def _setup_device_lock(self, sample_running_run, db_session):
-        """Helper to set up device lock for tests"""
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device
-        device = db_session.get(Device, sample_running_run.device_id)
-        device.lock_run_id = sample_running_run.id
-        device.lock_expires_at = datetime.utcnow() + timedelta(minutes=10)
-        db_session.commit()
-        return device
+        run_id = seed.get("workflow_run_id")
+        if run_id:
+            db.query(WorkflowRun).filter(WorkflowRun.id == run_id).delete()
 
-    def test_run_complete_success_finished(self, client, sample_running_run, db_session):
-        """Test completing a run with FINISHED status"""
-        self._setup_device_lock(sample_running_run, db_session)
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "status": "FINISHED",
-                    "exit_code": 0,
-                    "log_summary": "completed successfully",
-                }
-            },
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["ok"] is True
+        tpl_id = seed.get("task_template_id")
+        if tpl_id:
+            db.query(TaskTemplate).filter(TaskTemplate.id == tpl_id).delete()
 
-    def test_run_complete_success_failed(self, client, sample_running_run, db_session):
-        """Test completing a run with FAILED status"""
-        self._setup_device_lock(sample_running_run, db_session)
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "status": "FAILED",
-                    "exit_code": 1,
-                    "error_code": "TEST_ERROR",
-                    "error_message": "Test failure",
-                }
-            },
-        )
-        assert response.status_code == 200
+        wf_id = seed.get("workflow_definition_id")
+        if wf_id:
+            db.query(WorkflowDefinition).filter(WorkflowDefinition.id == wf_id).delete()
 
-    def test_run_complete_with_artifact(self, client, sample_running_run, db_session):
-        """Test completing a run with artifact"""
-        self._setup_device_lock(sample_running_run, db_session)
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "status": "FINISHED",
-                    "exit_code": 0,
-                },
-                "artifact": {
-                    "storage_uri": "file:///tmp/test.tar.gz",
-                    "size_bytes": 1024,
-                    "checksum": "abc123",
-                },
-            },
-        )
-        assert response.status_code == 200
+        device_id = seed.get("device_id")
+        if device_id:
+            db.query(Device).filter(Device.id == device_id).delete()
 
-    def test_run_complete_not_found(self, client):
-        """Test completing non-existent run"""
-        response = client.post(
-            "/api/v1/agent/runs/99999/complete",
-            json={
-                "update": {
-                    "status": "FINISHED",
-                    "exit_code": 0,
-                }
-            },
-        )
-        assert response.status_code == 404
+        host_id = seed.get("host_id")
+        if host_id:
+            db.query(Host).filter(Host.id == host_id).delete()
 
-    def test_run_complete_missing_status(self, client, sample_running_run):
-        """Test completing without status"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "exit_code": 0,
-                }
-            },
-        )
-        assert response.status_code == 400
-        assert "status required" in response.json()["detail"]
-
-    def test_run_complete_invalid_status(self, client, sample_running_run):
-        """Test completing with invalid status"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "status": "INVALID",
-                    "exit_code": 0,
-                }
-            },
-        )
-        assert response.status_code == 400
-        assert "invalid run status" in response.json()["detail"]
-
-    def test_run_complete_illegal_transition(self, client, sample_running_run):
-        """Test completing with illegal transition"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "status": "QUEUED",
-                    "exit_code": 0,
-                }
-            },
-        )
-        assert response.status_code == 409
-        assert "illegal run transition" in response.json()["detail"]
-
-    def test_run_complete_releases_device_lock(self, client, sample_running_run, db_session):
-        """Test that completing releases device lock"""
-        # Set up device lock to match the running run
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device
-        device = db_session.get(Device, sample_running_run.device_id)
-        device.lock_run_id = sample_running_run.id
-        device.lock_expires_at = datetime.utcnow() + timedelta(minutes=10)
-        db_session.commit()
-
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "status": "FINISHED",
-                    "exit_code": 0,
-                }
-            },
-        )
-        assert response.status_code == 200
-
-        db_session.refresh(device)
-        assert device.lock_run_id is None
-        assert device.lock_expires_at is None
-
-    def test_run_complete_updates_task_status_finished(self, client, sample_running_run, db_session):
-        """Test that FINISHED run updates task to COMPLETED"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "status": "FINISHED",
-                    "exit_code": 0,
-                }
-            },
-        )
-        assert response.status_code == 200
-
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Task
-        task = db_session.get(Task, sample_running_run.task_id)
-        assert task.status.value == "COMPLETED"
-
-    def test_run_complete_updates_task_status_failed(self, client, sample_running_run, db_session):
-        """Test that FAILED run updates task to FAILED"""
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "update": {
-                    "status": "FAILED",
-                    "exit_code": 1,
-                }
-            },
-        )
-        assert response.status_code == 200
-
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Task
-        task = db_session.get(Task, sample_running_run.task_id)
-        assert task.status.value == "FAILED"
-
-    def test_run_complete_legacy_payload(self, client, sample_running_run, db_session):
-        """Test completing with legacy payload format"""
-        # Set up device lock to match the running run
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device
-        device = db_session.get(Device, sample_running_run.device_id)
-        device.lock_run_id = sample_running_run.id
-        device.lock_expires_at = datetime.utcnow() + timedelta(minutes=10)
-        db_session.commit()
-
-        response = client.post(
-            f"/api/v1/agent/runs/{sample_running_run.id}/complete",
-            json={
-                "status": "FINISHED",
-                "exit_code": 0,
-                "log_summary": "legacy format",
-            },
-        )
-        assert response.status_code == 200
+        db.commit()
+    finally:
+        db.close()
 
 
-class TestExtendDeviceLock:
-    """Test POST /api/v1/agent/runs/{run_id}/extend_lock"""
+@pytest.mark.asyncio
+async def test_get_pending_jobs_success():
+    seed = _seed_job(status=JobStatus.PENDING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await get_pending_jobs(host_id=seed["host_id"], limit=5, db=async_db, _=None)
+        assert result.error is None
+        assert isinstance(result.data, list)
+        assert len(result.data) == 1
+        item = result.data[0]
+        assert item.id == seed["job_id"]
+        assert item.host_id == seed["host_id"]
+        assert item.device_id == seed["device_id"]
+        assert item.device_serial == seed["device_serial"]
+        assert item.status == JobStatus.PENDING.value
+    finally:
+        _cleanup_seed(seed)
 
-    def test_extend_lock_success(self, client, sample_running_run, db_session):
-        """Test extending device lock successfully"""
-        # Set up device lock to match the running run
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device
-        device = db_session.get(Device, sample_running_run.device_id)
-        device.lock_run_id = sample_running_run.id
-        device.lock_expires_at = datetime.utcnow() + timedelta(minutes=10)
-        db_session.commit()
 
-        response = client.post(f"/api/v1/agent/runs/{sample_running_run.id}/extend_lock")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "ok"
-        assert data["run_id"] == sample_running_run.id
-        assert "expires_at" in data
-        assert "extended_at" in data
+@pytest.mark.asyncio
+async def test_get_pending_jobs_empty():
+    seed = _seed_host_only()
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await get_pending_jobs(host_id=seed["host_id"], limit=10, db=async_db, _=None)
+        assert result.error is None
+        assert result.data == []
+    finally:
+        _cleanup_seed(seed)
 
-    def test_extend_lock_not_found(self, client):
-        """Test extending lock for non-existent run"""
-        response = client.post("/api/v1/agent/runs/99999/extend_lock")
-        assert response.status_code == 404
 
-    def test_extend_lock_not_running(self, client, sample_task_run):
-        """Test extending lock for non-running run"""
-        response = client.post(f"/api/v1/agent/runs/{sample_task_run.id}/extend_lock")
-        assert response.status_code == 409
-        assert "not running" in response.json()["detail"]
+@pytest.mark.asyncio
+async def test_job_heartbeat_transitions_to_running():
+    seed = _seed_job(status=JobStatus.PENDING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await job_heartbeat(
+                job_id=seed["job_id"],
+                payload=_JobHeartbeatIn(status="RUNNING"),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data["status"] == JobStatus.RUNNING.value
 
-    def test_extend_lock_lock_lost(self, client, sample_running_run, db_session):
-        """Test extending lock when lock is lost"""
-        # Set up device lock to match the running run first
-        import sys
-        import os
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        if project_root not in sys.path:
-            sys.path.insert(0, project_root)
-        from backend.models.schemas import Device
-        device = db_session.get(Device, sample_running_run.device_id)
-        device.lock_run_id = sample_running_run.id
-        device.lock_expires_at = datetime.utcnow() + timedelta(minutes=10)
-        db_session.commit()
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.RUNNING.value
+            assert job.started_at is not None
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
 
-        # Simulate lock being taken by another run
-        device.lock_run_id = 99999
-        db_session.commit()
 
-        response = client.post(f"/api/v1/agent/runs/{sample_running_run.id}/extend_lock")
-        assert response.status_code == 409
-        assert "lock lost" in response.json()["detail"]
+@pytest.mark.asyncio
+async def test_complete_job_maps_finished_to_completed():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await complete_job(
+                job_id=seed["job_id"],
+                payload=_RunCompleteIn(update={"status": "FINISHED", "exit_code": 0}),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data["status"] == JobStatus.COMPLETED.value
 
-    def test_extend_lock_device_not_found(self, client, sample_running_run, db_session):
-        """Test extending lock when device not found"""
-        if db_session.bind and db_session.bind.dialect.name == "postgresql":
-            pytest.skip("PostgreSQL foreign key prevents orphaned run->device reference")
-        # Set invalid device id
-        sample_running_run.device_id = 99999
-        db_session.commit()
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            run = db.get(WorkflowRun, seed["workflow_run_id"])
+            assert job is not None
+            assert run is not None
+            assert job.status == JobStatus.COMPLETED.value
+            assert job.ended_at is not None
+            assert run.status == WorkflowStatus.SUCCESS.value
+            assert run.ended_at is not None
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
 
-        response = client.post(f"/api/v1/agent/runs/{sample_running_run.id}/extend_lock")
-        assert response.status_code == 404
+
+@pytest.mark.asyncio
+async def test_complete_job_persists_run_complete_snapshot():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await complete_job(
+                job_id=seed["job_id"],
+                payload=_RunCompleteIn(
+                    update={
+                        "status": "FINISHED",
+                        "exit_code": 0,
+                        "log_summary": "risk=LOW;restarts=1",
+                    },
+                    artifact={
+                        "storage_uri": "file:///tmp/report.tar.gz",
+                        "size_bytes": 1024,
+                        "checksum": "abc123",
+                    },
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data["status"] == JobStatus.COMPLETED.value
+
+        db = SessionLocal()
+        try:
+            snapshot = (
+                db.query(StepTrace)
+                .filter(
+                    StepTrace.job_id == seed["job_id"],
+                    StepTrace.step_id == "__job__",
+                    StepTrace.event_type == "RUN_COMPLETE",
+                )
+                .first()
+            )
+            assert snapshot is not None
+            payload = json.loads(snapshot.output)
+            assert payload["update"]["log_summary"] == "risk=LOW;restarts=1"
+            assert payload["artifact"]["storage_uri"] == "file:///tmp/report.tar.gz"
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_extend_lock_success():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        db = SessionLocal()
+        try:
+            device = db.get(Device, seed["device_id"])
+            assert device is not None
+            device.lock_run_id = seed["job_id"]
+            db.commit()
+        finally:
+            db.close()
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_job_lock(job_id=seed["job_id"], db=async_db, _=None)
+        assert result.error is None
+        assert result.data["job_id"] == seed["job_id"]
+        assert result.data["expires_at"]
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_extend_lock_conflict():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        db = SessionLocal()
+        try:
+            device = db.get(Device, seed["device_id"])
+            assert device is not None
+            device.lock_run_id = seed["job_id"] + 999
+            db.commit()
+        finally:
+            db.close()
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc_info:
+                await extend_job_lock(job_id=seed["job_id"], db=async_db, _=None)
+        assert exc_info.value.status_code == 409
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_update_job_step_status_upserts_trace():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await update_job_step_status(
+                job_id=seed["job_id"],
+                step_id="check_device",
+                payload=_StepStatusIn(
+                    status="RUNNING",
+                    started_at="2026-03-01T10:00:00Z",
+                    error_message=None,
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data["job_id"] == seed["job_id"]
+        assert result.data["step_id"] == "check_device"
+        assert result.data["status"] == "RUNNING"
+
+        db = SessionLocal()
+        try:
+            trace = (
+                db.query(StepTrace)
+                .filter(
+                    StepTrace.job_id == seed["job_id"],
+                    StepTrace.step_id == "check_device",
+                    StepTrace.event_type == "status_update",
+                )
+                .first()
+            )
+            assert trace is not None
+            assert trace.stage == "execute"
+            assert trace.status == "RUNNING"
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)

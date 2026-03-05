@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import React from 'react';
 import { PipelineStepTree, type StepUpdateMessage } from './PipelineStepTree';
 import type { RunStep } from '@/utils/api';
 

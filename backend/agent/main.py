@@ -14,6 +14,7 @@ import requests
 # 优先加载当前工作目录的 .env，不覆盖已有环境变量
 try:
     from dotenv import load_dotenv
+
     load_dotenv(override=False)
 except ImportError:
     pass  # python-dotenv 未安装时跳过，由 systemd EnvironmentFile 提供变量
@@ -22,25 +23,25 @@ except ImportError:
 if __name__ == "__main__" and __package__ is None:
     # 直接运行时的导入路径处理
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from agent.adb_wrapper import AdbWrapper
-    from agent.heartbeat import send_heartbeat
     from agent import device_discovery
-    from agent.config import ensure_dirs, get_run_log_dir, BASE_DIR
-    from agent.ws_client import AgentWSClient
+    from agent.adb_wrapper import AdbWrapper
+    from agent.config import BASE_DIR, ensure_dirs, get_run_log_dir
+    from agent.heartbeat import send_heartbeat
+    from agent.mq.control_listener import ControlListener
+    from agent.mq.producer import MQProducer
     from agent.registry.local_db import LocalDB
     from agent.registry.tool_registry import ToolRegistry
-    from agent.mq.producer import MQProducer
-    from agent.mq.control_listener import ControlListener
+    from agent.ws_client import AgentWSClient
 else:
-    from .adb_wrapper import AdbWrapper
-    from .heartbeat import send_heartbeat
     from . import device_discovery
-    from .config import ensure_dirs, get_run_log_dir, BASE_DIR
-    from .ws_client import AgentWSClient
+    from .adb_wrapper import AdbWrapper
+    from .config import BASE_DIR, ensure_dirs, get_run_log_dir
+    from .heartbeat import send_heartbeat
+    from .mq.control_listener import ControlListener
+    from .mq.producer import MQProducer
     from .registry.local_db import LocalDB
     from .registry.tool_registry import ToolRegistry
-    from .mq.producer import MQProducer
-    from .mq.control_listener import ControlListener
+    from .ws_client import AgentWSClient
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -50,7 +51,9 @@ logger = logging.getLogger(__name__)
 
 POST_RETRIES = int(os.getenv("AGENT_POST_RETRIES", "3"))
 POST_RETRY_BASE_DELAY = float(os.getenv("AGENT_POST_RETRY_BASE_DELAY", "1"))
-LOCK_RENEWAL_INTERVAL = int(os.getenv("AGENT_LOCK_RENEWAL_INTERVAL", "60"))  # 默认60秒续期一次
+LOCK_RENEWAL_INTERVAL = int(
+    os.getenv("AGENT_LOCK_RENEWAL_INTERVAL", "60")
+)  # 默认60秒续期一次
 
 # 全局锁续期管理
 _active_run_ids: Set[int] = set()
@@ -117,19 +120,27 @@ class LockRenewalManager:
             except requests.HTTPError as e:
                 if e.response is not None and e.response.status_code == 409:
                     # 锁丢失，从活跃列表移除
-                    logger.error(f"lock_lost for run {run_id}, removing from active runs")
+                    logger.error(
+                        f"lock_lost for run {run_id}, removing from active runs"
+                    )
                     with _active_runs_lock:
                         _active_run_ids.discard(run_id)
                     raise RuntimeError(f"Lock lost for run {run_id}")
-                logger.warning(f"lock_extension_attempt_{attempt}_failed for run {run_id}: {e}")
+                logger.warning(
+                    f"lock_extension_attempt_{attempt}_failed for run {run_id}: {e}"
+                )
             except requests.RequestException as e:
-                logger.warning(f"lock_extension_attempt_{attempt}_failed for run {run_id}: {e}")
+                logger.warning(
+                    f"lock_extension_attempt_{attempt}_failed for run {run_id}: {e}"
+                )
 
             if attempt < POST_RETRIES:
                 delay = POST_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 time.sleep(delay)
 
-        raise RuntimeError(f"Failed to extend lock for run {run_id} after {POST_RETRIES} attempts")
+        raise RuntimeError(
+            f"Failed to extend lock for run {run_id} after {POST_RETRIES} attempts"
+        )
 
 
 RUN_TERMINAL_STATUS_MAP = {
@@ -181,7 +192,9 @@ class HeartbeatThread:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True, name="heartbeat")
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name="heartbeat"
+        )
         self._thread.start()
         logger.info("heartbeat_thread_started")
 
@@ -207,7 +220,9 @@ class HeartbeatThread:
         try:
             discovered = device_discovery.discover_devices(self._adb_path)
             for dev in discovered:
-                info = device_discovery.collect_device_info(self._adb_path, dev["serial"])
+                info = device_discovery.collect_device_info(
+                    self._adb_path, dev["serial"]
+                )
                 device_data = {
                     "serial": dev["serial"],
                     "model": dev.get("model"),
@@ -236,21 +251,24 @@ class HeartbeatThread:
         # Try WS heartbeat first, fall back to HTTP
         if self._ws_client and self._ws_client.connected:
             try:
-                from .system_monitor import collect_system_stats
                 from .heartbeat import check_mounts
+                from .system_monitor import collect_system_stats
+
                 stats = collect_system_stats()
                 stats["devices"] = devices_list
                 stats["mount_status"] = check_mounts(self._mount_points)
                 self._ws_client.send_heartbeat(stats)
                 logger.debug("heartbeat_sent_via_ws")
-                return
             except Exception as e:
                 logger.warning(f"ws_heartbeat_failed, falling back to HTTP: {e}")
 
         # HTTP fallback
         send_heartbeat(
-            self._api_url, self._host_id, self._mount_points,
-            host_info=self._host_info, devices=devices_list,
+            self._api_url,
+            self._host_id,
+            self._mount_points,
+            host_info=self._host_info,
+            devices=devices_list,
         )
 
 
@@ -261,10 +279,16 @@ def fetch_pending_runs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
         timeout=10,
     )
     resp.raise_for_status()
-    return resp.json()
+    payload = resp.json()
+    # Backend wraps response in ApiResponse[T] = {"data": [...], "error": null}
+    if isinstance(payload, dict) and "data" in payload:
+        return payload["data"] or []
+    return payload
 
 
-def _post_with_retry(url: str, payload: Dict[str, Any], context: str, timeout: int = 10) -> None:
+def _post_with_retry(
+    url: str, payload: Dict[str, Any], context: str, timeout: int = 10
+) -> None:
     last_error: Optional[Exception] = None
     for attempt in range(1, POST_RETRIES + 1):
         try:
@@ -382,29 +406,47 @@ def _auto_register_host(api_url: str, host_info: Dict) -> str:
         headers["x-agent-secret"] = agent_secret
 
     try:
-        logger.info(f"auto_register_host: url={heartbeat_url}, ip={host_info.get('ip')}")
-        response = requests.post(heartbeat_url, json=payload, headers=headers, timeout=10)
+        logger.info(
+            f"auto_register_host: url={heartbeat_url}, ip={host_info.get('ip')}"
+        )
+        response = requests.post(
+            heartbeat_url, json=payload, headers=headers, timeout=10
+        )
         response.raise_for_status()
         data = response.json()
         host_id = data.get("host_id")
         if not host_id:
             raise ValueError(f"Heartbeat response missing host_id: {data}")
-        logger.info(f"auto_register_host_success: host_id={host_id}, ip={host_info.get('ip')}")
+        logger.info(
+            f"auto_register_host_success: host_id={host_id}, ip={host_info.get('ip')}"
+        )
         return host_id
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response else None
         body = exc.response.text[:500] if exc.response else None
-        logger.error(f"auto_register_host_failed: status={status_code}, body={body}, error={exc}")
+        logger.error(
+            f"auto_register_host_failed: status={status_code}, body={body}, error={exc}"
+        )
         raise
     except Exception as exc:
         logger.error(f"auto_register_host_failed: error={exc}")
         raise
 
 
-def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, host_id,
-                           ws_client=None, mq_producer=None, tool_registry=None):
+def _execute_pipeline_run(
+    pipeline_def,
+    run_id,
+    device_serial,
+    adb,
+    api_url,
+    host_id,
+    ws_client=None,
+    mq_producer=None,
+    tool_registry=None,
+    local_db=None,
+):
     """Execute a task using the pipeline engine instead of the legacy executor."""
-    from backend.agent.pipeline_engine import PipelineEngine, StepResult
+    from .pipeline_engine import PipelineEngine, StepResult
 
     # Get log directory for this run
     log_dir = get_run_log_dir(run_id)
@@ -423,6 +465,7 @@ def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, hos
 
     def http_step_fallback(rid, sid, status, **kwargs):
         import requests
+
         url = f"{api_url}/api/v1/agent/jobs/{rid}/steps/{sid}/status"
         payload = {"status": status}
         for k in ("started_at", "finished_at", "exit_code", "error_message"):
@@ -448,33 +491,8 @@ def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, hos
         http_fallback=http_step_fallback,
         mq_producer=mq_producer,
         tool_registry=tool_registry,
+        local_db=local_db,
     )
-
-    # Inject DB step IDs into pipeline_def for status reporting
-    # Fetch step IDs from the backend
-    try:
-        import requests
-        headers = {}
-        if agent_secret:
-            headers["X-Agent-Secret"] = agent_secret
-        resp = requests.get(
-            f"{api_url}/api/v1/runs/{run_id}/steps",
-            headers=headers, timeout=10,
-        )
-        if resp.status_code == 200:
-            db_steps = resp.json()
-            # Map (phase, step_order) -> db_step_id
-            step_id_map = {}
-            for s in db_steps:
-                key = (s["phase"], s["step_order"])
-                step_id_map[key] = s["id"]
-            # Inject into pipeline_def
-            for phase in pipeline_def.get("phases", []):
-                phase_name = phase.get("name", "")
-                for idx, step in enumerate(phase.get("steps", [])):
-                    step["_db_step_id"] = step_id_map.get((phase_name, idx), 0)
-    except Exception as e:
-        logger.warning(f"Failed to fetch RunStep IDs: {e}")
 
     try:
         result = engine.execute(pipeline_def)
@@ -492,7 +510,9 @@ def _execute_pipeline_run(pipeline_def, run_id, device_serial, adb, api_url, hos
     }
 
 
-def _run_task_wrapper(run, adb, api_url, host_id, ws_client, mq_producer=None, tool_registry=None):
+def _run_task_wrapper(
+    run, adb, api_url, host_id, ws_client, mq_producer=None, tool_registry=None, local_db=None
+):
     """Wrapper to run a single task in a thread and report completion."""
     run_id = run["id"]
     task_id = run.get("task_id")
@@ -500,7 +520,10 @@ def _run_task_wrapper(run, adb, api_url, host_id, ws_client, mq_producer=None, t
     device_serial = run.get("device_serial", "")
     pipeline_def = run.get("pipeline_def")
 
-    logger.info("run_start", extra={"run_id": run_id, "task_id": task_id, "device_id": device_id})
+    logger.info(
+        "run_start",
+        extra={"run_id": run_id, "task_id": task_id, "device_id": device_id},
+    )
 
     # Mark as running in backend
     try:
@@ -513,8 +536,11 @@ def _run_task_wrapper(run, adb, api_url, host_id, ws_client, mq_producer=None, t
         logger.error(f"Failed to mark run {run_id} as RUNNING: {e}")
         # Continue anyway, pipeline engine will try to report status too
 
-    if not (pipeline_def and isinstance(pipeline_def, dict) and
-            (pipeline_def.get("phases") or pipeline_def.get("stages"))):
+    if not (
+        pipeline_def
+        and isinstance(pipeline_def, dict)
+        and isinstance(pipeline_def.get("stages"), dict)
+    ):
         complete_run(
             api_url,
             run_id,
@@ -522,7 +548,23 @@ def _run_task_wrapper(run, adb, api_url, host_id, ws_client, mq_producer=None, t
                 "status": "FAILED",
                 "exit_code": 1,
                 "error_code": "PIPELINE_REQUIRED",
-                "error_message": "pipeline_def is required",
+                "error_message": "pipeline_def.stages is required (legacy phases unsupported)",
+                "log_summary": None,
+                "artifact": None,
+            },
+        )
+        return
+
+    stages = pipeline_def.get("stages", {})
+    if not any(isinstance(stages.get(k), list) and len(stages.get(k) or []) > 0 for k in ("prepare", "execute", "post_process")):
+        complete_run(
+            api_url,
+            run_id,
+            {
+                "status": "FAILED",
+                "exit_code": 1,
+                "error_code": "PIPELINE_REQUIRED",
+                "error_message": "pipeline_def.stages must contain at least one step",
                 "log_summary": None,
                 "artifact": None,
             },
@@ -535,9 +577,16 @@ def _run_task_wrapper(run, adb, api_url, host_id, ws_client, mq_producer=None, t
 
     try:
         result = _execute_pipeline_run(
-            pipeline_def, run_id, device_serial, adb, api_url,
-            host_id=host_id, ws_client=ws_client,
-            mq_producer=mq_producer, tool_registry=tool_registry,
+            pipeline_def,
+            run_id,
+            device_serial,
+            adb,
+            api_url,
+            host_id=host_id,
+            ws_client=ws_client,
+            mq_producer=mq_producer,
+            tool_registry=tool_registry,
+            local_db=local_db,
         )
 
         complete_run(
@@ -552,7 +601,9 @@ def _run_task_wrapper(run, adb, api_url, host_id, ws_client, mq_producer=None, t
                 "artifact": result.get("artifact"),
             },
         )
-        logger.info("run_complete", extra={"run_id": run_id, "status": result["status"]})
+        logger.info(
+            "run_complete", extra={"run_id": run_id, "status": result["status"]}
+        )
     except Exception as e:
         logger.exception(f"Unhandled exception during run {run_id}: {e}")
         try:
@@ -620,7 +671,10 @@ def main() -> None:
     mount_points = [p for p in os.getenv("MOUNT_POINTS", "").split(",") if p]
     adb_path = os.getenv("ADB_PATH", "adb")
 
-    logger.info("agent_started", extra={"host_id": host_id, "api_url": api_url, "ip": host_info["ip"]})
+    logger.info(
+        "agent_started",
+        extra={"host_id": host_id, "api_url": api_url, "ip": host_info["ip"]},
+    )
 
     adb = AdbWrapper(adb_path=adb_path)
     # 启动 WebSocket 客户端（best-effort，失败时降级到 HTTP）
@@ -664,7 +718,9 @@ def main() -> None:
     lock_manager.start()
 
     # Create thread pool for parallel task execution
-    executor = ThreadPoolExecutor(max_workers=max_concurrent_tasks, thread_name_prefix="task-worker")
+    executor = ThreadPoolExecutor(
+        max_workers=max_concurrent_tasks, thread_name_prefix="task-worker"
+    )
 
     try:
         while True:
@@ -672,27 +728,43 @@ def main() -> None:
                 # Calculate how many slots are available
                 with _active_runs_lock:
                     active_count = len(_active_run_ids)
-                
+
                 available_slots = max(0, max_concurrent_tasks - active_count)
-                
+
                 if available_slots > 0:
                     runs = fetch_pending_runs(api_url, host_id)
                     # Limit fetched runs to available slots to avoid over-fetching
                     runs = runs[:available_slots]
-                    
+
                     if runs:
-                        logger.info("pending_runs_fetched", extra={"host_id": host_id, "count": len(runs), "available_slots": available_slots})
-                    
+                        logger.info(
+                            "pending_runs_fetched",
+                            extra={
+                                "host_id": host_id,
+                                "count": len(runs),
+                                "available_slots": available_slots,
+                            },
+                        )
+
                     for run in runs:
                         # Mark as active immediately to reserve the slot
                         with _active_runs_lock:
                             _active_run_ids.add(run["id"])
-                        
-                        # Note: _run_task_wrapper also adds it to _active_run_ids, 
+
+                        # Note: _run_task_wrapper also adds it to _active_run_ids,
                         # but doing it here prevents the next iteration from fetching same slot.
                         # The wrapper will also discard it on finish.
-                        executor.submit(_run_task_wrapper, run, adb, api_url, host_id,
-                                        ws_client, mq_producer, tool_registry)
+                        executor.submit(
+                            _run_task_wrapper,
+                            run,
+                            adb,
+                            api_url,
+                            host_id,
+                            ws_client,
+                            mq_producer,
+                            tool_registry,
+                            local_db,
+                        )
             except Exception:
                 logger.exception("agent_loop_failed", extra={"host_id": host_id})
             time.sleep(poll_interval)

@@ -3,6 +3,7 @@
 Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -17,7 +18,7 @@ from backend.api.response import ApiResponse, err, ok
 from backend.core.database import get_async_db
 from backend.models.enums import HostStatus, JobStatus
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance
+from backend.models.job import JobInstance, StepTrace
 from backend.services.aggregator import WorkflowAggregator
 from backend.services.reconciler import reconcile_step_traces
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
@@ -339,6 +340,43 @@ async def complete_job(
         JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
     except InvalidTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+
+    # 持久化一次性完成快照（log_summary + artifact），为新链路报告读取提供数据闭环。
+    snapshot = {
+        "update": payload.update,
+        "artifact": payload.artifact,
+    }
+    snapshot_output = json.dumps(snapshot, ensure_ascii=False)
+    now_ts = datetime.now(timezone.utc)
+    existing_snapshot = (
+        await db.execute(
+            select(StepTrace).where(
+                StepTrace.job_id == job_id,
+                StepTrace.step_id == "__job__",
+                StepTrace.event_type == "RUN_COMPLETE",
+            )
+        )
+    ).scalars().first()
+    if existing_snapshot:
+        existing_snapshot.stage = "post_process"
+        existing_snapshot.status = target.value
+        existing_snapshot.output = snapshot_output
+        existing_snapshot.error_message = payload.update.get("error_message")
+        existing_snapshot.original_ts = now_ts
+    else:
+        db.add(
+            StepTrace(
+                job_id=job_id,
+                step_id="__job__",
+                stage="post_process",
+                status=target.value,
+                event_type="RUN_COMPLETE",
+                output=snapshot_output,
+                error_message=payload.update.get("error_message"),
+                original_ts=now_ts,
+                created_at=datetime.utcnow(),
+            )
+        )
 
     job.ended_at = datetime.now(timezone.utc)
     if job.status in _TERMINAL:

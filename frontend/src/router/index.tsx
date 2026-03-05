@@ -9,7 +9,6 @@ import RegisterPage from '../pages/auth/RegisterPage';
 // All other pages use React.lazy for route-level code splitting
 const Dashboard = lazy(() => import('../pages/Dashboard'));
 const TaskList = lazy(() => import('../pages/tasks/TaskList'));
-const CreateTask = lazy(() => import('../pages/tasks/CreateTask'));
 const TaskDetails = lazy(() => import('../pages/tasks/TaskDetails'));
 const RunReportPage = lazy(() => import('../pages/tasks/RunReportPage'));
 const HostsPage = lazy(() => import('../pages/hosts/HostsPage'));
@@ -17,7 +16,6 @@ const DevicesPage = lazy(() => import('../pages/devices/DevicesPage'));
 const ResultsPage = lazy(() => import('../pages/results/ResultsPage'));
 const MapReducePage = lazy(() => import('../pages/mapreduce/MapReducePage'));
 const WifiPage = lazy(() => import('../pages/wifi/WifiPage'));
-const LogsPage = lazy(() => import('../pages/logs/LogsPage'));
 const UsersPage = lazy(() => import('../pages/users/UsersPage'));
 const ToolsPage = lazy(() => import('../pages/tools/ToolsPage'));
 const NotificationsPage = lazy(() => import('../pages/notifications/NotificationsPage'));
@@ -34,6 +32,7 @@ const TaskRunsPage = lazy(() => import('../pages/task-runs/TaskRunsPage'));
 // 新编排层页面
 const WorkflowDefinitionListPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionListPage'));
 const WorkflowDefinitionEditPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionEditPage'));
+const ActionTemplatePage = lazy(() => import('../pages/orchestration/ActionTemplatePage'));
 const DispatchEntryPage = lazy(() => import('../pages/execution/DispatchEntryPage'));
 const WorkflowRunMatrixPage = lazy(() => import('../pages/execution/WorkflowRunMatrixPage'));
 const WorkflowRunListPage = lazy(() => import('../pages/execution/WorkflowRunListPage'));
@@ -70,7 +69,7 @@ export default function AppRouter() {
 
             <Route path="tasks">
               <Route index element={<TaskList />} />
-              <Route path="new" element={<CreateTask />} />
+              <Route path="new" element={<Navigate to="/orchestration/workflows" replace />} />
               <Route path=":taskId" element={<TaskDetails />} />
             </Route>
 
@@ -84,7 +83,7 @@ export default function AppRouter() {
             {/* /workflows → redirect to new orchestration page (backend endpoint now returns ApiResponse format) */}
             <Route path="workflows" element={<Navigate to="/orchestration/workflows" replace />} />
             <Route path="results" element={<ResultsPage />} />
-            <Route path="logs" element={<LogsPage />} />
+            <Route path="logs" element={<Navigate to="/execution/runs?view=logs" replace />} />
             <Route path="mapreduce" element={<MapReducePage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
@@ -96,11 +95,13 @@ export default function AppRouter() {
             <Route path="issue-tracker" element={<IssueTrackerPage />} />
             <Route path="resources" element={<ResourcesPage />} />
             <Route path="task-runs" element={<TaskRunsPage />} />
+            <Route path="orchestration/actions" element={<ActionTemplatePage />} />
 
             {/* 新编排层路由 */}
             <Route path="orchestration">
               <Route path="workflows" element={<WorkflowDefinitionListPage />} />
               <Route path="workflows/:id" element={<WorkflowDefinitionEditPage />} />
+              <Route path="actions" element={<ActionTemplatePage />} />
             </Route>
             <Route path="execution">
               <Route path="run" element={<DispatchEntryPage />} />

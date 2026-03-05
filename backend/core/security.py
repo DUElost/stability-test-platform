@@ -18,8 +18,8 @@ if not SECRET_KEY or SECRET_KEY == _PLACEHOLDER:
             "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
         )
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
-REFRESH_TOKEN_EXPIRE_DAYS = 7
+ACCESS_TOKEN_EXPIRE_MINUTES = 480
+REFRESH_TOKEN_EXPIRE_DAYS = 30
 
 # Password hashing context
 # 使用 bcrypt 并设置 truncate_error=False 以自动截断超过 72 字节的密码

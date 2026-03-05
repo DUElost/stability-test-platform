@@ -253,7 +253,7 @@ class BaseTestCase(ABC):
                     payload["progress_message"] = self._progress_message
 
                 requests.post(
-                    f"{self.api_url}/api/v1/agent/runs/{self.run_id}/heartbeat",
+                    f"{self.api_url}/api/v1/agent/jobs/{self.run_id}/heartbeat",
                     json=payload,
                     timeout=5
                 )

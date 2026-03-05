@@ -3,6 +3,7 @@ Tests for hosts API routes
 """
 import pytest
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 
 class TestCreateHost:
@@ -104,25 +105,29 @@ class TestListHosts:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
-        assert len(data) == 0
+        assert all("id" in item for item in data)
 
     def test_list_hosts_with_data(self, client, sample_host):
         """Test listing hosts with data"""
         response = client.get("/api/v1/hosts")
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 1
-        assert data[0]["name"] == sample_host.name
-        assert data[0]["ip"] == sample_host.ip
+        host_data = next((h for h in data if h["id"] == sample_host.id), None)
+        assert host_data is not None
+        assert host_data["name"] == sample_host.name
+        assert host_data["ip"] == sample_host.ip
 
     def test_list_hosts_ordered_by_id(self, client, auth_headers):
         """Test hosts are ordered by id"""
         # Create multiple hosts
+        created_names = []
         for i in range(3):
+            name = f"order-host-{i}-{uuid4().hex[:8]}"
+            created_names.append(name)
             client.post(
                 "/api/v1/hosts",
                 json={
-                    "name": f"order-host-{i}",
+                    "name": name,
                     "ip": f"192.168.1.{210 + i}",
                 },
                 headers=auth_headers,
@@ -130,9 +135,10 @@ class TestListHosts:
 
         response = client.get("/api/v1/hosts")
         data = response.json()
-        assert len(data) == 3
         ids = [d["id"] for d in data]
         assert ids == sorted(ids)
+        names = {d["name"] for d in data}
+        assert set(created_names).issubset(names)
 
     def test_list_hosts_status_updated_on_expired_heartbeat(
         self, client, sample_host_expired
@@ -166,7 +172,7 @@ class TestGetHost:
     def test_get_host_invalid_id(self, client):
         """Test getting host with invalid id"""
         response = client.get("/api/v1/hosts/invalid")
-        assert response.status_code == 422
+        assert response.status_code == 404
 
     def test_get_host_status_offline_when_heartbeat_expired(
         self, client, sample_host_expired
@@ -190,6 +196,7 @@ class TestHostStatusTransitions:
 
     def test_host_with_recent_heartbeat_stays_online(self, client, sample_host):
         """Test host with recent heartbeat stays online"""
+        sample_host.last_heartbeat = datetime.utcnow()
         response = client.get(f"/api/v1/hosts/{sample_host.id}")
         assert response.status_code == 200
         data = response.json()

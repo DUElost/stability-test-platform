@@ -15,11 +15,13 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from pydantic import BaseModel, Field
 from pydantic.fields import PrivateAttr
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session, selectinload
 
 from backend.core.database import get_db
 from backend.core.task_templates import list_templates as list_core_templates
-from backend.models.schemas import DeviceStatus, HostStatus, LogArtifact, RunStatus, RunStep, RunStepStatus, Task, TaskRun, TaskStatus
+from backend.models.enums import DeviceStatus
+from backend.models.schemas import LogArtifact, RunStatus, Task, TaskRun, TaskStatus
 from backend.models.host import Device, Host
 from backend.api.schemas import (
     AgentLogOut,
@@ -80,6 +82,13 @@ RUN_STATUS_ALIASES = {
     "COMPLETED": RunStatus.FINISHED.value,
     "CANCELLED": RunStatus.CANCELED.value,
 }
+
+
+def _parse_iso_timestamp(value: str) -> datetime:
+    """Parse ISO timestamp while tolerating trailing `Z`."""
+    if value.endswith("Z"):
+        value = value[:-1] + "+00:00"
+    return datetime.fromisoformat(value)
 
 
 def _normalize_run_status(value: Optional[str]) -> Optional[str]:
@@ -212,59 +221,6 @@ def _update_distributed_task_status(db: Session, task_id: int) -> None:
     db.commit()
 
 
-def _create_run_steps_from_pipeline(db: Session, run_id: int, pipeline_def: dict) -> None:
-    """Create PENDING RunStep records from a pipeline definition when a run first starts."""
-    phases = pipeline_def.get("phases", [])
-    for phase in phases:
-        phase_name = phase.get("name", "unknown")
-        steps = phase.get("steps", [])
-        for idx, step in enumerate(steps):
-            run_step = RunStep(
-                run_id=run_id,
-                phase=phase_name,
-                step_order=idx,
-                name=step.get("name", f"step_{idx}"),
-                action=step.get("action", ""),
-                params=step.get("params", {}),
-                status=RunStepStatus.PENDING,
-            )
-            db.add(run_step)
-    db.flush()
-
-
-def _aggregate_run_status_from_steps(db: Session, run: TaskRun, pipeline_def: dict) -> None:
-    """Derive TaskRun status from the aggregate state of its RunStep records."""
-    steps = db.query(RunStep).filter(RunStep.run_id == run.id).all()
-    if not steps:
-        return
-
-    all_completed = all(s.status == RunStepStatus.COMPLETED for s in steps)
-    any_failed_stop = False
-    any_failed = False
-
-    # Build a lookup for step failure policies from pipeline_def
-    step_policies = {}
-    for phase in pipeline_def.get("phases", []):
-        for step_def in phase.get("steps", []):
-            step_policies[step_def.get("name", "")] = step_def.get("on_failure", "stop")
-
-    for s in steps:
-        if s.status == RunStepStatus.FAILED:
-            any_failed = True
-            policy = step_policies.get(s.name, "stop")
-            if policy == "stop":
-                any_failed_stop = True
-
-    if any_failed_stop:
-        run.status = RunStatus.FAILED
-        run.finished_at = datetime.utcnow()
-    elif all_completed:
-        run.status = RunStatus.FINISHED
-        run.finished_at = datetime.utcnow()
-        if any_failed:
-            run.log_summary = (run.log_summary or "") + " [WARNING: some steps failed with on_failure=continue]"
-
-
 def _acquire_device_lock(db: Session, device_id: int, run_id: int) -> None:
     now = datetime.utcnow()
     expires_at = now + timedelta(seconds=DEVICE_LOCK_LEASE_SECONDS)
@@ -335,6 +291,36 @@ def _release_device_lock(db: Session, device_id: int, run_id: int) -> None:
     )
 
 
+_WF_STATUS_TO_TASK = {
+    "RUNNING":         "RUNNING",
+    "SUCCESS":         "COMPLETED",
+    "PARTIAL_SUCCESS": "COMPLETED",
+    "FAILED":          "FAILED",
+    "DEGRADED":        "FAILED",
+}
+
+
+def _wd_to_task_out(db: Session, wd, run_count: int = 0) -> TaskOut:
+    from backend.models.workflow import WorkflowRun
+    latest_run = (
+        db.query(WorkflowRun)
+        .filter(WorkflowRun.workflow_definition_id == wd.id)
+        .order_by(WorkflowRun.id.desc())
+        .first()
+    )
+    task_status = _WF_STATUS_TO_TASK.get(latest_run.status, "PENDING") if latest_run else "PENDING"
+    return TaskOut(
+        id=wd.id,
+        name=wd.name,
+        type="WORKFLOW",
+        status=task_status,
+        params={},
+        priority=0,
+        created_at=wd.created_at,
+        runs_count=run_count,
+    )
+
+
 @router.get("/tasks", response_model=Any)
 def list_tasks(
     request: Request,
@@ -343,19 +329,50 @@ def list_tasks(
     status: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    """获取任务列表（分页）"""
-    query = db.query(Task).order_by(Task.id.desc())
-    if status:
-        query = query.filter(Task.status == status)
-    total = query.count()
-    rows = query.offset(skip).limit(limit).all()
-    items: List[TaskOut] = []
-    for row in rows:
-        if hasattr(TaskOut, "model_validate"):
-            items.append(TaskOut.model_validate(row))
-        else:
-            items.append(TaskOut.from_orm(row))
-    # 兼容旧接口：未显式传分页参数时返回数组
+    from sqlalchemy import func
+    from backend.models.workflow import WorkflowDefinition, WorkflowRun
+
+    # 单次聚合查询：run_count + 最新 run_id（避免 N+1）
+    run_stats = (
+        db.query(
+            WorkflowRun.workflow_definition_id.label("wf_id"),
+            func.count(WorkflowRun.id).label("run_count"),
+            func.max(WorkflowRun.id).label("latest_run_id"),
+        )
+        .group_by(WorkflowRun.workflow_definition_id)
+        .subquery("run_stats")
+    )
+    rows = (
+        db.query(
+            WorkflowDefinition,
+            func.coalesce(run_stats.c.run_count, 0).label("run_count"),
+            WorkflowRun.status.label("latest_status"),
+        )
+        .outerjoin(run_stats, WorkflowDefinition.id == run_stats.c.wf_id)
+        .outerjoin(WorkflowRun, WorkflowRun.id == run_stats.c.latest_run_id)
+        .order_by(WorkflowDefinition.id.desc())
+        .all()
+    )
+
+    all_items: List[TaskOut] = []
+    for wd, run_count, latest_status in rows:
+        task_status = _WF_STATUS_TO_TASK.get(latest_status, "PENDING") if latest_status else "PENDING"
+        if status and task_status != status:
+            continue
+        all_items.append(TaskOut(
+            id=wd.id,
+            name=wd.name,
+            type="WORKFLOW",
+            status=task_status,
+            params={},
+            priority=0,
+            created_at=wd.created_at,
+            runs_count=run_count,
+        ))
+
+    total = len(all_items)
+    items = all_items[skip: skip + limit]
+
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
@@ -378,159 +395,19 @@ def list_task_templates():
 
 @router.post("/tasks", response_model=TaskOut)
 def create_task(payload: TaskCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
-    resolved_target_device_id = payload.target_device_id
-
-    # 生成 group_id（分布式任务用）
-    import uuid
-    group_id = str(uuid.uuid4())[:8] if payload.is_distributed else None
-
-    # 处理单设备场景
-    if resolved_target_device_id is None and payload.device_serial:
-        device = db.query(Device).filter(Device.serial == payload.device_serial).first()
-        if not device:
-            raise HTTPException(status_code=400, detail="target device serial not found")
-        resolved_target_device_id = device.id
-
-    # 验证设备（单设备场景）
-    if resolved_target_device_id is not None:
-        target_device = db.get(Device, resolved_target_device_id)
-        if not target_device:
-            raise HTTPException(status_code=400, detail="target device not found")
-        if target_device.status != DeviceStatus.ONLINE:
-            raise HTTPException(status_code=409, detail="target device is not online")
-        if not target_device.host_id:
-            raise HTTPException(status_code=409, detail="target device has no host binding")
-        host = db.get(Host, target_device.host_id)
-        if not host or host.status != HostStatus.ONLINE:
-            raise HTTPException(status_code=409, detail="target device host is not online")
-
-    # 验证设备列表（分布式场景）
-    device_ids = payload.device_ids or []
-    if payload.is_distributed and not device_ids:
-        raise HTTPException(status_code=400, detail="分布式任务需要提供设备列表 device_ids")
-
-    # 验证分布式任务的所有设备
-    if payload.is_distributed and device_ids:
-        for device_id in device_ids:
-            device = db.get(Device, device_id)
-            if not device:
-                raise HTTPException(status_code=400, detail=f"设备 {device_id} 不存在")
-            if device.status != DeviceStatus.ONLINE:
-                raise HTTPException(status_code=409, detail=f"设备 {device_id} 不在线")
-            if not device.host_id:
-                raise HTTPException(status_code=409, detail=f"设备 {device_id} 未绑定主机")
-
-    # Pipeline-only: require pipeline_def and disable tool management linkage
-    if payload.pipeline_def is None:
-        raise HTTPException(status_code=422, detail="pipeline_def is required")
-    if payload.tool_id is not None or payload.tool_snapshot is not None:
-        raise HTTPException(status_code=400, detail="tool management is disabled; use pipeline_def only")
-
-    tool_snapshot = None
-
-    # Validate pipeline_def
-    pipeline_def = None
-    from backend.core.pipeline_validator import validate_pipeline_def
-    is_valid, errors = validate_pipeline_def(payload.pipeline_def)
-    if not is_valid:
-        raise HTTPException(status_code=422, detail=f"Invalid pipeline definition: {'; '.join(errors)}")
-    pipeline_def = payload.pipeline_def
-
-    task = Task(
-        name=payload.name,
-        type=payload.type,
-        template_id=payload.template_id,
-        tool_id=payload.tool_id,
-        params=payload.params,
-        tool_snapshot=tool_snapshot,
-        target_device_id=resolved_target_device_id,
-        status=TaskStatus.PENDING,
-        priority=payload.priority,
-        group_id=group_id,
-        is_distributed=payload.is_distributed,
-        pipeline_def=pipeline_def,
-    )
-    db.add(task)
-    db.flush()
-    record_audit(
-        db,
-        action="create",
-        resource_type="task",
-        resource_id=task.id,
-        details={
-            "name": payload.name,
-            "type": payload.type,
-            "tool_id": payload.tool_id,
-            "target_device_id": resolved_target_device_id,
-            "priority": payload.priority,
-            "pipeline_def_present": payload.pipeline_def is not None,
-        },
-        user_id=current_user.id,
-        username=current_user.username,
-        request=request,
-    )
-    db.commit()
-    db.refresh(task)
-
-    # 分布式任务：自动为每个设备创建 TaskRun
-    if payload.is_distributed and device_ids:
-        for device_id in device_ids:
-            device = db.get(Device, device_id)
-            run = TaskRun(
-                task_id=task.id,
-                host_id=device.host_id,
-                device_id=device_id,
-                group_id=group_id,
-                status=RunStatus.QUEUED,
-            )
-            db.add(run)
-            # 锁定设备
-            device.status = DeviceStatus.BUSY
-            device.lock_run_id = None  # 将在调度时设置
-
-        # 自动更新任务状态为 QUEUED
-        task.status = TaskStatus.QUEUED
-        db.commit()
-
-    logger.info(
-        "task_created",
-        extra={
-            "task_id": task.id,
-            "type": task.type,
-            "target_device_id": task.target_device_id,
-            "priority": task.priority,
-            "is_distributed": task.is_distributed,
-            "group_id": task.group_id,
-        },
-    )
-    return task
+    raise HTTPException(status_code=503, detail="任务创建已迁移至 /orchestration/workflows，请通过工作流编辑器创建工作流")
 
 
 @router.get("/tasks/{task_id}", response_model=TaskOut)
 def get_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.get(Task, task_id)
-    if not task:
+    from backend.models.workflow import WorkflowDefinition, WorkflowRun
+
+    wd = db.get(WorkflowDefinition, task_id)
+    if not wd:
         raise HTTPException(status_code=404, detail="task not found")
 
-    # 计算关联的 TaskRun 数量
-    runs_count = db.query(TaskRun).filter(TaskRun.task_id == task_id).count()
-
-    return TaskOut(
-        id=task.id,
-        name=task.name,
-        type=task.type,
-        template_id=task.template_id,
-        tool_id=task.tool_id,
-        params=task.params,
-        tool_snapshot=task.tool_snapshot,
-        target_device_id=task.target_device_id,
-        status=task.status.value,
-        priority=task.priority,
-        group_id=task.group_id,
-        is_distributed=task.is_distributed,
-        runs_count=runs_count,
-        created_at=task.created_at,
-    )
+    run_count = db.query(WorkflowRun).filter(WorkflowRun.workflow_definition_id == task_id).count()
+    return _wd_to_task_out(db, wd, run_count)
 
 
 @router.get("/tasks/{task_id}/runs", response_model=Any)
@@ -541,30 +418,194 @@ def get_task_runs(
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    """获取任务的所有运行记录（分页）"""
-    task = db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="task not found")
+    from backend.models.workflow import WorkflowDefinition, WorkflowRun
+    from backend.models.job import JobInstance
+
+    # task_id=0 作为“全量运行记录”兼容入口（供 task-runs/results 列表页使用）
+    if task_id > 0:
+        wd = db.get(WorkflowDefinition, task_id)
+        if not wd:
+            raise HTTPException(status_code=404, detail="task not found")
+
     base = (
-        db.query(TaskRun)
-        .options(selectinload(TaskRun.artifacts))
-        .filter(TaskRun.task_id == task_id)
-        .order_by(TaskRun.id.desc())
+        db.query(JobInstance, WorkflowRun.workflow_definition_id)
+        .join(WorkflowRun, WorkflowRun.id == JobInstance.workflow_run_id)
     )
-    total = base.count()
-    runs = base.offset(skip).limit(limit).all()
+    if task_id > 0:
+        base = base.filter(WorkflowRun.workflow_definition_id == task_id)
+
+    ordered = base.order_by(JobInstance.id.desc())
+    total = ordered.count()
+    rows = ordered.offset(skip).limit(limit).all()
+    if not rows:
+        if "skip" not in request.query_params and "limit" not in request.query_params:
+            return []
+        return PaginatedResponse(items=[], total=0, skip=skip, limit=limit)
+
+    _JOB_STATUS_MAP = {
+        "PENDING":      "QUEUED",
+        "RUNNING":      "RUNNING",
+        "COMPLETED":    "FINISHED",
+        "FAILED":       "FAILED",
+        "ABORTED":      "CANCELED",
+        "UNKNOWN":      "RUNNING",
+        "PENDING_TOOL": "QUEUED",
+    }
     run_items: List[RunOut] = []
-    for run in runs:
-        if hasattr(RunOut, "model_validate"):
-            run_out = RunOut.model_validate(run)
-        else:
-            run_out = RunOut.from_orm(run)
-        run_out.risk_summary = _load_risk_summary_from_artifacts(run.artifacts)
-        run_items.append(run_out)
-    # 兼容旧接口：未显式传分页参数时返回数组
+    for job, workflow_definition_id in rows:
+        status_out = _JOB_STATUS_MAP.get(job.status, job.status)
+        host_id_out = 0
+        if job.host_id is not None:
+            try:
+                host_id_out = int(str(job.host_id))
+            except (TypeError, ValueError):
+                host_id_out = 0
+        run_items.append(RunOut(
+            id=job.id,
+            task_id=workflow_definition_id,
+            host_id=host_id_out,
+            device_id=job.device_id,
+            status=status_out,
+            progress=100 if status_out in {"FINISHED", "FAILED", "CANCELED"} else 0,
+            progress_message=job.status_reason,
+            started_at=job.started_at,
+            finished_at=job.ended_at,
+            exit_code=None,
+            error_message=job.status_reason,
+        ))
+
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return run_items
     return PaginatedResponse(items=run_items, total=total, skip=skip, limit=limit)
+
+
+@router.get("/logs/query", response_model=Any)
+async def query_runtime_logs(
+    job_id: Optional[int] = Query(None, ge=1),
+    job_ids: Optional[str] = Query(None, description="Comma-separated job ids"),
+    level: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, description="Keyword search"),
+    step_id: Optional[str] = Query(None),
+    from_ts: Optional[str] = Query(None, description="ISO8601 start time"),
+    to_ts: Optional[str] = Query(None, description="ISO8601 end time"),
+    cursor: Optional[str] = Query(None, description="Redis stream id cursor for older page"),
+    limit: int = Query(200, ge=20, le=1000),
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Query runtime logs from Redis stream with server-side filtering and pagination.
+
+    Notes:
+    - Results are returned in chronological order (old -> new) for direct rendering.
+    - `cursor` points to the last scanned stream id from previous call.
+    """
+    del current_user
+    try:
+        from backend.main import redis_client
+        if not redis_client:
+            return {
+                "items": [],
+                "next_cursor": None,
+                "has_more": False,
+                "scanned": 0,
+            }
+
+        job_filter: Set[int] = set()
+        if job_id:
+            job_filter.add(job_id)
+        if job_ids:
+            for token in job_ids.split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                try:
+                    job_filter.add(int(token))
+                except ValueError:
+                    continue
+
+        level_filter = (level or "").strip().upper()
+        keyword = (q or "").strip().lower()
+        step_filter = (step_id or "").strip().lower()
+
+        from_dt: Optional[datetime] = None
+        to_dt_dt: Optional[datetime] = None
+        if from_ts:
+            from_dt = _parse_iso_timestamp(from_ts.strip())
+        if to_ts:
+            to_dt_dt = _parse_iso_timestamp(to_ts.strip())
+
+        # Use an exclusive max bound when paginating to older entries.
+        redis_max = f"({cursor}" if cursor else "+"
+        scan_count = max(limit * 8, 1200)
+        entries = await redis_client.xrevrange("stp:logs", max=redis_max, min="-", count=scan_count)
+        if not entries:
+            return {
+                "items": [],
+                "next_cursor": None,
+                "has_more": False,
+                "scanned": 0,
+            }
+
+        items: List[Dict[str, Any]] = []
+        for stream_id, fields in entries:
+            job_text = fields.get("job_id") or fields.get("run_id")
+            try:
+                job_value = int(job_text) if job_text is not None else None
+            except (TypeError, ValueError):
+                job_value = None
+
+            if job_filter and (job_value is None or job_value not in job_filter):
+                continue
+
+            level_value = str(fields.get("level") or "INFO").upper()
+            if level_filter and level_filter != "ALL" and level_value != level_filter:
+                continue
+
+            step_value = str(fields.get("tag") or fields.get("step_id") or "")
+            if step_filter and step_filter not in step_value.lower():
+                continue
+
+            timestamp_text = str(fields.get("timestamp") or "")
+            if from_dt is not None or to_dt_dt is not None:
+                try:
+                    ts_dt = _parse_iso_timestamp(timestamp_text)
+                except Exception:
+                    continue
+                if from_dt is not None and ts_dt < from_dt:
+                    continue
+                if to_dt_dt is not None and ts_dt > to_dt_dt:
+                    continue
+
+            message_value = str(fields.get("message") or "")
+            if keyword:
+                haystack = f"{message_value}\n{step_value}\n{job_text or ''}".lower()
+                if keyword not in haystack:
+                    continue
+
+            items.append({
+                "stream_id": stream_id,
+                "job_id": job_value,
+                "step_id": step_value,
+                "level": level_value,
+                "timestamp": timestamp_text,
+                "message": message_value,
+            })
+            if len(items) >= limit:
+                break
+
+        # Reverse so frontend gets chronological order.
+        items.reverse()
+
+        next_cursor = entries[-1][0] if len(entries) >= scan_count else None
+        return {
+            "items": items,
+            "next_cursor": next_cursor,
+            "has_more": next_cursor is not None,
+            "scanned": len(entries),
+        }
+    except Exception as e:
+        logger.warning("query_runtime_logs_failed: %s", e)
+        raise HTTPException(status_code=500, detail="failed to query runtime logs")
 
 
 @router.get("/runs/{run_id}/report", response_model=RunReportOut)
@@ -603,15 +644,18 @@ def create_run_jira_draft(run_id: int, db: Session = Depends(get_db)):
 @router.get("/runs/{run_id}/report/cached")
 def get_cached_run_report(run_id: int, db: Session = Depends(get_db)):
     """Return cached report if post-processed, otherwise compute live."""
-    run = db.get(TaskRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="run not found")
-    if run.post_processed_at and run.report_json:
-        return JSONResponse(content=run.report_json)
-    # Fallback to live computation
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
+
+    # 旧链路有缓存时优先返回缓存；新链路（JobInstance）直接返回实时报告。
+    try:
+        run = db.get(TaskRun, run_id)
+    except ProgrammingError:
+        db.rollback()
+        run = None
+    if run and run.post_processed_at and run.report_json:
+        return JSONResponse(content=run.report_json)
     return JSONResponse(content=jsonable_encoder(_model_to_dict(report)))
 
 
@@ -656,53 +700,7 @@ def download_run_artifact(task_id: int, run_id: int, artifact_id: int, db: Sessi
 
 @router.post("/tasks/{task_id}/dispatch", response_model=RunOut)
 def dispatch_task(task_id: int, payload: TaskDispatch, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
-    host = db.get(Host, payload.host_id)
-    device = db.get(Device, payload.device_id)
-    if not host or not device:
-        raise HTTPException(status_code=400, detail="host or device not found")
-
-    task = db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="task not found")
-    if task.target_device_id and task.target_device_id != payload.device_id:
-        raise HTTPException(status_code=409, detail="task target device mismatch")
-
-    # Atomic status update to prevent concurrent dispatch
-    updated = db.execute(
-        text(
-            "UPDATE tasks SET status = :queued WHERE id = :task_id AND status = :pending"
-        ),
-        {
-            "task_id": task.id,
-            "queued": TaskStatus.QUEUED.value,
-            "pending": TaskStatus.PENDING.value,
-        },
-    )
-    if updated.rowcount != 1:
-        raise HTTPException(status_code=409, detail="task not pending")
-
-    run = TaskRun(
-        task_id=task.id,
-        host_id=host.id,
-        device_id=device.id,
-        status=RunStatus.QUEUED,
-    )
-    db.add(run)
-    db.flush()
-    _acquire_device_lock(db, device.id, run.id)
-    record_audit(
-        db,
-        action="dispatch",
-        resource_type="task",
-        resource_id=task.id,
-        details={"host_id": host.id, "device_id": device.id, "run_id": run.id},
-        user_id=current_user.id,
-        username=current_user.username,
-        request=request,
-    )
-    db.commit()
-    db.refresh(run)
-    return run
+    raise HTTPException(status_code=503, detail="任务分发已迁移至 /orchestration/workflows/{id}/dispatch")
 
 
 @router.post("/agent/logs", response_model=AgentLogOut)
@@ -802,112 +800,12 @@ def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db), _: boo
 
 @router.post("/tasks/{task_id}/cancel", response_model=RunOut)
 def cancel_task(task_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
-    """
-    Cancel a pending or queued task.
-    If the task is already running, it will be marked for cancellation.
-    """
-    task = db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="task not found")
-
-    # Can only cancel tasks that are pending, queued, or running
-    if task.status not in (TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING):
-        raise HTTPException(
-            status_code=409,
-            detail=f"cannot cancel task in status {task.status.value}"
-        )
-
-    # Get the latest run for this task
-    run = (
-        db.query(TaskRun)
-        .filter(TaskRun.task_id == task_id)
-        .order_by(TaskRun.id.desc())
-        .first()
-    )
-
-    # Update task status
-    prev_task_status = task.status.value
-    _ensure_task_transition(task, TaskStatus.CANCELED)
-    task.status = TaskStatus.CANCELED
-
-    # Update run status if exists and not already finished
-    if run and run.status in (RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING):
-        run.status = RunStatus.CANCELED
-        run.finished_at = datetime.utcnow()
-        # Release device lock if held
-        if run.device_id:
-            _release_device_lock(db, run.device_id, run.id)
-        # Cancel all pending/running RunSteps for this run
-        pending_steps = db.query(RunStep).filter(
-            RunStep.run_id == run.id,
-            RunStep.status.in_([RunStepStatus.PENDING, RunStepStatus.RUNNING]),
-        ).all()
-        for step in pending_steps:
-            step.status = RunStepStatus.CANCELED
-
-    record_audit(
-        db,
-        action="cancel",
-        resource_type="task",
-        resource_id=task.id,
-        details={
-            "run_id": run.id if run else None,
-            "from_status": prev_task_status,
-            "to_status": TaskStatus.CANCELED.value,
-        },
-        user_id=current_user.id,
-        username=current_user.username,
-        request=request,
-    )
-    db.commit()
-    db.refresh(run if run else task)
-    if run:
-        return run
-    # Return a synthetic RunOut for tasks without runs
-    return RunOut(
-        id=0,
-        task_id=task.id,
-        host_id=0,
-        device_id=task.target_device_id or 0,
-        status=RunStatus.CANCELED,
-        started_at=None,
-        finished_at=datetime.utcnow(),
-        exit_code=None,
-        error_message="Task canceled by user",
-    )
+    raise HTTPException(status_code=503, detail="取消操作已迁移至 /orchestration/workflow-runs/{id}/abort")
 
 
 @router.post("/tasks/{task_id}/retry", response_model=TaskOut)
 def retry_task(task_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
-    """
-    Retry a failed or canceled task.
-    Resets task to PENDING status - dispatcher will create new run when assigning host/device.
-    """
-    task = db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="task not found")
-
-    # Can only retry failed or canceled tasks
-    if task.status not in (TaskStatus.FAILED, TaskStatus.CANCELED):
-        raise HTTPException(
-            status_code=409,
-            detail=f"cannot retry task in status {task.status.value}"
-        )
-
-    # Check if target device is available (if specified)
-    if task.target_device_id:
-        device = db.get(Device, task.target_device_id)
-        if not device or device.status != DeviceStatus.ONLINE:
-            raise HTTPException(
-                status_code=409,
-                detail="target device is not available"
-            )
-
-    # Reset task status to pending - dispatcher will handle creating the run
-    task.status = TaskStatus.PENDING
-    db.commit()
-    db.refresh(task)
-    return task
+    raise HTTPException(status_code=503, detail="重试操作已迁移至 /orchestration/workflows/{id}/dispatch")
 
 
 # ---------------------------------------------------------------------------
@@ -930,44 +828,7 @@ def batch_cancel_tasks(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Cancel multiple tasks at once."""
-    result = BatchResult(total=len(payload.task_ids))
-
-    for task_id in payload.task_ids:
-        task = db.get(Task, task_id)
-        if not task:
-            result.failed.append({"task_id": task_id, "error": "not found"})
-            continue
-
-        if task.status not in (TaskStatus.PENDING, TaskStatus.QUEUED, TaskStatus.RUNNING):
-            result.failed.append({"task_id": task_id, "error": f"cannot cancel in status {task.status.value}"})
-            continue
-
-        try:
-            task.status = TaskStatus.CANCELED
-            # Cancel active runs
-            active_runs = (
-                db.query(TaskRun)
-                .filter(
-                    TaskRun.task_id == task_id,
-                    TaskRun.status.in_([RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING]),
-                )
-                .all()
-            )
-            for run in active_runs:
-                run.status = RunStatus.CANCELED
-                run.finished_at = datetime.utcnow()
-                if run.device_id:
-                    _release_device_lock(db, run.device_id, run.id)
-            result.success.append(task_id)
-            # 每个任务单独提交，确保成功即持久化
-            db.commit()
-        except Exception as exc:
-            # 失败时回滚当前任务的操作
-            db.rollback()
-            result.failed.append({"task_id": task_id, "error": str(exc)})
-
-    return result
+    raise HTTPException(status_code=503, detail="批量取消已迁移至 /orchestration 相关接口")
 
 
 @router.post("/tasks/batch/retry", response_model=BatchResult)
@@ -976,30 +837,7 @@ def batch_retry_tasks(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Retry multiple failed/canceled tasks at once."""
-    result = BatchResult(total=len(payload.task_ids))
-
-    for task_id in payload.task_ids:
-        task = db.get(Task, task_id)
-        if not task:
-            result.failed.append({"task_id": task_id, "error": "not found"})
-            continue
-
-        if task.status not in (TaskStatus.FAILED, TaskStatus.CANCELED):
-            result.failed.append({"task_id": task_id, "error": f"cannot retry in status {task.status.value}"})
-            continue
-
-        try:
-            task.status = TaskStatus.PENDING
-            result.success.append(task_id)
-            # 每个任务单独提交，确保成功即持久化
-            db.commit()
-        except Exception as exc:
-            # 失败时回滚当前任务的操作
-            db.rollback()
-            result.failed.append({"task_id": task_id, "error": str(exc)})
-
-    return result
+    raise HTTPException(status_code=503, detail="批量重试已迁移至 /orchestration 相关接口")
 
 
 @router.delete("/tasks/{task_id}")
@@ -1008,46 +846,7 @@ def delete_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """
-    Delete a task (only allowed for terminal or pending states).
-    Rejects if the task has active (QUEUED/DISPATCHED/RUNNING) runs.
-    """
-    task = db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="task not found")
-
-    allowed_statuses = {TaskStatus.PENDING, TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED}
-    if task.status not in allowed_statuses:
-        raise HTTPException(
-            status_code=409,
-            detail=f"cannot delete task in status {task.status.value}; must be PENDING, COMPLETED, FAILED, or CANCELED",
-        )
-
-    # Check for active runs
-    active_run_count = (
-        db.query(TaskRun)
-        .filter(
-            TaskRun.task_id == task_id,
-            TaskRun.status.in_([RunStatus.QUEUED, RunStatus.DISPATCHED, RunStatus.RUNNING]),
-        )
-        .count()
-    )
-    if active_run_count > 0:
-        raise HTTPException(
-            status_code=409,
-            detail=f"task has {active_run_count} active run(s); cancel them first",
-        )
-
-    # Delete associated runs and artifacts
-    runs = db.query(TaskRun).filter(TaskRun.task_id == task_id).all()
-    for run in runs:
-        db.query(LogArtifact).filter(LogArtifact.run_id == run.id).delete()
-    db.query(TaskRun).filter(TaskRun.task_id == task_id).delete()
-
-    db.delete(task)
-    db.commit()
-
-    return {"message": "删除成功"}
+    raise HTTPException(status_code=503, detail="删除操作已迁移至 /orchestration/workflows/{id}")
 
 
 # ==================== RunStep API (Pipeline 子步骤) ====================
@@ -1055,23 +854,97 @@ def delete_task(
 
 @router.get("/runs/{run_id}/steps", response_model=List[RunStepOut])
 def list_run_steps(run_id: int, db: Session = Depends(get_db)):
-    """List all pipeline steps for a given TaskRun, ordered by phase and step_order."""
-    run = db.get(TaskRun, run_id)
-    if not run:
+    """Return step status for a JobInstance, mapped from StepTrace records."""
+    from backend.models.job import JobInstance, StepTrace as _StepTrace
+
+    job = db.get(JobInstance, run_id)
+    if not job:
         raise HTTPException(status_code=404, detail="run not found")
-    steps = (
-        db.query(RunStep)
-        .filter(RunStep.run_id == run_id)
-        .order_by(RunStep.phase, RunStep.step_order)
+
+    traces = (
+        db.query(_StepTrace)
+        .filter(_StepTrace.job_id == run_id)
+        .order_by(_StepTrace.original_ts)
         .all()
     )
-    return steps
+
+    if traces:
+        # Deduplicate by step_id: keep the latest event for each step
+        step_latest: dict = {}
+        for t in traces:
+            step_latest[t.step_id] = t
+
+        result = []
+        for idx, (step_id, t) in enumerate(step_latest.items()):
+            is_terminal = t.status in ("COMPLETED", "FAILED", "SKIPPED")
+            result.append(RunStepOut(
+                id=t.id,
+                run_id=t.job_id,
+                phase=t.stage,
+                step_order=idx,
+                name=step_id,
+                action="",
+                params={},
+                status=t.status,
+                started_at=t.original_ts,
+                finished_at=t.created_at if is_terminal else None,
+                exit_code=None,
+                error_message=t.error_message,
+                log_line_count=0,
+                created_at=t.created_at,
+            ))
+        return result
+
+    # No traces yet: synthesize PENDING steps from pipeline_def stages
+    pipeline_def = job.pipeline_def or {}
+    stages = pipeline_def.get("stages", {})
+    now = datetime.utcnow()
+    result = []
+    idx = 0
+    for stage_name, steps in stages.items():
+        for step in (steps or []):
+            result.append(RunStepOut(
+                id=idx,
+                run_id=run_id,
+                phase=stage_name,
+                step_order=idx,
+                name=step.get("step_id", f"step_{idx}"),
+                action=step.get("action", ""),
+                params=step.get("params", {}),
+                status="PENDING",
+                started_at=None,
+                finished_at=None,
+                exit_code=None,
+                error_message=None,
+                log_line_count=0,
+                created_at=now,
+            ))
+            idx += 1
+    return result
 
 
 @router.get("/runs/{run_id}/steps/{step_id}", response_model=RunStepOut)
 def get_run_step(run_id: int, step_id: int, db: Session = Depends(get_db)):
-    """Get a single RunStep detail."""
-    step = db.query(RunStep).filter(RunStep.id == step_id, RunStep.run_id == run_id).first()
-    if not step:
+    """Get a single step detail from StepTrace."""
+    from backend.models.job import StepTrace as _StepTrace
+
+    trace = db.query(_StepTrace).filter(_StepTrace.id == step_id, _StepTrace.job_id == run_id).first()
+    if not trace:
         raise HTTPException(status_code=404, detail="step not found")
-    return step
+    is_terminal = trace.status in ("COMPLETED", "FAILED", "SKIPPED")
+    return RunStepOut(
+        id=trace.id,
+        run_id=trace.job_id,
+        phase=trace.stage,
+        step_order=0,
+        name=trace.step_id,
+        action="",
+        params={},
+        status=trace.status,
+        started_at=trace.original_ts,
+        finished_at=trace.created_at if is_terminal else None,
+        exit_code=None,
+        error_message=trace.error_message,
+        log_line_count=0,
+        created_at=trace.created_at,
+    )
