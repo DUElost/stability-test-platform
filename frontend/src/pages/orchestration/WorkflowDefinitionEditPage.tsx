@@ -236,7 +236,8 @@ export default function WorkflowDefinitionEditPage() {
       });
     },
     onSuccess: (updated) => {
-      queryClient.invalidateQueries({ queryKey: ['workflow-definition', workflowId] });
+      // Directly update the query cache instead of invalidating (which is async)
+      queryClient.setQueryData(['workflow-definition', workflowId], updated);
       queryClient.invalidateQueries({ queryKey: ['workflow-definitions'] });
       setBasicForm({
         name: updated.name,

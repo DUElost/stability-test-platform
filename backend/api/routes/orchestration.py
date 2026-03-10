@@ -217,19 +217,43 @@ async def update_workflow(
     if payload.task_templates is not None:
         _validate_task_templates(payload.task_templates)
 
-        # Replace all templates: delete existing, insert new
-        from sqlalchemy import delete as sa_delete
-        await db.execute(sa_delete(TaskTemplate).where(TaskTemplate.workflow_definition_id == wf_id))
+        # Get existing templates
+        existing_templates = (await db.execute(
+            select(TaskTemplate).where(TaskTemplate.workflow_definition_id == wf_id)
+        )).scalars().all()
+
+        # Update existing or insert new (upsert logic)
         now = datetime.utcnow()
+        existing_by_name = {t.name: t for t in existing_templates}
+
         for t in payload.task_templates:
-            db.add(TaskTemplate(
-                workflow_definition_id=wf_id,
-                name=t.name,
-                pipeline_def=t.pipeline_def,
-                platform_filter=t.platform_filter,
-                sort_order=t.sort_order,
-                created_at=now,
-            ))
+            if t.name in existing_by_name:
+                # Update existing template
+                existing = existing_by_name[t.name]
+                existing.pipeline_def = t.pipeline_def
+                existing.platform_filter = t.platform_filter
+                existing.sort_order = t.sort_order
+            else:
+                # Insert new template
+                db.add(TaskTemplate(
+                    workflow_definition_id=wf_id,
+                    name=t.name,
+                    pipeline_def=t.pipeline_def,
+                    platform_filter=t.platform_filter,
+                    sort_order=t.sort_order,
+                    created_at=now,
+                ))
+
+        # Delete templates that are no longer in payload (skip if referenced by JobInstance)
+        new_names = {t.name for t in payload.task_templates}
+        for t in existing_templates:
+            if t.name not in new_names:
+                # Check if referenced by any JobInstance
+                referenced = (await db.execute(
+                    select(JobInstance.id).where(JobInstance.task_template_id == t.id).limit(1)
+                )).scalars().first()
+                if not referenced:
+                    await db.delete(t)
 
     await db.commit()
     await db.refresh(wf)

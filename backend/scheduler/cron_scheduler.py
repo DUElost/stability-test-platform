@@ -12,6 +12,7 @@ import time
 from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from backend.core.database import SessionLocal
 from backend.models.schemas import Task, TaskSchedule, TaskStatus
@@ -109,7 +110,14 @@ class CronScheduler:
             )
             if stale_runs:
                 run_ids = [r.id for r in stale_runs]
-                # Delete related JobInstance records first
+                # Delete related StepTrace records first (FK to JobInstance)
+                from backend.models.job import StepTrace
+                db.query(StepTrace).filter(
+                    StepTrace.job_id.in_(
+                        select(JobInstance.id).where(JobInstance.workflow_run_id.in_(run_ids))
+                    )
+                ).delete(synchronize_session=False)
+                # Delete related JobInstance records
                 db.query(JobInstance).filter(
                     JobInstance.workflow_run_id.in_(run_ids)
                 ).delete(synchronize_session=False)
