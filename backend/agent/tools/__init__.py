@@ -3,6 +3,9 @@
 测试工具模块
 """
 
-from .monkey_aee_stability_test import MonkeyAEEStabilityTest
+from .monkey_aee_stability_test import MonkeyAEEAction
 
-__all__ = ["MonkeyAEEStabilityTest"]
+# backward compat alias
+MonkeyAEEStabilityTest = MonkeyAEEAction
+
+__all__ = ["MonkeyAEEAction", "MonkeyAEEStabilityTest"]

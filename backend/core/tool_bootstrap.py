@@ -44,7 +44,7 @@ def ensure_monkey_aee_tool(db: Session) -> Tuple[Tool, bool]:
     tool = (
         db.query(Tool)
         .filter(
-            Tool.script_class == "MonkeyAEEStabilityTest",
+            Tool.script_class == "MonkeyAEEAction",
             Tool.script_path == expected_script_path,
         )
         .first()
@@ -66,7 +66,7 @@ def ensure_monkey_aee_tool(db: Session) -> Tuple[Tool, bool]:
             name=MONKEY_AEE_TOOL_NAME,
             description="MONKEY_AEE 专项稳定性测试（兼容旧脚本）",
             script_path=expected_script_path,
-            script_class="MonkeyAEEStabilityTest",
+            script_class="MonkeyAEEAction",
             script_type="python",
             default_params=build_monkey_aee_defaults(),
             param_schema=MONKEY_AEE_PARAM_SCHEMA,
@@ -80,7 +80,7 @@ def ensure_monkey_aee_tool(db: Session) -> Tuple[Tool, bool]:
         tool.category_id = category.id
         tool.description = "MONKEY_AEE 专项稳定性测试（兼容旧脚本）"
         tool.script_path = expected_script_path
-        tool.script_class = "MonkeyAEEStabilityTest"
+        tool.script_class = "MonkeyAEEAction"
         tool.script_type = "python"
         tool.default_params = build_monkey_aee_defaults()
         tool.param_schema = MONKEY_AEE_PARAM_SCHEMA
