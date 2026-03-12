@@ -1,6 +1,9 @@
-"""Process lifecycle pipeline actions: start_process, monitor_process, stop_process, run_instrument."""
+"""Process lifecycle pipeline actions: start_process, monitor_process, stop_process, run_instrument, run_shell_script."""
 
 import logging
+import os
+import subprocess
+import threading
 import time
 from ..pipeline_engine import StepContext, StepResult
 
@@ -296,4 +299,142 @@ def guard_process(ctx: StepContext) -> StepResult:
         exit_code=1,
         error_message=f"Failed to restart '{process_name}' after {restart_count} attempts",
         metrics={"status": "restart_failed", "pid": "", "restart_count": restart_count, "killed_duplicates": 0},
+    )
+
+
+def run_shell_script(ctx: StepContext) -> StepResult:
+    """Run a shell script or command on the Agent host (not on Android device).
+
+    This action is designed for migrating existing test scripts to the platform
+    with zero code changes. The script receives the device serial via environment
+    variables and can call adb directly.
+
+    Params:
+        script_path (str): Absolute path to script file on the Agent host.
+        command (str): Inline shell command string (mutually exclusive with script_path).
+        args (list[str]): Extra arguments appended after script_path.
+        env (dict): Additional environment variables to inject.
+        timeout (int): Max execution time in seconds. Default: 3600.
+        capture_output (bool): Stream stdout/stderr to platform logs. Default: True.
+        inject_serial (bool): Auto-inject DEVICE_SERIAL / ADB_SERIAL env vars. Default: True.
+        working_dir (str): Working directory for the script. Default: script's parent dir or cwd.
+
+    Injected env vars (always):
+        DEVICE_SERIAL   — ADB device serial
+        ADB_SERIAL      — same as DEVICE_SERIAL (convenience alias)
+        STP_JOB_ID      — current job ID
+        STP_LOG_DIR     — log directory path (if available via ctx.params)
+    """
+    script_path: str = ctx.params.get("script_path", "")
+    command: str = ctx.params.get("command", "")
+    args: list = ctx.params.get("args", [])
+    env_extra: dict = ctx.params.get("env", {})
+    timeout: int = int(ctx.params.get("timeout", 3600))
+    capture_output: bool = ctx.params.get("capture_output", True)
+    inject_serial: bool = ctx.params.get("inject_serial", True)
+    working_dir: str = ctx.params.get("working_dir", "")
+
+    if not script_path and not command:
+        return StepResult(
+            success=False, exit_code=1,
+            error_message="run_shell_script: neither 'script_path' nor 'command' specified in params",
+        )
+
+    # Build the command
+    if script_path:
+        cmd = [script_path] + [str(a) for a in args]
+        use_shell = False
+        cwd = working_dir or os.path.dirname(os.path.abspath(script_path)) or None
+    else:
+        cmd = command
+        use_shell = True
+        cwd = working_dir or None
+
+    # Build environment
+    env = os.environ.copy()
+    if inject_serial and ctx.serial:
+        env["DEVICE_SERIAL"] = ctx.serial
+        env["ADB_SERIAL"] = ctx.serial
+    if ctx.run_id:
+        env["STP_JOB_ID"] = str(ctx.run_id)
+    log_dir = ctx.params.get("log_dir", "")
+    if log_dir:
+        env["STP_LOG_DIR"] = log_dir
+    env.update({str(k): str(v) for k, v in env_extra.items()})
+
+    cmd_display = cmd if isinstance(cmd, str) else " ".join(str(c) for c in cmd)
+    if ctx.logger:
+        ctx.logger.info(f"[run_shell_script] exec: {cmd_display}")
+        if inject_serial and ctx.serial:
+            ctx.logger.info(f"[run_shell_script] DEVICE_SERIAL={ctx.serial}")
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=cwd,
+            shell=use_shell,
+            text=True,
+            bufsize=1,
+        )
+    except FileNotFoundError:
+        return StepResult(
+            success=False, exit_code=1,
+            error_message=f"Script not found: {script_path or command}",
+        )
+    except Exception as exc:
+        return StepResult(success=False, exit_code=1, error_message=str(exc))
+
+    # Timeout guard: kill the process when deadline exceeded
+    timed_out = threading.Event()
+
+    def _kill_on_timeout():
+        timed_out.set()
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    timer = threading.Timer(timeout, _kill_on_timeout)
+    timer.start()
+
+    output_lines: list = []
+    try:
+        for raw_line in proc.stdout:
+            line = raw_line.rstrip()
+            output_lines.append(line)
+            if capture_output and ctx.logger:
+                ctx.logger.info(line)
+    finally:
+        timer.cancel()
+
+    proc.wait()
+
+    if timed_out.is_set():
+        if ctx.logger:
+            ctx.logger.warn(f"[run_shell_script] timed out after {timeout}s, process killed")
+        return StepResult(
+            success=False, exit_code=124,
+            error_message=f"Script timed out after {timeout}s",
+            metrics={"lines": len(output_lines), "timeout": timeout},
+        )
+
+    exit_code = proc.returncode
+    if ctx.logger:
+        ctx.logger.info(f"[run_shell_script] exited with code {exit_code}")
+
+    if exit_code == 0:
+        return StepResult(
+            success=True, exit_code=0,
+            metrics={"lines": len(output_lines)},
+        )
+
+    tail = "\n".join(output_lines[-30:]) if output_lines else "(no output)"
+    return StepResult(
+        success=False,
+        exit_code=exit_code,
+        error_message=f"Script exited {exit_code}. Last output:\n{tail}",
+        metrics={"lines": len(output_lines)},
     )

@@ -51,6 +51,22 @@ async def dispatch_workflow(
 
     await _validate_tool_references(templates, db)
 
+    # Pre-fetch device → host mapping so each JobInstance can be pre-assigned
+    from backend.models.host import Device
+    device_rows = (await db.execute(
+        select(Device.id, Device.host_id)
+        .where(Device.id.in_(device_ids))
+    )).all()
+    device_host_map = {row.id: row.host_id for row in device_rows}
+
+    # Warn about devices without host assignment (Agent won't pick them up)
+    orphan_devices = [did for did in device_ids if not device_host_map.get(did)]
+    if orphan_devices:
+        logger.warning(
+            "dispatch_devices_without_host: device_ids=%s — Agent may not pick up these jobs",
+            orphan_devices,
+        )
+
     run = WorkflowRun(
         workflow_definition_id=workflow_def_id,
         status="RUNNING",
@@ -68,6 +84,7 @@ async def dispatch_workflow(
                 workflow_run_id=run.id,
                 task_template_id=template.id,
                 device_id=device_id,
+                host_id=device_host_map.get(device_id),
                 status=JobStatus.PENDING.value,
                 pipeline_def=template.pipeline_def,
                 created_at=now,

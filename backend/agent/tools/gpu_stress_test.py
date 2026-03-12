@@ -1,23 +1,20 @@
 # -*- coding: utf-8 -*-
-"""
-GPU stress test.
-Installs a GPU benchmark APK and loop-launches the test Activity.
-"""
+"""GPU stress test — Pipeline Action."""
 
 import time
 from typing import Any, Dict
 
-from ..test_framework import BaseTestCase, TestResult
-from ..test_stages import MINIMAL_STAGES
+from ..pipeline_engine import PipelineAction, StepContext, StepResult
 
 
-class GpuStressTest(BaseTestCase):
-    """GPU stress cycle test using Antutu or similar benchmark."""
+class GpuStressAction(PipelineAction):
+    """Install a GPU benchmark APK and loop-launch the test Activity."""
 
-    TEST_TYPE = "GPU"
-    STAGES = MINIMAL_STAGES
+    TOOL_CATEGORY = "GPU"
+    TOOL_DESCRIPTION = "GPU stress cycle test using Antutu or similar benchmark."
 
-    def get_default_params(self) -> Dict[str, Any]:
+    @classmethod
+    def get_default_params(cls) -> Dict[str, Any]:
         return {
             "apk_path": "",
             "activity": "com.antutu.ABenchMark/.ABenchMarkStart",
@@ -25,36 +22,30 @@ class GpuStressTest(BaseTestCase):
             "interval": 120,
         }
 
-    def setup(self, serial: str, params: Dict[str, Any]) -> None:
-        super().setup(serial, params)
-        apk_path = params.get("apk_path")
-        if apk_path:
-            self.adb.install(serial, apk_path)
-            self._log(f"GPU test APK 已安装: {apk_path}")
+    def run(self, ctx: StepContext) -> StepResult:
+        apk_path = ctx.params.get("apk_path", "")
+        activity = ctx.params.get("activity", "com.antutu.ABenchMark/.ABenchMarkStart")
+        loops = int(ctx.params.get("loops", 3))
+        interval = int(ctx.params.get("interval", 120))
 
-    def execute(self, serial: str, params: Dict[str, Any]) -> TestResult:
-        activity = params.get("activity", "com.antutu.ABenchMark/.ABenchMarkStart")
-        loops = int(params.get("loops", 3))
-        interval = int(params.get("interval", 120))
+        if apk_path:
+            ctx.logger.info(f"安装 GPU test APK: {apk_path}")
+            ctx.adb.install(ctx.serial, apk_path)
 
         summaries = []
         last_code = 0
 
         for idx in range(loops):
-            self._log(f"GPU loop {idx + 1}/{loops}")
-            self.set_progress(
-                35 + int((idx / max(loops, 1)) * 50),
-                f"GPU loop {idx + 1}/{loops}",
-            )
-            result = self._run_shell(serial, ["am", "start", "-n", activity])
-            last_code = result.returncode
-            summaries.append(f"loop={idx + 1}, exit={result.returncode}")
+            ctx.logger.info(f"GPU loop {idx + 1}/{loops}")
+            result = ctx.adb.shell(ctx.serial, ["am", "start", "-n", activity])
+            last_code = getattr(result, "returncode", 0)
+            summaries.append(f"loop={idx + 1}, exit={last_code}")
             if idx < loops - 1:
                 time.sleep(interval)
 
-        status = "FINISHED" if last_code == 0 else "FAILED"
-        return TestResult(
-            status=status,
+        return StepResult(
+            success=last_code == 0,
             exit_code=last_code,
-            log_summary="; ".join(summaries)[-2000:],
+            error_message="" if last_code == 0 else "; ".join(summaries),
+            metrics={"loops_run": loops, "last_exit_code": last_code},
         )

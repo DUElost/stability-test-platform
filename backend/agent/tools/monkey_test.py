@@ -1,22 +1,19 @@
 # -*- coding: utf-8 -*-
-"""
-Standard Android Monkey test.
-Sends random UI events to the device via the built-in monkey command.
-"""
+"""Standard Android Monkey stress test — Pipeline Action."""
 
 from typing import Any, Dict
 
-from ..test_framework import BaseTestCase, TestResult
-from ..test_stages import MINIMAL_STAGES
+from ..pipeline_engine import PipelineAction, StepContext, StepResult
 
 
-class MonkeyTest(BaseTestCase):
-    """Standard Android Monkey random event stress test."""
+class MonkeyAction(PipelineAction):
+    """Send random UI events to the device via the built-in ``monkey`` command."""
 
-    TEST_TYPE = "MONKEY"
-    STAGES = MINIMAL_STAGES  # PRECHECK, RUN, TEARDOWN
+    TOOL_CATEGORY = "MONKEY"
+    TOOL_DESCRIPTION = "Standard Android Monkey random event stress test."
 
-    def get_default_params(self) -> Dict[str, Any]:
+    @classmethod
+    def get_default_params(cls) -> Dict[str, Any]:
         return {
             "packages": [],
             "event_count": 10000,
@@ -24,11 +21,11 @@ class MonkeyTest(BaseTestCase):
             "seed": None,
         }
 
-    def execute(self, serial: str, params: Dict[str, Any]) -> TestResult:
-        packages = params.get("packages") or []
-        event_count = int(params.get("event_count", 10000))
-        throttle = int(params.get("throttle", 100))
-        seed = params.get("seed")
+    def run(self, ctx: StepContext) -> StepResult:
+        packages = ctx.params.get("packages") or []
+        event_count = int(ctx.params.get("event_count", 10000))
+        throttle = int(ctx.params.get("throttle", 100))
+        seed = ctx.params.get("seed")
 
         cmd = ["monkey"]
         for pkg in packages:
@@ -38,12 +35,14 @@ class MonkeyTest(BaseTestCase):
             cmd += ["-s", str(seed)]
         cmd += [str(event_count)]
 
-        self._log(f"执行 monkey: events={event_count}, throttle={throttle}")
-        result = self._run_shell(serial, cmd, timeout=max(event_count // 10 + 300, 600))
-        exit_code = result.returncode
+        timeout = max(event_count // 10 + 300, 600)
+        ctx.logger.info(f"执行 monkey: events={event_count}, throttle={throttle}, pkgs={packages}")
+        result = ctx.adb.shell(ctx.serial, cmd, timeout=timeout)
+        exit_code = getattr(result, "returncode", 0)
+        stdout = getattr(result, "stdout", "") or ""
 
-        return TestResult(
-            status="FINISHED" if exit_code == 0 else "FAILED",
+        return StepResult(
+            success=exit_code == 0,
             exit_code=exit_code,
-            log_summary=(result.stdout or "")[-2000:],
+            error_message=stdout[-2000:] if exit_code != 0 else "",
         )

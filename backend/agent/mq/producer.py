@@ -34,10 +34,18 @@ except ImportError:
 
 
 class MQProducer:
-    """Sync Redis Stream producer. Falls back gracefully when Redis is unavailable."""
+    """Sync Redis Stream producer. Falls back gracefully when Redis is unavailable.
+
+    Supports automatic reconnection: when a write fails, the next write
+    attempt will try to re-establish the connection (at most once per
+    _RECONNECT_COOLDOWN seconds to avoid flooding).
+    """
+
+    _RECONNECT_COOLDOWN = 10  # seconds between reconnect attempts
 
     def __init__(self, redis_url: str, host_id: str, local_db: Optional["LocalDB"] = None):
         self._host_id = host_id
+        self._redis_url = redis_url
         self._local_db = local_db
         self._log_rate_limit: Optional[int] = None
         self._log_count = 0
@@ -45,23 +53,43 @@ class MQProducer:
         self._lock = threading.Lock()
         self._redis = None
         self._connected = False
+        self._last_reconnect_attempt = 0.0
 
         if not _HAS_REDIS:
             return
 
+        self._try_connect()
+
+    def _try_connect(self) -> bool:
+        """Attempt to connect/reconnect to Redis. Returns True on success."""
         try:
             self._redis = _redis_mod.Redis.from_url(
-                redis_url,
+                self._redis_url,
                 decode_responses=True,
                 socket_connect_timeout=5,
                 socket_timeout=5,
             )
             self._redis.ping()
             self._connected = True
-            logger.info(f"MQ producer connected: {redis_url}")
+            logger.info(f"MQ producer connected: {self._redis_url}")
+            return True
         except Exception as e:
             logger.warning(f"MQ producer Redis connection failed: {e}")
             self._redis = None
+            self._connected = False
+            return False
+
+    def _ensure_connected(self) -> bool:
+        """Lazily reconnect if disconnected (respecting cooldown)."""
+        if self._connected:
+            return True
+        if not _HAS_REDIS:
+            return False
+        now = time.monotonic()
+        if now - self._last_reconnect_attempt < self._RECONNECT_COOLDOWN:
+            return False
+        self._last_reconnect_attempt = now
+        return self._try_connect()
 
     @property
     def connected(self) -> bool:
@@ -191,7 +219,7 @@ class MQProducer:
             return False
 
     def _xadd_status(self, msg: dict) -> Optional[str]:
-        if not self._redis or not self._connected:
+        if not self._ensure_connected():
             return None
         try:
             return self._redis.xadd(STATUS_STREAM, msg, maxlen=STATUS_MAXLEN, approximate=True)
@@ -201,12 +229,13 @@ class MQProducer:
             return None
 
     def _xadd_logs(self, msg: dict) -> Optional[str]:
-        if not self._redis or not self._connected:
+        if not self._ensure_connected():
             return None
         try:
             return self._redis.xadd(LOG_STREAM, msg, maxlen=LOG_MAXLEN, approximate=True)
         except Exception as e:
             logger.warning(f"MQ xadd stp:logs failed: {e}")
+            self._connected = False
             return None
 
 

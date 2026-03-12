@@ -64,13 +64,14 @@
 | [ADR-0013](./ADR-0013-frontend-feature-expansion.md) | 前端功能模块扩展（任务实例、问题追踪、环境资源） | Accepted | P1 | M2 | 已实现 |
 | [ADR-0014](./ADR-0014-pipeline-execution-engine.md) | Pipeline 执行引擎架构 | Accepted | P1 | M2 | 已实现 |
 | [ADR-0015](./ADR-0015-audit-log-system.md) | 审计日志系统 | Accepted | P1 | M2 | 已实现 |
+| [ADR-0016](./ADR-0016-deprecate-base-test-case.md) | 废弃 BaseTestCase，以 Pipeline Action 为唯一执行模型 | Accepted | P0 | M2 | 冻结中，待迁移 |
 
 ## Proposed 里程碑看板（2026 上半年）
 
 | 里程碑 | 目标日期 | 包含 ADR |
 |---|---|---|
 | M1 | 2026-03-15 | ADR-0008, ADR-0009 |
-| M2 | 2026-04-15 | ADR-0010, ADR-0011, ADR-0013, ADR-0014 |
+| M2 | 2026-04-15 | ADR-0010, ADR-0011, ADR-0013, ADR-0014, ADR-0016 |
 | M3 | 2026-05-15 | ADR-0012（第 2-3 层） |
 
 ## 维护约定

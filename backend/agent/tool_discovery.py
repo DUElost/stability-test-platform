@@ -1,25 +1,47 @@
 # -*- coding: utf-8 -*-
-"""
-工具自动发现模块
-扫描指定目录，自动发现可用的测试工具
+"""工具自动发现模块
+
+扫描指定目录，自动发现继承 ``PipelineAction`` 的工具类并注册到数据库。
+
+发现规则
+--------
+- 扫描目录下的所有 ``.py`` 文件（不含以 ``_`` 开头的文件）
+- 解析 AST，查找继承 ``PipelineAction`` 的类（**不再支持 BaseTestCase**）
+- 从类属性读取元数据：``TOOL_CATEGORY``、``TOOL_DESCRIPTION``
+- 从 ``get_default_params()`` 方法体读取默认参数
+
+目录结构（支持两种布局）
+------------------------
+外部分类目录（Test_Tool/）::
+
+    Test_Tool/
+    ├── Monkey/
+    │   └── mtk_monkey.py          # class MtkMonkeyAction(PipelineAction)
+    └── GPU/
+        └── gpu_stress.py
+
+内置扁平目录（backend/agent/tools/）::
+
+    tools/
+    ├── monkey_test.py             # class MonkeyAction(PipelineAction)
+    └── gpu_stress_test.py
 """
 
-import os
 import ast
-import json
+import os
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-
+from typing import Any, Dict, List, Optional
 
 from .config import EXTERNAL_TOOL_DIR, BUILTIN_TOOL_DIR
 
-
-# 默认扫描路径
 DEFAULT_TOOL_DIR = EXTERNAL_TOOL_DIR
+
+# 标记基类名称（与 pipeline_engine.PipelineAction 一致）
+_PIPELINE_ACTION_BASE = "PipelineAction"
 
 
 class ToolDiscovery:
-    """工具自动发现器"""
+    """Pipeline Action 工具自动发现器。"""
 
     def __init__(self, tool_dir: str = DEFAULT_TOOL_DIR, include_builtin: bool = True):
         self._dirs: List[Path] = []
@@ -30,210 +52,202 @@ class ToolDiscovery:
             self._dirs.append(BUILTIN_TOOL_DIR)
 
     def scan(self) -> List[Dict[str, Any]]:
-        """
-        扫描工具目录，返回发现的工具列表
+        """扫描工具目录，返回发现的 PipelineAction 列表。
 
-        支持两种目录结构：
+        每项格式::
 
-        1) 外部分类目录（Test_Tool/）:
-        Test_Tool/
-        ├── Monkey/
-        │   ├── mtk_monkey.py
-        │   └── qcom_monkey.py
-        └── GPU/
-            └── gpu_stress.py
-
-        2) 内置扁平目录（backend/agent/tools/）:
-        tools/
-        ├── monkey_test.py
-        ├── gpu_stress_test.py
-        └── ...
-
-        返回：
-        [
             {
-                "category": "Monkey",
-                "script_path": ".../mtk_monkey.py",
-                "class_name": "MtkMonkeyTest",
-                "params": {...}
-            },
-            ...
-        ]
+                "category": "MONKEY",
+                "script_path": ".../monkey_test.py",
+                "class_name": "MonkeyAction",
+                "default_params": {"event_count": 10000, ...},
+                "description": "...",
+            }
         """
-        tools = []
+        tools: List[Dict[str, Any]] = []
 
         for tool_dir in self._dirs:
             if not tool_dir.exists():
                 continue
 
-            # Check if this dir contains sub-category folders or flat scripts
-            has_subdirs = any(p.is_dir() and not p.name.startswith("_") for p in tool_dir.iterdir())
+            has_subdirs = any(
+                p.is_dir() and not p.name.startswith("_")
+                for p in tool_dir.iterdir()
+            )
 
             if has_subdirs:
-                # External layout: category sub-directories
                 for category_dir in tool_dir.iterdir():
                     if not category_dir.is_dir() or category_dir.name.startswith("_"):
                         continue
                     for script_file in category_dir.iterdir():
                         if script_file.suffix != ".py" or script_file.name.startswith("_"):
                             continue
-                        tool_info = self._parse_script(script_file, category_dir.name)
-                        if tool_info:
-                            tools.append(tool_info)
+                        info = self._parse_script(script_file, category_dir.name)
+                        if info:
+                            tools.append(info)
             else:
-                # Built-in flat layout: derive category from TEST_TYPE
                 for script_file in tool_dir.iterdir():
                     if script_file.suffix != ".py" or script_file.name.startswith("_"):
                         continue
-                    tool_info = self._parse_script(script_file, None)
-                    if tool_info:
-                        tools.append(tool_info)
+                    info = self._parse_script(script_file, None)
+                    if info:
+                        tools.append(info)
 
         return tools
 
-    def _parse_script(self, script_path: Path, category: Optional[str]) -> Optional[Dict]:
-        """解析脚本获取测试类信息"""
+    def _parse_script(self, script_path: Path, category: Optional[str]) -> Optional[Dict[str, Any]]:
+        """解析脚本，查找继承 PipelineAction 的类。"""
         try:
             with open(script_path, "r", encoding="utf-8") as f:
                 source = f.read()
 
-            # 解析 AST 查找继承 BaseTestCase 的类
             tree = ast.parse(source)
 
             for node in ast.walk(tree):
-                if isinstance(node, ast.ClassDef):
-                    # 检查是否继承 BaseTestCase
-                    for base in node.bases:
-                        if isinstance(base, ast.Name) and base.id == "BaseTestCase":
-                            # 提取默认参数
-                            default_params = self._extract_default_params(node)
+                if not isinstance(node, ast.ClassDef):
+                    continue
 
-                            # 提取 TEST_TYPE 作为 category 回退
-                            resolved_category = category or self._extract_test_type(node) or script_path.stem
-                            return {
-                                "category": resolved_category,
-                                "script_path": str(script_path),
-                                "class_name": node.name,
-                                "default_params": default_params,
-                                "description": ast.get_docstring(node) or "",
-                            }
+                if not self._inherits_pipeline_action(node):
+                    continue
 
-            return None
-        except Exception as e:
-            print(f"解析脚本失败 {script_path}: {e}")
-            return None
+                default_params = self._extract_default_params(node)
+                description = ast.get_docstring(node) or ""
 
-    def _extract_test_type(self, class_node: ast.ClassDef) -> Optional[str]:
-        """Extract TEST_TYPE class attribute from a ClassDef AST node."""
+                # TOOL_CATEGORY 优先于 category 目录名，再回退到文件名
+                tool_category = (
+                    self._extract_str_attr(node, "TOOL_CATEGORY")
+                    or category
+                    or script_path.stem
+                )
+                tool_description = (
+                    self._extract_str_attr(node, "TOOL_DESCRIPTION")
+                    or description
+                )
+
+                return {
+                    "category": tool_category,
+                    "script_path": str(script_path),
+                    "class_name": node.name,
+                    "default_params": default_params,
+                    "description": tool_description,
+                }
+
+        except Exception as exc:
+            print(f"解析脚本失败 {script_path}: {exc}")
+
+        return None
+
+    # ------------------------------------------------------------------
+    # AST helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _inherits_pipeline_action(class_node: ast.ClassDef) -> bool:
+        """Return True if the class directly inherits PipelineAction."""
+        for base in class_node.bases:
+            if isinstance(base, ast.Name) and base.id == _PIPELINE_ACTION_BASE:
+                return True
+            # Support: from pipeline_engine import PipelineAction (as Attribute)
+            if isinstance(base, ast.Attribute) and base.attr == _PIPELINE_ACTION_BASE:
+                return True
+        return False
+
+    @staticmethod
+    def _extract_str_attr(class_node: ast.ClassDef, attr_name: str) -> str:
+        """Extract a string class-level attribute (e.g. TOOL_CATEGORY = "...")."""
         for node in class_node.body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == "TEST_TYPE":
-                        if isinstance(node.value, ast.Constant):
-                            return str(node.value.value)
-        return None
+                    if isinstance(target, ast.Name) and target.id == attr_name:
+                        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                            return node.value.value
+        return ""
 
-    def _extract_default_params(self, class_node: ast.ClassDef) -> Dict[str, Any]:
-        """从类中提取默认参数"""
-        params = {}
-
+    @staticmethod
+    def _extract_default_params(class_node: ast.ClassDef) -> Dict[str, Any]:
+        """Extract the return dict of get_default_params() via AST."""
         for node in class_node.body:
-            if isinstance(node, ast.FunctionDef) and node.name == "get_default_params":
-                # 解析返回值 - 方式1: type hint 直接返回字典
-                if node.returns and isinstance(node.returns, ast.Dict):
-                    params = self._parse_dict(node.returns)
-                # 方式2: 遍历函数体查找 return 语句
-                elif node.body:
-                    for stmt in node.body:
-                        if isinstance(stmt, ast.Return) and stmt.value:
-                            if isinstance(stmt.value, ast.Dict):
-                                params = self._parse_dict(stmt.value)
-                                break
-                            elif isinstance(stmt.value, ast.Call):
-                                # 处理 dict() 或 {} 形式
-                                if isinstance(stmt.value.func, ast.Name) and stmt.value.func.id == "dict":
-                                    # 处理 dict(key=value) 形式
-                                    for kw in stmt.value.keywords:
-                                        if kw.value:
-                                            if isinstance(kw.value, ast.Constant):
-                                                params[kw.arg] = kw.value.value
-                break
+            if not (isinstance(node, ast.FunctionDef) and node.name == "get_default_params"):
+                continue
+            for stmt in node.body:
+                if isinstance(stmt, ast.Return) and stmt.value:
+                    if isinstance(stmt.value, ast.Dict):
+                        return ToolDiscovery._parse_dict(stmt.value)
+                    if isinstance(stmt.value, ast.Call):
+                        func = stmt.value.func
+                        if isinstance(func, ast.Name) and func.id == "dict":
+                            return {
+                                kw.arg: kw.value.value
+                                for kw in stmt.value.keywords
+                                if kw.arg and isinstance(kw.value, ast.Constant)
+                            }
+        return {}
 
-        return params
-
-    def _parse_dict(self, node: ast.Dict) -> Dict:
-        """解析 AST Dict 节点"""
-        result = {}
+    @staticmethod
+    def _parse_dict(node: ast.Dict) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
         for key, value in zip(node.keys, node.values):
             if isinstance(key, ast.Constant):
                 k = key.value
-            elif isinstance(key, ast.Str):  # Python 3.7-
-                k = key.s
             else:
                 continue
-
             if isinstance(value, ast.Constant):
                 result[k] = value.value
-            elif isinstance(value, ast.Str):
-                result[k] = value.s
-            elif isinstance(value, ast.Num):
-                result[k] = value.n
             elif isinstance(value, ast.Dict):
-                result[k] = self._parse_dict(value)
-
+                result[k] = ToolDiscovery._parse_dict(value)
+            elif isinstance(value, (ast.List, ast.Tuple)):
+                elts = []
+                for elt in value.elts:
+                    if isinstance(elt, ast.Constant):
+                        elts.append(elt.value)
+                result[k] = elts
         return result
 
 
 class ToolDiscoveryService:
-    """工具发现服务 - 用于同步工具到数据库"""
+    """服务端工具：将发现的 PipelineAction 同步到数据库。
+
+    注意：此类仅在服务端运行（需要 backend.models），Agent 运行时不调用。
+    """
 
     def __init__(self, db_session):
         self.db = db_session
         self.discovery = ToolDiscovery()
 
     def sync(self) -> Dict[str, int]:
-        """
-        同步发现的工具到数据库
-        返回：{"categories": 新增分类数, "tools": 新增工具数}
-
-        注意：此方法为服务端功能（需要 backend.models），Agent 运行时不调用。
-        """
-        from backend.models.schemas import ToolCategory, Tool
+        """同步发现的工具到数据库，返回 {"categories": N, "tools": N}。"""
+        from backend.models.schemas import Tool, ToolCategory
 
         tools = self.discovery.scan()
         categories_created = 0
         tools_created = 0
 
         for tool_info in tools:
-            # 获取或创建分类
             category_name = tool_info["category"]
             category = self.db.query(ToolCategory).filter_by(name=category_name).first()
-
             if not category:
                 category = ToolCategory(
                     name=category_name,
-                    description=f"{category_name} 测试类型"
+                    description=f"{category_name} 测试类型",
                 )
                 self.db.add(category)
                 self.db.flush()
                 categories_created += 1
 
-            # 检查工具是否已存在（按 script_path + script_class 唯一判断）
             existing = self.db.query(Tool).filter_by(
                 category_id=category.id,
-                script_class=tool_info["class_name"]
+                script_class=tool_info["class_name"],
             ).first()
 
             if not existing:
-                new_tool = Tool(
+                self.db.add(Tool(
                     category_id=category.id,
                     name=f"{category_name} - {tool_info['class_name']}",
                     script_path=tool_info["script_path"],
                     script_class=tool_info["class_name"],
                     default_params=tool_info.get("default_params", {}),
                     description=tool_info.get("description", ""),
-                )
-                self.db.add(new_tool)
+                ))
                 tools_created += 1
 
         self.db.commit()
@@ -241,13 +255,10 @@ class ToolDiscoveryService:
 
 
 if __name__ == "__main__":
-    # 测试扫描功能
     discovery = ToolDiscovery()
-    tools = discovery.scan()
-
-    print(f"发现 {len(tools)} 个工具:")
-    for tool in tools:
-        print(f"  - [{tool['category']}] {tool['class_name']}")
-        print(f"    脚本: {tool['script_path']}")
-        print(f"    参数: {tool.get('default_params', {})}")
-        print()
+    found = discovery.scan()
+    print(f"发现 {len(found)} 个 PipelineAction 工具:")
+    for t in found:
+        print(f"  [{t['category']}] {t['class_name']} — {t['script_path']}")
+        if t.get("default_params"):
+            print(f"    默认参数: {t['default_params']}")

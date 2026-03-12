@@ -1,22 +1,19 @@
 # -*- coding: utf-8 -*-
-"""
-DDR memory stress test.
-Requires root. Pushes memtester binary and runs it on the device.
-"""
+"""DDR memory stress test — Pipeline Action."""
 
 from typing import Any, Dict
 
-from ..test_framework import BaseTestCase, TestResult
-from ..test_stages import MINIMAL_STAGES
+from ..pipeline_engine import PipelineAction, StepContext, StepResult
 
 
-class DdrTest(BaseTestCase):
-    """DDR memory stress test using memtester."""
+class DdrAction(PipelineAction):
+    """DDR memory stress test using memtester. Requires root."""
 
-    TEST_TYPE = "DDR"
-    STAGES = MINIMAL_STAGES
+    TOOL_CATEGORY = "DDR"
+    TOOL_DESCRIPTION = "DDR memory stress test using memtester (root required)."
 
-    def get_default_params(self) -> Dict[str, Any]:
+    @classmethod
+    def get_default_params(cls) -> Dict[str, Any]:
         return {
             "memtester_path": "",
             "remote_path": "/data/local/tmp/memtester",
@@ -24,35 +21,32 @@ class DdrTest(BaseTestCase):
             "loops": 1,
         }
 
-    def setup(self, serial: str, params: Dict[str, Any]) -> None:
-        # DDR requires root
-        if not self._ensure_root(serial):
-            raise RuntimeError("DDR test requires root access")
+    def run(self, ctx: StepContext) -> StepResult:
+        memtester_path = ctx.params.get("memtester_path", "")
+        remote_path = ctx.params.get("remote_path", "/data/local/tmp/memtester")
+        mem_size_mb = int(ctx.params.get("mem_size_mb", 512))
+        loops = int(ctx.params.get("loops", 1))
 
-        memtester_path = params.get("memtester_path")
-        remote_path = params.get("remote_path", "/data/local/tmp/memtester")
+        # Verify root
+        id_result = ctx.adb.shell(ctx.serial, ["id", "-u"])
+        uid = (getattr(id_result, "stdout", "") or "").strip()
+        if uid != "0":
+            return StepResult(success=False, exit_code=1, error_message="DDR test requires root access")
 
         if memtester_path:
-            self._push_file(serial, memtester_path, remote_path)
-            self._run_shell(serial, ["chmod", "755", remote_path])
-            self._log(f"memtester 已推送到 {remote_path}")
+            ctx.logger.info(f"推送 memtester: {memtester_path} → {remote_path}")
+            ctx.adb.push(ctx.serial, memtester_path, remote_path)
+            ctx.adb.shell(ctx.serial, ["chmod", "755", remote_path])
 
-    def execute(self, serial: str, params: Dict[str, Any]) -> TestResult:
-        remote_path = params.get("remote_path", "/data/local/tmp/memtester")
-        mem_size_mb = int(params.get("mem_size_mb", 512))
-        loops = int(params.get("loops", 1))
+        timeout = mem_size_mb * loops * 10
+        ctx.logger.info(f"执行 memtester: size={mem_size_mb}MB, loops={loops}, timeout={timeout}s")
+        result = ctx.adb.shell(ctx.serial, [remote_path, str(mem_size_mb), str(loops)], timeout=timeout)
+        exit_code = getattr(result, "returncode", 0)
+        stdout = getattr(result, "stdout", "") or ""
 
-        self._log(f"执行 memtester: size={mem_size_mb}MB, loops={loops}")
-        result = self._run_shell(
-            serial,
-            [remote_path, str(mem_size_mb), str(loops)],
-            timeout=mem_size_mb * loops * 10,
-        )
-        status = "FINISHED" if result.returncode == 0 else "FAILED"
-
-        return TestResult(
-            status=status,
-            exit_code=result.returncode,
-            error_code=None if status == "FINISHED" else "MEMTESTER_FAILED",
-            log_summary=(result.stdout or "")[-2000:],
+        return StepResult(
+            success=exit_code == 0,
+            exit_code=exit_code,
+            error_message="" if exit_code == 0 else f"memtester failed (exit={exit_code})",
+            metrics={"mem_size_mb": mem_size_mb, "loops": loops, "output_tail": stdout[-500:]},
         )

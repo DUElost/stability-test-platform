@@ -11,7 +11,7 @@ from .device_actions import (
 )
 from .process_actions import (
     start_process, monitor_process, stop_process, run_instrument,
-    guard_process,
+    guard_process, run_shell_script,
 )
 from .file_actions import adb_pull, collect_bugreport, scan_aee, export_mobilelogs
 from .log_actions import aee_extract, log_scan
@@ -33,6 +33,7 @@ ACTION_REGISTRY = {
     "stop_process": stop_process,
     "run_instrument": run_instrument,
     "guard_process": guard_process,
+    "run_shell_script": run_shell_script,
     # File actions
     "adb_pull": adb_pull,
     "collect_bugreport": collect_bugreport,

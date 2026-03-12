@@ -261,18 +261,31 @@ async def get_pending_jobs(
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
-    """Return PENDING JobInstances for devices on this host (pull model)."""
+    """Return PENDING JobInstances for devices on this host (pull model).
+
+    Atomically transitions matched jobs to RUNNING to prevent duplicate claims.
+    Also searches for jobs with matching host_id (pre-assigned by dispatcher).
+    """
     device_ids_result = await db.execute(
         select(Device.id).where(Device.host_id == host_id)
     )
     device_ids = [row[0] for row in device_ids_result.all()]
+
     if not device_ids:
+        logger.info(
+            "agent_pending_no_devices: host_id=%s has no registered devices", host_id
+        )
         return ok([])
 
+    # Match by device_id (original) OR by pre-assigned host_id (new dispatcher logic)
+    from sqlalchemy import or_
     jobs = (await db.execute(
         select(JobInstance)
         .where(
-            JobInstance.device_id.in_(device_ids),
+            or_(
+                JobInstance.device_id.in_(device_ids),
+                JobInstance.host_id == host_id,
+            ),
             JobInstance.status == JobStatus.PENDING.value,
         )
         .order_by(JobInstance.created_at)
@@ -287,6 +300,25 @@ async def get_pending_jobs(
         )
         serial_map = {row.id: row.serial for row in rows.all()}
 
+    # Atomically claim jobs: transition PENDING → RUNNING
+    claimed = []
+    now = datetime.now(timezone.utc)
+    for j in jobs:
+        try:
+            JobStateMachine.transition(j, JobStatus.RUNNING, "claimed_by_agent")
+            j.host_id = host_id
+            j.started_at = now
+            claimed.append(j)
+        except InvalidTransitionError:
+            continue
+
+    if claimed:
+        await db.commit()
+        logger.info(
+            "agent_claimed_jobs: host_id=%s, claimed=%d, device_ids=%s",
+            host_id, len(claimed), [j.device_id for j in claimed],
+        )
+
     return ok([
         JobOut(
             id=j.id, workflow_run_id=j.workflow_run_id,
@@ -294,7 +326,7 @@ async def get_pending_jobs(
             device_serial=serial_map.get(j.device_id),
             host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
         )
-        for j in jobs
+        for j in claimed
     ])
 
 

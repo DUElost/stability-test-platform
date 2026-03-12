@@ -521,11 +521,12 @@ def _run_task_wrapper(
     pipeline_def = run.get("pipeline_def")
 
     logger.info(
-        "run_start",
-        extra={"run_id": run_id, "task_id": task_id, "device_id": device_id},
+        "run_start run_id=%d task_id=%s device_id=%s device_serial=%s",
+        run_id, task_id, device_id, device_serial,
     )
 
-    # Mark as running in backend
+    # Server already transitioned job to RUNNING during claim (get_pending_jobs).
+    # Send heartbeat as confirmation (idempotent, won't fail on already-RUNNING).
     try:
         update_run(
             api_url,
@@ -533,8 +534,7 @@ def _run_task_wrapper(
             {"status": "RUNNING", "started_at": datetime.utcnow().isoformat()},
         )
     except Exception as e:
-        logger.error(f"Failed to mark run {run_id} as RUNNING: {e}")
-        # Continue anyway, pipeline engine will try to report status too
+        logger.warning(f"Heartbeat confirmation for run {run_id} failed (non-fatal): {e}")
 
     if not (
         pipeline_def
@@ -738,12 +738,14 @@ def main() -> None:
 
                     if runs:
                         logger.info(
-                            "pending_runs_fetched",
-                            extra={
-                                "host_id": host_id,
-                                "count": len(runs),
-                                "available_slots": available_slots,
-                            },
+                            "pending_runs_fetched host_id=%s count=%d slots=%d run_ids=%s",
+                            host_id, len(runs), available_slots,
+                            [r.get("id") for r in runs],
+                        )
+                    else:
+                        logger.debug(
+                            "no_pending_runs host_id=%s active=%d slots=%d",
+                            host_id, active_count, available_slots,
                         )
 
                     for run in runs:

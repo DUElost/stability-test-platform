@@ -1,17 +1,22 @@
 # -*- coding: utf-8 -*-
+# ==============================================================================
+# DEPRECATED — 此模块已废弃，禁止在新代码中使用或扩展。
+#
+# 架构决策：ADR-0016（docs/adr/ADR-0016-deprecate-base-test-case.md）
+#
+# 迁移路径：
+#   - 通用设备操作  → builtin: Action（backend/agent/actions/）
+#   - 专项执行逻辑  → tool: Action（实现 run(ctx: StepContext) -> StepResult）
+#
+# 禁止行为：
+#   - 新建继承 BaseTestCase 的类
+#   - 在 PipelineEngine 中为 BaseTestCase 添加任何适配/桥接层
+#   - 在新模块中 import 本文件的任何符号
+#
+# 此文件暂时保留以避免删除引发隐性依赖，待存量迁移完成后将被删除。
+# ==============================================================================
 """
-测试框架基类
-所有测试用例应继承此类，享受平台提供的通用能力
-
-使用方式：
-    class MyTest(BaseTestCase):
-        TEST_TYPE = "MY_TEST"
-
-        def execute(self, serial: str, params: Dict) -> TestResult:
-            ...
-
-    if __name__ == "__main__":
-        BaseTestCase.main(MyTest)
+[已废弃] 测试框架基类 — 请参阅上方 DEPRECATED 说明。
 """
 
 import os
@@ -85,8 +90,7 @@ class BaseTestCase(ABC):
     # ADB 包装器（由 Agent 注入）
     adb: Any = None
 
-    # 日志缓冲区
-    _log_buffer: List[str] = []
+    # 日志缓冲区（类级声明仅作类型提示，实例变量在 __init__ 中初始化，避免共享）
     _log_level: str = "INFO"
 
     # 心跳控制
@@ -106,12 +110,17 @@ class BaseTestCase(ABC):
         for key, value in context.items():
             setattr(self, key, value)
 
+        # 实例级日志缓冲区（避免类级可变默认值被多实例共享的问题）
+        self._log_buffer: List[str] = []
+        self._should_stop: bool = False
+        self._last_heartbeat: float = 0.0
+        self._progress: int = 0
+        self._progress_message: str = ""
+        self._current_stage: Optional[TestStage] = None
+
         # 确保日志目录存在
         if self.log_dir:
             os.makedirs(self.log_dir, exist_ok=True)
-
-        # Stage tracking
-        self._current_stage: Optional[TestStage] = None
 
     def enter_stage(self, stage: TestStage, message: str = "") -> bool:
         """
@@ -120,9 +129,11 @@ class BaseTestCase(ABC):
         """
         if stage not in self.STAGES:
             return False
+
         self._current_stage = stage
         progress = stage_progress(stage)
         display_msg = message or stage.value
+
         self.set_progress(progress, f"{stage.value}: {display_msg}")
         self._log(f"[{stage.value}] {display_msg}")
         return True
@@ -206,27 +217,22 @@ class BaseTestCase(ABC):
         return {}
 
     # ==================== 通用能力（平台提供） ====================
-
-    # 进度信息
-    _progress: int = 0
-    _progress_message: str = ""
+    # 注意：_progress / _progress_message / _log_buffer 等可变状态均在 __init__ 中
+    # 初始化为实例属性，避免多实例共享类级可变对象。
 
     def set_progress(self, progress: int, message: str = "") -> None:
-        """设置进度并触发心跳上报"""
+        """设置进度并触发心跳上报。"""
         self._progress = progress
         self._progress_message = message
         self._maybe_send_heartbeat()
 
     def _log(self, message: str, level: str = "INFO") -> None:
-        """记录日志并缓存"""
+        """记录日志并缓存。"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_line = f"[{timestamp}] [{level}] {message}"
         self._log_buffer.append(log_line)
 
-        # 打印到标准输出
         print(log_line)
-
-        # 尝试通过心跳上报日志
         self._maybe_send_heartbeat()
 
     def _maybe_send_heartbeat(self, force: bool = False) -> None:
@@ -430,7 +436,7 @@ class BaseTestCase(ABC):
             self.enter_stage(TestStage.PREPARE, "执行前置配置")
             self.setup(serial, params)
 
-            # 3. RUN + execute (with heartbeat thread)
+            # 3. RUN + execute
             self.enter_stage(TestStage.RUN, "开始执行测试")
             heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
             heartbeat_thread.start()
@@ -466,18 +472,17 @@ class BaseTestCase(ABC):
             if not result.log_summary:
                 result.log_summary = "\n".join(self._log_buffer[-50:])
 
-            # 强制发送最后一次心跳
-            self._maybe_send_heartbeat(force=True)
-
-            # 停止心跳线程
             self._should_stop = True
+            self._maybe_send_heartbeat(force=True)
 
             return result
 
         except Exception as e:
+            self._should_stop = True
             self._log(f"测试执行异常: {str(e)}", "ERROR")
             import traceback
             traceback.print_exc()
+
             return TestResult(
                 status="FAILED",
                 exit_code=1,

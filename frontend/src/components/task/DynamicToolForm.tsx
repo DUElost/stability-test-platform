@@ -18,27 +18,32 @@ interface DynamicToolFormProps {
   schema: ParamSchema;
   values: Record<string, any>;
   onChange: (key: string, value: any) => void;
+  errors?: Record<string, string>;
 }
 
-export const DynamicToolForm: React.FC<DynamicToolFormProps> = ({ schema, values, onChange }) => {
+export const DynamicToolForm: React.FC<DynamicToolFormProps> = ({ schema, values, onChange, errors }) => {
   const renderField = (key: string, field: SchemaField) => {
     const value = values[key] ?? field.default;
+    const error = errors?.[key];
 
     switch (field.type) {
       case 'boolean':
         return (
-          <div key={key} className="flex items-center gap-2 py-2">
-            <input
-              type="checkbox"
-              id={key}
-              checked={!!value}
-              onChange={(e) => onChange(key, e.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            />
-            <label htmlFor={key} className="text-sm font-medium text-slate-700 cursor-pointer">
-              {field.label || key}
-              {field.description && <span className="block text-xs text-slate-400 font-normal">{field.description}</span>}
-            </label>
+          <div key={key} className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 py-2">
+              <input
+                type="checkbox"
+                id={key}
+                checked={!!value}
+                onChange={(e) => onChange(key, e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <label htmlFor={key} className="text-sm font-medium text-slate-700 cursor-pointer">
+                {field.label || key}
+                {field.description && <span className="block text-xs text-slate-400 font-normal">{field.description}</span>}
+              </label>
+            </div>
+            {error && <p className="text-[10px] text-red-500">{error}</p>}
           </div>
         );
 
@@ -57,9 +62,9 @@ export const DynamicToolForm: React.FC<DynamicToolFormProps> = ({ schema, values
               required={field.required}
               placeholder={field.placeholder}
               onChange={(e) => onChange(key, e.target.value === '' ? undefined : Number(e.target.value))}
-              className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+              className={`w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none ${error ? 'border-red-400' : 'border-slate-300'}`}
             />
-            {field.description && <p className="text-[10px] text-slate-400">{field.description}</p>}
+            {error ? <p className="text-[10px] text-red-500">{error}</p> : field.description && <p className="text-[10px] text-slate-400">{field.description}</p>}
           </div>
         );
 
@@ -74,7 +79,7 @@ export const DynamicToolForm: React.FC<DynamicToolFormProps> = ({ schema, values
               value={value ?? ''}
               required={field.required}
               onChange={(e) => onChange(key, e.target.value)}
-              className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+              className={`w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white ${error ? 'border-red-400' : 'border-slate-300'}`}
             >
               <option value="">Select an option</option>
               {field.options?.map((opt) => (
@@ -83,7 +88,7 @@ export const DynamicToolForm: React.FC<DynamicToolFormProps> = ({ schema, values
                 </option>
               ))}
             </select>
-            {field.description && <p className="text-[10px] text-slate-400">{field.description}</p>}
+            {error ? <p className="text-[10px] text-red-500">{error}</p> : field.description && <p className="text-[10px] text-slate-400">{field.description}</p>}
           </div>
         );
 
@@ -101,9 +106,9 @@ export const DynamicToolForm: React.FC<DynamicToolFormProps> = ({ schema, values
               required={field.required}
               placeholder={field.placeholder}
               onChange={(e) => onChange(key, e.target.value)}
-              className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+              className={`w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none ${error ? 'border-red-400' : 'border-slate-300'}`}
             />
-            {field.description && <p className="text-[10px] text-slate-400">{field.description}</p>}
+            {error ? <p className="text-[10px] text-red-500">{error}</p> : field.description && <p className="text-[10px] text-slate-400">{field.description}</p>}
           </div>
         );
     }

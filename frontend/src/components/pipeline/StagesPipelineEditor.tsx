@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2, Layers3, RotateCcw, Pencil, X } from 'lucide-react';
 import type { PipelineDef, PipelineStep } from '@/utils/api';
 import { BUILTIN_ACTIONS } from './actionCatalog';
+import { DynamicToolForm, type ParamSchema } from '@/components/task/DynamicToolForm';
 
 interface ActionTemplateOption {
   id: number;
@@ -190,20 +191,10 @@ function StepEditorDrawer({
 }: StepEditorDrawerProps) {
   const [paramsText, setParamsText] = useState('');
   const [paramsError, setParamsError] = useState('');
-
-  useEffect(() => {
-    if (!step) {
-      setParamsText('');
-      setParamsError('');
-      return;
-    }
-    setParamsText(
-      step.params && Object.keys(step.params).length > 0
-        ? JSON.stringify(step.params, null, 2)
-        : '',
-    );
-    setParamsError('');
-  }, [step]);
+  const [formValues, setFormValues] = useState<Record<string, any>>({});
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
+  const [touchedFields, setTouchedFields] = useState<Set<string>>(new Set());
+  const initKeyRef = useRef('');
 
   const meta = useMemo(() => {
     if (!step) {
@@ -217,6 +208,51 @@ function StepEditorDrawer({
     }
     return getActionMeta(step, toolOptions, builtinOptions);
   }, [step, toolOptions, builtinOptions]);
+
+  const paramSchema = useMemo<ParamSchema | null>(() => {
+    if (meta.actionType !== 'builtin' || !meta.selectedBuiltin) return null;
+    const schema = meta.selectedBuiltin.param_schema;
+    return schema && Object.keys(schema).length > 0 ? (schema as ParamSchema) : null;
+  }, [meta]);
+
+  // Initialize form/textarea when step identity or action changes
+  useEffect(() => {
+    if (!step) {
+      setParamsText('');
+      setParamsError('');
+      setFormValues({});
+      setValidationErrors({});
+      setTouchedFields(new Set());
+      initKeyRef.current = '';
+      return;
+    }
+
+    const initKey = `${step.step_id}::${step.action}::${paramSchema ? 'form' : 'text'}`;
+    if (initKey === initKeyRef.current) return;
+    initKeyRef.current = initKey;
+
+    if (paramSchema) {
+      const merged: Record<string, any> = {};
+      for (const [key, field] of Object.entries(paramSchema)) {
+        if (step.params && key in step.params) {
+          merged[key] = step.params[key];
+        } else if (field.default !== undefined) {
+          merged[key] = field.default;
+        }
+      }
+      setFormValues(merged);
+      setParamsText(Object.keys(merged).length > 0 ? JSON.stringify(merged, null, 2) : '');
+    } else {
+      setParamsText(
+        step.params && Object.keys(step.params).length > 0
+          ? JSON.stringify(step.params, null, 2)
+          : '',
+      );
+    }
+    setParamsError('');
+    setValidationErrors({});
+    setTouchedFields(new Set());
+  }, [step, paramSchema]);
 
   const selectedTemplateId = useMemo(() => {
     if (!step) return '';
@@ -266,6 +302,8 @@ function StepEditorDrawer({
 
   const handleBuiltinChange = (name: string) => {
     if (!step) return;
+    // When switching actions, carry current form/params values to new step
+    // (the useEffect will re-merge with new schema, preserving overlapping keys)
     onChange({ ...step, action: `builtin:${name}`, version: undefined });
   };
 
@@ -295,6 +333,27 @@ function StepEditorDrawer({
     }
   };
 
+  const handleFormFieldChange = (key: string, value: any) => {
+    if (!step || !paramSchema) return;
+    const next = { ...formValues, [key]: value };
+    setFormValues(next);
+    setTouchedFields((prev) => new Set(prev).add(key));
+
+    // Validate ALL required fields against the updated values
+    const errors: Record<string, string> = {};
+    for (const [k, field] of Object.entries(paramSchema)) {
+      if (field.required && (next[k] === undefined || next[k] === '')) {
+        errors[k] = `${field.label || k} 不能为空`;
+      }
+    }
+    setValidationErrors(errors);
+
+    // Only sync to parent when all required fields are valid
+    if (Object.keys(errors).length === 0) {
+      onChange({ ...step, params: next });
+    }
+  };
+
   const handleApplyTemplate = (templateIdText: string) => {
     if (!step || !templateIdText) return;
 
@@ -318,7 +377,20 @@ function StepEditorDrawer({
         : '',
     );
     setParamsError('');
+    // Reset init key so useEffect re-initializes for new template
+    initKeyRef.current = '';
   };
+
+  // Visible validation errors: only show for fields the user has touched
+  const visibleErrors = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [key, msg] of Object.entries(validationErrors)) {
+      if (touchedFields.has(key)) {
+        out[key] = msg;
+      }
+    }
+    return out;
+  }, [validationErrors, touchedFields]);
 
   if (!open || !step) return null;
 
@@ -452,17 +524,32 @@ function StepEditorDrawer({
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-medium text-gray-600">params (JSON)</label>
-              <textarea
-                value={paramsText}
-                onChange={(e) => setParamsText(e.target.value)}
-                onBlur={handleParamsBlur}
-                disabled={readOnly}
-                rows={12}
-                placeholder="{}"
-                className="w-full resize-y rounded border px-2 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
-              />
-              {paramsError && <p className="mt-1 text-xs text-red-500">{paramsError}</p>}
+              <label className="mb-1 block text-xs font-medium text-gray-600">
+                params{paramSchema ? '' : ' (JSON)'}
+              </label>
+              {paramSchema ? (
+                <div className="rounded border border-gray-200 bg-gray-50/50 p-3">
+                  <DynamicToolForm
+                    schema={paramSchema}
+                    values={formValues}
+                    onChange={handleFormFieldChange}
+                    errors={visibleErrors}
+                  />
+                </div>
+              ) : (
+                <>
+                  <textarea
+                    value={paramsText}
+                    onChange={(e) => setParamsText(e.target.value)}
+                    onBlur={handleParamsBlur}
+                    disabled={readOnly}
+                    rows={12}
+                    placeholder="{}"
+                    className="w-full resize-y rounded border px-2 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                  />
+                  {paramsError && <p className="mt-1 text-xs text-red-500">{paramsError}</p>}
+                </>
+              )}
             </div>
           </div>
         </div>

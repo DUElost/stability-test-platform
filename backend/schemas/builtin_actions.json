@@ -143,6 +143,41 @@
     "updated_at": "2026-03-03T06:21:49.893191Z"
   },
   {
+    "name": "export_mobilelogs",
+    "label": "Export Mobilelogs",
+    "category": "log",
+    "description": "Pull mobilelog directories correlated with AEE timestamps",
+    "param_schema": {
+      "timestamps_from_step": {
+        "type": "string",
+        "label": "Timestamps From Step",
+        "placeholder": "scan_aee step_id",
+        "description": "Step ID to get AEE timestamps from (via shared metrics)"
+      },
+      "mobilelog_path": {
+        "type": "string",
+        "label": "Mobilelog Path",
+        "default": "/data/debuglogger/mobilelog/",
+        "placeholder": "/data/debuglogger/mobilelog/"
+      },
+      "local_dir": {
+        "type": "string",
+        "label": "Local Directory",
+        "required": true,
+        "placeholder": "{log_dir}/mobilelogs"
+      },
+      "time_window_minutes": {
+        "type": "number",
+        "label": "Time Window (min)",
+        "default": 30,
+        "min": 1,
+        "description": "Match mobilelog dirs within this many minutes of AEE timestamp"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-11T10:00:00.000000Z"
+  },
+  {
     "name": "fill_storage",
     "label": "Fill Storage",
     "category": "device",
@@ -158,6 +193,42 @@
     },
     "is_active": true,
     "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "guard_process",
+    "label": "Guard Process",
+    "category": "process",
+    "description": "Check process by name, restart if dead, deduplicate if multiple",
+    "param_schema": {
+      "process_name": {
+        "type": "string",
+        "label": "Process Name",
+        "required": true,
+        "placeholder": "com.example.app",
+        "description": "Process name to match via pgrep -f"
+      },
+      "restart_command": {
+        "type": "string",
+        "label": "Restart Command",
+        "placeholder": "am start -n com.example.app/.MainActivity",
+        "description": "ADB shell command to restart the process"
+      },
+      "max_restarts": {
+        "type": "number",
+        "label": "Max Restarts",
+        "default": 3,
+        "min": 1,
+        "max": 10
+      },
+      "resource_check_path": {
+        "type": "string",
+        "label": "Resource Check Path",
+        "placeholder": "/data/local/tmp/resource.apk",
+        "description": "File path to verify exists before restart"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-11T10:00:00.000000Z"
   },
   {
     "name": "install_apk",
@@ -291,6 +362,52 @@
     "updated_at": "2026-03-03T06:21:49.893191Z"
   },
   {
+    "name": "run_shell_script",
+    "label": "Run Shell Script",
+    "category": "script",
+    "description": "Run a shell script or command on the Agent host (not on device)",
+    "param_schema": {
+      "script_path": {
+        "type": "string",
+        "label": "Script Path",
+        "placeholder": "/opt/scripts/test.sh",
+        "description": "Absolute path to script file on Agent host (mutually exclusive with command)"
+      },
+      "command": {
+        "type": "string",
+        "label": "Inline Command",
+        "placeholder": "echo $DEVICE_SERIAL",
+        "description": "Inline shell command (mutually exclusive with script_path)"
+      },
+      "timeout": {
+        "type": "number",
+        "label": "Timeout (s)",
+        "default": 3600,
+        "min": 1
+      },
+      "capture_output": {
+        "type": "boolean",
+        "label": "Capture Output",
+        "default": true,
+        "description": "Stream stdout/stderr to platform logs"
+      },
+      "inject_serial": {
+        "type": "boolean",
+        "label": "Inject Serial",
+        "default": true,
+        "description": "Auto-inject DEVICE_SERIAL env var"
+      },
+      "working_dir": {
+        "type": "string",
+        "label": "Working Directory",
+        "placeholder": "/opt/scripts",
+        "description": "Working directory for the script"
+      }
+    },
+    "is_active": true,
+    "updated_at": "2026-03-11T10:00:00.000000Z"
+  },
+  {
     "name": "run_tool_script",
     "label": "Run Tool Script",
     "category": "script",
@@ -339,6 +456,15 @@
     },
     "is_active": true,
     "updated_at": "2026-03-03T06:21:49.893191Z"
+  },
+  {
+    "name": "setup_device_commands",
+    "label": "Setup Device Commands",
+    "category": "device",
+    "description": "Execute an ordered list of ADB shell commands for device initialization",
+    "param_schema": {},
+    "is_active": true,
+    "updated_at": "2026-03-11T10:00:00.000000Z"
   },
   {
     "name": "start_process",

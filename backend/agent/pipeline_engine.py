@@ -48,8 +48,63 @@ class StepResult:
     artifact: Optional[dict] = None
 
 
+class PipelineAction:
+    """Marker base class for all ``tool:<id>`` Pipeline Action scripts.
+
+    Subclasses **must** implement :meth:`run`.  Class-level attributes are used
+    by :class:`~backend.agent.tool_discovery.ToolDiscovery` to register the
+    action into the database automatically.
+
+    Usage::
+
+        class MyAction(PipelineAction):
+            TOOL_CATEGORY = "MY_CATEGORY"
+            TOOL_DESCRIPTION = "What this action does."
+
+            @classmethod
+            def get_default_params(cls) -> dict:
+                return {"timeout": 300}
+
+            def run(self, ctx: StepContext) -> StepResult:
+                ctx.logger.info("running")
+                return StepResult(success=True)
+    """
+
+    TOOL_CATEGORY: str = ""
+    TOOL_DESCRIPTION: str = ""
+
+    @classmethod
+    def get_default_params(cls) -> dict:
+        """Return the default parameter dict surfaced in the UI."""
+        return {}
+
+    def run(self, ctx: StepContext) -> StepResult:  # noqa: D102
+        raise NotImplementedError(f"{type(self).__name__} must implement run(ctx)")
+
+
 class PipelineEngine:
     """Executes a pipeline definition: phase-serial, intra-phase parallel."""
+
+    _builtin_catalog: Optional[Dict[str, dict]] = None
+
+    @classmethod
+    def _load_builtin_catalog(cls) -> Dict[str, dict]:
+        """Lazy-load builtin actions param_schema from JSON. Returns name -> param_schema."""
+        if cls._builtin_catalog is not None:
+            return cls._builtin_catalog
+        try:
+            catalog_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "..", "schemas", "builtin_actions.json",
+            )
+            with open(catalog_path, "r", encoding="utf-8") as f:
+                actions = json.load(f)
+            cls._builtin_catalog = {
+                a["name"]: a.get("param_schema", {}) for a in actions
+            }
+        except Exception:
+            cls._builtin_catalog = {}
+        return cls._builtin_catalog
 
     def __init__(
         self,
@@ -513,6 +568,21 @@ class PipelineEngine:
                 time.sleep(5 * (attempt + 1))
         return False
 
+    def _validate_step_params(self, step_id: str, action: str, params: dict) -> None:
+        """Validate step params against builtin action param_schema. Warns only, never blocks."""
+        action_name = action.split(":", 1)[1]
+        catalog = self._load_builtin_catalog()
+        schema = catalog.get(action_name, {})
+
+        for param_key, field_def in schema.items():
+            if isinstance(field_def, dict) and field_def.get("required"):
+                value = params.get(param_key)
+                if value is None or value == "":
+                    logger.warning(
+                        "Step %s: missing required param '%s' for action '%s'",
+                        step_id, param_key, action_name,
+                    )
+
     def _execute_step_stages(self, stage: str, step: dict) -> StepResult:
         """Execute a single step in stages format. Reports STARTED/COMPLETED/FAILED via MQ."""
         step_id = step.get("step_id", "unknown")
@@ -521,6 +591,10 @@ class PipelineEngine:
         timeout = step.get("timeout_seconds", step.get("timeout", 300))
 
         self._report_step_trace_mq(step_id, stage, "STARTED", "RUNNING")
+
+        # Validate params against builtin action schema (warn only, never blocks)
+        if action.startswith("builtin:"):
+            self._validate_step_params(step_id, action, params)
 
         log_file = None
         if self._log_dir:
@@ -649,7 +723,10 @@ class PipelineEngine:
         return self._execute_tool_script(ctx, entry)
 
     def _execute_tool_script(self, ctx: StepContext, entry) -> StepResult:
-        """Dynamically load and execute a tool script from its local path."""
+        """Dynamically load and execute a tool script from its local path.
+
+        Expects a native Pipeline Action class with run(ctx) -> StepResult interface.
+        """
         script_path = entry.script_path
         script_class = entry.script_class
 
@@ -665,6 +742,7 @@ class PipelineEngine:
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             tool_cls = getattr(module, script_class)
+
             result = tool_cls().run(ctx)
             if not isinstance(result, StepResult):
                 result = StepResult(success=bool(result))
@@ -724,22 +802,29 @@ class PipelineEngine:
             )
 
     def _make_mq_logger(self, step_id: str, log_file: Optional[str] = None):
-        """Create a simple logger that writes to MQ stp:logs and a local file."""
+        """Create a logger that writes to MQ stp:logs with WS fallback and a local file."""
         return _MQStepLogger(
             mq_producer=self._mq,
             run_id=self._run_id,
             step_id_str=step_id,
             log_file=log_file,
+            ws_client=self._ws,
         )
 
 
 class _MQStepLogger:
-    """Lightweight logger that sends lines to stp:logs via MQ and optionally to a file."""
+    """Lightweight logger that sends lines to stp:logs via MQ (primary), WS (fallback), and local file."""
 
     def __init__(
-        self, mq_producer, run_id: int, step_id_str: str, log_file: Optional[str] = None
+        self,
+        mq_producer,
+        run_id: int,
+        step_id_str: str,
+        log_file: Optional[str] = None,
+        ws_client=None,
     ):
         self._mq = mq_producer
+        self._ws = ws_client
         self._run_id = run_id
         self._step_id = step_id_str
         self._log_file = log_file
@@ -750,6 +835,7 @@ class _MQStepLogger:
                 pass
 
     def _write(self, message: str, level: str) -> None:
+        sent = False
         if self._mq and self._mq.connected:
             self._mq.send_log(
                 job_id=self._run_id,
@@ -758,6 +844,14 @@ class _MQStepLogger:
                 tag=self._step_id,
                 message=message,
             )
+            sent = True
+
+        if not sent and self._ws and self._ws.connected:
+            try:
+                self._ws.log(self._run_id, self._step_id, message, level)
+            except Exception:
+                pass
+
         if self._log_file:
             try:
                 ts = datetime.utcnow().isoformat() + "Z"

@@ -471,82 +471,88 @@ def _parse_iso_timestamp(value: str) -> "datetime":
 
 
 def _handle_agent_step_update(msg: dict, agent_host_id: Optional[str] = None) -> None:
-    """Update RunStep record in DB from agent WS message. Runs in the main thread."""
+    """Upsert StepTrace from agent WS step_update message. Runs in the main thread."""
     from backend.core.database import SessionLocal
-    from backend.models.schemas import RunStep, RunStepStatus, TaskRun
-    from datetime import datetime
+    from backend.models.job import JobInstance, StepTrace
+    from datetime import datetime, timezone
 
+    # Agent 发送的 run_id 字段对应新模型的 job_id
+    job_id = msg.get("run_id")
     step_id = msg.get("step_id")
-    if not step_id:
+    if not job_id or not step_id:
         return
 
-    # Expected run_id from the message (for ownership validation)
-    msg_run_id = msg.get("run_id")
+    status = (msg.get("status") or "").upper()
 
-    # Valid RunStep status transitions
-    _STEP_TRANSITIONS = {
-        RunStepStatus.PENDING: {RunStepStatus.RUNNING, RunStepStatus.SKIPPED, RunStepStatus.CANCELED},
-        RunStepStatus.RUNNING: {RunStepStatus.COMPLETED, RunStepStatus.FAILED, RunStepStatus.CANCELED},
-        RunStepStatus.COMPLETED: set(),
-        RunStepStatus.FAILED: set(),
-        RunStepStatus.SKIPPED: set(),
-        RunStepStatus.CANCELED: set(),
+    # 将 Agent 上报的状态映射到 StepTrace event_type
+    _STATUS_TO_EVENT = {
+        "RUNNING": "STARTED",
+        "STARTED": "STARTED",
+        "COMPLETED": "COMPLETED",
+        "FAILED": "FAILED",
+        "CANCELED": "CANCELED",
+        "CANCELLED": "CANCELED",
     }
+    event_type = _STATUS_TO_EVENT.get(status, "status_update")
 
     db = SessionLocal()
     try:
-        step = db.get(RunStep, step_id)
-        if not step:
-            return
-
-        # Validate run_id ownership: step must belong to the run in the message
-        if msg_run_id and step.run_id != msg_run_id:
-            logger.warning(
-                f"step_update ownership mismatch: step {step_id} belongs to run {step.run_id}, "
-                f"but message claims run {msg_run_id} from host {agent_host_id}"
-            )
-            return
-
-        # Validate host ownership: run must be assigned to the connecting agent's host
+        # Host 归属校验：job 必须属于当前连接的 Agent
         if agent_host_id:
-            run = db.get(TaskRun, step.run_id)
-            if run and str(run.host_id) != str(agent_host_id):
+            job = db.get(JobInstance, int(job_id))
+            if not job:
+                logger.warning(f"step_update: job {job_id} not found, host={agent_host_id}")
+                return
+            if job.host_id and str(job.host_id) != str(agent_host_id):
                 logger.warning(
-                    f"step_update host mismatch: run {step.run_id} is assigned to host {run.host_id}, "
-                    f"but update came from host {agent_host_id}"
+                    f"step_update host mismatch: job {job_id} assigned to host {job.host_id}, "
+                    f"message from host {agent_host_id}"
                 )
                 return
 
-        status_str = msg.get("status")
-        if status_str:
+        # 解析时间戳
+        now = datetime.now(timezone.utc)
+        original_ts = now
+        ts_src = msg.get("started_at") or msg.get("finished_at")
+        if ts_src:
             try:
-                target_status = RunStepStatus(status_str)
-                # Validate transition
-                allowed = _STEP_TRANSITIONS.get(step.status, set())
-                if target_status in allowed or step.status == target_status:
-                    step.status = target_status
-                else:
-                    logger.warning(f"Invalid RunStep transition {step.status.value}->{status_str} for step {step_id}")
-            except ValueError:
+                original_ts = _parse_iso_timestamp(ts_src)
+            except Exception:
                 pass
-        if msg.get("started_at"):
-            try:
-                step.started_at = _parse_iso_timestamp(msg["started_at"])
-            except (ValueError, TypeError):
-                pass
-        if msg.get("finished_at"):
-            try:
-                step.finished_at = _parse_iso_timestamp(msg["finished_at"])
-            except (ValueError, TypeError):
-                pass
-        if msg.get("exit_code") is not None:
-            step.exit_code = msg["exit_code"]
-        if msg.get("error_message") is not None:
-            step.error_message = msg["error_message"]
+
+        # 幂等 Upsert：(job_id, step_id, event_type) 唯一
+        existing = (
+            db.query(StepTrace)
+            .filter(
+                StepTrace.job_id == int(job_id),
+                StepTrace.step_id == str(step_id),
+                StepTrace.event_type == event_type,
+            )
+            .first()
+        )
+        if existing:
+            existing.status = status
+            if msg.get("error_message") is not None:
+                existing.error_message = msg["error_message"]
+            existing.original_ts = original_ts
+        else:
+            db.add(
+                StepTrace(
+                    job_id=int(job_id),
+                    step_id=str(step_id),
+                    stage=msg.get("stage", "execute"),
+                    status=status,
+                    event_type=event_type,
+                    error_message=msg.get("error_message"),
+                    original_ts=original_ts,
+                    created_at=datetime.utcnow(),
+                )
+            )
 
         db.commit()
+        logger.debug(f"step_trace_upsert: job={job_id} step={step_id} event={event_type} status={status}")
     except Exception as e:
-        logger.warning(f"DB update for step {step_id} failed: {e}")
+        logger.warning(f"StepTrace upsert failed: job={job_id} step={step_id} error={e}")
         db.rollback()
     finally:
         db.close()

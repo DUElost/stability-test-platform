@@ -27,8 +27,11 @@ def _update_if_not_none(device: Device, field: str, value) -> bool:
     return True
 
 
+_DEVICE_OFFLINE_TIMEOUT = int(os.getenv("DEVICE_OFFLINE_TIMEOUT", "60"))
+
+
 def _mark_missing_devices_offline(
-    db: Session, host_id: str, seen_serials: set, timeout: int = 180
+    db: Session, host_id: str, seen_serials: set, timeout: int = _DEVICE_OFFLINE_TIMEOUT
 ) -> List[Device]:
     """Mark devices not seen in current heartbeat as offline"""
     offline_threshold = datetime.now(timezone.utc) - timedelta(seconds=timeout)
@@ -160,14 +163,7 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
             _update_if_not_none(device, "disk_total", dev_data.get("disk_total"))
             _update_if_not_none(device, "disk_used", dev_data.get("disk_used"))
 
-            # Snapshot interval check uses device.last_seen BEFORE updating it
-            if device.adb_connected:
-                should_snapshot = True
-                if device.last_seen:
-                    time_since_last = (now - device.last_seen).total_seconds()
-                    should_snapshot = time_since_last >= SNAPSHOT_INTERVAL_SECONDS
-
-            # Update last_seen AFTER snapshot check
+            # Update last_seen
             device.last_seen = now
 
             # Business status: based on ADB connection and lock
@@ -196,7 +192,7 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
             )
 
     # Mark missing devices as offline
-    missing_devices = _mark_missing_devices_offline(db, host.id, seen_serials, timeout=180)
+    missing_devices = _mark_missing_devices_offline(db, host.id, seen_serials)
     for device in missing_devices:
         if device.serial in seen_serials:
             continue

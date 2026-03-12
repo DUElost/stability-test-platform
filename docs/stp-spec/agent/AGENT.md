@@ -256,3 +256,48 @@ async def heartbeat_loop():
 
         await asyncio.sleep(10)
 ```
+
+---
+
+## 架构约束：禁止使用 BaseTestCase
+
+> **参见 [ADR-0016](../../adr/ADR-0016-deprecate-base-test-case.md)**
+
+`backend/agent/test_framework.py` 中的 `BaseTestCase` **已正式废弃**，严格禁止在 Agent 任何新增代码中使用。
+
+### 强制规则
+
+| 场景 | 禁止 | 要求 |
+|------|------|------|
+| 新增测试逻辑 | `class MyTest(BaseTestCase)` | 实现 `run(ctx: StepContext) -> StepResult` |
+| PipelineEngine 扩展 | 为 BaseTestCase 添加适配层（如 `_is_base_test_case()`） | 保持引擎只识别原生 Action 接口 |
+| 日志上报 | `_maybe_send_heartbeat()`、HTTP 心跳 | `ctx.logger.info(...)` → Redis Streams → WebSocket |
+| 跨 Run 状态持久化 | `_log_buffer`、本地 JSON 文件 | `ctx.local_db`（SQLite WAL） |
+| 新增 import | `from backend.agent.test_framework import ...` | 无（该模块仅保留不删除，不可引用） |
+
+### Tool Action 标准接口
+
+所有 `tool:<id>` 脚本统一实现以下接口，不得使用其他模式：
+
+```python
+from backend.agent.pipeline_engine import StepContext, StepResult
+
+class MyAction:
+    def run(self, ctx: StepContext) -> StepResult:
+        ctx.logger.info("开始执行")
+        # ctx.adb      — AdbWrapper
+        # ctx.serial   — 设备序列号
+        # ctx.params   — pipeline_def 传入的参数
+        # ctx.shared   — 跨 Step 共享（同一 Run 内）
+        # ctx.local_db — 跨 Run 持久化（Agent SQLite WAL）
+        return StepResult(success=True)
+```
+
+### 违规识别
+
+代码审查和 AI 辅助时，出现以下任意一项即视为违规，须立即修正：
+
+- 类定义中出现 `BaseTestCase` 作为基类
+- `PipelineEngine` 中出现 `_is_base_test_case` / `_run_base_test_case` / `step_id_str` 注入
+- 新增 `from backend.agent.test_framework import` 语句
+- `StepContext` 中出现仅服务于 BaseTestCase 桥接的额外字段
