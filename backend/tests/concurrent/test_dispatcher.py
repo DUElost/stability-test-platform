@@ -21,9 +21,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from ...core.database import Base
+from ...models.host import Device, Host
 from ...models.schemas import (
-    Base,
-    Device, DeviceStatus, Host, HostStatus,
+    DeviceStatus, HostStatus,
     Task, TaskStatus, TaskRun, RunStatus
 )
 from ...scheduler.dispatcher import TaskDispatcher

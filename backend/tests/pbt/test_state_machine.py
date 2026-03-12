@@ -16,7 +16,6 @@ from hypothesis.stateful import RuleBasedStateMachine, rule, precondition, invar
 
 from ...models.schemas import (
     DeviceStatus, TaskStatus, RunStatus, HostStatus,
-    Device, Task, TaskRun, Host
 )
 
 
