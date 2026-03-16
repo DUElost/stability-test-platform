@@ -1,8 +1,8 @@
 # ADR-0004: 心跳驱动的主机/设备在线性模型
 - 状态：Accepted
-- 日期：2026-02-18
+- 日期：2026-02-18（2026-03-16 更新）
 - 决策者：平台研发组
-- 标签：心跳, 在线状态, 设备监控, 数据采样
+- 标签：心跳, 在线状态, 设备监控, 数据采样, 会话看门狗
 
 ## 背景
 
@@ -19,6 +19,17 @@
   - 心跳中未出现且超时的设备标记 `OFFLINE`。
 - 采样策略：设备指标快照按间隔降采样，降低数据库写压力。
 
+### 2026-03-16 更新：会话看门狗接管心跳超时检测
+
+Host 心跳超时检测现由 `session_watchdog` 统一管理（`USE_SESSION_WATCHDOG=true` 时）：
+
+- **超时阈值**：`HOST_HEARTBEAT_TIMEOUT_SECONDS`（默认 120s），替代 legacy `heartbeat_monitor` 的 30s 阈值
+- **联动行为**：Host 超时 → OFFLINE + RUNNING job → UNKNOWN → 宽限期后 FAILED
+- **互斥运行**：`session_watchdog` 与 `heartbeat_monitor` 通过 `USE_SESSION_WATCHDOG` 环境变量互斥切换。启用 watchdog 时 heartbeat_monitor 不启动
+- **Recycler 协调**：watchdog 启用时，recycler 跳过 `_check_host_heartbeat_timeout` 和 `_check_device_lock_expiration`
+
+Legacy `heartbeat_monitor`（`backend/tasks/heartbeat_monitor.py`）仍保留用于兼容旧 TaskRun 路径，但默认不启动。
+
 ## 备选方案与权衡
 
 - 方案 A：控制面主动轮询主机与设备。
@@ -26,7 +37,7 @@
   - 缺点：高成本、跨网段复杂、扩展性差。
 - 方案 B：当前方案（Agent 主动上报心跳）。
   - 优点：节点自治，扩展成本低，网络开销可控。
-  - 缺点：依赖 HOST_ID 配置正确，错配会出现“心跳正常但无任务”。
+  - 缺点：依赖 HOST_ID 配置正确，错配会出现"心跳正常但无任务"。
 
 ## 影响
 
@@ -35,14 +46,19 @@
 
 ## 落地与后续动作
 
-- 已落地：心跳接入、设备数据回传、离线判定与通知。
-- 后续：引入 Agent 注册握手，降低手工维护 `HOST_ID` 的操作风险。
+- ✅ 心跳接入、设备数据回传、离线判定与通知
+- ✅ 会话看门狗接管心跳超时检测，与 heartbeat_monitor 互斥
+- ✅ Host 超时联动 Job 状态转换（RUNNING → UNKNOWN → FAILED）
+- 后续：引入 Agent 注册握手，降低手工维护 `HOST_ID` 的操作风险
 
 ## 关联实现/文档
 
-- `backend/api/routes/heartbeat.py`
-- `backend/agent/heartbeat.py`
-- `backend/agent/main.py`
+- `backend/api/routes/heartbeat.py` — 心跳接收端点
+- `backend/agent/heartbeat.py` — Agent 心跳发送
+- `backend/agent/main.py` — Agent 主循环
+- `backend/tasks/session_watchdog.py` — 会话看门狗（Host 超时检测）
+- `backend/tasks/heartbeat_monitor.py` — Legacy 心跳超时检测（默认不启动）
+- `backend/main.py` — watchdog / heartbeat_monitor 互斥启动
+- `backend/scheduler/recycler.py` — 回收器（watchdog 启用时跳过心跳检查）
 - `backend/api/routes/hosts.py`
-- `docs/preprod-drill-runbook.md`
-- `docs/production-minimum-deployment-checklist.md`
+- [`ADR-0003`](./ADR-0003-task-run-state-machine-and-device-lock-lease.md) — 设备锁租约与会话看门狗详细设计

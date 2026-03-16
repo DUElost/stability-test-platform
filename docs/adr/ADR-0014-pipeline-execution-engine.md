@@ -2,9 +2,9 @@
 - 状态：Accepted
 - 优先级：P1
 - 目标里程碑：M2
-- 日期：2026-02-25
+- 日期：2026-02-25（2026-03-16 更新）
 - 决策者：平台研发组
-- 标签：执行引擎, Pipeline, 任务编排, Agent
+- 标签：执行引擎, Pipeline, 任务编排, Agent, 设备锁, 参数表单
 
 ## 背景
 
@@ -75,6 +75,24 @@ Pipeline
 - **步骤超时**：使用 daemon thread 实现，超时后放弃 worker thread
 - **Pipeline 取消**：`cancel()` 方法设置标志位，阻止后续 Phase/Step 启动
 
+### 2026-03-16 更新：设备锁验证
+
+PipelineEngine 新增设备锁验证机制，确保 Pipeline 执行期间设备归属正确：
+
+- **启动前验证**：`_verify_device_lock()` 调用 `extend_lock` 端点，携带 `X-Agent-Secret` 鉴权。409 响应表示锁已丢失，Pipeline 立即中止
+- **步间锁丢失检测**：通过构造函数注入的 `is_aborted` 回调（闭包检查 `_active_run_ids` 集合），在每个 Step 开始前检测 LockRenewalManager 是否因 409 移除了本 run
+- **网络容错**：启动前验证支持指数退避重试（1s, 2s, 4s），区分 401（鉴权失败）和 409（锁丢失）
+
+### 2026-03-16 更新：内置 Action 参数表单
+
+Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema 驱动的动态表单：
+
+- **条件渲染**：当 action 为 `builtin:*` 且具有非空 `param_schema` 时，使用 `DynamicToolForm` 组件渲染表单；否则回退到 JSON textarea
+- **双向同步**：表单状态与 `step.params` 双向绑定，切换 action 时保留匹配字段值
+- **必填校验**：保存前校验 `param_schema.required` 标记的字段，阻止空值提交
+- **后端校验**：`pipeline_engine.py` 执行前对照 `param_schema` 校验必填参数，缺失时记录 warning（不阻塞执行）
+- **Schema 补全**：为 4 个缺失 schema 的 action 补充了 `param_schema`（`guard_process`、`run_shell_script`、`export_mobilelogs`；`setup_device_commands` 确认无用户参数）
+
 ## 备选方案与权衡
 
 - 方案 A：使用外部工作流引擎（如 Airflow、Prefect）
@@ -89,6 +107,7 @@ Pipeline
 - 正向影响：任务编排能力大幅提升，支持复杂测试场景
 - 需维护内置 Action 库与前端编辑器同步
 - 状态上报频率增加，需考虑 WebSocket 连接稳定性
+- 参数表单降低了 Pipeline 配置门槛，减少 JSON 手写错误
 
 ## 落地与后续动作
 
@@ -96,13 +115,19 @@ Pipeline
 - ✅ 18 个内置 Actions（Device/Process/File/Log/Tool）
 - ✅ 前端 PipelineEditor 可视化编辑器
 - ✅ 内置 Pipeline Templates API
+- ✅ 设备锁启动前验证 + 步间锁丢失检测
+- ✅ `is_aborted` 回调注入（消除 pipeline_engine → main 循环依赖）
+- ✅ DynamicToolForm 集成到 StepEditorDrawer
+- ✅ 4 个缺失 action 的 param_schema 补全
+- ✅ 前端必填字段校验 + 后端参数 warning
 - ⏳ 完善超时重试策略配置化
 - ⏳ 增加更多内置 Actions（如网络诊断）
+- ⏳ 长步骤锁丢失中断能力（当前仅在步间检查）
 
 ## 关联实现/文档
 
 ### 后端核心
-- `backend/agent/pipeline_engine.py` - Pipeline 执行引擎
+- `backend/agent/pipeline_engine.py` - Pipeline 执行引擎（含锁验证）
 - `backend/agent/actions/__init__.py` - Action 注册表
 - `backend/agent/actions/device_actions.py` - 设备类 Action
 - `backend/agent/actions/process_actions.py` - 进程类 Action
@@ -110,19 +135,32 @@ Pipeline
 - `backend/agent/actions/log_actions.py` - 日志类 Action
 - `backend/agent/actions/tool_actions.py` - Tool 桥接 Action
 - `backend/api/routes/pipeline.py` - Pipeline Templates API
+- `backend/api/routes/builtin_actions.py` - 内置 Action 及 param_schema API
+- `backend/data/builtin_actions.json` - 内置 Action 定义与参数 Schema
 
 ### 前端
 - `frontend/src/components/pipeline/PipelineEditor.tsx` - 可视化编辑器
+- `frontend/src/components/pipeline/StagesPipelineEditor.tsx` - Stages 编辑器（含 DynamicToolForm 集成）
 - `frontend/src/components/pipeline/actionCatalog.ts` - Action 目录
 - `frontend/src/components/pipeline/pipelineTypes.ts` - 类型定义
 - `frontend/src/components/pipeline/PipelineStepTree.tsx` - 运行时步骤树
+- `frontend/src/components/tools/DynamicToolForm.tsx` - 动态参数表单组件
 - `frontend/src/pages/tasks/CreateTask.tsx` - 任务创建集成
 
 ### API
 - `GET /api/v1/pipeline/templates` - 获取内置模板
 - `GET /api/v1/pipeline/templates/{name}` - 获取指定模板
+- `GET /api/v1/builtin-actions` - 获取内置 Action 列表（含 param_schema）
 - `POST /api/v1/tasks` - 创建任务（含 `pipeline_def` 字段）
 
 ### 数据库
 - `Task.pipeline_def` - Pipeline 定义 JSON 字段
 - `RunStep` - 步骤执行记录表
+
+### 关联 ADR
+- [`ADR-0003`](./ADR-0003-task-run-state-machine-and-device-lock-lease.md) - 设备锁租约与会话看门狗
+- [`ADR-0016`](./ADR-0016-deprecate-base-test-case.md) - 废弃 BaseTestCase
+
+### OpenSpec
+- [`openspec/specs/pipeline-engine/spec.md`](../../openspec/specs/pipeline-engine/spec.md) - Pipeline 引擎规范（含锁验证）
+- [`openspec/changes/builtin-action-param-forms/`](../../openspec/changes/builtin-action-param-forms/) - 参数表单 Change
