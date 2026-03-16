@@ -117,6 +117,9 @@ class PipelineEngine:
         mq_producer=None,
         tool_registry=None,
         local_db=None,
+        api_url: Optional[str] = None,
+        agent_secret: str = "",
+        is_aborted: Optional[Callable[[], bool]] = None,
     ):
         self._adb = adb
         self._serial = serial
@@ -127,6 +130,9 @@ class PipelineEngine:
         self._mq = mq_producer
         self._registry = tool_registry
         self._local_db = local_db
+        self._api_url = api_url
+        self._agent_secret = agent_secret
+        self._is_aborted = is_aborted
         self._shared: dict = {}
         self._canceled = False
 
@@ -136,6 +142,11 @@ class PipelineEngine:
 
     def execute(self, pipeline_def: dict) -> StepResult:
         """Execute the full pipeline in stages format."""
+        # Verify device lock is held before executing
+        lock_err = self._verify_device_lock()
+        if lock_err:
+            return lock_err
+
         if "stages" in pipeline_def:
             return self._execute_stages_format(pipeline_def)
 
@@ -143,6 +154,58 @@ class PipelineEngine:
             success=False,
             exit_code=1,
             error_message="legacy phases format is unsupported; use pipeline_def.stages",
+        )
+
+    def _verify_device_lock(self) -> Optional[StepResult]:
+        """Verify device lock via extend_lock endpoint. Returns StepResult on failure, None on success."""
+        if not self._api_url:
+            return None  # No API URL configured — skip verification (dev mode)
+
+        import requests
+
+        url = f"{self._api_url}/api/v1/agent/jobs/{self._run_id}/extend_lock"
+        headers = {}
+        if self._agent_secret:
+            headers["X-Agent-Secret"] = self._agent_secret
+        retry_delays = [1, 2, 4]  # exponential backoff
+
+        for attempt, delay in enumerate(retry_delays, 1):
+            try:
+                resp = requests.post(url, headers=headers, timeout=10)
+                if resp.status_code == 409:
+                    logger.error("device_lock_not_held run=%d — aborting pipeline", self._run_id)
+                    return StepResult(
+                        success=False,
+                        exit_code=1,
+                        error_message="device_lock_not_held",
+                    )
+                if resp.status_code == 401:
+                    logger.error("lock_verify_auth_failed run=%d status=401", self._run_id)
+                    return StepResult(
+                        success=False,
+                        exit_code=1,
+                        error_message="lock_verify_auth_failed",
+                    )
+                resp.raise_for_status()
+                logger.debug("lock_verified run=%d", self._run_id)
+                return None  # Lock verified
+            except requests.HTTPError:
+                logger.error("lock_verification_failed run=%d status=%s", self._run_id, resp.status_code)
+                return StepResult(
+                    success=False,
+                    exit_code=1,
+                    error_message=f"lock_verification_http_{resp.status_code}",
+                )
+            except requests.RequestException as e:
+                logger.warning("lock_verify_attempt_%d_failed run=%d: %s", attempt, self._run_id, e)
+                if attempt < len(retry_delays):
+                    time.sleep(delay)
+
+        logger.error("lock_verification_unreachable run=%d", self._run_id)
+        return StepResult(
+            success=False,
+            exit_code=1,
+            error_message="lock_verification_unreachable",
         )
 
     def _archive_logs(self) -> Optional[dict]:
@@ -541,6 +604,15 @@ class PipelineEngine:
         for stage_name in ("prepare", "execute", "post_process"):
             steps = stages_def.get(stage_name, [])
             for step in steps:
+                # Check for lock lost (LockRenewalManager removed us from active set)
+                if self._is_lock_lost():
+                    self._report_job_status_mq("ABORTED", reason="device_lock_lost")
+                    return StepResult(
+                        success=False,
+                        exit_code=1,
+                        error_message="device_lock_lost",
+                    )
+
                 success = self._run_step_with_retry_stages(stage_name, step)
                 if not success:
                     step_id = step.get("step_id", "unknown")
@@ -556,6 +628,12 @@ class PipelineEngine:
         self._report_job_status_mq("COMPLETED")
         artifact = self._archive_logs()
         return StepResult(success=True, artifact=artifact)
+
+    def _is_lock_lost(self) -> bool:
+        """Check if the run has been aborted (e.g. LockRenewalManager received 409)."""
+        if self._is_aborted is not None:
+            return self._is_aborted()
+        return False
 
     def _run_step_with_retry_stages(self, stage: str, step: dict) -> bool:
         """Execute a step with retry logic. Returns True on success."""

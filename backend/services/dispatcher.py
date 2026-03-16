@@ -78,6 +78,10 @@ async def dispatch_workflow(
     await db.flush()
 
     now = datetime.utcnow()
+    # Device locking is deferred to the claim endpoint (agent_api.get_pending_jobs)
+    # which atomically transitions PENDING → RUNNING + acquires the device lock.
+    # Pre-locking here would use WorkflowRun.id as the lock owner, but claim/complete
+    # use JobInstance.id, causing an owner semantic mismatch.
     for device_id in device_ids:
         for template in templates:
             job = JobInstance(

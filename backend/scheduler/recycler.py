@@ -22,6 +22,10 @@ from backend.core.metrics import (
 )
 from backend.models.host import Device, Host
 from backend.models.schemas import LogArtifact, RunStatus, Task, TaskRun, TaskStatus
+from backend.services.device_lock import release_lock_sync
+
+# When the session watchdog is active, the recycler skips overlapping checks
+_USE_SESSION_WATCHDOG = os.getenv("USE_SESSION_WATCHDOG", "true").lower() in ("true", "1", "yes")
 
 logger = logging.getLogger(__name__)
 
@@ -64,26 +68,7 @@ def _check_host_heartbeat_timeout(db, now: datetime) -> int:
 
 
 def _release_device_lock(db, device_id: int, run_id: int) -> None:
-    db.execute(
-        text(
-            """
-            UPDATE device
-            SET status = CASE
-                    WHEN status = :busy_status THEN :online_status
-                    ELSE status
-                END,
-                lock_run_id = NULL,
-                lock_expires_at = NULL
-            WHERE id = :device_id AND lock_run_id = :run_id
-            """
-        ),
-        {
-            "device_id": device_id,
-            "run_id": run_id,
-            "busy_status": "BUSY",
-            "online_status": "ONLINE",
-        },
-    )
+    release_lock_sync(db, device_id, run_id)
 
 
 def _mark_timeout(db, run: TaskRun, now: datetime, reason: str) -> None:
@@ -162,26 +147,7 @@ def _check_device_lock_expiration(db, now: datetime) -> int:
 
     released_count = 0
     for device_id, device_serial, run_id in expired_locks:
-        released = db.execute(
-            text(
-                """
-                UPDATE device
-                SET status = :online_status,
-                    lock_run_id = NULL,
-                    lock_expires_at = NULL
-                WHERE id = :device_id
-                  AND lock_run_id = :run_id
-                  AND (lock_expires_at IS NULL OR lock_expires_at < :now)
-                """
-            ),
-            {
-                "online_status": "ONLINE",
-                "device_id": device_id,
-                "run_id": run_id,
-                "now": now,
-            },
-        )
-        if released.rowcount != 1:
+        if not release_lock_sync(db, device_id, run_id):
             continue
         released_count += 1
 
@@ -216,11 +182,13 @@ def recycle_once() -> None:
     running_deadline = now_naive - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
 
     with SessionLocal() as db:
-        # Check host heartbeat timeout first
-        offline_hosts = _check_host_heartbeat_timeout(db, now_tz)
-
-        # Check device lock expiration (for lock renewal mechanism)
-        expired_locks = _check_device_lock_expiration(db, now_tz)
+        # Host heartbeat timeout + device lock expiration are handled by
+        # session_watchdog when enabled; skip here to avoid conflicts.
+        offline_hosts = 0
+        expired_locks = 0
+        if not _USE_SESSION_WATCHDOG:
+            offline_hosts = _check_host_heartbeat_timeout(db, now_tz)
+            expired_locks = _check_device_lock_expiration(db, now_tz)
 
         expired_dispatched = (
             db.query(TaskRun)

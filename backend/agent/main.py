@@ -57,6 +57,7 @@ LOCK_RENEWAL_INTERVAL = int(
 
 # 全局锁续期管理
 _active_run_ids: Set[int] = set()
+_active_device_ids: Set[int] = set()  # per-device concurrency guard
 _active_runs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
 
@@ -482,6 +483,11 @@ def _execute_pipeline_run(
         except Exception as e:
             logger.warning(f"HTTP step status fallback failed: {e}")
 
+    # Abort callback: checks if LockRenewalManager removed this run (409 received)
+    def _check_aborted():
+        with _active_runs_lock:
+            return run_id not in _active_run_ids
+
     engine = PipelineEngine(
         adb=adb,
         serial=device_serial,
@@ -492,6 +498,9 @@ def _execute_pipeline_run(
         mq_producer=mq_producer,
         tool_registry=tool_registry,
         local_db=local_db,
+        api_url=api_url,
+        agent_secret=agent_secret,
+        is_aborted=_check_aborted,
     )
 
     try:
@@ -620,8 +629,11 @@ def _run_task_wrapper(
         except Exception:
             pass
     finally:
+        device_id = run.get("device_id") if isinstance(run, dict) else None
         with _active_runs_lock:
             _active_run_ids.discard(run_id)
+            if device_id:
+                _active_device_ids.discard(device_id)
 
 
 def main() -> None:
@@ -749,24 +761,40 @@ def main() -> None:
                         )
 
                     for run in runs:
-                        # Mark as active immediately to reserve the slot
-                        with _active_runs_lock:
-                            _active_run_ids.add(run["id"])
+                        device_id = run.get("device_id")
 
-                        # Note: _run_task_wrapper also adds it to _active_run_ids,
-                        # but doing it here prevents the next iteration from fetching same slot.
-                        # The wrapper will also discard it on finish.
-                        executor.submit(
-                            _run_task_wrapper,
-                            run,
-                            adb,
-                            api_url,
-                            host_id,
-                            ws_client,
-                            mq_producer,
-                            tool_registry,
-                            local_db,
-                        )
+                        # Per-device concurrency guard: skip if device already active
+                        with _active_runs_lock:
+                            if device_id and device_id in _active_device_ids:
+                                logger.debug(
+                                    "skip_device_busy run=%d device=%d",
+                                    run["id"], device_id,
+                                )
+                                continue
+                            # Mark as active immediately to reserve the slot
+                            _active_run_ids.add(run["id"])
+                            if device_id:
+                                _active_device_ids.add(device_id)
+
+                        try:
+                            executor.submit(
+                                _run_task_wrapper,
+                                run,
+                                adb,
+                                api_url,
+                                host_id,
+                                ws_client,
+                                mq_producer,
+                                tool_registry,
+                                local_db,
+                            )
+                        except Exception:
+                            # Submit failed (pool shutting down / full) — rollback reservations
+                            logger.exception("submit_failed run=%d device=%s", run["id"], device_id)
+                            with _active_runs_lock:
+                                _active_run_ids.discard(run["id"])
+                                if device_id:
+                                    _active_device_ids.discard(device_id)
             except Exception:
                 logger.exception("agent_loop_failed", extra={"host_id": host_id})
             time.sleep(poll_interval)

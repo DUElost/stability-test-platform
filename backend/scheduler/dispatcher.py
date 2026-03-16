@@ -3,7 +3,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional, Set, Tuple
 
 from sqlalchemy import text
@@ -29,6 +29,7 @@ from backend.models.schemas import (
     TaskRun,
     TaskStatus,
 )
+from backend.services.device_lock import acquire_lock_sync
 
 logger = logging.getLogger(__name__)
 
@@ -262,8 +263,6 @@ class TaskDispatcher:
 
     def _create_run_with_lock(self, db: Session, task: Task, device: Device, host: Host, host_limit: int) -> int:
         """开启事务，更新任务状态、创建 run 并占用设备，内含主机并发保护"""
-        now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(seconds=DEVICE_LOCK_LEASE_SECONDS)
         # Phase C pending: host_id in task_runs is Integer FK; host.id is String.
         # For numeric string IDs (legacy agents), cast to int. Raises for non-numeric IDs.
         try:
@@ -305,28 +304,7 @@ class TaskDispatcher:
             db.add(run)
             db.flush()
 
-            locked = db.execute(
-                text(
-                    """
-                    UPDATE device
-                    SET status = :busy_status,
-                        lock_run_id = :run_id,
-                        lock_expires_at = :expires_at
-                    WHERE id = :device_id
-                      AND status = :online_status
-                      AND (lock_run_id IS NULL OR lock_expires_at IS NULL OR lock_expires_at < :now)
-                    """
-                ),
-                {
-                    "device_id": device.id,
-                    "run_id": run.id,
-                    "expires_at": expires_at,
-                    "now": now,
-                    "busy_status": "BUSY",
-                    "online_status": "ONLINE",
-                },
-            )
-            if locked.rowcount != 1:
+            if not acquire_lock_sync(db, device.id, run.id, DEVICE_LOCK_LEASE_SECONDS):
                 device_lock_conflicts.inc()
                 raise RuntimeError("device_lock_failed")
 

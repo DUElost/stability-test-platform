@@ -1,3 +1,13 @@
+"""Legacy heartbeat monitor — host heartbeat timeout detection.
+
+NOTE: When USE_SESSION_WATCHDOG=true (default), the session_watchdog handles
+host heartbeat timeouts with a consolidated threshold (120s default). This
+module still runs but is effectively superseded for the workflow path. It
+remains active for the legacy TaskRun path heartbeat monitoring.
+
+See backend/tasks/session_watchdog.py for the unified replacement.
+"""
+
 import asyncio
 import logging
 import os

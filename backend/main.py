@@ -43,6 +43,7 @@ from backend.core.metrics import init_build_info
 from backend.mq.consumer import consume_log_stream, consume_status_stream, monitor_backpressure
 from backend.services.state_machine import InvalidTransitionError
 from backend.tasks.heartbeat_monitor import heartbeat_monitor_loop
+from backend.tasks.session_watchdog import USE_SESSION_WATCHDOG, session_watchdog_loop
 from backend.scheduler.cron_scheduler import start_cron_scheduler
 
 logger = logging.getLogger(__name__)
@@ -92,7 +93,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass  # already exists
 
-        monitor_task = asyncio.create_task(heartbeat_monitor_loop())
+        monitor_task = None
+        if not USE_SESSION_WATCHDOG:
+            monitor_task = asyncio.create_task(heartbeat_monitor_loop())
+            logger.info("legacy_heartbeat_monitor_enabled")
+        watchdog_task = None
+        if USE_SESSION_WATCHDOG:
+            watchdog_task = asyncio.create_task(session_watchdog_loop())
+            logger.info("session_watchdog_enabled")
         mq_consumer_task = asyncio.create_task(consume_status_stream(redis_client))
         mq_log_task = asyncio.create_task(consume_log_stream(redis_client))
         mq_bp_task = asyncio.create_task(monitor_backpressure(redis_client))
@@ -105,7 +113,10 @@ async def lifespan(app: FastAPI):
     yield
 
     if os.getenv("TESTING") != "1":
-        monitor_task.cancel()
+        if monitor_task:
+            monitor_task.cancel()
+        if watchdog_task:
+            watchdog_task.cancel()
         mq_consumer_task.cancel()
         mq_log_task.cancel()
         mq_bp_task.cancel()
