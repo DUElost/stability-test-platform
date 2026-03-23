@@ -117,10 +117,20 @@ sudo systemctl status stability-test-agent
 tail -f /opt/stability-test-agent/logs/agent_error.log
 ```
 
+**WSL Agent 热更新**（代码变更后同步，无需重新安装）：
+```bash
+# 方式一：使用 sync_agent.sh（推荐，进入 WSL 执行）
+wsl -u root -- bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh wsl
+
+# 方式二：从 Windows 命令行直接同步
+wsl -u root -- bash -c "rsync -av --delete --exclude='__pycache__' --exclude='.env' --exclude='*.pyc' /mnt/f/stability-test-platform/backend/agent/ /opt/stability-test-agent/agent/ && systemctl restart stability-test-agent"
+```
+
 > **WSL 注意事项**：
 > - `API_URL` 必须使用 `http://127.0.0.1:8000`（安装脚本自动检测 WSL 并设置）
 > - 必须先 `rsync` 到 WSL 本地再安装，不能直接在 `/mnt/` 下执行（CRLF + drvfs 权限问题）
 > - 安装前需 `sed -i 's/\r$//'` 修复从 Windows 同步过来的 shell 脚本换行符
+> - WSL Agent 使用 `ANDROID_ADB_SERVER_PORT=5039`（见 `/opt/stability-test-agent/.env`）连接 Windows 侧 ADB server
 
 ---
 
@@ -187,8 +197,8 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 
 **Action 类型**:
 - `builtin:<name>` — 内置 action（如 `check_device`, `start_process`）
-- `tool:<id>` — 注册工具 ID
-- `shell:<command>` — ADB shell 命令
+- `tool:<id>` — 注册工具 ID（仅 stages 格式，需 ToolRegistry）
+- ~~`shell:<command>`~~ — 已废弃，仅 legacy phases 格式残留，stages/lifecycle 格式不支持（详见 ADR-0014）
 
 ---
 
@@ -225,13 +235,15 @@ aiohttp
 
 ### 环境变量
 
-| 变量 | 默认值 | 说明 |
+| 变量 | 当前值 / 默认值 | 说明 |
 |------|--------|------|
-| `DATABASE_URL` | `postgresql://user:pass@localhost:5432/stability` | 数据库连接 |
+| `DATABASE_URL` | `postgresql+psycopg://stability:stability@localhost:5432/stability` | 数据库连接（Windows 侧 PostgreSQL） |
 | `API_URL` | `http://127.0.0.1:8000` | 后端 API 地址 |
-| `HOST_ID` | `0` | 主机 ID（Agent 使用） |
+| `HOST_ID` | `auto` | 主机 ID（Agent 使用，`auto` 为自动注册） |
 | `ADB_PATH` | `adb` | ADB 可执行文件路径 |
-| `POLL_INTERVAL` | `5` | Agent 轮询间隔（秒） |
+| `POLL_INTERVAL` | `10` | Agent 轮询间隔（秒） |
+| `ANDROID_ADB_SERVER_PORT` | `5039`（WSL Agent） | WSL 环境必须指定此端口以连接 Windows 侧 ADB server |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Redis 连接（实时日志流） |
 
 ---
 
@@ -331,6 +343,30 @@ class TaskRun(Base):
 - `temperature`：从 `dumpsys battery` 解析
 - `network_latency`：ping 8.8.8.8 / 223.5.5.5（备用）
 
+### Q: 开发环境常见易错项？
+
+**数据库连接**：
+- PostgreSQL 运行在 Windows 侧，`DATABASE_URL` 为 `postgresql+psycopg://stability:stability@localhost:5432/stability`
+- 使用 `psycopg`（v3 同步驱动）直连时去掉 `+psycopg` 后缀：`postgresql://stability:stability@localhost:5432/stability`
+- 数据库表名为单数形式（`device` 非 `devices`，`host` 非 `hosts`）
+
+**WSL Agent ADB 连接**：
+- WSL Agent 必须通过 `ANDROID_ADB_SERVER_PORT=5039` 连接到 Windows 侧的 ADB server
+- 此配置在 `/opt/stability-test-agent/.env` 中，已在安装时配置
+- 手动验证：`ANDROID_ADB_SERVER_PORT=5039 adb devices`（在 WSL 中执行）
+- 若忘记配置，Agent 心跳正常但发现设备数为 0
+
+**设备锁（Device Lock）**：
+- Job 执行期间设备被锁定（`device.lock_run_id = job_id, status = BUSY`）
+- Job 异常终止可能遗留锁，导致后续 Job 卡在 PENDING
+- 清理方法：`UPDATE device SET lock_run_id = NULL, lock_expires_at = NULL, status = 'ONLINE' WHERE id = <device_id>`
+- 锁自动续期由 Agent 的 `LockRenewalManager` 负责（每 30s 调用 `extend_lock`）
+
+**Agent 代码热更新**：
+- 修改 `backend/agent/` 下的代码后，必须同步到 WSL 并重启 Agent 才能生效
+- 快速同步：`wsl -u root -- bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh wsl`
+- 详见 `backend/agent/DEPLOY.md` 热更新章节
+
 ---
 
 ## 相关文件清单
@@ -395,4 +431,4 @@ class TaskRun(Base):
 
 ---
 
-*最后更新时间：2026-01-22 20:45:40*
+*最后更新时间：2026-03-23 17:50:00*

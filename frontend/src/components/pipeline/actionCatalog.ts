@@ -118,9 +118,10 @@ export const BUILTIN_ACTIONS: ActionDef[] = [
     name: 'stop_process',
     label: 'Stop Process',
     category: 'process',
-    description: 'Kill process by PID via adb shell kill -9',
+    description: 'Kill process by PID or by process name via pgrep -f',
     paramSchema: {
-      pid_from_step: { type: 'string', label: 'PID From Step', placeholder: 'start_process step name' },
+      pid_from_step: { type: 'string', label: 'PID From Step', placeholder: 'start_process step name', description: 'Step name to look up PID from shared metrics (takes priority over process_name)' },
+      process_name: { type: 'string', label: 'Process Name', placeholder: 'com.example.app', description: 'Process name pattern for pgrep -f (used when pid_from_step is unavailable)' },
     },
   },
   {

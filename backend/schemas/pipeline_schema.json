@@ -2,10 +2,60 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "PipelineDefinition",
   "type": "object",
-  "required": ["stages"],
-  "additionalProperties": false,
-  "properties": {
-    "stages": {
+  "oneOf": [
+    { "$ref": "#/$defs/stages_format" },
+    { "$ref": "#/$defs/lifecycle_format" }
+  ],
+  "$defs": {
+    "stages_format": {
+      "type": "object",
+      "required": ["stages"],
+      "additionalProperties": false,
+      "properties": {
+        "stages": { "$ref": "#/$defs/stages_object" }
+      }
+    },
+    "lifecycle_format": {
+      "type": "object",
+      "required": ["lifecycle"],
+      "additionalProperties": false,
+      "properties": {
+        "lifecycle": {
+          "type": "object",
+          "required": ["init", "teardown"],
+          "additionalProperties": false,
+          "properties": {
+            "timeout_seconds": { "type": "integer", "minimum": 1 },
+            "init": {
+              "type": "object",
+              "required": ["stages"],
+              "additionalProperties": false,
+              "properties": {
+                "stages": { "$ref": "#/$defs/stages_object" }
+              }
+            },
+            "patrol": {
+              "type": "object",
+              "required": ["stages", "interval_seconds"],
+              "additionalProperties": false,
+              "properties": {
+                "interval_seconds": { "type": "integer", "minimum": 1 },
+                "stages": { "$ref": "#/$defs/stages_object" }
+              }
+            },
+            "teardown": {
+              "type": "object",
+              "required": ["stages"],
+              "additionalProperties": false,
+              "properties": {
+                "stages": { "$ref": "#/$defs/stages_object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stages_object": {
       "type": "object",
       "properties": {
         "prepare":      { "$ref": "#/$defs/stage" },
@@ -13,9 +63,7 @@
         "post_process": { "$ref": "#/$defs/stage" }
       },
       "additionalProperties": false
-    }
-  },
-  "$defs": {
+    },
     "stage": {
       "type": "array",
       "items": { "$ref": "#/$defs/step" }

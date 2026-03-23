@@ -15,7 +15,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,7 @@ class StepResult:
     error_message: str = ""
     metrics: dict = field(default_factory=dict)
     artifact: Optional[dict] = None
+    metadata: dict = field(default_factory=dict)
 
 
 class PipelineAction:
@@ -141,11 +142,14 @@ class PipelineEngine:
         self._canceled = True
 
     def execute(self, pipeline_def: dict) -> StepResult:
-        """Execute the full pipeline in stages format."""
+        """Execute the full pipeline: stages format or lifecycle format."""
         # Verify device lock is held before executing
         lock_err = self._verify_device_lock()
         if lock_err:
             return lock_err
+
+        if "lifecycle" in pipeline_def:
+            return self._execute_lifecycle(pipeline_def)
 
         if "stages" in pipeline_def:
             return self._execute_stages_format(pipeline_def)
@@ -153,7 +157,7 @@ class PipelineEngine:
         return StepResult(
             success=False,
             exit_code=1,
-            error_message="legacy phases format is unsupported; use pipeline_def.stages",
+            error_message="pipeline_def must contain 'stages' or 'lifecycle'",
         )
 
     def _verify_device_lock(self) -> Optional[StepResult]:
@@ -592,7 +596,29 @@ class PipelineEngine:
     # ==================================================================
 
     def _execute_stages_format(self, pipeline_def: dict) -> StepResult:
-        """Execute new stages-format pipeline: prepare → execute → post_process (serial)."""
+        """Execute new stages-format pipeline: prepare → execute → post_process (serial).
+
+        This is the top-level entry for standalone stages jobs. It wraps
+        ``_run_stages_only()`` and adds terminal side effects (MQ COMPLETED/FAILED,
+        log archiving).  Lifecycle sub-pipelines should call ``_run_stages_only()``
+        directly to avoid premature terminal events.
+        """
+        result = self._run_stages_only(pipeline_def)
+        if result.success:
+            self._report_job_status_mq("COMPLETED")
+            artifact = self._archive_logs()
+            result.artifact = artifact
+        else:
+            step_hint = result.error_message or "unknown"
+            self._report_job_status_mq("FAILED", reason=f"step_failed:{step_hint}")
+        return result
+
+    def _run_stages_only(self, pipeline_def: dict) -> StepResult:
+        """Execute stages (prepare → execute → post_process) without terminal side effects.
+
+        Returns a StepResult indicating success or failure. Does NOT send
+        MQ terminal status or archive logs — the caller is responsible for that.
+        """
         # Replace {log_dir} placeholders in pipeline params
         if self._log_dir:
             raw = json.dumps(pipeline_def)
@@ -606,7 +632,6 @@ class PipelineEngine:
             for step in steps:
                 # Check for lock lost (LockRenewalManager removed us from active set)
                 if self._is_lock_lost():
-                    self._report_job_status_mq("ABORTED", reason="device_lock_lost")
                     return StepResult(
                         success=False,
                         exit_code=1,
@@ -616,18 +641,13 @@ class PipelineEngine:
                 success = self._run_step_with_retry_stages(stage_name, step)
                 if not success:
                     step_id = step.get("step_id", "unknown")
-                    self._report_job_status_mq(
-                        "FAILED", reason=f"step_failed:{step_id}"
-                    )
                     return StepResult(
                         success=False,
                         exit_code=1,
                         error_message=f"step failed in {stage_name}: {step_id}",
                     )
 
-        self._report_job_status_mq("COMPLETED")
-        artifact = self._archive_logs()
-        return StepResult(success=True, artifact=artifact)
+        return StepResult(success=True)
 
     def _is_lock_lost(self) -> bool:
         """Check if the run has been aborted (e.g. LockRenewalManager received 409)."""
@@ -887,6 +907,213 @@ class PipelineEngine:
             step_id_str=step_id,
             log_file=log_file,
             ws_client=self._ws,
+        )
+
+    # ==================================================================
+    # Lifecycle execution (init → patrol loop → teardown)
+    # ==================================================================
+
+    def _execute_lifecycle(self, pipeline_def: dict) -> StepResult:
+        """Execute a lifecycle pipeline: init → patrol_loop → teardown (best-effort).
+
+        The lifecycle key contains sub-pipelines for each phase.  Patrol runs
+        in a loop with ``interval_seconds`` between iterations until a
+        termination condition is met.  Teardown always runs via try/finally.
+
+        Uses ``_run_stages_only()`` for sub-pipelines to avoid premature
+        terminal MQ events and log archiving.
+
+        All exit paths flow through a single post-finally block that handles
+        terminal MQ status, log archiving, and final StepResult construction.
+        """
+        lifecycle = pipeline_def["lifecycle"]
+        timeout_seconds = lifecycle.get("timeout_seconds", 0)
+        init_def = lifecycle["init"]
+        patrol_def = lifecycle.get("patrol")
+        teardown_def = lifecycle["teardown"]
+
+        # Replace {log_dir} / {run_id} placeholders in all sub-pipelines
+        if self._log_dir:
+            raw = json.dumps(lifecycle)
+            raw = raw.replace("{log_dir}", self._log_dir.replace("\\", "/"))
+            raw = raw.replace("{run_id}", str(self._run_id))
+            lifecycle = json.loads(raw)
+            init_def = lifecycle["init"]
+            patrol_def = lifecycle.get("patrol")
+            teardown_def = lifecycle["teardown"]
+
+        termination_reason = "completed"
+        lifecycle_error = ""
+        teardown_result = None
+
+        try:
+            # ── Phase 1: Init ──
+            self._report_job_status_mq("INIT_RUNNING")
+            logger.info("[Lifecycle] run=%d — executing init", self._run_id)
+
+            init_result = self._run_stages_only({"stages": init_def["stages"]})
+            if not init_result.success:
+                # Distinguish lock_lost (abort) from genuine init failure
+                if init_result.error_message == "device_lock_lost":
+                    termination_reason = "abort"
+                else:
+                    termination_reason = "init_failure"
+                lifecycle_error = f"lifecycle init failed: {init_result.error_message}"
+                logger.error("[Lifecycle] run=%d — init failed: %s", self._run_id, init_result.error_message)
+                # Do NOT return here — fall through to finally for teardown,
+                # then to the unified exit block for MQ status + artifact.
+
+            elif patrol_def:
+                # ── Phase 2: Patrol loop (only if init succeeded) ──
+                interval = patrol_def.get("interval_seconds", 300)
+                init_completed_at = time.time()
+                iteration = 0
+
+                self._report_job_status_mq("PATROL_RUNNING")
+
+                while True:
+                    # Check termination conditions before each patrol
+                    if self._is_lock_lost() or self._canceled:
+                        termination_reason = "abort"
+                        logger.info("[Lifecycle] run=%d — abort detected, ending patrol loop", self._run_id)
+                        break
+
+                    if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
+                        termination_reason = "timeout"
+                        logger.info("[Lifecycle] run=%d — timeout reached (%ds), ending patrol loop", self._run_id, timeout_seconds)
+                        break
+
+                    iteration += 1
+                    logger.info("[Lifecycle] run=%d — [Patrol #%d] starting", self._run_id, iteration)
+
+                    patrol_result = self._run_stages_only({"stages": patrol_def["stages"]})
+
+                    if not patrol_result.success:
+                        # Distinguish lock_lost (abort) from genuine patrol failure
+                        if patrol_result.error_message == "device_lock_lost":
+                            termination_reason = "abort"
+                        else:
+                            termination_reason = "patrol_failure"
+                            lifecycle_error = f"patrol #{iteration} failed: {patrol_result.error_message}"
+                        logger.error("[Lifecycle] run=%d — [Patrol #%d] failed: %s", self._run_id, iteration, patrol_result.error_message)
+                        break
+
+                    # Report patrol progress
+                    time_elapsed = time.time() - init_completed_at
+                    time_remaining = max(0, timeout_seconds - time_elapsed) if timeout_seconds > 0 else -1
+                    next_patrol_at = (datetime.utcnow() + timedelta(seconds=interval)).isoformat() + "Z" if interval > 0 else ""
+
+                    self._report_job_status_mq(
+                        "PATROL_RUNNING",
+                        reason=f"iteration={iteration} next_in={interval}s remaining={int(time_remaining)}s",
+                    )
+
+                    logger.info(
+                        "[Lifecycle] run=%d — [Patrol #%d] completed, next in %ds (remaining: %ds)",
+                        self._run_id, iteration, interval, int(time_remaining),
+                    )
+
+                    # Fixed-delay wait with abort/timeout checking (sleep in 5s chunks)
+                    sleep_remaining = interval
+                    while sleep_remaining > 0:
+                        chunk = min(sleep_remaining, 5)
+                        time.sleep(chunk)
+                        sleep_remaining -= chunk
+                        if self._is_lock_lost() or self._canceled:
+                            termination_reason = "abort"
+                            break
+                        if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
+                            termination_reason = "timeout"
+                            logger.info("[Lifecycle] run=%d — timeout reached during sleep, ending patrol loop", self._run_id)
+                            break
+                    if termination_reason in ("abort", "timeout"):
+                        break
+
+        finally:
+            # ── Phase 3: Teardown (best-effort, always runs) ──
+            self._report_job_status_mq("TEARDOWN_RUNNING", reason=f"termination_reason={termination_reason}")
+            logger.info("[Lifecycle] run=%d — executing teardown (reason: %s)", self._run_id, termination_reason)
+
+            teardown_result = self._execute_teardown_best_effort(teardown_def)
+
+        # ── Unified exit: terminal MQ + artifact + StepResult ──
+        success = termination_reason in ("completed", "timeout")
+        artifact = self._archive_logs()
+
+        # Map termination_reason to MQ terminal status
+        if success:
+            mq_status = "COMPLETED"
+        elif termination_reason == "abort":
+            mq_status = "ABORTED"
+        else:
+            mq_status = "FAILED"
+
+        self._report_job_status_mq(
+            mq_status,
+            reason=f"termination_reason={termination_reason}",
+        )
+
+        # Merge teardown metadata into final result
+        final_metadata = {"termination_reason": termination_reason}
+        if teardown_result and isinstance(teardown_result.metadata, dict):
+            final_metadata["teardown_status"] = teardown_result.metadata.get("teardown_status", "UNKNOWN")
+
+        return StepResult(
+            success=success,
+            exit_code=0 if success else 1,
+            error_message="" if success else (lifecycle_error or f"lifecycle ended: {termination_reason}"),
+            artifact=artifact,
+            metadata=final_metadata,
+        )
+
+    def _execute_teardown_best_effort(self, teardown_def: dict) -> StepResult:
+        """Execute teardown with best-effort semantics: each step runs independently.
+
+        Returns a StepResult with metadata["teardown_status"]:
+        - "SUCCESS" — all steps passed
+        - "DEGRADED" — some steps failed but at least one succeeded
+        - "FAILED" — all steps failed
+        """
+        stages = teardown_def.get("stages", {})
+        total_steps = 0
+        failed_steps = 0
+        errors = []
+
+        for stage_name in ("prepare", "execute", "post_process"):
+            steps = stages.get(stage_name, [])
+            for step in steps:
+                total_steps += 1
+                step_id = step.get("step_id", "unknown")
+                try:
+                    result = self._execute_step_stages(stage_name, step)
+                    if not result.success:
+                        failed_steps += 1
+                        errors.append(f"{step_id}: {result.error_message}")
+                        logger.warning("[Teardown] step '%s' failed: %s", step_id, result.error_message)
+                except Exception as e:
+                    failed_steps += 1
+                    errors.append(f"{step_id}: {e}")
+                    logger.warning("[Teardown] step '%s' exception: %s", step_id, e)
+
+        if failed_steps > 0:
+            logger.warning(
+                "[Teardown] %d/%d steps failed: %s",
+                failed_steps, total_steps, "; ".join(errors),
+            )
+
+        # Determine teardown status: SUCCESS / DEGRADED / FAILED
+        if failed_steps == 0:
+            teardown_status = "SUCCESS"
+        elif failed_steps < total_steps:
+            teardown_status = "DEGRADED"
+        else:
+            teardown_status = "FAILED"
+
+        return StepResult(
+            success=(total_steps == 0 or failed_steps < total_steps),  # DEGRADED still counts as success
+            exit_code=0 if failed_steps == 0 else 1,
+            error_message=f"teardown: {failed_steps}/{total_steps} steps failed" if failed_steps > 0 else "",
+            metadata={"teardown_status": teardown_status},
         )
 
 

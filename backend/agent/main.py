@@ -150,6 +150,7 @@ RUN_TERMINAL_STATUS_MAP = {
     "FAILED": "FAILED",
     "CANCELED": "CANCELED",
     "CANCELLED": "CANCELED",
+    "ABORTED": "CANCELED",
 }
 
 
@@ -509,8 +510,15 @@ def _execute_pipeline_run(
         if own_ws:
             ws_client.disconnect()
 
+    # Map lifecycle termination_reason to terminal status
+    status = "FINISHED" if result.success else "FAILED"
+    if not result.success and hasattr(result, "metadata") and isinstance(result.metadata, dict):
+        reason = result.metadata.get("termination_reason", "")
+        if reason == "abort":
+            status = "CANCELED"
+
     return {
-        "status": "FINISHED" if result.success else "FAILED",
+        "status": status,
         "exit_code": result.exit_code,
         "error_code": None,
         "error_message": result.error_message,
@@ -545,11 +553,8 @@ def _run_task_wrapper(
     except Exception as e:
         logger.warning(f"Heartbeat confirmation for run {run_id} failed (non-fatal): {e}")
 
-    if not (
-        pipeline_def
-        and isinstance(pipeline_def, dict)
-        and isinstance(pipeline_def.get("stages"), dict)
-    ):
+    # Validate pipeline_def: must be a dict with either 'stages' or 'lifecycle' key
+    if not (pipeline_def and isinstance(pipeline_def, dict)):
         complete_run(
             api_url,
             run_id,
@@ -557,15 +562,17 @@ def _run_task_wrapper(
                 "status": "FAILED",
                 "exit_code": 1,
                 "error_code": "PIPELINE_REQUIRED",
-                "error_message": "pipeline_def.stages is required (legacy phases unsupported)",
+                "error_message": "pipeline_def is required",
                 "log_summary": None,
                 "artifact": None,
             },
         )
         return
 
-    stages = pipeline_def.get("stages", {})
-    if not any(isinstance(stages.get(k), list) and len(stages.get(k) or []) > 0 for k in ("prepare", "execute", "post_process")):
+    is_lifecycle = isinstance(pipeline_def.get("lifecycle"), dict)
+    is_stages = isinstance(pipeline_def.get("stages"), dict)
+
+    if not is_lifecycle and not is_stages:
         complete_run(
             api_url,
             run_id,
@@ -573,12 +580,30 @@ def _run_task_wrapper(
                 "status": "FAILED",
                 "exit_code": 1,
                 "error_code": "PIPELINE_REQUIRED",
-                "error_message": "pipeline_def.stages must contain at least one step",
+                "error_message": "pipeline_def must contain 'stages' or 'lifecycle'",
                 "log_summary": None,
                 "artifact": None,
             },
         )
         return
+
+    # For stages format, verify at least one step exists
+    if is_stages and not is_lifecycle:
+        stages = pipeline_def.get("stages", {})
+        if not any(isinstance(stages.get(k), list) and len(stages.get(k) or []) > 0 for k in ("prepare", "execute", "post_process")):
+            complete_run(
+                api_url,
+                run_id,
+                {
+                    "status": "FAILED",
+                    "exit_code": 1,
+                    "error_code": "PIPELINE_REQUIRED",
+                    "error_message": "pipeline_def.stages must contain at least one step",
+                    "log_summary": None,
+                    "artifact": None,
+                },
+            )
+            return
 
     # Add to active runs for lock renewal
     with _active_runs_lock:

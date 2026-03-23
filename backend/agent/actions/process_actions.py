@@ -2,14 +2,37 @@
 
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
+from typing import Optional
 from ..pipeline_engine import StepContext, StepResult
 
 logger = logging.getLogger(__name__)
 
+# Safe character set for process_name: must start with alphanumeric/dot/slash,
+# then alphanumeric, dots, dashes, underscores, forward slashes.
+# Leading '-' is FORBIDDEN to prevent pgrep option injection.
+_SAFE_PROCESS_NAME_RE = re.compile(r"^[a-zA-Z0-9._/][a-zA-Z0-9._/\-]*$")
 
+
+def _validate_process_name(process_name: str, ctx: "StepContext") -> Optional["StepResult"]:
+    """Validate process_name for safe use in shell commands.
+
+    Returns None if valid, or a failing StepResult if invalid.
+    """
+    if not process_name:
+        return None
+    if not _SAFE_PROCESS_NAME_RE.match(process_name):
+        if ctx.logger:
+            ctx.logger.info(f"process_name '{process_name}' contains unsafe characters, rejecting")
+        return StepResult(
+            success=False,
+            exit_code=1,
+            error_message=f"process_name contains unsafe characters: {process_name!r}",
+        )
+    return None
 def _stdout(result) -> str:
     """Extract stdout string from subprocess.CompletedProcess or plain string."""
     if hasattr(result, "stdout"):
@@ -118,23 +141,54 @@ def monitor_process(ctx: StepContext) -> StepResult:
 
 
 def stop_process(ctx: StepContext) -> StepResult:
-    """Stop a process by PID."""
+    """Stop a process by PID (from shared context) or by process name (via pgrep -f)."""
     pid_from_step = ctx.params.get("pid_from_step", "")
     pid = ctx.shared.get(pid_from_step, {}).get("pid") if pid_from_step else ctx.params.get("pid")
 
-    if not pid:
-        if ctx.logger:
-            ctx.logger.info("No PID to stop, skipping")
+    # Priority 1: kill by PID (same-job shared context)
+    if pid:
+        try:
+            ctx.adb.shell(ctx.serial, f"kill -9 {pid} 2>/dev/null", timeout=10)
+            if ctx.logger:
+                ctx.logger.info(f"Killed process PID={pid}")
+        except Exception as e:
+            if ctx.logger:
+                ctx.logger.info(f"Kill PID={pid} returned: {e} (process may have already exited)")
         return StepResult(success=True)
 
-    try:
-        ctx.adb.shell(ctx.serial, f"kill -9 {pid} 2>/dev/null", timeout=10)
-        if ctx.logger:
-            ctx.logger.info(f"Killed process PID={pid}")
-    except Exception as e:
-        if ctx.logger:
-            ctx.logger.info(f"Kill PID={pid} returned: {e} (process may have already exited)")
+    # Priority 2: kill by process name (cross-job, e.g., teardown)
+    process_name = ctx.params.get("process_name", "")
+    if process_name:
+        # Validate process_name to prevent shell/pgrep option injection
+        validation_err = _validate_process_name(process_name, ctx)
+        if validation_err:
+            return validation_err
+        try:
+            result = ctx.adb.shell(ctx.serial, f"pgrep -f -- '{process_name}'", timeout=10)
+            raw = _stdout(result).strip()
+            pids = [p.strip() for p in raw.splitlines() if p.strip().isdigit()]
+        except Exception:
+            pids = []
 
+        if not pids:
+            if ctx.logger:
+                ctx.logger.info(f"No process matching '{process_name}' found, skipping")
+            return StepResult(success=True)
+
+        killed = 0
+        for p in pids:
+            try:
+                ctx.adb.shell(ctx.serial, f"kill -9 {p} 2>/dev/null", timeout=10)
+                killed += 1
+            except Exception:
+                pass
+        if ctx.logger:
+            ctx.logger.info(f"Killed {killed} process(es) matching '{process_name}'")
+        return StepResult(success=True)
+
+    # Neither PID nor process_name provided
+    if ctx.logger:
+        ctx.logger.info("No PID or process_name to stop, skipping")
     return StepResult(success=True)
 
 
@@ -186,9 +240,14 @@ def guard_process(ctx: StepContext) -> StepResult:
     if not process_name:
         return StepResult(success=False, exit_code=1, error_message="No process_name specified")
 
-    # 1. pgrep -f to get PID list
+    # Validate process_name to prevent shell/pgrep option injection
+    validation_err = _validate_process_name(process_name, ctx)
+    if validation_err:
+        return validation_err
+
+    # 1. pgrep -f to get PID list (-- terminates option parsing)
     try:
-        result = ctx.adb.shell(ctx.serial, f"pgrep -f '{process_name}'", timeout=10)
+        result = ctx.adb.shell(ctx.serial, f"pgrep -f -- '{process_name}'", timeout=10)
         raw = _stdout(result).strip()
         pids = [p.strip() for p in raw.splitlines() if p.strip().isdigit()]
     except Exception:
@@ -280,7 +339,7 @@ def guard_process(ctx: StepContext) -> StepResult:
 
         # Re-check
         try:
-            result = ctx.adb.shell(ctx.serial, f"pgrep -f '{process_name}'", timeout=10)
+            result = ctx.adb.shell(ctx.serial, f"pgrep -f -- '{process_name}'", timeout=10)
             raw = _stdout(result).strip()
             new_pids = [p.strip() for p in raw.splitlines() if p.strip().isdigit()]
         except Exception:

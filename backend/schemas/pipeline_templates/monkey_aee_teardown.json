@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "description": "Monkey AEE stability test - teardown (run once on terminate)",
+  "stages": {
+    "prepare": [
+      {
+        "step_id": "ensure_root_for_teardown",
+        "action": "builtin:ensure_root",
+        "timeout_seconds": 30,
+        "retry": 1,
+        "params": {
+          "max_attempts": 2
+        }
+      }
+    ],
+    "execute": [
+      {
+        "step_id": "stop_monkey",
+        "action": "builtin:stop_process",
+        "timeout_seconds": 30,
+        "retry": 0,
+        "params": {
+          "process_name": "com.android.commands.monkey.transsion"
+        }
+      },
+      {
+        "step_id": "collect_bugreport",
+        "action": "builtin:collect_bugreport",
+        "timeout_seconds": 300,
+        "retry": 0,
+        "params": {
+          "remote_path": "/sdcard/bugreport_teardown.txt",
+          "local_dir": "{log_dir}/bugreport"
+        }
+      },
+      {
+        "step_id": "final_scan_aee",
+        "action": "builtin:scan_aee",
+        "timeout_seconds": 300,
+        "retry": 0,
+        "params": {
+          "aee_dirs": ["/data/aee_exp", "/data/vendor/aee_exp"],
+          "local_dir": "{log_dir}/aee_final",
+          "incremental": true,
+          "whitelist_file": "{resource_dir}/AEE_whitelist.txt"
+        }
+      },
+      {
+        "step_id": "final_export_mobilelogs",
+        "action": "builtin:export_mobilelogs",
+        "timeout_seconds": 300,
+        "retry": 0,
+        "params": {
+          "timestamps_from_step": "final_scan_aee",
+          "local_dir": "{log_dir}/mobilelog_final"
+        }
+      }
+    ],
+    "post_process": [
+      {
+        "step_id": "final_decrypt_aee",
+        "action": "builtin:aee_extract",
+        "timeout_seconds": 600,
+        "retry": 0,
+        "params": {
+          "input_dir": "{log_dir}/aee_final",
+          "tool_path": "{tools_dir}/aee_extract",
+          "batch": true,
+          "max_workers": 4,
+          "min_free_disk_gb": 10
+        }
+      },
+      {
+        "step_id": "final_log_scan",
+        "action": "builtin:log_scan",
+        "timeout_seconds": 120,
+        "retry": 0,
+        "params": {
+          "input_dir": "{log_dir}",
+          "keywords": ["FATAL", "CRASH", "ANR"]
+        }
+      },
+      {
+        "step_id": "final_adb_pull",
+        "action": "builtin:adb_pull",
+        "timeout_seconds": 600,
+        "retry": 0,
+        "params": {
+          "remote_path": "/data/debuglogger/mobilelog/",
+          "local_path": "{log_dir}/mobilelog_full"
+        }
+      }
+    ]
+  }
+}

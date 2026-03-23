@@ -280,7 +280,7 @@ sudo ufw status                # Ubuntu
 adb devices
 
 # 检查 ADB 路径和端口配置
-grep -E "^ADB" /opt/stability-test-agent/.env
+grep -E "^ADB|^ANDROID" /opt/stability-test-agent/.env
 
 # 健康检查（会显示端口和已识别设备数）
 agentctl health
@@ -296,7 +296,36 @@ sudo systemctl restart stability-test-agent
 
 # 验证
 agentctl health  # 应显示 "端口: 5039" 和 "已识别设备: N 台"
+
+# 手动验证 ADB 连接（必须指定端口）
+ANDROID_ADB_SERVER_PORT=5039 adb devices
 ```
+
+### Job 卡在 PENDING（设备锁残留）
+
+Job 异常终止后可能遗留设备锁（`device.lock_run_id` 不为空，`device.status = BUSY`），导致后续 Job 无法被 claim。
+
+**诊断**：
+```bash
+# 通过 API 查看设备状态
+curl -s http://localhost:8000/api/v1/devices | python3 -m json.tool | grep -A2 '"status": "BUSY"'
+```
+
+**修复**（在 Windows 侧或能连接 PostgreSQL 的环境执行）：
+```python
+import psycopg
+conn = psycopg.connect('postgresql://stability:stability@localhost:5432/stability')
+conn.autocommit = True
+cur = conn.cursor()
+# 查看锁状态
+cur.execute('SELECT id, lock_run_id, lock_expires_at, status FROM device WHERE status = %s', ('BUSY',))
+for row in cur.fetchall(): print(row)
+# 清理指定设备的锁
+cur.execute('UPDATE device SET lock_run_id = NULL, lock_expires_at = NULL, status = %s WHERE id = %s', ('ONLINE', <device_id>))
+conn.close()
+```
+
+> **注意**：数据库运行在 Windows 侧，连接串为 `postgresql://stability:stability@localhost:5432/stability`，表名为单数形式（`device`、`host`、`job_instance`）。
 
 ---
 
@@ -389,6 +418,13 @@ bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh root@172.21.15.1
 bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh 172.21.15.10 172.21.15.11 172.21.15.12
 ```
 
+### 从 Windows 命令行快速同步（无需进入 WSL shell）
+
+```powershell
+# PowerShell / Git Bash / Windows Terminal
+wsl -u root -- bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh wsl
+```
+
 ### 批量同步（hosts.txt）
 
 在 `backend/agent/` 创建 `hosts.txt`：
@@ -429,5 +465,5 @@ bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh --all
 
 ---
 
-*文档版本: 1.2.0*
-*最后更新: 2026-02-23*
+*文档版本: 1.3.0*
+*最后更新: 2026-03-23*

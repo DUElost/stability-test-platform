@@ -49,11 +49,26 @@ Pipeline
 
 ### Action 类型
 
-| 类型 | 前缀 | 说明 |
-|------|------|------|
-| Built-in | `builtin:<name>` | 内置 Action（18 个） |
-| Tool | `tool:<id>` | 执行注册的 Tool 脚本 |
-| Shell | `shell:<command>` | 直接执行 ADB shell 命令 |
+| 类型 | 前缀 | 格式 | 说明 |
+|------|------|------|------|
+| Built-in | `builtin:<name>` | stages / lifecycle | 内置 Action（18 个） |
+| Tool | `tool:<id>` | stages 仅 | 执行注册的 Tool 脚本（需 ToolRegistry） |
+| ~~Shell~~ | ~~`shell:<command>`~~ | ~~legacy phases 仅~~ | **已废弃，不在 stages/lifecycle 中支持**（见下方说明） |
+
+### 2026-03-23 决策：不支持 `shell:` action（stages/lifecycle 格式）
+
+**背景**：`pipeline_engine.py` 的 legacy `_resolve_action()` 支持 `shell:<command>` 前缀，但 stages 格式的 `_resolve_action_stages()` 明确注释 `no shell: allowed`。JSON Schema (`pipeline_schema.json`) 的 step.action pattern 为 `^(tool:\d+|builtin:.+)$`，不包含 `shell:`。
+
+**决策**：维持现状，**不在 stages/lifecycle 格式中支持 `shell:` action**。
+
+**理由**：
+1. **安全边界**：`shell:` 将任意命令嵌入 pipeline JSON，任何能创建工作流的用户即可在目标设备上执行任意命令。`builtin:` 和 `tool:` 通过注册机制提供了审计边界
+2. **已有替代方案**：
+   - 设备端批量命令 → `builtin:setup_device_commands`（参数化，可审计）
+   - 主机端脚本 → `builtin:run_shell_script`（执行 Agent 主机上的脚本）
+   - 自定义逻辑 → `tool:<id>` Pipeline Action（注册制，版本控制）
+3. **三层一致**：Engine（`_resolve_action_stages`）、Schema（`pipeline_schema.json`）、Validator（`pipeline_validator.py`）均不支持 `shell:`，保持一致
+4. **模板零使用**：无任何现有 pipeline 模板使用 `shell:` 前缀
 
 ### 核心组件
 

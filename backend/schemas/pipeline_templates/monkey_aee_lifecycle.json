@@ -1,0 +1,269 @@
+{
+  "version": 1,
+  "description": "Monkey AEE stability test - full lifecycle (init → patrol → teardown)",
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": {
+      "stages": {
+        "prepare": [
+          {
+            "step_id": "check_device",
+            "action": "builtin:check_device",
+            "timeout_seconds": 30,
+            "retry": 1,
+            "params": {}
+          },
+          {
+            "step_id": "ensure_root",
+            "action": "builtin:ensure_root",
+            "timeout_seconds": 30,
+            "retry": 2,
+            "params": { "max_attempts": 3 }
+          },
+          {
+            "step_id": "setup_commands",
+            "action": "builtin:setup_device_commands",
+            "timeout_seconds": 120,
+            "retry": 0,
+            "params": {
+              "commands": [
+                { "cmd": "settings put global development_settings_enabled 1", "timeout": 10 },
+                { "cmd": "setprop persist.vendor.mtk.aee.mode 3", "timeout": 10 },
+                { "cmd": "am broadcast -a com.debug.loggerui.ADB_CMD -e cmd_name start --ei cmd_target 1 -n com.debug.loggerui/.framework.LogReceiver", "timeout": 15 },
+                { "cmd": "am broadcast -a com.debug.loggerui.ADB_CMD -e cmd_name set_total_log_size_4096 --ei cmd_target 1 -n com.debug.loggerui/.framework.LogReceiver", "timeout": 15 },
+                { "cmd": "am broadcast -a com.debug.loggerui.ADB_CMD -e cmd_name set_sublog_4_5_0 --ei cmd_target 1 -n com.debug.loggerui/.framework.LogReceiver", "timeout": 15 },
+                { "cmd": "settings put global development_settings_enabled 0", "timeout": 10 },
+                { "cmd": "cmd wifi set-wifi-enabled enabled", "timeout": 10 },
+                { "cmd": "cmd wifi start-scan", "timeout": 10 }
+              ]
+            }
+          },
+          {
+            "step_id": "connect_wifi",
+            "action": "builtin:connect_wifi",
+            "timeout_seconds": 30,
+            "retry": 1,
+            "params": { "ssid": "{wifi_ssid}", "password": "{wifi_password}" }
+          },
+          {
+            "step_id": "fill_storage",
+            "action": "builtin:fill_storage",
+            "timeout_seconds": 300,
+            "retry": 0,
+            "params": { "target_percentage": 60 }
+          }
+        ],
+        "execute": [
+          {
+            "step_id": "push_monkey_resources",
+            "action": "builtin:push_resources",
+            "timeout_seconds": 600,
+            "retry": 1,
+            "params": {
+              "files": [
+                { "local": "{resource_dir}/aim.jar", "remote": "/data/local/tmp/aim.jar" },
+                { "local": "{resource_dir}/aim", "remote": "/data/local/tmp/aim", "chmod": "777" },
+                { "local": "{resource_dir}/aimwd", "remote": "/data/local/tmp/aimwd", "chmod": "777" },
+                { "local": "{resource_dir}/aimonkey.apk", "remote": "/data/local/tmp/monkey.apk" },
+                { "local": "{resource_dir}/blacklist.txt", "remote": "/sdcard/blacklist.txt" },
+                { "local": "{resource_dir}/MonkeyTestAi.sh", "remote": "/data/local/tmp/MonkeyTest.sh", "chmod": "777" }
+              ]
+            }
+          },
+          {
+            "step_id": "start_aimwd",
+            "action": "builtin:start_process",
+            "timeout_seconds": 30,
+            "retry": 0,
+            "params": { "command": "/data/local/tmp/aimwd", "background": true }
+          },
+          {
+            "step_id": "start_monkey",
+            "action": "builtin:start_process",
+            "timeout_seconds": 30,
+            "retry": 0,
+            "params": {
+              "command": "/data/local/tmp/aim --pkg-blacklist-file /sdcard/blacklist.txt --smartuiautomator true --hprof --ignore-crashes --ignore-security-exceptions --ignore-timeouts --throttle 500 --runtime-minutes 10080 --switchuimode -v",
+              "background": true
+            }
+          }
+        ],
+        "post_process": []
+      }
+    },
+    "patrol": {
+      "interval_seconds": 300,
+      "stages": {
+        "prepare": [
+          {
+            "step_id": "check_device",
+            "action": "builtin:check_device",
+            "timeout_seconds": 30,
+            "retry": 1,
+            "params": {}
+          },
+          {
+            "step_id": "ensure_root",
+            "action": "builtin:ensure_root",
+            "timeout_seconds": 30,
+            "retry": 2,
+            "params": { "max_attempts": 3 }
+          }
+        ],
+        "execute": [
+          {
+            "step_id": "guard_monkey",
+            "action": "builtin:guard_process",
+            "timeout_seconds": 60,
+            "retry": 0,
+            "params": {
+              "process_name": "com.android.commands.monkey.transsion",
+              "restart_command": "nohup /data/local/tmp/aim --pkg-blacklist-file /sdcard/blacklist.txt --smartuiautomator true --hprof --ignore-crashes --ignore-security-exceptions --ignore-timeouts --throttle 500 --runtime-minutes 10080 --switchuimode -v >/dev/null 2>&1 &",
+              "pre_restart_commands": ["dumpsys activity appops on"],
+              "resource_check_path": "/data/local/tmp/MonkeyTest.sh",
+              "max_restarts": 1
+            }
+          },
+          {
+            "step_id": "scan_aee",
+            "action": "builtin:scan_aee",
+            "timeout_seconds": 300,
+            "retry": 0,
+            "params": {
+              "aee_dirs": ["/data/aee_exp", "/data/vendor/aee_exp"],
+              "local_dir": "{log_dir}/aee",
+              "incremental": true,
+              "whitelist_file": "{resource_dir}/AEE_whitelist.txt"
+            }
+          },
+          {
+            "step_id": "export_mobilelogs",
+            "action": "builtin:export_mobilelogs",
+            "timeout_seconds": 300,
+            "retry": 0,
+            "params": {
+              "timestamps_from_step": "scan_aee",
+              "local_dir": "{log_dir}/mobilelog"
+            }
+          }
+        ],
+        "post_process": [
+          {
+            "step_id": "decrypt_aee",
+            "action": "builtin:aee_extract",
+            "timeout_seconds": 600,
+            "retry": 0,
+            "params": {
+              "input_dir": "{log_dir}/aee",
+              "tool_path": "{tools_dir}/aee_extract",
+              "batch": true,
+              "max_workers": 4,
+              "min_free_disk_gb": 10
+            }
+          },
+          {
+            "step_id": "log_scan",
+            "action": "builtin:log_scan",
+            "timeout_seconds": 120,
+            "retry": 0,
+            "params": {
+              "input_dir": "{log_dir}",
+              "keywords": ["FATAL", "CRASH", "ANR"]
+            }
+          }
+        ]
+      }
+    },
+    "teardown": {
+      "stages": {
+        "prepare": [
+          {
+            "step_id": "ensure_root_for_teardown",
+            "action": "builtin:ensure_root",
+            "timeout_seconds": 30,
+            "retry": 1,
+            "params": { "max_attempts": 2 }
+          }
+        ],
+        "execute": [
+          {
+            "step_id": "stop_monkey",
+            "action": "builtin:stop_process",
+            "timeout_seconds": 30,
+            "retry": 0,
+            "params": {
+              "process_name": "com.android.commands.monkey.transsion"
+            }
+          },
+          {
+            "step_id": "collect_bugreport",
+            "action": "builtin:collect_bugreport",
+            "timeout_seconds": 300,
+            "retry": 0,
+            "params": {
+              "remote_path": "/sdcard/bugreport_teardown.txt",
+              "local_dir": "{log_dir}/bugreport"
+            }
+          },
+          {
+            "step_id": "final_scan_aee",
+            "action": "builtin:scan_aee",
+            "timeout_seconds": 300,
+            "retry": 0,
+            "params": {
+              "aee_dirs": ["/data/aee_exp", "/data/vendor/aee_exp"],
+              "local_dir": "{log_dir}/aee_final",
+              "incremental": true,
+              "whitelist_file": "{resource_dir}/AEE_whitelist.txt"
+            }
+          },
+          {
+            "step_id": "final_export_mobilelogs",
+            "action": "builtin:export_mobilelogs",
+            "timeout_seconds": 300,
+            "retry": 0,
+            "params": {
+              "timestamps_from_step": "final_scan_aee",
+              "local_dir": "{log_dir}/mobilelog_final"
+            }
+          }
+        ],
+        "post_process": [
+          {
+            "step_id": "final_decrypt_aee",
+            "action": "builtin:aee_extract",
+            "timeout_seconds": 600,
+            "retry": 0,
+            "params": {
+              "input_dir": "{log_dir}/aee_final",
+              "tool_path": "{tools_dir}/aee_extract",
+              "batch": true,
+              "max_workers": 4,
+              "min_free_disk_gb": 10
+            }
+          },
+          {
+            "step_id": "final_log_scan",
+            "action": "builtin:log_scan",
+            "timeout_seconds": 120,
+            "retry": 0,
+            "params": {
+              "input_dir": "{log_dir}",
+              "keywords": ["FATAL", "CRASH", "ANR"]
+            }
+          },
+          {
+            "step_id": "final_adb_pull",
+            "action": "builtin:adb_pull",
+            "timeout_seconds": 600,
+            "retry": 0,
+            "params": {
+              "remote_path": "/data/debuglogger/mobilelog/",
+              "local_path": "{log_dir}/mobilelog_full"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
