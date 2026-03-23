@@ -35,12 +35,13 @@ def collect_bugreport(ctx: StepContext) -> StepResult:
     local_dir = ctx.params.get("local_dir", "/tmp/")
 
     os.makedirs(local_dir, exist_ok=True)
-    local_path = os.path.join(local_dir, "bugreport.txt")
+    local_path = os.path.join(local_dir, os.path.basename(remote_path))
 
     try:
         if ctx.logger:
             ctx.logger.info("Generating bugreport (this may take a while)...")
-        ctx.adb.shell(ctx.serial, f"bugreport {remote_path}", timeout=300)
+        # bugreport outputs to stdout; redirect into remote_path via sh -c
+        ctx.adb.shell(ctx.serial, f"sh -c 'bugreport > {remote_path}'", timeout=300)
         ctx.adb.pull(ctx.serial, remote_path, local_path)
         if ctx.logger:
             ctx.logger.info(f"Bugreport saved to {local_path}")

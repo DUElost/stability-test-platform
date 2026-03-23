@@ -453,10 +453,15 @@ async def complete_job(
 
     raw = str(payload.update.get("status", "FAILED")).upper()
     target = _RUN_TO_JOB.get(raw, JobStatus.FAILED)
-    try:
-        JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
-    except InvalidTransitionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+
+    # Idempotent: if MQ consumer already transitioned to the same terminal state,
+    # skip the transition but still persist snapshot and release lock.
+    already_terminal = job.status == target.value and job.status in _TERMINAL
+    if not already_terminal:
+        try:
+            JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
+        except InvalidTransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
 
     # 持久化一次性完成快照（log_summary + artifact），为新链路报告读取提供数据闭环。
     snapshot = {

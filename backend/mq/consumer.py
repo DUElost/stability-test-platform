@@ -210,6 +210,7 @@ async def _persist_job_status(fields: dict) -> None:
     from backend.services.aggregator import WorkflowAggregator
     from backend.services.state_machine import InvalidTransitionError, JobStateMachine
     from backend.api.routes.websocket import broadcast_run_job_update, broadcast_run_workflow_status
+    from backend.services.device_lock import release_lock
 
     job_id = int(fields.get("job_id", 0))
     status_str = fields.get("status", "").upper()
@@ -241,6 +242,8 @@ async def _persist_job_status(fields: dict) -> None:
             if job.status in _TERMINAL:
                 job.ended_at = datetime.utcnow()
                 await WorkflowAggregator.on_job_terminal(job, db)
+                # Release device lock when MQ consumer transitions to terminal
+                await release_lock(db, job.device_id, job_id)
                 # capture workflow terminal status before commit flushes
                 from backend.models.workflow import WorkflowRun
                 run = await db.get(WorkflowRun, workflow_run_id)
