@@ -1,3 +1,15 @@
+"""
+Job Recycler — timeout recovery for JobInstance lifecycle.
+
+Complements the session watchdog by handling:
+- PENDING timeout: agent never claimed the job within DISPATCHED_TIMEOUT_SECONDS
+- RUNNING timeout: job started but no completion within RUNNING_HEARTBEAT_TIMEOUT_SECONDS
+- Artifact file pruning: delete physical files referenced by old StepTrace completion records
+
+Host heartbeat timeout and device lock expiration are handled by session_watchdog.py.
+"""
+
+import json
 import logging
 import os
 import threading
@@ -6,8 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from sqlalchemy import or_, text
-from sqlalchemy.orm import Session
+from sqlalchemy import or_
 
 from backend.core.database import SessionLocal
 from backend.api.routes.websocket import schedule_broadcast
@@ -16,232 +27,196 @@ from backend.core.metrics import (
     recycler_timeouts,
     recycler_duration,
     device_lock_released,
-    host_heartbeat_missed,
     task_run_state_changes,
     task_run_total,
 )
-from backend.models.host import Device, Host
-from backend.models.schemas import LogArtifact, RunStatus, Task, TaskRun, TaskStatus
+from backend.models.enums import JobStatus
+from backend.models.job import JobInstance, StepTrace
 from backend.services.device_lock import release_lock_sync
-
-# When the session watchdog is active, the recycler skips overlapping checks
-_USE_SESSION_WATCHDOG = os.getenv("USE_SESSION_WATCHDOG", "true").lower() in ("true", "1", "yes")
+from backend.services.state_machine import JobStateMachine, InvalidTransitionError
 
 logger = logging.getLogger(__name__)
 
 DISPATCHED_TIMEOUT_SECONDS = int(os.getenv("RUN_DISPATCHED_TIMEOUT_SECONDS", "120"))
 RUNNING_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("RUN_HEARTBEAT_TIMEOUT_SECONDS", "900"))
 ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
-HOST_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "300"))
 RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
 
 
-def _check_host_heartbeat_timeout(db, now: datetime) -> int:
-    """Mark hosts as OFFLINE if no heartbeat received within timeout period."""
-    offline_deadline = now - timedelta(seconds=HOST_HEARTBEAT_TIMEOUT_SECONDS)
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    expired_hosts = (
-        db.query(Host)
-        .filter(
-            Host.status == "ONLINE",
-            or_(
-                Host.last_heartbeat.is_(None),
-                Host.last_heartbeat < offline_deadline,
-            ),
-        )
-        .all()
-    )
-
-    for host in expired_hosts:
-        host.status = "OFFLINE"
-        host_heartbeat_missed.labels(host_id=str(host.id)).inc()
-        recycler_timeouts.labels(timeout_type="host").inc()
-        logger.info(
-            "host_offline_by_heartbeat_timeout",
-            extra={
-                "host_id": host.id,
-                "host_name": host.name,
-                "last_heartbeat": host.last_heartbeat.isoformat() if host.last_heartbeat else None,
-            },
-        )
-    return len(expired_hosts)
+def _safe_json_loads(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
 
 
-def _release_device_lock(db, device_id: int, run_id: int) -> None:
-    release_lock_sync(db, device_id, run_id)
-
-
-def _mark_timeout(db, run: TaskRun, now: datetime, reason: str) -> None:
-    if run.status in {RunStatus.FINISHED, RunStatus.FAILED, RunStatus.CANCELED}:
+def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
+    """Transition a stuck JobInstance to FAILED and release its device lock."""
+    terminal = {JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.ABORTED.value}
+    if job.status in terminal:
         return
-    old_status = run.status
-    run.status = RunStatus.FAILED
-    run.error_code = "TIMEOUT"
-    run.error_message = reason
-    run.finished_at = now
-    task = db.get(Task, run.task_id)
-    if task and task.status not in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED}:
-        task.status = TaskStatus.FAILED
-    _release_device_lock(db, run.device_id, run.id)
-    # Record metrics
-    task_run_state_changes.labels(from_state=old_status.value, to_state="failed").inc()
-    task_run_total.labels(status="failed", task_type=task.type if task else "unknown").inc()
+
+    old_status = job.status
+    try:
+        # State machine: PENDING cannot go directly to FAILED; two-step required
+        if job.status == JobStatus.PENDING.value:
+            JobStateMachine.transition(job, JobStatus.RUNNING, "recycler_auto_claim")
+        JobStateMachine.transition(job, JobStatus.FAILED, reason)
+    except InvalidTransitionError:
+        # Force-set if state machine rejects (e.g., concurrent watchdog transition)
+        job.status = JobStatus.FAILED.value
+        job.status_reason = reason
+        job.updated_at = now
+
+    job.ended_at = now
+    release_lock_sync(db, job.device_id, job.id)
+
+    # Metrics
+    task_run_state_changes.labels(from_state=old_status, to_state="FAILED").inc()
+    task_run_total.labels(status="failed", task_type="workflow").inc()
     device_lock_released.labels(reason="timeout").inc()
-    if "dispatched" in reason:
+    if "pending" in reason.lower():
         recycler_timeouts.labels(timeout_type="dispatched").inc()
     else:
         recycler_timeouts.labels(timeout_type="running").inc()
+
     logger.warning(
-        "run_timeout",
+        "job_timeout",
         extra={
-            "run_id": run.id,
-            "task_id": run.task_id,
-            "status": run.status.value,
+            "job_id": job.id,
+            "workflow_run_id": job.workflow_run_id,
+            "old_status": old_status,
             "reason": reason,
         },
     )
-    # Broadcast timeout event via WebSocket
+
+    # WebSocket broadcast
     schedule_broadcast("/ws/dashboard", {
-        "type": "RUN_UPDATE",
+        "type": "JOB_UPDATE",
         "payload": {
-            "run_id": run.id,
-            "task_id": run.task_id,
+            "job_id": job.id,
+            "workflow_run_id": job.workflow_run_id,
             "status": "FAILED",
             "error_code": "TIMEOUT",
             "message": reason,
         },
     })
-    # Fire-and-forget: auto-generate report + JIRA draft
-    from backend.services.post_completion import run_post_completion_async
-    run_post_completion_async(run.id)
 
-    # Dispatch RUN_FAILED notification for timeout
+    # Fire-and-forget notification
+    # NOTE: run_post_completion_async is NOT called here because JobInstance
+    # lacks report_json/jira_draft_json/post_processed_at columns.
+    # This will be restored after Alembic migration adds those columns.
+    # See ADR-0008 "Post-Completion Pipeline Migration" section.
     from backend.services.notification_service import dispatch_notification_async
-    device_serial = run.device.serial if run.device else str(run.device_id)
     dispatch_notification_async("RUN_FAILED", {
-        "run_id": run.id,
-        "task_id": run.task_id,
-        "task_name": task.name if task else "unknown",
-        "task_type": task.type if task else "unknown",
+        "run_id": job.id,
+        "task_id": job.workflow_run_id,
+        "task_name": f"job-{job.id}",
+        "task_type": "workflow",
         "error_message": reason,
-        "device_serial": device_serial,
+        "device_serial": str(job.device_id),
     })
 
 
-def _check_device_lock_expiration(db, now: datetime) -> int:
-    """
-    检查并释放过期的设备锁
-    当 Agent 续期失败或崩溃时，锁会过期，需要回收
-    """
-    expired_locks = (
-        db.query(Device.id, Device.serial, Device.lock_run_id)
-        .filter(
-            Device.lock_run_id.isnot(None),
-            or_(
-                Device.lock_expires_at.is_(None),
-                Device.lock_expires_at < now,
-            ),
-        )
-        .all()
-    )
-
-    released_count = 0
-    for device_id, device_serial, run_id in expired_locks:
-        if not release_lock_sync(db, device_id, run_id):
-            continue
-        released_count += 1
-
-        if run_id:
-            run = db.get(TaskRun, run_id)
-            if run and run.status == RunStatus.RUNNING:
-                _mark_timeout(
-                    db, run, now.replace(tzinfo=None),
-                    "device lock expired, agent may be offline"
-                )
-
-        device_lock_released.labels(reason="expired").inc()
-        recycler_timeouts.labels(timeout_type="device_lock").inc()
-
-        logger.warning(
-            "device_lock_expired_released",
-            extra={
-                "device_id": device_id,
-                "device_serial": device_serial,
-                "run_id": run_id,
-            },
-        )
-
-    return released_count
-
+# ---------------------------------------------------------------------------
+# Main recycler pass
+# ---------------------------------------------------------------------------
 
 def recycle_once() -> None:
     start_time = time.time()
-    now_tz = datetime.now(timezone.utc)         # for Host/Device (TZ-aware columns)
-    now_naive = datetime.utcnow()               # for TaskRun/Task (naive DateTime columns)
-    dispatched_deadline = now_naive - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
-    running_deadline = now_naive - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
+    now = datetime.now(timezone.utc)
+    pending_deadline = now - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
+    running_deadline = now - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
 
     with SessionLocal() as db:
-        # Host heartbeat timeout + device lock expiration are handled by
-        # session_watchdog when enabled; skip here to avoid conflicts.
-        offline_hosts = 0
-        expired_locks = 0
-        if not _USE_SESSION_WATCHDOG:
-            offline_hosts = _check_host_heartbeat_timeout(db, now_tz)
-            expired_locks = _check_device_lock_expiration(db, now_tz)
-
-        expired_dispatched = (
-            db.query(TaskRun)
-            .filter(TaskRun.status == RunStatus.DISPATCHED, TaskRun.created_at < dispatched_deadline)
+        # 1) PENDING timeout — agent never claimed the job
+        expired_pending = (
+            db.query(JobInstance)
+            .filter(
+                JobInstance.status == JobStatus.PENDING.value,
+                JobInstance.created_at < pending_deadline,
+            )
             .all()
         )
+
+        # 2) RUNNING timeout — job started but no completion within window
+        # Uses started_at as proxy; session_watchdog handles host-level heartbeat.
         expired_running = (
-            db.query(TaskRun)
+            db.query(JobInstance)
             .filter(
-                TaskRun.status == RunStatus.RUNNING,
+                JobInstance.status == JobStatus.RUNNING.value,
                 or_(
-                    TaskRun.last_heartbeat_at < running_deadline,
-                    (TaskRun.last_heartbeat_at.is_(None) & TaskRun.started_at.isnot(None) & (TaskRun.started_at < running_deadline)),
-                    (TaskRun.last_heartbeat_at.is_(None) & TaskRun.started_at.is_(None) & (TaskRun.created_at < running_deadline)),
+                    (JobInstance.started_at.isnot(None)) & (JobInstance.started_at < running_deadline),
+                    (JobInstance.started_at.is_(None)) & (JobInstance.created_at < running_deadline),
                 ),
             )
             .all()
         )
-        expired_runs = expired_dispatched + expired_running
-        for run in expired_runs:
-            reason = "dispatched timeout" if run.status == RunStatus.DISPATCHED else "running heartbeat timeout"
-            _mark_timeout(db, run, now_naive, reason)
-        if expired_runs or offline_hosts or expired_locks:
+
+        expired_jobs = expired_pending + expired_running
+        for job in expired_jobs:
+            reason = (
+                "pending_timeout: agent never claimed job"
+                if job.status == JobStatus.PENDING.value
+                else "running_timeout: no completion within window"
+            )
+            _mark_timeout(db, job, now, reason)
+
+        if expired_jobs:
             db.commit()
 
-        # Prune old log artifacts
-        _prune_log_artifacts(db, now_naive)
+        # 3) Prune old artifact files
+        _prune_steptrace_artifacts(db, now)
 
-    # Record recycler metrics
     duration = time.time() - start_time
     recycler_duration.observe(duration)
     recycler_runs.inc()
 
 
-def _prune_log_artifacts(db: Session, now: datetime) -> None:
-    """Delete log artifacts and their files older than retention period."""
+# ---------------------------------------------------------------------------
+# Artifact pruning
+# ---------------------------------------------------------------------------
+
+def _prune_steptrace_artifacts(db, now: datetime) -> None:
+    """Delete physical artifact files referenced by old StepTrace completion records.
+
+    Only deletes file:// URIs. StepTrace rows are preserved (audit records).
+    """
     cutoff = now - timedelta(days=ARTIFACT_RETENTION_DAYS)
 
-    old_artifacts = (
-        db.query(LogArtifact)
-        .filter(LogArtifact.created_at < cutoff)
+    old_traces = (
+        db.query(StepTrace)
+        .filter(
+            StepTrace.step_id == "__job__",
+            StepTrace.event_type == "RUN_COMPLETE",
+            StepTrace.created_at < cutoff,
+        )
         .all()
     )
 
-    if not old_artifacts:
+    if not old_traces:
         return
 
-    deleted_count = 0
     file_deleted_count = 0
-
-    for artifact in old_artifacts:
+    for trace in old_traces:
+        snapshot = _safe_json_loads(trace.output)
+        artifact = snapshot.get("artifact") if isinstance(snapshot, dict) else None
+        if not artifact or not isinstance(artifact, dict):
+            continue
+        storage_uri = artifact.get("storage_uri")
+        if not storage_uri:
+            continue
         try:
-            parsed = urlparse(artifact.storage_uri)
+            parsed = urlparse(storage_uri)
             if parsed.scheme.lower() == "file":
                 if parsed.netloc and parsed.path:
                     local_path = Path(f"//{parsed.netloc}{unquote(parsed.path)}")
@@ -249,22 +224,22 @@ def _prune_log_artifacts(db: Session, now: datetime) -> None:
                     local_path = Path(unquote(parsed.netloc))
                 else:
                     local_path = Path(unquote(parsed.path))
-
                 if local_path.exists() and local_path.is_file():
                     os.remove(local_path)
                     file_deleted_count += 1
         except Exception as e:
-            logger.warning(f"Failed to delete artifact file {artifact.storage_uri}: {e}")
+            logger.warning(f"Failed to delete artifact file {storage_uri}: {e}")
 
-        db.delete(artifact)
-        deleted_count += 1
+    if file_deleted_count:
+        logger.info(
+            "steptrace_artifacts_pruned",
+            extra={"traces_scanned": len(old_traces), "files_deleted": file_deleted_count},
+        )
 
-    db.commit()
-    logger.info(
-        "log_artifacts_pruned",
-        extra={"db_count": deleted_count, "files_count": file_deleted_count}
-    )
 
+# ---------------------------------------------------------------------------
+# Daemon thread
+# ---------------------------------------------------------------------------
 
 def _recycler_loop() -> None:
     logger.info("recycler_started")
@@ -277,6 +252,6 @@ def _recycler_loop() -> None:
 
 
 def start_recycler() -> threading.Thread:
-    thread = threading.Thread(target=_recycler_loop, name="run-recycler", daemon=True)
+    thread = threading.Thread(target=_recycler_loop, name="job-recycler", daemon=True)
     thread.start()
     return thread

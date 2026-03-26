@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, type WorkflowRun, type JobInstance, type StepTrace, type JobStatus, type WorkflowStatus } from '@/utils/api';
-import { ensureFreshAccessToken, upsertWsToken } from '@/utils/auth';
+import { useWebSocket } from '@/hooks/useWebSocket';
 import { formatLocalDateTime, formatLocalTime, parseIsoToDate } from '@/utils/time';
 import { ArrowLeft, RefreshCw, X } from 'lucide-react';
 
@@ -115,74 +115,30 @@ interface LogLine {
 
 function JobLogStream({ jobId }: { jobId: number }) {
   const [lines, setLines] = useState<LogLine[]>([]);
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting');
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProtocol}//${window.location.host}/ws/jobs/${jobId}/logs`;
+  const { lastMessage, connectionStatus } = useWebSocket(wsUrl);
+
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let stopped = false;
-    let attempt = 0;
-
-    const getReconnectDelay = () => Math.min(1000 * Math.pow(2, attempt), 30000);
-
-    const connect = async () => {
-      if (stopped) return;
-      setWsStatus('connecting');
-
-      const token = await ensureFreshAccessToken();
-      if (import.meta.env.PROD && !token) {
-        setWsStatus('closed');
-        return;
-      }
-      const baseUrl = `${protocol}://${window.location.host}/ws/jobs/${jobId}/logs`;
-      const wsUrl = token ? upsertWsToken(baseUrl, token) : baseUrl;
-      if (stopped) return;
-
-      ws = new WebSocket(wsUrl);
-      ws.onopen = () => {
-        attempt = 0;
-        setWsStatus('open');
-      };
-      ws.onclose = () => {
-        setWsStatus('closed');
-        if (stopped) return;
-        const delay = getReconnectDelay();
-        attempt += 1;
-        reconnectTimer = setTimeout(connect, delay);
-      };
-      ws.onerror = () => ws?.close();
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'STEP_LOG' && msg.payload) {
-            setLines(prev => [...prev.slice(-499), msg.payload as LogLine]);
-          }
-        } catch {}
-      };
-    };
-
-    connect();
-
-    return () => {
-      stopped = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      ws?.close();
-    };
-  }, [jobId]);
+    if (!lastMessage) return;
+    if (lastMessage.type === 'STEP_LOG' && lastMessage.payload) {
+      setLines(prev => [...prev.slice(-499), lastMessage.payload as LogLine]);
+    }
+  }, [lastMessage]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [lines]);
 
-  const statusColor = wsStatus === 'open' ? 'bg-green-400' : wsStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-300';
+  const statusColor = connectionStatus === 'connected' ? 'bg-green-400' : connectionStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-300';
 
   return (
     <div className="flex flex-col h-64">
       <div className="flex items-center gap-2 mb-2">
         <span className={`w-2 h-2 rounded-full ${statusColor}`} />
-        <span className="text-xs text-gray-400">{wsStatus === 'open' ? '实时连接' : wsStatus === 'connecting' ? '连接中…' : '已断开'}</span>
+        <span className="text-xs text-gray-400">{connectionStatus === 'connected' ? '实时连接' : connectionStatus === 'connecting' ? '连接中…' : '已断开'}</span>
       </div>
       <div className="flex-1 overflow-y-auto bg-gray-950 rounded p-2 font-mono text-xs">
         {lines.length === 0 ? (
@@ -279,8 +235,6 @@ export default function WorkflowRunMatrixPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedJob, setSelectedJob] = useState<JobInstance | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('connecting');
 
   const { data: run, isLoading: runLoading } = useQuery({
     queryKey: ['workflow-run', runId],
@@ -300,76 +254,29 @@ export default function WorkflowRunMatrixPage() {
     },
   });
 
-  // WebSocket for real-time job status updates
+  // WebSocket for real-time job/workflow status updates (token injected by hook)
+  const isTerminal = run && TERMINAL_STATUSES.includes(run.status);
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = runId ? `${wsProtocol}//${window.location.host}/ws/workflow-runs/${runId}` : '';
+
+  const { lastMessage, connectionStatus } = useWebSocket(wsUrl, {
+    enabled: !!runId && !isTerminal,
+  });
+
   useEffect(() => {
-    if (!runId) return;
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    let ws: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
-    let stopped = false;
-    let attempt = 0;
-
-    const getReconnectDelay = () => Math.min(1000 * Math.pow(2, attempt), 30000);
-
-    const connect = async () => {
-      if (stopped) return;
-      setWsStatus('connecting');
-
-      const token = await ensureFreshAccessToken();
-      if (import.meta.env.PROD && !token) {
-        setWsStatus('closed');
-        return;
-      }
-      const baseUrl = `${protocol}://${window.location.host}/ws/workflow-runs/${runId}`;
-      const wsUrl = token ? upsertWsToken(baseUrl, token) : baseUrl;
-      if (stopped) return;
-
-      ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        attempt = 0;
-        setWsStatus('open');
-      };
-      ws.onclose = () => {
-        setWsStatus('closed');
-        if (stopped) return;
-        const runStatus = queryClient.getQueryData<WorkflowRun>(['workflow-run', runId])?.status;
-        if (!runStatus || !TERMINAL_STATUSES.includes(runStatus)) {
-          const delay = getReconnectDelay();
-          attempt += 1;
-          reconnectTimer = setTimeout(connect, delay);
-        }
-      };
-      ws.onerror = () => ws?.close();
-
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          if (msg.type === 'job_status') {
-            queryClient.setQueryData<JobInstance[]>(['workflow-run-jobs', runId], (prev) =>
-              prev?.map(j => j.id === msg.job_id ? { ...j, status: msg.status } : j)
-            );
-          } else if (msg.type === 'workflow_status') {
-            queryClient.setQueryData<WorkflowRun>(['workflow-run', runId], (prev) =>
-              prev ? { ...prev, status: msg.status } : prev
-            );
-            if (TERMINAL_STATUSES.includes(msg.status)) {
-              ws?.close();
-            }
-          }
-        } catch {}
-      };
-    };
-
-    connect();
-
-    return () => {
-      stopped = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      ws?.close();
-    };
-  }, [runId]);
+    if (!lastMessage) return;
+    if (lastMessage.type === 'JOB_STATUS') {
+      const { job_id, status } = lastMessage.payload as any;
+      queryClient.setQueryData<JobInstance[]>(['workflow-run-jobs', runId], (prev) =>
+        prev?.map(j => j.id === job_id ? { ...j, status } : j)
+      );
+    } else if (lastMessage.type === 'WORKFLOW_STATUS') {
+      const { status } = lastMessage.payload as any;
+      queryClient.setQueryData<WorkflowRun>(['workflow-run', runId], (prev) =>
+        prev ? { ...prev, status } : prev
+      );
+    }
+  }, [lastMessage, runId, queryClient]);
 
   const allJobs = jobs ?? [];
   const counts = {
@@ -428,8 +335,8 @@ export default function WorkflowRunMatrixPage() {
                 {run.status}
               </span>
               <span className={`w-2 h-2 rounded-full ${
-                wsStatus === 'open' ? 'bg-green-400' : wsStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-300'
-              }`} title={`WebSocket: ${wsStatus}`} />
+                connectionStatus === 'connected' ? 'bg-green-400' : connectionStatus === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-300'
+              }`} title={`WebSocket: ${connectionStatus}`} />
             </div>
             <p className="text-sm text-gray-500">
               {formatTime(run.started_at)} → {formatTime(run.ended_at ?? null)}

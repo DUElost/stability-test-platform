@@ -45,6 +45,7 @@ from backend.services.state_machine import InvalidTransitionError
 from backend.tasks.heartbeat_monitor import heartbeat_monitor_loop
 from backend.tasks.session_watchdog import USE_SESSION_WATCHDOG, session_watchdog_loop
 from backend.scheduler.cron_scheduler import start_cron_scheduler
+from backend.scheduler.recycler import start_recycler
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,8 @@ async def lifespan(app: FastAPI):
         if os.getenv("ENABLE_CRON_SCHEDULER", "1") == "1":
             cron_thread = start_cron_scheduler()
             logger.info("cron_scheduler_thread_started name=%s", getattr(cron_thread, "name", "cron-scheduler"))
+        recycler_thread = start_recycler()
+        logger.info("recycler_thread_started name=%s", recycler_thread.name)
 
     yield
 

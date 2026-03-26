@@ -28,13 +28,27 @@ except ImportError:
     logger.warning("websockets library not installed, WebSocket log streaming disabled")
 
 
+def _env_int(key: str, default: int) -> int:
+    try:
+        return int(os.environ[key])
+    except (KeyError, ValueError):
+        return default
+
+
+def _env_float(key: str, default: float) -> float:
+    try:
+        return float(os.environ[key])
+    except (KeyError, ValueError):
+        return default
+
+
 class AgentWSClient:
     """Synchronous WebSocket client for the agent process."""
 
-    MAX_BUFFER = 1000
+    MAX_BUFFER = _env_int("WS_BUFFER_SIZE", 1000)
     INITIAL_BACKOFF = 1.0
-    MAX_BACKOFF = 30.0
-    PING_INTERVAL = 30
+    MAX_BACKOFF = _env_float("WS_RECONNECT_MAX_DELAY", 30.0)
+    PING_INTERVAL = _env_int("WS_PING_INTERVAL", 30)
     PONG_TIMEOUT = 10
 
     def __init__(self, api_url: str, host_id: int, agent_secret: str = ""):

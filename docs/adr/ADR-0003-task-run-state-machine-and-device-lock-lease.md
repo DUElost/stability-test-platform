@@ -23,6 +23,8 @@ PENDING → RUNNING → COMPLETED
                   → UNKNOWN → RUNNING    (Agent 恢复)
                             → COMPLETED  (Agent 补报)
                             → FAILED     (宽限期超时)
+
+PENDING_TOOL → PENDING  (工具就绪后回到待认领队列)
 ```
 
 Legacy TaskRun 状态转换（保留兼容）：
@@ -91,6 +93,7 @@ PipelineEngine 在两个层面验证锁：
 - ✅ Agent per-device 并发守卫 `_active_device_ids`
 - ✅ PipelineEngine 锁验证（启动前 + 步间 `is_aborted` 回调）
 - ✅ 状态机支持 `UNKNOWN → FAILED` 转换
+- ✅ 状态机支持 `PENDING_TOOL → PENDING` 转换（工具依赖就绪后重新排队）
 - ✅ heartbeat_monitor 与 session_watchdog 互斥运行
 - ⏳ 将 claim 端点的锁过滤下推到 SQL 层（避免 LIMIT 前置导致的饥饿）
 - ⏳ 统一 pipeline 锁丢失时的终态映射（ABORTED vs FAILED）
@@ -103,7 +106,7 @@ PipelineEngine 在两个层面验证锁：
 - `backend/api/routes/agent_api.py` — claim / complete / extend_lock 端点
 - `backend/agent/main.py` — Agent 主循环与 per-device 守卫
 - `backend/agent/pipeline_engine.py` — Pipeline 锁验证
-- `backend/scheduler/recycler.py` — 回收器（watchdog 启用时部分检查跳过）
+- `backend/scheduler/recycler.py` — 回收器（Host 心跳超时与设备锁过期由 session_watchdog 独占处理，recycler 不包含这两类检查）
 - `backend/services/dispatcher.py` — Workflow 派发（不再预锁）
 - [`openspec/specs/device-concurrency-guard/spec.md`](../../openspec/specs/device-concurrency-guard/spec.md) — 设备并发守卫规范
 - [`openspec/specs/session-lifecycle/spec.md`](../../openspec/specs/session-lifecycle/spec.md) — 会话生命周期规范

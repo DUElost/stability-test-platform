@@ -6,6 +6,12 @@ Create Date: 2026-02-27
 
 Phase 1: Drop all legacy tables, create new stp-spec schema.
 This migration is irreversible (downgrade raises NotImplementedError).
+
+!! FROZEN — DO NOT EXECUTE !!
+This migration drops 17 legacy tables that are still actively referenced by
+ORM models in schemas.py (Task, TaskRun, Tool, etc.). Running it will break
+the application. See ADR-0008 "双轨合并" section for the remediation plan.
+Frozen on: 2026-03-24
 """
 
 from alembic import op
@@ -17,8 +23,16 @@ down_revision = "c1a2b3d4e5f6"
 branch_labels = None
 depends_on = None
 
+_FROZEN = True
+
 
 def upgrade() -> None:
+    if _FROZEN:
+        raise RuntimeError(
+            "Migration a1b2c3d4e5f6 is FROZEN. Legacy tables it drops are still "
+            "in active use. Complete the dual-track model merge (ADR-0008) before "
+            "unfreezing. See docs/adr/ADR-0008-schema-migration-governance-alembic-only.md"
+        )
     # ── 1. New tables (dependency order) ──────────────────────────────────────
 
     op.create_table(

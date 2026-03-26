@@ -71,10 +71,10 @@ export default function TaskDetails() {
 
   const isPipeline = (runSteps?.length ?? 0) > 0;
 
-  // WebSocket for log streaming
+  // WebSocket for log streaming (token injected by useWebSocket hook via authMode: 'auto')
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = activeRun
-    ? `${wsProtocol}//${window.location.host}/ws/logs/${activeRun.id}?token=${localStorage.getItem('access_token') || 'dev-token-12345'}`
+    ? `${wsProtocol}//${window.location.host}/ws/logs/${activeRun.id}`
     : '';
 
   const { lastMessage } = useWebSocket(wsUrl, {

@@ -154,6 +154,9 @@ wsl -u root -- bash -c "rsync -av --delete --exclude='__pycache__' --exclude='.e
 | GET | `/api/v1/runs/{run_id}/steps/{step_id}` | 获取单个 RunStep |
 | GET | `/api/v1/pipeline/templates` | 列出内置 Pipeline 模板 |
 | GET | `/api/v1/pipeline/templates/{name}` | 获取指定 Pipeline 模板 |
+| GET | `/api/v1/workflow-runs/{run_id}/jobs/{job_id}/report` | [STUB] 单 Job 报告（501） |
+| POST | `/api/v1/workflow-runs/{run_id}/jobs/{job_id}/jira-draft` | [STUB] Job JIRA 草稿（501） |
+| GET | `/api/v1/workflow-runs/{run_id}/summary` | [STUB] Workflow 聚合概览（501） |
 
 ### Agent API 端点
 

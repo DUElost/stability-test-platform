@@ -1,6 +1,6 @@
 # ADR-0007: 工具配置 + 任务模板 + 工作流扩展模型
 - 状态：Accepted
-- 日期：2026-02-18
+- 日期：2026-02-18（2026-03-24 更新）
 - 决策者：平台研发组
 - 标签：可扩展性, 工具模型, 工作流, 定时任务
 
@@ -10,7 +10,7 @@
 
 ## 决策
 
-采用“三层扩展”模型：
+采用"三层扩展"模型：
 
 - 工具层：`ToolCategory` + `Tool` 数据化配置，支持脚本路径、参数 Schema、超时等能力。
 - 模板层：内置 `task_templates` 提供默认参数与脚本入口。
@@ -36,15 +36,24 @@
 
 ## 落地与后续动作
 
-- 已落地：工具 CRUD、扫描同步、工作流 CRUD 与执行器、cron 调度。
-- 后续：建立“工具版本 + 参数 Schema 校验 + 灰度发布”机制。
+- ✅ 已落地：工具 CRUD、扫描同步、工作流 CRUD、cron 调度。
+- ✅ Phase 3 路由替代：`tools.py` 和 `workflows.py` 已被 `orchestration.py`、`tool_catalog.py`、`action_templates.py` 替代并在 `main.py` 中挂载。Legacy 路由文件保留但不再挂载。
+- ✅ Workflow 执行器重构：`scheduler/workflow_executor.py` 已删除，工作流推进由 `services/dispatcher.py`（`dispatch_workflow`）+ Agent claim 机制替代。
+- 后续：建立"工具版本 + 参数 Schema 校验 + 灰度发布"机制。
 
 ## 关联实现/文档
 
-- `backend/models/schemas.py`
-- `backend/api/routes/tools.py`
-- `backend/core/task_templates.py`
-- `backend/api/routes/workflows.py`
-- `backend/scheduler/workflow_executor.py`
-- `backend/api/routes/schedules.py`
-- `backend/scheduler/cron_scheduler.py`
+### 当前活跃
+- `backend/models/schemas.py` — 旧 ToolCategory / Tool 模型（双轨合并后迁移到 `models/tool.py`）
+- `backend/models/tool.py` — 新 Tool 模型
+- `backend/core/task_templates.py` — 内置任务模板
+- `backend/api/routes/orchestration.py` — Workflow 编排端点（替代 `workflows.py`）
+- `backend/api/routes/tool_catalog.py` — 工具目录端点（替代 `tools.py`）
+- `backend/api/routes/action_templates.py` — Action 模板端点
+- `backend/api/routes/schedules.py` — 定时任务
+- `backend/scheduler/cron_scheduler.py` — Cron 调度器
+- `backend/services/dispatcher.py` — Workflow 派发服务
+
+### Legacy（保留但未挂载）
+- `backend/api/routes/tools.py` — 旧工具 CRUD 路由（未在 `main.py` 中 `include_router`）
+- `backend/api/routes/workflows.py` — 旧工作流 CRUD 路由（未在 `main.py` 中 `include_router`）

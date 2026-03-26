@@ -51,7 +51,7 @@ Pipeline
 
 | 类型 | 前缀 | 格式 | 说明 |
 |------|------|------|------|
-| Built-in | `builtin:<name>` | stages / lifecycle | 内置 Action（18 个） |
+| Built-in | `builtin:<name>` | stages / lifecycle | 内置 Action（21 个） |
 | Tool | `tool:<id>` | stages 仅 | 执行注册的 Tool 脚本（需 ToolRegistry） |
 | ~~Shell~~ | ~~`shell:<command>`~~ | ~~legacy phases 仅~~ | **已废弃，不在 stages/lifecycle 中支持**（见下方说明） |
 
@@ -127,7 +127,7 @@ Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema
 ## 落地与后续动作
 
 - ✅ PipelineEngine 核心实现
-- ✅ 18 个内置 Actions（Device/Process/File/Log/Tool）
+- ✅ 21 个内置 Actions（Device/Process/File/Log/Tool）
 - ✅ 前端 PipelineEditor 可视化编辑器
 - ✅ 内置 Pipeline Templates API
 - ✅ 设备锁启动前验证 + 步间锁丢失检测
@@ -151,16 +151,14 @@ Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema
 - `backend/agent/actions/tool_actions.py` - Tool 桥接 Action
 - `backend/api/routes/pipeline.py` - Pipeline Templates API
 - `backend/api/routes/builtin_actions.py` - 内置 Action 及 param_schema API
-- `backend/data/builtin_actions.json` - 内置 Action 定义与参数 Schema
+- `backend/schemas/builtin_actions.json` - 内置 Action 定义与参数 Schema
 
 ### 前端
-- `frontend/src/components/pipeline/PipelineEditor.tsx` - 可视化编辑器
-- `frontend/src/components/pipeline/StagesPipelineEditor.tsx` - Stages 编辑器（含 DynamicToolForm 集成）
+- `frontend/src/components/pipeline/StagesPipelineEditor.tsx` - Stages 可视化编辑器（含 DynamicToolForm 集成）
 - `frontend/src/components/pipeline/actionCatalog.ts` - Action 目录
-- `frontend/src/components/pipeline/pipelineTypes.ts` - 类型定义
 - `frontend/src/components/pipeline/PipelineStepTree.tsx` - 运行时步骤树
-- `frontend/src/components/tools/DynamicToolForm.tsx` - 动态参数表单组件
-- `frontend/src/pages/tasks/CreateTask.tsx` - 任务创建集成
+- `frontend/src/components/task/DynamicToolForm.tsx` - 动态参数表单组件
+- `frontend/src/pages/orchestration/WorkflowDefinitionEditPage.tsx` - 工作流编辑页面（集成 Pipeline 编辑器）
 
 ### API
 - `GET /api/v1/pipeline/templates` - 获取内置模板
@@ -178,4 +176,4 @@ Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema
 
 ### OpenSpec
 - [`openspec/specs/pipeline-engine/spec.md`](../../openspec/specs/pipeline-engine/spec.md) - Pipeline 引擎规范（含锁验证）
-- [`openspec/changes/builtin-action-param-forms/`](../../openspec/changes/builtin-action-param-forms/) - 参数表单 Change
+- [`openspec/changes/archive/2026-03-11-builtin-action-param-forms/`](../../openspec/changes/archive/2026-03-11-builtin-action-param-forms/) - 参数表单 Change（已归档）

@@ -30,7 +30,6 @@ from ...models.schemas import (
 from ...scheduler.dispatcher import TaskDispatcher
 import backend.scheduler.dispatcher as dispatcher_module
 import backend.scheduler.recycler as recycler_module
-from ...core.database_adapter import get_adapter_from_engine
 
 SessionLocal = None
 engine = None
@@ -411,26 +410,12 @@ class TestDatabaseConcurrency:
         """
         测试 SKIP LOCKED 行为
 
-        验证: 数据库适配器正确应用 SKIP LOCKED
+        验证: PostgreSQL 正确支持 FOR UPDATE SKIP LOCKED
         """
-        db_adapter = get_adapter_from_engine(engine)
+        # PostgreSQL always supports SKIP LOCKED
+        if engine.dialect.name != 'postgresql':
+            pytest.skip("SKIP LOCKED requires PostgreSQL")
 
-        # 检查适配器支持
-        supports_skip = db_adapter.supports_skip_locked()
-
-        # SQLite 不支持 SKIP LOCKED
-        if engine.dialect.name == 'sqlite':
-            assert not supports_skip, "SQLite should not support SKIP LOCKED"
-        else:
-            # PostgreSQL 和 MySQL 支持
-            assert supports_skip, f"{engine.dialect.name} should support SKIP LOCKED"
-
-    def test_transaction_isolation(self, db_session):
-        """
-        测试事务隔离级别
-
-        验证: 并发事务正确隔离
-        """
         host = Host(
             name="isolation-host",
             ip="172.21.15.104",
@@ -517,7 +502,6 @@ def db_session(monkeypatch):
     # 将调度器/回收器模块切换到测试库
     monkeypatch.setattr(dispatcher_module, "engine", engine)
     monkeypatch.setattr(dispatcher_module, "SessionLocal", SessionLocal)
-    monkeypatch.setattr(dispatcher_module, "db_adapter", get_adapter_from_engine(engine))
     monkeypatch.setattr(recycler_module, "SessionLocal", SessionLocal)
 
     Base.metadata.create_all(bind=engine)

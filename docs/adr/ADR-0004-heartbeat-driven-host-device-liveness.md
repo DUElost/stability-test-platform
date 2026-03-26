@@ -24,6 +24,7 @@
 Host 心跳超时检测现由 `session_watchdog` 统一管理（`USE_SESSION_WATCHDOG=true` 时）：
 
 - **超时阈值**：`HOST_HEARTBEAT_TIMEOUT_SECONDS`（默认 120s），替代 legacy `heartbeat_monitor` 的 30s 阈值
+- **注意**：同一环境变量在不同模块有不同的硬编码回退值。`session_watchdog.py` 回退 120s（用于判定 Host 离线并联动 Job 状态），`hosts.py` 与 `devices.py` 回退 300s（用于 API 查询时标记离线设备）。生产部署时应在 `.env` 中显式设置该变量以消除歧义。`.env.example` 已配置为 120s
 - **联动行为**：Host 超时 → OFFLINE + RUNNING job → UNKNOWN → 宽限期后 FAILED
 - **互斥运行**：`session_watchdog` 与 `heartbeat_monitor` 通过 `USE_SESSION_WATCHDOG` 环境变量互斥切换。启用 watchdog 时 heartbeat_monitor 不启动
 - **Recycler 协调**：watchdog 启用时，recycler 跳过 `_check_host_heartbeat_timeout` 和 `_check_device_lock_expiration`

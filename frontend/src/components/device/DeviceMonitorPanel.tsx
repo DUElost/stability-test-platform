@@ -93,10 +93,10 @@ export function DeviceMonitorPanel({
     if (lastMessage) {
       try {
         const data = lastMessage as any;
-        if (data.type === 'device_update') {
+        if (data.type === 'DEVICE_UPDATE' && data.payload) {
           setDevices(prev => {
             const updated = prev.map(device => {
-              if (device.id === data.deviceId) {
+              if (device.id === data.payload.id) {
                 return { ...device, ...data.payload, lastUpdate: new Date() };
               }
               return device;

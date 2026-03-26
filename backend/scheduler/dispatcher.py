@@ -10,7 +10,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from backend.core.database import SessionLocal
-from backend.core.database_adapter import get_adapter_from_engine
 from backend.core.database import engine
 from backend.api.routes.websocket import schedule_broadcast
 from backend.core.metrics import (
@@ -40,10 +39,6 @@ WORKER_COUNT = int(os.getenv("DISPATCHER_WORKERS", "2"))
 QUEUE_CAPACITY = int(os.getenv("DISPATCH_QUEUE_CAPACITY", "200"))
 DEFAULT_MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT_TASKS", "1"))
 DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
-
-# 初始化数据库适配器
-db_adapter = get_adapter_from_engine(engine)
-
 
 class TaskDispatcher:
     """基于 asyncio 的任务自动分发器"""
@@ -232,8 +227,8 @@ class TaskDispatcher:
             .order_by(Device.last_seen.desc().nullslast(), Device.id)
         )
 
-        # 应用数据库特定的 FOR UPDATE
-        query = db_adapter.apply_for_update(query, skip_locked=db_adapter.supports_skip_locked())
+        # PostgreSQL: FOR UPDATE SKIP LOCKED
+        query = query.with_for_update(skip_locked=True)
 
         available_device = query.first()
 

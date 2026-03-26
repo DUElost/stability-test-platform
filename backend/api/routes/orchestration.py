@@ -355,6 +355,78 @@ async def list_run_jobs(run_id: int, db: AsyncSession = Depends(get_async_db)):
     return ok(result)
 
 
+# ── Report / JIRA Stubs (Wave 3b — future implementation) ─────────────────
+
+
+@router.get(
+    "/workflow-runs/{run_id}/jobs/{job_id}/report",
+    response_model=ApiResponse[dict],
+    summary="[STUB] Single-job report",
+)
+async def get_job_report(
+    run_id: int,
+    job_id: int,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Single-job report. Not yet implemented.
+
+    Will replace legacy ``GET /api/v1/runs/{run_id}/report``.
+    See ADR-0008 Wave 3b for the migration plan.
+    """
+    job = await db.get(JobInstance, job_id)
+    if job is None or job.workflow_run_id != run_id:
+        raise HTTPException(status_code=404, detail="job not found in this workflow run")
+    raise HTTPException(
+        status_code=501,
+        detail="Job report endpoint pending implementation. "
+               "Use GET /api/v1/runs/{job_id}/report as interim.",
+    )
+
+
+@router.post(
+    "/workflow-runs/{run_id}/jobs/{job_id}/jira-draft",
+    response_model=ApiResponse[dict],
+    summary="[STUB] JIRA draft for a job",
+)
+async def create_job_jira_draft(
+    run_id: int,
+    job_id: int,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """JIRA draft for a single job. Not yet implemented.
+
+    Will replace legacy ``POST /api/v1/runs/{run_id}/jira-draft``.
+    See ADR-0008 Wave 3b for the migration plan.
+    """
+    job = await db.get(JobInstance, job_id)
+    if job is None or job.workflow_run_id != run_id:
+        raise HTTPException(status_code=404, detail="job not found in this workflow run")
+    raise HTTPException(
+        status_code=501,
+        detail="JIRA draft endpoint pending implementation. "
+               "Use POST /api/v1/runs/{job_id}/jira-draft as interim.",
+    )
+
+
+@router.get(
+    "/workflow-runs/{run_id}/summary",
+    response_model=ApiResponse[dict],
+    summary="[STUB] Workflow aggregate summary",
+)
+async def get_workflow_run_summary(
+    run_id: int,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Workflow-level aggregate summary (per-device matrix, failure distribution).
+
+    Not yet implemented. See ADR-0008 Wave 3b for the migration plan.
+    """
+    run = await db.get(WorkflowRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="workflow run not found")
+    raise HTTPException(status_code=501, detail="Workflow summary endpoint pending implementation.")
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _wf_out(wf: WorkflowDefinition, templates: list) -> WorkflowDefOut:

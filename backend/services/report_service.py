@@ -15,12 +15,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote, urlparse
 
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
 
 from backend.models.job import JobInstance, StepTrace, TaskTemplate as JobTaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
-from backend.models.schemas import LogArtifact, Task, TaskRun
 from backend.models.host import Device, Host
 from backend.api.schemas import (
     DeviceLiteOut,
@@ -107,7 +106,7 @@ def _load_risk_summary_from_tar(path: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _load_risk_summary_from_artifacts(artifacts: List[LogArtifact]) -> Optional[Dict[str, Any]]:
+def _load_risk_summary_from_artifacts(artifacts: list) -> Optional[Dict[str, Any]]:
     if not artifacts:
         return None
     ordered = sorted(
@@ -410,67 +409,18 @@ def build_risk_alerts(
 
 def compose_run_report(db: Session, run_id: int) -> Optional[RunReportOut]:
     """
-    Build a RunReportOut for the given run_id.
+    Build a RunReportOut for the given run_id (JobInstance path only).
 
-    Returns None if the run or its task is not found (instead of raising
+    Returns None if the run is not found (instead of raising
     HTTPException), making it safe for use outside request context.
     """
-    # 1) 新模型路径（JobInstance）
     try:
         job = db.get(JobInstance, run_id)
     except ProgrammingError:
         db.rollback()
         job = None
     if job:
-        report = _compose_job_report(db, job)
-        if report is not None:
-            return report
-
-    # 2) 旧模型路径（TaskRun）
-    try:
-        run = (
-            db.query(TaskRun)
-            .options(selectinload(TaskRun.artifacts))
-            .filter(TaskRun.id == run_id)
-            .first()
-        )
-    except ProgrammingError:
-        db.rollback()
-        run = None
-
-    if run:
-        task = db.get(Task, run.task_id)
-        if not task:
-            return None
-
-        host = db.get(Host, str(run.host_id)) if run.host_id is not None else None
-        device = db.get(Device, run.device_id)
-
-        if hasattr(RunOut, "model_validate"):
-            run_out = RunOut.model_validate(run)
-            task_out = TaskOut.model_validate(task)
-            host_out = HostLiteOut.model_validate(host) if host else None
-            device_out = DeviceLiteOut.model_validate(device) if device else None
-        else:
-            run_out = RunOut.from_orm(run)
-            task_out = TaskOut.from_orm(task)
-            host_out = HostLiteOut.from_orm(host) if host else None
-            device_out = DeviceLiteOut.from_orm(device) if device else None
-
-        risk_summary = _load_risk_summary_from_artifacts(run.artifacts)
-        summary_metrics = parse_run_log_summary(run.log_summary)
-        alerts = build_risk_alerts(risk_summary, summary_metrics)
-        run_out.risk_summary = risk_summary
-        return RunReportOut(
-            generated_at=datetime.utcnow(),
-            run=run_out,
-            task=task_out,
-            host=host_out,
-            device=device_out,
-            summary_metrics=summary_metrics,
-            risk_summary=risk_summary,
-            alerts=alerts,
-        )
+        return _compose_job_report(db, job)
     return None
 
 

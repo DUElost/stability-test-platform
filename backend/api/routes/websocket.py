@@ -216,41 +216,60 @@ def schedule_broadcast(path: str, message: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Broadcast helper functions
 # ---------------------------------------------------------------------------
+# All broadcasts use the standard envelope: {type, payload, timestamp}
+# See ADR-0009 for the event envelope specification.
 
-# 辅助函数：广播设备更新
+from datetime import datetime, timezone
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 async def broadcast_device_update(device_data: Dict[str, Any]):
     await manager.broadcast("/ws/dashboard", {
         "type": "DEVICE_UPDATE",
-        "payload": device_data
+        "payload": device_data,
+        "timestamp": _now_iso(),
     })
 
 
-# 辅助函数：广播日志消息
 async def broadcast_log_message(run_id: int, log_data: Dict[str, Any]):
     await manager.broadcast(f"/ws/logs/{run_id}", {
         "type": "LOG",
-        "payload": log_data
+        "payload": log_data,
+        "timestamp": _now_iso(),
     })
 
 
 async def broadcast_job_log(job_id: int, log_data: Dict[str, Any]):
-    await manager.broadcast(f"/ws/jobs/{job_id}/logs", log_data)
+    await manager.broadcast(f"/ws/jobs/{job_id}/logs", {
+        "type": "STEP_LOG",
+        "payload": log_data,
+        "timestamp": _now_iso(),
+    })
 
 
 async def broadcast_run_job_update(run_id: int, job_id: int, status: str) -> None:
     """Notify frontend subscribers that a specific job's status changed."""
     await manager.broadcast(f"/ws/workflow-runs/{run_id}", {
-        "type": "job_status",
-        "job_id": job_id,
-        "status": status,
+        "type": "JOB_STATUS",
+        "payload": {
+            "job_id": job_id,
+            "status": status,
+        },
+        "timestamp": _now_iso(),
     })
 
 
 async def broadcast_run_workflow_status(run_id: int, status: str) -> None:
     """Notify frontend subscribers that the overall WorkflowRun reached a terminal status."""
     await manager.broadcast(f"/ws/workflow-runs/{run_id}", {
-        "type": "workflow_status",
-        "status": status,
+        "type": "WORKFLOW_STATUS",
+        "payload": {
+            "status": status,
+        },
+        "timestamp": _now_iso(),
     })
 
 
@@ -271,6 +290,7 @@ async def broadcast_run_update(
             "progress": progress,
             "message": message,
         },
+        "timestamp": _now_iso(),
     })
 
 
@@ -282,6 +302,7 @@ async def broadcast_task_update(task_id: int, status: Optional[str] = None) -> N
             "task_id": task_id,
             "status": status,
         },
+        "timestamp": _now_iso(),
     })
 
 
@@ -293,6 +314,7 @@ async def broadcast_report_ready(run_id: int, task_id: int) -> None:
             "run_id": run_id,
             "task_id": task_id,
         },
+        "timestamp": _now_iso(),
     })
 
 
@@ -411,6 +433,7 @@ async def websocket_agent(websocket: WebSocket, host_id: str):
                         "ts": msg.get("ts", ""),
                         "msg": msg.get("msg", ""),
                     },
+                    "timestamp": _now_iso(),
                 }
                 if run_id:
                     await manager.broadcast(f"/ws/logs/{run_id}", log_data)
@@ -428,7 +451,7 @@ async def websocket_agent(websocket: WebSocket, host_id: str):
                     except Exception as e:
                         logger.warning(f"Failed to handle step_update: {e}")
 
-                    # Broadcast to frontend immediately (wrapped in {type, payload} envelope)
+                    # Broadcast to frontend immediately (standard envelope)
                     step_data = {
                         "type": "STEP_UPDATE",
                         "payload": {
@@ -440,6 +463,7 @@ async def websocket_agent(websocket: WebSocket, host_id: str):
                             "exit_code": msg.get("exit_code"),
                             "error_message": msg.get("error_message"),
                         },
+                        "timestamp": _now_iso(),
                     }
                     await manager.broadcast(f"/ws/logs/{run_id}", step_data)
 
@@ -618,6 +642,7 @@ async def _send_recent_job_logs(websocket: WebSocket, job_id: int, limit: int = 
                     "ts": fields.get("timestamp", ""),
                     "msg": fields.get("message", ""),
                 },
+                "timestamp": _now_iso(),
             }
             await websocket.send_json(log_data)
     except Exception as e:

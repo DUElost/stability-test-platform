@@ -45,8 +45,10 @@
 
 ## 关联实现/文档
 
-- `backend/api/routes/deploy.py`
+> 本 ADR 状态为 Proposed，以下路径为计划创建，尚未实现。
+
+- ⏳ `backend/api/routes/deploy.py`（计划）
 - `backend/models/schemas.py`
-- `openspec/changes/ssh-auto-deploy/proposal.md`
-- `openspec/changes/ssh-auto-deploy/spec.md`
-- `openspec/changes/ssh-auto-deploy/tasks.md`
+- ⏳ `openspec/changes/ssh-auto-deploy/proposal.md`（计划）
+- ⏳ `openspec/changes/ssh-auto-deploy/spec.md`（计划）
+- ⏳ `openspec/changes/ssh-auto-deploy/tasks.md`（计划）

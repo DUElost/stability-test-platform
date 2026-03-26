@@ -10,13 +10,14 @@
 
 平台早期引入了 `BaseTestCase`（`backend/agent/test_framework.py`）作为测试脚本的基础类，提供 stage 流程管理、HTTP 心跳上报、日志缓冲等能力。
 
-随着 Pipeline 执行引擎（ADR-0014）的落地，所有执行能力已由以下三类 Action 完整覆盖：
+随着 Pipeline 执行引擎（ADR-0014）的落地，所有执行能力已由以下两类 Action 完整覆盖：
 
 | Action 类型 | 前缀 | 适用场景 |
 |------------|------|---------|
 | 内置 Action | `builtin:<name>` | 设备操作、进程管理、日志采集等通用能力 |
 | Tool Action | `tool:<id>` | 注册的自定义 Pipeline Action 脚本 |
-| Shell Action | `shell:<command>` | 直接执行 ADB shell 命令 |
+
+> **注意**：`shell:<command>` 仅在 legacy phases 格式中残留，stages/lifecycle 格式**不支持**（详见 ADR-0014 决策）。新增 Action 必须使用 `builtin:` 或 `tool:` 前缀。
 
 `BaseTestCase` 体系存在以下根本性问题：
 
