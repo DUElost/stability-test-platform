@@ -1153,7 +1153,7 @@ class _MQStepLogger:
 
         if not sent and self._ws and self._ws.connected:
             try:
-                self._ws.log(self._run_id, self._step_id, message, level)
+                self._ws.send_log(self._run_id, self._step_id, level, message)
             except Exception:
                 pass
 

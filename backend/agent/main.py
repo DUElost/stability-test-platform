@@ -54,6 +54,7 @@ POST_RETRY_BASE_DELAY = float(os.getenv("AGENT_POST_RETRY_BASE_DELAY", "1"))
 LOCK_RENEWAL_INTERVAL = int(
     os.getenv("AGENT_LOCK_RENEWAL_INTERVAL", "60")
 )  # 默认60秒续期一次
+_AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 
 # 全局锁续期管理
 _active_run_ids: Set[int] = set()
@@ -108,10 +109,11 @@ class LockRenewalManager:
     def _extend_lock(self, run_id: int) -> None:
         """向服务器请求延长设备锁"""
         url = f"{self.api_url}/api/v1/agent/jobs/{run_id}/extend_lock"
+        headers = {"X-Agent-Secret": _AGENT_SECRET} if _AGENT_SECRET else {}
 
         for attempt in range(1, POST_RETRIES + 1):
             try:
-                resp = requests.post(url, timeout=10)
+                resp = requests.post(url, headers=headers, timeout=10)
                 resp.raise_for_status()
                 result = resp.json()
                 logger.debug(
@@ -275,9 +277,11 @@ class HeartbeatThread:
 
 
 def fetch_pending_runs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
+    headers = {"X-Agent-Secret": _AGENT_SECRET} if _AGENT_SECRET else {}
     resp = requests.get(
         f"{api_url}/api/v1/agent/jobs/pending",
         params={"host_id": host_id, "limit": 10},
+        headers=headers,
         timeout=10,
     )
     resp.raise_for_status()
@@ -291,10 +295,11 @@ def fetch_pending_runs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
 def _post_with_retry(
     url: str, payload: Dict[str, Any], context: str, timeout: int = 10
 ) -> None:
+    headers = {"X-Agent-Secret": _AGENT_SECRET} if _AGENT_SECRET else {}
     last_error: Optional[Exception] = None
     for attempt in range(1, POST_RETRIES + 1):
         try:
-            resp = requests.post(url, json=payload, timeout=timeout)
+            resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
             resp.raise_for_status()
             return
         except requests.RequestException as exc:
@@ -553,44 +558,12 @@ def _run_task_wrapper(
     except Exception as e:
         logger.warning(f"Heartbeat confirmation for run {run_id} failed (non-fatal): {e}")
 
-    # Validate pipeline_def: must be a dict with either 'stages' or 'lifecycle' key
-    if not (pipeline_def and isinstance(pipeline_def, dict)):
-        complete_run(
-            api_url,
-            run_id,
-            {
-                "status": "FAILED",
-                "exit_code": 1,
-                "error_code": "PIPELINE_REQUIRED",
-                "error_message": "pipeline_def is required",
-                "log_summary": None,
-                "artifact": None,
-            },
-        )
-        return
-
-    is_lifecycle = isinstance(pipeline_def.get("lifecycle"), dict)
-    is_stages = isinstance(pipeline_def.get("stages"), dict)
-
-    if not is_lifecycle and not is_stages:
-        complete_run(
-            api_url,
-            run_id,
-            {
-                "status": "FAILED",
-                "exit_code": 1,
-                "error_code": "PIPELINE_REQUIRED",
-                "error_message": "pipeline_def must contain 'stages' or 'lifecycle'",
-                "log_summary": None,
-                "artifact": None,
-            },
-        )
-        return
-
-    # For stages format, verify at least one step exists
-    if is_stages and not is_lifecycle:
-        stages = pipeline_def.get("stages", {})
-        if not any(isinstance(stages.get(k), list) and len(stages.get(k) or []) > 0 for k in ("prepare", "execute", "post_process")):
+    # run_id and device_id are already registered in _active_run_ids / _active_device_ids
+    # by the main loop before submitting to the thread pool. The finally block below
+    # MUST execute on every exit path to release the slot.
+    try:
+        # Validate pipeline_def: must be a dict with either 'stages' or 'lifecycle' key
+        if not (pipeline_def and isinstance(pipeline_def, dict)):
             complete_run(
                 api_url,
                 run_id,
@@ -598,18 +571,49 @@ def _run_task_wrapper(
                     "status": "FAILED",
                     "exit_code": 1,
                     "error_code": "PIPELINE_REQUIRED",
-                    "error_message": "pipeline_def.stages must contain at least one step",
+                    "error_message": "pipeline_def is required",
                     "log_summary": None,
                     "artifact": None,
                 },
             )
             return
 
-    # Add to active runs for lock renewal
-    with _active_runs_lock:
-        _active_run_ids.add(run_id)
+        is_lifecycle = isinstance(pipeline_def.get("lifecycle"), dict)
+        is_stages = isinstance(pipeline_def.get("stages"), dict)
 
-    try:
+        if not is_lifecycle and not is_stages:
+            complete_run(
+                api_url,
+                run_id,
+                {
+                    "status": "FAILED",
+                    "exit_code": 1,
+                    "error_code": "PIPELINE_REQUIRED",
+                    "error_message": "pipeline_def must contain 'stages' or 'lifecycle'",
+                    "log_summary": None,
+                    "artifact": None,
+                },
+            )
+            return
+
+        # For stages format, verify at least one step exists
+        if is_stages and not is_lifecycle:
+            stages = pipeline_def.get("stages", {})
+            if not any(isinstance(stages.get(k), list) and len(stages.get(k) or []) > 0 for k in ("prepare", "execute", "post_process")):
+                complete_run(
+                    api_url,
+                    run_id,
+                    {
+                        "status": "FAILED",
+                        "exit_code": 1,
+                        "error_code": "PIPELINE_REQUIRED",
+                        "error_message": "pipeline_def.stages must contain at least one step",
+                        "log_summary": None,
+                        "artifact": None,
+                    },
+                )
+                return
+
         result = _execute_pipeline_run(
             pipeline_def,
             run_id,
@@ -654,7 +658,6 @@ def _run_task_wrapper(
         except Exception:
             pass
     finally:
-        device_id = run.get("device_id") if isinstance(run, dict) else None
         with _active_runs_lock:
             _active_run_ids.discard(run_id)
             if device_id:
