@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from backend.core.database import SessionLocal
-from backend.models.schemas import Task, TaskSchedule, TaskStatus
+from backend.models.schemas import TaskSchedule
 
 logger = logging.getLogger(__name__)
 
@@ -167,21 +167,14 @@ class CronScheduler:
                 sched.id, sched.workflow_definition_id,
             )
         else:
-            # Legacy path: create Task row
-            task = Task(
-                name=f"[cron] {sched.name} - {now.strftime('%Y%m%d_%H%M')}",
-                type=sched.task_type,
-                tool_id=sched.tool_id,
-                template_id=sched.task_template_id,
-                params=sched.params or {},
-                target_device_id=sched.target_device_id,
-                status=TaskStatus.PENDING,
-                priority=0,
-            )
-            db.add(task)
-            logger.info(
-                "cron_task_created schedule_id=%s task_name=%s",
-                sched.id, task.name,
+            # Legacy Task path is no longer supported — all schedules must
+            # reference a workflow_definition_id.  Skip and warn so the
+            # operator can fix the schedule row.
+            logger.error(
+                "cron_schedule_skip_no_workflow schedule_id=%s name=%s — "
+                "workflow_definition_id is required; legacy Task creation "
+                "path has been removed (see ADR-0008)",
+                sched.id, sched.name,
             )
 
         sched.last_run_at = now

@@ -56,8 +56,8 @@
 | [ADR-0005](./ADR-0005-database-strategy-sqlite-first-postgresql-ready.md) | SQLite 起步 + PostgreSQL 兼容演进 | Deprecated | - | - | 已废弃，使用 PostgreSQL |
 | [ADR-0006](./ADR-0006-realtime-communication-rest-plus-websocket.md) | REST + WebSocket 的实时通信分工 | Accepted | - | - | 已实现 |
 | [ADR-0007](./ADR-0007-tool-template-workflow-extension-model.md) | 工具配置 + 任务模板 + 工作流扩展模型 | Accepted | - | - | 已实现 |
-| [ADR-0008](./ADR-0008-schema-migration-governance-alembic-only.md) | 统一 Schema 迁移治理（Alembic Only） | Proposed | P0 | M1 | 预扩展/重构 |
-| [ADR-0009](./ADR-0009-websocket-auth-and-endpoint-config-unification.md) | WebSocket 鉴权与端点配置统一化 | Proposed | P0 | M1 | 预扩展/重构 |
+| [ADR-0008](./ADR-0008-schema-migration-governance-alembic-only.md) | 统一 Schema 迁移治理（Alembic Only） | Accepted | P0 | M1 | 预扩展/重构 |
+| [ADR-0009](./ADR-0009-websocket-auth-and-endpoint-config-unification.md) | WebSocket 鉴权与端点配置统一化 | Accepted | P0 | M1 | 已实现（2026-03-24） |
 | [ADR-0010](./ADR-0010-deployment-pipeline-jobification.md) | 部署能力作业化（异步、幂等、可回放） | Proposed | P1 | M2 | 预扩展/重构 |
 | [ADR-0011](./ADR-0011-observability-and-alerting-evolution.md) | 可观测性与告警体系演进 | Proposed | P1 | M2 | 预扩展/重构 |
 | [ADR-0012](./ADR-0012-post-completion-pipeline-jira-automation.md) | 后处理流水线到 JIRA 自动提交演进 | Accepted | P2 | M3 | 第 1 层已实现 |

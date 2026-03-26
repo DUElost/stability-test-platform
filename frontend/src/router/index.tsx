@@ -95,9 +95,8 @@ export default function AppRouter() {
             <Route path="issue-tracker" element={<IssueTrackerPage />} />
             <Route path="resources" element={<ResourcesPage />} />
             <Route path="task-runs" element={<TaskRunsPage />} />
-            <Route path="orchestration/actions" element={<ActionTemplatePage />} />
 
-            {/* 新编排层路由 */}
+            {/* 编排层路由 */}
             <Route path="orchestration">
               <Route path="workflows" element={<WorkflowDefinitionListPage />} />
               <Route path="workflows/:id" element={<WorkflowDefinitionEditPage />} />

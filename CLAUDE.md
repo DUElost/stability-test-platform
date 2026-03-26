@@ -162,10 +162,11 @@ wsl -u root -- bash -c "rsync -av --delete --exclude='__pycache__' --exclude='.e
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| GET | `/api/v1/agent/runs/pending` | 获取待执行任务 |
-| POST | `/api/v1/agent/runs/{id}/heartbeat` | 更新任务状态 |
-| POST | `/api/v1/agent/runs/{id}/complete` | 完成任务 |
-| POST | `/api/v1/agent/runs/{run_id}/steps/{step_id}/status` | 更新步骤状态（HTTP fallback） |
+| GET | `/api/v1/agent/jobs/pending` | 获取待执行任务 |
+| POST | `/api/v1/agent/jobs/{id}/heartbeat` | 更新任务状态 |
+| POST | `/api/v1/agent/jobs/{id}/complete` | 完成任务 |
+| POST | `/api/v1/agent/jobs/{id}/extend_lock` | 续期设备锁 |
+| POST | `/api/v1/agent/jobs/{run_id}/steps/{step_id}/status` | 更新步骤状态（HTTP fallback） |
 
 ### WebSocket 端点
 
