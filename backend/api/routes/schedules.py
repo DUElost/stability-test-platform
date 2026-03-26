@@ -14,7 +14,6 @@ from backend.core.database import AsyncSessionLocal, get_db
 from backend.core.audit import record_audit
 from backend.models.host import Device
 from backend.models.schedule import TaskSchedule
-from backend.models.schemas import Task, TaskStatus
 from backend.models.workflow import WorkflowDefinition
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas import (
@@ -296,28 +295,17 @@ def run_schedule_now(
     if not sched:
         raise HTTPException(status_code=404, detail="定时任务不存在")
 
-    if sched.workflow_definition_id is not None:
-        device_ids = [int(x) for x in (sched.device_ids or [])]
-        _validate_workflow_schedule(db, sched.workflow_definition_id, device_ids)
-        try:
-            workflow_run_id = _dispatch_workflow_sync(sched.workflow_definition_id, device_ids)
-        except DispatchError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-        return {"message": "工作流已触发", "workflow_run_id": workflow_run_id, "task_id": None}
+    if sched.workflow_definition_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="该定时任务未关联 WorkflowDefinition，无法执行。"
+                   "请编辑该定时任务并关联一个工作流定义。",
+        )
 
-    now = datetime.utcnow()
-    task = Task(
-        name=f"[manual] {sched.name} - {now.strftime('%Y%m%d_%H%M')}",
-        type=sched.task_type,
-        tool_id=sched.tool_id,
-        template_id=sched.task_template_id,
-        params=sched.params or {},
-        target_device_id=sched.target_device_id,
-        status=TaskStatus.PENDING,
-        priority=0,
-    )
-    db.add(task)
-    db.commit()
-    db.refresh(task)
-
-    return {"message": "任务已创建", "task_id": task.id, "workflow_run_id": None}
+    device_ids = [int(x) for x in (sched.device_ids or [])]
+    _validate_workflow_schedule(db, sched.workflow_definition_id, device_ids)
+    try:
+        workflow_run_id = _dispatch_workflow_sync(sched.workflow_definition_id, device_ids)
+    except DispatchError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"message": "工作流已触发", "workflow_run_id": workflow_run_id}

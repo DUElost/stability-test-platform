@@ -14,8 +14,8 @@ from typing import Dict, Set
 from hypothesis import given, strategies as st, settings, assume
 from hypothesis.stateful import RuleBasedStateMachine, rule, precondition, invariant
 
-from ...models.schemas import (
-    DeviceStatus, TaskStatus, RunStatus, HostStatus,
+from backend.models.enums import (
+    DeviceStatus, HostStatus, RunStatus, TaskStatus,
 )
 
 

@@ -253,58 +253,140 @@ aiohttp
 
 ## 数据模型
 
-### Host（主机）
+> **双轨架构说明**：项目正在从旧 Task/TaskRun 模型迁移到新 WorkflowDefinition/JobInstance 模型。
+> 新代码使用 `backend/models/` 下的独立模块；旧模型保留在 `schemas.py` 中用于兼容层。
+> 详见 `docs/dual-track-merger-v3.revised.md`。
+
+### Host（主机） — `backend/models/host.py`
 ```python
 class Host(Base):
-    id: int
-    name: str
-    ip: str
+    __tablename__ = "host"
+    id: str             # 字符串主键 (如 "host-101")
+    hostname: str
+    name: Optional[str]
+    ip: Optional[str]
+    ip_address: Optional[str]
     ssh_port: int
     ssh_user: Optional[str]
-    status: HostStatus  # ONLINE, OFFLINE, DEGRADED
+    status: str         # ONLINE, OFFLINE, DEGRADED
     last_heartbeat: datetime
-    extra: JSON  # cpu_load, ram_usage, disk_usage
+    extra: JSON         # cpu_load, ram_usage, disk_usage
     mount_status: JSON
 ```
 
-### Device（设备）
+### Device（设备） — `backend/models/host.py`
 ```python
 class Device(Base):
+    __tablename__ = "device"
     id: int
-    serial: str
+    serial: str         # 唯一
     model: Optional[str]
-    host_id: int
-    status: DeviceStatus  # ONLINE, OFFLINE, BUSY
+    host_id: str        # FK -> host.id (字符串)
+    status: str         # ONLINE, OFFLINE, BUSY
     last_seen: datetime
-    extra: JSON  # battery_level, temperature, network_latency
+    battery_level: int
+    temperature: int
+    network_latency: float
+    lock_run_id: Optional[int]
+    lock_expires_at: Optional[datetime]
 ```
 
-### Task（任务）
+### WorkflowDefinition（工作流定义） — `backend/models/workflow.py`
 ```python
-class Task(Base):
+class WorkflowDefinition(Base):
+    __tablename__ = "workflow_definition"
     id: int
     name: str
-    type: str  # MONKEY, MTBF, DDR, GPU, STANDBY
-    params: JSON
-    target_device_id: int
-    status: TaskStatus
-    priority: int
+    description: Optional[str]
+    failure_threshold: float
+    created_by: Optional[str]
+    # relationships: task_templates, runs
 ```
 
-### TaskRun（任务执行记录）
+### TaskTemplate（任务模板） — `backend/models/job.py`
 ```python
-class TaskRun(Base):
+class TaskTemplate(Base):
+    __tablename__ = "task_template"
     id: int
-    task_id: int
-    host_id: int
-    device_id: int
-    status: RunStatus
-    started_at: datetime
-    finished_at: datetime
-    exit_code: int
-    error_message: str
-    log_summary: str
+    workflow_definition_id: int  # FK -> workflow_definition.id
+    name: str
+    pipeline_def: JSONB          # Pipeline 定义
+    platform_filter: Optional[JSONB]
+    sort_order: int
 ```
+
+### WorkflowRun（工作流执行） — `backend/models/workflow.py`
+```python
+class WorkflowRun(Base):
+    __tablename__ = "workflow_run"
+    id: int
+    workflow_definition_id: int
+    status: str          # RUNNING, SUCCESS, PARTIAL_SUCCESS, FAILED, DEGRADED
+    failure_threshold: float
+    triggered_by: Optional[str]
+    started_at: datetime
+    ended_at: Optional[datetime]
+    result_summary: Optional[JSONB]
+    # relationships: definition, jobs
+```
+
+### JobInstance（任务执行记录） — `backend/models/job.py`
+```python
+class JobInstance(Base):
+    __tablename__ = "job_instance"
+    id: int
+    workflow_run_id: int    # FK -> workflow_run.id
+    task_template_id: int   # FK -> task_template.id
+    device_id: int          # FK -> device.id
+    host_id: str            # FK -> host.id
+    status: str             # PENDING, RUNNING, COMPLETED, FAILED, ABORTED
+    status_reason: Optional[str]
+    pipeline_def: JSONB
+    started_at: Optional[datetime]
+    ended_at: Optional[datetime]
+    report_json: Optional[JSONB]
+    jira_draft_json: Optional[JSONB]
+    post_processed_at: Optional[datetime]
+    # relationships: workflow_run, task_template, device, host, step_traces, artifacts
+```
+
+### StepTrace（步骤执行追踪） — `backend/models/job.py`
+```python
+class StepTrace(Base):
+    __tablename__ = "step_trace"
+    id: int
+    job_id: int          # FK -> job_instance.id
+    step_id: str
+    stage: str
+    event_type: str
+    status: str
+    output: Optional[str]
+    error_message: Optional[str]
+    original_ts: datetime
+```
+
+### Tool（工具） — `backend/models/tool.py`
+```python
+class Tool(Base):
+    __tablename__ = "tool"
+    id: int
+    name: str
+    version: str
+    script_path: str
+    script_class: str
+    param_schema: JSONB
+    is_active: bool
+    description: Optional[str]
+    category: Optional[str]
+```
+
+### 其他模型
+- **User** — `backend/models/user.py`（认证用户）
+- **AuditLog** — `backend/models/audit.py`（审计日志）
+- **NotificationChannel / AlertRule** — `backend/models/notification.py`（通知规则）
+- **TaskSchedule** — `backend/models/schedule.py`（定时调度）
+- **ActionTemplate** — `backend/models/action_template.py`（Action 模板）
+- **JobArtifact** — `backend/models/job.py`（Job 产物）
 
 ---
 
@@ -377,14 +459,25 @@ class TaskRun(Base):
 
 ### 后端核心
 - `backend/main.py` - 应用入口
-- `backend/core/database.py` - 数据库配置
-- `backend/models/schemas.py` - ORM 模型
+- `backend/core/database.py` - 数据库配置（同步 + 异步引擎）
+- `backend/models/enums.py` - 所有枚举定义（单一源）
+- `backend/models/host.py` - Host / Device ORM
+- `backend/models/workflow.py` - WorkflowDefinition / WorkflowRun ORM
+- `backend/models/job.py` - TaskTemplate / JobInstance / StepTrace / JobArtifact ORM
+- `backend/models/tool.py` - Tool ORM（新模型）
+- `backend/models/user.py` - User ORM
+- `backend/models/notification.py` - NotificationChannel / AlertRule ORM
+- `backend/models/schedule.py` - TaskSchedule ORM
+- `backend/models/audit.py` - AuditLog ORM
+- `backend/models/schemas.py` - 遗留 ORM（Task/TaskRun 等，仅兼容层使用）
 - `backend/api/schemas.py` - Pydantic 模型
 
 ### 后端 API
+- `backend/api/routes/orchestration.py` - 工作流管理（CRUD + 执行 + 报告）
 - `backend/api/routes/hosts.py` - 主机管理
 - `backend/api/routes/devices.py` - 设备管理
-- `backend/api/routes/tasks.py` - 任务管理
+- `backend/api/routes/tasks.py` - 兼容层（映射到 WorkflowDefinition/JobInstance）
+- `backend/api/routes/tool_catalog.py` - 工具目录 API（新）
 - `backend/api/routes/heartbeat.py` - 心跳处理
 - `backend/api/routes/websocket.py` - WebSocket 端点（Agent + Frontend）
 - `backend/api/routes/pipeline.py` - Pipeline 模板 API

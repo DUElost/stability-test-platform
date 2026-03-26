@@ -32,11 +32,11 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 from backend.core.database import async_engine, get_db
 from backend.core.database import Base
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, RunStatus, TaskStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, TaskTemplate as JobTaskTemplate
+from backend.models.schemas import Task, TaskRun  # legacy ORM — kept for existing test fixtures
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
-from backend.models.schemas import RunStatus, Task, TaskRun, TaskStatus  # legacy — kept for existing tests
 from backend.core.security import create_access_token
 from backend.main import app
 
@@ -382,8 +382,7 @@ def sample_running_job(db_session, sample_workflow_run, sample_task_template, sa
 def test_user(db_session):
     """Create a test user"""
     from backend.core.security import get_password_hash
-    # Import User here to avoid circular imports
-    from backend.models.schemas import User
+    from backend.models.user import User
     user = db_session.query(User).filter(User.username == "testuser").first()
     if not user:
         user = User(
@@ -405,8 +404,7 @@ def test_user(db_session):
 def admin_user(db_session):
     """Create an admin user"""
     from backend.core.security import get_password_hash
-    # Import User here to avoid circular imports
-    from backend.models.schemas import User
+    from backend.models.user import User
     user = db_session.query(User).filter(User.username == "admin").first()
     if not user:
         user = User(

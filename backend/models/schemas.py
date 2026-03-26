@@ -1,5 +1,4 @@
 from datetime import datetime
-from enum import Enum as PyEnum
 
 from sqlalchemy import (
     BigInteger,
@@ -18,37 +17,13 @@ from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
 from backend.models.enums import (  # noqa: F401 — canonical source; re-exported for back-compat
-    HostStatus,
     DeviceStatus,
+    HostStatus,
+    RunStatus,
+    RunStepStatus,
+    TaskStatus,
 )
 from backend.models.user import User  # noqa: F401 — re-export for back-compat
-
-
-class TaskStatus(str, PyEnum):
-    PENDING = "PENDING"
-    QUEUED = "QUEUED"
-    RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    CANCELED = "CANCELED"
-
-
-class RunStatus(str, PyEnum):
-    QUEUED = "QUEUED"
-    DISPATCHED = "DISPATCHED"
-    RUNNING = "RUNNING"
-    FINISHED = "FINISHED"
-    FAILED = "FAILED"
-    CANCELED = "CANCELED"
-
-
-class RunStepStatus(str, PyEnum):
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    SKIPPED = "SKIPPED"
-    CANCELED = "CANCELED"
 
 
 

@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, selectinload
 from backend.core.database import get_db
 from backend.core.task_templates import list_templates as list_core_templates
 from backend.models.enums import DeviceStatus
-from backend.models.schemas import LogArtifact, RunStatus, Task, TaskRun, TaskStatus
+from backend.models.schemas import LogArtifact, RunStatus, Task, TaskRun
 from backend.models.host import Device, Host
 from backend.api.schemas import (
     AgentLogOut,
@@ -59,24 +59,6 @@ router = APIRouter(prefix="/api/v1", tags=["tasks"])
 logger = logging.getLogger(__name__)
 
 DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
-
-TASK_STATUS_TRANSITIONS = {
-    TaskStatus.PENDING: {TaskStatus.QUEUED, TaskStatus.CANCELED},
-    TaskStatus.QUEUED: {TaskStatus.RUNNING, TaskStatus.CANCELED, TaskStatus.FAILED},
-    TaskStatus.RUNNING: {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELED},
-    TaskStatus.COMPLETED: set(),
-    TaskStatus.FAILED: set(),
-    TaskStatus.CANCELED: set(),
-}
-
-RUN_STATUS_TRANSITIONS = {
-    RunStatus.QUEUED: {RunStatus.DISPATCHED, RunStatus.FAILED, RunStatus.CANCELED},
-    RunStatus.DISPATCHED: {RunStatus.RUNNING, RunStatus.FAILED, RunStatus.CANCELED},
-    RunStatus.RUNNING: {RunStatus.FINISHED, RunStatus.FAILED, RunStatus.CANCELED},
-    RunStatus.FINISHED: set(),
-    RunStatus.FAILED: set(),
-    RunStatus.CANCELED: set(),
-}
 
 RUN_STATUS_ALIASES = {
     "COMPLETED": RunStatus.FINISHED.value,
@@ -170,55 +152,6 @@ def _report_to_markdown(report: RunReportOut) -> str:
     else:
         lines.append("- N/A")
     return "\n".join(lines)
-
-
-def _ensure_task_transition(task: Task, target_status: TaskStatus) -> None:
-    current_status = task.status
-    if current_status == target_status:
-        return
-    allowed = TASK_STATUS_TRANSITIONS.get(current_status, set())
-    if target_status not in allowed:
-        raise HTTPException(
-            status_code=409,
-            detail=f"illegal task transition {current_status.value}->{target_status.value}",
-        )
-
-
-def _ensure_run_transition(run: TaskRun, target_status: RunStatus) -> None:
-    current_status = run.status
-    if current_status == target_status:
-        return
-    allowed = RUN_STATUS_TRANSITIONS.get(current_status, set())
-    if target_status not in allowed:
-        raise HTTPException(
-            status_code=409,
-            detail=f"illegal run transition {current_status.value}->{target_status.value}",
-        )
-
-
-def _update_distributed_task_status(db: Session, task_id: int) -> None:
-    """更新分布式任务的整体状态"""
-    task = db.get(Task, task_id)
-    if not task:
-        return
-
-    runs = db.query(TaskRun).filter(TaskRun.task_id == task_id).all()
-
-    # 检查所有 TaskRun 的状态
-    all_finished = all(r.status in [RunStatus.FINISHED, RunStatus.FAILED] for r in runs)
-    any_failed = any(r.status == RunStatus.FAILED for r in runs)
-    any_running = any(r.status == RunStatus.RUNNING for r in runs)
-
-    if any_failed:
-        task.status = TaskStatus.FAILED
-    elif all_finished:
-        task.status = TaskStatus.COMPLETED
-    elif any_running:
-        task.status = TaskStatus.RUNNING
-    else:
-        task.status = TaskStatus.QUEUED
-
-    db.commit()
 
 
 def _acquire_device_lock(db: Session, device_id: int, run_id: int) -> None:
@@ -644,30 +577,25 @@ def create_run_jira_draft(run_id: int, db: Session = Depends(get_db)):
 @router.get("/runs/{run_id}/report/cached")
 def get_cached_run_report(run_id: int, db: Session = Depends(get_db)):
     """Return cached report if post-processed, otherwise compute live."""
+    from backend.models.job import JobInstance
+    job = db.get(JobInstance, run_id)
+    if job and job.post_processed_at and job.report_json:
+        return JSONResponse(content=job.report_json)
+
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
-
-    # 旧链路有缓存时优先返回缓存；新链路（JobInstance）直接返回实时报告。
-    try:
-        run = db.get(TaskRun, run_id)
-    except ProgrammingError:
-        db.rollback()
-        run = None
-    if run and run.post_processed_at and run.report_json:
-        return JSONResponse(content=run.report_json)
     return JSONResponse(content=jsonable_encoder(_model_to_dict(report)))
 
 
 @router.get("/runs/{run_id}/jira-draft/cached")
 def get_cached_jira_draft(run_id: int, db: Session = Depends(get_db)):
     """Return cached JIRA draft if post-processed, otherwise compute live."""
-    run = db.get(TaskRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="run not found")
-    if run.post_processed_at and run.jira_draft_json:
-        return JSONResponse(content=run.jira_draft_json)
-    # Fallback to live computation
+    from backend.models.job import JobInstance
+    job = db.get(JobInstance, run_id)
+    if job and job.post_processed_at and job.jira_draft_json:
+        return JSONResponse(content=job.jira_draft_json)
+
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
