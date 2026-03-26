@@ -31,6 +31,7 @@ class ToolCreate(BaseModel):
     param_schema: dict = {}
     description: Optional[str] = None
     is_active: bool = True
+    category: Optional[str] = None
 
 
 class ToolUpdate(BaseModel):
@@ -41,6 +42,7 @@ class ToolUpdate(BaseModel):
     param_schema: Optional[dict] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
+    category: Optional[str] = None
 
 
 class ToolOut(BaseModel):
@@ -52,23 +54,39 @@ class ToolOut(BaseModel):
     param_schema: dict
     is_active: bool
     description: Optional[str]
+    category: Optional[str]
     created_at: datetime
     updated_at: datetime
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+@router.get("/categories", response_model=ApiResponse[List[str]])
+async def list_tool_categories(db: AsyncSession = Depends(get_async_db)):
+    """Derived category list from DISTINCT tool.category values."""
+    from sqlalchemy import distinct
+    rows = (await db.execute(
+        select(distinct(Tool.category))
+        .where(Tool.category.isnot(None))
+        .order_by(Tool.category)
+    )).scalars().all()
+    return ok(list(rows))
+
+
 @router.get("", response_model=ApiResponse[List[ToolOut]])
 async def list_tools(
     is_active: Optional[bool] = None,
+    category: Optional[str] = None,
     skip: int = 0,
     limit: int = 200,
     db: AsyncSession = Depends(get_async_db),
 ):
-    """List tools. is_active=true returns only active tools (Agent default)."""
+    """List tools. Supports is_active and category filters."""
     q = select(Tool).order_by(Tool.name)
     if is_active is not None:
         q = q.where(Tool.is_active.is_(is_active))
+    if category is not None:
+        q = q.where(Tool.category == category)
     tools = (await db.execute(q.offset(skip).limit(limit))).scalars().all()
     return ok([_tool_out(t) for t in tools])
 
@@ -87,6 +105,7 @@ async def create_tool(
         param_schema=payload.param_schema,
         description=payload.description,
         is_active=payload.is_active,
+        category=payload.category,
         created_at=now,
         updated_at=now,
     )
@@ -127,6 +146,8 @@ async def update_tool(
         tool.description = payload.description
     if payload.is_active is not None:
         tool.is_active = payload.is_active
+    if payload.category is not None:
+        tool.category = payload.category
     tool.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(tool)
@@ -145,6 +166,27 @@ async def deactivate_tool(tool_id: int, db: AsyncSession = Depends(get_async_db)
     return ok({"deactivated": tool_id})
 
 
+@router.post("/scan", response_model=ApiResponse[dict])
+async def scan_tools(db: AsyncSession = Depends(get_async_db)):
+    """Scan tool directories and sync discovered PipelineActions to the DB."""
+    import asyncio
+    from backend.agent.tool_discovery import ToolDiscoveryService
+
+    sync_db = db.sync_session
+    result = await asyncio.to_thread(ToolDiscoveryService(sync_db).sync)
+    return ok(result)
+
+
+@router.get("/scan/preview", response_model=ApiResponse[dict])
+async def preview_scan():
+    """Preview scan results without writing to DB."""
+    from backend.agent.tool_discovery import ToolDiscovery
+
+    discovery = ToolDiscovery()
+    found = discovery.scan()
+    return ok({"tools": found, "count": len(found)})
+
+
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 def _tool_out(t: Tool) -> ToolOut:
@@ -152,5 +194,6 @@ def _tool_out(t: Tool) -> ToolOut:
         id=t.id, name=t.name, version=t.version,
         script_path=t.script_path, script_class=t.script_class,
         param_schema=t.param_schema or {}, is_active=t.is_active,
-        description=t.description, created_at=t.created_at, updated_at=t.updated_at,
+        description=t.description, category=t.category,
+        created_at=t.created_at, updated_at=t.updated_at,
     )

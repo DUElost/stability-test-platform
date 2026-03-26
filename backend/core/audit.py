@@ -9,7 +9,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.session import object_session
 
-from backend.models.schemas import AuditLog
+from backend.models.audit import AuditLog
 
 logger = logging.getLogger(__name__)
 

@@ -17,6 +17,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
+from backend.models.enums import (  # noqa: F401 — canonical source; re-exported for back-compat
+    HostStatus,
+    DeviceStatus,
+)
 
 
 class User(Base):
@@ -31,18 +35,6 @@ class User(Base):
     is_active = Column(String(1), default="Y", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_login = Column(DateTime)
-
-
-class HostStatus(str, PyEnum):
-    OFFLINE = "OFFLINE"
-    ONLINE = "ONLINE"
-    DEGRADED = "DEGRADED"
-
-
-class DeviceStatus(str, PyEnum):
-    OFFLINE = "OFFLINE"
-    ONLINE = "ONLINE"
-    BUSY = "BUSY"
 
 
 class TaskStatus(str, PyEnum):
@@ -285,26 +277,8 @@ class AlertRule(Base):
     channel = relationship("NotificationChannel", back_populates="rules")
 
 
-# ==================== 审计日志 ====================
-
-
-class AuditLog(Base):
-    """Audit log for tracking mutation operations."""
-    __tablename__ = "audit_logs"
-    __table_args__ = (
-        Index('ix_audit_user_ts', 'user_id', 'timestamp'),
-        Index('ix_audit_resource', 'resource_type', 'resource_id'),
-    )
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    username = Column(String(128))
-    action = Column(String(64), nullable=False)  # create, update, delete, start, cancel, etc.
-    resource_type = Column(String(64), nullable=False)  # task, workflow, tool, notification, etc.
-    resource_id = Column(Integer)
-    details = Column(JSON, default=dict)
-    ip_address = Column(String(64))
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+# ==================== 审计日志（canonical: backend.models.audit） ====================
+from backend.models.audit import AuditLog  # noqa: F401 — re-export for back-compat
 
 
 # ==================== 定时任务 ====================

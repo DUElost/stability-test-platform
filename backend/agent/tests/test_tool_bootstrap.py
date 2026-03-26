@@ -2,7 +2,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.core.tool_bootstrap import ensure_monkey_aee_tool
-from backend.models.schemas import Base, Tool, ToolCategory
+from backend.models.tool import Tool
+from backend.core.database import Base
 
 
 def test_ensure_monkey_aee_tool_idempotent():
@@ -17,11 +18,11 @@ def test_ensure_monkey_aee_tool_idempotent():
     assert first_created is True
     assert second_created is False
     assert first_tool.id == second_tool.id
-    assert second_tool.script_class == "MonkeyAEEStabilityTest"
-    assert second_tool.script_path.endswith("backend\\agent\\tools\\monkey_aee_stability_test.py") or second_tool.script_path.endswith("backend/agent/tools/monkey_aee_stability_test.py")
+    assert second_tool.script_class == "MonkeyAEEAction"
+    assert second_tool.script_path.endswith("monkey_aee_stability_test.py")
+    assert second_tool.category == "Monkey"
+    assert second_tool.is_active is True
 
-    assert session.query(ToolCategory).filter(ToolCategory.name == "Monkey").count() == 1
     assert session.query(Tool).filter(Tool.name == "MONKEY_AEE Stability").count() == 1
 
     session.close()
-

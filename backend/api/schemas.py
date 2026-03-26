@@ -381,81 +381,9 @@ class DeploymentStatusOut(ORMBaseModel):
     error_message: Optional[str] = None
 
 
-# ==================== 工具管理模块 ====================
-
-class ToolCategoryCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-    icon: Optional[str] = None
-    order: int = 0
-    enabled: bool = True
-
-
-class ToolCategoryOut(ORMBaseModel):
-    id: int
-    name: str
-    description: Optional[str] = None
-    icon: Optional[str] = None
-    order: int
-    enabled: bool
-    tools_count: Optional[int] = None  # 关联工具数量
-
-
-class ToolCreate(BaseModel):
-    category_id: int
-    name: str
-    description: Optional[str] = None
-    script_path: str
-    script_class: Optional[str] = None
-    script_type: str = "python"
-    default_params: Dict[str, Any] = Field(default_factory=dict)
-    param_schema: Dict[str, Any] = Field(default_factory=dict)
-    timeout: int = 3600
-    need_device: bool = True
-    enabled: bool = True
-
-
-class ToolOut(ORMBaseModel):
-    id: int
-    category_id: int
-    category_name: Optional[str] = None
-    name: str
-    description: Optional[str] = None
-    script_path: str
-    script_class: Optional[str] = None
-    script_type: str
-    default_params: Dict[str, Any]
-    param_schema: Dict[str, Any]
-    timeout: int
-    need_device: bool
-    enabled: bool
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-
-class ToolRunCreate(BaseModel):
-    tool_id: int
-    device_id: Optional[int] = None
-    device_serial: Optional[str] = None
-    host_id: Optional[int] = None
-    params: Dict[str, Any] = Field(default_factory=dict)
-
-
-class ToolRunOut(ORMBaseModel):
-    id: int
-    tool_id: int
-    tool_name: Optional[str] = None
-    task_run_id: Optional[int] = None
-    host_id: Optional[int] = None
-    device_id: Optional[int] = None
-    device_serial: Optional[str] = None
-    status: str
-    params: Dict[str, Any]
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    exit_code: Optional[int] = None
-    error_message: Optional[str] = None
-    log_summary: Optional[str] = None
+# ==================== 工具管理模块（DEPRECATED — see tool_catalog.py） ====================
+# 以下 schema 仅供旧 tools.py 路由使用，该路由已废弃且不再挂载。
+# 新代码请使用 tool_catalog.py 中内联定义的 ToolCreate/ToolOut。
     created_at: datetime
 
 

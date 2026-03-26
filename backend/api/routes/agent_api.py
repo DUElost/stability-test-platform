@@ -507,6 +507,14 @@ async def complete_job(
         await release_lock(db, job.device_id, job_id)
 
     await db.commit()
+
+    if job.status in _TERMINAL:
+        try:
+            from backend.services.post_completion import run_post_completion_async
+            run_post_completion_async(job_id)
+        except Exception as e:
+            logger.warning("post_completion trigger failed for job %d: %s", job_id, e)
+
     return ok({"job_id": job_id, "status": job.status})
 
 

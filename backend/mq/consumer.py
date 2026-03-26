@@ -253,6 +253,14 @@ async def _persist_job_status(fields: dict) -> None:
         except InvalidTransitionError:
             pass
 
+    # Post-completion (report generation) — fire-and-forget in background thread
+    if new_status.value in _TERMINAL:
+        try:
+            from backend.services.post_completion import run_post_completion_async
+            run_post_completion_async(job_id)
+        except Exception as e:
+            logger.warning("post_completion trigger failed for job %d: %s", job_id, e)
+
     # Broadcast outside the DB session
     if workflow_run_id:
         try:

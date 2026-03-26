@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from backend.api.routes.auth import require_admin, User
 from backend.api.schemas import AuditLogOut, PaginatedResponse
 from backend.core.database import get_db
-from backend.models.schemas import AuditLog
+from backend.models.audit import AuditLog
 
 router = APIRouter(prefix="/api/v1/audit-logs", tags=["audit"])
 

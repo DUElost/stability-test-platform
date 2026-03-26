@@ -111,11 +111,9 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
         },
     })
 
-    # Fire-and-forget notification
-    # NOTE: run_post_completion_async is NOT called here because JobInstance
-    # lacks report_json/jira_draft_json/post_processed_at columns.
-    # This will be restored after Alembic migration adds those columns.
-    # See ADR-0008 "Post-Completion Pipeline Migration" section.
+    from backend.services.post_completion import run_post_completion_async
+    run_post_completion_async(job.id)
+
     from backend.services.notification_service import dispatch_notification_async
     dispatch_notification_async("RUN_FAILED", {
         "run_id": job.id,

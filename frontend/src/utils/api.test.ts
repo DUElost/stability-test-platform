@@ -171,7 +171,6 @@ describe('api module', () => {
       expect(api.auth).toBeDefined();
       expect(api.auth.login).toBeInstanceOf(Function);
       expect(api.results).toBeDefined();
-      expect(api.workflows).toBeDefined();
       expect(api.stats).toBeDefined();
       expect(api.notifications).toBeDefined();
       expect(api.schedules).toBeDefined();

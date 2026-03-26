@@ -24,10 +24,12 @@ config.set_main_option("sqlalchemy.url", _sync_url)
 
 def get_metadata():
     from backend.core.database import Base  # noqa: F401 — import all models for metadata
-    import backend.models.tool       # noqa: F401
-    import backend.models.host       # noqa: F401
-    import backend.models.workflow   # noqa: F401
-    import backend.models.job        # noqa: F401
+    import backend.models.audit            # noqa: F401
+    import backend.models.action_template  # noqa: F401
+    import backend.models.tool             # noqa: F401
+    import backend.models.host             # noqa: F401
+    import backend.models.workflow         # noqa: F401
+    import backend.models.job              # noqa: F401
     return Base.metadata
 
 

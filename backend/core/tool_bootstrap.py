@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 内置工具引导：确保关键工具在数据库中存在。
+
+使用新 Tool 模型（table: tool）——分类通过 Tool.category 字符串字段管理，
+不再依赖 ToolCategory 表。
 """
 
 from __future__ import annotations
@@ -14,11 +17,12 @@ from backend.agent.tools.config.monkey_aee_defaults import (
     MONKEY_AEE_PARAM_SCHEMA,
     build_monkey_aee_defaults,
 )
-from backend.models.schemas import Tool, ToolCategory
+from backend.models.tool import Tool
 
 
-MONKEY_CATEGORY_NAME = "Monkey"
+MONKEY_CATEGORY = "Monkey"
 MONKEY_AEE_TOOL_NAME = "MONKEY_AEE Stability"
+MONKEY_AEE_VERSION = "1.0.0"
 
 
 def _monkey_aee_script_path() -> str:
@@ -28,19 +32,8 @@ def _monkey_aee_script_path() -> str:
 
 def ensure_monkey_aee_tool(db: Session) -> Tuple[Tool, bool]:
     """确保 MONKEY_AEE 工具存在，返回 (tool, created)。"""
-    category = db.query(ToolCategory).filter(ToolCategory.name == MONKEY_CATEGORY_NAME).first()
-    if not category:
-        category = ToolCategory(
-            name=MONKEY_CATEGORY_NAME,
-            description="Monkey 稳定性测试工具",
-            icon="activity",
-            order=10,
-            enabled=True,
-        )
-        db.add(category)
-        db.flush()
-
     expected_script_path = _monkey_aee_script_path()
+
     tool = (
         db.query(Tool)
         .filter(
@@ -52,43 +45,37 @@ def ensure_monkey_aee_tool(db: Session) -> Tuple[Tool, bool]:
     if not tool:
         tool = (
             db.query(Tool)
-            .filter(
-                Tool.name == MONKEY_AEE_TOOL_NAME,
-                Tool.category_id == category.id,
-            )
+            .filter(Tool.name == MONKEY_AEE_TOOL_NAME)
             .first()
         )
+
+    param_schema = {
+        **MONKEY_AEE_PARAM_SCHEMA,
+        "_defaults": build_monkey_aee_defaults(),
+    }
 
     created = False
     if not tool:
         tool = Tool(
-            category_id=category.id,
             name=MONKEY_AEE_TOOL_NAME,
+            version=MONKEY_AEE_VERSION,
             description="MONKEY_AEE 专项稳定性测试（兼容旧脚本）",
             script_path=expected_script_path,
             script_class="MonkeyAEEAction",
-            script_type="python",
-            default_params=build_monkey_aee_defaults(),
-            param_schema=MONKEY_AEE_PARAM_SCHEMA,
-            timeout=21600,
-            need_device=True,
-            enabled=True,
+            param_schema=param_schema,
+            category=MONKEY_CATEGORY,
+            is_active=True,
         )
         db.add(tool)
         created = True
     else:
-        tool.category_id = category.id
         tool.description = "MONKEY_AEE 专项稳定性测试（兼容旧脚本）"
         tool.script_path = expected_script_path
         tool.script_class = "MonkeyAEEAction"
-        tool.script_type = "python"
-        tool.default_params = build_monkey_aee_defaults()
-        tool.param_schema = MONKEY_AEE_PARAM_SCHEMA
-        tool.timeout = 21600
-        tool.need_device = True
-        tool.enabled = True
+        tool.param_schema = param_schema
+        tool.category = MONKEY_CATEGORY
+        tool.is_active = True
 
     db.commit()
     db.refresh(tool)
     return tool, created
-

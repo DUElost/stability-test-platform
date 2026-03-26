@@ -253,34 +253,11 @@ export interface JiraDraft {
   extra: Record<string, any>;
 }
 
-// 工具管理类型
+/** @deprecated Use ToolEntry instead — kept for ToolsPage back-compat during migration */
+export type Tool = ToolEntry;
+/** @deprecated category is now a string on ToolEntry.category */
 export interface ToolCategory {
-  id: number;
   name: string;
-  description?: string;
-  icon?: string;
-  order: number;
-  enabled: boolean;
-  created_at: string;
-  tools_count?: number;
-}
-
-export interface Tool {
-  id: number;
-  category_id: number;
-  category_name?: string;
-  name: string;
-  description?: string;
-  script_path: string;
-  script_class?: string;
-  script_type: string;
-  default_params: Record<string, any>;
-  param_schema: Record<string, any>;
-  timeout: number;
-  need_device: boolean;
-  enabled: boolean;
-  created_at: string;
-  updated_at?: string;
 }
 
 export interface TaskTemplate {
@@ -353,49 +330,6 @@ export interface ResultsSummary {
   test_type_stats: TestTypeStat[];
   risk_distribution: RiskDistribution;
   recent_runs: RecentRun[];
-}
-
-// Workflow types
-export interface WorkflowStep {
-  id: number;
-  workflow_id: number;
-  order: number;
-  name: string;
-  tool_id?: number | null;
-  task_type?: string | null;
-  params: Record<string, any>;
-  target_device_id?: number | null;
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED';
-  task_run_id?: number | null;
-  error_message?: string | null;
-  started_at?: string | null;
-  finished_at?: string | null;
-}
-
-export interface Workflow {
-  id: number;
-  name: string;
-  description?: string | null;
-  status: 'DRAFT' | 'READY' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELED';
-  created_by?: number | null;
-  created_at: string;
-  started_at?: string | null;
-  finished_at?: string | null;
-  steps: WorkflowStep[];
-}
-
-export interface WorkflowStepCreate {
-  name: string;
-  tool_id?: number | null;
-  task_type?: string | null;
-  params?: Record<string, any>;
-  target_device_id?: number | null;
-}
-
-export interface WorkflowCreate {
-  name: string;
-  description?: string;
-  steps: WorkflowStepCreate[];
 }
 
 // Stats types
@@ -528,6 +462,7 @@ export interface ToolEntry {
   param_schema: Record<string, any>;
   is_active: boolean;
   description?: string | null;
+  category?: string | null;
   created_at: string;
   updated_at?: string;
 }
@@ -825,69 +760,32 @@ export const api = {
       apiClient.post('/users/change-password', data),
   },
 
-  // 工具管理相关
+  // 工具管理 (delegates to tool_catalog.py — new `tool` table)
   tools: {
-    // 专项分类
-    listCategories: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<ToolCategory>>('/tools/categories', { params: { skip, limit } }),
-    getCategory: (id: number) => apiClient.get<ToolCategory>(`/tools/categories/${id}`),
-    createCategory: (data: { name: string; description?: string; icon?: string; order?: number; enabled?: boolean }) =>
-      apiClient.post<ToolCategory>('/tools/categories', data),
-    updateCategory: (id: number, data: { name: string; description?: string; icon?: string; order?: number; enabled?: boolean }) =>
-      apiClient.put<ToolCategory>(`/tools/categories/${id}`, data),
-    deleteCategory: (id: number) => apiClient.delete<void>(`/tools/categories/${id}`),
-
-    // 工具
-    list: (categoryId?: number, skip = 0, limit = 50) => apiClient.get<PaginatedResponse<Tool>>('/tools', { params: { category_id: categoryId, skip, limit } }),
-    get: (id: number) => apiClient.get<Tool>(`/tools/${id}`),
-    create: (data: {
-      category_id: number;
-      name: string;
-      description?: string;
-      script_path: string;
-      script_class?: string;
-      script_type?: string;
-      default_params?: Record<string, any>;
-      param_schema?: Record<string, any>;
-      timeout?: number;
-      need_device?: boolean;
-      enabled?: boolean;
-    }) => apiClient.post<Tool>('/tools', data),
-    update: (id: number, data: {
-      category_id: number;
-      name: string;
-      description?: string;
-      script_path: string;
-      script_class?: string;
-      script_type?: string;
-      default_params?: Record<string, any>;
-      param_schema?: Record<string, any>;
-      timeout?: number;
-      need_device?: boolean;
-      enabled?: boolean;
-    }) => apiClient.put<Tool>(`/tools/${id}`, data),
-    delete: (id: number) => apiClient.delete<void>(`/tools/${id}`),
-
-    // 扫描
-    scan: () => apiClient.post<{ message: string; result: { categories: number; tools: number } }>('/tools/scan'),
-    previewScan: () => apiClient.get<{ tools: any[]; count: number }>('/tools/scan/preview'),
+    listCategories: () =>
+      unwrapApiResponse<string[]>(apiClient.get('/tools/categories')),
+    list: (category?: string) =>
+      unwrapApiResponse<ToolEntry[]>(
+        apiClient.get('/tools', { params: category ? { category } : {} }),
+      ),
+    get: (id: number) =>
+      unwrapApiResponse<ToolEntry>(apiClient.get(`/tools/${id}`)),
+    create: (data: Omit<ToolEntry, 'id' | 'created_at'>) =>
+      unwrapApiResponse<ToolEntry>(apiClient.post('/tools', data)),
+    update: (id: number, data: Partial<Omit<ToolEntry, 'id' | 'created_at'>>) =>
+      unwrapApiResponse<ToolEntry>(apiClient.put(`/tools/${id}`, data)),
+    delete: (id: number) =>
+      unwrapApiResponse<void>(apiClient.delete(`/tools/${id}`)),
+    scan: () =>
+      unwrapApiResponse<{ created: number; updated: number }>(apiClient.post('/tools/scan')),
+    previewScan: () =>
+      unwrapApiResponse<{ tools: any[]; count: number }>(apiClient.get('/tools/scan/preview')),
   },
 
   // 结果汇总
   results: {
     summary: (limit?: number) =>
       apiClient.get<ResultsSummary>('/results/summary', { params: limit ? { limit } : {} }),
-  },
-
-  // 工作流管理
-  workflows: {
-    list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<Workflow>>('/workflows', { params: { skip, limit } }),
-    get: (id: number) => apiClient.get<Workflow>(`/workflows/${id}`),
-    create: (data: WorkflowCreate) => apiClient.post<Workflow>('/workflows', data),
-    start: (id: number) => apiClient.post<Workflow>(`/workflows/${id}/start`),
-    cancel: (id: number) => apiClient.post<Workflow>(`/workflows/${id}/cancel`),
-    delete: (id: number) => apiClient.delete<void>(`/workflows/${id}`),
-    clone: (id: number) => apiClient.post<Workflow>(`/workflows/${id}/clone`),
-    toggleTemplate: (id: number) => apiClient.post<Workflow>(`/workflows/${id}/toggle-template`),
   },
 
   // 统计数据

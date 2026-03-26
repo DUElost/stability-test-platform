@@ -1,41 +1,34 @@
-// -*- coding: utf-8 -*-
 import { useState, useEffect } from 'react';
-import { api, Tool, ToolCategory } from '@/utils/api';
+import { api, ToolEntry } from '@/utils/api';
 import { Wrench, Plus, RefreshCw, Trash2, Edit, AlertCircle } from 'lucide-react';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 
-interface ToolPageProps {
-  // parent component props
-}
-
-export default function ToolsPage({}: ToolPageProps) {
+export default function ToolsPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
-  const [categories, setCategories] = useState<ToolCategory[]>([]);
-  const [tools, setTools] = useState<Tool[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [tools, setTools] = useState<ToolEntry[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editingTool, setEditingTool] = useState<Tool | null>(null);
+  const [editingTool, setEditingTool] = useState<ToolEntry | null>(null);
 
-  // 加载分类
   const loadCategories = async () => {
     try {
-      const response = await api.tools.listCategories(0, 200);
-      setCategories(response.data.items);
+      const cats = await api.tools.listCategories();
+      setCategories(cats);
     } catch (error) {
       console.error('加载分类失败:', error);
     }
   };
 
-  // 加载工具
-  const loadTools = async (categoryId?: number) => {
+  const loadTools = async (category?: string) => {
     setLoading(true);
     try {
-      const response = await api.tools.list(categoryId || undefined, 0, 200);
-      setTools(response.data.items);
+      const list = await api.tools.list(category || undefined);
+      setTools(list);
     } catch (error) {
       console.error('加载工具失败:', error);
     } finally {
@@ -43,12 +36,11 @@ export default function ToolsPage({}: ToolPageProps) {
     }
   };
 
-  // 扫描工具
   const handleScan = async () => {
     setScanning(true);
     try {
-      const response = await api.tools.scan();
-      toast.success(`扫描完成：新增 ${response.data.result.categories} 个分类，${response.data.result.tools} 个工具`);
+      const result = await api.tools.scan();
+      toast.success(`扫描完成：新增 ${result.created} 个，更新 ${result.updated} 个`);
       loadCategories();
       loadTools(selectedCategory || undefined);
     } catch (error) {
@@ -59,15 +51,14 @@ export default function ToolsPage({}: ToolPageProps) {
     }
   };
 
-  // 删除工具
   const handleDelete = async (id: number) => {
-    if (!(await confirmDialog({ description: '确定要删除这个工具吗？', variant: 'destructive' }))) return;
+    if (!(await confirmDialog({ description: '确定要停用这个工具吗？', variant: 'destructive' }))) return;
     try {
       await api.tools.delete(id);
       loadTools(selectedCategory || undefined);
     } catch (error) {
-      console.error('删除失败:', error);
-      toast.error('删除失败');
+      console.error('停用失败:', error);
+      toast.error('停用失败');
     }
   };
 
@@ -81,12 +72,11 @@ export default function ToolsPage({}: ToolPageProps) {
   }, [selectedCategory]);
 
   const filteredTools = selectedCategory
-    ? tools.filter(t => t.category_id === selectedCategory)
+    ? tools.filter(t => t.category === selectedCategory)
     : tools;
 
   return (
     <div className="p-6">
-      {/* 页面头部 */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <div className="p-2 bg-blue-50 rounded-lg">
@@ -116,7 +106,6 @@ export default function ToolsPage({}: ToolPageProps) {
         </div>
       </div>
 
-      {/* 分类筛选 */}
       <div className="mb-6">
         <div className="flex gap-2 flex-wrap">
           <button
@@ -131,21 +120,20 @@ export default function ToolsPage({}: ToolPageProps) {
           </button>
           {categories.map(cat => (
             <button
-              key={cat.id}
-              onClick={() => setSelectedCategory(cat.id)}
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
               className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-                selectedCategory === cat.id
+                selectedCategory === cat
                   ? 'bg-blue-600 text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              {cat.name} ({cat.tools_count || 0})
+              {cat}
             </button>
           ))}
         </div>
       </div>
 
-      {/* 工具列表 */}
       {loading ? (
         <div className="flex items-center justify-center h-64">
           <RefreshCw className="w-8 h-8 animate-spin text-gray-400" />
@@ -166,12 +154,12 @@ export default function ToolsPage({}: ToolPageProps) {
               <div className="flex items-start justify-between mb-3">
                 <div>
                   <h3 className="font-medium text-gray-900">{tool.name}</h3>
-                  <p className="text-sm text-gray-500">{tool.category_name}</p>
+                  <p className="text-sm text-gray-500">{tool.category || '未分类'}</p>
                 </div>
                 <span className={`px-2 py-1 text-xs font-medium rounded ${
-                  tool.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+                  tool.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
                 }`}>
-                  {tool.enabled ? '启用' : '禁用'}
+                  {tool.is_active ? '启用' : '禁用'}
                 </span>
               </div>
 
@@ -184,7 +172,7 @@ export default function ToolsPage({}: ToolPageProps) {
                   脚本: {tool.script_path}
                 </p>
                 <p>类名: {tool.script_class}</p>
-                <p>超时: {tool.timeout}秒</p>
+                <p>版本: {tool.version}</p>
               </div>
 
               <div className="flex items-center gap-2 pt-3 border-t border-gray-100">
@@ -200,7 +188,7 @@ export default function ToolsPage({}: ToolPageProps) {
                   className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  删除
+                  停用
                 </button>
               </div>
             </div>
@@ -208,7 +196,6 @@ export default function ToolsPage({}: ToolPageProps) {
         </div>
       )}
 
-      {/* 创建/编辑弹窗 */}
       {(showCreateModal || editingTool) && (
         <ToolModal
           tool={editingTool}
@@ -229,10 +216,9 @@ export default function ToolsPage({}: ToolPageProps) {
   );
 }
 
-// 工具弹窗组件
 interface ToolModalProps {
-  tool: Tool | null;
-  categories: ToolCategory[];
+  tool: ToolEntry | null;
+  categories: string[];
   onClose: () => void;
   onSave: () => void;
 }
@@ -240,16 +226,14 @@ interface ToolModalProps {
 function ToolModal({ tool, categories, onClose, onSave }: ToolModalProps) {
   const toast = useToast();
   const [form, setForm] = useState({
-    category_id: tool?.category_id || (categories[0]?.id || 0),
+    category: tool?.category || (categories[0] || ''),
     name: tool?.name || '',
+    version: tool?.version || '1.0.0',
     description: tool?.description || '',
     script_path: tool?.script_path || '',
     script_class: tool?.script_class || '',
-    script_type: tool?.script_type || 'python',
-    timeout: tool?.timeout || 3600,
-    need_device: tool?.need_device ?? true,
-    enabled: tool?.enabled ?? true,
-    default_params: JSON.stringify(tool?.default_params || {}, null, 2),
+    is_active: tool?.is_active ?? true,
+    param_schema: JSON.stringify(tool?.param_schema || {}, null, 2),
   });
   const [saving, setSaving] = useState(false);
 
@@ -259,12 +243,12 @@ function ToolModal({ tool, categories, onClose, onSave }: ToolModalProps) {
     try {
       const data = {
         ...form,
-        default_params: JSON.parse(form.default_params || '{}'),
+        param_schema: JSON.parse(form.param_schema || '{}'),
       };
       if (tool) {
         await api.tools.update(tool.id, data);
       } else {
-        await api.tools.create(data);
+        await api.tools.create(data as any);
       }
       onSave();
     } catch (error) {
@@ -284,25 +268,24 @@ function ToolModal({ tool, categories, onClose, onSave }: ToolModalProps) {
           </h2>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                所属分类 *
-              </label>
-              <select
-                value={form.category_id}
-                onChange={e => setForm({ ...form, category_id: Number(e.target.value) })}
+              <label className="block text-sm font-medium text-gray-700 mb-1">分类</label>
+              <input
+                type="text"
+                list="tool-categories"
+                value={form.category}
+                onChange={e => setForm({ ...form, category: e.target.value })}
+                placeholder="Monkey, GPU, DDR..."
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                required
-              >
+              />
+              <datalist id="tool-categories">
                 {categories.map(cat => (
-                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  <option key={cat} value={cat} />
                 ))}
-              </select>
+              </datalist>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                工具名称 *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">工具名称 *</label>
               <input
                 type="text"
                 value={form.name}
@@ -312,10 +295,32 @@ function ToolModal({ tool, categories, onClose, onSave }: ToolModalProps) {
               />
             </div>
 
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">版本 *</label>
+                <input
+                  type="text"
+                  value={form.version}
+                  onChange={e => setForm({ ...form, version: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  required
+                />
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.is_active}
+                    onChange={e => setForm({ ...form, is_active: e.target.checked })}
+                    className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <span className="text-sm text-gray-700">启用</span>
+                </label>
+              </div>
+            </div>
+
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                描述
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">描述</label>
               <textarea
                 value={form.description}
                 onChange={e => setForm({ ...form, description: e.target.value })}
@@ -325,93 +330,38 @@ function ToolModal({ tool, categories, onClose, onSave }: ToolModalProps) {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                脚本路径 *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">脚本路径 *</label>
               <input
                 type="text"
                 value={form.script_path}
                 onChange={e => setForm({ ...form, script_path: e.target.value })}
-                placeholder="/home/android/sonic_agent/.../Test_Tool/Monkey/test.py"
+                placeholder="/home/android/.../test.py"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 required
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                类名 *
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">类名 *</label>
               <input
                 type="text"
                 value={form.script_class}
                 onChange={e => setForm({ ...form, script_class: e.target.value })}
-                placeholder="MtkMonkeyTest"
+                placeholder="MonkeyAEEAction"
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 required
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  超时时间（秒）
-                </label>
-                <input
-                  type="number"
-                  value={form.timeout}
-                  onChange={e => setForm({ ...form, timeout: Number(e.target.value) })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  脚本类型
-                </label>
-                <select
-                  value={form.script_type}
-                  onChange={e => setForm({ ...form, script_type: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="python">Python</option>
-                  <option value="shell">Shell</option>
-                  <option value="bat">Batch</option>
-                </select>
-              </div>
-            </div>
-
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                默认参数（JSON）
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">参数 Schema（JSON）</label>
               <textarea
-                value={form.default_params}
-                onChange={e => setForm({ ...form, default_params: e.target.value })}
+                value={form.param_schema}
+                onChange={e => setForm({ ...form, param_schema: e.target.value })}
                 rows={4}
-                placeholder='{"event_count": 10000, "throttle": 100}'
+                placeholder='{"event_count": {"type": "integer", "default": 10000}}'
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
               />
-            </div>
-
-            <div className="flex items-center gap-6">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={form.need_device}
-                  onChange={e => setForm({ ...form, need_device: e.target.checked })}
-                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <span className="text-sm text-gray-700">需要设备</span>
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={form.enabled}
-                  onChange={e => setForm({ ...form, enabled: e.target.checked })}
-                  className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                />
-                <span className="text-sm text-gray-700">启用</span>
-              </label>
             </div>
 
             <div className="flex justify-end gap-3 pt-4">

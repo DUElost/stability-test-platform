@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
 
@@ -17,6 +18,9 @@ class WorkflowDefinition(Base):
     created_at        = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at        = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    task_templates = relationship("backend.models.job.TaskTemplate", back_populates="definition", lazy="dynamic")
+    runs           = relationship("WorkflowRun", back_populates="definition", lazy="dynamic")
+
 
 class WorkflowRun(Base):
     __tablename__ = "workflow_run"
@@ -29,3 +33,6 @@ class WorkflowRun(Base):
     started_at             = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     ended_at               = Column(DateTime(timezone=True))
     result_summary         = Column(JSONB)
+
+    definition = relationship("WorkflowDefinition", foreign_keys=[workflow_definition_id], back_populates="runs")
+    jobs       = relationship("backend.models.job.JobInstance", back_populates="workflow_run", lazy="dynamic")

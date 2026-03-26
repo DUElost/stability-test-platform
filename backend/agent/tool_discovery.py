@@ -215,43 +215,40 @@ class ToolDiscoveryService:
         self.discovery = ToolDiscovery()
 
     def sync(self) -> Dict[str, int]:
-        """同步发现的工具到数据库，返回 {"categories": N, "tools": N}。"""
-        from backend.models.schemas import Tool, ToolCategory
+        """同步发现的工具到数据库（新 tool 表），返回 {"created": N, "updated": N}。"""
+        from backend.models.tool import Tool
 
         tools = self.discovery.scan()
-        categories_created = 0
-        tools_created = 0
+        created = 0
+        updated = 0
 
         for tool_info in tools:
             category_name = tool_info["category"]
-            category = self.db.query(ToolCategory).filter_by(name=category_name).first()
-            if not category:
-                category = ToolCategory(
-                    name=category_name,
-                    description=f"{category_name} 测试类型",
-                )
-                self.db.add(category)
-                self.db.flush()
-                categories_created += 1
-
             existing = self.db.query(Tool).filter_by(
-                category_id=category.id,
                 script_class=tool_info["class_name"],
             ).first()
 
             if not existing:
                 self.db.add(Tool(
-                    category_id=category.id,
                     name=f"{category_name} - {tool_info['class_name']}",
+                    version="discovered",
                     script_path=tool_info["script_path"],
                     script_class=tool_info["class_name"],
-                    default_params=tool_info.get("default_params", {}),
+                    param_schema=tool_info.get("default_params", {}),
                     description=tool_info.get("description", ""),
+                    category=category_name,
+                    is_active=True,
                 ))
-                tools_created += 1
+                created += 1
+            else:
+                existing.script_path = tool_info["script_path"]
+                existing.category = category_name
+                if tool_info.get("description"):
+                    existing.description = tool_info["description"]
+                updated += 1
 
         self.db.commit()
-        return {"categories": categories_created, "tools": tools_created}
+        return {"created": created, "updated": updated}
 
 
 if __name__ == "__main__":

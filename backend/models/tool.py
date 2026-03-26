@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 
 from backend.core.database import Base
@@ -17,9 +17,10 @@ class Tool(Base):
     param_schema = Column(JSONB, nullable=False, default=dict)
     is_active    = Column(Boolean, nullable=False, default=True)
     description  = Column(Text)
+    category     = Column(String(64))
     created_at   = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at   = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     __table_args__ = (
-        __import__("sqlalchemy").UniqueConstraint("name", "version", name="uq_tool_name_version"),
+        UniqueConstraint("name", "version", name="uq_tool_name_version"),
     )

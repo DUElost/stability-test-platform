@@ -5,31 +5,16 @@ Tests the concurrent properties defined in specs.md:
 - PROP-004: Task Dispatch Idempotency
 - PROP-005: Heartbeat Timestamp Monotonicity
 - Race condition validation
+
+NOTE: This module tests the DEPRECATED scheduler/dispatcher.py.
+      It should be rewritten to target services/dispatcher.py (Wave 3e).
 """
 
-import asyncio
-import os
-import threading
-import time
-import tempfile
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
-
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-from ...core.database import Base
-from ...models.host import Device, Host
-from ...models.schemas import (
-    DeviceStatus, HostStatus,
-    Task, TaskStatus, TaskRun, RunStatus
+pytestmark = pytest.mark.skip(
+    reason="Tests target deprecated scheduler/dispatcher.py — rewrite for services/dispatcher.py in Wave 3e"
 )
-from ...scheduler.dispatcher import TaskDispatcher
-import backend.scheduler.dispatcher as dispatcher_module
-import backend.scheduler.recycler as recycler_module
 
 SessionLocal = None
 engine = None

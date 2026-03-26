@@ -20,8 +20,9 @@ class WorkflowStatus(str, Enum):
 
 
 class HostStatus(str, Enum):
-    ONLINE  = "ONLINE"
-    OFFLINE = "OFFLINE"
+    ONLINE   = "ONLINE"
+    OFFLINE  = "OFFLINE"
+    DEGRADED = "DEGRADED"
 
 
 class DeviceStatus(str, Enum):
