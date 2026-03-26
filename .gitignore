@@ -30,3 +30,5 @@ venv-wsl/
 .hypothesis/
 /nul
 /frontend/nul
+.github/prompts/
+.github/skills/
