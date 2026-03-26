@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 from backend.core.database import AsyncSessionLocal, get_db
 from backend.core.audit import record_audit
 from backend.models.host import Device
-from backend.models.schemas import Task, TaskSchedule, TaskStatus
+from backend.models.schedule import TaskSchedule
+from backend.models.schemas import Task, TaskStatus
 from backend.models.workflow import WorkflowDefinition
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas import (

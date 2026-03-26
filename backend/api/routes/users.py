@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
 from backend.core.security import get_password_hash, verify_password, decode_token
-from backend.models.schemas import User as UserModel
+from backend.models.user import User as UserModel
 from backend.api.schemas import PaginatedResponse
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])

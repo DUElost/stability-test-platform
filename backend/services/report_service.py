@@ -612,3 +612,82 @@ def build_jira_draft(report: RunReportOut) -> JiraDraftOut:
             "template_resolved": resolved,
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Public API: Workflow-level aggregate summary
+# ---------------------------------------------------------------------------
+
+def compose_workflow_summary(db: Session, run_id: int) -> Optional[Dict[str, Any]]:
+    """Build an aggregate summary for a WorkflowRun across all its jobs.
+
+    Returns a dict with status matrix, failure distribution, pass rate,
+    and per-device breakdown.  Returns None if the run is not found.
+    """
+    run = db.get(WorkflowRun, run_id)
+    if run is None:
+        return None
+
+    definition = db.get(WorkflowDefinition, run.workflow_definition_id)
+
+    jobs: List[JobInstance] = (
+        db.query(JobInstance)
+        .filter(JobInstance.workflow_run_id == run_id)
+        .all()
+    )
+
+    device_ids = {j.device_id for j in jobs}
+    devices_by_id: Dict[int, Device] = {}
+    if device_ids:
+        rows = db.query(Device).filter(Device.id.in_(device_ids)).all()
+        devices_by_id = {d.id: d for d in rows}
+
+    status_counts: Dict[str, int] = {}
+    device_results: List[Dict[str, Any]] = []
+    total_duration_seconds = 0.0
+
+    for job in jobs:
+        s = job.status or "UNKNOWN"
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+        dev = devices_by_id.get(job.device_id)
+        duration = None
+        if job.started_at and job.ended_at:
+            duration = (job.ended_at - job.started_at).total_seconds()
+            total_duration_seconds += duration
+
+        device_results.append({
+            "job_id": job.id,
+            "device_id": job.device_id,
+            "device_serial": dev.serial if dev else None,
+            "status": s,
+            "status_reason": job.status_reason,
+            "started_at": job.started_at.isoformat() if job.started_at else None,
+            "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+            "duration_seconds": duration,
+        })
+
+    total = len(jobs)
+    completed = status_counts.get("COMPLETED", 0)
+    failed = status_counts.get("FAILED", 0) + status_counts.get("ABORTED", 0)
+    pass_rate = (completed / total * 100) if total > 0 else 0.0
+
+    return {
+        "workflow_run_id": run.id,
+        "workflow_definition_id": run.workflow_definition_id,
+        "workflow_name": definition.name if definition else None,
+        "status": run.status,
+        "failure_threshold": run.failure_threshold,
+        "triggered_by": run.triggered_by,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "ended_at": run.ended_at.isoformat() if run.ended_at else None,
+        "result_summary": run.result_summary,
+        "statistics": {
+            "total_jobs": total,
+            "status_distribution": status_counts,
+            "pass_rate": round(pass_rate, 2),
+            "failed_count": failed,
+            "avg_duration_seconds": round(total_duration_seconds / total, 1) if total > 0 else 0,
+        },
+        "device_results": device_results,
+    }

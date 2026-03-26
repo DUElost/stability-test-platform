@@ -21,20 +21,7 @@ from backend.models.enums import (  # noqa: F401 — canonical source; re-export
     HostStatus,
     DeviceStatus,
 )
-
-
-class User(Base):
-    """User model for system authentication."""
-
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True)
-    username = Column(String(128), unique=True, nullable=False, index=True)
-    hashed_password = Column(String(256), nullable=False)
-    role = Column(String(32), default="user", nullable=False)
-    is_active = Column(String(1), default="Y", nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    last_login = Column(DateTime)
+from backend.models.user import User  # noqa: F401 — re-export for back-compat
 
 
 class TaskStatus(str, PyEnum):
@@ -237,72 +224,18 @@ class Tool(Base):
     category = relationship("backend.models.schemas.ToolCategory", back_populates="tools")
 
 
-class ChannelType(str, PyEnum):
-    WEBHOOK = "WEBHOOK"
-    EMAIL = "EMAIL"
-    DINGTALK = "DINGTALK"
-
-
-class EventType(str, PyEnum):
-    RUN_COMPLETED = "RUN_COMPLETED"
-    RUN_FAILED = "RUN_FAILED"
-    RISK_HIGH = "RISK_HIGH"
-    DEVICE_OFFLINE = "DEVICE_OFFLINE"
-
-
-class NotificationChannel(Base):
-    __tablename__ = "notification_channels"
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(128), nullable=False)
-    type = Column(Enum(ChannelType), nullable=False)
-    config = Column(JSON, default=dict)
-    enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    rules = relationship("AlertRule", back_populates="channel")
-
-
-class AlertRule(Base):
-    __tablename__ = "alert_rules"
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(128), nullable=False)
-    event_type = Column(Enum(EventType), nullable=False)
-    channel_id = Column(Integer, ForeignKey("notification_channels.id"), nullable=False)
-    filters = Column(JSON, default=dict)
-    enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    channel = relationship("NotificationChannel", back_populates="rules")
+# ==================== 通知模块（canonical: backend.models.notification） ====================
+from backend.models.notification import (  # noqa: F401 — re-export for back-compat
+    AlertRule,
+    ChannelType,
+    EventType,
+    NotificationChannel,
+)
 
 
 # ==================== 审计日志（canonical: backend.models.audit） ====================
 from backend.models.audit import AuditLog  # noqa: F401 — re-export for back-compat
 
 
-# ==================== 定时任务 ====================
-
-
-class TaskSchedule(Base):
-    """Cron-based task scheduling."""
-    __tablename__ = "task_schedules"
-    __table_args__ = (
-        Index('ix_sched_enabled_next', 'enabled', 'next_run_at'),
-    )
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(128), nullable=False)
-    cron_expression = Column(String(128), nullable=False)  # e.g. "0 2 * * *"
-    task_template_id = Column(Integer, nullable=True)   # legacy col, old table dropped
-    tool_id = Column(Integer, nullable=True)            # legacy col, old table dropped
-    task_type = Column(String(32), nullable=False)
-    params = Column(JSON, default=dict)
-    target_device_id = Column(Integer, nullable=True)   # legacy col, old table dropped
-    enabled = Column(Boolean, default=True)
-    last_run_at = Column(DateTime, nullable=True)
-    next_run_at = Column(DateTime, nullable=True)
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    workflow_definition_id = Column(Integer, ForeignKey("workflow_definition.id"), nullable=True)
-    device_ids = Column(JSON, nullable=True)
+# ==================== 定时任务（canonical: backend.models.schedule） ====================
+from backend.models.schedule import TaskSchedule  # noqa: F401 — re-export for back-compat

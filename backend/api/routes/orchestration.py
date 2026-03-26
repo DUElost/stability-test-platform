@@ -355,76 +355,115 @@ async def list_run_jobs(run_id: int, db: AsyncSession = Depends(get_async_db)):
     return ok(result)
 
 
-# ── Report / JIRA Stubs (Wave 3b — future implementation) ─────────────────
+# ── Report / JIRA / Summary (Wave 3b) ─────────────────────────────────────
+
+
+def _sync_compose_report(job_id: int):
+    """Run compose_run_report in a sync session (called via to_thread)."""
+    from backend.core.database import SessionLocal
+    from backend.services.report_service import compose_run_report
+    db = SessionLocal()
+    try:
+        return compose_run_report(db, job_id)
+    finally:
+        db.close()
+
+
+def _sync_compose_summary(run_id: int):
+    """Run compose_workflow_summary in a sync session (called via to_thread)."""
+    from backend.core.database import SessionLocal
+    from backend.services.report_service import compose_workflow_summary
+    db = SessionLocal()
+    try:
+        return compose_workflow_summary(db, run_id)
+    finally:
+        db.close()
 
 
 @router.get(
     "/workflow-runs/{run_id}/jobs/{job_id}/report",
     response_model=ApiResponse[dict],
-    summary="[STUB] Single-job report",
+    summary="Single-job report",
 )
 async def get_job_report(
     run_id: int,
     job_id: int,
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Single-job report. Not yet implemented.
+    """Return the report for a single job within a workflow run.
 
-    Will replace legacy ``GET /api/v1/runs/{run_id}/report``.
-    See ADR-0008 Wave 3b for the migration plan.
+    Serves cached ``report_json`` if available, otherwise computes live.
     """
+    import asyncio
     job = await db.get(JobInstance, job_id)
     if job is None or job.workflow_run_id != run_id:
         raise HTTPException(status_code=404, detail="job not found in this workflow run")
-    raise HTTPException(
-        status_code=501,
-        detail="Job report endpoint pending implementation. "
-               "Use GET /api/v1/runs/{job_id}/report as interim.",
-    )
+
+    if job.post_processed_at and job.report_json:
+        return ok(job.report_json)
+
+    report = await asyncio.to_thread(_sync_compose_report, job_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report data not available")
+
+    data = report.model_dump(mode="json") if hasattr(report, "model_dump") else report.dict()
+    return ok(data)
 
 
 @router.post(
     "/workflow-runs/{run_id}/jobs/{job_id}/jira-draft",
     response_model=ApiResponse[dict],
-    summary="[STUB] JIRA draft for a job",
+    summary="JIRA draft for a job",
 )
 async def create_job_jira_draft(
     run_id: int,
     job_id: int,
     db: AsyncSession = Depends(get_async_db),
 ):
-    """JIRA draft for a single job. Not yet implemented.
+    """Generate a JIRA draft from the job's report data.
 
-    Will replace legacy ``POST /api/v1/runs/{run_id}/jira-draft``.
-    See ADR-0008 Wave 3b for the migration plan.
+    Serves cached ``jira_draft_json`` if available, otherwise computes live.
     """
+    import asyncio
+    from backend.services.report_service import build_jira_draft
+
     job = await db.get(JobInstance, job_id)
     if job is None or job.workflow_run_id != run_id:
         raise HTTPException(status_code=404, detail="job not found in this workflow run")
-    raise HTTPException(
-        status_code=501,
-        detail="JIRA draft endpoint pending implementation. "
-               "Use POST /api/v1/runs/{job_id}/jira-draft as interim.",
-    )
+
+    if job.post_processed_at and job.jira_draft_json:
+        return ok(job.jira_draft_json)
+
+    report = await asyncio.to_thread(_sync_compose_report, job_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="report data not available")
+
+    draft = build_jira_draft(report)
+    data = draft.model_dump(mode="json") if hasattr(draft, "model_dump") else draft.dict()
+    return ok(data)
 
 
 @router.get(
     "/workflow-runs/{run_id}/summary",
     response_model=ApiResponse[dict],
-    summary="[STUB] Workflow aggregate summary",
+    summary="Workflow aggregate summary",
 )
 async def get_workflow_run_summary(
     run_id: int,
     db: AsyncSession = Depends(get_async_db),
 ):
-    """Workflow-level aggregate summary (per-device matrix, failure distribution).
-
-    Not yet implemented. See ADR-0008 Wave 3b for the migration plan.
+    """Workflow-level aggregate summary: status matrix, failure distribution,
+    pass rate across all jobs in the run.
     """
+    import asyncio
     run = await db.get(WorkflowRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="workflow run not found")
-    raise HTTPException(status_code=501, detail="Workflow summary endpoint pending implementation.")
+
+    summary = await asyncio.to_thread(_sync_compose_summary, run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="summary data not available")
+    return ok(summary)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

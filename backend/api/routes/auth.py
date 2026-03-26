@@ -16,7 +16,7 @@ from backend.core.security import (
     get_password_hash,
     verify_password,
 )
-from backend.models.schemas import User
+from backend.models.user import User
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)

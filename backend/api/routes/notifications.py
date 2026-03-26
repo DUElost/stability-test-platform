@@ -20,7 +20,7 @@ from backend.api.schemas import (
 )
 from backend.core.database import get_db
 from backend.core.audit import record_audit
-from backend.models.schemas import AlertRule, ChannelType, EventType, NotificationChannel
+from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel
 from backend.api.routes.auth import get_current_active_user, User
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])

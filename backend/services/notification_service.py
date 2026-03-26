@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 import requests
 
 from backend.core.database import SessionLocal
-from backend.models.schemas import AlertRule, EventType, NotificationChannel
+from backend.models.notification import AlertRule, EventType, NotificationChannel
 
 logger = logging.getLogger(__name__)
 

@@ -614,6 +614,35 @@ export interface WorkflowRunCreate {
   failure_threshold?: number;
 }
 
+export interface WorkflowSummary {
+  workflow_run_id: number;
+  workflow_definition_id: number;
+  workflow_name?: string | null;
+  status: string;
+  failure_threshold: number;
+  triggered_by?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  result_summary?: Record<string, any> | null;
+  statistics: {
+    total_jobs: number;
+    status_distribution: Record<string, number>;
+    pass_rate: number;
+    failed_count: number;
+    avg_duration_seconds: number;
+  };
+  device_results: Array<{
+    job_id: number;
+    device_id: number;
+    device_serial?: string | null;
+    status: string;
+    status_reason?: string | null;
+    started_at?: string | null;
+    ended_at?: string | null;
+    duration_seconds?: number | null;
+  }>;
+}
+
 // 解包后端统一响应格式 { data: T, error: null | { code, message } }
 async function unwrapApiResponse<T>(request: Promise<{ data: { data?: T; error?: { code: string; message: string } | null } }>): Promise<T> {
   const resp = await request;
@@ -889,6 +918,12 @@ export const api = {
       unwrapApiResponse<WorkflowRun>(apiClient.get(`/workflow-runs/${runId}`)),
     getRunJobs: (runId: number) =>
       unwrapApiResponse<JobInstance[]>(apiClient.get(`/workflow-runs/${runId}/jobs`)),
+    getJobReport: (runId: number, jobId: number) =>
+      unwrapApiResponse<RunReport>(apiClient.get(`/workflow-runs/${runId}/jobs/${jobId}/report`)),
+    createJobJiraDraft: (runId: number, jobId: number) =>
+      unwrapApiResponse<JiraDraft>(apiClient.post(`/workflow-runs/${runId}/jobs/${jobId}/jira-draft`)),
+    getWorkflowSummary: (runId: number) =>
+      unwrapApiResponse<WorkflowSummary>(apiClient.get(`/workflow-runs/${runId}/summary`)),
   },
 
   // Tool Catalog (新工具目录，Phase 3 格式)

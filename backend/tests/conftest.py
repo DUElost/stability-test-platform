@@ -32,9 +32,11 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 from backend.core.database import async_engine, get_db
 from backend.core.database import Base
-from backend.models.enums import DeviceStatus, HostStatus
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus
 from backend.models.host import Device, Host
-from backend.models.schemas import RunStatus, Task, TaskRun, TaskStatus
+from backend.models.job import JobInstance, TaskTemplate as JobTaskTemplate
+from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.schemas import RunStatus, Task, TaskRun, TaskStatus  # legacy — kept for existing tests
 from backend.core.security import create_access_token
 from backend.main import app
 
@@ -293,6 +295,87 @@ def sample_running_run(db_session, sample_running_task, sample_host, sample_devi
     db_session.add(run)
     db_session.commit()
     return run
+
+
+# ── New model fixtures (WorkflowDefinition / WorkflowRun / JobInstance) ────
+
+
+@pytest.fixture
+def sample_workflow_definition(db_session):
+    """Create a sample WorkflowDefinition."""
+    wd = WorkflowDefinition(
+        name="test-workflow",
+        description="Test workflow for unit tests",
+        failure_threshold=0.1,
+        created_by="test",
+    )
+    db_session.add(wd)
+    db_session.commit()
+    return wd
+
+
+@pytest.fixture
+def sample_task_template(db_session, sample_workflow_definition):
+    """Create a sample TaskTemplate within a WorkflowDefinition."""
+    tt = JobTaskTemplate(
+        workflow_definition_id=sample_workflow_definition.id,
+        name="test-template",
+        pipeline_def={"version": 1, "stages": [{"name": "test", "steps": []}]},
+        sort_order=0,
+    )
+    db_session.add(tt)
+    db_session.commit()
+    return tt
+
+
+@pytest.fixture
+def sample_workflow_run(db_session, sample_workflow_definition):
+    """Create a sample WorkflowRun."""
+    run = WorkflowRun(
+        workflow_definition_id=sample_workflow_definition.id,
+        status="RUNNING",
+        failure_threshold=sample_workflow_definition.failure_threshold,
+        triggered_by="test",
+    )
+    db_session.add(run)
+    db_session.commit()
+    return run
+
+
+@pytest.fixture
+def sample_job_instance(db_session, sample_workflow_run, sample_task_template, sample_device, sample_host):
+    """Create a sample JobInstance."""
+    job = JobInstance(
+        workflow_run_id=sample_workflow_run.id,
+        task_template_id=sample_task_template.id,
+        device_id=sample_device.id,
+        host_id=sample_host.id,
+        status=JobStatus.PENDING.value,
+        pipeline_def=sample_task_template.pipeline_def,
+    )
+    db_session.add(job)
+    db_session.commit()
+    return job
+
+
+@pytest.fixture
+def sample_running_job(db_session, sample_workflow_run, sample_task_template, sample_device, sample_host):
+    """Create a sample running JobInstance."""
+    job = JobInstance(
+        workflow_run_id=sample_workflow_run.id,
+        task_template_id=sample_task_template.id,
+        device_id=sample_device.id,
+        host_id=sample_host.id,
+        status=JobStatus.RUNNING.value,
+        pipeline_def=sample_task_template.pipeline_def,
+        started_at=datetime.utcnow(),
+    )
+    db_session.add(job)
+    db_session.commit()
+    return job
+
+
+# ── User fixtures ─────────────────────────────────────────────────────────
 
 
 @pytest.fixture

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from backend.core.database import SessionLocal
-from backend.models.schemas import TaskSchedule
+from backend.models.schedule import TaskSchedule
 
 logger = logging.getLogger(__name__)
 
