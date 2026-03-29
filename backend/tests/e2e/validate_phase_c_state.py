@@ -1,29 +1,39 @@
 """
-Phase C 状态校验脚本（只读，不修改数据）。
+Dual-Track Schema Validation Script (read-only).
 
-用途：
-1. 校验 host.id / device.host_id 是否已迁移为字符串类型
-2. 校验旧表 hosts/devices 是否已清理
-3. 校验 task_runs 中是否仍有遗留 RunStatus（QUEUED/DISPATCHED/FINISHED/CANCELED）
+Validates the database schema state after ADR-0008 incremental migrations:
+1. All new tables exist with correct column types
+2. Legacy tables coexistence (expected during dual-track; flagged as INFO)
+3. Data migration completeness (new tables have rows if legacy tables do)
 
-执行：
+Usage:
     python backend/tests/e2e/validate_phase_c_state.py
 
-环境变量：
-    STP_DATABASE_URL 或 DATABASE_URL
+Environment:
+    STP_DATABASE_URL or DATABASE_URL
 """
 
 from __future__ import annotations
 
 import os
 import sys
-from typing import Optional, Sequence
+from typing import Optional
 
 from sqlalchemy import create_engine, text
 
 
-LEGACY_RUN_STATUSES = {"QUEUED", "DISPATCHED", "FINISHED", "CANCELED"}
-PASS_TYPES = {"character varying", "text"}
+NEW_TABLES = [
+    "host", "device", "workflow_definition", "task_template",
+    "workflow_run", "job_instance", "step_trace", "tool",
+    "job_artifact", "action_template",
+]
+
+LEGACY_TABLES = [
+    "hosts", "devices", "tasks", "task_runs", "run_steps",
+    "tools", "tool_categories", "log_artifacts",
+]
+
+STRING_TYPES = {"character varying", "text"}
 
 
 def _resolve_database_url() -> Optional[str]:
@@ -39,42 +49,31 @@ def _to_sync_url(url: str) -> str:
 
 def _table_exists(conn, table_name: str) -> bool:
     stmt = text(
-        """
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = :table_name
-        ) AS exists_flag
-        """
+        "SELECT EXISTS ("
+        "  SELECT 1 FROM information_schema.tables "
+        "  WHERE table_schema = 'public' AND table_name = :tbl"
+        ")"
     )
-    return bool(conn.execute(stmt, {"table_name": table_name}).scalar())
+    return bool(conn.execute(stmt, {"tbl": table_name}).scalar())
 
 
 def _column_data_type(conn, table_name: str, column_name: str) -> Optional[str]:
     stmt = text(
-        """
-        SELECT data_type
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-          AND table_name = :table_name
-          AND column_name = :column_name
-        """
+        "SELECT data_type FROM information_schema.columns "
+        "WHERE table_schema = 'public' AND table_name = :tbl AND column_name = :col"
     )
-    row = conn.execute(stmt, {"table_name": table_name, "column_name": column_name}).first()
+    row = conn.execute(stmt, {"tbl": table_name, "col": column_name}).first()
     return row[0] if row else None
 
 
-def _legacy_statuses(conn) -> Sequence[str]:
-    if not _table_exists(conn, "task_runs"):
-        return []
-    rows = conn.execute(text("SELECT DISTINCT status FROM task_runs")).fetchall()
-    return [str(r[0]).upper() for r in rows if r and r[0] is not None]
+def _row_count(conn, table_name: str) -> int:
+    return conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).scalar()
 
 
 def main() -> int:
     raw_url = _resolve_database_url()
     if not raw_url:
-        print("[FAIL] 缺少数据库连接：请设置 STP_DATABASE_URL 或 DATABASE_URL")
+        print("[FAIL] Missing database URL: set STP_DATABASE_URL or DATABASE_URL")
         return 2
 
     db_url = _to_sync_url(raw_url)
@@ -84,49 +83,59 @@ def main() -> int:
 
     try:
         with engine.connect() as conn:
-            # 1) 新表存在性
-            for table in ("host", "device"):
+            # 1) New tables must exist
+            for table in NEW_TABLES:
                 if _table_exists(conn, table):
-                    infos.append(f"[OK] 表存在: {table}")
+                    infos.append(f"[OK] new table exists: {table}")
                 else:
-                    failures.append(f"[FAIL] 缺少新表: {table}")
+                    failures.append(f"[FAIL] missing new table: {table}")
 
-            # 2) 旧表清理状态
-            for legacy in ("hosts", "devices"):
-                if _table_exists(conn, legacy):
-                    failures.append(f"[FAIL] 旧表仍存在: {legacy}")
-                else:
-                    infos.append(f"[OK] 旧表已清理: {legacy}")
-
-            # 3) 字段类型
+            # 2) Key column types
             host_id_type = _column_data_type(conn, "host", "id")
-            if host_id_type in PASS_TYPES:
-                infos.append(f"[OK] host.id 类型: {host_id_type}")
-            else:
-                failures.append(f"[FAIL] host.id 类型异常: {host_id_type}")
+            if host_id_type in STRING_TYPES:
+                infos.append(f"[OK] host.id type: {host_id_type}")
+            elif host_id_type:
+                failures.append(f"[FAIL] host.id type should be string, got: {host_id_type}")
 
-            device_host_id_type = _column_data_type(conn, "device", "host_id")
-            if device_host_id_type in PASS_TYPES:
-                infos.append(f"[OK] device.host_id 类型: {device_host_id_type}")
-            else:
-                failures.append(f"[FAIL] device.host_id 类型异常: {device_host_id_type}")
+            device_host_id = _column_data_type(conn, "device", "host_id")
+            if device_host_id in STRING_TYPES:
+                infos.append(f"[OK] device.host_id type: {device_host_id}")
+            elif device_host_id:
+                failures.append(f"[FAIL] device.host_id type should be string, got: {device_host_id}")
 
-            # 4) C-2: 旧状态残留
-            statuses = _legacy_statuses(conn)
-            if not statuses:
-                infos.append("[INFO] task_runs 不存在或为空：C-2 状态转换校验不适用")
-            else:
-                hit = sorted(set(statuses) & LEGACY_RUN_STATUSES)
-                if hit:
-                    failures.append(
-                        "[FAIL] task_runs 存在遗留 RunStatus，需要执行 C-2 映射: "
-                        + ", ".join(hit)
-                    )
+            # job_instance post-completion columns
+            for col in ("report_json", "jira_draft_json", "post_processed_at"):
+                dt = _column_data_type(conn, "job_instance", col)
+                if dt:
+                    infos.append(f"[OK] job_instance.{col} exists ({dt})")
                 else:
-                    infos.append("[OK] task_runs 未检测到遗留 RunStatus")
+                    failures.append(f"[FAIL] job_instance.{col} missing")
+
+            # tool.category
+            cat_type = _column_data_type(conn, "tool", "category")
+            if cat_type:
+                infos.append(f"[OK] tool.category exists ({cat_type})")
+            else:
+                failures.append("[FAIL] tool.category missing")
+
+            # 3) Legacy table coexistence (INFO, not failure)
+            for table in LEGACY_TABLES:
+                if _table_exists(conn, table):
+                    infos.append(f"[INFO] legacy table still exists: {table} (expected during dual-track)")
+                else:
+                    infos.append(f"[INFO] legacy table already dropped: {table}")
+
+            # 4) Data migration check
+            if _table_exists(conn, "host") and _table_exists(conn, "hosts"):
+                old_count = _row_count(conn, "hosts")
+                new_count = _row_count(conn, "host")
+                if old_count > 0 and new_count == 0:
+                    failures.append(f"[FAIL] hosts has {old_count} rows but host has 0 — data migration incomplete")
+                else:
+                    infos.append(f"[OK] host rows: {new_count} (legacy hosts: {old_count})")
 
     except Exception as exc:
-        print(f"[FAIL] 执行校验失败: {exc}")
+        print(f"[FAIL] validation error: {exc}")
         return 2
     finally:
         engine.dispose()
@@ -137,10 +146,10 @@ def main() -> int:
         print(line)
 
     if failures:
-        print(f"[SUMMARY] FAIL ({len(failures)} 项)")
+        print(f"\n[SUMMARY] FAIL ({len(failures)} issue(s))")
         return 2
 
-    print("[SUMMARY] PASS")
+    print(f"\n[SUMMARY] PASS ({len(infos)} checks)")
     return 0
 
 

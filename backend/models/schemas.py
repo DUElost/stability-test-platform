@@ -1,3 +1,18 @@
+"""
+Legacy ORM models — scheduled for removal in Wave 6.
+
+This file retains ORM models that still map to legacy database tables:
+  TaskTemplate (task_templates), Task (tasks), TaskRun (task_runs),
+  RunStep (run_steps), LogArtifact (log_artifacts),
+  ToolCategory (tool_categories), Tool (tools)
+
+All other models have been migrated to dedicated modules:
+  enums.py, user.py, host.py, workflow.py, job.py, tool.py,
+  notification.py, schedule.py, audit.py, action_template.py
+
+Do NOT add new models here. See docs/dual-track-merger-v3.revised.md.
+"""
+
 from datetime import datetime
 
 from sqlalchemy import (

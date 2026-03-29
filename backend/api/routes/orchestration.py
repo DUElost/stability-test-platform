@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.response import ApiResponse, err, ok
 from backend.core.database import get_async_db
 from backend.core.pipeline_validator import validate_pipeline_def
-from backend.models.job import JobInstance, StepTrace, TaskTemplate
+from backend.models.job import JobArtifact, JobInstance, StepTrace, TaskTemplate
 from backend.models.host import Device
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
 from backend.services.dispatcher import DispatchError, dispatch_workflow
@@ -464,6 +464,42 @@ async def get_workflow_run_summary(
     if summary is None:
         raise HTTPException(status_code=404, detail="summary data not available")
     return ok(summary)
+
+
+# ── Artifacts ─────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/workflow-runs/{run_id}/jobs/{job_id}/artifacts",
+    response_model=ApiResponse[list],
+    summary="List job artifacts",
+)
+async def list_job_artifacts(
+    run_id: int,
+    job_id: int,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """List all artifacts for a job within a workflow run."""
+    job = await db.get(JobInstance, job_id)
+    if job is None or job.workflow_run_id != run_id:
+        raise HTTPException(status_code=404, detail="job not found in this workflow run")
+
+    result = await db.execute(
+        select(JobArtifact).where(JobArtifact.job_id == job_id)
+    )
+    artifacts = result.scalars().all()
+    return ok([
+        {
+            "id": a.id,
+            "job_id": a.job_id,
+            "storage_uri": a.storage_uri,
+            "artifact_type": a.artifact_type,
+            "size_bytes": a.size_bytes,
+            "checksum": a.checksum,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in artifacts
+    ])
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

@@ -643,6 +643,16 @@ export interface WorkflowSummary {
   }>;
 }
 
+export interface JobArtifactEntry {
+  id: number;
+  job_id: number;
+  storage_uri: string;
+  artifact_type: string;
+  size_bytes?: number | null;
+  checksum?: string | null;
+  created_at?: string | null;
+}
+
 // 解包后端统一响应格式 { data: T, error: null | { code, message } }
 async function unwrapApiResponse<T>(request: Promise<{ data: { data?: T; error?: { code: string; message: string } | null } }>): Promise<T> {
   const resp = await request;
@@ -924,6 +934,10 @@ export const api = {
       unwrapApiResponse<JiraDraft>(apiClient.post(`/workflow-runs/${runId}/jobs/${jobId}/jira-draft`)),
     getWorkflowSummary: (runId: number) =>
       unwrapApiResponse<WorkflowSummary>(apiClient.get(`/workflow-runs/${runId}/summary`)),
+    listJobArtifacts: (runId: number, jobId: number) =>
+      unwrapApiResponse<JobArtifactEntry[]>(apiClient.get(`/workflow-runs/${runId}/jobs/${jobId}/artifacts`)),
+    getJobReportExportUrl: (runId: number, jobId: number, format: 'markdown' | 'json' = 'markdown') =>
+      `${apiClient.defaults.baseURL}/runs/${jobId}/report/export?format=${format}`,
   },
 
   // Tool Catalog (新工具目录，Phase 3 格式)
