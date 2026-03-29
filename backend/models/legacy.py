@@ -1,16 +1,20 @@
 """
-Legacy ORM models — scheduled for removal in Wave 6.
+Legacy ORM models — mapped to tables scheduled for DROP.
 
-This file retains ORM models that still map to legacy database tables:
-  TaskTemplate (task_templates), Task (tasks), TaskRun (task_runs),
-  RunStep (run_steps), LogArtifact (log_artifacts),
-  ToolCategory (tool_categories), Tool (tools)
+These models exist solely to support legacy API endpoints that still read
+from the old table structure (tasks, task_runs, run_steps, log_artifacts,
+tools, tool_categories, task_templates).  Once all API consumers migrate
+to the new orchestration layer, these models and their tables can be
+removed entirely.
 
-All other models have been migrated to dedicated modules:
-  enums.py, user.py, host.py, workflow.py, job.py, tool.py,
-  notification.py, schedule.py, audit.py, action_template.py
-
-Do NOT add new models here. See docs/dual-track-merger-v3.revised.md.
+Canonical replacements:
+  task_templates  → task_template  (backend.models.job.TaskTemplate)
+  tasks           → workflow_definition + job_instance
+  task_runs       → job_instance   (backend.models.job.JobInstance)
+  run_steps       → step_trace     (backend.models.job.StepTrace)
+  log_artifacts   → job_artifact   (backend.models.job.JobArtifact)
+  tool_categories → tool.category  (backend.models.tool.Tool)
+  tools           → tool           (backend.models.tool.Tool)
 """
 
 from datetime import datetime
@@ -31,18 +35,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
-from backend.models.enums import (  # noqa: F401 — canonical source; re-exported for back-compat
-    DeviceStatus,
-    HostStatus,
-    RunStatus,
-    RunStepStatus,
-    TaskStatus,
-)
-from backend.models.user import User  # noqa: F401 — re-export for back-compat
+from backend.models.enums import RunStatus, RunStepStatus, TaskStatus
 
 
-
-class TaskTemplate(Base):
+class LegacyTaskTemplate(Base):
     __tablename__ = "task_templates"
 
     id = Column(Integer, primary_key=True)
@@ -53,13 +49,13 @@ class TaskTemplate(Base):
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    tasks = relationship("backend.models.schemas.Task", back_populates="template")
+    tasks = relationship("Task", back_populates="template")
 
 
 class Task(Base):
     __tablename__ = "tasks"
     __table_args__ = (
-        Index('ix_task_status', 'status'),
+        Index("ix_task_status", "status"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -73,26 +69,24 @@ class Task(Base):
     status = Column(Enum(TaskStatus), default=TaskStatus.PENDING, nullable=False)
     priority = Column(Integer, default=0)
 
-    # 分布式任务支持
-    group_id = Column(String(32), index=True)  # 任务组ID，关联的 TaskRun 共享
-    is_distributed = Column(Boolean, default=False)  # 是否为分布式任务
+    group_id = Column(String(32), index=True)
+    is_distributed = Column(Boolean, default=False)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    # Pipeline 定义（JSON Schema validated）
     pipeline_def = Column(JSON, nullable=True)
 
-    template = relationship("backend.models.schemas.TaskTemplate", back_populates="tasks")
-    tool = relationship("backend.models.schemas.Tool")
+    template = relationship("LegacyTaskTemplate", back_populates="tasks")
+    tool = relationship("LegacyTool")
     runs = relationship("TaskRun", back_populates="task")
 
 
 class TaskRun(Base):
     __tablename__ = "task_runs"
     __table_args__ = (
-        Index('ix_tr_host_status', 'host_id', 'status'),
-        Index('ix_tr_task_id', 'task_id'),
-        Index('ix_tr_status', 'status'),
+        Index("ix_tr_host_status", "host_id", "status"),
+        Index("ix_tr_task_id", "task_id"),
+        Index("ix_tr_status", "status"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -101,12 +95,10 @@ class TaskRun(Base):
     device_id = Column(Integer, ForeignKey("devices.id"), nullable=False)
     status = Column(Enum(RunStatus), default=RunStatus.QUEUED, nullable=False)
 
-    # 分布式任务支持
-    group_id = Column(String(32), index=True)  # 与 Task.group_id 关联
+    group_id = Column(String(32), index=True)
 
-    # 进度信息
-    progress = Column(Integer, default=0)  # 进度百分比
-    progress_message = Column(String(256))  # 进度描述，如 "设备配置中"、"风险扫描中"
+    progress = Column(Integer, default=0)
+    progress_message = Column(String(256))
 
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
@@ -117,22 +109,25 @@ class TaskRun(Base):
     log_summary = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    # Post-completion pipeline results
     report_json = Column(JSON, nullable=True)
     jira_draft_json = Column(JSON, nullable=True)
     post_processed_at = Column(DateTime, nullable=True)
 
     task = relationship("Task", back_populates="runs")
     artifacts = relationship("LogArtifact", back_populates="run")
-    steps = relationship("RunStep", back_populates="run", order_by="RunStep.phase, RunStep.step_order", cascade="all, delete-orphan")
+    steps = relationship(
+        "RunStep",
+        back_populates="run",
+        order_by="RunStep.phase, RunStep.step_order",
+        cascade="all, delete-orphan",
+    )
 
 
 class RunStep(Base):
-    """Pipeline step execution record within a TaskRun."""
     __tablename__ = "run_steps"
     __table_args__ = (
-        Index('ix_rs_run_id', 'run_id'),
-        Index('ix_rs_run_status', 'run_id', 'status'),
+        Index("ix_rs_run_id", "run_id"),
+        Index("ix_rs_run_status", "run_id", "status"),
     )
 
     id = Column(Integer, primary_key=True)
@@ -166,44 +161,36 @@ class LogArtifact(Base):
     run = relationship("TaskRun", back_populates="artifacts")
 
 
-# ==================== 工具管理模块 ====================
-
-class ToolCategory(Base):
-    """测试类型分类（Monkey、GPU、DDR、MTBF）"""
+class LegacyToolCategory(Base):
     __tablename__ = "tool_categories"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(64), nullable=False, unique=True)  # 如 "Monkey", "GPU", "DDR"
+    name = Column(String(64), nullable=False, unique=True)
     description = Column(String(256))
-    icon = Column(String(32))  # 图标名
+    icon = Column(String(32))
     order = Column(Integer, default=0)
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
-    tools = relationship("backend.models.schemas.Tool", back_populates="category")
+    tools = relationship("LegacyTool", back_populates="category")
 
 
-class Tool(Base):
-    """工具配置"""
+class LegacyTool(Base):
     __tablename__ = "tools"
 
     id = Column(Integer, primary_key=True)
     category_id = Column(Integer, ForeignKey("tool_categories.id"), nullable=False, index=True)
 
-    # 基本信息
-    name = Column(String(128), nullable=False)  # 如 "MTK平台 Monkey 测试"
+    name = Column(String(128), nullable=False)
     description = Column(String(256))
 
-    # 脚本配置
-    script_path = Column(String(512), nullable=False)  # Agent 端脚本路径
-    script_class = Column(String(128))  # Python 类名，如 "MonkeyTest"
+    script_path = Column(String(512), nullable=False)
+    script_class = Column(String(128))
     script_type = Column(String(16), default="python")
 
-    # 参数模板
-    default_params = Column(JSON, default=dict)  # 默认参数
-    param_schema = Column(JSON, default=dict)  # 参数 Schema（用于前端表单）
+    default_params = Column(JSON, default=dict)
+    param_schema = Column(JSON, default=dict)
 
-    # 运行配置
     timeout = Column(Integer, default=3600)
     need_device = Column(Boolean, default=True)
 
@@ -211,21 +198,4 @@ class Tool(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    category = relationship("backend.models.schemas.ToolCategory", back_populates="tools")
-
-
-# ==================== 通知模块（canonical: backend.models.notification） ====================
-from backend.models.notification import (  # noqa: F401 — re-export for back-compat
-    AlertRule,
-    ChannelType,
-    EventType,
-    NotificationChannel,
-)
-
-
-# ==================== 审计日志（canonical: backend.models.audit） ====================
-from backend.models.audit import AuditLog  # noqa: F401 — re-export for back-compat
-
-
-# ==================== 定时任务（canonical: backend.models.schedule） ====================
-from backend.models.schedule import TaskSchedule  # noqa: F401 — re-export for back-compat
+    category = relationship("LegacyToolCategory", back_populates="tools")

@@ -45,8 +45,8 @@ todos:
     content: "Wave 5: CI 一致性检查（migration chain lint + env.py import check + legacy import guard）"
     status: done
   - id: wave6-drop
-    content: "Wave 6: [FUTURE] 确认所有代码已迁移后，新增 migration 删除遗留表"
-    status: pending
+    content: "Wave 6: schemas.py → legacy.py 迁移 + DROP migration i7d8e9f0a1b2 创建"
+    status: done
 isProject: false
 ---
 
@@ -187,16 +187,31 @@ CI 脚本 `scripts/ci_check_migrations.py` 执行三项检查：
 
 ---
 
-## Wave 6: 遗留表清除（未来）
+## Wave 6: 遗留表清除（已完成代码层面，DROP 待执行）
 
-当所有应用代码（`tasks.py`、`schedules.py`、`conftest.py` 等）完全切换到新模型后，
-新增最终迁移 `DROP TABLE IF EXISTS` 删除遗留表：
+### 6-1. schemas.py → legacy.py
 
-- `tasks`, `task_runs`, `run_steps`, `task_templates` (legacy)
+- 所有遗留模型（`Task`, `TaskRun`, `RunStep`, `LogArtifact`, `LegacyTaskTemplate`,
+  `LegacyTool`, `LegacyToolCategory`）从 `schemas.py` 移入 `backend/models/legacy.py`。
+- `schemas.py` 已删除；所有消费方（仅 `tasks.py`）改为从 `legacy.py` 导入。
+- `alembic/env.py` 新增 `import backend.models.legacy`。
+- `ci_check_migrations.py` 的 `NEW_MODEL_FILES` 补入 `legacy`。
+
+### 6-2. DROP migration (i7d8e9f0a1b2)
+
+迁移 `i7d8e9f0a1b2_drop_legacy_tables.py` 已创建，DROP 以下表（按依赖顺序）：
+
+- `run_steps`, `log_artifacts`, `task_runs`, `tasks`, `task_templates`
 - `tools`, `tool_categories`
-- `log_artifacts`
-- `hosts`, `devices` (legacy int-PK tables)
-- `workflows`, `workflow_steps`, `deployments`, `device_metric_snapshots`
+
+**执行前提**：
+1. 运行 `h6c7d8e9f0a1` 数据迁移确认无遗漏
+2. 无 API 流量命中遗留端点
+3. 已创建数据库备份
+
+> `hosts`/`devices` 遗留 int-PK 表暂不在此迁移中 DROP，因新 `device` 表仍有
+> `ForeignKey("devices.id")` 的间接引用（通过 `legacy.py` 中的 `TaskRun.device_id`）。
+> 这些表将在 `legacy.py` 中的模型全部下线后单独处理。
 
 ---
 

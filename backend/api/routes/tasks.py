@@ -21,7 +21,8 @@ from sqlalchemy.orm import Session, selectinload
 from backend.core.database import get_db
 from backend.core.task_templates import list_templates as list_core_templates
 from backend.models.enums import DeviceStatus
-from backend.models.schemas import LogArtifact, RunStatus, Task
+from backend.models.enums import RunStatus
+from backend.models.legacy import LogArtifact, Task
 from backend.models.host import Device, Host
 from backend.api.schemas import (
     AgentLogOut,

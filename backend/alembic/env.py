@@ -29,6 +29,7 @@ def get_metadata():
     import backend.models.enums            # noqa: F401
     import backend.models.host             # noqa: F401
     import backend.models.job              # noqa: F401
+    import backend.models.legacy           # noqa: F401
     import backend.models.notification     # noqa: F401
     import backend.models.schedule         # noqa: F401
     import backend.models.tool             # noqa: F401
