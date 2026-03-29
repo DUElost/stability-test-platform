@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, selectinload
 from backend.core.database import get_db
 from backend.core.task_templates import list_templates as list_core_templates
 from backend.models.enums import DeviceStatus
-from backend.models.schemas import LogArtifact, RunStatus, Task, TaskRun
+from backend.models.schemas import LogArtifact, RunStatus, Task
 from backend.models.host import Device, Host
 from backend.api.schemas import (
     AgentLogOut,
@@ -605,19 +605,22 @@ def get_cached_jira_draft(run_id: int, db: Session = Depends(get_db)):
 
 @router.get("/tasks/{task_id}/runs/{run_id}/artifacts/{artifact_id}/download")
 def download_run_artifact(task_id: int, run_id: int, artifact_id: int, db: Session = Depends(get_db)):
-    task = db.get(Task, task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="task not found")
+    from backend.models.job import JobArtifact
 
-    run = db.get(TaskRun, run_id)
-    if not run or run.task_id != task_id:
-        raise HTTPException(status_code=404, detail="run not found")
+    storage_uri = None
 
-    artifact = db.get(LogArtifact, artifact_id)
-    if not artifact or artifact.run_id != run_id:
+    artifact = db.get(JobArtifact, artifact_id)
+    if artifact and artifact.job_id == run_id:
+        storage_uri = artifact.storage_uri
+    else:
+        legacy = db.get(LogArtifact, artifact_id)
+        if legacy and legacy.run_id == run_id:
+            storage_uri = legacy.storage_uri
+
+    if not storage_uri:
         raise HTTPException(status_code=404, detail="artifact not found")
 
-    target = _artifact_download_target(artifact.storage_uri)
+    target = _artifact_download_target(storage_uri)
     if target["kind"] == "redirect":
         return RedirectResponse(url=target["url"], status_code=307)
 

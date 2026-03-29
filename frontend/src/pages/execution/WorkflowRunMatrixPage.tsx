@@ -4,10 +4,10 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, type WorkflowRun, type JobInstance, type StepTrace, type JobStatus, type WorkflowStatus } from '@/utils/api';
+import { api, type WorkflowRun, type JobInstance, type StepTrace, type JobStatus, type WorkflowStatus, type JiraDraft } from '@/utils/api';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { formatLocalDateTime, formatLocalTime, parseIsoToDate } from '@/utils/time';
-import { ArrowLeft, RefreshCw, X } from 'lucide-react';
+import { ArrowLeft, RefreshCw, X, FileText, Download, Bug } from 'lucide-react';
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -164,11 +164,53 @@ function JobLogStream({ jobId }: { jobId: number }) {
 
 // ─── Job detail drawer ─────────────────────────────────────────────────────────
 
-type DrawerTab = 'trace' | 'logs';
+type DrawerTab = 'trace' | 'logs' | 'artifacts';
 
-function JobDrawer({ job, onClose }: { job: JobInstance; onClose: () => void }) {
+function ArtifactList({ runId, jobId }: { runId: number; jobId: number }) {
+  const { data: artifacts, isLoading } = useQuery({
+    queryKey: ['job-artifacts', runId, jobId],
+    queryFn: () => api.execution.listJobArtifacts(runId, jobId),
+  });
+
+  if (isLoading) return <p className="text-sm text-gray-400 py-2">加载中…</p>;
+  if (!artifacts?.length) return <p className="text-sm text-gray-400 py-2">暂无制品</p>;
+
+  return (
+    <div className="space-y-2">
+      {artifacts.map(a => (
+        <div key={a.id} className="flex items-center justify-between rounded-md border p-2 text-sm">
+          <div className="min-w-0 flex-1">
+            <div className="font-mono text-xs truncate" title={a.storage_uri}>{a.storage_uri.split('/').pop()}</div>
+            <div className="text-xs text-gray-400 mt-0.5">
+              {a.artifact_type}{a.size_bytes ? ` · ${(a.size_bytes / 1024).toFixed(1)} KB` : ''}
+            </div>
+          </div>
+          <a href={`/api/v1/tasks/0/runs/${jobId}/artifacts/${a.id}/download`} target="_blank" rel="noreferrer">
+            <Download className="w-4 h-4 text-gray-400 hover:text-blue-500" />
+          </a>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function JobDrawer({ job, runId, onClose }: { job: JobInstance; runId: number; onClose: () => void }) {
+  const navigate = useNavigate();
   const style = JOB_STATUS_STYLE[job.status] ?? JOB_STATUS_STYLE.PENDING;
   const [tab, setTab] = useState<DrawerTab>('trace');
+  const [jiraLoading, setJiraLoading] = useState(false);
+  const [jiraDraft, setJiraDraft] = useState<JiraDraft | null>(null);
+  const isTerminalJob = ['COMPLETED', 'FAILED', 'ABORTED'].includes(job.status);
+
+  const handleJiraDraft = async () => {
+    setJiraLoading(true);
+    try {
+      const draft = await api.execution.createJobJiraDraft(runId, job.id);
+      setJiraDraft(draft);
+    } catch { /* ignore */ }
+    setJiraLoading(false);
+  };
+
   return (
     <div className="fixed inset-y-0 right-0 z-50 w-96 bg-white shadow-2xl border-l flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b">
@@ -206,9 +248,37 @@ function JobDrawer({ job, onClose }: { job: JobInstance; onClose: () => void }) 
           </div>
         </div>
 
+        {/* Action buttons for terminal jobs */}
+        {isTerminalJob && (
+          <div className="flex gap-2">
+            <button
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 text-xs font-medium rounded-md hover:bg-blue-100 transition-colors"
+              onClick={() => navigate(`/runs/${job.id}/report`)}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              查看报告
+            </button>
+            <button
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 text-xs font-medium rounded-md hover:bg-amber-100 transition-colors disabled:opacity-50"
+              onClick={handleJiraDraft}
+              disabled={jiraLoading}
+            >
+              <Bug className="w-3.5 h-3.5" />
+              {jiraLoading ? '生成中…' : 'JIRA 草稿'}
+            </button>
+          </div>
+        )}
+
+        {jiraDraft && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs">
+            <div className="font-medium text-amber-800">{jiraDraft.summary}</div>
+            <div className="text-amber-600 mt-1">优先级: {jiraDraft.priority} · 标签: {jiraDraft.labels?.join(', ') || '-'}</div>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex border-b">
-          {(['trace', 'logs'] as DrawerTab[]).map(t => (
+          {(['trace', 'logs', 'artifacts'] as DrawerTab[]).map(t => (
             <button
               key={t}
               className={`px-4 py-1.5 text-sm font-medium border-b-2 transition-colors ${
@@ -216,13 +286,14 @@ function JobDrawer({ job, onClose }: { job: JobInstance; onClose: () => void }) 
               }`}
               onClick={() => setTab(t)}
             >
-              {t === 'trace' ? 'Step 时间线' : '实时日志'}
+              {t === 'trace' ? 'Step 时间线' : t === 'logs' ? '实时日志' : '制品'}
             </button>
           ))}
         </div>
 
         {tab === 'trace' && <StepTimeline traces={job.step_traces ?? []} />}
         {tab === 'logs' && <JobLogStream jobId={job.id} />}
+        {tab === 'artifacts' && <ArtifactList runId={runId} jobId={job.id} />}
       </div>
     </div>
   );
@@ -318,7 +389,7 @@ export default function WorkflowRunMatrixPage() {
   return (
     <div className="space-y-6">
       {selectedJob && (
-        <JobDrawer job={selectedJob} onClose={() => setSelectedJob(null)} />
+        <JobDrawer job={selectedJob} runId={Number(runId)} onClose={() => setSelectedJob(null)} />
       )}
 
       {/* Header */}

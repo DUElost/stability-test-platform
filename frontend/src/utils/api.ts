@@ -128,6 +128,7 @@ export interface Task {
   runs_count?: number;
 }
 
+/** @deprecated Use StepTrace instead — retained for legacy PipelineStepTree */
 export interface RunStep {
   id: number;
   run_id: number;
@@ -145,6 +146,7 @@ export interface RunStep {
   created_at: string;
 }
 
+/** @deprecated Use JobInstance instead — retained for legacy TaskDetails/TaskRunsPage */
 export interface TaskRun {
   id: number;
   task_id: number;
@@ -184,6 +186,7 @@ export interface RuntimeLogQueryResponse {
   scanned: number;
 }
 
+/** @deprecated Use JobArtifactEntry instead — retained for legacy compatibility */
 export interface LogArtifact {
   id: number;
   run_id: number;
@@ -747,12 +750,18 @@ export const api = {
       }
       return apiClient.get<RuntimeLogQueryResponse>('/logs/query', { params: reqParams });
     },
+    /** @deprecated Use api.execution.getJobReport instead */
     getRunReport: (runId: number) => apiClient.get<RunReport>(`/runs/${runId}/report`),
+    /** @deprecated Use api.execution.getJobReportExportUrl instead */
     getRunReportExportUrl: (runId: number, format: 'markdown' | 'json' = 'markdown') =>
       `/api/v1/runs/${runId}/report/export?format=${format}`,
+    /** @deprecated Use api.execution.createJobJiraDraft instead */
     createRunJiraDraft: (runId: number) => apiClient.post<JiraDraft>(`/runs/${runId}/jira-draft`),
+    /** @deprecated Use api.execution.getJobReport instead */
     getCachedReport: (runId: number) => apiClient.get<RunReport>(`/runs/${runId}/report/cached`),
+    /** @deprecated Use api.execution.createJobJiraDraft instead */
     getCachedJiraDraft: (runId: number) => apiClient.get<JiraDraft>(`/runs/${runId}/jira-draft/cached`),
+    /** @deprecated Use api.execution.listJobArtifacts instead */
     artifactDownloadUrl: (taskId: number, runId: number, artifactId: number) =>
       `/api/v1/tasks/${taskId}/runs/${runId}/artifacts/${artifactId}/download`,
     // 查询Agent日志
@@ -936,7 +945,7 @@ export const api = {
       unwrapApiResponse<WorkflowSummary>(apiClient.get(`/workflow-runs/${runId}/summary`)),
     listJobArtifacts: (runId: number, jobId: number) =>
       unwrapApiResponse<JobArtifactEntry[]>(apiClient.get(`/workflow-runs/${runId}/jobs/${jobId}/artifacts`)),
-    getJobReportExportUrl: (runId: number, jobId: number, format: 'markdown' | 'json' = 'markdown') =>
+    getJobReportExportUrl: (_runId: number, jobId: number, format: 'markdown' | 'json' = 'markdown') =>
       `${apiClient.defaults.baseURL}/runs/${jobId}/report/export?format=${format}`,
   },
 

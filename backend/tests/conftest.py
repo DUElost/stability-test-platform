@@ -32,10 +32,9 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 from backend.core.database import async_engine, get_db
 from backend.core.database import Base
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus, RunStatus, TaskStatus
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, TaskTemplate as JobTaskTemplate
-from backend.models.schemas import Task, TaskRun  # legacy ORM — kept for existing test fixtures
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
 from backend.core.security import create_access_token
 from backend.main import app
@@ -205,99 +204,7 @@ def sample_busy_device(db_session, sample_host):
     return device
 
 
-@pytest.fixture
-def sample_task(db_session, sample_device):
-    """Create a sample task"""
-    task = Task(
-        name="test-task",
-        type="MONKEY",
-        params={"count": 1000},
-        target_device_id=sample_device.id,
-        status=TaskStatus.PENDING,
-        priority=1,
-    )
-    db_session.add(task)
-    db_session.commit()
-    return task
-
-
-@pytest.fixture
-def sample_queued_task(db_session, sample_device):
-    """Create a sample queued task"""
-    task = Task(
-        name="test-queued-task",
-        type="MTBF",
-        params={"duration": 3600},
-        target_device_id=sample_device.id,
-        status=TaskStatus.QUEUED,
-        priority=2,
-    )
-    db_session.add(task)
-    db_session.commit()
-    return task
-
-
-@pytest.fixture
-def sample_running_task(db_session, sample_device):
-    """Create a sample running task"""
-    task = Task(
-        name="test-running-task",
-        type="DDR",
-        params={"duration": 1800},
-        target_device_id=sample_device.id,
-        status=TaskStatus.RUNNING,
-        priority=3,
-    )
-    db_session.add(task)
-    db_session.commit()
-    return task
-
-
-@pytest.fixture
-def sample_task_run(db_session, sample_task, sample_host, sample_device):
-    """Create a sample task run"""
-    run = TaskRun(
-        task_id=sample_task.id,
-        host_id=sample_host.id,
-        device_id=sample_device.id,
-        status=RunStatus.QUEUED,
-    )
-    db_session.add(run)
-    db_session.commit()
-    return run
-
-
-@pytest.fixture
-def sample_dispatched_run(db_session, sample_queued_task, sample_host, sample_device):
-    """Create a sample dispatched task run"""
-    run = TaskRun(
-        task_id=sample_queued_task.id,
-        host_id=sample_host.id,
-        device_id=sample_device.id,
-        status=RunStatus.DISPATCHED,
-    )
-    db_session.add(run)
-    db_session.commit()
-    return run
-
-
-@pytest.fixture
-def sample_running_run(db_session, sample_running_task, sample_host, sample_device):
-    """Create a sample running task run"""
-    run = TaskRun(
-        task_id=sample_running_task.id,
-        host_id=sample_host.id,
-        device_id=sample_device.id,
-        status=RunStatus.RUNNING,
-        started_at=datetime.utcnow(),
-        last_heartbeat_at=datetime.utcnow(),
-    )
-    db_session.add(run)
-    db_session.commit()
-    return run
-
-
-# ── New model fixtures (WorkflowDefinition / WorkflowRun / JobInstance) ────
+# ── Model fixtures (WorkflowDefinition / WorkflowRun / JobInstance) ────────
 
 
 @pytest.fixture
