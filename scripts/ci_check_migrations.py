@@ -22,7 +22,7 @@ NEW_MODEL_DIR = ROOT / "backend" / "models"
 
 LEGACY_IMPORT = re.compile(r"from\s+backend\.models\.schemas\s+import")
 NEW_MODEL_FILES = {
-    "audit", "host", "job", "legacy", "notification", "schedule",
+    "audit", "host", "job", "notification", "schedule",
     "tool", "user", "workflow", "action_template", "enums",
 }
 

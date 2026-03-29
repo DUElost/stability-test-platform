@@ -3,63 +3,40 @@ import json
 import logging
 import os
 import shlex
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote, urlparse
 
 import paramiko
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
-from pydantic.fields import PrivateAttr
-from sqlalchemy import text
-from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
 from backend.core.task_templates import list_templates as list_core_templates
-from backend.models.enums import DeviceStatus
 from backend.models.enums import RunStatus
-from backend.models.legacy import LogArtifact, Task
-from backend.models.host import Device, Host
+from backend.models.host import Host
 from backend.api.schemas import (
     AgentLogOut,
     AgentLogQuery,
-    DeviceLiteOut,
-    HostLiteOut,
     JiraDraftOut,
-    LogArtifactIn,
     PaginatedResponse,
-    RiskAlertOut,
-    RunAgentOut,
-    RunCompleteIn,
     RunOut,
     RunReportOut,
     RunStepOut,
-    RunStepUpdate,
-    RunUpdate,
     TaskCreate,
     TaskDispatch,
     TaskTemplateOut,
     TaskOut,
 )
 from backend.api.routes.auth import get_current_active_user, User, verify_agent_secret
-from backend.core.audit import record_audit
-from backend.services.report_service import (
-    compose_run_report,
-    build_jira_draft,
-    build_risk_alerts as _build_risk_alerts,
-    parse_run_log_summary as _parse_run_log_summary,
-)
-from backend.services.report_service import _load_risk_summary_from_artifacts, _model_to_dict
-from backend.api.routes.websocket import broadcast_run_update, broadcast_task_update
+from backend.services.report_service import compose_run_report, build_jira_draft, _model_to_dict
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 logger = logging.getLogger(__name__)
-
-DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
 
 RUN_STATUS_ALIASES = {
     "COMPLETED": RunStatus.FINISHED.value,
@@ -153,76 +130,6 @@ def _report_to_markdown(report: RunReportOut) -> str:
     else:
         lines.append("- N/A")
     return "\n".join(lines)
-
-
-def _acquire_device_lock(db: Session, device_id: int, run_id: int) -> None:
-    now = datetime.utcnow()
-    expires_at = now + timedelta(seconds=DEVICE_LOCK_LEASE_SECONDS)
-    result = db.execute(
-        text(
-            """
-            UPDATE devices
-            SET status = :busy_status,
-                lock_run_id = :run_id,
-                lock_expires_at = :expires_at
-            WHERE id = :device_id
-              AND status = :online_status
-              AND (lock_run_id IS NULL OR lock_expires_at IS NULL OR lock_expires_at < :now)
-            """
-        ),
-        {
-            "device_id": device_id,
-            "run_id": run_id,
-            "expires_at": expires_at,
-            "now": now,
-            "busy_status": DeviceStatus.BUSY.value,
-            "online_status": DeviceStatus.ONLINE.value,
-        },
-    )
-    if result.rowcount != 1:
-        raise HTTPException(status_code=409, detail="device busy")
-
-
-def _extend_device_lock(db: Session, device_id: int, run_id: int) -> None:
-    now = datetime.utcnow()
-    expires_at = now + timedelta(seconds=DEVICE_LOCK_LEASE_SECONDS)
-    db.execute(
-        text(
-            """
-            UPDATE devices
-            SET lock_expires_at = :expires_at
-            WHERE id = :device_id AND lock_run_id = :run_id
-            """
-        ),
-        {
-            "device_id": device_id,
-            "run_id": run_id,
-            "expires_at": expires_at,
-        },
-    )
-
-
-def _release_device_lock(db: Session, device_id: int, run_id: int) -> None:
-    db.execute(
-        text(
-            """
-            UPDATE devices
-            SET status = CASE
-                    WHEN status = :busy_status THEN :online_status
-                    ELSE status
-                END,
-                lock_run_id = NULL,
-                lock_expires_at = NULL
-            WHERE id = :device_id AND lock_run_id = :run_id
-            """
-        ),
-        {
-            "device_id": device_id,
-            "run_id": run_id,
-            "busy_status": DeviceStatus.BUSY.value,
-            "online_status": DeviceStatus.ONLINE.value,
-        },
-    )
 
 
 _WF_STATUS_TO_TASK = {
@@ -608,20 +515,11 @@ def get_cached_jira_draft(run_id: int, db: Session = Depends(get_db)):
 def download_run_artifact(task_id: int, run_id: int, artifact_id: int, db: Session = Depends(get_db)):
     from backend.models.job import JobArtifact
 
-    storage_uri = None
-
     artifact = db.get(JobArtifact, artifact_id)
-    if artifact and artifact.job_id == run_id:
-        storage_uri = artifact.storage_uri
-    else:
-        legacy = db.get(LogArtifact, artifact_id)
-        if legacy and legacy.run_id == run_id:
-            storage_uri = legacy.storage_uri
-
-    if not storage_uri:
+    if not artifact or artifact.job_id != run_id:
         raise HTTPException(status_code=404, detail="artifact not found")
 
-    target = _artifact_download_target(storage_uri)
+    target = _artifact_download_target(artifact.storage_uri)
     if target["kind"] == "redirect":
         return RedirectResponse(url=target["url"], status_code=307)
 

@@ -253,9 +253,9 @@ aiohttp
 
 ## 数据模型
 
-> **双轨架构说明**：项目已从旧 Task/TaskRun 模型迁移到新 WorkflowDefinition/JobInstance 模型。
-> 新代码使用 `backend/models/` 下的独立模块；遗留模型（Task/TaskRun 等）位于 `legacy.py`，仅兼容层使用。
-> 遗留表的 DROP 迁移已就绪（`i7d8e9f0a1b2`），待数据确认后执行。详见 `docs/dual-track-merger-v3.revised.md`。
+> **双轨合并完成**：遗留 ORM（schemas.py / legacy.py）和遗留表已全部清除。
+> 所有业务逻辑使用 `backend/models/` 下的独立模块（host, job, tool, workflow 等）。
+> 详见 `docs/dual-track-merger-v3.revised.md`。
 
 ### Host（主机） — `backend/models/host.py`
 ```python
@@ -469,7 +469,7 @@ class Tool(Base):
 - `backend/models/notification.py` - NotificationChannel / AlertRule ORM
 - `backend/models/schedule.py` - TaskSchedule ORM
 - `backend/models/audit.py` - AuditLog ORM
-- `backend/models/legacy.py` - 遗留 ORM（Task/TaskRun 等，仅兼容层使用，Wave 6 后删除）
+- `backend/models/` - 所有 ORM 模型均按领域拆分（host, job, tool, workflow 等）
 - `backend/api/schemas.py` - Pydantic 模型
 
 ### 后端 API
