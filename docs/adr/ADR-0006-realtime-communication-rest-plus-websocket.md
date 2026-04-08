@@ -32,18 +32,20 @@
 
 - 正向影响：日志与状态更新响应更快，UI 可观测性增强。
 - 风险：
-  - WebSocket 鉴权 token 与前端端点配置尚未完全统一。
-  - 局部页面仍存在硬编码 WS 地址的问题。
+  - ~~WebSocket 鉴权 token 与前端端点配置尚未完全统一。~~ → 已由 [ADR-0009](./ADR-0009-websocket-auth-and-endpoint-config-unification.md) 解决（2026-03-24）。
+  - ~~局部页面仍存在硬编码 WS 地址的问题。~~ → 同上。
 
 ## 落地与后续动作
 
-- 已落地：Dashboard 与 run 日志通道、线程安全广播桥接。
-- 后续：见 `ADR-0009`，统一 WS 鉴权与端点配置。
+- ✅ 已落地：Dashboard 与 run 日志通道、线程安全广播桥接。
+- ✅ WS 鉴权与端点配置已由 [ADR-0009](./ADR-0009-websocket-auth-and-endpoint-config-unification.md) 统一。
+- ⚠️ **WebSocket 实现层被 ADR-0018 supersede**：自研 `ConnectionManager` 将由 python-socketio 替代，获得 rooms、namespace（`/agent` + `/dashboard`）、Redis adapter 多进程同步、自动断线重连。**REST + WebSocket 分工原则保留不变**。详见 [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md)。
 
 ## 关联实现/文档
 
-- `backend/api/routes/websocket.py`
+- `backend/api/routes/websocket.py` → 将重构为 python-socketio server（ADR-0018）
 - `backend/api/routes/tasks.py`
-- `frontend/src/hooks/useWebSocket.ts`
+- `frontend/src/hooks/useWebSocket.ts` → 将迁移到 socket.io-client（ADR-0018）
 - `frontend/src/hooks/useRealtimeDashboard.ts`
 - `frontend/src/pages/tasks/TaskDetails.tsx`
+- `docs/module-responsibilities.md` — 模块职责定义（含 SocketIO 服务端日志持久化策略）

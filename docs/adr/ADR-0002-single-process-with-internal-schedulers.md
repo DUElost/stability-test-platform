@@ -49,7 +49,8 @@
 
 - ✅ 已落地：启动钩子内拉起 recycler + cron_scheduler 线程，以及 session_watchdog + Redis 消费者异步任务。
 - ✅ Legacy dispatcher 和 workflow_executor 已被 Workflow dispatcher + Agent claim 机制替代。
-- 后续：重构为"调度作业服务 + 选主机制"时，需新增替代 ADR 并将本 ADR 标记为 `Superseded`。
+- ⚠️ **部分被 ADR-0018 supersede**：后台线程（recycler、cron_scheduler）和异步任务（session_watchdog、Redis 消费者）的启动方式将由 APScheduler + SAQ + python-socketio 接管。**单进程约束保留不变**。详见 [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md)。
+- 远期：重构为"调度作业服务 + 选主机制"时，需新增替代 ADR 并将本 ADR 标记为 `Superseded`。
 
 ## 关联实现/文档
 

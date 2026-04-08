@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>创新项目申报附件图示预览</title>
+  <style>
+    :root {
+      --bg: #eef4f5;
+      --panel: #ffffff;
+      --ink: #163042;
+      --muted: #537083;
+      --line: #c9d8de;
+      --accent: #135d8c;
+      --accent-2: #1f8a70;
+      --accent-3: #b45309;
+      --accent-4: #0f766e;
+      --soft-1: #e6f1f7;
+      --soft-2: #e5f6f1;
+      --soft-3: #fff4df;
+      --soft-4: #e8f7f4;
+      --shadow: 0 20px 48px rgba(18, 57, 78, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(19,93,140,0.09), transparent 28%),
+        radial-gradient(circle at top right, rgba(31,138,112,0.1), transparent 24%),
+        linear-gradient(180deg, #f7fcfd 0%, var(--bg) 100%);
+      color: var(--ink);
+    }
+    .page {
+      width: min(1320px, calc(100vw - 48px));
+      margin: 0 auto;
+      padding: 40px 0 60px;
+    }
+    .hero {
+      background: linear-gradient(135deg, #0f2c3d 0%, #135d8c 58%, #1f8a70 100%);
+      color: #fff;
+      padding: 34px 38px;
+      border-radius: 26px;
+      box-shadow: var(--shadow);
+      margin-bottom: 28px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -80px -90px auto;
+      width: 280px;
+      height: 280px;
+      background: radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 72%);
+    }
+    .hero h1 {
+      margin: 0 0 10px;
+      font-size: 34px;
+      line-height: 1.2;
+      letter-spacing: 0.5px;
+    }
+    .hero p {
+      margin: 0;
+      max-width: 980px;
+      font-size: 15px;
+      line-height: 1.7;
+      color: rgba(255,255,255,0.88);
+    }
+    .hero-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding: 7px 14px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.18);
+      font-size: 12px;
+      letter-spacing: 1px;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid rgba(201,216,222,0.9);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      padding: 24px 26px 22px;
+      margin-bottom: 24px;
+      position: relative;
+    }
+    .panel::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 6px;
+      border-radius: 24px 24px 0 0;
+      background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%);
+    }
+    .panel h2 {
+      margin: 10px 0 8px;
+      font-size: 24px;
+      letter-spacing: 0.4px;
+    }
+    .panel p {
+      margin: 0 0 18px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+      overflow: visible;
+    }
+    .node {
+      rx: 18;
+      ry: 18;
+      stroke-width: 2;
+    }
+    .label {
+      font-size: 18px;
+      font-weight: 700;
+      fill: var(--ink);
+      text-anchor: middle;
+    }
+    .sub {
+      font-size: 13px;
+      font-weight: 500;
+      fill: var(--muted);
+      text-anchor: middle;
+    }
+    .arrow {
+      stroke: #64748b;
+      stroke-width: 2.2;
+      fill: none;
+      marker-end: url(#arrow);
+    }
+    .tag {
+      display: inline-block;
+      margin-right: 10px;
+      margin-bottom: 8px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: linear-gradient(180deg, #edf8fb 0%, #eef7f3 100%);
+      color: #17637d;
+      border: 1px solid rgba(23, 99, 125, 0.12);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .section-no {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 88px;
+      height: 30px;
+      padding: 0 14px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #dff0f6 0%, #dff4ec 100%);
+      color: #12536b;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      border: 1px solid rgba(18, 83, 107, 0.14);
+    }
+    .footer {
+      color: var(--muted);
+      font-size: 13px;
+      padding: 8px 4px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="hero-meta">创新项目申报附件 · 蓝绿科技申报风正式版</div>
+      <h1>稳定性专项测试平台申报附件图示</h1>
+      <p>本页展示四张可直接用于创新项目申报的核心图示：平台总体架构图、控制面与 Agent 协同流程图、稳定性专项测试标准流程图、任务调度与状态流转图。图示依据现有项目文档、ADR 及实现入口整理，适合作为申报附件、汇报材料或答辩说明页使用。</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-no">附件一</div>
+      <h2>1. 平台总体架构图</h2>
+      <p>
+        <span class="tag">控制面统一编排</span>
+        <span class="tag">执行面 Agent 分布式执行</span>
+        <span class="tag">40+ Host × 1000+ Device</span>
+        <span class="tag">后处理闭环</span>
+      </p>
+      <svg viewBox="0 0 1240 820" role="img" aria-label="平台总体架构图">
+        <defs>
+          <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+            <path d="M0,0 L12,6 L0,12 z" fill="#64748b"></path>
+          </marker>
+        </defs>
+
+        <rect x="70" y="36" width="1100" height="110" class="node" fill="#eef5ff" stroke="#1c5d99"></rect>
+        <text x="620" y="77" class="label">用户与展示层</text>
+        <text x="620" y="106" class="sub">前端 Web Dashboard：任务创建 / 状态监控 / 日志查看 / 报表展示</text>
+
+        <rect x="110" y="196" width="1020" height="168" class="node" fill="#eef4fb" stroke="#1c5d99"></rect>
+        <text x="620" y="230" class="label">控制面 Control Plane</text>
+
+        <rect x="150" y="256" width="200" height="72" class="node" fill="#ffffff" stroke="#1c5d99"></rect>
+        <text x="250" y="285" class="label" style="font-size:16px">FastAPI / WebSocket</text>
+        <text x="250" y="307" class="sub">API 接口 / 实时状态推送</text>
+
+        <rect x="390" y="256" width="200" height="72" class="node" fill="#ffffff" stroke="#1c5d99"></rect>
+        <text x="490" y="285" class="label" style="font-size:16px">编排层</text>
+        <text x="490" y="307" class="sub">WorkflowDefinition / WorkflowRun</text>
+
+        <rect x="630" y="256" width="200" height="72" class="node" fill="#ffffff" stroke="#1c5d99"></rect>
+        <text x="730" y="285" class="label" style="font-size:16px">调度层</text>
+        <text x="730" y="307" class="sub">TaskTemplate / Job / Dispatcher / Cron</text>
+
+        <rect x="870" y="256" width="220" height="72" class="node" fill="#ffffff" stroke="#1c5d99"></rect>
+        <text x="980" y="285" class="label" style="font-size:16px">后处理与聚合</text>
+        <text x="980" y="307" class="sub">Report / JIRA Draft / Summary</text>
+
+        <rect x="100" y="410" width="320" height="144" class="node" fill="#effaf3" stroke="#15803d"></rect>
+        <text x="260" y="445" class="label">数据与消息层</text>
+        <text x="260" y="476" class="sub">PostgreSQL：元数据 / 状态 / 结果</text>
+        <text x="260" y="503" class="sub">Redis / MQ：控制指令 / 状态流 / 日志流</text>
+        <text x="260" y="530" class="sub">中心存储：日志归档 / 产物附件</text>
+
+        <rect x="460" y="410" width="320" height="144" class="node" fill="#fff7e8" stroke="#b45309"></rect>
+        <text x="620" y="445" class="label">连通性验证层</text>
+        <text x="620" y="476" class="sub">SSH 连通性验证 / 挂载点健康检查</text>
+        <text x="620" y="503" class="sub">主机可达性监测 / 关键指标补偿</text>
+        <text x="620" y="530" class="sub">支撑主机接入与稳定运行</text>
+
+        <rect x="820" y="410" width="330" height="144" class="node" fill="#f4ecff" stroke="#7c3aed"></rect>
+        <text x="985" y="445" class="label">执行面 Execution Plane</text>
+        <text x="985" y="476" class="sub">Linux Host Agent A / B / N</text>
+        <text x="985" y="503" class="sub">任务拉取 / Step 执行 / 日志采集 / 心跳回传</text>
+        <text x="985" y="530" class="sub">本地 ADB 驱动 / 脚本执行 / 异常恢复</text>
+
+        <rect x="250" y="632" width="740" height="112" class="node" fill="#ffffff" stroke="#475569"></rect>
+        <text x="620" y="670" class="label">终端设备层</text>
+        <text x="620" y="700" class="sub">Android Device 集群（1000+ 设备）</text>
+        <text x="620" y="723" class="sub">Monkey / MTBF / DDR / GPU / 待机等稳定性专项执行载体</text>
+
+        <path d="M620 146 L620 196" class="arrow"></path>
+        <path d="M250 328 L250 410" class="arrow"></path>
+        <path d="M490 328 L260 410" class="arrow"></path>
+        <path d="M730 328 L260 410" class="arrow"></path>
+        <path d="M980 328 L260 410" class="arrow"></path>
+        <path d="M620 364 L620 410" class="arrow"></path>
+        <path d="M985 364 L985 410" class="arrow"></path>
+        <path d="M985 554 L985 632" class="arrow"></path>
+        <path d="M620 554 L780 632" class="arrow"></path>
+        <path d="M420 482 L820 482" class="arrow"></path>
+      </svg>
+      <div class="footer">架构依据：控制面 + 执行面 + 连通性验证层分层模型，配合数据层与终端设备层构成完整闭环。</div>
+    </section>
+
+    <section class="panel">
+      <div class="section-no">附件二</div>
+      <h2>2. 控制面与 Agent 协同流程图</h2>
+      <p>
+        <span class="tag">任务创建</span>
+        <span class="tag">心跳上报</span>
+        <span class="tag">任务认领</span>
+        <span class="tag">执行回传</span>
+        <span class="tag">报告/JIRA 闭环</span>
+      </p>
+      <svg viewBox="0 0 1240 1120" role="img" aria-label="控制面与 Agent 协同流程图">
+        <defs>
+          <marker id="arrow2" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+            <path d="M0,0 L12,6 L0,12 z" fill="#64748b"></path>
+          </marker>
+        </defs>
+        <g>
+          <text x="120" y="62" class="label" style="font-size:18px">用户 / 前端</text>
+          <text x="370" y="62" class="label" style="font-size:18px">控制面 API / 调度器</text>
+          <text x="620" y="62" class="label" style="font-size:18px">数据库</text>
+          <text x="870" y="62" class="label" style="font-size:18px">Linux Host Agent</text>
+          <text x="1110" y="62" class="label" style="font-size:18px">Android Device</text>
+
+          <line x1="120" y1="90" x2="120" y2="1040" stroke="#94a3b8" stroke-dasharray="8 8"></line>
+          <line x1="370" y1="90" x2="370" y2="1040" stroke="#94a3b8" stroke-dasharray="8 8"></line>
+          <line x1="620" y1="90" x2="620" y2="1040" stroke="#94a3b8" stroke-dasharray="8 8"></line>
+          <line x1="870" y1="90" x2="870" y2="1040" stroke="#94a3b8" stroke-dasharray="8 8"></line>
+          <line x1="1110" y1="90" x2="1110" y2="1040" stroke="#94a3b8" stroke-dasharray="8 8"></line>
+
+          <path d="M140 132 L350 132" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="244" y="122" class="sub">创建 Workflow / 触发任务</text>
+
+          <path d="M390 184 L600 184" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="494" y="174" class="sub">写入 WorkflowRun / JobInstance(PENDING)</text>
+
+          <path d="M850 256 L390 256" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="620" y="246" class="sub">周期心跳：主机 / 设备 / 挂载状态</text>
+
+          <path d="M390 318 L600 318" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="494" y="308" class="sub">更新 Host / Device 状态</text>
+
+          <path d="M850 390 L390 390" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="620" y="380" class="sub">拉取并认领待执行任务</text>
+
+          <path d="M390 452 L600 452" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="494" y="442" class="sub">Job PENDING → RUNNING</text>
+
+          <path d="M390 524 L850 524" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="620" y="514" class="sub">下发 pipeline_def / 参数</text>
+
+          <path d="M890 596 L1090 596" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="992" y="586" class="sub">执行专项测试步骤</text>
+
+          <path d="M850 678 L390 678" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="620" y="668" class="sub">回传日志 / 进度 / StepTrace / 心跳</text>
+
+          <path d="M390 748 L600 748" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="494" y="738" class="sub">持久化运行轨迹与状态</text>
+
+          <path d="M850 820 L390 820" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="620" y="810" class="sub">上报完成结果 / 产物摘要</text>
+
+          <path d="M390 892 L600 892" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="494" y="882" class="sub">Job 进入终态，写入结果</text>
+
+          <rect x="300" y="938" width="140" height="58" class="node" fill="#eef4fb" stroke="#1c5d99"></rect>
+          <text x="370" y="971" class="label" style="font-size:15px">后处理</text>
+          <text x="370" y="990" class="sub">报告 / JIRA Draft</text>
+
+          <path d="M440 967 L600 967" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="520" y="957" class="sub">写入 report_json / jira_draft_json</text>
+
+          <path d="M390 1030 L140 1030" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow2)"></path>
+          <text x="260" y="1020" class="sub">展示状态、日志、报告与问题草稿</text>
+        </g>
+      </svg>
+      <div class="footer">主链路：创建任务 → 心跳感知 → 任务认领 → 执行回传 → 完成聚合 → 报告/JIRA 闭环。</div>
+    </section>
+
+    <section class="panel">
+      <div class="section-no">附件三</div>
+      <h2>3. 稳定性专项测试标准流程图</h2>
+      <p>
+        <span class="tag">九阶段标准流程</span>
+        <span class="tag">统一流程建模</span>
+        <span class="tag">跨专项复用</span>
+      </p>
+      <svg viewBox="0 0 1240 300" role="img" aria-label="稳定性专项测试标准流程图">
+        <defs>
+          <marker id="arrow3" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+            <path d="M0,0 L12,6 L0,12 z" fill="#64748b"></path>
+          </marker>
+        </defs>
+        <g>
+          <rect x="20" y="90" width="118" height="86" class="node" fill="#eef5ff" stroke="#1c5d99"></rect>
+          <text x="79" y="125" class="label" style="font-size:16px">1</text>
+          <text x="79" y="148" class="sub">设备连接检测</text>
+
+          <rect x="154" y="90" width="118" height="86" class="node" fill="#eef5ff" stroke="#1c5d99"></rect>
+          <text x="213" y="125" class="label" style="font-size:16px">2</text>
+          <text x="213" y="148" class="sub">前置准备</text>
+
+          <rect x="288" y="90" width="118" height="86" class="node" fill="#eef5ff" stroke="#1c5d99"></rect>
+          <text x="347" y="125" class="label" style="font-size:16px">3</text>
+          <text x="347" y="148" class="sub">资源填充</text>
+
+          <rect x="422" y="90" width="118" height="86" class="node" fill="#e9f8ef" stroke="#15803d"></rect>
+          <text x="481" y="125" class="label" style="font-size:16px">4</text>
+          <text x="481" y="148" class="sub">开始运行测试</text>
+
+          <rect x="556" y="90" width="118" height="86" class="node" fill="#e9f8ef" stroke="#15803d"></rect>
+          <text x="615" y="125" class="label" style="font-size:16px">5</text>
+          <text x="615" y="148" class="sub">日志检测</text>
+
+          <rect x="690" y="90" width="118" height="86" class="node" fill="#fff4df" stroke="#b45309"></rect>
+          <text x="749" y="125" class="label" style="font-size:16px">6</text>
+          <text x="749" y="148" class="sub">风险问题检查</text>
+
+          <rect x="824" y="90" width="118" height="86" class="node" fill="#fff4df" stroke="#b45309"></rect>
+          <text x="883" y="125" class="label" style="font-size:16px">7</text>
+          <text x="883" y="148" class="sub">日志回传导出</text>
+
+          <rect x="958" y="90" width="118" height="86" class="node" fill="#f4ecff" stroke="#7c3aed"></rect>
+          <text x="1017" y="125" class="label" style="font-size:16px">8</text>
+          <text x="1017" y="148" class="sub">结束测试</text>
+
+          <rect x="1092" y="90" width="118" height="86" class="node" fill="#f4ecff" stroke="#7c3aed"></rect>
+          <text x="1151" y="125" class="label" style="font-size:16px">9</text>
+          <text x="1151" y="148" class="sub">测试后置</text>
+
+          <path d="M138 133 L154 133" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow3)"></path>
+          <path d="M272 133 L288 133" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow3)"></path>
+          <path d="M406 133 L422 133" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow3)"></path>
+          <path d="M540 133 L556 133" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow3)"></path>
+          <path d="M674 133 L690 133" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow3)"></path>
+          <path d="M808 133 L824 133" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow3)"></path>
+          <path d="M942 133 L958 133" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow3)"></path>
+          <path d="M1076 133 L1092 133" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow3)"></path>
+        </g>
+      </svg>
+      <div class="footer">流程依据：项目愿景与 Agent 统一生命周期定义，严格对应九阶段标准流程。</div>
+    </section>
+
+    <section class="panel">
+      <div class="section-no">附件四</div>
+      <h2>4. 任务调度与状态流转图</h2>
+      <p>
+        <span class="tag">计划触发</span>
+        <span class="tag">任务扇出</span>
+        <span class="tag">Agent 认领</span>
+        <span class="tag">状态机约束</span>
+        <span class="tag">Workflow 聚合</span>
+      </p>
+      <svg viewBox="0 0 1240 540" role="img" aria-label="任务调度与状态流转图">
+        <defs>
+          <marker id="arrow4" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+            <path d="M0,0 L12,6 L0,12 z" fill="#64748b"></path>
+          </marker>
+        </defs>
+
+        <rect x="24" y="110" width="160" height="92" class="node" fill="#e8f3f9" stroke="#135d8c"></rect>
+        <text x="104" y="144" class="label" style="font-size:16px">计划触发</text>
+        <text x="104" y="168" class="sub">TaskSchedule</text>
+        <text x="104" y="189" class="sub">手动运行 / Cron</text>
+
+        <rect x="224" y="110" width="180" height="92" class="node" fill="#e8f3f9" stroke="#135d8c"></rect>
+        <text x="314" y="144" class="label" style="font-size:16px">调度创建</text>
+        <text x="314" y="168" class="sub">CronScheduler / WorkflowRun</text>
+        <text x="314" y="189" class="sub">记录运行批次</text>
+
+        <rect x="444" y="110" width="210" height="92" class="node" fill="#e8f3f9" stroke="#135d8c"></rect>
+        <text x="549" y="144" class="label" style="font-size:16px">任务扇出</text>
+        <text x="549" y="168" class="sub">Dispatcher</text>
+        <text x="549" y="189" class="sub">按设备 × 模板创建 JobInstance</text>
+
+        <rect x="694" y="110" width="170" height="92" class="node" fill="#e7f7f1" stroke="#1f8a70"></rect>
+        <text x="779" y="144" class="label" style="font-size:16px">PENDING</text>
+        <text x="779" y="168" class="sub">等待 Agent 认领</text>
+        <text x="779" y="189" class="sub">可进入执行队列</text>
+
+        <rect x="904" y="110" width="190" height="92" class="node" fill="#fff4df" stroke="#b45309"></rect>
+        <text x="999" y="144" class="label" style="font-size:16px">PENDING_TOOL</text>
+        <text x="999" y="168" class="sub">工具未就绪 / 版本异常</text>
+        <text x="999" y="189" class="sub">修复后重新排队</text>
+
+        <rect x="460" y="286" width="190" height="104" class="node" fill="#e7f7f1" stroke="#1f8a70"></rect>
+        <text x="555" y="321" class="label" style="font-size:16px">RUNNING</text>
+        <text x="555" y="346" class="sub">Agent claim + 执行中</text>
+        <text x="555" y="369" class="sub">心跳续租 / StepTrace / 日志回传</text>
+
+        <rect x="698" y="286" width="170" height="104" class="node" fill="#f7f2ff" stroke="#0f766e"></rect>
+        <text x="783" y="321" class="label" style="font-size:16px">UNKNOWN</text>
+        <text x="783" y="346" class="sub">Host 心跳超时</text>
+        <text x="783" y="369" class="sub">待恢复或补报</text>
+
+        <rect x="904" y="286" width="130" height="76" class="node" fill="#e9f8ef" stroke="#1f8a70"></rect>
+        <text x="969" y="320" class="label" style="font-size:16px">COMPLETED</text>
+
+        <rect x="1060" y="266" width="130" height="76" class="node" fill="#fff4df" stroke="#b45309"></rect>
+        <text x="1125" y="300" class="label" style="font-size:16px">FAILED</text>
+
+        <rect x="1060" y="366" width="130" height="76" class="node" fill="#ffe9e9" stroke="#b91c1c"></rect>
+        <text x="1125" y="400" class="label" style="font-size:16px">ABORTED</text>
+
+        <rect x="886" y="454" width="304" height="60" class="node" fill="#e8f3f9" stroke="#135d8c"></rect>
+        <text x="1038" y="489" class="label" style="font-size:16px">Workflow 聚合判定：SUCCESS / PARTIAL_SUCCESS / FAILED / DEGRADED</text>
+
+        <path d="M184 156 L224 156" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M404 156 L444 156" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M654 156 L694 156" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M864 156 L904 156" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M779 202 L555 286" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M999 202 L999 238 L779 238 L779 286" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M650 338 L698 338" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M868 318 L904 318" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M650 300 L1060 300" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M650 378 L1060 404" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M783 390 L783 426 L555 426 L555 390" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M969 362 L969 454" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M1125 342 L1125 454" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M1125 442 L1125 454" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+        <path d="M783 390 L1038 454" stroke="#64748b" stroke-width="2.2" fill="none" marker-end="url(#arrow4)"></path>
+      </svg>
+      <div class="footer">状态依据：JobInstance 合法状态枚举与状态机规则，结合调度器、Dispatcher 与 Agent claim 主链路形成完整运行闭环。</div>
+    </section>
+  </div>
+</body>
+</html>
