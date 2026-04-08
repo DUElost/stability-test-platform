@@ -60,27 +60,41 @@ def _safe_json_loads(raw) -> dict:
 
 
 def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
-    """Transition a stuck JobInstance to FAILED and release its device lock."""
-    terminal = {JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.ABORTED.value}
-    if job.status in terminal:
+    """Transition a stuck JobInstance to FAILED and release its device lock.
+
+    Respects the StateMachine — if the job is already terminal or the
+    transition is rejected (e.g. concurrent watchdog already moved it),
+    we skip silently to avoid overwriting the authoritative state.
+    """
+    _terminal = {
+        JobStatus.COMPLETED.value, JobStatus.FAILED.value,
+        JobStatus.ABORTED.value, JobStatus.UNKNOWN.value,
+    }
+    if job.status in _terminal:
         return
 
     old_status = job.status
     try:
-        # State machine: PENDING cannot go directly to FAILED; two-step required
         if job.status == JobStatus.PENDING.value:
             JobStateMachine.transition(job, JobStatus.RUNNING, "recycler_auto_claim")
         JobStateMachine.transition(job, JobStatus.FAILED, reason)
     except InvalidTransitionError:
-        # Force-set if state machine rejects (e.g., concurrent watchdog transition)
-        job.status = JobStatus.FAILED.value
-        job.status_reason = reason
-        job.updated_at = now
+        logger.info(
+            "recycler_skip_transition job=%d current=%s reason=%s",
+            job.id, job.status, reason,
+        )
+        return
 
     job.ended_at = now
     release_lock_sync(db, job.device_id, job.id)
 
-    # Metrics
+    # Workflow aggregation (sync path)
+    try:
+        from backend.services.aggregator_sync import workflow_aggregator_sync
+        workflow_aggregator_sync(job, db)
+    except Exception as e:
+        logger.warning("recycler_aggregation_failed job=%d: %s", job.id, e)
+
     task_run_state_changes.labels(from_state=old_status, to_state="FAILED").inc()
     task_run_total.labels(status="failed", task_type="workflow").inc()
     device_lock_released.labels(reason="timeout").inc()
@@ -99,7 +113,6 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
         },
     )
 
-    # WebSocket broadcast
     schedule_broadcast("/ws/dashboard", {
         "type": "JOB_UPDATE",
         "payload": {
@@ -111,23 +124,64 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
         },
     })
 
-    from backend.services.post_completion import run_post_completion_async
-    run_post_completion_async(job.id)
-
-    from backend.services.notification_service import dispatch_notification_async
-    dispatch_notification_async("RUN_FAILED", {
-        "run_id": job.id,
-        "task_id": job.workflow_run_id,
-        "task_name": f"job-{job.id}",
-        "task_type": "workflow",
-        "error_message": reason,
-        "device_serial": str(job.device_id),
-    })
+    # post_completion and notification are NOT triggered here.
+    # The recycler is a compensating path — it only ensures state closure.
+    # Post-completion is handled by _fill_deferred_post_completions() which
+    # gives the primary path (agent outbox drain) a grace window first.
 
 
 # ---------------------------------------------------------------------------
 # Main recycler pass
 # ---------------------------------------------------------------------------
+
+_POST_COMPLETION_GRACE_SECONDS = int(os.getenv("POST_COMPLETION_GRACE_SECONDS", "120"))
+
+
+def _fill_deferred_post_completions(db, now: datetime) -> int:
+    """Trigger post-completion for terminal jobs that the primary path missed.
+
+    Waits POST_COMPLETION_GRACE_SECONDS after ended_at before triggering,
+    giving the agent's outbox drain a window to be the first writer.
+    """
+    grace_deadline = now - timedelta(seconds=_POST_COMPLETION_GRACE_SECONDS)
+    terminal_statuses = [
+        JobStatus.COMPLETED.value, JobStatus.FAILED.value,
+        JobStatus.ABORTED.value,
+    ]
+    orphan_jobs = (
+        db.query(JobInstance)
+        .filter(
+            JobInstance.status.in_(terminal_statuses),
+            JobInstance.post_processed_at.is_(None),
+            JobInstance.ended_at.isnot(None),
+            JobInstance.ended_at < grace_deadline,
+        )
+        .limit(10)
+        .all()
+    )
+
+    filled = 0
+    for job in orphan_jobs:
+        try:
+            from backend.services.post_completion import run_post_completion
+            if run_post_completion(job.id, db):
+                filled += 1
+                logger.info("deferred_post_completion job=%d", job.id)
+
+                from backend.services.notification_service import dispatch_notification_async
+                dispatch_notification_async("RUN_FAILED" if job.status == JobStatus.FAILED.value else "RUN_COMPLETED", {
+                    "run_id": job.id,
+                    "task_id": job.workflow_run_id,
+                    "task_name": f"job-{job.id}",
+                    "task_type": "workflow",
+                    "error_message": job.status_reason or "",
+                    "device_serial": str(job.device_id),
+                })
+        except Exception:
+            logger.exception("deferred_post_completion_failed job=%d", job.id)
+
+    return filled
+
 
 def recycle_once() -> None:
     start_time = time.time()
@@ -147,7 +201,6 @@ def recycle_once() -> None:
         )
 
         # 2) RUNNING timeout — job started but no completion within window
-        # Uses started_at as proxy; session_watchdog handles host-level heartbeat.
         expired_running = (
             db.query(JobInstance)
             .filter(
@@ -172,7 +225,12 @@ def recycle_once() -> None:
         if expired_jobs:
             db.commit()
 
-        # 3) Prune old artifact files
+        # 3) Deferred post-completion for orphan terminal jobs
+        filled = _fill_deferred_post_completions(db, now)
+        if filled:
+            logger.info("deferred_post_completions_filled count=%d", filled)
+
+        # 4) Prune old artifact files
         _prune_steptrace_artifacts(db, now)
 
     duration = time.time() - start_time

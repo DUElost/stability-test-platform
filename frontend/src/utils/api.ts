@@ -649,7 +649,7 @@ export interface WorkflowSummary {
 export interface JobArtifactEntry {
   id: number;
   job_id: number;
-  storage_uri: string;
+  filename: string | null;
   artifact_type: string;
   size_bytes?: number | null;
   checksum?: string | null;

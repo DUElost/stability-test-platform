@@ -512,7 +512,13 @@ def get_cached_jira_draft(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/tasks/{task_id}/runs/{run_id}/artifacts/{artifact_id}/download")
-def download_run_artifact(task_id: int, run_id: int, artifact_id: int, db: Session = Depends(get_db)):
+def download_run_artifact(
+    task_id: int,
+    run_id: int,
+    artifact_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     from backend.models.job import JobArtifact
 
     artifact = db.get(JobArtifact, artifact_id)

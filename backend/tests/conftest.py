@@ -7,6 +7,17 @@ import os
 from datetime import datetime, timedelta
 
 import pytest
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "phase0: Phase 0 state-closure regression — run with -m phase0",
+    )
+    config.addinivalue_line(
+        "markers",
+        "integration: tests that require a live database (TEST_DATABASE_URL)",
+    )
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

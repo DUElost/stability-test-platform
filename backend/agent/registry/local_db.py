@@ -1,19 +1,21 @@
-"""SQLite WAL cache for Agent-side StepTrace persistence and tool catalog.
+"""SQLite WAL cache for Agent-side persistence.
 
-Provides three tables:
-  step_trace_cache — persists step traces before Redis XADD; acked after confirmation
-  tool_cache       — local copy of the server-side tool catalog
-  agent_state      — key/value store for last_ack_id and other scalars
+Tables:
+  step_trace_cache      — step traces before Redis XADD; acked after confirmation
+  tool_cache            — local copy of the server-side tool catalog
+  agent_state           — key/value store for last_ack_id and other scalars
+  job_terminal_outbox   — terminal-state payloads; retried until server ACKs
 
 All writes are wrapped in transactions and protected by a threading lock.
 WAL mode + FULL synchronous ensures durability without blocking readers.
 """
 
+import json
 import logging
 import sqlite3
 import threading
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,15 @@ class LocalDB:
             CREATE TABLE IF NOT EXISTS agent_state (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS job_terminal_outbox (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id      INTEGER NOT NULL UNIQUE,
+                payload     TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL,
+                attempts    INTEGER NOT NULL DEFAULT 0,
+                last_error  TEXT,
+                acked       INTEGER NOT NULL DEFAULT 0
             );
         """)
         self._conn.commit()
@@ -187,3 +198,70 @@ class LocalDB:
                     "INSERT OR REPLACE INTO agent_state (key, value) VALUES (?, ?)",
                     (key, value),
                 )
+
+    # ------------------------------------------------------------------
+    # job_terminal_outbox
+    # ------------------------------------------------------------------
+
+    def enqueue_terminal(self, job_id: int, payload: Dict[str, Any]) -> int:
+        """Persist a terminal-state payload. Idempotent per job_id (REPLACE)."""
+        now = datetime.utcnow().isoformat()
+        raw = json.dumps(payload, ensure_ascii=False)
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO job_terminal_outbox
+                    (job_id, payload, created_at, attempts, last_error, acked)
+                    VALUES (?, ?, ?, 0, NULL, 0)
+                    """,
+                    (job_id, raw, now),
+                )
+                return cur.lastrowid
+
+    def get_pending_terminals(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return un-acked outbox entries ordered by creation time."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, job_id, payload, attempts FROM job_terminal_outbox "
+                "WHERE acked = 0 ORDER BY created_at ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            result.append({
+                "id": row["id"],
+                "job_id": row["job_id"],
+                "payload": json.loads(row["payload"]),
+                "attempts": row["attempts"],
+            })
+        return result
+
+    def ack_terminal(self, job_id: int) -> None:
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE job_terminal_outbox SET acked = 1 WHERE job_id = ?",
+                    (job_id,),
+                )
+
+    def bump_terminal_attempt(self, job_id: int, error: str) -> None:
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE job_terminal_outbox SET attempts = attempts + 1, "
+                    "last_error = ? WHERE job_id = ?",
+                    (error, job_id),
+                )
+
+    def prune_acked_terminals(self, keep_recent: int = 100) -> int:
+        """Delete old acked entries, keeping the most recent ones."""
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM job_terminal_outbox WHERE acked = 1 "
+                    "AND id NOT IN (SELECT id FROM job_terminal_outbox "
+                    "WHERE acked = 1 ORDER BY id DESC LIMIT ?)",
+                    (keep_recent,),
+                )
+                return cur.rowcount

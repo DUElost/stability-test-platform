@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
+from backend.api.routes.auth import get_current_active_user, User
 from backend.core.database import get_async_db
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.job import JobArtifact, JobInstance, StepTrace, TaskTemplate
@@ -175,13 +176,25 @@ async def list_workflows(
         select(WorkflowDefinition).order_by(WorkflowDefinition.created_at.desc())
         .offset(skip).limit(limit)
     )).scalars().all()
+
+    if not rows:
+        return ok([])
+
+    # Batch-fetch all templates for the page (fixes N+1)
+    wf_ids = [wf.id for wf in rows]
+    all_templates = (await db.execute(
+        select(TaskTemplate)
+        .where(TaskTemplate.workflow_definition_id.in_(wf_ids))
+        .order_by(TaskTemplate.sort_order)
+    )).scalars().all()
+
+    templates_by_wf: dict[int, list] = {}
+    for t in all_templates:
+        templates_by_wf.setdefault(t.workflow_definition_id, []).append(t)
+
     result = []
     for wf in rows:
-        templates = (await db.execute(
-            select(TaskTemplate).where(TaskTemplate.workflow_definition_id == wf.id)
-            .order_by(TaskTemplate.sort_order)
-        )).scalars().all()
-        result.append(_wf_out(wf, templates))
+        result.append(_wf_out(wf, templates_by_wf.get(wf.id, [])))
     return ok(result)
 
 
@@ -336,6 +349,9 @@ async def list_run_jobs(run_id: int, db: AsyncSession = Depends(get_async_db)):
         select(JobInstance).where(JobInstance.workflow_run_id == run_id)
     )).scalars().all()
 
+    if not jobs:
+        return ok([])
+
     # Batch-fetch device serials
     device_ids = list({j.device_id for j in jobs})
     devices: dict[int, str] = {}
@@ -345,13 +361,21 @@ async def list_run_jobs(run_id: int, db: AsyncSession = Depends(get_async_db)):
         )).all()
         devices = {r.id: r.serial for r in rows}
 
+    # Batch-fetch all StepTraces for this run's jobs (fixes N+1)
+    job_ids = [j.id for j in jobs]
+    all_traces = (await db.execute(
+        select(StepTrace)
+        .where(StepTrace.job_id.in_(job_ids))
+        .order_by(StepTrace.original_ts)
+    )).scalars().all()
+
+    traces_by_job: dict[int, list] = {}
+    for t in all_traces:
+        traces_by_job.setdefault(t.job_id, []).append(t)
+
     result = []
     for job in jobs:
-        traces = (await db.execute(
-            select(StepTrace).where(StepTrace.job_id == job.id)
-            .order_by(StepTrace.original_ts)
-        )).scalars().all()
-        result.append(_job_out(job, traces, devices.get(job.device_id)))
+        result.append(_job_out(job, traces_by_job.get(job.id, []), devices.get(job.device_id)))
     return ok(result)
 
 
@@ -478,6 +502,7 @@ async def list_job_artifacts(
     run_id: int,
     job_id: int,
     db: AsyncSession = Depends(get_async_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     """List all artifacts for a job within a workflow run."""
     job = await db.get(JobInstance, job_id)
@@ -492,7 +517,7 @@ async def list_job_artifacts(
         {
             "id": a.id,
             "job_id": a.job_id,
-            "storage_uri": a.storage_uri,
+            "filename": a.storage_uri.rsplit("/", 1)[-1] if a.storage_uri else None,
             "artifact_type": a.artifact_type,
             "size_bytes": a.size_bytes,
             "checksum": a.checksum,

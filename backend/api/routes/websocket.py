@@ -583,31 +583,33 @@ def _handle_agent_step_update(msg: dict, agent_host_id: Optional[str] = None) ->
 
 
 def _handle_agent_heartbeat(host_id: str, msg: dict) -> None:
-    """Process heartbeat received via agent WebSocket."""
-    from backend.core.database import SessionLocal
-    from backend.models.enums import HostStatus
-    from backend.models.host import Host
-    from datetime import datetime, timezone
+    """Push agent heartbeat data to dashboard subscribers for real-time UI.
 
-    db = SessionLocal()
-    try:
-        host = db.get(Host, host_id)
-        if not host:
-            return
+    Does NOT write to DB — the HTTP heartbeat endpoint (/api/v1/heartbeat)
+    is the single authority for host/device state persistence.
+    """
+    stats = msg.get("stats", {})
+    devices = stats.get("devices", [])
 
-        host.status = HostStatus.ONLINE.value
-        host.last_heartbeat = datetime.now(timezone.utc)
-
-        stats = msg.get("stats", {})
-        if stats:
-            host.extra = {**(host.extra or {}), **stats}
-
-        db.commit()
-    except Exception as e:
-        logger.warning(f"Agent heartbeat DB update for host {host_id} failed: {e}")
-        db.rollback()
-    finally:
-        db.close()
+    # Broadcast device metrics to dashboard for instant UI refresh
+    if devices:
+        try:
+            for dev in devices:
+                schedule_broadcast("/ws/dashboard", {
+                    "type": "DEVICE_UPDATE",
+                    "payload": {
+                        "serial": dev.get("serial"),
+                        "status": "ONLINE" if dev.get("adb_connected") else "OFFLINE",
+                        "battery_level": dev.get("battery_level"),
+                        "temperature": dev.get("temperature"),
+                        "network_latency": dev.get("network_latency"),
+                        "adb_state": dev.get("adb_state"),
+                        "adb_connected": dev.get("adb_connected"),
+                        "host_id": host_id,
+                    },
+                })
+        except Exception as e:
+            logger.debug("ws_heartbeat_broadcast_failed host=%s: %s", host_id, e)
 
 
 async def _send_recent_job_logs(websocket: WebSocket, job_id: int, limit: int = 200) -> None:

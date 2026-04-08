@@ -130,7 +130,7 @@
 | 设备锁释放 | `release_lock_sync(db, device_id, run.id)` | 同（run.id → job.id） |
 | Host/Device 超时 | recycler 自行检查（可选跳过） | 完全移除，由 session_watchdog 独占处理 |
 | Artifact 清理 | 删除 `LogArtifact` 行 + 物理文件 | 仅删除物理文件（StepTrace 行为审计记录，不删除） |
-| Post-completion | 调用 `run_post_completion_async` | **暂不调用**（见下文） |
+| Post-completion | 调用 `run_post_completion_async` | 主路径触发，`recycler` 仅做延迟补偿 |
 
 Recycler 已在 `main.py` 启用（`start_recycler()`），与 session_watchdog 并行运行，查询的 status 值不重叠。
 
@@ -154,47 +154,46 @@ Recycler 已在 `main.py` 启用（`start_recycler()`），与 session_watchdog 
 
 旧端点暂时保留作为 interim 通道，待新端点实现后移除。
 
-## Post-Completion Pipeline 迁移（延后）
+## Post-Completion Pipeline 迁移（已完成主链路）
 
-> **状态**：已规划，待 Alembic 迁移
-> **阻塞项**：`job_instance` 表缺少报告缓存列
+> **状态**：主链路已落地，补偿边界已收敛
+> **完成日期**：2026-04-07
 
-### 现状
+### 当前实现
 
-`backend/services/post_completion.py` 在 run 完成后自动生成 report + JIRA draft 并缓存到 `TaskRun` 行：
+`JobInstance` 已具备报告缓存所需列：
+
+- `report_json`
+- `jira_draft_json`
+- `post_processed_at`
+
+`backend/services/post_completion.py` 已以 `JobInstance` 为事实源生成并缓存报告与 JIRA 草稿：
 
 ```python
-run.report_json = report.model_dump(mode="json")
-run.jira_draft_json = jira_draft.model_dump(mode="json")
-run.post_processed_at = datetime.utcnow()
+job.report_json = report_dict
+job.jira_draft_json = jira_draft_dict
+job.post_processed_at = datetime.utcnow()
 ```
 
-`JobInstance` 模型（`backend/models/job.py`）无对应列，因此：
-- Recycler 的 `_mark_timeout()` 不再调用 `run_post_completion_async()`
-- `agent_api.py` 的 `complete_job()` 未调用 post-completion
-- Post-completion 对新模型路径为无效代码
+其中 `post_processed_at` 是 post-completion 的唯一幂等标记，用于避免重复生成报告、重复发通知或被补偿路径重复触发。
 
-### 方案评估
+### 当前职责边界
 
-| 方案 | 描述 | 优劣 |
-|------|------|------|
-| **A. 为 `job_instance` 加 3 列（推荐）** | `report_json JSONB`, `jira_draft_json JSONB`, `post_processed_at TIMESTAMPTZ` | 最直接，与旧模型对齐，Alembic 一步完成 |
-| B. 存入 `WorkflowRun.result_summary` | 将 per-job 报告塞进 workflow 级 JSONB | 语义混淆，per-job vs per-workflow 不分 |
-| C. 新建 `job_report_cache` 表 | 独立缓存表 | 过度设计，增加 JOIN 复杂度 |
-| D. 存为 StepTrace 事件 | `event_type="REPORT_CACHED"` | 语义超载，StepTrace 应为审计记录 |
+- `agent_api.complete_job()` 是 Agent 终态收敛的主路径
+  - 负责终态 transition、终态快照持久化、workflow 聚合、设备锁释放
+  - 主路径完成后触发 `run_post_completion_async(job_id)`
+- `MQ consumer` 属于补偿路径
+  - 仅在自己实际完成终态推进时触发 post-completion
+- `recycler` 不再直接触发 `run_post_completion_async(job.id)`
+  - 只负责超时场景下的状态补偿、聚合、锁释放和 WS 广播
+  - 对于终态后仍未完成 post-processing 的 Job，基于 `post_processed_at IS NULL` 在宽限期后执行延迟补偿
 
-### 实施步骤（后续工作项）
+### 治理约束
 
-1. 创建 Alembic 迁移脚本：`job_instance` 表新增 `report_json`、`jira_draft_json`、`post_processed_at` 列
-2. 在 `backend/models/job.py` `JobInstance` 类中添加对应 ORM Column
-3. 重写 `backend/services/post_completion.py`：
-   - `run_post_completion()` 中将 `db.get(TaskRun, run_id)` 改为 `db.get(JobInstance, run_id)`
-   - 缓存写入 `job.report_json` / `job.jira_draft_json` / `job.post_processed_at`
-   - 通知上下文从 `Task` 改为 `WorkflowDefinition` + `TaskTemplate`
-4. 在 recycler `_mark_timeout()` 中恢复 `run_post_completion_async(job.id)` 调用
-5. 在 `agent_api.py` `complete_job()` 中添加 `run_post_completion_async(job_id)` 调用
-6. 更新 `tasks.py` cached-report 端点（`/report/cached`, `/jira-draft/cached`）改为优先查 `JobInstance`
-7. 新端点（orchestration.py 的 3 个 stub）实现完整报告逻辑，移除 501 状态
+- `agent_api.complete_job` 是 Agent 终态后的主处理入口
+- `post_processed_at` 是 post-completion 的唯一幂等标记
+- `recycler`、`watchdog`、`MQ consumer` 均属于补偿路径，不得绕过状态机强制写终态
+- 补偿路径只有在自己实际完成状态推进时，才允许触发后续副作用
 
 ## 关联实现/文档
 

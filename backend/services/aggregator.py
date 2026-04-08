@@ -44,3 +44,12 @@ class WorkflowAggregator:
             run.status = WorkflowStatus.FAILED.value
 
         run.ended_at = datetime.utcnow()
+
+        completed = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.COMPLETED)
+        run.result_summary = {
+            "total": total,
+            "completed": completed,
+            "failed": failed,
+            "unknown": unknown,
+            "pass_rate": round(completed / total, 4) if total else 0,
+        }

@@ -180,7 +180,7 @@ function ArtifactList({ runId, jobId }: { runId: number; jobId: number }) {
       {artifacts.map(a => (
         <div key={a.id} className="flex items-center justify-between rounded-md border p-2 text-sm">
           <div className="min-w-0 flex-1">
-            <div className="font-mono text-xs truncate" title={a.storage_uri}>{a.storage_uri.split('/').pop()}</div>
+            <div className="font-mono text-xs truncate" title={a.filename ?? ''}>{a.filename ?? `artifact-${a.id}`}</div>
             <div className="text-xs text-gray-400 mt-0.5">
               {a.artifact_type}{a.size_bytes ? ` · ${(a.size_bytes / 1024).toFixed(1)} KB` : ''}
             </div>

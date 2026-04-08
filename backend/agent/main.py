@@ -1,5 +1,6 @@
 import logging
 import os
+import signal
 import socket
 import sys
 import threading
@@ -146,6 +147,119 @@ class LockRenewalManager:
         )
 
 
+class OutboxDrainThread:
+    """Background thread that retries un-acked terminal-state payloads."""
+
+    def __init__(self, api_url: str, local_db, interval: float = 15.0):
+        self._api_url = api_url
+        self._local_db = local_db
+        self._interval = interval
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name="outbox-drain",
+        )
+        self._thread.start()
+        logger.info("outbox_drain_thread_started")
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5)
+        logger.info("outbox_drain_thread_stopped")
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._stop_event.wait(self._interval)
+            if self._stop_event.is_set():
+                break
+            try:
+                self._drain_once()
+            except Exception:
+                logger.exception("outbox_drain_error")
+
+    def drain_sync(self) -> int:
+        """Blocking drain for shutdown — returns number of successfully sent items."""
+        return self._drain_once()
+
+    _TERMINAL_STATUSES = {"COMPLETED", "FAILED", "ABORTED", "UNKNOWN"}
+
+    def _drain_once(self) -> int:
+        pending = self._local_db.get_pending_terminals(limit=20)
+        if not pending:
+            self._local_db.prune_acked_terminals()
+            return 0
+
+        sent = 0
+        headers = {"X-Agent-Secret": _AGENT_SECRET} if _AGENT_SECRET else {}
+        for entry in pending:
+            job_id = entry["job_id"]
+            payload = entry["payload"]
+            try:
+                resp = requests.post(
+                    f"{self._api_url}/api/v1/agent/jobs/{job_id}/complete",
+                    json=payload,
+                    headers=headers,
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                self._local_db.ack_terminal(job_id)
+                sent += 1
+                logger.info("outbox_drain_acked job=%d", job_id)
+            except requests.HTTPError as e:
+                status_code = e.response.status_code if e.response else None
+                if status_code == 409:
+                    # Parse server response to distinguish "already terminal"
+                    # from "genuine conflict on non-terminal state"
+                    current = self._parse_current_status(e.response)
+                    if current and current in self._TERMINAL_STATUSES:
+                        self._local_db.ack_terminal(job_id)
+                        sent += 1
+                        logger.info(
+                            "outbox_drain_conflict_ack job=%d current=%s (job is terminal)",
+                            job_id, current,
+                        )
+                    else:
+                        self._local_db.bump_terminal_attempt(job_id, str(e))
+                        logger.warning(
+                            "outbox_drain_conflict_retry job=%d current=%s",
+                            job_id, current,
+                        )
+                elif status_code == 404:
+                    # Job doesn't exist on server — nothing to do, ACK to stop retrying
+                    self._local_db.ack_terminal(job_id)
+                    logger.warning("outbox_drain_job_gone job=%d", job_id)
+                else:
+                    self._local_db.bump_terminal_attempt(job_id, str(e))
+            except Exception as e:
+                self._local_db.bump_terminal_attempt(job_id, str(e))
+                logger.warning("outbox_drain_retry job=%d error=%s", job_id, e)
+
+        self._local_db.prune_acked_terminals()
+        return sent
+
+    @staticmethod
+    def _parse_current_status(response) -> Optional[str]:
+        """Extract current_status from a 409 response body."""
+        try:
+            body = response.json()
+            detail = body.get("detail", {})
+            if isinstance(detail, dict):
+                return detail.get("current_status")
+            # Fallback: wrapped ApiResponse format
+            err = body.get("error", {})
+            if isinstance(err, dict):
+                return err.get("current_status")
+        except Exception:
+            pass
+        return None
+
+
 RUN_TERMINAL_STATUS_MAP = {
     "COMPLETED": "FINISHED",
     "FINISHED": "FINISHED",
@@ -157,11 +271,15 @@ RUN_TERMINAL_STATUS_MAP = {
 
 
 class HeartbeatThread:
-    """Daemon thread that sends host heartbeat independently of the task execution loop.
+    """Daemon thread: device discovery + heartbeat every poll_interval seconds.
 
-    Runs device discovery + system monitor + heartbeat POST every poll_interval seconds.
-    If a WebSocket client is provided and connected, sends heartbeat via WS;
-    otherwise falls back to HTTP POST.
+    Channel design (Phase 0 state-closure):
+      - HTTP POST /api/v1/heartbeat is the SOLE authority for persisting
+        host and device state to the DB (last_heartbeat, device.last_seen,
+        battery, temperature, etc.).
+      - WS heartbeat is supplementary: pushes real-time device metrics to
+        dashboard subscribers for instant UI refresh.  The server-side WS
+        handler does NOT write to the DB.
     """
 
     def __init__(
@@ -219,7 +337,7 @@ class HeartbeatThread:
             self._tick()
 
     def _tick(self) -> None:
-        """Single heartbeat cycle: discover devices, collect stats, send heartbeat."""
+        """Single heartbeat cycle: discover → HTTP POST (authoritative) → WS push (display-only)."""
         devices_list = []
         try:
             discovered = device_discovery.discover_devices(self._adb_path)
@@ -252,7 +370,18 @@ class HeartbeatThread:
         with self._devices_lock:
             self._latest_devices = devices_list
 
-        # Try WS heartbeat first, fall back to HTTP
+        # HTTP heartbeat is the authority for host + device state in the DB.
+        # Always send HTTP so device.last_seen, battery, temperature etc. are updated.
+        send_heartbeat(
+            self._api_url,
+            self._host_id,
+            self._mount_points,
+            host_info=self._host_info,
+            devices=devices_list,
+        )
+
+        # WS heartbeat is supplementary: pushes real-time device metrics to
+        # dashboard subscribers for instant UI refresh (no DB write on server).
         if self._ws_client and self._ws_client.connected:
             try:
                 from .heartbeat import check_mounts
@@ -262,18 +391,9 @@ class HeartbeatThread:
                 stats["devices"] = devices_list
                 stats["mount_status"] = check_mounts(self._mount_points)
                 self._ws_client.send_heartbeat(stats)
-                logger.debug("heartbeat_sent_via_ws")
+                logger.debug("heartbeat_ws_push_sent")
             except Exception as e:
-                logger.warning(f"ws_heartbeat_failed, falling back to HTTP: {e}")
-
-        # HTTP fallback
-        send_heartbeat(
-            self._api_url,
-            self._host_id,
-            self._mount_points,
-            host_info=self._host_info,
-            devices=devices_list,
-        )
+                logger.debug("heartbeat_ws_push_failed: %s", e)
 
 
 def fetch_pending_runs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
@@ -334,10 +454,10 @@ def update_run(api_url: str, run_id: int, payload: Dict[str, Any]) -> None:
     )
 
 
-def complete_run(api_url: str, run_id: int, payload: Dict[str, Any]) -> None:
+def _build_complete_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Build the normalized payload for the /complete endpoint."""
     raw_status = str(payload.get("status", "FAILED")).upper()
     normalized_status = RUN_TERMINAL_STATUS_MAP.get(raw_status, "FAILED")
-
     complete_payload: Dict[str, Any] = {
         "update": {
             "status": normalized_status,
@@ -350,12 +470,45 @@ def complete_run(api_url: str, run_id: int, payload: Dict[str, Any]) -> None:
     artifact = payload.get("artifact")
     if isinstance(artifact, dict):
         complete_payload["artifact"] = artifact
+    return complete_payload
 
-    _post_with_retry(
-        f"{api_url}/api/v1/agent/jobs/{run_id}/complete",
-        complete_payload,
-        context=f"run_complete:{run_id}",
-    )
+
+def complete_run(
+    api_url: str,
+    run_id: int,
+    payload: Dict[str, Any],
+    local_db=None,
+) -> None:
+    """Report job terminal state. Writes to local outbox first for durability."""
+    complete_payload = _build_complete_payload(payload)
+
+    # Outbox-first: persist locally before attempting HTTP
+    if local_db is not None:
+        try:
+            local_db.enqueue_terminal(run_id, complete_payload)
+        except Exception as e:
+            logger.warning("outbox_enqueue_failed job=%d: %s", run_id, e)
+
+    try:
+        _post_with_retry(
+            f"{api_url}/api/v1/agent/jobs/{run_id}/complete",
+            complete_payload,
+            context=f"run_complete:{run_id}",
+        )
+        # ACK on success
+        if local_db is not None:
+            try:
+                local_db.ack_terminal(run_id)
+            except Exception:
+                pass
+    except Exception:
+        # HTTP failed after retries — outbox drain thread will pick it up
+        if local_db is not None:
+            logger.warning(
+                "complete_run_deferred_to_outbox job=%d", run_id,
+            )
+        else:
+            raise
 
 
 def get_host_info() -> Dict[str, Any]:
@@ -565,16 +718,11 @@ def _run_task_wrapper(
         # Validate pipeline_def: must be a dict with either 'stages' or 'lifecycle' key
         if not (pipeline_def and isinstance(pipeline_def, dict)):
             complete_run(
-                api_url,
-                run_id,
-                {
-                    "status": "FAILED",
-                    "exit_code": 1,
-                    "error_code": "PIPELINE_REQUIRED",
-                    "error_message": "pipeline_def is required",
-                    "log_summary": None,
-                    "artifact": None,
-                },
+                api_url, run_id,
+                {"status": "FAILED", "exit_code": 1,
+                 "error_code": "PIPELINE_REQUIRED",
+                 "error_message": "pipeline_def is required"},
+                local_db=local_db,
             )
             return
 
@@ -583,34 +731,23 @@ def _run_task_wrapper(
 
         if not is_lifecycle and not is_stages:
             complete_run(
-                api_url,
-                run_id,
-                {
-                    "status": "FAILED",
-                    "exit_code": 1,
-                    "error_code": "PIPELINE_REQUIRED",
-                    "error_message": "pipeline_def must contain 'stages' or 'lifecycle'",
-                    "log_summary": None,
-                    "artifact": None,
-                },
+                api_url, run_id,
+                {"status": "FAILED", "exit_code": 1,
+                 "error_code": "PIPELINE_REQUIRED",
+                 "error_message": "pipeline_def must contain 'stages' or 'lifecycle'"},
+                local_db=local_db,
             )
             return
 
-        # For stages format, verify at least one step exists
         if is_stages and not is_lifecycle:
             stages = pipeline_def.get("stages", {})
             if not any(isinstance(stages.get(k), list) and len(stages.get(k) or []) > 0 for k in ("prepare", "execute", "post_process")):
                 complete_run(
-                    api_url,
-                    run_id,
-                    {
-                        "status": "FAILED",
-                        "exit_code": 1,
-                        "error_code": "PIPELINE_REQUIRED",
-                        "error_message": "pipeline_def.stages must contain at least one step",
-                        "log_summary": None,
-                        "artifact": None,
-                    },
+                    api_url, run_id,
+                    {"status": "FAILED", "exit_code": 1,
+                     "error_code": "PIPELINE_REQUIRED",
+                     "error_message": "pipeline_def.stages must contain at least one step"},
+                    local_db=local_db,
                 )
                 return
 
@@ -628,35 +765,26 @@ def _run_task_wrapper(
         )
 
         complete_run(
-            api_url,
-            run_id,
-            {
-                "status": result["status"],
-                "exit_code": result["exit_code"],
-                "error_code": result.get("error_code"),
-                "error_message": result.get("error_message"),
-                "log_summary": result.get("log_summary"),
-                "artifact": result.get("artifact"),
-            },
+            api_url, run_id,
+            {"status": result["status"], "exit_code": result["exit_code"],
+             "error_code": result.get("error_code"),
+             "error_message": result.get("error_message"),
+             "log_summary": result.get("log_summary"),
+             "artifact": result.get("artifact")},
+            local_db=local_db,
         )
         logger.info(
             "run_complete", extra={"run_id": run_id, "status": result["status"]}
         )
     except Exception as e:
-        logger.exception(f"Unhandled exception during run {run_id}: {e}")
-        try:
-            complete_run(
-                api_url,
-                run_id,
-                {
-                    "status": "FAILED",
-                    "exit_code": 1,
-                    "error_code": "AGENT_ERROR",
-                    "error_message": str(e),
-                },
-            )
-        except Exception:
-            pass
+        logger.exception("run_failed job=%d: %s", run_id, e)
+        # Outbox guarantees delivery even if this call fails
+        complete_run(
+            api_url, run_id,
+            {"status": "FAILED", "exit_code": 1,
+             "error_code": "AGENT_ERROR", "error_message": str(e)},
+            local_db=local_db,
+        )
     finally:
         with _active_runs_lock:
             _active_run_ids.discard(run_id)
@@ -757,15 +885,29 @@ def main() -> None:
     lock_manager = LockRenewalManager(api_url)
     lock_manager.start()
 
+    # 启动终态 Outbox Drain 线程
+    outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
+    outbox_drain.start()
+
     # Create thread pool for parallel task execution
     executor = ThreadPoolExecutor(
         max_workers=max_concurrent_tasks, thread_name_prefix="task-worker"
     )
 
+    # SIGTERM / SIGINT graceful shutdown
+    _shutdown_event = threading.Event()
+
+    def _signal_handler(signum, frame):
+        sig_name = signal.Signals(signum).name
+        logger.info("received_%s, initiating graceful shutdown", sig_name)
+        _shutdown_event.set()
+
+    signal.signal(signal.SIGTERM, _signal_handler)
+    signal.signal(signal.SIGINT, _signal_handler)
+
     try:
-        while True:
+        while not _shutdown_event.is_set():
             try:
-                # Calculate how many slots are available
                 with _active_runs_lock:
                     active_count = len(_active_run_ids)
 
@@ -773,7 +915,6 @@ def main() -> None:
 
                 if available_slots > 0:
                     runs = fetch_pending_runs(api_url, host_id)
-                    # Limit fetched runs to available slots to avoid over-fetching
                     runs = runs[:available_slots]
 
                     if runs:
@@ -791,7 +932,6 @@ def main() -> None:
                     for run in runs:
                         device_id = run.get("device_id")
 
-                        # Per-device concurrency guard: skip if device already active
                         with _active_runs_lock:
                             if device_id and device_id in _active_device_ids:
                                 logger.debug(
@@ -799,7 +939,6 @@ def main() -> None:
                                     run["id"], device_id,
                                 )
                                 continue
-                            # Mark as active immediately to reserve the slot
                             _active_run_ids.add(run["id"])
                             if device_id:
                                 _active_device_ids.add(device_id)
@@ -817,7 +956,6 @@ def main() -> None:
                                 local_db,
                             )
                         except Exception:
-                            # Submit failed (pool shutting down / full) — rollback reservations
                             logger.exception("submit_failed run=%d device=%s", run["id"], device_id)
                             with _active_runs_lock:
                                 _active_run_ids.discard(run["id"])
@@ -825,16 +963,26 @@ def main() -> None:
                                     _active_device_ids.discard(device_id)
             except Exception:
                 logger.exception("agent_loop_failed", extra={"host_id": host_id})
-            time.sleep(poll_interval)
+            # Use event wait instead of sleep so SIGTERM wakes us immediately
+            _shutdown_event.wait(poll_interval)
     finally:
-        # 确保后台线程停止
-        executor.shutdown(wait=False)
+        logger.info("agent_shutting_down, waiting for active tasks to finish...")
+        executor.shutdown(wait=True, cancel_futures=False)
+        # Final outbox drain: flush any un-acked terminal states
+        try:
+            flushed = outbox_drain.drain_sync()
+            if flushed:
+                logger.info("shutdown_outbox_flushed count=%d", flushed)
+        except Exception:
+            logger.exception("shutdown_outbox_flush_failed")
+        outbox_drain.stop()
         heartbeat_thread.stop()
         lock_manager.stop()
         control_listener.stop()
         mq_producer.close()
         local_db.close()
         ws_client.disconnect()
+        logger.info("agent_shutdown_complete")
 
 
 if __name__ == "__main__":

@@ -461,7 +461,14 @@ async def complete_job(
         try:
             JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
         except InvalidTransitionError as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": str(exc),
+                    "current_status": job.status,
+                    "requested_status": target.value,
+                },
+            )
 
     # 持久化一次性完成快照（log_summary + artifact），为新链路报告读取提供数据闭环。
     snapshot = {

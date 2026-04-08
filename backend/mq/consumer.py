@@ -204,6 +204,13 @@ async def _persist_step_trace(fields: dict) -> None:
 
 
 async def _persist_job_status(fields: dict) -> None:
+    """Compensating path for job status — handles MQ events that arrive before
+    or after the primary agent_api.complete_job HTTP call.
+
+    If the job is already in a terminal state, this is a no-op (idempotent).
+    Post-completion is only triggered if this consumer is the first to reach
+    terminal, preventing duplicate report generation.
+    """
     from backend.core.database import AsyncSessionLocal
     from backend.models.enums import JobStatus
     from backend.models.job import JobInstance
@@ -214,14 +221,14 @@ async def _persist_job_status(fields: dict) -> None:
 
     job_id = int(fields.get("job_id", 0))
     status_str = fields.get("status", "").upper()
-    reason = fields.get("reason", "mq")
+    reason = fields.get("reason", "mq_compensate")
     if not job_id or not status_str:
         return
 
     try:
         new_status = JobStatus(status_str)
     except ValueError:
-        logger.warning("Unknown job status from MQ: %s", status_str)
+        logger.warning("mq_unknown_job_status: %s", status_str)
         return
 
     _TERMINAL = {
@@ -231,41 +238,57 @@ async def _persist_job_status(fields: dict) -> None:
 
     workflow_run_id = None
     workflow_terminal_status = None
+    did_transition = False
 
     async with AsyncSessionLocal() as db:
         job = await db.get(JobInstance, job_id)
         if job is None:
             return
-        workflow_run_id = job.workflow_run_id
-        try:
-            JobStateMachine.transition(job, new_status, reason)
-            if job.status in _TERMINAL:
-                job.ended_at = datetime.utcnow()
-                await WorkflowAggregator.on_job_terminal(job, db)
-                # Release device lock when MQ consumer transitions to terminal
-                await release_lock(db, job.device_id, job_id)
-                # capture workflow terminal status before commit flushes
-                from backend.models.workflow import WorkflowRun
-                run = await db.get(WorkflowRun, workflow_run_id)
-                if run and run.status != "RUNNING":
-                    workflow_terminal_status = run.status
-            await db.commit()
-        except InvalidTransitionError:
-            pass
 
-    # Post-completion (report generation) — fire-and-forget in background thread
-    if new_status.value in _TERMINAL:
+        # Already terminal — primary path (agent_api) already handled it
+        if job.status in _TERMINAL:
+            logger.debug(
+                "mq_skip_already_terminal job=%d status=%s", job_id, job.status,
+            )
+            # Still broadcast for WS consistency, but skip DB writes
+            workflow_run_id = job.workflow_run_id
+            # No commit needed
+        else:
+            workflow_run_id = job.workflow_run_id
+            try:
+                JobStateMachine.transition(job, new_status, reason)
+                did_transition = True
+                if job.status in _TERMINAL:
+                    job.ended_at = datetime.utcnow()
+                    await WorkflowAggregator.on_job_terminal(job, db)
+                    await release_lock(db, job.device_id, job_id)
+                    from backend.models.workflow import WorkflowRun
+                    run = await db.get(WorkflowRun, workflow_run_id)
+                    if run and run.status != "RUNNING":
+                        workflow_terminal_status = run.status
+                await db.commit()
+                logger.info(
+                    "mq_compensate_transition job=%d %s->%s",
+                    job_id, "RUNNING", new_status.value,
+                )
+            except InvalidTransitionError:
+                logger.debug(
+                    "mq_transition_rejected job=%d target=%s current=%s",
+                    job_id, new_status.value, job.status,
+                )
+
+    # Only trigger post-completion if this consumer actually did the terminal transition
+    if did_transition and new_status.value in _TERMINAL:
         try:
             from backend.services.post_completion import run_post_completion_async
             run_post_completion_async(job_id)
         except Exception as e:
-            logger.warning("post_completion trigger failed for job %d: %s", job_id, e)
+            logger.warning("mq_post_completion_failed job=%d: %s", job_id, e)
 
-    # Broadcast outside the DB session
     if workflow_run_id:
         try:
             await broadcast_run_job_update(workflow_run_id, job_id, new_status.value)
             if workflow_terminal_status:
                 await broadcast_run_workflow_status(workflow_run_id, workflow_terminal_status)
         except Exception as e:
-            logger.warning("WS broadcast failed: %s", e)
+            logger.warning("mq_ws_broadcast_failed: %s", e)
