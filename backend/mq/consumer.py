@@ -280,10 +280,22 @@ async def _persist_job_status(fields: dict) -> None:
     # Only trigger post-completion if this consumer actually did the terminal transition
     if did_transition and new_status.value in _TERMINAL:
         try:
-            from backend.services.post_completion import run_post_completion_async
-            run_post_completion_async(job_id)
+            from backend.tasks.saq_worker import get_queue
+            from saq import Job as SaqJob
+
+            await get_queue().enqueue(
+                SaqJob(
+                    function="post_completion_task",
+                    kwargs={"job_id": job_id},
+                    key=f"pc:{job_id}",
+                    timeout=120,
+                    retries=3,
+                    retry_delay=5.0,
+                    retry_backoff=True,
+                )
+            )
         except Exception as e:
-            logger.warning("mq_post_completion_failed job=%d: %s", job_id, e)
+            logger.warning("mq_post_completion_enqueue_failed job=%d: %s", job_id, e)
 
     if workflow_run_id:
         try:

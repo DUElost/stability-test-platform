@@ -140,11 +140,13 @@ _POST_COMPLETION_GRACE_SECONDS = int(os.getenv("POST_COMPLETION_GRACE_SECONDS", 
 
 
 def _fill_deferred_post_completions(db, now: datetime) -> int:
-    """Trigger post-completion for terminal jobs that the primary path missed.
+    """Enqueue post-completion via SAQ for terminal jobs the primary path missed.
 
     Waits POST_COMPLETION_GRACE_SECONDS after ended_at before triggering,
     giving the agent's outbox drain a window to be the first writer.
     """
+    from backend.tasks.saq_worker import enqueue_sync
+
     grace_deadline = now - timedelta(seconds=_POST_COMPLETION_GRACE_SECONDS)
     terminal_statuses = [
         JobStatus.COMPLETED.value, JobStatus.FAILED.value,
@@ -165,22 +167,32 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
     filled = 0
     for job in orphan_jobs:
         try:
-            from backend.services.post_completion import run_post_completion
-            if run_post_completion(job.id, db):
-                filled += 1
-                logger.info("deferred_post_completion job=%d", job.id)
+            enqueue_sync(
+                "post_completion_task",
+                key=f"pc:{job.id}",
+                timeout=120,
+                retries=3,
+                job_id=job.id,
+            )
+            filled += 1
+            logger.info("deferred_post_completion_enqueued job=%d", job.id)
 
-                from backend.services.notification_service import dispatch_notification_async
-                dispatch_notification_async("RUN_FAILED" if job.status == JobStatus.FAILED.value else "RUN_COMPLETED", {
+            event_type = "RUN_FAILED" if job.status == JobStatus.FAILED.value else "RUN_COMPLETED"
+            enqueue_sync(
+                "send_notification_task",
+                key=f"notif:{job.id}:{event_type}",
+                event_type=event_type,
+                context={
                     "run_id": job.id,
                     "task_id": job.workflow_run_id,
                     "task_name": f"job-{job.id}",
                     "task_type": "workflow",
                     "error_message": job.status_reason or "",
                     "device_serial": str(job.device_id),
-                })
+                },
+            )
         except Exception:
-            logger.exception("deferred_post_completion_failed job=%d", job.id)
+            logger.exception("deferred_post_completion_enqueue_failed job=%d", job.id)
 
     return filled
 

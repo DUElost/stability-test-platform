@@ -258,7 +258,7 @@ class TestDeferredPostCompletion:
         reason="Requires database connection",
     )
     def test_fill_deferred_post_completions(self):
-        """Create an orphan terminal job, verify deferred fill after grace."""
+        """Create an orphan terminal job, verify SAQ enqueue for post-completion."""
         from backend.core.database import SessionLocal
         from backend.models.enums import HostStatus, JobStatus, WorkflowStatus
         from backend.models.host import Device, Host
@@ -320,37 +320,32 @@ class TestDeferredPostCompletion:
 
             from backend.scheduler.recycler import _fill_deferred_post_completions
 
-            with patch("backend.services.report_service.compose_run_report") as mock_report:
-                mock_obj = MagicMock()
-                mock_obj.model_dump.return_value = {"summary": "test"}
-                mock_report.return_value = mock_obj
+            with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enqueue:
+                filled = _fill_deferred_post_completions(db, datetime.now(timezone.utc))
 
-                with patch("backend.services.report_service.build_jira_draft") as mock_jira:
-                    mock_jira_obj = MagicMock()
-                    mock_jira_obj.model_dump.return_value = {"key": "TEST-1"}
-                    mock_jira.return_value = mock_jira_obj
-                    filled = _fill_deferred_post_completions(db, datetime.now(timezone.utc))
+            assert filled >= 1, f"Should enqueue at least our orphan job, got {filled}"
 
-            assert filled >= 1, f"Should fill at least our orphan job, got {filled}"
+            # Verify post_completion_task was enqueued for our job
+            pc_calls = [
+                c for c in mock_enqueue.call_args_list
+                if c[0][0] == "post_completion_task" and c[1].get("job_id") == job_id
+            ]
+            assert len(pc_calls) == 1, f"post_completion_task should be enqueued for job {job_id}"
+            assert pc_calls[0][1]["key"] == f"pc:{job_id}"
 
-            db.expire_all()
-            job_after = db.get(JobInstance, job_id)
-            assert job_after.post_processed_at is not None, \
-                "post_processed_at should be set after deferred fill"
-            assert job_after.report_json is not None, \
-                "report_json should be populated"
+            # Verify notification task was enqueued for our job
+            notif_calls = [
+                c for c in mock_enqueue.call_args_list
+                if c[0][0] == "send_notification_task"
+                and c[1].get("context", {}).get("run_id") == job_id
+            ]
+            assert len(notif_calls) == 1, "send_notification_task should be enqueued"
+            assert notif_calls[0][1]["event_type"] == "RUN_FAILED"
 
-            # Second pass — idempotency
-            with patch("backend.services.report_service.compose_run_report") as m2:
-                m2.return_value = mock_obj
-                with patch("backend.services.report_service.build_jira_draft") as m3:
-                    m3.return_value = mock_jira_obj
-                    _fill_deferred_post_completions(db, datetime.now(timezone.utc))
-
-            db.expire_all()
-            job_final = db.get(JobInstance, job_id)
-            assert job_final.post_processed_at == job_after.post_processed_at, \
-                "post_processed_at should not change on second pass (idempotent)"
+            # Second pass — same job re-enqueued (SAQ key dedup handles idempotency)
+            with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enqueue2:
+                filled2 = _fill_deferred_post_completions(db, datetime.now(timezone.utc))
+            assert filled2 >= 1, "Orphan job re-enqueued (SAQ key dedup is the idempotency layer)"
 
         finally:
             from backend.models.job import StepTrace

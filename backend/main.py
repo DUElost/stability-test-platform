@@ -43,6 +43,7 @@ from backend.core.metrics import init_build_info
 from backend.mq.consumer import consume_log_stream, consume_status_stream, monitor_backpressure
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
+from backend.tasks.saq_worker import start_saq_worker, stop_saq_worker
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +105,13 @@ async def lifespan(app: FastAPI):
         await scheduler.start_in_background()
         logger.info("apscheduler_started")
 
+        # SAQ async task queue (post-completion, notifications, control commands)
+        await start_saq_worker()
+
     yield
 
     if os.getenv("TESTING") != "1":
+        await stop_saq_worker()
         if scheduler is not None:
             await scheduler.__aexit__(None, None, None)
             logger.info("apscheduler_stopped")
