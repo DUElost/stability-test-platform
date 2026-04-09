@@ -19,6 +19,8 @@ from typing import Any, Dict, Optional
 
 import socketio
 
+from backend.core.metrics import record_socketio_connection
+
 logger = logging.getLogger(__name__)
 
 _AGENT_SECRET = os.getenv("AGENT_SECRET", "")
@@ -89,11 +91,13 @@ class AgentNamespace(socketio.AsyncNamespace):
             session["host_id"] = host_id
 
         self.enter_room(sid, f"agent:{host_id}")
+        record_socketio_connection("/agent", True)
         logger.info("agent_sio_connected sid=%s host_id=%s", sid, host_id)
 
     async def on_disconnect(self, sid: str):
         async with self.session(sid) as session:
             host_id = session.get("host_id", "?")
+        record_socketio_connection("/agent", False)
         logger.info("agent_sio_disconnected sid=%s host_id=%s", sid, host_id)
 
     async def on_step_log(self, sid: str, data: dict):
@@ -230,9 +234,11 @@ class DashboardNamespace(socketio.AsyncNamespace):
                 except Exception:
                     raise socketio.exceptions.ConnectionRefusedError("Invalid token")
 
+        record_socketio_connection("/dashboard", True)
         logger.info("dashboard_sio_connected sid=%s", sid)
 
     async def on_disconnect(self, sid: str):
+        record_socketio_connection("/dashboard", False)
         logger.info("dashboard_sio_disconnected sid=%s", sid)
 
     async def on_subscribe(self, sid: str, data: dict):

@@ -1,8 +1,8 @@
 # ADR-0011: 可观测性与告警体系演进
-- 状态：Proposed
+- 状态：Accepted（第一层指标已落地）
 - 优先级：P1
 - 目标里程碑：M2
-- 日期：2026-02-18
+- 日期：2026-02-18（2026-04-09 第一层落地）
 - 决策者：平台研发组
 - 标签：可观测性, 指标, 告警, 运维
 
@@ -12,7 +12,7 @@
 
 ## 决策
 
-建立“指标 + 日志 + 告警”三位一体可观测性体系：
+建立"指标 + 日志 + 告警"三位一体可观测性体系：
 
 - 指标基线：
   - 主机心跳超时数
@@ -42,13 +42,21 @@
 
 ## 落地与后续动作
 
-- 第一步：选定 MVP 告警阈值并落地默认规则。
-- 第二步：建立“部署后 30 分钟观测窗口”标准动作。
-- 第三步：结合回归数据持续调整阈值，降低误报漏报。
+- ✅ 第一层（指标暴露）：Prometheus 指标定义 + `/metrics` 端点 + Grafana dashboard 模板。由 ADR-0018 Phase 5 落地。
+  - 业务指标：task dispatch、device lock、task run、host/device、recycler、API 请求（共 18 项）
+  - 框架指标：saq_tasks_total、saq_task_duration、saq_queue_depth、socketio_connections_active、apscheduler_job_runs_total、apscheduler_job_duration（共 6 项）
+  - Grafana dashboard：`docs/grafana/stability-platform-dashboard.json`（7 分组、20 面板）
+- ⬜ 第二层（告警规则）：选定 MVP 告警阈值并落地默认规则。
+- ⬜ 第三层（运维闭环）：建立"部署后 30 分钟观测窗口"标准动作；结合回归数据持续调整阈值。
 
 ## 关联实现/文档
 
-- `backend/core/metrics.py`
+- `backend/core/metrics.py` — 全部 24 项 Prometheus 指标定义
+- `backend/api/routes/metrics.py` — `/metrics` + `/metrics/health` 端点
+- `backend/scheduler/app_scheduler.py` — APScheduler job 指标埋点 + SAQ queue depth 轮询
+- `backend/tasks/saq_worker.py` — SAQ 任务指标埋点（before/after_process hooks）
+- `backend/realtime/socketio_server.py` — SocketIO 连接指标埋点
+- `docs/grafana/stability-platform-dashboard.json` — Grafana dashboard 导入模板
 - `backend/services/notification_service.py`
 - `backend/scheduler/recycler.py`
 - `docs/preprod-drill-runbook.md`

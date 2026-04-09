@@ -15,13 +15,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Optional
 
 from saq import Job, Queue, Worker
 
 from backend.tasks.saq_tasks import SAQ_FUNCTIONS
+from backend.core.metrics import record_saq_task
 
 logger = logging.getLogger(__name__)
+
+_SAQ_JOB_START_KEY = "_saq_metric_start"
 
 _queue: Optional[Queue] = None
 _worker: Optional[Worker] = None
@@ -39,6 +43,23 @@ def get_queue() -> Queue:
     return _queue
 
 
+async def _before_process(ctx: dict) -> None:
+    """SAQ hook: record job start time for duration measurement."""
+    ctx[_SAQ_JOB_START_KEY] = time.monotonic()
+
+
+async def _after_process(ctx: dict) -> None:
+    """SAQ hook: record task metrics after job completion."""
+    job: Job | None = ctx.get("job")
+    if job is None:
+        return
+    task_name = job.function or "unknown"
+    status = job.status.value if hasattr(job.status, "value") else str(job.status)
+    start = ctx.pop(_SAQ_JOB_START_KEY, None)
+    duration = time.monotonic() - start if start is not None else 0.0
+    record_saq_task(task_name, status, duration)
+
+
 async def start_saq_worker() -> None:
     """Connect the queue and launch the SAQ worker as a background task."""
     global _queue, _worker, _worker_task, _loop
@@ -53,6 +74,8 @@ async def start_saq_worker() -> None:
         _queue,
         functions=SAQ_FUNCTIONS,
         concurrency=SAQ_CONCURRENCY,
+        before_process=_before_process,
+        after_process=_after_process,
     )
     _worker_task = asyncio.create_task(_worker.start(), name="saq-worker")
     logger.info(

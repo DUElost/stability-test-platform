@@ -1,8 +1,9 @@
 # ADR-0018: 基础设施层框架引入（SAQ / APScheduler / python-socketio）
-- 状态：Proposed
+- 状态：Accepted
 - 优先级：P0
 - 目标里程碑：M2
 - 日期：2026-04-08
+- 接受日期：2026-04-09
 - 决策者：平台研发组
 - 标签：基础设施, 调度, 消息队列, 实时推送, 框架替代
 
@@ -268,13 +269,31 @@ socket.io-client@^4.7.0
 - **兼容 ADR-0017**：所有护栏条款不变
 - **推进 ADR-0011**：SAQ 内置监控 + SocketIO 连接指标为可观测性落地提供基础
 
-## 关联实现（待创建/修改）
+## 落地与后续动作
+
+- ✅ Phase 1（APScheduler 迁移）：commit e69763f + cb7e957
+- ✅ Phase 2（SAQ 迁移）：commit bfdf686
+- ✅ Phase 3（python-socketio 迁移）：commit 7fc7242
+- ✅ Phase 3.7（Agent 状态上报迁移）+ Phase 4（Redis Streams 清理）：commit 6bdefac
+- ✅ Phase 5（可观测性落地）：框架级 Prometheus 指标 + Grafana dashboard 模板
+- ✅ Phase 6（验收与文档）：文档更新、废弃代码确认
+- 回归测试：14 failed / 154 passed / 11 skipped（与迁移前基线一致，零新增 FAILED）
+
+## 关联实现
 
 - `backend/main.py` — lifespan 初始化 APScheduler + SAQ + SocketIO
-- `backend/scheduler/cron_scheduler.py` → 重构为 APScheduler job 注册
-- `backend/scheduler/recycler.py` → 重构为 APScheduler interval job
-- `backend/tasks/session_watchdog.py` → 重构为 APScheduler interval job
-- `backend/mq/consumer.py` → 拆分后由 SAQ + SocketIO 替代，最终移除
-- `backend/api/routes/websocket.py` → 重构为 python-socketio server
-- `backend/agent/ws_client.py` → 迁移到 python-socketio AsyncClient
-- `frontend/src/hooks/useWebSocket.ts` → 迁移到 socket.io-client
+- `backend/scheduler/app_scheduler.py` — APScheduler 4.x 统一调度入口
+- `backend/scheduler/cron_scheduler.py` — 重构为 APScheduler job 回调（纯函数）
+- `backend/scheduler/recycler.py` — 重构为 APScheduler interval job 回调（纯函数）
+- `backend/tasks/session_watchdog.py` — 重构为 APScheduler interval job 回调（纯函数）
+- `backend/tasks/saq_tasks.py` — SAQ 异步任务定义
+- `backend/tasks/saq_worker.py` — SAQ Worker 生命周期管理
+- `backend/realtime/socketio_server.py` — python-socketio 服务端（/agent + /dashboard）
+- `backend/realtime/log_writer.py` — 异步日志文件持久化
+- `backend/core/metrics.py` — Prometheus 指标定义（含框架级指标）
+- `backend/agent/ws_client.py` — 迁移到 python-socketio Client（同步版）
+- `backend/agent/step_trace_uploader.py` — Step 状态 HTTP 批量上报
+- `frontend/src/hooks/useSocketIO.ts` — 迁移到 socket.io-client
+- `docs/grafana/stability-platform-dashboard.json` — Grafana dashboard 模板
+- ~~`backend/mq/consumer.py`~~ — 已删除（由 SAQ + SocketIO 替代）
+- ~~`backend/tasks/heartbeat_monitor.py`~~ — 已删除（由 APScheduler session_watchdog 替代）

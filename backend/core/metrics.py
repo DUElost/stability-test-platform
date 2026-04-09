@@ -247,6 +247,56 @@ api_request_duration = Histogram(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
+# SAQ (Async Task Queue) Metrics
+# ============================================================================
+
+saq_tasks_total = Counter(
+    'stability_saq_tasks_total',
+    'Total SAQ tasks processed',
+    ['task_name', 'status']  # status: completed, failed, aborted
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+saq_task_duration = Histogram(
+    'stability_saq_task_duration_seconds',
+    'SAQ task execution duration in seconds',
+    ['task_name'],
+    buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0]
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+saq_queue_depth = Gauge(
+    'stability_saq_queue_depth',
+    'Current SAQ queue depth',
+    ['queue_name']
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
+# SocketIO Metrics
+# ============================================================================
+
+socketio_connections = Gauge(
+    'stability_socketio_connections_active',
+    'Number of active SocketIO connections',
+    ['namespace']  # /agent, /dashboard
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
+# APScheduler Metrics
+# ============================================================================
+
+apscheduler_job_runs = Counter(
+    'stability_apscheduler_job_runs_total',
+    'Total APScheduler job executions',
+    ['job_name', 'outcome']  # outcome: success, error
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+apscheduler_job_duration = Histogram(
+    'stability_apscheduler_job_duration_seconds',
+    'APScheduler job execution duration in seconds',
+    ['job_name'],
+    buckets=[0.001, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0, 30.0]
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
 # Build Info
 # ============================================================================
 
@@ -315,6 +365,32 @@ def record_websocket_connection(endpoint: str, connected: bool):
         websocket_connections.labels(endpoint=endpoint).inc()
     else:
         websocket_connections.labels(endpoint=endpoint).dec()
+
+
+def record_socketio_connection(namespace: str, connected: bool):
+    """Record SocketIO connection change (new framework metric)."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    if connected:
+        socketio_connections.labels(namespace=namespace).inc()
+    else:
+        socketio_connections.labels(namespace=namespace).dec()
+
+
+def record_saq_task(task_name: str, status: str, duration: float):
+    """Record a completed SAQ task with its outcome and duration."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    saq_tasks_total.labels(task_name=task_name, status=status).inc()
+    saq_task_duration.labels(task_name=task_name).observe(duration)
+
+
+def record_apscheduler_job(job_name: str, outcome: str, duration: float):
+    """Record an APScheduler job execution with its outcome and duration."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    apscheduler_job_runs.labels(job_name=job_name, outcome=outcome).inc()
+    apscheduler_job_duration.labels(job_name=job_name).observe(duration)
 
 
 def record_api_request(method: str, endpoint: str, status_code: int, duration: float):

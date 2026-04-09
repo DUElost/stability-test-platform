@@ -1,6 +1,6 @@
 # ADR-0002: 单进程后端 + 内置后台调度线程
-- 状态：Accepted
-- 日期：2026-02-18（2026-03-24 更新）
+- 状态：Superseded by [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md)
+- 日期：2026-02-18（2026-03-24 更新，2026-04-09 superseded）
 - 决策者：平台研发组
 - 标签：调度, 线程模型, 部署约束
 
@@ -49,16 +49,17 @@
 
 - ✅ 已落地：启动钩子内拉起 recycler + cron_scheduler 线程，以及 session_watchdog + Redis 消费者异步任务。
 - ✅ Legacy dispatcher 和 workflow_executor 已被 Workflow dispatcher + Agent claim 机制替代。
-- ⚠️ **部分被 ADR-0018 supersede**：后台线程（recycler、cron_scheduler）和异步任务（session_watchdog、Redis 消费者）的启动方式将由 APScheduler + SAQ + python-socketio 接管。**单进程约束保留不变**。详见 [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md)。
-- 远期：重构为"调度作业服务 + 选主机制"时，需新增替代 ADR 并将本 ADR 标记为 `Superseded`。
+- ✅ **已被 ADR-0018 supersede**：后台线程（recycler、cron_scheduler）和异步任务（session_watchdog、Redis 消费者）已由 APScheduler + SAQ + python-socketio 接管。**单进程约束保留不变**。详见 [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md)。
 
 ## 关联实现/文档
 
-- `backend/main.py` — lifespan 启动钩子
-- `backend/scheduler/recycler.py` — JobInstance 超时回收（后台线程）
-- `backend/scheduler/cron_scheduler.py` — Cron 定时任务（后台线程）
-- `backend/tasks/session_watchdog.py` — 会话看门狗（异步任务）
-- `backend/mq/consumer.py` — Redis Streams 消费者（异步任务）
+> **注**：以下实现已由 ADR-0018 重构，条目标注当前状态。
+
+- `backend/main.py` — lifespan 启动钩子（现初始化 APScheduler + SAQ + SocketIO）
+- `backend/scheduler/recycler.py` — JobInstance 超时回收（现为 APScheduler interval job 回调）
+- `backend/scheduler/cron_scheduler.py` — Cron 定时任务（现为 APScheduler job 回调）
+- `backend/tasks/session_watchdog.py` — 会话看门狗（现为 APScheduler interval job 回调）
+- ~~`backend/mq/consumer.py`~~ — 已删除（由 SAQ + SocketIO 替代）
 - `backend/scheduler/dispatcher.py` — Legacy Task 派发器（保留但未启动）
 - `backend/services/dispatcher.py` — Workflow 派发服务（替代 legacy dispatcher + workflow_executor）
 - `docs/production-minimum-deployment-checklist.md`

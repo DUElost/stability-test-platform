@@ -1,8 +1,8 @@
 # Stability Test Platform 核心模块职责定义
 
-**版本**：2.1.0  
-**更新时间**：2026-04-08  
-**状态**：已评审修订
+**版本**：2.2.0  
+**更新时间**：2026-04-09  
+**状态**：ADR-0018 全量落地后修订
 
 ---
 
@@ -65,17 +65,15 @@
 
 ### 3. Redis
 
-**定位**：SAQ 任务队列的 broker + 控制指令下发通道。单一 Redis 实例，通过不同 key prefix 隔离职责。
+**定位**：SAQ 任务队列的 broker。单一 Redis 实例。
 
 **核心职责**：
 - **SAQ broker**：存储 SAQ 异步任务队列，提供入队、消费、重试、DLQ 等基础设施
-- **控制指令通道**：中心端 → Agent 单向下发（取消、暂停、配置推送等）
-  - SAQ 将指令发布到 `stp:control:{host_id}` 或 `stp:control:broadcast`
-  - Agent 通过订阅对应频道接收指令
 
 **不应承担的职责**：
 - 作为 Agent 上报数据的通道（日志走 SocketIO，状态走 HTTP API）
 - 作为持久化存储（Redis 数据允许丢失，持久化状态在 PostgreSQL）
+- 作为控制指令通道（已迁移到 SocketIO `on_control` event）
 
 ---
 
@@ -108,6 +106,8 @@
   - **数据清理**（`IntervalTrigger`）：历史 WorkflowRun 保留期删除
 - 对于轻量级周期任务（recycler、watchdog），直接在回调函数中执行业务逻辑
 - 对于重量级任务（dispatch 扇出、post-completion），通过回调函数向 SAQ 入队
+- **SAQ 队列深度轮询**（`IntervalTrigger`）：每 15s 采样 SAQ 队列深度写入 Prometheus gauge
+- 所有 job 自动通过 `_instrumented()` 装饰器记录 Prometheus 指标（执行次数、耗时、成功/失败）
 
 **不应承担的职责**：
 - 替代 SAQ 处理一次性异步任务（如用户触发的 dispatch、通知推送）
@@ -140,8 +140,7 @@
 
 *通信通道*：
 - **HTTP API**（权威路径）：心跳上报、任务领取/完成、Step 状态上报、设备锁续期
-- **SocketIO**（展示路径）：实时日志流、步骤进度推送
-- **Redis Subscribe**（控制接收）：订阅 `stp:control:{host_id}` 频道，接收中心端下发的指令
+- **SocketIO**（展示路径 + 控制接收）：实时日志流、步骤进度推送；接收 `on_control` event（abort / backpressure / tool_update）
 
 *执行能力*：
 - 执行 Pipeline 定义的测试流程（stages 生命周期：prepare → execute → post_process）
@@ -169,11 +168,11 @@
 | Step 状态上报 | Agent → 中心端 | HTTP API | 必须可靠 | PostgreSQL (StepTrace) |
 | 设备锁续期 | Agent → 中心端 | HTTP API (`extend_lock`) | 必须可靠 | PostgreSQL |
 | 实时日志/进度 | Agent → 服务端 → 前端 | SocketIO | 传输允许丢失 | 服务端异步写文件 |
-| 控制指令 | 中心端 → Agent | Redis Pub/Sub | 允许丢失 | 不持久化 |
+| 控制指令 | 中心端 → Agent | SocketIO `on_control` event | 允许丢失 | 不持久化 |
 | 前端 CRUD 操作 | 前端 → 中心端 | HTTP API | 必须可靠 | PostgreSQL |
 | 前端实时更新 | 中心端 → 前端 | SocketIO | 允许丢失 | 不持久化 |
 | [计划中] 审批请求创建 | Agent → 中心端 | HTTP API | 必须可靠 | PostgreSQL |
-| [计划中] 审批结果下发 | 中心端 → Agent | Redis Pub/Sub | 允许丢失 | 不持久化 |
+| [计划中] 审批结果下发 | 中心端 → Agent | SocketIO `on_control` event | 允许丢失 | 不持久化 |
 
 ---
 
@@ -184,3 +183,4 @@
 | 1.0.0 | 2026-01-21 | 初始版本 |
 | 2.0.0 | 2026-04-08 | 引入 SAQ/APScheduler/python-socketio 后的职责重定义；明确 HTTP 权威 / SocketIO 展示的双通道原则；简化 Redis 角色 |
 | 2.1.0 | 2026-04-08 | 对照代码实现修正：补全 Agent API 端点（双心跳路径、claim/pending 双模型、extend_lock、step status）；Redis 增加 SAQ broker 职责；日志持久化策略修正为服务端异步写文件；模型名称对齐（TaskRun→JobInstance 等）；APScheduler 明确 recycler/watchdog/cron 三类具体 job；Agent 补充 outbox/锁续期/per-device 并发控制；未实现特性标注 [计划中]；数据流表补充 StepTrace、锁续期等缺失路径 |
+| 2.2.0 | 2026-04-09 | ADR-0018 全量落地后修订：Redis 简化为仅 SAQ broker（控制指令迁移到 SocketIO on_control event）；Agent 通信通道合并 SocketIO 控制接收；APScheduler 补充 SAQ queue depth 轮询和 Prometheus 指标埋点；数据流表控制指令通道改为 SocketIO |

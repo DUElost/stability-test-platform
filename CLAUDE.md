@@ -6,6 +6,18 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-04-09 — ADR-0018 基础设施层框架引入（Phase 1-5 完成）
+- **APScheduler 4.x**：替代遗留守护线程（recycler/cron_scheduler/session_watchdog），新建 `backend/scheduler/app_scheduler.py`
+- **SAQ 异步任务队列**：替代直接 post-completion 调用，新建 `backend/tasks/saq_tasks.py` + `backend/tasks/saq_worker.py`
+- **python-socketio**：替代自研 ConnectionManager，新建 `backend/realtime/socketio_server.py`（/agent + /dashboard namespaces）
+- **Agent SocketIO 客户端**：`ws_client.py` 重写为 `socketio.Client` 同步版
+- **前端 SocketIO**：新建 `useSocketIO.ts` hook，6 个消费组件全部迁移
+- **Step 状态上报**：新建 `backend/agent/step_trace_uploader.py`（HTTP 批量上报）
+- **Redis 简化**：仅保留 SAQ broker，Redis Streams 全面清除
+- **可观测性**：新增框架级 Prometheus 指标（saq_tasks/socketio_connections/apscheduler_job_runs 等）
+- **Grafana Dashboard**：新建 `docs/grafana/stability-platform-dashboard.json`
+- 依赖：新增 `apscheduler`, `saq`, `python-socketio`, `socket.io-client`
+
 ### 2026-02-23
 - Pipeline Editor：新增 `PipelineEditor.tsx` 可视化编辑器（Phase/Step CRUD、拖拽排序、Action 选择器、JSON 预览）
 - Pipeline Templates API：新增 `GET /api/v1/pipeline/templates` 端点服务内置模板
@@ -37,9 +49,12 @@
 ## 架构模式
 
 ### Windows 主机（中心服务器）
-- **FastAPI 后端**：端口 8000，提供 REST API 和 WebSocket
+- **FastAPI 后端**：端口 8000，提供 REST API + python-socketio 实时推送
+- **APScheduler**：进程内定时调度（recycler / session_watchdog / cron / 数据清理）
+- **SAQ Worker**：进程内异步任务队列（post-completion / 通知 / 控制指令）
 - **React 前端**：端口 5173，Web Dashboard 界面
 - **数据库**：PostgreSQL
+- **Redis**：SAQ broker（任务队列）
 
 ### Linux Agent 主机
 - **Python Agent**：拉取任务、上报心跳、执行测试
@@ -168,12 +183,14 @@ wsl -u root -- bash -c "rsync -av --delete --exclude='__pycache__' --exclude='.e
 | POST | `/api/v1/agent/jobs/{id}/extend_lock` | 续期设备锁 |
 | POST | `/api/v1/agent/jobs/{run_id}/steps/{step_id}/status` | 更新步骤状态（HTTP fallback） |
 
-### WebSocket 端点
+### SocketIO 端点
 
-| 端点 | 方向 | 说明 |
-|------|------|------|
-| `WS /ws/agent/{host_id}` | Agent→Backend | Agent 实时日志/状态推送 |
-| `WS /ws/logs/{run_id}` | Backend→Frontend | 前端日志订阅 |
+| Namespace | 方向 | 说明 |
+|-----------|------|------|
+| `/agent` | Agent→Backend | Agent 实时日志/状态/心跳推送（socketio.Client 同步版） |
+| `/dashboard` | Backend→Frontend | 前端实时更新推送（socket.io-client） |
+
+> Legacy WS 端点（`/ws/agent/{host_id}`, `/ws/logs/{run_id}`）保留为 deprecated stubs。
 
 ### Pipeline 定义格式（pipeline_def）
 
@@ -220,6 +237,10 @@ asyncssh
 psutil
 requests
 aiohttp
+apscheduler>=4.0.0a5,<5.0
+saq>=0.12.0,<1.0
+python-socketio[asyncio]>=5.11.0,<6.0
+prometheus-client
 ```
 
 ### 前端依赖
@@ -232,7 +253,8 @@ aiohttp
     "@tanstack/react-query": "^4.29.0",
     "axios": "^1.4.0",
     "lucide-react": "^0.562.0",
-    "tailwindcss": "^3.3.0"
+    "tailwindcss": "^3.3.0",
+    "socket.io-client": "^4.8.3"
   }
 }
 ```
@@ -247,7 +269,9 @@ aiohttp
 | `ADB_PATH` | `adb` | ADB 可执行文件路径 |
 | `POLL_INTERVAL` | `10` | Agent 轮询间隔（秒） |
 | `ANDROID_ADB_SERVER_PORT` | `5039`（WSL Agent） | WSL 环境必须指定此端口以连接 Windows 侧 ADB server |
-| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Redis 连接（实时日志流） |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Redis 连接（SAQ broker） |
+| `SAQ_CONCURRENCY` | `10` | SAQ Worker 并发数 |
+| `AGENT_SECRET` | （空） | Agent SocketIO 连接密钥（生产环境必须设置） |
 
 ---
 
@@ -479,8 +503,20 @@ class Tool(Base):
 - `backend/api/routes/tasks.py` - 兼容层（映射到 WorkflowDefinition/JobInstance）
 - `backend/api/routes/tool_catalog.py` - 工具目录 API（新）
 - `backend/api/routes/heartbeat.py` - 心跳处理
-- `backend/api/routes/websocket.py` - WebSocket 端点（Agent + Frontend）
+- `backend/api/routes/websocket.py` - WebSocket 端点（deprecated stubs）
+- `backend/api/routes/metrics.py` - Prometheus 指标端点
 - `backend/api/routes/pipeline.py` - Pipeline 模板 API
+
+### 基础设施层（ADR-0018）
+- `backend/scheduler/app_scheduler.py` - APScheduler 4.x 统一调度器
+- `backend/scheduler/recycler.py` - Recycler 纯函数（APScheduler job 回调）
+- `backend/scheduler/cron_scheduler.py` - Cron 调度纯函数（APScheduler job 回调）
+- `backend/tasks/saq_tasks.py` - SAQ 异步任务定义
+- `backend/tasks/saq_worker.py` - SAQ Worker 生命周期管理
+- `backend/tasks/session_watchdog.py` - Session Watchdog 纯函数（APScheduler job 回调）
+- `backend/realtime/socketio_server.py` - python-socketio 服务端（/agent + /dashboard）
+- `backend/realtime/log_writer.py` - 异步日志文件持久化
+- `backend/core/metrics.py` - Prometheus 指标定义与工具函数
 
 ### Agent 模块
 - `backend/agent/main.py` - Agent 主程序
@@ -490,7 +526,8 @@ class Tool(Base):
 - `backend/agent/system_monitor.py` - 系统监控
 - `backend/agent/task_executor.py` - 任务执行
 - `backend/agent/pipeline_engine.py` - Pipeline 执行引擎
-- `backend/agent/ws_client.py` - WebSocket 客户端
+- `backend/agent/ws_client.py` - SocketIO 客户端（socketio.Client 同步版）
+- `backend/agent/step_trace_uploader.py` - Step 状态 HTTP 批量上报
 - `backend/agent/actions/` - 内置 Step Action 库
 
 ### 前端核心
@@ -520,12 +557,12 @@ class Tool(Base):
 
 ## 下一步建议
 
-1. **任务调度器**：实现完整的任务调度逻辑
-2. **WebSocket 推送**：实时状态更新
-3. **日志管理**：日志收集、上传、归档
-4. **代码同步**：Windows 到 Linux 自动同步脚本
-5. **测试工具集成**：封装现有测试工具
+1. **告警规则落地**：ADR-0011 第二层——定义 SLO 阈值、配置 Prometheus AlertManager 规则
+2. **日志管理**：日志收集、上传、归档（当前由 `log_writer.py` 写入文件系统，后续接入 Loki）
+3. **代码同步**：Windows 到 Linux 自动同步脚本
+4. **测试工具集成**：封装现有测试工具
+5. **水平扩展**：python-socketio Redis adapter 支持多进程消息同步
 
 ---
 
-*最后更新时间：2026-03-23 17:50:00*
+*最后更新时间：2026-04-09 17:00:00*
