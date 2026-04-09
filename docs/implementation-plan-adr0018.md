@@ -1,7 +1,7 @@
 # ADR-0018 实施计划：基础设施层框架引入
 
 **关联决策**：[ADR-0018](adr/ADR-0018-infrastructure-layer-framework-adoption.md)  
-**预估总工期**：8-10 工作日  
+**预估总工期**：10-12 工作日  
 **创建日期**：2026-04-08
 
 ---
@@ -9,14 +9,17 @@
 ## 总览
 
 ```
-Phase 0  准备工作              ▓░░░░░░░░░░░░░░░░  0.5 天
-Phase 1  APScheduler 迁移      ░▓▓▓░░░░░░░░░░░░░  1.5 天
-Phase 2  SAQ 迁移              ░░░░▓▓▓▓░░░░░░░░░  2   天
-Phase 3  python-socketio 迁移  ░░░░░░░░▓▓▓▓▓░░░░  2.5 天
-Phase 4  Redis 清理            ░░░░░░░░░░░░░▓░░░  0.5 天
-Phase 5  可观测性落地          ░░░░░░░░░░░░░░▓▓░  1   天
-Phase 6  验收与文档            ░░░░░░░░░░░░░░░░▓  0.5 天
+Phase 0    准备工作                            0.5 天
+Phase 1    APScheduler 迁移                    1.5 天
+Phase 2    SAQ 迁移 (dispatch 同步, PC 异步)    1.5 天
+Phase 3    python-socketio 迁移                2.5 天
+Phase 3.7  Agent 状态上报迁移                   1.5 天
+Phase 4    Redis Streams 全面清理               1   天
+Phase 5    可观测性落地                         1   天
+Phase 6    验收与文档                           0.5 天
 ```
+
+独立修复项（可与迁移并行，不计入主线工期）：PENDING_TOOL 状态机修复（约 0.5 天）。
 
 ---
 
@@ -163,9 +166,9 @@ pytest backend/tests/ -v --tb=short
 
 ---
 
-## Phase 2：SAQ 迁移（2 天）— P1
+## Phase 2：SAQ 迁移（1.5 天）— P1
 
-**目标**：用 SAQ 替代 `mq/consumer.py` 的后台任务处理，将 dispatch 扇出和 post-completion 异步化。
+**目标**：用 SAQ 接管 post-completion 异步处理和控制指令发布。Dispatch 保持同步（前端依赖同步返回 `workflow_run_id`）。MQ consumer 暂保留，延迟到 Phase 4 统一清理。
 
 **前置依赖**：Phase 1 完成（APScheduler 已接管定时触发）
 
@@ -177,8 +180,7 @@ pytest backend/tests/ -v --tb=short
 
 | 任务名 | 来源 | 触发方 |
 |--------|------|--------|
-| `dispatch_workflow_task` | `services/dispatcher.py::dispatch_workflow` | orchestration API / APScheduler cron |
-| `post_completion_task` | `services/post_completion.py::run_post_completion` | agent_api.complete_job |
+| `post_completion_task` | `services/post_completion.py::run_post_completion` | agent_api.complete_job / consumer.py 终态补偿 |
 | `send_notification_task` | `services/notification_service.py::dispatch_notification` | post_completion / recycler deferred |
 | `publish_control_command` | 新增 | orchestration API (abort/pause) |
 
@@ -207,26 +209,9 @@ pytest backend/tests/ -v --tb=short
 #   await stop_saq_worker()
 ```
 
-### 2.4 迁移 dispatch 扇出为异步
+### 2.4 Dispatch 保持同步（已决策）
 
-**修改文件**：`backend/api/routes/orchestration.py`
-
-```python
-# 修改前:
-#   run = await dispatch_workflow(wf_def_id, device_ids, ...)
-
-# 修改后:
-#   from backend.tasks.saq_worker import get_queue
-#   job = await get_queue().enqueue(
-#       "dispatch_workflow_task",
-#       workflow_def_id=wf_def_id,
-#       device_ids=device_ids,
-#       ...
-#   )
-#   return ok({"workflow_run_id": "pending", "saq_job_id": job.id})
-```
-
-**注意**：dispatch 异步化后，API 立即返回，前端需通过轮询或 SocketIO 获知 WorkflowRun 创建结果。如果产品上需要同步返回 `workflow_run_id`，可保留 dispatch 同步执行，仅将 post-completion 异步化。此处需评审确认。
+Dispatch 保持 `await dispatch_workflow(...)` 同步调用不变，前端依赖同步返回 `workflow_run_id`。不做异步化改造。
 
 ### 2.5 迁移 post-completion 为异步
 
@@ -254,17 +239,28 @@ pytest backend/tests/ -v --tb=short
 #   await get_queue().enqueue("publish_control_command", host_id=..., command="abort", ...)
 ```
 
-### 2.7 移除 consume_status_stream
+### 2.7 暂保留 MQ Consumer（延迟到 Phase 4）
 
-**修改文件**：`backend/main.py`
+`consume_status_stream` 和 `consume_log_stream` 在此阶段**不移除**。Agent 尚未完成 step_trace HTTP 迁移（Phase 3.7），MQ consumer 仍是 step_trace 持久化的唯一路径。延迟到 Phase 4 统一清理。
 
-移除：
-- `mq_consumer_task = asyncio.create_task(consume_status_stream(redis_client))`
-- `mq_bp_task = asyncio.create_task(monitor_backpressure(redis_client))`
+### 2.8 迁移 consumer.py 中的 post-completion 触发
 
-`consume_log_stream` 在 Phase 3 迁移，此阶段暂保留。
+**修改文件**：`backend/mq/consumer.py`
 
-### 2.8 验证清单
+`_persist_job_status` 在终态分支中直接调用 `run_post_completion_async(job_id)` —— 将此调用改为 SAQ enqueue，使 post-completion 触发统一收口到 SAQ：
+
+```python
+# 修改前:
+#   run_post_completion_async(job_id)
+
+# 修改后:
+#   from backend.tasks.saq_worker import get_queue
+#   await get_queue().enqueue("post_completion_task", job_id=job_id)
+```
+
+这确保 `agent_api.complete_job` 和 MQ consumer 终态补偿两条路径都经过 SAQ 去重。
+
+### 2.9 验证清单
 
 - [ ] `pytest backend/tests/` 全部通过
 - [ ] 在前端触发 workflow dispatch，确认 JobInstance 正确创建
@@ -299,12 +295,20 @@ pytest backend/tests/ -v --tb=short
 
 **修改文件**：`backend/main.py`
 
+使用 python-socketio 官方推荐的 `ASGIApp` 包装模式，将 SocketIO 和现有 FastAPI 应用组合为单一 ASGI 应用。**不要**用 `app.mount("/", sio_app)`——这会将根路径流量整体交给子应用，吞掉现有 FastAPI 路由。
+
 ```python
-# 追加：
-#   from backend.realtime.socketio_server import create_sio_app
-#   sio_app = create_sio_app()
-#   app.mount("/sio", sio_app)  # SocketIO ASGI app
+# 修改前：
+#   app = FastAPI(...)
+
+# 修改后：
+#   from backend.realtime.socketio_server import create_sio_server
+#   sio = create_sio_server()
+#   combined_app = socketio.ASGIApp(sio, app)  # sio 拦截 /socket.io 路径，其余透传给 FastAPI
+#   # uvicorn 启动时使用 combined_app 代替 app
 ```
+
+`socketio.ASGIApp` 会拦截 `/socket.io` 路径的请求交给 SocketIO 处理，其余所有路径透传给内部的 FastAPI 应用，两者共存互不干扰。
 
 ### 3.3 创建服务端日志持久化
 
@@ -344,7 +348,7 @@ pytest backend/tests/ -v --tb=short
 
 | 修改前 | 修改后 |
 |--------|--------|
-| `new WebSocket(url)` | `io(url, { path: "/sio/socket.io" })` |
+| `new WebSocket(url)` | `io(url)` — 使用默认 `/socket.io` 路径，无需额外配置 |
 | 手动 JSON parse | SocketIO 自动序列化 |
 | 手动重连 setTimeout | SocketIO 内置 reconnection |
 
@@ -380,13 +384,220 @@ pytest backend/tests/ -v --tb=short
 
 ---
 
-## Phase 4：Redis 清理（0.5 天）— P2
+## Phase 3.7：Agent 状态上报迁移（1.5 天）— P1
 
-**目标**：移除已被 SAQ + SocketIO 替代的 Redis Streams 遗留代码。
+**目标**：将 Agent 的 step_trace 持久化从 MQ 迁移到 HTTP 批量上报，修复 WS fallback 断裂，使中间信息状态首次通过 SocketIO 生效。这是 Phase 4 移除 MQ 的前提条件。
 
-**前置依赖**：Phase 2 + Phase 3 全部完成
+**前置依赖**：Phase 3 完成（Agent SocketIO 迁移已落地）
 
-### 4.1 移除 Stream Group 创建
+### 3.7.1 step_trace 持久化迁移（高优先级）
+
+当前 step_trace 唯一有效持久化路径是 MQ `stp:status` → `_persist_step_trace` → DB。Agent 侧 `LocalDB.get_unacked_traces()` 已定义但全仓库无调用点，不存在现成的 HTTP replay 机制。
+
+采用 **HTTP 批量上报方案**（遵循 ADR-0018 双通道原则：HTTP 权威写入，SocketIO 仅展示）。
+
+**为何不选 SocketIO handler 写 DB**：ADR-0018 明确声明"HTTP 是权威写入路径，SocketIO 是展示路径。禁止 SocketIO handler 直接推进状态机。" `module-responsibilities.md` 进一步要求"需要幂等性保障的操作，必须走 HTTP API"。`reconcile_step_traces` 虽不推进状态机，但属于需要幂等性保障的持久化操作，按项目原则必须走 HTTP。
+
+#### StepTraceUploader 模块
+
+**新建文件**：`backend/agent/step_trace_uploader.py`
+
+设计模式复刻 `OutboxDrainThread`（`main.py` 中的终态重试线程）——同样的 `start()` / `stop()` / `drain_sync()` 接口、daemon 线程、`_stop_event.wait(interval)` 循环。
+
+```python
+class StepTraceUploader:
+    _BATCH_LIMIT = 100
+
+    def __init__(self, api_url: str, local_db: LocalDB,
+                 agent_secret: str = "", interval: float = 5.0):
+        self._api_url = api_url
+        self._local_db = local_db
+        self._agent_secret = agent_secret
+        self._interval = interval
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._last_id = 0
+
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+
+    def drain_sync(self) -> int:
+        """Blocking drain for shutdown — 循环直到无剩余数据或出错。"""
+        total = 0
+        while True:
+            try:
+                n = self._upload_once()
+            except Exception:
+                logger.exception("step_trace_drain_error")
+                break
+            if n == 0:
+                break
+            total += n
+        return total
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._stop_event.wait(self._interval)
+            if self._stop_event.is_set():
+                break
+            try:
+                self._upload_once()
+            except Exception:
+                logger.exception("step_trace_upload_error")
+
+    def _upload_once(self) -> int:
+        traces = self._local_db.get_unacked_traces(after_id=self._last_id)
+        if not traces:
+            return 0
+        batch = traces[:self._BATCH_LIMIT]
+        headers = {"X-Agent-Secret": self._agent_secret} if self._agent_secret else {}
+        resp = requests.post(
+            f"{self._api_url}/api/v1/agent/steps",
+            json=[_to_step_trace_in(t) for t in batch],
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        for t in batch:
+            self._local_db.mark_acked(t["id"])
+            self._last_id = max(self._last_id, t["id"])
+        return len(batch)
+```
+
+**约束说明**：
+
+- `drain_sync()` 循环调用 `_upload_once()` 直到返回 0 或抛异常，确保 shutdown 时不遗留未上报的 trace
+- HTTP 请求的 `X-Agent-Secret` header 构造对齐 `OutboxDrainThread._drain_once()`：有值则带上，空则不带
+- 每次上传上限 `_BATCH_LIMIT=100`，避免单次请求体过大；`drain_sync` 的循环保证大量积压时也能全部 flush
+
+**在 `main.py` 中的接入位置**（OutboxDrainThread 启动之后）：
+
+```python
+outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
+outbox_drain.start()
+
+step_trace_uploader = StepTraceUploader(api_url, local_db, agent_secret, interval=5.0)
+step_trace_uploader.start()
+```
+
+**shutdown 序列**（在 `executor.shutdown(wait=True)` 之后、`mq_producer.close()` 之前）：
+
+```python
+try:
+    flushed = step_trace_uploader.drain_sync()
+    if flushed:
+        logger.info("shutdown_step_trace_flushed count=%d", flushed)
+except Exception:
+    logger.exception("shutdown_step_trace_flush_failed")
+step_trace_uploader.stop()
+```
+
+#### MQProducer.send_step_trace() 两阶段迁移
+
+当前 `send_step_trace()` 在 XADD 成功后立即 `mark_acked(trace_id)`，被标记 `acked=1` 的记录不会再被 `get_unacked_traces()` 读到。因此 Redis 正常时 Uploader 看不到任何数据。
+
+**Phase A（MQ 主路径 + HTTP 补传兜底，本阶段落地时）**：
+
+- `MQProducer.send_step_trace()` **不改动**：仍然 `save_step_trace` → `XADD` → `mark_acked`
+- `StepTraceUploader` 同时运行：读取 `acked=0` 的记录 → HTTP POST → `mark_acked`
+- 实际效果：
+  - Redis 正常时：MQ XADD 成功 → `mark_acked` → Uploader 无事可做
+  - Redis 异常时：XADD 失败 → `mark_acked` 不执行 → 记录留在 `acked=0` → Uploader 补传到 HTTP → `mark_acked`
+- 此阶段不能验证 HTTP 链路在正常流量下的表现，仅验证补传兜底能力
+- 服务端 `reconcile_step_traces` 的 `ON CONFLICT DO NOTHING` 保证 MQ 与 HTTP 偶发重叠时幂等
+
+**Phase B（MQ 切除，Phase 4 执行时）**：
+
+修改 `MQProducer.send_step_trace()`：
+
+```python
+def send_step_trace(self, job_id, step_id, stage, event_type, status,
+                    output=None, error_message=None) -> Optional[int]:
+    """Save step_trace to SQLite WAL only. HTTP upload delegated to StepTraceUploader."""
+    ts = _utcnow()
+    if self._local_db is not None:
+        try:
+            from datetime import datetime as _dt
+            return self._local_db.save_step_trace(
+                job_id=job_id, step_id=step_id, stage=stage,
+                event_type=event_type, status=status,
+                output=output, error_message=error_message,
+                original_ts=_dt.fromisoformat(ts.replace("Z", "+00:00")),
+            )
+        except Exception as e:
+            logger.warning("SQLite save_step_trace failed: %s", e)
+    return None
+    # 移除：_xadd_status(msg)
+    # 移除：mark_acked（由 StepTraceUploader 成为唯一 ack owner）
+```
+
+### 3.7.2 PENDING_TOOL — 暂不处理
+
+当前 `PENDING_TOOL` 在所有路径中均为死代码（`VALID_TRANSITIONS` 无 `RUNNING→PENDING_TOOL` 边），Agent 报告后立即返回 FAIL。迁移过程中保持原样不动：
+
+- 不修改状态机
+- 不修改 Agent 的 `_report_job_status_mq("PENDING_TOOL", ...)` 调用（迁移后此调用改走 SocketIO emit，服务端同样不做 DB 写入，行为不变）
+- 迁移完成后作为独立清理项决策保留或移除
+
+### 3.7.3 中间信息状态首次生效
+
+- `INIT_RUNNING` / `PATROL_RUNNING` / `TEARDOWN_RUNNING` 当前在所有路径中均被丢弃
+- 迁移到 SocketIO 后，Agent emit 这些状态 → SocketIO server 广播到 dashboard namespace（仅展示，不写 DB）
+- 这是一个**功能增强**而非回归风险，迁移后首次实现中间状态的前端展示
+
+### 3.7.4 终态 job_status 确认无需改动
+
+- Agent 已使用 HTTP `complete_job` 作为终态主路径
+- MQ 终态补偿路径随 Phase 4 移除，`complete_job` HTTP 端点已包含完整的锁释放、快照、聚合、post-completion 逻辑
+- 无需额外迁移工作
+
+### 3.7.5 修复当前 WS fallback 的断裂
+
+- 现有 `_report_step_trace_mq` / `_report_job_status_mq` 的 WS fallback 因 message type 不匹配而无效
+- SocketIO 迁移后，Agent 使用 SocketIO emit 替代原始 WS send，server handler 显式处理所有事件类型
+- 此修复是迁移的自然副产物，不需要额外工作
+
+### 3.7.6 验证清单
+
+- [ ] StepTraceUploader 单元测试：mock `get_unacked_traces` 返回数据 → 验证 HTTP POST 被调用 → 验证 `mark_acked` 被调用
+- [ ] Phase A 集成测试：Agent 执行 job → step_trace 通过 MQ 入库 → 手动断开 Redis → 新的 step_trace 由 Uploader 补传入库
+- [ ] `drain_sync` 测试：积压 200+ traces → shutdown → 验证全部 flush（分多批）
+- [ ] 前端打开 Job 详情，验证 INIT_RUNNING / PATROL_RUNNING 等中间状态通过 SocketIO 实时展示
+- [ ] PENDING_TOOL 行为不变：Agent tool pull 失败 → 报告 PENDING_TOOL → 立即 FAIL（迁移前后行为一致）
+
+---
+
+## Phase 4：Redis Streams 全面清理（1 天）— P2
+
+**目标**：移除已被 SAQ + SocketIO + HTTP 替代的 Redis Streams 遗留代码，包括 MQ Producer/Consumer、ControlListener、以及所有 Redis Streams 读取点。
+
+**前置依赖**：Phase 2 + Phase 3 + Phase 3.7 全部完成（Agent 已完全切换到 SocketIO + HTTP）
+
+### 4.1 ControlListener 迁移
+
+**修改文件**：`backend/agent/mq/control_listener.py`
+
+将 `stp:control` stream 的控制指令（backpressure / tool_update / abort 等）迁移到 SocketIO event 或独立 Redis Pub/Sub（与 Streams 无关）。
+
+### 4.2 Redis 读取点清理
+
+| 读取点 | 当前用途 | 迁移方案 |
+|--------|---------|---------|
+| `agent_api.py._get_backpressure` 读取 `stp:backpressure:log_rate_limit` key | 背压控制 | 改为 SAQ 或 SocketIO 内部状态 |
+| `tasks.py` / `websocket.py` 的 `xrevrange("stp:logs")` | 历史日志查询 | 改为从文件系统读取（Phase 3.3 的 `log_writer.py` 已落地） |
+
+### 4.3 移除 consume_status_stream / consume_log_stream
+
+**修改文件**：`backend/main.py`
+
+移除：
+- `mq_consumer_task = asyncio.create_task(consume_status_stream(redis_client))`
+- `mq_log_task = asyncio.create_task(consume_log_stream(redis_client))`
+- `mq_bp_task = asyncio.create_task(monitor_backpressure(redis_client))`
+
+此时 Agent 已完全切换到 SocketIO + HTTP，MQ consumer 不再有消费者依赖。
+
+### 4.4 移除 Stream Group 创建
 
 **修改文件**：`backend/main.py`
 
@@ -397,9 +608,11 @@ pytest backend/tests/ -v --tb=short
 #       await redis_client.xgroup_create(...)
 ```
 
-### 4.2 移除 Agent MQ Producer
+### 4.5 移除 Agent MQ Producer（执行 Phase B 切除）
 
-**删除文件**：`backend/agent/mq/producer.py`
+**修改文件**：`backend/agent/mq/producer.py`
+
+按 Phase 3.7.1 Phase B 方案修改 `send_step_trace()`，移除 XADD 和 `mark_acked` 调用。`StepTraceUploader` 成为唯一 ack owner。
 
 **修改文件**：`backend/agent/main.py`
 
@@ -411,11 +624,11 @@ pytest backend/tests/ -v --tb=short
 # 以及所有传递 mq_producer 参数的调用
 ```
 
-### 4.3 清理 Consumer 模块
+### 4.6 清理 Consumer 模块
 
-**删除或归档**：`backend/mq/consumer.py`（所有消费函数已被替代）
+**删除或归档**：`backend/mq/consumer.py`（所有消费函数已被 Phase 2 SAQ + Phase 3 SocketIO + Phase 3.7 HTTP 替代）
 
-### 4.4 精简 Redis 连接用途
+### 4.7 精简 Redis 连接用途
 
 **修改文件**：`backend/main.py`
 
@@ -424,16 +637,18 @@ Redis 连接保留，但注释明确其职责：
 ```python
 # Redis 用途：
 # 1. SAQ broker（任务队列）
-# 2. stp:control Pub/Sub（控制指令下发）
-# 3. python-socketio Redis adapter（多进程消息同步，远期）
+# 2. python-socketio Redis adapter（多进程消息同步，远期）
+# 注：stp:control Pub/Sub 已迁移到 SocketIO event（Phase 4.1）
 ```
 
-### 4.5 验证清单
+### 4.8 验证清单
 
 - [ ] `pytest backend/tests/` 全部通过
-- [ ] `rg "stp:status\|stp:logs\|consume_status\|consume_log\|MQProducer" backend/` 无残留引用
+- [ ] `rg "stp:status|stp:logs|consume_status|consume_log|MQProducer|stp:control" backend/` 无残留引用
 - [ ] Agent 端移除 `mq_producer` 后正常运行（心跳、任务执行、日志推送）
+- [ ] step_trace 仅通过 HTTP 批量上报入库，MQ 路径已不存在
 - [ ] Redis 中不再出现 `stp:status` 和 `stp:logs` stream
+- [ ] 控制指令（abort/pause）通过 SocketIO 或 Pub/Sub 正常下发
 
 ---
 
@@ -447,7 +662,7 @@ Redis 连接保留，但注释明确其职责：
 
 **修改文件**：`backend/api/routes/metrics.py`
 
-确认 `/metrics` 端点正确暴露所有 Counter/Histogram（`backend/core/metrics.py` 已定义）。如果当前是 JSON 格式，需改为 Prometheus text format。
+`/metrics` 已使用 `generate_latest()` 输出 Prometheus text format。确认端点正确暴露所有 Phase 1-4 新增指标（`saq_*`、`socketio_*`、`apscheduler_*`）。
 
 ### 5.2 新增框架级指标
 
@@ -514,7 +729,7 @@ pytest backend/tests/ -v --tb=short
 | `backend/tasks/heartbeat_monitor.py` | Phase 1 删除 |
 | `backend/mq/consumer.py` | Phase 4 删除 |
 | `backend/agent/mq/producer.py` | Phase 4 删除 |
-| `backend/scheduler/dispatcher.py`（legacy） | 确认不再引用后删除 |
+| ~~`backend/scheduler/dispatcher.py`~~ | 该文件不存在；`backend/services/dispatcher.py` 是活跃核心服务，不应删除 |
 | `backend/api/routes/websocket.py` ConnectionManager | Phase 3 移除 |
 
 ---
@@ -524,27 +739,30 @@ pytest backend/tests/ -v --tb=short
 | 风险 | 影响 | 缓解措施 |
 |------|------|---------|
 | APScheduler 4.x 仍为 alpha | 生产稳定性未充分验证 | Phase 1 验证后评估；降级方案为退回 3.x（无 async-native，需 wrapper） |
-| SAQ dispatch 异步化后前端无法立即获得 workflow_run_id | 用户体验变化 | 评审确认：可选择保留 dispatch 同步 + 仅 post-completion 异步 |
 | SocketIO 与现有原生 WebSocket 端点并行期间增加复杂度 | 迁移期 bug | Phase 3 内尽快完成全量迁移，避免长期并行 |
 | Agent 侧 SocketIO Client 与同步线程模型的兼容性 | Agent 用 threading，SocketIO Client 有 async/sync 两种 | 使用 `socketio.Client`（同步版本），适配现有 Agent 线程模型 |
+| step_trace 持久化迁移期断链 | 执行中的 step 状态不入库 | Phase 3.7 先落地 HTTP 批量上报 + 验证通过后再移除 MQ consumer；过渡期双写由幂等 upsert 保障 |
+| Phase 2~4 期间 MQ consumer 与新路径并行 | 双写可能导致幂等冲突 | `reconcile_step_traces` 使用 `ON CONFLICT DO NOTHING`，天然幂等 |
+| ControlListener 依赖 MQ Producer + stp:control | Phase 4 删除 MQ Producer 后控制指令断开 | Phase 4 先迁移 ControlListener 到 SocketIO，再删除 MQ |
+| WS fallback 当前不工作（step_trace/job_status 静默丢弃） | 此为已有缺陷，非迁移引入 | SocketIO 迁移后所有事件类型显式处理，属于净改善 |
+| Agent step_trace 从 fire-and-forget MQ 改为 HTTP 批量上报 | 批量窗口（5s）内的 trace 延迟入库 | 可调整批量间隔；SQLite WAL 本地持久化保证不丢数据；Agent 崩溃恢复后 `get_unacked_traces` 可重放 |
+| PENDING_TOOL 状态机缺陷 | 预置 bug：job 执行中无法进入 PENDING_TOOL | 独立修复项（见 Phase 3.7.2），不阻塞迁移主线 |
 
 ---
 
-## 决策待确认项
+## 已决策项
 
-以下设计选择需在实施前评审确认：
+以下设计选择已在评审中完成决策：
 
-1. **Dispatch 是否异步化？**
-   - 方案 A：dispatch 保持同步（API 直接调 `dispatch_workflow`），仅 post-completion 走 SAQ
-   - 方案 B：dispatch 也走 SAQ 异步（API 立即返回 "pending"，前端轮询/SocketIO 获取结果）
-   - **建议**：Phase 2 先用方案 A，后续按产品需求升级到 B
+| # | 决策项 | 结论 | 依据 |
+|---|--------|------|------|
+| 1 | Dispatch 是否异步化 | **保持同步**（方案 A） | 前端依赖同步返回 `workflow_run_id` |
+| 2 | SocketIO mount path | **默认 `/socket.io`**（方案 B） | 减少 client 配置 |
+| 3 | Agent SocketIO Client 同步 vs 异步 | **`socketio.Client` 同步**（方案 A） | 不改动 Agent 线程模型 |
+| 4 | step_trace 持久化路径 | **HTTP 批量上报** | ADR-0018 双通道原则：HTTP 权威写入，SocketIO 仅展示 |
 
-2. **SocketIO mount path？**
-   - 方案 A：`/sio`（独立 ASGI app mount）
-   - 方案 B：`/socket.io`（SocketIO 默认 path，client 无需配置）
-   - **建议**：方案 B，减少 client 配置
+## 延迟决策项
 
-3. **Agent SocketIO Client 同步 vs 异步？**
-   - 方案 A：`socketio.Client`（同步，适配现有 threading 模型）
-   - 方案 B：`socketio.AsyncClient`（需在 Agent 中引入 asyncio 事件循环）
-   - **建议**：方案 A，不改动 Agent 线程模型
+以下事项在迁移完成后单独处理：
+
+- **PENDING_TOOL 状态机**：当前为死代码（`VALID_TRANSITIONS` 无 `RUNNING→PENDING_TOOL` 边），不影响迁移。迁移完成后再决策保留（需加转换边 + Agent 暂停等待逻辑）或删除（移除枚举 + watchdog 代码 + Agent 报告）。
