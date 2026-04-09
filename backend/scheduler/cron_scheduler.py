@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Cron Scheduler Daemon — polls task_schedules and creates Task rows or dispatches
-WorkflowRuns on schedule.
+Cron Schedule Checker — polls task_schedules and dispatches WorkflowRuns.
+
+Refactored for APScheduler 4.x: the CronScheduler daemon thread has been
+replaced by two standalone functions invoked via APScheduler IntervalTrigger:
+
+- ``check_and_fire_schedules()``  — async, called every CRON_POLL_INTERVAL
+- ``run_retention_cleanup()``     — sync, called every hour
 """
 
-import asyncio
+from __future__ import annotations
+
 import logging
 import os
-import threading
-import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy.orm import Session
 from sqlalchemy import select
 
-from backend.core.database import SessionLocal
+from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.schedule import TaskSchedule
 
 logger = logging.getLogger(__name__)
@@ -31,74 +34,114 @@ def _compute_next_run(cron_expression: str, after: datetime) -> datetime:
     return cron.get_next(datetime)
 
 
-async def _dispatch_workflow_async(wf_def_id: int, device_ids: list) -> None:
-    from backend.core.database import AsyncSessionLocal
+async def _dispatch_workflow_async(wf_def_id: int, device_ids: list, db) -> None:
+    """Dispatch a workflow using the provided async session."""
     from backend.services.dispatcher import dispatch_workflow, DispatchError
+    try:
+        await dispatch_workflow(
+            workflow_def_id=wf_def_id,
+            device_ids=device_ids,
+            failure_threshold=0.5,
+            triggered_by="cron",
+            db=db,
+        )
+    except DispatchError as exc:
+        logger.error("cron_dispatch_workflow_error wf_def_id=%s: %s", wf_def_id, exc)
+
+
+async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
+    """Evaluate and fire a single TaskSchedule row."""
+    if sched.workflow_definition_id:
+        from backend.models.workflow import WorkflowRun
+
+        stale_cutoff = now - timedelta(minutes=PATROL_TIMEOUT_MINUTES)
+        try:
+            active_count_result = await db.execute(
+                select(WorkflowRun)
+                .where(
+                    WorkflowRun.workflow_definition_id == sched.workflow_definition_id,
+                    WorkflowRun.status == "RUNNING",
+                    WorkflowRun.started_at > stale_cutoff,
+                )
+            )
+            active_count = len(active_count_result.scalars().all())
+            if active_count > 0:
+                logger.info(
+                    "cron_skip_overlap schedule_id=%s wf_def_id=%s active_runs=%d",
+                    sched.id, sched.workflow_definition_id, active_count,
+                )
+                sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+                return
+        except Exception as e:
+            logger.warning(
+                "overlap_check_failed schedule_id=%s, skipping dispatch (fail-closed): %s",
+                sched.id, e,
+            )
+            sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+            return
+
+        device_ids = sched.device_ids or []
+        await _dispatch_workflow_async(sched.workflow_definition_id, device_ids, db)
+        logger.info(
+            "cron_workflow_dispatched schedule_id=%s wf_def_id=%s",
+            sched.id, sched.workflow_definition_id,
+        )
+    else:
+        logger.error(
+            "cron_schedule_skip_no_workflow schedule_id=%s name=%s — "
+            "workflow_definition_id is required; legacy Task creation "
+            "path has been removed (see ADR-0008)",
+            sched.id, sched.name,
+        )
+
+    sched.last_run_at = now
+    sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+    logger.info(
+        "cron_schedule_updated schedule_id=%s next_run=%s",
+        sched.id, sched.next_run_at,
+    )
+
+
+async def check_and_fire_schedules() -> None:
+    """One tick of the cron schedule checker.
+
+    Queries ``TaskSchedule`` rows whose ``next_run_at`` has passed and fires
+    each eligible schedule.  Called by APScheduler ``IntervalTrigger``.
+    """
     async with AsyncSessionLocal() as db:
-        try:
-            await dispatch_workflow(
-                workflow_def_id=wf_def_id,
-                device_ids=device_ids,
-                failure_threshold=0.5,
-                triggered_by="cron",
-                db=db,
+        now = datetime.now(timezone.utc)
+        result = await db.execute(
+            select(TaskSchedule).where(
+                TaskSchedule.enabled == True,  # noqa: E712
+                TaskSchedule.next_run_at <= now,
             )
-            await db.commit()
-        except DispatchError as exc:
-            logger.error("cron_dispatch_workflow_error wf_def_id=%s: %s", wf_def_id, exc)
+        )
+        schedules = result.scalars().all()
 
-
-class CronScheduler:
-    """Background daemon that creates tasks from cron schedules."""
-
-    def start(self) -> threading.Thread:
-        thread = threading.Thread(target=self._run_loop, name="cron-scheduler", daemon=True)
-        thread.start()
-        logger.info("cron_scheduler_started interval=%s", CRON_POLL_INTERVAL)
-        return thread
-
-    def _run_loop(self) -> None:
-        while True:
+        for sched in schedules:
             try:
-                self._tick()
+                await _fire_schedule(db, sched, now)
             except Exception:
-                logger.exception("cron_scheduler_tick_error")
-            time.sleep(CRON_POLL_INTERVAL)
+                logger.exception("cron_schedule_execute_error schedule_id=%s", sched.id)
 
-    def _tick(self) -> None:
-        db: Session = SessionLocal()
+        if schedules:
+            await db.commit()
+            logger.info("cron_scheduler_fired count=%d", len(schedules))
+
+
+def run_retention_cleanup() -> None:
+    """Delete completed WorkflowRuns older than WORKFLOW_RUN_RETENTION_DAYS.
+
+    Runs as an independent APScheduler job (sync, runs in thread-pool).
+    """
+    from backend.models.workflow import WorkflowRun
+    from backend.models.job import JobInstance, StepTrace
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=WORKFLOW_RUN_RETENTION_DAYS)
+
+    with SessionLocal() as db:
         try:
-            now = datetime.utcnow()
-            schedules = (
-                db.query(TaskSchedule)
-                .filter(TaskSchedule.enabled == True, TaskSchedule.next_run_at <= now)
-                .all()
-            )
-
-            for sched in schedules:
-                try:
-                    self._fire_schedule(db, sched, now)
-                except Exception:
-                    logger.exception("cron_schedule_execute_error schedule_id=%s", sched.id)
-
-            if schedules:
-                db.commit()
-                logger.info("cron_scheduler_fired count=%d", len(schedules))
-
-            # Cleanup stale completed WorkflowRuns beyond retention period
-            self._cleanup_old_runs(db, now)
-        finally:
-            db.close()
-
-    def _cleanup_old_runs(self, db: Session, now: datetime) -> None:
-        """Delete completed WorkflowRuns older than WORKFLOW_RUN_RETENTION_DAYS.
-
-        Must delete related JobInstance records first due to FK constraint.
-        """
-        try:
-            from backend.models.workflow import WorkflowRun
-            from backend.models.job import JobInstance
-            cutoff = now - timedelta(days=WORKFLOW_RUN_RETENTION_DAYS)
             stale_runs = (
                 db.query(WorkflowRun)
                 .filter(
@@ -108,84 +151,23 @@ class CronScheduler:
                 .limit(100)
                 .all()
             )
-            if stale_runs:
-                run_ids = [r.id for r in stale_runs]
-                # Delete related StepTrace records first (FK to JobInstance)
-                from backend.models.job import StepTrace
-                db.query(StepTrace).filter(
-                    StepTrace.job_id.in_(
-                        select(JobInstance.id).where(JobInstance.workflow_run_id.in_(run_ids))
-                    )
-                ).delete(synchronize_session=False)
-                # Delete related JobInstance records
-                db.query(JobInstance).filter(
-                    JobInstance.workflow_run_id.in_(run_ids)
-                ).delete(synchronize_session=False)
-                # Then delete WorkflowRun records
-                db.query(WorkflowRun).filter(
-                    WorkflowRun.id.in_(run_ids)
-                ).delete(synchronize_session=False)
-                db.commit()
-                logger.info("cron_cleanup_old_runs deleted runs=%d", len(stale_runs))
-        except Exception:
-            logger.warning("cron_cleanup_old_runs failed", exc_info=True)
-            db.rollback()
-
-    def _fire_schedule(self, db: Session, sched: TaskSchedule, now: datetime) -> None:
-        if sched.workflow_definition_id:
-            # Overlap protection: skip if same workflow has a recent RUNNING run
-            # Fail-closed: if the check itself errors, skip dispatch to avoid
-            # amplifying concurrent overlap risk.
-            try:
-                from backend.models.workflow import WorkflowRun
-                stale_cutoff = now - timedelta(minutes=PATROL_TIMEOUT_MINUTES)
-                active_count = db.query(WorkflowRun).filter(
-                    WorkflowRun.workflow_definition_id == sched.workflow_definition_id,
-                    WorkflowRun.status == "RUNNING",
-                    WorkflowRun.started_at > stale_cutoff,
-                ).count()
-                if active_count > 0:
-                    logger.info(
-                        "cron_skip_overlap schedule_id=%s wf_def_id=%s active_runs=%d",
-                        sched.id, sched.workflow_definition_id, active_count,
-                    )
-                    sched.next_run_at = _compute_next_run(sched.cron_expression, now)
-                    return
-            except Exception as e:
-                logger.warning(
-                    "overlap_check_failed schedule_id=%s, skipping dispatch (fail-closed): %s",
-                    sched.id, e,
-                )
-                sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+            if not stale_runs:
                 return
 
-            # Normal dispatch
-            device_ids = sched.device_ids or []
-            asyncio.run(_dispatch_workflow_async(sched.workflow_definition_id, device_ids))
-            logger.info(
-                "cron_workflow_dispatched schedule_id=%s wf_def_id=%s",
-                sched.id, sched.workflow_definition_id,
-            )
-        else:
-            # Legacy Task path is no longer supported — all schedules must
-            # reference a workflow_definition_id.  Skip and warn so the
-            # operator can fix the schedule row.
-            logger.error(
-                "cron_schedule_skip_no_workflow schedule_id=%s name=%s — "
-                "workflow_definition_id is required; legacy Task creation "
-                "path has been removed (see ADR-0008)",
-                sched.id, sched.name,
-            )
-
-        sched.last_run_at = now
-        sched.next_run_at = _compute_next_run(sched.cron_expression, now)
-        logger.info(
-            "cron_schedule_updated schedule_id=%s next_run=%s",
-            sched.id, sched.next_run_at,
-        )
-
-
-def start_cron_scheduler() -> threading.Thread:
-    """Called from FastAPI startup."""
-    scheduler = CronScheduler()
-    return scheduler.start()
+            run_ids = [r.id for r in stale_runs]
+            db.query(StepTrace).filter(
+                StepTrace.job_id.in_(
+                    select(JobInstance.id).where(JobInstance.workflow_run_id.in_(run_ids))
+                )
+            ).delete(synchronize_session=False)
+            db.query(JobInstance).filter(
+                JobInstance.workflow_run_id.in_(run_ids)
+            ).delete(synchronize_session=False)
+            db.query(WorkflowRun).filter(
+                WorkflowRun.id.in_(run_ids)
+            ).delete(synchronize_session=False)
+            db.commit()
+            logger.info("retention_cleanup deleted runs=%d", len(stale_runs))
+        except Exception:
+            logger.warning("retention_cleanup failed", exc_info=True)
+            db.rollback()

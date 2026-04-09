@@ -42,10 +42,7 @@ from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
 from backend.mq.consumer import consume_log_stream, consume_status_stream, monitor_backpressure
 from backend.services.state_machine import InvalidTransitionError
-from backend.tasks.heartbeat_monitor import heartbeat_monitor_loop
-from backend.tasks.session_watchdog import USE_SESSION_WATCHDOG, session_watchdog_loop
-from backend.scheduler.cron_scheduler import start_cron_scheduler
-from backend.scheduler.recycler import start_recycler
+from backend.scheduler.app_scheduler import create_scheduler, register_schedules
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +76,7 @@ _STREAM_GROUPS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client
-    cron_thread = None
+    scheduler = None
 
     if os.getenv("TESTING") != "1":
         # Connect Redis
@@ -94,32 +91,25 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass  # already exists
 
-        monitor_task = None
-        if not USE_SESSION_WATCHDOG:
-            monitor_task = asyncio.create_task(heartbeat_monitor_loop())
-            logger.info("legacy_heartbeat_monitor_enabled")
-        watchdog_task = None
-        if USE_SESSION_WATCHDOG:
-            watchdog_task = asyncio.create_task(session_watchdog_loop())
-            logger.info("session_watchdog_enabled")
         mq_consumer_task = asyncio.create_task(consume_status_stream(redis_client))
         mq_log_task = asyncio.create_task(consume_log_stream(redis_client))
         mq_bp_task = asyncio.create_task(monitor_backpressure(redis_client))
         capture_main_loop()
         init_build_info(version="2.0.0", commit="unknown")
-        if os.getenv("ENABLE_CRON_SCHEDULER", "1") == "1":
-            cron_thread = start_cron_scheduler()
-            logger.info("cron_scheduler_thread_started name=%s", getattr(cron_thread, "name", "cron-scheduler"))
-        recycler_thread = start_recycler()
-        logger.info("recycler_thread_started name=%s", recycler_thread.name)
+
+        # APScheduler replaces legacy daemon threads + asyncio background tasks
+        scheduler = create_scheduler()
+        await scheduler.__aenter__()
+        await register_schedules(scheduler)
+        await scheduler.start_in_background()
+        logger.info("apscheduler_started")
 
     yield
 
     if os.getenv("TESTING") != "1":
-        if monitor_task:
-            monitor_task.cancel()
-        if watchdog_task:
-            watchdog_task.cancel()
+        if scheduler is not None:
+            await scheduler.__aexit__(None, None, None)
+            logger.info("apscheduler_stopped")
         mq_consumer_task.cancel()
         mq_log_task.cancel()
         mq_bp_task.cancel()

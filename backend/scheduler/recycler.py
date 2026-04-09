@@ -7,12 +7,14 @@ Complements the session watchdog by handling:
 - Artifact file pruning: delete physical files referenced by old StepTrace completion records
 
 Host heartbeat timeout and device lock expiration are handled by session_watchdog.py.
+
+Entry point: ``recycle_once()`` is invoked by APScheduler IntervalTrigger
+(see ``app_scheduler.py``).  The legacy daemon thread has been removed.
 """
 
 import json
 import logging
 import os
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,7 +42,7 @@ logger = logging.getLogger(__name__)
 DISPATCHED_TIMEOUT_SECONDS = int(os.getenv("RUN_DISPATCHED_TIMEOUT_SECONDS", "120"))
 RUNNING_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("RUN_HEARTBEAT_TIMEOUT_SECONDS", "900"))
 ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
-RECYCLE_INTERVAL_SECONDS = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
+
 
 
 # ---------------------------------------------------------------------------
@@ -293,21 +295,3 @@ def _prune_steptrace_artifacts(db, now: datetime) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Daemon thread
-# ---------------------------------------------------------------------------
-
-def _recycler_loop() -> None:
-    logger.info("recycler_started")
-    while True:
-        try:
-            recycle_once()
-        except Exception:
-            logger.exception("recycler_failed")
-        time.sleep(RECYCLE_INTERVAL_SECONDS)
-
-
-def start_recycler() -> threading.Thread:
-    thread = threading.Thread(target=_recycler_loop, name="job-recycler", daemon=True)
-    thread.start()
-    return thread

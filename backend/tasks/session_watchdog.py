@@ -1,16 +1,18 @@
 """Session watchdog — consolidated background task for session-lease lifecycle.
 
-Replaces overlapping checks in the legacy recycler and heartbeat_monitor:
+Handles:
   1. Host heartbeat timeout  → mark OFFLINE, jobs → UNKNOWN
   2. Device lock expiration  → release lock, job → UNKNOWN
   3. UNKNOWN grace period    → job → FAILED after grace window
+  4. PENDING_TOOL timeout    → job → FAILED
 
-Controlled by USE_SESSION_WATCHDOG env var (default: true).
+Entry point: ``session_watchdog_once()`` is invoked by APScheduler
+IntervalTrigger (see ``app_scheduler.py``).  The legacy asyncio loop and
+``USE_SESSION_WATCHDOG`` gate have been removed.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -30,9 +32,6 @@ logger = logging.getLogger(__name__)
 _HOST_HEARTBEAT_TIMEOUT = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "120"))
 _UNKNOWN_GRACE_SECONDS = int(os.getenv("UNKNOWN_GRACE_SECONDS", "300"))
 _PENDING_TOOL_TIMEOUT_SECONDS = int(os.getenv("PENDING_TOOL_TIMEOUT_SECONDS", "600"))
-_CHECK_INTERVAL = int(os.getenv("SESSION_WATCHDOG_INTERVAL_SECONDS", "15"))
-
-USE_SESSION_WATCHDOG = os.getenv("USE_SESSION_WATCHDOG", "true").lower() in ("true", "1", "yes")
 
 
 async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
@@ -185,12 +184,3 @@ async def session_watchdog_once() -> None:
             )
 
 
-async def session_watchdog_loop() -> None:
-    """Main watchdog loop — runs until cancelled."""
-    logger.info("session_watchdog_started interval=%ds", _CHECK_INTERVAL)
-    while True:
-        await asyncio.sleep(_CHECK_INTERVAL)
-        try:
-            await session_watchdog_once()
-        except Exception:
-            logger.exception("session_watchdog_error")
