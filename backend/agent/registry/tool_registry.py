@@ -10,7 +10,7 @@ resolve(tool_id, version) → ToolEntry
 
 pull_tool_sync(tool_id, version) → bool
   Fetches a single tool from the server. Retries 3× with exponential backoff.
-  Used by ControlListener on tool_update command and by PipelineEngine on
+  Used by SocketIO control handler on tool_update command and by PipelineEngine on
   ToolVersionMismatch.
 """
 

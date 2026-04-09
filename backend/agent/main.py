@@ -28,20 +28,20 @@ if __name__ == "__main__" and __package__ is None:
     from agent.adb_wrapper import AdbWrapper
     from agent.config import BASE_DIR, ensure_dirs, get_run_log_dir
     from agent.heartbeat import send_heartbeat
-    from agent.mq.control_listener import ControlListener
     from agent.mq.producer import MQProducer
     from agent.registry.local_db import LocalDB
     from agent.registry.tool_registry import ToolRegistry
+    from agent.step_trace_uploader import StepTraceUploader
     from agent.ws_client import AgentWSClient
 else:
     from . import device_discovery
     from .adb_wrapper import AdbWrapper
     from .config import BASE_DIR, ensure_dirs, get_run_log_dir
     from .heartbeat import send_heartbeat
-    from .mq.control_listener import ControlListener
     from .mq.producer import MQProducer
     from .registry.local_db import LocalDB
     from .registry.tool_registry import ToolRegistry
+    from .step_trace_uploader import StepTraceUploader
     from .ws_client import AgentWSClient
 
 logging.basicConfig(
@@ -861,13 +861,45 @@ def main() -> None:
     tool_registry = ToolRegistry(local_db, api_url, agent_secret)
     tool_registry.initialize()
 
-    # 初始化 Redis MQ 生产者
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    mq_producer = MQProducer(redis_url, host_id, local_db=local_db)
+    # Step trace local writer (Redis XADD removed in Phase 4; HTTP upload via StepTraceUploader)
+    mq_producer = MQProducer("", host_id, local_db=local_db)
 
-    # 启动控制指令监听器
-    control_listener = ControlListener(redis_url, host_id, mq_producer, tool_registry)
-    control_listener.start()
+    # Control commands via SocketIO (replaces Redis ControlListener)
+    def _handle_control(data):
+        command = data.get("command", "")
+        payload = data.get("payload", {})
+        if command == "backpressure":
+            limit_str = payload.get("log_rate_limit")
+            limit = None
+            if limit_str and str(limit_str) not in ("None", "null", ""):
+                try:
+                    limit = int(limit_str)
+                except ValueError:
+                    pass
+            mq_producer.set_log_rate_limit(limit)
+        elif command == "tool_update":
+            try:
+                tool_id = int(payload.get("tool_id", 0))
+                version = payload.get("version", "")
+            except (TypeError, ValueError):
+                tool_id, version = 0, ""
+            if tool_id and tool_registry:
+                threading.Thread(
+                    target=tool_registry.pull_tool_sync,
+                    args=(tool_id, version),
+                    daemon=True,
+                    name=f"tool-pull-{tool_id}",
+                ).start()
+        elif command == "abort":
+            job_id = payload.get("job_id")
+            if job_id:
+                with _active_runs_lock:
+                    _active_run_ids.discard(int(job_id))
+                logger.info("control_abort job_id=%s", job_id)
+        else:
+            logger.warning("unknown_control_command: %s", command)
+
+    ws_client.set_control_handler(_handle_control)
 
     # 启动心跳守护线程（独立于任务执行循环）
     heartbeat_thread = HeartbeatThread(
@@ -888,6 +920,12 @@ def main() -> None:
     # 启动终态 Outbox Drain 线程
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
     outbox_drain.start()
+
+    # StepTrace HTTP 批量上报（Phase 3.7: acked=0 补传 → Phase 4: 唯一上报路径）
+    step_trace_uploader = StepTraceUploader(
+        api_url, local_db, agent_secret=agent_secret, interval=5.0,
+    )
+    step_trace_uploader.start()
 
     # Create thread pool for parallel task execution
     executor = ThreadPoolExecutor(
@@ -968,6 +1006,14 @@ def main() -> None:
     finally:
         logger.info("agent_shutting_down, waiting for active tasks to finish...")
         executor.shutdown(wait=True, cancel_futures=False)
+        # Flush step traces via HTTP before shutdown
+        try:
+            flushed = step_trace_uploader.drain_sync()
+            if flushed:
+                logger.info("shutdown_step_trace_flushed count=%d", flushed)
+        except Exception:
+            logger.exception("shutdown_step_trace_flush_failed")
+        step_trace_uploader.stop()
         # Final outbox drain: flush any un-acked terminal states
         try:
             flushed = outbox_drain.drain_sync()
@@ -978,7 +1024,6 @@ def main() -> None:
         outbox_drain.stop()
         heartbeat_thread.stop()
         lock_manager.stop()
-        control_listener.stop()
         mq_producer.close()
         local_db.close()
         ws_client.disconnect()

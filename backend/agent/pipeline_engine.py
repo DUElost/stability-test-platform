@@ -610,7 +610,7 @@ class PipelineEngine:
             )
 
     def _make_mq_logger(self, step_id: str, log_file: Optional[str] = None):
-        """Create a logger that writes to MQ stp:logs with WS fallback and a local file."""
+        """Create a logger that writes to SocketIO (primary) and a local file."""
         return _MQStepLogger(
             mq_producer=self._mq,
             run_id=self._run_id,
@@ -828,7 +828,7 @@ class PipelineEngine:
 
 
 class _MQStepLogger:
-    """Lightweight logger that sends lines to stp:logs via MQ (primary), WS (fallback), and local file."""
+    """Lightweight logger that sends lines via SocketIO (primary) and writes to local file."""
 
     def __init__(
         self,

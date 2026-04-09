@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -42,7 +41,6 @@ from backend.api.routes.agent_api import router as agent_api_router
 from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
-from backend.mq.consumer import consume_status_stream, monitor_backpressure
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
@@ -70,11 +68,6 @@ for _h in logging.getLogger("uvicorn.access").handlers:
 
 redis_client: Optional[aioredis.Redis] = None
 
-_STREAM_GROUPS = [
-    ("stp:status",  "server-consumer"),
-    ("stp:control", "agent-consumer"),
-]
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -82,20 +75,13 @@ async def lifespan(app: FastAPI):
     scheduler = None
 
     if os.getenv("TESTING") != "1":
-        # Connect Redis
+        # Redis — retained for SAQ broker (task queue)
         redis_client = await aioredis.from_url(
             os.getenv("REDIS_URL", "redis://localhost:6379/0"),
             encoding="utf-8",
             decode_responses=True,
         )
-        for stream, group in _STREAM_GROUPS:
-            try:
-                await redis_client.xgroup_create(stream, group, id="0", mkstream=True)
-            except Exception:
-                pass  # already exists
 
-        mq_consumer_task = asyncio.create_task(consume_status_stream(redis_client))
-        mq_bp_task = asyncio.create_task(monitor_backpressure(redis_client))
         capture_main_loop()
         init_build_info(version="2.0.0", commit="unknown")
 
@@ -116,8 +102,6 @@ async def lifespan(app: FastAPI):
         if scheduler is not None:
             await scheduler.__aexit__(None, None, None)
             logger.info("apscheduler_stopped")
-        mq_consumer_task.cancel()
-        mq_bp_task.cancel()
         if redis_client:
             await redis_client.aclose()
         await async_engine.dispose()

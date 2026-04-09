@@ -586,12 +586,10 @@ async def update_job_step_status(
 
 
 async def _get_backpressure() -> Optional[int]:
-    """Read current backpressure setting from Redis (set by MQ consumer monitor)."""
-    try:
-        from backend.main import redis_client
-        if redis_client:
-            val = await redis_client.get("stp:backpressure:log_rate_limit")
-            return int(val) if val else None
-    except Exception:
-        pass
+    """Return current backpressure setting.
+
+    Redis-based backpressure (stp:backpressure:*) removed in Phase 4.
+    SocketIO has built-in TCP backpressure; this returns None (no limit).
+    Can be extended later with SocketIO-based metrics if needed.
+    """
     return None

@@ -329,28 +329,26 @@ async def query_runtime_logs(
     step_id: Optional[str] = Query(None),
     from_ts: Optional[str] = Query(None, description="ISO8601 start time"),
     to_ts: Optional[str] = Query(None, description="ISO8601 end time"),
-    cursor: Optional[str] = Query(None, description="Redis stream id cursor for older page"),
+    cursor: Optional[str] = Query(None, description="Line offset for pagination"),
     limit: int = Query(200, ge=20, le=1000),
     current_user: User = Depends(get_current_active_user),
 ):
     """
-    Query runtime logs from Redis stream with server-side filtering and pagination.
+    Query runtime logs from persisted log files (Phase 4: replaces Redis stream).
 
     Notes:
-    - Results are returned in chronological order (old -> new) for direct rendering.
-    - `cursor` points to the last scanned stream id from previous call.
+    - Results are returned in chronological order (old -> new).
+    - `cursor` is a line offset (integer string) for pagination.
     """
     del current_user
-    try:
-        from backend.main import redis_client
-        if not redis_client:
-            return {
-                "items": [],
-                "next_cursor": None,
-                "has_more": False,
-                "scanned": 0,
-            }
+    import re
+    from backend.realtime.log_writer import LOG_BASE_DIR
 
+    _LOG_RE = re.compile(
+        r"^(?P<ts>\S+)\s+\[(?P<level>\w+)\](?:\s+\[(?P<step_id>[^\]]*)\])?\s+(?P<msg>.*)$"
+    )
+
+    try:
         job_filter: Set[int] = set()
         if job_id:
             job_filter.add(job_id)
@@ -364,6 +362,9 @@ async def query_runtime_logs(
                 except ValueError:
                     continue
 
+        if not job_filter:
+            return {"items": [], "next_cursor": None, "has_more": False, "scanned": 0}
+
         level_filter = (level or "").strip().upper()
         keyword = (q or "").strip().lower()
         step_filter = (step_id or "").strip().lower()
@@ -375,78 +376,77 @@ async def query_runtime_logs(
         if to_ts:
             to_dt_dt = _parse_iso_timestamp(to_ts.strip())
 
-        # Use an exclusive max bound when paginating to older entries.
-        redis_max = f"({cursor}" if cursor else "+"
-        scan_count = max(limit * 8, 1200)
-        entries = await redis_client.xrevrange("stp:logs", max=redis_max, min="-", count=scan_count)
-        if not entries:
-            return {
-                "items": [],
-                "next_cursor": None,
-                "has_more": False,
-                "scanned": 0,
-            }
-
+        offset = int(cursor) if cursor else 0
         items: List[Dict[str, Any]] = []
-        for stream_id, fields in entries:
-            job_text = fields.get("job_id") or fields.get("run_id")
+        total_scanned = 0
+
+        for jid in sorted(job_filter):
+            log_path = LOG_BASE_DIR / "jobs" / str(jid) / "console.log"
+            if not log_path.exists():
+                continue
+
             try:
-                job_value = int(job_text) if job_text is not None else None
-            except (TypeError, ValueError):
-                job_value = None
-
-            if job_filter and (job_value is None or job_value not in job_filter):
+                all_lines = await asyncio.to_thread(_read_log_file, log_path)
+            except Exception:
                 continue
 
-            level_value = str(fields.get("level") or "INFO").upper()
-            if level_filter and level_filter != "ALL" and level_value != level_filter:
-                continue
-
-            step_value = str(fields.get("tag") or fields.get("step_id") or "")
-            if step_filter and step_filter not in step_value.lower():
-                continue
-
-            timestamp_text = str(fields.get("timestamp") or "")
-            if from_dt is not None or to_dt_dt is not None:
-                try:
-                    ts_dt = _parse_iso_timestamp(timestamp_text)
-                except Exception:
+            for idx, raw_line in enumerate(all_lines):
+                if idx < offset:
                     continue
-                if from_dt is not None and ts_dt < from_dt:
-                    continue
-                if to_dt_dt is not None and ts_dt > to_dt_dt:
+                total_scanned += 1
+                m = _LOG_RE.match(raw_line.rstrip("\n"))
+                if not m:
                     continue
 
-            message_value = str(fields.get("message") or "")
-            if keyword:
-                haystack = f"{message_value}\n{step_value}\n{job_text or ''}".lower()
-                if keyword not in haystack:
+                ts_text = m.group("ts")
+                lvl = m.group("level").upper()
+                step_val = m.group("step_id") or ""
+                msg = m.group("msg")
+
+                if level_filter and level_filter != "ALL" and lvl != level_filter:
                     continue
+                if step_filter and step_filter not in step_val.lower():
+                    continue
+                if from_dt is not None or to_dt_dt is not None:
+                    try:
+                        ts_dt = _parse_iso_timestamp(ts_text)
+                    except Exception:
+                        continue
+                    if from_dt is not None and ts_dt < from_dt:
+                        continue
+                    if to_dt_dt is not None and ts_dt > to_dt_dt:
+                        continue
+                if keyword:
+                    haystack = f"{msg}\n{step_val}\n{jid}".lower()
+                    if keyword not in haystack:
+                        continue
 
-            items.append({
-                "stream_id": stream_id,
-                "job_id": job_value,
-                "step_id": step_value,
-                "level": level_value,
-                "timestamp": timestamp_text,
-                "message": message_value,
-            })
-            if len(items) >= limit:
-                break
+                items.append({
+                    "stream_id": str(idx),
+                    "job_id": jid,
+                    "step_id": step_val,
+                    "level": lvl,
+                    "timestamp": ts_text,
+                    "message": msg,
+                })
+                if len(items) >= limit:
+                    break
 
-        # Reverse so frontend gets chronological order.
-        items.reverse()
-
-        next_cursor = entries[-1][0] if len(entries) >= scan_count else None
+        next_cursor = str(offset + total_scanned) if len(items) >= limit else None
         return {
             "items": items,
             "next_cursor": next_cursor,
             "has_more": next_cursor is not None,
-            "scanned": len(entries),
+            "scanned": total_scanned,
         }
     except Exception as e:
         logger.warning("query_runtime_logs_failed: %s", e)
         raise HTTPException(status_code=500, detail="failed to query runtime logs")
+
+
+def _read_log_file(path) -> List[str]:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        return f.readlines()
 
 
 @router.get("/runs/{run_id}/report", response_model=RunReportOut)

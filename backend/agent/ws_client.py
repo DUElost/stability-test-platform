@@ -65,10 +65,15 @@ class AgentWSClient:
         self._seq_counters: Dict[int, int] = {}
         self._sio: Optional[Any] = None
         self._stop_event = threading.Event()
+        self._control_handler: Optional[Any] = None
 
     @property
     def connected(self) -> bool:
         return self._connected
+
+    def set_control_handler(self, handler) -> None:
+        """Register a callback for 'control' events from the server."""
+        self._control_handler = handler
 
     def _build_url(self) -> str:
         """Return the base HTTP(S) URL for SocketIO (it upgrades internally)."""
@@ -100,6 +105,11 @@ class AgentWSClient:
             @sio.on("control", namespace="/agent")
             def _on_control(data):
                 logger.info("sio_control_received: %s", data)
+                if self._control_handler:
+                    try:
+                        self._control_handler(data)
+                    except Exception as e:
+                        logger.warning("sio_control_handler_error: %s", e)
 
             self._sio = sio
             url = self._build_url()

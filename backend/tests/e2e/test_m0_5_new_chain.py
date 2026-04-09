@@ -5,12 +5,10 @@ import uuid
 from datetime import datetime
 
 import httpx
-import redis
 from sqlalchemy import bindparam, create_engine, text
 
 
 SERVER_URL = os.getenv("STP_SERVER_URL", "http://127.0.0.1:8000")
-REDIS_URL = os.getenv("STP_REDIS_URL", "redis://localhost:6379/0")
 DATABASE_URL = os.getenv(
     "STP_DATABASE_URL",
     "postgresql+psycopg://stability:stability@localhost:5432/stability",
@@ -49,24 +47,6 @@ def _wait_until(desc: str, timeout_s: float, predicate) -> None:
     raise AssertionError(f"timeout waiting for {desc} (>{timeout_s}s)")
 
 
-def _get_group_state(rds: redis.Redis, stream: str, group: str) -> tuple[int, int]:
-    groups = rds.xinfo_groups(stream)
-    for g in groups:
-        if g.get("name") == group:
-            lag = int(g.get("lag") or 0)
-            pending = int(g.get("pending") or 0)
-            return lag, pending
-    raise AssertionError(f"consumer group not found: {group}")
-
-
-def _get_pending_count(rds: redis.Redis, stream: str, group: str) -> int:
-    info = rds.xpending(stream, group)
-    if isinstance(info, dict):
-        return int(info.get("pending", 0))
-    # 兼容旧返回格式 (count, min, max, consumers)
-    return int(info[0]) if info else 0
-
-
 def test_m0_5_new_chain_e2e():
     # 生成本次测试唯一标识
     run_tag = uuid.uuid4().hex[:8]
@@ -76,7 +56,6 @@ def test_m0_5_new_chain_e2e():
     tool_version = "v0.0.1"
 
     engine = create_engine(DATABASE_URL, future=True)
-    rds = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
     tool_id = None
     wf_id = None
@@ -192,43 +171,43 @@ def test_m0_5_new_chain_e2e():
             claimed_ids = {j["id"] for j in claimed}
             assert claimed_ids.issuperset(set(job_ids)), "job 未被正确认领"
 
-            # 6) MQ 写入 + 消费验证
-            # 6a 写入消息
+            # 6) HTTP step trace upload + complete_job (Phase 4: replaces MQ)
             msg_ts = datetime.utcnow().isoformat() + "Z"
             for job_id in job_ids:
-                rds.xadd(
-                    "stp:status",
+                # 6a Upload step trace via HTTP
+                trace_payload = [
                     {
-                        "msg_type": "step_trace",
-                        "host_id": host_id,
-                        "job_id": str(job_id),
-                        "timestamp": msg_ts,
+                        "job_id": job_id,
                         "step_id": "e2e_step",
                         "stage": "execute",
                         "event_type": "COMPLETED",
                         "status": "COMPLETED",
                         "output": "ok",
-                        "error_message": "",
-                    },
-                )
-                rds.xadd(
-                    "stp:status",
-                    {
-                        "msg_type": "job_status",
-                        "host_id": host_id,
-                        "job_id": str(job_id),
-                        "timestamp": msg_ts,
-                        "status": "COMPLETED",
-                        "reason": "e2e",
-                    },
+                        "original_ts": msg_ts,
+                    }
+                ]
+                _unwrap_api(
+                    client.post(
+                        "/api/v1/agent/steps",
+                        json=trace_payload,
+                        headers=_headers(),
+                    )
                 )
 
-            # 6b 消费 lag -> 0
-            _wait_until(
-                "consumer lag to 0",
-                20,
-                lambda: _get_group_state(rds, "stp:status", "server-consumer")[0] == 0,
-            )
+                # 6b Complete job via HTTP
+                complete_payload = {
+                    "update": {
+                        "status": "FINISHED",
+                        "exit_code": 0,
+                    }
+                }
+                _unwrap_api(
+                    client.post(
+                        f"/api/v1/agent/jobs/{job_id}/complete",
+                        json=complete_payload,
+                        headers=_headers(),
+                    )
+                )
 
             # 6c step_trace 落库
             def _step_trace_ok():
@@ -242,13 +221,6 @@ def test_m0_5_new_chain_e2e():
                 return count > 0
 
             _wait_until("step_trace persisted", 20, _step_trace_ok)
-
-            # 6d PEL 清空
-            _wait_until(
-                "PEL cleared",
-                20,
-                lambda: _get_pending_count(rds, "stp:status", "server-consumer") == 0,
-            )
 
             # 9) 聚合状态轮询（result_summary）
             def _result_summary_ready():
@@ -298,5 +270,4 @@ def test_m0_5_new_chain_e2e():
                 if tool_id:
                     conn.execute(text("DELETE FROM tool WHERE id = :tid"), {"tid": tool_id})
 
-            rds.close()
             engine.dispose()

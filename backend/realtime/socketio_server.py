@@ -154,6 +154,28 @@ class AgentNamespace(socketio.AsyncNamespace):
         await sio.emit("step_update", step_payload, namespace="/dashboard", room=f"job:{job_id}")
         await sio.emit("step_update", step_payload, namespace="/dashboard", room=f"run:{data.get('run_id', job_id)}")
 
+    async def on_job_status(self, sid: str, data: dict):
+        """Agent emits intermediate job status (INIT_RUNNING, etc.) → broadcast only, no DB write."""
+        job_id = data.get("job_id") or data.get("run_id")
+        if not job_id:
+            return
+
+        status = data.get("status", "")
+        payload = {
+            "type": "JOB_STATUS",
+            "payload": {
+                "job_id": int(job_id),
+                "status": status,
+                "reason": data.get("reason", ""),
+            },
+            "timestamp": _now_iso(),
+        }
+
+        sio = get_sio()
+        await sio.emit("job_status", payload, namespace="/dashboard", room=f"job:{job_id}")
+        run_id = data.get("workflow_run_id") or data.get("run_id", job_id)
+        await sio.emit("job_status", payload, namespace="/dashboard", room=f"workflow:{run_id}")
+
     async def on_heartbeat(self, sid: str, data: dict):
         """Agent relays heartbeat for instant dashboard refresh (no DB write)."""
         async with self.session(sid) as session:
