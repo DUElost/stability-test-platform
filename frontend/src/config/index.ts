@@ -16,5 +16,5 @@ export const WS_BASE_URL = import.meta.env.VITE_WS_BASE_URL ||
     ? 'ws://localhost:8000'
     : `ws://${window.location.hostname}:8000`);
 
-// WebSocket 端点
+// WebSocket 端点 (legacy format — useSocketIO maps these to SocketIO rooms)
 export const WS_DASHBOARD_ENDPOINT = `${WS_BASE_URL}/ws/dashboard`;

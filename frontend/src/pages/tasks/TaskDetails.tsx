@@ -5,7 +5,7 @@ import { LogViewer } from '../../components/log/LogViewer';
 import { XTerminal, type XTerminalHandle } from '../../components/log/XTerminal';
 import { PipelineStepTree, type StepUpdateMessage } from '../../components/pipeline/PipelineStepTree';
 import { api, AgentLogOut, JiraDraft } from '../../utils/api';
-import { useWebSocket } from '../../hooks/useWebSocket';
+import { useSocketIO as useWebSocket } from '../../hooks/useSocketIO';
 
 // ---------- Types ----------
 

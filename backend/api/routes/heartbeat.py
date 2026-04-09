@@ -214,13 +214,10 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
 
     if ws_device_updates:
         try:
-            from backend.api.routes.websocket import manager
+            from backend.realtime.socketio_server import broadcast_device_update
 
             for update in ws_device_updates:
-                await manager.broadcast(
-                    "/ws/dashboard",
-                    {"type": "DEVICE_UPDATE", "payload": update},
-                )
+                await broadcast_device_update(update)
         except Exception as exc:
             logger.warning(f"device_update_broadcast_failed: {exc}")
 

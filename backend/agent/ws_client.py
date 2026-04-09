@@ -1,14 +1,17 @@
-"""WebSocket client for agent-to-backend real-time communication.
+"""SocketIO client for agent-to-backend real-time communication.
 
-Provides persistent WebSocket connection with:
-- Authentication handshake via AGENT_SECRET
-- Exponential backoff reconnection (1s -> 30s cap)
-- Message buffering during disconnect (up to 1000 messages)
-- Sequence-numbered message replay on reconnect
-- HTTP heartbeat fallback when WS is unavailable
+Replaces the legacy raw-WebSocket ``AgentWSClient`` with ``socketio.Client``
+(sync mode) to match the Agent's threading model.
+
+Features:
+- Automatic reconnection (handled by python-socketio built-in)
+- Auth handshake via ``auth`` dict on connect
+- Message buffering during disconnect (up to MAX_BUFFER messages)
+- StepLogger with local file + SocketIO dual output
 """
 
-import json
+from __future__ import annotations
+
 import logging
 import os
 import threading
@@ -20,12 +23,11 @@ from typing import Any, Deque, Dict, Optional
 logger = logging.getLogger(__name__)
 
 try:
-    import websockets
-    from websockets.sync.client import connect as ws_connect
-    _HAS_WEBSOCKETS = True
+    import socketio as _sio_lib
+    _HAS_SOCKETIO = True
 except ImportError:
-    _HAS_WEBSOCKETS = False
-    logger.warning("websockets library not installed, WebSocket log streaming disabled")
+    _HAS_SOCKETIO = False
+    logger.warning("python-socketio not installed, SocketIO log streaming disabled")
 
 
 def _env_int(key: str, default: int) -> int:
@@ -43,133 +45,119 @@ def _env_float(key: str, default: float) -> float:
 
 
 class AgentWSClient:
-    """Synchronous WebSocket client for the agent process."""
+    """Synchronous SocketIO client for the agent process.
+
+    Drop-in replacement for the legacy WebSocket client. The public API
+    (connect, disconnect, send_log, send_step_update, send_heartbeat,
+    connected property) is unchanged so callers need no modifications.
+    """
 
     MAX_BUFFER = _env_int("WS_BUFFER_SIZE", 1000)
-    INITIAL_BACKOFF = 1.0
-    MAX_BACKOFF = _env_float("WS_RECONNECT_MAX_DELAY", 30.0)
-    PING_INTERVAL = _env_int("WS_PING_INTERVAL", 30)
-    PONG_TIMEOUT = 10
+    MAX_RECONNECT_DELAY = _env_float("WS_RECONNECT_MAX_DELAY", 30.0)
 
-    def __init__(self, api_url: str, host_id: int, agent_secret: str = ""):
+    def __init__(self, api_url: str, host_id: int | str, agent_secret: str = ""):
         self._api_url = api_url
         self._host_id = host_id
         self._agent_secret = agent_secret
-        self._ws = None
         self._connected = False
         self._buffer: Deque[dict] = deque(maxlen=self.MAX_BUFFER)
-        self._backoff = self.INITIAL_BACKOFF
         self._lock = threading.Lock()
-        self._seq_counters: Dict[int, int] = {}  # run_id -> seq
-        self._reconnect_thread: Optional[threading.Thread] = None
+        self._seq_counters: Dict[int, int] = {}
+        self._sio: Optional[Any] = None
         self._stop_event = threading.Event()
 
     @property
     def connected(self) -> bool:
         return self._connected
 
-    def _build_ws_url(self) -> str:
-        """Convert http(s) API URL to ws(s) WebSocket URL."""
-        base = self._api_url.rstrip("/")
-        if base.startswith("https://"):
-            ws_base = "wss://" + base[len("https://"):]
-        elif base.startswith("http://"):
-            ws_base = "ws://" + base[len("http://"):]
-        else:
-            ws_base = "ws://" + base
-        return f"{ws_base}/ws/agent/{self._host_id}"
+    def _build_url(self) -> str:
+        """Return the base HTTP(S) URL for SocketIO (it upgrades internally)."""
+        return self._api_url.rstrip("/")
 
     def connect(self) -> bool:
         """Attempt to connect and authenticate. Returns True on success."""
-        if not _HAS_WEBSOCKETS:
+        if not _HAS_SOCKETIO:
             return False
 
-        url = self._build_ws_url()
         try:
-            self._ws = ws_connect(url, open_timeout=10, close_timeout=5)
+            sio = _sio_lib.Client(
+                reconnection=False,
+                logger=False,
+                engineio_logger=False,
+            )
 
-            # Send auth message
-            auth_msg = json.dumps({
-                "type": "auth",
-                "agent_secret": self._agent_secret,
-            })
-            self._ws.send(auth_msg)
+            @sio.on("connect", namespace="/agent")
+            def _on_connect():
+                self._connected = True
+                logger.info("sio_agent_connected host_id=%s", self._host_id)
+                self._replay_buffer()
 
-            # Wait for auth_ack
-            raw = self._ws.recv(timeout=10)
-            resp = json.loads(raw)
-            if resp.get("type") != "auth_ack":
-                logger.warning(f"WS auth failed: unexpected response {resp}")
-                self._ws.close()
-                self._ws = None
-                return False
+            @sio.on("disconnect", namespace="/agent")
+            def _on_disconnect():
+                self._connected = False
+                logger.info("sio_agent_disconnected host_id=%s", self._host_id)
 
-            self._connected = True
-            self._backoff = self.INITIAL_BACKOFF
-            logger.info(f"WS connected to {url}")
+            @sio.on("control", namespace="/agent")
+            def _on_control(data):
+                logger.info("sio_control_received: %s", data)
 
-            # Replay buffered messages
-            self._replay_buffer()
-            return True
+            self._sio = sio
+            url = self._build_url()
+            sio.connect(
+                url,
+                namespaces=["/agent"],
+                auth={
+                    "agent_secret": self._agent_secret,
+                    "host_id": str(self._host_id),
+                },
+                wait_timeout=10,
+            )
+            return self._connected
 
         except Exception as e:
-            logger.warning(f"WS connect failed: {e}")
-            self._ws = None
+            logger.warning("sio_connect_failed: %s", e)
             self._connected = False
             return False
 
     def disconnect(self):
-        """Gracefully close the WebSocket connection and stop reconnect loop."""
+        """Gracefully close the SocketIO connection and stop reconnect loop."""
         self._stop_event.set()
         self._connected = False
-        if self._ws:
+        if self._sio:
             try:
-                self._ws.close()
+                self._sio.disconnect()
             except Exception:
                 pass
-            self._ws = None
-        if self._reconnect_thread and self._reconnect_thread.is_alive():
-            self._reconnect_thread.join(timeout=5)
-
-    def reconnect(self) -> bool:
-        """Attempt reconnection with exponential backoff."""
-        self._connected = False
-        if self._ws:
-            try:
-                self._ws.close()
-            except Exception:
-                pass
-            self._ws = None
-        logger.info(f"WS reconnecting in {self._backoff:.1f}s...")
-        time.sleep(self._backoff)
-        self._backoff = min(self._backoff * 2, self.MAX_BACKOFF)
-        return self.connect()
+            self._sio = None
 
     def start_reconnect_loop(self):
-        """Start a background daemon thread that monitors connection and reconnects on disconnect."""
-        if self._reconnect_thread and self._reconnect_thread.is_alive():
-            return
+        """Start a background daemon thread that reconnects on disconnect."""
         self._stop_event.clear()
-        self._reconnect_thread = threading.Thread(target=self._reconnect_loop, daemon=True, name="ws-reconnect")
-        self._reconnect_thread.start()
-        logger.info("WS reconnect loop started")
+        t = threading.Thread(target=self._reconnect_loop, daemon=True, name="sio-reconnect")
+        t.start()
+        logger.info("sio_reconnect_loop_started")
 
     def _reconnect_loop(self):
-        """Background loop: monitors connection state, reconnects with exponential backoff."""
+        backoff = 1.0
         while not self._stop_event.is_set():
             if not self._connected:
-                try:
-                    success = self.reconnect()
-                    if success:
-                        logger.info("WS reconnected successfully")
-                    # If failed, reconnect() already slept with backoff
-                except Exception as e:
-                    logger.warning(f"WS reconnect attempt failed: {e}")
+                if self._sio:
+                    try:
+                        self._sio.disconnect()
+                    except Exception:
+                        pass
+                    self._sio = None
+                logger.info("sio_reconnecting in %.1fs...", backoff)
+                self._stop_event.wait(backoff)
+                if self._stop_event.is_set():
+                    break
+                success = self.connect()
+                if success:
+                    backoff = 1.0
+                else:
+                    backoff = min(backoff * 2, self.MAX_RECONNECT_DELAY)
             else:
-                # Reset backoff when connected
-                self._backoff = self.INITIAL_BACKOFF
-            # Check every 5s when connected, backoff handles delay when disconnected
-            if self._connected:
+                backoff = 1.0
                 self._stop_event.wait(5.0)
 
     def _replay_buffer(self):
@@ -177,53 +165,60 @@ class AgentWSClient:
         if not self._buffer:
             return
         count = len(self._buffer)
-        logger.info(f"Replaying {count} buffered messages")
-        replayed = []
+        logger.info("sio_replaying %d buffered messages", count)
+        replayed = 0
         while self._buffer:
             msg = self._buffer.popleft()
             try:
-                self._ws.send(json.dumps(msg))
-                replayed.append(msg)
+                event = msg.pop("_event", "step_log")
+                self._sio.emit(event, msg, namespace="/agent")
+                replayed += 1
             except Exception as e:
-                # Put back failed messages
                 self._buffer.appendleft(msg)
-                for m in reversed(replayed):
-                    self._buffer.appendleft(m)
-                logger.warning(f"Replay failed after {len(replayed)} messages: {e}")
+                logger.warning("sio_replay_failed after %d messages: %s", replayed, e)
                 self._connected = False
                 return
-        logger.info(f"Replayed {count} messages successfully")
+        logger.info("sio_replayed %d messages", replayed)
 
     def _next_seq(self, run_id: int) -> int:
-        """Get next sequence number for a run (thread-safe via _lock)."""
         with self._lock:
             seq = self._seq_counters.get(run_id, 0) + 1
             self._seq_counters[run_id] = seq
             return seq
 
-    def send(self, message: dict) -> bool:
-        """Send a message. Buffers if disconnected. Returns True if sent immediately."""
+    def _emit(self, event: str, data: dict) -> bool:
+        """Emit an event. Buffers if disconnected. Returns True if sent immediately."""
         with self._lock:
-            if self._connected and self._ws:
+            if self._connected and self._sio:
                 try:
-                    self._ws.send(json.dumps(message))
+                    self._sio.emit(event, data, namespace="/agent")
                     return True
                 except Exception as e:
-                    logger.warning(f"WS send failed: {e}")
+                    logger.warning("sio_emit_failed: %s", e)
                     self._connected = False
-                    self._buffer.append(message)
+                    data["_event"] = event
+                    self._buffer.append(data)
                     return False
             else:
-                dropped = len(self._buffer) >= self.MAX_BUFFER
-                self._buffer.append(message)
-                if dropped:
-                    logger.warning(f"WS buffer overflow, oldest message dropped (buffer={len(self._buffer)})")
+                data["_event"] = event
+                self._buffer.append(data)
                 return False
 
-    def send_log(self, run_id: int, step_id: int, level: str, msg: str) -> bool:
+    def send(self, message: dict) -> bool:
+        """Legacy compatibility: route to appropriate emit based on message type."""
+        msg_type = message.get("type", "")
+        if msg_type == "log":
+            return self._emit("step_log", message)
+        elif msg_type == "step_update":
+            return self._emit("step_update", message)
+        elif msg_type == "heartbeat":
+            return self._emit("heartbeat", message)
+        else:
+            return self._emit(msg_type or "message", message)
+
+    def send_log(self, run_id: int, step_id: int | str, level: str, msg: str) -> bool:
         """Send a log line message."""
-        return self.send({
-            "type": "log",
+        return self._emit("step_log", {
             "run_id": run_id,
             "job_id": run_id,
             "step_id": step_id,
@@ -233,11 +228,11 @@ class AgentWSClient:
             "msg": msg,
         })
 
-    def send_step_update(self, run_id: int, step_id: int, status: str, **kwargs) -> bool:
+    def send_step_update(self, run_id: int, step_id: int | str, status: str, **kwargs) -> bool:
         """Send a step status update."""
-        msg = {
-            "type": "step_update",
+        data: dict = {
             "run_id": run_id,
+            "job_id": run_id,
             "step_id": step_id,
             "status": status,
         }
@@ -246,58 +241,52 @@ class AgentWSClient:
                 val = kwargs[key]
                 if isinstance(val, datetime):
                     val = val.isoformat() + "Z"
-                msg[key] = val
-        return self.send(msg)
+                data[key] = val
+        return self._emit("step_update", data)
 
-    def send_heartbeat(self, stats: dict = None) -> bool:
-        """Send a heartbeat message via WebSocket."""
-        return self.send({
-            "type": "heartbeat",
+    def send_heartbeat(self, stats: dict | None = None) -> bool:
+        """Send a heartbeat message via SocketIO."""
+        return self._emit("heartbeat", {
             "host_id": self._host_id,
             "stats": stats or {},
         })
 
 
 class StepLogger:
-    """Per-step logger that sends log lines via WebSocket (or falls back to buffer).
+    """Per-step logger that sends log lines via SocketIO (or falls back to buffer).
     Also optionally writes logs to a local file.
     """
 
-    def __init__(self, ws_client: AgentWSClient, run_id: int, step_id: int, log_file: Optional[str] = None):
+    def __init__(self, ws_client: AgentWSClient, run_id: int, step_id: int | str, log_file: Optional[str] = None):
         self._ws = ws_client
         self._run_id = run_id
         self._step_id = step_id
         self._log_file = log_file
         self._line_count = 0
 
-        # Ensure directory exists if log_file is provided
         if self._log_file:
             try:
                 os.makedirs(os.path.dirname(self._log_file), exist_ok=True)
             except Exception as e:
-                logger.warning(f"Failed to create log directory for {self._log_file}: {e}")
+                logger.warning("Failed to create log directory for %s: %s", self._log_file, e)
 
     @property
     def line_count(self) -> int:
         return self._line_count
 
     def log(self, message: str, level: str = "INFO"):
-        """Log a single line. Sends via WS if connected and writes to file if provided."""
         self._line_count += 1
         ts = datetime.utcnow().isoformat() + "Z"
 
-        # Send via WebSocket
         self._ws.send_log(self._run_id, self._step_id, level, message)
 
-        # Write to local file
         if self._log_file:
             try:
                 with open(self._log_file, "a", encoding="utf-8") as f:
                     f.write(f"{ts} [{level}] {message}\n")
             except Exception as e:
-                # Only log error once to avoid flooding
                 if self._line_count == 1:
-                    logger.warning(f"Failed to write to log file {self._log_file}: {e}")
+                    logger.warning("Failed to write to log file %s: %s", self._log_file, e)
 
     def info(self, message: str):
         self.log(message, "INFO")

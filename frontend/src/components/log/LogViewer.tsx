@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useWebSocket } from '../../hooks/useWebSocket';
+import { useSocketIO as useWebSocket } from '../../hooks/useSocketIO';
 import { Download, Pause, Play, Trash2 } from 'lucide-react';
 
 interface LogEntry {

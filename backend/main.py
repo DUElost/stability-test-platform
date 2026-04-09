@@ -19,9 +19,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+import socketio as python_socketio
+
 from backend.api.routes import auth_router, heartbeat_router, hosts_router, tasks_router
 from backend.api.routes.devices import router as devices_router
-from backend.api.routes.websocket import router as websocket_router, capture_main_loop
+from backend.api.routes.websocket import router as websocket_router
 from backend.api.routes.metrics import router as metrics_router
 from backend.api.routes.users import router as users_router
 from backend.api.routes.results import router as results_router
@@ -40,7 +42,8 @@ from backend.api.routes.agent_api import router as agent_api_router
 from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
-from backend.mq.consumer import consume_log_stream, consume_status_stream, monitor_backpressure
+from backend.mq.consumer import consume_status_stream, monitor_backpressure
+from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
 from backend.tasks.saq_worker import start_saq_worker, stop_saq_worker
@@ -69,7 +72,6 @@ redis_client: Optional[aioredis.Redis] = None
 
 _STREAM_GROUPS = [
     ("stp:status",  "server-consumer"),
-    ("stp:logs",    "log-consumer"),
     ("stp:control", "agent-consumer"),
 ]
 
@@ -93,7 +95,6 @@ async def lifespan(app: FastAPI):
                 pass  # already exists
 
         mq_consumer_task = asyncio.create_task(consume_status_stream(redis_client))
-        mq_log_task = asyncio.create_task(consume_log_stream(redis_client))
         mq_bp_task = asyncio.create_task(monitor_backpressure(redis_client))
         capture_main_loop()
         init_build_info(version="2.0.0", commit="unknown")
@@ -116,17 +117,20 @@ async def lifespan(app: FastAPI):
             await scheduler.__aexit__(None, None, None)
             logger.info("apscheduler_stopped")
         mq_consumer_task.cancel()
-        mq_log_task.cancel()
         mq_bp_task.cancel()
         if redis_client:
             await redis_client.aclose()
         await async_engine.dispose()
 
 
-app = FastAPI(title="Stability Test Platform", lifespan=lifespan)
+_fastapi_app = FastAPI(title="Stability Test Platform", lifespan=lifespan)
+fastapi_app = _fastapi_app  # Exposed for tests and tooling
+
+sio_server = create_sio_server()
+app = python_socketio.ASGIApp(sio_server, _fastapi_app)
 
 
-@app.exception_handler(InvalidTransitionError)
+@_fastapi_app.exception_handler(InvalidTransitionError)
 async def invalid_transition_handler(request: Request, exc: InvalidTransitionError):
     return JSONResponse(
         status_code=409,
@@ -134,17 +138,15 @@ async def invalid_transition_handler(request: Request, exc: InvalidTransitionErr
     )
 
 
-@app.exception_handler(Exception)
+@_fastapi_app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"data": None, "error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}})
-app.add_middleware(RateLimitMiddleware)
+_fastapi_app.add_middleware(RateLimitMiddleware)
 
-# CORS: restrict to specific origins in production
-# Use CORS_ORIGINS env var (comma-separated) or default to common dev origins
 _cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 allow_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
-app.add_middleware(
+_fastapi_app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=True,
@@ -152,35 +154,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router)
-app.include_router(heartbeat_router)
-app.include_router(hosts_router)
-app.include_router(tasks_router)
-app.include_router(devices_router)
-app.include_router(websocket_router)
-app.include_router(metrics_router)
-app.include_router(users_router)
-app.include_router(results_router)
-app.include_router(stats_router)
-app.include_router(notifications_router)
-app.include_router(audit_router)
-app.include_router(schedules_router)
-app.include_router(templates_router)
-app.include_router(pipeline_router)
-app.include_router(builtin_actions_router)
-# Phase 3 routers (replace legacy tools + workflows)
-app.include_router(tool_catalog_router)
-app.include_router(action_templates_router)
-app.include_router(orchestration_router)
-app.include_router(agent_api_router)
+_fastapi_app.include_router(auth_router)
+_fastapi_app.include_router(heartbeat_router)
+_fastapi_app.include_router(hosts_router)
+_fastapi_app.include_router(tasks_router)
+_fastapi_app.include_router(devices_router)
+_fastapi_app.include_router(websocket_router)
+_fastapi_app.include_router(metrics_router)
+_fastapi_app.include_router(users_router)
+_fastapi_app.include_router(results_router)
+_fastapi_app.include_router(stats_router)
+_fastapi_app.include_router(notifications_router)
+_fastapi_app.include_router(audit_router)
+_fastapi_app.include_router(schedules_router)
+_fastapi_app.include_router(templates_router)
+_fastapi_app.include_router(pipeline_router)
+_fastapi_app.include_router(builtin_actions_router)
+_fastapi_app.include_router(tool_catalog_router)
+_fastapi_app.include_router(action_templates_router)
+_fastapi_app.include_router(orchestration_router)
+_fastapi_app.include_router(agent_api_router)
 
 
-@app.get("/")
+@_fastapi_app.get("/")
 def root():
     return {"message": "Stability Test Platform API", "version": "2.0.0"}
 
 
-@app.get("/health")
+@_fastapi_app.get("/health")
 async def health_check():
     try:
         async with async_engine.connect() as conn:

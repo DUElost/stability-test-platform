@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api, type WorkflowRun, type JobInstance, type StepTrace, type JobStatus, type WorkflowStatus, type JiraDraft } from '@/utils/api';
-import { useWebSocket } from '@/hooks/useWebSocket';
+import { useSocketIO as useWebSocket } from '@/hooks/useSocketIO';
 import { formatLocalDateTime, formatLocalTime, parseIsoToDate } from '@/utils/time';
 import { ArrowLeft, RefreshCw, X, FileText, Download, Bug } from 'lucide-react';
 

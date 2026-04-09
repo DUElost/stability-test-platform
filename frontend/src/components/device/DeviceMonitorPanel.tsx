@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useWebSocket } from '@/hooks/useWebSocket';
+import { useSocketIO as useWebSocket } from '@/hooks/useSocketIO';
 import { DeviceCard, type Device } from './DeviceCard';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';

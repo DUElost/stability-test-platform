@@ -23,7 +23,7 @@ from urllib.parse import unquote, urlparse
 from sqlalchemy import or_
 
 from backend.core.database import SessionLocal
-from backend.api.routes.websocket import schedule_broadcast
+from backend.realtime.socketio_server import schedule_emit
 from backend.core.metrics import (
     recycler_runs,
     recycler_timeouts,
@@ -115,7 +115,7 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
         },
     )
 
-    schedule_broadcast("/ws/dashboard", {
+    schedule_emit("job_update", {
         "type": "JOB_UPDATE",
         "payload": {
             "job_id": job.id,
@@ -124,7 +124,7 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
             "error_code": "TIMEOUT",
             "message": reason,
         },
-    })
+    }, namespace="/dashboard")
 
     # post_completion and notification are NOT triggered here.
     # The recycler is a compensating path — it only ensures state closure.

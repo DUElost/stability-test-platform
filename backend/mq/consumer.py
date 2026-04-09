@@ -155,28 +155,13 @@ async def _process_status_message(fields: dict) -> None:
 
 
 async def _process_log_message(fields: dict) -> None:
-    """Broadcast a single stp:logs message to /ws/logs/{run_id}."""
-    run_id = fields.get("job_id") or fields.get("run_id")
-    if not run_id:
-        return
+    """No-op: log broadcasting now handled by SocketIO /agent namespace.
 
-    log_data = {
-        "type": "STEP_LOG",
-        "payload": {
-            "step_id": fields.get("tag") or "",
-            "seq": None,
-            "level": fields.get("level", "INFO"),
-            "ts": fields.get("timestamp", ""),
-            "msg": fields.get("message", ""),
-        },
-    }
-
-    try:
-        from backend.api.routes.websocket import manager
-        await manager.broadcast(f"/ws/logs/{run_id}", log_data)
-        await manager.broadcast(f"/ws/jobs/{run_id}/logs", log_data)
-    except Exception as e:
-        logger.warning("WS broadcast failed for log message: %s", e)
+    Kept as a stub so consume_log_stream (still active until Phase 4)
+    does not crash on existing messages.  The Redis consumer simply ACKs
+    and discards.
+    """
+    pass
 
 
 async def _persist_step_trace(fields: dict) -> None:
@@ -216,7 +201,7 @@ async def _persist_job_status(fields: dict) -> None:
     from backend.models.job import JobInstance
     from backend.services.aggregator import WorkflowAggregator
     from backend.services.state_machine import InvalidTransitionError, JobStateMachine
-    from backend.api.routes.websocket import broadcast_run_job_update, broadcast_run_workflow_status
+    from backend.realtime.socketio_server import broadcast_run_job_update, broadcast_run_workflow_status
     from backend.services.device_lock import release_lock
 
     job_id = int(fields.get("job_id", 0))

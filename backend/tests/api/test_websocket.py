@@ -1,46 +1,41 @@
-"""WebSocket contract tests (ADR-0009).
+"""WebSocket / SocketIO contract tests (ADR-0009, Phase 3 migration).
 
 Validates that:
-- WS endpoints accept connections with valid tokens
-- WS endpoints reject connections without tokens in production mode
+- Legacy WS stub endpoints accept connections (deprecated but functional)
 - All broadcast messages follow the standard envelope: {type, payload, timestamp}
+- Broadcast helpers emit via SocketIO with correct event/namespace/room
 """
 
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
 from starlette.testclient import TestClient
 
-from backend.main import app
+from backend.main import fastapi_app
 
 
 @pytest.fixture
 def ws_client():
-    with TestClient(app) as c:
+    with TestClient(fastapi_app) as c:
         yield c
 
 
 # ---------------------------------------------------------------------------
-# Connection / Auth
+# Connection — legacy WS stub endpoints (deprecated, accept-and-hold)
 # ---------------------------------------------------------------------------
 
 class TestDashboardWS:
     def test_connect_with_valid_token(self, ws_client):
         with ws_client.websocket_connect("/ws/dashboard?token=dev-token-12345") as ws:
-            ws.send_text("{}")
-            # If we get here, connection was accepted
+            data = ws.receive_json()
+            assert data["type"] == "DEPRECATED"
 
     def test_connect_without_token_dev_mode(self, ws_client):
-        """Dev mode allows connection without token."""
         with ws_client.websocket_connect("/ws/dashboard") as ws:
-            ws.send_text("{}")
-
-    def test_legacy_dashboard_endpoint(self, ws_client):
-        """Legacy /dashboard endpoint should still work."""
-        with ws_client.websocket_connect("/dashboard?token=dev-token-12345") as ws:
-            ws.send_text("{}")
+            data = ws.receive_json()
+            assert data["type"] == "DEPRECATED"
 
 
 class TestLogsWS:
@@ -60,116 +55,91 @@ class TestWorkflowRunWS:
 
 
 class TestAgentWS:
-    def test_agent_auth_success(self, ws_client):
+    def test_agent_ws_stub_accepts(self, ws_client):
+        """Deprecated agent WS endpoint accepts connection and sends DEPRECATED notice."""
         with ws_client.websocket_connect("/ws/agent/test-host-001") as ws:
-            ws.send_text(json.dumps({"type": "auth", "agent_secret": ""}))
-            resp = json.loads(ws.recv())
-            assert resp["type"] == "auth_ack"
-            assert resp["status"] == "ok"
-
-    def test_agent_auth_wrong_type_rejected(self, ws_client):
-        with pytest.raises(Exception):
-            with ws_client.websocket_connect("/ws/agent/test-host-002") as ws:
-                ws.send_text(json.dumps({"type": "hello"}))
-                ws.recv()
+            data = ws.receive_json()
+            assert data["type"] == "DEPRECATED"
 
 
 # ---------------------------------------------------------------------------
 # Envelope contract: every broadcast message must have {type, payload, timestamp}
+# Uses mock SocketIO server to capture emitted events.
 # ---------------------------------------------------------------------------
+
+def _make_mock_sio():
+    """Create a mock AsyncServer that captures emit() calls."""
+    mock_sio = AsyncMock()
+    mock_sio.emit = AsyncMock()
+    return mock_sio
+
 
 class TestBroadcastEnvelope:
     """Test that broadcast helpers produce messages with the standard envelope."""
 
     @pytest.mark.asyncio
     async def test_device_update_envelope(self):
-        from backend.api.routes.websocket import broadcast_device_update, manager
+        from backend.realtime.socketio_server import broadcast_device_update
 
-        sent = []
-        original_broadcast = manager.broadcast
-
-        async def capture(path, message):
-            sent.append((path, message))
-
-        manager.broadcast = capture
-        try:
+        mock_sio = _make_mock_sio()
+        with patch("backend.realtime.socketio_server._sio", mock_sio):
             await broadcast_device_update({"id": 1, "status": "ONLINE"})
-        finally:
-            manager.broadcast = original_broadcast
 
-        assert len(sent) == 1
-        path, msg = sent[0]
-        assert path == "/ws/dashboard"
+        mock_sio.emit.assert_called_once()
+        args, kwargs = mock_sio.emit.call_args
+        assert args[0] == "device_update"
+        msg = args[1]
         assert msg["type"] == "DEVICE_UPDATE"
         assert "payload" in msg
         assert "timestamp" in msg
         assert msg["payload"]["id"] == 1
+        assert kwargs["namespace"] == "/dashboard"
 
     @pytest.mark.asyncio
     async def test_job_status_envelope(self):
-        from backend.api.routes.websocket import broadcast_run_job_update, manager
+        from backend.realtime.socketio_server import broadcast_run_job_update
 
-        sent = []
-        original_broadcast = manager.broadcast
-
-        async def capture(path, message):
-            sent.append((path, message))
-
-        manager.broadcast = capture
-        try:
+        mock_sio = _make_mock_sio()
+        with patch("backend.realtime.socketio_server._sio", mock_sio):
             await broadcast_run_job_update(run_id=10, job_id=42, status="COMPLETED")
-        finally:
-            manager.broadcast = original_broadcast
 
-        assert len(sent) == 1
-        path, msg = sent[0]
-        assert path == "/ws/workflow-runs/10"
+        mock_sio.emit.assert_called_once()
+        args, kwargs = mock_sio.emit.call_args
+        assert args[0] == "job_status"
+        msg = args[1]
         assert msg["type"] == "JOB_STATUS"
         assert msg["payload"]["job_id"] == 42
         assert msg["payload"]["status"] == "COMPLETED"
         assert "timestamp" in msg
+        assert kwargs["room"] == "workflow:10"
 
     @pytest.mark.asyncio
     async def test_workflow_status_envelope(self):
-        from backend.api.routes.websocket import broadcast_run_workflow_status, manager
+        from backend.realtime.socketio_server import broadcast_run_workflow_status
 
-        sent = []
-        original_broadcast = manager.broadcast
-
-        async def capture(path, message):
-            sent.append((path, message))
-
-        manager.broadcast = capture
-        try:
+        mock_sio = _make_mock_sio()
+        with patch("backend.realtime.socketio_server._sio", mock_sio):
             await broadcast_run_workflow_status(run_id=10, status="SUCCESS")
-        finally:
-            manager.broadcast = original_broadcast
 
-        assert len(sent) == 1
-        path, msg = sent[0]
-        assert path == "/ws/workflow-runs/10"
+        mock_sio.emit.assert_called_once()
+        args, kwargs = mock_sio.emit.call_args
+        msg = args[1]
         assert msg["type"] == "WORKFLOW_STATUS"
         assert msg["payload"]["status"] == "SUCCESS"
         assert "timestamp" in msg
+        assert kwargs["room"] == "workflow:10"
 
     @pytest.mark.asyncio
     async def test_run_update_envelope(self):
-        from backend.api.routes.websocket import broadcast_run_update, manager
+        from backend.realtime.socketio_server import broadcast_run_update
 
-        sent = []
-        original_broadcast = manager.broadcast
-
-        async def capture(path, message):
-            sent.append((path, message))
-
-        manager.broadcast = capture
-        try:
+        mock_sio = _make_mock_sio()
+        with patch("backend.realtime.socketio_server._sio", mock_sio):
             await broadcast_run_update(run_id=5, task_id=3, status="RUNNING", progress=50)
-        finally:
-            manager.broadcast = original_broadcast
 
-        assert len(sent) == 1
-        _, msg = sent[0]
+        mock_sio.emit.assert_called_once()
+        args, kwargs = mock_sio.emit.call_args
+        msg = args[1]
         assert msg["type"] == "RUN_UPDATE"
         assert msg["payload"]["run_id"] == 5
         assert msg["payload"]["progress"] == 50
@@ -177,44 +147,30 @@ class TestBroadcastEnvelope:
 
     @pytest.mark.asyncio
     async def test_task_update_envelope(self):
-        from backend.api.routes.websocket import broadcast_task_update, manager
+        from backend.realtime.socketio_server import broadcast_task_update
 
-        sent = []
-        original_broadcast = manager.broadcast
-
-        async def capture(path, message):
-            sent.append((path, message))
-
-        manager.broadcast = capture
-        try:
+        mock_sio = _make_mock_sio()
+        with patch("backend.realtime.socketio_server._sio", mock_sio):
             await broadcast_task_update(task_id=7, status="COMPLETED")
-        finally:
-            manager.broadcast = original_broadcast
 
-        assert len(sent) == 1
-        _, msg = sent[0]
+        mock_sio.emit.assert_called_once()
+        args, kwargs = mock_sio.emit.call_args
+        msg = args[1]
         assert msg["type"] == "TASK_UPDATE"
         assert msg["payload"]["task_id"] == 7
         assert "timestamp" in msg
 
     @pytest.mark.asyncio
     async def test_report_ready_envelope(self):
-        from backend.api.routes.websocket import broadcast_report_ready, manager
+        from backend.realtime.socketio_server import broadcast_report_ready
 
-        sent = []
-        original_broadcast = manager.broadcast
-
-        async def capture(path, message):
-            sent.append((path, message))
-
-        manager.broadcast = capture
-        try:
+        mock_sio = _make_mock_sio()
+        with patch("backend.realtime.socketio_server._sio", mock_sio):
             await broadcast_report_ready(run_id=1, task_id=2)
-        finally:
-            manager.broadcast = original_broadcast
 
-        assert len(sent) == 1
-        _, msg = sent[0]
+        mock_sio.emit.assert_called_once()
+        args, kwargs = mock_sio.emit.call_args
+        msg = args[1]
         assert msg["type"] == "REPORT_READY"
         assert msg["payload"]["run_id"] == 1
         assert "timestamp" in msg

@@ -48,7 +48,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobInstance, TaskTemplate as JobTaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
 from backend.core.security import create_access_token
-from backend.main import app
+from backend.main import fastapi_app as app
 
 
 @pytest.fixture(scope="session")

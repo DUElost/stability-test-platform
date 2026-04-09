@@ -52,16 +52,21 @@ async def send_notification_task(
 async def publish_control_command(
     ctx: dict, *, host_id: str, command: str, payload: dict | None = None
 ) -> None:
-    """Publish a control command (abort / pause / backpressure) to an agent.
-
-    Forward-looking: currently no API endpoint triggers this task.
-    Will be wired in when the abort-workflow endpoint is implemented.
-    """
+    """Publish a control command (abort / pause / backpressure) to an agent via SocketIO."""
     logger.info(
         "saq_control_command host_id=%s command=%s", host_id, command,
     )
-    # Phase 3 will implement SocketIO-based delivery.
-    # For now, log the intent so the task completes successfully.
+    try:
+        from backend.realtime.socketio_server import get_sio
+        sio = get_sio()
+        await sio.emit("control", {
+            "command": command,
+            "payload": payload or {},
+        }, namespace="/agent", room=f"agent:{host_id}")
+        logger.info("saq_control_command_sent host_id=%s command=%s", host_id, command)
+    except Exception:
+        logger.exception("saq_control_command_failed host_id=%s command=%s", host_id, command)
+        raise
 
 
 SAQ_FUNCTIONS = [post_completion_task, send_notification_task, publish_control_command]

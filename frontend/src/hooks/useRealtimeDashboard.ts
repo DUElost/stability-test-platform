@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useWebSocket } from './useWebSocket';
+import { useSocketIO as useWebSocket } from './useSocketIO';
 import { api } from '../utils/api';
 
 interface DeviceUpdate {

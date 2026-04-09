@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type RuntimeLogEntry, type Task, type TaskRun } from '@/utils/api';
-import { useWebSocket, type WebSocketMessage } from '@/hooks/useWebSocket';
+import { useSocketIO as useWebSocket, type WebSocketMessage } from '@/hooks/useSocketIO';
 import {
   FileSearch,
   RefreshCw,
