@@ -808,13 +808,7 @@ def main() -> None:
     except ValueError as exc:
         # 检查是否启用自动注册
         if os.getenv("AUTO_REGISTER_HOST", "false").lower() == "true":
-            try:
-                host_id = _auto_register_host(api_url, host_info)
-                logger.info("auto_register_host_completed", extra={"host_id": host_id})
-            except Exception as reg_exc:
-                logger.error("auto_register_host_failed", extra={"error": str(reg_exc)})
-                logger.error("Set HOST_ID manually or enable AUTO_REGISTER_HOST=true")
-                raise SystemExit(2)
+            host_id = None  # will be resolved in the retry loop below
         else:
             logger.error(
                 "invalid_host_id_config",
@@ -828,13 +822,25 @@ def main() -> None:
             )
             raise SystemExit(2)
 
-    # 如果 host_id 为 None（自动注册模式），再次尝试
+    # 如果 host_id 为 None（自动注册模式），带重试地注册
     if host_id is None:
-        try:
-            host_id = _auto_register_host(api_url, host_info)
-        except Exception as exc:
-            logger.error(f"auto_register_failed: {exc}")
-            raise SystemExit(2)
+        max_retries = int(os.getenv("AUTO_REGISTER_MAX_RETRIES", "0"))  # 0 = infinite
+        retry_delay = float(os.getenv("AUTO_REGISTER_RETRY_DELAY", "10"))
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                host_id = _auto_register_host(api_url, host_info)
+                break
+            except Exception as exc:
+                if max_retries and attempt >= max_retries:
+                    logger.error("auto_register_failed after %d attempts: %s", attempt, exc)
+                    raise SystemExit(2)
+                logger.warning(
+                    "auto_register_retry attempt=%d delay=%.0fs error=%s",
+                    attempt, retry_delay, exc,
+                )
+                time.sleep(retry_delay)
     poll_interval = float(os.getenv("POLL_INTERVAL", "5"))
     mount_points = [p for p in os.getenv("MOUNT_POINTS", "").split(",") if p]
     adb_path = os.getenv("ADB_PATH", "adb")

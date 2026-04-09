@@ -120,10 +120,15 @@ def enqueue_sync(
     retries: int = 3,
     **kwargs,
 ) -> None:
-    """Enqueue a SAQ job from a synchronous context.
+    """Enqueue a SAQ job from a synchronous context (fire-and-forget).
 
-    Uses ``asyncio.run_coroutine_threadsafe`` to schedule the enqueue
-    coroutine on the main event loop stored at worker-start time.
+    Uses ``call_soon_threadsafe`` to schedule an async enqueue on the main
+    event loop.  Does NOT block for the result — the recycler is a
+    compensating path and will retry on the next cycle if enqueue fails.
+
+    Note: ``run_coroutine_threadsafe`` + ``future.result()`` deadlocks when
+    the SAQ Worker is running on the same event loop (Worker holds internal
+    state that prevents ``Queue.enqueue`` from completing synchronously).
     """
     if _queue is None or _loop is None:
         logger.warning("enqueue_sync called but SAQ not running — dropping %s", task_name)
@@ -136,8 +141,15 @@ def enqueue_sync(
         timeout=timeout,
         retries=retries,
     )
-    future = asyncio.run_coroutine_threadsafe(_queue.enqueue(job), _loop)
+
+    async def _do_enqueue():
+        try:
+            await _queue.enqueue(job)
+            logger.info("enqueue_async_ok task=%s key=%s", task_name, key)
+        except Exception:
+            logger.exception("enqueue_async_failed task=%s", task_name)
+
     try:
-        future.result(timeout=10)
-    except Exception:
-        logger.exception("enqueue_sync failed for %s", task_name)
+        _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue())
+    except RuntimeError:
+        logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)

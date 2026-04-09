@@ -9,6 +9,7 @@ AsyncScheduler managed by the FastAPI lifespan.
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import os
@@ -37,20 +38,37 @@ MISFIRE_GRACE = timedelta(seconds=60)
 
 
 def _instrumented(job_name: str, func: Callable) -> Callable:
-    """Wrap a scheduler job function with Prometheus timing/counting."""
-    @functools.wraps(func)
-    async def wrapper(*args, **kwargs):
-        t0 = time.monotonic()
-        try:
-            result = func(*args, **kwargs)
-            if hasattr(result, "__await__"):
-                result = await result
-            record_apscheduler_job(job_name, "success", time.monotonic() - t0)
-            return result
-        except Exception:
-            record_apscheduler_job(job_name, "error", time.monotonic() - t0)
-            raise
-    return wrapper
+    """Wrap a scheduler job function with Prometheus timing/counting.
+
+    Preserves sync/async nature: sync jobs stay sync (APScheduler runs them
+    in a thread pool), async jobs stay async (run on the event loop).
+    Mixing these up causes deadlocks — sync functions that call
+    ``enqueue_sync`` must NOT run on the event loop.
+    """
+    if asyncio.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            t0 = time.monotonic()
+            try:
+                result = await func(*args, **kwargs)
+                record_apscheduler_job(job_name, "success", time.monotonic() - t0)
+                return result
+            except Exception:
+                record_apscheduler_job(job_name, "error", time.monotonic() - t0)
+                raise
+        return async_wrapper
+    else:
+        @functools.wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            t0 = time.monotonic()
+            try:
+                result = func(*args, **kwargs)
+                record_apscheduler_job(job_name, "success", time.monotonic() - t0)
+                return result
+            except Exception:
+                record_apscheduler_job(job_name, "error", time.monotonic() - t0)
+                raise
+        return sync_wrapper
 
 
 def create_scheduler() -> AsyncScheduler:

@@ -13,7 +13,7 @@ interface HostResourceData {
 
 interface HostResourceChartProps {
   hosts: Array<{
-    ip: string;
+    ip: string | null;
     cpu_load: number;
     ram_usage: number;
     disk_usage: number;
@@ -24,7 +24,7 @@ interface HostResourceChartProps {
 export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) {
   const data: HostResourceData[] = useMemo(() => {
     return hosts.map(host => ({
-      name: host.ip.split('.').pop() || host.ip,
+      name: host.ip?.split('.').pop() || host.ip || 'unknown',
       cpu: host.cpu_load,
       ram: host.ram_usage,
       disk: host.disk_usage,

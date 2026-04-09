@@ -120,7 +120,10 @@ async def websocket_workflow_run(websocket: WebSocket, run_id: int, token: Optio
 async def websocket_agent(websocket: WebSocket, host_id: str):
     """Deprecated — use SocketIO /agent namespace instead."""
     await websocket.accept()
-    await websocket.send_json({"type": "DEPRECATED", "message": "Use SocketIO /agent namespace"})
+    try:
+        await websocket.send_json({"type": "DEPRECATED", "message": "Use SocketIO /agent namespace"})
+    except (WebSocketDisconnect, Exception):
+        return
     try:
         while True:
             await websocket.receive_text()
