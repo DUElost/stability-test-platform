@@ -102,6 +102,7 @@ export interface Device {
   wifi_rssi?: number | null;
   wifi_ssid?: string | null;
   network_latency?: number | null;  // 网络延迟 (ms)
+  build_display_id?: string | null;  // ro.build.display.id
   // 系统资源
   cpu_usage?: number | null;
   mem_total?: number | null;

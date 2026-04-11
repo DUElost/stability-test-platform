@@ -153,6 +153,7 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
             hardware_updated |= _update_if_not_none(device, "wifi_rssi", dev_data.get("wifi_rssi"))
             hardware_updated |= _update_if_not_none(device, "wifi_ssid", dev_data.get("wifi_ssid"))
             hardware_updated |= _update_if_not_none(device, "network_latency", dev_data.get("network_latency"))
+            _update_if_not_none(device, "build_display_id", dev_data.get("build_display_id"))
             if hardware_updated:
                 device.hardware_updated_at = now
 

@@ -64,6 +64,7 @@ export default function DevicesPage() {
         battery_level: device.battery_level ?? 0,
         temperature: device.temperature ?? 0,
         network_latency: device.network_latency ?? null,
+        build_display_id: device.build_display_id ?? null,
         host_id: device.host_id,
         host_name: host?.name || host?.ip || null,
         current_task: device.current_task?.name,

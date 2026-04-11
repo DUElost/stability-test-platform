@@ -316,6 +316,7 @@ class DeviceOut(ORMBaseModel):
     wifi_rssi: Optional[int] = None
     wifi_ssid: Optional[str] = None
     network_latency: Optional[float] = None  # 网络延迟 (ms)
+    build_display_id: Optional[str] = None  # ro.build.display.id
 
     # 系统资源
     cpu_usage: Optional[float] = None

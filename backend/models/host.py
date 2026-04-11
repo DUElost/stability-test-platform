@@ -71,6 +71,7 @@ class Device(Base):
     mem_used            = Column(BigInteger, nullable=True)
     disk_total          = Column(BigInteger, nullable=True)
     disk_used           = Column(BigInteger, nullable=True)
+    build_display_id    = Column(String(256), nullable=True)
     hardware_updated_at = Column(DateTime(timezone=True), nullable=True)
     extra               = Column(JSON, default=dict, nullable=True)
 

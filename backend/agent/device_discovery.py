@@ -74,6 +74,7 @@ def collect_device_info(adb_path: str, serial: str) -> Dict[str, Any]:
         "battery_level": None,
         "temperature": None,
         "network_latency": None,
+        "build_display_id": None,
     }
 
     # 检查 ADB 连接状态
@@ -112,6 +113,19 @@ def collect_device_info(adb_path: str, serial: str) -> Dict[str, Any]:
         info["temperature"] = _parse_battery_temp(battery_text)
     except Exception as e:
         logger.warning(f"battery_parse_failed: {serial}, error={e}")
+
+    # 采集版本信息
+    try:
+        result = subprocess.run(
+            [adb_path, "-s", serial, "shell", "getprop", "ro.build.display.id"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            info["build_display_id"] = result.stdout.strip()
+    except Exception as e:
+        logger.warning(f"build_display_id_failed: {serial}, error={e}")
 
     # 采集网络延迟 (主目标 223.5.5.5, 备用 8.8.8.8)
     latency = _ping_with_fallback(adb_path, serial, "223.5.5.5", fallback="8.8.8.8")

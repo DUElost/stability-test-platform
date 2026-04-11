@@ -354,6 +354,7 @@ class HeartbeatThread:
                     "battery_level": info.get("battery_level"),
                     "temperature": info.get("temperature"),
                     "network_latency": info.get("network_latency"),
+                    "build_display_id": info.get("build_display_id"),
                 }
                 devices_list.append(device_data)
                 logger.info(
