@@ -20,7 +20,15 @@ def pytest_configure(config):
     )
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb_for_sqlite(type_, compiler, **kwargs):
+    return "JSON"
 
 # Set test mode before importing app to disable startup background threads
 os.environ["TESTING"] = "1"
@@ -57,11 +65,16 @@ def engine():
     create_kwargs = {"future": True}
     if TEST_DATABASE_URL.startswith("sqlite"):
         create_kwargs["connect_args"] = {"check_same_thread": False}
+        create_kwargs["poolclass"] = StaticPool
     else:
         create_kwargs["pool_pre_ping"] = True
 
     engine = create_engine(TEST_DATABASE_URL, **create_kwargs)
+    if TEST_DATABASE_URL.startswith("sqlite"):
+        Base.metadata.create_all(bind=engine)
     yield engine
+    if TEST_DATABASE_URL.startswith("sqlite"):
+        Base.metadata.drop_all(bind=engine)
     engine.dispose()
 
 

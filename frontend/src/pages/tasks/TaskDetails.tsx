@@ -4,8 +4,9 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { LogViewer } from '../../components/log/LogViewer';
 import { XTerminal, type XTerminalHandle } from '../../components/log/XTerminal';
 import { PipelineStepTree, type StepUpdateMessage } from '../../components/pipeline/PipelineStepTree';
-import { api, AgentLogOut, JiraDraft } from '../../utils/api';
+import { api, AgentLogOut, JiraDraft, type JobInstance, type WorkflowDefinition } from '../../utils/api';
 import { useSocketIO as useWebSocket } from '../../hooks/useSocketIO';
+import { getLatestArtifact, getWorkflowDisplayStatus, shouldPollJobData } from './taskDetailsState';
 
 // ---------- Types ----------
 
@@ -34,39 +35,38 @@ export default function TaskDetails() {
   const xtermRef = useRef<XTerminalHandle>(null);
   const manualSelection = useRef(false);
 
-  const { data: task } = useQuery({
+  const { data: task } = useQuery<WorkflowDefinition>({
     queryKey: ['tasks', id],
-    queryFn: () => api.tasks.get(id).then(res => res.data),
+    queryFn: () => api.orchestration.get(id),
     enabled: !!id,
   });
 
-  const { data: runs } = useQuery({
-    queryKey: ['tasks', id, 'runs'],
-    queryFn: () => api.tasks.getRuns(id, 0, 200).then(res => res.data.items),
+  const { data: jobs } = useQuery<JobInstance[]>({
+    queryKey: ['tasks', id, 'jobs'],
+    queryFn: () => api.execution.listJobs(0, 200, id).then(r => r.items),
     enabled: !!id,
-    refetchInterval: task?.status === 'RUNNING' ? 5000 : false,
+    refetchInterval: (data) => (data?.some((job) => shouldPollJobData(job)) ? 5000 : false),
   });
 
-  const activeRun = runs?.[0];
-  const riskSummary = activeRun?.risk_summary;
+  const activeRun = jobs?.[0];
+  const workflowStatusLabel = getWorkflowDisplayStatus(activeRun);
+  const shouldPollActiveRun = shouldPollJobData(activeRun);
   const { data: runReport } = useQuery({
     queryKey: ['runs', activeRun?.id, 'report'],
-    queryFn: () => api.tasks.getRunReport(activeRun!.id).then(res => res.data),
+    queryFn: () => api.execution.getCachedJobReport(activeRun!.id).then(res => res.data),
     enabled: !!activeRun?.id,
-    refetchInterval: task?.status === 'RUNNING' ? 5000 : false,
+    refetchInterval: shouldPollActiveRun ? 5000 : false,
   });
   const reportRiskSummary = runReport?.risk_summary;
   const riskAlerts = runReport?.alerts || [];
-  const latestArtifact = activeRun?.artifacts?.length
-    ? activeRun.artifacts[activeRun.artifacts.length - 1]
-    : null;
+  const latestArtifact = getLatestArtifact(runReport);
 
   // Fetch RunSteps for pipeline tasks
   const { data: runSteps } = useQuery({
     queryKey: ['runs', activeRun?.id, 'steps'],
-    queryFn: () => api.tasks.getRunSteps(activeRun!.id).then(res => res.data),
+    queryFn: () => api.execution.getJobSteps(activeRun!.id).then(res => res.data),
     enabled: !!activeRun?.id,
-    refetchInterval: task?.status === 'RUNNING' ? 5000 : false,
+    refetchInterval: shouldPollActiveRun ? 5000 : false,
   });
 
   const isPipeline = (runSteps?.length ?? 0) > 0;
@@ -161,8 +161,8 @@ export default function TaskDetails() {
   const queryAgentLogMutation = useMutation({
     mutationFn: async () => {
       if (!activeRun?.host_id) throw new Error('No host_id available');
-      const response = await api.tasks.queryAgentLogs({
-        host_id: activeRun.host_id,
+      const response = await api.logs.queryAgent({
+        host_id: Number(activeRun.host_id),
         log_path: '/tmp/agent.log',
         lines: 200,
       });
@@ -181,8 +181,7 @@ export default function TaskDetails() {
   const createJiraDraftMutation = useMutation({
     mutationFn: async () => {
       if (!activeRun?.id) throw new Error('No run_id available');
-      const response = await api.tasks.createRunJiraDraft(activeRun.id);
-      return response.data;
+      return api.execution.createJobJiraDraft(activeRun.workflow_run_id, activeRun.id);
     },
     onSuccess: (data: JiraDraft) => {
       setJiraDraftContent(
@@ -212,12 +211,12 @@ export default function TaskDetails() {
               <h2 className="text-lg font-semibold">{task.name}</h2>
               <div className="flex items-center gap-2 mt-1">
                 <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                  task.status === 'RUNNING' ? 'bg-green-100 text-green-700' :
-                  task.status === 'COMPLETED' ? 'bg-indigo-100 text-indigo-700' :
-                  task.status === 'FAILED' ? 'bg-red-100 text-red-700' :
+                  workflowStatusLabel === 'RUNNING' ? 'bg-green-100 text-green-700' :
+                  workflowStatusLabel === 'COMPLETED' ? 'bg-indigo-100 text-indigo-700' :
+                  workflowStatusLabel === 'FAILED' ? 'bg-red-100 text-red-700' :
                   'bg-slate-100 text-slate-600'
                 }`}>
-                  {task.status}
+                  {workflowStatusLabel}
                 </span>
                 {activeRun && (
                   <span className="text-xs text-slate-500">Run #{activeRun.id}</span>
@@ -246,7 +245,7 @@ export default function TaskDetails() {
                   {queryAgentLogMutation.isPending ? 'Querying...' : 'Agent Logs'}
                 </button>
                 <button
-                  onClick={() => window.open(api.tasks.getRunReportExportUrl(activeRun.id, 'markdown'), '_blank')}
+                  onClick={() => window.open(api.execution.getJobReportExportUrl(0, activeRun.id, 'markdown'), '_blank')}
                   className="w-full px-3 py-1.5 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-500 transition-colors"
                 >
                   Export Report
@@ -269,36 +268,30 @@ export default function TaskDetails() {
               </div>
               <div>
                 <label className="text-slate-500 block">Status</label>
-                <span className="font-medium">{task.status}</span>
+                <span className="font-medium">{workflowStatusLabel}</span>
               </div>
               {activeRun && (
                 <>
                   <div className="pt-4 mt-2 border-t border-slate-100">
                     <div className="flex justify-between items-center mb-1">
-                      <label className="text-slate-500 text-xs font-semibold uppercase">Execution Progress</label>
-                      <span className="text-indigo-600 font-bold text-xs">{activeRun.progress || 0}%</span>
+                      <label className="text-slate-500 text-xs font-semibold uppercase">Execution Status</label>
+                      <span className={`text-xs font-semibold ${
+                        activeRun.status === 'RUNNING' ? 'text-green-600 animate-pulse' :
+                        activeRun.status === 'COMPLETED' ? 'text-indigo-600' : 'text-slate-600'
+                      }`}>{activeRun.status}</span>
                     </div>
-                    <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden border border-slate-200">
-                      <div
-                        className="bg-indigo-600 h-full transition-all duration-500 ease-out"
-                        style={{ width: `${activeRun.progress || 0}%` }}
-                      />
-                    </div>
-                    {activeRun.progress_message && (
-                      <p className="text-[10px] text-slate-400 mt-1 italic">{activeRun.progress_message}</p>
+                    {activeRun.status_reason && (
+                      <p className="text-[10px] text-slate-400 mt-1 italic">{activeRun.status_reason}</p>
                     )}
                   </div>
                   <div className="grid grid-cols-2 gap-3 pt-4">
                     <div>
-                      <label className="text-slate-500 block text-[10px] uppercase">Run ID</label>
+                      <label className="text-slate-500 block text-[10px] uppercase">Job ID</label>
                       <span className="font-mono text-xs">{activeRun.id}</span>
                     </div>
                     <div>
-                      <label className="text-slate-500 block text-[10px] uppercase">Run Status</label>
-                      <span className={`text-xs font-semibold ${
-                        activeRun.status === 'RUNNING' ? 'text-green-600 animate-pulse' :
-                        activeRun.status === 'FINISHED' ? 'text-indigo-600' : 'text-slate-600'
-                      }`}>{activeRun.status}</span>
+                      <label className="text-slate-500 block text-[10px] uppercase">Device</label>
+                      <span className="font-mono text-xs">{activeRun.device_serial || `#${activeRun.device_id}`}</span>
                     </div>
                   </div>
                   <div>
@@ -306,16 +299,12 @@ export default function TaskDetails() {
                     <span className="font-mono">{activeRun.host_id}</span>
                   </div>
                   <div>
-                    <label className="text-slate-500 block">Artifacts</label>
-                    <span className="font-mono">{activeRun.artifacts?.length || 0}</span>
-                  </div>
-                  <div>
                     <label className="text-slate-500 block">Risk Level</label>
-                    <span className="font-mono">{reportRiskSummary?.risk_level || riskSummary?.risk_level || 'N/A'}</span>
+                    <span className="font-mono">{reportRiskSummary?.risk_level || 'N/A'}</span>
                   </div>
                   <div>
                     <label className="text-slate-500 block">Risk Events</label>
-                    <span className="font-mono">{reportRiskSummary?.counts?.events_total ?? riskSummary?.counts?.events_total ?? 0}</span>
+                    <span className="font-mono">{reportRiskSummary?.counts?.events_total ?? 0}</span>
                   </div>
                   <div>
                     <label className="text-slate-500 block">Alerts</label>
@@ -323,7 +312,7 @@ export default function TaskDetails() {
                   </div>
                   <div>
                     <label className="text-slate-500 block">Run Summary</label>
-                    <div className="text-xs break-all font-mono">{activeRun.log_summary || '-'}</div>
+                    <div className="text-xs break-all font-mono">{activeRun.status_reason || '-'}</div>
                   </div>
                   {riskAlerts.length > 0 && (
                     <div>
@@ -341,7 +330,7 @@ export default function TaskDetails() {
                         className="mt-2 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-500"
                         onClick={() => {
                           window.open(
-                            api.tasks.artifactDownloadUrl(task.id, activeRun.id, latestArtifact.id),
+                            api.execution.artifactDownloadUrl(task.id, activeRun.id, latestArtifact.id),
                             '_blank'
                           );
                         }}
@@ -368,7 +357,7 @@ export default function TaskDetails() {
                   Query agent logs from Linux host via SSH
                 </p>
                 <button
-                  onClick={() => window.open(api.tasks.getRunReportExportUrl(activeRun.id, 'markdown'), '_blank')}
+                  onClick={() => window.open(api.execution.getJobReportExportUrl(0, activeRun.id, 'markdown'), '_blank')}
                   className="mt-3 w-full px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500 transition-colors"
                 >
                   Export Run Report (Markdown)
@@ -433,7 +422,7 @@ export default function TaskDetails() {
           <LogViewer wsUrl={wsUrl} />
         ) : (
           <div className="flex items-center justify-center h-full text-slate-400">
-            {task.status === 'PENDING'
+            {workflowStatusLabel === 'PENDING'
               ? 'Task is pending dispatch...'
               : 'No active run available'}
           </div>

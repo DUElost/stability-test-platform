@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, type RuntimeLogEntry, type Task, type TaskRun } from '@/utils/api';
+import { api, type RuntimeLogEntry, type WorkflowDefinition, type JobInstance } from '@/utils/api';
 import { useSocketIO as useWebSocket, type WebSocketMessage } from '@/hooks/useSocketIO';
 import {
   FileSearch,
@@ -27,12 +27,6 @@ type QuickRange = '15m' | '1h' | '6h' | '24h' | 'all';
 const LOG_ROW_HEIGHT = 22;
 const LOG_OVERSCAN = 24;
 const MAX_LOG_LINES = 30000;
-
-function toArrayItems<T>(payload: any): T[] {
-  if (Array.isArray(payload)) return payload as T[];
-  if (Array.isArray(payload?.items)) return payload.items as T[];
-  return [];
-}
 
 function computeFromTs(range: QuickRange): string | undefined {
   if (range === 'all') return undefined;
@@ -69,8 +63,8 @@ interface LogsPageProps {
 }
 
 export default function LogsPage({ embedded = false }: LogsPageProps) {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [taskRuns, setTaskRuns] = useState<TaskRun[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
+  const [jobs, setJobs] = useState<JobInstance[]>([]);
 
   const [taskLoading, setTaskLoading] = useState(false);
   const [runLoading, setRunLoading] = useState(false);
@@ -105,40 +99,39 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   const toTs = useMemo(() => (quickRange === 'all' ? undefined : new Date().toISOString()), [quickRange]);
 
   const selectedTask = useMemo(
-    () => tasks.find((t) => t.id === selectedTaskId) || null,
-    [tasks, selectedTaskId],
+    () => workflows.find((t) => t.id === selectedTaskId) || null,
+    [workflows, selectedTaskId],
   );
 
   const selectedRun = useMemo(
-    () => taskRuns.find((r) => r.id === selectedRunId) || null,
-    [taskRuns, selectedRunId],
+    () => jobs.find((r) => r.id === selectedRunId) || null,
+    [jobs, selectedRunId],
   );
 
   const filteredTasks = useMemo(() => {
     const q = taskSearch.trim().toLowerCase();
-    if (!q) return tasks;
-    return tasks.filter((task) => (
-      task.name.toLowerCase().includes(q)
-      || task.status.toLowerCase().includes(q)
-      || task.type.toLowerCase().includes(q)
+    if (!q) return workflows;
+    return workflows.filter((wf) => (
+      wf.name.toLowerCase().includes(q)
+      || (wf.description || '').toLowerCase().includes(q)
     ));
-  }, [tasks, taskSearch]);
+  }, [workflows, taskSearch]);
 
   const filteredRuns = useMemo(() => {
     const q = runSearch.trim().toLowerCase();
-    if (!q) return taskRuns;
-    return taskRuns.filter((run) => (
-      String(run.id).includes(q)
-      || run.status.toLowerCase().includes(q)
-      || (run.progress_message || '').toLowerCase().includes(q)
+    if (!q) return jobs;
+    return jobs.filter((job) => (
+      String(job.id).includes(q)
+      || job.status.toLowerCase().includes(q)
+      || (job.status_reason || '').toLowerCase().includes(q)
     ));
-  }, [taskRuns, runSearch]);
+  }, [jobs, runSearch]);
 
   const aggregateJobIds = useMemo(() => {
     if (selectedRunId || selectedTaskId === null) return undefined;
-    const ids = taskRuns.map((r) => r.id).slice(0, 180);
+    const ids = jobs.map((r) => r.id).slice(0, 180);
     return ids.length > 0 ? ids : undefined;
-  }, [selectedRunId, selectedTaskId, taskRuns]);
+  }, [selectedRunId, selectedTaskId, jobs]);
 
   const wsUrl = selectedRunId
     ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/jobs/${selectedRunId}/logs`
@@ -232,11 +225,11 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   const loadTasks = useCallback(async () => {
     setTaskLoading(true);
     try {
-      const response = await api.tasks.list(0, 200);
-      setTasks(toArrayItems<Task>(response.data));
+      const wfList = await api.orchestration.list(0, 200);
+      setWorkflows(Array.isArray(wfList) ? wfList : []);
     } catch (error) {
-      console.error('加载任务失败:', error);
-      setTasks([]);
+      console.error('加载工作流失败:', error);
+      setWorkflows([]);
     } finally {
       setTaskLoading(false);
     }
@@ -246,18 +239,18 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
     setRunsHydrated(false);
     setRunLoading(true);
     try {
-      const targetTaskId = taskId ?? 0;
-      const response = await api.tasks.getRuns(targetTaskId, 0, 200);
-      const items = toArrayItems<TaskRun>(response.data);
-      setTaskRuns(items);
+      const workflowId = taskId && taskId > 0 ? taskId : undefined;
+      const result = await api.execution.listJobs(0, 200, workflowId);
+      const items = result.items;
+      setJobs(items);
       setSelectedRunId((prev) => {
-        if (prev && items.some((run) => run.id === prev)) return prev;
+        if (prev && items.some((job) => job.id === prev)) return prev;
         if (taskId === null) return null;
         return items.length > 0 ? items[0].id : null;
       });
     } catch (error) {
-      console.error('加载执行节点失败:', error);
-      setTaskRuns([]);
+      console.error('加载执行记录失败:', error);
+      setJobs([]);
       setSelectedRunId(null);
     } finally {
       setRunLoading(false);
@@ -274,7 +267,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
     }
 
     try {
-      const response = await api.tasks.queryLogs({
+      const response = await api.logs.queryRuntime({
         job_id: selectedRunId ?? undefined,
         job_ids: !selectedRunId ? aggregateJobIds : undefined,
         level: levelFilter !== 'all' ? levelFilter : undefined,
@@ -337,7 +330,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `runtime_logs_${selectedTask?.name || 'all'}_${selectedRunId || 'aggregate'}_${new Date().toISOString()}.txt`;
+    a.download = `runtime_logs_${selectedTask?.name || 'all'}_job${selectedRunId || 'aggregate'}_${new Date().toISOString()}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -413,7 +406,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   }, [loadTasks]);
 
   useEffect(() => {
-    setTaskRuns([]);
+    setJobs([]);
     setSelectedRunId(null);
     void loadRuns(selectedTaskId);
   }, [loadRuns, selectedTaskId]);
@@ -427,10 +420,10 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   }, [fetchHistory, keyword, stepFilter, levelFilter, quickRange, selectedRunId, selectedTaskId, runsHydrated]);
 
   const overallProgress = useMemo(() => {
-    if (taskRuns.length === 0) return 0;
-    const total = taskRuns.reduce((sum, run) => sum + (run.progress || 0), 0);
-    return Math.round(total / taskRuns.length);
-  }, [taskRuns]);
+    if (jobs.length === 0) return 0;
+    const completed = jobs.filter((j) => ['COMPLETED', 'FAILED', 'ABORTED'].includes(j.status)).length;
+    return Math.round((completed / jobs.length) * 100);
+  }, [jobs]);
 
   const isLiveMode = !!selectedRunId;
 
@@ -472,14 +465,14 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
             <div className="border-b border-gray-100 p-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-medium text-gray-900">任务视图</h3>
-                <span className="text-xs text-gray-400">{tasks.length}</span>
+                <span className="text-xs text-gray-400">{workflows.length}</span>
               </div>
               <div className="relative mt-2">
                 <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
                 <input
                   value={taskSearch}
                   onChange={(e) => setTaskSearch(e.target.value)}
-                  placeholder="搜索任务"
+                  placeholder="搜索工作流"
                   className="w-full rounded-lg border border-gray-300 py-1.5 pl-7 pr-2 text-xs focus:border-slate-500 focus:outline-none"
                 />
               </div>
@@ -506,23 +499,21 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                 <div className="p-4 text-center text-sm text-gray-400">无匹配任务</div>
               ) : (
                 <div className="divide-y divide-gray-100">
-                  {filteredTasks.map((task) => (
+                  {filteredTasks.map((wf) => (
                     <button
-                      key={task.id}
+                      key={wf.id}
                       type="button"
-                      onClick={() => setSelectedTaskId(task.id)}
+                      onClick={() => setSelectedTaskId(wf.id)}
                       className={`w-full px-4 py-3 text-left transition-colors ${
-                        selectedTaskId === task.id ? 'bg-blue-50' : 'hover:bg-gray-50'
+                        selectedTaskId === wf.id ? 'bg-blue-50' : 'hover:bg-gray-50'
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="truncate text-sm font-medium text-gray-900">{task.name}</span>
-                        <span className="rounded bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">{task.status}</span>
+                        <span className="truncate text-sm font-medium text-gray-900">{wf.name}</span>
                       </div>
-                      <div className="mt-1 flex items-center gap-2 text-[11px] text-gray-500">
-                        <span>{task.type}</span>
-                        {task.runs_count != null && <span>{task.runs_count} runs</span>}
-                      </div>
+                      {wf.description && (
+                        <div className="mt-1 text-[11px] text-gray-500 truncate">{wf.description}</div>
+                      )}
                     </button>
                   ))}
                 </div>
@@ -536,7 +527,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
             <div className="border-b border-gray-100 p-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-medium text-gray-900">执行节点</h3>
-                <span className="text-xs text-gray-400">{taskRuns.length}</span>
+                <span className="text-xs text-gray-400">{jobs.length}</span>
               </div>
               <div className="mt-2">
                 <div className="mb-1 flex items-center justify-between text-xs text-gray-500">
@@ -579,26 +570,23 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                 <div className="p-4 text-center text-sm text-gray-400">暂无执行节点</div>
               ) : (
                 <div className="divide-y divide-gray-100">
-                  {filteredRuns.map((run) => (
+                  {filteredRuns.map((job) => (
                     <button
-                      key={run.id}
+                      key={job.id}
                       type="button"
-                      onClick={() => setSelectedRunId(run.id)}
+                      onClick={() => setSelectedRunId(job.id)}
                       className={`w-full px-3 py-3 text-left transition-colors ${
-                        selectedRunId === run.id ? 'bg-blue-50' : 'hover:bg-gray-50'
+                        selectedRunId === job.id ? 'bg-blue-50' : 'hover:bg-gray-50'
                       }`}
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <Smartphone className="h-4 w-4 text-gray-400" />
-                          <span className="text-sm font-medium text-gray-900">Job {run.id}</span>
+                          <span className="text-sm font-medium text-gray-900">Job {job.id}</span>
                         </div>
-                        <span className="rounded bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">{run.status}</span>
+                        <span className="rounded bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">{job.status}</span>
                       </div>
-                      <div className="mt-1 text-[11px] text-gray-500">{run.progress_message || '无进度描述'}</div>
-                      <div className="mt-2 h-1.5 w-full rounded-full bg-gray-100">
-                        <div className="h-1.5 rounded-full bg-blue-500" style={{ width: `${run.progress || 0}%` }} />
-                      </div>
+                      <div className="mt-1 text-[11px] text-gray-500">{job.status_reason || job.device_serial || `设备 #${job.device_id}`}</div>
                     </button>
                   ))}
                 </div>

@@ -20,6 +20,8 @@ croniter>=2.0.0,<3.0
 psycopg[binary]>=3.1.0
 # asyncpg for async PostgreSQL
 asyncpg>=0.29.0,<1.0
+# sqlite async driver for local quick tests
+aiosqlite>=0.20.0,<1.0
 # Redis async client
 redis[asyncio]>=5.0.0,<6.0
 # Alembic for DB migrations

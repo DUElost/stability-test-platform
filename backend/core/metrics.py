@@ -187,28 +187,6 @@ device_monitoring_updates = Counter(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
-# WebSocket Metrics
-# ============================================================================
-
-websocket_connections = Gauge(
-    'stability_websocket_connections_active',
-    'Number of active WebSocket connections',
-    ['endpoint']  # dashboard, logs
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-websocket_messages_sent = Counter(
-    'stability_websocket_messages_sent_total',
-    'Total number of WebSocket messages sent',
-    ['message_type']
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-websocket_errors = Counter(
-    'stability_websocket_errors_total',
-    'Total number of WebSocket errors',
-    ['error_type']
-) if PROMETHEUS_AVAILABLE else _MockMetric()
-
-# ============================================================================
 # Recycler Metrics
 # ============================================================================
 
@@ -354,17 +332,6 @@ def record_device_lock_released(reason: str):
     """Record a device lock release"""
     if PROMETHEUS_AVAILABLE:
         device_lock_released.labels(reason=reason).inc()
-
-
-def record_websocket_connection(endpoint: str, connected: bool):
-    """Record WebSocket connection change"""
-    if not PROMETHEUS_AVAILABLE:
-        return
-
-    if connected:
-        websocket_connections.labels(endpoint=endpoint).inc()
-    else:
-        websocket_connections.labels(endpoint=endpoint).dec()
 
 
 def record_socketio_connection(namespace: str, connected: bool):

@@ -31,8 +31,8 @@ class DeviceStatus(str, Enum):
     BUSY    = "BUSY"
 
 
-# Legacy enums — still used by Task/TaskRun/RunStep ORM models in schemas.py.
-# Canonical source since Wave 4; schemas.py re-exports for backward compat.
+# Legacy enums — used by tasks.py compatibility layer (status mapping).
+# Canonical source since Wave 4; schemas.py deleted, legacy.py re-exports.
 
 class TaskStatus(str, Enum):
     PENDING   = "PENDING"

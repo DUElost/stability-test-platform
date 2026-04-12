@@ -2,8 +2,8 @@
 """
 报告与 JIRA Draft 生成服务
 
-从 backend/api/routes/tasks.py 提取的纯业务逻辑，不依赖 FastAPI HTTPException。
-可在 API 路由和后台线程中安全复用。
+纯业务逻辑，不依赖 FastAPI HTTPException。
+可在 API 路由（runs.py / orchestration.py）和后台线程中安全复用。
 """
 
 import json

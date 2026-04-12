@@ -591,15 +591,25 @@ export interface StepTrace {
 export interface JobInstance {
   id: number;
   workflow_run_id: number;
+  workflow_definition_id?: number | null;
   task_template_id: number;
   host_id: string;
   device_id: number;
   device_serial?: string | null;
   status: JobStatus;
   status_reason?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
   created_at: string;
-  updated_at: string;
+  updated_at?: string;
   step_traces?: StepTrace[];
+}
+
+export interface PaginatedJobList {
+  items: JobInstance[];
+  total: number;
+  skip: number;
+  limit: number;
 }
 
 export interface WorkflowRun {
@@ -706,33 +716,9 @@ export const api = {
       apiClient.put<Device>(`/devices/${id}/tags`, tags),
   },
 
-  // 任务相关
-  tasks: {
-    list: (skip = 0, limit = 50, status?: string) => apiClient.get<PaginatedResponse<Task>>('/tasks', { params: { skip, limit, ...(status ? { status } : {}) } }),
-    get: (id: number) => apiClient.get<Task>(`/tasks/${id}`),
-    listTemplates: () => apiClient.get<TaskTemplate[]>('/task-templates'),
-    create: (data: {
-      name: string;
-      type: string;
-      template_id?: number;
-      target_device_id?: number;
-      device_serial?: string;
-      params?: Record<string, any>;
-      pipeline_def?: Record<string, any>;
-      priority?: number;
-    }) =>
-      apiClient.post<Task>('/tasks', data),
-    cancel: (id: number) => apiClient.post(`/tasks/${id}/cancel`),
-    delete: (id: number) => apiClient.delete<void>(`/tasks/${id}`),
-    retry: (id: number) => apiClient.post(`/tasks/${id}/retry`),
-    batchCancel: (taskIds: number[]) =>
-      apiClient.post<{ success: number[]; failed: any[]; total: number }>('/tasks/batch/cancel', { task_ids: taskIds }),
-    batchRetry: (taskIds: number[]) =>
-      apiClient.post<{ success: number[]; failed: any[]; total: number }>('/tasks/batch/retry', { task_ids: taskIds }),
-    dispatch: (taskId: number, data: { host_id: number; device_id: number }) =>
-      apiClient.post<TaskRun>(`/tasks/${taskId}/dispatch`, data),
-    getRuns: (taskId: number, skip = 0, limit = 50) => apiClient.get<PaginatedResponse<TaskRun>>(`/tasks/${taskId}/runs`, { params: { skip, limit } }),
-    queryLogs: (params: {
+  // 日志查询
+  logs: {
+    queryRuntime: (params: {
       job_id?: number;
       job_ids?: number[];
       level?: string;
@@ -751,28 +737,14 @@ export const api = {
       }
       return apiClient.get<RuntimeLogQueryResponse>('/logs/query', { params: reqParams });
     },
-    /** @deprecated Use api.execution.getJobReport instead */
-    getRunReport: (runId: number) => apiClient.get<RunReport>(`/runs/${runId}/report`),
-    /** @deprecated Use api.execution.getJobReportExportUrl instead */
-    getRunReportExportUrl: (runId: number, format: 'markdown' | 'json' = 'markdown') =>
-      `/api/v1/runs/${runId}/report/export?format=${format}`,
-    /** @deprecated Use api.execution.createJobJiraDraft instead */
-    createRunJiraDraft: (runId: number) => apiClient.post<JiraDraft>(`/runs/${runId}/jira-draft`),
-    /** @deprecated Use api.execution.getJobReport instead */
-    getCachedReport: (runId: number) => apiClient.get<RunReport>(`/runs/${runId}/report/cached`),
-    /** @deprecated Use api.execution.createJobJiraDraft instead */
-    getCachedJiraDraft: (runId: number) => apiClient.get<JiraDraft>(`/runs/${runId}/jira-draft/cached`),
-    /** @deprecated Use api.execution.listJobArtifacts instead */
-    artifactDownloadUrl: (taskId: number, runId: number, artifactId: number) =>
-      `/api/v1/tasks/${taskId}/runs/${runId}/artifacts/${artifactId}/download`,
-    // 查询Agent日志
-    queryAgentLogs: (data: { host_id: number; log_path?: string; lines?: number }) =>
+    queryAgent: (data: { host_id: number; log_path?: string; lines?: number }) =>
       apiClient.post<AgentLogOut>('/agent/logs', data),
-    // RunStep API
-    getRunSteps: (runId: number) => apiClient.get<RunStep[]>(`/runs/${runId}/steps`),
-    // Pipeline templates
-    listPipelineTemplates: () => apiClient.get<PipelineTemplate[]>('/pipeline/templates'),
-    getPipelineTemplate: (name: string) => apiClient.get<PipelineTemplate>(`/pipeline/templates/${name}`),
+  },
+
+  // Pipeline 模板（独立功能，从 tasks 提升）
+  pipeline: {
+    listTemplates: () => apiClient.get<PipelineTemplate[]>('/pipeline/templates'),
+    getTemplate: (name: string) => apiClient.get<PipelineTemplate>(`/pipeline/templates/${name}`),
   },
 
   // 心跳相关
@@ -932,6 +904,16 @@ export const api = {
 
   // WorkflowRun (执行记录) 查询
   execution: {
+    listJobs: (skip = 0, limit = 50, workflowId?: number, status?: string) =>
+      unwrapApiResponse<PaginatedJobList>(
+        apiClient.get('/jobs', {
+          params: {
+            skip, limit,
+            ...(workflowId ? { workflow_id: workflowId } : {}),
+            ...(status ? { status } : {}),
+          },
+        })
+      ),
     listRuns: (skip = 0, limit = 50) =>
       unwrapApiResponse<WorkflowRun[]>(apiClient.get('/workflow-runs', { params: { skip, limit } })),
     getRun: (runId: number) =>
@@ -948,6 +930,11 @@ export const api = {
       unwrapApiResponse<JobArtifactEntry[]>(apiClient.get(`/workflow-runs/${runId}/jobs/${jobId}/artifacts`)),
     getJobReportExportUrl: (_runId: number, jobId: number, format: 'markdown' | 'json' = 'markdown') =>
       `${apiClient.defaults.baseURL}/runs/${jobId}/report/export?format=${format}`,
+    getJobSteps: (jobId: number) => apiClient.get<RunStep[]>(`/runs/${jobId}/steps`),
+    getCachedJobReport: (jobId: number) => apiClient.get<RunReport>(`/runs/${jobId}/report/cached`),
+    getCachedJobJiraDraft: (jobId: number) => apiClient.get<JiraDraft>(`/runs/${jobId}/jira-draft/cached`),
+    artifactDownloadUrl: (_taskId: number, jobId: number, artifactId: number) =>
+      `/api/v1/runs/${jobId}/artifacts/${artifactId}/download`,
   },
 
   // Tool Catalog (新工具目录，Phase 3 格式)

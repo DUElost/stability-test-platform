@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, type JiraDraft, type TaskRun } from '@/utils/api';
+import { api, type JiraDraft, type JobInstance } from '@/utils/api';
 import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
 
 const PRIORITY_BADGE: Record<string, string> = {
@@ -14,7 +14,7 @@ const PRIORITY_BADGE: Record<string, string> = {
 };
 
 interface RunWithDraft {
-  run: TaskRun;
+  run: JobInstance;
   draft: JiraDraft | null;
 }
 
@@ -35,13 +35,13 @@ export default function IssueTrackerPage() {
   const { data: runsData, isLoading, refetch } = useQuery({
     queryKey: ['runs-with-jira-drafts'],
     queryFn: async () => {
-      const resp = await api.tasks.getRuns(0, 0, 50);
-      const runs = resp.data?.items || [];
+      const result = await api.execution.listJobs(0, 50);
+      const runs = result.items;
 
       const runsWithDrafts: RunWithDraft[] = await Promise.all(
-        runs.map(async (run: TaskRun) => {
+        runs.map(async (run: JobInstance) => {
           try {
-            const draftResp = await api.tasks.getCachedJiraDraft(run.id);
+            const draftResp = await api.execution.getCachedJobJiraDraft(run.id);
             return { run, draft: draftResp.data };
           } catch {
             return { run, draft: null };
@@ -108,7 +108,7 @@ export default function IssueTrackerPage() {
                         </span>
                       </div>
                       <div className="text-sm text-gray-500 mt-1">
-                        {draft?.project_key}-{draft?.issue_type} | 任务 #{run.task_id} | Run #{run.id}
+                        {draft?.project_key}-{draft?.issue_type} | 工作流 #{run.workflow_definition_id ?? '-'} | Job #{run.id}
                       </div>
                       <div className="text-sm text-gray-400 mt-1">
                         {draft?.description ? `${draft.description.substring(0, 100)}...` : '-'}
@@ -119,7 +119,7 @@ export default function IssueTrackerPage() {
                       </div>
                     </div>
                     <div className="text-right text-sm text-gray-500">
-                      <div>{formatTime(run.finished_at)}</div>
+                      <div>{formatTime(run.ended_at ?? null)}</div>
                     </div>
                   </div>
                 );

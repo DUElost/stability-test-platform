@@ -185,7 +185,7 @@ function ArtifactList({ runId, jobId }: { runId: number; jobId: number }) {
               {a.artifact_type}{a.size_bytes ? ` · ${(a.size_bytes / 1024).toFixed(1)} KB` : ''}
             </div>
           </div>
-          <a href={`/api/v1/tasks/0/runs/${jobId}/artifacts/${a.id}/download`} target="_blank" rel="noreferrer">
+          <a href={`/api/v1/runs/${jobId}/artifacts/${a.id}/download`} target="_blank" rel="noreferrer">
             <Download className="w-4 h-4 text-gray-400 hover:text-blue-500" />
           </a>
         </div>

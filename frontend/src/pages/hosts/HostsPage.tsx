@@ -28,9 +28,15 @@ export default function HostsPage() {
     refetchInterval: 10000,
   });
 
-  const { data: tasks } = useQuery({
-    queryKey: ['tasks'],
-    queryFn: () => api.tasks.list(0, 200).then(res => res.data.items),
+  const { data: activeJobs } = useQuery({
+    queryKey: ['active-jobs'],
+    queryFn: async () => {
+      const [pending, running] = await Promise.all([
+        api.execution.listJobs(0, 200, undefined, 'PENDING'),
+        api.execution.listJobs(0, 200, undefined, 'RUNNING'),
+      ]);
+      return [...pending.items, ...running.items];
+    },
     refetchInterval: 10000,
   });
 
@@ -102,18 +108,19 @@ export default function HostsPage() {
     return countMap;
   }, [devices]);
 
-  // Calculate active tasks per host
   const activeTasksMap = useMemo(() => {
-    if (!tasks) return new Map<number, number>();
+    if (!activeJobs) return new Map<number, number>();
     const countMap = new Map<number, number>();
-    tasks.forEach((task: any) => {
-      if (task.host_id && ['PENDING', 'QUEUED', 'RUNNING'].includes(task.status)) {
-        const current = countMap.get(task.host_id) || 0;
-        countMap.set(task.host_id, current + 1);
+    activeJobs.forEach((job: any) => {
+      if (job.host_id) {
+        const hostKey = Number(job.host_id);
+        if (!isNaN(hostKey)) {
+          countMap.set(hostKey, (countMap.get(hostKey) || 0) + 1);
+        }
       }
     });
     return countMap;
-  }, [tasks]);
+  }, [activeJobs]);
 
   // Transform data for expandable table
   const tableData: HostTableData[] = useMemo(() => {

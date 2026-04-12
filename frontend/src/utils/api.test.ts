@@ -165,9 +165,11 @@ describe('api module', () => {
       expect(api.hosts.update).toBeInstanceOf(Function);
       expect(api.devices).toBeDefined();
       expect(api.devices.list).toBeInstanceOf(Function);
-      expect(api.tasks).toBeDefined();
-      expect(api.tasks.list).toBeInstanceOf(Function);
-      expect(api.tasks.delete).toBeInstanceOf(Function);
+      expect(api.orchestration).toBeDefined();
+      expect(api.orchestration.list).toBeInstanceOf(Function);
+      expect(api.orchestration.delete).toBeInstanceOf(Function);
+      expect(api.execution).toBeDefined();
+      expect(api.execution.listJobs).toBeInstanceOf(Function);
       expect(api.auth).toBeDefined();
       expect(api.auth.login).toBeInstanceOf(Function);
       expect(api.results).toBeDefined();

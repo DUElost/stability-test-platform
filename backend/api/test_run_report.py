@@ -8,11 +8,11 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from backend.api.routes.tasks import (
-        _build_jira_draft,
-        _build_risk_alerts,
-        _parse_run_log_summary,
-        _report_to_markdown,
+    from backend.api.routes.runs import _report_to_markdown
+    from backend.services.report_service import (
+        build_jira_draft as _build_jira_draft,
+        build_risk_alerts as _build_risk_alerts,
+        parse_run_log_summary as _parse_run_log_summary,
     )
     from backend.api.schemas import (
         RunReportOut,
@@ -21,11 +21,11 @@ try:
         RiskAlertOut,
     )
 except ModuleNotFoundError:
-    from api.routes.tasks import (
-        _build_jira_draft,
-        _build_risk_alerts,
-        _parse_run_log_summary,
-        _report_to_markdown,
+    from api.routes.runs import _report_to_markdown
+    from services.report_service import (
+        build_jira_draft as _build_jira_draft,
+        build_risk_alerts as _build_risk_alerts,
+        parse_run_log_summary as _parse_run_log_summary,
     )
     from api.schemas import (
         RunReportOut,
@@ -72,6 +72,13 @@ class TestRunReportHelpers(unittest.TestCase):
             alerts=[RiskAlertOut(code="ANR_DETECTED", severity="HIGH", message="ANR found")],
         )
 
+    def test_report_to_markdown_contains_sections(self):
+        report = self._sample_report()
+        text = _report_to_markdown(report)
+        self.assertIn("# Run Report - 101", text)
+        self.assertIn("## Risk Summary", text)
+        self.assertIn("## Alerts", text)
+
     def test_parse_run_log_summary(self):
         metrics = _parse_run_log_summary(
             "monitor=runtime completed; risk=HIGH; events=3; restarts=2; aee_entries=1"
@@ -98,13 +105,6 @@ class TestRunReportHelpers(unittest.TestCase):
         self.assertIn("ANR_DETECTED", codes)
         self.assertIn("CRASH_DETECTED", codes)
         self.assertIn("RESTART_FREQUENT", codes)
-
-    def test_report_to_markdown_contains_sections(self):
-        report = self._sample_report()
-        text = _report_to_markdown(report)
-        self.assertIn("# Run Report - 101", text)
-        self.assertIn("## Risk Summary", text)
-        self.assertIn("## Alerts", text)
 
     def test_build_jira_draft_from_report(self):
         report = self._sample_report()

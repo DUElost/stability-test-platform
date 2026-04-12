@@ -4,10 +4,10 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from backend.api.schemas import ORMBaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
@@ -87,6 +87,7 @@ class StepTraceOut(ORMBaseModel):
 class JobInstanceOut(ORMBaseModel):
     id: int
     workflow_run_id: int
+    workflow_definition_id: Optional[int] = None
     task_template_id: int
     device_id: int
     device_serial: Optional[str] = None
@@ -97,6 +98,13 @@ class JobInstanceOut(ORMBaseModel):
     ended_at: Optional[datetime]
     created_at: datetime
     step_traces: List[StepTraceOut] = []
+
+
+class PaginatedJobList(BaseModel):
+    items: List[JobInstanceOut]
+    total: int
+    skip: int
+    limit: int
 
 
 class WorkflowRunOut(ORMBaseModel):
@@ -379,6 +387,54 @@ async def list_run_jobs(run_id: int, db: AsyncSession = Depends(get_async_db)):
     return ok(result)
 
 
+@router.get("/jobs", response_model=ApiResponse[PaginatedJobList])
+async def list_jobs(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    workflow_id: Optional[int] = None,
+    status: Optional[str] = None,
+    db: AsyncSession = Depends(get_async_db),
+):
+    """Paginated global Job listing with optional workflow / status filters.
+
+    Replaces the legacy ``GET /tasks/{id}/runs`` compatibility endpoint.
+    """
+    base = (
+        select(JobInstance, WorkflowRun.workflow_definition_id)
+        .join(WorkflowRun, WorkflowRun.id == JobInstance.workflow_run_id)
+    )
+    if workflow_id is not None:
+        base = base.where(WorkflowRun.workflow_definition_id == workflow_id)
+    if status is not None:
+        base = base.where(JobInstance.status == status.upper())
+
+    count_q = select(func.count()).select_from(base.subquery())
+    total = (await db.execute(count_q)).scalar() or 0
+
+    ordered = base.order_by(JobInstance.id.desc()).offset(skip).limit(limit)
+    rows = (await db.execute(ordered)).all()
+
+    if not rows:
+        return ok(PaginatedJobList(items=[], total=total, skip=skip, limit=limit))
+
+    jobs = [r[0] for r in rows]
+    wf_def_ids = {r[0].id: r[1] for r in rows}
+
+    device_ids = list({j.device_id for j in jobs})
+    devices: dict[int, str] = {}
+    if device_ids:
+        dev_rows = (await db.execute(
+            select(Device.id, Device.serial).where(Device.id.in_(device_ids))
+        )).all()
+        devices = {r.id: r.serial for r in dev_rows}
+
+    items = [
+        _job_out(j, [], devices.get(j.device_id), wf_def_ids.get(j.id))
+        for j in jobs
+    ]
+    return ok(PaginatedJobList(items=items, total=total, skip=skip, limit=limit))
+
+
 # ── Report / JIRA / Summary (Wave 3b) ─────────────────────────────────────
 
 
@@ -555,9 +611,15 @@ def _run_out(run: WorkflowRun, jobs: list) -> WorkflowRunOut:
     )
 
 
-def _job_out(job: JobInstance, traces: list, device_serial: Optional[str] = None) -> JobInstanceOut:
+def _job_out(
+    job: JobInstance,
+    traces: list,
+    device_serial: Optional[str] = None,
+    workflow_definition_id: Optional[int] = None,
+) -> JobInstanceOut:
     return JobInstanceOut(
         id=job.id, workflow_run_id=job.workflow_run_id,
+        workflow_definition_id=workflow_definition_id,
         task_template_id=job.task_template_id, device_id=job.device_id,
         device_serial=device_serial, host_id=job.host_id,
         status=job.status, status_reason=job.status_reason,

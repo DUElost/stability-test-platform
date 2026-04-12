@@ -41,8 +41,8 @@ export default function RunReportPage() {
     const id = parseInt(runId, 10);
     setLoading(true);
     Promise.all([
-      api.tasks.getCachedReport(id).then((r) => r.data).catch(() => null),
-      api.tasks.getCachedJiraDraft(id).then((r) => r.data).catch(() => null),
+      api.execution.getCachedJobReport(id).then((r) => r.data).catch(() => null),
+      api.execution.getCachedJobJiraDraft(id).then((r) => r.data).catch(() => null),
     ])
       .then(([r, j]) => {
         if (r) setReport(r);
@@ -96,7 +96,7 @@ export default function RunReportPage() {
         </div>
         <div className="flex items-center gap-2">
           <a
-            href={api.tasks.getRunReportExportUrl(parseInt(runId!, 10), 'markdown')}
+            href={api.execution.getJobReportExportUrl(0, parseInt(runId!, 10), 'markdown')}
             download
           >
             <Button variant="outline" size="sm">
@@ -105,7 +105,7 @@ export default function RunReportPage() {
             </Button>
           </a>
           <a
-            href={api.tasks.getRunReportExportUrl(parseInt(runId!, 10), 'json')}
+            href={api.execution.getJobReportExportUrl(0, parseInt(runId!, 10), 'json')}
             download
           >
             <Button variant="outline" size="sm">

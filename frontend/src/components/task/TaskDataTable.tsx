@@ -55,7 +55,7 @@ import {
 } from '@/components/ui/table';
 
 export type TaskStatus = 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELED';
-export type TaskType = 'MONKEY' | 'MTBF' | 'DDR' | 'GPU' | 'STANDBY' | 'AIMONKEY';
+export type TaskType = 'MONKEY' | 'MTBF' | 'DDR' | 'GPU' | 'STANDBY' | 'AIMONKEY' | 'WORKFLOW';
 
 export interface Task {
   id: number;
@@ -97,6 +97,7 @@ const typeColors: Record<TaskType, string> = {
   GPU: 'bg-green-500/10 text-green-600 border-green-500/20',
   STANDBY: 'bg-gray-500/10 text-gray-600 border-gray-500/20',
   AIMONKEY: 'bg-pink-500/10 text-pink-600 border-pink-500/20',
+  WORKFLOW: 'bg-slate-500/10 text-slate-700 border-slate-500/20',
 };
 
 export function TaskDataTable({

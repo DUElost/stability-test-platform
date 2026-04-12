@@ -12,9 +12,11 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from backend.api.routes.tasks import _artifact_download_target, _load_risk_summary_from_artifacts
+    from backend.api.routes.runs import _artifact_download_target
+    from backend.services.report_service import _load_risk_summary_from_artifacts
 except ModuleNotFoundError:
-    from api.routes.tasks import _artifact_download_target, _load_risk_summary_from_artifacts
+    from api.routes.runs import _artifact_download_target
+    from services.report_service import _load_risk_summary_from_artifacts
 
 
 class TestArtifactDownloadTarget(unittest.TestCase):
