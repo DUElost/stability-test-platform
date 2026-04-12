@@ -164,7 +164,8 @@ Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema
 - `GET /api/v1/pipeline/templates` - 获取内置模板
 - `GET /api/v1/pipeline/templates/{name}` - 获取指定模板
 - `GET /api/v1/builtin-actions` - 获取内置 Action 列表（含 param_schema）
-- `POST /api/v1/tasks` - 创建任务（含 `pipeline_def` 字段）
+- `POST /api/v1/workflows` - 创建工作流定义（`task_templates[].pipeline_def` 承载 Pipeline 定义）
+- `POST /api/v1/workflows/{wf_id}/run` - 基于工作流定义触发执行
 
 ### 数据库
 - `Task.pipeline_def` - Pipeline 定义 JSON 字段

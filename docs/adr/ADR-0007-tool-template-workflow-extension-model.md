@@ -44,8 +44,7 @@
 ## 关联实现/文档
 
 ### 当前活跃
-- `backend/models/schemas.py` — 旧 ToolCategory / Tool 模型（双轨合并后迁移到 `models/tool.py`）
-- `backend/models/tool.py` — 新 Tool 模型
+- `backend/models/tool.py` — Tool ORM 模型（含 `category` 字段，替代旧 `ToolCategory`）
 - `backend/core/task_templates.py` — 内置任务模板
 - `backend/api/routes/orchestration.py` — Workflow 编排端点（替代 `workflows.py`）
 - `backend/api/routes/tool_catalog.py` — 工具目录端点（替代 `tools.py`）
@@ -54,6 +53,6 @@
 - `backend/scheduler/cron_scheduler.py` — Cron 调度器
 - `backend/services/dispatcher.py` — Workflow 派发服务
 
-### Legacy（保留但未挂载）
+### Legacy（保留但未挂载，待 Wave 8 移除）
 - `backend/api/routes/tools.py` — 旧工具 CRUD 路由（未在 `main.py` 中 `include_router`）
-- `backend/api/routes/workflows.py` — 旧工作流 CRUD 路由（未在 `main.py` 中 `include_router`）
+- `backend/api/routes/workflows.py` — 旧工作流 CRUD 路由（ImportError 占位，未挂载）

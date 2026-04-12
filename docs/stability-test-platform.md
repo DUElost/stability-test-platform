@@ -603,7 +603,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+router = APIRouter(prefix="/api/v1/workflows", tags=["orchestration"])
 
 @router.post("/")
 async def create_task(
@@ -847,7 +847,7 @@ export const DeviceCard: React.FC<DeviceCardProps> = ({ device, onClick }) => {
 };
 ```
 
-#### 4.2 任务创建表单
+#### 4.2 工作流执行表单
 
 ```tsx
 // frontend/src/components/CreateTaskForm.tsx
@@ -861,18 +861,18 @@ interface TaskConfig {
 }
 
 export const CreateTaskForm: React.FC = () => {
-  const [selectedType, setSelectedType] = useState('');
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(null);
   const [selectedDevices, setSelectedDevices] = useState<number[]>([]);
   const [config, setConfig] = useState<TaskConfig>({});
 
-  const { data: templates } = useQuery({
-    queryKey: ['task-templates'],
-    queryFn: () => fetch('/api/v1/task-templates').then(r => r.json())
+  const { data: workflows } = useQuery({
+    queryKey: ['workflows'],
+    queryFn: () => fetch('/api/v1/workflows').then(r => r.json())
   });
 
-  const createTask = useMutation({
+  const createRun = useMutation({
     mutationFn: (data: any) =>
-      fetch('/api/v1/tasks', {
+      fetch(`/api/v1/workflows/${selectedWorkflowId}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -881,9 +881,9 @@ export const CreateTaskForm: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await createTask.mutateAsync({
-      template_id: templates?.find((t: any) => t.type === selectedType)?.id,
+    await createRun.mutateAsync({
       device_ids: selectedDevices,
+      trigger_source: 'ui',
       config
     });
   };

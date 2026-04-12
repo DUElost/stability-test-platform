@@ -1,5 +1,5 @@
 # ADR-0006: REST + WebSocket 的实时通信分工
-- 状态：Accepted
+- 状态：Accepted（实现层被 ADR-0018 supersede）
 - 日期：2026-02-18
 - 决策者：平台研发组
 - 标签：实时通信, WebSocket, API
@@ -39,13 +39,22 @@
 
 - ✅ 已落地：Dashboard 与 run 日志通道、线程安全广播桥接。
 - ✅ WS 鉴权与端点配置已由 [ADR-0009](./ADR-0009-websocket-auth-and-endpoint-config-unification.md) 统一。
-- ⚠️ **WebSocket 实现层被 ADR-0018 supersede**：自研 `ConnectionManager` 将由 python-socketio 替代，获得 rooms、namespace（`/agent` + `/dashboard`）、Redis adapter 多进程同步、自动断线重连。**REST + WebSocket 分工原则保留不变**。详见 [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md)。
+- ✅ **WebSocket 实现层已被 ADR-0018 supersede**：自研 `ConnectionManager` 已由 python-socketio 替代，获得 rooms、namespace（`/agent` + `/dashboard`）、Redis adapter 多进程同步、自动断线重连。**REST + 实时推送分工原则保留不变**。详见 [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md)。
 
 ## 关联实现/文档
 
-- `backend/api/routes/websocket.py` → 将重构为 python-socketio server（ADR-0018）
-- `backend/api/routes/tasks.py`
-- `frontend/src/hooks/useWebSocket.ts` → 将迁移到 socket.io-client（ADR-0018）
-- `frontend/src/hooks/useRealtimeDashboard.ts`
+### 当前活跃（ADR-0018 迁移后）
+- `backend/realtime/socketio_server.py` — python-socketio 服务端（`/agent` + `/dashboard` namespace）
+- `backend/realtime/log_writer.py` — 异步日志文件持久化
+- `frontend/src/hooks/useSocketIO.ts` — socket.io-client hook（替代 useWebSocket）
+- `frontend/src/hooks/useRealtimeDashboard.ts` — Dashboard 实时数据 hook
+
+### Legacy（待 Wave 8 清理）
+- `backend/api/routes/websocket.py` — deprecated stub（ConnectionManager no-op）
+- `frontend/src/hooks/useWebSocket.ts` — 旧原生 WebSocket hook（生产页面已不引用）
+- `frontend/src/config/index.ts` — `WS_*` 常量（仅作 room 解析键）
+
+### 其他关联
+- `backend/api/routes/tasks.py` — 兼容层（Wave 7 收敛目标）
 - `frontend/src/pages/tasks/TaskDetails.tsx`
 - `docs/module-responsibilities.md` — 模块职责定义（含 SocketIO 服务端日志持久化策略）

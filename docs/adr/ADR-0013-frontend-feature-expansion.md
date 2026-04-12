@@ -28,7 +28,7 @@
 ### 技术实现要点
 
 - 使用 React Router Lazy Loading 懒加载新页面
-- 复用现有 API（`api.tasks.getRuns`、`api.tasks.getCachedJiraDraft`）
+- 复用现有执行链路 API（`api.execution.listJobs`、`api.execution.getCachedJobJiraDraft`）
 - 复用现有 UI 组件（Card、Button、Skeleton 等）
 - 遵循现有代码规范与样式约定
 
@@ -69,6 +69,6 @@
 - `frontend/src/layouts/Sidebar.tsx` - 侧边栏导航
 
 ### API 复用
-- `api.tasks.getRuns` - 获取任务运行列表
-- `api.tasks.getCachedJiraDraft` - 获取 JIRA 草稿
+- `api.execution.listJobs` - 获取任务运行列表
+- `api.execution.getCachedJobJiraDraft` - 获取 JIRA 草稿
 - `api.users.changePassword` - 修改密码

@@ -279,8 +279,21 @@ socket.io-client@^4.7.0
 - ✅ Phase 6（验收与文档）：文档更新、废弃代码确认
 - 回归测试：14 failed / 154 passed / 11 skipped（与迁移前基线一致，零新增 FAILED）
 
+### 遗留清理项（2026-04-12 审计补充）
+
+以下残留代码在 Phase 6 验收时确认存在但未立即移除，已纳入双轨合并 Wave 7/8 追踪：
+
+| 残留项 | 位置 | 说明 | 清理计划 |
+|--------|------|------|----------|
+| `ConnectionManager` + WS stub 路由 | `backend/api/routes/websocket.py` | deprecated stub，仍挂载在 `main.py` | Wave 8-3 移除 |
+| `websocket_*` Prometheus 指标 | `backend/core/metrics.py` L189-209 | 与 `socketio_*` 指标并存，`record_websocket_connection` 无调用方 | Wave 7-4 移除 |
+| `useWebSocket.ts` + 测试 | `frontend/src/hooks/useWebSocket.ts` | 原生 WS hook，生产页面已不引用 | Wave 7-3 移除 |
+| `WS_*` 常量命名 | `frontend/src/config/index.ts` | `/ws/dashboard` 形式，仅作 room 解析键 | Wave 7-3 重命名或移除 |
+| `WebSocketMock` | `frontend/src/test/setup.ts` | 测试夹具 | Wave 7-3 同步清理 |
+
 ## 关联实现
 
+### 当前活跃
 - `backend/main.py` — lifespan 初始化 APScheduler + SAQ + SocketIO
 - `backend/scheduler/app_scheduler.py` — APScheduler 4.x 统一调度入口
 - `backend/scheduler/cron_scheduler.py` — 重构为 APScheduler job 回调（纯函数）
@@ -295,5 +308,12 @@ socket.io-client@^4.7.0
 - `backend/agent/step_trace_uploader.py` — Step 状态 HTTP 批量上报
 - `frontend/src/hooks/useSocketIO.ts` — 迁移到 socket.io-client
 - `docs/grafana/stability-platform-dashboard.json` — Grafana dashboard 模板
+
+### 已删除
 - ~~`backend/mq/consumer.py`~~ — 已删除（由 SAQ + SocketIO 替代）
 - ~~`backend/tasks/heartbeat_monitor.py`~~ — 已删除（由 APScheduler session_watchdog 替代）
+
+### Legacy（待 Wave 7/8 清理）
+- `backend/api/routes/websocket.py` — deprecated stub（Wave 8-3）
+- `frontend/src/hooks/useWebSocket.ts` — 旧原生 WS hook（Wave 7-3）
+- `backend/core/metrics.py` 中 `websocket_*` 指标（Wave 7-4）

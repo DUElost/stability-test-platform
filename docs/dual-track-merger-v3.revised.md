@@ -1,6 +1,6 @@
 ---
 name: 双轨合并路线图 v3 修订版
-overview: 针对 Tool 迁移覆盖面、Dispatcher 路径、API 收口策略及报告语义进行深度优化的终版路线图。采用“后端先行 + 兼容壳”策略，分 6 个波次渐进式完成。
+overview: 针对 Tool 迁移覆盖面、Dispatcher 路径、API 收口策略及报告语义进行深度优化的终版路线图。采用"后端先行 + 兼容壳"策略，分 8 个波次渐进式完成。
 todos:
   - id: wave0-cleanup
     content: "Wave 0-1: 删除死代码 workflows.py + 清理 schemas.py 中对应的 Pydantic schema"
@@ -29,9 +29,12 @@ todos:
   - id: wave3b-api
     content: "Wave 3b: API 端点迁移 + 区分 Single-Job Report 与 Workflow Aggregate Report"
     status: done
-  - id: wave3c-frontend
-    content: "Wave 3c: 前端 api.ts 新增 execution report/jira/summary 方法"
+  - id: wave3c-frontend-types
+    content: "Wave 3c-1: 前端 api.ts 新增 orchestration/execution 类型与方法"
     status: done
+  - id: wave3c-frontend-migration
+    content: "Wave 3c-2: 前端页面逐页切换到 orchestration/execution API（替代旧任务兼容层）"
+    status: pending
   - id: wave3d-cleanup
     content: "Wave 3d: 清理 schemas.py — User/Notification/Schedule 分离到独立模块；conftest 新模型 fixtures"
     status: done
@@ -46,6 +49,12 @@ todos:
     status: done
   - id: wave6-drop
     content: "Wave 6: schemas.py → legacy.py 迁移 + DROP migration i7d8e9f0a1b2 创建"
+    status: done
+  - id: wave7-frontend-convergence
+    content: "Wave 7: 前端 API 统一收敛 + tasks.py 兼容层缩减 + 旧框架残留清理"
+    status: done
+  - id: wave8-legacy-removal
+    content: "Wave 8: 移除 tasks.py 兼容层 + 独立功能拆分（runs.py / logs.py）"
     status: done
 isProject: false
 ---
@@ -156,8 +165,27 @@ Alembic 脚本：将旧 `tool_categories` 数据迁移到 `tool.category` 后再
 
 ### 3c. 前端分步平滑迁移
 
-- 第一步：`api.ts` 新增 `WorkflowRun` 类型，`api.tasks.getRunReport` 临时保持旧路径。
-- 第二步：详情页、列表页逐个切回 `api.workflows.*` 调用。
+#### 3c-1. 新增前端 API 方法（已完成）
+
+- `api.ts` 新增 `api.orchestration`（WorkflowDefinition CRUD + run trigger）
+- `api.ts` 新增 `api.execution`（WorkflowRun 查询 + report/jira/summary/artifacts）
+- 新增前端类型：`WorkflowDefinition`、`WorkflowRun`、`JobInstance`、`StepTrace`、`WorkflowSummary`、`JobArtifactEntry`
+
+#### 3c-2. 前端页面逐页迁移（✅ 已完成，收敛到 Wave 7/8）
+
+> **2026-04-13 更新**：此前审计中标记为“未完成”的页面迁移现已完成。生产代码已不再调用旧任务兼容层，统一收敛到 `api.orchestration.*` 与 `api.execution.*`，对应兼容层也已在 Wave 8 移除。
+>
+> 当前映射关系如下：
+>
+> | 页面 | 当前调用 |
+> |------|---------|
+> | `TaskList.tsx` | `api.orchestration.list` |
+> | `TaskDetails.tsx` | `api.orchestration.get` + `api.execution.listJobs/getCachedJobReport/getJobSteps/getCachedJobJiraDraft` |
+> | `TaskRunsPage.tsx` | `api.execution.listJobs` |
+> | `RunReportPage.tsx` | `api.execution.getCachedJobReport` / `getCachedJobJiraDraft` / `getJobReportExportUrl` |
+> | `LogsPage.tsx` | `api.orchestration.list` + `api.execution.listJobs` + 日志查询 |
+> | `HostsPage.tsx` | `api.execution.listJobs` |
+> | `IssueTrackerPage.tsx` | `api.execution.listJobs` + `getCachedJobJiraDraft` |
 
 ### 3d. 清理与测试迁移
 
@@ -215,8 +243,87 @@ CI 脚本 `scripts/ci_check_migrations.py` 执行三项检查：
 
 ---
 
+## Wave 7: 前端 API 统一收敛 + 旧框架残留清理（✅ 完成）
+
+> 新增于 2026-04-12。补齐 Wave 3c-2 遗留的前端迁移 + ADR-0018 遗留的旧框架代码清理。
+> **完成于 2026-04-12**。
+
+### 7-0. 后端新增 `GET /api/v1/jobs` 端点（✅ 完成）
+
+新增 `orchestration.py` → `GET /api/v1/jobs` 分页端点，替代 `tasks.py` → `GET /tasks/{id}/runs` 兼容层：
+- 支持 `workflow_id` 可选筛选（按 `WorkflowDefinition.id` 过滤）
+- 支持 `status` 可选筛选
+- 返回 `PaginatedJobList`（`items: JobInstanceOut[]` + `total/skip/limit`）
+- `JobInstanceOut` 新增 `workflow_definition_id` 字段（通过 `WorkflowRun` join 填充）
+
+### 7-1. 前端页面 API 切换（✅ 完成）
+
+所有旧任务兼容层生产调用已迁移到 `api.orchestration.*` / `api.execution.*`：
+
+| 步骤 | 页面 | 范围 | 状态 |
+|------|------|------|------|
+| 7-1a | `TaskList.tsx` | 列表改用 `api.orchestration.list`；cancel/retry/batch 已移除 | ✅ 完成（Wave 3c-1） |
+| 7-1b | `TaskDetails.tsx` | 详情/Jobs/Report/Steps/JIRA 全量切换到 `api.execution.listJobs` + `getCachedJobReport` | ✅ 完成 |
+| 7-1c | `TaskRunsPage.tsx` | `getRuns(0,...)` 改用 `api.execution.listJobs`；使用 `JobInstance` 类型 | ✅ 完成 |
+| 7-1d | `RunReportPage.tsx` | 报告/JIRA/导出改用 `api.execution.*` | ✅ 完成（Wave 3c-1） |
+| 7-1e | `LogsPage.tsx` | 工作流列表改用 `api.orchestration.list`；Job 列表改用 `api.execution.listJobs` | ✅ 完成 |
+| 7-1f | `HostsPage.tsx` | 活跃 Job 计数改用 `api.execution.listJobs(status=PENDING/RUNNING)` | ✅ 完成 |
+| 7-1g | `IssueTrackerPage.tsx` | Runs 改用 `api.execution.listJobs`；JIRA 改用 `api.execution.getCachedJobJiraDraft` | ✅ 完成 |
+
+### 7-2. 前端旧类型清理（⚠️ 待执行 → Wave 8 前置）
+
+- 移除 `api.ts` 中 `api.tasks` 命名空间下已标记 `@deprecated` 的方法
+- 移除旧类型 `TaskRun`、`RunStep`、`LogArtifact`（已标记 `@deprecated`）
+- 更新 `Task` 类型为 `WorkflowDefinition` 别名或直接替换
+
+### 7-3. 旧实时通信残留清理（✅ 完成）
+
+- ✅ 删除 `frontend/src/hooks/useWebSocket.ts` + `useWebSocket.test.ts`（已被 `useSocketIO.ts` 替代）
+- ✅ 清理 `frontend/src/test/setup.ts` 中 `WebSocketMock`
+- 待定：`frontend/src/config/index.ts` 中 `WS_*` 常量命名（改为语义化名称或移除）
+
+### 7-4. 后端旧框架残留清理（✅ 完成）
+
+- ✅ 移除 `backend/core/metrics.py` 中 `websocket_*` 指标和 `record_websocket_connection` 函数
+- ✅ 修正 `backend/models/enums.py` 第 34-35 行过时注释
+
+### 7-5. 后端 `tasks.py` 兼容层缩减（✅ 已在 Wave 8 完成）
+
+本项已完成，不再保留 `/tasks*` 兼容端点。当前测试契约改为显式验证旧端点返回 `404`。
+
+---
+
+## Wave 8: 兼容层移除（✅ 完成）
+
+> 完成于 2026-04-12。
+
+### 8-1. `tasks.py` 兼容层拆分与移除（✅ 完成）
+
+- ✅ 独立功能拆分到新模块：
+  - `backend/api/routes/runs.py` — 报告、JIRA 草稿、步骤、产物下载
+  - `backend/api/routes/logs.py` — 运行时日志查询、Agent SSH 日志
+- ✅ 产物下载 URL 简化：`/tasks/{id}/runs/{id}/artifacts/{id}/download` → `/runs/{id}/artifacts/{id}/download`
+- ✅ 删除 `backend/api/routes/tasks.py`（787 行兼容层代码）
+- ✅ 从 `main.py` 移除 `tasks_router`，注册 `runs_router` + `logs_router`
+- ✅ 前端 `api.tasks` 命名空间整体移除
+- ✅ 测试文件更新（`TaskList.test.tsx`、`api.test.ts`、`backend/tests/api/test_tasks.py`、`backend/tests/api/test_runs.py`）
+
+### 8-2. 移除 legacy 占位文件（⚠️ 待执行）
+
+- 删除 `backend/api/routes/workflows.py`（ImportError 占位）
+- 删除 `backend/api/routes/tools.py`（旧工具路由）
+
+### 8-3. 移除 WebSocket deprecated stubs（⚠️ 待执行）
+
+- 删除 `backend/api/routes/websocket.py` 中的 `ConnectionManager` + WS 路由
+- 从 `main.py` 移除 `include_router(websocket_router)`
+- 清理 `backend/core/limiter.py` 中 `/ws/` 白名单
+
+---
+
 ## 实施关键决议
 
 1. Tool 管理全部收口至 `tool_catalog.py`，前端同步切换到新工具 API，不再保留分类 CRUD 资源。
 2. Dispatcher 统一到 `backend/services/dispatcher.py`，清理 `backend/scheduler/dispatcher.py` 的生产引用。
 3. 文档、接口命名与注释中严禁混用 "Run Report" 和 "Workflow Summary"。
+4. **Wave 7/8 护栏**：前端切换必须逐页验证（开发环境功能回归），不得一次性删除 `tasks.py` 兼容层。
