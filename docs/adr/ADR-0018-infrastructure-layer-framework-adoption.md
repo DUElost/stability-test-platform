@@ -291,6 +291,37 @@ socket.io-client@^4.7.0
 | `WS_*` 常量命名 | `frontend/src/config/index.ts` | `/ws/dashboard` 形式，仅作 room 解析键 | Wave 7-3 重命名或移除 |
 | `WebSocketMock` | `frontend/src/test/setup.ts` | 测试夹具 | Wave 7-3 同步清理 |
 
+## Watcher 子系统铺路（2026-04-17 起 · ADR-0018 延伸）
+
+本章节记录 ADR-0018 基础设施层框架落地之后，在同一分支 `feature/adr-0018-infra-framework` 上完成的 **Watcher 子系统**交付（inotifyd 设备日志观察者 + NFS 富化 + JobArtifact 独立持久化）。这部分不改变前置框架决策，但沿用本 ADR 的单进程约束、HTTP 权威写入、SocketIO 展示路径等护栏。
+
+### 交付结构（Commit `f366b1b`，单 commit 主线）
+
+| 阶段 | 范围 | 状态 |
+|------|------|------|
+| **Stage 5A** — Watcher 基础设施 | `backend/agent/watcher/` 模块骨架（`sources.py` / `batcher.py` / `emitter.py` / `manager.py` / `policy.py` / `contracts.py` / `exceptions.py`）、Alembic `k9f0a1b2c3d4` 增补 `watcher_policy` / `watcher_capability` / `watcher_state_*`、Alembic `m1g2h3i4j5k6` 设备 active job 部分唯一索引、`JobLogSignal` ORM + `backend/agent/job_session.py` + `pipeline_engine.StepContext.job_id` 透传、`agent_api POST /log-signals` + `claim` PENDING→RUNNING、完整单测 + 契约测试 | ✅ |
+| **Stage 5B1** — LogPuller 异步 adb pull + envelope 富化 | `watcher/puller.py` per-device async worker（adb pull → NFS `$nfs_base_dir/jobs/{job_id}/{CATEGORY}/`）、`sha256` / `size_bytes` / `first_lines` 富化、`DeviceLogWatcher.attach_puller` + `_on_pull_done` 回调、`LogWatcherManager` 在 `nfs_base_dir` 非空时注入 puller、`test_puller` 覆盖 oversized/失败/drain 路径 | ✅ |
+| **Stage 5B2** — JobArtifact 独立端点 + Agent ArtifactUploader | Alembic `n2h3i4j5k6l7` 为 `job_artifact` 增补 `source_category` / `source_path_on_device` + `UniqueConstraint(job_id, storage_uri)`、`POST /api/v1/agent/jobs/{job_id}/artifacts` whitelist + PG `ON CONFLICT DO NOTHING` 幂等、`backend/agent/artifact_uploader.py` 进程级单例 + 队列 + daemon worker（fire-and-forget）、`DeviceLogWatcher._maybe_submit_artifact` 仅对 AEE / VENDOR_AEE 且 pull 成功时转发、`main.py` lifecycle `configure()` / `start()` / `stop()` 串入、`test_agent_api_artifacts` (7) + `test_artifact_uploader` (13) + `test_device_watcher_artifact` (7) 全部通过 | ✅ |
+| **Stage 6** — JobSession 真实闭环 E2E | `test_job_session_e2e.py` 7 cases 仅 mock `adb` 子进程与 HTTP；bugfix：`LogWatcherManager._prober_factory` 改用 lambda 兼容 `timeout_seconds` keyword-only 签名 | ✅ |
+
+**回归测试基线**：5B2 新增 20 passed + 7 skipped；watcher 整体回归 126 passed + 14 skipped，零新增 FAILED（5 个 pre-existing failure 与 watcher 无关，见"遗留失败治理"追踪项）。
+
+### 收口契约（不变量）
+
+以下 3 条契约是 Watcher 子系统的**硬边界**，后续演进必须继续遵守：
+
+1. **`log_signal` 是异常事件权威流** — Agent outbox 持久化后 `POST /api/v1/agent/log-signals` 幂等上报，`(host_id, device_serial, job_id, category, seq_no)` 单调。任何 Watcher 路径（immediate / batch / puller 回调）最终都必须通过 `SignalEmitter.emit()` 落 outbox，**不允许**因为 pull 失败、artifact 入库失败、uploader 异常而丢信号。
+2. **`JobArtifact` 是独立的异步持久化面** — 产物入库走 `POST /api/v1/agent/jobs/{job_id}/artifacts`，与 `log_signal` 在数据库层**完全解耦**：`JobArtifact.storage_uri` 幂等键是 `(job_id, storage_uri)`；相同文件重复提交命中 `ON CONFLICT DO NOTHING`，不返回 409 也不覆写旧记录。白名单（`aee_crash` / `vendor_aee_crash` / …）在端点侧校验，越界类型返回 400。
+3. **`ArtifactUploader` 是 fire-and-forget，不回压 watcher** — Agent 侧 `ArtifactUploader` 为进程级单例，内部持有有界队列 + daemon worker；`submit()` 非阻塞且吞所有异常。HTTP 失败走本地重试 + 退避；队列满丢弃时记 `submits_dropped` 计数，**不会**把压力传导回 `DeviceLogWatcher` 的 emit 主链路。
+
+### 灰度路径（`STP_WATCHER_ENABLED`）
+
+Watcher 默认**关闭**（`backend/agent/main.py:69` — `STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "false").lower() == "true"`），未显式打开时 Agent 完全回退到 ADR-0018 Phase 1-6 路径：
+
+- 关闭态：Agent 不启动 `LogWatcherManager` / `LogPuller` / `ArtifactUploader`，不订阅 inotifyd；现有 Pipeline 执行、SocketIO 日志、Step 状态上报完全不受影响。
+- 灰度策略：先在单台试点 Agent 设置 `STP_WATCHER_ENABLED=true` + `STP_WATCHER_NFS_BASE=/mnt/nfs/...`，验证 claim/complete 正常 → AEE/VENDOR_AEE signal 产生 → NFS 富化 → JobArtifact 入库 → 停机/超时/DEGRADED 路径符合预期后再扩量。
+- 回滚：置回 `false` + systemctl restart 即可，无数据库残留（`log_signal` / `job_artifact` 表独立，不污染 `job_instance` 主线）。
+
 ## 关联实现
 
 ### 当前活跃
@@ -308,6 +339,23 @@ socket.io-client@^4.7.0
 - `backend/agent/step_trace_uploader.py` — Step 状态 HTTP 批量上报
 - `frontend/src/hooks/useSocketIO.ts` — 迁移到 socket.io-client
 - `docs/grafana/stability-platform-dashboard.json` — Grafana dashboard 模板
+
+#### Watcher 子系统（2026-04-17 起）
+- `backend/agent/watcher/sources.py` — InotifydSource + ProbeResult + WatcherCapability
+- `backend/agent/watcher/batcher.py` — EventBatcher（immediate / batch 双路由）
+- `backend/agent/watcher/emitter.py` — SignalEmitter（seq_no 单调分配 + outbox 落库）
+- `backend/agent/watcher/device_watcher.py` — per-device 编排器
+- `backend/agent/watcher/manager.py` — LogWatcherManager + WatcherHandle
+- `backend/agent/watcher/puller.py` — per-device async adb pull → NFS + 富化
+- `backend/agent/watcher/policy.py` / `contracts.py` / `exceptions.py`
+- `backend/agent/job_session.py` — Job lifecycle 绑定 watcher start/stop
+- `backend/agent/artifact_uploader.py` — ArtifactUploader 进程级单例（fire-and-forget）
+- `backend/agent/registry/local_db.py` — `log_signal_outbox` / `watcher_state` 表 + drain API
+- `backend/alembic/versions/k9f0a1b2c3d4_add_watcher_lifecycle_fields.py` — watcher 生命周期字段
+- `backend/alembic/versions/m1g2h3i4j5k6_add_job_active_per_device_unique.py` — 设备 active job 部分唯一索引
+- `backend/alembic/versions/n2h3i4j5k6l7_add_job_artifact_uniq_and_source_fields.py` — JobArtifact 幂等键 + 来源字段
+- `backend/api/routes/agent_api.py` — `POST /log-signals` + `POST /jobs/{id}/artifacts` + claim PENDING→RUNNING
+- `backend/models/job.py` — `JobLogSignal` / `JobArtifact` ORM
 
 ### 已删除
 - ~~`backend/mq/consumer.py`~~ — 已删除（由 SAQ + SocketIO 替代）

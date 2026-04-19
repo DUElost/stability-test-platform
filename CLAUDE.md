@@ -6,6 +6,27 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-04-20 — ADR-0018 Watcher 子系统主线完成
+- **Stage 5A — Watcher 基础设施**：新建 `backend/agent/watcher/`（sources/batcher/emitter/manager/policy/contracts/exceptions），Alembic `k9f0a1b2c3d4`（watcher 生命周期字段）+ `m1g2h3i4j5k6`（设备 active job 部分唯一索引），`JobLogSignal` ORM + `backend/agent/job_session.py` + `POST /api/v1/agent/log-signals` + `claim` PENDING→RUNNING
+- **Stage 5B1 — LogPuller**：per-device async adb pull → NFS + sha256/size_bytes/first_lines 富化；`DeviceLogWatcher.attach_puller` + `_on_pull_done` 回调；`LogWatcherManager` 在 `nfs_base_dir` 非空时注入
+- **Stage 5B2 — JobArtifact 独立端点 + ArtifactUploader**：Alembic `n2h3i4j5k6l7` 增补 `source_category` / `source_path_on_device` + `UniqueConstraint(job_id, storage_uri)`；`POST /api/v1/agent/jobs/{job_id}/artifacts` whitelist + PG `ON CONFLICT DO NOTHING` 幂等；`backend/agent/artifact_uploader.py` 单例 fire-and-forget；`DeviceLogWatcher._maybe_submit_artifact` 仅 AEE/VENDOR_AEE 且 pull 成功时转发
+- **Stage 6 — JobSession E2E**：`test_job_session_e2e.py` 7 cases 仅 mock adb + HTTP；bugfix `LogWatcherManager._prober_factory` 改 lambda 兼容 keyword-only 签名
+- **3 个收口契约**：log_signal 是异常事件权威流 / JobArtifact 是独立异步持久化面 / ArtifactUploader 是 fire-and-forget 不回压 watcher
+- **灰度路径**：`STP_WATCHER_ENABLED` 默认 `false`（`backend/agent/main.py:69`），未开启时 Agent 完全回退 ADR-0018 Phase 1-6 路径
+- **验证**：5B2 新增 20 passed + 7 skipped；watcher 回归 126 passed + 14 skipped
+- 主线 commit：`f366b1b`，改动 37 文件 +9083/-88
+- 依赖：无新增
+
+### 2026-04-12 — 双轨合并 Wave 7+8 完成：兼容层彻底移除
+- **后端新端点**：`orchestration.py` 新增 `GET /api/v1/jobs` 分页端点（支持 `workflow_id` / `status` 筛选），`JobInstanceOut` 新增 `workflow_definition_id` 字段
+- **兼容层拆分**：`tasks.py`（787 行）拆分为 `runs.py`（报告/JIRA/步骤/产物）+ `logs.py`（运行时日志/Agent SSH 日志），然后**删除 `tasks.py`**
+- **前端全量迁移完成**：所有生产页面切换到 `api.orchestration.*` / `api.execution.*` / `api.logs.*`；`api.tasks` 命名空间整体移除
+- **类型统一**：页面全部使用 `JobInstance`/`WorkflowDefinition` 原生类型
+- **URL 简化**：产物下载 `/tasks/{id}/runs/{id}/artifacts/{id}/download` → `/runs/{id}/artifacts/{id}/download`
+- **旧框架清理**：删除 `useWebSocket.ts` + `useWebSocket.test.ts`；移除 `websocket_*` 死代码指标；清理 `WebSocketMock`
+- **文档同步**：ADR-0006/0007/0009/0018 更新；双轨合并文档标记 Wave 7+8 完成
+- 依赖：无新增
+
 ### 2026-04-09 — ADR-0018 基础设施层框架引入（Phase 1-5 完成）
 - **APScheduler 4.x**：替代遗留守护线程（recycler/cron_scheduler/session_watchdog），新建 `backend/scheduler/app_scheduler.py`
 - **SAQ 异步任务队列**：替代直接 post-completion 调用，新建 `backend/tasks/saq_tasks.py` + `backend/tasks/saq_worker.py`
@@ -162,16 +183,22 @@ wsl -u root -- bash -c "rsync -av --delete --exclude='__pycache__' --exclude='.e
 | POST | `/api/v1/hosts` | 创建主机 |
 | GET | `/api/v1/devices` | 列出所有设备 |
 | POST | `/api/v1/devices` | 创建设备 |
-| GET | `/api/v1/tasks` | 列出所有任务 |
-| POST | `/api/v1/tasks` | 创建任务（支持 `pipeline_def` 字段） |
-| POST | `/api/v1/tasks/{id}/dispatch` | 分发任务 |
+| GET | `/api/v1/jobs` | 全量 Job 分页列表（支持 workflow_id/status 筛选） |
+| GET | `/api/v1/runs/{run_id}/report` | 获取 Job 报告 |
+| GET | `/api/v1/runs/{run_id}/report/cached` | 获取缓存 Job 报告 |
+| GET | `/api/v1/runs/{run_id}/report/export` | 导出 Job 报告（markdown/json） |
+| POST | `/api/v1/runs/{run_id}/jira-draft` | 生成 JIRA 草稿 |
+| GET | `/api/v1/runs/{run_id}/jira-draft/cached` | 获取缓存 JIRA 草稿 |
 | GET | `/api/v1/runs/{run_id}/steps` | 获取 RunStep 列表 |
 | GET | `/api/v1/runs/{run_id}/steps/{step_id}` | 获取单个 RunStep |
+| GET | `/api/v1/runs/{run_id}/artifacts/{artifact_id}/download` | 下载产物文件 |
+| GET | `/api/v1/logs/query` | 查询运行时日志 |
+| POST | `/api/v1/agent/logs` | 查询 Agent SSH 日志 |
 | GET | `/api/v1/pipeline/templates` | 列出内置 Pipeline 模板 |
 | GET | `/api/v1/pipeline/templates/{name}` | 获取指定 Pipeline 模板 |
-| GET | `/api/v1/workflow-runs/{run_id}/jobs/{job_id}/report` | [STUB] 单 Job 报告（501） |
-| POST | `/api/v1/workflow-runs/{run_id}/jobs/{job_id}/jira-draft` | [STUB] Job JIRA 草稿（501） |
-| GET | `/api/v1/workflow-runs/{run_id}/summary` | [STUB] Workflow 聚合概览（501） |
+| GET | `/api/v1/workflow-runs/{run_id}/jobs/{job_id}/report` | 编排层 Job 报告 |
+| POST | `/api/v1/workflow-runs/{run_id}/jobs/{job_id}/jira-draft` | 编排层 JIRA 草稿 |
+| GET | `/api/v1/workflow-runs/{run_id}/summary` | Workflow 聚合概览 |
 
 ### Agent API 端点
 
@@ -500,7 +527,8 @@ class Tool(Base):
 - `backend/api/routes/orchestration.py` - 工作流管理（CRUD + 执行 + 报告）
 - `backend/api/routes/hosts.py` - 主机管理
 - `backend/api/routes/devices.py` - 设备管理
-- `backend/api/routes/tasks.py` - 兼容层（映射到 WorkflowDefinition/JobInstance）
+- `backend/api/routes/runs.py` - Job 报告/JIRA 草稿/步骤/产物下载
+- `backend/api/routes/logs.py` - 运行时日志查询/Agent SSH 日志
 - `backend/api/routes/tool_catalog.py` - 工具目录 API（新）
 - `backend/api/routes/heartbeat.py` - 心跳处理
 - `backend/api/routes/websocket.py` - WebSocket 端点（deprecated stubs）
@@ -519,15 +547,19 @@ class Tool(Base):
 - `backend/core/metrics.py` - Prometheus 指标定义与工具函数
 
 ### Agent 模块
-- `backend/agent/main.py` - Agent 主程序
+- `backend/agent/main.py` - Agent 主程序（含 `STP_WATCHER_ENABLED` 灰度开关 L69）
 - `backend/agent/config.py` - 集中路径配置
 - `backend/agent/heartbeat.py` - 心跳发送
 - `backend/agent/device_discovery.py` - 设备发现
 - `backend/agent/system_monitor.py` - 系统监控
 - `backend/agent/task_executor.py` - 任务执行
-- `backend/agent/pipeline_engine.py` - Pipeline 执行引擎
+- `backend/agent/pipeline_engine.py` - Pipeline 执行引擎（StepContext.job_id 透传）
 - `backend/agent/ws_client.py` - SocketIO 客户端（socketio.Client 同步版）
 - `backend/agent/step_trace_uploader.py` - Step 状态 HTTP 批量上报
+- `backend/agent/job_session.py` - Job lifecycle 绑定 Watcher start/stop
+- `backend/agent/artifact_uploader.py` - ArtifactUploader 单例（fire-and-forget）
+- `backend/agent/watcher/` - Watcher 子系统（sources/batcher/emitter/manager/policy/puller/device_watcher）
+- `backend/agent/registry/local_db.py` - Agent SQLite（含 `log_signal_outbox` / `watcher_state`）
 - `backend/agent/actions/` - 内置 Step Action 库
 
 ### 前端核心
@@ -565,4 +597,4 @@ class Tool(Base):
 
 ---
 
-*最后更新时间：2026-04-09 17:00:00*
+*最后更新时间：2026-04-20 (ADR-0018 Watcher 主线完成)*
