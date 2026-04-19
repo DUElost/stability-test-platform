@@ -36,6 +36,16 @@ class StepContext:
     # LocalDB instance for cross-run persistent state (e.g., incremental scan_aee)
     local_db: Any = None
 
+    @property
+    def job_id(self) -> int:
+        """Alias for run_id — new code should use ctx.job_id.
+
+        The underlying field remains run_id for backward compatibility with
+        existing actions / tools / tests (20+ call sites). A future governance
+        PR may rename the field once all consumers migrate.
+        """
+        return self.run_id
+
 
 @dataclass
 class StepResult:

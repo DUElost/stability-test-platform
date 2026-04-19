@@ -32,3 +32,7 @@ venv-wsl/
 /frontend/nul
 .github/prompts/
 .github/skills/
+# Codex CLI 本地状态文件（0 字节占位，无业务含义）
+.codex
+# Ansible / SSH 部署本地配置（含敏感凭据引用）
+ssh/

@@ -184,7 +184,8 @@ async def test_get_pending_jobs_success():
         assert item.host_id == seed["host_id"]
         assert item.device_id == seed["device_id"]
         assert item.device_serial == seed["device_serial"]
-        assert item.status == JobStatus.PENDING.value
+        # claim 端点原子过渡 PENDING → RUNNING（ADR-0018 锁保护机制）
+        assert item.status == JobStatus.RUNNING.value
     finally:
         _cleanup_seed(seed)
 

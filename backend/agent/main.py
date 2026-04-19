@@ -26,22 +26,28 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent import device_discovery
     from agent.adb_wrapper import AdbWrapper
+    from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs, get_run_log_dir
     from agent.heartbeat import send_heartbeat
+    from agent.job_session import JobSession, JobStartupError
     from agent.mq.producer import MQProducer
     from agent.registry.local_db import LocalDB
     from agent.registry.tool_registry import ToolRegistry
     from agent.step_trace_uploader import StepTraceUploader
+    from agent.watcher import LogWatcherManager, OutboxDrainer
     from agent.ws_client import AgentWSClient
 else:
     from . import device_discovery
     from .adb_wrapper import AdbWrapper
+    from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs, get_run_log_dir
     from .heartbeat import send_heartbeat
+    from .job_session import JobSession, JobStartupError
     from .mq.producer import MQProducer
     from .registry.local_db import LocalDB
     from .registry.tool_registry import ToolRegistry
     from .step_trace_uploader import StepTraceUploader
+    from .watcher import LogWatcherManager, OutboxDrainer
     from .ws_client import AgentWSClient
 
 logging.basicConfig(
@@ -57,11 +63,22 @@ LOCK_RENEWAL_INTERVAL = int(
 )  # 默认60秒续期一次
 _AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 
-# 全局锁续期管理
-_active_run_ids: Set[int] = set()
+# Device Log Watcher feature flag —— 默认 false，保持与治理前行为 100% 一致。
+# 置 true 时：main() 会 configure LogWatcherManager；_run_task_wrapper 用 JobSession
+# 包裹 pipeline 执行，并在 complete payload 中回传 watcher_summary。
+STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "false").lower() == "true"
+
+# 全局活跃 Job 追踪（语义上存的就是 job_instance.id）
+# 命名约定：_active_job_ids / _active_jobs_lock
+# 历史遗留：旧代码曾叫 _active_run_ids，本轮治理统一到 job_id 语义
+_active_job_ids: Set[int] = set()
 _active_device_ids: Set[int] = set()  # per-device concurrency guard
-_active_runs_lock = threading.Lock()
+_active_jobs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
+
+# 向后兼容 alias：外部模块若仍 import 旧名，保持可用；新代码不要再用
+_active_run_ids = _active_job_ids
+_active_runs_lock = _active_jobs_lock
 
 
 class LockRenewalManager:
@@ -91,25 +108,25 @@ class LockRenewalManager:
     def _renewal_loop(self) -> None:
         """续期主循环"""
         while not _lock_renewal_stop_event.is_set():
-            # 复制当前活跃任务列表避免并发修改
-            with _active_runs_lock:
-                current_runs = list(_active_run_ids)
+            # 复制当前活跃 Job 列表避免并发修改
+            with _active_jobs_lock:
+                current_jobs = list(_active_job_ids)
 
-            for run_id in current_runs:
+            for job_id in current_jobs:
                 if _lock_renewal_stop_event.is_set():
                     break
 
                 try:
-                    self._extend_lock(run_id)
+                    self._extend_lock(job_id)
                 except Exception as e:
-                    logger.warning(f"lock_renewal_failed for run {run_id}: {e}")
+                    logger.warning(f"lock_renewal_failed for job {job_id}: {e}")
 
             # 等待下一次续期周期
             _lock_renewal_stop_event.wait(LOCK_RENEWAL_INTERVAL)
 
-    def _extend_lock(self, run_id: int) -> None:
+    def _extend_lock(self, job_id: int) -> None:
         """向服务器请求延长设备锁"""
-        url = f"{self.api_url}/api/v1/agent/jobs/{run_id}/extend_lock"
+        url = f"{self.api_url}/api/v1/agent/jobs/{job_id}/extend_lock"
         headers = {"X-Agent-Secret": _AGENT_SECRET} if _AGENT_SECRET else {}
 
         for attempt in range(1, POST_RETRIES + 1):
@@ -118,24 +135,24 @@ class LockRenewalManager:
                 resp.raise_for_status()
                 result = resp.json()
                 logger.debug(
-                    f"lock_extended for run {run_id}, expires_at={result.get('expires_at')}"
+                    f"lock_extended for job {job_id}, expires_at={result.get('expires_at')}"
                 )
                 return
             except requests.HTTPError as e:
                 if e.response is not None and e.response.status_code == 409:
                     # 锁丢失，从活跃列表移除
                     logger.error(
-                        f"lock_lost for run {run_id}, removing from active runs"
+                        f"lock_lost for job {job_id}, removing from active jobs"
                     )
-                    with _active_runs_lock:
-                        _active_run_ids.discard(run_id)
-                    raise RuntimeError(f"Lock lost for run {run_id}")
+                    with _active_jobs_lock:
+                        _active_job_ids.discard(job_id)
+                    raise RuntimeError(f"Lock lost for job {job_id}")
                 logger.warning(
-                    f"lock_extension_attempt_{attempt}_failed for run {run_id}: {e}"
+                    f"lock_extension_attempt_{attempt}_failed for job {job_id}: {e}"
                 )
             except requests.RequestException as e:
                 logger.warning(
-                    f"lock_extension_attempt_{attempt}_failed for run {run_id}: {e}"
+                    f"lock_extension_attempt_{attempt}_failed for job {job_id}: {e}"
                 )
 
             if attempt < POST_RETRIES:
@@ -143,7 +160,7 @@ class LockRenewalManager:
                 time.sleep(delay)
 
         raise RuntimeError(
-            f"Failed to extend lock for run {run_id} after {POST_RETRIES} attempts"
+            f"Failed to extend lock for job {job_id} after {POST_RETRIES} attempts"
         )
 
 
@@ -398,10 +415,15 @@ class HeartbeatThread:
 
 
 def fetch_pending_runs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
+    """Claim pending jobs via POST /agent/jobs/claim (D1: 统一 claim 路径).
+
+    Backend 在 claim 响应中注入 device_serial + watcher_policy，供 JobSession 启动使用。
+    函数名保留为 fetch_pending_runs 以免破坏 test_main.py（下次治理 PR 再改）。
+    """
     headers = {"X-Agent-Secret": _AGENT_SECRET} if _AGENT_SECRET else {}
-    resp = requests.get(
-        f"{api_url}/api/v1/agent/jobs/pending",
-        params={"host_id": host_id, "limit": 10},
+    resp = requests.post(
+        f"{api_url}/api/v1/agent/jobs/claim",
+        json={"host_id": host_id, "capacity": 10},
         headers=headers,
         timeout=10,
     )
@@ -471,6 +493,10 @@ def _build_complete_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     artifact = payload.get("artifact")
     if isinstance(artifact, dict):
         complete_payload["artifact"] = artifact
+    # watcher_summary —— JobSession 产出的 watcher 生命周期/统计元数据
+    watcher_summary = payload.get("watcher_summary")
+    if isinstance(watcher_summary, dict):
+        complete_payload["watcher_summary"] = watcher_summary
     return complete_payload
 
 
@@ -643,10 +669,10 @@ def _execute_pipeline_run(
         except Exception as e:
             logger.warning(f"HTTP step status fallback failed: {e}")
 
-    # Abort callback: checks if LockRenewalManager removed this run (409 received)
+    # Abort callback: checks if LockRenewalManager removed this job (409 received)
     def _check_aborted():
-        with _active_runs_lock:
-            return run_id not in _active_run_ids
+        with _active_jobs_lock:
+            return run_id not in _active_job_ids
 
     engine = PipelineEngine(
         adb=adb,
@@ -686,19 +712,45 @@ def _execute_pipeline_run(
     }
 
 
+# 全局活跃 Job 追踪辅助函数（JobSession 回调与现有主循环共用）
+def _register_active_job(jid: int) -> None:
+    with _active_jobs_lock:
+        _active_job_ids.add(jid)
+
+
+def _deregister_active_job(jid: int) -> None:
+    with _active_jobs_lock:
+        _active_job_ids.discard(jid)
+
+
+def _register_active_device(did: int) -> None:
+    with _active_jobs_lock:
+        _active_device_ids.add(did)
+
+
+def _deregister_active_device(did: int) -> None:
+    with _active_jobs_lock:
+        _active_device_ids.discard(did)
+
+
 def _run_task_wrapper(
     run, adb, api_url, host_id, ws_client, mq_producer=None, tool_registry=None, local_db=None
 ):
-    """Wrapper to run a single task in a thread and report completion."""
-    run_id = run["id"]
+    """Wrapper to run a single task in a thread and report completion.
+
+    Flag STP_WATCHER_ENABLED=true 时用 JobSession 包裹 pipeline 执行，
+    在 complete payload 中回传 watcher_summary（watcher 生命周期 + 统计）。
+    默认 false 时与历史行为 100% 一致。
+    """
+    job_id = run["id"]
     task_id = run.get("task_id")
     device_id = run.get("device_id")
     device_serial = run.get("device_serial", "")
     pipeline_def = run.get("pipeline_def")
 
     logger.info(
-        "run_start run_id=%d task_id=%s device_id=%s device_serial=%s",
-        run_id, task_id, device_id, device_serial,
+        "run_start job_id=%d task_id=%s device_id=%s device_serial=%s",
+        job_id, task_id, device_id, device_serial,
     )
 
     # Server already transitioned job to RUNNING during claim (get_pending_jobs).
@@ -706,55 +758,92 @@ def _run_task_wrapper(
     try:
         update_run(
             api_url,
-            run_id,
+            job_id,
             {"status": "RUNNING", "started_at": datetime.utcnow().isoformat()},
         )
     except Exception as e:
-        logger.warning(f"Heartbeat confirmation for run {run_id} failed (non-fatal): {e}")
+        logger.warning(f"Heartbeat confirmation for job {job_id} failed (non-fatal): {e}")
 
-    # run_id and device_id are already registered in _active_run_ids / _active_device_ids
+    # job_id and device_id are already registered in _active_job_ids / _active_device_ids
     # by the main loop before submitting to the thread pool. The finally block below
     # MUST execute on every exit path to release the slot.
-    try:
-        # Validate pipeline_def: must be a dict with either 'stages' or 'lifecycle' key
-        if not (pipeline_def and isinstance(pipeline_def, dict)):
-            complete_run(
-                api_url, run_id,
-                {"status": "FAILED", "exit_code": 1,
-                 "error_code": "PIPELINE_REQUIRED",
-                 "error_message": "pipeline_def is required"},
-                local_db=local_db,
-            )
-            return
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Pipeline 形态校验 —— 必须在 JobSession.__enter__ 之前执行
+    # 理由：校验失败即快速 FAILED + return，绝不进入 watcher 生命周期。
+    #       防止早退路径绕过 JobSession.__exit__ 造成 watcher 泄漏。
+    # ─────────────────────────────────────────────────────────────────────
+    pipeline_error: Optional[str] = None
+    if not (pipeline_def and isinstance(pipeline_def, dict)):
+        pipeline_error = "pipeline_def is required"
+    else:
         is_lifecycle = isinstance(pipeline_def.get("lifecycle"), dict)
         is_stages = isinstance(pipeline_def.get("stages"), dict)
-
         if not is_lifecycle and not is_stages:
+            pipeline_error = "pipeline_def must contain 'stages' or 'lifecycle'"
+        elif is_stages and not is_lifecycle:
+            stages = pipeline_def.get("stages", {})
+            if not any(
+                isinstance(stages.get(k), list) and len(stages.get(k) or []) > 0
+                for k in ("prepare", "execute", "post_process")
+            ):
+                pipeline_error = "pipeline_def.stages must contain at least one step"
+
+    if pipeline_error is not None:
+        complete_run(
+            api_url, job_id,
+            {"status": "FAILED", "exit_code": 1,
+             "error_code": "PIPELINE_REQUIRED",
+             "error_message": pipeline_error},
+            local_db=local_db,
+        )
+        with _active_jobs_lock:
+            _active_job_ids.discard(job_id)
+            if device_id:
+                _active_device_ids.discard(device_id)
+        return
+
+    # Feature flag: JobSession 接入 —— 失败即快速 complete FAILED 并返回
+    session: Optional[JobSession] = None
+    if STP_WATCHER_ENABLED:
+        try:
+            session = JobSession(
+                job_payload=run,
+                host_id=host_id,
+                log_dir=str(get_run_log_dir(job_id)),
+                lock_register=_register_active_job,
+                lock_deregister=_deregister_active_job,
+                device_id_register=_register_active_device,
+                device_id_deregister=_deregister_active_device,
+            )
+            session.__enter__()
+        except JobStartupError as exc:
+            logger.error(
+                "job_session_start_failed job_id=%d reason=%s: %s",
+                job_id, exc.reason_code, exc,
+            )
             complete_run(
-                api_url, run_id,
+                api_url, job_id,
                 {"status": "FAILED", "exit_code": 1,
-                 "error_code": "PIPELINE_REQUIRED",
-                 "error_message": "pipeline_def must contain 'stages' or 'lifecycle'"},
+                 "error_code": "WATCHER_START_FAIL",
+                 "error_message": str(exc)},
                 local_db=local_db,
             )
+            # JobSession 在 FAIL 策略下已自行释放锁；保底让 finally 再次 discard（幂等）
+            session = None
+            # 仍走 finally 兜底释放主循环预注册的 job/device 条目
+            with _active_jobs_lock:
+                _active_job_ids.discard(job_id)
+                if device_id:
+                    _active_device_ids.discard(device_id)
             return
 
-        if is_stages and not is_lifecycle:
-            stages = pipeline_def.get("stages", {})
-            if not any(isinstance(stages.get(k), list) and len(stages.get(k) or []) > 0 for k in ("prepare", "execute", "post_process")):
-                complete_run(
-                    api_url, run_id,
-                    {"status": "FAILED", "exit_code": 1,
-                     "error_code": "PIPELINE_REQUIRED",
-                     "error_message": "pipeline_def.stages must contain at least one step"},
-                    local_db=local_db,
-                )
-                return
-
+    try:
+        # Pipeline 校验已在 JobSession 进入前完成，此处直接执行
+        # _execute_pipeline_run signature keeps run_id= kwarg for test stability (see plan K2).
         result = _execute_pipeline_run(
             pipeline_def,
-            run_id,
+            job_id,
             device_serial,
             adb,
             api_url,
@@ -765,30 +854,65 @@ def _run_task_wrapper(
             local_db=local_db,
         )
 
+        # 合入 watcher_summary（若 JobSession 启用）—— 必须在 JobSession.exit 之前抓取
+        watcher_summary = None
+        if session is not None:
+            try:
+                # Phase 1: watcher 收尾 + 生成最终 summary；exit 也负责 Phase 2 释放锁
+                session.__exit__(None, None, None)
+                watcher_summary = session.summary.to_complete_payload()
+            except Exception:
+                logger.exception("job_session_exit_failed job_id=%d", job_id)
+            finally:
+                session = None
+
+        complete_payload = {
+            "status": result["status"],
+            "exit_code": result["exit_code"],
+            "error_code": result.get("error_code"),
+            "error_message": result.get("error_message"),
+            "log_summary": result.get("log_summary"),
+            "artifact": result.get("artifact"),
+        }
+        if watcher_summary is not None:
+            complete_payload["watcher_summary"] = watcher_summary
+
         complete_run(
-            api_url, run_id,
-            {"status": result["status"], "exit_code": result["exit_code"],
-             "error_code": result.get("error_code"),
-             "error_message": result.get("error_message"),
-             "log_summary": result.get("log_summary"),
-             "artifact": result.get("artifact")},
+            api_url, job_id,
+            complete_payload,
             local_db=local_db,
         )
         logger.info(
-            "run_complete", extra={"run_id": run_id, "status": result["status"]}
+            "run_complete", extra={"job_id": job_id, "status": result["status"]}
         )
     except Exception as e:
-        logger.exception("run_failed job=%d: %s", run_id, e)
+        logger.exception("run_failed job=%d: %s", job_id, e)
+        # JobSession 异常退出路径：exc 信息不吞
+        watcher_summary = None
+        if session is not None:
+            try:
+                session.__exit__(type(e), e, e.__traceback__)
+                watcher_summary = session.summary.to_complete_payload()
+            except Exception:
+                logger.exception("job_session_exit_failed_on_error job_id=%d", job_id)
+            finally:
+                session = None
+        failure_payload = {
+            "status": "FAILED", "exit_code": 1,
+            "error_code": "AGENT_ERROR", "error_message": str(e),
+        }
+        if watcher_summary is not None:
+            failure_payload["watcher_summary"] = watcher_summary
         # Outbox guarantees delivery even if this call fails
         complete_run(
-            api_url, run_id,
-            {"status": "FAILED", "exit_code": 1,
-             "error_code": "AGENT_ERROR", "error_message": str(e)},
+            api_url, job_id,
+            failure_payload,
             local_db=local_db,
         )
     finally:
-        with _active_runs_lock:
-            _active_run_ids.discard(run_id)
+        # 保底：即使 JobSession 未启用或 exit 抛异常，主循环预注册条目仍需释放
+        with _active_jobs_lock:
+            _active_job_ids.discard(job_id)
             if device_id:
                 _active_device_ids.discard(device_id)
 
@@ -868,6 +992,39 @@ def main() -> None:
     tool_registry = ToolRegistry(local_db, api_url, agent_secret)
     tool_registry.initialize()
 
+    # Device Log Watcher 子系统（feature flag 控制，默认关闭）
+    log_signal_drainer: Optional[OutboxDrainer] = None
+    if STP_WATCHER_ENABLED:
+        # 5B1：LogPuller NFS 根目录（空串 = 禁用 puller，仅记元数据）
+        nfs_base_dir = os.getenv("STP_WATCHER_NFS_BASE_DIR", "")
+        LogWatcherManager.instance().configure(
+            adb=adb,
+            adb_path=adb_path,          # InotifydSource.Popen 需要 adb 二进制路径
+            local_db=local_db,
+            ws_client=ws_client,
+            api_url=api_url,
+            agent_secret=agent_secret,
+            nfs_base_dir=nfs_base_dir,
+        )
+        # log_signal_outbox 后台批量上送线程（watcher 写入 → drainer 推送到后端）
+        log_signal_drainer = OutboxDrainer.instance().configure(
+            local_db=local_db,
+            api_url=api_url,
+            agent_secret=agent_secret,
+            interval_seconds=5.0,
+            batch_size=50,
+        )
+        log_signal_drainer.start()
+        # 5B2：artifact 上传单例（fire-and-forget；失败不影响 log_signal 主链路）
+        ArtifactUploader.instance().configure(
+            api_url=api_url,
+            agent_secret=agent_secret,
+        )
+        ArtifactUploader.instance().start()
+        logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
+    else:
+        logger.info("watcher_subsystem_disabled (STP_WATCHER_ENABLED=false)")
+
     # Step trace local writer (Redis XADD removed in Phase 4; HTTP upload via StepTraceUploader)
     mq_producer = MQProducer("", host_id, local_db=local_db)
 
@@ -900,8 +1057,8 @@ def main() -> None:
         elif command == "abort":
             job_id = payload.get("job_id")
             if job_id:
-                with _active_runs_lock:
-                    _active_run_ids.discard(int(job_id))
+                with _active_jobs_lock:
+                    _active_job_ids.discard(int(job_id))
                 logger.info("control_abort job_id=%s", job_id)
         else:
             logger.warning("unknown_control_command: %s", command)
@@ -953,8 +1110,8 @@ def main() -> None:
     try:
         while not _shutdown_event.is_set():
             try:
-                with _active_runs_lock:
-                    active_count = len(_active_run_ids)
+                with _active_jobs_lock:
+                    active_count = len(_active_job_ids)
 
                 available_slots = max(0, max_concurrent_tasks - active_count)
 
@@ -964,27 +1121,27 @@ def main() -> None:
 
                     if runs:
                         logger.info(
-                            "pending_runs_fetched host_id=%s count=%d slots=%d run_ids=%s",
+                            "pending_jobs_fetched host_id=%s count=%d slots=%d job_ids=%s",
                             host_id, len(runs), available_slots,
                             [r.get("id") for r in runs],
                         )
                     else:
                         logger.debug(
-                            "no_pending_runs host_id=%s active=%d slots=%d",
+                            "no_pending_jobs host_id=%s active=%d slots=%d",
                             host_id, active_count, available_slots,
                         )
 
                     for run in runs:
                         device_id = run.get("device_id")
 
-                        with _active_runs_lock:
+                        with _active_jobs_lock:
                             if device_id and device_id in _active_device_ids:
                                 logger.debug(
-                                    "skip_device_busy run=%d device=%d",
+                                    "skip_device_busy job=%d device=%d",
                                     run["id"], device_id,
                                 )
                                 continue
-                            _active_run_ids.add(run["id"])
+                            _active_job_ids.add(run["id"])
                             if device_id:
                                 _active_device_ids.add(device_id)
 
@@ -1001,9 +1158,9 @@ def main() -> None:
                                 local_db,
                             )
                         except Exception:
-                            logger.exception("submit_failed run=%d device=%s", run["id"], device_id)
-                            with _active_runs_lock:
-                                _active_run_ids.discard(run["id"])
+                            logger.exception("submit_failed job=%d device=%s", run["id"], device_id)
+                            with _active_jobs_lock:
+                                _active_job_ids.discard(run["id"])
                                 if device_id:
                                     _active_device_ids.discard(device_id)
             except Exception:
@@ -1029,6 +1186,20 @@ def main() -> None:
         except Exception:
             logger.exception("shutdown_outbox_flush_failed")
         outbox_drain.stop()
+        # log_signal_outbox drainer（watcher 子系统启用时）
+        if log_signal_drainer is not None:
+            try:
+                flushed = log_signal_drainer.tick_once()
+                if flushed:
+                    logger.info("shutdown_log_signal_flushed count=%d", flushed)
+            except Exception:
+                logger.exception("shutdown_log_signal_flush_failed")
+            log_signal_drainer.stop(timeout=5.0)
+            # 5B2：artifact uploader 收尾
+            try:
+                ArtifactUploader.instance().stop(drain=True, timeout=5.0)
+            except Exception:
+                logger.exception("shutdown_artifact_uploader_stop_failed")
         heartbeat_thread.stop()
         lock_manager.stop()
         mq_producer.close()

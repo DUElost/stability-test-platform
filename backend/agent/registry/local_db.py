@@ -5,6 +5,8 @@ Tables:
   tool_cache            — local copy of the server-side tool catalog
   agent_state           — key/value store for last_ack_id and other scalars
   job_terminal_outbox   — terminal-state payloads; retried until server ACKs
+  log_signal_outbox     — per-job log_signal envelopes; (job_id, seq_no) idempotent key
+  watcher_state         — per-watcher lifecycle state; supports cross-restart recovery
 
 All writes are wrapped in transactions and protected by a threading lock.
 WAL mode + FULL synchronous ensures durability without blocking readers.
@@ -70,6 +72,34 @@ class LocalDB:
                 last_error  TEXT,
                 acked       INTEGER NOT NULL DEFAULT 0
             );
+            CREATE TABLE IF NOT EXISTS log_signal_outbox (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id      INTEGER NOT NULL,
+                seq_no      INTEGER NOT NULL,
+                envelope    TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL,
+                attempts    INTEGER NOT NULL DEFAULT 0,
+                last_error  TEXT,
+                acked       INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(job_id, seq_no)
+            );
+            CREATE INDEX IF NOT EXISTS idx_log_signal_outbox_pending
+                ON log_signal_outbox(acked, id);
+            CREATE TABLE IF NOT EXISTS watcher_state (
+                watcher_id    TEXT    PRIMARY KEY,
+                job_id        INTEGER NOT NULL,
+                serial        TEXT    NOT NULL,
+                host_id       TEXT    NOT NULL,
+                state         TEXT    NOT NULL,
+                capability    TEXT,
+                started_at    TEXT    NOT NULL,
+                stopped_at    TEXT,
+                last_error    TEXT,
+                last_seq_no   INTEGER NOT NULL DEFAULT 0,
+                updated_at    TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_watcher_state_active
+                ON watcher_state(state);
         """)
         self._conn.commit()
         logger.info(f"LocalDB initialized: {db_path}")
@@ -265,3 +295,196 @@ class LocalDB:
                     (keep_recent,),
                 )
                 return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # log_signal_outbox — Watcher 采集的异常信号，批量推送到后端
+    # 幂等键: (job_id, seq_no)，与后端 job_log_signal 表约束一致
+    # ------------------------------------------------------------------
+
+    def next_log_signal_seq_no(self, job_id: int) -> int:
+        """返回该 job 下一个可用 seq_no（即 MAX(seq_no)+1；空则返回 1）。
+
+        Agent 崩溃/重启后，SignalEmitter 用此方法恢复单调 seq_no，避免冲突。
+        """
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(MAX(seq_no), 0) AS m FROM log_signal_outbox WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return int(row["m"]) + 1 if row else 1
+
+    def enqueue_log_signal(
+        self,
+        job_id: int,
+        seq_no: int,
+        envelope: Dict[str, Any],
+    ) -> Optional[int]:
+        """持久化一条 log_signal envelope。
+
+        幂等：INSERT OR IGNORE，重复的 (job_id, seq_no) 返回 None。
+        envelope 以 JSON 文本存储，取出后反序列化。
+        """
+        now = datetime.utcnow().isoformat()
+        raw = json.dumps(envelope, ensure_ascii=False)
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    """
+                    INSERT OR IGNORE INTO log_signal_outbox
+                    (job_id, seq_no, envelope, created_at, attempts, last_error, acked)
+                    VALUES (?, ?, ?, ?, 0, NULL, 0)
+                    """,
+                    (job_id, seq_no, raw, now),
+                )
+                # rowcount=0 表示 (job_id, seq_no) 冲突（已存在）
+                return cur.lastrowid if cur.rowcount > 0 else None
+
+    def get_pending_log_signals(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """取未 ack 的 log_signal；按 id 升序（≈ 入队时间）。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, job_id, seq_no, envelope, attempts "
+                "FROM log_signal_outbox WHERE acked = 0 ORDER BY id ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            result.append({
+                "id":       row["id"],
+                "job_id":   row["job_id"],
+                "seq_no":   row["seq_no"],
+                "envelope": json.loads(row["envelope"]),
+                "attempts": row["attempts"],
+            })
+        return result
+
+    def ack_log_signal(self, row_id: int) -> None:
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE log_signal_outbox SET acked = 1 WHERE id = ?",
+                    (row_id,),
+                )
+
+    def bump_log_signal_attempt(self, row_id: int, error: str) -> None:
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE log_signal_outbox SET attempts = attempts + 1, "
+                    "last_error = ? WHERE id = ?",
+                    (error[:500] if error else None, row_id),
+                )
+
+    def prune_acked_log_signals(self, keep_recent: int = 1000) -> int:
+        """删除旧的 acked=1 条目，保留最近 keep_recent 条。"""
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM log_signal_outbox WHERE acked = 1 "
+                    "AND id NOT IN (SELECT id FROM log_signal_outbox "
+                    "WHERE acked = 1 ORDER BY id DESC LIMIT ?)",
+                    (keep_recent,),
+                )
+                return cur.rowcount
+
+    # ------------------------------------------------------------------
+    # watcher_state — per-watcher 生命周期状态
+    # 支持 Agent 重启后重建 (本轮仅建表 + 基础 CRUD，reconcile 留到阶段 5)
+    # ------------------------------------------------------------------
+
+    def upsert_watcher_state(
+        self,
+        *,
+        watcher_id: str,
+        job_id: int,
+        serial: str,
+        host_id: str,
+        state: str,                          # active | stopping | stopped | failed
+        capability: Optional[str] = None,
+        started_at: Optional[datetime] = None,
+        stopped_at: Optional[datetime] = None,
+        last_error: Optional[str] = None,
+    ) -> None:
+        """插入或全量覆写一条 watcher_state。首次启动时调用。"""
+        now = datetime.utcnow().isoformat()
+        started = (started_at or datetime.utcnow()).isoformat()
+        stopped = stopped_at.isoformat() if stopped_at else None
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO watcher_state
+                    (watcher_id, job_id, serial, host_id, state, capability,
+                     started_at, stopped_at, last_error, last_seq_no, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    ON CONFLICT(watcher_id) DO UPDATE SET
+                        job_id=excluded.job_id,
+                        serial=excluded.serial,
+                        host_id=excluded.host_id,
+                        state=excluded.state,
+                        capability=excluded.capability,
+                        started_at=excluded.started_at,
+                        stopped_at=excluded.stopped_at,
+                        last_error=excluded.last_error,
+                        updated_at=excluded.updated_at
+                    """,
+                    (watcher_id, job_id, serial, host_id, state, capability,
+                     started, stopped, last_error, now),
+                )
+
+    def update_watcher_state(
+        self,
+        watcher_id: str,
+        *,
+        state: Optional[str] = None,
+        capability: Optional[str] = None,
+        stopped_at: Optional[datetime] = None,
+        last_error: Optional[str] = None,
+    ) -> None:
+        """增量更新非空字段。未指定字段保持不变。"""
+        fields: List[str] = []
+        values: List[Any] = []
+        if state is not None:
+            fields.append("state = ?"); values.append(state)
+        if capability is not None:
+            fields.append("capability = ?"); values.append(capability)
+        if stopped_at is not None:
+            fields.append("stopped_at = ?"); values.append(stopped_at.isoformat())
+        if last_error is not None:
+            fields.append("last_error = ?"); values.append(last_error[:500])
+        if not fields:
+            return
+        fields.append("updated_at = ?"); values.append(datetime.utcnow().isoformat())
+        values.append(watcher_id)
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    f"UPDATE watcher_state SET {', '.join(fields)} WHERE watcher_id = ?",
+                    tuple(values),
+                )
+
+    def bump_watcher_last_seq(self, watcher_id: str, seq_no: int) -> None:
+        """单调递增 last_seq_no（仅当 seq_no 更大才更新）。"""
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE watcher_state SET last_seq_no = ?, updated_at = ? "
+                    "WHERE watcher_id = ? AND last_seq_no < ?",
+                    (seq_no, datetime.utcnow().isoformat(), watcher_id, seq_no),
+                )
+
+    def get_watcher_state(self, watcher_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM watcher_state WHERE watcher_id = ?",
+                (watcher_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_active_watcher_states(self) -> List[Dict[str, Any]]:
+        """返回 state='active' 的所有 watcher_state，用于 Agent 重启后 reconcile。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM watcher_state WHERE state = 'active' ORDER BY started_at ASC"
+            ).fetchall()
+        return [dict(row) for row in rows]
