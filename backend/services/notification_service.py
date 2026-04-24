@@ -15,6 +15,7 @@ from email.mime.text import MIMEText
 from typing import Any, Dict, Optional
 
 import requests
+from sqlalchemy.orm import joinedload
 
 from backend.core.database import SessionLocal
 from backend.models.notification import AlertRule, EventType, NotificationChannel
@@ -161,10 +162,10 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
     Safe to call from any thread.
     """
     try:
-        db = SessionLocal()
-        try:
+        with SessionLocal() as db:
             rules = (
                 db.query(AlertRule)
+                .options(joinedload(AlertRule.channel))
                 .filter(AlertRule.event_type == event_type, AlertRule.enabled.is_(True))
                 .all()
             )
@@ -173,6 +174,7 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
                 return
 
             message = _format_message(event_type, context)
+            pending_dispatches = []
 
             for rule in rules:
                 if not _matches_filters(rule.filters or {}, context):
@@ -182,27 +184,43 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
                 if not channel or not channel.enabled:
                     continue
 
-                try:
-                    send_to_channel(channel, message)
-                    logger.info(
-                        "notification_sent",
-                        extra={
-                            "rule_id": rule.id,
-                            "channel_id": channel.id,
-                            "event_type": event_type,
-                        },
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "notification_send_failed",
-                        extra={
-                            "rule_id": rule.id,
-                            "channel_id": channel.id,
-                            "error": str(exc),
-                        },
-                    )
-        finally:
-            db.close()
+                # 先把发送所需字段复制出来，再释放数据库连接。
+                pending_dispatches.append(
+                    {
+                        "rule_id": rule.id,
+                        "channel_id": channel.id,
+                        "channel_type": channel.type,
+                        "channel_config": dict(channel.config or {}),
+                    }
+                )
+
+        for dispatch in pending_dispatches:
+            channel = NotificationChannel(
+                id=dispatch["channel_id"],
+                type=dispatch["channel_type"],
+                config=dispatch["channel_config"],
+                enabled=True,
+            )
+
+            try:
+                send_to_channel(channel, message)
+                logger.info(
+                    "notification_sent",
+                    extra={
+                        "rule_id": dispatch["rule_id"],
+                        "channel_id": dispatch["channel_id"],
+                        "event_type": event_type,
+                    },
+                )
+            except Exception as exc:
+                logger.warning(
+                    "notification_send_failed",
+                    extra={
+                        "rule_id": dispatch["rule_id"],
+                        "channel_id": dispatch["channel_id"],
+                        "error": str(exc),
+                    },
+                )
     except Exception:
         logger.exception("dispatch_notification_failed", extra={"event_type": event_type})
 
