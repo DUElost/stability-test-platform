@@ -59,6 +59,52 @@ class TestHeartbeat:
         # Should find and use existing host
         assert data["host_id"] == sample_host.id
 
+    def test_heartbeat_auto_register_sentinel_creates_distinct_hosts_per_ip(self, client):
+        """Test host_id=0 auto-register does not collapse multiple hosts into one row"""
+        first = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": 0,
+                "status": "ONLINE",
+                "host": {"ip": "198.18.0.1"},
+            },
+        )
+        second = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": 0,
+                "status": "ONLINE",
+                "host": {"ip": "172.21.10.36"},
+            },
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+
+        first_host_id = first.json()["host_id"]
+        second_host_id = second.json()["host_id"]
+
+        assert first_host_id != "0"
+        assert second_host_id != "0"
+        assert first_host_id != second_host_id
+
+    def test_heartbeat_updates_existing_host_ip_from_payload(self, client, sample_host, db_session):
+        """Test heartbeat refreshes displayed host IP when agent reports a new address"""
+        response = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": sample_host.id,
+                "status": "ONLINE",
+                "host": {"ip": "172.21.10.36"},
+            },
+        )
+
+        assert response.status_code == 200
+
+        db_session.refresh(sample_host)
+        assert sample_host.ip == "172.21.10.36"
+        assert sample_host.ip_address == "172.21.10.36"
+
     def test_heartbeat_with_devices(self, client, sample_host):
         """Test heartbeat with device information"""
         response = client.post(
