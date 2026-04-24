@@ -47,8 +47,8 @@ class TestAgentMain(unittest.TestCase):
 class TestHeartbeatThread(unittest.TestCase):
     """Test that HeartbeatThread continues sending heartbeats during long-running tasks."""
 
-    @patch("backend.agent.main.send_heartbeat")
-    @patch("backend.agent.main.device_discovery")
+    @patch("backend.agent.heartbeat_thread.send_heartbeat")
+    @patch("backend.agent.heartbeat_thread.device_discovery")
     def test_heartbeat_continues_during_long_task(self, mock_discovery, mock_send_hb):
         """Verify heartbeat fires multiple times while a simulated task blocks the main thread."""
         # Mock device discovery to return empty list quickly
@@ -100,8 +100,8 @@ class TestHeartbeatThread(unittest.TestCase):
                 f"Average heartbeat gap {avg_gap:.2f}s too large (expected ~{poll_interval}s)",
             )
 
-    @patch("backend.agent.main.send_heartbeat")
-    @patch("backend.agent.main.device_discovery")
+    @patch("backend.agent.heartbeat_thread.send_heartbeat")
+    @patch("backend.agent.heartbeat_thread.device_discovery")
     def test_heartbeat_ws_fallback_to_http(self, mock_discovery, mock_send_hb):
         """When WS client is disconnected, heartbeat falls back to HTTP."""
         mock_discovery.discover_devices.return_value = []
@@ -129,8 +129,8 @@ class TestHeartbeatThread(unittest.TestCase):
         # WS send_heartbeat should NOT have been called
         mock_ws.send_heartbeat.assert_not_called()
 
-    @patch("backend.agent.main.send_heartbeat")
-    @patch("backend.agent.main.device_discovery")
+    @patch("backend.agent.heartbeat_thread.send_heartbeat")
+    @patch("backend.agent.heartbeat_thread.device_discovery")
     def test_heartbeat_stop_terminates_thread(self, mock_discovery, mock_send_hb):
         """HeartbeatThread.stop() should terminate the thread promptly."""
         mock_discovery.discover_devices.return_value = []

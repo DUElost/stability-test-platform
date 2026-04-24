@@ -129,7 +129,7 @@ class TestOutbox409Semantics:
                 },
             })
             with patch(
-                "backend.agent.main.requests.post",
+                "backend.agent.outbox_drainer.requests.post",
                 side_effect=_raise_http_error(fake_resp),
             ):
                 sent = drain._drain_once()
@@ -157,7 +157,7 @@ class TestOutbox409Semantics:
                 },
             })
             with patch(
-                "backend.agent.main.requests.post",
+                "backend.agent.outbox_drainer.requests.post",
                 side_effect=_raise_http_error(fake_resp),
             ):
                 sent = drain._drain_once()
@@ -194,7 +194,7 @@ class TestSigtermGracefulShutdown:
 
             drain = OutboxDrainThread("http://fake:8000", local_db, interval=999)
 
-            with patch("backend.agent.main.requests.post", return_value=success_resp):
+            with patch("backend.agent.outbox_drainer.requests.post", return_value=success_resp):
                 flushed = drain.drain_sync()
 
             assert flushed == 2, "drain_sync should flush all pending entries"

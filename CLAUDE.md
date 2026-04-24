@@ -27,33 +27,6 @@
 - **文档同步**：ADR-0006/0007/0009/0018 更新；双轨合并文档标记 Wave 7+8 完成
 - 依赖：无新增
 
-### 2026-04-09 — ADR-0018 基础设施层框架引入（Phase 1-5 完成）
-- **APScheduler 4.x**：替代遗留守护线程（recycler/cron_scheduler/session_watchdog），新建 `backend/scheduler/app_scheduler.py`
-- **SAQ 异步任务队列**：替代直接 post-completion 调用，新建 `backend/tasks/saq_tasks.py` + `backend/tasks/saq_worker.py`
-- **python-socketio**：替代自研 ConnectionManager，新建 `backend/realtime/socketio_server.py`（/agent + /dashboard namespaces）
-- **Agent SocketIO 客户端**：`ws_client.py` 重写为 `socketio.Client` 同步版
-- **前端 SocketIO**：新建 `useSocketIO.ts` hook，6 个消费组件全部迁移
-- **Step 状态上报**：新建 `backend/agent/step_trace_uploader.py`（HTTP 批量上报）
-- **Redis 简化**：仅保留 SAQ broker，Redis Streams 全面清除
-- **可观测性**：新增框架级 Prometheus 指标（saq_tasks/socketio_connections/apscheduler_job_runs 等）
-- **Grafana Dashboard**：新建 `docs/grafana/stability-platform-dashboard.json`
-- 依赖：新增 `apscheduler`, `saq`, `python-socketio`, `socket.io-client`
-
-### 2026-02-23
-- Pipeline Editor：新增 `PipelineEditor.tsx` 可视化编辑器（Phase/Step CRUD、拖拽排序、Action 选择器、JSON 预览）
-- Pipeline Templates API：新增 `GET /api/v1/pipeline/templates` 端点服务内置模板
-- CreateTask 集成：Pipeline 编辑器作为第 3 步嵌入任务创建流程
-- 前端类型更新：`Task` 接口和 `api.tasks.create` 新增 `pipeline_def` 字段
-- Log Fold Groups：Agent 发出 OSC 633 折叠标记，前端渲染为样式化区域分隔符
-- Agent `.env.example`：新增 WebSocket 配置变量（WS_URL, AGENT_SECRET, WS_RECONNECT_MAX_DELAY 等）
-- 依赖：新增 `@dnd-kit/core`, `@dnd-kit/sortable`, `@dnd-kit/utilities`
-
-### 2026-01-22
-- 设备监控：新增 `network_latency` 指标（ping 8.8.8.8 / 223.5.5.5）
-- 后端：`device_discovery.py` 实现备用 DNS 逻辑
-- 后端：`heartbeat.py` 持久化 `network_latency`，移除 WiFi 字段
-- 前端：`DeviceCard.tsx` 使用 `ConnectivityBadge` 替代 WiFi dBm 显示
-
 ---
 
 ## 模块职责
@@ -597,4 +570,4 @@ class Tool(Base):
 
 ---
 
-*最后更新时间：2026-04-20 (ADR-0018 Watcher 主线完成)*
+*最后更新时间：2026-04-24 (P0/P1 项目结构治理完成)*

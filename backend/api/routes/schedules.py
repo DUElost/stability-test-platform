@@ -308,4 +308,8 @@ def run_schedule_now(
         workflow_run_id = _dispatch_workflow_sync(sched.workflow_definition_id, device_ids)
     except DispatchError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"message": "工作流已触发", "workflow_run_id": workflow_run_id}
+    return {
+        "message": "工作流已触发",
+        "workflow_run_id": workflow_run_id,
+        "task_id": None,
+    }
