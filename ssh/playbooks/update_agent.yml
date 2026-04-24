@@ -1,0 +1,122 @@
+- name: Update linux agent host code
+  hosts: linux_hosts
+  gather_facts: false
+
+  tasks:
+    - name: Ensure remote temp directory exists
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_remote_tmp_dir }}"
+        state: directory
+        owner: "{{ agent_user }}"
+        group: "{{ agent_group }}"
+        mode: "0755"
+
+    - name: Check install directory exists before update
+      become: true
+      ansible.builtin.stat:
+        path: "{{ agent_install_dir }}"
+      register: agent_install_dir_stat
+
+    - name: Fail when target host is not installed
+      ansible.builtin.assert:
+        that:
+          - agent_install_dir_stat.stat.exists
+        fail_msg: "Agent is not installed on {{ inventory_hostname }}. Run install_agent.yml first."
+
+    - name: Check environment file exists before update
+      become: true
+      ansible.builtin.stat:
+        path: "{{ agent_install_dir }}/.env"
+      register: agent_env_file_stat
+
+    - name: Fail when environment file is missing
+      ansible.builtin.assert:
+        that:
+          - agent_env_file_stat.stat.exists
+        fail_msg: "Agent environment file is missing on {{ inventory_hostname }}. Run install_agent.yml first."
+
+    - name: Copy latest agent source tree to remote temp directory
+      ansible.builtin.copy:
+        src: "{{ agent_source_dir }}/"
+        dest: "{{ agent_remote_tmp_dir }}/"
+        mode: preserve
+
+    - name: Normalize line endings in staged source tree
+      become: true
+      ansible.builtin.shell: |
+        find "{{ agent_remote_tmp_dir }}" -type f \( -name "*.sh" -o -name "*.py" \) -exec sed -i 's/\r$//' {} +
+      changed_when: false
+
+    - name: Sync Python code into installed agent directory
+      become: true
+      ansible.builtin.shell: |
+        rsync -av --delete \
+          --exclude='__pycache__/' \
+          --exclude='test_agent*.py' \
+          --exclude='test_aimonkey*.py' \
+          --exclude='test_main*.py' \
+          --exclude='tests/' \
+          --exclude='agentctl.sh' \
+          --exclude='install_agent.sh' \
+          --exclude='sync_agent.sh' \
+          --exclude='DEPLOY.md' \
+          --exclude='.env.example' \
+          --exclude='stability-test-agent.service' \
+          --exclude='hosts.txt' \
+          "{{ agent_remote_tmp_dir }}/" "{{ agent_install_dir }}/agent/"
+      args:
+        executable: /bin/bash
+
+    - name: Refresh agentctl command from staged source
+      become: true
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ agent_remote_tmp_dir }}/agentctl.sh"
+        dest: "{{ agent_install_dir }}/agentctl"
+        mode: "0755"
+
+    - name: Refresh /usr/local/bin/agentctl symlink
+      become: true
+      ansible.builtin.file:
+        src: "{{ agent_install_dir }}/agentctl"
+        dest: "/usr/local/bin/agentctl"
+        state: link
+
+    - name: Update API_URL in deployed environment file
+      become: true
+      ansible.builtin.lineinfile:
+        path: "{{ agent_install_dir }}/.env"
+        regexp: "^API_URL="
+        line: "API_URL={{ agent_api_url }}"
+        create: false
+
+    - name: Repair ownership on install directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_install_dir }}"
+        owner: "{{ agent_user }}"
+        group: "{{ agent_group }}"
+        recurse: true
+
+    - name: Reload systemd and restart service
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ agent_service_name }}"
+        state: restarted
+        daemon_reload: true
+
+    - name: Tail error log after update
+      become: true
+      ansible.builtin.shell: |
+        tail -n {{ agent_health_log_tail_lines }} {{ agent_install_dir }}/logs/agent_error.log
+      register: agent_update_error_log
+      changed_when: false
+      failed_when: false
+
+    - name: Print update summary
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          api_url: "{{ agent_api_url }}"
+          error_log_tail: "{{ agent_update_error_log.stdout_lines | default([]) }}"

@@ -1,0 +1,16 @@
+---
+- name: 批量分发 SSH 公钥
+  hosts: linux_hosts
+  gather_facts: no
+  tasks:
+    - name: 确保 .ssh 目录存在
+      file:
+        path: ~/.ssh
+        state: directory
+        mode: '0700'
+
+    - name: 推送 SSH 公钥
+      authorized_key:
+        user: "{{ ansible_user }}"
+        state: present
+        key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"

@@ -1,0 +1,19 @@
+agent_allowed_service_actions:
+  - start
+  - stop
+  - restart
+  - status
+
+agent_install_excludes:
+  - "__pycache__/"
+  - "test_agent*.py"
+  - "test_aimonkey*.py"
+  - "test_main*.py"
+  - "tests/"
+  - "install_agent.sh"
+  - "sync_agent.sh"
+  - "agentctl.sh"
+  - "DEPLOY.md"
+  - ".env.example"
+  - "stability-test-agent.service"
+  - "hosts.txt"

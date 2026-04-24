@@ -1,0 +1,21 @@
+ansible_become: true
+ansible_become_method: sudo
+ansible_become_password: "{{ ansible_password }}"
+
+agent_check_strict: true
+agent_status_require_active: true
+
+# 开发环境可在执行时用 -e agent_api_url=http://<ip>:8000 临时覆盖。
+agent_api_url: "http://172.21.10.5:8000"
+agent_install_dir: "/opt/stability-test-agent"
+agent_service_name: "stability-test-agent"
+agent_remote_tmp_dir: "/tmp/stability-test-agent-ansible"
+agent_user: "android"
+agent_group: "android"
+agent_auto_register_host: true
+agent_poll_interval: 10
+agent_adb_path: "adb"
+agent_log_level: "INFO"
+agent_health_log_tail_lines: 40
+agent_agentctl_path: "{{ agent_install_dir }}/agentctl"
+agent_source_dir: "{{ playbook_dir }}/../../backend/agent"

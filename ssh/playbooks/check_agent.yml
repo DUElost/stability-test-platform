@@ -1,0 +1,68 @@
+- name: Check linux agent host status
+  hosts: linux_hosts
+  gather_facts: false
+
+  tasks:
+    - name: Verify transport connectivity
+      ansible.builtin.ping:
+
+    - name: Check install directory
+      become: true
+      ansible.builtin.stat:
+        path: "{{ agent_install_dir }}"
+      register: agent_install_dir_stat
+
+    - name: Check environment file
+      become: true
+      ansible.builtin.stat:
+        path: "{{ agent_install_dir }}/.env"
+      register: agent_env_stat
+
+    - name: Check service active state
+      become: true
+      ansible.builtin.command: "systemctl is-active {{ agent_service_name }}"
+      register: agent_service_active
+      changed_when: false
+      failed_when: false
+
+    - name: Run agent health command when installed
+      become: true
+      ansible.builtin.command: "{{ agent_agentctl_path }} health"
+      register: agent_health_result
+      changed_when: false
+      failed_when: false
+      when: agent_install_dir_stat.stat.exists
+
+    - name: Tail error log when present
+      become: true
+      ansible.builtin.shell: |
+        tail -n {{ agent_health_log_tail_lines }} {{ agent_install_dir }}/logs/agent_error.log
+      register: agent_error_log_tail
+      changed_when: false
+      failed_when: false
+      when: agent_install_dir_stat.stat.exists
+
+    - name: Print host summary
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          install_dir_exists: "{{ agent_install_dir_stat.stat.exists }}"
+          env_exists: "{{ agent_env_stat.stat.exists }}"
+          service_state: "{{ agent_service_active.stdout | default('unknown') }}"
+          health_rc: "{{ agent_health_result.rc | default('skipped') }}"
+          health_stdout: "{{ agent_health_result.stdout_lines | default([]) }}"
+          error_log_tail: "{{ agent_error_log_tail.stdout_lines | default([]) }}"
+
+    - name: Fail when host is not fully configured
+      ansible.builtin.assert:
+        that:
+          - not agent_check_strict or agent_install_dir_stat.stat.exists
+          - not agent_check_strict or agent_env_stat.stat.exists
+          - not agent_check_strict or (agent_service_active.stdout | default('unknown')) == 'active'
+          - not agent_check_strict or (agent_health_result.rc | default(1)) == 0
+        fail_msg: >-
+          Agent host check failed on {{ inventory_hostname }}.
+          install_dir_exists={{ agent_install_dir_stat.stat.exists }}
+          env_exists={{ agent_env_stat.stat.exists }}
+          service_state={{ agent_service_active.stdout | default('unknown') }}
+          health_rc={{ agent_health_result.rc | default('skipped') }}

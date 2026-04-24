@@ -116,7 +116,7 @@ sudo nano /opt/stability-test-agent/.env
 # 服务器地址（必填）
 # - 远程 Linux 主机：使用 Windows 中心服务器的局域网 IP
 # - WSL 环境（同机）：使用 127.0.0.1（安装脚本自动检测并设置）
-API_URL=http://172.21.10.15:8000
+API_URL=http://172.21.10.5:8000
 
 # 主机 ID（推荐 auto，首次心跳时自动注册）
 HOST_ID=auto
@@ -368,6 +368,19 @@ sudo userdel stability-test
 
 ## 多主机部署
 
+## Ansible 运维入口
+
+从 2026-04-20 起，Linux agent host 的推荐运维入口为 `ssh/` 下的 Ansible playbook。
+
+- 首次部署：`ssh/playbooks/install_agent.yml`
+- 热更新：`ssh/playbooks/update_agent.yml`
+- 服务管理：`ssh/playbooks/service_agent.yml`
+- 状态检查：`ssh/playbooks/check_agent.yml`
+
+详细命令见 `ssh/README.md`。
+
+---
+
 如需部署到多台主机：
 
 ```bash
@@ -377,7 +390,7 @@ sudo userdel stability-test
 
 HOSTS=("192.168.1.101" "192.168.1.102" "192.168.1.103")
 AGENT_SRC="backend/agent"
-API_URL="http://172.21.10.15:8000"
+API_URL="http://172.21.10.5:8000"
 
 for HOST in "${HOSTS[@]}"; do
     echo "部署到 $HOST..."

@@ -1,0 +1,93 @@
+- name: Install linux agent host via phase-a bridge
+  hosts: linux_hosts
+  gather_facts: false
+
+  tasks:
+    - name: Ensure remote temp directory exists
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_remote_tmp_dir }}"
+        state: directory
+        owner: "{{ agent_user }}"
+        group: "{{ agent_group }}"
+        mode: "0755"
+
+    - name: Copy agent source tree to remote temp directory
+      ansible.builtin.copy:
+        src: "{{ agent_source_dir }}/"
+        dest: "{{ agent_remote_tmp_dir }}/"
+        mode: preserve
+
+    - name: Normalize line endings in staged source tree
+      become: true
+      ansible.builtin.shell: |
+        find "{{ agent_remote_tmp_dir }}" -type f \( -name "*.sh" -o -name "*.py" \) -exec sed -i 's/\r$//' {} +
+      changed_when: false
+
+    - name: Run install script non-interactively
+      become: true
+      ansible.builtin.shell: |
+        printf '%s\n\n' '{{ agent_api_url }}' | bash install_agent.sh
+      args:
+        chdir: "{{ agent_remote_tmp_dir }}"
+        executable: /bin/bash
+      environment:
+        AGENT_INSTALL_DIR: "{{ agent_install_dir }}"
+        AGENT_USER: "{{ agent_user }}"
+        AGENT_GROUP: "{{ agent_group }}"
+
+    - name: Refresh agentctl command from staged source
+      become: true
+      ansible.builtin.copy:
+        remote_src: true
+        src: "{{ agent_remote_tmp_dir }}/agentctl.sh"
+        dest: "{{ agent_install_dir }}/agentctl"
+        mode: "0755"
+
+    - name: Refresh /usr/local/bin/agentctl symlink
+      become: true
+      ansible.builtin.file:
+        src: "{{ agent_install_dir }}/agentctl"
+        dest: "/usr/local/bin/agentctl"
+        state: link
+
+    - name: Repair ownership on install directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_install_dir }}"
+        owner: "{{ agent_user }}"
+        group: "{{ agent_group }}"
+        recurse: true
+
+    - name: Ensure environment file ownership and mode
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_install_dir }}/.env"
+        owner: "{{ agent_user }}"
+        group: "{{ agent_group }}"
+        mode: "0640"
+
+    - name: Enable and start agent service
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ agent_service_name }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Verify service is active after install
+      become: true
+      ansible.builtin.command: "systemctl is-active {{ agent_service_name }}"
+      register: agent_service_after_install
+      changed_when: false
+      retries: 12
+      delay: 5
+      until: agent_service_after_install.stdout == "active"
+
+    - name: Print install summary
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          service_state: "{{ agent_service_after_install.stdout | default('unknown') }}"
+          api_url: "{{ agent_api_url }}"
+          install_dir: "{{ agent_install_dir }}"

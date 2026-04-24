@@ -1,0 +1,89 @@
+- name: Manage linux agent service
+  hosts: linux_hosts
+  gather_facts: false
+  roles:
+    - agent_deploy
+  vars:
+    agent_service_action: "{{ agent_service_action | default('status') }}"
+
+  pre_tasks:
+    - name: Validate requested service action
+      ansible.builtin.assert:
+        that:
+          - agent_service_action in agent_allowed_service_actions
+        fail_msg: "agent_service_action must be one of {{ agent_allowed_service_actions }}"
+
+    - name: Check install directory before service action
+      become: true
+      ansible.builtin.stat:
+        path: "{{ agent_install_dir }}"
+      register: agent_install_dir_stat
+
+    - name: Fail when target host is not installed
+      ansible.builtin.assert:
+        that:
+          - agent_install_dir_stat.stat.exists
+        fail_msg: "Agent is not installed on {{ inventory_hostname }}. Run install_agent.yml first."
+
+  tasks:
+    - name: Read service state before action
+      become: true
+      ansible.builtin.command: "systemctl is-active {{ agent_service_name }}"
+      register: agent_service_state_before
+      changed_when: false
+      failed_when: false
+
+    - name: Apply requested service action
+      become: true
+      ansible.builtin.systemd:
+        name: "{{ agent_service_name }}"
+        state: >-
+          {{
+            'started' if agent_service_action == 'start'
+            else 'stopped' if agent_service_action == 'stop'
+            else 'restarted'
+          }}
+        daemon_reload: "{{ agent_service_action == 'restart' }}"
+      when: agent_service_action in ['start', 'stop', 'restart']
+
+    - name: Read service state after action
+      become: true
+      ansible.builtin.command: "systemctl is-active {{ agent_service_name }}"
+      register: agent_service_state_after
+      changed_when: false
+      failed_when: false
+
+    - name: Print service action summary
+      ansible.builtin.debug:
+        msg:
+          host: "{{ inventory_hostname }}"
+          requested_action: "{{ agent_service_action }}"
+          before: "{{ agent_service_state_before.stdout | default('unknown') }}"
+          after: "{{ (agent_service_state_after.stdout if agent_service_action != 'status' else agent_service_state_before.stdout) | default('unknown') }}"
+
+    - name: Fail when service state is not expected
+      ansible.builtin.assert:
+        that:
+          - >-
+            (
+              agent_service_action == 'stop'
+              and (agent_service_state_after.stdout | default('unknown')) == 'inactive'
+            )
+            or
+            (
+              agent_service_action in ['start', 'restart']
+              and (agent_service_state_after.stdout | default('unknown')) == 'active'
+            )
+            or
+            (
+              agent_service_action == 'status'
+              and (
+                not agent_status_require_active
+                or (agent_service_state_before.stdout | default('unknown')) == 'active'
+              )
+            )
+        fail_msg: >-
+          Service state check failed on {{ inventory_hostname }}.
+          action={{ agent_service_action }}
+          before={{ agent_service_state_before.stdout | default('unknown') }}
+          after={{ (agent_service_state_after.stdout if agent_service_action != 'status' else agent_service_state_before.stdout) | default('unknown') }}
