@@ -24,7 +24,6 @@ from backend.api.routes import auth_router, heartbeat_router, hosts_router
 from backend.api.routes.devices import router as devices_router
 from backend.api.routes.runs import router as runs_router
 from backend.api.routes.logs import router as logs_router
-from backend.api.routes.websocket import router as websocket_router
 from backend.api.routes.metrics import router as metrics_router
 from backend.api.routes.users import router as users_router
 from backend.api.routes.results import router as results_router
@@ -146,7 +145,6 @@ _fastapi_app.include_router(hosts_router)
 _fastapi_app.include_router(runs_router)
 _fastapi_app.include_router(logs_router)
 _fastapi_app.include_router(devices_router)
-_fastapi_app.include_router(websocket_router)
 _fastapi_app.include_router(metrics_router)
 _fastapi_app.include_router(users_router)
 _fastapi_app.include_router(results_router)

@@ -1,65 +1,14 @@
-"""WebSocket / SocketIO contract tests (ADR-0009, Phase 3 migration).
+"""SocketIO broadcast envelope contract tests.
 
 Validates that:
-- Legacy WS stub endpoints accept connections (deprecated but functional)
 - All broadcast messages follow the standard envelope: {type, payload, timestamp}
 - Broadcast helpers emit via SocketIO with correct event/namespace/room
 """
 
 import json
-import os
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from starlette.testclient import TestClient
-
-from backend.main import fastapi_app
-
-
-@pytest.fixture
-def ws_client():
-    with TestClient(fastapi_app) as c:
-        yield c
-
-
-# ---------------------------------------------------------------------------
-# Connection — legacy WS stub endpoints (deprecated, accept-and-hold)
-# ---------------------------------------------------------------------------
-
-class TestDashboardWS:
-    def test_connect_with_valid_token(self, ws_client):
-        with ws_client.websocket_connect("/ws/dashboard?token=dev-token-12345") as ws:
-            data = ws.receive_json()
-            assert data["type"] == "DEPRECATED"
-
-    def test_connect_without_token_dev_mode(self, ws_client):
-        with ws_client.websocket_connect("/ws/dashboard") as ws:
-            data = ws.receive_json()
-            assert data["type"] == "DEPRECATED"
-
-
-class TestLogsWS:
-    def test_connect_logs_endpoint(self, ws_client):
-        with ws_client.websocket_connect("/ws/logs/999?token=dev-token-12345") as ws:
-            ws.send_text("{}")
-
-    def test_connect_job_logs_endpoint(self, ws_client):
-        with ws_client.websocket_connect("/ws/jobs/999/logs?token=dev-token-12345") as ws:
-            ws.send_text("{}")
-
-
-class TestWorkflowRunWS:
-    def test_connect_workflow_run_endpoint(self, ws_client):
-        with ws_client.websocket_connect("/ws/workflow-runs/999?token=dev-token-12345") as ws:
-            ws.send_text("{}")
-
-
-class TestAgentWS:
-    def test_agent_ws_stub_accepts(self, ws_client):
-        """Deprecated agent WS endpoint accepts connection and sends DEPRECATED notice."""
-        with ws_client.websocket_connect("/ws/agent/test-host-001") as ws:
-            data = ws.receive_json()
-            assert data["type"] == "DEPRECATED"
 
 
 # ---------------------------------------------------------------------------
