@@ -444,7 +444,7 @@ class Tool(Base):
 ## 测试与质量
 
 ### 单元测试
-- 位置：`backend/agent/test_agent.py`
+- 位置：`backend/agent/tests/`
 - 运行：`pytest backend/`
 
 ### 手动测试

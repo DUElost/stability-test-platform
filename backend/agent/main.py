@@ -418,7 +418,7 @@ def fetch_pending_runs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
     """Claim pending jobs via POST /agent/jobs/claim (D1: 统一 claim 路径).
 
     Backend 在 claim 响应中注入 device_serial + watcher_policy，供 JobSession 启动使用。
-    函数名保留为 fetch_pending_runs 以免破坏 test_main.py（下次治理 PR 再改）。
+    函数名保留为 fetch_pending_runs 以免破坏 tests/test_main.py（下次治理 PR 再改）。
     """
     headers = {"X-Agent-Secret": _AGENT_SECRET} if _AGENT_SECRET else {}
     resp = requests.post(
