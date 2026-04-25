@@ -11,6 +11,7 @@ import hashlib
 import os
 import tarfile
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from ..pipeline_engine import PipelineAction, StepContext, StepResult
@@ -165,3 +166,52 @@ class MonkeyAEEAction(PipelineAction):
             }
         except Exception:
             return None
+
+
+@dataclass
+class LegacyMonkeyAEEResult:
+    status: str
+    exit_code: int
+    error_message: str = ""
+    artifact: Optional[dict] = None
+    metrics: Optional[dict] = None
+
+
+class _LegacyStepLogger:
+    def info(self, message: str) -> None:
+        pass
+
+    def warn(self, message: str) -> None:
+        pass
+
+    warning = warn
+
+
+class MonkeyAEEStabilityTest:
+    """Backward-compatible wrapper for the pre-Pipeline MonkeyAEE test API."""
+
+    def __init__(self, adb_wrapper: Any, run_id: int, log_dir: str):
+        self.adb_wrapper = adb_wrapper
+        self.run_id = run_id
+        self.log_dir = log_dir
+        self._action = MonkeyAEEAction()
+
+    def run(self, serial: str, params: Optional[Dict[str, Any]] = None) -> LegacyMonkeyAEEResult:
+        merged_params = dict(params or {})
+        merged_params.setdefault("log_dir", self.log_dir)
+        ctx = StepContext(
+            adb=self.adb_wrapper,
+            serial=serial,
+            params=merged_params,
+            run_id=self.run_id,
+            step_id=0,
+            logger=_LegacyStepLogger(),
+        )
+        result = self._action.run(ctx)
+        return LegacyMonkeyAEEResult(
+            status="FINISHED" if result.success else "FAILED",
+            exit_code=result.exit_code,
+            error_message=result.error_message,
+            artifact=result.artifact,
+            metrics=result.metrics,
+        )

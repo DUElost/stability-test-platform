@@ -1,9 +1,9 @@
-"""Regression tests for stages-based pipeline templates.
+"""Regression tests for stages-based and lifecycle pipeline templates.
 
 Validates that:
 1. All pipeline templates load and parse correctly.
 2. All referenced builtin actions exist in ACTION_REGISTRY.
-3. Pipeline engine executes stages-format pipelines.
+3. Pipeline engine executes stages-format and lifecycle-format pipelines.
 4. Legacy phases-format definitions are rejected.
 """
 
@@ -34,6 +34,18 @@ EXPECTED_TEMPLATES = {
 REQUIRED_STAGE_KEYS = {"prepare", "execute", "post_process"}
 
 
+def _iter_stage_maps(data):
+    if isinstance(data.get("stages"), dict):
+        yield "stages", data["stages"]
+
+    lifecycle = data.get("lifecycle")
+    if isinstance(lifecycle, dict):
+        for phase_name in ("init", "patrol", "teardown"):
+            phase = lifecycle.get(phase_name)
+            if isinstance(phase, dict) and isinstance(phase.get("stages"), dict):
+                yield f"lifecycle.{phase_name}", phase["stages"]
+
+
 class TestTemplateValidity(unittest.TestCase):
     """Test that all pipeline templates are valid and self-consistent."""
 
@@ -47,12 +59,13 @@ class TestTemplateValidity(unittest.TestCase):
             with open(f, encoding="utf-8-sig") as fp:
                 data = json.load(fp)
             self.assertIn("version", data, f"{f.name} missing 'version'")
-            self.assertIn("stages", data, f"{f.name} missing 'stages'")
-            self.assertIsInstance(data["stages"], dict, f"{f.name} 'stages' not an object")
-            self.assertTrue(
-                REQUIRED_STAGE_KEYS.issubset(set(data["stages"].keys())),
-                f"{f.name} stages must contain {sorted(REQUIRED_STAGE_KEYS)}",
-            )
+            stage_maps = list(_iter_stage_maps(data))
+            self.assertTrue(stage_maps, f"{f.name} missing 'stages' or 'lifecycle'")
+            for label, stages in stage_maps:
+                self.assertTrue(
+                    REQUIRED_STAGE_KEYS.issubset(set(stages.keys())),
+                    f"{f.name} {label} must contain {sorted(REQUIRED_STAGE_KEYS)}",
+                )
 
     def test_templates_meet_minimum_structure(self):
         for name, reqs in EXPECTED_TEMPLATES.items():
@@ -84,18 +97,20 @@ class TestActionCoverage(unittest.TestCase):
         for f in TEMPLATE_DIR.glob("*.json"):
             with open(f, encoding="utf-8-sig") as fp:
                 data = json.load(fp)
-            for stage_name, steps in (data.get("stages") or {}).items():
-                for step in (steps or []):
-                    action = step.get("action", "")
-                    step_id = step.get("step_id", "unknown")
-                    if action.startswith("builtin:"):
-                        action_name = action[len("builtin:") :]
-                        if action_name not in ACTION_REGISTRY:
-                            missing.append(f"{f.name}/{stage_name}/{step_id}: {action_name}")
-                    elif action.startswith("tool:"):
-                        continue  # tool actions are resolved dynamically
-                    else:
-                        missing.append(f"{f.name}/{stage_name}/{step_id}: invalid action '{action}'")
+            for label, stages in _iter_stage_maps(data):
+                for stage_name, steps in stages.items():
+                    for step in (steps or []):
+                        action = step.get("action", "")
+                        step_id = step.get("step_id", "unknown")
+                        location = f"{f.name}/{label}/{stage_name}/{step_id}"
+                        if action.startswith("builtin:"):
+                            action_name = action[len("builtin:") :]
+                            if action_name not in ACTION_REGISTRY:
+                                missing.append(f"{location}: {action_name}")
+                        elif action.startswith("tool:"):
+                            continue  # tool actions are resolved dynamically
+                        else:
+                            missing.append(f"{location}: invalid action '{action}'")
 
         self.assertEqual(missing, [], f"Missing or invalid actions: {missing}")
 

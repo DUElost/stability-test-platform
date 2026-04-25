@@ -164,6 +164,13 @@ class PipelineEngine:
         if "stages" in pipeline_def:
             return self._execute_stages_format(pipeline_def)
 
+        if "phases" in pipeline_def:
+            return StepResult(
+                success=False,
+                exit_code=1,
+                error_message="legacy phases format is not supported; use 'stages' or 'lifecycle'",
+            )
+
         return StepResult(
             success=False,
             exit_code=1,

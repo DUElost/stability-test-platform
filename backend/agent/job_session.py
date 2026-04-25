@@ -18,8 +18,7 @@
 
 命名约定：
   - 对外统一使用 "job_id"（= job_instance.id）
-  - Agent 主链 _active_job_ids（原 _active_run_ids，治理已重命名）即 job_id 集合，
-    新代码不再引入 run_id 字眼，避免语义债继续扩散
+  - Agent 主链 _active_job_ids 即 job_id 集合，避免 run_id 语义债继续扩散
 
 典型用法：
     with JobSession(job_payload, host_id, log_dir, lock_*) as session:

@@ -95,7 +95,7 @@ Pipeline
 PipelineEngine 新增设备锁验证机制，确保 Pipeline 执行期间设备归属正确：
 
 - **启动前验证**：`_verify_device_lock()` 调用 `extend_lock` 端点，携带 `X-Agent-Secret` 鉴权。409 响应表示锁已丢失，Pipeline 立即中止
-- **步间锁丢失检测**：通过构造函数注入的 `is_aborted` 回调（闭包检查 `_active_run_ids` 集合），在每个 Step 开始前检测 LockRenewalManager 是否因 409 移除了本 run
+- **步间锁丢失检测**：通过构造函数注入的 `is_aborted` 回调（闭包检查 `_active_job_ids` 集合），在每个 Step 开始前检测 LockRenewalManager 是否因 409 移除了本 job
 - **网络容错**：启动前验证支持指数退避重试（1s, 2s, 4s），区分 401（鉴权失败）和 409（锁丢失）
 
 ### 2026-03-16 更新：内置 Action 参数表单
