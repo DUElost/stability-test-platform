@@ -63,6 +63,7 @@ def run_task_wrapper(
     state: JobRunnerState,
     mq_producer: Optional[Any] = None,
     tool_registry: Optional[Any] = None,
+    script_registry: Optional[Any] = None,
     local_db: Optional[Any] = None,
 ) -> None:
     """Run a claimed job in a worker thread and report its terminal state."""
@@ -149,6 +150,7 @@ def run_task_wrapper(
             ws_client=ws_client,
             mq_producer=mq_producer,
             tool_registry=tool_registry,
+            script_registry=script_registry,
             local_db=local_db,
             is_aborted=lambda: state.is_aborted(job_id),
         )

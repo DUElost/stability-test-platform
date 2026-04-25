@@ -1,5 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Layers3, RotateCcw, Pencil, X } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Copy,
+  Eye,
+  EyeOff,
+  GripVertical,
+  Layers3,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+  X,
+} from 'lucide-react';
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  type DragEndEvent,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { PipelineDef, PipelineStep } from '@/utils/api';
 import { BUILTIN_ACTIONS } from './actionCatalog';
 import { DynamicToolForm, type ParamSchema } from '@/components/task/DynamicToolForm';
@@ -24,21 +54,44 @@ interface BuiltinActionOption {
   is_active: boolean;
 }
 
+interface ScriptOption {
+  id: number;
+  name: string;
+  version: string;
+  category?: string | null;
+  script_type: string;
+  param_schema?: Record<string, any>;
+  is_active: boolean;
+}
+
+type ActionType = 'builtin' | 'tool' | 'script';
+
 interface StagesPipelineEditorProps {
   value: PipelineDef;
   onChange: (def: PipelineDef) => void;
   toolOptions?: { id: number; name: string; version: string }[];
+  scriptOptions?: ScriptOption[];
   builtinOptions?: BuiltinActionOption[];
   actionTemplateOptions?: ActionTemplateOption[];
+  allowedStages?: Array<keyof PipelineDef['stages']>;
   readOnly?: boolean;
 }
 
 interface StepCardProps {
+  id: string;
   step: PipelineStep;
   index: number;
   onEdit: () => void;
   onRemove: () => void;
+  onDuplicate: () => void;
+  onToggleEnabled: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onInlineChange: (step: PipelineStep) => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
   toolOptions: { id: number; name: string; version: string }[];
+  scriptOptions: ScriptOption[];
   builtinOptions: BuiltinActionOption[];
   readOnly?: boolean;
 }
@@ -50,6 +103,7 @@ interface StepEditorDrawerProps {
   onClose: () => void;
   onChange: (step: PipelineStep) => void;
   toolOptions: { id: number; name: string; version: string }[];
+  scriptOptions: ScriptOption[];
   builtinOptions: BuiltinActionOption[];
   actionTemplateOptions: ActionTemplateOption[];
   readOnly?: boolean;
@@ -100,74 +154,227 @@ function createEmptyStep(stageName: string, index: number, defaultBuiltin = 'che
     timeout_seconds: 300,
     retry: 0,
     params: {},
+    enabled: true,
   };
+}
+
+function normalizeStepEnabled(step: PipelineStep): PipelineStep {
+  return { ...step, enabled: step.enabled !== false };
+}
+
+function duplicateStep(step: PipelineStep, existing: PipelineStep[]): PipelineStep {
+  const base = `${step.step_id}_copy`;
+  let candidate = base;
+  let suffix = 2;
+  while (existing.some((item) => item.step_id === candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  return {
+    ...normalizeStepEnabled(step),
+    step_id: candidate,
+  };
+}
+
+function clampTimeout(value: string): number {
+  return Math.max(1, Number.parseInt(value, 10) || 1);
+}
+
+function clampRetry(value: string): number {
+  return Math.min(10, Math.max(0, Number.parseInt(value, 10) || 0));
 }
 
 function getActionMeta(
   step: PipelineStep,
   toolOptions: { id: number; name: string; version: string }[],
+  scriptOptions: ScriptOption[],
   builtinOptions: BuiltinActionOption[],
 ) {
-  const actionType = step.action.startsWith('tool:') ? 'tool' : 'builtin';
+  const actionType: ActionType = step.action.startsWith('tool:')
+    ? 'tool'
+    : step.action.startsWith('script:')
+      ? 'script'
+      : 'builtin';
   const builtinName = actionType === 'builtin' ? step.action.replace('builtin:', '') : '';
   const toolId = actionType === 'tool' ? parseInt(step.action.replace('tool:', ''), 10) : 0;
+  const scriptName = actionType === 'script' ? step.action.replace('script:', '') : '';
   const selectedBuiltin = builtinOptions.find((x) => x.name === builtinName);
   const selectedTool = toolOptions.find((x) => x.id === toolId);
+  const selectedScript = scriptOptions.find((x) => x.name === scriptName && x.version === step.version)
+    ?? scriptOptions.find((x) => x.name === scriptName);
 
   return {
     actionType,
     builtinName,
     toolId,
+    scriptName,
     selectedBuiltin,
     selectedTool,
+    selectedScript,
   };
 }
 
 function StepCard({
+  id,
   step,
   index,
   onEdit,
   onRemove,
+  onDuplicate,
+  onToggleEnabled,
+  onMoveUp,
+  onMoveDown,
+  onInlineChange,
+  canMoveUp,
+  canMoveDown,
   toolOptions,
+  scriptOptions,
   builtinOptions,
   readOnly,
 }: StepCardProps) {
-  const { actionType, builtinName, toolId, selectedBuiltin, selectedTool } = getActionMeta(step, toolOptions, builtinOptions);
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id, disabled: readOnly });
+  const { actionType, builtinName, toolId, scriptName, selectedBuiltin, selectedTool, selectedScript } = getActionMeta(
+    step,
+    toolOptions,
+    scriptOptions,
+    builtinOptions,
+  );
   const paramsCount = Object.keys(step.params ?? {}).length;
+  const enabled = step.enabled !== false;
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
 
   return (
-    <div className="mb-2 rounded-xl border border-gray-200 bg-white px-3 py-2 shadow-sm">
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`mb-2 rounded-xl border px-3 py-2 shadow-sm ${
+        enabled ? 'border-gray-200 bg-white' : 'border-dashed border-gray-300 bg-gray-50'
+      } ${isDragging ? 'opacity-70 shadow-md' : ''}`}
+    >
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 w-5 text-center text-xs font-mono text-gray-500">{index + 1}</div>
+        <button
+          type="button"
+          className="mt-0.5 flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40"
+          title="拖拽排序"
+          aria-label={`拖拽排序 Step ${step.step_id}`}
+          disabled={readOnly}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+        <div className="mt-1 w-5 text-center text-xs font-mono text-gray-500">{index + 1}</div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-gray-800">{step.step_id}</p>
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_120px_96px]">
+            <input
+              aria-label={`Step ID ${step.step_id}`}
+              className="h-8 min-w-0 rounded-md border border-gray-200 bg-white px-2 text-sm font-medium text-gray-800 focus:border-slate-400 focus:outline-none disabled:bg-gray-100"
+              value={step.step_id}
+              disabled={readOnly}
+              onChange={(event) => onInlineChange({ ...step, step_id: event.target.value })}
+            />
+            <input
+              aria-label={`Timeout ${step.step_id}`}
+              className="h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:border-slate-400 focus:outline-none disabled:bg-gray-100"
+              type="number"
+              min={1}
+              value={step.timeout_seconds}
+              disabled={readOnly}
+              onChange={(event) => onInlineChange({ ...step, timeout_seconds: clampTimeout(event.target.value) })}
+            />
+            <input
+              aria-label={`Retry ${step.step_id}`}
+              className="h-8 rounded-md border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:border-slate-400 focus:outline-none disabled:bg-gray-100"
+              type="number"
+              min={0}
+              max={10}
+              value={step.retry ?? 0}
+              disabled={readOnly}
+              onChange={(event) => onInlineChange({ ...step, retry: clampRetry(event.target.value) })}
+            />
+          </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
             <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">
               {actionType === 'tool'
                 ? `tool:${selectedTool?.name || toolId}`
-                : `builtin:${selectedBuiltin?.name || builtinName}`}
+                : actionType === 'script'
+                  ? `script:${selectedScript?.name || scriptName}`
+                  : `builtin:${selectedBuiltin?.name || builtinName}`}
             </span>
-            <span className="rounded bg-gray-100 px-1.5 py-0.5">timeout {step.timeout_seconds}s</span>
-            <span className="rounded bg-gray-100 px-1.5 py-0.5">retry {step.retry ?? 0}</span>
             <span className="rounded bg-gray-100 px-1.5 py-0.5">params {paramsCount}</span>
+            {!enabled && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">disabled</span>}
           </div>
         </div>
 
         <div className="flex items-center gap-1">
+          {!readOnly && (
+            <>
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={onMoveUp}
+                disabled={!canMoveUp}
+                title="上移 Step"
+                aria-label={`上移 Step ${step.step_id}`}
+              >
+                <ArrowUp className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={onMoveDown}
+                disabled={!canMoveDown}
+                title="下移 Step"
+                aria-label={`下移 Step ${step.step_id}`}
+              >
+                <ArrowDown className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                onClick={onDuplicate}
+                title="复制 Step"
+                aria-label={`复制 Step ${step.step_id}`}
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                onClick={onToggleEnabled}
+                title={enabled ? '禁用 Step' : '启用 Step'}
+                aria-label={`${enabled ? '禁用' : '启用'} Step ${step.step_id}`}
+              >
+                {enabled ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              </button>
+            </>
+          )}
           <button
             type="button"
-            className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+            className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600"
             onClick={onEdit}
             title="编辑 Step"
+            aria-label={`编辑 Step ${step.step_id}`}
           >
             <Pencil className="h-4 w-4" />
           </button>
           {!readOnly && (
             <button
               type="button"
-              className="rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-500"
+              className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-red-50 hover:text-red-500"
               onClick={onRemove}
               title="删除 Step"
+              aria-label={`删除 Step ${step.step_id}`}
             >
               <Trash2 className="h-4 w-4" />
             </button>
@@ -185,6 +392,7 @@ function StepEditorDrawer({
   onClose,
   onChange,
   toolOptions,
+  scriptOptions,
   builtinOptions,
   actionTemplateOptions,
   readOnly,
@@ -199,19 +407,24 @@ function StepEditorDrawer({
   const meta = useMemo(() => {
     if (!step) {
       return {
-        actionType: 'builtin' as 'builtin' | 'tool',
+        actionType: 'builtin' as ActionType,
+        scriptName: '',
         builtinName: '',
         toolId: 0,
         selectedBuiltin: undefined,
         selectedTool: undefined,
+        selectedScript: undefined,
       };
     }
-    return getActionMeta(step, toolOptions, builtinOptions);
-  }, [step, toolOptions, builtinOptions]);
+    return getActionMeta(step, toolOptions, scriptOptions, builtinOptions);
+  }, [step, toolOptions, scriptOptions, builtinOptions]);
 
   const paramSchema = useMemo<ParamSchema | null>(() => {
-    if (meta.actionType !== 'builtin' || !meta.selectedBuiltin) return null;
-    const schema = meta.selectedBuiltin.param_schema;
+    const schema = meta.actionType === 'builtin'
+      ? meta.selectedBuiltin?.param_schema
+      : meta.actionType === 'script'
+        ? meta.selectedScript?.param_schema
+        : null;
     return schema && Object.keys(schema).length > 0 ? (schema as ParamSchema) : null;
   }, [meta]);
 
@@ -285,7 +498,18 @@ function StepEditorDrawer({
     return grouped;
   }, [builtinOptions]);
 
-  const handleActionTypeChange = (type: 'builtin' | 'tool') => {
+  const scriptGroups = useMemo(() => {
+    const grouped: Record<string, ScriptOption[]> = {};
+    scriptOptions.filter((x) => x.is_active).forEach((item) => {
+      const category = item.category || 'script';
+      grouped[category] = grouped[category] || [];
+      grouped[category].push(item);
+    });
+    Object.values(grouped).forEach((items) => items.sort((a, b) => a.name.localeCompare(b.name)));
+    return grouped;
+  }, [scriptOptions]);
+
+  const handleActionTypeChange = (type: ActionType) => {
     if (!step) return;
 
     if (type === 'builtin') {
@@ -294,9 +518,15 @@ function StepEditorDrawer({
       return;
     }
 
-    if (toolOptions.length > 0) {
+    if (type === 'tool' && toolOptions.length > 0) {
       const firstTool = toolOptions[0];
       onChange({ ...step, action: `tool:${firstTool.id}`, version: firstTool.version });
+      return;
+    }
+
+    if (type === 'script' && scriptOptions.length > 0) {
+      const firstScript = scriptOptions[0];
+      onChange({ ...step, action: `script:${firstScript.name}`, version: firstScript.version });
     }
   };
 
@@ -313,6 +543,13 @@ function StepEditorDrawer({
     const tool = toolOptions.find((x) => x.id === id);
     if (!tool) return;
     onChange({ ...step, action: `tool:${tool.id}`, version: tool.version });
+  };
+
+  const handleScriptChange = (name: string) => {
+    if (!step) return;
+    const script = scriptOptions.find((x) => x.name === name);
+    if (!script) return;
+    onChange({ ...step, action: `script:${script.name}`, version: script.version });
   };
 
   const handleParamsBlur = () => {
@@ -443,12 +680,13 @@ function StepEditorDrawer({
               <div className="flex flex-col gap-2 md:flex-row">
                 <select
                   value={meta.actionType}
-                  onChange={(e) => handleActionTypeChange(e.target.value as 'builtin' | 'tool')}
+                  onChange={(e) => handleActionTypeChange(e.target.value as ActionType)}
                   disabled={readOnly}
                   className="rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
                 >
                   <option value="builtin">builtin:</option>
                   {toolOptions.length > 0 && <option value="tool">tool:</option>}
+                  {scriptOptions.length > 0 && <option value="script">script:</option>}
                 </select>
 
                 {meta.actionType === 'builtin' ? (
@@ -472,7 +710,7 @@ function StepEditorDrawer({
                       );
                     })}
                   </select>
-                ) : (
+                ) : meta.actionType === 'tool' ? (
                   <select
                     value={meta.toolId}
                     onChange={(e) => handleToolChange(e.target.value)}
@@ -483,12 +721,32 @@ function StepEditorDrawer({
                       <option key={tool.id} value={tool.id}>{tool.name} v{tool.version}</option>
                     ))}
                   </select>
+                ) : (
+                  <select
+                    value={meta.scriptName}
+                    onChange={(e) => handleScriptChange(e.target.value)}
+                    disabled={readOnly}
+                    className="flex-1 rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+                  >
+                    {Object.entries(scriptGroups).map(([category, items]) => (
+                      <optgroup key={category} label={category}>
+                        {items.map((script) => (
+                          <option key={`${script.name}:${script.version}`} value={script.name}>
+                            {script.name} v{script.version}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
                 )}
               </div>
               {meta.actionType === 'builtin' && meta.selectedBuiltin?.description && (
                 <p className="mt-1 text-xs text-gray-500">{meta.selectedBuiltin.description}</p>
               )}
               {meta.actionType === 'tool' && step.version && (
+                <p className="mt-1 text-xs text-gray-500">锁定版本: v{step.version}</p>
+              )}
+              {meta.actionType === 'script' && step.version && (
                 <p className="mt-1 text-xs text-gray-500">锁定版本: v{step.version}</p>
               )}
             </div>
@@ -562,14 +820,31 @@ export default function StagesPipelineEditor({
   value,
   onChange,
   toolOptions = [],
+  scriptOptions = [],
   builtinOptions = [],
   actionTemplateOptions = [],
+  allowedStages,
   readOnly = false,
 }: StagesPipelineEditorProps) {
   const stages = value.stages ?? {};
   const [viewMode, setViewMode] = useState<'focus' | 'all'>('focus');
-  const [activeStage, setActiveStage] = useState<keyof PipelineDef['stages']>('prepare');
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const stageKeys = useMemo(
+    () => new Set<keyof PipelineDef['stages']>(allowedStages ?? ['prepare', 'execute', 'post_process']),
+    [allowedStages],
+  );
+  const visibleStageDefs = useMemo(() => STAGES.filter((stage) => stageKeys.has(stage.key)), [stageKeys]);
+  const [activeStage, setActiveStage] = useState<keyof PipelineDef['stages']>(allowedStages?.[0] ?? 'prepare');
   const [editingStep, setEditingStep] = useState<{ stage: keyof PipelineDef['stages']; index: number } | null>(null);
+
+  useEffect(() => {
+    if (!stageKeys.has(activeStage)) {
+      setActiveStage(visibleStageDefs[0]?.key ?? 'prepare');
+    }
+  }, [activeStage, stageKeys, visibleStageDefs]);
 
   const stageMeta = useMemo(() => {
     const map: Record<keyof PipelineDef['stages'], { label: string; hint: string }> = {
@@ -631,9 +906,56 @@ export default function StagesPipelineEditor({
     });
   };
 
+  const duplicateStepAt = (key: keyof PipelineDef['stages'], index: number) => {
+    const current = [...(stages[key] || [])];
+    const source = current[index];
+    if (!source) return;
+    current.splice(index + 1, 0, duplicateStep(source, current));
+    updateStage(key, current);
+  };
+
+  const toggleStepEnabled = (key: keyof PipelineDef['stages'], index: number) => {
+    const current = [...(stages[key] || [])];
+    const step = current[index];
+    if (!step) return;
+    current[index] = { ...step, enabled: step.enabled === false };
+    updateStage(key, current);
+  };
+
+  const moveStep = (key: keyof PipelineDef['stages'], index: number, direction: -1 | 1) => {
+    const current = [...(stages[key] || [])];
+    const target = index + direction;
+    if (target < 0 || target >= current.length) return;
+    updateStage(key, arrayMove(current, index, target));
+    setEditingStep((prev) => {
+      if (!prev || prev.stage !== key) return prev;
+      if (prev.index === index) return { ...prev, index: target };
+      if (prev.index === target) return { ...prev, index };
+      return prev;
+    });
+  };
+
+  const handleDragEnd = (
+    key: keyof PipelineDef['stages'],
+    itemIds: string[],
+    event: DragEndEvent,
+  ) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = itemIds.indexOf(String(active.id));
+    const newIndex = itemIds.indexOf(String(over.id));
+    if (oldIndex < 0 || newIndex < 0) return;
+    updateStage(key, arrayMove(stages[key] || [], oldIndex, newIndex));
+    setEditingStep((prev) => {
+      if (!prev || prev.stage !== key) return prev;
+      if (prev.index === oldIndex) return { ...prev, index: newIndex };
+      return prev;
+    });
+  };
+
   const visibleStages = viewMode === 'focus'
-    ? STAGES.filter((stage) => stage.key === activeStage)
-    : STAGES;
+    ? visibleStageDefs.filter((stage) => stage.key === activeStage)
+    : visibleStageDefs;
 
   const editingStepData = editingStep
     ? (stages[editingStep.stage] || [])[editingStep.index] || null
@@ -644,7 +966,7 @@ export default function StagesPipelineEditor({
       <div className="rounded-lg border border-gray-200 bg-white p-3">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="grid gap-2 sm:grid-cols-3">
-            {STAGES.map((stage) => {
+            {visibleStageDefs.map((stage) => {
               const count = (stages[stage.key] || []).length;
               const isActive = stage.key === activeStage;
               return (
@@ -702,6 +1024,7 @@ export default function StagesPipelineEditor({
       <div className={viewMode === 'all' ? 'grid gap-4 xl:grid-cols-2 2xl:grid-cols-3' : 'grid gap-4 grid-cols-1'}>
         {visibleStages.map(({ key, label, hint, color, chipClass }) => {
           const steps = stages[key] || [];
+          const itemIds = steps.map((step, index) => `${key}-${step.step_id || 'step'}-${index}`);
 
           return (
             <section key={key} className={`rounded-xl border-2 p-3 ${color}`}>
@@ -741,20 +1064,37 @@ export default function StagesPipelineEditor({
                   <div>点击添加第一个 Step</div>
                 </button>
               ) : (
-                <div>
-                  {steps.map((step, index) => (
-                    <StepCard
-                      key={`${key}-${index}`}
-                      step={step}
-                      index={index}
-                      onEdit={() => setEditingStep({ stage: key, index })}
-                      onRemove={() => removeStep(key, index)}
-                      toolOptions={toolOptions}
-                      builtinOptions={builtinCatalog}
-                      readOnly={readOnly}
-                    />
-                  ))}
-                </div>
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={(event) => handleDragEnd(key, itemIds, event)}
+                >
+                  <SortableContext items={itemIds} strategy={verticalListSortingStrategy}>
+                    <div>
+                      {steps.map((step, index) => (
+                        <StepCard
+                          id={itemIds[index]}
+                          key={itemIds[index]}
+                          step={step}
+                          index={index}
+                          onEdit={() => setEditingStep({ stage: key, index })}
+                          onRemove={() => removeStep(key, index)}
+                          onDuplicate={() => duplicateStepAt(key, index)}
+                          onToggleEnabled={() => toggleStepEnabled(key, index)}
+                          onMoveUp={() => moveStep(key, index, -1)}
+                          onMoveDown={() => moveStep(key, index, 1)}
+                          onInlineChange={(next) => updateStep(key, index, next)}
+                          canMoveUp={index > 0}
+                          canMoveDown={index < steps.length - 1}
+                          toolOptions={toolOptions}
+                          scriptOptions={scriptOptions}
+                          builtinOptions={builtinCatalog}
+                          readOnly={readOnly}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
               )}
 
               {steps.length > 0 && !readOnly && (
@@ -789,6 +1129,7 @@ export default function StagesPipelineEditor({
           updateStep(editingStep.stage, editingStep.index, next);
         }}
         toolOptions={toolOptions}
+        scriptOptions={scriptOptions}
         builtinOptions={builtinCatalog}
         actionTemplateOptions={actionTemplateOptions}
         readOnly={readOnly}

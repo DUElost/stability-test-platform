@@ -5,7 +5,7 @@ export { hosts, heartbeat, deploy } from './hosts';
 export { devices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
-export { tools, toolCatalog, builtinCatalog, actionTemplates } from './tools';
+export { tools, toolCatalog, builtinCatalog, actionTemplates, scripts } from './tools';
 export { results, stats } from './analytics';
 export { users, notifications, schedules, templates, audit } from './management';
 export { orchestration, execution } from './orchestration';
@@ -22,11 +22,13 @@ export type {
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,
   ToolEntry, BuiltinActionEntry, BuiltinActionUpdatePayload,
+  ScriptEntry,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
-  PipelineStep, PipelineDef, TaskTemplateEntry,
+  PipelineStep, PipelineDef, PipelineStepOverride, TaskTemplateEntry,
   WorkflowDefinition, WorkflowDefinitionCreate,
   WorkflowStatus, JobStatus, StepTrace, JobInstance, PaginatedJobList,
-  WorkflowRun, WorkflowRunCreate, WorkflowSummary, JobArtifactEntry,
+  WorkflowRun, WorkflowRunCreate, WorkflowRunPreview, WorkflowRunPreviewTemplate,
+  WorkflowSummary, JobArtifactEntry,
   Tool, ToolCategory,
 } from './types';
 
@@ -35,7 +37,7 @@ import { hosts, heartbeat, deploy } from './hosts';
 import { devices } from './devices';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
-import { tools, toolCatalog, builtinCatalog, actionTemplates } from './tools';
+import { tools, toolCatalog, builtinCatalog, actionTemplates, scripts } from './tools';
 import { results, stats } from './analytics';
 import { users, notifications, schedules, templates, audit } from './management';
 import { orchestration, execution } from './orchestration';
@@ -61,4 +63,5 @@ export const api = {
   toolCatalog,
   builtinCatalog,
   actionTemplates,
+  scripts,
 };

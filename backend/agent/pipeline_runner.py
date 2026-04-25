@@ -23,6 +23,7 @@ def execute_pipeline_run(
     ws_client: Optional[Any] = None,
     mq_producer: Optional[Any] = None,
     tool_registry: Optional[Any] = None,
+    script_registry: Optional[Any] = None,
     local_db: Optional[Any] = None,
     is_aborted: Optional[Callable[[], bool]] = None,
 ) -> Dict[str, Any]:
@@ -63,6 +64,7 @@ def execute_pipeline_run(
         http_fallback=http_step_fallback,
         mq_producer=mq_producer,
         tool_registry=tool_registry,
+        script_registry=script_registry,
         local_db=local_db,
         api_url=api_url,
         agent_secret=agent_secret,

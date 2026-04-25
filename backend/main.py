@@ -33,6 +33,7 @@ from backend.api.routes.audit import router as audit_router
 from backend.api.routes.schedules import router as schedules_router
 from backend.api.routes.templates import router as templates_router
 from backend.api.routes.pipeline import router as pipeline_router
+from backend.api.routes.scripts import router as scripts_router
 from backend.api.routes.builtin_actions import router as builtin_actions_router
 # Phase 3: new routers replace legacy workflows + tools
 from backend.api.routes.orchestration import router as orchestration_router
@@ -154,6 +155,7 @@ _fastapi_app.include_router(audit_router)
 _fastapi_app.include_router(schedules_router)
 _fastapi_app.include_router(templates_router)
 _fastapi_app.include_router(pipeline_router)
+_fastapi_app.include_router(scripts_router)
 _fastapi_app.include_router(builtin_actions_router)
 _fastapi_app.include_router(tool_catalog_router)
 _fastapi_app.include_router(action_templates_router)

@@ -131,10 +131,25 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
     _sync_host_identity(host, host_info)
 
     # Update host status
+    tool_catalog_outdated = (
+        bool(payload.tool_catalog_version)
+        and bool(host.tool_catalog_version)
+        and host.tool_catalog_version != payload.tool_catalog_version
+    )
+    script_catalog_outdated = (
+        bool(payload.script_catalog_version)
+        and bool(host.script_catalog_version)
+        and host.script_catalog_version != payload.script_catalog_version
+    )
+
     host.status = payload.status
     now = datetime.now(timezone.utc)
     host.last_heartbeat = now
     host.mount_status = payload.mount_status
+    if payload.tool_catalog_version:
+        host.tool_catalog_version = payload.tool_catalog_version
+    if payload.script_catalog_version:
+        host.script_catalog_version = payload.script_catalog_version
 
     # Merge extra data without losing system stats
     host_extra = {}
@@ -267,4 +282,10 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
         except Exception as exc:
             logger.warning(f"device_update_broadcast_failed: {exc}")
 
-    return {"ok": True, "host_id": host.id, "devices_count": len(seen_serials)}
+    return {
+        "ok": True,
+        "host_id": host.id,
+        "devices_count": len(seen_serials),
+        "tool_catalog_outdated": tool_catalog_outdated,
+        "script_catalog_outdated": script_catalog_outdated,
+    }

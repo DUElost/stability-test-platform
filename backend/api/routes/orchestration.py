@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import Literal, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -17,7 +17,7 @@ from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.job import JobArtifact, JobInstance, StepTrace, TaskTemplate
 from backend.models.host import Device
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
-from backend.services.dispatcher import DispatchError, dispatch_workflow
+from backend.services.dispatcher import DispatchError, dispatch_workflow, preview_workflow_dispatch
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["orchestration"])
@@ -36,6 +36,8 @@ class WorkflowDefCreate(BaseModel):
     name: str
     description: Optional[str] = None
     failure_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
+    setup_pipeline: Optional[dict] = None
+    teardown_pipeline: Optional[dict] = None
     task_templates: List[TaskTemplateIn] = Field(default_factory=list)
 
 
@@ -43,12 +45,25 @@ class WorkflowDefUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     failure_threshold: Optional[float] = None
+    setup_pipeline: Optional[dict] = None
+    teardown_pipeline: Optional[dict] = None
     task_templates: Optional[List[TaskTemplateIn]] = None
+
+
+class PipelineStepOverride(BaseModel):
+    template_name: str
+    stage: Literal["prepare", "execute", "post_process"]
+    step_id: str
+    params: Optional[dict] = None
+    timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    retry: Optional[int] = Field(default=None, ge=0, le=10)
+    enabled: Optional[bool] = None
 
 
 class WorkflowRunTrigger(BaseModel):
     device_ids: List[int]
     failure_threshold: Optional[float] = None
+    step_overrides: List[PipelineStepOverride] = Field(default_factory=list)
 
 
 class TaskTemplateOut(ORMBaseModel):
@@ -66,6 +81,8 @@ class WorkflowDefOut(ORMBaseModel):
     description: Optional[str]
     failure_threshold: float
     created_by: Optional[str]
+    setup_pipeline: Optional[dict] = None
+    teardown_pipeline: Optional[dict] = None
     created_at: datetime
     updated_at: datetime
     task_templates: List[TaskTemplateOut] = []
@@ -138,11 +155,32 @@ def _validate_task_templates(task_templates: List[TaskTemplateIn]) -> None:
         )
 
 
+def _validate_optional_pipeline(field_name: str, pipeline_def: Optional[dict]) -> None:
+    if pipeline_def is None:
+        return
+    is_valid, errors = validate_pipeline_def(pipeline_def)
+    if not is_valid:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_PIPELINE_DEF",
+                "field": field_name,
+                "errors": errors,
+            },
+        )
+
+
+def _fields_set(payload: BaseModel) -> set[str]:
+    return set(getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set())))
+
+
 @router.post("/workflows", response_model=ApiResponse[WorkflowDefOut])
 async def create_workflow(
     payload: WorkflowDefCreate,
     db: AsyncSession = Depends(get_async_db),
 ):
+    _validate_optional_pipeline("setup_pipeline", payload.setup_pipeline)
+    _validate_optional_pipeline("teardown_pipeline", payload.teardown_pipeline)
     _validate_task_templates(payload.task_templates)
 
     now = datetime.utcnow()
@@ -150,6 +188,8 @@ async def create_workflow(
         name=payload.name,
         description=payload.description,
         failure_threshold=payload.failure_threshold,
+        setup_pipeline=payload.setup_pipeline,
+        teardown_pipeline=payload.teardown_pipeline,
         created_at=now,
         updated_at=now,
     )
@@ -233,6 +273,13 @@ async def update_workflow(
         wf.description = payload.description
     if payload.failure_threshold is not None:
         wf.failure_threshold = payload.failure_threshold
+    changed_fields = _fields_set(payload)
+    if "setup_pipeline" in changed_fields:
+        _validate_optional_pipeline("setup_pipeline", payload.setup_pipeline)
+        wf.setup_pipeline = payload.setup_pipeline
+    if "teardown_pipeline" in changed_fields:
+        _validate_optional_pipeline("teardown_pipeline", payload.teardown_pipeline)
+        wf.teardown_pipeline = payload.teardown_pipeline
     wf.updated_at = datetime.utcnow()
 
     if payload.task_templates is not None:
@@ -305,6 +352,32 @@ async def delete_workflow(wf_id: int, db: AsyncSession = Depends(get_async_db)):
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
+def _override_payload(payload: WorkflowRunTrigger) -> list[dict]:
+    return [item.model_dump(exclude_none=True) for item in payload.step_overrides]
+
+
+@router.post("/workflows/{wf_id}/run/preview", response_model=ApiResponse[dict])
+async def preview_workflow_run(
+    wf_id: int,
+    payload: WorkflowRunTrigger,
+    db: AsyncSession = Depends(get_async_db),
+):
+    wf_def = await db.get(WorkflowDefinition, wf_id)
+    threshold = payload.failure_threshold if payload.failure_threshold is not None \
+        else (wf_def.failure_threshold if wf_def else 0.05)
+    try:
+        preview = await preview_workflow_dispatch(
+            workflow_def_id=wf_id,
+            device_ids=payload.device_ids,
+            failure_threshold=threshold,
+            db=db,
+            step_overrides=_override_payload(payload),
+        )
+    except DispatchError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return ok(preview)
+
+
 @router.post("/workflows/{wf_id}/run", response_model=ApiResponse[WorkflowRunOut])
 async def run_workflow(
     wf_id: int,
@@ -321,6 +394,7 @@ async def run_workflow(
             failure_threshold=threshold,
             triggered_by="api",
             db=db,
+            step_overrides=_override_payload(payload),
         )
     except DispatchError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -589,6 +663,8 @@ def _wf_out(wf: WorkflowDefinition, templates: list) -> WorkflowDefOut:
     return WorkflowDefOut(
         id=wf.id, name=wf.name, description=wf.description,
         failure_threshold=wf.failure_threshold, created_by=wf.created_by,
+        setup_pipeline=wf.setup_pipeline,
+        teardown_pipeline=wf.teardown_pipeline,
         created_at=wf.created_at, updated_at=wf.updated_at,
         task_templates=[
             TaskTemplateOut(

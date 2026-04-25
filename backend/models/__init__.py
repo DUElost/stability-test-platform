@@ -5,6 +5,7 @@ from backend.models.host import Device, Host
 from backend.models.job import JobArtifact, JobInstance, StepTrace, TaskTemplate
 from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel
 from backend.models.schedule import TaskSchedule
+from backend.models.script import Script
 from backend.models.tool import Tool
 from backend.models.user import User
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
@@ -23,6 +24,7 @@ __all__ = [
     "JobInstance",
     "JobStatus",
     "NotificationChannel",
+    "Script",
     "StepTrace",
     "TaskSchedule",
     "TaskTemplate",

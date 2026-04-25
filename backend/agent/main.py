@@ -31,6 +31,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.mq.producer import MQProducer
     from agent.outbox_drainer import OutboxDrainThread
     from agent.registry.local_db import LocalDB
+    from agent.registry.script_registry import ScriptRegistry
     from agent.registry.tool_registry import ToolRegistry
     from agent.step_trace_uploader import StepTraceUploader
     from agent.watcher import LogWatcherManager, OutboxDrainer
@@ -47,6 +48,7 @@ else:
     from .mq.producer import MQProducer
     from .outbox_drainer import OutboxDrainThread
     from .registry.local_db import LocalDB
+    from .registry.script_registry import ScriptRegistry
     from .registry.tool_registry import ToolRegistry
     from .step_trace_uploader import StepTraceUploader
     from .watcher import LogWatcherManager, OutboxDrainer
@@ -166,6 +168,8 @@ def main() -> None:
     # 初始化工具注册表
     tool_registry = ToolRegistry(local_db, api_url, agent_secret)
     tool_registry.initialize()
+    script_registry = ScriptRegistry(local_db, api_url, agent_secret)
+    script_registry.initialize()
 
     # Device Log Watcher 子系统（feature flag 控制，默认关闭）
     log_signal_drainer: Optional[OutboxDrainer] = None
@@ -249,6 +253,11 @@ def main() -> None:
         host_info=host_info,
         poll_interval=poll_interval,
         ws_client=ws_client,
+        catalog_versions=lambda: {
+            "tool_catalog_version": tool_registry.version,
+            "script_catalog_version": script_registry.version,
+        },
+        on_scripts_outdated=script_registry.initialize,
     )
     heartbeat_thread.start()
 
@@ -346,6 +355,7 @@ def main() -> None:
                                 job_runner_state,
                                 mq_producer,
                                 tool_registry,
+                                script_registry,
                                 local_db,
                             )
                         except Exception:

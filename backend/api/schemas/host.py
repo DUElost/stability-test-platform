@@ -43,6 +43,8 @@ class HostLiteOut(ORMBaseModel):
 class HeartbeatIn(BaseModel):
     host_id: str
     status: Literal["ONLINE", "OFFLINE", "DEGRADED"]
+    tool_catalog_version: str = ""
+    script_catalog_version: str = ""
     mount_status: Dict[str, Any] = Field(default_factory=dict)
     extra: Dict[str, Any] = Field(default_factory=dict)
     host: Optional[Dict[str, Any]] = None

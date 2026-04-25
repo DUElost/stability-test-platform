@@ -53,6 +53,27 @@ describe('PipelineStepTree', () => {
     expect(screen.getByText('post_process')).toBeDefined();
   });
 
+  it('renders known phases in pipeline order regardless of input order', () => {
+    render(
+      <PipelineStepTree
+        steps={[
+          makeStep({ id: 10, phase: 'execute', step_order: 0, name: 'execute_first' }),
+          makeStep({ id: 11, phase: 'post_process', step_order: 0, name: 'post_second' }),
+          makeStep({ id: 12, phase: 'prepare', step_order: 0, name: 'prepare_third' }),
+        ]}
+        selectedStepId={null}
+        onStepSelect={onStepSelect}
+      />,
+    );
+
+    const prepare = screen.getByText('prepare');
+    const execute = screen.getByText('execute');
+    const postProcess = screen.getByText('post_process');
+
+    expect(prepare.compareDocumentPosition(execute) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(execute.compareDocumentPosition(postProcess) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('auto-expands phase with RUNNING step', () => {
     render(
       <PipelineStepTree

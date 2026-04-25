@@ -14,9 +14,10 @@ export type {
   PaginatedResponse,
   ToolEntry, BuiltinActionEntry, BuiltinActionUpdatePayload,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
-  PipelineStep, PipelineDef, TaskTemplateEntry,
+  PipelineStep, PipelineDef, PipelineStepOverride, TaskTemplateEntry,
   WorkflowDefinition, WorkflowDefinitionCreate,
   WorkflowStatus, JobStatus, StepTrace, JobInstance, PaginatedJobList,
-  WorkflowRun, WorkflowRunCreate, WorkflowSummary, JobArtifactEntry,
+  WorkflowRun, WorkflowRunCreate, WorkflowRunPreview, WorkflowRunPreviewTemplate,
+  WorkflowSummary, JobArtifactEntry,
   Tool, ToolCategory,
 } from './api/index';

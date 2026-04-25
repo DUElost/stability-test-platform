@@ -74,13 +74,14 @@
       "additionalProperties": false,
       "properties": {
         "step_id":         { "type": "string", "minLength": 1 },
-        "action":          { "type": "string", "pattern": "^(tool:\\d+|builtin:.+)$" },
+        "action":          { "type": "string", "pattern": "^(tool:\\d+|builtin:.+|script:.+)$" },
         "version":         { "type": "string", "minLength": 1 },
         "params":          { "type": "object", "default": {} },
         "timeout_seconds": { "type": "integer", "minimum": 1 },
-        "retry":           { "type": "integer", "minimum": 0, "maximum": 10, "default": 0 }
+        "retry":           { "type": "integer", "minimum": 0, "maximum": 10, "default": 0 },
+        "enabled":         { "type": "boolean", "default": true }
       },
-      "if":   { "properties": { "action": { "pattern": "^tool:" } }, "required": ["action"] },
+      "if":   { "properties": { "action": { "pattern": "^(tool:|script:)" } }, "required": ["action"] },
       "then": { "required": ["version"] }
     }
   }

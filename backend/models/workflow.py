@@ -19,6 +19,8 @@ class WorkflowDefinition(Base):
     # 字段形态参考 backend/agent/watcher/policy.py WatcherPolicy.from_job
     # 可选字段：on_unavailable / required_categories / paths / nfs_quota_mb / ...
     watcher_policy    = Column(JSONB, nullable=True)
+    setup_pipeline    = Column(JSONB, nullable=True)
+    teardown_pipeline = Column(JSONB, nullable=True)
     created_at        = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at        = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 

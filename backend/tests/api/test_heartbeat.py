@@ -44,6 +44,27 @@ class TestHeartbeat:
         assert data["ok"] is True
         assert data["host_id"] == sample_host.id
 
+    def test_heartbeat_updates_script_catalog_version_and_reports_outdated(
+        self, client, sample_host, db_session
+    ):
+        sample_host.script_catalog_version = "old-script-version"
+        db_session.commit()
+
+        response = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": sample_host.id,
+                "status": "ONLINE",
+                "script_catalog_version": "new-script-version",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["script_catalog_outdated"] is True
+        db_session.refresh(sample_host)
+        assert sample_host.script_catalog_version == "new-script-version"
+
     def test_heartbeat_creates_host_by_ip(self, client, sample_host):
         """Test heartbeat finds existing host by IP"""
         response = client.post(

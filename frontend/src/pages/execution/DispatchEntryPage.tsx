@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, type WorkflowDefinition, type Device } from '@/utils/api';
 import { useToast } from '@/components/ui/toast';
 import { Play, Smartphone, AlertCircle } from 'lucide-react';
+import DispatchPreviewDialog from '@/pages/orchestration/DispatchPreviewDialog';
 
 function DeviceRow({
   device,
@@ -56,7 +57,7 @@ export default function DispatchEntryPage() {
   );
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
   const [failureThreshold, setFailureThreshold] = useState<number>(0.05);
-  const [submitting, setSubmitting] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const [deviceFilter, setDeviceFilter] = useState('');
 
   const { data: workflows, isLoading: wfLoading } = useQuery({
@@ -118,25 +119,28 @@ export default function DispatchEntryPage() {
     if (!selectedWorkflowId) { toast.error('请选择工作流'); return; }
     if (selectedDeviceIds.size === 0) { toast.error('请至少选择一台设备'); return; }
 
-    setSubmitting(true);
-    try {
-      const run = await api.orchestration.run(selectedWorkflowId, {
-        device_ids: Array.from(selectedDeviceIds),
-        failure_threshold: failureThreshold,
-      });
-      toast.success('测试已发起');
-      navigate(`/execution/runs/${run.id}`);
-    } catch (err: any) {
-      toast.error(err.message || '发起失败');
-    } finally {
-      setSubmitting(false);
-    }
+    setShowPreview(true);
   };
 
   const availableCount = allDevices.filter(d => d.status !== 'OFFLINE').length;
 
   return (
     <div className="space-y-6 max-w-3xl">
+      {showPreview && selectedWorkflowId && (
+        <DispatchPreviewDialog
+          open={showPreview}
+          workflowId={selectedWorkflowId}
+          deviceIds={Array.from(selectedDeviceIds)}
+          failureThreshold={failureThreshold}
+          onClose={() => setShowPreview(false)}
+          onStarted={(run) => {
+            toast.success('测试已发起');
+            setShowPreview(false);
+            navigate(`/execution/runs/${run.id}`);
+          }}
+        />
+      )}
+
       <div>
         <h1 className="text-2xl font-semibold text-gray-900">发起测试</h1>
         <p className="text-gray-500 mt-1">选择工作流蓝图和目标设备，创建一次 WorkflowRun</p>
@@ -257,10 +261,10 @@ export default function DispatchEntryPage() {
           </Button>
           <Button
             type="submit"
-            disabled={submitting || !selectedWorkflowId || selectedDeviceIds.size === 0}
+            disabled={!selectedWorkflowId || selectedDeviceIds.size === 0}
           >
             <Play className="w-4 h-4 mr-2" />
-            {submitting ? '发起中...' : '发起测试'}
+            预览并发起
           </Button>
         </div>
       </form>

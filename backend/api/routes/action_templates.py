@@ -19,7 +19,7 @@ from backend.models.tool import Tool
 
 router = APIRouter(prefix="/api/v1/action-templates", tags=["action-templates"])
 
-ACTION_PATTERN = re.compile(r"^(tool:\d+|builtin:.+)$")
+ACTION_PATTERN = re.compile(r"^(tool:\d+|builtin:.+|script:.+)$")
 
 
 class ActionTemplateCreate(BaseModel):
@@ -84,7 +84,7 @@ async def _validate_template_payload(
     if not ACTION_PATTERN.match(action):
         raise HTTPException(
             status_code=422,
-            detail="action must match 'builtin:<name>' or 'tool:<id>'",
+            detail="action must match 'builtin:<name>', 'tool:<id>', or 'script:<name>'",
         )
 
     if not isinstance(params, dict):
@@ -102,8 +102,11 @@ async def _validate_template_payload(
         tool = await db.get(Tool, tool_id)
         if tool is None or not tool.is_active:
             raise HTTPException(status_code=422, detail=f"tool not found or inactive: {tool_id}")
+    elif action.startswith("script:"):
+        if not version:
+            raise HTTPException(status_code=422, detail="version is required for script action")
     elif version:
-        raise HTTPException(status_code=422, detail="version is only allowed for tool action")
+        raise HTTPException(status_code=422, detail="version is only allowed for tool or script action")
 
     q = select(ActionTemplate).where(ActionTemplate.name == name)
     if current_id is not None:

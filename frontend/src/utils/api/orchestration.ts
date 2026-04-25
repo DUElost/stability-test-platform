@@ -3,7 +3,7 @@ import { unwrapApiResponse } from './client';
 import type {
   WorkflowDefinition, WorkflowDefinitionCreate, WorkflowRun, WorkflowRunCreate,
   PaginatedJobList, JobInstance, RunReport, JiraDraft, WorkflowSummary,
-  JobArtifactEntry, RunStep, PipelineDef,
+  JobArtifactEntry, RunStep, PipelineDef, WorkflowRunPreview,
 } from './types';
 
 export const orchestration = {
@@ -17,10 +17,14 @@ export const orchestration = {
     unwrapApiResponse<WorkflowDefinition>(apiClient.post('/workflows', data)),
   update: (id: number, data: Partial<WorkflowDefinitionCreate & {
     task_templates?: { name: string; pipeline_def: PipelineDef; sort_order?: number }[];
+    setup_pipeline?: PipelineDef | null;
+    teardown_pipeline?: PipelineDef | null;
   }>) =>
     unwrapApiResponse<WorkflowDefinition>(apiClient.put(`/workflows/${id}`, data)),
   delete: (id: number) =>
     unwrapApiResponse<void>(apiClient.delete(`/workflows/${id}`)),
+  previewRun: (id: number, data: WorkflowRunCreate) =>
+    unwrapApiResponse<WorkflowRunPreview>(apiClient.post(`/workflows/${id}/run/preview`, data)),
   run: (id: number, data: WorkflowRunCreate) =>
     unwrapApiResponse<WorkflowRun>(apiClient.post(`/workflows/${id}/run`, data)),
 };
@@ -55,6 +59,7 @@ export const execution = {
   getJobSteps: (jobId: number) => apiClient.get<RunStep[]>(`/runs/${jobId}/steps`),
   getCachedJobReport: (jobId: number) => apiClient.get<RunReport>(`/runs/${jobId}/report/cached`),
   getCachedJobJiraDraft: (jobId: number) => apiClient.get<JiraDraft>(`/runs/${jobId}/jira-draft/cached`),
-  artifactDownloadUrl: (_taskId: number, jobId: number, artifactId: number) =>
+  artifactDownloadUrl: (_runId: number, jobId: number, artifactId: number) =>
+    // Legacy backend route names this segment run_id but validates it as job_id.
     `/api/v1/runs/${jobId}/artifacts/${artifactId}/download`,
 };

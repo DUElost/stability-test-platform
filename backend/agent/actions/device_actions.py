@@ -1,5 +1,7 @@
 """Device-related pipeline actions: check_device, clean_env, push_resources, ensure_root, fill_storage, connect_wifi, install_apk."""
 
+import hashlib
+import json
 import logging
 import subprocess
 import time
@@ -13,6 +15,14 @@ def _stdout(result) -> str:
     if hasattr(result, "stdout"):
         return result.stdout or ""
     return str(result) if result is not None else ""
+
+
+def _sha256_file(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def check_device(ctx: StepContext) -> StepResult:
@@ -84,6 +94,11 @@ def clean_env(ctx: StepContext) -> StepResult:
 
 def push_resources(ctx: StepContext) -> StepResult:
     """Push files from host to device."""
+    bundle = ctx.params.get("bundle")
+    manifest_path = ctx.params.get("manifest")
+    if bundle and manifest_path:
+        return _push_resource_bundle(ctx, bundle, manifest_path)
+
     files = ctx.params.get("files", [])
     if not files:
         if ctx.logger:
@@ -111,6 +126,69 @@ def push_resources(ctx: StepContext) -> StepResult:
     if errors:
         return StepResult(success=False, exit_code=1, error_message="; ".join(errors))
     return StepResult(success=True, metrics={"files_pushed": pushed})
+
+
+def _push_resource_bundle(ctx: StepContext, bundle: str, manifest_path: str) -> StepResult:
+    remote_dir = (ctx.params.get("remote_dir") or ctx.params.get("target_dir") or "/sdcard/test_resources").rstrip("/")
+    skip_if_match = ctx.params.get("skip_if_match", True)
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+    except Exception as exc:
+        return StepResult(success=False, exit_code=1, error_message=f"manifest load failed: {exc}")
+
+    expected_sha = manifest.get("bundle_sha256", "")
+    if not expected_sha:
+        return StepResult(success=False, exit_code=1, error_message="manifest.bundle_sha256 is required")
+
+    try:
+        actual_sha = _sha256_file(bundle)
+    except Exception as exc:
+        return StepResult(success=False, exit_code=1, error_message=f"bundle sha256 failed: {exc}")
+
+    if actual_sha != expected_sha:
+        return StepResult(
+            success=False,
+            exit_code=1,
+            error_message=f"bundle_sha256 mismatch: manifest={expected_sha} actual={actual_sha}",
+        )
+
+    marker = f"{remote_dir}/.stp_bundle_sha256"
+    if skip_if_match:
+        try:
+            remote_marker = _stdout(ctx.adb.shell(
+                ctx.serial,
+                f"cat {marker} 2>/dev/null",
+                timeout=10,
+            )).strip().splitlines()[0]
+            if remote_marker == expected_sha:
+                return StepResult(
+                    success=True,
+                    skipped=True,
+                    skip_reason=f"Bundle {manifest.get('name', bundle)} already in sync",
+                )
+        except Exception:
+            pass
+
+    try:
+        ctx.adb.shell(ctx.serial, f"mkdir -p {remote_dir}", timeout=10)
+        remote_bundle = f"{remote_dir}/.stp_tmp_bundle.tar.gz"
+        ctx.adb.push(ctx.serial, bundle, remote_bundle)
+        ctx.adb.push(ctx.serial, manifest_path, f"{remote_dir}/manifest.json")
+        ctx.adb.shell(
+            ctx.serial,
+            f"cd {remote_dir} && tar xf .stp_tmp_bundle.tar.gz && "
+            f"rm .stp_tmp_bundle.tar.gz && echo {expected_sha} > .stp_bundle_sha256",
+            timeout=ctx.params.get("extract_timeout", 600),
+        )
+        return StepResult(success=True, metrics={
+            "bundle": manifest.get("name", ""),
+            "files": manifest.get("file_count", 0),
+            "bytes": manifest.get("total_size_bytes", 0),
+        })
+    except Exception as exc:
+        return StepResult(success=False, exit_code=1, error_message=f"bundle push failed: {exc}")
 
 
 def ensure_root(ctx: StepContext) -> StepResult:
@@ -204,6 +282,17 @@ def connect_wifi(ctx: StepContext) -> StepResult:
         return StepResult(success=True)
 
     try:
+        status = ctx.adb.shell(ctx.serial, "cmd -w wifi status", timeout=10)
+        if ssid in _stdout(status):
+            return StepResult(
+                success=True,
+                skipped=True,
+                skip_reason=f"Already connected to {ssid}",
+            )
+    except Exception:
+        pass
+
+    try:
         ctx.adb.shell(ctx.serial, "svc wifi enable", timeout=10)
         time.sleep(1)
         cmd = f'cmd -w wifi connect-network "{ssid}" wpa2 "{password}"'
@@ -266,9 +355,27 @@ def install_apk(ctx: StepContext) -> StepResult:
     """Install an APK on the device via adb install."""
     apk_path = ctx.params.get("apk_path", "")
     reinstall = ctx.params.get("reinstall", True)
+    pkg_name = ctx.params.get("pkg_name", "")
+    required_version = ctx.params.get("required_version", "")
 
     if not apk_path:
         return StepResult(success=False, exit_code=1, error_message="No apk_path specified")
+
+    if pkg_name and required_version:
+        try:
+            info = ctx.adb.shell(
+                ctx.serial,
+                f"dumpsys package {pkg_name} | grep versionName",
+                timeout=10,
+            )
+            if required_version in _stdout(info):
+                return StepResult(
+                    success=True,
+                    skipped=True,
+                    skip_reason=f"{pkg_name}=={required_version} already installed",
+                )
+        except Exception:
+            pass
 
     try:
         flags = ["-r"] if reinstall else []

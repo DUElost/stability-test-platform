@@ -27,6 +27,8 @@ interface PhaseGroup {
   steps: RunStep[];
 }
 
+const PHASE_ORDER = ['prepare', 'execute', 'post_process'];
+
 interface PipelineStepTreeProps {
   steps: RunStep[];
   selectedStepId: number | null;
@@ -44,9 +46,15 @@ function groupByPhase(steps: RunStep[]): PhaseGroup[] {
     arr.push(step);
     map.set(step.phase, arr);
   }
-  return Array.from(map.entries()).map(([name, steps]) => ({
+
+  const known = PHASE_ORDER.filter((phase) => map.has(phase));
+  const unknown = Array.from(map.keys())
+    .filter((phase) => !PHASE_ORDER.includes(phase))
+    .sort();
+
+  return [...known, ...unknown].map((name) => ({
     name,
-    steps: steps.sort((a, b) => a.step_order - b.step_order),
+    steps: [...(map.get(name) ?? [])].sort((a, b) => a.step_order - b.step_order),
   }));
 }
 

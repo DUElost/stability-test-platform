@@ -25,6 +25,7 @@ class Host(Base):
     hostname             = Column(String(256), nullable=False, unique=True)
     ip_address           = Column(String(64))
     tool_catalog_version = Column(String(64))
+    script_catalog_version = Column(String(64))
     last_heartbeat       = Column(DateTime(timezone=True))
     cpu_quota            = Column(Integer, nullable=False, default=2)
     status               = Column(String(32), nullable=False, default="OFFLINE")

@@ -25,6 +25,8 @@ def send_heartbeat(
     status: str = "ONLINE",
     host_info: Optional[Dict[str, Any]] = None,
     devices: Optional[List[Dict[str, Any]]] = None,
+    tool_catalog_version: str = "",
+    script_catalog_version: str = "",
 ) -> Optional[Dict[str, Any]]:
     """发送心跳到服务器，包含系统统计信息和设备数据
 
@@ -45,6 +47,8 @@ def send_heartbeat(
         "host_id": host_id,
         "status": status,
         "mount_status": mount_status,
+        "tool_catalog_version": tool_catalog_version,
+        "script_catalog_version": script_catalog_version,
         "extra": system_stats,
         "host": host_info,  # 包含主机信息用于自动创建
         "devices": devices or [],  # 设备列表

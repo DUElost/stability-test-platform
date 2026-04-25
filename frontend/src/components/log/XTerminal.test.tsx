@@ -166,6 +166,20 @@ describe('XTerminal', () => {
     expect(written).toContain('ANR');
   });
 
+  it('strips OSC control sequences from untrusted log lines before writing', () => {
+    const ref = createRef<XTerminalHandle>();
+    render(<XTerminal ref={ref} poolKey="test-osc" />);
+
+    act(() => {
+      ref.current!.writeLine('safe \x1b]0;owned\x07 message');
+    });
+
+    const written = mockWriteln.mock.calls[0][0];
+    expect(written).toContain('safe  message');
+    expect(written).not.toContain('\x1b]0;owned');
+    expect(written).not.toContain('\x07');
+  });
+
   it('calls onReady callback after mount', () => {
     const onReady = vi.fn();
     render(<XTerminal poolKey="test-10" onReady={onReady} />);

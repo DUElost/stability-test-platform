@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, type RuntimeLogEntry, type WorkflowDefinition, type JobInstance } from '@/utils/api';
 import { useSocketIO as useWebSocket, type WebSocketMessage } from '@/hooks/useSocketIO';
 import {
@@ -56,6 +56,15 @@ function buildDedupeKey(log: {
     log.timestamp ?? '',
     log.message ?? '',
   ].join('|');
+}
+
+function highlightLogText(text: string): ReactNode[] {
+  const parts = text.split(/(\bFATAL\b|\bCRASH\b|\bANR\b)/gi);
+  return parts.map((part, index) => (
+    /^(FATAL|CRASH|ANR)$/i.test(part)
+      ? <mark key={index} className="rounded bg-amber-200 px-0.5 text-amber-950">{part}</mark>
+      : <span key={index}>{part}</span>
+  ));
 }
 
 interface LogsPageProps {
@@ -717,10 +726,10 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
               ) : (
                 <div style={{ height: totalHeight, position: 'relative' }}>
                   <div style={{ transform: `translateY(${startIndex * LOG_ROW_HEIGHT}px)` }}>
-                    {visibleLogs.map((log) => (
+                    {visibleLogs.map((log, visibleIndex) => (
                       <div
                         key={log.key}
-                        className={`truncate leading-[22px] ${
+                        className={`grid grid-cols-[64px_minmax(0,1fr)] leading-[22px] ${
                           log.level === 'ERROR'
                             ? 'text-red-400'
                             : log.level === 'WARN'
@@ -737,21 +746,26 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                           second: '2-digit',
                         })} [${log.level}] [job-${log.job_id ?? 'na'}] [${log.step_id || '-'}] ${log.message}`}
                       >
-                        <span className="text-gray-500">
-                          [{formatLocalDateTime(log.timestamp, {
-                            month: '2-digit',
-                            day: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            second: '2-digit',
-                          })}]
-                        </span>{' '}
-                        <span className="text-blue-400">[job-{log.job_id ?? 'na'}]</span>{' '}
-                        <span className="text-purple-300">[{log.step_id || '-'}]</span>{' '}
-                        <span className={log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARN' ? 'text-yellow-400' : 'text-green-400'}>
-                          [{log.level}]
-                        </span>{' '}
-                        {log.message}
+                        <span className="select-none pr-3 text-right text-gray-600">
+                          {startIndex + visibleIndex + 1}
+                        </span>
+                        <span className="truncate">
+                          <span className="text-gray-500">
+                            [{formatLocalDateTime(log.timestamp, {
+                              month: '2-digit',
+                              day: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit',
+                            })}]
+                          </span>{' '}
+                          <span className="text-blue-400">[job-{log.job_id ?? 'na'}]</span>{' '}
+                          <span className="text-purple-300">[{log.step_id || '-'}]</span>{' '}
+                          <span className={log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARN' ? 'text-yellow-400' : 'text-green-400'}>
+                            [{log.level}]
+                          </span>{' '}
+                          {highlightLogText(log.message)}
+                        </span>
                       </div>
                     ))}
                   </div>

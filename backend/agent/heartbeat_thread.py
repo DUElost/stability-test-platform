@@ -6,7 +6,7 @@
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import device_discovery
 from .heartbeat import send_heartbeat
@@ -35,6 +35,8 @@ class HeartbeatThread:
         host_info: Dict[str, Any],
         poll_interval: float,
         ws_client=None,
+        catalog_versions: Optional[Callable[[], Dict[str, str]]] = None,
+        on_scripts_outdated: Optional[Callable[[], None]] = None,
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -43,6 +45,8 @@ class HeartbeatThread:
         self._host_info = host_info
         self._poll_interval = poll_interval
         self._ws_client = ws_client
+        self._catalog_versions = catalog_versions
+        self._on_scripts_outdated = on_scripts_outdated
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
@@ -113,13 +117,21 @@ class HeartbeatThread:
         with self._devices_lock:
             self._latest_devices = devices_list
 
-        send_heartbeat(
+        versions = self._catalog_versions() if self._catalog_versions else {}
+        response = send_heartbeat(
             self._api_url,
             self._host_id,
             self._mount_points,
             host_info=self._host_info,
             devices=devices_list,
+            tool_catalog_version=versions.get("tool_catalog_version", ""),
+            script_catalog_version=versions.get("script_catalog_version", ""),
         )
+        if response and response.get("script_catalog_outdated") and self._on_scripts_outdated:
+            try:
+                self._on_scripts_outdated()
+            except Exception as exc:
+                logger.warning("script_catalog_refresh_failed: %s", exc)
 
         if self._ws_client and self._ws_client.connected:
             try:

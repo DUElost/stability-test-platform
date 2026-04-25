@@ -30,6 +30,38 @@ def _has_any_step(stages: dict) -> bool:
     )
 
 
+def _iter_stage_steps(pipeline_def: Dict[str, Any]):
+    if isinstance(pipeline_def.get("stages"), dict):
+        for stage_name, steps in pipeline_def["stages"].items():
+            if isinstance(steps, list):
+                for index, step in enumerate(steps):
+                    yield f"stages.{stage_name}.{index}", step
+
+    lifecycle = pipeline_def.get("lifecycle")
+    if isinstance(lifecycle, dict):
+        for phase_name, phase in lifecycle.items():
+            if not isinstance(phase, dict):
+                continue
+            stages = phase.get("stages")
+            if not isinstance(stages, dict):
+                continue
+            for stage_name, steps in stages.items():
+                if isinstance(steps, list):
+                    for index, step in enumerate(steps):
+                        yield f"lifecycle.{phase_name}.stages.{stage_name}.{index}", step
+
+
+def _validate_action_versions(pipeline_def: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    for path, step in _iter_stage_steps(pipeline_def):
+        if not isinstance(step, dict):
+            continue
+        action = step.get("action", "")
+        if isinstance(action, str) and action.startswith(("tool:", "script:")) and not step.get("version"):
+            errors.append(f"{path}.version: version is required for {action.split(':', 1)[0]} action")
+    return errors
+
+
 def validate_pipeline_def(pipeline_def: Dict[str, Any]) -> Tuple[bool, List[str]]:
     """Validate a pipeline definition against the JSON Schema.
 
@@ -80,6 +112,10 @@ def validate_pipeline_def(pipeline_def: Dict[str, Any]) -> Tuple[bool, List[str]
             interval = patrol.get("interval_seconds")
             if not isinstance(interval, int) or interval < 1:
                 return False, ["lifecycle.patrol.interval_seconds: must be a positive integer"]
+
+    action_version_errors = _validate_action_versions(pipeline_def)
+    if action_version_errors:
+        return False, action_version_errors
 
     # JSON Schema validation
     schema = _load_schema()

@@ -3,6 +3,7 @@
 Tables:
   step_trace_cache      — step traces before Redis XADD; acked after confirmation
   tool_cache            — local copy of the server-side tool catalog
+  script_cache          — local copy of the server-side script catalog
   agent_state           — key/value store for last_ack_id and other scalars
   job_terminal_outbox   — terminal-state payloads; retried until server ACKs
   log_signal_outbox     — per-job log_signal envelopes; (job_id, seq_no) idempotent key
@@ -58,6 +59,16 @@ class LocalDB:
                 script_path  TEXT    NOT NULL,
                 script_class TEXT    NOT NULL,
                 updated_at   TEXT    NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS script_cache (
+                cache_key       TEXT    PRIMARY KEY,
+                script_id       INTEGER NOT NULL,
+                name            TEXT    NOT NULL,
+                version         TEXT    NOT NULL,
+                script_type     TEXT    NOT NULL,
+                nfs_path        TEXT    NOT NULL,
+                content_sha256  TEXT    NOT NULL,
+                updated_at      TEXT    NOT NULL
             );
             CREATE TABLE IF NOT EXISTS agent_state (
                 key   TEXT PRIMARY KEY,
@@ -206,6 +217,74 @@ class LocalDB:
                 "version": row["version"],
                 "script_path": row["script_path"],
                 "script_class": row["script_class"],
+            }
+            for row in rows
+        }
+
+    # ------------------------------------------------------------------
+    # script_cache
+    # ------------------------------------------------------------------
+
+    def save_script_cache(self, scripts: dict) -> None:
+        """Bulk-replace script cache entries."""
+        now = datetime.utcnow().isoformat()
+        with self._lock:
+            with self._conn:
+                self._conn.execute("DELETE FROM script_cache")
+                for cache_key, entry in scripts.items():
+                    self._conn.execute(
+                        """
+                        INSERT OR REPLACE INTO script_cache
+                        (cache_key, script_id, name, version, script_type, nfs_path,
+                         content_sha256, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            cache_key,
+                            entry.get("script_id", 0),
+                            entry.get("name", ""),
+                            entry.get("version", ""),
+                            entry.get("script_type", ""),
+                            entry.get("nfs_path", ""),
+                            entry.get("content_sha256", ""),
+                            now,
+                        ),
+                    )
+
+    def update_script_cache(self, cache_key: str, entry: dict) -> None:
+        now = datetime.utcnow().isoformat()
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO script_cache
+                    (cache_key, script_id, name, version, script_type, nfs_path,
+                     content_sha256, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cache_key,
+                        entry.get("script_id", 0),
+                        entry.get("name", ""),
+                        entry.get("version", ""),
+                        entry.get("script_type", ""),
+                        entry.get("nfs_path", ""),
+                        entry.get("content_sha256", ""),
+                        now,
+                    ),
+                )
+
+    def load_script_cache(self) -> dict:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM script_cache").fetchall()
+        return {
+            row["cache_key"]: {
+                "script_id": row["script_id"],
+                "name": row["name"],
+                "version": row["version"],
+                "script_type": row["script_type"],
+                "nfs_path": row["nfs_path"],
+                "content_sha256": row["content_sha256"],
             }
             for row in rows
         }

@@ -49,23 +49,30 @@ function highlightKeywords(text: string): string {
   return result;
 }
 
+function sanitizeTerminalInput(text: string): string {
+  return text
+    .replace(/\x1b\][0-9;?]*;[^\x07]*(\x07|\x1b\\)/g, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+}
+
 function formatLogLine(line: string, level?: string): string {
   // Detect fold group markers (OSC 633 protocol)
   const foldStartMatch = line.match(/\x1b\]633;A\x07(.+)/);
   if (foldStartMatch) {
-    const title = foldStartMatch[1];
+    const title = sanitizeTerminalInput(foldStartMatch[1]);
     return `${ANSI.bold}\x1b[36m${'─'.repeat(4)} ▼ ${title} ${'─'.repeat(40)}${ANSI.reset}`;
   }
   const foldEndMatch = line.match(/\x1b\]633;B\x07(.+)/);
   if (foldEndMatch) {
-    const title = foldEndMatch[1];
+    const title = sanitizeTerminalInput(foldEndMatch[1]);
     const isFailure = title.includes('FAILED');
     const color = isFailure ? ANSI.red : '\x1b[32m';
     return `${ANSI.bold}${color}${'─'.repeat(4)} ▲ ${title} ${'─'.repeat(40)}${ANSI.reset}`;
   }
 
+  const sanitizedLine = sanitizeTerminalInput(line);
   const color = level ? colorizeLogLevel(level) : '';
-  const highlighted = highlightKeywords(line);
+  const highlighted = highlightKeywords(sanitizedLine);
   return level ? `${color}${highlighted}${ANSI.reset}` : highlighted;
 }
 

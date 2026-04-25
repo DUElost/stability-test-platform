@@ -120,6 +120,7 @@ class StepTraceIn(BaseModel):
 class HeartbeatRequest(BaseModel):
     host_id: str
     tool_catalog_version: str = ""
+    script_catalog_version: str = ""
     load: Dict[str, Any] = {}
 
 
@@ -129,6 +130,7 @@ class BackpressureInfo(BaseModel):
 
 class HeartbeatResponse(BaseModel):
     tool_catalog_outdated: bool
+    script_catalog_outdated: bool = False
     backpressure: BackpressureInfo
 
 
@@ -289,12 +291,21 @@ async def agent_heartbeat(
         db.add(host)
 
     outdated = (
-        bool(host.tool_catalog_version)
+        bool(payload.tool_catalog_version)
+        and bool(host.tool_catalog_version)
         and host.tool_catalog_version != payload.tool_catalog_version
+    )
+    scripts_outdated = (
+        bool(payload.script_catalog_version)
+        and bool(host.script_catalog_version)
+        and host.script_catalog_version != payload.script_catalog_version
     )
 
     host.last_heartbeat = datetime.utcnow()
-    host.tool_catalog_version = payload.tool_catalog_version
+    if payload.tool_catalog_version:
+        host.tool_catalog_version = payload.tool_catalog_version
+    if payload.script_catalog_version:
+        host.script_catalog_version = payload.script_catalog_version
     host.status = HostStatus.ONLINE.value
 
     await db.commit()
@@ -302,6 +313,7 @@ async def agent_heartbeat(
     backpressure = await _get_backpressure()
     return ok(HeartbeatResponse(
         tool_catalog_outdated=outdated,
+        script_catalog_outdated=scripts_outdated,
         backpressure=BackpressureInfo(log_rate_limit=backpressure),
     ))
 

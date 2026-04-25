@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import shutil
+import subprocess
+import sys
 import tarfile
 import threading
 import time
@@ -35,6 +37,9 @@ class StepContext:
     shared: dict = field(default_factory=dict)
     # LocalDB instance for cross-run persistent state (e.g., incremental scan_aee)
     local_db: Any = None
+    log_dir: str = ""
+    adb_path: str = ""
+    nfs_root: str = ""
 
     @property
     def job_id(self) -> int:
@@ -57,6 +62,8 @@ class StepResult:
     metrics: dict = field(default_factory=dict)
     artifact: Optional[dict] = None
     metadata: dict = field(default_factory=dict)
+    skipped: bool = False
+    skip_reason: str = ""
 
 
 class PipelineAction:
@@ -127,9 +134,11 @@ class PipelineEngine:
         http_fallback=None,
         mq_producer=None,
         tool_registry=None,
+        script_registry=None,
         local_db=None,
         api_url: Optional[str] = None,
         agent_secret: str = "",
+        nfs_root: Optional[str] = None,
         is_aborted: Optional[Callable[[], bool]] = None,
     ):
         self._adb = adb
@@ -140,9 +149,12 @@ class PipelineEngine:
         self._http_fallback = http_fallback
         self._mq = mq_producer
         self._registry = tool_registry
+        self._script_registry = script_registry
         self._local_db = local_db
         self._api_url = api_url
         self._agent_secret = agent_secret
+        self._adb_path = getattr(adb, "adb_path", os.getenv("ADB_PATH", "adb"))
+        self._nfs_root = nfs_root if nfs_root is not None else os.getenv("STP_NFS_ROOT", "")
         self._is_aborted = is_aborted
         self._shared: dict = {}
         self._canceled = False
@@ -415,6 +427,17 @@ class PipelineEngine:
         params = step.get("params", {})
         timeout = step.get("timeout_seconds", step.get("timeout", 300))
 
+        if step.get("enabled") is False:
+            result = StepResult(success=True, skipped=True, skip_reason="step disabled")
+            self._report_step_trace_mq(
+                step_id,
+                stage,
+                "COMPLETED",
+                "SKIPPED",
+                output=result.skip_reason,
+            )
+            return result
+
         self._report_step_trace_mq(step_id, stage, "STARTED", "RUNNING")
 
         # Validate params against builtin action schema (warn only, never blocks)
@@ -437,6 +460,9 @@ class PipelineEngine:
             logger=self._make_mq_logger(step_id, log_file),
             shared=self._shared,
             local_db=self._local_db,
+            log_dir=self._log_dir or "",
+            adb_path=self._adb_path or "",
+            nfs_root=self._nfs_root or "",
         )
 
         try:
@@ -453,11 +479,15 @@ class PipelineEngine:
             result = StepResult(success=False, exit_code=1, error_message=str(e))
 
         event_type = "COMPLETED" if result.success else "FAILED"
+        status = "SKIPPED" if result.success and result.skipped else (
+            "COMPLETED" if result.success else "FAILED"
+        )
         self._report_step_trace_mq(
             step_id,
             stage,
             event_type,
-            "COMPLETED" if result.success else "FAILED",
+            status,
+            output=result.skip_reason if result.skipped else None,
             error_message=result.error_message if not result.success else None,
         )
 
@@ -493,7 +523,87 @@ class PipelineEngine:
                 ctx, tool_id, required_version
             )
 
+        if action.startswith("script:"):
+            return lambda ctx: self._run_script_action(ctx, step)
+
         return None
+
+    def _run_script_action(self, ctx: StepContext, step: dict) -> StepResult:
+        """Execute a script:<name> action through ScriptRegistry metadata."""
+        if self._script_registry is None:
+            return StepResult(
+                success=False,
+                exit_code=1,
+                error_message="ScriptRegistry not available — cannot execute script: action",
+            )
+
+        action = step.get("action", "")
+        name = action.split(":", 1)[1]
+        version = step.get("version", "")
+
+        try:
+            entry = self._script_registry.resolve(name, version)
+        except Exception as exc:
+            return StepResult(success=False, exit_code=1, error_message=str(exc))
+
+        runners = {
+            "python": [sys.executable, entry.nfs_path],
+            "shell": ["bash", entry.nfs_path],
+            "bat": ["cmd.exe", "/c", entry.nfs_path],
+        }
+        cmd = runners.get(entry.script_type)
+        if cmd is None:
+            return StepResult(
+                success=False,
+                exit_code=1,
+                error_message=f"Unsupported script_type: {entry.script_type}",
+            )
+
+        env = os.environ.copy()
+        env.update({
+            "STP_DEVICE_SERIAL": ctx.serial,
+            "STP_ADB_PATH": ctx.adb_path or self._adb_path or "",
+            "STP_LOG_DIR": ctx.log_dir or "",
+            "STP_STEP_PARAMS": json.dumps(ctx.params or {}, ensure_ascii=False),
+            "STP_NFS_ROOT": ctx.nfs_root or self._nfs_root or "",
+            "STP_JOB_ID": str(ctx.job_id),
+        })
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=step.get("timeout_seconds", 300),
+                cwd=os.path.dirname(entry.nfs_path) or None,
+            )
+        except subprocess.TimeoutExpired:
+            return StepResult(success=False, exit_code=124, error_message="script timeout")
+        except Exception as exc:
+            return StepResult(success=False, exit_code=1, error_message=str(exc))
+
+        if proc.returncode != 0:
+            return StepResult(
+                success=False,
+                exit_code=proc.returncode,
+                error_message=(proc.stderr or proc.stdout or "")[:2000],
+            )
+
+        payload = {}
+        stdout = (proc.stdout or "").strip()
+        if stdout:
+            try:
+                payload = json.loads(stdout)
+            except json.JSONDecodeError:
+                payload = {}
+
+        return StepResult(
+            success=True,
+            metrics=payload.get("metrics", {}) if isinstance(payload, dict) else {},
+            skipped=bool(payload.get("skipped")) if isinstance(payload, dict) else False,
+            skip_reason=payload.get("skip_reason", "") if isinstance(payload, dict) else "",
+        )
 
     def _run_tool_action_stages(
         self, ctx: StepContext, tool_id: int, required_version: str
@@ -585,6 +695,7 @@ class PipelineEngine:
         stage: str,
         event_type: str,
         status: str,
+        output: Optional[str] = None,
         error_message: Optional[str] = None,
     ) -> None:
         """Send step_trace via MQ (primary) or WS fallback."""
@@ -595,6 +706,7 @@ class PipelineEngine:
                 stage=stage,
                 event_type=event_type,
                 status=status,
+                output=output,
                 error_message=error_message,
             )
             return
@@ -608,6 +720,7 @@ class PipelineEngine:
                     "stage": stage,
                     "event_type": event_type,
                     "status": status,
+                    "output": output,
                 }
             )
 

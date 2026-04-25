@@ -380,6 +380,23 @@ export interface ToolEntry {
   updated_at?: string;
 }
 
+export interface ScriptEntry {
+  id: number;
+  name: string;
+  display_name?: string | null;
+  category?: string | null;
+  script_type: 'python' | 'shell' | 'bat' | string;
+  version: string;
+  nfs_path: string;
+  entry_point?: string | null;
+  content_sha256: string;
+  param_schema: Record<string, any>;
+  is_active: boolean;
+  description?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface BuiltinActionEntry {
   name: string;
   label: string;
@@ -441,6 +458,7 @@ export interface PipelineStep {
   params?: Record<string, any>;
   timeout_seconds: number;
   retry?: number;
+  enabled?: boolean;
 }
 
 export interface PipelineDef {
@@ -449,6 +467,16 @@ export interface PipelineDef {
     execute?: PipelineStep[];
     post_process?: PipelineStep[];
   };
+}
+
+export interface PipelineStepOverride {
+  template_name: string;
+  stage: 'prepare' | 'execute' | 'post_process';
+  step_id: string;
+  params?: Record<string, any>;
+  timeout_seconds?: number;
+  retry?: number;
+  enabled?: boolean;
 }
 
 export interface TaskTemplateEntry {
@@ -464,6 +492,8 @@ export interface WorkflowDefinition {
   name: string;
   description?: string | null;
   failure_threshold: number;
+  setup_pipeline?: PipelineDef | null;
+  teardown_pipeline?: PipelineDef | null;
   task_templates?: TaskTemplateEntry[];
   created_at: string;
 }
@@ -472,6 +502,8 @@ export interface WorkflowDefinitionCreate {
   name: string;
   description?: string;
   failure_threshold?: number;
+  setup_pipeline?: PipelineDef | null;
+  teardown_pipeline?: PipelineDef | null;
   task_templates?: Omit<TaskTemplateEntry, 'id' | 'workflow_definition_id'>[];
 }
 
@@ -535,6 +567,28 @@ export interface WorkflowRun {
 export interface WorkflowRunCreate {
   device_ids: number[];
   failure_threshold?: number;
+  step_overrides?: PipelineStepOverride[];
+}
+
+export interface WorkflowRunPreviewTemplate {
+  id?: number;
+  name: string;
+  sort_order?: number;
+  resolved_pipeline: PipelineDef;
+  total_steps: number;
+  disabled_steps: number;
+  executable_steps: number;
+}
+
+export interface WorkflowRunPreview {
+  workflow_definition_id: number;
+  failure_threshold: number;
+  device_ids: number[];
+  device_count: number;
+  template_count: number;
+  job_count: number;
+  executable_steps_per_device: number;
+  templates: WorkflowRunPreviewTemplate[];
 }
 
 export interface WorkflowSummary {

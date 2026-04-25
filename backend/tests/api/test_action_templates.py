@@ -94,3 +94,31 @@ def test_action_template_validation(client):
         },
     )
     assert missing_version.status_code == 422
+
+    # script action 必须有 version
+    missing_script_version = client.post(
+        "/api/v1/action-templates",
+        json={
+            "name": _uniq("invalid_script_without_version"),
+            "action": "script:push_bundle",
+            "params": {},
+            "timeout_seconds": 60,
+            "retry": 0,
+        },
+    )
+    assert missing_script_version.status_code == 422
+
+    valid_script = client.post(
+        "/api/v1/action-templates",
+        json={
+            "name": _uniq("valid_script_template"),
+            "action": "script:push_bundle",
+            "version": "2.0.0",
+            "params": {"bundle_name": "audio_stability_v2"},
+            "timeout_seconds": 600,
+            "retry": 0,
+        },
+    )
+    assert valid_script.status_code == 201
+    assert valid_script.json()["data"]["action"] == "script:push_bundle"
+    assert valid_script.json()["data"]["version"] == "2.0.0"

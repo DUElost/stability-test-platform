@@ -7,7 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, type WorkflowRun, type JobInstance, type StepTrace, type JobStatus, type WorkflowStatus, type JiraDraft } from '@/utils/api';
 import { useSocketIO as useWebSocket } from '@/hooks/useSocketIO';
 import { formatLocalDateTime, formatLocalTime, parseIsoToDate } from '@/utils/time';
-import { ArrowLeft, RefreshCw, X, FileText, Download, Bug } from 'lucide-react';
+import { ArrowLeft, RefreshCw, X, FileText, Download, Bug, Search } from 'lucide-react';
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -166,7 +166,7 @@ function JobLogStream({ jobId }: { jobId: number }) {
 
 type DrawerTab = 'trace' | 'logs' | 'artifacts';
 
-function ArtifactList({ runId, jobId }: { runId: number; jobId: number }) {
+export function ArtifactList({ runId, jobId }: { runId: number; jobId: number }) {
   const { data: artifacts, isLoading } = useQuery({
     queryKey: ['job-artifacts', runId, jobId],
     queryFn: () => api.execution.listJobArtifacts(runId, jobId),
@@ -185,7 +185,7 @@ function ArtifactList({ runId, jobId }: { runId: number; jobId: number }) {
               {a.artifact_type}{a.size_bytes ? ` · ${(a.size_bytes / 1024).toFixed(1)} KB` : ''}
             </div>
           </div>
-          <a href={`/api/v1/runs/${jobId}/artifacts/${a.id}/download`} target="_blank" rel="noreferrer">
+          <a href={api.execution.artifactDownloadUrl(runId, jobId, a.id)} target="_blank" rel="noreferrer">
             <Download className="w-4 h-4 text-gray-400 hover:text-blue-500" />
           </a>
         </div>
@@ -212,7 +212,7 @@ function JobDrawer({ job, runId, onClose }: { job: JobInstance; runId: number; o
   };
 
   return (
-    <div className="fixed inset-y-0 right-0 z-50 w-96 bg-white shadow-2xl border-l flex flex-col">
+    <div className="fixed inset-y-0 right-0 z-50 w-full max-w-5xl bg-white shadow-2xl border-l flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b">
         <h2 className="font-semibold text-gray-900">Job #{job.id}</h2>
         <button onClick={onClose} className="p-1 rounded hover:bg-gray-100">
@@ -306,6 +306,7 @@ export default function WorkflowRunMatrixPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [selectedJob, setSelectedJob] = useState<JobInstance | null>(null);
+  const [jobQuery, setJobQuery] = useState('');
 
   const { data: run, isLoading: runLoading } = useQuery({
     queryKey: ['workflow-run', runId],
@@ -350,6 +351,18 @@ export default function WorkflowRunMatrixPage() {
   }, [lastMessage, runId, queryClient]);
 
   const allJobs = jobs ?? [];
+  const filteredJobs = allJobs.filter((job) => {
+    const q = jobQuery.trim().toLowerCase();
+    if (!q) return true;
+    return [
+      String(job.id),
+      String(job.device_id),
+      job.device_serial ?? '',
+      job.status,
+      job.status_reason ?? '',
+      job.host_id ?? '',
+    ].some((value) => value.toLowerCase().includes(q));
+  });
   const counts = {
     COMPLETED: allJobs.filter(j => j.status === 'COMPLETED').length,
     FAILED:    allJobs.filter(j => j.status === 'FAILED' || j.status === 'ABORTED').length,
@@ -441,7 +454,18 @@ export default function WorkflowRunMatrixPage() {
       {/* Matrix */}
       <Card>
         <CardHeader>
-          <CardTitle>设备矩阵 ({allJobs.length} 台)</CardTitle>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <CardTitle>设备矩阵 ({filteredJobs.length} / {allJobs.length} 台)</CardTitle>
+            <div className="relative md:w-72">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <input
+                value={jobQuery}
+                onChange={(event) => setJobQuery(event.target.value)}
+                className="h-9 w-full rounded-md border border-gray-200 bg-white pl-8 pr-3 text-sm focus:border-slate-400 focus:outline-none"
+                placeholder="搜索设备 / Job / 状态"
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {jobsLoading ? (
@@ -450,9 +474,11 @@ export default function WorkflowRunMatrixPage() {
             </div>
           ) : allJobs.length === 0 ? (
             <div className="text-center py-8 text-gray-400 text-sm">暂无 Job 数据</div>
+          ) : filteredJobs.length === 0 ? (
+            <div className="text-center py-8 text-gray-400 text-sm">没有匹配的 Job</div>
           ) : (
             <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 xl:grid-cols-10 gap-2">
-              {allJobs.map(job => (
+              {filteredJobs.map(job => (
                 <JobBlock
                   key={job.id}
                   job={job}
