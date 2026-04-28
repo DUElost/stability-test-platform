@@ -28,6 +28,11 @@ if __name__ == "__main__" and __package__ is None:
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lock_manager import LockRenewalManager
+    from agent.script_batch_runner import (
+        ScriptBatchRunnerState,
+        fetch_pending_batches,
+        run_script_batch,
+    )
     from agent.mq.producer import MQProducer
     from agent.outbox_drainer import OutboxDrainThread
     from agent.registry.local_db import LocalDB
@@ -45,6 +50,11 @@ else:
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lock_manager import LockRenewalManager
+    from .script_batch_runner import (
+        ScriptBatchRunnerState,
+        fetch_pending_batches,
+        run_script_batch,
+    )
     from .mq.producer import MQProducer
     from .outbox_drainer import OutboxDrainThread
     from .registry.local_db import LocalDB
@@ -294,6 +304,16 @@ def main() -> None:
         device_id_register=_register_active_device,
         device_id_deregister=_deregister_active_device,
     )
+    script_batch_state = ScriptBatchRunnerState(
+        active_jobs_lock=_active_jobs_lock,
+        active_job_ids=_active_job_ids,
+        active_device_ids=_active_device_ids,
+        watcher_enabled=STP_WATCHER_ENABLED,
+        lock_register=_register_active_job,
+        lock_deregister=_deregister_active_job,
+        device_id_register=_register_active_device,
+        device_id_deregister=_deregister_active_device,
+    )
 
     # SIGTERM / SIGINT graceful shutdown
     _shutdown_event = threading.Event()
@@ -313,6 +333,8 @@ def main() -> None:
                     active_count = len(_active_job_ids)
 
                 available_slots = max(0, max_concurrent_tasks - active_count)
+
+                logger.info("main_loop_tick active=%d slots=%d", active_count, available_slots)
 
                 if available_slots > 0:
                     jobs = fetch_pending_jobs(api_url, host_id)
@@ -364,6 +386,35 @@ def main() -> None:
                                 _active_job_ids.discard(job["id"])
                                 if device_id:
                                     _active_device_ids.discard(device_id)
+
+                # ── Script batch polling (fallback: lightweight script sequences) ──
+                if available_slots > 0:
+                    try:
+                        batch = fetch_pending_batches(api_url, host_id)
+                        if batch:
+                            batch_id = batch.get("batch_id")
+                            device_id = batch.get("device_id")
+                            with _active_jobs_lock:
+                                if device_id and device_id in _active_device_ids:
+                                    logger.debug("skip_script_batch_device_busy batch=%d device=%d", batch_id, device_id)
+                                else:
+                                    _active_job_ids.add(batch_id)
+                                    if device_id:
+                                        _active_device_ids.add(device_id)
+                                    logger.info("script_batch_submitting batch=%s device=%s", batch_id, device_id)
+                                    executor.submit(
+                                        run_script_batch,
+                                        batch,
+                                        adb,
+                                        api_url,
+                                        host_id,
+                                        script_batch_state,
+                                        script_registry,
+                                        local_db,
+                                    )
+                                    logger.info("script_batch_submitted batch=%s", batch_id)
+                    except Exception:
+                        logger.exception("script_batch_poll_failed host=%s", host_id)
             except Exception:
                 logger.exception("agent_loop_failed", extra={"host_id": host_id})
             # Use event wait instead of sleep so SIGTERM wakes us immediately

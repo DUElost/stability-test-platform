@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
@@ -60,7 +60,7 @@ def _iter_script_entries(root: Path) -> Iterable[Tuple[str, str, str, Path, str]
                 version = raw_version[1:]
                 candidates = [
                     p for p in sorted(version_dir.iterdir())
-                    if p.is_file() and detect_script_type(p)
+                    if p.is_file() and detect_script_type(p) and not p.name.startswith("_")
                 ]
                 if not candidates:
                     continue
@@ -78,7 +78,24 @@ def _is_under_root(path: str, root: Path) -> bool:
         return False
 
 
-def scan_script_root(db: Session, root: str | Path) -> ScriptScanResult:
+def _is_under_runtime_root(path: str, runtime_root: str) -> bool:
+    root = runtime_root.replace("\\", "/").rstrip("/")
+    target = path.replace("\\", "/").rstrip("/")
+    return bool(root) and (target == root or target.startswith(f"{root}/"))
+
+
+def _runtime_path(root: Path, entry: Path, runtime_root: str | None) -> str:
+    if not runtime_root:
+        return str(entry)
+
+    relative_parts = entry.relative_to(root).parts
+    normalized_root = runtime_root.rstrip("/\\")
+    if "\\" in normalized_root or (len(normalized_root) >= 2 and normalized_root[1] == ":"):
+        return str(PureWindowsPath(normalized_root, *relative_parts))
+    return str(PurePosixPath(normalized_root, *relative_parts))
+
+
+def scan_script_root(db: Session, root: str | Path, runtime_root: str | None = None) -> ScriptScanResult:
     root_path = Path(root).resolve()
     if not root_path.exists() or not root_path.is_dir():
         raise FileNotFoundError(f"script root not found: {root_path}")
@@ -103,7 +120,7 @@ def scan_script_root(db: Session, root: str | Path) -> ScriptScanResult:
                 category=category,
                 script_type=script_type,
                 version=version,
-                nfs_path=str(entry),
+                nfs_path=_runtime_path(root_path, entry, runtime_root),
                 entry_point="",
                 content_sha256=content_sha256,
                 param_schema={},
@@ -129,7 +146,10 @@ def scan_script_root(db: Session, root: str | Path) -> ScriptScanResult:
             continue
         if not row.is_active:
             continue
-        if not _is_under_root(row.nfs_path, root_path):
+        if runtime_root:
+            if not _is_under_runtime_root(row.nfs_path, runtime_root):
+                continue
+        elif not _is_under_root(row.nfs_path, root_path):
             continue
         row.is_active = False
         row.updated_at = now

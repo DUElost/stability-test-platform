@@ -13,9 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance, TaskTemplate
+from backend.models.resource_pool import ResourcePool
 from backend.models.script import Script
 from backend.models.tool import Tool
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.services.resource_pool import (
+    AllocationError,
+    allocate_devices,
+    create_allocations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +111,26 @@ def _resolve_template_pipeline(
     return _apply_step_overrides(resolved_pipeline, template.name, step_overrides)
 
 
+def _inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
+    """Inject WiFi pool SSID/password into connect_wifi step params."""
+    if not wifi_params or not wifi_params.get("ssid"):
+        return pipeline
+
+    for stage_steps in (pipeline or {}).get("stages", {}).values():
+        for step in (stage_steps or []):
+            action = step.get("action", "")
+            if "connect_wifi" not in action:
+                continue
+            params = dict(step.get("params") or {})
+            if not params.get("ssid"):
+                params["ssid"] = wifi_params["ssid"]
+            if not params.get("password"):
+                params["password"] = wifi_params.get("password", "")
+            step["params"] = params
+
+    return pipeline
+
+
 async def preview_workflow_dispatch(
     workflow_def_id: int,
     device_ids: List[int],
@@ -161,8 +187,9 @@ async def dispatch_workflow(
     1. Load WorkflowDefinition + TaskTemplates
     2. Validate all tool_ids in pipeline_defs are active
     3. Create WorkflowRun (RUNNING)
-    4. Create JobInstance per (device_id × TaskTemplate)
-    5. Return WorkflowRun
+    4. Allocate WiFi pools per device (ResourcePool decision layer)
+    5. Create JobInstance per (device_id × TaskTemplate) with WiFi params injected
+    6. Return WorkflowRun
     """
     wf_def = await db.get(WorkflowDefinition, workflow_def_id)
     if wf_def is None:
@@ -195,6 +222,20 @@ async def dispatch_workflow(
             orphan_devices,
         )
 
+    # ── ResourcePool: allocate WiFi per device ──
+    wifi_allocations: Dict[int, dict] = {}
+    try:
+        assignments = await allocate_devices(db, device_ids, resource_type="wifi")
+        for device_id, (_pool, alloc_params) in assignments.items():
+            wifi_allocations[device_id] = alloc_params
+        logger.info(
+            "dispatch_wifi_allocated: devices=%d pools_used=%d",
+            len(device_ids),
+            len({a[0].id for a in assignments.values()}),
+        )
+    except AllocationError as exc:
+        logger.warning("dispatch_wifi_allocation_skipped: %s", exc)
+
     run = WorkflowRun(
         workflow_definition_id=workflow_def_id,
         status="RUNNING",
@@ -206,13 +247,15 @@ async def dispatch_workflow(
     await db.flush()
 
     now = datetime.utcnow()
-    # Device locking is deferred to the claim endpoint (agent_api.get_pending_jobs)
-    # which atomically transitions PENDING → RUNNING + acquires the device lock.
-    # Pre-locking here would use WorkflowRun.id as the lock owner, but claim/complete
-    # use JobInstance.id, causing an owner semantic mismatch.
+    job_device_pairs: Dict[int, int] = {}
     for device_id in device_ids:
         for template in templates:
             resolved_pipeline = _resolve_template_pipeline(wf_def, template, step_overrides)
+            # Inject WiFi allocation into pipeline step params
+            wifi_params = wifi_allocations.get(device_id)
+            if wifi_params:
+                resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
+
             job = JobInstance(
                 workflow_run_id=run.id,
                 task_template_id=template.id,
@@ -224,6 +267,21 @@ async def dispatch_workflow(
                 updated_at=now,
             )
             db.add(job)
+            await db.flush()
+            job_device_pairs[job.id] = device_id
+
+    # Persist ResourceAllocation records
+    if wifi_allocations:
+        assignment_refs = {
+            did: (
+                (await db.execute(
+                    select(ResourcePool).where(ResourcePool.id == wifi_allocations[did]["pool_id"])
+                )).scalar(),
+                wifi_allocations[did],
+            )
+            for did in wifi_allocations
+        }
+        await create_allocations(db, assignment_refs, job_device_pairs)
 
     await db.commit()
     await db.refresh(run)

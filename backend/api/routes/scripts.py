@@ -73,6 +73,10 @@ def _script_root() -> str:
     return str(Path(os.getenv("STP_NFS_ROOT", "/mnt/storage/test-platform")) / "scripts")
 
 
+def _script_runtime_root() -> str | None:
+    return os.getenv("STP_SCRIPT_RUNTIME_ROOT")
+
+
 def _script_out(script: Script) -> ScriptOut:
     return ScriptOut(
         id=script.id,
@@ -106,7 +110,7 @@ def list_script_categories(db: Session = Depends(get_db)):
 @router.post("/scan", response_model=ApiResponse[dict])
 def scan_scripts(db: Session = Depends(get_db)):
     try:
-        result = scan_script_root(db, _script_root())
+        result = scan_script_root(db, _script_root(), _script_runtime_root())
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return ok(result.to_dict())

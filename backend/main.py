@@ -34,12 +34,17 @@ from backend.api.routes.schedules import router as schedules_router
 from backend.api.routes.templates import router as templates_router
 from backend.api.routes.pipeline import router as pipeline_router
 from backend.api.routes.scripts import router as scripts_router
+from backend.api.routes.script_sequences import router as script_sequences_router
+from backend.api.routes.script_executions import router as script_executions_router
 from backend.api.routes.builtin_actions import router as builtin_actions_router
 # Phase 3: new routers replace legacy workflows + tools
 from backend.api.routes.orchestration import router as orchestration_router
 from backend.api.routes.tool_catalog import router as tool_catalog_router
 from backend.api.routes.action_templates import router as action_templates_router
 from backend.api.routes.agent_api import router as agent_api_router
+from backend.api.routes.agent_script_api import router as agent_script_api_router
+from backend.api.routes.resource_pools import router as resource_pools_router
+from backend.api.routes.script_batches import router as script_batches_router
 from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
@@ -156,11 +161,16 @@ _fastapi_app.include_router(schedules_router)
 _fastapi_app.include_router(templates_router)
 _fastapi_app.include_router(pipeline_router)
 _fastapi_app.include_router(scripts_router)
+_fastapi_app.include_router(script_sequences_router)
+_fastapi_app.include_router(script_executions_router)
 _fastapi_app.include_router(builtin_actions_router)
 _fastapi_app.include_router(tool_catalog_router)
 _fastapi_app.include_router(action_templates_router)
 _fastapi_app.include_router(orchestration_router)
 _fastapi_app.include_router(agent_api_router)
+_fastapi_app.include_router(agent_script_api_router)
+_fastapi_app.include_router(resource_pools_router)
+_fastapi_app.include_router(script_batches_router)
 
 
 @_fastapi_app.get("/")

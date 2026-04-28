@@ -91,3 +91,26 @@ def test_script_scan_registers_conflicts_and_deactivates_missing(client, tmp_pat
     inactive_list = client.get("/api/v1/scripts", params={"is_active": True})
     assert inactive_list.status_code == 200
     assert inactive_list.json()["data"] == []
+
+
+def test_script_scan_maps_source_root_to_agent_runtime_root(client, tmp_path, monkeypatch):
+    root = tmp_path / "agent" / "scripts"
+    version_dir = root / "device" / "connect_wifi" / "v1.0.0"
+    version_dir.mkdir(parents=True)
+    entry = version_dir / "connect_wifi.sh"
+    entry.write_text("#!/usr/bin/env bash\necho wifi\n", encoding="utf-8")
+
+    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
+    monkeypatch.setenv("STP_SCRIPT_RUNTIME_ROOT", "/opt/stability-test-agent/agent/scripts")
+
+    scan_resp = client.post("/api/v1/scripts/scan")
+    assert scan_resp.status_code == 200
+
+    list_resp = client.get("/api/v1/scripts", params={"is_active": True})
+    assert list_resp.status_code == 200
+    scripts = list_resp.json()["data"]
+    assert len(scripts) == 1
+    assert (
+        scripts[0]["nfs_path"]
+        == "/opt/stability-test-agent/agent/scripts/device/connect_wifi/v1.0.0/connect_wifi.sh"
+    )
