@@ -20,8 +20,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from sqlalchemy import or_
-
 from backend.core.database import SessionLocal
 from backend.realtime.socketio_server import schedule_emit
 from backend.core.metrics import (
@@ -214,15 +212,12 @@ def recycle_once() -> None:
             .all()
         )
 
-        # 2) RUNNING timeout — job started but no completion within window
+        # 2) RUNNING timeout — job has not reported liveness within window
         expired_running = (
             db.query(JobInstance)
             .filter(
                 JobInstance.status == JobStatus.RUNNING.value,
-                or_(
-                    (JobInstance.started_at.isnot(None)) & (JobInstance.started_at < running_deadline),
-                    (JobInstance.started_at.is_(None)) & (JobInstance.created_at < running_deadline),
-                ),
+                JobInstance.updated_at < running_deadline,
             )
             .all()
         )
@@ -305,5 +300,4 @@ def _prune_steptrace_artifacts(db, now: datetime) -> None:
             "steptrace_artifacts_pruned",
             extra={"traces_scanned": len(old_traces), "files_deleted": file_deleted_count},
         )
-
 

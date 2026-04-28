@@ -4,6 +4,8 @@ Extracted from tasks.py (Wave 8) — these are independent endpoints
 that operate on JobInstance records, not part of the legacy compatibility layer.
 """
 
+from __future__ import annotations
+
 import logging
 from datetime import datetime
 from pathlib import Path

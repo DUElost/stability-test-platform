@@ -78,11 +78,21 @@ def _mark_missing_devices_offline(
         )
         .all()
     )
+    changed_devices = []
     for device in missing_devices:
         if device.serial not in seen_serials:
+            already_offline = (
+                device.status == "OFFLINE"
+                and device.adb_connected is False
+                and device.adb_state == "offline"
+            )
+            if already_offline:
+                continue
+
             device.status = "OFFLINE"
             device.adb_connected = False
             device.adb_state = "offline"
+            changed_devices.append(device)
             # Dispatch DEVICE_OFFLINE notification
             from backend.services.notification_service import dispatch_notification_async
             dispatch_notification_async("DEVICE_OFFLINE", {
@@ -90,7 +100,7 @@ def _mark_missing_devices_offline(
                 "device_id": device.id,
                 "host_id": host_id,
             })
-    return missing_devices
+    return changed_devices
 
 
 @router.post("/heartbeat")

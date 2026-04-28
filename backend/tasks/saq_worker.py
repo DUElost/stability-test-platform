@@ -90,7 +90,7 @@ async def stop_saq_worker() -> None:
     global _queue, _worker, _worker_task, _loop
 
     if _worker is not None:
-        _worker.stop()
+        await _worker.stop()
         if _worker_task is not None:
             try:
                 await asyncio.wait_for(_worker_task, timeout=10)

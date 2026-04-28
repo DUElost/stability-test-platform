@@ -295,6 +295,36 @@ class TestHeartbeat:
         assert old_device.status == DeviceStatus.OFFLINE.value
         assert old_device.adb_connected is False
 
+    def test_heartbeat_notifies_missing_device_offline_only_on_transition(
+        self, client, sample_host, db_session, monkeypatch
+    ):
+        calls = []
+        monkeypatch.setattr(
+            "backend.services.notification_service.dispatch_notification_async",
+            lambda event_type, context: calls.append((event_type, context["device_serial"])),
+        )
+        old_device = Device(
+            serial="OLD_NOTIFY_DEVICE",
+            host_id=sample_host.id,
+            status=DeviceStatus.ONLINE.value,
+            last_seen=datetime.utcnow() - timedelta(minutes=5),
+            adb_connected=True,
+        )
+        db_session.add(old_device)
+        db_session.commit()
+
+        payload = {
+            "host_id": sample_host.id,
+            "status": "ONLINE",
+            "devices": [],
+        }
+
+        assert client.post("/api/v1/heartbeat", json=payload).status_code == 200
+        assert calls == [("DEVICE_OFFLINE", "OLD_NOTIFY_DEVICE")]
+
+        assert client.post("/api/v1/heartbeat", json=payload).status_code == 200
+        assert calls == [("DEVICE_OFFLINE", "OLD_NOTIFY_DEVICE")]
+
     def test_heartbeat_updates_device_hardware_info(self, client, sample_host, db_session):
         """Test heartbeat updates device hardware information"""
         response = client.post(

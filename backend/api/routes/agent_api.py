@@ -491,12 +491,15 @@ async def job_heartbeat(
         raise HTTPException(status_code=404, detail="job not found")
 
     target = _RUN_TO_JOB.get(payload.status.upper(), JobStatus.RUNNING)
+    now = datetime.now(timezone.utc)
     try:
         JobStateMachine.transition(job, target, "agent_heartbeat")
-        if target == JobStatus.RUNNING and not job.started_at:
-            job.started_at = datetime.now(timezone.utc)
     except InvalidTransitionError:
         pass  # idempotent — already in target state
+    if target == JobStatus.RUNNING and job.status == JobStatus.RUNNING.value:
+        if not job.started_at:
+            job.started_at = now
+        job.updated_at = now
 
     await db.commit()
     return ok({"job_id": job_id, "status": job.status})
@@ -625,8 +628,9 @@ async def extend_job_lock(
     if not extended:
         raise HTTPException(status_code=409, detail="device locked by another job")
 
-    await db.commit()
     now = datetime.now(timezone.utc)
+    job.updated_at = now
+    await db.commit()
     expires_at = now + timedelta(seconds=_DEVICE_LOCK_LEASE_SECONDS)
     return ok({"job_id": job_id, "expires_at": expires_at.isoformat()})
 

@@ -1,7 +1,7 @@
 """Tests for Agent Jobs API routes."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -231,6 +231,42 @@ async def test_job_heartbeat_transitions_to_running():
 
 
 @pytest.mark.asyncio
+async def test_job_heartbeat_refreshes_liveness_for_running_job(engine):
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    old_liveness = datetime.now(timezone.utc) - timedelta(hours=1)
+    try:
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            job.updated_at = old_liveness
+            db.commit()
+        finally:
+            db.close()
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await job_heartbeat(
+                job_id=seed["job_id"],
+                payload=_JobHeartbeatIn(status="RUNNING"),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data["status"] == JobStatus.RUNNING.value
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.updated_at > old_liveness
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
 async def test_complete_job_maps_finished_to_completed():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     try:
@@ -309,14 +345,18 @@ async def test_complete_job_persists_run_complete_snapshot():
 
 
 @pytest.mark.asyncio
-async def test_extend_lock_success():
+async def test_extend_lock_success(engine):
     seed = _seed_job(status=JobStatus.RUNNING.value)
+    old_liveness = datetime.now(timezone.utc) - timedelta(hours=1)
     try:
         db = SessionLocal()
         try:
             device = db.get(Device, seed["device_id"])
             assert device is not None
             device.lock_run_id = seed["job_id"]
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            job.updated_at = old_liveness
             db.commit()
         finally:
             db.close()
@@ -327,6 +367,14 @@ async def test_extend_lock_success():
         assert result.error is None
         assert result.data["job_id"] == seed["job_id"]
         assert result.data["expires_at"]
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.updated_at > old_liveness
+        finally:
+            db.close()
     finally:
         _cleanup_seed(seed)
 

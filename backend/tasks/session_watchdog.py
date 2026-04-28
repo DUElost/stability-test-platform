@@ -61,6 +61,7 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
             try:
                 JobStateMachine.transition(job, JobStatus.UNKNOWN, "host_heartbeat_timeout")
                 job.ended_at = datetime.now(timezone.utc)
+                await release_lock(db, job.device_id, job.id)
                 await WorkflowAggregator.on_job_terminal(job, db)
                 affected_jobs += 1
             except InvalidTransitionError:
@@ -182,5 +183,4 @@ async def session_watchdog_once() -> None:
                 "jobs_failed=%d pending_tool_timeout=%d",
                 hosts_offline, jobs_unknown, locks_released, jobs_failed, pending_tool_failed,
             )
-
 

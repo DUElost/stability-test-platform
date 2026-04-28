@@ -39,7 +39,9 @@ def _seed_job_with_host(
         )
         device = Device(
             serial=f"S-{suffix}", host_id=host_id, status="BUSY", tags=[],
-            created_at=now, lock_run_id=lock_run_id, lock_expires_at=lock_expires_at,
+            created_at=now,
+            lock_run_id=None if lock_run_id == "auto" else lock_run_id,
+            lock_expires_at=lock_expires_at,
         )
         db.add_all([host, device])
         db.flush()
@@ -121,6 +123,30 @@ async def test_host_timeout_marks_offline_and_jobs_unknown():
 
     job = _get_job(seed["job_id"])
     assert job.status == JobStatus.UNKNOWN.value
+
+
+@pytest.mark.asyncio
+async def test_host_timeout_releases_running_job_lock():
+    """Host timeout should not leave a terminal job holding the device lock."""
+    old_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=300)
+    future_lock_expiry = datetime.now(timezone.utc) + timedelta(seconds=600)
+    seed = _seed_job_with_host(
+        host_heartbeat=old_heartbeat,
+        lock_run_id="auto",
+        lock_expires_at=future_lock_expiry,
+    )
+
+    await session_watchdog_once()
+
+    db = SessionLocal()
+    try:
+        device = db.get(Device, seed["device_id"])
+        assert device is not None
+        assert device.lock_run_id is None
+        assert device.lock_expires_at is None
+        assert device.status == "ONLINE"
+    finally:
+        db.close()
 
 
 @pytest.mark.asyncio

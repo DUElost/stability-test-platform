@@ -154,3 +154,41 @@ def test_get_queue_raises_when_uninitialised():
             mod.get_queue()
     finally:
         mod._queue = original
+
+
+@pytest.mark.asyncio
+async def test_stop_saq_worker_awaits_async_worker_stop():
+    """stop_saq_worker awaits Worker.stop() before disconnecting queue."""
+    import backend.tasks.saq_worker as mod
+
+    mock_worker = MagicMock()
+    mock_worker.stop = AsyncMock(return_value=None)
+    mock_queue = MagicMock()
+    mock_queue.disconnect = AsyncMock(return_value=None)
+    worker_task = asyncio.create_task(asyncio.sleep(0))
+
+    original_worker = mod._worker
+    original_worker_task = mod._worker_task
+    original_queue = mod._queue
+    original_loop = mod._loop
+    try:
+        mod._worker = mock_worker
+        mod._worker_task = worker_task
+        mod._queue = mock_queue
+        mod._loop = asyncio.get_running_loop()
+
+        await mod.stop_saq_worker()
+
+        mock_worker.stop.assert_awaited_once()
+        mock_queue.disconnect.assert_awaited_once()
+        assert mod._worker is None
+        assert mod._worker_task is None
+        assert mod._queue is None
+        assert mod._loop is None
+    finally:
+        if not worker_task.done():
+            worker_task.cancel()
+        mod._worker = original_worker
+        mod._worker_task = original_worker_task
+        mod._queue = original_queue
+        mod._loop = original_loop
