@@ -154,11 +154,6 @@ export default function WorkflowDefinitionEditPage() {
     queryFn: () => api.toolCatalog.list(true),
   });
 
-  const { data: builtinActions } = useQuery({
-    queryKey: ['builtin-catalog'],
-    queryFn: () => api.builtinCatalog.list(true),
-  });
-
   const { data: actionTemplates } = useQuery({
     queryKey: ['action-templates'],
     queryFn: () => api.actionTemplates.list(true),
@@ -645,14 +640,7 @@ export default function WorkflowDefinitionEditPage() {
                   param_schema: s.param_schema ?? {},
                   is_active: s.is_active,
                 }))}
-                builtinOptions={(builtinActions ?? []).map((a) => ({
-                  name: a.name,
-                  label: a.label,
-                  category: a.category,
-                  description: a.description,
-                  param_schema: a.param_schema ?? {},
-                  is_active: a.is_active,
-                }))}
+
                 actionTemplateOptions={(actionTemplates ?? []).map((t) => ({
                   id: t.id,
                   name: t.name,
@@ -696,14 +684,7 @@ export default function WorkflowDefinitionEditPage() {
                   param_schema: s.param_schema ?? {},
                   is_active: s.is_active,
                 }))}
-                builtinOptions={(builtinActions ?? []).map((a) => ({
-                  name: a.name,
-                  label: a.label,
-                  category: a.category,
-                  description: a.description,
-                  param_schema: a.param_schema ?? {},
-                  is_active: a.is_active,
-                }))}
+
                 actionTemplateOptions={(actionTemplates ?? []).map((t) => ({
                   id: t.id,
                   name: t.name,
@@ -737,14 +718,7 @@ export default function WorkflowDefinitionEditPage() {
                   param_schema: s.param_schema ?? {},
                   is_active: s.is_active,
                 }))}
-                builtinOptions={(builtinActions ?? []).map((a) => ({
-                  name: a.name,
-                  label: a.label,
-                  category: a.category,
-                  description: a.description,
-                  param_schema: a.param_schema ?? {},
-                  is_active: a.is_active,
-                }))}
+
                 actionTemplateOptions={(actionTemplates ?? []).map((t) => ({
                   id: t.id,
                   name: t.name,

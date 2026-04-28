@@ -31,7 +31,6 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { PipelineDef, PipelineStep } from '@/utils/api';
-import { BUILTIN_ACTIONS } from './actionCatalog';
 import { DynamicToolForm, type ParamSchema } from '@/components/task/DynamicToolForm';
 
 interface ActionTemplateOption {
@@ -45,15 +44,6 @@ interface ActionTemplateOption {
   is_active: boolean;
 }
 
-interface BuiltinActionOption {
-  name: string;
-  label: string;
-  category: 'device' | 'process' | 'file' | 'log' | 'script';
-  description: string;
-  param_schema: Record<string, any>;
-  is_active: boolean;
-}
-
 interface ScriptOption {
   id: number;
   name: string;
@@ -64,14 +54,13 @@ interface ScriptOption {
   is_active: boolean;
 }
 
-type ActionType = 'builtin' | 'tool' | 'script';
+type ActionType = 'tool' | 'script';
 
 interface StagesPipelineEditorProps {
   value: PipelineDef;
   onChange: (def: PipelineDef) => void;
   toolOptions?: { id: number; name: string; version: string }[];
   scriptOptions?: ScriptOption[];
-  builtinOptions?: BuiltinActionOption[];
   actionTemplateOptions?: ActionTemplateOption[];
   allowedStages?: Array<keyof PipelineDef['stages']>;
   readOnly?: boolean;
@@ -92,7 +81,6 @@ interface StepCardProps {
   canMoveDown: boolean;
   toolOptions: { id: number; name: string; version: string }[];
   scriptOptions: ScriptOption[];
-  builtinOptions: BuiltinActionOption[];
   readOnly?: boolean;
 }
 
@@ -104,7 +92,6 @@ interface StepEditorDrawerProps {
   onChange: (step: PipelineStep) => void;
   toolOptions: { id: number; name: string; version: string }[];
   scriptOptions: ScriptOption[];
-  builtinOptions: BuiltinActionOption[];
   actionTemplateOptions: ActionTemplateOption[];
   readOnly?: boolean;
 }
@@ -139,18 +126,10 @@ const STAGES: {
   },
 ];
 
-const BUILTIN_CATEGORY_LABEL: Record<BuiltinActionOption['category'], string> = {
-  device: '设备',
-  process: '进程',
-  file: '文件',
-  log: '日志',
-  script: '脚本',
-};
-
-function createEmptyStep(stageName: string, index: number, defaultBuiltin = 'check_device'): PipelineStep {
+function createEmptyStep(stageName: string, index: number): PipelineStep {
   return {
     step_id: `${stageName}_step_${index + 1}`,
-    action: `builtin:${defaultBuiltin}`,
+    action: '',
     timeout_seconds: 300,
     retry: 0,
     params: {},
@@ -188,27 +167,18 @@ function getActionMeta(
   step: PipelineStep,
   toolOptions: { id: number; name: string; version: string }[],
   scriptOptions: ScriptOption[],
-  builtinOptions: BuiltinActionOption[],
 ) {
-  const actionType: ActionType = step.action.startsWith('tool:')
-    ? 'tool'
-    : step.action.startsWith('script:')
-      ? 'script'
-      : 'builtin';
-  const builtinName = actionType === 'builtin' ? step.action.replace('builtin:', '') : '';
-  const toolId = actionType === 'tool' ? parseInt(step.action.replace('tool:', ''), 10) : 0;
-  const scriptName = actionType === 'script' ? step.action.replace('script:', '') : '';
-  const selectedBuiltin = builtinOptions.find((x) => x.name === builtinName);
+  const actionType: ActionType = step.action.startsWith('script:') ? 'script' : 'tool';
+  const toolId = actionType === 'tool' ? parseInt((step.action || '').replace('tool:', ''), 10) || 0 : 0;
+  const scriptName = actionType === 'script' ? (step.action || '').replace('script:', '') : '';
   const selectedTool = toolOptions.find((x) => x.id === toolId);
   const selectedScript = scriptOptions.find((x) => x.name === scriptName && x.version === step.version)
     ?? scriptOptions.find((x) => x.name === scriptName);
 
   return {
     actionType,
-    builtinName,
     toolId,
     scriptName,
-    selectedBuiltin,
     selectedTool,
     selectedScript,
   };
@@ -229,7 +199,6 @@ function StepCard({
   canMoveDown,
   toolOptions,
   scriptOptions,
-  builtinOptions,
   readOnly,
 }: StepCardProps) {
   const {
@@ -240,11 +209,10 @@ function StepCard({
     transition,
     isDragging,
   } = useSortable({ id, disabled: readOnly });
-  const { actionType, builtinName, toolId, scriptName, selectedBuiltin, selectedTool, selectedScript } = getActionMeta(
+  const { actionType, toolId, scriptName, selectedTool, selectedScript } = getActionMeta(
     step,
     toolOptions,
     scriptOptions,
-    builtinOptions,
   );
   const paramsCount = Object.keys(step.params ?? {}).length;
   const enabled = step.enabled !== false;
@@ -305,11 +273,9 @@ function StepCard({
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
             <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">
-              {actionType === 'tool'
-                ? `tool:${selectedTool?.name || toolId}`
-                : actionType === 'script'
-                  ? `script:${selectedScript?.name || scriptName}`
-                  : `builtin:${selectedBuiltin?.name || builtinName}`}
+              {actionType === 'script'
+                ? `script:${selectedScript?.name || scriptName}`
+                : `tool:${selectedTool?.name || toolId}`}
             </span>
             <span className="rounded bg-gray-100 px-1.5 py-0.5">params {paramsCount}</span>
             {!enabled && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">disabled</span>}
@@ -393,7 +359,6 @@ function StepEditorDrawer({
   onChange,
   toolOptions,
   scriptOptions,
-  builtinOptions,
   actionTemplateOptions,
   readOnly,
 }: StepEditorDrawerProps) {
@@ -407,24 +372,20 @@ function StepEditorDrawer({
   const meta = useMemo(() => {
     if (!step) {
       return {
-        actionType: 'builtin' as ActionType,
+        actionType: 'tool' as ActionType,
         scriptName: '',
-        builtinName: '',
         toolId: 0,
-        selectedBuiltin: undefined,
         selectedTool: undefined,
         selectedScript: undefined,
       };
     }
-    return getActionMeta(step, toolOptions, scriptOptions, builtinOptions);
-  }, [step, toolOptions, scriptOptions, builtinOptions]);
+    return getActionMeta(step, toolOptions, scriptOptions);
+  }, [step, toolOptions, scriptOptions]);
 
   const paramSchema = useMemo<ParamSchema | null>(() => {
-    const schema = meta.actionType === 'builtin'
-      ? meta.selectedBuiltin?.param_schema
-      : meta.actionType === 'script'
-        ? meta.selectedScript?.param_schema
-        : null;
+    const schema = meta.actionType === 'script'
+      ? meta.selectedScript?.param_schema
+      : null;
     return schema && Object.keys(schema).length > 0 ? (schema as ParamSchema) : null;
   }, [meta]);
 
@@ -478,26 +439,6 @@ function StepEditorDrawer({
     ))?.id ?? '';
   }, [actionTemplateOptions, step]);
 
-  const builtinGroups = useMemo(() => {
-    const grouped: Record<BuiltinActionOption['category'], BuiltinActionOption[]> = {
-      device: [],
-      process: [],
-      file: [],
-      log: [],
-      script: [],
-    };
-
-    builtinOptions.forEach((item) => {
-      grouped[item.category].push(item);
-    });
-
-    (Object.keys(grouped) as BuiltinActionOption['category'][]).forEach((key) => {
-      grouped[key].sort((a, b) => a.label.localeCompare(b.label));
-    });
-
-    return grouped;
-  }, [builtinOptions]);
-
   const scriptGroups = useMemo(() => {
     const grouped: Record<string, ScriptOption[]> = {};
     scriptOptions.filter((x) => x.is_active).forEach((item) => {
@@ -512,12 +453,6 @@ function StepEditorDrawer({
   const handleActionTypeChange = (type: ActionType) => {
     if (!step) return;
 
-    if (type === 'builtin') {
-      const firstBuiltin = builtinOptions[0]?.name || 'check_device';
-      onChange({ ...step, action: `builtin:${firstBuiltin}`, version: undefined });
-      return;
-    }
-
     if (type === 'tool' && toolOptions.length > 0) {
       const firstTool = toolOptions[0];
       onChange({ ...step, action: `tool:${firstTool.id}`, version: firstTool.version });
@@ -528,13 +463,6 @@ function StepEditorDrawer({
       const firstScript = scriptOptions[0];
       onChange({ ...step, action: `script:${firstScript.name}`, version: firstScript.version });
     }
-  };
-
-  const handleBuiltinChange = (name: string) => {
-    if (!step) return;
-    // When switching actions, carry current form/params values to new step
-    // (the useEffect will re-merge with new schema, preserving overlapping keys)
-    onChange({ ...step, action: `builtin:${name}`, version: undefined });
   };
 
   const handleToolChange = (idText: string) => {
@@ -684,33 +612,11 @@ function StepEditorDrawer({
                   disabled={readOnly}
                   className="rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
                 >
-                  <option value="builtin">builtin:</option>
                   {toolOptions.length > 0 && <option value="tool">tool:</option>}
                   {scriptOptions.length > 0 && <option value="script">script:</option>}
                 </select>
 
-                {meta.actionType === 'builtin' ? (
-                  <select
-                    value={meta.builtinName}
-                    onChange={(e) => handleBuiltinChange(e.target.value)}
-                    disabled={readOnly}
-                    className="flex-1 rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
-                  >
-                    {(Object.keys(builtinGroups) as BuiltinActionOption['category'][]).map((category) => {
-                      const items = builtinGroups[category];
-                      if (items.length === 0) return null;
-                      return (
-                        <optgroup key={category} label={BUILTIN_CATEGORY_LABEL[category]}>
-                          {items.map((item) => (
-                            <option key={item.name} value={item.name}>
-                              {item.label} ({item.name})
-                            </option>
-                          ))}
-                        </optgroup>
-                      );
-                    })}
-                  </select>
-                ) : meta.actionType === 'tool' ? (
+                {meta.actionType === 'tool' ? (
                   <select
                     value={meta.toolId}
                     onChange={(e) => handleToolChange(e.target.value)}
@@ -740,9 +646,6 @@ function StepEditorDrawer({
                   </select>
                 )}
               </div>
-              {meta.actionType === 'builtin' && meta.selectedBuiltin?.description && (
-                <p className="mt-1 text-xs text-gray-500">{meta.selectedBuiltin.description}</p>
-              )}
               {meta.actionType === 'tool' && step.version && (
                 <p className="mt-1 text-xs text-gray-500">锁定版本: v{step.version}</p>
               )}
@@ -821,7 +724,6 @@ export default function StagesPipelineEditor({
   onChange,
   toolOptions = [],
   scriptOptions = [],
-  builtinOptions = [],
   actionTemplateOptions = [],
   allowedStages,
   readOnly = false,
@@ -855,20 +757,6 @@ export default function StagesPipelineEditor({
     return map;
   }, []);
 
-  const builtinCatalog = (builtinOptions.length > 0
-    ? builtinOptions
-    : BUILTIN_ACTIONS.map((x) => ({
-      name: x.name,
-      label: x.label,
-      category: x.category,
-      description: x.description,
-      param_schema: x.paramSchema,
-      is_active: true,
-    }))
-  ).filter((x) => x.is_active);
-
-  const defaultBuiltin = builtinCatalog[0]?.name || 'check_device';
-
   const updateStage = (key: keyof PipelineDef['stages'], steps: PipelineStep[]) => {
     onChange({
       stages: {
@@ -882,7 +770,7 @@ export default function StagesPipelineEditor({
 
   const addStep = (key: keyof PipelineDef['stages']) => {
     const current = stages[key] || [];
-    updateStage(key, [...current, createEmptyStep(key, current.length, defaultBuiltin)]);
+    updateStage(key, [...current, createEmptyStep(key, current.length)]);
     setActiveStage(key);
     setEditingStep({ stage: key, index: current.length });
   };
@@ -1088,7 +976,6 @@ export default function StagesPipelineEditor({
                           canMoveDown={index < steps.length - 1}
                           toolOptions={toolOptions}
                           scriptOptions={scriptOptions}
-                          builtinOptions={builtinCatalog}
                           readOnly={readOnly}
                         />
                       ))}
@@ -1130,7 +1017,6 @@ export default function StagesPipelineEditor({
         }}
         toolOptions={toolOptions}
         scriptOptions={scriptOptions}
-        builtinOptions={builtinCatalog}
         actionTemplateOptions={actionTemplateOptions}
         readOnly={readOnly}
       />

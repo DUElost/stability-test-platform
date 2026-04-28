@@ -79,7 +79,7 @@ describe('StagesPipelineEditor', () => {
         initialValue={makePipeline([
           {
             step_id: 'check',
-            action: 'builtin:check_device',
+            action: 'script:check_device',
             params: {},
             timeout_seconds: 30,
             retry: 0,
@@ -113,7 +113,7 @@ describe('StagesPipelineEditor', () => {
         initialValue={makePipeline([
           {
             step_id: 'push_resources',
-            action: 'builtin:push_resources',
+            action: 'script:push_resources',
             params: { bundle: 'a.tar.gz' },
             timeout_seconds: 300,
             retry: 0,
@@ -151,14 +151,14 @@ describe('StagesPipelineEditor', () => {
         initialValue={makePipeline([
           {
             step_id: 'first',
-            action: 'builtin:check_device',
+            action: 'script:check_device',
             params: {},
             timeout_seconds: 30,
             retry: 0,
           },
           {
             step_id: 'second',
-            action: 'builtin:ensure_root',
+            action: 'script:ensure_root',
             params: {},
             timeout_seconds: 30,
             retry: 0,

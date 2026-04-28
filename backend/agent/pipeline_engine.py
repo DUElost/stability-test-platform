@@ -22,7 +22,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class StepContext:
     """Context passed to each action function."""
@@ -102,27 +101,6 @@ class PipelineAction:
 
 class PipelineEngine:
     """Executes a pipeline definition: phase-serial, intra-phase parallel."""
-
-    _builtin_catalog: Optional[Dict[str, dict]] = None
-
-    @classmethod
-    def _load_builtin_catalog(cls) -> Dict[str, dict]:
-        """Lazy-load builtin actions param_schema from JSON. Returns name -> param_schema."""
-        if cls._builtin_catalog is not None:
-            return cls._builtin_catalog
-        try:
-            catalog_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)),
-                "..", "schemas", "builtin_actions.json",
-            )
-            with open(catalog_path, "r", encoding="utf-8") as f:
-                actions = json.load(f)
-            cls._builtin_catalog = {
-                a["name"]: a.get("param_schema", {}) for a in actions
-            }
-        except Exception:
-            cls._builtin_catalog = {}
-        return cls._builtin_catalog
 
     def __init__(
         self,
@@ -405,21 +383,6 @@ class PipelineEngine:
                 time.sleep(5 * (attempt + 1))
         return False
 
-    def _validate_step_params(self, step_id: str, action: str, params: dict) -> None:
-        """Validate step params against builtin action param_schema. Warns only, never blocks."""
-        action_name = action.split(":", 1)[1]
-        catalog = self._load_builtin_catalog()
-        schema = catalog.get(action_name, {})
-
-        for param_key, field_def in schema.items():
-            if isinstance(field_def, dict) and field_def.get("required"):
-                value = params.get(param_key)
-                if value is None or value == "":
-                    logger.warning(
-                        "Step %s: missing required param '%s' for action '%s'",
-                        step_id, param_key, action_name,
-                    )
-
     def _execute_step_stages(self, stage: str, step: dict) -> StepResult:
         """Execute a single step in stages format. Reports STARTED/COMPLETED/FAILED via MQ."""
         step_id = step.get("step_id", "unknown")
@@ -439,10 +402,6 @@ class PipelineEngine:
             return result
 
         self._report_step_trace_mq(step_id, stage, "STARTED", "RUNNING")
-
-        # Validate params against builtin action schema (warn only, never blocks)
-        if action.startswith("builtin:"):
-            self._validate_step_params(step_id, action, params)
 
         log_file = None
         if self._log_dir:
@@ -499,16 +458,6 @@ class PipelineEngine:
 
     def _resolve_action_stages(self, action: str, step: dict) -> Optional[Callable]:
         """Resolve action for stages format. tool: uses ToolRegistry; no shell: allowed."""
-        if action.startswith("builtin:"):
-            action_name = action[len("builtin:") :]
-            try:
-                from .actions import ACTION_REGISTRY
-
-                return ACTION_REGISTRY.get(action_name)
-            except ImportError:
-                logger.error("Cannot import ACTION_REGISTRY")
-                return None
-
         if action.startswith("tool:"):
             try:
                 tool_id = int(action.split(":", 1)[1])

@@ -7,7 +7,8 @@ def test_validate_pipeline_def_accepts_stages_format():
             "prepare": [
                 {
                     "step_id": "check_device",
-                    "action": "builtin:check_device",
+                    "action": "script:check_device",
+                    "version": "1.0.0",
                     "params": {},
                     "timeout_seconds": 30,
                     "retry": 0,
@@ -30,7 +31,7 @@ def test_validate_pipeline_def_rejects_legacy_phases_format():
                 "steps": [
                     {
                         "name": "check_device",
-                        "action": "builtin:check_device",
+                        "action": "script:check_device",
                         "timeout": 30,
                     }
                 ],
@@ -100,13 +101,14 @@ def test_validate_pipeline_def_rejects_script_action_without_version():
     assert any("version is required for script action" in err for err in errors)
 
 
-def test_validate_pipeline_def_builtin_action_does_not_require_version():
+def test_validate_pipeline_def_rejects_action_with_invalid_prefix():
     pipeline_def = {
         "stages": {
             "prepare": [
                 {
-                    "step_id": "check_device",
-                    "action": "builtin:check_device",
+                    "step_id": "bad_action",
+                    "action": "invalid:something",
+                    "version": "1.0.0",
                     "params": {},
                     "timeout_seconds": 30,
                 }
@@ -116,8 +118,8 @@ def test_validate_pipeline_def_builtin_action_does_not_require_version():
 
     is_valid, errors = validate_pipeline_def(pipeline_def)
 
-    assert is_valid is True
-    assert errors == []
+    assert is_valid is False
+    assert any("action" in err.lower() for err in errors)
 
 
 def test_validate_pipeline_def_accepts_disabled_step():
@@ -126,7 +128,8 @@ def test_validate_pipeline_def_accepts_disabled_step():
             "prepare": [
                 {
                     "step_id": "skip_me",
-                    "action": "builtin:check_device",
+                    "action": "script:check_device",
+                    "version": "1.0.0",
                     "params": {},
                     "timeout_seconds": 30,
                     "retry": 0,
