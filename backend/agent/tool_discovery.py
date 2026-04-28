@@ -38,6 +38,7 @@ DEFAULT_TOOL_DIR = EXTERNAL_TOOL_DIR
 
 # 标记基类名称（与 pipeline_engine.PipelineAction 一致）
 _PIPELINE_ACTION_BASE = "PipelineAction"
+_TOOL_BUNDLE_MARKER = ".stp-tool-bundle"
 
 
 class ToolDiscovery:
@@ -45,6 +46,7 @@ class ToolDiscovery:
 
     def __init__(self, tool_dir: str = DEFAULT_TOOL_DIR, include_builtin: bool = True):
         self._dirs: List[Path] = []
+        self._tool_runtime_root = os.getenv("STP_TOOL_RUNTIME_ROOT", "").strip()
         external = Path(tool_dir)
         if external.exists():
             self._dirs.append(external)
@@ -70,30 +72,44 @@ class ToolDiscovery:
             if not tool_dir.exists():
                 continue
 
-            has_subdirs = any(
-                p.is_dir() and not p.name.startswith("_")
-                for p in tool_dir.iterdir()
-            )
+            for script_file in tool_dir.iterdir():
+                if not script_file.is_file() or script_file.suffix != ".py" or script_file.name.startswith("_"):
+                    continue
+                info = self._parse_script(script_file, None)
+                if info:
+                    info["script_path"] = self._script_path_for_runtime(script_file)
+                    tools.append(info)
 
-            if has_subdirs:
-                for category_dir in tool_dir.iterdir():
-                    if not category_dir.is_dir() or category_dir.name.startswith("_"):
+            for category_dir in tool_dir.iterdir():
+                if not category_dir.is_dir() or category_dir.name.startswith("_"):
+                    continue
+                if (category_dir / _TOOL_BUNDLE_MARKER).exists():
+                    continue
+                for script_file in category_dir.iterdir():
+                    if not script_file.is_file() or script_file.suffix != ".py" or script_file.name.startswith("_"):
                         continue
-                    for script_file in category_dir.iterdir():
-                        if script_file.suffix != ".py" or script_file.name.startswith("_"):
-                            continue
-                        info = self._parse_script(script_file, category_dir.name)
-                        if info:
-                            tools.append(info)
-            else:
-                for script_file in tool_dir.iterdir():
-                    if script_file.suffix != ".py" or script_file.name.startswith("_"):
-                        continue
-                    info = self._parse_script(script_file, None)
+                    info = self._parse_script(script_file, category_dir.name)
                     if info:
+                        info["script_path"] = self._script_path_for_runtime(script_file)
                         tools.append(info)
 
         return tools
+
+    def _script_path_for_runtime(self, script_path: Path) -> str:
+        """Return the path agents should load for built-in tools."""
+        if not self._tool_runtime_root:
+            return str(script_path)
+
+        try:
+            relative = script_path.resolve().relative_to(BUILTIN_TOOL_DIR.resolve())
+        except ValueError:
+            return str(script_path)
+
+        root = self._tool_runtime_root.rstrip("\\/")
+        relative_posix = relative.as_posix()
+        if root.startswith("/"):
+            return f"{root}/{relative_posix}"
+        return str(Path(root) / relative)
 
     def _parse_script(self, script_path: Path, category: Optional[str]) -> Optional[Dict[str, Any]]:
         """解析脚本，查找继承 PipelineAction 的类。"""

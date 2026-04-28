@@ -5,13 +5,14 @@ import importlib.util
 import json
 import logging
 import os
+from dataclasses import replace
 
 try:
     from .. import config
-    from ..pipeline_engine import StepContext, StepResult
+    from ..pipeline_engine import PipelineAction, StepContext, StepResult
 except ModuleNotFoundError:  # pragma: no cover
     from agent import config
-    from agent.pipeline_engine import StepContext, StepResult
+    from agent.pipeline_engine import PipelineAction, StepContext, StepResult
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,41 @@ def _convert_windows_path(script_path: str) -> str:
         if os.path.exists(linux_path):
             return linux_path
     return script_path
+
+
+def _load_default_params(raw):
+    if raw is None:
+        return {}
+    if isinstance(raw, str):
+        if not raw.strip():
+            return {}
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raise ValueError("default_params must be valid JSON")
+    if not isinstance(raw, dict):
+        raise ValueError("default_params must be an object")
+    return raw
+
+
+def _is_pipeline_action_class(tool_class) -> bool:
+    if not isinstance(tool_class, type):
+        return False
+    try:
+        if issubclass(tool_class, PipelineAction):
+            return True
+    except TypeError:
+        return False
+    return any(base.__name__ == "PipelineAction" for base in tool_class.__mro__[1:])
+
+
+def _load_host_id() -> int:
+    raw = os.getenv("HOST_ID", "0")
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        logger.debug("Ignoring non-numeric HOST_ID for legacy tool adapter: %r", raw)
+        return 0
 
 
 def run_tool_script(ctx: StepContext) -> StepResult:
@@ -52,9 +88,18 @@ def run_tool_script(ctx: StepContext) -> StepResult:
         if tool_class is None:
             return StepResult(success=False, exit_code=1, error_message=f"Class {script_class} not found in {script_path}")
 
+        default_params = _load_default_params(ctx.params.get("default_params", {}))
+        merged_params = {**default_params, **ctx.params}
+
+        if _is_pipeline_action_class(tool_class):
+            result = tool_class().run(replace(ctx, params=merged_params))
+            if isinstance(result, StepResult):
+                return result
+            return StepResult(success=bool(result))
+
         # Instantiate and run
         api_url = os.getenv("API_URL", "")
-        host_id = int(os.getenv("HOST_ID", "0") or 0)
+        host_id = _load_host_id()
         log_dir = config.get_run_log_dir(ctx.run_id) if ctx.run_id else ""
         instance = tool_class(
             adb_wrapper=ctx.adb,
@@ -64,23 +109,6 @@ def run_tool_script(ctx: StepContext) -> StepResult:
             device_serial=ctx.serial,
             log_dir=log_dir,
         )
-
-        # Merge default params with step params
-        default_params = ctx.params.get("default_params", {})
-        if default_params is None:
-            default_params = {}
-        if isinstance(default_params, str):
-            if not default_params.strip():
-                default_params = {}
-            else:
-                try:
-                    default_params = json.loads(default_params)
-                except Exception:
-                    return StepResult(success=False, exit_code=1, error_message="default_params must be valid JSON")
-        if not isinstance(default_params, dict):
-            return StepResult(success=False, exit_code=1, error_message="default_params must be an object")
-
-        merged_params = {**default_params, **ctx.params}
 
         result = instance.run(ctx.serial, merged_params)
 

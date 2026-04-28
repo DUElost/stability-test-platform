@@ -22,6 +22,15 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+_MAX_STEP_OUTPUT_CHARS = 64 * 1024
+
+
+def _truncate_step_output(value: str) -> str:
+    if len(value) <= _MAX_STEP_OUTPUT_CHARS:
+        return value
+    return value[:_MAX_STEP_OUTPUT_CHARS] + "\n[truncated]"
+
+
 @dataclass
 class StepContext:
     """Context passed to each action function."""
@@ -60,6 +69,7 @@ class StepResult:
     error_message: str = ""
     metrics: dict = field(default_factory=dict)
     artifact: Optional[dict] = None
+    output: str = ""
     metadata: dict = field(default_factory=dict)
     skipped: bool = False
     skip_reason: str = ""
@@ -446,7 +456,7 @@ class PipelineEngine:
             stage,
             event_type,
             status,
-            output=result.skip_reason if result.skipped else None,
+            output=result.skip_reason if result.skipped else (result.output or None),
             error_message=result.error_message if not result.success else None,
         )
 
@@ -532,18 +542,23 @@ class PipelineEngine:
         except Exception as exc:
             return StepResult(success=False, exit_code=1, error_message=str(exc))
 
+        stdout = proc.stdout or ""
+        stderr = proc.stderr or ""
+        combined_output = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
+
         if proc.returncode != 0:
             return StepResult(
                 success=False,
                 exit_code=proc.returncode,
-                error_message=(proc.stderr or proc.stdout or "")[:2000],
+                error_message=(stderr or stdout or "")[:2000],
+                output=_truncate_step_output(combined_output),
             )
 
         payload = {}
-        stdout = (proc.stdout or "").strip()
-        if stdout:
+        clean_stdout = stdout.strip()
+        if clean_stdout:
             try:
-                payload = json.loads(stdout)
+                payload = json.loads(clean_stdout)
             except json.JSONDecodeError:
                 payload = {}
 
@@ -552,6 +567,7 @@ class PipelineEngine:
             metrics=payload.get("metrics", {}) if isinstance(payload, dict) else {},
             skipped=bool(payload.get("skipped")) if isinstance(payload, dict) else False,
             skip_reason=payload.get("skip_reason", "") if isinstance(payload, dict) else "",
+            output=_truncate_step_output(combined_output),
         )
 
     def _run_tool_action_stages(

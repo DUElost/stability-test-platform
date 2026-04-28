@@ -39,3 +39,4 @@ venv-wsl/
 ssh/inventory.ini
 ssh/*.retry
 .worktrees/
+/backend/agent/tools/AIMonkeyTest_20260317

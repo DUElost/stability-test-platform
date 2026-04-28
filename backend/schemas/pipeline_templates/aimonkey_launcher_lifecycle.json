@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "description": "AIMonkey 20260317 node-local launcher lifecycle; JobSession watcher handles log monitoring and export.",
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": {
+      "stages": {
+        "prepare": [
+          {
+            "step_id": "check_device",
+            "action": "builtin:check_device",
+            "timeout_seconds": 30,
+            "retry": 1,
+            "params": {}
+          },
+          {
+            "step_id": "ensure_root",
+            "action": "builtin:ensure_root",
+            "timeout_seconds": 30,
+            "retry": 2,
+            "params": { "max_attempts": 3 }
+          }
+        ],
+        "execute": [
+          {
+            "step_id": "start_aimonkey_launcher",
+            "action": "builtin:run_tool_script",
+            "timeout_seconds": 1200,
+            "retry": 0,
+            "params": {
+              "script_path": "/opt/stability-test-agent/agent/tools/aimonkey_launcher.py",
+              "script_class": "AIMonkeyLauncherAction",
+              "default_params": {
+                "need_nohup": false,
+                "push_resources": true,
+                "sleep_mode": false,
+                "blacklist": true
+              }
+            }
+          }
+        ],
+        "post_process": []
+      }
+    },
+    "patrol": {
+      "interval_seconds": 300,
+      "stages": {
+        "prepare": [
+          {
+            "step_id": "check_device",
+            "action": "builtin:check_device",
+            "timeout_seconds": 30,
+            "retry": 1,
+            "params": {}
+          }
+        ],
+        "execute": [
+          {
+            "step_id": "guard_monkey_process",
+            "action": "builtin:guard_process",
+            "timeout_seconds": 60,
+            "retry": 0,
+            "params": {
+              "process_name": "com.android.commands.monkey",
+              "restart_command": "monkey --kill-process-after-error --ignore-crashes --ignore-timeouts --ignore-security-exceptions --monitor-native-crashes --ignore-native-crashes --match-description skip_application_not_responding_traces --pkg-blacklist-file /sdcard/blacklist.txt --throttle 500 -v 1000000000 >/dev/null 2>&1 &",
+              "pre_restart_commands": ["dumpsys activity appops on"]
+            }
+          }
+        ],
+        "post_process": []
+      }
+    },
+    "teardown": {
+      "stages": {
+        "prepare": [
+          {
+            "step_id": "check_device_for_teardown",
+            "action": "builtin:check_device",
+            "timeout_seconds": 30,
+            "retry": 0,
+            "params": {}
+          }
+        ],
+        "execute": [
+          {
+            "step_id": "stop_monkey_shell",
+            "action": "builtin:stop_process",
+            "timeout_seconds": 30,
+            "retry": 0,
+            "params": {
+              "process_name": "/data/local/tmp/MonkeyTest.sh"
+            }
+          },
+          {
+            "step_id": "stop_monkey_process",
+            "action": "builtin:stop_process",
+            "timeout_seconds": 30,
+            "retry": 0,
+            "params": {
+              "process_name": "com.android.commands.monkey"
+            }
+          }
+        ],
+        "post_process": []
+      }
+    }
+  }
+}

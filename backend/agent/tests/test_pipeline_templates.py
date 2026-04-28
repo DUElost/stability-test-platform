@@ -235,6 +235,27 @@ class TestPipelineExecution(unittest.TestCase):
                 if action.startswith("builtin:"):
                     self.assertIn(action[8:], ACTION_REGISTRY, f"Missing: {stage_name}/{action}")
 
+    def test_aimonkey_launcher_lifecycle_uses_node_local_launcher(self):
+        with open(TEMPLATE_DIR / "aimonkey_launcher_lifecycle.json", encoding="utf-8-sig") as fp:
+            template = json.load(fp)
+
+        execute_steps = template["lifecycle"]["init"]["stages"]["execute"]
+        launch_step = next(step for step in execute_steps if step["step_id"] == "start_aimonkey_launcher")
+
+        self.assertEqual(launch_step["action"], "builtin:run_tool_script")
+        self.assertEqual(launch_step["params"]["script_class"], "AIMonkeyLauncherAction")
+        self.assertEqual(
+            launch_step["params"]["script_path"],
+            "/opt/stability-test-agent/agent/tools/aimonkey_launcher.py",
+        )
+        self.assertIs(launch_step["params"]["default_params"]["need_nohup"], False)
+
+        patrol_steps = template["lifecycle"]["patrol"]["stages"]["execute"]
+        guard_step = next(step for step in patrol_steps if step["step_id"] == "guard_monkey_process")
+        self.assertEqual(guard_step["action"], "builtin:guard_process")
+        self.assertEqual(guard_step["params"]["process_name"], "com.android.commands.monkey")
+        self.assertIn("--pkg-blacklist-file /sdcard/blacklist.txt", guard_step["params"]["restart_command"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -76,6 +76,41 @@ print(json.dumps({"metrics": {"value": params["value"], "serial": os.environ["ST
     assert engine._shared["echo"] == {"value": 7, "serial": "SERIAL001"}
 
 
+def test_pipeline_engine_reports_script_stdout_and_stderr(tmp_path):
+    script = _write_script(
+        tmp_path / "stdout_stderr.py",
+        """
+import sys
+print("hello stdout")
+print("debug stderr", file=sys.stderr)
+""".strip(),
+    )
+    mq = FakeMQ()
+    engine = PipelineEngine(
+        adb=SimpleNamespace(adb_path="adb"),
+        serial="SERIAL001",
+        run_id=42,
+        mq_producer=mq,
+        script_registry=FakeScriptRegistry(script),
+    )
+
+    result = engine._execute_step_stages(
+        "execute",
+        {
+            "step_id": "stdout_stderr",
+            "action": "script:stdout_stderr",
+            "version": "1.0.0",
+            "params": {},
+            "timeout_seconds": 5,
+        },
+    )
+
+    assert result.success is True
+    assert mq.traces[-1]["status"] == "COMPLETED"
+    assert "hello stdout" in mq.traces[-1]["output"]
+    assert "debug stderr" in mq.traces[-1]["output"]
+
+
 def test_pipeline_engine_reports_skipped_script_without_retry(tmp_path):
     script = _write_script(
         tmp_path / "skip.py",
