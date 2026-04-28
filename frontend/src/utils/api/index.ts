@@ -6,6 +6,9 @@ export { devices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
 export { tools, toolCatalog, builtinCatalog, actionTemplates, scripts } from './tools';
+export { scriptSequences, scriptExecutions } from './scripts';
+export { resourcePools } from './resourcePools';
+export { scriptBatches } from './scriptBatches';
 export { results, stats } from './analytics';
 export { users, notifications, schedules, templates, audit } from './management';
 export { orchestration, execution } from './orchestration';
@@ -23,6 +26,9 @@ export type {
   PaginatedResponse,
   ToolEntry, BuiltinActionEntry, BuiltinActionUpdatePayload,
   ScriptEntry,
+  ScriptSequenceItem, ScriptSequence, ScriptSequencePayload, ScriptSequenceList,
+  ScriptExecutionCreatePayload, ScriptExecutionCreated, ScriptExecutionListItem,
+  ScriptExecutionList, ScriptExecutionStep, ScriptExecutionJob, ScriptExecutionDetail,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
   PipelineStep, PipelineDef, PipelineStepOverride, TaskTemplateEntry,
   WorkflowDefinition, WorkflowDefinitionCreate,
@@ -30,6 +36,9 @@ export type {
   WorkflowRun, WorkflowRunCreate, WorkflowRunPreview, WorkflowRunPreviewTemplate,
   WorkflowSummary, JobArtifactEntry,
   Tool, ToolCategory,
+  ResourcePool, ResourcePoolLoad, ResourcePoolCreatePayload,
+  ScriptBatchItemIn, ScriptBatchCreatePayload, ScriptRunOut,
+  ScriptBatch, ScriptBatchListItem, ScriptBatchList,
 } from './types';
 
 import { auth } from './auth';
@@ -38,6 +47,9 @@ import { devices } from './devices';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
 import { tools, toolCatalog, builtinCatalog, actionTemplates, scripts } from './tools';
+import { scriptSequences, scriptExecutions } from './scripts';
+import { resourcePools } from './resourcePools';
+import { scriptBatches } from './scriptBatches';
 import { results, stats } from './analytics';
 import { users, notifications, schedules, templates, audit } from './management';
 import { orchestration, execution } from './orchestration';
@@ -64,4 +76,8 @@ export const api = {
   builtinCatalog,
   actionTemplates,
   scripts,
+  scriptSequences,
+  scriptExecutions,
+  resourcePools,
+  scriptBatches,
 };

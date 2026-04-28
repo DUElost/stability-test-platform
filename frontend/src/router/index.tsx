@@ -28,6 +28,9 @@ const NotFoundPage = lazy(() => import('../pages/NotFoundPage'));
 const IssueTrackerPage = lazy(() => import('../pages/issues/IssueTrackerPage'));
 const ResourcesPage = lazy(() => import('../pages/resources/ResourcesPage'));
 const TaskRunsPage = lazy(() => import('../pages/task-runs/TaskRunsPage'));
+const ScriptLibraryPage = lazy(() => import('../pages/scripts/ScriptLibraryPage'));
+const ScriptExecutePage = lazy(() => import('../pages/execution/ScriptExecutePage'));
+const ScriptHistoryPage = lazy(() => import('../pages/execution/ScriptHistoryPage'));
 
 // 新编排层页面
 const WorkflowDefinitionListPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionListPage'));
@@ -69,13 +72,16 @@ export default function AppRouter() {
 
             <Route path="tasks">
               <Route index element={<TaskList />} />
-              <Route path="new" element={<Navigate to="/orchestration/workflows" replace />} />
+              <Route path="new" element={<Navigate to="/execute" replace />} />
               <Route path=":taskId" element={<TaskDetails />} />
             </Route>
 
             <Route path="runs/:runId/report" element={<RunReportPage />} />
 
             <Route path="tools" element={<ToolsPage />} />
+            <Route path="scripts" element={<ScriptLibraryPage />} />
+            <Route path="execute" element={<ScriptExecutePage />} />
+            <Route path="history" element={<ScriptHistoryPage />} />
 
             <Route path="hosts" element={<HostsPage />} />
             <Route path="devices" element={<DevicesPage />} />
@@ -83,7 +89,7 @@ export default function AppRouter() {
             {/* /workflows → redirect to new orchestration page (backend endpoint now returns ApiResponse format) */}
             <Route path="workflows" element={<Navigate to="/orchestration/workflows" replace />} />
             <Route path="results" element={<ResultsPage />} />
-            <Route path="logs" element={<Navigate to="/execution/runs?view=logs" replace />} />
+            <Route path="logs" element={<Navigate to="/history" replace />} />
             <Route path="mapreduce" element={<MapReducePage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="notifications" element={<NotificationsPage />} />

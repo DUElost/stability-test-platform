@@ -11,9 +11,9 @@ import { ArrowLeft, RefreshCw, X, FileText, Download, Bug, Search } from 'lucide
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
-const JOB_STATUS_STYLE: Record<JobStatus, { bg: string; text: string; label: string; pulse?: boolean }> = {
+const JOB_STATUS_STYLE: Record<JobStatus, { bg: string; text: string; label: string }> = {
   PENDING:      { bg: 'bg-gray-100',    text: 'text-gray-500',  label: 'Pending' },
-  RUNNING:      { bg: 'bg-blue-100',    text: 'text-blue-700',  label: 'Running', pulse: true },
+  RUNNING:      { bg: 'bg-blue-100',    text: 'text-blue-700',  label: 'Running' },
   COMPLETED:    { bg: 'bg-green-100',   text: 'text-green-700', label: 'Done' },
   FAILED:       { bg: 'bg-red-100',     text: 'text-red-700',   label: 'Failed' },
   ABORTED:      { bg: 'bg-orange-100',  text: 'text-orange-700', label: 'Aborted' },
@@ -50,12 +50,13 @@ function formatDuration(start: string, end: string | null | undefined) {
 function JobBlock({ job, onClick }: { job: JobInstance; onClick: () => void }) {
   const style = JOB_STATUS_STYLE[job.status] ?? JOB_STATUS_STYLE.PENDING;
   const label = job.device_serial ?? `#${job.device_id}`;
+  const runningHighlight = job.status === 'RUNNING' ? 'border-blue-300 ring-1 ring-blue-200' : '';
   return (
     <button
       className={`
         w-full p-2 rounded-lg border text-left transition-all duration-200
         ${style.bg} ${style.text} hover:shadow-md hover:scale-105 active:scale-100
-        ${style.pulse ? 'animate-pulse' : ''}
+        ${runningHighlight}
       `}
       onClick={onClick}
     >

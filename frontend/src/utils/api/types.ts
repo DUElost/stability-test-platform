@@ -397,6 +397,115 @@ export interface ScriptEntry {
   updated_at?: string;
 }
 
+export interface ScriptSequenceItem {
+  script_name: string;
+  version: string;
+  params?: Record<string, any>;
+  timeout_seconds?: number;
+  retry?: number;
+}
+
+export interface ScriptSequence {
+  id: number;
+  name: string;
+  description?: string | null;
+  items: ScriptSequenceItem[];
+  on_failure: 'stop' | string;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScriptSequencePayload {
+  name: string;
+  description?: string | null;
+  items: ScriptSequenceItem[];
+  on_failure?: 'stop';
+}
+
+export interface ScriptSequenceList {
+  items: ScriptSequence[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface ScriptExecutionCreatePayload {
+  sequence_id?: number | null;
+  items?: ScriptSequenceItem[];
+  device_ids: number[];
+  on_failure?: 'stop';
+}
+
+export interface ScriptExecutionCreated {
+  workflow_run_id: number;
+  job_ids: number[];
+  device_count: number;
+  step_count: number;
+}
+
+export interface ScriptExecutionListItem {
+  workflow_run_id: number;
+  status: string;
+  started_at: string;
+  ended_at?: string | null;
+  sequence_id?: number | null;
+  step_count: number;
+}
+
+export interface ScriptExecutionList {
+  items: ScriptExecutionListItem[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface ScriptExecutionStep {
+  step_id: string;
+  script_name: string;
+  version?: string;
+  params: Record<string, any>;
+  timeout_seconds?: number;
+  retry: number;
+  status: string;
+  output?: string | null;
+  error_message?: string | null;
+}
+
+export interface ScriptExecutionJob {
+  id: number;
+  device_id: number;
+  device_serial?: string | null;
+  device_model?: string | null;
+  host_id?: string | null;
+  host_name?: string | null;
+  status: string;
+  status_reason?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  watcher_capability?: string | null;
+  log_signal_count: number;
+  steps: ScriptExecutionStep[];
+  artifacts: Array<{
+    id: number;
+    storage_uri: string;
+    artifact_type: string;
+    size_bytes?: number | null;
+    checksum?: string | null;
+    created_at: string;
+  }>;
+}
+
+export interface ScriptExecutionDetail {
+  workflow_run_id: number;
+  mode: 'script_execution';
+  status: string;
+  sequence_id?: number | null;
+  items: ScriptSequenceItem[];
+  on_failure: 'stop' | string;
+  jobs: ScriptExecutionJob[];
+}
+
 export interface BuiltinActionEntry {
   name: string;
   label: string;
@@ -628,6 +737,104 @@ export interface JobArtifactEntry {
   size_bytes?: number | null;
   checksum?: string | null;
   created_at?: string | null;
+}
+
+// ─── ScriptBatch ────────────────────────────────────────────────────────────────
+
+export interface ScriptBatchItemIn {
+  script_name: string;
+  version?: string;
+  params?: Record<string, any>;
+  timeout_seconds?: number;
+}
+
+export interface ScriptBatchCreatePayload {
+  name?: string | null;
+  device_ids: number[];
+  items: ScriptBatchItemIn[];
+  sequence_id?: number | null;
+  on_failure?: 'stop' | 'continue';
+}
+
+export interface ScriptRunOut {
+  id: number;
+  batch_id: number;
+  item_index: number;
+  script_name: string;
+  script_version: string;
+  params_json: Record<string, any>;
+  status: string;
+  exit_code: number | null;
+  stdout: string | null;
+  stderr: string | null;
+  metrics_json: Record<string, any> | null;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+export interface ScriptBatch {
+  id: number;
+  name: string | null;
+  sequence_id: number | null;
+  device_id: number;
+  device_serial: string;
+  device_model: string | null;
+  host_id: string | null;
+  host_name: string | null;
+  status: string;
+  on_failure: string;
+  watcher_started_at: string | null;
+  watcher_stopped_at: string | null;
+  watcher_capability: string | null;
+  log_signal_count: number;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string | null;
+  runs: ScriptRunOut[];
+}
+
+export interface ScriptBatchListItem {
+  id: number;
+  name: string | null;
+  device_id: number;
+  device_serial: string;
+  host_id: string | null;
+  status: string;
+  step_count: number;
+  script_names: string;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string | null;
+}
+
+export interface ScriptBatchList {
+  items: ScriptBatchListItem[];
+  total: number;
+}
+
+// ─── ResourcePool ────────────────────────────────────────────────────────────────
+
+export interface ResourcePool {
+  id: number;
+  name: string;
+  resource_type: string;
+  config: Record<string, any>;
+  max_concurrent_devices: number;
+  host_group: string | null;
+  is_active: boolean;
+}
+
+export interface ResourcePoolLoad extends ResourcePool {
+  current_devices: number;
+}
+
+export interface ResourcePoolCreatePayload {
+  name: string;
+  resource_type?: string;
+  config?: Record<string, any>;
+  max_concurrent_devices?: number;
+  host_group?: string | null;
+  is_active?: boolean;
 }
 
 // Legacy aliases

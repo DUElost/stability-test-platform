@@ -9,8 +9,6 @@ import {
   Zap,
   X,
   TestTube2,
-  Workflow,
-  Clock,
   FileBox,
   Folder,
   AlertCircle,
@@ -39,19 +37,11 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: '任务编排',
+    label: '脚本执行',
     items: [
-      { path: '/orchestration/workflows', label: '工作流设计', icon: Workflow },
-      { path: '/orchestration/actions', label: '动作目录', icon: Zap },
-      { path: '/templates', label: '任务模板', icon: FileBox },
-      { path: '/schedules', label: '定时任务', icon: Clock },
-    ],
-  },
-  {
-    label: '执行中心',
-    items: [
-      { path: '/execution/run', label: '发起测试', icon: Rocket },
-      { path: '/execution/runs', label: '执行观测', icon: ListTodo },
+      { path: '/scripts', label: '脚本库', icon: FileBox },
+      { path: '/execute', label: '执行任务', icon: Rocket },
+      { path: '/history', label: '执行记录', icon: ListTodo },
     ],
   },
   {

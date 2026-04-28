@@ -28,6 +28,7 @@ describe('api module', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    vi.clearAllMocks();
     localStorage.clear();
     // Re-import to trigger interceptor registration
   });
@@ -178,6 +179,11 @@ describe('api module', () => {
       expect(api.schedules).toBeDefined();
       expect(api.templates).toBeDefined();
       expect(api.audit).toBeDefined();
+      expect(api.scriptSequences).toBeDefined();
+      expect(api.scriptSequences.list).toBeInstanceOf(Function);
+      expect(api.scriptExecutions).toBeDefined();
+      expect(api.scriptExecutions.create).toBeInstanceOf(Function);
+      expect(api.scriptExecutions.get).toBeInstanceOf(Function);
     });
   });
 });
