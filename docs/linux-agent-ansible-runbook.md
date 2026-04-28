@@ -166,6 +166,8 @@ wsl bash -lc 'cd "$REPO_ROOT/ssh" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbo
 
 ```bash
 wsl bash -lc 'cd "$REPO_ROOT/ssh" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart'
+
+wsl bash -lc 'cd "/mnt/f/stability-test-platform/ssh" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart'
 ```
 
 ### 单机查看服务状态

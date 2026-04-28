@@ -64,6 +64,10 @@ fi
 
 cd "$FRONTEND_DIR"
 
+BACKEND_PORT="${1:-${BACKEND_PORT:-8000}}"
+export VITE_API_BASE_URL="${VITE_API_BASE_URL:-http://localhost:${BACKEND_PORT}}"
+export VITE_WS_BASE_URL="${VITE_WS_BASE_URL:-ws://localhost:${BACKEND_PORT}}"
+
 # Enhanced detection: support both npm flat structure and pnpm content-addressable store
 if [ -d "node_modules/@esbuild/win32-x64" ] || [ -n "$(find node_modules/.pnpm -maxdepth 1 -name "*win32-x64*" 2>/dev/null)" ]; then
   echo "Detected Windows node_modules in WSL, reinstalling dependencies for Linux..."
@@ -82,6 +86,7 @@ fi
 
 echo
 echo "Starting Vite dev server on http://localhost:5173"
+echo "Backend API target: ${VITE_API_BASE_URL}"
 echo "Press Ctrl+C to stop the server."
 echo
 

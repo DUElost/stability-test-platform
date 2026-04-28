@@ -4,6 +4,8 @@ REM Windows Native Frontend Launcher for Stability Test Platform
 
 cd /d "%~dp0\frontend"
 
+if not "%~1"=="" set "BACKEND_PORT=%~1"
+
 echo Starting Stability Test Platform - Frontend (Windows)...
 echo.
 
@@ -54,6 +56,12 @@ if not exist "node_modules\.bin\vite.cmd" (
 
 echo.
 echo Starting Vite dev server on http://localhost:5173
+
+if not defined BACKEND_PORT set "BACKEND_PORT=8000"
+if not defined VITE_API_BASE_URL set "VITE_API_BASE_URL=http://localhost:%BACKEND_PORT%"
+if not defined VITE_WS_BASE_URL set "VITE_WS_BASE_URL=ws://localhost:%BACKEND_PORT%"
+
+echo Backend API target: %VITE_API_BASE_URL%
 echo Press Ctrl+C to stop the server.
 echo.
 

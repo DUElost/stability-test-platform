@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 VENV_DIR="${ROOT_DIR}/venv-wsl"
+BACKEND_PORT="${1:-${BACKEND_PORT:-8000}}"
 
 echo "Starting Stability Test Platform - Backend (WSL)..."
 echo
@@ -52,8 +53,14 @@ if [ "$new_venv" -eq 1 ] || [ "$missing_deps" -eq 1 ]; then
 fi
 
 echo
-echo "Starting FastAPI server on http://localhost:8000"
+echo "Starting FastAPI server on http://localhost:${BACKEND_PORT}"
 echo "Press Ctrl+C to stop the server."
 echo
 
-exec uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+if [ "${STP_BACKEND_NORELOAD:-}" = "1" ]; then
+  echo "Auto-reload disabled."
+  exec uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT"
+fi
+
+echo "Auto-reload enabled."
+exec uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload
