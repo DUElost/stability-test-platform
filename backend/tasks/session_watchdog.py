@@ -17,15 +17,15 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update as _update
 
 from backend.core.database import AsyncSessionLocal
-from backend.models.enums import HostStatus, JobStatus, LeaseType
+from backend.models.device_lease import DeviceLease
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.services.aggregator import WorkflowAggregator
-from backend.services.device_lock import release_lock
-from backend.services.lease_manager import release_lease
+from backend.services.lease_manager import LeaseProjectionError, release_lease
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -62,10 +62,31 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
             try:
                 JobStateMachine.transition(job, JobStatus.UNKNOWN, "host_heartbeat_timeout")
                 job.ended_at = datetime.now(timezone.utc)
-                await release_lock(db, job.device_id, job.id)
-                await release_lease(db, job.device_id, job.id, LeaseType.JOB)
-                await WorkflowAggregator.on_job_terminal(job, db)
-                affected_jobs += 1
+                try:
+                    ok = await release_lease(db, job.device_id, job.id, LeaseType.JOB)
+                except LeaseProjectionError:
+                    logger.warning(
+                        "watchdog_host_timeout_projection_failed: device=%d job=%s — "
+                        "releasing lease without device projection",
+                        job.device_id, job.id,
+                    )
+                    dl = (await db.execute(
+                        select(DeviceLease).where(
+                            DeviceLease.device_id == job.device_id,
+                            DeviceLease.job_id == job.id,
+                            DeviceLease.lease_type == LeaseType.JOB.value,
+                            DeviceLease.status == LeaseStatus.ACTIVE.value,
+                        )
+                    )).scalars().first()
+                    if dl is not None:
+                        dl.status = LeaseStatus.RELEASED.value
+                        dl.released_at = datetime.now(timezone.utc)
+                        ok = True
+                    else:
+                        ok = False
+                if ok:
+                    await WorkflowAggregator.on_job_terminal(job, db)
+                    affected_jobs += 1
             except InvalidTransitionError:
                 pass
 
@@ -79,38 +100,61 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
 
 
 async def _check_device_lock_expiration(db) -> int:
-    """Release expired device locks, transition associated jobs → UNKNOWN."""
+    """Release expired device leases, transition associated jobs → UNKNOWN (Phase 2c).
+
+    Reads DeviceLease instead of Device.lock_run_id — device_leases is the source of truth.
+    """
     now = datetime.now(timezone.utc)
-    expired_devices = (await db.execute(
-        select(Device).where(
-            Device.lock_run_id.isnot(None),
+    expired_leases = (await db.execute(
+        select(DeviceLease).where(
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+            DeviceLease.lease_type == LeaseType.JOB.value,
             or_(
-                Device.lock_expires_at.is_(None),
-                Device.lock_expires_at < now,
+                DeviceLease.expires_at.is_(None),
+                DeviceLease.expires_at < now,
             ),
         )
     )).scalars().all()
 
     released = 0
-    for device in expired_devices:
-        job_id = device.lock_run_id
-        if await release_lock(db, device.id, job_id):
-            await release_lease(db, device.id, job_id, LeaseType.JOB)
+    for lease in expired_leases:
+        if not lease.job_id:
+            continue
+        job_id = lease.job_id
+        device_id = lease.device_id  # snapshot before savepoint may detach
+        lease_id = lease.id
+        try:
+            ok = await release_lease(db, device_id, job_id, LeaseType.JOB)
+        except LeaseProjectionError:
+            logger.warning(
+                "watchdog_lock_expired_projection_failed: device=%d job=%s — "
+                "device table out of sync, releasing lease only",
+                device_id, job_id,
+            )
+            # Fallback: release lease via ORM (avoids asyncpg MissingGreenlet
+            # after savepoint rollback inside release_lease)
+            dl = await db.get(DeviceLease, lease_id)
+            if dl is not None and dl.status == LeaseStatus.ACTIVE.value:
+                dl.status = LeaseStatus.RELEASED.value
+                dl.released_at = datetime.now(timezone.utc)
+                ok = True
+            else:
+                ok = False
+        if ok:
             released += 1
 
             # Find the associated job and transition to UNKNOWN if RUNNING
-            if job_id:
-                job = await db.get(JobInstance, job_id)
-                if job and job.status == JobStatus.RUNNING.value:
-                    try:
-                        JobStateMachine.transition(job, JobStatus.UNKNOWN, "device_lock_expired")
-                        job.ended_at = datetime.now(timezone.utc)
-                        await WorkflowAggregator.on_job_terminal(job, db)
-                    except InvalidTransitionError:
-                        pass
+            job = await db.get(JobInstance, job_id)
+            if job and job.status == JobStatus.RUNNING.value:
+                try:
+                    JobStateMachine.transition(job, JobStatus.UNKNOWN, "device_lock_expired")
+                    job.ended_at = datetime.now(timezone.utc)
+                    await WorkflowAggregator.on_job_terminal(job, db)
+                except InvalidTransitionError:
+                    pass
 
             logger.warning(
-                "watchdog_lock_expired: device=%d job=%s", device.id, job_id,
+                "watchdog_lock_expired: device=%d job=%s", device_id, job_id,
             )
 
     return released

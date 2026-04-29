@@ -32,8 +32,7 @@ from backend.core.metrics import (
 )
 from backend.models.enums import JobStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
-from backend.services.device_lock import release_lock_sync
-from backend.services.lease_manager import release_lease_sync
+from backend.services.lease_manager import LeaseProjectionError, release_lease_sync
 from backend.services.state_machine import JobStateMachine, InvalidTransitionError
 
 logger = logging.getLogger(__name__)
@@ -87,8 +86,31 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
         return
 
     job.ended_at = now
-    release_lock_sync(db, job.device_id, job.id)
-    release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
+    try:
+        release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
+    except LeaseProjectionError:
+        logger.warning(
+            "recycler_projection_failed: device=%d job=%d — "
+            "device table out of sync, continuing without projection",
+            job.device_id, job.id,
+        )
+        # Fallback: release lease without device projection
+        from sqlalchemy import update as _update
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseStatus
+        db.execute(
+            _update(DeviceLease)
+            .where(
+                DeviceLease.device_id == job.device_id,
+                DeviceLease.job_id == job.id,
+                DeviceLease.lease_type == LeaseType.JOB.value,
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+            )
+            .values(
+                status=LeaseStatus.RELEASED.value,
+                released_at=now,
+            )
+        )
 
     # Workflow aggregation (sync path)
     try:

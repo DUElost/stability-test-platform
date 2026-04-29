@@ -1,5 +1,11 @@
 """Unified device-lock service.
 
+.. deprecated:: Phase 2c
+    Use :mod:`backend.services.lease_manager` instead.
+    device_leases is now the source of truth; this module persists only as
+    a historical reference.  device.lock_run_id / lock_expires_at are now
+    projection fields maintained by lease_manager.
+
 Provides atomic acquire / extend / release for device lease management.
 Both async (for FastAPI routes, workflow dispatcher) and sync (for legacy
 scheduler/recycler) variants are exposed.
@@ -27,7 +33,10 @@ async def acquire_lock(
     job_id: int,
     lease_seconds: int = _DEFAULT_LEASE_SECONDS,
 ) -> bool:
-    """Atomically acquire a device lock for *job_id*.
+    """.. deprecated:: Phase 2c
+    Use :func:`backend.services.lease_manager.acquire_lease` instead.
+
+    Atomically acquire a device lock for *job_id*.
 
     Succeeds when the device is free, the existing lease has expired, or the
     lock is already held by the same job (idempotent re-acquire / extend).
@@ -71,7 +80,10 @@ async def extend_lock(
     job_id: int,
     lease_seconds: int = _DEFAULT_LEASE_SECONDS,
 ) -> bool:
-    """Extend the lease for an existing lock held by *job_id*.
+    """.. deprecated:: Phase 2c
+    Use :func:`backend.services.lease_manager.extend_lease` instead.
+
+    Extend the lease for an existing lock held by *job_id*.
 
     Returns ``True`` if the lock was extended, ``False`` if the device is
     unlocked or held by a different job.
@@ -101,7 +113,10 @@ async def release_lock(
     device_id: int,
     job_id: int,
 ) -> bool:
-    """Release the device lock held by *job_id*.
+    """.. deprecated:: Phase 2c
+    Use :func:`backend.services.lease_manager.release_lease` instead.
+
+    Release the device lock held by *job_id*.
 
     Only clears the lock if ``lock_run_id == job_id``, preventing a job from
     releasing another job's lock.  Restores status to ``ONLINE`` if it was
@@ -139,7 +154,10 @@ def acquire_lock_sync(
     job_id: int,
     lease_seconds: int = _DEFAULT_LEASE_SECONDS,
 ) -> bool:
-    """Synchronous variant of :func:`acquire_lock`."""
+    """.. deprecated:: Phase 2c
+    Use :func:`backend.services.lease_manager.acquire_lease` instead.
+
+    Synchronous variant of :func:`acquire_lock`."""
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=lease_seconds)
     result = db.execute(
@@ -172,7 +190,10 @@ def extend_lock_sync(
     job_id: int,
     lease_seconds: int = _DEFAULT_LEASE_SECONDS,
 ) -> bool:
-    """Synchronous variant of :func:`extend_lock`."""
+    """.. deprecated:: Phase 2c
+    Use :func:`backend.services.lease_manager.extend_lease` instead.
+
+    Synchronous variant of :func:`extend_lock`."""
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=lease_seconds)
     result = db.execute(
@@ -198,7 +219,10 @@ def release_lock_sync(
     device_id: int,
     job_id: int,
 ) -> bool:
-    """Synchronous variant of :func:`release_lock`."""
+    """.. deprecated:: Phase 2c
+    Use :func:`backend.services.lease_manager.release_lease_sync` instead.
+
+    Synchronous variant of :func:`release_lock`."""
     result = db.execute(
         text(
             """

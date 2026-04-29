@@ -140,6 +140,7 @@ def _seed_host_only() -> dict:
 
 def _setup_lease(seed: dict) -> str:
     """Create an ACTIVE DeviceLease for Phase 2b fencing_token validation.
+    Also projects to device table (Phase 2c: projection is required).
 
     Returns the fencing_token that callers should pass to handlers.
     """
@@ -164,6 +165,12 @@ def _setup_lease(seed: dict) -> str:
             expires_at=expires,
         )
         db.add(lease)
+        # Phase 2c: project to device table (release_lease/extend_lease require it)
+        dev = db.query(Device).filter(Device.id == seed["device_id"]).first()
+        if dev is not None:
+            dev.status = "BUSY"
+            dev.lock_run_id = seed["job_id"]
+            dev.lock_expires_at = expires
         db.commit()
         return token
     finally:
@@ -426,14 +433,17 @@ async def test_extend_lock_success(engine):
 
 @pytest.mark.asyncio
 async def test_extend_lock_conflict():
+    """Phase 2c: extend_job_lock returns 409 when no ACTIVE lease exists."""
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)
     try:
+        # Release the lease so extend_lease returns False → 409
         db = SessionLocal()
         try:
-            device = db.get(Device, seed["device_id"])
-            assert device is not None
-            device.lock_run_id = seed["job_id"] + 999
+            db.query(DeviceLease).filter(
+                DeviceLease.device_id == seed["device_id"],
+                DeviceLease.job_id == seed["job_id"],
+            ).update({"status": LeaseStatus.RELEASED.value})
             db.commit()
         finally:
             db.close()

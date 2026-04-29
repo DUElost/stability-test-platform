@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +22,6 @@ from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace, TaskTemplate
 from backend.models.workflow import WorkflowDefinition
 from backend.services.aggregator import WorkflowAggregator
-from backend.services.device_lock import acquire_lock, extend_lock, release_lock
 from backend.services.lease_manager import acquire_lease, extend_lease, release_lease
 from backend.services.reconciler import reconcile_step_traces
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
@@ -139,6 +138,77 @@ class HeartbeatResponse(BaseModel):
     capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
 
 
+# ── Shared helpers ────────────────────────────────────────────────────────────
+
+
+async def _claim_jobs_for_host(
+    db: AsyncSession,
+    host_id: str,
+    capacity: int = 10,
+) -> tuple[List[JobInstance], Dict[int, str]]:
+    """Shared claim logic for claim_jobs (POST) and get_pending_jobs (GET).
+
+    Only acquire_lease is the conflict source — acquire_lock is NOT called (Phase 2c).
+    Expired ACTIVE leases are recycled inside acquire_lease.
+
+    Returns (claimed_jobs, fencing_token_map).
+    """
+    device_ids_result = await db.execute(
+        select(Device.id).where(Device.host_id == host_id)
+    )
+    device_ids = [row[0] for row in device_ids_result.all()]
+    if not device_ids:
+        return [], {}
+
+    pending_jobs = (await db.execute(
+        select(JobInstance)
+        .where(
+            JobInstance.device_id.in_(device_ids),
+            JobInstance.status == JobStatus.PENDING.value,
+        )
+        .order_by(JobInstance.created_at)
+        .limit(capacity)
+    )).scalars().all()
+
+    claimed = []
+    claimed_device_ids: set[int] = set()
+    fencing_token_map: Dict[int, str] = {}
+    now = datetime.now(timezone.utc)
+    for job in pending_jobs:
+        if job.device_id in claimed_device_ids:
+            continue
+
+        try:
+            async with db.begin_nested():
+                JobStateMachine.transition(job, JobStatus.RUNNING, "claimed_by_agent")
+                job.host_id = host_id
+                job.started_at = now
+
+                lease = await acquire_lease(
+                    db,
+                    device_id=job.device_id,
+                    host_id=host_id,
+                    lease_type=LeaseType.JOB,
+                    agent_instance_id=host_id,
+                    job_id=job.id,
+                )
+                if lease is None:
+                    raise _LockAcquireFailed()
+                fencing_token_map[job.id] = lease.fencing_token
+
+            claimed.append(job)
+            claimed_device_ids.add(job.device_id)
+        except _LockAcquireFailed:
+            continue
+        except InvalidTransitionError:
+            continue
+
+    if claimed:
+        await db.commit()
+
+    return claimed, fencing_token_map
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/jobs/claim", response_model=ApiResponse[List[JobOut]])
@@ -150,84 +220,15 @@ async def claim_jobs(
     """Find PENDING jobs for devices on this host, claim up to `capacity`.
 
     Per-device deduplication: only one job per device is claimed per call.
-    Device lock guard: skips jobs for devices locked by a different job.
+    Uses device_leases as the sole conflict source (Phase 2c).
     Response includes device_serial + watcher_policy for Agent JobSession boot.
     """
-    device_ids_result = await db.execute(
-        select(Device.id).where(Device.host_id == payload.host_id)
+    claimed, fencing_token_map = await _claim_jobs_for_host(
+        db, payload.host_id, payload.capacity,
     )
-    device_ids = [row[0] for row in device_ids_result.all()]
-    if not device_ids:
+
+    if not claimed:
         return ok([])
-
-    pending_jobs = (await db.execute(
-        select(JobInstance)
-        .where(
-            JobInstance.device_id.in_(device_ids),
-            JobInstance.status == JobStatus.PENDING.value,
-        )
-        .order_by(JobInstance.created_at)
-        .limit(payload.capacity)
-    )).scalars().all()
-
-    # Pre-fetch device lock state
-    lock_map: Dict[int, Optional[int]] = {}
-    if pending_jobs:
-        lock_rows = await db.execute(
-            select(Device.id, Device.lock_run_id, Device.lock_expires_at)
-            .where(Device.id.in_([j.device_id for j in pending_jobs]))
-        )
-        now_utc = datetime.now(timezone.utc)
-        for row in lock_rows.all():
-            if row.lock_run_id and row.lock_expires_at and row.lock_expires_at >= now_utc:
-                lock_map[row.id] = row.lock_run_id
-            else:
-                lock_map[row.id] = None
-
-    claimed = []
-    claimed_device_ids: set[int] = set()
-    fencing_token_map: Dict[int, str] = {}
-    now = datetime.now(timezone.utc)
-    for job in pending_jobs:
-        if job.device_id in claimed_device_ids:
-            continue
-
-        holder = lock_map.get(job.device_id)
-        if holder is not None and holder != job.id:
-            continue
-
-        try:
-            async with db.begin_nested():
-                JobStateMachine.transition(job, JobStatus.RUNNING, "claimed_by_agent")
-                job.host_id = payload.host_id
-                job.started_at = now
-
-                acquired = await acquire_lock(db, job.device_id, job.id, _DEVICE_LOCK_LEASE_SECONDS)
-                if not acquired:
-                    raise _LockAcquireFailed()
-
-                lease = await acquire_lease(
-                    db,
-                    device_id=job.device_id,
-                    host_id=payload.host_id,
-                    lease_type=LeaseType.JOB,
-                    agent_instance_id=payload.host_id,
-                    job_id=job.id,
-                )
-                if lease is None:
-                    raise _LockAcquireFailed()
-                fencing_token_map[job.id] = lease.fencing_token
-
-            claimed.append(job)
-            claimed_device_ids.add(job.device_id)
-        except _LockAcquireFailed:
-            # Savepoint already rolled back by begin_nested() context manager
-            continue
-        except InvalidTransitionError:
-            continue
-
-    if claimed:
-        await db.commit()
 
     # Enrich response: device_serial + watcher_policy(from WorkflowDefinition)
     serial_map, watcher_policy_map = await _enrich_job_metadata(db, claimed)
@@ -409,124 +410,43 @@ class _StepStatusIn(BaseModel):
 async def get_pending_jobs(
     host_id: str,
     limit: int = 10,
+    response: Response = None,
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
-    """Return PENDING JobInstances for devices on this host (pull model).
+    """.. deprecated:: Phase 2c
+    Use POST /jobs/claim instead.
 
-    Atomically transitions matched jobs to RUNNING to prevent duplicate claims.
-    Per-device deduplication: only the earliest PENDING job per device is claimed.
-    Device lock guard: skips jobs for devices locked by a different running job.
+    Return PENDING JobInstances for devices on this host (pull model).
+    Internally delegates to _claim_jobs_for_host (same logic as POST /jobs/claim).
     """
-    device_ids_result = await db.execute(
-        select(Device.id).where(Device.host_id == host_id)
-    )
-    device_ids = [row[0] for row in device_ids_result.all()]
+    # Deprecation headers
+    if response is not None:
+        response.headers["Deprecation"] = "true"
+        response.headers["Sunset"] = "Sat, 01 Nov 2026 00:00:00 GMT"
+    logger.info("agent_get_pending_jobs_deprecated host_id=%s", host_id)
 
-    if not device_ids:
-        logger.info(
-            "agent_pending_no_devices: host_id=%s has no registered devices", host_id
-        )
+    claimed, fencing_token_map = await _claim_jobs_for_host(
+        db, host_id, limit,
+    )
+
+    if not claimed:
         return ok([])
 
-    # Match by device_id (original) OR by pre-assigned host_id (new dispatcher logic)
-    from sqlalchemy import or_
-    jobs = (await db.execute(
-        select(JobInstance)
-        .where(
-            or_(
-                JobInstance.device_id.in_(device_ids),
-                JobInstance.host_id == host_id,
-            ),
-            JobInstance.status == JobStatus.PENDING.value,
-        )
-        .order_by(JobInstance.created_at)
-        .limit(limit)
-    )).scalars().all()
-
+    # Pre-fetch serial_map for response enrichment
     serial_map: Dict[int, str] = {}
-    if jobs:
-        rows = await db.execute(
-            select(Device.id, Device.serial)
-            .where(Device.id.in_([j.device_id for j in jobs]))
-        )
-        serial_map = {row.id: row.serial for row in rows.all()}
+    rows = await db.execute(
+        select(Device.id, Device.serial)
+        .where(Device.id.in_([j.device_id for j in claimed]))
+    )
+    serial_map = {row.id: row.serial for row in rows.all()}
 
-    # Pre-fetch device lock state for lock guard
-    lock_map: Dict[int, Optional[int]] = {}
-    if jobs:
-        lock_rows = await db.execute(
-            select(Device.id, Device.lock_run_id, Device.lock_expires_at)
-            .where(Device.id.in_([j.device_id for j in jobs]))
-        )
-        now_utc = datetime.now(timezone.utc)
-        for row in lock_rows.all():
-            # Treat expired locks as free
-            if row.lock_run_id and row.lock_expires_at and row.lock_expires_at >= now_utc:
-                lock_map[row.id] = row.lock_run_id
-            else:
-                lock_map[row.id] = None
-
-    # Atomically claim jobs: transition PENDING → RUNNING
-    # Per-device deduplication: only one job per device per poll
-    claimed = []
-    claimed_device_ids: set[int] = set()
-    fencing_token_map: Dict[int, str] = {}
-    now = datetime.now(timezone.utc)
-    for j in jobs:
-        # Skip if we already claimed a job for this device this cycle
-        if j.device_id in claimed_device_ids:
-            continue
-
-        # Skip if device is locked by a different running job
-        holder = lock_map.get(j.device_id)
-        if holder is not None and holder != j.id:
-            logger.debug(
-                "claim_skip_locked: job=%d device=%d locked_by=%d", j.id, j.device_id, holder,
-            )
-            continue
-
-        # Wrap transition + lock acquire in a savepoint
-        try:
-            async with db.begin_nested():
-                JobStateMachine.transition(j, JobStatus.RUNNING, "claimed_by_agent")
-                j.host_id = host_id
-                j.started_at = now
-
-                acquired = await acquire_lock(db, j.device_id, j.id, _DEVICE_LOCK_LEASE_SECONDS)
-                if not acquired:
-                    raise _LockAcquireFailed()
-
-                lease = await acquire_lease(
-                    db,
-                    device_id=j.device_id,
-                    host_id=host_id,
-                    lease_type=LeaseType.JOB,
-                    agent_instance_id=host_id,
-                    job_id=j.id,
-                )
-                if lease is None:
-                    raise _LockAcquireFailed()
-                fencing_token_map[j.id] = lease.fencing_token
-
-            claimed.append(j)
-            claimed_device_ids.add(j.device_id)
-        except _LockAcquireFailed:
-            # Savepoint already rolled back by begin_nested() context manager
-            logger.debug("claim_lock_race: job=%d device=%d", j.id, j.device_id)
-            continue
-        except InvalidTransitionError:
-            continue
-
-    if claimed:
-        await db.commit()
-        logger.info(
-            "agent_claimed_jobs: host_id=%s, claimed=%d, device_ids=%s",
-            host_id, len(claimed), [j.device_id for j in claimed],
-        )
-
-    # Enrich with watcher_policy(from WorkflowDefinition)，serial_map 已预取复用
     _, watcher_policy_map = await _enrich_job_metadata(db, claimed)
+
+    logger.info(
+        "agent_claimed_jobs: host_id=%s, claimed=%d, device_ids=%s",
+        host_id, len(claimed), [j.device_id for j in claimed],
+    )
 
     return ok([
         JobOut(
@@ -682,8 +602,7 @@ async def complete_job(
 
     if job.status in _TERMINAL:
         await WorkflowAggregator.on_job_terminal(job, db)
-        # Release device lock + lease on terminal state (ADR-0019 Phase 2a dual-write)
-        await release_lock(db, job.device_id, job_id)
+        # Release device lease on terminal state (ADR-0019 Phase 2c: device_leases is source of truth)
         released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
         if not released:
             if already_terminal:
@@ -743,13 +662,9 @@ async def extend_job_lock(
     if active_lease is None or active_lease.fencing_token != payload.fencing_token:
         raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
 
-    extended = await extend_lock(db, job.device_id, job_id, _DEVICE_LOCK_LEASE_SECONDS)
-    if not extended:
-        raise HTTPException(status_code=409, detail="device locked by another job")
-
     renewed = await extend_lease(db, job.device_id, job_id, LeaseType.JOB, _DEVICE_LOCK_LEASE_SECONDS)
     if not renewed:
-        logger.warning("extend_lease_miss device=%s job=%s", job.device_id, job_id)
+        raise HTTPException(status_code=409, detail="device locked by another job")
 
     now = datetime.now(timezone.utc)
     job.updated_at = now

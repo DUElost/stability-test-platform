@@ -189,6 +189,7 @@ def _cleanup_seed(seed: dict) -> None:
 
 def _setup_watcher_lease(seed: dict) -> str:
     """Create an ACTIVE DeviceLease for Phase 2b fencing_token validation.
+    Also projects to device table (Phase 2c: projection is required).
 
     Returns the fencing_token that callers should pass to handlers.
     """
@@ -213,6 +214,12 @@ def _setup_watcher_lease(seed: dict) -> str:
             expires_at=expires,
         )
         db.add(lease)
+        # Phase 2c: project to device table (release_lease/extend_lease require it)
+        dev = db.query(Device).filter(Device.id == seed["device_id"]).first()
+        if dev is not None:
+            dev.status = "BUSY"
+            dev.lock_run_id = seed["job_id"]
+            dev.lock_expires_at = expires
         db.commit()
         return token
     finally:

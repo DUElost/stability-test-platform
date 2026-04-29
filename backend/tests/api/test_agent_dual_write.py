@@ -152,6 +152,7 @@ def _setup_lock_and_lease(seed: dict) -> None:
 
         device = db.get(Device, seed["device_id"])
         if device:
+            device.status = "BUSY"
             device.lock_run_id = seed["job_id"]
             device.lock_expires_at = expires
 
@@ -764,16 +765,19 @@ async def test_session_watchdog_releases_lease_on_host_timeout():
 
 @pytest.mark.asyncio
 async def test_session_watchdog_releases_lease_on_lock_expiration():
-    """Device lock 过期 → release_lock + release_lease 同时触发。"""
+    """DeviceLease 过期 → watchdog release_lease（Phase 2c: 读 DeviceLease 而非 Device.lock_run_id）。"""
     from backend.tasks.session_watchdog import _check_device_lock_expiration
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     try:
+        # Phase 2c: expire the LEASE (not just device.lock_expires_at)
         db = SessionLocal()
         try:
-            device = db.get(Device, seed["device_id"])
-            device.lock_expires_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            db.query(DeviceLease).filter(
+                DeviceLease.device_id == seed["device_id"],
+                DeviceLease.job_id == seed["job_id"],
+            ).update({"expires_at": datetime(2020, 1, 1, tzinfo=timezone.utc)})
             db.commit()
         finally:
             db.close()
@@ -798,6 +802,218 @@ async def test_session_watchdog_releases_lease_on_lock_expiration():
             assert lease is not None
             assert lease.status == LeaseStatus.RELEASED.value, (
                 f"Watchdog must release lease on lock expiration; got {lease.status}"
+            )
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 2c API integration tests
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_get_pending_jobs_deprecated_header():
+    """GET /jobs/pending 返回 Deprecation + Sunset header (Phase 2c)."""
+    from fastapi import Response as FapiResponse
+
+    seed = _seed_job(status=JobStatus.PENDING.value)
+    try:
+        await async_engine.dispose()
+        r = FapiResponse()
+        async with AsyncSessionLocal() as async_db:
+            result = await get_pending_jobs(
+                host_id=seed["host_id"], limit=5,
+                response=r, db=async_db, _=None,
+            )
+        assert result.error is None
+        assert r.headers.get("Deprecation") == "true"
+        assert "Sunset" in r.headers
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_get_pending_jobs_still_works():
+    """GET /jobs/pending 虽已 deprecated 但功能与 claim_jobs 一致 (Phase 2c)."""
+    seed = _seed_job(status=JobStatus.PENDING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await get_pending_jobs(
+                host_id=seed["host_id"], limit=5,
+                db=async_db, _=None,
+            )
+        assert result.error is None
+        assert len(result.data) == 1
+        item = result.data[0]
+        assert item.id == seed["job_id"]
+        assert item.status == JobStatus.RUNNING.value
+        assert item.fencing_token is not None
+
+        db = SessionLocal()
+        try:
+            device = db.get(Device, seed["device_id"])
+            assert device.lock_run_id == seed["job_id"], (
+                "get_pending_jobs must project device lock via acquire_lease"
+            )
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_claim_jobs_skip_on_active_lease():
+    """设备已有 ACTIVE lease 时 claim_jobs 跳过该设备上的 PENDING job (Phase 2c)."""
+    seed = _seed_job(status=JobStatus.PENDING.value)
+    _setup_lock_and_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await claim_jobs(
+                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                db=async_db, _=None,
+            )
+        assert result.data == [], (
+            "claim_jobs must skip jobs on devices with ACTIVE lease"
+        )
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.PENDING.value, (
+                "Job must stay PENDING when device has ACTIVE lease"
+            )
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_claim_jobs_claims_after_expired_lease():
+    """旧 lease 过期后 claim_jobs 可重新 claim 同设备不同 job (Phase 2c 过期回收)."""
+    from datetime import timedelta
+
+    seed = _seed_job(status=JobStatus.PENDING.value)
+    old_lease_id = None
+    # Create expired ACTIVE lease using sync session
+    db = SessionLocal()
+    try:
+        past = datetime.now(timezone.utc) - timedelta(seconds=3600)
+        lease = DeviceLease(
+            device_id=seed["device_id"],
+            job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{seed['device_id']}:1",
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=past - timedelta(seconds=7200),
+            renewed_at=past,
+            expires_at=past,
+        )
+        db.add(lease)
+        db.flush()
+        old_lease_id = lease.id
+        dev = db.get(Device, seed["device_id"])
+        dev.status = "BUSY"
+        dev.lock_run_id = 99999
+        dev.lock_expires_at = past
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await claim_jobs(
+                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                db=async_db, _=None,
+            )
+        assert len(result.data) == 1, (
+            "claim_jobs must reclaim after expired lease is recycled"
+        )
+        assert result.data[0].id == seed["job_id"]
+
+        db = SessionLocal()
+        try:
+            old_lease = db.get(DeviceLease, old_lease_id)
+            assert old_lease is not None
+            assert old_lease.status == LeaseStatus.EXPIRED.value, (
+                f"Expired ACTIVE lease must be recycled to EXPIRED; got {old_lease.status}"
+            )
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 2c watchdog: reads DeviceLease NOT Device.lock_run_id
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_device_lock_expiration_reads_device_leases_not_device_table():
+    """DeviceLease 过期但 Device.lock_run_id=NULL 时 watchdog 仍释放 lease (Phase 2c)."""
+    from backend.tasks.session_watchdog import _check_device_lock_expiration
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        expired = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        lease = DeviceLease(
+            device_id=seed["device_id"],
+            job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{seed['device_id']}:1",
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=expired,
+        )
+        db.add(lease)
+        # Intentionally set lock_run_id=NULL — projection out of sync
+        dev = db.get(Device, seed["device_id"])
+        dev.lock_run_id = None
+        dev.lock_expires_at = None
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            released = await _check_device_lock_expiration(async_db)
+            await async_db.commit()
+
+        assert released >= 1, (
+            "Watchdog must release lease even when Device.lock_run_id=NULL"
+        )
+
+        db = SessionLocal()
+        try:
+            db.expire_all()
+            dl = (
+                db.query(DeviceLease)
+                .filter(
+                    DeviceLease.device_id == seed["device_id"],
+                    DeviceLease.job_id == seed["job_id"],
+                )
+                .first()
+            )
+            assert dl is not None
+            assert dl.status == LeaseStatus.RELEASED.value, (
+                f"Lease must be RELEASED; got {dl.status}"
             )
         finally:
             db.close()

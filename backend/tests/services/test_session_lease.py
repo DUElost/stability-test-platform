@@ -99,16 +99,48 @@ def _get_job(job_id: int) -> JobInstance:
 
 @pytest.mark.asyncio
 async def test_claim_skips_locked_device():
-    """Claim endpoint skips job for a device locked by another job."""
+    """Claim endpoint skips job when device has an ACTIVE lease (Phase 2c: lease is source of truth)."""
     from backend.api.routes.agent_api import get_pending_jobs
+    from backend.models.device_lease import DeviceLease
+    from backend.models.enums import LeaseStatus, LeaseType
 
-    future = datetime.now(timezone.utc) + timedelta(seconds=300)
-    seed = _seed(lock_run_id=9999, lock_expires_at=future)
+    seed = _seed()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=300)
+
+    # Create an ACTIVE lease on the device so acquire_lease fails (conflict).
+    # Use seed's own job_id for FK compliance — the blocking behaviour only
+    # depends on the partial unique index (device_id WHERE status='ACTIVE').
+    db = SessionLocal()
+    try:
+        blocking_lease = DeviceLease(
+            device_id=seed["device_id"],
+            job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{seed['device_id']}:1",
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=expires,
+        )
+        db.add(blocking_lease)
+        # Phase 2c: project to device table
+        device = db.get(Device, seed["device_id"])
+        if device:
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = expires
+        db.commit()
+    finally:
+        db.close()
 
     async with AsyncSessionLocal() as db:
         resp = await get_pending_jobs(host_id=seed["host_id"], limit=10, db=db)
 
-    # No jobs should be claimed since device is locked by job 9999
+    # No jobs should be claimed since device has an ACTIVE lease
     assert resp.data == []
     job = _get_job(seed["job_id"])
     assert job.status == JobStatus.PENDING.value
