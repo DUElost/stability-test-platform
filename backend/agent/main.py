@@ -254,6 +254,11 @@ def main() -> None:
 
     ws_client.set_control_handler(_handle_control)
 
+    # ADR-0019 Phase 1: capacity helper — thread-safe active job count
+    def _get_active_job_count() -> int:
+        with _active_jobs_lock:
+            return len(_active_job_ids)
+
     # 启动心跳守护线程（独立于任务执行循环）
     heartbeat_thread = HeartbeatThread(
         api_url=api_url,
@@ -268,6 +273,8 @@ def main() -> None:
             "script_catalog_version": script_registry.version,
         },
         on_scripts_outdated=script_registry.initialize,
+        max_concurrent_jobs=max_concurrent_tasks,
+        get_active_job_count=_get_active_job_count,
     )
     heartbeat_thread.start()
 

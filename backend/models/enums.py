@@ -59,3 +59,17 @@ class RunStepStatus(str, Enum):
     FAILED    = "FAILED"
     SKIPPED   = "SKIPPED"
     CANCELED  = "CANCELED"
+
+
+# ADR-0019: Device Lease enums
+
+class LeaseType(str, Enum):
+    JOB         = "JOB"
+    SCRIPT      = "SCRIPT"
+    MAINTENANCE = "MAINTENANCE"
+
+
+class LeaseStatus(str, Enum):
+    ACTIVE   = "ACTIVE"
+    RELEASED = "RELEASED"
+    EXPIRED  = "EXPIRED"

@@ -1,6 +1,7 @@
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus, WorkflowStatus
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
 from backend.models.action_template import ActionTemplate
 from backend.models.audit import AuditLog
+from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
 from backend.models.job import JobArtifact, JobInstance, StepTrace, TaskTemplate
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
@@ -20,12 +21,15 @@ __all__ = [
     "DeviceStatus",
     "ActionTemplate",
     "Device",
+    "DeviceLease",
     "EventType",
     "Host",
     "HostStatus",
     "JobArtifact",
     "JobInstance",
     "JobStatus",
+    "LeaseStatus",
+    "LeaseType",
     "NotificationChannel",
     "ResourceAllocation",
     "ResourcePool",

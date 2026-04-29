@@ -26,6 +26,7 @@ def get_metadata():
     from backend.core.database import Base  # noqa: F401 — import all models for metadata
     import backend.models.action_template  # noqa: F401
     import backend.models.audit            # noqa: F401
+    import backend.models.device_lease     # noqa: F401 — ADR-0019 Phase 1
     import backend.models.enums            # noqa: F401
     import backend.models.host             # noqa: F401
     import backend.models.job              # noqa: F401

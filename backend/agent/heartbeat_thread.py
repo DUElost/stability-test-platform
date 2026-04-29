@@ -37,6 +37,9 @@ class HeartbeatThread:
         ws_client=None,
         catalog_versions: Optional[Callable[[], Dict[str, str]]] = None,
         on_scripts_outdated: Optional[Callable[[], None]] = None,
+        # ADR-0019 Phase 1
+        max_concurrent_jobs: int = 2,
+        get_active_job_count: Optional[Callable[[], int]] = None,
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -47,6 +50,8 @@ class HeartbeatThread:
         self._ws_client = ws_client
         self._catalog_versions = catalog_versions
         self._on_scripts_outdated = on_scripts_outdated
+        self._max_concurrent_jobs = max_concurrent_jobs
+        self._get_active_job_count = get_active_job_count
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
@@ -118,6 +123,16 @@ class HeartbeatThread:
             self._latest_devices = devices_list
 
         versions = self._catalog_versions() if self._catalog_versions else {}
+
+        # ADR-0019 Phase 1: compute capacity for heartbeat
+        active_count = self._get_active_job_count() if self._get_active_job_count else 0
+        available_slots = max(0, self._max_concurrent_jobs - active_count)
+        online_healthy = sum(
+            1 for d in devices_list
+            if d.get("adb_connected") is True
+            and d.get("adb_state") not in ("offline", "unknown", "")
+        )
+
         response = send_heartbeat(
             self._api_url,
             self._host_id,
@@ -126,6 +141,9 @@ class HeartbeatThread:
             devices=devices_list,
             tool_catalog_version=versions.get("tool_catalog_version", ""),
             script_catalog_version=versions.get("script_catalog_version", ""),
+            available_slots=available_slots,
+            max_concurrent_jobs=self._max_concurrent_jobs,
+            online_healthy_devices=online_healthy,
         )
         if response and response.get("script_catalog_outdated") and self._on_scripts_outdated:
             try:

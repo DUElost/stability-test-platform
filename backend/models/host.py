@@ -26,6 +26,7 @@ class Host(Base):
     ip_address           = Column(String(64))
     tool_catalog_version = Column(String(64))
     script_catalog_version = Column(String(64))
+    max_concurrent_jobs  = Column(Integer, nullable=False, default=2)  # ADR-0019 Phase 1
     last_heartbeat       = Column(DateTime(timezone=True))
     cpu_quota            = Column(Integer, nullable=False, default=2)
     status               = Column(String(32), nullable=False, default="OFFLINE")
@@ -74,6 +75,7 @@ class Device(Base):
     disk_used           = Column(BigInteger, nullable=True)
     build_display_id    = Column(String(256), nullable=True)
     hardware_updated_at = Column(DateTime(timezone=True), nullable=True)
+    lease_generation    = Column(Integer, nullable=False, default=0)   # ADR-0019 Phase 1
     extra               = Column(JSON, default=dict, nullable=True)
 
     host = relationship("backend.models.host.Host", foreign_keys=[host_id])

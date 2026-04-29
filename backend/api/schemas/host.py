@@ -49,6 +49,7 @@ class HeartbeatIn(BaseModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
     host: Optional[Dict[str, Any]] = None
     devices: List[Dict[str, Any]] = Field(default_factory=list)
+    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
 
     @field_validator('host_id', mode='before')
     @classmethod

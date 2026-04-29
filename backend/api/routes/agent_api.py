@@ -122,6 +122,7 @@ class HeartbeatRequest(BaseModel):
     tool_catalog_version: str = ""
     script_catalog_version: str = ""
     load: Dict[str, Any] = {}
+    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
 
 
 class BackpressureInfo(BaseModel):
@@ -132,6 +133,7 @@ class HeartbeatResponse(BaseModel):
     tool_catalog_outdated: bool
     script_catalog_outdated: bool = False
     backpressure: BackpressureInfo
+    capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -281,14 +283,24 @@ async def agent_heartbeat(
     Returns tool_catalog_outdated flag + current backpressure setting.
     """
     host = await db.get(Host, payload.host_id)
+    # ADR-0019 Phase 1: capacity safe-read
+    capacity = payload.capacity or {}
+    max_jobs_from_capacity = capacity.get("max_concurrent_jobs")
     if host is None:
         host = Host(
             id=payload.host_id,
             hostname=payload.host_id,
             status=HostStatus.ONLINE.value,
             created_at=datetime.utcnow(),
+            max_concurrent_jobs=(
+                max_jobs_from_capacity
+                if isinstance(max_jobs_from_capacity, int) and max_jobs_from_capacity > 0
+                else 2
+            ),
         )
         db.add(host)
+    elif isinstance(max_jobs_from_capacity, int) and max_jobs_from_capacity > 0:
+        host.max_concurrent_jobs = max_jobs_from_capacity
 
     outdated = (
         bool(payload.tool_catalog_version)
@@ -308,6 +320,16 @@ async def agent_heartbeat(
         host.script_catalog_version = payload.script_catalog_version
     host.status = HostStatus.ONLINE.value
 
+    # ADR-0019 Phase 1: count online healthy devices
+    online_rows = await db.execute(
+        select(Device.id).where(
+            Device.host_id == payload.host_id,
+            Device.adb_connected == True,
+            Device.adb_state.notin_(["offline", "unknown", ""]),
+        )
+    )
+    online_healthy = len(online_rows.scalars().all())
+
     await db.commit()
 
     backpressure = await _get_backpressure()
@@ -315,6 +337,10 @@ async def agent_heartbeat(
         tool_catalog_outdated=outdated,
         script_catalog_outdated=scripts_outdated,
         backpressure=BackpressureInfo(log_rate_limit=backpressure),
+        capacity={
+            "max_concurrent_jobs": host.max_concurrent_jobs,
+            "online_healthy_devices": online_healthy,
+        },
     ))
 
 

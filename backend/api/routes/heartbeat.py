@@ -161,6 +161,12 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
     if payload.script_catalog_version:
         host.script_catalog_version = payload.script_catalog_version
 
+    # ADR-0019 Phase 1: store agent-reported capacity
+    capacity = payload.capacity or {}
+    m = capacity.get("max_concurrent_jobs")
+    if isinstance(m, int) and m > 0:
+        host.max_concurrent_jobs = m
+
     # Merge extra data without losing system stats
     host_extra = {}
     if payload.extra:
@@ -172,6 +178,7 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
     # Process devices array
     devices_data = getattr(payload, "devices", None) or []
     seen_serials = set()
+    online_healthy_count = 0  # ADR-0019 Phase 1
     ws_device_updates: List[Dict[str, Any]] = []
 
     if devices_data:
@@ -212,6 +219,11 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
             # Update ADB connection state
             device.adb_state = dev_data.get("adb_state", "unknown")
             device.adb_connected = bool(dev_data.get("adb_connected", False))
+
+            # ADR-0019 Phase 1: count online healthy devices
+            if (device.adb_connected is True
+                    and device.adb_state not in ("offline", "unknown", "")):
+                online_healthy_count += 1
 
             logger.info(f"device_adb_update: serial={serial}, adb_state={device.adb_state}, adb_connected={device.adb_connected}, network_latency={dev_data.get('network_latency')}")
 
@@ -298,4 +310,9 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
         "devices_count": len(seen_serials),
         "tool_catalog_outdated": tool_catalog_outdated,
         "script_catalog_outdated": script_catalog_outdated,
+        # ADR-0019 Phase 1
+        "capacity": {
+            "max_concurrent_jobs": host.max_concurrent_jobs,
+            "online_healthy_devices": online_healthy_count,
+        },
     }

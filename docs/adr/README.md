@@ -66,7 +66,8 @@
 | [ADR-0015](./ADR-0015-audit-log-system.md) | 审计日志系统 | Accepted | P1 | M2 | 已实现 |
 | [ADR-0016](./ADR-0016-deprecate-base-test-case.md) | 废弃 BaseTestCase，以 Pipeline Action 为唯一执行模型 | Accepted | P0 | M2 | 冻结中，待迁移 |
 | [ADR-0017](./ADR-0017-phase0-state-closure.md) | Phase 0 状态闭环 | Accepted | P0 | M1 | 已实现 |
-| [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md) | 基础设施层框架引入（SAQ / APScheduler / python-socketio） | Proposed | P0 | M2 | 待评审 |
+| [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md) | 基础设施层框架引入（SAQ / APScheduler / python-socketio） | Accepted | P0 | M2 | 已实现 |
+| [ADR-0019](./ADR-0019-android-device-lease-and-capacity-scheduling.md) | Android Device Lease 与容量调度模型 | Proposed | P0 | M3 | 待评审 |
 
 ## Proposed 里程碑看板（2026 上半年）
 
@@ -74,7 +75,7 @@
 |---|---|---|
 | M1 | 2026-03-15 | ADR-0008, ADR-0009 |
 | M2 | 2026-04-15 | ADR-0010, ADR-0011, ADR-0013, ADR-0014, ADR-0016, ADR-0018 |
-| M3 | 2026-05-15 | ADR-0012（第 2-3 层） |
+| M3 | 2026-05-15 | ADR-0012（第 2-3 层）, ADR-0019 |
 
 ## 维护约定
 

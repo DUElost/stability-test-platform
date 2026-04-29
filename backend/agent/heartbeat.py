@@ -27,6 +27,10 @@ def send_heartbeat(
     devices: Optional[List[Dict[str, Any]]] = None,
     tool_catalog_version: str = "",
     script_catalog_version: str = "",
+    # ADR-0019 Phase 1: capacity reporting
+    available_slots: int = 0,
+    max_concurrent_jobs: int = 2,
+    online_healthy_devices: int = 0,
 ) -> Optional[Dict[str, Any]]:
     """发送心跳到服务器，包含系统统计信息和设备数据
 
@@ -52,6 +56,12 @@ def send_heartbeat(
         "extra": system_stats,
         "host": host_info,  # 包含主机信息用于自动创建
         "devices": devices or [],  # 设备列表
+        # ADR-0019 Phase 1
+        "capacity": {
+            "available_slots": available_slots,
+            "max_concurrent_jobs": max_concurrent_jobs,
+            "online_healthy_devices": online_healthy_devices,
+        },
     }
 
     agent_secret = os.getenv("AGENT_SECRET", "")
