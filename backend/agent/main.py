@@ -83,17 +83,7 @@ _active_jobs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
 
 
-# 全局活跃 Job 追踪辅助函数（JobSession 回调与现有主循环共用）
-def _register_active_job(jid: int) -> None:
-    with _active_jobs_lock:
-        _active_job_ids.add(jid)
-
-
-def _deregister_active_job(jid: int) -> None:
-    with _active_jobs_lock:
-        _active_job_ids.discard(jid)
-
-
+# 全局活跃 Job 追踪辅助函数（仅 per-device guard）
 def _register_active_device(did: int) -> None:
     with _active_jobs_lock:
         _active_device_ids.add(did)
@@ -246,13 +236,10 @@ def main() -> None:
         elif command == "abort":
             job_id = payload.get("job_id")
             if job_id:
-                with _active_jobs_lock:
-                    _active_job_ids.discard(int(job_id))
+                _deregister_active_job(int(job_id))
                 logger.info("control_abort job_id=%s", job_id)
         else:
             logger.warning("unknown_control_command: %s", command)
-
-    ws_client.set_control_handler(_handle_control)
 
     # ADR-0019 Phase 1: capacity helper — thread-safe active job count
     def _get_active_job_count() -> int:
@@ -286,6 +273,21 @@ def main() -> None:
         lock_renewal_stop_event=_lock_renewal_stop_event,
     )
     lock_manager.start()
+
+    # ADR-0019 Phase 2b: 活跃 job 注册/注销闭包（捕获 lock_manager）
+    def _register_active_job(jid: int, fencing_token: str = "") -> None:
+        with _active_jobs_lock:
+            _active_job_ids.add(jid)
+        if fencing_token:
+            lock_manager.set_fencing_token(jid, fencing_token)
+
+    def _deregister_active_job(jid: int) -> None:
+        with _active_jobs_lock:
+            _active_job_ids.discard(jid)
+        lock_manager.clear_fencing_token(jid)
+
+    # 必须在闭包定义之后注册，避免 _handle_control 中 _deregister_active_job 引用未绑定
+    ws_client.set_control_handler(_handle_control)
 
     # 启动终态 Outbox Drain 线程
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
@@ -369,9 +371,11 @@ def main() -> None:
                                     job["id"], device_id,
                                 )
                                 continue
-                            _active_job_ids.add(job["id"])
                             if device_id:
                                 _active_device_ids.add(device_id)
+
+                        # ADR-0019 Phase 2b: 统一走闭包注册 job + fencing_token
+                        _register_active_job(job["id"], job["fencing_token"])
 
                         try:
                             executor.submit(
@@ -389,8 +393,8 @@ def main() -> None:
                             )
                         except Exception:
                             logger.exception("submit_failed job=%d device=%s", job["id"], device_id)
+                            _deregister_active_job(job["id"])
                             with _active_jobs_lock:
-                                _active_job_ids.discard(job["id"])
                                 if device_id:
                                     _active_device_ids.discard(device_id)
 

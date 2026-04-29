@@ -20,11 +20,12 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import or_, select
 
 from backend.core.database import AsyncSessionLocal
-from backend.models.enums import HostStatus, JobStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.services.aggregator import WorkflowAggregator
 from backend.services.device_lock import release_lock
+from backend.services.lease_manager import release_lease
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,7 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
                 JobStateMachine.transition(job, JobStatus.UNKNOWN, "host_heartbeat_timeout")
                 job.ended_at = datetime.now(timezone.utc)
                 await release_lock(db, job.device_id, job.id)
+                await release_lease(db, job.device_id, job.id, LeaseType.JOB)
                 await WorkflowAggregator.on_job_terminal(job, db)
                 affected_jobs += 1
             except InvalidTransitionError:
@@ -93,6 +95,7 @@ async def _check_device_lock_expiration(db) -> int:
     for device in expired_devices:
         job_id = device.lock_run_id
         if await release_lock(db, device.id, job_id):
+            await release_lease(db, device.id, job_id, LeaseType.JOB)
             released += 1
 
             # Find the associated job and transition to UNKNOWN if RUNNING

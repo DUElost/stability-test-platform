@@ -16,12 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
 from backend.core.database import get_async_db
-from backend.models.enums import HostStatus, JobStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
+from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace, TaskTemplate
 from backend.models.workflow import WorkflowDefinition
 from backend.services.aggregator import WorkflowAggregator
 from backend.services.device_lock import acquire_lock, extend_lock, release_lock
+from backend.services.lease_manager import acquire_lease, extend_lease, release_lease
 from backend.services.reconciler import reconcile_step_traces
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
@@ -99,6 +101,7 @@ class JobOut(BaseModel):
     # Watcher 策略覆盖（来自 WorkflowDefinition.watcher_policy）
     # Agent 解析见 backend/agent/watcher/policy.py WatcherPolicy.from_job
     watcher_policy: Optional[Dict[str, Any]] = None
+    fencing_token: str  # ADR-0019 Phase 2b: 必填，来自 DeviceLease.fencing_token
 
 
 class JobStatusUpdate(BaseModel):
@@ -183,6 +186,7 @@ async def claim_jobs(
 
     claimed = []
     claimed_device_ids: set[int] = set()
+    fencing_token_map: Dict[int, str] = {}
     now = datetime.now(timezone.utc)
     for job in pending_jobs:
         if job.device_id in claimed_device_ids:
@@ -201,6 +205,18 @@ async def claim_jobs(
                 acquired = await acquire_lock(db, job.device_id, job.id, _DEVICE_LOCK_LEASE_SECONDS)
                 if not acquired:
                     raise _LockAcquireFailed()
+
+                lease = await acquire_lease(
+                    db,
+                    device_id=job.device_id,
+                    host_id=payload.host_id,
+                    lease_type=LeaseType.JOB,
+                    agent_instance_id=payload.host_id,
+                    job_id=job.id,
+                )
+                if lease is None:
+                    raise _LockAcquireFailed()
+                fencing_token_map[job.id] = lease.fencing_token
 
             claimed.append(job)
             claimed_device_ids.add(job.device_id)
@@ -223,6 +239,7 @@ async def claim_jobs(
             device_serial=serial_map.get(j.device_id),
             host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
             watcher_policy=watcher_policy_map.get(j.id),
+            fencing_token=fencing_token_map[j.id],
         )
         for j in claimed
     ])
@@ -360,6 +377,7 @@ _RUN_TO_JOB: Dict[str, JobStatus] = {
 class _JobHeartbeatIn(BaseModel):
     status: str = "RUNNING"
     started_at: Optional[str] = None
+    fencing_token: str  # ADR-0019 Phase 2b: 必填
 
 
 class _RunCompleteIn(BaseModel):
@@ -369,6 +387,11 @@ class _RunCompleteIn(BaseModel):
     # 字段形态参考 backend/agent/watcher/contracts.py WatcherSummaryPayload
     # 可选：watcher_id / watcher_started_at / watcher_stopped_at / watcher_capability / log_signal_count / watcher_stats
     watcher_summary: Optional[Dict[str, Any]] = None
+    fencing_token: str  # ADR-0019 Phase 2b: 必填
+
+
+class _ExtendLockIn(BaseModel):
+    fencing_token: str  # ADR-0019 Phase 2b: 必填
 
 
 class _StepStatusIn(BaseModel):
@@ -448,6 +471,7 @@ async def get_pending_jobs(
     # Per-device deduplication: only one job per device per poll
     claimed = []
     claimed_device_ids: set[int] = set()
+    fencing_token_map: Dict[int, str] = {}
     now = datetime.now(timezone.utc)
     for j in jobs:
         # Skip if we already claimed a job for this device this cycle
@@ -472,6 +496,18 @@ async def get_pending_jobs(
                 acquired = await acquire_lock(db, j.device_id, j.id, _DEVICE_LOCK_LEASE_SECONDS)
                 if not acquired:
                     raise _LockAcquireFailed()
+
+                lease = await acquire_lease(
+                    db,
+                    device_id=j.device_id,
+                    host_id=host_id,
+                    lease_type=LeaseType.JOB,
+                    agent_instance_id=host_id,
+                    job_id=j.id,
+                )
+                if lease is None:
+                    raise _LockAcquireFailed()
+                fencing_token_map[j.id] = lease.fencing_token
 
             claimed.append(j)
             claimed_device_ids.add(j.device_id)
@@ -499,6 +535,7 @@ async def get_pending_jobs(
             device_serial=serial_map.get(j.device_id),
             host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
             watcher_policy=watcher_policy_map.get(j.id),
+            fencing_token=fencing_token_map[j.id],
         )
         for j in claimed
     ])
@@ -515,6 +552,18 @@ async def job_heartbeat(
     job = await db.get(JobInstance, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+
+    # ADR-0019 Phase 2b: validate fencing_token against ACTIVE lease
+    active_lease = (await db.execute(
+        select(DeviceLease).where(
+            DeviceLease.device_id == job.device_id,
+            DeviceLease.job_id == job_id,
+            DeviceLease.lease_type == LeaseType.JOB.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
+    )).scalars().first()
+    if active_lease is None or active_lease.fencing_token != payload.fencing_token:
+        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
 
     target = _RUN_TO_JOB.get(payload.status.upper(), JobStatus.RUNNING)
     now = datetime.now(timezone.utc)
@@ -549,6 +598,31 @@ async def complete_job(
     # Idempotent: if MQ consumer already transitioned to the same terminal state,
     # skip the transition but still persist snapshot and release lock.
     already_terminal = job.status == target.value and job.status in _TERMINAL
+
+    # ADR-0019 Phase 2b: fencing_token validation
+    if not already_terminal:
+        active_lease = (await db.execute(
+            select(DeviceLease).where(
+                DeviceLease.device_id == job.device_id,
+                DeviceLease.job_id == job_id,
+                DeviceLease.lease_type == LeaseType.JOB.value,
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+            )
+        )).scalars().first()
+        if active_lease is None or active_lease.fencing_token != payload.fencing_token:
+            raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
+    else:
+        released_lease = (await db.execute(
+            select(DeviceLease).where(
+                DeviceLease.device_id == job.device_id,
+                DeviceLease.job_id == job_id,
+                DeviceLease.lease_type == LeaseType.JOB.value,
+                DeviceLease.status == LeaseStatus.RELEASED.value,
+            )
+        )).scalars().first()
+        if released_lease is None or released_lease.fencing_token != payload.fencing_token:
+            raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
+
     if not already_terminal:
         try:
             JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
@@ -608,8 +682,14 @@ async def complete_job(
 
     if job.status in _TERMINAL:
         await WorkflowAggregator.on_job_terminal(job, db)
-        # Release device lock on terminal state
+        # Release device lock + lease on terminal state (ADR-0019 Phase 2a dual-write)
         await release_lock(db, job.device_id, job_id)
+        released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
+        if not released:
+            if already_terminal:
+                logger.debug("release_lease_already_released device=%s job=%s", job.device_id, job_id)
+            else:
+                logger.warning("release_lease_miss device=%s job=%s", job.device_id, job_id)
 
     await db.commit()
 
@@ -638,6 +718,7 @@ async def complete_job(
 @router.post("/jobs/{job_id}/extend_lock", response_model=ApiResponse[dict])
 async def extend_job_lock(
     job_id: int,
+    payload: _ExtendLockIn,
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
@@ -650,9 +731,25 @@ async def extend_job_lock(
     if device is None:
         raise HTTPException(status_code=404, detail="device not found")
 
+    # ADR-0019 Phase 2b: validate fencing_token against ACTIVE lease
+    active_lease = (await db.execute(
+        select(DeviceLease).where(
+            DeviceLease.device_id == job.device_id,
+            DeviceLease.job_id == job_id,
+            DeviceLease.lease_type == LeaseType.JOB.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
+    )).scalars().first()
+    if active_lease is None or active_lease.fencing_token != payload.fencing_token:
+        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
+
     extended = await extend_lock(db, job.device_id, job_id, _DEVICE_LOCK_LEASE_SECONDS)
     if not extended:
         raise HTTPException(status_code=409, detail="device locked by another job")
+
+    renewed = await extend_lease(db, job.device_id, job_id, LeaseType.JOB, _DEVICE_LOCK_LEASE_SECONDS)
+    if not renewed:
+        logger.warning("extend_lease_miss device=%s job=%s", job.device_id, job_id)
 
     now = datetime.now(timezone.utc)
     job.updated_at = now

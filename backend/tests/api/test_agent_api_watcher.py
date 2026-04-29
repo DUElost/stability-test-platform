@@ -40,7 +40,8 @@ from backend.api.routes.agent_api import (
     ingest_log_signals,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
-from backend.models.enums import HostStatus, JobStatus, WorkflowStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
+from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, JobLogSignal, StepTrace, TaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
@@ -156,6 +157,7 @@ def _cleanup_seed(seed: dict) -> None:
     try:
         job_id = seed.get("job_id")
         if job_id:
+            db.query(DeviceLease).filter(DeviceLease.job_id == job_id).delete()
             db.query(JobLogSignal).filter(JobLogSignal.job_id == job_id).delete()
             db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
             db.query(JobInstance).filter(JobInstance.id == job_id).delete()
@@ -181,6 +183,38 @@ def _cleanup_seed(seed: dict) -> None:
             db.query(Host).filter(Host.id == host_id).delete()
 
         db.commit()
+    finally:
+        db.close()
+
+
+def _setup_watcher_lease(seed: dict) -> str:
+    """Create an ACTIVE DeviceLease for Phase 2b fencing_token validation.
+
+    Returns the fencing_token that callers should pass to handlers.
+    """
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=600)
+    token = f"{seed['device_id']}:1"
+
+    db = SessionLocal()
+    try:
+        lease = DeviceLease(
+            device_id=seed["device_id"],
+            job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=token,
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=expires,
+        )
+        db.add(lease)
+        db.commit()
+        return token
     finally:
         db.close()
 
@@ -254,6 +288,7 @@ async def test_complete_with_watcher_summary_persists_fields():
         "log_signal_count": 5,
         "watcher_stats": {"events_total": 12, "signals_emitted": 5},
     }
+    token = _setup_watcher_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
@@ -262,6 +297,7 @@ async def test_complete_with_watcher_summary_persists_fields():
                 payload=_RunCompleteIn(
                     update={"status": "FINISHED", "exit_code": 0},
                     watcher_summary=summary,
+                    fencing_token=token,
                 ),
                 db=async_db,
                 _=None,
@@ -289,6 +325,7 @@ async def test_complete_with_watcher_summary_persists_fields():
 async def test_complete_without_watcher_summary_keeps_columns_null():
     """未启用 watcher 的旧 Agent 上报不带 summary → watcher_* 列保持 None。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    token = _setup_watcher_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
@@ -297,6 +334,7 @@ async def test_complete_without_watcher_summary_keeps_columns_null():
                 payload=_RunCompleteIn(
                     update={"status": "FINISHED", "exit_code": 0},
                     # 不传 watcher_summary
+                    fencing_token=token,
                 ),
                 db=async_db,
                 _=None,

@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 from backend.api.routes.agent_api import (
+    _ExtendLockIn,
     _JobHeartbeatIn,
     _RunCompleteIn,
     _StepStatusIn,
@@ -18,7 +19,8 @@ from backend.api.routes.agent_api import (
     update_job_step_status,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
-from backend.models.enums import HostStatus, JobStatus, WorkflowStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
+from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, StepTrace, TaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
@@ -136,11 +138,44 @@ def _seed_host_only() -> dict:
         db.close()
 
 
+def _setup_lease(seed: dict) -> str:
+    """Create an ACTIVE DeviceLease for Phase 2b fencing_token validation.
+
+    Returns the fencing_token that callers should pass to handlers.
+    """
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=600)
+    token = f"{seed['device_id']}:1"
+
+    db = SessionLocal()
+    try:
+        lease = DeviceLease(
+            device_id=seed["device_id"],
+            job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=token,
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=expires,
+        )
+        db.add(lease)
+        db.commit()
+        return token
+    finally:
+        db.close()
+
+
 def _cleanup_seed(seed: dict) -> None:
     db = SessionLocal()
     try:
         job_id = seed.get("job_id")
         if job_id:
+            db.query(DeviceLease).filter(DeviceLease.job_id == job_id).delete()
             db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
             db.query(JobInstance).filter(JobInstance.id == job_id).delete()
 
@@ -206,12 +241,13 @@ async def test_get_pending_jobs_empty():
 @pytest.mark.asyncio
 async def test_job_heartbeat_transitions_to_running():
     seed = _seed_job(status=JobStatus.PENDING.value)
+    token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await job_heartbeat(
                 job_id=seed["job_id"],
-                payload=_JobHeartbeatIn(status="RUNNING"),
+                payload=_JobHeartbeatIn(status="RUNNING", fencing_token=token),
                 db=async_db,
                 _=None,
             )
@@ -233,6 +269,7 @@ async def test_job_heartbeat_transitions_to_running():
 @pytest.mark.asyncio
 async def test_job_heartbeat_refreshes_liveness_for_running_job(engine):
     seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
     old_liveness = datetime.now(timezone.utc) - timedelta(hours=1)
     try:
         db = SessionLocal()
@@ -248,7 +285,7 @@ async def test_job_heartbeat_refreshes_liveness_for_running_job(engine):
         async with AsyncSessionLocal() as async_db:
             result = await job_heartbeat(
                 job_id=seed["job_id"],
-                payload=_JobHeartbeatIn(status="RUNNING"),
+                payload=_JobHeartbeatIn(status="RUNNING", fencing_token=token),
                 db=async_db,
                 _=None,
             )
@@ -269,12 +306,13 @@ async def test_job_heartbeat_refreshes_liveness_for_running_job(engine):
 @pytest.mark.asyncio
 async def test_complete_job_maps_finished_to_completed():
     seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await complete_job(
                 job_id=seed["job_id"],
-                payload=_RunCompleteIn(update={"status": "FINISHED", "exit_code": 0}),
+                payload=_RunCompleteIn(update={"status": "FINISHED", "exit_code": 0}, fencing_token=token),
                 db=async_db,
                 _=None,
             )
@@ -300,6 +338,7 @@ async def test_complete_job_maps_finished_to_completed():
 @pytest.mark.asyncio
 async def test_complete_job_persists_run_complete_snapshot():
     seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
@@ -316,6 +355,7 @@ async def test_complete_job_persists_run_complete_snapshot():
                         "size_bytes": 1024,
                         "checksum": "abc123",
                     },
+                    fencing_token=token,
                 ),
                 db=async_db,
                 _=None,
@@ -347,6 +387,7 @@ async def test_complete_job_persists_run_complete_snapshot():
 @pytest.mark.asyncio
 async def test_extend_lock_success(engine):
     seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
     old_liveness = datetime.now(timezone.utc) - timedelta(hours=1)
     try:
         db = SessionLocal()
@@ -363,7 +404,11 @@ async def test_extend_lock_success(engine):
 
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            result = await extend_job_lock(job_id=seed["job_id"], db=async_db, _=None)
+            result = await extend_job_lock(
+                job_id=seed["job_id"],
+                payload=_ExtendLockIn(fencing_token=token),
+                db=async_db, _=None,
+            )
         assert result.error is None
         assert result.data["job_id"] == seed["job_id"]
         assert result.data["expires_at"]
@@ -382,6 +427,7 @@ async def test_extend_lock_success(engine):
 @pytest.mark.asyncio
 async def test_extend_lock_conflict():
     seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
     try:
         db = SessionLocal()
         try:
@@ -395,7 +441,11 @@ async def test_extend_lock_conflict():
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
-                await extend_job_lock(job_id=seed["job_id"], db=async_db, _=None)
+                await extend_job_lock(
+                    job_id=seed["job_id"],
+                    payload=_ExtendLockIn(fencing_token=token),
+                    db=async_db, _=None,
+                )
         assert exc_info.value.status_code == 409
     finally:
         _cleanup_seed(seed)

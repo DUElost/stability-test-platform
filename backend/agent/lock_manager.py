@@ -7,7 +7,7 @@ import logging
 import os
 import threading
 import time
-from typing import Optional, Set
+from typing import Dict, Optional, Set
 
 import requests
 
@@ -33,6 +33,7 @@ class LockRenewalManager:
         self._post_retries = int(os.getenv("AGENT_POST_RETRIES", "3"))
         self._post_retry_base_delay = float(os.getenv("AGENT_POST_RETRY_BASE_DELAY", "1"))
         self._renewal_interval = int(os.getenv("AGENT_LOCK_RENEWAL_INTERVAL", "60"))
+        self._fencing_tokens: Dict[int, str] = {}  # ADR-0019 Phase 2b
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -65,13 +66,31 @@ class LockRenewalManager:
 
             self._stop_event.wait(self._renewal_interval)
 
+    def set_fencing_token(self, job_id: int, token: str) -> None:
+        """Store fencing_token for a job (ADR-0019 Phase 2b)."""
+        with self._jobs_lock:
+            self._fencing_tokens[job_id] = token
+
+    def clear_fencing_token(self, job_id: int) -> None:
+        """Remove fencing_token for a job (ADR-0019 Phase 2b)."""
+        with self._jobs_lock:
+            self._fencing_tokens.pop(job_id, None)
+
     def _extend_lock(self, job_id: int) -> None:
+        with self._jobs_lock:
+            token = self._fencing_tokens.get(job_id)
+        if not token:
+            logger.debug("extend_lock_skipped_no_token job_id=%s", job_id)
+            return
+
         url = f"{self._api_url}/api/v1/agent/jobs/{job_id}/extend_lock"
         headers = {"X-Agent-Secret": self._agent_secret} if self._agent_secret else {}
 
         for attempt in range(1, self._post_retries + 1):
             try:
-                resp = requests.post(url, headers=headers, timeout=10)
+                resp = requests.post(
+                    url, json={"fencing_token": token}, headers=headers, timeout=10,
+                )
                 resp.raise_for_status()
                 result = resp.json()
                 logger.debug(
@@ -85,6 +104,7 @@ class LockRenewalManager:
                     )
                     with self._jobs_lock:
                         self._job_ids.discard(job_id)
+                        self._fencing_tokens.pop(job_id, None)
                     raise RuntimeError(f"Lock lost for job {job_id}")
                 logger.warning(
                     f"lock_extension_attempt_{attempt}_failed for job {job_id}: {e}"

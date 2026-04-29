@@ -30,9 +30,10 @@ from backend.core.metrics import (
     task_run_state_changes,
     task_run_total,
 )
-from backend.models.enums import JobStatus
+from backend.models.enums import JobStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
 from backend.services.device_lock import release_lock_sync
+from backend.services.lease_manager import release_lease_sync
 from backend.services.state_machine import JobStateMachine, InvalidTransitionError
 
 logger = logging.getLogger(__name__)
@@ -87,6 +88,7 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
 
     job.ended_at = now
     release_lock_sync(db, job.device_id, job.id)
+    release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
 
     # Workflow aggregation (sync path)
     try:

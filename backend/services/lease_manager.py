@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import LeaseStatus, LeaseType
@@ -148,35 +149,95 @@ async def acquire_lease(
     return lease
 
 
+async def extend_lease(
+    db: AsyncSession,
+    device_id: int,
+    job_id: int,
+    lease_type: LeaseType = LeaseType.JOB,
+    ttl: int = _DEFAULT_LEASE_SECONDS,
+) -> bool:
+    """Extend expires_at for an ACTIVE lease (ADR-0019 Phase 2a).
+
+    Only touches rows matching device_id + job_id + lease_type +
+    status='ACTIVE'.  Returns True if a lease was extended.
+    """
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=ttl)
+    result = await db.execute(
+        update(DeviceLease)
+        .where(
+            DeviceLease.device_id == device_id,
+            DeviceLease.job_id == job_id,
+            DeviceLease.lease_type == lease_type.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
+        .values(renewed_at=now, expires_at=expires_at)
+    )
+    if result.rowcount:
+        logger.info(
+            "lease_extended device=%s job=%s type=%s expires=%s",
+            device_id, job_id, lease_type.value, expires_at,
+        )
+    return bool(result.rowcount)
+
+
 async def release_lease(
     db: AsyncSession,
     device_id: int,
-    lease_type: LeaseType | None = None,
+    job_id: int,
+    lease_type: LeaseType = LeaseType.JOB,
 ) -> bool:
-    """Release all ACTIVE leases for a device (ADR-0019 Phase 1).
+    """Release an ACTIVE lease for a device+job (ADR-0019 Phase 2a).
 
-    Optionally filter by lease_type.  Sets status=RELEASED and
-    released_at to the current time.
-
-    Returns True if at least one lease was released.
+    Only touches rows matching device_id + job_id + lease_type +
+    status='ACTIVE'.  Returns True if a lease was released.
     """
     now = datetime.now(timezone.utc)
-    conditions = [
-        DeviceLease.device_id == device_id,
-        DeviceLease.status == LeaseStatus.ACTIVE.value,
-    ]
-    if lease_type is not None:
-        conditions.append(DeviceLease.lease_type == lease_type.value)
-
     result = await db.execute(
         update(DeviceLease)
-        .where(*conditions)
+        .where(
+            DeviceLease.device_id == device_id,
+            DeviceLease.job_id == job_id,
+            DeviceLease.lease_type == lease_type.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
         .values(status=LeaseStatus.RELEASED.value, released_at=now)
     )
-    released = result.rowcount
-    if released:
-        logger.info("lease_released device=%s count=%s", device_id, released)
-    return bool(released)
+    if result.rowcount:
+        logger.info(
+            "lease_released device=%s job=%s type=%s",
+            device_id, job_id, lease_type.value,
+        )
+    return bool(result.rowcount)
+
+
+def release_lease_sync(
+    db: Session,
+    device_id: int,
+    job_id: int,
+    lease_type: LeaseType = LeaseType.JOB,
+) -> bool:
+    """Release an ACTIVE lease synchronously (ADR-0019 Phase 2b).
+
+    Used by the recycler which runs in APScheduler threads (non-async).
+    """
+    now = datetime.now(timezone.utc)
+    result = db.execute(
+        update(DeviceLease)
+        .where(
+            DeviceLease.device_id == device_id,
+            DeviceLease.job_id == job_id,
+            DeviceLease.lease_type == lease_type.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
+        .values(status=LeaseStatus.RELEASED.value, released_at=now)
+    )
+    if result.rowcount:
+        logger.info(
+            "lease_released_sync device=%s job=%s type=%s",
+            device_id, job_id, lease_type.value,
+        )
+    return bool(result.rowcount)
 
 
 class _LeaseConflict(Exception):

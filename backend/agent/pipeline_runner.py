@@ -26,6 +26,7 @@ def execute_pipeline_run(
     script_registry: Optional[Any] = None,
     local_db: Optional[Any] = None,
     is_aborted: Optional[Callable[[], bool]] = None,
+    fencing_token: str = "",
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -69,6 +70,7 @@ def execute_pipeline_run(
         api_url=api_url,
         agent_secret=agent_secret,
         is_aborted=is_aborted,
+        fencing_token=fencing_token,
     )
 
     try:

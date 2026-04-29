@@ -19,7 +19,7 @@ class JobRunnerState:
     active_job_ids: MutableSet[int]
     active_device_ids: MutableSet[int]
     watcher_enabled: bool
-    lock_register: Callable[[int], None]
+    lock_register: Callable[[int, str], None]  # ADR-0019 Phase 2b: (job_id, fencing_token)
     lock_deregister: Callable[[int], None]
     device_id_register: Callable[[int], None]
     device_id_deregister: Callable[[int], None]
@@ -29,8 +29,8 @@ class JobRunnerState:
             return job_id not in self.active_job_ids
 
     def release(self, job_id: int, device_id: Optional[int]) -> None:
+        self.lock_deregister(job_id)  # discard from Set + clear fencing_token
         with self.active_jobs_lock:
-            self.active_job_ids.discard(job_id)
             if device_id:
                 self.active_device_ids.discard(device_id)
 
@@ -72,6 +72,10 @@ def run_task_wrapper(
     device_id = run.get("device_id")
     device_serial = run.get("device_serial", "")
     pipeline_def = run.get("pipeline_def")
+    fencing_token = run["fencing_token"]  # ADR-0019 Phase 2b: 强协议，缺字段直接暴露协议错误
+
+    # ADR-0019 Phase 2b: register fencing_token before any work begins
+    state.lock_register(job_id, fencing_token)
 
     logger.info(
         "run_start job_id=%d task_id=%s device_id=%s device_serial=%s",
@@ -82,7 +86,7 @@ def run_task_wrapper(
         update_job(
             api_url,
             job_id,
-            {"status": "RUNNING", "started_at": datetime.utcnow().isoformat()},
+            {"status": "RUNNING", "started_at": datetime.utcnow().isoformat(), "fencing_token": fencing_token},
         )
     except Exception as exc:
         logger.warning(
@@ -102,6 +106,7 @@ def run_task_wrapper(
                 "error_code": "PIPELINE_REQUIRED",
                 "error_message": pipeline_error,
             },
+            fencing_token=fencing_token,
             local_db=local_db,
         )
         state.release(job_id, device_id)
@@ -134,6 +139,7 @@ def run_task_wrapper(
                     "error_code": "WATCHER_START_FAIL",
                     "error_message": str(exc),
                 },
+                fencing_token=fencing_token,
                 local_db=local_db,
             )
             state.release(job_id, device_id)
@@ -153,6 +159,7 @@ def run_task_wrapper(
             script_registry=script_registry,
             local_db=local_db,
             is_aborted=lambda: state.is_aborted(job_id),
+            fencing_token=fencing_token,
         )
 
         watcher_summary = None
@@ -176,7 +183,7 @@ def run_task_wrapper(
         if watcher_summary is not None:
             complete_payload["watcher_summary"] = watcher_summary
 
-        complete_job(api_url, job_id, complete_payload, local_db=local_db)
+        complete_job(api_url, job_id, complete_payload, fencing_token=fencing_token, local_db=local_db)
         logger.info("run_complete", extra={"job_id": job_id, "status": result["status"]})
     except Exception as exc:
         logger.exception("run_failed job=%d: %s", job_id, exc)
@@ -197,6 +204,6 @@ def run_task_wrapper(
         }
         if watcher_summary is not None:
             failure_payload["watcher_summary"] = watcher_summary
-        complete_job(api_url, job_id, failure_payload, local_db=local_db)
+        complete_job(api_url, job_id, failure_payload, fencing_token=fencing_token, local_db=local_db)
     finally:
         state.release(job_id, device_id)

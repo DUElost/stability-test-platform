@@ -110,7 +110,7 @@ def update_run(api_url: str, run_id: int, payload: Dict[str, Any]) -> None:
     update_job(api_url, run_id, payload)
 
 
-def _build_complete_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _build_complete_payload(payload: Dict[str, Any], fencing_token: str) -> Dict[str, Any]:
     """Build the normalized payload for the /complete endpoint."""
     raw_status = str(payload.get("status", "FAILED")).upper()
     normalized_status = RUN_TERMINAL_STATUS_MAP.get(raw_status, "FAILED")
@@ -121,7 +121,8 @@ def _build_complete_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "error_code": payload.get("error_code"),
             "error_message": payload.get("error_message"),
             "log_summary": payload.get("log_summary"),
-        }
+        },
+        "fencing_token": fencing_token,
     }
     artifact = payload.get("artifact")
     if isinstance(artifact, dict):
@@ -136,10 +137,11 @@ def complete_job(
     api_url: str,
     job_id: int,
     payload: Dict[str, Any],
+    fencing_token: str,
     local_db=None,
 ) -> None:
     """Report job terminal state. Writes to local outbox first for durability."""
-    complete_payload = _build_complete_payload(payload)
+    complete_payload = _build_complete_payload(payload, fencing_token)
 
     if local_db is not None:
         try:
@@ -171,7 +173,8 @@ def complete_run(
     api_url: str,
     run_id: int,
     payload: Dict[str, Any],
+    fencing_token: str,
     local_db=None,
 ) -> None:
     """Backward-compatible alias for job terminal reporting."""
-    complete_job(api_url, run_id, payload, local_db=local_db)
+    complete_job(api_url, run_id, payload, fencing_token=fencing_token, local_db=local_db)

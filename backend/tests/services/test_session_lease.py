@@ -120,6 +120,8 @@ async def test_claim_skips_locked_device():
 async def test_complete_job_releases_lock():
     """complete_job endpoint releases device lock on terminal status."""
     from backend.api.routes.agent_api import _RunCompleteIn, complete_job
+    from backend.models.device_lease import DeviceLease
+    from backend.models.enums import LeaseStatus, LeaseType
 
     seed = _seed()
 
@@ -135,8 +137,30 @@ async def test_complete_job_releases_lock():
     d = _get_device(seed["device_id"])
     assert d.lock_run_id == seed["job_id"]
 
+    # Create an ACTIVE DeviceLease for Phase 2b fencing_token validation
+    token = f"{seed['device_id']}:1"
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        db.add(DeviceLease(
+            device_id=seed["device_id"],
+            job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=token,
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=now + timedelta(seconds=600),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
     # Now complete the job
-    payload = _RunCompleteIn(update={"status": "COMPLETED"})
+    payload = _RunCompleteIn(update={"status": "COMPLETED"}, fencing_token=token)
     async with AsyncSessionLocal() as db:
         await complete_job(seed["job_id"], payload, db)
 

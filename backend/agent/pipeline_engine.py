@@ -128,6 +128,7 @@ class PipelineEngine:
         agent_secret: str = "",
         nfs_root: Optional[str] = None,
         is_aborted: Optional[Callable[[], bool]] = None,
+        fencing_token: Optional[str] = None,
     ):
         self._adb = adb
         self._serial = serial
@@ -144,6 +145,7 @@ class PipelineEngine:
         self._adb_path = getattr(adb, "adb_path", os.getenv("ADB_PATH", "adb"))
         self._nfs_root = nfs_root if nfs_root is not None else os.getenv("STP_NFS_ROOT", "")
         self._is_aborted = is_aborted
+        self._fencing_token = fencing_token or ""  # ADR-0019 Phase 2b
         self._shared: dict = {}
         self._canceled = False
 
@@ -192,7 +194,9 @@ class PipelineEngine:
 
         for attempt, delay in enumerate(retry_delays, 1):
             try:
-                resp = requests.post(url, headers=headers, timeout=10)
+                resp = requests.post(
+                    url, json={"fencing_token": self._fencing_token}, headers=headers, timeout=10,
+                )
                 if resp.status_code == 409:
                     logger.error("device_lock_not_held run=%d — aborting pipeline", self._run_id)
                     return StepResult(

@@ -37,6 +37,7 @@ class TestAgentMain(unittest.TestCase):
                     "log_summary": "ok",
                     "artifact": artifact,
                 },
+                fencing_token="0:1",
             )
 
             called_payload = mock_post.call_args.kwargs["json"]
