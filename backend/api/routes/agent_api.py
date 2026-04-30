@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
@@ -148,32 +148,90 @@ async def _claim_jobs_for_host(
 ) -> tuple[List[JobInstance], Dict[int, str]]:
     """Shared claim logic for claim_jobs (POST) and get_pending_jobs (GET).
 
-    Only acquire_lease is the conflict source — acquire_lock is NOT called (Phase 2c).
-    Expired ACTIVE leases are recycled inside acquire_lease.
+    Phase 2d hardening:
+    - Host row FOR UPDATE serializes concurrent claims for the same host
+    - Capacity is authoritative (host.max_concurrent_jobs), Agent's "capacity" is a soft cap
+    - Non-expired ACTIVE leases (JOB/Script/MAINTENANCE) pre-filter busy devices
+    - row_number() per device picks the earliest PENDING job
+    - FOR UPDATE OF JobInstance SKIP LOCKED prevents thundering herd
+    - Unified exit: commit on success, rollback on empty to release host lock
 
     Returns (claimed_jobs, fencing_token_map).
     """
+    now = datetime.now(timezone.utc)
+
+    # 1. Lock host row — serializes concurrent claims for the same host
+    host_row = (await db.execute(
+        select(Host).where(Host.id == host_id).with_for_update()
+    )).scalars().first()
+    if not host_row:
+        return [], {}  # host not found, no lock acquired — safe early return
+
+    # 2. Count non-expired ACTIVE JOB leases (capacity authority)
+    active_job_count = (await db.execute(
+        select(func.count()).select_from(DeviceLease).where(
+            DeviceLease.host_id == host_id,
+            DeviceLease.lease_type == LeaseType.JOB.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+            DeviceLease.expires_at > now,
+        )
+    )).scalar_one()
+
+    # 3. Effective capacity — Agent's "capacity" is only a soft cap
+    effective_capacity = max(0, host_row.max_concurrent_jobs - active_job_count)
+    effective_capacity = min(effective_capacity, capacity)
+
+    # 4. Get all device IDs for this host
     device_ids_result = await db.execute(
         select(Device.id).where(Device.host_id == host_id)
     )
-    device_ids = [row[0] for row in device_ids_result.all()]
-    if not device_ids:
-        return [], {}
+    all_device_ids = [row[0] for row in device_ids_result.all()]
 
-    pending_jobs = (await db.execute(
-        select(JobInstance)
-        .where(
-            JobInstance.device_id.in_(device_ids),
-            JobInstance.status == JobStatus.PENDING.value,
+    # 5. Pre-filter: exclude devices with ANY non-expired ACTIVE lease
+    #    (JOB / SCRIPT / MAINTENANCE all occupy the device)
+    #    Expired ACTIVE leases pass through — acquire_lease recycles them.
+    free_device_ids: list[int] = []
+    if all_device_ids:
+        busy_rows = await db.execute(
+            select(DeviceLease.device_id).where(
+                DeviceLease.device_id.in_(all_device_ids),
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+                DeviceLease.expires_at > now,
+            )
         )
-        .order_by(JobInstance.created_at)
-        .limit(capacity)
-    )).scalars().all()
+        busy_device_ids = {row[0] for row in busy_rows.all()}
+        free_device_ids = [did for did in all_device_ids if did not in busy_device_ids]
 
-    claimed = []
+    # 6. Per-device first PENDING job + FOR UPDATE SKIP LOCKED
+    pending_jobs: list[JobInstance] = []
+    claimed: list[JobInstance] = []
     claimed_device_ids: set[int] = set()
     fencing_token_map: Dict[int, str] = {}
-    now = datetime.now(timezone.utc)
+
+    if effective_capacity > 0 and free_device_ids:
+        rn = func.row_number().over(
+            partition_by=JobInstance.device_id,
+            order_by=(JobInstance.created_at, JobInstance.id),
+        ).label("rn")
+
+        ranked = (
+            select(JobInstance.id, rn)
+            .where(
+                JobInstance.device_id.in_(free_device_ids),
+                JobInstance.status == JobStatus.PENDING.value,
+            )
+        ).subquery("ranked")
+
+        pending_jobs = (await db.execute(
+            select(JobInstance)
+            .join(ranked, JobInstance.id == ranked.c.id)
+            .where(ranked.c.rn == 1)
+            .order_by(JobInstance.created_at)
+            .limit(effective_capacity)
+            .with_for_update(of=JobInstance.__table__, skip_locked=True)
+        )).scalars().all()
+
+    # 7-8. Claim loop
     for job in pending_jobs:
         if job.device_id in claimed_device_ids:
             continue
@@ -203,8 +261,11 @@ async def _claim_jobs_for_host(
         except InvalidTransitionError:
             continue
 
+    # 9. Unified exit: commit to release host FOR UPDATE lock
     if claimed:
         await db.commit()
+    else:
+        await db.rollback()
 
     return claimed, fencing_token_map
 

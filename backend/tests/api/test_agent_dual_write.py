@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 pytestmark = pytest.mark.skipif(
     os.getenv("DATABASE_URL", "").startswith("sqlite"),
@@ -27,6 +28,7 @@ from backend.api.routes.agent_api import (
     _ExtendLockIn,
     _JobHeartbeatIn,
     _RunCompleteIn,
+    _claim_jobs_for_host,
     ClaimRequest,
     claim_jobs,
     complete_job,
@@ -1019,3 +1021,648 @@ async def test_device_lock_expiration_reads_device_leases_not_device_table():
             db.close()
     finally:
         _cleanup_seed(seed)
+
+
+def _cleanup_custom(seed: dict) -> None:
+    """Clean up a custom seed dict with arbitrary *_id* keys."""
+    db = SessionLocal()
+    try:
+        # Collect all IDs by type
+        job_ids = set()
+        run_ids = set()
+        tpl_ids = set()
+        wf_ids = set()
+        device_ids = set()
+        host_id = None
+        for key, val in seed.items():
+            if not val:
+                continue
+            if key.startswith("job") and isinstance(val, int):
+                job_ids.add(val)
+            elif key.startswith("device") and isinstance(val, int):
+                device_ids.add(val)
+        if "host_id" in seed:
+            host_id = seed["host_id"]
+        if "workflow_run_id" in seed:
+            run_ids.add(seed["workflow_run_id"])
+        if "task_template_id" in seed:
+            tpl_ids.add(seed["task_template_id"])
+        if "workflow_definition_id" in seed:
+            wf_ids.add(seed["workflow_definition_id"])
+
+        # Delete leases by device_id (for job_id=None leases) and by job_id
+        for did in device_ids:
+            db.query(DeviceLease).filter(DeviceLease.device_id == did).delete()
+        for jid in job_ids:
+            db.query(DeviceLease).filter(DeviceLease.job_id == jid).delete()
+            db.query(StepTrace).filter(StepTrace.job_id == jid).delete()
+            db.query(JobInstance).filter(JobInstance.id == jid).delete()
+        for rid in run_ids:
+            db.query(WorkflowRun).filter(WorkflowRun.id == rid).delete()
+        for tid in tpl_ids:
+            db.query(TaskTemplate).filter(TaskTemplate.id == tid).delete()
+        for wid in wf_ids:
+            db.query(WorkflowDefinition).filter(WorkflowDefinition.id == wid).delete()
+        for did in device_ids:
+            db.query(Device).filter(Device.id == did).delete()
+        if host_id:
+            db.query(Host).filter(Host.id == host_id).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 2d: Claim SQL hardening
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_skip_locked_skips_manually_locked_job():
+    """Session A manually locks a PENDING job row; session B's SKIP LOCKED
+    must skip the locked row and claim the other device's job."""
+    seed_a = _seed_job(status=JobStatus.PENDING.value)
+    seed_b = _seed_job(status=JobStatus.PENDING.value)
+    host_id = seed_a["host_id"]
+
+    # Merge device B and job B onto host A / workflow A
+    db_sync = SessionLocal()
+    try:
+        dev_b = db_sync.get(Device, seed_b["device_id"])
+        job_b = db_sync.get(JobInstance, seed_b["job_id"])
+        if dev_b:
+            dev_b.host_id = host_id
+        if job_b:
+            job_b.host_id = host_id
+            job_b.workflow_run_id = seed_a["workflow_run_id"]
+            job_b.task_template_id = seed_a["task_template_id"]
+        db_sync.flush()
+        # Delete seed_b's orphan records (no longer referenced)
+        run_b = db_sync.get(WorkflowRun, seed_b["workflow_run_id"])
+        tpl_b = db_sync.get(TaskTemplate, seed_b["task_template_id"])
+        wf_b = db_sync.get(WorkflowDefinition, seed_b["workflow_definition_id"])
+        host_b = db_sync.get(Host, seed_b["host_id"])
+        for obj in (run_b, tpl_b, wf_b, host_b):
+            if obj:
+                db_sync.delete(obj)
+        db_sync.commit()
+    finally:
+        db_sync.close()
+
+    merged_seed = {
+        "host_id": host_id,
+        "device_id_a": seed_a["device_id"], "device_id_b": seed_b["device_id"],
+        "workflow_definition_id": seed_a["workflow_definition_id"],
+        "task_template_id": seed_a["task_template_id"],
+        "workflow_run_id": seed_a["workflow_run_id"],
+        "job_id_a": seed_a["job_id"], "job_id_b": seed_b["job_id"],
+    }
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db_a:
+            async with db_a.begin():
+                locked = (await db_a.execute(
+                    select(JobInstance).where(
+                        JobInstance.id == seed_a["job_id"],
+                        JobInstance.status == JobStatus.PENDING.value,
+                    ).with_for_update()
+                )).scalars().first()
+                assert locked is not None, "Must be able to lock job_A"
+
+                async with AsyncSessionLocal() as db_b:
+                    claimed, _ = await _claim_jobs_for_host(
+                        db_b, host_id, capacity=2,
+                    )
+                    claimed_ids = [j.id for j in claimed]
+                    assert seed_a["job_id"] not in claimed_ids, (
+                        "SKIP LOCKED must skip locked job_A"
+                    )
+                    assert seed_b["job_id"] in claimed_ids, (
+                        "SKIP LOCKED: session B must claim unlocked job_B"
+                    )
+    finally:
+        _cleanup_custom(merged_seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("lease_type", [
+    LeaseType.JOB,
+    LeaseType.SCRIPT,
+    LeaseType.MAINTENANCE,
+])
+async def test_active_lease_excludes_device(lease_type):
+    """Any non-expired ACTIVE lease (JOB/SCRIPT/MAINTENANCE) on a device
+    excludes its PENDING jobs from claim candidates."""
+    suffix = uuid4().hex[:8]
+    host_id = f"dwh-{suffix}"
+    now = datetime.now(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id, hostname=f"h-{suffix}",
+            status=HostStatus.ONLINE.value, created_at=now,
+        )
+        dev_a = Device(serial=f"DWA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_b = Device(serial=f"DWB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        wf = WorkflowDefinition(
+            name=f"wf-{suffix}", description="", failure_threshold=0.1,
+            created_by="pytest", created_at=now, updated_at=now,
+        )
+        db.add_all([host, dev_a, dev_b, wf])
+        db.flush()
+
+        tpl = TaskTemplate(
+            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
+            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
+        )
+        db.add(tpl)
+        db.flush()
+
+        run = WorkflowRun(
+            workflow_definition_id=wf.id,
+            status=WorkflowStatus.RUNNING.value,
+            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        )
+        db.add(run)
+        db.flush()
+
+        job_a = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_a.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now, updated_at=now,
+        )
+        job_b = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_b.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now, updated_at=now,
+        )
+        db.add_all([job_a, job_b])
+        db.flush()
+
+        fencing_token = f"{dev_a.id}:1"
+        lease = DeviceLease(
+            device_id=dev_a.id, job_id=job_a.id,
+            host_id=host_id, lease_type=lease_type.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=fencing_token, lease_generation=1,
+            agent_instance_id=host_id,
+            acquired_at=now, renewed_at=now,
+            expires_at=now + timedelta(seconds=600),
+        )
+        db.add(lease)
+        db.commit()
+
+        seed = {
+            "host_id": host_id, "device_id_a": dev_a.id, "device_id_b": dev_b.id,
+            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
+            "workflow_run_id": run.id, "job_id_a": job_a.id, "job_id_b": job_b.id,
+        }
+    finally:
+        db.close()
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            claimed, _ = await _claim_jobs_for_host(
+                async_db, host_id, capacity=10,
+            )
+            claimed_ids = [j.id for j in claimed]
+            assert job_a.id not in claimed_ids, (
+                f"Device A with ACTIVE {lease_type.value} lease must be excluded"
+            )
+            assert len(claimed) == 1, (
+                f"Expected exactly 1 claimed (device B), got {len(claimed)}"
+            )
+            assert claimed[0].id == job_b.id, (
+                f"Must claim device B job (id={job_b.id}); "
+                f"got job id={claimed[0].id} device_id={claimed[0].device_id}"
+            )
+    finally:
+        _cleanup_custom(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_capacity_capped_by_max_concurrent_jobs():
+    """host.max_concurrent_jobs=2, 1 active JOB lease -> effective_capacity=1."""
+    suffix = uuid4().hex[:8]
+    host_id = f"dwh-{suffix}"
+    now = datetime.now(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id, hostname=f"h-{suffix}",
+            max_concurrent_jobs=2, status=HostStatus.ONLINE.value, created_at=now,
+        )
+        dev_a = Device(serial=f"CA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now)
+        dev_b = Device(serial=f"CB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_c = Device(serial=f"CC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        wf = WorkflowDefinition(
+            name=f"wf-{suffix}", description="", failure_threshold=0.1,
+            created_by="pytest", created_at=now, updated_at=now,
+        )
+        db.add_all([host, dev_a, dev_b, dev_c, wf])
+        db.flush()
+
+        tpl = TaskTemplate(
+            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
+            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
+        )
+        db.add(tpl)
+        db.flush()
+
+        run = WorkflowRun(
+            workflow_definition_id=wf.id,
+            status=WorkflowStatus.RUNNING.value,
+            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        )
+        db.add(run)
+        db.flush()
+
+        lease = DeviceLease(
+            device_id=dev_a.id, job_id=None, host_id=host_id,
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{dev_a.id}:1", lease_generation=1,
+            agent_instance_id=host_id,
+            acquired_at=now, renewed_at=now,
+            expires_at=now + timedelta(seconds=600),
+        )
+        db.add(lease)
+
+        job_b = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_b.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now, updated_at=now,
+        )
+        job_c = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_c.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now + timedelta(seconds=1), updated_at=now,
+        )
+        db.add_all([job_b, job_c])
+        db.commit()
+
+        seed = {
+            "host_id": host_id, "device_id_a": dev_a.id, "device_id_b": dev_b.id,
+            "device_id_c": dev_c.id, "workflow_definition_id": wf.id,
+            "task_template_id": tpl.id, "workflow_run_id": run.id,
+            "job_id_b": job_b.id, "job_id_c": job_c.id,
+        }
+    finally:
+        db.close()
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            claimed, _ = await _claim_jobs_for_host(
+                async_db, host_id, capacity=10,
+            )
+            assert len(claimed) == 1, (
+                f"Effective capacity must cap at 1; got {len(claimed)}"
+            )
+            active_leases = (await async_db.execute(
+                select(DeviceLease).where(
+                    DeviceLease.host_id == host_id,
+                    DeviceLease.lease_type == LeaseType.JOB.value,
+                    DeviceLease.status == LeaseStatus.ACTIVE.value,
+                )
+            )).scalars().all()
+            assert len(active_leases) == 2, (
+                "Should have 2 ACTIVE JOB leases (1 pre-existing + 1 claimed)"
+            )
+    finally:
+        _cleanup_custom(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_zero_capacity_returns_empty_no_state_change():
+    """effective_capacity=0 -> empty list, job status unchanged, host lock released."""
+    suffix = uuid4().hex[:8]
+    host_id = f"dwh-{suffix}"
+    now = datetime.now(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id, hostname=f"h-{suffix}",
+            max_concurrent_jobs=1, status=HostStatus.ONLINE.value, created_at=now,
+        )
+        dev_a = Device(serial=f"ZA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now)
+        dev_b = Device(serial=f"ZB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        wf = WorkflowDefinition(
+            name=f"wf-{suffix}", description="", failure_threshold=0.1,
+            created_by="pytest", created_at=now, updated_at=now,
+        )
+        db.add_all([host, dev_a, dev_b, wf])
+        db.flush()
+
+        tpl = TaskTemplate(
+            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
+            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
+        )
+        db.add(tpl)
+        db.flush()
+
+        run = WorkflowRun(
+            workflow_definition_id=wf.id,
+            status=WorkflowStatus.RUNNING.value,
+            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        )
+        db.add(run)
+        db.flush()
+
+        lease = DeviceLease(
+            device_id=dev_a.id, job_id=None, host_id=host_id,
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{dev_a.id}:1", lease_generation=1,
+            agent_instance_id=host_id,
+            acquired_at=now, renewed_at=now,
+            expires_at=now + timedelta(seconds=600),
+        )
+        db.add(lease)
+
+        job_b = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_b.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now, updated_at=now,
+        )
+        db.add(job_b)
+        db.commit()
+
+        seed = {
+            "host_id": host_id, "device_id_a": dev_a.id, "device_id_b": dev_b.id,
+            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
+            "workflow_run_id": run.id, "job_id_b": job_b.id,
+        }
+    finally:
+        db.close()
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            claimed, _ = await _claim_jobs_for_host(
+                async_db, host_id, capacity=10,
+            )
+            assert claimed == [], "Zero effective capacity must return empty list"
+
+            job_b_ref = await async_db.get(JobInstance, job_b.id)
+            assert job_b_ref.status == JobStatus.PENDING.value, (
+                "Job must remain PENDING when no capacity"
+            )
+
+        # Verify host lock was released by rollback(): a second session
+        # must be able to acquire the host row lock immediately.
+        async with AsyncSessionLocal() as verify_db:
+            host_check = (await verify_db.execute(
+                select(Host).where(Host.id == host_id).with_for_update(nowait=True)
+            )).scalars().first()
+            assert host_check is not None, (
+                "Host row must be lockable immediately — "
+                "proves rollback() released the FOR UPDATE lock"
+            )
+    finally:
+        _cleanup_custom(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_expired_active_lease_allows_claim():
+    """Expired ACTIVE lease does NOT block claim -- pre-filter passes it through,
+    acquire_lease recycles it."""
+    seed = _seed_job(status=JobStatus.PENDING.value)
+    now = datetime.now(timezone.utc)
+    past = now - timedelta(seconds=600)
+
+    db = SessionLocal()
+    try:
+        lease = DeviceLease(
+            device_id=seed["device_id"], job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{seed['device_id']}:1",
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=past, renewed_at=past,
+            expires_at=past + timedelta(seconds=60),
+        )
+        db.add(lease)
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            claimed, _ = await _claim_jobs_for_host(
+                async_db, seed["host_id"], capacity=10,
+            )
+            assert len(claimed) == 1, (
+                f"Expired ACTIVE lease must not block claim; got {len(claimed)}"
+            )
+            assert claimed[0].id == seed["job_id"]
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_per_device_first_does_not_waste_capacity():
+    """3 devices, 3 PENDING jobs, capacity=2. Per-device row_number() +
+    LIMIT picks exactly 2 distinct devices without duplicates."""
+    suffix = uuid4().hex[:8]
+    host_id = f"dwh-{suffix}"
+    now = datetime.now(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id, hostname=f"h-{suffix}",
+            max_concurrent_jobs=3, status=HostStatus.ONLINE.value, created_at=now,
+        )
+        dev_a = Device(serial=f"PA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_b = Device(serial=f"PB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_c = Device(serial=f"PC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        wf = WorkflowDefinition(
+            name=f"wf-{suffix}", description="", failure_threshold=0.1,
+            created_by="pytest", created_at=now, updated_at=now,
+        )
+        db.add_all([host, dev_a, dev_b, dev_c, wf])
+        db.flush()
+
+        tpl = TaskTemplate(
+            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
+            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
+        )
+        db.add(tpl)
+        db.flush()
+
+        run = WorkflowRun(
+            workflow_definition_id=wf.id,
+            status=WorkflowStatus.RUNNING.value,
+            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        )
+        db.add(run)
+        db.flush()
+
+        job_a = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_a.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now, updated_at=now,
+        )
+        job_b = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_b.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now + timedelta(seconds=1), updated_at=now,
+        )
+        job_c = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_c.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now + timedelta(seconds=2), updated_at=now,
+        )
+        db.add_all([job_a, job_b, job_c])
+        db.commit()
+
+        seed = {
+            "host_id": host_id,
+            "device_id_a": dev_a.id, "device_id_b": dev_b.id, "device_id_c": dev_c.id,
+            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
+            "workflow_run_id": run.id,
+            "job_a": job_a.id, "job_b": job_b.id, "job_c": job_c.id,
+        }
+    finally:
+        db.close()
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            claimed, _ = await _claim_jobs_for_host(
+                async_db, host_id, capacity=2,
+            )
+            claimed_devices = {j.device_id for j in claimed}
+
+            assert len(claimed) == 2, f"Expected 2 claimed; got {len(claimed)}"
+            assert len(claimed_devices) == 2, (
+                f"Must claim 2 distinct devices; got {claimed_devices}"
+            )
+            # The earliest 2 PENDING jobs (by created_at) should be claimed
+            claimed_ids = [j.id for j in claimed]
+            assert job_a.id in claimed_ids, "Earliest PENDING (device A) must be claimed"
+            assert job_b.id in claimed_ids, "Second PENDING (device B) must be claimed"
+            assert job_c.id not in claimed_ids, (
+                "Third PENDING (device C) must NOT be claimed (capacity=2)"
+            )
+    finally:
+        _cleanup_custom(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_concurrent_claim_capacity_does_not_exceed():
+    """Host row lock serialization: max_concurrent_jobs=1, two concurrent claims
+    must produce exactly 1 successful claim."""
+    import asyncio
+
+    suffix = uuid4().hex[:8]
+    host_id = f"dwh-{suffix}"
+    now = datetime.now(timezone.utc)
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id, hostname=f"h-{suffix}",
+            max_concurrent_jobs=1, status=HostStatus.ONLINE.value, created_at=now,
+        )
+        dev_a = Device(serial=f"CC1-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_b = Device(serial=f"CC2-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        wf = WorkflowDefinition(
+            name=f"wf-{suffix}", description="", failure_threshold=0.1,
+            created_by="pytest", created_at=now, updated_at=now,
+        )
+        db.add_all([host, dev_a, dev_b, wf])
+        db.flush()
+
+        tpl = TaskTemplate(
+            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
+            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
+        )
+        db.add(tpl)
+        db.flush()
+
+        run = WorkflowRun(
+            workflow_definition_id=wf.id,
+            status=WorkflowStatus.RUNNING.value,
+            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        )
+        db.add(run)
+        db.flush()
+
+        job_a = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_a.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now, updated_at=now,
+        )
+        job_b = JobInstance(
+            workflow_run_id=run.id, task_template_id=tpl.id,
+            device_id=dev_b.id, host_id=host_id,
+            status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+            created_at=now + timedelta(seconds=1), updated_at=now,
+        )
+        db.add_all([job_a, job_b])
+        db.commit()
+
+        seed = {
+            "host_id": host_id, "device_id_a": dev_a.id, "device_id_b": dev_b.id,
+            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
+            "workflow_run_id": run.id, "job_id_a": job_a.id, "job_id_b": job_b.id,
+        }
+    finally:
+        db.close()
+
+    try:
+        results = []
+
+        async def _claim(sess):
+            async with sess as db:
+                claimed, _ = await _claim_jobs_for_host(
+                    db, host_id, capacity=1,
+                )
+                results.append(claimed)
+
+        await async_engine.dispose()
+        tasks = [_claim(AsyncSessionLocal()), _claim(AsyncSessionLocal())]
+        await asyncio.gather(*tasks)
+
+        total_claimed = sum(len(r) for r in results)
+        assert total_claimed == 1, (
+            f"Exactly 1 claim must succeed; got {total_claimed}"
+        )
+
+        db_verify = SessionLocal()
+        try:
+            active_leases = (
+                db_verify.query(DeviceLease)
+                .filter(
+                    DeviceLease.host_id == host_id,
+                    DeviceLease.lease_type == LeaseType.JOB.value,
+                    DeviceLease.status == LeaseStatus.ACTIVE.value,
+                )
+                .all()
+            )
+            assert len(active_leases) == 1, (
+                f"Must have exactly 1 ACTIVE JOB lease; got {len(active_leases)}"
+            )
+        finally:
+            db_verify.close()
+    finally:
+        _cleanup_custom(seed)
