@@ -27,7 +27,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.heartbeat_thread import HeartbeatThread
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
     from agent.job_runner import JobRunnerState, run_task_wrapper
-    from agent.lock_manager import LockRenewalManager
+    from agent.lease_renewer import LeaseRenewer
     from agent.script_batch_runner import (
         ScriptBatchRunnerState,
         fetch_pending_batches,
@@ -49,7 +49,7 @@ else:
     from .heartbeat_thread import HeartbeatThread
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
     from .job_runner import JobRunnerState, run_task_wrapper
-    from .lock_manager import LockRenewalManager
+    from .lease_renewer import LeaseRenewer
     from .script_batch_runner import (
         ScriptBatchRunnerState,
         fetch_pending_batches,
@@ -97,7 +97,7 @@ def _deregister_active_device(did: int) -> None:
 def execute_recovery_actions_impl(
     resp: dict,
     active_jobs_by_id: dict,
-    lock_manager: Any,
+    lease_renewer: Any,
     local_db: Any,
     outbox_drain: Any,
     register_active_job: Any,
@@ -115,11 +115,11 @@ def execute_recovery_actions_impl(
             logger.info("recovery_resume job=%d token=%s", jid, token[:8] if token else "")
         elif action == "CLEANUP":
             local_db.delete_active_job(jid)
-            lock_manager.clear_fencing_token(jid)
+            lease_renewer.clear_fencing_token(jid)
             logger.warning("recovery_cleanup job=%d reason=%s", jid, a.get("reason"))
         elif action == "ABORT_LOCAL":
             local_db.delete_active_job(jid)
-            lock_manager.clear_fencing_token(jid)
+            lease_renewer.clear_fencing_token(jid)
             logger.warning("recovery_abort_local job=%d reason=%s", jid, a.get("reason"))
 
     if outbox_actions:
@@ -356,29 +356,47 @@ def main() -> None:
     )
     heartbeat_thread.start()
 
-    # 启动锁续期管理器
-    lock_manager = LockRenewalManager(
+    # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处清理外部状态）
+    def _on_lease_lost(jid: int, device_id: Optional[int]) -> None:
+        try:
+            with _active_jobs_lock:
+                if device_id:
+                    _active_device_ids.discard(device_id)
+            local_db.delete_active_job(jid)
+        except Exception:
+            logger.exception("on_lease_lost_cleanup_failed", extra={
+                "job_id": jid,
+                "reason": "external_cleanup_exception",
+            })
+
+    # 启动 lease 续租器
+    lease_renewer = LeaseRenewer(
         api_url,
         active_jobs_lock=_active_jobs_lock,
         active_job_ids=_active_job_ids,
         lock_renewal_stop_event=_lock_renewal_stop_event,
         agent_instance_id=agent_instance_id,
+        on_lease_lost=_on_lease_lost,
     )
-    lock_manager.start()
+    lease_renewer.start()
 
-    # ADR-0019 Phase 2b + Phase 3a: 活跃 job 注册/注销闭包（捕获 lock_manager + local_db）
+    # ADR-0019 Phase 2b + Phase 3a/3b: 活跃 job 注册/注销闭包（捕获 lease_renewer + local_db）
     def _register_active_job(jid: int, fencing_token: str = "", device_id: Optional[int] = None) -> None:
         with _active_jobs_lock:
             _active_job_ids.add(jid)
+            if device_id is not None:
+                _active_device_ids.add(device_id)  # Phase 3b: 注册时同步占位 device
         if fencing_token:
-            lock_manager.set_fencing_token(jid, fencing_token)
+            lease_renewer.set_fencing_token(jid, fencing_token, device_id)
         if device_id is not None:
             local_db.save_active_job(jid, device_id, fencing_token)
 
     def _deregister_active_job(jid: int) -> None:
+        device_id = lease_renewer.clear_fencing_token(jid)  # Phase 3b: 返回 device_id
         with _active_jobs_lock:
             _active_job_ids.discard(jid)
-        lock_manager.clear_fencing_token(jid)
+            if device_id:
+                _active_device_ids.discard(device_id)
         local_db.delete_active_job(jid)
 
     # 必须在闭包定义之后注册，避免 _handle_control 中 _deregister_active_job 引用未绑定
@@ -397,7 +415,7 @@ def main() -> None:
         execute_recovery_actions_impl(
             resp=resp,
             active_jobs_by_id=active_jobs_by_id,
-            lock_manager=lock_manager,
+            lease_renewer=lease_renewer,
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=_register_active_job,
@@ -584,7 +602,7 @@ def main() -> None:
             except Exception:
                 logger.exception("shutdown_artifact_uploader_stop_failed")
         heartbeat_thread.stop()
-        lock_manager.stop()
+        lease_renewer.stop()
         mq_producer.close()
         local_db.close()
         ws_client.disconnect()

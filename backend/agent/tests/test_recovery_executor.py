@@ -13,7 +13,7 @@ class TestRecoveryExecutor:
     def test_execute_resume_registers_token_and_active_id(self):
         """RESUME action → register_active_job called with job_id, token, device_id."""
         local_db = MagicMock()
-        lock_manager = MagicMock()
+        lease_renewer = MagicMock()
         outbox_drain = MagicMock()
         register_calls = []
 
@@ -31,7 +31,7 @@ class TestRecoveryExecutor:
         execute_recovery_actions_impl(
             resp=resp,
             active_jobs_by_id={},
-            lock_manager=lock_manager,
+            lease_renewer=lease_renewer,
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=register,
@@ -44,7 +44,7 @@ class TestRecoveryExecutor:
     def test_execute_cleanup_clears_local_state(self):
         """CLEANUP action → delete_active_job + clear_fencing_token called."""
         local_db = MagicMock()
-        lock_manager = MagicMock()
+        lease_renewer = MagicMock()
         outbox_drain = MagicMock()
 
         resp = {
@@ -57,19 +57,19 @@ class TestRecoveryExecutor:
         execute_recovery_actions_impl(
             resp=resp,
             active_jobs_by_id={},
-            lock_manager=lock_manager,
+            lease_renewer=lease_renewer,
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=MagicMock(),
         )
 
         local_db.delete_active_job.assert_called_once_with(5)
-        lock_manager.clear_fencing_token.assert_called_once_with(5)
+        lease_renewer.clear_fencing_token.assert_called_once_with(5)
 
     def test_execute_upload_terminal_triggers_outbox_drain(self):
         """UPLOAD_TERMINAL action → drain_sync called, then delete_active_job for acked."""
         local_db = MagicMock()
-        lock_manager = MagicMock()
+        lease_renewer = MagicMock()
         outbox_drain = MagicMock()
         outbox_drain.drain_sync.return_value = 2
 
@@ -87,7 +87,7 @@ class TestRecoveryExecutor:
         execute_recovery_actions_impl(
             resp=resp,
             active_jobs_by_id={},
-            lock_manager=lock_manager,
+            lease_renewer=lease_renewer,
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=MagicMock(),
@@ -101,7 +101,7 @@ class TestRecoveryExecutor:
     def test_abort_local_clears_local_state(self):
         """ABORT_LOCAL action → delete_active_job + clear_fencing_token."""
         local_db = MagicMock()
-        lock_manager = MagicMock()
+        lease_renewer = MagicMock()
         outbox_drain = MagicMock()
 
         resp = {
@@ -114,19 +114,19 @@ class TestRecoveryExecutor:
         execute_recovery_actions_impl(
             resp=resp,
             active_jobs_by_id={},
-            lock_manager=lock_manager,
+            lease_renewer=lease_renewer,
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=MagicMock(),
         )
 
         local_db.delete_active_job.assert_called_once_with(7)
-        lock_manager.clear_fencing_token.assert_called_once_with(7)
+        lease_renewer.clear_fencing_token.assert_called_once_with(7)
 
     def test_noop_without_upload_terminal_still_clears(self):
         """Pure NOOP actions (no UPLOAD_TERMINAL) still clear local_db."""
         local_db = MagicMock()
-        lock_manager = MagicMock()
+        lease_renewer = MagicMock()
         outbox_drain = MagicMock()
         local_db.get_pending_outbox.return_value = []
 
@@ -140,7 +140,7 @@ class TestRecoveryExecutor:
         execute_recovery_actions_impl(
             resp=resp,
             active_jobs_by_id={},
-            lock_manager=lock_manager,
+            lease_renewer=lease_renewer,
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=MagicMock(),

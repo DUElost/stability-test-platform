@@ -2,7 +2,7 @@
 
 职责链（三阶段退出）：
     Enter:
-        设备锁持有注册 (LockRenewal 活跃集合)
+        设备租约持有注册 (LeaseRenewer 活跃集合)
           → Watcher 启动 (LogWatcherManager.start)
         → （调用方执行 Pipeline）
     Exit:
@@ -85,7 +85,7 @@ class JobSession:
         job_payload: Dict[str, Any],
         host_id: str,
         log_dir: str,
-        lock_register,        # callable(job_id) —— 把 job_id 加入 LockRenewal 的活跃集合
+        lock_register,        # callable(job_id, ...) —— 把 job_id 加入 LeaseRenewer 的活跃集合
         lock_deregister,      # callable(job_id) —— 对应移除
         device_id_register=None,
         device_id_deregister=None,
@@ -202,7 +202,7 @@ class JobSession:
     def is_aborted_checker(self, active_run_ids: set[int], lock) -> callable:
         """兼容现有 pipeline_engine.is_aborted 回调签名。
 
-        返回一个闭包 —— LockRenewal 收到 409 移除 run_id 时返回 True。
+        返回一个闭包 —— LeaseRenewer 收到 409 移除 run_id 时返回 True。
         """
         job_id = self._job_id
 

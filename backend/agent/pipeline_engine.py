@@ -361,7 +361,7 @@ class PipelineEngine:
         for stage_name in ("prepare", "execute", "post_process"):
             steps = stages_def.get(stage_name, [])
             for step in steps:
-                # Check for lock lost (LockRenewalManager removed us from active set)
+                # Check for lock lost (LeaseRenewer removed us from active set)
                 if self._is_lock_lost():
                     return StepResult(
                         success=False,
@@ -381,7 +381,7 @@ class PipelineEngine:
         return StepResult(success=True)
 
     def _is_lock_lost(self) -> bool:
-        """Check if the run has been aborted (e.g. LockRenewalManager received 409)."""
+        """Check if the run has been aborted (e.g. LeaseRenewer received 409)."""
         if self._is_aborted is not None:
             return self._is_aborted()
         return False

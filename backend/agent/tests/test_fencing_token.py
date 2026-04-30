@@ -1,6 +1,6 @@
 """ADR-0019 Phase 2b Agent 级 fencing_token 贯穿测试。
 
-5 个测试，覆盖 token 流转、lock_manager skip、pipeline lock verify、
+5 个测试，覆盖 token 流转、LeaseRenewer skip、pipeline lock verify、
 complete_run 透传、run_task_wrapper 入口校验。
 """
 
@@ -17,18 +17,18 @@ sys.path.insert(0, str(project_root))
 
 from backend.agent.api_client import complete_run, _build_complete_payload
 from backend.agent.job_runner import JobRunnerState, run_task_wrapper
-from backend.agent.lock_manager import LockRenewalManager
+from backend.agent.lease_renewer import LeaseRenewer
 from backend.agent.pipeline_engine import PipelineEngine
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def lock_manager():
+def lease_renewer():
     lock = threading.Lock()
     ids = {1, 2}
     stop = threading.Event()
-    mgr = LockRenewalManager(
+    mgr = LeaseRenewer(
         api_url="http://127.0.0.1:8000",
         active_jobs_lock=lock,
         active_job_ids=ids,
@@ -126,26 +126,26 @@ def test_run_task_wrapper_heartbeat_and_complete_include_token(job_runner_state)
     )
 
 
-# ── Test 18: LockRenewalManager skip when no token ───────────────────────────
+# ── Test 18: LeaseRenewer skip when no token ───────────────────────────
 
-def test_lock_renewal_manager_skips_extend_when_no_token(lock_manager):
+def test_lease_renewer_skips_extend_when_no_token(lease_renewer):
     """无 fencing_token（如 ScriptBatch ID）→ extend_lock 直接 skip，不发 HTTP。"""
     with patch("requests.post") as mock_post:
-        lock_manager._extend_lock(999)  # 999 has no token registered
+        lease_renewer._extend_lock(999)  # 999 has no token registered
 
     mock_post.assert_not_called()
 
 
-def test_lock_renewal_manager_sends_token_when_present(lock_manager):
+def test_lease_renewer_sends_token_when_present(lease_renewer):
     """有 fencing_token → extend_lock POST body 包含 {"fencing_token": token}。"""
-    lock_manager.set_fencing_token(1, "test:token:1")
+    lease_renewer.set_fencing_token(1, "test:token:1")
 
     with patch("requests.post") as mock_post:
         mock_resp = MagicMock()
         mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
-        lock_manager._extend_lock(1)
+        lease_renewer._extend_lock(1)
 
     mock_post.assert_called_once()
     assert mock_post.call_args.kwargs["json"] == {"fencing_token": "test:token:1"}
