@@ -19,7 +19,7 @@ class JobRunnerState:
     active_job_ids: MutableSet[int]
     active_device_ids: MutableSet[int]
     watcher_enabled: bool
-    lock_register: Callable[[int, str], None]  # ADR-0019 Phase 2b: (job_id, fencing_token)
+    lock_register: Callable[[int, str, Optional[int]], None]  # ADR-0019 Phase 3a: (job_id, fencing_token, device_id)
     lock_deregister: Callable[[int], None]
     device_id_register: Callable[[int], None]
     device_id_deregister: Callable[[int], None]
@@ -74,8 +74,8 @@ def run_task_wrapper(
     pipeline_def = run.get("pipeline_def")
     fencing_token = run["fencing_token"]  # ADR-0019 Phase 2b: 强协议，缺字段直接暴露协议错误
 
-    # ADR-0019 Phase 2b: register fencing_token before any work begins
-    state.lock_register(job_id, fencing_token)
+    # ADR-0019 Phase 3a: register fencing_token + persist active_job before any work begins
+    state.lock_register(job_id, fencing_token, device_id)
 
     logger.info(
         "run_start job_id=%d task_id=%s device_id=%s device_serial=%s",

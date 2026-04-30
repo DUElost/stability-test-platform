@@ -111,6 +111,12 @@ class LocalDB:
             );
             CREATE INDEX IF NOT EXISTS idx_watcher_state_active
                 ON watcher_state(state);
+            CREATE TABLE IF NOT EXISTS active_job_registry (
+                job_id        INTEGER PRIMARY KEY,
+                device_id     INTEGER NOT NULL,
+                fencing_token TEXT    NOT NULL DEFAULT '',
+                claimed_at    TEXT    NOT NULL
+            );
         """)
         self._conn.commit()
         logger.info(f"LocalDB initialized: {db_path}")
@@ -567,3 +573,54 @@ class LocalDB:
                 "SELECT * FROM watcher_state WHERE state = 'active' ORDER BY started_at ASC"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # active_job_registry — ADR-0019 Phase 3a: crash recovery persistence
+    # ------------------------------------------------------------------
+
+    def save_active_job(self, job_id: int, device_id: int, fencing_token: str) -> None:
+        """Persist active job for crash recovery. Claim 时调用."""
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO active_job_registry (job_id, device_id, fencing_token, claimed_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (job_id, device_id, fencing_token, datetime.utcnow().isoformat()),
+                )
+
+    def delete_active_job(self, job_id: int) -> None:
+        """Remove job from active registry. Complete/abort 时调用."""
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "DELETE FROM active_job_registry WHERE job_id = ?",
+                    (job_id,),
+                )
+
+    def get_active_jobs(self) -> List[Dict[str, Any]]:
+        """Return all persisted active jobs for recovery sync."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT job_id, device_id, fencing_token FROM active_job_registry "
+                "ORDER BY claimed_at ASC"
+            ).fetchall()
+        return [{"job_id": r["job_id"], "device_id": r["device_id"], "fencing_token": r["fencing_token"]} for r in rows]
+
+    def get_pending_outbox(self) -> List[Dict[str, Any]]:
+        """Return un-acked terminal outbox entries for recovery sync.
+
+        Thin wrapper around get_pending_terminals; extracts job_id + event_type.
+        """
+        terminals = self.get_pending_terminals()
+        result = []
+        for entry in terminals:
+            try:
+                payload = entry.get("payload", {}) if isinstance(entry.get("payload"), dict) else {}
+                event_type = payload.get("update", {}).get("status", "RUN_COMPLETED")
+            except Exception:
+                event_type = "RUN_COMPLETED"
+            result.append({
+                "job_id": entry["job_id"],
+                "event_type": event_type,
+            })
+        return result

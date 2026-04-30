@@ -34,7 +34,7 @@ def _get_post_retry_base_delay() -> float:
     return float(os.getenv("AGENT_POST_RETRY_BASE_DELAY", "1"))
 
 
-def fetch_pending_jobs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
+def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "") -> List[Dict[str, Any]]:
     """Claim pending jobs via POST /agent/jobs/claim (D1: 统一 claim 路径).
 
     Backend 在 claim 响应中注入 device_serial + watcher_policy，供 JobSession 启动使用。
@@ -43,7 +43,7 @@ def fetch_pending_jobs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
     headers = {"X-Agent-Secret": agent_secret} if agent_secret else {}
     resp = requests.post(
         f"{api_url}/api/v1/agent/jobs/claim",
-        json={"host_id": host_id, "capacity": 10},
+        json={"host_id": host_id, "capacity": 10, "agent_instance_id": agent_instance_id},
         headers=headers,
         timeout=10,
     )
@@ -57,6 +57,41 @@ def fetch_pending_jobs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
 def fetch_pending_runs(api_url: str, host_id: str) -> List[Dict[str, Any]]:
     """Backward-compatible alias for callers not yet migrated to job naming."""
     return fetch_pending_jobs(api_url, host_id)
+
+
+def sync_recovery(
+    api_url: str,
+    host_id: str,
+    agent_instance_id: str,
+    boot_id: str,
+    active_jobs: List[Dict[str, Any]],
+    pending_outbox: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """ADR-0019 Phase 3a: sync recovery state with Backend.
+
+    Returns recovery actions dict {"actions": [...], "outbox_actions": [...]} or None on failure.
+    """
+    agent_secret = _get_agent_secret()
+    headers = {"X-Agent-Secret": agent_secret} if agent_secret else {}
+    try:
+        resp = requests.post(
+            f"{api_url}/api/v1/agent/recovery/sync",
+            json={
+                "host_id": host_id,
+                "agent_instance_id": agent_instance_id,
+                "boot_id": boot_id,
+                "active_jobs": active_jobs,
+                "pending_outbox": pending_outbox,
+            },
+            headers=headers,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        return payload.get("data", payload)
+    except Exception as exc:
+        logger.warning("recovery_sync_failed: %s", exc)
+        return None
 
 
 def _post_with_retry(

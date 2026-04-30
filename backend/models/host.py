@@ -42,6 +42,8 @@ class Host(Base):
     extra         = Column(JSON, default=dict, nullable=True)
     mount_status  = Column(JSON, default=dict, nullable=True)
     updated_at    = Column(DateTime(timezone=True), onupdate=datetime.utcnow, nullable=True)
+    boot_id       = Column(String(64), nullable=False, default="")           # ADR-0019 Phase 3a
+    last_agent_instance_id = Column(String(64), nullable=False, default="")  # ADR-0019 Phase 3a
 
 
 class Device(Base):

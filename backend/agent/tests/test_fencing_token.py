@@ -7,6 +7,7 @@ complete_run 透传、run_task_wrapper 入口校验。
 import sys
 import threading
 from pathlib import Path
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -42,7 +43,7 @@ def job_runner_state():
     ids = set()
     device_ids = set()
 
-    def register(jid: int, token: str = ""):
+    def register(jid: int, token: str = "", device_id: Optional[int] = None):
         with lock:
             ids.add(jid)
 

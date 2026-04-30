@@ -167,6 +167,12 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
     if isinstance(m, int) and m > 0:
         host.max_concurrent_jobs = m
 
+    # ADR-0019 Phase 3a: store agent identity on host
+    if payload.boot_id:
+        host.boot_id = payload.boot_id
+    if payload.agent_instance_id:
+        host.last_agent_instance_id = payload.agent_instance_id
+
     # Merge extra data without losing system stats
     host_extra = {}
     if payload.extra:

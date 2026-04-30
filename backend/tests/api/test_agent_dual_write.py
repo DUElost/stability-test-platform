@@ -17,6 +17,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from unittest.mock import AsyncMock, MagicMock
 from sqlalchemy import select
 
 pytestmark = pytest.mark.skipif(
@@ -25,8 +26,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 from backend.api.routes.agent_api import (
+    _ActiveJobEntry,
     _ExtendLockIn,
     _JobHeartbeatIn,
+    _OutboxEntry,
+    _RecoverySyncIn,
     _RunCompleteIn,
     _claim_jobs_for_host,
     ClaimRequest,
@@ -35,6 +39,7 @@ from backend.api.routes.agent_api import (
     extend_job_lock,
     get_pending_jobs,
     job_heartbeat,
+    recovery_sync,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
@@ -1666,3 +1671,659 @@ async def test_concurrent_claim_capacity_does_not_exceed():
             db_verify.close()
     finally:
         _cleanup_custom(seed)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADR-0019 Phase 3a: heartbeat stores agent identity
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_stores_agent_identity():
+    """Heartbeat 携带 agent_instance_id + boot_id → Host 表正确记录."""
+    from backend.api.routes.heartbeat import heartbeat
+    from backend.api.schemas.host import HeartbeatIn
+
+    suffix = uuid4().hex[:8]
+    host_id = f"ident-host-{suffix}"
+    instance_id = uuid4().hex
+    boot_id = uuid4().hex
+
+    db = SessionLocal()
+    try:
+        # Seed host
+        host = Host(
+            id=host_id,
+            hostname=f"ident-{suffix}",
+            status=HostStatus.ONLINE.value,
+            ip="10.0.0.1",
+            ip_address="10.0.0.1",
+        )
+        db.add(host)
+        db.flush()
+
+        # Send heartbeat with identity
+        payload = HeartbeatIn(
+            host_id=host_id,
+            status="ONLINE",
+            agent_instance_id=instance_id,
+            boot_id=boot_id,
+        )
+        await heartbeat(payload, db)
+
+        db.refresh(host)
+        assert host.boot_id == boot_id, f"boot_id not stored; got {host.boot_id!r}"
+        assert host.last_agent_instance_id == instance_id, (
+            f"last_agent_instance_id not stored; got {host.last_agent_instance_id!r}"
+        )
+    finally:
+        db.rollback()
+        db.query(Host).filter(Host.id == host_id).delete()
+        db.commit()
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# ADR-0019 Phase 3a: Claim passes real agent_instance_id
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_claim_jobs_uses_real_agent_instance_id():
+    """claim_jobs 传入真实 agent_instance_id → DeviceLease.agent_instance_id 为 uuid4（非 host_id）。"""
+    seed = _seed_job(status=JobStatus.PENDING.value)
+    real_instance_id = uuid4().hex
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await claim_jobs(
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5,
+                    agent_instance_id=real_instance_id,
+                ),
+                db=async_db, _=None,
+            )
+        assert result.error is None
+        assert len(result.data) == 1
+
+        db = SessionLocal()
+        try:
+            lease = (
+                db.query(DeviceLease)
+                .filter(
+                    DeviceLease.device_id == seed["device_id"],
+                    DeviceLease.job_id == seed["job_id"],
+                    DeviceLease.status == LeaseStatus.ACTIVE.value,
+                )
+                .first()
+            )
+            assert lease is not None
+            assert lease.agent_instance_id == real_instance_id, (
+                f"expected agent_instance_id={real_instance_id!r}, got {lease.agent_instance_id!r}"
+            )
+            # 关键断言：不再是 host_id
+            assert lease.agent_instance_id != seed["host_id"], (
+                f"agent_instance_id should NOT equal host_id; got {lease.agent_instance_id!r}"
+            )
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_claim_request_default_agent_instance_id_empty():
+    """ClaimRequest 不传 agent_instance_id → 默认空字符串（向后兼容）。"""
+    req = ClaimRequest(host_id="host-1", capacity=5)
+    assert req.agent_instance_id == ""
+
+
+# ---------------------------------------------------------------------------
+# ADR-0019 Phase 3a: Recovery Sync tests
+# ---------------------------------------------------------------------------
+
+def _seed_recovery_host(host_id: str, boot_id: str = "", instance_id: str = "") -> Host:
+    """Create a minimal host for recovery sync testing."""
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id, hostname=f"rec-{host_id}",
+            status=HostStatus.ONLINE.value,
+            ip="10.0.0.1", ip_address="10.0.0.1",
+            boot_id=boot_id, last_agent_instance_id=instance_id,
+        )
+        db.add(host)
+        db.commit()
+        return host
+    finally:
+        db.close()
+
+
+def _cleanup_recovery_host(host_id: str) -> None:
+    db = SessionLocal()
+    try:
+        db.query(DeviceLease).filter(DeviceLease.host_id == host_id).delete()
+        db.query(StepTrace).filter(StepTrace.job_id.in_(
+            db.query(JobInstance.id).filter(JobInstance.host_id == host_id)
+        )).delete()
+        db.query(JobInstance).filter(JobInstance.host_id == host_id).delete()
+        db.query(Device).filter(Device.host_id == host_id).delete()
+        db.query(Host).filter(Host.id == host_id).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_host_not_found_404():
+    """recovery sync with unknown host → 404."""
+    payload = _RecoverySyncIn(
+        host_id="nonexistent-host-999",
+        agent_instance_id=uuid4().hex,
+        boot_id=uuid4().hex,
+    )
+    mock_db = AsyncMock()
+    mock_db.get.return_value = None  # host not found
+    with pytest.raises(HTTPException) as exc:
+        await recovery_sync(payload, db=mock_db, _=None)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_same_instance_resume():
+    """Lease 的 agent_instance_id == 请求的 instance_id → RESUME."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-host-{suffix}"
+    instance_id = uuid4().hex
+    boot_id = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=boot_id, instance_id=instance_id)
+
+    # Create a job + device + ACTIVE lease via _seed_job + claim
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        # Update the job's host_id to our recovery host
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+            job.host_id = host_id
+            db_sync.commit()
+
+            # Create an ACTIVE lease
+            lease = DeviceLease(
+                device_id=seed["device_id"],
+                job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value,
+                status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1",
+                agent_instance_id=instance_id,
+                lease_generation=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+            db_sync.add(lease)
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=instance_id,
+            boot_id=boot_id,
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"], device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
+            )],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "RESUME"
+        assert actions[0]["reason"] == "same_instance"
+        assert actions[0]["fencing_token"] == f"{seed['device_id']}:1"
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_legacy_lease_adopted():
+    """Lease agent_instance_id == host_id → RESUME (legacy lease adopted)."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-legacy-{suffix}"
+    instance_id = uuid4().hex
+    boot_id = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=boot_id)
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+            job.host_id = host_id
+            db_sync.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"],
+                job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value,
+                status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1",
+                agent_instance_id=host_id,  # legacy: equals host_id
+                lease_generation=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+            db_sync.add(lease)
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=instance_id,
+            boot_id=boot_id,
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"], device_id=seed["device_id"],
+            )],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "RESUME"
+        assert actions[0]["reason"] == "legacy_lease_adopted"
+
+        # Verify lease agent_instance_id was updated
+        db_sync2 = SessionLocal()
+        try:
+            updated = (
+                db_sync2.query(DeviceLease)
+                .filter(DeviceLease.job_id == seed["job_id"])
+                .first()
+            )
+            assert updated.agent_instance_id == instance_id
+        finally:
+            db_sync2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_same_boot_different_instance_resume():
+    """Same boot_id, different instance → RESUME (same_boot_instance_updated)."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-boot-{suffix}"
+    old_instance = uuid4().hex
+    new_instance = uuid4().hex
+    boot_id = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=boot_id, instance_id=old_instance)
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+            job.host_id = host_id
+            db_sync.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"],
+                job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value,
+                status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1",
+                agent_instance_id=old_instance,  # old instance, same boot
+                lease_generation=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+            db_sync.add(lease)
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=new_instance,
+            boot_id=boot_id,  # same boot
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"], device_id=seed["device_id"],
+            )],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "RESUME"
+        assert actions[0]["reason"] == "same_boot_instance_updated"
+
+        # Verify lease was adopted
+        db_sync2 = SessionLocal()
+        try:
+            updated = (
+                db_sync2.query(DeviceLease)
+                .filter(DeviceLease.job_id == seed["job_id"])
+                .first()
+            )
+            assert updated.agent_instance_id == new_instance
+        finally:
+            db_sync2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_boot_id_mismatch_cleanup():
+    """Different boot_id → CLEANUP (release_lease + job→FAILED)."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-cleanup-{suffix}"
+    old_boot = uuid4().hex
+    new_boot = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=old_boot)
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+            job.host_id = host_id
+            db_sync.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"],
+                job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value,
+                status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1",
+                agent_instance_id=uuid4().hex,
+                lease_generation=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+            db_sync.add(lease)
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=uuid4().hex,
+            boot_id=new_boot,  # different boot
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"], device_id=seed["device_id"],
+            )],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "CLEANUP"
+        assert actions[0]["reason"] == "boot_id_mismatch"
+
+        # Verify lease → RELEASED
+        db_sync2 = SessionLocal()
+        try:
+            updated_lease = (
+                db_sync2.query(DeviceLease)
+                .filter(DeviceLease.job_id == seed["job_id"])
+                .first()
+            )
+            assert updated_lease.status == LeaseStatus.RELEASED.value
+
+            # Verify job → FAILED
+            updated_job = db_sync2.get(JobInstance, seed["job_id"])
+            assert updated_job.status == JobStatus.FAILED.value
+        finally:
+            db_sync2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_no_lease_abort_local():
+    """No ACTIVE lease for the job → ABORT_LOCAL."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-nolease-{suffix}"
+    _seed_recovery_host(host_id)
+
+    payload = _RecoverySyncIn(
+        host_id=host_id,
+        agent_instance_id=uuid4().hex,
+        boot_id=uuid4().hex,
+        active_jobs=[_ActiveJobEntry(
+            job_id=99999, device_id=99999,
+        )],
+    )
+
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as async_db:
+        result = await recovery_sync(payload, db=async_db, _=None)
+
+    assert result.error is None
+    actions = result.data["actions"]
+    assert len(actions) == 1
+    assert actions[0]["action"] == "ABORT_LOCAL"
+    assert actions[0]["reason"] == "no_active_lease"
+    _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_outbox_not_terminal_upload():
+    """Outbox entry for non-terminal job → UPLOAD_TERMINAL."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-outbox-{suffix}"
+    _seed_recovery_host(host_id)
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        # Update host_id
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+            job.host_id = host_id
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=uuid4().hex,
+            boot_id=uuid4().hex,
+            pending_outbox=[_OutboxEntry(job_id=seed["job_id"], event_type="RUN_COMPLETED")],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        outbox_actions = result.data["outbox_actions"]
+        assert len(outbox_actions) == 1
+        assert outbox_actions[0]["action"] == "UPLOAD_TERMINAL"
+        assert outbox_actions[0]["reason"] == "not_terminal_on_backend"
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_outbox_already_terminal_noop():
+    """Outbox entry for already-terminal job → NOOP."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-noop-{suffix}"
+    _seed_recovery_host(host_id)
+
+    seed = _seed_job(status=JobStatus.COMPLETED.value)
+    try:
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+            job.host_id = host_id
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=uuid4().hex,
+            boot_id=uuid4().hex,
+            pending_outbox=[_OutboxEntry(job_id=seed["job_id"])],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        outbox_actions = result.data["outbox_actions"]
+        assert len(outbox_actions) == 1
+        assert outbox_actions[0]["action"] == "NOOP"
+        assert outbox_actions[0]["reason"] == "already_terminal"
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_outbox_job_not_found_noop():
+    """Outbox entry for nonexistent job → NOOP."""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-nf-{suffix}"
+    _seed_recovery_host(host_id)
+
+    payload = _RecoverySyncIn(
+        host_id=host_id,
+        agent_instance_id=uuid4().hex,
+        boot_id=uuid4().hex,
+        pending_outbox=[_OutboxEntry(job_id=99999)],
+    )
+
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as async_db:
+        result = await recovery_sync(payload, db=async_db, _=None)
+
+    assert result.error is None
+    outbox_actions = result.data["outbox_actions"]
+    assert len(outbox_actions) == 1
+    assert outbox_actions[0]["action"] == "NOOP"
+    assert outbox_actions[0]["reason"] == "job_not_found"
+    _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio
+async def test_recovery_sync_boot_id_not_overwritten_before_compare():
+    """D1: host.boot_id 在比较之前不覆盖 — 先 snapshot 后比较。"""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-d1-{suffix}"
+    old_boot = uuid4().hex
+    new_boot = uuid4().hex
+    new_instance = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=old_boot)
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+            job.host_id = host_id
+            db_sync.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"],
+                job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value,
+                status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1",
+                agent_instance_id=uuid4().hex,  # some other instance
+                lease_generation=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+            db_sync.add(lease)
+            db_sync.commit()
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=new_instance,
+            boot_id=new_boot,  # different from old_boot
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"], device_id=seed["device_id"],
+            )],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        # 因为 old_boot != new_boot，应触发 CLEANUP 而非 RESUME
+        assert actions[0]["action"] == "CLEANUP"
+        assert actions[0]["reason"] == "boot_id_mismatch"
+
+        # Verify host.boot_id was updated after comparison
+        db_sync2 = SessionLocal()
+        try:
+            updated_host = db_sync2.get(Host, host_id)
+            assert updated_host.boot_id == new_boot
+        finally:
+            db_sync2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)

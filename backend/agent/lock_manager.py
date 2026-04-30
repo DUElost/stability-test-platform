@@ -23,6 +23,7 @@ class LockRenewalManager:
         active_jobs_lock: threading.Lock,
         active_job_ids: Set[int],
         lock_renewal_stop_event: threading.Event,
+        agent_instance_id: str = "",  # ADR-0019 Phase 3a
     ):
         self._api_url = api_url
         self._jobs_lock = active_jobs_lock
@@ -34,6 +35,7 @@ class LockRenewalManager:
         self._post_retry_base_delay = float(os.getenv("AGENT_POST_RETRY_BASE_DELAY", "1"))
         self._renewal_interval = int(os.getenv("AGENT_LOCK_RENEWAL_INTERVAL", "60"))
         self._fencing_tokens: Dict[int, str] = {}  # ADR-0019 Phase 2b
+        self._agent_instance_id = agent_instance_id    # ADR-0019 Phase 3a
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():

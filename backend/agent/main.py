@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Set
+from typing import Any, Optional, Set
 
 # 自动加载 .env 文件（支持手动运行时读取配置）
 # 优先加载当前工作目录的 .env，不覆盖已有环境变量
@@ -21,7 +21,7 @@ if __name__ == "__main__" and __package__ is None:
     # 直接运行时的导入路径处理
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
-    from agent.api_client import complete_run, fetch_pending_jobs
+    from agent.api_client import complete_run, fetch_pending_jobs, sync_recovery
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
     from agent.heartbeat_thread import HeartbeatThread
@@ -43,7 +43,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.ws_client import AgentWSClient
 else:
     from .adb_wrapper import AdbWrapper
-    from .api_client import complete_run, fetch_pending_jobs
+    from .api_client import complete_run, fetch_pending_jobs, sync_recovery
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
     from .heartbeat_thread import HeartbeatThread
@@ -94,6 +94,88 @@ def _deregister_active_device(did: int) -> None:
         _active_device_ids.discard(did)
 
 
+def execute_recovery_actions_impl(
+    resp: dict,
+    active_jobs_by_id: dict,
+    lock_manager: Any,
+    local_db: Any,
+    outbox_drain: Any,
+    register_active_job: Any,
+) -> None:
+    """ADR-0019 Phase 3a: execute recovery actions (module-level for testability)."""
+    job_actions = resp.get("actions", [])
+    outbox_actions = resp.get("outbox_actions", [])
+
+    for a in job_actions:
+        jid = a["job_id"]
+        action = a["action"]
+        if action == "RESUME":
+            token = a.get("fencing_token", "")
+            register_active_job(jid, token, a.get("device_id"))
+            logger.info("recovery_resume job=%d token=%s", jid, token[:8] if token else "")
+        elif action == "CLEANUP":
+            local_db.delete_active_job(jid)
+            lock_manager.clear_fencing_token(jid)
+            logger.warning("recovery_cleanup job=%d reason=%s", jid, a.get("reason"))
+        elif action == "ABORT_LOCAL":
+            local_db.delete_active_job(jid)
+            lock_manager.clear_fencing_token(jid)
+            logger.warning("recovery_abort_local job=%d reason=%s", jid, a.get("reason"))
+
+    if outbox_actions:
+        has_upload = any(a["action"] == "UPLOAD_TERMINAL" for a in outbox_actions)
+        if has_upload:
+            try:
+                flushed = outbox_drain.drain_sync()
+                logger.info("recovery_outbox_flushed count=%d", flushed)
+            except Exception:
+                logger.exception("recovery_outbox_flush_failed")
+                return
+
+        still_pending = local_db.get_pending_outbox()
+        pending_ids = {e["job_id"] for e in still_pending}
+        for a in outbox_actions:
+            jid = a["job_id"]
+            action = a["action"]
+            if action == "UPLOAD_TERMINAL":
+                if jid not in pending_ids:
+                    local_db.delete_active_job(jid)
+                else:
+                    logger.warning("recovery_upload_terminal_still_pending job=%d", jid)
+            elif action == "NOOP":
+                local_db.delete_active_job(jid)
+
+
+def run_recovery_sync_if_needed(
+    local_db: Any,
+    api_url: str,
+    host_id: str,
+    agent_instance_id: str,
+    boot_id: str,
+    execute_actions: Any,
+) -> None:
+    """ADR-0019 Phase 3a: check local persisted state and sync with Backend if needed."""
+    try:
+        persisted_jobs = local_db.get_active_jobs()
+        pending_outbox = local_db.get_pending_outbox()
+        if persisted_jobs or pending_outbox:
+            resp = sync_recovery(
+                api_url, host_id, agent_instance_id, boot_id,
+                active_jobs=persisted_jobs,
+                pending_outbox=pending_outbox,
+            )
+            if resp is not None:
+                execute_actions(resp, {j["job_id"]: j for j in persisted_jobs})
+                logger.info(
+                    "recovery_sync_complete active_jobs=%d outbox=%d",
+                    len(persisted_jobs), len(pending_outbox),
+                )
+        else:
+            logger.info("recovery_skip_no_persisted_state")
+    except Exception:
+        logger.exception("recovery_sync_failed_continuing")
+
+
 def main() -> None:
     api_url = os.getenv("API_URL", "http://127.0.0.1:8000")
     max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
@@ -103,6 +185,13 @@ def main() -> None:
 
     # 获取本机信息（需要在验证 HOST_ID 之前）
     host_info = get_host_info()
+
+    # ADR-0019 Phase 3a: generate agent identity
+    from .identity import generate_agent_instance_id, read_boot_id
+
+    agent_instance_id = generate_agent_instance_id()
+    boot_id = read_boot_id()
+    logger.info("agent_identity instance=%s boot=%s", agent_instance_id, boot_id)
 
     # 加载 HOST_ID，支持自动注册
     try:
@@ -262,6 +351,8 @@ def main() -> None:
         on_scripts_outdated=script_registry.initialize,
         max_concurrent_jobs=max_concurrent_tasks,
         get_active_job_count=_get_active_job_count,
+        agent_instance_id=agent_instance_id,
+        boot_id=boot_id,
     )
     heartbeat_thread.start()
 
@@ -271,20 +362,24 @@ def main() -> None:
         active_jobs_lock=_active_jobs_lock,
         active_job_ids=_active_job_ids,
         lock_renewal_stop_event=_lock_renewal_stop_event,
+        agent_instance_id=agent_instance_id,
     )
     lock_manager.start()
 
-    # ADR-0019 Phase 2b: 活跃 job 注册/注销闭包（捕获 lock_manager）
-    def _register_active_job(jid: int, fencing_token: str = "") -> None:
+    # ADR-0019 Phase 2b + Phase 3a: 活跃 job 注册/注销闭包（捕获 lock_manager + local_db）
+    def _register_active_job(jid: int, fencing_token: str = "", device_id: Optional[int] = None) -> None:
         with _active_jobs_lock:
             _active_job_ids.add(jid)
         if fencing_token:
             lock_manager.set_fencing_token(jid, fencing_token)
+        if device_id is not None:
+            local_db.save_active_job(jid, device_id, fencing_token)
 
     def _deregister_active_job(jid: int) -> None:
         with _active_jobs_lock:
             _active_job_ids.discard(jid)
         lock_manager.clear_fencing_token(jid)
+        local_db.delete_active_job(jid)
 
     # 必须在闭包定义之后注册，避免 _handle_control 中 _deregister_active_job 引用未绑定
     ws_client.set_control_handler(_handle_control)
@@ -292,6 +387,31 @@ def main() -> None:
     # 启动终态 Outbox Drain 线程
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
     outbox_drain.start()
+
+    # ── ADR-0019 Phase 3a: Recovery Sync ──
+    def _execute_recovery_actions(
+        resp: dict,
+        active_jobs_by_id: dict,
+    ) -> None:
+        """Execute recovery actions returned by Backend (closure capturing dependencies)."""
+        execute_recovery_actions_impl(
+            resp=resp,
+            active_jobs_by_id=active_jobs_by_id,
+            lock_manager=lock_manager,
+            local_db=local_db,
+            outbox_drain=outbox_drain,
+            register_active_job=_register_active_job,
+        )
+
+    # Recovery sync execution
+    run_recovery_sync_if_needed(
+        local_db=local_db,
+        api_url=api_url,
+        host_id=host_id,
+        agent_instance_id=agent_instance_id,
+        boot_id=boot_id,
+        execute_actions=_execute_recovery_actions,
+    )
 
     # StepTrace HTTP 批量上报（Phase 3.7: acked=0 补传 → Phase 4: 唯一上报路径）
     step_trace_uploader = StepTraceUploader(
@@ -346,7 +466,7 @@ def main() -> None:
                 logger.info("main_loop_tick active=%d slots=%d", active_count, available_slots)
 
                 if available_slots > 0:
-                    jobs = fetch_pending_jobs(api_url, host_id)
+                    jobs = fetch_pending_jobs(api_url, host_id, agent_instance_id)
                     jobs = jobs[:available_slots]
 
                     if jobs:
@@ -374,8 +494,8 @@ def main() -> None:
                             if device_id:
                                 _active_device_ids.add(device_id)
 
-                        # ADR-0019 Phase 2b: 统一走闭包注册 job + fencing_token
-                        _register_active_job(job["id"], job["fencing_token"])
+                        # ADR-0019 Phase 2b + 3a: 注册 job + fencing_token + 持久化 active_job
+                        _register_active_job(job["id"], job["fencing_token"], device_id)
 
                         try:
                             executor.submit(

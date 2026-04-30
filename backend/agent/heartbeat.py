@@ -31,6 +31,9 @@ def send_heartbeat(
     available_slots: int = 0,
     max_concurrent_jobs: int = 2,
     online_healthy_devices: int = 0,
+    # ADR-0019 Phase 3a: agent identity
+    agent_instance_id: str = "",
+    boot_id: str = "",
 ) -> Optional[Dict[str, Any]]:
     """发送心跳到服务器，包含系统统计信息和设备数据
 
@@ -62,6 +65,9 @@ def send_heartbeat(
             "max_concurrent_jobs": max_concurrent_jobs,
             "online_healthy_devices": online_healthy_devices,
         },
+        # ADR-0019 Phase 3a
+        "agent_instance_id": agent_instance_id,
+        "boot_id": boot_id,
     }
 
     agent_secret = os.getenv("AGENT_SECRET", "")

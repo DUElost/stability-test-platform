@@ -86,6 +86,7 @@ async def _enrich_job_metadata(
 class ClaimRequest(BaseModel):
     host_id: str
     capacity: int = 10
+    agent_instance_id: str = ""   # ADR-0019 Phase 3a
 
 
 class JobOut(BaseModel):
@@ -125,6 +126,8 @@ class HeartbeatRequest(BaseModel):
     script_catalog_version: str = ""
     load: Dict[str, Any] = {}
     capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
+    agent_instance_id: str = ""   # ADR-0019 Phase 3a
+    boot_id: str = ""             # ADR-0019 Phase 3a
 
 
 class BackpressureInfo(BaseModel):
@@ -138,6 +141,41 @@ class HeartbeatResponse(BaseModel):
     capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
 
 
+# ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
+
+
+class _ActiveJobEntry(BaseModel):
+    job_id: int
+    device_id: int
+    fencing_token: str = ""
+
+
+class _OutboxEntry(BaseModel):
+    job_id: int
+    event_type: str = "RUN_COMPLETED"
+
+
+class _RecoverySyncIn(BaseModel):
+    host_id: str
+    agent_instance_id: str = ""
+    boot_id: str = ""
+    active_jobs: List[_ActiveJobEntry] = []
+    pending_outbox: List[_OutboxEntry] = []
+
+
+class _RecoveryAction(BaseModel):
+    job_id: int
+    device_id: Optional[int] = None
+    action: str       # RESUME | CLEANUP | ABORT_LOCAL | UPLOAD_TERMINAL | NOOP
+    fencing_token: str = ""
+    event_type: str = ""
+    reason: str = ""
+
+
+class _RecoverySyncOut(BaseModel):
+    data: dict  # {"actions": [...], "outbox_actions": [...]}
+
+
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 
@@ -145,6 +183,7 @@ async def _claim_jobs_for_host(
     db: AsyncSession,
     host_id: str,
     capacity: int = 10,
+    agent_instance_id: str = "",
 ) -> tuple[List[JobInstance], Dict[int, str]]:
     """Shared claim logic for claim_jobs (POST) and get_pending_jobs (GET).
 
@@ -247,7 +286,7 @@ async def _claim_jobs_for_host(
                     device_id=job.device_id,
                     host_id=host_id,
                     lease_type=LeaseType.JOB,
-                    agent_instance_id=host_id,
+                    agent_instance_id=agent_instance_id,
                     job_id=job.id,
                 )
                 if lease is None:
@@ -285,7 +324,7 @@ async def claim_jobs(
     Response includes device_serial + watcher_policy for Agent JobSession boot.
     """
     claimed, fencing_token_map = await _claim_jobs_for_host(
-        db, payload.host_id, payload.capacity,
+        db, payload.host_id, payload.capacity, payload.agent_instance_id,
     )
 
     if not claimed:
@@ -1007,3 +1046,143 @@ def _apply_watcher_summary(job: JobInstance, summary: Dict[str, Any]) -> None:
     count = summary.get("log_signal_count")
     if isinstance(count, int) and count > (job.log_signal_count or 0):
         job.log_signal_count = count
+
+
+# ── ADR-0019 Phase 3a: Recovery Sync ────────────────────────────────────────
+
+
+@router.post("/recovery/sync", response_model=ApiResponse[dict])
+async def recovery_sync(
+    payload: _RecoverySyncIn,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """Agent crash-recovery state reconciliation.
+
+    Agent reports local active_jobs + pending_outbox. Backend returns actions
+    (RESUME/CLEANUP/ABORT_LOCAL/UPLOAD_TERMINAL/NOOP) to align state.
+    """
+    # Load host
+    host = await db.get(Host, payload.host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    # D1: snapshot previous_boot_id before overwriting
+    previous_boot_id = host.boot_id
+
+    # Update host identity
+    if payload.boot_id:
+        host.boot_id = payload.boot_id
+    if payload.agent_instance_id:
+        host.last_agent_instance_id = payload.agent_instance_id
+
+    now = datetime.now(timezone.utc)
+
+    # ── Active job actions ──
+    job_actions: list[_RecoveryAction] = []
+    for entry in payload.active_jobs:
+        # Query ACTIVE lease for this device+job
+        lease = (await db.execute(
+            select(DeviceLease).where(
+                DeviceLease.device_id == entry.device_id,
+                DeviceLease.job_id == entry.job_id,
+                DeviceLease.lease_type == LeaseType.JOB.value,
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+            )
+        )).scalars().first()
+
+        if lease is None:
+            # Also check for RELEASED/EXPIRED lease
+            any_lease = (await db.execute(
+                select(DeviceLease).where(
+                    DeviceLease.device_id == entry.device_id,
+                    DeviceLease.job_id == entry.job_id,
+                    DeviceLease.lease_type == LeaseType.JOB.value,
+                )
+            )).scalars().first()
+            if any_lease is None:
+                job_actions.append(_RecoveryAction(
+                    job_id=entry.job_id, device_id=entry.device_id,
+                    action="ABORT_LOCAL", reason="no_active_lease",
+                ))
+            else:
+                job_actions.append(_RecoveryAction(
+                    job_id=entry.job_id, device_id=entry.device_id,
+                    action="ABORT_LOCAL", reason="lease_not_active",
+                ))
+            continue
+
+        # D3: legacy lease adoption
+        lease_agent_id = lease.agent_instance_id or ""
+
+        if lease_agent_id == payload.agent_instance_id:
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id, device_id=entry.device_id,
+                action="RESUME", fencing_token=lease.fencing_token,
+                reason="same_instance",
+            ))
+        elif lease_agent_id == payload.host_id or not lease_agent_id:
+            # Phase 2d legacy: adopt as own, update lease
+            lease.agent_instance_id = payload.agent_instance_id
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id, device_id=entry.device_id,
+                action="RESUME", fencing_token=lease.fencing_token,
+                reason="legacy_lease_adopted",
+            ))
+        elif previous_boot_id == payload.boot_id:
+            # Same boot, different instance: update lease
+            lease.agent_instance_id = payload.agent_instance_id
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id, device_id=entry.device_id,
+                action="RESUME", fencing_token=lease.fencing_token,
+                reason="same_boot_instance_updated",
+            ))
+        else:
+            # D7: CLEANUP — release_lease + job→FAILED (synchronous)
+            # Load job for status update
+            job = await db.get(JobInstance, entry.job_id)
+            if job is not None:
+                try:
+                    JobStateMachine.transition(job, JobStatus.FAILED, "recovery_cleanup_boot_mismatch")
+                except InvalidTransitionError:
+                    pass  # Already terminal
+            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id, device_id=entry.device_id,
+                action="CLEANUP", reason="boot_id_mismatch",
+            ))
+
+    # ── Outbox actions ──
+    outbox_actions: list[_RecoveryAction] = []
+    for entry in payload.pending_outbox:
+        job = await db.get(JobInstance, entry.job_id)
+        if job is None:
+            outbox_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                action="NOOP", reason="job_not_found",
+            ))
+        elif job.status in _TERMINAL:
+            outbox_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                action="NOOP", reason="already_terminal",
+            ))
+        else:
+            outbox_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                action="UPLOAD_TERMINAL", event_type=entry.event_type,
+                reason="not_terminal_on_backend",
+            ))
+
+    await db.commit()
+
+    logger.info(
+        "recovery_sync host=%s jobs=%d outbox=%d actions_job=%d actions_outbox=%d",
+        payload.host_id,
+        len(payload.active_jobs), len(payload.pending_outbox),
+        len(job_actions), len(outbox_actions),
+    )
+
+    return ok({
+        "actions": [a.model_dump() for a in job_actions],
+        "outbox_actions": [a.model_dump() for a in outbox_actions],
+    })

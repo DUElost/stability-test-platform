@@ -40,6 +40,9 @@ class HeartbeatThread:
         # ADR-0019 Phase 1
         max_concurrent_jobs: int = 2,
         get_active_job_count: Optional[Callable[[], int]] = None,
+        # ADR-0019 Phase 3a
+        agent_instance_id: str = "",
+        boot_id: str = "",
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -52,6 +55,8 @@ class HeartbeatThread:
         self._on_scripts_outdated = on_scripts_outdated
         self._max_concurrent_jobs = max_concurrent_jobs
         self._get_active_job_count = get_active_job_count
+        self._agent_instance_id = agent_instance_id
+        self._boot_id = boot_id
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
@@ -144,6 +149,8 @@ class HeartbeatThread:
             available_slots=available_slots,
             max_concurrent_jobs=self._max_concurrent_jobs,
             online_healthy_devices=online_healthy,
+            agent_instance_id=self._agent_instance_id,
+            boot_id=self._boot_id,
         )
         if response and response.get("script_catalog_outdated") and self._on_scripts_outdated:
             try:
