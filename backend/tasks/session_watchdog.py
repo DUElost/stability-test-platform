@@ -100,9 +100,10 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
 
 
 async def _check_device_lock_expiration(db) -> int:
-    """Release expired device leases, transition associated jobs → UNKNOWN (Phase 2c).
+    """DEPRECATED since Phase 4b: Reconciler is now the sole handler of lease expiration.
 
-    Reads DeviceLease instead of Device.lock_run_id — device_leases is the source of truth.
+    This function is no longer called from session_watchdog_once().
+    Will be removed in Phase 4c.
     """
     now = datetime.now(timezone.utc)
     expired_leases = (await db.execute(
@@ -218,16 +219,18 @@ async def session_watchdog_once() -> None:
     """Run all watchdog checks in a single pass."""
     async with AsyncSessionLocal() as db:
         hosts_offline, jobs_unknown = await _check_host_heartbeat_timeouts(db)
-        locks_released = await _check_device_lock_expiration(db)
+        # ADR-0019 Phase 4b: _check_device_lock_expiration is DISABLED.
+        # Reconciler (device_lease_reconciler.py) is now the sole handler
+        # of lease expiration.
         jobs_failed = await _check_unknown_grace_period(db)
         pending_tool_failed = await _check_pending_tool_timeout(db)
 
-        has_changes = hosts_offline or jobs_unknown or locks_released or jobs_failed or pending_tool_failed
+        has_changes = hosts_offline or jobs_unknown or jobs_failed or pending_tool_failed
         if has_changes:
             await db.commit()
             logger.info(
-                "watchdog_pass: hosts_offline=%d jobs_unknown=%d locks_released=%d "
+                "watchdog_pass: hosts_offline=%d jobs_unknown=%d "
                 "jobs_failed=%d pending_tool_timeout=%d",
-                hosts_offline, jobs_unknown, locks_released, jobs_failed, pending_tool_failed,
+                hosts_offline, jobs_unknown, jobs_failed, pending_tool_failed,
             )
 

@@ -107,17 +107,10 @@ async def acquire_lease(
             now = datetime.now(timezone.utc)
             expires_at = now + timedelta(seconds=lease_seconds)
 
-            # Step ②.5: recycle expired ACTIVE leases for this device (Phase 2c)
-            # Prevents expired leases from blocking new claims when lock_map is removed.
-            await db.execute(
-                update(DeviceLease)
-                .where(
-                    DeviceLease.device_id == device_id,
-                    DeviceLease.status == LeaseStatus.ACTIVE.value,
-                    DeviceLease.expires_at < now,
-                )
-                .values(status=LeaseStatus.EXPIRED.value)
-            )
+            # Phase 4b: expired ACTIVE leases are NOT auto-recycled.
+            # Reconciler is the sole handler of lease expiration.
+            # Grace-held (expired) leases block the device until
+            # Reconciler releases them.
 
             # Step ③: check for remaining ACTIVE lease (FOR UPDATE
             # protects against concurrent claim of the same device)
@@ -200,7 +193,10 @@ async def extend_lease(
     """Extend expires_at for an ACTIVE lease (ADR-0019 Phase 2a).
 
     Only touches rows matching device_id + job_id + lease_type +
-    status='ACTIVE'.  Returns True if a lease was extended.
+    status='ACTIVE' AND expires_at > now.  Returns True if a lease was extended.
+
+    Phase 4b: refuses to extend expired (grace-held) leases.  Recovery sync
+    uses the dedicated _resume_expired_lease_for_recovery() instead.
 
     Phase 2c: lease update + device projection wrapped in a savepoint
     so projection failure rolls back the lease update.
@@ -216,6 +212,7 @@ async def extend_lease(
                 DeviceLease.job_id == job_id,
                 DeviceLease.lease_type == lease_type.value,
                 DeviceLease.status == LeaseStatus.ACTIVE.value,
+                DeviceLease.expires_at > now,  # Phase 4b: refuse to extend expired lease
             )
             .values(renewed_at=now, expires_at=expires_at)
         )

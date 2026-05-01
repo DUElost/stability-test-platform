@@ -308,7 +308,8 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
 
     db.commit()
 
-    # ADR-0019 Phase 3c: count active JOB leases for backend capacity view
+    # ADR-0019 Phase 4b: count ALL ACTIVE JOB leases for backend capacity view.
+    # Grace-held (expired) leases still occupy capacity slots until Reconciler releases them.
     active_job_lease_count = (
         db.query(func.count())
         .select_from(DeviceLease)
@@ -316,7 +317,6 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
             DeviceLease.host_id == host.id,
             DeviceLease.lease_type == LeaseType.JOB.value,
             DeviceLease.status == LeaseStatus.ACTIVE.value,
-            DeviceLease.expires_at > now,
         )
     ).scalar() or 0
 

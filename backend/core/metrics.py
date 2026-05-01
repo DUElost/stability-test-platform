@@ -208,6 +208,34 @@ recycler_duration = Histogram(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
+# Reconciler Metrics (ADR-0019 Phase 4a/4b)
+# ============================================================================
+
+reconciler_runs = Counter(
+    'stability_reconciler_runs_total',
+    'Total number of reconciler check invocations',
+    ['check', 'outcome']  # check: expired_leases/stale_unknown/terminal_job_active_lease, outcome: success/error
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+reconciler_actions = Counter(
+    'stability_reconciler_actions_total',
+    'Total number of actions taken by reconciler',
+    ['action', 'reason']  # action: to_unknown/to_failed/release_lease, reason: lease_expired/unknown_grace_timeout/terminal_job_active_lease
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+expired_active_leases_gauge = Gauge(
+    'stability_expired_active_leases',
+    'Number of expired but still ACTIVE (grace-held) leases',
+    ['host_id']
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+unknown_jobs_gauge = Gauge(
+    'stability_unknown_jobs',
+    'Number of UNKNOWN status jobs',
+    ['reason']  # reason: lease_expired / host_timeout
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
 # API Metrics
 # ============================================================================
 

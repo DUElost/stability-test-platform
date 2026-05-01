@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 RECYCLER_INTERVAL = int(os.getenv("RUN_RECYCLE_INTERVAL_SECONDS", "30"))
 WATCHDOG_INTERVAL = int(os.getenv("SESSION_WATCHDOG_INTERVAL_SECONDS", "15"))
+RECONCILER_INTERVAL = int(os.getenv("RECONCILER_INTERVAL_SECONDS", "15"))
 CRON_POLL_INTERVAL = float(os.getenv("CRON_POLL_INTERVAL", "30"))
 RETENTION_CLEANUP_INTERVAL = int(os.getenv("RETENTION_CLEANUP_INTERVAL_SECONDS", "3600"))
 QUEUE_DEPTH_INTERVAL = int(os.getenv("QUEUE_DEPTH_POLL_INTERVAL_SECONDS", "15"))
@@ -107,6 +108,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         check_and_fire_schedules,
         run_retention_cleanup,
     )
+    from backend.scheduler.device_lease_reconciler import device_lease_reconcile_once
     from backend.tasks.session_watchdog import session_watchdog_once
 
     await scheduler.add_schedule(
@@ -126,6 +128,15 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=session_watchdog interval=%ds", WATCHDOG_INTERVAL)
+
+    await scheduler.add_schedule(
+        _instrumented("device_lease_reconciler", device_lease_reconcile_once),
+        IntervalTrigger(seconds=RECONCILER_INTERVAL),
+        id="device_lease_reconciler",
+        misfire_grace_time=MISFIRE_GRACE,
+        conflict_policy=ConflictPolicy.replace,
+    )
+    logger.info("schedule_registered id=device_lease_reconciler interval=%ds", RECONCILER_INTERVAL)
 
     await scheduler.add_schedule(
         _instrumented("cron_check", check_and_fire_schedules),

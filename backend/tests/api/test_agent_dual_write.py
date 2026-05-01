@@ -903,12 +903,16 @@ async def test_claim_jobs_skip_on_active_lease():
 
 @pytest.mark.asyncio
 async def test_claim_jobs_claims_after_expired_lease():
-    """旧 lease 过期后 claim_jobs 可重新 claim 同设备不同 job (Phase 2c 过期回收)."""
+    """Phase 4b blocking lease: expired ACTIVE lease blocks claim (0 jobs returned).
+
+    The auto-recycle (Phase 2c Step 2.5) is removed.  Only Reconciler can
+    release grace-held leases.  Claim must skip the blocked device.
+    """
     from datetime import timedelta
 
     seed = _seed_job(status=JobStatus.PENDING.value)
     old_lease_id = None
-    # Create expired ACTIVE lease using sync session
+    # Create expired ACTIVE lease using sync session — blocks the device
     db = SessionLocal()
     try:
         past = datetime.now(timezone.utc) - timedelta(seconds=3600)
@@ -943,17 +947,19 @@ async def test_claim_jobs_claims_after_expired_lease():
                 payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
                 db=async_db, _=None,
             )
-        assert len(result.data) == 1, (
-            "claim_jobs must reclaim after expired lease is recycled"
+        # Phase 4b: expired ACTIVE lease is a blocking grace-held lease.
+        # The device is excluded by the pre-filter, so claim returns 0.
+        assert len(result.data) == 0, (
+            f"Phase 4b: expired ACTIVE lease must block claim; got {len(result.data)}"
         )
-        assert result.data[0].id == seed["job_id"]
 
+        # The old lease stays ACTIVE (not auto-recycled to EXPIRED)
         db = SessionLocal()
         try:
             old_lease = db.get(DeviceLease, old_lease_id)
             assert old_lease is not None
-            assert old_lease.status == LeaseStatus.EXPIRED.value, (
-                f"Expired ACTIVE lease must be recycled to EXPIRED; got {old_lease.status}"
+            assert old_lease.status == LeaseStatus.ACTIVE.value, (
+                f"Phase 4b: grace-held lease stays ACTIVE; got {old_lease.status}"
             )
         finally:
             db.close()
@@ -1441,8 +1447,11 @@ async def test_zero_capacity_returns_empty_no_state_change():
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_expired_active_lease_allows_claim():
-    """Expired ACTIVE lease does NOT block claim -- pre-filter passes it through,
-    acquire_lease recycles it."""
+    """Phase 4b: expired ACTIVE lease blocks claim (grace-held blocking lease).
+
+    The device is excluded by the pre-filter even though the lease is expired.
+    Only Reconciler can release it.
+    """
     seed = _seed_job(status=JobStatus.PENDING.value)
     now = datetime.now(timezone.utc)
     past = now - timedelta(seconds=600)
@@ -1471,10 +1480,10 @@ async def test_expired_active_lease_allows_claim():
             claimed, _ = await _claim_jobs_for_host(
                 async_db, seed["host_id"], capacity=10,
             )
-            assert len(claimed) == 1, (
-                f"Expired ACTIVE lease must not block claim; got {len(claimed)}"
+            # Phase 4b: expired ACTIVE lease blocks the device
+            assert len(claimed) == 0, (
+                f"Phase 4b: expired ACTIVE lease must block claim; got {len(claimed)}"
             )
-            assert claimed[0].id == seed["job_id"]
     finally:
         _cleanup_seed(seed)
 
@@ -2530,3 +2539,264 @@ def test_hosts_api_backward_compat_no_capacity():
         db.query(Host).filter(Host.id == host_id).delete()
         db.commit()
         db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 4b: Watchdog / Reconciler / Recovery Sync 补充测试
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_watchdog_does_not_release_grace_held_lease():
+    """Phase 4b: session_watchdog_once() 不再释放过期 ACTIVE lease（仅 Reconciler 可释放）。"""
+    from backend.tasks.session_watchdog import session_watchdog_once
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        past = datetime.now(timezone.utc) - timedelta(seconds=3600)
+        db = SessionLocal()
+        try:
+            lease = DeviceLease(
+                device_id=seed["device_id"], job_id=seed["job_id"],
+                host_id=seed["host_id"],
+                lease_type=LeaseType.JOB.value, status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1", lease_generation=1,
+                agent_instance_id=seed["host_id"],
+                acquired_at=past - timedelta(seconds=7200),
+                renewed_at=past, expires_at=past,
+            )
+            db.add(lease)
+            dev = db.get(Device, seed["device_id"])
+            dev.status = "BUSY"
+            dev.lock_run_id = seed["job_id"]
+            dev.lock_expires_at = past
+            db.commit()
+            lease_id = lease.id
+        finally:
+            db.close()
+
+        await async_engine.dispose()
+        await session_watchdog_once()
+
+        db2 = SessionLocal()
+        try:
+            l = db2.get(DeviceLease, lease_id)
+            assert l is not None
+            assert l.status == LeaseStatus.ACTIVE.value, (
+                f"Watchdog must NOT release grace-held lease; got {l.status}"
+            )
+        finally:
+            db2.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_heartbeat_blocking_lease_reduces_available_slots():
+    """Phase 4b: 过期 ACTIVE lease 计入 heartbeat backend_available_slots 且阻塞 claim。"""
+    from sqlalchemy import func
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        past = datetime.now(timezone.utc) - timedelta(seconds=3600)
+        db = SessionLocal()
+        try:
+            lease = DeviceLease(
+                device_id=seed["device_id"], job_id=seed["job_id"],
+                host_id=seed["host_id"],
+                lease_type=LeaseType.JOB.value, status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1", lease_generation=1,
+                agent_instance_id=seed["host_id"],
+                acquired_at=past - timedelta(seconds=7200),
+                renewed_at=past, expires_at=past,
+            )
+            db.add(lease)
+            dev = db.get(Device, seed["device_id"])
+            dev.status = "BUSY"
+            dev.lock_run_id = seed["job_id"]
+            dev.lock_expires_at = past
+            db.commit()
+        finally:
+            db.close()
+
+        # 1. Heartbeat view: expired ACTIVE lease is counted
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            active_count = (await async_db.execute(
+                select(func.count()).select_from(DeviceLease).where(
+                    DeviceLease.host_id == seed["host_id"],
+                    DeviceLease.lease_type == LeaseType.JOB.value,
+                    DeviceLease.status == LeaseStatus.ACTIVE.value,
+                )
+            )).scalar_one()
+            assert active_count == 1, f"Expired ACTIVE lease must be counted; got {active_count}"
+
+        # 2. Claim: blocking lease prevents claim
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            claimed, tokens = await _claim_jobs_for_host(async_db, seed["host_id"], capacity=10)
+            assert len(claimed) == 0, (
+                f"Expired ACTIVE lease must block claim; got {len(claimed)} claimed"
+            )
+            await async_db.rollback()
+    finally:
+        _cleanup_seed(seed)
+
+
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_sync_unknown_within_grace_resumes():
+    """Phase 4b D4: UNKNOWN job + ACTIVE lease + same boot + within grace → RESUME + UNKNOWN→RUNNING。"""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-uwg-{suffix}"
+    instance_id = uuid4().hex
+    boot_id = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=boot_id, instance_id=instance_id)
+
+    seed = _seed_job(status=JobStatus.UNKNOWN.value)
+    try:
+        now = datetime.now(timezone.utc)
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            job.ended_at = now - timedelta(seconds=60)  # within grace
+            job.host_id = host_id
+            db.commit()
+
+            device = db.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = now - timedelta(seconds=1800)
+            db.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"], job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value, status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1", lease_generation=1,
+                agent_instance_id=instance_id,
+                acquired_at=now - timedelta(seconds=3600),
+                renewed_at=now - timedelta(seconds=3600),
+                expires_at=now - timedelta(seconds=1800),  # expired
+            )
+            db.add(lease)
+            db.commit()
+        finally:
+            db.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=instance_id,
+            boot_id=boot_id,
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"],
+                device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
+            )],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+            await async_db.commit()
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "RESUME"
+        assert actions[0]["reason"] == "recovery_resume_unknown"
+
+        db2 = SessionLocal()
+        try:
+            j = db2.get(JobInstance, seed["job_id"])
+            assert j.status == JobStatus.RUNNING.value
+            l = (db2.query(DeviceLease)
+                 .filter(DeviceLease.device_id == seed["device_id"],
+                         DeviceLease.job_id == seed["job_id"])
+                 .first())
+            assert l is not None and l.expires_at > now
+        finally:
+            db2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_sync_unknown_grace_expired_cleanup():
+    """Phase 4b D4 reverse: UNKNOWN job + grace expired → CLEANUP。"""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-uge-{suffix}"
+    instance_id = uuid4().hex
+    boot_id = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=boot_id, instance_id=instance_id)
+
+    seed = _seed_job(status=JobStatus.UNKNOWN.value)
+    try:
+        now = datetime.now(timezone.utc)
+        past_grace = now - timedelta(seconds=600)  # past grace
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            job.ended_at = past_grace
+            job.host_id = host_id
+            db.commit()
+
+            device = db.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            device.lock_run_id = seed["job_id"]
+            device.lock_expires_at = now - timedelta(seconds=3600)
+            db.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"], job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value, status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1", lease_generation=1,
+                agent_instance_id=instance_id,
+                acquired_at=now - timedelta(seconds=7200),
+                renewed_at=now - timedelta(seconds=3600),
+                expires_at=now - timedelta(seconds=1800),  # expired
+            )
+            db.add(lease)
+            db.commit()
+        finally:
+            db.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=instance_id,
+            boot_id=boot_id,
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"],
+                device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
+            )],
+        )
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+            await async_db.commit()
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "CLEANUP"
+        assert actions[0]["reason"] == "unknown_grace_expired"
+
+        db2 = SessionLocal()
+        try:
+            l = (db2.query(DeviceLease)
+                 .filter(DeviceLease.device_id == seed["device_id"],
+                         DeviceLease.job_id == seed["job_id"])
+                 .first())
+            assert l is not None and l.status == LeaseStatus.RELEASED.value
+        finally:
+            db2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)

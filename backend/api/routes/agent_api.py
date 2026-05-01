@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
@@ -206,13 +206,13 @@ async def _claim_jobs_for_host(
     if not host_row:
         return [], {}  # host not found, no lock acquired — safe early return
 
-    # 2. Count non-expired ACTIVE JOB leases (capacity authority)
+    # 2. Count ALL ACTIVE JOB leases — Phase 4b blocking lease:
+    #    expired (grace-held) leases still occupy capacity slots.
     active_job_count = (await db.execute(
         select(func.count()).select_from(DeviceLease).where(
             DeviceLease.host_id == host_id,
             DeviceLease.lease_type == LeaseType.JOB.value,
             DeviceLease.status == LeaseStatus.ACTIVE.value,
-            DeviceLease.expires_at > now,
         )
     )).scalar_one()
 
@@ -233,16 +233,15 @@ async def _claim_jobs_for_host(
     )
     all_device_ids = [row[0] for row in device_ids_result.all()]
 
-    # 5. Pre-filter: exclude devices with ANY non-expired ACTIVE lease
-    #    (JOB / SCRIPT / MAINTENANCE all occupy the device)
-    #    Expired ACTIVE leases pass through — acquire_lease recycles them.
+    # 5. Pre-filter: exclude devices with ANY ACTIVE lease (Phase 4b blocking lease).
+    #    Expired (grace-held) ACTIVE leases also block the device —
+    #    only Reconciler can release them.
     free_device_ids: list[int] = []
     if all_device_ids:
         busy_rows = await db.execute(
             select(DeviceLease.device_id).where(
                 DeviceLease.device_id.in_(all_device_ids),
                 DeviceLease.status == LeaseStatus.ACTIVE.value,
-                DeviceLease.expires_at > now,
             )
         )
         busy_device_ids = {row[0] for row in busy_rows.all()}
@@ -314,6 +313,98 @@ async def _claim_jobs_for_host(
         await db.rollback()
 
     return claimed, fencing_token_map
+
+
+# ── ADR-0019 Phase 4b: Runtime Lease Validation ────────────────────────────────
+
+
+async def _get_valid_runtime_lease(
+    db: AsyncSession,
+    job: JobInstance,
+    fencing_token: str,
+) -> Optional[DeviceLease]:
+    """Validate runtime lease for token-gated operations (Phase 4b).
+
+    Returns the valid ACTIVE lease, or None if any check fails.
+    Checks (all must pass):
+      1. ACTIVE lease exists for (device_id, job_id, JOB)
+      2. fencing_token matches
+      3. expires_at > now (B: expired lease rejects all runtime ops)
+      4. job.status == RUNNING (C: whitelist, not blacklist)
+    """
+    now = datetime.now(timezone.utc)
+    lease = (await db.execute(
+        select(DeviceLease).where(
+            DeviceLease.device_id == job.device_id,
+            DeviceLease.job_id == job.id,
+            DeviceLease.lease_type == LeaseType.JOB.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
+    )).scalars().first()
+
+    if lease is None:
+        return None
+    if lease.fencing_token != fencing_token:
+        return None
+    # B: expired lease rejects all runtime operations
+    if lease.expires_at is None or lease.expires_at <= now:
+        return None
+    # C: only RUNNING jobs may perform runtime operations
+    if job.status != JobStatus.RUNNING.value:
+        return None
+    return lease
+
+
+async def _resume_expired_lease_for_recovery(
+    db: AsyncSession,
+    lease: DeviceLease,
+    job: JobInstance,
+    agent_instance_id: str,
+    now: datetime,
+    grace_seconds: int = 300,
+) -> bool:
+    """Refresh an expired ACTIVE lease for UNKNOWN→RUNNING recovery (Phase 4b).
+
+    MUST be called under row lock on both lease and job rows.
+    Only succeeds when:
+      - lease.status == ACTIVE (row-locked, may have been released concurrently)
+      - job.status == UNKNOWN (row-locked, may have been finalized concurrently)
+      - job.ended_at is within grace period (now - ended_at < grace_seconds)
+
+    Does NOT use extend_lease() — this is the ONLY place that refreshes
+    an expired lease, and only under the validated recovery preconditions.
+    """
+    from backend.models.host import Device
+
+    # Re-check under row lock
+    if lease.status != LeaseStatus.ACTIVE.value:
+        return False
+    if job.status != JobStatus.UNKNOWN.value:
+        return False
+    if job.ended_at is None:
+        return False
+    grace_deadline = now - timedelta(seconds=grace_seconds)
+    if job.ended_at <= grace_deadline:
+        return False
+
+    # Refresh lease TTL
+    new_expires_at = now + timedelta(seconds=_DEVICE_LOCK_LEASE_SECONDS)
+    lease.renewed_at = now
+    lease.expires_at = new_expires_at
+    lease.agent_instance_id = agent_instance_id
+
+    # Project to device table (consistent with extend_lease projection)
+    proj_result = await db.execute(
+        update(Device)
+        .where(Device.id == lease.device_id, Device.lock_run_id == job.id)
+        .values(lock_expires_at=new_expires_at)
+    )
+    if proj_result.rowcount != 1:
+        raise LeaseProjectionError(
+            f"resume_expired_lease projection failed: device={lease.device_id} job={job.id}"
+        )
+
+    return True
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -580,16 +671,9 @@ async def job_heartbeat(
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
-    # ADR-0019 Phase 2b: validate fencing_token against ACTIVE lease
-    active_lease = (await db.execute(
-        select(DeviceLease).where(
-            DeviceLease.device_id == job.device_id,
-            DeviceLease.job_id == job_id,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            DeviceLease.status == LeaseStatus.ACTIVE.value,
-        )
-    )).scalars().first()
-    if active_lease is None or active_lease.fencing_token != payload.fencing_token:
+    # ADR-0019 Phase 4b: validate fencing_token via _get_valid_runtime_lease
+    valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
+    if valid_lease is None:
         raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
 
     target = _RUN_TO_JOB.get(payload.status.upper(), JobStatus.RUNNING)
@@ -626,17 +710,10 @@ async def complete_job(
     # skip the transition but still persist snapshot and release lock.
     already_terminal = job.status == target.value and job.status in _TERMINAL
 
-    # ADR-0019 Phase 2b: fencing_token validation
+    # ADR-0019 Phase 4b: fencing_token validation
     if not already_terminal:
-        active_lease = (await db.execute(
-            select(DeviceLease).where(
-                DeviceLease.device_id == job.device_id,
-                DeviceLease.job_id == job_id,
-                DeviceLease.lease_type == LeaseType.JOB.value,
-                DeviceLease.status == LeaseStatus.ACTIVE.value,
-            )
-        )).scalars().first()
-        if active_lease is None or active_lease.fencing_token != payload.fencing_token:
+        valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
+        if valid_lease is None:
             raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
     else:
         released_lease = (await db.execute(
@@ -757,16 +834,9 @@ async def extend_job_lock(
     if device is None:
         raise HTTPException(status_code=404, detail="device not found")
 
-    # ADR-0019 Phase 2b: validate fencing_token against ACTIVE lease
-    active_lease = (await db.execute(
-        select(DeviceLease).where(
-            DeviceLease.device_id == job.device_id,
-            DeviceLease.job_id == job_id,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            DeviceLease.status == LeaseStatus.ACTIVE.value,
-        )
-    )).scalars().first()
-    if active_lease is None or active_lease.fencing_token != payload.fencing_token:
+    # ADR-0019 Phase 4b: validate fencing_token via _get_valid_runtime_lease
+    valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
+    if valid_lease is None:
         raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
 
     renewed = await extend_lease(db, job.device_id, job_id, LeaseType.JOB, _DEVICE_LOCK_LEASE_SECONDS)
@@ -1086,16 +1156,17 @@ async def recovery_sync(
     now = datetime.now(timezone.utc)
 
     # ── Active job actions ──
+    _recovery_grace_seconds = 300  # UNKNOWN grace for recovery, matches watchdog
     job_actions: list[_RecoveryAction] = []
     for entry in payload.active_jobs:
-        # Query ACTIVE lease for this device+job
+        # Query ACTIVE lease for this device+job (Phase 4b: row lock)
         lease = (await db.execute(
             select(DeviceLease).where(
                 DeviceLease.device_id == entry.device_id,
                 DeviceLease.job_id == entry.job_id,
                 DeviceLease.lease_type == LeaseType.JOB.value,
                 DeviceLease.status == LeaseStatus.ACTIVE.value,
-            )
+            ).with_for_update()  # Phase 4b: lock lease row against concurrent Reconciler
         )).scalars().first()
 
         if lease is None:
@@ -1122,42 +1193,82 @@ async def recovery_sync(
         # D3: legacy lease adoption
         lease_agent_id = lease.agent_instance_id or ""
 
-        if lease_agent_id == payload.agent_instance_id:
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id, device_id=entry.device_id,
-                action="RESUME", fencing_token=lease.fencing_token,
-                reason="same_instance",
-            ))
-        elif lease_agent_id == payload.host_id or not lease_agent_id:
-            # Phase 2d legacy: adopt as own, update lease
-            lease.agent_instance_id = payload.agent_instance_id
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id, device_id=entry.device_id,
-                action="RESUME", fencing_token=lease.fencing_token,
-                reason="legacy_lease_adopted",
-            ))
-        elif previous_boot_id == payload.boot_id:
-            # Same boot, different instance: update lease
-            lease.agent_instance_id = payload.agent_instance_id
-            job_actions.append(_RecoveryAction(
-                job_id=entry.job_id, device_id=entry.device_id,
-                action="RESUME", fencing_token=lease.fencing_token,
-                reason="same_boot_instance_updated",
-            ))
-        else:
-            # D7: CLEANUP — release_lease + job→FAILED (synchronous)
-            # Load job for status update
+        is_resume = (
+            lease_agent_id == payload.agent_instance_id
+            or lease_agent_id == payload.host_id
+            or not lease_agent_id
+            or previous_boot_id == payload.boot_id
+        )
+
+        if not is_resume:
+            # D7: CLEANUP — boot mismatch → release_lease + job→FAILED
             job = await db.get(JobInstance, entry.job_id)
             if job is not None:
                 try:
                     JobStateMachine.transition(job, JobStatus.FAILED, "recovery_cleanup_boot_mismatch")
                 except InvalidTransitionError:
-                    pass  # Already terminal
+                    pass
             await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
             job_actions.append(_RecoveryAction(
                 job_id=entry.job_id, device_id=entry.device_id,
                 action="CLEANUP", reason="boot_id_mismatch",
             ))
+            continue
+
+        # ── RESUME path: check job status for UNKNOWN / terminal edge cases ──
+        # Load job with row lock to prevent race with Reconciler
+        job = (await db.execute(
+            select(JobInstance).where(JobInstance.id == entry.job_id).with_for_update()
+        )).scalars().first()
+
+        if job is not None and job.status == JobStatus.UNKNOWN.value:
+            # Phase 4b: UNKNOWN→RUNNING resurrection (within grace)
+            resumed = await _resume_expired_lease_for_recovery(
+                db, lease, job, payload.agent_instance_id, now, _recovery_grace_seconds,
+            )
+            if resumed:
+                try:
+                    JobStateMachine.transition(job, JobStatus.RUNNING, "recovery_resume_unknown")
+                except InvalidTransitionError:
+                    pass
+                job_actions.append(_RecoveryAction(
+                    job_id=entry.job_id, device_id=entry.device_id,
+                    action="RESUME", fencing_token=lease.fencing_token,
+                    reason="recovery_resume_unknown",
+                ))
+            else:
+                # Grace expired or state changed under lock
+                await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+                job_actions.append(_RecoveryAction(
+                    job_id=entry.job_id, device_id=entry.device_id,
+                    action="CLEANUP", reason="unknown_grace_expired",
+                ))
+            continue
+
+        if job is not None and job.status in _TERMINAL:
+            # D5: terminal job with lingering ACTIVE lease → release, ABORT_LOCAL
+            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id, device_id=entry.device_id,
+                action="ABORT_LOCAL", reason="terminal_job_active_lease",
+            ))
+            continue
+
+        # Normal RESUME: legacy adoption / same_boot update
+        if not lease_agent_id or lease_agent_id == payload.host_id:
+            lease.agent_instance_id = payload.agent_instance_id
+            reason = "legacy_lease_adopted"
+        elif previous_boot_id == payload.boot_id and lease_agent_id != payload.agent_instance_id:
+            lease.agent_instance_id = payload.agent_instance_id
+            reason = "same_boot_instance_updated"
+        else:
+            reason = "same_instance"
+
+        job_actions.append(_RecoveryAction(
+            job_id=entry.job_id, device_id=entry.device_id,
+            action="RESUME", fencing_token=lease.fencing_token,
+            reason=reason,
+        ))
 
     # ── Outbox actions ──
     outbox_actions: list[_RecoveryAction] = []
