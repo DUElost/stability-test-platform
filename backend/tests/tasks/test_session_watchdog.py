@@ -117,6 +117,7 @@ async def test_host_timeout_marks_offline_and_jobs_unknown():
     old_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=300)
     seed = _seed_job_with_host(host_heartbeat=old_heartbeat)
 
+    await async_engine.dispose()
     await session_watchdog_once()
 
     host = _get_host(seed["host_id"])
