@@ -1,14 +1,16 @@
-"""Session watchdog — consolidated background task for session-lease lifecycle.
+"""Session watchdog — consolidated background task for session lifecycle.
 
 Handles:
-  1. Host heartbeat timeout  → mark OFFLINE, jobs → UNKNOWN
-  2. Device lock expiration  → release lock, job → UNKNOWN
-  3. UNKNOWN grace period    → job → FAILED after grace window
-  4. PENDING_TOOL timeout    → job → FAILED
+  1. Host heartbeat timeout  → mark OFFLINE, jobs → UNKNOWN (lease stays ACTIVE)
+  2. UNKNOWN grace period    → job → FAILED after grace window
+  3. PENDING_TOOL timeout    → job → FAILED
+
+Device lock expiration is now handled by Reconciler
+(backend.scheduler.device_lease_reconciler), the sole handler of lease
+expiration since ADR-0019 Phase 4b.
 
 Entry point: ``session_watchdog_once()`` is invoked by APScheduler
-IntervalTrigger (see ``app_scheduler.py``).  The legacy asyncio loop and
-``USE_SESSION_WATCHDOG`` gate have been removed.
+IntervalTrigger (see ``app_scheduler.py``).
 """
 
 from __future__ import annotations
@@ -17,15 +19,13 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select, update as _update
+from sqlalchemy import select
 
 from backend.core.database import AsyncSessionLocal
-from backend.models.device_lease import DeviceLease
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
-from backend.models.host import Device, Host
+from backend.models.enums import HostStatus, JobStatus
+from backend.models.host import Host
 from backend.models.job import JobInstance
 from backend.services.aggregator import WorkflowAggregator
-from backend.services.lease_manager import LeaseProjectionError, release_lease
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -62,31 +62,7 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
             try:
                 JobStateMachine.transition(job, JobStatus.UNKNOWN, "host_heartbeat_timeout")
                 job.ended_at = datetime.now(timezone.utc)
-                try:
-                    ok = await release_lease(db, job.device_id, job.id, LeaseType.JOB)
-                except LeaseProjectionError:
-                    logger.warning(
-                        "watchdog_host_timeout_projection_failed: device=%d job=%s — "
-                        "releasing lease without device projection",
-                        job.device_id, job.id,
-                    )
-                    dl = (await db.execute(
-                        select(DeviceLease).where(
-                            DeviceLease.device_id == job.device_id,
-                            DeviceLease.job_id == job.id,
-                            DeviceLease.lease_type == LeaseType.JOB.value,
-                            DeviceLease.status == LeaseStatus.ACTIVE.value,
-                        )
-                    )).scalars().first()
-                    if dl is not None:
-                        dl.status = LeaseStatus.RELEASED.value
-                        dl.released_at = datetime.now(timezone.utc)
-                        ok = True
-                    else:
-                        ok = False
-                if ok:
-                    await WorkflowAggregator.on_job_terminal(job, db)
-                    affected_jobs += 1
+                affected_jobs += 1
             except InvalidTransitionError:
                 pass
 
@@ -97,68 +73,6 @@ async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:
         )
 
     return hosts_offline, affected_jobs
-
-
-async def _check_device_lock_expiration(db) -> int:
-    """DEPRECATED since Phase 4b: Reconciler is now the sole handler of lease expiration.
-
-    This function is no longer called from session_watchdog_once().
-    Will be removed in Phase 4c.
-    """
-    now = datetime.now(timezone.utc)
-    expired_leases = (await db.execute(
-        select(DeviceLease).where(
-            DeviceLease.status == LeaseStatus.ACTIVE.value,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            or_(
-                DeviceLease.expires_at.is_(None),
-                DeviceLease.expires_at < now,
-            ),
-        )
-    )).scalars().all()
-
-    released = 0
-    for lease in expired_leases:
-        if not lease.job_id:
-            continue
-        job_id = lease.job_id
-        device_id = lease.device_id  # snapshot before savepoint may detach
-        lease_id = lease.id
-        try:
-            ok = await release_lease(db, device_id, job_id, LeaseType.JOB)
-        except LeaseProjectionError:
-            logger.warning(
-                "watchdog_lock_expired_projection_failed: device=%d job=%s — "
-                "device table out of sync, releasing lease only",
-                device_id, job_id,
-            )
-            # Fallback: release lease via ORM (avoids asyncpg MissingGreenlet
-            # after savepoint rollback inside release_lease)
-            dl = await db.get(DeviceLease, lease_id)
-            if dl is not None and dl.status == LeaseStatus.ACTIVE.value:
-                dl.status = LeaseStatus.RELEASED.value
-                dl.released_at = datetime.now(timezone.utc)
-                ok = True
-            else:
-                ok = False
-        if ok:
-            released += 1
-
-            # Find the associated job and transition to UNKNOWN if RUNNING
-            job = await db.get(JobInstance, job_id)
-            if job and job.status == JobStatus.RUNNING.value:
-                try:
-                    JobStateMachine.transition(job, JobStatus.UNKNOWN, "device_lock_expired")
-                    job.ended_at = datetime.now(timezone.utc)
-                    await WorkflowAggregator.on_job_terminal(job, db)
-                except InvalidTransitionError:
-                    pass
-
-            logger.warning(
-                "watchdog_lock_expired: device=%d job=%s", device_id, job_id,
-            )
-
-    return released
 
 
 async def _check_unknown_grace_period(db) -> int:
@@ -219,9 +133,6 @@ async def session_watchdog_once() -> None:
     """Run all watchdog checks in a single pass."""
     async with AsyncSessionLocal() as db:
         hosts_offline, jobs_unknown = await _check_host_heartbeat_timeouts(db)
-        # ADR-0019 Phase 4b: _check_device_lock_expiration is DISABLED.
-        # Reconciler (device_lease_reconciler.py) is now the sole handler
-        # of lease expiration.
         jobs_failed = await _check_unknown_grace_period(db)
         pending_tool_failed = await _check_pending_tool_timeout(db)
 
