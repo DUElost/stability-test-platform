@@ -148,25 +148,33 @@ class LeaseRenewer:
                 return
             except requests.HTTPError as e:
                 last_error = e
-                if e.response is not None and e.response.status_code == 409:
-                    # lease definitively lost — full cleanup
+                status = e.response.status_code if e.response is not None else None
+                if status in (409, 404):
+                    # 409: token rejected; 404: job not found — lease definitively lost
                     with self._jobs_lock:
                         self._job_ids.discard(job_id)
                         self._fencing_tokens.pop(job_id, None)
                         device_id = self._device_ids.pop(job_id, None)
                     if self._on_lease_lost:
                         self._on_lease_lost(job_id, device_id)
-                    logger.warning("lease_lost_409", extra={
-                        "agent_instance_id": self._agent_instance_id,
-                        "job_id": job_id,
-                        "reason": "backend_rejected_token",
-                    })
+                    logger.warning(
+                        "lease_lost_409" if status == 409 else "lease_lost_404",
+                        extra={
+                            "agent_instance_id": self._agent_instance_id,
+                            "job_id": job_id,
+                            "status_code": status,
+                            "reason": (
+                                "backend_rejected_token" if status == 409
+                                else "job_not_found_on_backend"
+                            ),
+                        },
+                    )
                     return
                 logger.warning("lease_extend_http_error", extra={
                     "agent_instance_id": self._agent_instance_id,
                     "job_id": job_id,
                     "attempt": attempt,
-                    "status_code": e.response.status_code if e.response else "unknown",
+                    "status_code": status or "unknown",
                     "error": str(e),
                 })
             except requests.RequestException as e:
