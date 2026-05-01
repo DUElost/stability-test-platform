@@ -1,15 +1,16 @@
 """
 Job Recycler — timeout recovery for JobInstance lifecycle.
 
-Complements the session watchdog by handling:
-- PENDING timeout: agent never claimed the job within DISPATCHED_TIMEOUT_SECONDS
-- RUNNING timeout: job started but no completion within RUNNING_HEARTBEAT_TIMEOUT_SECONDS
-- Artifact file pruning: delete physical files referenced by old StepTrace completion records
+Complements the session watchdog and Reconciler by handling:
+- PENDING timeout: agent never claimed the job → FAILED + release lease
+- RUNNING timeout: job lost contact → UNKNOWN (lease stays ACTIVE; Reconciler finalizes)
+- Artifact file pruning: delete physical files referenced by old StepTrace records
 
-Host heartbeat timeout and device lock expiration are handled by session_watchdog.py.
+Host heartbeat timeout is handled by session_watchdog.py.
+Lease expiration is handled by device_lease_reconciler.py (ADR-0019 Phase 4b).
 
 Entry point: ``recycle_once()`` is invoked by APScheduler IntervalTrigger
-(see ``app_scheduler.py``).  The legacy daemon thread has been removed.
+(see ``app_scheduler.py``).
 """
 
 import json
@@ -59,12 +60,12 @@ def _safe_json_loads(raw) -> dict:
         return {}
 
 
-def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
-    """Transition a stuck JobInstance to FAILED and release its device lock.
+def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
+    """PENDING timeout → FAILED + release lease (defensive, normally no-op).
 
-    Respects the StateMachine — if the job is already terminal or the
-    transition is rejected (e.g. concurrent watchdog already moved it),
-    we skip silently to avoid overwriting the authoritative state.
+    ADR-0019 Phase 4c: PENDING handling unchanged — agent never claimed,
+    so no lease existed in the normal path. release_lease_sync is kept as
+    a safety net.
     """
     _terminal = {
         JobStatus.COMPLETED.value, JobStatus.FAILED.value,
@@ -72,11 +73,12 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
     }
     if job.status in _terminal:
         return
+    if job.status != JobStatus.PENDING.value:
+        return  # Phase 4c: only PENDING; RUNNING handled by _mark_running_timeout
 
     old_status = job.status
     try:
-        if job.status == JobStatus.PENDING.value:
-            JobStateMachine.transition(job, JobStatus.RUNNING, "recycler_auto_claim")
+        JobStateMachine.transition(job, JobStatus.RUNNING, "recycler_auto_claim")
         JobStateMachine.transition(job, JobStatus.FAILED, reason)
     except InvalidTransitionError:
         logger.info(
@@ -94,7 +96,6 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
             "device table out of sync, continuing without projection",
             job.device_id, job.id,
         )
-        # Fallback: release lease without device projection
         from sqlalchemy import update as _update
         from backend.models.device_lease import DeviceLease
         from backend.models.enums import LeaseStatus
@@ -112,7 +113,6 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
             )
         )
 
-    # Workflow aggregation (sync path)
     try:
         from backend.services.aggregator_sync import workflow_aggregator_sync
         workflow_aggregator_sync(job, db)
@@ -122,10 +122,7 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
     task_run_state_changes.labels(from_state=old_status, to_state="FAILED").inc()
     task_run_total.labels(status="failed", task_type="workflow").inc()
     device_lock_released.labels(reason="timeout").inc()
-    if "pending" in reason.lower():
-        recycler_timeouts.labels(timeout_type="dispatched").inc()
-    else:
-        recycler_timeouts.labels(timeout_type="running").inc()
+    recycler_timeouts.labels(timeout_type="dispatched").inc()
 
     logger.warning(
         "job_timeout",
@@ -148,10 +145,54 @@ def _mark_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
         },
     }, namespace="/dashboard")
 
-    # post_completion and notification are NOT triggered here.
-    # The recycler is a compensating path — it only ensures state closure.
-    # Post-completion is handled by _fill_deferred_post_completions() which
-    # gives the primary path (agent outbox drain) a grace window first.
+
+def _mark_running_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
+    """RUNNING timeout → UNKNOWN (ADR-0019 Phase 4c).
+
+    Lease stays ACTIVE — the device remains blocked. Reconciler will
+    finalize (UNKNOWN→FAILED + release lease) after the grace period.
+
+    Does NOT call release_lease_sync, workflow aggregation, or emit
+    FAILED notification.
+    """
+    if job.status != JobStatus.RUNNING.value:
+        return
+
+    old_status = job.status
+    try:
+        JobStateMachine.transition(job, JobStatus.UNKNOWN, reason)
+    except InvalidTransitionError:
+        logger.info(
+            "recycler_skip_transition job=%d current=%s reason=%s",
+            job.id, job.status, reason,
+        )
+        return
+
+    job.ended_at = now
+
+    task_run_state_changes.labels(from_state=old_status, to_state="UNKNOWN").inc()
+    recycler_timeouts.labels(timeout_type="running").inc()
+
+    logger.warning(
+        "job_timeout_to_unknown",
+        extra={
+            "job_id": job.id,
+            "workflow_run_id": job.workflow_run_id,
+            "old_status": old_status,
+            "reason": reason,
+        },
+    )
+
+    schedule_emit("job_update", {
+        "type": "JOB_UPDATE",
+        "payload": {
+            "job_id": job.id,
+            "workflow_run_id": job.workflow_run_id,
+            "status": "UNKNOWN",
+            "error_code": "TIMEOUT",
+            "message": reason,
+        },
+    }, namespace="/dashboard")
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +267,7 @@ def recycle_once() -> None:
     running_deadline = now - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
 
     with SessionLocal() as db:
-        # 1) PENDING timeout — agent never claimed the job
+        # 1) PENDING timeout — agent never claimed the job → FAILED
         expired_pending = (
             db.query(JobInstance)
             .filter(
@@ -236,7 +277,12 @@ def recycle_once() -> None:
             .all()
         )
 
-        # 2) RUNNING timeout — job has not reported liveness within window
+        for job in expired_pending:
+            _mark_pending_timeout(
+                db, job, now, "pending_timeout: agent never claimed job",
+            )
+
+        # 2) RUNNING timeout → UNKNOWN (Phase 4c). Lease stays ACTIVE.
         expired_running = (
             db.query(JobInstance)
             .filter(
@@ -246,16 +292,12 @@ def recycle_once() -> None:
             .all()
         )
 
-        expired_jobs = expired_pending + expired_running
-        for job in expired_jobs:
-            reason = (
-                "pending_timeout: agent never claimed job"
-                if job.status == JobStatus.PENDING.value
-                else "running_timeout: no completion within window"
+        for job in expired_running:
+            _mark_running_timeout(
+                db, job, now, "running_timeout: no completion within window",
             )
-            _mark_timeout(db, job, now, reason)
 
-        if expired_jobs:
+        if expired_pending or expired_running:
             db.commit()
 
         # 3) Deferred post-completion for orphan terminal jobs
