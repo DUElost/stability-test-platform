@@ -194,35 +194,6 @@ async def test_watchdog_host_timeout_keeps_lease_active():
 
 @pytest.mark.asyncio
 async def test_watchdog_unknown_grace_keeps_lease_active():
-
-    await async_engine.dispose()
-    await session_watchdog_once()
-
-    # Job → FAILED
-    job = _get_job(seed["job_id"])
-    assert job.status == JobStatus.FAILED.value
-
-    # Lease must still be ACTIVE (not released by watchdog)
-    db = SessionLocal()
-    try:
-        dl = (
-            db.query(DeviceLease)
-            .filter(
-                DeviceLease.device_id == seed["device_id"],
-                DeviceLease.job_id == seed["job_id"],
-            )
-            .first()
-        )
-        assert dl is not None
-        assert dl.status == LeaseStatus.ACTIVE.value, (
-            f"Lease must stay ACTIVE after UNKNOWN grace; got {dl.status}"
-        )
-    finally:
-        db.close()
-
-
-@pytest.mark.asyncio
-async def test_watchdog_unknown_grace_keeps_lease_active():
     """Phase 4c: UNKNOWN grace → FAILED but lease stays ACTIVE.
 
     Watchdog _check_unknown_grace_period only changes job status.
