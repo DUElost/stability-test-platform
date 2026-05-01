@@ -70,6 +70,7 @@ def _seed_job(*, status: str = JobStatus.PENDING.value) -> dict:
         device = Device(
             serial=f"DW-RT-{suffix}", host_id=host_id,
             status="ONLINE", tags=[], created_at=now,
+            adb_connected=True, adb_state="device",
         )
         wf = WorkflowDefinition(
             name=f"wf-{suffix}", description="dual-write route test",
@@ -1169,8 +1170,8 @@ async def test_active_lease_excludes_device(lease_type):
             id=host_id, hostname=f"h-{suffix}",
             status=HostStatus.ONLINE.value, created_at=now,
         )
-        dev_a = Device(serial=f"DWA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
-        dev_b = Device(serial=f"DWB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_a = Device(serial=f"DWA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
+        dev_b = Device(serial=f"DWB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         wf = WorkflowDefinition(
             name=f"wf-{suffix}", description="", failure_threshold=0.1,
             created_by="pytest", created_at=now, updated_at=now,
@@ -1263,9 +1264,9 @@ async def test_capacity_capped_by_max_concurrent_jobs():
             id=host_id, hostname=f"h-{suffix}",
             max_concurrent_jobs=2, status=HostStatus.ONLINE.value, created_at=now,
         )
-        dev_a = Device(serial=f"CA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now)
-        dev_b = Device(serial=f"CB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
-        dev_c = Device(serial=f"CC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_a = Device(serial=f"CA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now, adb_connected=True, adb_state="device")
+        dev_b = Device(serial=f"CB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
+        dev_c = Device(serial=f"CC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         wf = WorkflowDefinition(
             name=f"wf-{suffix}", description="", failure_threshold=0.1,
             created_by="pytest", created_at=now, updated_at=now,
@@ -1359,8 +1360,8 @@ async def test_zero_capacity_returns_empty_no_state_change():
             id=host_id, hostname=f"h-{suffix}",
             max_concurrent_jobs=1, status=HostStatus.ONLINE.value, created_at=now,
         )
-        dev_a = Device(serial=f"ZA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now)
-        dev_b = Device(serial=f"ZB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_a = Device(serial=f"ZA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now, adb_connected=True, adb_state="device")
+        dev_b = Device(serial=f"ZB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         wf = WorkflowDefinition(
             name=f"wf-{suffix}", description="", failure_threshold=0.1,
             created_by="pytest", created_at=now, updated_at=now,
@@ -1492,9 +1493,9 @@ async def test_per_device_first_does_not_waste_capacity():
             id=host_id, hostname=f"h-{suffix}",
             max_concurrent_jobs=3, status=HostStatus.ONLINE.value, created_at=now,
         )
-        dev_a = Device(serial=f"PA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
-        dev_b = Device(serial=f"PB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
-        dev_c = Device(serial=f"PC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_a = Device(serial=f"PA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
+        dev_b = Device(serial=f"PB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
+        dev_c = Device(serial=f"PC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         wf = WorkflowDefinition(
             name=f"wf-{suffix}", description="", failure_threshold=0.1,
             created_by="pytest", created_at=now, updated_at=now,
@@ -1587,8 +1588,8 @@ async def test_concurrent_claim_capacity_does_not_exceed():
             id=host_id, hostname=f"h-{suffix}",
             max_concurrent_jobs=1, status=HostStatus.ONLINE.value, created_at=now,
         )
-        dev_a = Device(serial=f"CC1-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
-        dev_b = Device(serial=f"CC2-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now)
+        dev_a = Device(serial=f"CC1-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
+        dev_b = Device(serial=f"CC2-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         wf = WorkflowDefinition(
             name=f"wf-{suffix}", description="", failure_threshold=0.1,
             created_by="pytest", created_at=now, updated_at=now,
@@ -2327,3 +2328,205 @@ async def test_recovery_sync_boot_id_not_overwritten_before_compare():
     finally:
         _cleanup_seed(seed)
         _cleanup_recovery_host(host_id)
+
+
+# ---------------------------------------------------------------------------
+# ADR-0019 Phase 3c: Capacity / Health 结构化可观测
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_stores_capacity_and_health():
+    """Heartbeat POST → host.extra["capacity"] + host.extra["health"] 正确存储."""
+    from backend.api.routes.heartbeat import heartbeat
+    from backend.api.schemas.host import HeartbeatIn
+
+    suffix = uuid4().hex[:8]
+    host_id = f"caph-host-{suffix}"
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id,
+            hostname=f"caph-{suffix}",
+            status=HostStatus.ONLINE.value,
+            ip="10.0.0.2",
+            ip_address="10.0.0.2",
+        )
+        db.add(host)
+        db.flush()
+
+        cap = {"available_slots": 5, "max_concurrent_jobs": 8,
+               "active_jobs": 3, "online_healthy_devices": 6,
+               "effective_slots": 4, "active_devices": 2}
+        health = {"status": "HEALTHY", "reasons": [],
+                  "cpu_load": 20.0, "ram_usage": 50.0,
+                  "disk_usage": 40.0, "mount_ok": True, "adb_ok": True}
+
+        payload = HeartbeatIn(
+            host_id=host_id,
+            status="ONLINE",
+            capacity=cap,
+            health=health,
+        )
+        response_data = await heartbeat(payload, db)
+
+        db.refresh(host)
+        assert host.extra.get("capacity") == cap, f"capacity not stored; got {host.extra.get('capacity')}"
+        assert host.extra.get("health") == health, f"health not stored; got {host.extra.get('health')}"
+
+        # Heartbeat response also includes backend capacity view
+        assert response_data["capacity"]["max_concurrent_jobs"] == 8
+        assert response_data["capacity"]["online_healthy_devices"] == 0  # no devices in payload
+        assert "backend_available_slots" in response_data["capacity"]
+    finally:
+        db.rollback()
+        db.query(Host).filter(Host.id == host_id).delete()
+        db.commit()
+        db.close()
+
+
+def test_hosts_api_returns_capacity_health():
+    """_host_to_out() 从 host.extra 正确提取 capacity/health/max_concurrent_jobs."""
+    from backend.api.routes.hosts import _host_to_out
+
+    suffix = uuid4().hex[:8]
+    host_id = f"hout-host-{suffix}"
+
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        cap = {"available_slots": 3, "max_concurrent_jobs": 5,
+               "effective_slots": 2, "active_jobs": 2,
+               "online_healthy_devices": 4, "active_devices": 1}
+        health = {"status": "HEALTHY", "reasons": [],
+                  "cpu_load": 30.0, "ram_usage": 60.0,
+                  "disk_usage": 50.0, "mount_ok": True, "adb_ok": True}
+
+        host = Host(
+            id=host_id, hostname=f"hout-{suffix}",
+            status=HostStatus.ONLINE.value, ip="10.0.0.3",
+            ip_address="10.0.0.3", last_heartbeat=now,
+            extra={"capacity": cap, "health": health},
+            max_concurrent_jobs=5,
+        )
+        db.add(host)
+        db.commit()
+        db.refresh(host)
+
+        host_out = _host_to_out(host)
+
+        assert host_out.capacity == cap, f"capacity mismatch: {host_out.capacity}"
+        assert host_out.health == health, f"health mismatch: {host_out.health}"
+        assert host_out.max_concurrent_jobs == 5
+    finally:
+        db.rollback()
+        db.query(Host).filter(Host.id == host_id).delete()
+        db.commit()
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_claim_filters_unhealthy_devices():
+    """adb_connected=false 的设备不进入 claim 候选.
+
+    两个设备共用一个 WorkflowDefinition/WorkflowRun/TaskTemplate，
+    各有一个 PENDING job。只 expect healthy device 被 claim。
+    """
+    suffix = uuid4().hex[:8]
+    host_id = f"cfilt-host-{suffix}"
+    now = datetime.now(timezone.utc)
+
+    seed_bad = _seed_job(status=JobStatus.PENDING.value)
+    seed_good = _seed_job(status=JobStatus.PENDING.value)
+
+    db_sync = SessionLocal()
+    try:
+        # Update good device to healthy; bad device to unhealthy
+        device_good = db_sync.get(Device, seed_good["device_id"])
+        device_good.adb_connected = True
+        device_good.adb_state = "device"
+        device_good.host_id = host_id
+
+        device_bad = db_sync.get(Device, seed_bad["device_id"])
+        device_bad.adb_connected = False
+        device_bad.adb_state = "offline"
+        device_bad.host_id = host_id
+
+        # Reassign both jobs to same host (they were created with different hosts)
+        job_good = db_sync.get(JobInstance, seed_good["job_id"])
+        job_good.host_id = host_id
+        job_good.device_id = seed_good["device_id"]
+
+        job_bad = db_sync.get(JobInstance, seed_bad["job_id"])
+        job_bad.host_id = host_id
+        job_bad.device_id = seed_bad["device_id"]
+
+        # Create shared host
+        host = Host(
+            id=host_id, hostname=f"cfilt-{suffix}",
+            status=HostStatus.ONLINE.value, max_concurrent_jobs=5,
+        )
+        db_sync.add(host)
+        db_sync.commit()
+
+        try:
+            await async_engine.dispose()
+            async with AsyncSessionLocal() as async_db:
+                claimed, _ = await _claim_jobs_for_host(async_db, host_id, capacity=5)
+
+            claimed_device_ids = {j.device_id for j in claimed}
+            assert device_good.id in claimed_device_ids, (
+                f"healthy device {device_good.id} should be claimed"
+            )
+            assert device_bad.id not in claimed_device_ids, (
+                f"unhealthy device {device_bad.id} should be filtered"
+            )
+        finally:
+            pass  # cleanup handled by _cleanup_seed below
+    finally:
+        db_sync.close()
+
+    _cleanup_seed(seed_good)
+    _cleanup_seed(seed_bad)
+    # Clean up the shared host
+    db = SessionLocal()
+    try:
+        db.query(Host).filter(Host.id == host_id).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_hosts_api_backward_compat_no_capacity():
+    """旧 host 无 capacity/health → _host_to_out returns None for capacity/health."""
+    from backend.api.routes.hosts import _host_to_out
+
+    suffix = uuid4().hex[:8]
+    host_id = f"hbc-host-{suffix}"
+
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        host = Host(
+            id=host_id, hostname=f"hbc-{suffix}",
+            status=HostStatus.ONLINE.value, ip="10.0.0.4",
+            ip_address="10.0.0.4", last_heartbeat=now,
+            extra={},  # no capacity/health
+        )
+        db.add(host)
+        db.commit()
+        db.refresh(host)
+
+        host_out = _host_to_out(host)
+
+        assert host_out.capacity is None
+        assert host_out.health is None
+        # max_concurrent_jobs defaults to 2 in DB; backward compat means
+        # it's still present but not overridden by extra
+        assert host_out.max_concurrent_jobs == 2
+    finally:
+        db.rollback()
+        db.query(Host).filter(Host.id == host_id).delete()
+        db.commit()
+        db.close()

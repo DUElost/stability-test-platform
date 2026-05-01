@@ -40,6 +40,11 @@ export interface HostTableData {
   mount_status?: MountStatus[];
   device_count?: number;
   active_tasks?: number;
+  // ADR-0019 Phase 3c: structured capacity/health
+  max_concurrent_jobs?: number;
+  effective_slots?: number;
+  health_status?: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
+  health_reasons?: string[];
 }
 
 interface ExpandableHostTableProps {
@@ -75,6 +80,15 @@ function getResourceColor(percentage: number): string {
   if (percentage >= 70) return 'text-amber-500';
   return 'text-emerald-500';
 }
+
+const REASON_LABELS: Record<string, string> = {
+  cpu_high: 'CPU 过高',
+  ram_high: '内存过高',
+  disk_high: '磁盘过高',
+  mount_failed: '挂载失败',
+  adb_low_healthy_devices: '无健康设备',
+};
+
 
 function getProgressColor(percentage: number): string {
   if (percentage >= 90) return 'bg-red-500';
@@ -182,6 +196,7 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                 <TableHead className="font-medium">主机名称</TableHead>
                 <TableHead className="font-medium">IP地址</TableHead>
                 <TableHead className="font-medium">状态</TableHead>
+                <TableHead className="font-medium text-center">槽位</TableHead>
                 <TableHead className="font-medium text-center">设备数</TableHead>
                 <TableHead className="font-medium text-center">任务数</TableHead>
                 <TableHead className="font-medium">CPU</TableHead>
@@ -232,13 +247,42 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                         {host.ip}
                       </TableCell>
                       <TableCell className="p-3">
-                        <span className={cn(
-                          'inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium',
-                          config.bgColor, config.textColor
-                        )}>
-                          <StatusIcon className="w-3 h-3" />
-                          {config.label}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={cn(
+                            'inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium',
+                            config.bgColor, config.textColor
+                          )}>
+                            <StatusIcon className="w-3 h-3" />
+                            {config.label}
+                          </span>
+                          {host.health_status && host.health_status !== 'HEALTHY' && (
+                            <span
+                              className={cn(
+                                'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help',
+                                host.health_status === 'UNSCHEDULABLE'
+                                  ? 'bg-red-50 text-red-600'
+                                  : 'bg-amber-50 text-amber-600'
+                              )}
+                              title={host.health_reasons?.map(r => REASON_LABELS[r] || r).join(', ') || ''}
+                            >
+                              {host.health_status === 'UNSCHEDULABLE' ? '禁调' : '降级'}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="p-3 text-center">
+                        {host.max_concurrent_jobs != null ? (
+                          <span className="text-xs font-mono">
+                            <span className={cn(
+                              (host.effective_slots ?? 0) > 0 ? 'text-emerald-600' : 'text-gray-400'
+                            )}>
+                              {host.effective_slots ?? 0}
+                            </span>
+                            <span className="text-gray-300">/{host.max_concurrent_jobs}</span>
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">-</span>
+                        )}
                       </TableCell>
                       <TableCell className="p-3 text-center">
                         <span className={cn(
@@ -314,7 +358,7 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                     {/* Expanded Details */}
                     {isExpanded && (
                       <TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
-                        <TableCell colSpan={selectable ? 11 : 10} className="p-4">
+                        <TableCell colSpan={selectable ? 12 : 11} className="p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             {/* CPU Details */}
                             <div className="bg-white rounded-lg border border-gray-100 p-3">

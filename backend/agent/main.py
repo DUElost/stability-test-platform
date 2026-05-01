@@ -335,6 +335,11 @@ def main() -> None:
         with _active_jobs_lock:
             return len(_active_job_ids)
 
+    # ADR-0019 Phase 3c: active device count for effective_slots
+    def _get_active_device_count() -> int:
+        with _active_jobs_lock:
+            return len(_active_device_ids)
+
     # 启动心跳守护线程（独立于任务执行循环）
     heartbeat_thread = HeartbeatThread(
         api_url=api_url,
@@ -351,6 +356,7 @@ def main() -> None:
         on_scripts_outdated=script_registry.initialize,
         max_concurrent_jobs=max_concurrent_tasks,
         get_active_job_count=_get_active_job_count,
+        get_active_device_count=_get_active_device_count,
         agent_instance_id=agent_instance_id,
         boot_id=boot_id,
     )

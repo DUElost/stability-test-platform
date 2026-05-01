@@ -5,11 +5,13 @@ import uuid
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
 from backend.models.host import Host, Device
+from backend.models.device_lease import DeviceLease
+from backend.models.enums import LeaseStatus, LeaseType
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
 
@@ -179,6 +181,11 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
         host_extra.update(payload.extra)
     if payload.host:
         host_extra["host"] = payload.host
+    # ADR-0019 Phase 3c: 规范化 capacity / health 存储到 extra
+    if payload.capacity:
+        host_extra["capacity"] = payload.capacity
+    if payload.health:
+        host_extra["health"] = payload.health
     host.extra = host_extra
 
     # Process devices array
@@ -301,6 +308,18 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
 
     db.commit()
 
+    # ADR-0019 Phase 3c: count active JOB leases for backend capacity view
+    active_job_lease_count = (
+        db.query(func.count())
+        .select_from(DeviceLease)
+        .filter(
+            DeviceLease.host_id == host.id,
+            DeviceLease.lease_type == LeaseType.JOB.value,
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+            DeviceLease.expires_at > now,
+        )
+    ).scalar() or 0
+
     if ws_device_updates:
         try:
             from backend.realtime.socketio_server import broadcast_device_update
@@ -316,9 +335,10 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
         "devices_count": len(seen_serials),
         "tool_catalog_outdated": tool_catalog_outdated,
         "script_catalog_outdated": script_catalog_outdated,
-        # ADR-0019 Phase 1
+        # ADR-0019 Phase 3c
         "capacity": {
             "max_concurrent_jobs": host.max_concurrent_jobs,
             "online_healthy_devices": online_healthy_count,
+            "backend_available_slots": max(0, host.max_concurrent_jobs - active_job_lease_count),
         },
     }

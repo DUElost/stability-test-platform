@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
@@ -220,9 +220,16 @@ async def _claim_jobs_for_host(
     effective_capacity = max(0, host_row.max_concurrent_jobs - active_job_count)
     effective_capacity = min(effective_capacity, capacity)
 
-    # 4. Get all device IDs for this host
+    # 4. Get all device IDs for this host (Phase 3c: filter known-unhealthy devices)
+    #    - INCLUDE: known-healthy OR never-reported (NULL adb fields → coalesce to safe default)
+    #    - EXCLUDE: known-offline (adb_connected=False, bad adb_state, status=OFFLINE)
     device_ids_result = await db.execute(
-        select(Device.id).where(Device.host_id == host_id)
+        select(Device.id).where(
+            Device.host_id == host_id,
+            func.coalesce(Device.adb_connected, True) == True,
+            func.coalesce(Device.adb_state, "device").notin_(["offline", "unknown"]),
+            Device.status != "OFFLINE",
+        )
     )
     all_device_ids = [row[0] for row in device_ids_result.all()]
 

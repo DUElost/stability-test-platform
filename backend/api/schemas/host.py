@@ -26,6 +26,10 @@ class HostOut(ORMBaseModel):
     last_heartbeat: Optional[datetime] = None
     extra: Dict[str, Any] = {}
     mount_status: Dict[str, Any] = {}
+    # ADR-0019 Phase 3c: 结构化 capacity/health
+    capacity: Optional[Dict[str, Any]] = None
+    health: Optional[Dict[str, Any]] = None
+    max_concurrent_jobs: Optional[int] = None
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod
@@ -50,6 +54,7 @@ class HeartbeatIn(BaseModel):
     host: Optional[Dict[str, Any]] = None
     devices: List[Dict[str, Any]] = Field(default_factory=list)
     capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
+    health: Optional[Dict[str, Any]] = None    # ADR-0019 Phase 3c
     agent_instance_id: str = ""   # ADR-0019 Phase 3a
     boot_id: str = ""             # ADR-0019 Phase 3a
 

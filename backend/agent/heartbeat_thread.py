@@ -40,6 +40,8 @@ class HeartbeatThread:
         # ADR-0019 Phase 1
         max_concurrent_jobs: int = 2,
         get_active_job_count: Optional[Callable[[], int]] = None,
+        # ADR-0019 Phase 3c
+        get_active_device_count: Optional[Callable[[], int]] = None,
         # ADR-0019 Phase 3a
         agent_instance_id: str = "",
         boot_id: str = "",
@@ -55,6 +57,7 @@ class HeartbeatThread:
         self._on_scripts_outdated = on_scripts_outdated
         self._max_concurrent_jobs = max_concurrent_jobs
         self._get_active_job_count = get_active_job_count
+        self._get_active_device_count = get_active_device_count
         self._agent_instance_id = agent_instance_id
         self._boot_id = boot_id
         self._stop_event = threading.Event()
@@ -94,7 +97,7 @@ class HeartbeatThread:
             self._tick()
 
     def _tick(self) -> None:
-        """Single heartbeat cycle: discover → HTTP POST (authoritative) → WS push (display-only)."""
+        """Single heartbeat cycle: discover → compute capacity/health → HTTP POST (authoritative) → WS push (display-only)."""
         devices_list = []
         try:
             discovered = device_discovery.discover_devices(self._adb_path)
@@ -129,13 +132,31 @@ class HeartbeatThread:
 
         versions = self._catalog_versions() if self._catalog_versions else {}
 
-        # ADR-0019 Phase 1: compute capacity for heartbeat
+        # ADR-0019 Phase 3c: 结构化 capacity/health（一次采集，两处复用）
+        from .capacity_reporter import compute_capacity
+        from .heartbeat import check_mounts
+        from .system_monitor import collect_system_stats
+
+        system_stats = collect_system_stats()
+        mount_status = check_mounts(self._mount_points)
+
         active_count = self._get_active_job_count() if self._get_active_job_count else 0
-        available_slots = max(0, self._max_concurrent_jobs - active_count)
+        active_device_count = self._get_active_device_count() if self._get_active_device_count else 0
         online_healthy = sum(
             1 for d in devices_list
             if d.get("adb_connected") is True
             and d.get("adb_state") not in ("offline", "unknown", "")
+        )
+        total_devices = len(devices_list)
+
+        cap_result = compute_capacity(
+            max_concurrent_jobs=self._max_concurrent_jobs,
+            active_job_count=active_count,
+            active_device_count=active_device_count,
+            online_healthy_devices=online_healthy,
+            total_devices=total_devices,
+            system_stats=system_stats,
+            mount_status=mount_status,
         )
 
         response = send_heartbeat(
@@ -146,11 +167,12 @@ class HeartbeatThread:
             devices=devices_list,
             tool_catalog_version=versions.get("tool_catalog_version", ""),
             script_catalog_version=versions.get("script_catalog_version", ""),
-            available_slots=available_slots,
-            max_concurrent_jobs=self._max_concurrent_jobs,
-            online_healthy_devices=online_healthy,
+            capacity=cap_result.get("capacity"),
+            health=cap_result.get("health"),
             agent_instance_id=self._agent_instance_id,
             boot_id=self._boot_id,
+            system_stats=system_stats,
+            mount_status=mount_status,
         )
         if response and response.get("script_catalog_outdated") and self._on_scripts_outdated:
             try:
@@ -158,14 +180,12 @@ class HeartbeatThread:
             except Exception as exc:
                 logger.warning("script_catalog_refresh_failed: %s", exc)
 
+        # WS push 复用同一份 stats（不再重复 collect_system_stats / check_mounts）
         if self._ws_client and self._ws_client.connected:
             try:
-                from .heartbeat import check_mounts
-                from .system_monitor import collect_system_stats
-
-                stats = collect_system_stats()
+                stats = dict(system_stats)
                 stats["devices"] = devices_list
-                stats["mount_status"] = check_mounts(self._mount_points)
+                stats["mount_status"] = mount_status
                 self._ws_client.send_heartbeat(stats)
                 logger.debug("heartbeat_ws_push_sent")
             except Exception as e:

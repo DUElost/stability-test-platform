@@ -27,23 +27,27 @@ def send_heartbeat(
     devices: Optional[List[Dict[str, Any]]] = None,
     tool_catalog_version: str = "",
     script_catalog_version: str = "",
-    # ADR-0019 Phase 1: capacity reporting
-    available_slots: int = 0,
-    max_concurrent_jobs: int = 2,
-    online_healthy_devices: int = 0,
+    # ADR-0019 Phase 3c: 结构化 capacity/health 快照（替代旧版散字段）
+    capacity: Optional[Dict[str, Any]] = None,
+    health: Optional[Dict[str, Any]] = None,
     # ADR-0019 Phase 3a: agent identity
     agent_instance_id: str = "",
     boot_id: str = "",
+    # Phase 3c: 预收集统计信息（避免 HeartbeatThread 双采）
+    system_stats: Optional[Dict[str, Any]] = None,
+    mount_status: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """发送心跳到服务器，包含系统统计信息和设备数据
 
     Returns:
         成功时返回响应字典 (含 host_id, devices_count 等)，失败返回 None
     """
-    from .system_monitor import collect_system_stats
 
-    mount_status = check_mounts(mount_points or [])
-    system_stats = collect_system_stats()
+    if system_stats is None:
+        from .system_monitor import collect_system_stats
+        system_stats = collect_system_stats()
+    if mount_status is None:
+        mount_status = check_mounts(mount_points or [])
 
     # 记录设备数据用于调试
     if devices:
@@ -59,12 +63,9 @@ def send_heartbeat(
         "extra": system_stats,
         "host": host_info,  # 包含主机信息用于自动创建
         "devices": devices or [],  # 设备列表
-        # ADR-0019 Phase 1
-        "capacity": {
-            "available_slots": available_slots,
-            "max_concurrent_jobs": max_concurrent_jobs,
-            "online_healthy_devices": online_healthy_devices,
-        },
+        # ADR-0019 Phase 3c: 结构化快照
+        "capacity": capacity or {},
+        "health": health or {},
         # ADR-0019 Phase 3a
         "agent_instance_id": agent_instance_id,
         "boot_id": boot_id,

@@ -46,6 +46,20 @@ def _ensure_host_status_up_to_date(host: Host) -> bool:
         return True
     return False
 
+def _host_to_out(h: Host) -> HostOut:
+    """从 ORM 对象构造 HostOut，从 host.extra 中提取 capacity/health。
+
+    不能仅靠 HostOut.model_validate(h) —— Pydantic 不会自动从 JSON 列
+    的嵌套 key 映射到顶层字段。此 helper 在 validate 后补充。
+    """
+    out = HostOut.model_validate(h) if hasattr(HostOut, "model_validate") else HostOut.from_orm(h)
+    extra = h.extra or {}
+    out.capacity = extra.get("capacity")
+    out.health = extra.get("health")
+    out.max_concurrent_jobs = h.max_concurrent_jobs
+    return out
+
+
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
 
@@ -78,7 +92,7 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
     )
     db.commit()
     db.refresh(host)
-    return host
+    return _host_to_out(host)
 
 
 @router.get("", response_model=Any)
@@ -98,10 +112,7 @@ def list_hosts(
             needs_commit = True
     if needs_commit:
         db.commit()
-    items = [
-        HostOut.model_validate(h) if hasattr(HostOut, "model_validate") else HostOut.from_orm(h)
-        for h in hosts
-    ]
+    items = [_host_to_out(h) for h in hosts]
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items
@@ -115,7 +126,7 @@ def get_host(host_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="host not found")
     if _ensure_host_status_up_to_date(host):
         db.commit()
-    return host
+    return _host_to_out(host)
 
 
 @router.put("/{host_id}", response_model=HostOut)
@@ -152,4 +163,4 @@ def update_host(
     )
     db.commit()
     db.refresh(host)
-    return host
+    return _host_to_out(host)
