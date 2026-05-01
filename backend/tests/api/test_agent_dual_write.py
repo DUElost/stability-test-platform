@@ -729,8 +729,12 @@ async def test_complete_job_idempotent_replay_wrong_token_returns_409():
 # ── C6: session_watchdog release_lease ──────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_session_watchdog_releases_lease_on_host_timeout():
-    """Host heartbeat timeout → release_lock + release_lease 同时触发。"""
+async def test_watchdog_host_timeout_keeps_lease_active():
+    """Phase 4c: host heartbeat timeout → UNKNOWN, lease stays ACTIVE.
+
+    Watchdog no longer calls release_lease — Reconciler is the sole handler
+    of lease expiration.
+    """
     from backend.tasks.session_watchdog import _check_host_heartbeat_timeouts
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -750,6 +754,7 @@ async def test_session_watchdog_releases_lease_on_host_timeout():
             await async_db.commit()
 
         assert hosts_off >= 1
+        assert jobs_unknown >= 1
 
         db = SessionLocal()
         try:
@@ -762,9 +767,12 @@ async def test_session_watchdog_releases_lease_on_host_timeout():
                 .first()
             )
             assert lease is not None
-            assert lease.status == LeaseStatus.RELEASED.value, (
-                f"Watchdog must release lease on host timeout; got {lease.status}"
+            assert lease.status == LeaseStatus.ACTIVE.value, (
+                f"Phase 4c: lease must stay ACTIVE after host timeout; got {lease.status}"
             )
+
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.UNKNOWN.value
         finally:
             db.close()
     finally:
@@ -772,14 +780,18 @@ async def test_session_watchdog_releases_lease_on_host_timeout():
 
 
 @pytest.mark.asyncio
-async def test_session_watchdog_releases_lease_on_lock_expiration():
-    """DeviceLease 过期 → watchdog release_lease（Phase 2c: 读 DeviceLease 而非 Device.lock_run_id）。"""
-    from backend.tasks.session_watchdog import _check_device_lock_expiration
+async def test_reconciler_releases_expired_lease_lock_expiration():
+    """Phase 4c: expired ACTIVE lease → Reconciler handles (watchdog function removed).
+
+    Reconciler is now the sole handler of lease expiration.
+    _check_device_lock_expiration has been deleted in Phase 4c.
+    """
+    from backend.scheduler.device_lease_reconciler import _reconcile_expired_leases
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     try:
-        # Phase 2c: expire the LEASE (not just device.lock_expires_at)
+        # Expire the LEASE
         db = SessionLocal()
         try:
             db.query(DeviceLease).filter(
@@ -792,10 +804,11 @@ async def test_session_watchdog_releases_lease_on_lock_expiration():
 
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            released = await _check_device_lock_expiration(async_db)
+            unknown, failed, terminal = await _reconcile_expired_leases(async_db)
             await async_db.commit()
 
-        assert released >= 1
+        # Phase 1: expired ACTIVE + RUNNING → UNKNOWN
+        assert unknown >= 1, f"Expected UNKNOWN transition; got unknown={unknown}"
 
         db = SessionLocal()
         try:
@@ -808,8 +821,8 @@ async def test_session_watchdog_releases_lease_on_lock_expiration():
                 .first()
             )
             assert lease is not None
-            assert lease.status == LeaseStatus.RELEASED.value, (
-                f"Watchdog must release lease on lock expiration; got {lease.status}"
+            assert lease.status == LeaseStatus.ACTIVE.value, (
+                f"Phase 1: lease stays ACTIVE during grace; got {lease.status}"
             )
         finally:
             db.close()
@@ -973,9 +986,13 @@ async def test_claim_jobs_claims_after_expired_lease():
 
 
 @pytest.mark.asyncio
-async def test_device_lock_expiration_reads_device_leases_not_device_table():
-    """DeviceLease 过期但 Device.lock_run_id=NULL 时 watchdog 仍释放 lease (Phase 2c)."""
-    from backend.tasks.session_watchdog import _check_device_lock_expiration
+async def test_reconciler_reads_device_leases_not_device_table():
+    """Phase 4c: expired ACTIVE lease → Reconciler Phase 1, even when lock_run_id=NULL.
+
+    _check_device_lock_expiration deleted in Phase 4c. Reconciler is the
+    sole handler — it reads DeviceLease table, not Device.lock_run_id.
+    """
+    from backend.scheduler.device_lease_reconciler import _reconcile_expired_leases
 
     seed = _seed_job(status=JobStatus.RUNNING.value)
     db = SessionLocal()
@@ -1007,11 +1024,12 @@ async def test_device_lock_expiration_reads_device_leases_not_device_table():
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            released = await _check_device_lock_expiration(async_db)
+            unknown, failed, terminal = await _reconcile_expired_leases(async_db)
             await async_db.commit()
 
-        assert released >= 1, (
-            "Watchdog must release lease even when Device.lock_run_id=NULL"
+        # Reconciler Phase 1: expired ACTIVE + RUNNING → UNKNOWN
+        assert unknown >= 1, (
+            "Reconciler must detect expired lease even when lock_run_id=NULL"
         )
 
         db = SessionLocal()
@@ -1026,8 +1044,8 @@ async def test_device_lock_expiration_reads_device_leases_not_device_table():
                 .first()
             )
             assert dl is not None
-            assert dl.status == LeaseStatus.RELEASED.value, (
-                f"Lease must be RELEASED; got {dl.status}"
+            assert dl.status == LeaseStatus.ACTIVE.value, (
+                f"Phase 1: lease stays ACTIVE during grace; got {dl.status}"
             )
         finally:
             db.close()

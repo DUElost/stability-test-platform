@@ -1,12 +1,13 @@
-"""Tests for session_watchdog checks."""
+"""Tests for session_watchdog checks — ADR-0019 Phase 4c updated."""
 
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
 
-from backend.core.database import AsyncSessionLocal, SessionLocal
-from backend.models.enums import HostStatus, JobStatus, WorkflowStatus
+from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
+from backend.models.device_lease import DeviceLease
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, TaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
@@ -126,44 +127,160 @@ async def test_host_timeout_marks_offline_and_jobs_unknown():
 
 
 @pytest.mark.asyncio
-async def test_host_timeout_releases_running_job_lock():
-    """Host timeout should not leave a terminal job holding the device lock."""
+async def test_watchdog_host_timeout_keeps_lease_active():
+    """Phase 4c: host timeout → UNKNOWN but lease stays ACTIVE.
+
+    Watchdog no longer calls release_lease — Reconciler is the sole handler
+    of lease expiration.
+    """
     old_heartbeat = datetime.now(timezone.utc) - timedelta(seconds=300)
-    future_lock_expiry = datetime.now(timezone.utc) + timedelta(seconds=600)
+    future_expiry = datetime.now(timezone.utc) + timedelta(seconds=600)
     seed = _seed_job_with_host(
         host_heartbeat=old_heartbeat,
         lock_run_id="auto",
-        lock_expires_at=future_lock_expiry,
+        lock_expires_at=future_expiry,
     )
 
-    await session_watchdog_once()
-
+    # Create an ACTIVE lease for the job
     db = SessionLocal()
     try:
+        lease = DeviceLease(
+            device_id=seed["device_id"],
+            job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{seed['device_id']}:1",
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=datetime.now(timezone.utc),
+            renewed_at=datetime.now(timezone.utc),
+            expires_at=future_expiry,
+        )
+        db.add(lease)
+        db.commit()
+    finally:
+        db.close()
+
+    await async_engine.dispose()
+    await session_watchdog_once()
+
+    # Job → UNKNOWN
+    job = _get_job(seed["job_id"])
+    assert job.status == JobStatus.UNKNOWN.value
+
+    # Lease must still be ACTIVE (not released by watchdog)
+    db = SessionLocal()
+    try:
+        dl = (
+            db.query(DeviceLease)
+            .filter(
+                DeviceLease.device_id == seed["device_id"],
+                DeviceLease.job_id == seed["job_id"],
+            )
+            .first()
+        )
+        assert dl is not None
+        assert dl.status == LeaseStatus.ACTIVE.value, (
+            f"Lease must stay ACTIVE after host timeout; got {dl.status}"
+        )
+
+        # Device lock_run_id must still be set (projection not cleared)
         device = db.get(Device, seed["device_id"])
-        assert device is not None
-        assert device.lock_run_id is None
-        assert device.lock_expires_at is None
-        assert device.status == "ONLINE"
+        assert device.lock_run_id == seed["job_id"]
     finally:
         db.close()
 
 
 @pytest.mark.asyncio
-async def test_expired_lock_released_and_job_unknown():
-    """Device with expired lock → lock released, RUNNING job → UNKNOWN."""
-    now = datetime.now(timezone.utc)
-    expired = now - timedelta(seconds=60)
-    seed = _seed_job_with_host(
-        host_heartbeat=now,  # host is healthy
-        lock_run_id="auto",
-        lock_expires_at=expired,
-    )
+async def test_watchdog_unknown_grace_keeps_lease_active():
 
+    await async_engine.dispose()
     await session_watchdog_once()
 
+    # Job → FAILED
     job = _get_job(seed["job_id"])
-    assert job.status == JobStatus.UNKNOWN.value
+    assert job.status == JobStatus.FAILED.value
+
+    # Lease must still be ACTIVE (not released by watchdog)
+    db = SessionLocal()
+    try:
+        dl = (
+            db.query(DeviceLease)
+            .filter(
+                DeviceLease.device_id == seed["device_id"],
+                DeviceLease.job_id == seed["job_id"],
+            )
+            .first()
+        )
+        assert dl is not None
+        assert dl.status == LeaseStatus.ACTIVE.value, (
+            f"Lease must stay ACTIVE after UNKNOWN grace; got {dl.status}"
+        )
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_watchdog_unknown_grace_keeps_lease_active():
+    """Phase 4c: UNKNOWN grace → FAILED but lease stays ACTIVE.
+
+    Watchdog _check_unknown_grace_period only changes job status.
+    Reconciler is responsible for releasing the lease.
+    """
+    now = datetime.now(timezone.utc)
+    old_ended = now - timedelta(seconds=600)  # past default 300s grace
+    seed = _seed_job_with_host(
+        host_heartbeat=now,
+        job_status=JobStatus.UNKNOWN.value,
+        job_ended_at=old_ended,
+    )
+
+    # Create an ACTIVE lease for the job
+    db = SessionLocal()
+    try:
+        lease = DeviceLease(
+            device_id=seed["device_id"],
+            job_id=seed["job_id"],
+            host_id=seed["host_id"],
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{seed['device_id']}:1",
+            lease_generation=1,
+            agent_instance_id=seed["host_id"],
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=now + timedelta(seconds=600),
+        )
+        db.add(lease)
+        db.commit()
+    finally:
+        db.close()
+
+    await async_engine.dispose()
+    await session_watchdog_once()
+
+    # Job → FAILED
+    job = _get_job(seed["job_id"])
+    assert job.status == JobStatus.FAILED.value
+
+    # Lease must still be ACTIVE (not released by watchdog)
+    db = SessionLocal()
+    try:
+        dl = (
+            db.query(DeviceLease)
+            .filter(
+                DeviceLease.device_id == seed["device_id"],
+                DeviceLease.job_id == seed["job_id"],
+            )
+            .first()
+        )
+        assert dl is not None
+        assert dl.status == LeaseStatus.ACTIVE.value, (
+            f"Lease must stay ACTIVE after UNKNOWN grace; got {dl.status}"
+        )
+    finally:
+        db.close()
 
 
 @pytest.mark.asyncio
@@ -177,6 +294,7 @@ async def test_unknown_grace_period_expires_to_failed():
         job_ended_at=old_ended,
     )
 
+    await async_engine.dispose()
     await session_watchdog_once()
 
     job = _get_job(seed["job_id"])

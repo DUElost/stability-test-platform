@@ -271,3 +271,56 @@ def test_extend_lock_skips_when_token_cleared_concurrently():
         r._extend_lock(1)
 
     mock_post.assert_not_called()
+
+
+# ── Phase 4c: 404 lease lost ──────────────────────────────────────────────────
+
+def test_404_triggers_lease_lost_cleanup():
+    """Phase 4c: 404 response → on_lease_lost called (job not found on backend)."""
+    lost_calls = []
+
+    def on_lost(jid: int, did: Optional[int]):
+        lost_calls.append((jid, did))
+
+    r = _make_renewer(on_lease_lost=on_lost)
+    r._job_ids.add(1)
+    r.set_fencing_token(1, "tok-1", device_id=10)
+
+    resp_404 = MagicMock()
+    resp_404.status_code = 404
+    resp_404.raise_for_status.side_effect = requests.HTTPError(response=resp_404)
+
+    with patch("requests.post", return_value=resp_404):
+        r._extend_lock(1)
+
+    assert len(lost_calls) == 1
+    assert lost_calls[0] == (1, 10)
+    # Internal state cleaned
+    assert 1 not in r._job_ids
+    assert 1 not in r._fencing_tokens
+    assert 1 not in r._device_ids
+
+
+def test_500_does_not_trigger_lease_lost():
+    """Phase 4c: 500/5xx → retry, no lease lost cleanup."""
+    lost_calls = []
+
+    def on_lost(jid: int, did: Optional[int]):
+        lost_calls.append((jid, did))
+
+    r = _make_renewer(on_lease_lost=on_lost)
+    r._job_ids.add(1)
+    r.set_fencing_token(1, "tok-1", device_id=10)
+
+    resp_500 = MagicMock()
+    resp_500.status_code = 500
+    resp_500.raise_for_status.side_effect = requests.HTTPError(response=resp_500)
+
+    with patch("requests.post", return_value=resp_500):
+        r._extend_lock(1)
+
+    # State preserved — 5xx is transient
+    assert len(lost_calls) == 0
+    assert 1 in r._job_ids
+    assert 1 in r._fencing_tokens
+    assert 1 in r._device_ids

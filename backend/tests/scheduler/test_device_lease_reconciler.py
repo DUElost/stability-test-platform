@@ -408,3 +408,60 @@ async def test_reconciler_orphan_lease_released():
             assert lease.status == LeaseStatus.RELEASED.value
     finally:
         _cleanup(host_id, device_id)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 4c: Reconciler finalizes recycler-originated UNKNOWN
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_reconciler_finalizes_recycler_unknown_after_grace():
+    """Phase 4c: Recycler RUNNING→UNKNOWN → Reconciler finalizes after grace.
+
+    Simulates: recycler sets RUNNING→UNKNOWN with ended_at past grace,
+    Reconciler finds it → release lease + UNKNOWN→FAILED.
+    """
+    suffix = uuid4().hex[:8]
+    host_id = f"rc-host-g-{suffix}"
+    device_id = int(suffix[:8], 16) % 10_000_000
+    job_id = device_id + 1
+
+    _seed(host_id, device_id, job_id, JobStatus.UNKNOWN.value)
+    # Set ended_at past grace (300s)
+    db = SessionLocal()
+    try:
+        job = db.get(JobInstance, job_id)
+        job.ended_at = datetime.now(timezone.utc) - timedelta(seconds=600)
+        db.commit()
+    finally:
+        db.close()
+    _add_expired_lease(device_id, job_id, host_id, status="ACTIVE")
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db:
+            unknown, failed, terminal = await _reconcile_expired_leases(db)
+            await db.commit()
+
+            # Phase 1 (expired→UNKNOWN): job already UNKNOWN, grace expired
+            # → Phase 2: release + FAILED
+            assert unknown == 0
+            assert failed == 1, (
+                f"Recycler-originated UNKNOWN should be finalized; "
+                f"got unknown={unknown} failed={failed} terminal={terminal}"
+            )
+            assert terminal == 0
+
+            job = await db.get(JobInstance, job_id)
+            assert job.status == JobStatus.FAILED.value
+
+            lease = (await db.execute(
+                select(DeviceLease).where(
+                    DeviceLease.device_id == device_id,
+                    DeviceLease.job_id == job_id,
+                )
+            )).scalars().first()
+            assert lease.status == LeaseStatus.RELEASED.value
+    finally:
+        _cleanup(host_id, device_id)
