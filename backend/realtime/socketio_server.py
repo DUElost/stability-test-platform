@@ -90,7 +90,7 @@ class AgentNamespace(socketio.AsyncNamespace):
         async with self.session(sid) as session:
             session["host_id"] = host_id
 
-        self.enter_room(sid, f"agent:{host_id}")
+        await self.enter_room(sid, f"agent:{host_id}")
         record_socketio_connection("/agent", True)
         logger.info("agent_sio_connected sid=%s host_id=%s", sid, host_id)
 
@@ -245,14 +245,14 @@ class DashboardNamespace(socketio.AsyncNamespace):
         """Client subscribes to specific rooms (job logs, workflow runs, etc.)."""
         room = data.get("room", "")
         if room:
-            self.enter_room(sid, room)
+            await self.enter_room(sid, room)
             logger.debug("dashboard_subscribe sid=%s room=%s", sid, room)
 
     async def on_unsubscribe(self, sid: str, data: dict):
         """Client unsubscribes from a room."""
         room = data.get("room", "")
         if room:
-            self.leave_room(sid, room)
+            await self.leave_room(sid, room)
             logger.debug("dashboard_unsubscribe sid=%s room=%s", sid, room)
 
 
