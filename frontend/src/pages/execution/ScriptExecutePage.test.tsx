@@ -43,7 +43,7 @@ vi.mock('@/utils/api', () => ({
       create: vi.fn(),
       update: vi.fn(),
     },
-    scriptBatches: { create: vi.fn().mockResolvedValue([{ id: 42, device_id: 7, device_serial: 'SERIAL001', runs: [] }]) },
+    scriptExecutions: { create: vi.fn().mockResolvedValue({ workflow_run_id: 42, job_ids: [1], device_count: 1, step_count: 1 }) },
     devices: {
       list: vi.fn().mockResolvedValue({
         data: {

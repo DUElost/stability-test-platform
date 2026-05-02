@@ -8,7 +8,6 @@ export { pipeline } from './pipeline';
 export { tools, toolCatalog, builtinCatalog, actionTemplates, scripts } from './tools';
 export { scriptSequences, scriptExecutions } from './scripts';
 export { resourcePools } from './resourcePools';
-export { scriptBatches } from './scriptBatches';
 export { results, stats } from './analytics';
 export { users, notifications, schedules, templates, audit } from './management';
 export { orchestration, execution } from './orchestration';
@@ -37,8 +36,6 @@ export type {
   WorkflowSummary, JobArtifactEntry,
   Tool, ToolCategory,
   ResourcePool, ResourcePoolLoad, ResourcePoolCreatePayload,
-  ScriptBatchItemIn, ScriptBatchCreatePayload, ScriptRunOut,
-  ScriptBatch, ScriptBatchListItem, ScriptBatchList,
 } from './types';
 
 import { auth } from './auth';
@@ -49,7 +46,6 @@ import { pipeline } from './pipeline';
 import { tools, toolCatalog, builtinCatalog, actionTemplates, scripts } from './tools';
 import { scriptSequences, scriptExecutions } from './scripts';
 import { resourcePools } from './resourcePools';
-import { scriptBatches } from './scriptBatches';
 import { results, stats } from './analytics';
 import { users, notifications, schedules, templates, audit } from './management';
 import { orchestration, execution } from './orchestration';
@@ -79,5 +75,4 @@ export const api = {
   scriptSequences,
   scriptExecutions,
   resourcePools,
-  scriptBatches,
 };

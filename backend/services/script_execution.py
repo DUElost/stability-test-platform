@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Iterable
 
 from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.models.enums import JobStatus
@@ -17,6 +18,8 @@ from backend.models.workflow import WorkflowDefinition, WorkflowRun
 
 SYSTEM_WORKFLOW_NAME = "__script_execution__"
 SYSTEM_TEMPLATE_NAME = "__script_sequence__"
+
+_ACTIVE_JOB_STATUSES = {JobStatus.PENDING.value, JobStatus.RUNNING.value, JobStatus.UNKNOWN.value}
 
 
 def validate_on_failure(value: str) -> str:
@@ -186,6 +189,22 @@ def create_script_execution(
     if missing_devices:
         raise HTTPException(status_code=400, detail=f"devices not found: {missing_devices}")
 
+    # Phase 5 guard: reject if any target device already has an active job
+    conflict = (
+        db.query(JobInstance.device_id)
+        .filter(
+            JobInstance.device_id.in_(device_ids),
+            JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+        )
+        .first()
+    )
+    if conflict is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Device {conflict.device_id} already has an active job (PENDING/RUNNING/UNKNOWN). "
+            "Wait for it to reach a terminal state or abort it first.",
+        )
+
     workflow, template = ensure_system_anchor(db)
     pipeline_def = synthesize_script_pipeline(items)
     now = datetime.utcnow()
@@ -222,7 +241,15 @@ def create_script_execution(
         db.flush()
         job_ids.append(job.id)
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Device already has an active job (concurrent conflict). "
+            "Wait for it to reach a terminal state or abort it first.",
+        )
     return {
         "workflow_run_id": run.id,
         "job_ids": job_ids,

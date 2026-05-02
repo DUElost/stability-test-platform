@@ -129,7 +129,7 @@ def test_run_task_wrapper_heartbeat_and_complete_include_token(job_runner_state)
 # ── Test 18: LeaseRenewer skip when no token ───────────────────────────
 
 def test_lease_renewer_skips_extend_when_no_token(lease_renewer):
-    """无 fencing_token（如 ScriptBatch ID）→ extend_lock 直接 skip，不发 HTTP。"""
+    """无 fencing_token 的 job → extend_lock 直接 skip，不发 HTTP。"""
     with patch("requests.post") as mock_post:
         lease_renewer._extend_lock(999)  # 999 has no token registered
 

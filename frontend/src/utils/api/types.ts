@@ -470,6 +470,10 @@ export interface ScriptExecutionListItem {
   ended_at?: string | null;
   sequence_id?: number | null;
   step_count: number;
+  device_count: number;
+  device_serials: string[];
+  script_names: string;
+  host_name?: string | null;
 }
 
 export interface ScriptExecutionList {
@@ -756,79 +760,6 @@ export interface JobArtifactEntry {
   size_bytes?: number | null;
   checksum?: string | null;
   created_at?: string | null;
-}
-
-// ─── ScriptBatch ────────────────────────────────────────────────────────────────
-
-export interface ScriptBatchItemIn {
-  script_name: string;
-  version?: string;
-  params?: Record<string, any>;
-  timeout_seconds?: number;
-}
-
-export interface ScriptBatchCreatePayload {
-  name?: string | null;
-  device_ids: number[];
-  items: ScriptBatchItemIn[];
-  sequence_id?: number | null;
-  on_failure?: 'stop' | 'continue';
-}
-
-export interface ScriptRunOut {
-  id: number;
-  batch_id: number;
-  item_index: number;
-  script_name: string;
-  script_version: string;
-  params_json: Record<string, any>;
-  status: string;
-  exit_code: number | null;
-  stdout: string | null;
-  stderr: string | null;
-  metrics_json: Record<string, any> | null;
-  started_at: string | null;
-  ended_at: string | null;
-}
-
-export interface ScriptBatch {
-  id: number;
-  name: string | null;
-  sequence_id: number | null;
-  device_id: number;
-  device_serial: string;
-  device_model: string | null;
-  host_id: string | null;
-  host_name: string | null;
-  status: string;
-  on_failure: string;
-  watcher_started_at: string | null;
-  watcher_stopped_at: string | null;
-  watcher_capability: string | null;
-  log_signal_count: number;
-  started_at: string | null;
-  ended_at: string | null;
-  created_at: string | null;
-  runs: ScriptRunOut[];
-}
-
-export interface ScriptBatchListItem {
-  id: number;
-  name: string | null;
-  device_id: number;
-  device_serial: string;
-  host_id: string | null;
-  status: string;
-  step_count: number;
-  script_names: string;
-  started_at: string | null;
-  ended_at: string | null;
-  created_at: string | null;
-}
-
-export interface ScriptBatchList {
-  items: ScriptBatchListItem[];
-  total: number;
 }
 
 // ─── ResourcePool ────────────────────────────────────────────────────────────────

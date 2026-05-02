@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Device, type ScriptEntry, type ScriptSequenceItem } from '@/utils/api';
-import type { ScriptBatchItemIn } from '@/utils/api/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -129,31 +128,17 @@ export default function ScriptExecutePage() {
       };
     });
 
-  const buildBatchItems = (): ScriptBatchItemIn[] =>
-    items.map((item) => {
-      const script = scriptByKey.get(`${item.script_name}:${item.version}`);
-      const params = toParamSchema(script?.param_schema) ? (item.params || {}) : parseParams(item.paramsText);
-      return {
-        script_name: item.script_name,
-        version: item.version,
-        params,
-        timeout_seconds: item.timeout_seconds,
-      };
-    });
-
   const executeMutation = useMutation({
     mutationFn: () =>
-      api.scriptBatches.create({
-        name: selectedTemplate?.name || null,
+      api.scriptExecutions.create({
         sequence_id: selectedTemplateId,
-        items: buildBatchItems(),
+        items: buildSequenceItems(),
         device_ids: Array.from(selectedDeviceIds),
         on_failure: 'stop',
       }),
     onSuccess: (result) => {
-      const firstId = result[0]?.id;
-      toast.success(`已下发 ${result.length} 个批次到 ${result.length} 台设备`);
-      if (firstId) navigate(`/history?batch=${firstId}`);
+      toast.success(`已创建脚本执行，${result.device_count} 台设备，${result.step_count} 个步骤`);
+      navigate(`/history?run=${result.workflow_run_id}`);
     },
     onError: () => toast.error('创建脚本执行失败，请检查参数 JSON 和设备选择'),
   });

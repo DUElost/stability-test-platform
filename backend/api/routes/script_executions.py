@@ -6,10 +6,11 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from backend.api.response import ApiResponse, ok
 from backend.core.database import get_db
+from backend.models.job import JobInstance
 from backend.models.workflow import WorkflowRun
 from backend.services.script_execution import (
     create_script_execution,
@@ -18,6 +19,8 @@ from backend.services.script_execution import (
 )
 
 router = APIRouter(prefix="/api/v1/script-executions", tags=["script-executions"])
+
+DEVICE_SERIAL_PREVIEW_LIMIT = 3
 
 
 class ScriptExecutionCreate(BaseModel):
@@ -55,24 +58,65 @@ def create_execution(payload: ScriptExecutionCreate, db: Session = Depends(get_d
 def list_executions(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     query = (
         db.query(WorkflowRun)
-        .filter(WorkflowRun.triggered_by == "script_execution")
+        .filter(
+            WorkflowRun.result_summary.isnot(None),
+            WorkflowRun.result_summary["mode"].astext == "script_execution",
+        )
         .order_by(WorkflowRun.started_at.desc(), WorkflowRun.id.desc())
     )
     total = query.count()
     rows = query.offset(skip).limit(limit).all()
+
+    run_ids = [row.id for row in rows]
+    jobs_map: dict[int, list[JobInstance]] = {}
+    if run_ids:
+        jobs = (
+            db.query(JobInstance)
+            .options(joinedload(JobInstance.device), joinedload(JobInstance.host))
+            .filter(JobInstance.workflow_run_id.in_(run_ids))
+            .order_by(JobInstance.id)
+            .all()
+        )
+        for job in jobs:
+            jobs_map.setdefault(job.workflow_run_id, []).append(job)
+
+    items = []
+    for row in rows:
+        row_jobs = jobs_map.get(row.id, [])
+        device_count = len(row_jobs)
+        device_serials = [
+            job.device.serial
+            for job in row_jobs[:DEVICE_SERIAL_PREVIEW_LIMIT]
+            if job.device is not None
+        ]
+        result_items = (row.result_summary or {}).get("items") or []
+        script_names = " → ".join(
+            item["script_name"] for item in result_items if item.get("script_name")
+        )
+        host_name = None
+        if row_jobs:
+            first_job = row_jobs[0]
+            if first_job.host:
+                host_name = first_job.host.name or first_job.host.hostname
+
+        items.append(
+            {
+                "workflow_run_id": row.id,
+                "status": row.status,
+                "started_at": row.started_at,
+                "ended_at": row.ended_at,
+                "sequence_id": (row.result_summary or {}).get("sequence_id"),
+                "step_count": len(result_items),
+                "device_count": device_count,
+                "device_serials": device_serials,
+                "script_names": script_names,
+                "host_name": host_name,
+            }
+        )
+
     return ok(
         {
-            "items": [
-                {
-                    "workflow_run_id": row.id,
-                    "status": row.status,
-                    "started_at": row.started_at,
-                    "ended_at": row.ended_at,
-                    "sequence_id": (row.result_summary or {}).get("sequence_id"),
-                    "step_count": len((row.result_summary or {}).get("items") or []),
-                }
-                for row in rows
-            ],
+            "items": items,
             "total": total,
             "skip": skip,
             "limit": limit,

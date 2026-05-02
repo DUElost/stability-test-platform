@@ -144,9 +144,9 @@ def test_network_failure_preserves_state():
 # ── Test 6: renewal loop only iterates fencing_tokens ──────────────────────
 
 def test_renewal_loop_only_iterates_fencing_tokens():
-    """ScriptBatch batch_id in _job_ids but no token → not iterated in loop."""
+    """job_id in _job_ids but no token → not iterated in loop."""
     r = _make_renewer()
-    r._job_ids.add(999)  # ScriptBatch batch_id, no token
+    r._job_ids.add(999)  # job_id with no token registered
     r._job_ids.add(1)
     r.set_fencing_token(1, "tok-1")
 
