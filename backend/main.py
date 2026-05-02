@@ -42,9 +42,7 @@ from backend.api.routes.orchestration import router as orchestration_router
 from backend.api.routes.tool_catalog import router as tool_catalog_router
 from backend.api.routes.action_templates import router as action_templates_router
 from backend.api.routes.agent_api import router as agent_api_router
-from backend.api.routes.agent_script_api import router as agent_script_api_router
 from backend.api.routes.resource_pools import router as resource_pools_router
-from backend.api.routes.script_batches import router as script_batches_router
 from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
@@ -168,9 +166,7 @@ _fastapi_app.include_router(tool_catalog_router)
 _fastapi_app.include_router(action_templates_router)
 _fastapi_app.include_router(orchestration_router)
 _fastapi_app.include_router(agent_api_router)
-_fastapi_app.include_router(agent_script_api_router)
 _fastapi_app.include_router(resource_pools_router)
-_fastapi_app.include_router(script_batches_router)
 
 
 @_fastapi_app.get("/")
