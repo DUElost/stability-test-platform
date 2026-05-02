@@ -206,6 +206,16 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
 
         now = datetime.now(timezone.utc)
 
+        # Phase 6c: pre-compute busy device IDs from device_leases (replaces lock_run_id)
+        existing_device_ids = [d.id for d in existing_devices.values() if d.id]
+        busy_device_ids: set[int] = set()
+        if existing_device_ids:
+            active_leases = db.query(DeviceLease.device_id).filter(
+                DeviceLease.device_id.in_(existing_device_ids),
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+            ).all()
+            busy_device_ids = {row.device_id for row in active_leases}
+
         for dev_data in devices_data:
             serial = dev_data.get("serial")
             if not serial:
@@ -262,16 +272,16 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
             # Update last_seen
             device.last_seen = now
 
-            # Business status: based on ADB connection and lock
+            # Phase 6c: Business status — based on ADB connection and active lease
             if not device.adb_connected:
                 device.status = "OFFLINE"
                 logger.info(f"device_status_offline: serial={serial}, reason=adb_connected_false")
-            elif device.lock_run_id:
+            elif device.id and device.id in busy_device_ids:
                 device.status = "BUSY"
-                logger.info(f"device_status_busy: serial={serial}, lock_run_id={device.lock_run_id}")
+                logger.info(f"device_status_busy: serial={serial}, device_id={device.id}")
             else:
                 device.status = "ONLINE"
-                logger.info(f"device_status_online: serial={serial}, adb_connected=true, no_lock")
+                logger.info(f"device_status_online: serial={serial}, adb_connected=true, no_active_lease")
 
             ws_device_updates.append(
                 {

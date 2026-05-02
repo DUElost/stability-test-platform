@@ -223,7 +223,10 @@ class TestHeartbeat:
         assert device.status == DeviceStatus.OFFLINE.value
 
     def test_heartbeat_device_busy_when_locked(self, client, sample_host, db_session):
-        """Test device status becomes BUSY when locked"""
+        """Phase 6c: device status becomes BUSY when it has an active DeviceLease."""
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import LeaseStatus, LeaseType
+
         # First create a device via heartbeat
         client.post(
             "/api/v1/heartbeat",
@@ -241,13 +244,27 @@ class TestHeartbeat:
             },
         )
 
-        # Lock the device
         device = db_session.query(Device).filter(Device.serial == "BUSY_DEVICE").first()
-        device.lock_run_id = 123456
-        device.lock_expires_at = datetime.utcnow() + timedelta(minutes=10)
+
+        # Phase 6c: create an ACTIVE DeviceLease instead of setting lock_run_id
+        now = datetime.utcnow()
+        lease = DeviceLease(
+            device_id=device.id,
+            job_id=None,
+            host_id=sample_host.id,
+            lease_type=LeaseType.JOB.value,
+            status=LeaseStatus.ACTIVE.value,
+            fencing_token=f"{device.id}:1",
+            lease_generation=1,
+            agent_instance_id=sample_host.id,
+            acquired_at=now,
+            renewed_at=now,
+            expires_at=now + timedelta(minutes=10),
+        )
+        db_session.add(lease)
         db_session.commit()
 
-        # Send heartbeat again
+        # Send heartbeat again — should detect active lease and set BUSY
         client.post(
             "/api/v1/heartbeat",
             json={

@@ -104,9 +104,6 @@ export interface DeviceDTO {
   mem_used?: number | null;
   disk_total?: number | null;
   disk_used?: number | null;
-  // 锁信息
-  lock_run_id?: number | null;
-  lock_expires_at?: string | null;
 }
 
 /** 组件使用的 Device 视图模型 */
@@ -116,8 +113,6 @@ export interface DeviceViewModel extends Device {
   hostIp?: string;
   /** 是否已连接 */
   isConnected: boolean;
-  /** 是否被锁定 */
-  isLocked: boolean;
   /** 格式化后的状态显示 */
   displayStatus: 'idle' | 'offline' | 'testing' | 'unknown';
 }
@@ -167,7 +162,6 @@ export function mapDeviceToViewModel(
     hostName: host?.name,
     hostIp: host?.ip,
     isConnected: dto.adb_connected === true,
-    isLocked: dto.lock_run_id != null,
     displayStatus: statusMap[dto.status] ?? 'unknown',
   };
 }

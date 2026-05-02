@@ -212,7 +212,7 @@ def sample_offline_device(db_session, sample_host):
 
 @pytest.fixture
 def sample_busy_device(db_session, sample_host):
-    """Create a sample busy device"""
+    """Create a sample busy device (static fixture — does not create DeviceLease)."""
     device = Device(
         serial="test-device-003",
         host_id=sample_host.id,
@@ -220,8 +220,6 @@ def sample_busy_device(db_session, sample_host):
         last_seen=datetime.utcnow(),
         adb_connected=True,
         adb_state="device",
-        lock_run_id=1,
-        lock_expires_at=datetime.utcnow() + timedelta(minutes=10),
     )
     db_session.add(device)
     db_session.commit()
