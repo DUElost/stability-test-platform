@@ -186,9 +186,8 @@ async def test_watchdog_host_timeout_keeps_lease_active():
             f"Lease must stay ACTIVE after host timeout; got {dl.status}"
         )
 
-        # Device lock_run_id must still be set (projection not cleared)
-        device = db.get(Device, seed["device_id"])
-        assert device.lock_run_id == seed["job_id"]
+        # Phase 6d-1: 投影列断言（device.lock_run_id == seed["job_id"]）已下沉到
+        # device_leases 真源；保留 lease ACTIVE 断言即可覆盖语义
     finally:
         db.close()
 

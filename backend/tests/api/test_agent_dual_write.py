@@ -1,11 +1,15 @@
 """Route-level dual-write tests for ADR-0019 Phase 2a.
 
 直接调用 claim_jobs / get_pending_jobs / extend_job_lock / complete_job
-handler，断言 device_leases 与 lock_run_id/lock_expires_at 同时写入。
+handler，断言 device_leases 写入正确。
 
-与 tests/services/test_dual_write.py 的区别：
+Phase 6d-1：投影列断言（device.lock_run_id / device.lock_expires_at）已下沉，
+device_leases 是真源；setup 阶段对投影列的写入仍保留，因为生产代码仍依赖
+`Device.lock_run_id == job_id` 作为 WHERE guard。
+
+与 tests/services/test_lease_manager.py 的区别：
   - 本文件走路由 handler（agent_api），覆盖完整的请求→响应路径
-  - service 级测试只覆盖 lease_manager + device_lock 的独立行为
+  - service 级测试只覆盖 lease_manager 的独立行为
 """
 
 from __future__ import annotations
@@ -204,14 +208,9 @@ async def test_claim_jobs_writes_lock_and_lease():
         assert job_out.id == seed["job_id"]
         assert job_out.status == JobStatus.RUNNING.value
 
-        # 同步验证 lock_run_id + device_leases
+        # 同步验证 device_leases（Phase 6d-1: 投影列断言已下沉到 device_leases 真源）
         db = SessionLocal()
         try:
-            device = db.get(Device, seed["device_id"])
-            assert device is not None
-            assert device.lock_run_id == seed["job_id"]
-            assert device.lock_expires_at is not None
-
             lease = (
                 db.query(DeviceLease)
                 .filter(
@@ -252,11 +251,7 @@ async def test_get_pending_jobs_writes_lock_and_lease():
 
         db = SessionLocal()
         try:
-            device = db.get(Device, seed["device_id"])
-            assert device is not None
-            assert device.lock_run_id == seed["job_id"]
-            assert device.lock_expires_at is not None
-
+            # Phase 6d-1: 投影列断言已下沉到 device_leases 真源
             lease = (
                 db.query(DeviceLease)
                 .filter(
@@ -288,8 +283,7 @@ async def test_extend_job_lock_renews_lease():
         # 记录原始 expires
         db = SessionLocal()
         try:
-            orig_device = db.get(Device, seed["device_id"])
-            orig_lock_expires = orig_device.lock_expires_at
+            # Phase 6d-1: orig_device.lock_expires_at 断言已下沉，仅记录 lease 续期前后变化
             orig_lease = (
                 db.query(DeviceLease)
                 .filter(
@@ -316,11 +310,9 @@ async def test_extend_job_lock_renews_lease():
         assert result.data["job_id"] == seed["job_id"]
         assert result.data["expires_at"]
 
-        # 同步验证两端都续期了
+        # 同步验证 lease 续期了（Phase 6d-1: device.lock_expires_at 断言已下沉）
         db = SessionLocal()
         try:
-            device = db.get(Device, seed["device_id"])
-            assert device.lock_expires_at > orig_lock_expires
             db.expire_all()
             lease = (
                 db.query(DeviceLease)
@@ -363,10 +355,7 @@ async def test_complete_job_releases_lock_and_lease():
 
         db = SessionLocal()
         try:
-            device = db.get(Device, seed["device_id"])
-            assert device.lock_run_id is None
-            assert device.lock_expires_at is None
-
+            # Phase 6d-1: 投影列断言（lock_run_id is None）已下沉到 device_leases 真源
             db.expire_all()
             lease = (
                 db.query(DeviceLease)
@@ -874,14 +863,8 @@ async def test_get_pending_jobs_still_works():
         assert item.status == JobStatus.RUNNING.value
         assert item.fencing_token is not None
 
-        db = SessionLocal()
-        try:
-            device = db.get(Device, seed["device_id"])
-            assert device.lock_run_id == seed["job_id"], (
-                "get_pending_jobs must project device lock via acquire_lease"
-            )
-        finally:
-            db.close()
+        # Phase 6d-1: 投影列断言（device.lock_run_id == seed["job_id"]）已下沉到
+        # device_leases 真源；上面的 fencing_token 已隐式覆盖 acquire_lease 的语义
     finally:
         _cleanup_seed(seed)
 

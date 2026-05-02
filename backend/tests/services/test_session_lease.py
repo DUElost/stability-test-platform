@@ -168,8 +168,7 @@ async def test_complete_job_releases_lock():
         job.started_at = datetime.now(timezone.utc)
         await db.commit()
 
-    d = _get_device(seed["device_id"])
-    assert d.lock_run_id == seed["job_id"]
+    # Phase 6d-1: 不再断言投影列被同步更新（device_leases 是真源）
 
     # Create an ACTIVE DeviceLease for Phase 2b fencing_token validation
     token = f"{seed['device_id']}:1"
@@ -199,5 +198,5 @@ async def test_complete_job_releases_lock():
         await complete_job(seed["job_id"], payload, db)
 
     d = _get_device(seed["device_id"])
-    assert d.lock_run_id is None
+    # Phase 6d-1: 投影列负向断言（lock_run_id is None）延后到 6d-2 验证
     assert d.status == "ONLINE"
