@@ -35,7 +35,7 @@ from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.services.aggregator import WorkflowAggregator
-from backend.services.lease_manager import LeaseProjectionError, release_lease
+from backend.services.lease_manager import release_lease
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -78,88 +78,86 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
         job_id = lease.job_id
         device_id = lease.device_id
 
-        if job_id is None:
-            # Orphan lease (no associated job) — release it directly
-            lease.status = LeaseStatus.RELEASED.value
-            lease.released_at = now
-            logger.warning(
-                "reconciler_orphan_lease_released device=%s job=None", device_id,
-            )
-            terminal_released_count += 1
-            continue
-
         try:
-            job = await db.get(JobInstance, job_id)
-        except Exception:
-            logger.warning("reconciler_job_load_failed job=%s", job_id, exc_info=True)
-            continue
-
-        if job is None:
-            # Orphan lease (job deleted, but FK should prevent this) — release it
-            try:
-                await release_lease(db, device_id, job_id, LeaseType.JOB)
-            except LeaseProjectionError:
-                await _fallback_release_lease(db, lease)
-            logger.warning(
-                "reconciler_orphan_lease_released device=%s job=%s", device_id, job_id,
-            )
-            terminal_released_count += 1
-            continue
-
-        if job.status in _FINAL_STATUSES:
-            # D5: terminal job with lingering ACTIVE lease
-            try:
-                await release_lease(db, device_id, job_id, LeaseType.JOB)
-            except LeaseProjectionError:
-                await _fallback_release_lease(db, lease)
-            logger.warning(
-                "reconciler_terminal_job_active_lease device=%s job=%s status=%s",
-                device_id, job_id, job.status,
-            )
-            terminal_released_count += 1
-            continue
-
-        if job.status == JobStatus.RUNNING.value:
-            # Phase 1: RUNNING → UNKNOWN, keep lease ACTIVE (blocking)
-            try:
-                JobStateMachine.transition(job, JobStatus.UNKNOWN, "lease_expired")
-                job.ended_at = now  # REQUIRED: grace period & recovery depend on this
-                await db.flush()
-                logger.warning(
-                    "reconciler_lease_expired_running_to_unknown device=%s job=%s",
-                    device_id, job_id,
-                )
-                unknown_count += 1
-            except InvalidTransitionError:
-                logger.debug(
-                    "reconciler_skip_invalid_transition device=%s job=%s status=%s",
-                    device_id, job_id, job.status,
-                )
-            continue
-
-        if job.status == JobStatus.UNKNOWN.value:
-            # Phase 2: UNKNOWN + grace expired → release + FAILED
-            grace_deadline = now - timedelta(seconds=_UNKNOWN_GRACE_SECONDS)
-            if job.ended_at and job.ended_at < grace_deadline:
-                try:
-                    await release_lease(db, device_id, job_id, LeaseType.JOB)
-                except LeaseProjectionError:
-                    await _fallback_release_lease(db, lease)
-
-                try:
-                    JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
-                    await WorkflowAggregator.on_job_terminal(job, db)
+            async with db.begin_nested():
+                if job_id is None:
+                    # Orphan lease (no associated job) — release it directly
+                    lease.status = LeaseStatus.RELEASED.value
+                    lease.released_at = now
                     logger.warning(
-                        "reconciler_unknown_grace_released device=%s job=%s ended_at=%s",
-                        device_id, job_id, job.ended_at,
+                        "reconciler_orphan_lease_released device=%s job=None", device_id,
                     )
-                    failed_count += 1
-                except InvalidTransitionError:
-                    pass
-            # else: still within grace — do nothing
-            continue
+                    terminal_released_count += 1
+                    continue
 
-        # Other statuses (PENDING, PENDING_TOOL, etc.) — skip
+                try:
+                    job = await db.get(JobInstance, job_id)
+                except Exception:
+                    logger.warning("reconciler_job_load_failed job=%s", job_id, exc_info=True)
+                    continue
+
+                if job is None:
+                    # Orphan lease (job deleted, but FK should prevent this) — release it
+                    await release_lease(db, device_id, job_id, LeaseType.JOB)
+                    logger.warning(
+                        "reconciler_orphan_lease_released device=%s job=%s", device_id, job_id,
+                    )
+                    terminal_released_count += 1
+                    continue
+
+                if job.status in _FINAL_STATUSES:
+                    # D5: terminal job with lingering ACTIVE lease
+                    await release_lease(db, device_id, job_id, LeaseType.JOB)
+                    logger.warning(
+                        "reconciler_terminal_job_active_lease device=%s job=%s status=%s",
+                        device_id, job_id, job.status,
+                    )
+                    terminal_released_count += 1
+                    continue
+
+                if job.status == JobStatus.RUNNING.value:
+                    # Phase 1: RUNNING → UNKNOWN, keep lease ACTIVE (blocking)
+                    try:
+                        JobStateMachine.transition(job, JobStatus.UNKNOWN, "lease_expired")
+                        job.ended_at = now  # REQUIRED: grace period & recovery depend on this
+                        await db.flush()
+                        logger.warning(
+                            "reconciler_lease_expired_running_to_unknown device=%s job=%s",
+                            device_id, job_id,
+                        )
+                        unknown_count += 1
+                    except InvalidTransitionError:
+                        logger.debug(
+                            "reconciler_skip_invalid_transition device=%s job=%s status=%s",
+                            device_id, job_id, job.status,
+                        )
+                    continue
+
+                if job.status == JobStatus.UNKNOWN.value:
+                    # Phase 2: UNKNOWN + grace expired → release + FAILED
+                    grace_deadline = now - timedelta(seconds=_UNKNOWN_GRACE_SECONDS)
+                    if job.ended_at and job.ended_at < grace_deadline:
+                        await release_lease(db, device_id, job_id, LeaseType.JOB)
+
+                        try:
+                            JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
+                            await WorkflowAggregator.on_job_terminal(job, db)
+                            logger.warning(
+                                "reconciler_unknown_grace_released device=%s job=%s ended_at=%s",
+                                device_id, job_id, job.ended_at,
+                            )
+                            failed_count += 1
+                        except InvalidTransitionError:
+                            pass
+                    # else: still within grace — do nothing
+                    continue
+
+                # Other statuses (PENDING, PENDING_TOOL, etc.) — skip
+        except Exception:
+            logger.exception(
+                "reconciler_expired_lease_failed lease=%s device=%s job=%s",
+                lease.id, device_id, job_id,
+            )
 
     return unknown_count, failed_count, terminal_released_count
 
@@ -186,31 +184,35 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
     failed = 0
     for job in stale:
         try:
-            # If there's still an ACTIVE lease, release it
-            active_lease = (await db.execute(
-                select(DeviceLease).where(
-                    DeviceLease.device_id == job.device_id,
-                    DeviceLease.job_id == job.id,
-                    DeviceLease.lease_type == LeaseType.JOB.value,
-                    DeviceLease.status == LeaseStatus.ACTIVE.value,
-                )
-            )).scalars().first()
+            async with db.begin_nested():
+                # If there's still an ACTIVE lease, release it
+                active_lease = (await db.execute(
+                    select(DeviceLease).where(
+                        DeviceLease.device_id == job.device_id,
+                        DeviceLease.job_id == job.id,
+                        DeviceLease.lease_type == LeaseType.JOB.value,
+                        DeviceLease.status == LeaseStatus.ACTIVE.value,
+                    )
+                )).scalars().first()
 
-            if active_lease is not None:
-                try:
+                if active_lease is not None:
                     await release_lease(db, job.device_id, job.id, LeaseType.JOB)
-                except LeaseProjectionError:
-                    await _fallback_release_lease(db, active_lease)
 
-            JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
-            await WorkflowAggregator.on_job_terminal(job, db)
-            failed += 1
-            logger.warning(
-                "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s",
-                job.device_id, job.id, job.ended_at,
+                try:
+                    JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
+                    await WorkflowAggregator.on_job_terminal(job, db)
+                    failed += 1
+                    logger.warning(
+                        "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s",
+                        job.device_id, job.id, job.ended_at,
+                    )
+                except InvalidTransitionError:
+                    pass
+        except Exception:
+            logger.exception(
+                "reconciler_stale_unknown_failed device=%s job=%s",
+                job.device_id, job.id,
             )
-        except InvalidTransitionError:
-            pass
 
     return failed
 
@@ -238,15 +240,19 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
     released = 0
     for lease, _job_status in rows:
         try:
-            await release_lease(db, lease.device_id, lease.job_id, LeaseType.JOB)
-        except LeaseProjectionError:
-            await _fallback_release_lease(db, lease)
+            async with db.begin_nested():
+                await release_lease(db, lease.device_id, lease.job_id, LeaseType.JOB)
 
-        logger.warning(
-            "reconciler_terminal_job_active_lease_released device=%s job=%s status=%s",
-            lease.device_id, lease.job_id, _job_status,
-        )
-        released += 1
+                logger.warning(
+                    "reconciler_terminal_job_active_lease_released device=%s job=%s status=%s",
+                    lease.device_id, lease.job_id, _job_status,
+                )
+                released += 1
+        except Exception:
+            logger.exception(
+                "reconciler_terminal_job_active_lease_failed lease=%s device=%s job=%s",
+                lease.id, lease.device_id, lease.job_id,
+            )
 
     return released
 
@@ -255,17 +261,8 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def _fallback_release_lease(db, lease: DeviceLease) -> None:
-    """Fallback: release a lease via ORM attribute mutation.
-
-    Used when release_lease() raises LeaseProjectionError (device projection
-    failed).  Avoids asyncpg MissingGreenlet issues by mutating the ORM object
-    directly instead of issuing a Core UPDATE after savepoint rollback.
-    """
-    dl = await db.get(DeviceLease, lease.id)
-    if dl is not None and dl.status == LeaseStatus.ACTIVE.value:
-        dl.status = LeaseStatus.RELEASED.value
-        dl.released_at = datetime.now(timezone.utc)
+# Phase 6d: _fallback_release_lease removed — release_lease is now a single
+# UPDATE without projection writes, so no fallback path is needed.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

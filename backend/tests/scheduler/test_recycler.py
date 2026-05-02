@@ -134,7 +134,7 @@ def test_recycler_keeps_running_job_with_recent_liveness(engine, monkeypatch):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Phase 2c recycler: LeaseProjectionError self-recovery
+# Phase 4c: PENDING timeout
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -251,67 +251,6 @@ def test_pending_timeout_fails_with_lease_release_attempt(engine, monkeypatch):
             assert dl is not None
             assert dl.status == LeaseStatus.RELEASED.value, (
                 f"PENDING timeout must release lease; got {dl.status}"
-            )
-        finally:
-            db.close()
-    finally:
-        _cleanup_seed(seed)
-
-
-# ── Phase 2c (updated for Phase 4c): projection failure with PENDING ──────────
-
-def test_recycler_mark_timeout_releases_lease_despite_projection_failure(engine, monkeypatch):
-    """_mark_pending_timeout 在投影失败时走 fallback 释放 lease (Phase 4c updated)."""
-    now = datetime.now(timezone.utc)
-    old_created = now - timedelta(seconds=recycler.DISPATCHED_TIMEOUT_SECONDS + 60)
-    seed = _seed_pending_job(created_at=old_created)
-
-    db = SessionLocal()
-    try:
-        lease = DeviceLease(
-            device_id=seed["device_id"], job_id=seed["job_id"],
-            host_id=seed["host_id"], lease_type=LeaseType.JOB.value,
-            status=LeaseStatus.ACTIVE.value,
-            fencing_token=f"{seed['device_id']}:1", lease_generation=1,
-            agent_instance_id=seed["host_id"],
-            acquired_at=old_created, renewed_at=old_created,
-            expires_at=old_created + timedelta(seconds=600),
-        )
-        db.add(lease)
-        # Tamper device.lock_run_id to trigger projection failure
-        dev = db.query(Device).filter(Device.id == seed["device_id"]).first()
-        dev.lock_run_id = 99999  # wrong holder
-        db.commit()
-    finally:
-        db.close()
-
-    monkeypatch.setattr(recycler, "_fill_deferred_post_completions", lambda db, current: 0)
-    monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda db, current: None)
-    monkeypatch.setattr(recycler, "schedule_emit", lambda *args, **kwargs: None)
-    try:
-        recycler.recycle_once()
-
-        db = SessionLocal()
-        try:
-            job = db.get(JobInstance, seed["job_id"])
-            assert job is not None
-            assert job.status == JobStatus.FAILED.value, (
-                f"PENDING timeout must transition to FAILED; got {job.status}"
-            )
-
-            # Lease must be RELEASED (fallback path)
-            db.expire_all()
-            dl = (
-                db.query(DeviceLease)
-                .filter(
-                    DeviceLease.device_id == seed["device_id"],
-                    DeviceLease.job_id == seed["job_id"],
-                )
-                .first()
-            )
-            assert dl is not None
-            assert dl.status == LeaseStatus.RELEASED.value, (
-                f"PENDING fallback must release lease; got {dl.status}"
             )
         finally:
             db.close()

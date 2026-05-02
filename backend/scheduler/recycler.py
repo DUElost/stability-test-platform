@@ -33,7 +33,7 @@ from backend.core.metrics import (
 )
 from backend.models.enums import JobStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
-from backend.services.lease_manager import LeaseProjectionError, release_lease_sync
+from backend.services.lease_manager import release_lease_sync
 from backend.services.state_machine import JobStateMachine, InvalidTransitionError
 
 logger = logging.getLogger(__name__)
@@ -88,30 +88,9 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
         return
 
     job.ended_at = now
-    try:
-        release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
-    except LeaseProjectionError:
-        logger.warning(
-            "recycler_projection_failed: device=%d job=%d — "
-            "device table out of sync, continuing without projection",
-            job.device_id, job.id,
-        )
-        from sqlalchemy import update as _update
-        from backend.models.device_lease import DeviceLease
-        from backend.models.enums import LeaseStatus
-        db.execute(
-            _update(DeviceLease)
-            .where(
-                DeviceLease.device_id == job.device_id,
-                DeviceLease.job_id == job.id,
-                DeviceLease.lease_type == LeaseType.JOB.value,
-                DeviceLease.status == LeaseStatus.ACTIVE.value,
-            )
-            .values(
-                status=LeaseStatus.RELEASED.value,
-                released_at=now,
-            )
-        )
+    # Phase 6d: release_lease_sync is now a single UPDATE — no projection,
+    # no LeaseProjectionError fallback needed.
+    release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
 
     try:
         from backend.services.aggregator_sync import workflow_aggregator_sync
@@ -278,9 +257,16 @@ def recycle_once() -> None:
         )
 
         for job in expired_pending:
-            _mark_pending_timeout(
-                db, job, now, "pending_timeout: agent never claimed job",
-            )
+            try:
+                with db.begin_nested():
+                    _mark_pending_timeout(
+                        db, job, now, "pending_timeout: agent never claimed job",
+                    )
+            except Exception:
+                logger.exception(
+                    "recycler_pending_failed job=%d device=%d",
+                    job.id, job.device_id,
+                )
 
         # 2) RUNNING timeout → UNKNOWN (Phase 4c). Lease stays ACTIVE.
         expired_running = (
@@ -293,9 +279,16 @@ def recycle_once() -> None:
         )
 
         for job in expired_running:
-            _mark_running_timeout(
-                db, job, now, "running_timeout: no completion within window",
-            )
+            try:
+                with db.begin_nested():
+                    _mark_running_timeout(
+                        db, job, now, "running_timeout: no completion within window",
+                    )
+            except Exception:
+                logger.exception(
+                    "recycler_running_failed job=%d device=%d",
+                    job.id, job.device_id,
+                )
 
         if expired_pending or expired_running:
             db.commit()

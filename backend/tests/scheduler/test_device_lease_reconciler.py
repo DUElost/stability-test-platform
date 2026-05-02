@@ -96,12 +96,9 @@ def _add_expired_lease(device_id: int, job_id: int | None, host_id: str,
         db.add(lease)
         db.flush()
         lid = lease.id
-        # Project onto device
-        dev = db.get(Device, device_id)
-        if dev:
-            dev.status = "BUSY"
-            dev.lock_run_id = job_id
-            dev.lock_expires_at = past
+        # Phase 6d: device_leases is the sole source of truth.  No projection
+        # writes to device.lock_run_id / lock_expires_at — those columns are
+        # decommissioned.
         db.commit()
         return lid
     finally:

@@ -3,9 +3,9 @@
 直接调用 claim_jobs / get_pending_jobs / extend_job_lock / complete_job
 handler，断言 device_leases 写入正确。
 
-Phase 6d-1：投影列断言（device.lock_run_id / device.lock_expires_at）已下沉，
-device_leases 是真源；setup 阶段对投影列的写入仍保留，因为生产代码仍依赖
-`Device.lock_run_id == job_id` 作为 WHERE guard。
+Phase 6d-2：device_leases 是真源；生产代码已停止写投影列
+（device.lock_run_id / device.lock_expires_at），测试 setup 不再写
+投影列，仅保留对 device_leases 的断言 + 投影列 None 的负向断言。
 
 与 tests/services/test_lease_manager.py 的区别：
   - 本文件走路由 handler（agent_api），覆盖完整的请求→响应路径
@@ -153,7 +153,11 @@ def _cleanup_seed(seed: dict) -> None:
 
 
 def _setup_lock_and_lease(seed: dict) -> None:
-    """Pre-populate device lock + ACTIVE lease for extend/complete tests."""
+    """Pre-populate ACTIVE lease for extend/complete tests.
+
+    Phase 6d: device_leases is the sole source of truth — no projection
+    writes to device.lock_run_id / lock_expires_at.
+    """
     from datetime import timedelta
 
     db = SessionLocal()
@@ -161,12 +165,6 @@ def _setup_lock_and_lease(seed: dict) -> None:
         now = datetime.now(timezone.utc)
         expires = now + timedelta(seconds=600)
         fencing_token = f"{seed['device_id']}:1"
-
-        device = db.get(Device, seed["device_id"])
-        if device:
-            device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = expires
 
         lease = DeviceLease(
             device_id=seed["device_id"],
@@ -193,7 +191,7 @@ def _setup_lock_and_lease(seed: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_claim_jobs_writes_lock_and_lease():
-    """claim_jobs 成功后 device.lock_run_id + device_leases 同时写入。"""
+    """claim_jobs 成功后只写 device_leases（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
         await async_engine.dispose()
@@ -208,7 +206,7 @@ async def test_claim_jobs_writes_lock_and_lease():
         assert job_out.id == seed["job_id"]
         assert job_out.status == JobStatus.RUNNING.value
 
-        # 同步验证 device_leases（Phase 6d-1: 投影列断言已下沉到 device_leases 真源）
+        # Phase 6d: device_leases is the sole source of truth.
         db = SessionLocal()
         try:
             lease = (
@@ -223,6 +221,11 @@ async def test_claim_jobs_writes_lock_and_lease():
             )
             assert lease is not None, "claim_jobs must create an ACTIVE device_lease"
             assert lease.fencing_token == f"{seed['device_id']}:{lease.lease_generation}"
+
+            # Phase 6d-2: negative assertion — projection columns are NOT written.
+            device = db.get(Device, seed["device_id"])
+            assert device.lock_run_id is None
+            assert device.lock_expires_at is None
         finally:
             db.close()
     finally:
@@ -235,7 +238,7 @@ async def test_claim_jobs_writes_lock_and_lease():
 
 @pytest.mark.asyncio
 async def test_get_pending_jobs_writes_lock_and_lease():
-    """get_pending_jobs 成功后 device.lock_run_id + device_leases 同时写入。"""
+    """get_pending_jobs 成功后只写 device_leases（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
         await async_engine.dispose()
@@ -251,7 +254,7 @@ async def test_get_pending_jobs_writes_lock_and_lease():
 
         db = SessionLocal()
         try:
-            # Phase 6d-1: 投影列断言已下沉到 device_leases 真源
+            # Phase 6d: device_leases is the sole source of truth.
             lease = (
                 db.query(DeviceLease)
                 .filter(
@@ -263,6 +266,11 @@ async def test_get_pending_jobs_writes_lock_and_lease():
                 .first()
             )
             assert lease is not None, "get_pending_jobs must create an ACTIVE device_lease"
+
+            # Phase 6d-2: negative assertion — projection columns are NOT written.
+            device = db.get(Device, seed["device_id"])
+            assert device.lock_run_id is None
+            assert device.lock_expires_at is None
         finally:
             db.close()
     finally:
@@ -275,7 +283,7 @@ async def test_get_pending_jobs_writes_lock_and_lease():
 
 @pytest.mark.asyncio
 async def test_extend_job_lock_renews_lease():
-    """extend_job_lock 续期 lock_expires_at 的同时续期 lease.expires_at。"""
+    """extend_job_lock 续期 lease.expires_at（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
@@ -283,7 +291,7 @@ async def test_extend_job_lock_renews_lease():
         # 记录原始 expires
         db = SessionLocal()
         try:
-            # Phase 6d-1: orig_device.lock_expires_at 断言已下沉，仅记录 lease 续期前后变化
+            # Phase 6d: device_leases is the sole source of truth.
             orig_lease = (
                 db.query(DeviceLease)
                 .filter(
@@ -310,7 +318,7 @@ async def test_extend_job_lock_renews_lease():
         assert result.data["job_id"] == seed["job_id"]
         assert result.data["expires_at"]
 
-        # 同步验证 lease 续期了（Phase 6d-1: device.lock_expires_at 断言已下沉）
+        # Phase 6d: lease 续期生效 + 投影列保持 None。
         db = SessionLocal()
         try:
             db.expire_all()
@@ -326,6 +334,11 @@ async def test_extend_job_lock_renews_lease():
             assert lease is not None
             assert lease.expires_at > orig_lease_expires
             assert lease.renewed_at > orig_lease_renewed
+
+            # Phase 6d-2: negative assertion — projection columns are NOT written.
+            device = db.get(Device, seed["device_id"])
+            assert device.lock_run_id is None
+            assert device.lock_expires_at is None
         finally:
             db.close()
     finally:
@@ -338,7 +351,7 @@ async def test_extend_job_lock_renews_lease():
 
 @pytest.mark.asyncio
 async def test_complete_job_releases_lock_and_lease():
-    """complete_job 后 lock_run_id 清空 + device_lease → RELEASED。"""
+    """complete_job 后 device_lease → RELEASED（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
@@ -355,7 +368,7 @@ async def test_complete_job_releases_lock_and_lease():
 
         db = SessionLocal()
         try:
-            # Phase 6d-1: 投影列断言（lock_run_id is None）已下沉到 device_leases 真源
+            # Phase 6d: device_leases is the sole source of truth.
             db.expire_all()
             lease = (
                 db.query(DeviceLease)
@@ -368,6 +381,11 @@ async def test_complete_job_releases_lock_and_lease():
             assert lease is not None
             assert lease.status == LeaseStatus.RELEASED.value
             assert lease.released_at is not None
+
+            # Phase 6d-2: negative assertion — projection columns are NOT written.
+            device = db.get(Device, seed["device_id"])
+            assert device.lock_run_id is None
+            assert device.lock_expires_at is None
         finally:
             db.close()
     finally:
@@ -863,8 +881,16 @@ async def test_get_pending_jobs_still_works():
         assert item.status == JobStatus.RUNNING.value
         assert item.fencing_token is not None
 
-        # Phase 6d-1: 投影列断言（device.lock_run_id == seed["job_id"]）已下沉到
-        # device_leases 真源；上面的 fencing_token 已隐式覆盖 acquire_lease 的语义
+        # Phase 6d-2: device_leases is the sole source of truth — projection
+        # columns are decommissioned; the fencing_token check above implicitly
+        # covers the acquire_lease semantic.
+        db = SessionLocal()
+        try:
+            device = db.get(Device, seed["device_id"])
+            assert device.lock_run_id is None
+            assert device.lock_expires_at is None
+        finally:
+            db.close()
     finally:
         _cleanup_seed(seed)
 
@@ -930,8 +956,8 @@ async def test_claim_jobs_claims_after_expired_lease():
         old_lease_id = lease.id
         dev = db.get(Device, seed["device_id"])
         dev.status = "BUSY"
-        dev.lock_run_id = 99999
-        dev.lock_expires_at = past
+        # Phase 6d: projection columns (lock_run_id / lock_expires_at) are
+        # decommissioned; the reconciler reads device_leases directly.
         db.commit()
     finally:
         db.close()
@@ -996,10 +1022,8 @@ async def test_reconciler_reads_device_leases_not_device_table():
             expires_at=expired,
         )
         db.add(lease)
-        # Intentionally set lock_run_id=NULL — projection out of sync
-        dev = db.get(Device, seed["device_id"])
-        dev.lock_run_id = None
-        dev.lock_expires_at = None
+        # Phase 6d: projection columns are decommissioned and always NULL —
+        # this scenario is now the default state, no extra setup needed.
         db.commit()
     finally:
         db.close()
@@ -1857,8 +1881,6 @@ async def test_recovery_sync_same_instance_resume():
             device = db_sync.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
             job.host_id = host_id
             db_sync.commit()
 
@@ -1921,8 +1943,6 @@ async def test_recovery_sync_legacy_lease_adopted():
             device = db_sync.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
             job.host_id = host_id
             db_sync.commit()
 
@@ -1995,8 +2015,6 @@ async def test_recovery_sync_same_boot_different_instance_resume():
             device = db_sync.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
             job.host_id = host_id
             db_sync.commit()
 
@@ -2068,8 +2086,6 @@ async def test_recovery_sync_boot_id_mismatch_cleanup():
             device = db_sync.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
             job.host_id = host_id
             db_sync.commit()
 
@@ -2172,8 +2188,6 @@ async def test_recovery_sync_outbox_not_terminal_upload():
             device = db_sync.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
             job.host_id = host_id
             db_sync.commit()
         finally:
@@ -2215,8 +2229,6 @@ async def test_recovery_sync_outbox_already_terminal_noop():
             device = db_sync.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
             job.host_id = host_id
             db_sync.commit()
         finally:
@@ -2287,8 +2299,6 @@ async def test_recovery_sync_boot_id_not_overwritten_before_compare():
             device = db_sync.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
             job.host_id = host_id
             db_sync.commit()
 
@@ -2569,8 +2579,6 @@ async def test_watchdog_does_not_release_grace_held_lease():
             db.add(lease)
             dev = db.get(Device, seed["device_id"])
             dev.status = "BUSY"
-            dev.lock_run_id = seed["job_id"]
-            dev.lock_expires_at = past
             db.commit()
             lease_id = lease.id
         finally:
@@ -2614,8 +2622,6 @@ async def test_heartbeat_blocking_lease_reduces_available_slots():
             db.add(lease)
             dev = db.get(Device, seed["device_id"])
             dev.status = "BUSY"
-            dev.lock_run_id = seed["job_id"]
-            dev.lock_expires_at = past
             db.commit()
         finally:
             db.close()
@@ -2668,8 +2674,6 @@ async def test_recovery_sync_unknown_within_grace_resumes():
             device = db.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = now - timedelta(seconds=1800)
             db.commit()
 
             lease = DeviceLease(
@@ -2748,8 +2752,6 @@ async def test_recovery_sync_unknown_grace_expired_cleanup():
             device = db.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = now - timedelta(seconds=3600)
             db.commit()
 
             lease = DeviceLease(

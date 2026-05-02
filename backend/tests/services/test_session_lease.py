@@ -21,7 +21,7 @@ PIPELINE_DEF = {
 }
 
 
-def _seed(lock_run_id=None, lock_expires_at=None) -> dict:
+def _seed() -> dict:
     """Create Host + Device + WorkflowDefinition + TaskTemplate + WorkflowRun + JobInstance."""
     suffix = uuid4().hex[:8]
     host_id = f"lease-host-{suffix}"
@@ -32,7 +32,6 @@ def _seed(lock_run_id=None, lock_expires_at=None) -> dict:
         host = Host(id=host_id, hostname=f"h-{suffix}", status=HostStatus.ONLINE.value, created_at=now)
         device = Device(
             serial=f"S-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now,
-            lock_run_id=lock_run_id, lock_expires_at=lock_expires_at,
         )
         db.add_all([host, device])
         db.flush()
@@ -126,12 +125,8 @@ async def test_claim_skips_locked_device():
             expires_at=expires,
         )
         db.add(blocking_lease)
-        # Phase 2c: project to device table
-        device = db.get(Device, seed["device_id"])
-        if device:
-            device.status = "BUSY"
-            device.lock_run_id = seed["job_id"]
-            device.lock_expires_at = expires
+        # Phase 6d: device_leases is the sole source of truth — no projection
+        # writes to device.lock_run_id / lock_expires_at.
         db.commit()
     finally:
         db.close()
@@ -143,6 +138,11 @@ async def test_claim_skips_locked_device():
     assert resp.data == []
     job = _get_job(seed["job_id"])
     assert job.status == JobStatus.PENDING.value
+
+    # Phase 6d-2: negative assertion — projection columns are NOT written.
+    d = _get_device(seed["device_id"])
+    assert d.lock_run_id is None
+    assert d.lock_expires_at is None
 
 
 # ── Complete releases device lock ─────────────────────────────────────────────
@@ -156,19 +156,14 @@ async def test_complete_job_releases_lock():
 
     seed = _seed()
 
-    # Direct device projection (Phase 6b: device_lock.py removed)
+    # Phase 6d: device_leases is the sole source of truth — no projection
+    # writes to device.lock_run_id / lock_expires_at.  Only transition the
+    # job to RUNNING here; the ACTIVE lease is created below.
     async with AsyncSessionLocal() as db:
-        device = await db.get(Device, seed["device_id"])
-        device.status = "BUSY"
-        device.lock_run_id = seed["job_id"]
-        device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
-        # Transition job to RUNNING
         job = await db.get(JobInstance, seed["job_id"])
         job.status = JobStatus.RUNNING.value
         job.started_at = datetime.now(timezone.utc)
         await db.commit()
-
-    # Phase 6d-1: 不再断言投影列被同步更新（device_leases 是真源）
 
     # Create an ACTIVE DeviceLease for Phase 2b fencing_token validation
     token = f"{seed['device_id']}:1"
@@ -198,5 +193,8 @@ async def test_complete_job_releases_lock():
         await complete_job(seed["job_id"], payload, db)
 
     d = _get_device(seed["device_id"])
-    # Phase 6d-1: 投影列负向断言（lock_run_id is None）延后到 6d-2 验证
-    assert d.status == "ONLINE"
+    # Phase 6d-2: device.status is no longer auto-projected from lease state
+    # because acquire_lease no longer writes status="BUSY".  We only assert
+    # the negative — projection columns are not written.
+    assert d.lock_run_id is None
+    assert d.lock_expires_at is None

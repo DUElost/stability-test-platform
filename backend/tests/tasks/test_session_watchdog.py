@@ -22,8 +22,6 @@ PIPELINE_DEF = {
 def _seed_job_with_host(
     host_heartbeat: datetime,
     job_status: str = JobStatus.RUNNING.value,
-    lock_run_id=None,
-    lock_expires_at=None,
     job_ended_at=None,
 ) -> dict:
     suffix = uuid4().hex[:8]
@@ -41,8 +39,6 @@ def _seed_job_with_host(
         device = Device(
             serial=f"S-{suffix}", host_id=host_id, status="BUSY", tags=[],
             created_at=now,
-            lock_run_id=None if lock_run_id == "auto" else lock_run_id,
-            lock_expires_at=lock_expires_at,
         )
         db.add_all([host, device])
         db.flush()
@@ -75,12 +71,7 @@ def _seed_job_with_host(
             ended_at=job_ended_at,
         )
         db.add(job)
-
-        # Update lock_run_id to point to the job
-        if lock_run_id == "auto":
-            db.flush()
-            device.lock_run_id = job.id
-            device.lock_expires_at = lock_expires_at
+        db.flush()
 
         db.commit()
         return {
@@ -138,8 +129,6 @@ async def test_watchdog_host_timeout_keeps_lease_active():
     future_expiry = datetime.now(timezone.utc) + timedelta(seconds=600)
     seed = _seed_job_with_host(
         host_heartbeat=old_heartbeat,
-        lock_run_id="auto",
-        lock_expires_at=future_expiry,
     )
 
     # Create an ACTIVE lease for the job
@@ -186,8 +175,9 @@ async def test_watchdog_host_timeout_keeps_lease_active():
             f"Lease must stay ACTIVE after host timeout; got {dl.status}"
         )
 
-        # Phase 6d-1: 投影列断言（device.lock_run_id == seed["job_id"]）已下沉到
-        # device_leases 真源；保留 lease ACTIVE 断言即可覆盖语义
+        # Phase 6d: device_leases is the sole source of truth.  Projection
+        # columns (device.lock_run_id / lock_expires_at) are decommissioned;
+        # the ACTIVE-lease assertion above fully covers the semantic.
     finally:
         db.close()
 

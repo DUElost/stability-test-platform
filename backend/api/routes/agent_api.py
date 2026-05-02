@@ -387,22 +387,12 @@ async def _resume_expired_lease_for_recovery(
     if job.ended_at <= grace_deadline:
         return False
 
-    # Refresh lease TTL
+    # Refresh lease TTL — Phase 6d: device_leases is sole source of truth,
+    # no projection writes to device.lock_run_id / lock_expires_at.
     new_expires_at = now + timedelta(seconds=_DEVICE_LOCK_LEASE_SECONDS)
     lease.renewed_at = now
     lease.expires_at = new_expires_at
     lease.agent_instance_id = agent_instance_id
-
-    # Project to device table (consistent with extend_lease projection)
-    proj_result = await db.execute(
-        update(Device)
-        .where(Device.id == lease.device_id, Device.lock_run_id == job.id)
-        .values(lock_expires_at=new_expires_at)
-    )
-    if proj_result.rowcount != 1:
-        raise LeaseProjectionError(
-            f"resume_expired_lease projection failed: device={lease.device_id} job={job.id}"
-        )
 
     return True
 
