@@ -169,8 +169,6 @@ def _setup_lease(seed: dict) -> str:
         dev = db.query(Device).filter(Device.id == seed["device_id"]).first()
         if dev is not None:
             dev.status = "BUSY"
-            dev.lock_run_id = seed["job_id"]
-            dev.lock_expires_at = expires
         db.commit()
         return token
     finally:
@@ -401,7 +399,6 @@ async def test_extend_lock_success(engine):
         try:
             device = db.get(Device, seed["device_id"])
             assert device is not None
-            device.lock_run_id = seed["job_id"]
             job = db.get(JobInstance, seed["job_id"])
             assert job is not None
             job.updated_at = old_liveness

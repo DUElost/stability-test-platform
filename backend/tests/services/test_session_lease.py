@@ -139,10 +139,6 @@ async def test_claim_skips_locked_device():
     job = _get_job(seed["job_id"])
     assert job.status == JobStatus.PENDING.value
 
-    # Phase 6d-2: negative assertion — projection columns are NOT written.
-    d = _get_device(seed["device_id"])
-    assert d.lock_run_id is None
-    assert d.lock_expires_at is None
 
 
 # ── Complete releases device lock ─────────────────────────────────────────────
@@ -193,8 +189,4 @@ async def test_complete_job_releases_lock():
         await complete_job(seed["job_id"], payload, db)
 
     d = _get_device(seed["device_id"])
-    # Phase 6d-2: device.status is no longer auto-projected from lease state
-    # because acquire_lease no longer writes status="BUSY".  We only assert
-    # the negative — projection columns are not written.
-    assert d.lock_run_id is None
-    assert d.lock_expires_at is None
+    # Phase 6d: status/lease lifecycle managed entirely through device_leases.

@@ -285,8 +285,6 @@ async def test_reconciler_stale_unknown_job_finalized():
         # Set device without a lock (no ACTIVE lease)
         dev = db.get(Device, device_id)
         dev.status = "ONLINE"
-        dev.lock_run_id = None
-        dev.lock_expires_at = None
         db.commit()
     finally:
         db.close()

@@ -296,10 +296,8 @@ def test_release_lease_sync_marks_active_to_released():
             renewed_at=now, expires_at=expires,
         )
         db.add(lease)
-        # Phase 6d-1: 投影 setup 保留，因为 release_lease_sync 仍带 WHERE guard
+        # Phase 6d-2: projection columns decommissioned.
         device.status = "BUSY"
-        device.lock_run_id = job.id
-        device.lock_expires_at = expires
         db.commit()
 
         # Act

@@ -218,8 +218,6 @@ def _setup_watcher_lease(seed: dict) -> str:
         dev = db.query(Device).filter(Device.id == seed["device_id"]).first()
         if dev is not None:
             dev.status = "BUSY"
-            dev.lock_run_id = seed["job_id"]
-            dev.lock_expires_at = expires
         db.commit()
         return token
     finally:

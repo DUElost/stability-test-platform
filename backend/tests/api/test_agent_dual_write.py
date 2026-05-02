@@ -221,11 +221,6 @@ async def test_claim_jobs_writes_lock_and_lease():
             )
             assert lease is not None, "claim_jobs must create an ACTIVE device_lease"
             assert lease.fencing_token == f"{seed['device_id']}:{lease.lease_generation}"
-
-            # Phase 6d-2: negative assertion — projection columns are NOT written.
-            device = db.get(Device, seed["device_id"])
-            assert device.lock_run_id is None
-            assert device.lock_expires_at is None
         finally:
             db.close()
     finally:
@@ -266,11 +261,6 @@ async def test_get_pending_jobs_writes_lock_and_lease():
                 .first()
             )
             assert lease is not None, "get_pending_jobs must create an ACTIVE device_lease"
-
-            # Phase 6d-2: negative assertion — projection columns are NOT written.
-            device = db.get(Device, seed["device_id"])
-            assert device.lock_run_id is None
-            assert device.lock_expires_at is None
         finally:
             db.close()
     finally:
@@ -334,11 +324,6 @@ async def test_extend_job_lock_renews_lease():
             assert lease is not None
             assert lease.expires_at > orig_lease_expires
             assert lease.renewed_at > orig_lease_renewed
-
-            # Phase 6d-2: negative assertion — projection columns are NOT written.
-            device = db.get(Device, seed["device_id"])
-            assert device.lock_run_id is None
-            assert device.lock_expires_at is None
         finally:
             db.close()
     finally:
@@ -381,11 +366,6 @@ async def test_complete_job_releases_lock_and_lease():
             assert lease is not None
             assert lease.status == LeaseStatus.RELEASED.value
             assert lease.released_at is not None
-
-            # Phase 6d-2: negative assertion — projection columns are NOT written.
-            device = db.get(Device, seed["device_id"])
-            assert device.lock_run_id is None
-            assert device.lock_expires_at is None
         finally:
             db.close()
     finally:
@@ -881,16 +861,7 @@ async def test_get_pending_jobs_still_works():
         assert item.status == JobStatus.RUNNING.value
         assert item.fencing_token is not None
 
-        # Phase 6d-2: device_leases is the sole source of truth — projection
-        # columns are decommissioned; the fencing_token check above implicitly
-        # covers the acquire_lease semantic.
-        db = SessionLocal()
-        try:
-            device = db.get(Device, seed["device_id"])
-            assert device.lock_run_id is None
-            assert device.lock_expires_at is None
-        finally:
-            db.close()
+        # Phase 6d: device_leases is the sole source of truth.
     finally:
         _cleanup_seed(seed)
 

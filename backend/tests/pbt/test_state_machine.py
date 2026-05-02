@@ -279,10 +279,10 @@ class DeviceLockTimeoutTest:
         """
         验证锁过期逻辑
         """
-        lock_expires_at = now - timedelta(seconds=lock_age_seconds)
+        expiry = now - timedelta(seconds=lock_age_seconds)
 
         # 锁已过期
-        is_expired = lock_expires_at < now
+        is_expired = expiry < now
 
         if lock_age_seconds > 0:
             assert is_expired, f"Lock should be expired when age is {lock_age_seconds}"

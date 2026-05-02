@@ -59,8 +59,6 @@ class Device(Base):
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     # 迁移补齐字段
-    lock_run_id         = Column(Integer, nullable=True)
-    lock_expires_at     = Column(DateTime(timezone=True), nullable=True)
     last_seen           = Column(DateTime(timezone=True), nullable=True)
     adb_state           = Column(String(32), nullable=True)
     adb_connected       = Column(Boolean, default=False, nullable=True)

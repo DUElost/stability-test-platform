@@ -79,8 +79,6 @@ def _seed_running_job(started_at: datetime, updated_at: datetime) -> dict:
         )
         db.add(job)
         db.flush()
-        device.lock_run_id = job.id
-        device.lock_expires_at = updated_at + timedelta(minutes=5)
         db.commit()
 
         return {
