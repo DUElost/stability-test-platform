@@ -1,6 +1,6 @@
 """Monkey 测试启动脚本：对单台设备启动 AIMonkeyTest。
 
-通过平台 ScriptBatch 调用，接收 STP_DEVICE_SERIAL 环境变量，
+通过平台 script_execution 调用，接收 STP_DEVICE_SERIAL 环境变量，
 加载 AIMonkeyTest_20260317 目录中的 MonkeyTest.py 并调用 startTest()。
 
 环境变量:

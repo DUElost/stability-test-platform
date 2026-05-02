@@ -301,31 +301,28 @@ agentctl health  # 应显示 "端口: 5039" 和 "已识别设备: N 台"
 ANDROID_ADB_SERVER_PORT=5039 adb devices
 ```
 
-### Job 卡在 PENDING（设备锁残留）
+### Job 卡在 PENDING（设备租约残留）
 
-Job 异常终止后可能遗留设备锁（`device.lock_run_id` 不为空，`device.status = BUSY`），导致后续 Job 无法被 claim。
+Job 异常终止后可能遗留 ACTIVE 租约（`device_leases.status = 'ACTIVE'`），导致后续 Job 无法被 claim。
 
-**诊断**：
-```bash
-# 通过 API 查看设备状态
-curl -s http://localhost:8000/api/v1/devices | python3 -m json.tool | grep -A2 '"status": "BUSY"'
+**自动恢复**：Reconciler（15s 间隔）会自动处理过期租约——先将关联 Job 标为 UNKNOWN，grace 到期后释放租约并标 FAILED。
+
+**手动诊断**：
+```sql
+-- 查看所有 ACTIVE 租约（含过期）
+SELECT dl.device_id, dl.job_id, dl.status, dl.expires_at,
+       d.serial, d.status AS device_status
+FROM device_leases dl
+JOIN device d ON d.id = dl.device_id
+WHERE dl.status = 'ACTIVE'
+ORDER BY dl.expires_at;
+
+-- 紧急手动释放（仅当 Reconciler 不可用时使用）
+UPDATE device_leases SET status = 'RELEASED', released_at = now()
+WHERE device_id = <device_id> AND status = 'ACTIVE';
 ```
 
-**修复**（在 Windows 侧或能连接 PostgreSQL 的环境执行）：
-```python
-import psycopg
-conn = psycopg.connect('postgresql://stability:stability@localhost:5432/stability')
-conn.autocommit = True
-cur = conn.cursor()
-# 查看锁状态
-cur.execute('SELECT id, lock_run_id, lock_expires_at, status FROM device WHERE status = %s', ('BUSY',))
-for row in cur.fetchall(): print(row)
-# 清理指定设备的锁
-cur.execute('UPDATE device SET lock_run_id = NULL, lock_expires_at = NULL, status = %s WHERE id = %s', ('ONLINE', <device_id>))
-conn.close()
-```
-
-> **注意**：数据库运行在 Windows 侧，连接串为 `postgresql://stability:stability@localhost:5432/stability`，表名为单数形式（`device`、`host`、`job_instance`）。
+> **注意**：数据库运行在 Windows 侧，连接串为 `postgresql://stability:stability@localhost:5432/stability`。
 
 ---
 

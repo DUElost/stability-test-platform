@@ -311,8 +311,7 @@ class Device(Base):
     battery_level: int
     temperature: int
     network_latency: float
-    lock_run_id: Optional[int]
-    lock_expires_at: Optional[datetime]
+    lease_generation: int
 ```
 
 ### WorkflowDefinition（工作流定义） — `backend/models/workflow.py`
@@ -466,11 +465,11 @@ class Tool(Base):
 - 手动验证：`ANDROID_ADB_SERVER_PORT=5039 adb devices`（在 WSL 中执行）
 - 若忘记配置，Agent 心跳正常但发现设备数为 0
 
-**设备锁（Device Lock）**：
-- Job 执行期间设备被锁定（`device.lock_run_id = job_id, status = BUSY`）
-- Job 异常终止可能遗留锁，导致后续 Job 卡在 PENDING
-- 清理方法：`UPDATE device SET lock_run_id = NULL, lock_expires_at = NULL, status = 'ONLINE' WHERE id = <device_id>`
-- 锁自动续期由 Agent 的 `LockRenewalManager` 负责（每 30s 调用 `extend_lock`）
+**设备租约（Device Lease）**：
+- Job 执行期间设备有 ACTIVE 租约（`device_leases.status = 'ACTIVE'`），status 为 BUSY
+- Job 异常终止后 Reconciler（15s 间隔）自动处理过期租约：UNKNOWN → grace → FAILED + 释放
+- 紧急手动释放：`UPDATE device_leases SET status = 'RELEASED', released_at = now() WHERE device_id = <id> AND status = 'ACTIVE'`
+- 租约续期由 Agent 的 `LeaseRenewer` 负责
 
 **Agent 代码热更新**：
 - 修改 `backend/agent/` 下的代码后，必须同步到 WSL 并重启 Agent 才能生效
