@@ -10,7 +10,6 @@ from backend.models.enums import HostStatus, JobStatus, WorkflowStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, TaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
-from backend.services.device_lock import acquire_lock
 
 
 PIPELINE_DEF = {
@@ -157,9 +156,12 @@ async def test_complete_job_releases_lock():
 
     seed = _seed()
 
-    # First acquire the lock
+    # Direct device projection (Phase 6b: device_lock.py removed)
     async with AsyncSessionLocal() as db:
-        await acquire_lock(db, seed["device_id"], seed["job_id"], 600)
+        device = await db.get(Device, seed["device_id"])
+        device.status = "BUSY"
+        device.lock_run_id = seed["job_id"]
+        device.lock_expires_at = datetime.now(timezone.utc) + timedelta(seconds=600)
         # Transition job to RUNNING
         job = await db.get(JobInstance, seed["job_id"])
         job.status = JobStatus.RUNNING.value

@@ -8,7 +8,6 @@ from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel
 from backend.models.schedule import TaskSchedule
 from backend.models.script import Script
-from backend.models.script_batch import ScriptBatch, ScriptRun
 from backend.models.script_sequence import ScriptSequence
 from backend.models.tool import Tool
 from backend.models.user import User
@@ -34,8 +33,6 @@ __all__ = [
     "ResourceAllocation",
     "ResourcePool",
     "Script",
-    "ScriptBatch",
-    "ScriptRun",
     "ScriptSequence",
     "StepTrace",
     "TaskSchedule",

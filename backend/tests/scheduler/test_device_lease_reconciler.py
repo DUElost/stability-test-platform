@@ -112,15 +112,12 @@ def _cleanup(host_id: str, device_id: int) -> None:
     """Remove seeded data (order respects FK constraints)."""
     from backend.models.job import JobArtifact, StepTrace
     from backend.models.resource_pool import ResourceAllocation
-    from backend.models.script_batch import ScriptBatch, ScriptRun
     db = SessionLocal()
     try:
         db.execute(StepTrace.__table__.delete())
         db.execute(JobArtifact.__table__.delete())
         db.execute(DeviceLease.__table__.delete())
         db.execute(ResourceAllocation.__table__.delete())
-        db.execute(ScriptRun.__table__.delete())
-        db.execute(ScriptBatch.__table__.delete())
         db.execute(JobInstance.__table__.delete())
         db.execute(TaskTemplate.__table__.delete())
         db.execute(WorkflowRun.__table__.delete())

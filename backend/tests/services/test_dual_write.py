@@ -22,7 +22,6 @@ from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, TaskTemplate as JobTaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
-from backend.services.device_lock import acquire_lock, extend_lock, release_lock
 from backend.services.lease_manager import (
     acquire_lease,
     extend_lease,
@@ -76,35 +75,6 @@ class TestClaimDualWrite:
     """claim_jobs + get_pending_jobs both write device_leases."""
 
     @pytest.mark.asyncio(loop_scope="module")
-    async def test_acquire_lock_and_lease_same_transaction(self):
-        suffix = uuid4().hex[:8]
-        async with AsyncSessionLocal() as db:
-            host, device, job = await _create_seed(db, suffix)
-            did, jid = device.id, job.id
-
-            locked = await acquire_lock(db, did, jid, 600)
-            assert locked
-            db.expire(device)
-
-            lease = await acquire_lease(
-                db, device_id=did, host_id=host.id,
-                lease_type=LeaseType.JOB, agent_instance_id=host.id, job_id=jid,
-            )
-            assert lease is not None
-            assert lease.device_id == did
-            assert lease.job_id == jid
-            assert lease.lease_type == LeaseType.JOB.value
-            assert lease.status == LeaseStatus.ACTIVE.value
-            assert lease.fencing_token == f"{did}:{lease.lease_generation}"
-            await db.commit()
-
-            dev = await db.get(Device, did)
-            assert dev.lock_run_id == jid
-            assert dev.lock_expires_at is not None
-
-            await db.rollback()
-
-    @pytest.mark.asyncio(loop_scope="module")
     async def test_acquire_lease_none_on_conflict(self):
         """Second acquire_lease on same device returns None (already ACTIVE)."""
         suffix = uuid4().hex[:8]
@@ -138,22 +108,20 @@ class TestClaimDualWrite:
 
             # Second lease on same device — must return None
             async with db.begin_nested():
-                locked = await acquire_lock(db, did, jid2, 600)
-                if locked:
-                    lease2 = await acquire_lease(
-                        db, device_id=did, host_id=host.id,
-                        lease_type=LeaseType.JOB, agent_instance_id=host.id, job_id=jid2,
-                    )
-                    assert lease2 is None, "acquire_lease should return None on conflict"
+                lease2 = await acquire_lease(
+                    db, device_id=did, host_id=host.id,
+                    lease_type=LeaseType.JOB, agent_instance_id=host.id, job_id=jid2,
+                )
+                assert lease2 is None, "acquire_lease should return None on conflict"
 
             await db.rollback()
 
 
 class TestExtendDualWrite:
-    """extend_lock + extend_lease dual-write."""
+    """extend_lease projection tests (Phase 6b: device_lock removed)."""
 
     @pytest.mark.asyncio(loop_scope="module")
-    async def test_extend_lock_and_lease(self):
+    async def test_extend_lease_updates_expires_and_renewed(self):
         suffix = uuid4().hex[:8]
         async with AsyncSessionLocal() as db:
             host, device, job = await _create_seed(db, suffix)
@@ -165,12 +133,9 @@ class TestExtendDualWrite:
             )
             original_expires = lease.expires_at
             original_renewed = lease.renewed_at
-            # acquire_lock must precede for extend_lock to work
-            await acquire_lock(db, did, jid, 600)
             await db.commit()
 
             await asyncio.sleep(0.01)
-            assert await extend_lock(db, did, jid, 600)
             assert await extend_lease(db, did, jid, LeaseType.JOB, 600)
 
             await db.refresh(lease)
