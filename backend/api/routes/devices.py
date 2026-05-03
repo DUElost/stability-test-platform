@@ -101,10 +101,10 @@ def list_devices(
     tags: Optional[str] = Query(None, description="Comma-separated tag filter"),
     status: Optional[str] = Query(None, description="Filter by device status (ONLINE, OFFLINE, BUSY)"),
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=1200),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Device).order_by(Device.id)
+    query = db.query(Device).order_by(Device.last_seen.desc().nullslast())
 
     # Filter by status if provided
     if status:

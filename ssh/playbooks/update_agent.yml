@@ -36,6 +36,21 @@
           - agent_env_file_stat.stat.exists
         fail_msg: "Agent environment file is missing on {{ inventory_hostname }}. Run install_agent.yml first."
 
+    - name: Clean stale files from remote temp directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_remote_tmp_dir }}"
+        state: absent
+
+    - name: Recreate remote temp directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_remote_tmp_dir }}"
+        state: directory
+        owner: "{{ agent_user }}"
+        group: "{{ agent_group }}"
+        mode: "0755"
+
     - name: Copy latest agent source tree to remote temp directory
       ansible.builtin.copy:
         src: "{{ agent_source_dir }}/"
