@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from fastapi import HTTPException
@@ -106,7 +106,7 @@ def ensure_system_anchor(db: Session) -> tuple[WorkflowDefinition, TaskTemplate]
         )
         .first()
     )
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if workflow is None:
         workflow = WorkflowDefinition(
             name=SYSTEM_WORKFLOW_NAME,
@@ -207,7 +207,7 @@ def create_script_execution(
 
     workflow, template = ensure_system_anchor(db)
     pipeline_def = synthesize_script_pipeline(items)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     run = WorkflowRun(
         workflow_definition_id=workflow.id,
         status="RUNNING",
