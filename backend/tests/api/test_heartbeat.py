@@ -1,7 +1,7 @@
 """
 Tests for heartbeat API routes
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.models.enums import DeviceStatus, HostStatus
 from backend.models.host import Device
@@ -247,7 +247,7 @@ class TestHeartbeat:
         device = db_session.query(Device).filter(Device.serial == "BUSY_DEVICE").first()
 
         # Phase 6c: create an ACTIVE DeviceLease instead of setting lock_run_id
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         lease = DeviceLease(
             device_id=device.id,
             job_id=None,
@@ -291,7 +291,7 @@ class TestHeartbeat:
             serial="OLD_DEVICE",
             host_id=sample_host.id,
             status=DeviceStatus.ONLINE.value,
-            last_seen=datetime.utcnow() - timedelta(minutes=5),
+            last_seen=datetime.now(timezone.utc) - timedelta(minutes=5),
             adb_connected=True,
         )
         db_session.add(old_device)
@@ -324,7 +324,7 @@ class TestHeartbeat:
             serial="OLD_NOTIFY_DEVICE",
             host_id=sample_host.id,
             status=DeviceStatus.ONLINE.value,
-            last_seen=datetime.utcnow() - timedelta(minutes=5),
+            last_seen=datetime.now(timezone.utc) - timedelta(minutes=5),
             adb_connected=True,
         )
         db_session.add(old_device)

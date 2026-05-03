@@ -2,7 +2,7 @@ import sys
 import tempfile
 import tarfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,7 +52,7 @@ class TestArtifactDownloadTarget(unittest.TestCase):
 
             artifact = SimpleNamespace(
                 storage_uri=f"file://{archive_path}",
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             summary = _load_risk_summary_from_artifacts([artifact])
             self.assertIsNotNone(summary)

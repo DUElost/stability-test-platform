@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 
 from sqlalchemy import select
@@ -50,7 +50,7 @@ async def reconcile_step_traces(
                 output=t.get("output"),
                 error_message=t.get("error_message"),
                 original_ts=_parse_ts(t.get("original_ts")),
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             .on_conflict_do_nothing(
                 constraint="uq_step_trace_idempotent"
@@ -95,7 +95,7 @@ async def _recompute_job_status(job_id: int, db: AsyncSession) -> None:
         if target == JobStatus.COMPLETED and job.status == JobStatus.UNKNOWN.value:
             JobStateMachine.transition(job, JobStatus.RUNNING, "reconciled")
         JobStateMachine.transition(job, target, "reconciled_from_replay")
-        job.ended_at = datetime.utcnow()
+        job.ended_at = datetime.now(timezone.utc)
         await WorkflowAggregator.on_job_terminal(job, db)
     except InvalidTransitionError as e:
         logger.warning("reconcile transition blocked: %s", e)
@@ -103,8 +103,8 @@ async def _recompute_job_status(job_id: int, db: AsyncSession) -> None:
 
 def _parse_ts(ts_str: str | None) -> datetime:
     if not ts_str:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)
     try:
         return datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
     except ValueError:
-        return datetime.utcnow()
+        return datetime.now(timezone.utc)

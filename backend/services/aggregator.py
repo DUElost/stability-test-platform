@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +28,7 @@ class WorkflowAggregator:
         total   = len(jobs)
         if total == 0:
             run.status = WorkflowStatus.FAILED.value
-            run.ended_at = datetime.utcnow()
+            run.ended_at = datetime.now(timezone.utc)
             return
 
         failed  = sum(1 for j in jobs if JobStatus(j.status) in {JobStatus.FAILED, JobStatus.ABORTED})
@@ -43,7 +43,7 @@ class WorkflowAggregator:
         else:
             run.status = WorkflowStatus.FAILED.value
 
-        run.ended_at = datetime.utcnow()
+        run.ended_at = datetime.now(timezone.utc)
 
         completed = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.COMPLETED)
         run.result_summary = {

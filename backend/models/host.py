@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
@@ -30,7 +30,7 @@ class Host(Base):
     last_heartbeat       = Column(DateTime(timezone=True))
     cpu_quota            = Column(Integer, nullable=False, default=2)
     status               = Column(String(32), nullable=False, default="OFFLINE")
-    created_at           = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at           = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # 迁移补齐字段
     name          = Column(String(128), nullable=True)
@@ -41,7 +41,7 @@ class Host(Base):
     ssh_key_path  = Column(String(256), nullable=True)
     extra         = Column(JSON, default=dict, nullable=True)
     mount_status  = Column(JSON, default=dict, nullable=True)
-    updated_at    = Column(DateTime(timezone=True), onupdate=datetime.utcnow, nullable=True)
+    updated_at    = Column(DateTime(timezone=True), onupdate=lambda: datetime.now(timezone.utc), nullable=True)
     boot_id       = Column(String(64), nullable=False, default="")           # ADR-0019 Phase 3a
     last_agent_instance_id = Column(String(64), nullable=False, default="")  # ADR-0019 Phase 3a
 
@@ -56,7 +56,7 @@ class Device(Base):
     platform   = Column(String(64))
     tags       = Column(JSONB, nullable=False, default=list)
     status     = Column(String(32), nullable=False, default="OFFLINE")
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # 迁移补齐字段
     last_seen           = Column(DateTime(timezone=True), nullable=True)

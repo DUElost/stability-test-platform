@@ -34,8 +34,8 @@ class DeviceLease(Base):
     agent_instance_id  = Column(String(64), nullable=False)
     reason             = Column(String(256), nullable=True)
     holder             = Column(String(128), nullable=True)
-    acquired_at        = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    renewed_at         = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    acquired_at        = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    renewed_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     expires_at         = Column(DateTime(timezone=True), nullable=False)
     released_at        = Column(DateTime(timezone=True), nullable=True)
 

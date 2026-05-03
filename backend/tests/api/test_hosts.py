@@ -2,7 +2,7 @@
 Tests for hosts API routes
 """
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 
@@ -196,7 +196,7 @@ class TestHostStatusTransitions:
 
     def test_host_with_recent_heartbeat_stays_online(self, client, sample_host):
         """Test host with recent heartbeat stays online"""
-        sample_host.last_heartbeat = datetime.utcnow()
+        sample_host.last_heartbeat = datetime.now(timezone.utc)
         response = client.get(f"/api/v1/hosts/{sample_host.id}")
         assert response.status_code == 200
         data = response.json()

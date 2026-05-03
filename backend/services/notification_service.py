@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import smtplib
-from datetime import datetime
+from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from typing import Any, Dict, Optional
 
@@ -32,7 +32,7 @@ SMTP_FROM = os.getenv("SMTP_FROM", "")
 
 def _format_message(event_type: str, context: Dict[str, Any]) -> str:
     """Format a human-readable notification message."""
-    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
     if event_type == EventType.RUN_COMPLETED.value:
         return (

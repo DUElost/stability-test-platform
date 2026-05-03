@@ -457,7 +457,7 @@ async def update_job_status(
         raise HTTPException(status_code=409, detail=str(e))
 
     if job.status in _TERMINAL:
-        job.ended_at = datetime.utcnow()
+        job.ended_at = datetime.now(timezone.utc)
         await WorkflowAggregator.on_job_terminal(job, db)
 
     await db.commit()
@@ -497,7 +497,7 @@ async def agent_heartbeat(
             id=payload.host_id,
             hostname=payload.host_id,
             status=HostStatus.ONLINE.value,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
             max_concurrent_jobs=(
                 max_jobs_from_capacity
                 if isinstance(max_jobs_from_capacity, int) and max_jobs_from_capacity > 0
@@ -519,7 +519,7 @@ async def agent_heartbeat(
         and host.script_catalog_version != payload.script_catalog_version
     )
 
-    host.last_heartbeat = datetime.utcnow()
+    host.last_heartbeat = datetime.now(timezone.utc)
     if payload.tool_catalog_version:
         host.tool_catalog_version = payload.tool_catalog_version
     if payload.script_catalog_version:
@@ -763,7 +763,7 @@ async def complete_job(
                 output=snapshot_output,
                 error_message=payload.update.get("error_message"),
                 original_ts=now_ts,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
         )
 

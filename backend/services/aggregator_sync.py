@@ -4,7 +4,7 @@ Mirrors the logic of WorkflowAggregator.on_job_terminal but uses a sync
 SQLAlchemy Session instead of AsyncSession.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -32,7 +32,7 @@ def workflow_aggregator_sync(job: JobInstance, db: Session) -> None:
     total = len(jobs)
     if total == 0:
         run.status = WorkflowStatus.FAILED.value
-        run.ended_at = datetime.utcnow()
+        run.ended_at = datetime.now(timezone.utc)
         return
 
     failed = sum(1 for j in jobs if JobStatus(j.status) in {JobStatus.FAILED, JobStatus.ABORTED})
@@ -47,7 +47,7 @@ def workflow_aggregator_sync(job: JobInstance, db: Session) -> None:
     else:
         run.status = WorkflowStatus.FAILED.value
 
-    run.ended_at = datetime.utcnow()
+    run.ended_at = datetime.now(timezone.utc)
 
     # Auto-fill result_summary
     completed = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.COMPLETED)

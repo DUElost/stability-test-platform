@@ -151,10 +151,10 @@ def test_lease_renewer_sends_token_when_present(lease_renewer):
     assert mock_post.call_args.kwargs["json"] == {"fencing_token": "test:token:1"}
 
 
-# ── Test 19: PipelineEngine._verify_device_lock sends fencing_token ──────────
+# ── Test 19: PipelineEngine._verify_device_lease sends fencing_token ──────────
 
-def test_pipeline_engine_verify_device_lock_sends_fencing_token():
-    """lock verify 阶段 POST extend_lock 携带 json={"fencing_token": token}。"""
+def test_pipeline_engine_verify_device_lease_sends_fencing_token():
+    """lease verify 阶段 POST extend_lock 携带 json={"fencing_token": token}。"""
     mock_adb = MagicMock()
     engine = PipelineEngine(
         adb=mock_adb,
@@ -169,12 +169,12 @@ def test_pipeline_engine_verify_device_lock_sends_fencing_token():
         mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
-        result = engine._verify_device_lock()
+        result = engine._verify_device_lease()
 
-    assert result is None, "Valid lock should return None (verified)"
+    assert result is None, "Valid lease should return None (verified)"
     mock_post.assert_called_once()
     assert mock_post.call_args.kwargs["json"] == {"fencing_token": "42:7"}, (
-        "_verify_device_lock must POST fencing_token in body"
+        "_verify_device_lease must POST fencing_token in body"
     )
 
 

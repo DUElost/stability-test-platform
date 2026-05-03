@@ -1,7 +1,7 @@
 """Orchestration API: WorkflowDefinition CRUD + WorkflowRun trigger + queries."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -183,7 +183,7 @@ async def create_workflow(
     _validate_optional_pipeline("teardown_pipeline", payload.teardown_pipeline)
     _validate_task_templates(payload.task_templates)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     wf = WorkflowDefinition(
         name=payload.name,
         description=payload.description,
@@ -280,7 +280,7 @@ async def update_workflow(
     if "teardown_pipeline" in changed_fields:
         _validate_optional_pipeline("teardown_pipeline", payload.teardown_pipeline)
         wf.teardown_pipeline = payload.teardown_pipeline
-    wf.updated_at = datetime.utcnow()
+    wf.updated_at = datetime.now(timezone.utc)
 
     if payload.task_templates is not None:
         _validate_task_templates(payload.task_templates)
@@ -291,7 +291,7 @@ async def update_workflow(
         )).scalars().all()
 
         # Update existing or insert new (upsert logic)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         existing_by_name = {t.name: t for t in existing_templates}
 
         for t in payload.task_templates:

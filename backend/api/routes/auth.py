@@ -1,6 +1,6 @@
 """Authentication API routes."""
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, status
@@ -184,7 +184,7 @@ def login(
         )
 
     # Update last login
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     db.commit()
 
     access_token = create_access_token(data={"sub": user.username, "role": user.role})

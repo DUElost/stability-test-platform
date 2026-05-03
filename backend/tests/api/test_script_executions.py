@@ -144,7 +144,7 @@ def test_list_includes_device_and_script_info(client, db_session, sample_host):
             serial=serial,
             host_id=sample_host.id,
             status="ONLINE",
-            last_seen=datetime.utcnow(),
+            last_seen=datetime.now(timezone.utc),
             adb_connected=True,
             adb_state="device",
         )
@@ -243,7 +243,7 @@ def test_list_filters_by_result_summary_mode(
         status="RUNNING",
         failure_threshold=0.0,
         triggered_by="script_execution",
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
         result_summary={"items": [{"script_name": "fake", "version": "1.0"}]},
     )
     db_session.add(run_no_mode)

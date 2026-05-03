@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -143,7 +143,7 @@ def create_script(payload: ScriptCreate, db: Session = Depends(get_db)):
             detail=f"script name/version already exists: {payload.name} {payload.version}",
         )
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     script = Script(
         name=payload.name,
         display_name=payload.display_name,
@@ -220,7 +220,7 @@ def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(g
         value = getattr(payload, field)
         if value is not None:
             setattr(script, field, value)
-    script.updated_at = datetime.utcnow()
+    script.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(script)
     return ok(_script_out(script))
@@ -232,6 +232,6 @@ def deactivate_script(script_id: int, db: Session = Depends(get_db)):
     if script is None:
         raise HTTPException(status_code=404, detail="script not found")
     script.is_active = False
-    script.updated_at = datetime.utcnow()
+    script.updated_at = datetime.now(timezone.utc)
     db.commit()
     return ok({"deactivated": script_id})

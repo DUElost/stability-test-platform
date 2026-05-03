@@ -88,29 +88,29 @@ task_dispatch_errors = Counter(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
-# Device Lock Metrics
+# Device Lease Metrics
 # ============================================================================
 
-device_lock_acquired = Counter(
-    'stability_device_lock_acquired_total',
-    'Total number of device locks acquired',
+device_lease_acquired = Counter(
+    'stability_device_lease_acquired_total',
+    'Total number of device leases acquired',
     ['host_id']
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-device_lock_released = Counter(
-    'stability_device_lock_released_total',
-    'Total number of device locks released',
+device_lease_released = Counter(
+    'stability_device_lease_released_total',
+    'Total number of device leases released',
     ['reason']  # completed, failed, timeout, canceled
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-device_lock_conflicts = Counter(
-    'stability_device_lock_conflicts_total',
-    'Total number of device lock conflicts'
+device_lease_conflicts = Counter(
+    'stability_device_lease_conflicts_total',
+    'Total number of device lease conflicts'
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
-device_lock_duration = Histogram(
-    'stability_device_lock_duration_seconds',
-    'Duration of device locks in seconds',
+device_lease_duration = Histogram(
+    'stability_device_lease_duration_seconds',
+    'Duration of device leases in seconds',
     buckets=[60, 120, 300, 600, 900, 1800, 3600, 7200]
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
@@ -350,16 +350,16 @@ def record_task_run_status(status: str, task_type: str):
         task_run_total.labels(status=status, task_type=task_type).inc()
 
 
-def record_device_lock_acquired(host_id: int):
-    """Record a device lock acquisition"""
+def record_device_lease_acquired(host_id: int):
+    """Record a device lease acquisition"""
     if PROMETHEUS_AVAILABLE:
-        device_lock_acquired.labels(host_id=str(host_id)).inc()
+        device_lease_acquired.labels(host_id=str(host_id)).inc()
 
 
-def record_device_lock_released(reason: str):
-    """Record a device lock release"""
+def record_device_lease_released(reason: str):
+    """Record a device lease release"""
     if PROMETHEUS_AVAILABLE:
-        device_lock_released.labels(reason=reason).inc()
+        device_lease_released.labels(reason=reason).inc()
 
 
 def record_socketio_connection(namespace: str, connected: bool):

@@ -1,6 +1,6 @@
 """Tests for schedules API routes"""
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.models.workflow import WorkflowDefinition
 
@@ -62,7 +62,7 @@ class TestToggleSchedule:
 
 class TestWorkflowSchedule:
     def test_create_workflow_schedule(self, client, auth_headers, db_session, sample_device):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         wf = WorkflowDefinition(
             name="sched-workflow",
             description="for schedule",
@@ -91,7 +91,7 @@ class TestWorkflowSchedule:
         assert data["task_type"] == "WORKFLOW"
 
     def test_run_now_workflow_schedule(self, client, auth_headers, db_session, sample_device, monkeypatch):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         wf = WorkflowDefinition(
             name="sched-run-now",
             description="run now workflow",

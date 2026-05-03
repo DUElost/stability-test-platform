@@ -17,7 +17,7 @@ import os
 import threading
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Deque, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -234,7 +234,7 @@ class AgentWSClient:
             "step_id": step_id,
             "seq": self._next_seq(run_id),
             "level": level,
-            "ts": datetime.utcnow().isoformat() + "Z",
+            "ts": datetime.now(timezone.utc).isoformat() + "Z",
             "msg": msg,
         })
 
@@ -286,7 +286,7 @@ class StepLogger:
 
     def log(self, message: str, level: str = "INFO"):
         self._line_count += 1
-        ts = datetime.utcnow().isoformat() + "Z"
+        ts = datetime.now(timezone.utc).isoformat() + "Z"
 
         self._ws.send_log(self._run_id, self._step_id, level, message)
 

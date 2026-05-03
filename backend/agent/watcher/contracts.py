@@ -40,7 +40,7 @@ class JobClaimPayload(TypedDict, total=False):
     workflow_run_id:   int
     task_template_id:  int
     watcher_policy:    Optional[Dict[str, Any]]    # 覆盖 WatcherPolicy 默认
-    device_lock_expires_at: Optional[str]          # ISO8601
+    device_lease_expires_at: Optional[str]          # ISO8601
 
 
 REQUIRED_CLAIM_FIELDS: tuple[str, ...] = (

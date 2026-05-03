@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, MutableSet, Optional
 
 from .api_client import complete_job, update_job
@@ -86,7 +86,7 @@ def run_task_wrapper(
         update_job(
             api_url,
             job_id,
-            {"status": "RUNNING", "started_at": datetime.utcnow().isoformat(), "fencing_token": fencing_token},
+            {"status": "RUNNING", "started_at": datetime.now(timezone.utc).isoformat(), "fencing_token": fencing_token},
         )
     except Exception as exc:
         logger.warning(

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -18,8 +18,8 @@ class Tool(Base):
     is_active    = Column(Boolean, nullable=False, default=True)
     description  = Column(Text)
     category     = Column(String(64))
-    created_at   = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at   = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at   = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at   = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("name", "version", name="uq_tool_name_version"),

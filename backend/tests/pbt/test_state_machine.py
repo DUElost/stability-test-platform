@@ -8,7 +8,7 @@ Tests the state machine properties defined in specs.md:
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Set
 
 from hypothesis import given, strategies as st, settings, assume
@@ -293,7 +293,7 @@ class DeviceLockTimeoutTest:
         """
         验证锁释放条件
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # 场景 1: 正常锁（未过期）
         future_expiry = now + timedelta(seconds=300)

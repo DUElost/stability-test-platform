@@ -4,7 +4,7 @@ Stats API — time-series endpoints for Dashboard charts.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -70,7 +70,7 @@ def get_activity(
     db: Session = Depends(get_db),
 ):
     """Hourly task-run activity over the past N hours."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     since = now - timedelta(hours=hours)
     dialect = db.bind.dialect.name if db.bind is not None else ""
 
@@ -139,7 +139,7 @@ def get_completion_trend(
     db: Session = Depends(get_db),
 ):
     """Daily pass/fail counts over the past N days."""
-    since = datetime.utcnow() - timedelta(days=days)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
     dialect = db.bind.dialect.name if db.bind is not None else ""
     if dialect == "postgresql":
         rows = db.execute(text("""
@@ -179,7 +179,7 @@ def get_completion_trend(
     # Fill empty days
     points = []
     cursor = since.date()
-    end = datetime.utcnow().date()
+    end = datetime.now(timezone.utc).date()
     while cursor <= end:
         key = cursor.isoformat()
         b = buckets.get(key, {})

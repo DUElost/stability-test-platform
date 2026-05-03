@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import tarfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote, urlparse
@@ -182,7 +182,7 @@ class _VirtualArtifact:
         self.storage_uri = storage_uri
         self.size_bytes = size_bytes
         self.checksum = checksum
-        self.created_at = created_at or datetime.utcnow()
+        self.created_at = created_at or datetime.now(timezone.utc)
 
 
 def _extract_job_completion_snapshot(db: Session, job_id: int) -> Dict[str, Any]:
@@ -225,7 +225,7 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
             storage_uri=str(artifact_payload.get("storage_uri")),
             size_bytes=artifact_payload.get("size_bytes"),
             checksum=artifact_payload.get("checksum"),
-            created_at=job.ended_at or datetime.utcnow(),
+            created_at=job.ended_at or datetime.now(timezone.utc),
         )
         artifacts_virtual.append(artifact_obj)
         artifacts_out.append(
@@ -270,7 +270,7 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
         is_distributed=False,
         runs_count=None,
         pipeline_def=job.pipeline_def,
-        created_at=wf_def.created_at or job.created_at or datetime.utcnow(),
+        created_at=wf_def.created_at or job.created_at or datetime.now(timezone.utc),
     )
 
     run_status = _JOB_STATUS_TO_RUN_STATUS.get(str(job.status).upper(), str(job.status))
@@ -300,7 +300,7 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
         host_out = HostLiteOut.from_orm(host) if host else None
         device_out = DeviceLiteOut.from_orm(device) if device else None
     return RunReportOut(
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(timezone.utc),
         run=run_out,
         task=task_out,
         host=host_out,

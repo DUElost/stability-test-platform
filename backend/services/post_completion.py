@@ -8,7 +8,7 @@ instantly by the API without recomputation.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -55,7 +55,7 @@ def run_post_completion(job_id: int, db: Session) -> bool:
         except Exception:
             logger.exception("post_completion: jira draft generation failed for job %d", job_id)
 
-        job.post_processed_at = datetime.utcnow()
+        job.post_processed_at = datetime.now(timezone.utc)
         db.commit()
         logger.info("post_completion: job %d report persisted", job_id)
         return True

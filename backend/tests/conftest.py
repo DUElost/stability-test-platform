@@ -4,7 +4,7 @@ Pytest Configuration and Fixtures
 
 import asyncio
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -135,7 +135,7 @@ def sample_host(db_session):
         ip="172.21.15.100",
         ip_address="172.21.15.100",
         status=HostStatus.ONLINE.value,
-        last_heartbeat=datetime.utcnow(),
+        last_heartbeat=datetime.now(timezone.utc),
     )
     db_session.add(host)
     db_session.commit()
@@ -152,7 +152,7 @@ def sample_offline_host(db_session):
         ip="172.21.15.101",
         ip_address="172.21.15.101",
         status=HostStatus.OFFLINE.value,
-        last_heartbeat=datetime.utcnow() - timedelta(minutes=10),
+        last_heartbeat=datetime.now(timezone.utc) - timedelta(minutes=10),
     )
     db_session.add(host)
     db_session.commit()
@@ -169,7 +169,7 @@ def sample_host_expired(db_session):
         ip="172.21.15.102",
         ip_address="172.21.15.102",
         status=HostStatus.ONLINE.value,
-        last_heartbeat=datetime.utcnow() - timedelta(seconds=400),
+        last_heartbeat=datetime.now(timezone.utc) - timedelta(seconds=400),
     )
     db_session.add(host)
     db_session.commit()
@@ -183,7 +183,7 @@ def sample_device(db_session, sample_host):
         serial="test-device-001",
         host_id=sample_host.id,
         status=DeviceStatus.ONLINE.value,
-        last_seen=datetime.utcnow(),
+        last_seen=datetime.now(timezone.utc),
         adb_connected=True,
         adb_state="device",
         battery_level=80,
@@ -201,7 +201,7 @@ def sample_offline_device(db_session, sample_host):
         serial="test-device-002",
         host_id=sample_host.id,
         status=DeviceStatus.OFFLINE.value,
-        last_seen=datetime.utcnow() - timedelta(minutes=10),
+        last_seen=datetime.now(timezone.utc) - timedelta(minutes=10),
         adb_connected=False,
         adb_state="offline",
     )
@@ -217,7 +217,7 @@ def sample_busy_device(db_session, sample_host):
         serial="test-device-003",
         host_id=sample_host.id,
         status=DeviceStatus.BUSY.value,
-        last_seen=datetime.utcnow(),
+        last_seen=datetime.now(timezone.utc),
         adb_connected=True,
         adb_state="device",
     )
@@ -297,7 +297,7 @@ def sample_running_job(db_session, sample_workflow_run, sample_task_template, sa
         host_id=sample_host.id,
         status=JobStatus.RUNNING.value,
         pipeline_def=sample_task_template.pipeline_def,
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
     )
     db_session.add(job)
     db_session.commit()

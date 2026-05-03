@@ -2,7 +2,7 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy import bindparam, create_engine, text
@@ -172,7 +172,7 @@ def test_m0_5_new_chain_e2e():
             assert claimed_ids.issuperset(set(job_ids)), "job 未被正确认领"
 
             # 6) HTTP step trace upload + complete_job (Phase 4: replaces MQ)
-            msg_ts = datetime.utcnow().isoformat() + "Z"
+            msg_ts = datetime.now(timezone.utc).isoformat() + "Z"
             for job_id in job_ids:
                 # 6a Upload step trace via HTTP
                 trace_payload = [

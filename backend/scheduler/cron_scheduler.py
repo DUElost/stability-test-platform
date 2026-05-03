@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -109,11 +109,13 @@ async def check_and_fire_schedules() -> None:
     each eligible schedule.  Called by APScheduler ``IntervalTrigger``.
     """
     async with AsyncSessionLocal() as db:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
+        # next_run_at is TIMESTAMP WITHOUT TIME ZONE; strip tz for comparison
+        now_naive = now.replace(tzinfo=None)
         result = await db.execute(
             select(TaskSchedule).where(
                 TaskSchedule.enabled == True,  # noqa: E712
-                TaskSchedule.next_run_at <= now,
+                TaskSchedule.next_run_at <= now_naive,
             )
         )
         schedules = result.scalars().all()
@@ -137,7 +139,7 @@ def run_retention_cleanup() -> None:
     from backend.models.workflow import WorkflowRun
     from backend.models.job import JobInstance, StepTrace
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=WORKFLOW_RUN_RETENTION_DAYS)
 
     with SessionLocal() as db:

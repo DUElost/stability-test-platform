@@ -9,7 +9,7 @@ Concurrent dispatch tests for `services/dispatcher.py` are tracked as future wor
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 class TestHeartbeatMonotonicity:
@@ -17,7 +17,7 @@ class TestHeartbeatMonotonicity:
 
     def test_heartbeat_timestamp_monotonic(self):
         timestamps = []
-        base_time = datetime.utcnow()
+        base_time = datetime.now(timezone.utc)
 
         for i in range(10):
             ts = base_time + timedelta(seconds=i * 5)
@@ -28,7 +28,7 @@ class TestHeartbeatMonotonicity:
 
     def test_heartbeat_clock_skew_handling(self):
         """System should use max(current, received) when clock skew is detected."""
-        current_heartbeat = datetime.utcnow()
+        current_heartbeat = datetime.now(timezone.utc)
         old_heartbeat = current_heartbeat - timedelta(seconds=30)
         effective_heartbeat = max(current_heartbeat, old_heartbeat)
         assert effective_heartbeat == current_heartbeat
@@ -36,7 +36,7 @@ class TestHeartbeatMonotonicity:
     def test_heartbeat_sequence_integrity(self):
         """Out-of-order arrivals should be sorted correctly."""
         sequence = []
-        base_time = datetime.utcnow()
+        base_time = datetime.now(timezone.utc)
         for i in range(5):
             sequence.append(base_time + timedelta(seconds=i * 5))
         sequence.append(base_time + timedelta(seconds=2 * 5))

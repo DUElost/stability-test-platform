@@ -17,7 +17,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ class PipelineEngine:
     def execute(self, pipeline_def: dict) -> StepResult:
         """Execute the full pipeline: stages format or lifecycle format."""
         # Verify device lock is held before executing
-        lock_err = self._verify_device_lock()
+        lock_err = self._verify_device_lease()
         if lock_err:
             return lock_err
 
@@ -179,8 +179,8 @@ class PipelineEngine:
             error_message="pipeline_def must contain 'stages' or 'lifecycle'",
         )
 
-    def _verify_device_lock(self) -> Optional[StepResult]:
-        """Verify device lock via extend_lock endpoint. Returns StepResult on failure, None on success."""
+    def _verify_device_lease(self) -> Optional[StepResult]:
+        """Verify device lease via extend_lock endpoint. Returns StepResult on failure, None on success."""
         if not self._api_url:
             return None  # No API URL configured — skip verification (dev mode)
 
@@ -198,11 +198,11 @@ class PipelineEngine:
                     url, json={"fencing_token": self._fencing_token}, headers=headers, timeout=10,
                 )
                 if resp.status_code == 409:
-                    logger.error("device_lock_not_held run=%d — aborting pipeline", self._run_id)
+                    logger.error("device_lease_not_held run=%d — aborting pipeline", self._run_id)
                     return StepResult(
                         success=False,
                         exit_code=1,
-                        error_message="device_lock_not_held",
+                        error_message="device_lease_not_held",
                     )
                 if resp.status_code == 401:
                     logger.error("lock_verify_auth_failed run=%d status=401", self._run_id)
@@ -366,7 +366,7 @@ class PipelineEngine:
                     return StepResult(
                         success=False,
                         exit_code=1,
-                        error_message="device_lock_lost",
+                        error_message="device_lease_lost",
                     )
 
                 success = self._run_step_with_retry_stages(stage_name, step)
@@ -763,7 +763,7 @@ class PipelineEngine:
             init_result = self._run_stages_only({"stages": init_def["stages"]})
             if not init_result.success:
                 # Distinguish lock_lost (abort) from genuine init failure
-                if init_result.error_message == "device_lock_lost":
+                if init_result.error_message == "device_lease_lost":
                     termination_reason = "abort"
                 else:
                     termination_reason = "init_failure"
@@ -799,7 +799,7 @@ class PipelineEngine:
 
                     if not patrol_result.success:
                         # Distinguish lock_lost (abort) from genuine patrol failure
-                        if patrol_result.error_message == "device_lock_lost":
+                        if patrol_result.error_message == "device_lease_lost":
                             termination_reason = "abort"
                         else:
                             termination_reason = "patrol_failure"
@@ -810,7 +810,7 @@ class PipelineEngine:
                     # Report patrol progress
                     time_elapsed = time.time() - init_completed_at
                     time_remaining = max(0, timeout_seconds - time_elapsed) if timeout_seconds > 0 else -1
-                    next_patrol_at = (datetime.utcnow() + timedelta(seconds=interval)).isoformat() + "Z" if interval > 0 else ""
+                    next_patrol_at = (datetime.now(timezone.utc) + timedelta(seconds=interval)).isoformat() + "Z" if interval > 0 else ""
 
                     self._report_job_status_mq(
                         "PATROL_RUNNING",
@@ -968,7 +968,7 @@ class _MQStepLogger:
 
         if self._log_file:
             try:
-                ts = datetime.utcnow().isoformat() + "Z"
+                ts = datetime.now(timezone.utc).isoformat() + "Z"
                 with open(self._log_file, "a", encoding="utf-8") as f:
                     f.write(f"{ts} [{level}] {message}\n")
             except Exception:

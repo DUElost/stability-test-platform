@@ -1,6 +1,6 @@
 """Resource pool models: WiFi router pools and per-device allocations."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB
@@ -25,8 +25,8 @@ class ResourcePool(Base):
     max_concurrent_devices = Column(Integer, nullable=False, default=30)
     host_group             = Column(String(128), nullable=True)
     is_active              = Column(Boolean, nullable=False, default=True)
-    created_at             = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at             = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at             = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at             = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     allocations = relationship("ResourceAllocation", back_populates="pool", lazy="dynamic")
 
@@ -40,7 +40,7 @@ class ResourceAllocation(Base):
     device_id       = Column(Integer, ForeignKey("device.id"), nullable=False)
     allocated_params = Column(JSONB, nullable=False, default=dict)
     # allocated_params = {"ssid": "LabWiFi-2.4G", "password": "secret"}
-    created_at      = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at      = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     pool = relationship("ResourcePool", foreign_keys=[resource_pool_id], back_populates="allocations")
     job  = relationship("JobInstance", foreign_keys=[job_instance_id])

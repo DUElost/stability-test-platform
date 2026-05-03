@@ -1,7 +1,7 @@
 """
 Tests for devices API routes
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from backend.models.host import Device
@@ -199,7 +199,7 @@ class TestDeviceWithHostRelationship:
         device = Device(
             serial=f"NOHOST-{uuid4().hex[:8]}",
             status="ONLINE",
-            last_seen=datetime.utcnow(),
+            last_seen=datetime.now(timezone.utc),
         )
         db_session.add(device)
         db_session.commit()

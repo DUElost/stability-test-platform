@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, Integer, String
 
@@ -15,5 +15,5 @@ class User(Base):
     hashed_password = Column(String(256), nullable=False)
     role = Column(String(32), default="user", nullable=False)
     is_active = Column(String(1), default="Y", nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     last_login = Column(DateTime)

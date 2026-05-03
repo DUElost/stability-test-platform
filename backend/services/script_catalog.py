@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -102,7 +102,7 @@ def scan_script_root(db: Session, root: str | Path, runtime_root: str | None = N
 
     result = ScriptScanResult()
     seen_keys: set[tuple[str, str]] = set()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     existing_rows = db.query(Script).all()
     existing_by_key = {(row.name, row.version): row for row in existing_rows}

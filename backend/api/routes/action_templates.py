@@ -4,7 +4,7 @@
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -145,7 +145,7 @@ async def create_action_template(
         db=db,
     )
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     item = ActionTemplate(
         name=payload.name.strip(),
         description=payload.description,
@@ -218,7 +218,7 @@ async def update_action_template(
         item.retry = payload.retry
     if payload.is_active is not None:
         item.is_active = payload.is_active
-    item.updated_at = datetime.utcnow()
+    item.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
     await db.refresh(item)
@@ -231,7 +231,7 @@ async def deactivate_action_template(template_id: int, db: AsyncSession = Depend
     if item is None:
         raise HTTPException(status_code=404, detail="action template not found")
     item.is_active = False
-    item.updated_at = datetime.utcnow()
+    item.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return ok({"deactivated": template_id})
 

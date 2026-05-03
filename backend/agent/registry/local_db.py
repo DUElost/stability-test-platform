@@ -17,7 +17,7 @@ import json
 import logging
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ class LocalDB:
         original_ts: Optional[datetime] = None,
     ) -> int:
         """Insert (or ignore duplicate) step trace. Returns row id."""
-        ts = (original_ts or datetime.utcnow()).isoformat()
+        ts = (original_ts or datetime.now(timezone.utc)).isoformat()
         with self._lock:
             with self._conn:
                 cursor = self._conn.execute(
@@ -177,7 +177,7 @@ class LocalDB:
 
     def save_tool_cache(self, tools: dict) -> None:
         """Bulk-replace tool cache entries."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             with self._conn:
                 for tool_id, entry in tools.items():
@@ -197,7 +197,7 @@ class LocalDB:
                     )
 
     def update_tool_cache(self, tool_id: int, entry: dict) -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             with self._conn:
                 self._conn.execute(
@@ -233,7 +233,7 @@ class LocalDB:
 
     def save_script_cache(self, scripts: dict) -> None:
         """Bulk-replace script cache entries."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             with self._conn:
                 self._conn.execute("DELETE FROM script_cache")
@@ -258,7 +258,7 @@ class LocalDB:
                     )
 
     def update_script_cache(self, cache_key: str, entry: dict) -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._lock:
             with self._conn:
                 self._conn.execute(
@@ -320,7 +320,7 @@ class LocalDB:
 
     def enqueue_terminal(self, job_id: int, payload: Dict[str, Any]) -> int:
         """Persist a terminal-state payload. Idempotent per job_id (REPLACE)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         raw = json.dumps(payload, ensure_ascii=False)
         with self._lock:
             with self._conn:
@@ -409,7 +409,7 @@ class LocalDB:
         幂等：INSERT OR IGNORE，重复的 (job_id, seq_no) 返回 None。
         envelope 以 JSON 文本存储，取出后反序列化。
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         raw = json.dumps(envelope, ensure_ascii=False)
         with self._lock:
             with self._conn:
@@ -491,8 +491,8 @@ class LocalDB:
         last_error: Optional[str] = None,
     ) -> None:
         """插入或全量覆写一条 watcher_state。首次启动时调用。"""
-        now = datetime.utcnow().isoformat()
-        started = (started_at or datetime.utcnow()).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        started = (started_at or datetime.now(timezone.utc)).isoformat()
         stopped = stopped_at.isoformat() if stopped_at else None
         with self._lock:
             with self._conn:
@@ -539,7 +539,7 @@ class LocalDB:
             fields.append("last_error = ?"); values.append(last_error[:500])
         if not fields:
             return
-        fields.append("updated_at = ?"); values.append(datetime.utcnow().isoformat())
+        fields.append("updated_at = ?"); values.append(datetime.now(timezone.utc).isoformat())
         values.append(watcher_id)
         with self._lock:
             with self._conn:
@@ -555,7 +555,7 @@ class LocalDB:
                 self._conn.execute(
                     "UPDATE watcher_state SET last_seq_no = ?, updated_at = ? "
                     "WHERE watcher_id = ? AND last_seq_no < ?",
-                    (seq_no, datetime.utcnow().isoformat(), watcher_id, seq_no),
+                    (seq_no, datetime.now(timezone.utc).isoformat(), watcher_id, seq_no),
                 )
 
     def get_watcher_state(self, watcher_id: str) -> Optional[Dict[str, Any]]:
@@ -585,7 +585,7 @@ class LocalDB:
                 self._conn.execute(
                     "INSERT OR REPLACE INTO active_job_registry (job_id, device_id, fencing_token, claimed_at) "
                     "VALUES (?, ?, ?, ?)",
-                    (job_id, device_id, fencing_token, datetime.utcnow().isoformat()),
+                    (job_id, device_id, fencing_token, datetime.now(timezone.utc).isoformat()),
                 )
 
     def delete_active_job(self, job_id: int) -> None:

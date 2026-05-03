@@ -1,7 +1,7 @@
 """Tests for results API routes"""
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.models.job import JobInstance, StepTrace, TaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
@@ -25,7 +25,7 @@ class TestResultsSummary:
         assert len(data["recent_runs"]) <= 5
 
     def test_summary_aggregates_from_job_instance_chain(self, client, db_session, sample_device):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         baseline = client.get("/api/v1/results/summary").json()
         suffix = now.strftime("%Y%m%d%H%M%S%f")
         smoke_type = f"Smoke-{suffix}"

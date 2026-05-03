@@ -156,7 +156,7 @@ class TestLifecycleE2EFlow:
 
         engine._run_stages_only = mock_run_stages
         engine._execute_teardown_best_effort = mock_teardown
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=10, interval_seconds=5)
@@ -187,7 +187,7 @@ class TestLifecycleE2EFlow:
 
         engine._run_stages_only = mock_run_stages
         engine._execute_teardown_best_effort = mock_teardown
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         result = engine._execute_lifecycle(_lifecycle_no_patrol())
@@ -217,7 +217,7 @@ class TestLifecycleE2EFlow:
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=10, interval_seconds=5)
@@ -276,7 +276,7 @@ class TestLifecycleE2EFlow:
 
         engine._run_stages_only = mock_run_stages
         engine._execute_teardown_best_effort = mock_teardown
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=10, interval_seconds=5)
@@ -313,7 +313,7 @@ class TestPatrolTimingAndTermination:
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=10, interval_seconds=60)
@@ -344,7 +344,7 @@ class TestPatrolTimingAndTermination:
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=9999, interval_seconds=0.001)
@@ -374,7 +374,7 @@ class TestPatrolTimingAndTermination:
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=9999, interval_seconds=0.001)
@@ -406,7 +406,7 @@ class TestPatrolTimingAndTermination:
 
         engine._run_stages_only = mock_run_stages
         engine._execute_teardown_best_effort = mock_teardown
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=9999, interval_seconds=0.001)
@@ -431,7 +431,7 @@ class TestPatrolTimingAndTermination:
 
         engine._run_stages_only = mock_run_stages
         engine._execute_teardown_best_effort = mock_teardown
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle()
@@ -455,7 +455,7 @@ class TestPatrolTimingAndTermination:
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=10, interval_seconds=60)
@@ -480,7 +480,7 @@ class TestTeardownBestEffort:
     def test_partial_failure_continues_execution(self):
         """When some teardown steps fail, remaining steps still execute."""
         engine, adb, mq, ws = _make_engine()
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         executed_steps = []
@@ -651,7 +651,7 @@ class TestTeardownBestEffort:
 
         engine._run_stages_only = exploding_stages
         engine._execute_teardown_best_effort = mock_teardown
-        engine._verify_device_lock = lambda: None
+        engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
         pipeline_def = _minimal_lifecycle()

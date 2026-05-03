@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -83,7 +83,7 @@ def create_script_sequence(payload: ScriptSequenceIn, db: Session = Depends(get_
     items = normalize_script_items(payload.items)
     validate_active_scripts(db, items)
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     sequence = ScriptSequence(
         name=name,
         description=payload.description,
@@ -130,7 +130,7 @@ def update_script_sequence(
         items = normalize_script_items(payload.items)
         validate_active_scripts(db, items)
         sequence.items = items
-    sequence.updated_at = datetime.utcnow()
+    sequence.updated_at = datetime.now(timezone.utc)
 
     db.commit()
     db.refresh(sequence)

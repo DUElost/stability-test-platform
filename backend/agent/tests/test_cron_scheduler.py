@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Unit tests for CronScheduler overlap protection and run cleanup."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,7 +24,7 @@ class FakeTaskSchedule:
         self.workflow_definition_id = workflow_definition_id
         self.task_type = task_type
         self.enabled = enabled
-        self.next_run_at = next_run_at or datetime.utcnow()
+        self.next_run_at = next_run_at or datetime.now(timezone.utc)
         self.device_ids = device_ids or []
         self.tool_id = tool_id
         self.task_template_id = task_template_id
@@ -40,7 +40,7 @@ class FakeWorkflowRun:
         self.id = id
         self.workflow_definition_id = workflow_definition_id
         self.status = status
-        self.started_at = started_at or datetime.utcnow()
+        self.started_at = started_at or datetime.now(timezone.utc)
 
 
 class FakeQuery:
@@ -73,7 +73,7 @@ class TestOverlapProtection:
         """Should skip dispatch and only update next_run_at."""
         from backend.scheduler.cron_scheduler import CronScheduler
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         sched = FakeTaskSchedule(
             workflow_definition_id=42,
             next_run_at=now - timedelta(seconds=10),
@@ -96,7 +96,7 @@ class TestOverlapProtection:
         """Should dispatch normally when no RUNNING runs."""
         from backend.scheduler.cron_scheduler import CronScheduler
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         sched = FakeTaskSchedule(
             workflow_definition_id=42,
             device_ids=[1, 2],
@@ -120,7 +120,7 @@ class TestOverlapProtection:
         """RUNNING runs older than PATROL_TIMEOUT_MINUTES should not block dispatch."""
         from backend.scheduler.cron_scheduler import CronScheduler
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         sched = FakeTaskSchedule(
             workflow_definition_id=42,
             device_ids=[1],
@@ -143,7 +143,7 @@ class TestOverlapProtection:
         """Fail-closed: if overlap query raises, skip dispatch to avoid concurrency risk."""
         from backend.scheduler.cron_scheduler import CronScheduler
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         sched = FakeTaskSchedule(
             workflow_definition_id=42,
             next_run_at=now - timedelta(seconds=10),
@@ -177,7 +177,7 @@ class TestCleanupOldRuns:
     def test_deletes_stale_runs(self):
         from backend.scheduler.cron_scheduler import CronScheduler
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         old_run = FakeWorkflowRun(
             id=99,
             status="SUCCESS",
@@ -196,7 +196,7 @@ class TestCleanupOldRuns:
     def test_no_stale_runs_no_delete(self):
         from backend.scheduler.cron_scheduler import CronScheduler
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db = MagicMock()
         db.query.return_value = FakeQuery(items=[])
 
@@ -209,7 +209,7 @@ class TestCleanupOldRuns:
         """If WorkflowRun import fails, cleanup should log warning and rollback."""
         from backend.scheduler.cron_scheduler import CronScheduler
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db = MagicMock()
         db.query.side_effect = Exception("import simulation")
 

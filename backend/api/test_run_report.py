@@ -1,7 +1,7 @@
 import sys
 import unittest
 from unittest.mock import patch
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent.parent
@@ -38,7 +38,7 @@ except ModuleNotFoundError:
 class TestRunReportHelpers(unittest.TestCase):
     def _sample_report(self) -> RunReportOut:
         return RunReportOut(
-            generated_at=datetime.utcnow(),
+            generated_at=datetime.now(timezone.utc),
             run=RunOut(
                 id=101,
                 task_id=11,
@@ -63,7 +63,7 @@ class TestRunReportHelpers(unittest.TestCase):
                 target_device_id=9,
                 status="FAILED",
                 priority=0,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             ),
             host=None,
             device=None,

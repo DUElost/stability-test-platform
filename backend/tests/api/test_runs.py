@@ -3,7 +3,7 @@ Tests for run-oriented API routes after removing the legacy /tasks* compatibilit
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.models.job import JobInstance, StepTrace, TaskTemplate
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
@@ -13,7 +13,7 @@ class TestRunReportFromJobChain:
     """Validate /runs/{id}/report* can read new Job chain completion snapshot."""
 
     def test_get_run_report_from_job_snapshot(self, client, db_session, sample_device, tmp_path):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         wf = WorkflowDefinition(
             name="job-report-workflow",

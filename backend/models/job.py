@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
@@ -16,7 +16,7 @@ class TaskTemplate(Base):
     pipeline_def           = Column(JSONB, nullable=False)
     platform_filter        = Column(JSONB)
     sort_order             = Column(Integer, nullable=False, default=0)
-    created_at             = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at             = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     definition = relationship(
         "backend.models.workflow.WorkflowDefinition",
@@ -48,8 +48,8 @@ class JobInstance(Base):
     watcher_stopped_at = Column(DateTime(timezone=True))
     watcher_capability = Column(String(32))   # inotifyd_root | inotifyd_shell | polling | unavailable | skipped | stub
     log_signal_count   = Column(Integer, nullable=False, default=0, server_default="0")
-    created_at         = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at         = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     workflow_run   = relationship("backend.models.workflow.WorkflowRun", foreign_keys=[workflow_run_id], back_populates="jobs")
     task_template  = relationship("TaskTemplate", foreign_keys=[task_template_id], back_populates="jobs")
@@ -78,7 +78,7 @@ class StepTrace(Base):
     output        = Column(Text)
     error_message = Column(Text)
     original_ts   = Column(DateTime(timezone=True), nullable=False)
-    created_at    = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at    = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     job = relationship("JobInstance", foreign_keys=[job_id], back_populates="step_traces")
 
@@ -110,7 +110,7 @@ class JobArtifact(Base):
     # ── 溯源字段（5B2，nullable）—— 便于与 log_signal JOIN 审计 ──
     source_category       = Column(String(32))    # AEE | VENDOR_AEE | BUGREPORT
     source_path_on_device = Column(String(512))   # 设备侧原路径
-    created_at  = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    created_at  = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     job = relationship("JobInstance", foreign_keys=[job_id], back_populates="artifacts")
 
@@ -142,7 +142,7 @@ class JobLogSignal(Base):
     size_bytes     = Column(BigInteger)
     first_lines    = Column(Text)
     detected_at    = Column(DateTime(timezone=True), nullable=False)
-    received_at    = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    received_at    = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     extra          = Column(JSONB)
 
     job = relationship("JobInstance", foreign_keys=[job_id], back_populates="log_signals")

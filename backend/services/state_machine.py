@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
@@ -33,4 +33,4 @@ class JobStateMachine:
             )
         job.status = new_status.value
         job.status_reason = reason
-        job.updated_at = datetime.utcnow()
+        job.updated_at = datetime.now(timezone.utc)

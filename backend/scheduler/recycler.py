@@ -27,7 +27,7 @@ from backend.core.metrics import (
     recycler_runs,
     recycler_timeouts,
     recycler_duration,
-    device_lock_released,
+    device_lease_released,
     task_run_state_changes,
     task_run_total,
 )
@@ -100,7 +100,7 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
 
     task_run_state_changes.labels(from_state=old_status, to_state="FAILED").inc()
     task_run_total.labels(status="failed", task_type="workflow").inc()
-    device_lock_released.labels(reason="timeout").inc()
+    device_lease_released.labels(reason="timeout").inc()
     recycler_timeouts.labels(timeout_type="dispatched").inc()
 
     logger.warning(

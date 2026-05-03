@@ -4,7 +4,7 @@ Task Schedules API — CRUD + toggle + run-now for cron-based scheduling.
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -124,7 +124,7 @@ def create_schedule(
     _validate_cron(data.cron_expression)
     _validate_workflow_schedule(db, data.workflow_definition_id, data.device_ids or [])
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     is_workflow_mode = data.workflow_definition_id is not None
     task_type = "WORKFLOW" if is_workflow_mode else (data.task_type or "WORKFLOW")
     sched = TaskSchedule(
@@ -210,7 +210,7 @@ def update_schedule(
 
     # Recompute next_run if enabled
     if sched.enabled:
-        sched.next_run_at = _compute_next_run(sched.cron_expression, datetime.utcnow())
+        sched.next_run_at = _compute_next_run(sched.cron_expression, datetime.now(timezone.utc))
     else:
         sched.next_run_at = None
 
@@ -275,7 +275,7 @@ def toggle_schedule(
 
     sched.enabled = not sched.enabled
     if sched.enabled:
-        sched.next_run_at = _compute_next_run(sched.cron_expression, datetime.utcnow())
+        sched.next_run_at = _compute_next_run(sched.cron_expression, datetime.now(timezone.utc))
     else:
         sched.next_run_at = None
 

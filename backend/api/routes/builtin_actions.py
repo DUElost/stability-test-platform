@@ -1,7 +1,7 @@
 """Builtin actions catalog API."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Set
 
@@ -40,7 +40,7 @@ class BuiltinActionUpdate(BaseModel):
 
 
 def _now_iso() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat() + "Z"
 
 
 def _load_catalog_raw() -> List[dict]:

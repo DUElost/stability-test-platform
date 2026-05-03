@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
 from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, JSON, String
@@ -28,7 +28,7 @@ class NotificationChannel(Base):
     type = Column(Enum(ChannelType), nullable=False)
     config = Column(JSON, default=dict)
     enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     rules = relationship("AlertRule", back_populates="channel")
 
@@ -42,6 +42,6 @@ class AlertRule(Base):
     channel_id = Column(Integer, ForeignKey("notification_channels.id"), nullable=False)
     filters = Column(JSON, default=dict)
     enabled = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     channel = relationship("NotificationChannel", back_populates="rules")

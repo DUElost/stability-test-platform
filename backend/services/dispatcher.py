@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, List
 
 from sqlalchemy import select
@@ -241,12 +241,12 @@ async def dispatch_workflow(
         status="RUNNING",
         failure_threshold=failure_threshold,
         triggered_by=triggered_by,
-        started_at=datetime.utcnow(),
+        started_at=datetime.now(timezone.utc),
     )
     db.add(run)
     await db.flush()
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     job_device_pairs: Dict[int, int] = {}
     for device_id in device_ids:
         for template in templates:

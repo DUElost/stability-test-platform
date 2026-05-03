@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, JSON, String
 
@@ -25,4 +25,4 @@ class AuditLog(Base):
     resource_id   = Column(Integer)
     details       = Column(JSON, default=dict)
     ip_address    = Column(String(64))
-    timestamp     = Column(DateTime, default=datetime.utcnow, nullable=False)
+    timestamp     = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)

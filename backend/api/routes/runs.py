@@ -7,7 +7,7 @@ that operate on JobInstance records, not part of the legacy compatibility layer.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 from urllib.parse import unquote, urlparse
@@ -211,7 +211,7 @@ def list_run_steps(run_id: int, db: Session = Depends(get_db)):
 
     pipeline_def = job.pipeline_def or {}
     stages = pipeline_def.get("stages", {})
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     result = []
     idx = 0
     for stage_name, steps in stages.items():

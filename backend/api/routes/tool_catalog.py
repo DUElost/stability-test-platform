@@ -5,7 +5,7 @@ Response includes `id`, `version`, `script_path`, `script_class` required by Age
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -96,7 +96,7 @@ async def create_tool(
     payload: ToolCreate,
     db: AsyncSession = Depends(get_async_db),
 ):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     tool = Tool(
         name=payload.name,
         version=payload.version,
@@ -148,7 +148,7 @@ async def update_tool(
         tool.is_active = payload.is_active
     if payload.category is not None:
         tool.category = payload.category
-    tool.updated_at = datetime.utcnow()
+    tool.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(tool)
     return ok(_tool_out(tool))
@@ -161,7 +161,7 @@ async def deactivate_tool(tool_id: int, db: AsyncSession = Depends(get_async_db)
     if tool is None:
         raise HTTPException(status_code=404, detail="tool not found")
     tool.is_active = False
-    tool.updated_at = datetime.utcnow()
+    tool.updated_at = datetime.now(timezone.utc)
     await db.commit()
     return ok({"deactivated": tool_id})
 
