@@ -39,6 +39,8 @@ class WorkflowRun(Base):
     started_at             = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     ended_at               = Column(DateTime(timezone=True))
     result_summary         = Column(JSONB)
+    run_type               = Column(String(64), nullable=True)
+    run_context            = Column(JSONB, nullable=True)
 
     definition = relationship("WorkflowDefinition", foreign_keys=[workflow_definition_id], back_populates="runs")
     jobs       = relationship("backend.models.job.JobInstance", back_populates="workflow_run", lazy="dynamic")

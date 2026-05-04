@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 
 _JOB_STATUS_TO_RUN_STATUS = {
     "PENDING": "QUEUED",
-    "PENDING_TOOL": "QUEUED",
     "RUNNING": "RUNNING",
     "COMPLETED": "FINISHED",
     "FAILED": "FAILED",

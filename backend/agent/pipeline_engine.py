@@ -75,25 +75,13 @@ class StepResult:
 
 
 class PipelineAction:
-    """Marker base class for legacy Pipeline Action scripts.
+    """Deprecated marker base class kept for legacy compat only.
 
-    Subclasses **must** implement :meth:`run`.  Class-level attributes are used
-    by :class:`~backend.agent.tool_discovery.ToolDiscovery` to register the
-    action into the database automatically.
+    The canonical execution model is ``script:<name>`` via ScriptRegistry.
+    This class and its subclasses exist only as adapters for legacy AIMonkey
+    scripts that have not yet been migrated to ``backend/agent/scripts/``.
 
-    Usage::
-
-        class MyAction(PipelineAction):
-            TOOL_CATEGORY = "MY_CATEGORY"
-            TOOL_DESCRIPTION = "What this action does."
-
-            @classmethod
-            def get_default_params(cls) -> dict:
-                return {"timeout": 300}
-
-            def run(self, ctx: StepContext) -> StepResult:
-                ctx.logger.info("running")
-                return StepResult(success=True)
+    New code must use :class:`~backend.agent.registry.script_registry.ScriptRegistry`.
     """
 
     TOOL_CATEGORY: str = ""

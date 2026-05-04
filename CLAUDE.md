@@ -181,7 +181,7 @@ wsl -u root -- bash -c "rsync -av --delete --exclude='__pycache__' --exclude='.e
 | POST | `/api/v1/agent/jobs/{id}/heartbeat` | 更新任务状态 |
 | POST | `/api/v1/agent/jobs/{id}/complete` | 完成任务 |
 | POST | `/api/v1/agent/jobs/{id}/extend_lock` | 续期设备锁 |
-| POST | `/api/v1/agent/jobs/{run_id}/steps/{step_id}/status` | 更新步骤状态（HTTP fallback） |
+| POST | `/api/v1/agent/jobs/{job_id}/steps/{step_id}/status` | 更新步骤状态（HTTP fallback） |
 
 ### SocketIO 端点
 
@@ -392,21 +392,6 @@ class StepTrace(Base):
     original_ts: datetime
 ```
 
-### Tool（工具） — `backend/models/tool.py`
-```python
-class Tool(Base):
-    __tablename__ = "tool"
-    id: int
-    name: str
-    version: str
-    script_path: str
-    script_class: str
-    param_schema: JSONB
-    is_active: bool
-    description: Optional[str]
-    category: Optional[str]
-```
-
 ### 其他模型
 - **User** — `backend/models/user.py`（认证用户）
 - **AuditLog** — `backend/models/audit.py`（审计日志）
@@ -491,7 +476,6 @@ class Tool(Base):
 - `backend/models/host.py` - Host / Device ORM
 - `backend/models/workflow.py` - WorkflowDefinition / WorkflowRun ORM
 - `backend/models/job.py` - TaskTemplate / JobInstance / StepTrace / JobArtifact ORM
-- `backend/models/tool.py` - Tool ORM（新模型）
 - `backend/models/user.py` - User ORM
 - `backend/models/notification.py` - NotificationChannel / AlertRule ORM
 - `backend/models/schedule.py` - TaskSchedule ORM
@@ -505,7 +489,6 @@ class Tool(Base):
 - `backend/api/routes/devices.py` - 设备管理
 - `backend/api/routes/runs.py` - Job 报告/JIRA 草稿/步骤/产物下载
 - `backend/api/routes/logs.py` - 运行时日志查询/Agent SSH 日志
-- `backend/api/routes/tool_catalog.py` - 工具目录 API（新）
 - `backend/api/routes/heartbeat.py` - 心跳处理
 - `backend/api/routes/websocket.py` - WebSocket 端点（deprecated stubs）
 - `backend/api/routes/metrics.py` - Prometheus 指标端点

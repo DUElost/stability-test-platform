@@ -6,13 +6,12 @@ from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
 
 VALID_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
-    JobStatus.PENDING:      {JobStatus.RUNNING},
+    JobStatus.PENDING:      {JobStatus.RUNNING, JobStatus.FAILED},
     JobStatus.RUNNING:      {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED, JobStatus.UNKNOWN},
     JobStatus.UNKNOWN:      {JobStatus.RUNNING, JobStatus.COMPLETED, JobStatus.FAILED},
     JobStatus.FAILED:       set(),
     JobStatus.COMPLETED:    set(),
     JobStatus.ABORTED:      set(),
-    JobStatus.PENDING_TOOL: {JobStatus.PENDING},
 }
 
 

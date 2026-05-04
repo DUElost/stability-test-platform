@@ -28,13 +28,11 @@ def test_send_heartbeat_includes_catalog_versions(monkeypatch):
     send_heartbeat(
         "http://server",
         "host-1",
-        tool_catalog_version="tool-v",
         script_catalog_version="script-v",
     )
 
     assert captured["url"] == "http://server/api/v1/heartbeat"
     assert captured["headers"] == {"x-agent-secret": "secret"}
-    assert captured["json"]["tool_catalog_version"] == "tool-v"
     assert captured["json"]["script_catalog_version"] == "script-v"
 
 
@@ -57,7 +55,6 @@ def test_heartbeat_thread_refreshes_scripts_when_server_reports_outdated(monkeyp
         host_info={},
         poll_interval=60,
         catalog_versions=lambda: {
-            "tool_catalog_version": "tool-v",
             "script_catalog_version": "script-v",
         },
         on_scripts_outdated=lambda: refreshed.append(True),
@@ -65,6 +62,5 @@ def test_heartbeat_thread_refreshes_scripts_when_server_reports_outdated(monkeyp
 
     thread._tick()
 
-    assert sent_payloads[0]["tool_catalog_version"] == "tool-v"
     assert sent_payloads[0]["script_catalog_version"] == "script-v"
     assert refreshed == [True]

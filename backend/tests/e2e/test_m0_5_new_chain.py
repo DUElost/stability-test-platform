@@ -52,12 +52,11 @@ def test_m0_5_new_chain_e2e():
     run_tag = uuid.uuid4().hex[:8]
     host_id = f"host-e2e-{run_tag}"
     device_serial = f"serial-e2e-{run_tag}"
-    tool_name = f"e2e-tool-{run_tag}"
-    tool_version = "v0.0.1"
+    script_name = f"e2e-script-{run_tag}"
+    script_version = "1.0.0"
 
     engine = create_engine(DATABASE_URL, future=True)
 
-    tool_id = None
     wf_id = None
     run_id = None
     device_id = None
@@ -69,23 +68,27 @@ def test_m0_5_new_chain_e2e():
         resp.raise_for_status()
 
         try:
-            # 1) Tool 注册
-            tool_payload = {
-                "name": tool_name,
-                "version": tool_version,
-                "script_path": "C:/tools/e2e_tool.py",
-                "script_class": "E2ETool",
-                "param_schema": {"type": "object"},
-                "description": "e2e tool",
+            # 1) Script 注册
+            script_payload = {
+                "name": script_name,
+                "display_name": script_name,
+                "category": "device",
+                "script_type": "python",
+                "version": script_version,
+                "nfs_path": f"/mnt/storage/test-platform/scripts/{script_name}/v{script_version}/{script_name}.py",
+                "entry_point": "",
+                "content_sha256": "e" * 64,
+                "param_schema": {"duration": {"type": "integer"}},
+                "description": "e2e script",
                 "is_active": True,
             }
-            tool = _unwrap_api(client.post("/api/v1/tools", json=tool_payload))
-            tool_id = tool["id"]
+            script = _unwrap_api(client.post("/api/v1/scripts", json=script_payload))
+            script_id = script["id"]
 
             # 2) Host 心跳注册
             hb_payload = {
                 "host_id": host_id,
-                "tool_catalog_version": "e2e",
+                "script_catalog_version": "e2e",
                 "load": {"running_jobs": 0},
             }
             _unwrap_api(client.post("/api/v1/agent/heartbeat", json=hb_payload, headers=_headers()))
@@ -125,17 +128,19 @@ def test_m0_5_new_chain_e2e():
                     {
                         "name": "e2e-template",
                         "pipeline_def": {
-                            "stages": {
-                                "execute": [
+                            "lifecycle": {
+                                "init": [
                                     {
                                         "step_id": "e2e_step",
-                                        "action": f"tool:{tool_id}",
-                                        "version": tool_version,
+                                        "action": f"script:{script_name}",
+                                        "version": script_version,
                                         "params": {"duration": 10},
                                         "timeout_seconds": 60,
                                         "retry": 0,
+                                        "enabled": True,
                                     }
-                                ]
+                                ],
+                                "teardown": [],
                             }
                         },
                         "platform_filter": {"platform": "MTK"},
@@ -267,7 +272,7 @@ def test_m0_5_new_chain_e2e():
                     conn.execute(text("DELETE FROM device WHERE id = :did"), {"did": device_id})
                 if host_id:
                     conn.execute(text("DELETE FROM host WHERE id = :hid"), {"hid": host_id})
-                if tool_id:
-                    conn.execute(text("DELETE FROM tool WHERE id = :tid"), {"tid": tool_id})
+                if script_id:
+                    conn.execute(text("DELETE FROM script WHERE id = :sid"), {"sid": script_id})
 
             engine.dispose()

@@ -152,7 +152,7 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                     # else: still within grace — do nothing
                     continue
 
-                # Other statuses (PENDING, PENDING_TOOL, etc.) — skip
+                # Other statuses (PENDING, etc.) — skip
         except Exception:
             logger.exception(
                 "reconciler_expired_lease_failed lease=%s device=%s job=%s",

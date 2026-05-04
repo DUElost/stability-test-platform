@@ -20,21 +20,25 @@
 │   ├── main.py                         # 入口：python -m agent.main
 │   ├── config.py                       # 集中路径常量
 │   ├── heartbeat.py
+│   ├── heartbeat_thread.py
 │   ├── device_discovery.py
 │   ├── system_monitor.py
-│   ├── task_executor.py
+│   ├── job_runner.py                   # 替代旧 task_executor
+│   ├── pipeline_engine.py              # lifecycle 执行引擎
+│   ├── pipeline_runner.py
 │   ├── adb_wrapper.py
-│   ├── tool_discovery.py
-│   ├── test_framework.py
-│   ├── test_stages.py
+│   ├── test_framework.py               # legacy（AIMonkey 适配）
+│   ├── test_stages.py                  # legacy（AIMonkey 适配）
 │   ├── aimonkey_aee.py
 │   ├── aimonkey_risk.py
 │   ├── aimonkey_stages.py
-│   └── tools/                          # 测试工具插件
-│       ├── __init__.py
-│       ├── monkey_test.py
-│       ├── aimonkey_test.py
-│       └── ...
+│   ├── registry/                       # 本地注册表
+│   │   ├── local_db.py                 # SQLite WAL
+│   │   └── script_registry.py          # script:<name> 解析
+│   ├── watcher/                        # ADR-0018 设备日志监控
+│   │   └── ...
+│   └── scripts/                        # 可执行脚本（扁平布局）
+│       └── <name>/v<version>/<entry>.py
 ├── resources/                          # 测试资源文件
 │   └── aimonkey/                       # AIMONKEY 二进制与配置
 ├── logs/                               # 所有日志统一目录

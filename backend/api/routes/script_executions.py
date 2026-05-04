@@ -58,10 +58,7 @@ def create_execution(payload: ScriptExecutionCreate, db: Session = Depends(get_d
 def list_executions(skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
     query = (
         db.query(WorkflowRun)
-        .filter(
-            WorkflowRun.result_summary.isnot(None),
-            WorkflowRun.result_summary["mode"].astext == "script_execution",
-        )
+        .filter(WorkflowRun.run_type == "script_execution")
         .order_by(WorkflowRun.started_at.desc(), WorkflowRun.id.desc())
     )
     total = query.count()
@@ -89,7 +86,8 @@ def list_executions(skip: int = 0, limit: int = 50, db: Session = Depends(get_db
             for job in row_jobs[:DEVICE_SERIAL_PREVIEW_LIMIT]
             if job.device is not None
         ]
-        result_items = (row.result_summary or {}).get("items") or []
+        run_context = row.run_context or {}
+        result_items = run_context.get("items") or []
         script_names = " → ".join(
             item["script_name"] for item in result_items if item.get("script_name")
         )
@@ -105,7 +103,7 @@ def list_executions(skip: int = 0, limit: int = 50, db: Session = Depends(get_db
                 "status": row.status,
                 "started_at": row.started_at,
                 "ended_at": row.ended_at,
-                "sequence_id": (row.result_summary or {}).get("sequence_id"),
+                "sequence_id": run_context.get("sequence_id"),
                 "step_count": len(result_items),
                 "device_count": device_count,
                 "device_serials": device_serials,

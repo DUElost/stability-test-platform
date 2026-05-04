@@ -152,6 +152,8 @@ class WorkflowRunOut(ORMBaseModel):
     started_at: datetime
     ended_at: Optional[datetime]
     result_summary: Optional[dict]
+    run_type: Optional[str] = None
+    run_context: Optional[dict] = None
     jobs: List[JobInstanceOut] = []
 
 
@@ -702,6 +704,7 @@ def _run_out(run: WorkflowRun, jobs: list) -> WorkflowRunOut:
         status=run.status, failure_threshold=run.failure_threshold,
         triggered_by=run.triggered_by, started_at=run.started_at,
         ended_at=run.ended_at, result_summary=run.result_summary,
+        run_type=run.run_type, run_context=run.run_context,
         jobs=[_job_out(j, []) for j in jobs],
     )
 

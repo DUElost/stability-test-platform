@@ -78,7 +78,6 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
 
     old_status = job.status
     try:
-        JobStateMachine.transition(job, JobStatus.RUNNING, "recycler_auto_claim")
         JobStateMachine.transition(job, JobStatus.FAILED, reason)
     except InvalidTransitionError:
         logger.info(

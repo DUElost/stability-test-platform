@@ -48,26 +48,38 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+_DEFAULT_CATEGORY = "device"
+
+
 def _iter_script_entries(root: Path) -> Iterable[Tuple[str, str, str, Path, str]]:
-    for category_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        category = category_dir.name
-        for name_dir in sorted(p for p in category_dir.iterdir() if p.is_dir()):
-            name = name_dir.name
-            for version_dir in sorted(p for p in name_dir.iterdir() if p.is_dir()):
-                raw_version = version_dir.name
-                if not raw_version.startswith("v") or len(raw_version) <= 1:
-                    continue
-                version = raw_version[1:]
-                candidates = [
-                    p for p in sorted(version_dir.iterdir())
-                    if p.is_file() and detect_script_type(p) and not p.name.startswith("_")
-                ]
-                if not candidates:
-                    continue
-                entry = candidates[0]
-                script_type = detect_script_type(entry)
-                if script_type:
-                    yield category, name, version, entry, script_type
+    """Yield (category, name, version, entry, script_type).
+
+    Layout: ``root/<name>/v<version>/<entry>.py`` (flat, 2 levels under root).
+    Category is fixed at ``device`` — manifest-based override may be added
+    when host-side scripts return.
+    """
+    for name_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        name = name_dir.name
+        for version_dir in sorted(p for p in name_dir.iterdir() if p.is_dir()):
+            raw_version = version_dir.name
+            if not raw_version.startswith("v") or len(raw_version) <= 1:
+                continue
+            version = raw_version[1:]
+            entry, script_type = _pick_entry(version_dir)
+            if entry:
+                yield _DEFAULT_CATEGORY, name, version, entry, script_type
+
+
+def _pick_entry(version_dir: Path) -> tuple:
+    """Return (entry_path, script_type) for the first script file in *version_dir*."""
+    candidates = [
+        p for p in sorted(version_dir.iterdir())
+        if p.is_file() and detect_script_type(p) and not p.name.startswith("_")
+    ]
+    if not candidates:
+        return None, None
+    entry = candidates[0]
+    return entry, detect_script_type(entry)
 
 
 def _is_under_root(path: str, root: Path) -> bool:

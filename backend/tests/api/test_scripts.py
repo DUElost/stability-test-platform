@@ -49,7 +49,7 @@ def test_script_crud_and_soft_delete(client):
 
 def test_script_scan_registers_conflicts_and_deactivates_missing(client, tmp_path, monkeypatch):
     root = tmp_path / "scripts"
-    version_dir = root / "device" / "connect_wifi" / "v1.0.0"
+    version_dir = root / "connect_wifi" / "v1.0.0"
     version_dir.mkdir(parents=True)
     entry = version_dir / "connect_wifi.sh"
     entry.write_text("#!/usr/bin/env bash\necho wifi\n", encoding="utf-8")
@@ -95,7 +95,7 @@ def test_script_scan_registers_conflicts_and_deactivates_missing(client, tmp_pat
 
 def test_script_scan_maps_source_root_to_agent_runtime_root(client, tmp_path, monkeypatch):
     root = tmp_path / "agent" / "scripts"
-    version_dir = root / "device" / "connect_wifi" / "v1.0.0"
+    version_dir = root / "connect_wifi" / "v1.0.0"
     version_dir.mkdir(parents=True)
     entry = version_dir / "connect_wifi.sh"
     entry.write_text("#!/usr/bin/env bash\necho wifi\n", encoding="utf-8")
@@ -112,5 +112,5 @@ def test_script_scan_maps_source_root_to_agent_runtime_root(client, tmp_path, mo
     assert len(scripts) == 1
     assert (
         scripts[0]["nfs_path"]
-        == "/opt/stability-test-agent/agent/scripts/device/connect_wifi/v1.0.0/connect_wifi.sh"
+        == "/opt/stability-test-agent/agent/scripts/connect_wifi/v1.0.0/connect_wifi.sh"
     )

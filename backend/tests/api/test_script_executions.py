@@ -75,7 +75,8 @@ def test_script_execution_creates_workflow_run_and_job_instances(
 
     run = db_session.get(WorkflowRun, data["workflow_run_id"])
     assert run.triggered_by == "script_execution"
-    assert run.result_summary["mode"] == "script_execution"
+    assert run.run_type == "script_execution"
+    assert run.run_context["items"][0]["script_name"] == script_name
 
     job = db_session.get(JobInstance, data["job_ids"][0])
     assert job.workflow_run_id == run.id
@@ -214,15 +215,15 @@ def test_rerun_returns_new_workflow_run_id(client, db_session, sample_device):
     assert run_id_2 != run_id_1
 
 
-def test_list_filters_by_result_summary_mode(
+def test_list_filters_by_run_type(
     client, db_session, sample_workflow_definition, sample_device
 ):
-    """Phase 5a: 仅 result_summary.mode == "script_execution" 的 WorkflowRun 出现在列表中。
+    """仅 run_type == "script_execution" 的 WorkflowRun 出现在列表中。
 
-    创建 trigger_by="script_execution" 但 result_summary 无 mode 字段的 WorkflowRun
-    → list 不返回该行；有 mode 的正常返回。
+    创建 trigger_by="script_execution" 但 run_type 为 NULL 的 WorkflowRun
+    → list 不返回该行；有 run_type="script_execution" 的正常返回。
     """
-    script_name = _uniq("mode_filter")
+    script_name = _uniq("runtype_filter")
     assert client.post("/api/v1/scripts", json=_script_payload(script_name)).status_code == 201
 
     resp = client.post(
@@ -237,16 +238,16 @@ def test_list_filters_by_result_summary_mode(
     assert resp.status_code == 201
     real_run_id = resp.json()["data"]["workflow_run_id"]
 
-    # WorkflowRun with triggered_by="script_execution" but NO "mode" in result_summary
-    run_no_mode = WorkflowRun(
+    # WorkflowRun with triggered_by="script_execution" but run_type not set
+    run_no_type = WorkflowRun(
         workflow_definition_id=sample_workflow_definition.id,
         status="RUNNING",
         failure_threshold=0.0,
         triggered_by="script_execution",
         started_at=datetime.now(timezone.utc),
-        result_summary={"items": [{"script_name": "fake", "version": "1.0"}]},
+        run_context={"items": [{"script_name": "fake", "version": "1.0"}]},
     )
-    db_session.add(run_no_mode)
+    db_session.add(run_no_type)
     db_session.commit()
 
     list_resp = client.get("/api/v1/script-executions")
@@ -255,7 +256,7 @@ def test_list_filters_by_result_summary_mode(
 
     run_ids = [item["workflow_run_id"] for item in items]
     assert real_run_id in run_ids
-    assert run_no_mode.id not in run_ids
+    assert run_no_type.id not in run_ids
 
 
 # ══════════════════════════════════════════════════════════════════════════════

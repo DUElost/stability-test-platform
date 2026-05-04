@@ -215,8 +215,8 @@ def create_script_execution(
         failure_threshold=0.0,
         triggered_by=triggered_by,
         started_at=now,
-        result_summary={
-            "mode": "script_execution",
+        run_type="script_execution",
+        run_context={
             "sequence_id": sequence_id,
             "items": items,
             "on_failure": on_failure,
@@ -270,9 +270,9 @@ def script_execution_detail(db: Session, run_id: int) -> dict[str, Any]:
     run = db.get(WorkflowRun, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="script execution not found")
-    summary = run.result_summary or {}
-    if summary.get("mode") != "script_execution":
+    if run.run_type != "script_execution":
         raise HTTPException(status_code=404, detail="script execution not found")
+    context = run.run_context or {}
 
     jobs = (
         db.query(JobInstance)
@@ -347,8 +347,8 @@ def script_execution_detail(db: Session, run_id: int) -> dict[str, Any]:
         "workflow_run_id": run.id,
         "mode": "script_execution",
         "status": run.status,
-        "sequence_id": summary.get("sequence_id"),
-        "items": summary.get("items") or [],
-        "on_failure": summary.get("on_failure", "stop"),
+        "sequence_id": context.get("sequence_id"),
+        "items": context.get("items") or [],
+        "on_failure": context.get("on_failure", "stop"),
         "jobs": payload_jobs,
     }
