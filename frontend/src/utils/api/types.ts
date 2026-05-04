@@ -529,24 +529,6 @@ export interface ScriptExecutionDetail {
   jobs: ScriptExecutionJob[];
 }
 
-export interface BuiltinActionEntry {
-  name: string;
-  label: string;
-  category: 'device' | 'process' | 'file' | 'log' | 'script';
-  description: string;
-  param_schema: Record<string, any>;
-  is_active: boolean;
-  updated_at: string;
-}
-
-export interface BuiltinActionUpdatePayload {
-  label?: string;
-  category?: 'device' | 'process' | 'file' | 'log' | 'script';
-  description?: string;
-  param_schema?: Record<string, any>;
-  is_active?: boolean;
-}
-
 export interface ActionTemplateEntry {
   id: number;
   name: string;
@@ -593,17 +575,25 @@ export interface PipelineStep {
   enabled?: boolean;
 }
 
+export type PipelinePhase = 'init' | 'patrol' | 'teardown';
+
+export interface PipelinePatrol {
+  interval_seconds: number;
+  steps: PipelineStep[];
+}
+
 export interface PipelineDef {
-  stages: {
-    prepare?: PipelineStep[];
-    execute?: PipelineStep[];
-    post_process?: PipelineStep[];
+  lifecycle: {
+    timeout_seconds?: number;
+    init: PipelineStep[];
+    patrol?: PipelinePatrol;
+    teardown: PipelineStep[];
   };
 }
 
 export interface PipelineStepOverride {
   template_name: string;
-  stage: 'prepare' | 'execute' | 'post_process';
+  phase: PipelinePhase;
   step_id: string;
   params?: Record<string, any>;
   timeout_seconds?: number;
@@ -653,7 +643,7 @@ export interface StepTrace {
   id: number;
   job_id: number;
   step_id: string;
-  stage: 'prepare' | 'execute' | 'post_process';
+  stage: string;
   event_type: 'STARTED' | 'COMPLETED' | 'FAILED' | 'RETRIED';
   status: string;
   output?: string | null;

@@ -35,7 +35,6 @@ const ScriptHistoryPage = lazy(() => import('../pages/execution/ScriptHistoryPag
 // 新编排层页面
 const WorkflowDefinitionListPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionListPage'));
 const WorkflowDefinitionEditPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionEditPage'));
-const ActionTemplatePage = lazy(() => import('../pages/orchestration/ActionTemplatePage'));
 const DispatchEntryPage = lazy(() => import('../pages/execution/DispatchEntryPage'));
 const WorkflowRunMatrixPage = lazy(() => import('../pages/execution/WorkflowRunMatrixPage'));
 const WorkflowRunListPage = lazy(() => import('../pages/execution/WorkflowRunListPage'));
@@ -106,7 +105,6 @@ export default function AppRouter() {
             <Route path="orchestration">
               <Route path="workflows" element={<WorkflowDefinitionListPage />} />
               <Route path="workflows/:id" element={<WorkflowDefinitionEditPage />} />
-              <Route path="actions" element={<ActionTemplatePage />} />
             </Route>
             <Route path="execution">
               <Route path="run" element={<DispatchEntryPage />} />

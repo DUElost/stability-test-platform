@@ -8,7 +8,7 @@ import {
   toTemplatePayload,
 } from './workflowTemplateState';
 
-const EMPTY: PipelineDef = { stages: { prepare: [], execute: [], post_process: [] } };
+const EMPTY: PipelineDef = { lifecycle: { init: [], teardown: [] } };
 
 describe('workflowTemplateState', () => {
   it('sorts templates by sort_order then name', () => {

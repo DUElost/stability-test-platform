@@ -30,7 +30,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { PipelineDef, PipelineStep } from '@/utils/api';
+import type { PipelineDef, PipelinePhase, PipelineStep } from '@/utils/api';
 import { DynamicToolForm, type ParamSchema } from '@/components/task/DynamicToolForm';
 
 interface ActionTemplateOption {
@@ -54,15 +54,12 @@ interface ScriptOption {
   is_active: boolean;
 }
 
-type ActionType = 'tool' | 'script';
-
 interface StagesPipelineEditorProps {
   value: PipelineDef;
   onChange: (def: PipelineDef) => void;
-  toolOptions?: { id: number; name: string; version: string }[];
   scriptOptions?: ScriptOption[];
   actionTemplateOptions?: ActionTemplateOption[];
-  allowedStages?: Array<keyof PipelineDef['stages']>;
+  allowedPhases?: PipelinePhase[];
   readOnly?: boolean;
 }
 
@@ -79,7 +76,6 @@ interface StepCardProps {
   onInlineChange: (step: PipelineStep) => void;
   canMoveUp: boolean;
   canMoveDown: boolean;
-  toolOptions: { id: number; name: string; version: string }[];
   scriptOptions: ScriptOption[];
   readOnly?: boolean;
 }
@@ -90,46 +86,47 @@ interface StepEditorDrawerProps {
   step: PipelineStep | null;
   onClose: () => void;
   onChange: (step: PipelineStep) => void;
-  toolOptions: { id: number; name: string; version: string }[];
   scriptOptions: ScriptOption[];
   actionTemplateOptions: ActionTemplateOption[];
   readOnly?: boolean;
 }
 
-const STAGES: {
-  key: keyof PipelineDef['stages'];
+const PHASES: {
+  key: PipelinePhase;
   label: string;
   hint: string;
   color: string;
   chipClass: string;
 }[] = [
   {
-    key: 'prepare',
-    label: 'Prepare',
-    hint: '环境校验与前置准备',
+    key: 'init',
+    label: 'Init',
+    hint: '生命周期初始化步骤',
     color: 'border-slate-200 bg-slate-50',
     chipClass: 'bg-slate-100 text-slate-700',
   },
   {
-    key: 'execute',
-    label: 'Execute',
-    hint: '核心测试动作执行',
+    key: 'patrol',
+    label: 'Patrol',
+    hint: '周期性巡检步骤',
     color: 'border-emerald-200 bg-emerald-50',
     chipClass: 'bg-emerald-100 text-emerald-700',
   },
   {
-    key: 'post_process',
-    label: 'Post Process',
-    hint: '收尾与结果产物处理',
+    key: 'teardown',
+    label: 'Teardown',
+    hint: '生命周期收尾步骤',
     color: 'border-amber-200 bg-amber-50',
     chipClass: 'bg-amber-100 text-amber-700',
   },
 ];
 
-function createEmptyStep(stageName: string, index: number): PipelineStep {
+function createEmptyStep(phaseName: string, index: number, scriptOptions: ScriptOption[]): PipelineStep {
+  const firstScript = scriptOptions.find((script) => script.is_active) ?? scriptOptions[0];
   return {
-    step_id: `${stageName}_step_${index + 1}`,
-    action: '',
+    step_id: `${phaseName}_step_${index + 1}`,
+    action: firstScript ? `script:${firstScript.name}` : 'script:',
+    version: firstScript?.version ?? '',
     timeout_seconds: 300,
     retry: 0,
     params: {},
@@ -165,22 +162,45 @@ function clampRetry(value: string): number {
 
 function getActionMeta(
   step: PipelineStep,
-  toolOptions: { id: number; name: string; version: string }[],
   scriptOptions: ScriptOption[],
 ) {
-  const actionType: ActionType = step.action.startsWith('script:') ? 'script' : 'tool';
-  const toolId = actionType === 'tool' ? parseInt((step.action || '').replace('tool:', ''), 10) || 0 : 0;
-  const scriptName = actionType === 'script' ? (step.action || '').replace('script:', '') : '';
-  const selectedTool = toolOptions.find((x) => x.id === toolId);
+  const scriptName = step.action.startsWith('script:') ? step.action.replace('script:', '') : '';
   const selectedScript = scriptOptions.find((x) => x.name === scriptName && x.version === step.version)
     ?? scriptOptions.find((x) => x.name === scriptName);
 
   return {
-    actionType,
-    toolId,
     scriptName,
-    selectedTool,
     selectedScript,
+  };
+}
+
+function getPhaseSteps(value: PipelineDef, phase: PipelinePhase): PipelineStep[] {
+  if (phase === 'patrol') return value.lifecycle?.patrol?.steps ?? [];
+  return value.lifecycle?.[phase] ?? [];
+}
+
+function setPhaseSteps(value: PipelineDef, phase: PipelinePhase, steps: PipelineStep[]): PipelineDef {
+  const lifecycle = value.lifecycle ?? { init: [], teardown: [] };
+  if (phase === 'patrol') {
+    return {
+      lifecycle: {
+        ...lifecycle,
+        init: lifecycle.init ?? [],
+        teardown: lifecycle.teardown ?? [],
+        patrol: {
+          interval_seconds: lifecycle.patrol?.interval_seconds ?? 60,
+          steps,
+        },
+      },
+    };
+  }
+  return {
+    lifecycle: {
+      ...lifecycle,
+      init: lifecycle.init ?? [],
+      teardown: lifecycle.teardown ?? [],
+      [phase]: steps,
+    },
   };
 }
 
@@ -197,7 +217,6 @@ function StepCard({
   onInlineChange,
   canMoveUp,
   canMoveDown,
-  toolOptions,
   scriptOptions,
   readOnly,
 }: StepCardProps) {
@@ -209,9 +228,8 @@ function StepCard({
     transition,
     isDragging,
   } = useSortable({ id, disabled: readOnly });
-  const { actionType, toolId, scriptName, selectedTool, selectedScript } = getActionMeta(
+  const { scriptName, selectedScript } = getActionMeta(
     step,
-    toolOptions,
     scriptOptions,
   );
   const paramsCount = Object.keys(step.params ?? {}).length;
@@ -273,9 +291,9 @@ function StepCard({
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
             <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700">
-              {actionType === 'script'
+              {step.action.startsWith('script:')
                 ? `script:${selectedScript?.name || scriptName}`
-                : `tool:${selectedTool?.name || toolId}`}
+                : step.action || 'script:'}
             </span>
             <span className="rounded bg-gray-100 px-1.5 py-0.5">params {paramsCount}</span>
             {!enabled && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">disabled</span>}
@@ -357,7 +375,6 @@ function StepEditorDrawer({
   step,
   onClose,
   onChange,
-  toolOptions,
   scriptOptions,
   actionTemplateOptions,
   readOnly,
@@ -372,20 +389,15 @@ function StepEditorDrawer({
   const meta = useMemo(() => {
     if (!step) {
       return {
-        actionType: 'tool' as ActionType,
         scriptName: '',
-        toolId: 0,
-        selectedTool: undefined,
         selectedScript: undefined,
       };
     }
-    return getActionMeta(step, toolOptions, scriptOptions);
-  }, [step, toolOptions, scriptOptions]);
+    return getActionMeta(step, scriptOptions);
+  }, [step, scriptOptions]);
 
   const paramSchema = useMemo<ParamSchema | null>(() => {
-    const schema = meta.actionType === 'script'
-      ? meta.selectedScript?.param_schema
-      : null;
+    const schema = meta.selectedScript?.param_schema;
     return schema && Object.keys(schema).length > 0 ? (schema as ParamSchema) : null;
   }, [meta]);
 
@@ -449,29 +461,6 @@ function StepEditorDrawer({
     Object.values(grouped).forEach((items) => items.sort((a, b) => a.name.localeCompare(b.name)));
     return grouped;
   }, [scriptOptions]);
-
-  const handleActionTypeChange = (type: ActionType) => {
-    if (!step) return;
-
-    if (type === 'tool' && toolOptions.length > 0) {
-      const firstTool = toolOptions[0];
-      onChange({ ...step, action: `tool:${firstTool.id}`, version: firstTool.version });
-      return;
-    }
-
-    if (type === 'script' && scriptOptions.length > 0) {
-      const firstScript = scriptOptions[0];
-      onChange({ ...step, action: `script:${firstScript.name}`, version: firstScript.version });
-    }
-  };
-
-  const handleToolChange = (idText: string) => {
-    if (!step) return;
-    const id = parseInt(idText, 10);
-    const tool = toolOptions.find((x) => x.id === id);
-    if (!tool) return;
-    onChange({ ...step, action: `tool:${tool.id}`, version: tool.version });
-  };
 
   const handleScriptChange = (name: string) => {
     if (!step) return;
@@ -605,51 +594,24 @@ function StepEditorDrawer({
 
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-600">action</label>
-              <div className="flex flex-col gap-2 md:flex-row">
-                <select
-                  value={meta.actionType}
-                  onChange={(e) => handleActionTypeChange(e.target.value as ActionType)}
-                  disabled={readOnly}
-                  className="rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
-                >
-                  {toolOptions.length > 0 && <option value="tool">tool:</option>}
-                  {scriptOptions.length > 0 && <option value="script">script:</option>}
-                </select>
-
-                {meta.actionType === 'tool' ? (
-                  <select
-                    value={meta.toolId}
-                    onChange={(e) => handleToolChange(e.target.value)}
-                    disabled={readOnly}
-                    className="flex-1 rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
-                  >
-                    {toolOptions.map((tool) => (
-                      <option key={tool.id} value={tool.id}>{tool.name} v{tool.version}</option>
+              <select
+                value={meta.scriptName}
+                onChange={(e) => handleScriptChange(e.target.value)}
+                disabled={readOnly || scriptOptions.length === 0}
+                className="w-full rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
+              >
+                {scriptOptions.length === 0 && <option value="">无可用 script</option>}
+                {Object.entries(scriptGroups).map(([category, items]) => (
+                  <optgroup key={category} label={category}>
+                    {items.map((script) => (
+                      <option key={`${script.name}:${script.version}`} value={script.name}>
+                        {script.name} v{script.version}
+                      </option>
                     ))}
-                  </select>
-                ) : (
-                  <select
-                    value={meta.scriptName}
-                    onChange={(e) => handleScriptChange(e.target.value)}
-                    disabled={readOnly}
-                    className="flex-1 rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
-                  >
-                    {Object.entries(scriptGroups).map(([category, items]) => (
-                      <optgroup key={category} label={category}>
-                        {items.map((script) => (
-                          <option key={`${script.name}:${script.version}`} value={script.name}>
-                            {script.name} v{script.version}
-                          </option>
-                        ))}
-                      </optgroup>
-                    ))}
-                  </select>
-                )}
-              </div>
-              {meta.actionType === 'tool' && step.version && (
-                <p className="mt-1 text-xs text-gray-500">锁定版本: v{step.version}</p>
-              )}
-              {meta.actionType === 'script' && step.version && (
+                  </optgroup>
+                ))}
+              </select>
+              {step.version && (
                 <p className="mt-1 text-xs text-gray-500">锁定版本: v{step.version}</p>
               )}
             </div>
@@ -664,7 +626,7 @@ function StepEditorDrawer({
                   className="w-full rounded border bg-white px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500/20"
                 >
                   <option value="">选择模板并填充当前 Step</option>
-                  {actionTemplateOptions.filter((x) => x.is_active).map((item) => (
+                  {actionTemplateOptions.filter((x) => x.is_active && x.action.startsWith('script:')).map((item) => (
                     <option key={item.id} value={item.id}>{item.name}</option>
                   ))}
                 </select>
@@ -722,101 +684,92 @@ function StepEditorDrawer({
 export default function StagesPipelineEditor({
   value,
   onChange,
-  toolOptions = [],
   scriptOptions = [],
   actionTemplateOptions = [],
-  allowedStages,
+  allowedPhases,
   readOnly = false,
 }: StagesPipelineEditorProps) {
-  const stages = value.stages ?? {};
   const [viewMode, setViewMode] = useState<'focus' | 'all'>('focus');
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  const stageKeys = useMemo(
-    () => new Set<keyof PipelineDef['stages']>(allowedStages ?? ['prepare', 'execute', 'post_process']),
-    [allowedStages],
+  const phaseKeys = useMemo(
+    () => new Set<PipelinePhase>(allowedPhases ?? ['init', 'patrol', 'teardown']),
+    [allowedPhases],
   );
-  const visibleStageDefs = useMemo(() => STAGES.filter((stage) => stageKeys.has(stage.key)), [stageKeys]);
-  const [activeStage, setActiveStage] = useState<keyof PipelineDef['stages']>(allowedStages?.[0] ?? 'prepare');
-  const [editingStep, setEditingStep] = useState<{ stage: keyof PipelineDef['stages']; index: number } | null>(null);
+  const visiblePhaseDefs = useMemo(() => PHASES.filter((phase) => phaseKeys.has(phase.key)), [phaseKeys]);
+  const [activePhase, setActivePhase] = useState<PipelinePhase>(allowedPhases?.[0] ?? 'init');
+  const [editingStep, setEditingStep] = useState<{ phase: PipelinePhase; index: number } | null>(null);
 
   useEffect(() => {
-    if (!stageKeys.has(activeStage)) {
-      setActiveStage(visibleStageDefs[0]?.key ?? 'prepare');
+    if (!phaseKeys.has(activePhase)) {
+      setActivePhase(visiblePhaseDefs[0]?.key ?? 'init');
     }
-  }, [activeStage, stageKeys, visibleStageDefs]);
+  }, [activePhase, phaseKeys, visiblePhaseDefs]);
 
-  const stageMeta = useMemo(() => {
-    const map: Record<keyof PipelineDef['stages'], { label: string; hint: string }> = {
-      prepare: { label: 'Prepare', hint: '环境校验与前置准备' },
-      execute: { label: 'Execute', hint: '核心测试动作执行' },
-      post_process: { label: 'Post Process', hint: '收尾与结果产物处理' },
+  const phaseMeta = useMemo(() => {
+    const map: Record<PipelinePhase, { label: string; hint: string }> = {
+      init: { label: 'Init', hint: '生命周期初始化步骤' },
+      patrol: { label: 'Patrol', hint: '周期性巡检步骤' },
+      teardown: { label: 'Teardown', hint: '生命周期收尾步骤' },
     };
     return map;
   }, []);
 
-  const updateStage = (key: keyof PipelineDef['stages'], steps: PipelineStep[]) => {
-    onChange({
-      stages: {
-        prepare: stages.prepare ?? [],
-        execute: stages.execute ?? [],
-        post_process: stages.post_process ?? [],
-        [key]: steps,
-      },
-    });
+  const updatePhase = (key: PipelinePhase, steps: PipelineStep[]) => {
+    onChange(setPhaseSteps(value, key, steps));
   };
 
-  const addStep = (key: keyof PipelineDef['stages']) => {
-    const current = stages[key] || [];
-    updateStage(key, [...current, createEmptyStep(key, current.length)]);
-    setActiveStage(key);
-    setEditingStep({ stage: key, index: current.length });
+  const addStep = (key: PipelinePhase) => {
+    const current = getPhaseSteps(value, key);
+    updatePhase(key, [...current, createEmptyStep(key, current.length, scriptOptions)]);
+    setActivePhase(key);
+    setEditingStep({ phase: key, index: current.length });
   };
 
-  const updateStep = (key: keyof PipelineDef['stages'], index: number, step: PipelineStep) => {
-    const current = [...(stages[key] || [])];
+  const updateStep = (key: PipelinePhase, index: number, step: PipelineStep) => {
+    const current = [...getPhaseSteps(value, key)];
     current[index] = step;
-    updateStage(key, current);
+    updatePhase(key, current);
   };
 
-  const removeStep = (key: keyof PipelineDef['stages'], index: number) => {
-    const current = [...(stages[key] || [])];
+  const removeStep = (key: PipelinePhase, index: number) => {
+    const current = [...getPhaseSteps(value, key)];
     current.splice(index, 1);
-    updateStage(key, current);
+    updatePhase(key, current);
 
     setEditingStep((prev) => {
-      if (!prev || prev.stage !== key) return prev;
+      if (!prev || prev.phase !== key) return prev;
       if (prev.index === index) return null;
       if (prev.index > index) return { ...prev, index: prev.index - 1 };
       return prev;
     });
   };
 
-  const duplicateStepAt = (key: keyof PipelineDef['stages'], index: number) => {
-    const current = [...(stages[key] || [])];
+  const duplicateStepAt = (key: PipelinePhase, index: number) => {
+    const current = [...getPhaseSteps(value, key)];
     const source = current[index];
     if (!source) return;
     current.splice(index + 1, 0, duplicateStep(source, current));
-    updateStage(key, current);
+    updatePhase(key, current);
   };
 
-  const toggleStepEnabled = (key: keyof PipelineDef['stages'], index: number) => {
-    const current = [...(stages[key] || [])];
+  const toggleStepEnabled = (key: PipelinePhase, index: number) => {
+    const current = [...getPhaseSteps(value, key)];
     const step = current[index];
     if (!step) return;
     current[index] = { ...step, enabled: step.enabled === false };
-    updateStage(key, current);
+    updatePhase(key, current);
   };
 
-  const moveStep = (key: keyof PipelineDef['stages'], index: number, direction: -1 | 1) => {
-    const current = [...(stages[key] || [])];
+  const moveStep = (key: PipelinePhase, index: number, direction: -1 | 1) => {
+    const current = [...getPhaseSteps(value, key)];
     const target = index + direction;
     if (target < 0 || target >= current.length) return;
-    updateStage(key, arrayMove(current, index, target));
+    updatePhase(key, arrayMove(current, index, target));
     setEditingStep((prev) => {
-      if (!prev || prev.stage !== key) return prev;
+      if (!prev || prev.phase !== key) return prev;
       if (prev.index === index) return { ...prev, index: target };
       if (prev.index === target) return { ...prev, index };
       return prev;
@@ -824,7 +777,7 @@ export default function StagesPipelineEditor({
   };
 
   const handleDragEnd = (
-    key: keyof PipelineDef['stages'],
+    key: PipelinePhase,
     itemIds: string[],
     event: DragEndEvent,
   ) => {
@@ -833,20 +786,20 @@ export default function StagesPipelineEditor({
     const oldIndex = itemIds.indexOf(String(active.id));
     const newIndex = itemIds.indexOf(String(over.id));
     if (oldIndex < 0 || newIndex < 0) return;
-    updateStage(key, arrayMove(stages[key] || [], oldIndex, newIndex));
+    updatePhase(key, arrayMove(getPhaseSteps(value, key), oldIndex, newIndex));
     setEditingStep((prev) => {
-      if (!prev || prev.stage !== key) return prev;
+      if (!prev || prev.phase !== key) return prev;
       if (prev.index === oldIndex) return { ...prev, index: newIndex };
       return prev;
     });
   };
 
-  const visibleStages = viewMode === 'focus'
-    ? visibleStageDefs.filter((stage) => stage.key === activeStage)
-    : visibleStageDefs;
+  const visiblePhases = viewMode === 'focus'
+    ? visiblePhaseDefs.filter((phase) => phase.key === activePhase)
+    : visiblePhaseDefs;
 
   const editingStepData = editingStep
-    ? (stages[editingStep.stage] || [])[editingStep.index] || null
+    ? getPhaseSteps(value, editingStep.phase)[editingStep.index] || null
     : null;
 
   return (
@@ -854,15 +807,15 @@ export default function StagesPipelineEditor({
       <div className="rounded-lg border border-gray-200 bg-white p-3">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="grid gap-2 sm:grid-cols-3">
-            {visibleStageDefs.map((stage) => {
-              const count = (stages[stage.key] || []).length;
-              const isActive = stage.key === activeStage;
+            {visiblePhaseDefs.map((phase) => {
+              const count = getPhaseSteps(value, phase.key).length;
+              const isActive = phase.key === activePhase;
               return (
                 <button
-                  key={stage.key}
+                  key={phase.key}
                   type="button"
                   onClick={() => {
-                    setActiveStage(stage.key);
+                    setActivePhase(phase.key);
                     setViewMode('focus');
                   }}
                   className={`rounded-lg border px-3 py-2 text-left transition-colors ${
@@ -872,12 +825,12 @@ export default function StagesPipelineEditor({
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-gray-800">{stage.label}</span>
+                    <span className="text-sm font-semibold text-gray-800">{phase.label}</span>
                     <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">
                       {count} Step
                     </span>
                   </div>
-                  <p className="mt-1 truncate text-xs text-gray-500">{stage.hint}</p>
+                  <p className="mt-1 truncate text-xs text-gray-500">{phase.hint}</p>
                 </button>
               );
             })}
@@ -910,8 +863,8 @@ export default function StagesPipelineEditor({
       </div>
 
       <div className={viewMode === 'all' ? 'grid gap-4 xl:grid-cols-2 2xl:grid-cols-3' : 'grid gap-4 grid-cols-1'}>
-        {visibleStages.map(({ key, label, hint, color, chipClass }) => {
-          const steps = stages[key] || [];
+        {visiblePhases.map(({ key, label, hint, color, chipClass }) => {
+          const steps = getPhaseSteps(value, key);
           const itemIds = steps.map((step, index) => `${key}-${step.step_id || 'step'}-${index}`);
 
           return (
@@ -965,7 +918,7 @@ export default function StagesPipelineEditor({
                           key={itemIds[index]}
                           step={step}
                           index={index}
-                          onEdit={() => setEditingStep({ stage: key, index })}
+                          onEdit={() => setEditingStep({ phase: key, index })}
                           onRemove={() => removeStep(key, index)}
                           onDuplicate={() => duplicateStepAt(key, index)}
                           onToggleEnabled={() => toggleStepEnabled(key, index)}
@@ -974,7 +927,6 @@ export default function StagesPipelineEditor({
                           onInlineChange={(next) => updateStep(key, index, next)}
                           canMoveUp={index > 0}
                           canMoveDown={index < steps.length - 1}
-                          toolOptions={toolOptions}
                           scriptOptions={scriptOptions}
                           readOnly={readOnly}
                         />
@@ -1008,14 +960,13 @@ export default function StagesPipelineEditor({
 
       <StepEditorDrawer
         open={!!editingStepData}
-        title={editingStep ? `${stageMeta[editingStep.stage].label} · Step ${editingStep.index + 1}` : ''}
+        title={editingStep ? `${phaseMeta[editingStep.phase].label} · Step ${editingStep.index + 1}` : ''}
         step={editingStepData}
         onClose={() => setEditingStep(null)}
         onChange={(next) => {
           if (!editingStep) return;
-          updateStep(editingStep.stage, editingStep.index, next);
+          updateStep(editingStep.phase, editingStep.index, next);
         }}
-        toolOptions={toolOptions}
         scriptOptions={scriptOptions}
         actionTemplateOptions={actionTemplateOptions}
         readOnly={readOnly}

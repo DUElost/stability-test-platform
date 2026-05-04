@@ -78,7 +78,7 @@ def _apply_step_overrides(
     for override in overrides:
         if override.get("template_name") != template_name:
             continue
-        phase = override.get("stage")
+        phase = override.get("phase") or override.get("stage")
         step_id = override.get("step_id")
         if not phase or not step_id:
             continue

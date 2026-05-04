@@ -7,10 +7,10 @@ function makeStep(overrides: Partial<RunStep> = {}): RunStep {
   return {
     id: 1,
     run_id: 100,
-    phase: 'prepare',
+    phase: 'init',
     step_order: 0,
     name: 'check_device',
-    action: 'builtin:check_device',
+    action: 'script:check_device',
     params: {},
     status: 'PENDING',
     started_at: null,
@@ -24,11 +24,11 @@ function makeStep(overrides: Partial<RunStep> = {}): RunStep {
 }
 
 const sampleSteps: RunStep[] = [
-  makeStep({ id: 1, phase: 'prepare', step_order: 0, name: 'check_device', status: 'COMPLETED', started_at: '2026-01-01T00:00:00Z', finished_at: '2026-01-01T00:00:05Z' }),
-  makeStep({ id: 2, phase: 'prepare', step_order: 1, name: 'ensure_root', status: 'COMPLETED', started_at: '2026-01-01T00:00:05Z', finished_at: '2026-01-01T00:00:08Z' }),
-  makeStep({ id: 3, phase: 'execute', step_order: 0, name: 'start_process', status: 'RUNNING', started_at: '2026-01-01T00:00:10Z' }),
-  makeStep({ id: 4, phase: 'execute', step_order: 1, name: 'monitor_process', status: 'PENDING' }),
-  makeStep({ id: 5, phase: 'post_process', step_order: 0, name: 'collect_logs', status: 'PENDING' }),
+  makeStep({ id: 1, phase: 'init', step_order: 0, name: 'check_device', status: 'COMPLETED', started_at: '2026-01-01T00:00:00Z', finished_at: '2026-01-01T00:00:05Z' }),
+  makeStep({ id: 2, phase: 'init', step_order: 1, name: 'ensure_root', status: 'COMPLETED', started_at: '2026-01-01T00:00:05Z', finished_at: '2026-01-01T00:00:08Z' }),
+  makeStep({ id: 3, phase: 'patrol', step_order: 0, name: 'monkey_check', status: 'RUNNING', started_at: '2026-01-01T00:00:10Z' }),
+  makeStep({ id: 4, phase: 'patrol', step_order: 1, name: 'check_device_again', status: 'PENDING' }),
+  makeStep({ id: 5, phase: 'teardown', step_order: 0, name: 'monkey_teardown', status: 'PENDING' }),
 ];
 
 describe('PipelineStepTree', () => {
@@ -48,30 +48,31 @@ describe('PipelineStepTree', () => {
     );
 
     // Phase names should be visible
-    expect(screen.getByText('prepare')).toBeDefined();
-    expect(screen.getByText('execute')).toBeDefined();
-    expect(screen.getByText('post_process')).toBeDefined();
+    expect(screen.getByText('init')).toBeDefined();
+    expect(screen.getByText('patrol')).toBeDefined();
+    expect(screen.getByText('teardown')).toBeDefined();
   });
 
   it('renders known phases in pipeline order regardless of input order', () => {
     render(
       <PipelineStepTree
         steps={[
-          makeStep({ id: 10, phase: 'execute', step_order: 0, name: 'execute_first' }),
-          makeStep({ id: 11, phase: 'post_process', step_order: 0, name: 'post_second' }),
-          makeStep({ id: 12, phase: 'prepare', step_order: 0, name: 'prepare_third' }),
+          makeStep({ id: 10, phase: 'patrol', step_order: 1, name: 'patrol_second' }),
+          makeStep({ id: 11, phase: 'teardown', step_order: 0, name: 'teardown_second' }),
+          makeStep({ id: 12, phase: 'init', step_order: 0, name: 'init_third' }),
+          makeStep({ id: 13, phase: 'patrol', step_order: 0, name: 'patrol_first' }),
         ]}
         selectedStepId={null}
         onStepSelect={onStepSelect}
       />,
     );
 
-    const prepare = screen.getByText('prepare');
-    const execute = screen.getByText('execute');
-    const postProcess = screen.getByText('post_process');
+    const init = screen.getByText('init');
+    const patrol = screen.getByText('patrol');
+    const teardown = screen.getByText('teardown');
 
-    expect(prepare.compareDocumentPosition(execute) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(execute.compareDocumentPosition(postProcess) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(init.compareDocumentPosition(patrol) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(patrol.compareDocumentPosition(teardown) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('auto-expands phase with RUNNING step', () => {
@@ -83,9 +84,9 @@ describe('PipelineStepTree', () => {
       />,
     );
 
-    // The execute phase has a RUNNING step, so its steps should be visible
-    expect(screen.getByText('start_process')).toBeDefined();
-    expect(screen.getByText('monitor_process')).toBeDefined();
+    // The patrol phase has a RUNNING step, so its steps should be visible
+    expect(screen.getByText('monkey_check')).toBeDefined();
+    expect(screen.getByText('check_device_again')).toBeDefined();
   });
 
   it('calls onStepSelect when a step is clicked', () => {
@@ -97,8 +98,8 @@ describe('PipelineStepTree', () => {
       />,
     );
 
-    // Click on a visible step (in the auto-expanded execute phase)
-    fireEvent.click(screen.getByText('start_process'));
+    // Click on a visible step (in the auto-expanded patrol phase)
+    fireEvent.click(screen.getByText('monkey_check'));
     expect(onStepSelect).toHaveBeenCalledWith(3);
   });
 
@@ -111,16 +112,16 @@ describe('PipelineStepTree', () => {
       />,
     );
 
-    // post_process phase is collapsed by default (no RUNNING step)
-    expect(screen.queryByText('collect_logs')).toBeNull();
+    // teardown phase is collapsed by default (no RUNNING step)
+    expect(screen.queryByText('monkey_teardown')).toBeNull();
 
     // Click to expand
-    fireEvent.click(screen.getByText('post_process'));
-    expect(screen.getByText('collect_logs')).toBeDefined();
+    fireEvent.click(screen.getByText('teardown'));
+    expect(screen.getByText('monkey_teardown')).toBeDefined();
 
     // Click to collapse
-    fireEvent.click(screen.getByText('post_process'));
-    expect(screen.queryByText('collect_logs')).toBeNull();
+    fireEvent.click(screen.getByText('teardown'));
+    expect(screen.queryByText('monkey_teardown')).toBeNull();
   });
 
   it('applies step updates from WebSocket', () => {
@@ -152,8 +153,8 @@ describe('PipelineStepTree', () => {
       />,
     );
 
-    // monitor_process should now be visible (execute phase auto-expanded)
-    expect(screen.getByText('monitor_process')).toBeDefined();
+    // check_device_again should now be visible (patrol phase auto-expanded)
+    expect(screen.getByText('check_device_again')).toBeDefined();
   });
 
   it('shows duration for completed steps', () => {
@@ -165,8 +166,8 @@ describe('PipelineStepTree', () => {
       />,
     );
 
-    // Expand prepare phase to see completed steps
-    fireEvent.click(screen.getByText('prepare'));
+    // Expand init phase to see completed steps
+    fireEvent.click(screen.getByText('init'));
 
     // check_device took 5 seconds
     expect(screen.getByText('5s')).toBeDefined();
@@ -193,7 +194,7 @@ describe('PipelineStepTree', () => {
       />,
     );
 
-    const stepButton = screen.getByText('start_process').closest('button');
+    const stepButton = screen.getByText('monkey_check').closest('button');
     expect(stepButton?.className).toContain('bg-slate-700');
   });
 });

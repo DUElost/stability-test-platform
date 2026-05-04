@@ -1,40 +1,28 @@
 {
   "version": 1,
   "description": "Standby test: play video, optionally turn off screen, wait for standby duration",
-  "stages": {
-    "prepare": [
+  "lifecycle": {
+    "timeout_seconds": 7200,
+    "init": [
       {
         "step_id": "check_device",
-        "action": "builtin:check_device",
+        "action": "script:check_device",
+        "version": "1.0.0",
         "timeout_seconds": 30,
-        "retry": 0,
+        "retry": 1,
         "params": {}
-      }
-    ],
-    "execute": [
-      {
-        "step_id": "start_video",
-        "action": "builtin:start_process",
-        "timeout_seconds": 30,
-        "retry": 0,
-        "params": {
-          "timeout": 30,
-          "command": "am start -a android.intent.action.VIEW -d {video_url}",
-          "background": false
-        }
       },
       {
-        "step_id": "standby_wait",
-        "action": "builtin:start_process",
-        "timeout_seconds": 7200,
-        "retry": 0,
+        "step_id": "ensure_root",
+        "action": "script:ensure_root",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
         "params": {
-          "command": "sleep {standby_seconds}",
-          "background": false,
-          "timeout": 7200
+          "max_attempts": 3
         }
       }
     ],
-    "post_process": []
+    "teardown": []
   }
 }

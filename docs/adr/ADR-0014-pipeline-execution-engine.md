@@ -77,7 +77,7 @@ Pipeline
 | `PipelineEngine` | 解析 Pipeline 定义，调度 Phase/Step 执行，管理共享状态 |
 | `StepContext` | 传递给每个 Action 的执行上下文（ADB、Serial、Params、Logger、Shared） |
 | `StepResult` | Action 返回结果（success、exit_code、error_message、metrics） |
-| `ACTION_REGISTRY` | 内置 Action 函数注册表 |
+| `ACTION_REGISTRY` | 内置 Action 函数注册表 *(已删除 2026-05-04，详见末尾 deprecated 注)* |
 
 ### 实时通信
 
@@ -155,7 +155,6 @@ Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema
 
 ### 前端
 - `frontend/src/components/pipeline/StagesPipelineEditor.tsx` - Stages 可视化编辑器（含 DynamicToolForm 集成）
-- `frontend/src/components/pipeline/actionCatalog.ts` - Action 目录
 - `frontend/src/components/pipeline/PipelineStepTree.tsx` - 运行时步骤树
 - `frontend/src/components/task/DynamicToolForm.tsx` - 动态参数表单组件
 - `frontend/src/pages/orchestration/WorkflowDefinitionEditPage.tsx` - 工作流编辑页面（集成 Pipeline 编辑器）
@@ -163,7 +162,7 @@ Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema
 ### API
 - `GET /api/v1/pipeline/templates` - 获取内置模板
 - `GET /api/v1/pipeline/templates/{name}` - 获取指定模板
-- `GET /api/v1/builtin-actions` - 获取内置 Action 列表（含 param_schema）
+- ~~`GET /api/v1/builtin-actions`~~ - **已删除（2026-05-04）**，随 builtin actions 全栈移除
 - `POST /api/v1/workflows` - 创建工作流定义（`task_templates[].pipeline_def` 承载 Pipeline 定义）
 - `POST /api/v1/workflows/{wf_id}/run` - 基于工作流定义触发执行
 
@@ -178,3 +177,16 @@ Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema
 ### OpenSpec
 - [`openspec/specs/pipeline-engine/spec.md`](../../openspec/specs/pipeline-engine/spec.md) - Pipeline 引擎规范（含锁验证）
 - [`openspec/changes/archive/2026-03-11-builtin-action-param-forms/`](../../openspec/changes/archive/2026-03-11-builtin-action-param-forms/) - 参数表单 Change（已归档）
+
+---
+
+## Deprecated 注（2026-05-04）
+
+ADR-0014 描述的双轨格式（builtin / tool / script + phases/stages/lifecycle）在 2026-05-04 收敛到 **lifecycle + script** 单轨：
+
+- 引擎硬性拒绝 `stages` / `phases` 顶层键，仅接受 `lifecycle`（`pipeline_engine.py` L158-179）
+- `_resolve_action` 仅匹配 `script:<name>` 前缀，其他报 `Unsupported action`（`pipeline_engine.py` L427-432）
+- 删除项：`backend/agent/actions/`（5 文件 + ACTION_REGISTRY）、`backend/api/routes/builtin_actions.py`、`backend/schemas/builtin_actions.json`、`frontend/.../actionCatalog.ts`、`frontend/.../ActionTemplatePage.tsx`、`api.builtinCatalog`、`BuiltinActionEntry` 类型
+- 路由 `/orchestration/actions` 与 `WorkflowDefinitionEditPage` 中"动作目录"按钮一并移除
+
+ADR 主体内容保留作历史决策记录，本注脚仅说明现状偏离。

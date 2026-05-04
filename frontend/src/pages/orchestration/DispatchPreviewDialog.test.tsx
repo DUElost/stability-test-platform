@@ -52,16 +52,18 @@ describe('DispatchPreviewDialog', () => {
           disabled_steps: 0,
           executable_steps: 1,
           resolved_pipeline: {
-            stages: {
-              execute: [
+            lifecycle: {
+              init: [
                 {
                   step_id: 'run',
-                  action: 'builtin:run_shell_script',
+                  action: 'script:check_device',
+                  version: '1.0.0',
                   timeout_seconds: 30,
                   retry: 0,
                   params: {},
                 },
               ],
+              teardown: [],
             },
           },
         },

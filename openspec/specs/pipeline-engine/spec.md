@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+> **Deprecated 注（2026-05-04）**：本 spec 描述的 phase/builtin 模型已被 lifecycle + script 单轨取代。
+> 实际引擎仅接受 `pipeline_def.lifecycle` 顶层键、仅匹配 `script:<name>` action（详见 `pipeline_engine.py` L158-179、L427-432，以及 `docs/adr/ADR-0014-pipeline-execution-engine.md` 末尾 deprecated 注）。
+> 主体场景与 `ACTION_REGISTRY` / `builtin:*` 引用保留作历史决策记录，**不再反映当前实现**。
+
 ### Requirement: Pipeline execution engine
 The agent SHALL implement a `PipelineEngine` class that parses a pipeline definition and executes phases and steps according to the defined topology (phase-serial, intra-phase parallel via ThreadPoolExecutor).
 

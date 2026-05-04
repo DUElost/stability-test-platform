@@ -194,32 +194,36 @@ wsl -u root -- bash -c "rsync -av --delete --exclude='__pycache__' --exclude='.e
 
 ### Pipeline 定义格式（pipeline_def）
 
+引擎仅接受 `lifecycle` 顶层键；`stages` 与 `phases` 格式会被拒绝（`pipeline_engine.py` L158-179）。
+
 ```json
 {
-  "version": 1,
-  "phases": [
-    {
-      "name": "prepare",
-      "parallel": false,
-      "steps": [
-        {
-          "name": "check_device",
-          "action": "builtin:check_device",
-          "params": {},
-          "timeout": 30,
-          "on_failure": "stop",
-          "max_retries": 0
-        }
-      ]
-    }
-  ]
+  "lifecycle": {
+    "init": [
+      {
+        "step_id": "check_device",
+        "action": "script:check_device",
+        "version": "v1.0.0",
+        "params": {},
+        "timeout_seconds": 30,
+        "retry": 0
+      }
+    ],
+    "patrol": {
+      "interval_seconds": 60,
+      "steps": [ /* ...script step... */ ]
+    },
+    "teardown": [ /* ...script step... */ ],
+    "timeout_seconds": 0
+  }
 }
 ```
 
 **Action 类型**:
-- `builtin:<name>` — 内置 action（如 `check_device`, `start_process`）
-- `tool:<id>` — 注册工具 ID（仅 stages 格式，需 ToolRegistry）
-- ~~`shell:<command>`~~ — 已废弃，仅 legacy phases 格式残留，stages/lifecycle 格式不支持（详见 ADR-0014）
+- `script:<name>` — 由 ScriptRegistry 解析的脚本（python/shell/bat），通过 NFS 路径执行。**唯一支持的 action 类型**。
+- ~~`builtin:<name>`~~ — 已删除（2026-05-04，随 `backend/agent/actions/`、`/api/v1/builtin-actions` 一并清理）。
+- ~~`tool:<id>`~~ — 已删除（同上批次）。
+- ~~`shell:<command>`~~ — 已废弃（详见 ADR-0014）。
 
 ---
 
@@ -532,7 +536,7 @@ class Tool(Base):
 - `backend/agent/artifact_uploader.py` - ArtifactUploader 单例（fire-and-forget）
 - `backend/agent/watcher/` - Watcher 子系统（sources/batcher/emitter/manager/policy/puller/device_watcher）
 - `backend/agent/registry/local_db.py` - Agent SQLite（含 `log_signal_outbox` / `watcher_state`）
-- `backend/agent/actions/` - 内置 Step Action 库
+- `backend/agent/registry/script_registry.py` - ScriptRegistry（解析 `script:<name>` action）
 
 ### 前端核心
 - `frontend/src/main.tsx` - 应用入口
@@ -546,7 +550,6 @@ class Tool(Base):
 - `frontend/src/components/network/ConnectivityBadge.tsx` - 连接状态
 - `frontend/src/components/pipeline/PipelineEditor.tsx` - Pipeline 可视化编辑器
 - `frontend/src/components/pipeline/PipelineStepTree.tsx` - Pipeline 步骤树（运行时视图）
-- `frontend/src/components/pipeline/actionCatalog.ts` - 内置 Action 目录
 - `frontend/src/components/pipeline/pipelineTypes.ts` - Pipeline 类型定义
 - `frontend/src/components/log/XTerminal.tsx` - xterm.js 终端日志组件
 - `frontend/src/components/network/HostCard.tsx` - 主机卡片

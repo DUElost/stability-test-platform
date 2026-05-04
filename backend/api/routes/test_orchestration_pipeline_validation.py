@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from backend.api.routes.orchestration import TaskTemplateIn, _validate_task_templates
+from backend.api.routes.orchestration import PipelineStepOverride, TaskTemplateIn, _validate_task_templates
 
 
 def test_validate_task_templates_accepts_lifecycle_script_steps():
@@ -85,3 +85,15 @@ def test_validate_task_templates_rejects_legacy_phases():
     detail = exc_info.value.detail
     assert detail["code"] == "INVALID_PIPELINE_DEF"
     assert detail["template_name"] == "legacy"
+
+
+def test_pipeline_step_override_accepts_lifecycle_phase_and_legacy_stage():
+    current = PipelineStepOverride(template_name="default", phase="patrol", step_id="check")
+    legacy = PipelineStepOverride(template_name="default", stage="execute", step_id="run")
+
+    assert current.model_dump(exclude_none=True)["phase"] == "patrol"
+    assert legacy.model_dump(exclude_none=True) == {
+        "template_name": "default",
+        "phase": "init",
+        "step_id": "run",
+    }

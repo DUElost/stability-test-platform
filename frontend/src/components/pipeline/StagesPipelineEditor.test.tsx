@@ -6,11 +6,7 @@ import type { PipelineDef, PipelineStep } from '@/utils/api';
 
 function makePipeline(steps: PipelineStep[]): PipelineDef {
   return {
-    stages: {
-      prepare: steps,
-      execute: [],
-      post_process: [],
-    },
+    lifecycle: { init: steps, teardown: [] },
   };
 }
 
@@ -36,8 +32,8 @@ function StatefulEditor({
 describe('StagesPipelineEditor', () => {
   it('renders script actions using script metadata', () => {
     const value: PipelineDef = {
-      stages: {
-        prepare: [
+      lifecycle: {
+        init: [
           {
             step_id: 'push_bundle',
             action: 'script:push_bundle',
@@ -46,8 +42,7 @@ describe('StagesPipelineEditor', () => {
             timeout_seconds: 600,
           },
         ],
-        execute: [],
-        post_process: [],
+        teardown: [],
       },
     };
 
@@ -94,8 +89,8 @@ describe('StagesPipelineEditor', () => {
     fireEvent.change(screen.getByLabelText('Retry check_phone'), { target: { value: '2' } });
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-      stages: expect.objectContaining({
-        prepare: [
+      lifecycle: expect.objectContaining({
+        init: [
           expect.objectContaining({
             step_id: 'check_phone',
             timeout_seconds: 45,
@@ -125,8 +120,8 @@ describe('StagesPipelineEditor', () => {
 
     fireEvent.click(screen.getByLabelText('复制 Step push_resources'));
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-      stages: expect.objectContaining({
-        prepare: [
+      lifecycle: expect.objectContaining({
+        init: [
           expect.objectContaining({ step_id: 'push_resources' }),
           expect.objectContaining({ step_id: 'push_resources_copy', enabled: true }),
         ],
@@ -135,8 +130,8 @@ describe('StagesPipelineEditor', () => {
 
     fireEvent.click(screen.getByLabelText('禁用 Step push_resources'));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      stages: expect.objectContaining({
-        prepare: [
+      lifecycle: expect.objectContaining({
+        init: [
           expect.objectContaining({ step_id: 'push_resources', enabled: false }),
           expect.objectContaining({ step_id: 'push_resources_copy', enabled: true }),
         ],
@@ -171,8 +166,8 @@ describe('StagesPipelineEditor', () => {
     fireEvent.click(screen.getByLabelText('下移 Step first'));
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-      stages: expect.objectContaining({
-        prepare: [
+      lifecycle: expect.objectContaining({
+        init: [
           expect.objectContaining({ step_id: 'second' }),
           expect.objectContaining({ step_id: 'first' }),
         ],

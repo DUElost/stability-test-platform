@@ -71,7 +71,7 @@ def test_apply_step_overrides_updates_matching_step_without_mutating_original():
         [
             {
                 "template_name": "monkey",
-                "stage": "init",
+                "phase": "init",
                 "step_id": "run_monkey",
                 "params": {"duration": 600},
                 "timeout_seconds": 700,
@@ -80,7 +80,7 @@ def test_apply_step_overrides_updates_matching_step_without_mutating_original():
             },
             {
                 "template_name": "other_template",
-                "stage": "init",
+                "phase": "init",
                 "step_id": "other",
                 "enabled": False,
             },

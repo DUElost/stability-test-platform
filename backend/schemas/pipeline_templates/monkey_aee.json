@@ -1,55 +1,65 @@
 {
   "version": 1,
   "description": "Monkey AEE Stability test: run external legacy script via subprocess adapter",
-  "stages": {
-    "prepare": [
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": [
       {
         "step_id": "check_device",
-        "action": "builtin:check_device",
+        "action": "script:check_device",
+        "version": "1.0.0",
         "timeout_seconds": 30,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "ensure_root",
+        "action": "script:ensure_root",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "max_attempts": 3
+        }
+      },
+      {
+        "step_id": "monkey_setup",
+        "action": "script:monkey_setup",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "monkey_launch",
+        "action": "script:monkey_launch",
+        "version": "2.0.0",
+        "timeout_seconds": 1200,
         "retry": 0,
         "params": {}
       }
     ],
-    "execute": [
-      {
-        "step_id": "run_legacy_script",
-        "action": "builtin:run_tool_script",
-        "timeout_seconds": 21600,
-        "retry": 0,
-        "params": {
-          "script_class": "MonkeyAEEStabilityTest",
-          "script_path": "{legacy_script_path}"
+    "patrol": {
+      "interval_seconds": 300,
+      "steps": [
+        {
+          "step_id": "monkey_check",
+          "action": "script:monkey_check",
+          "version": "1.0.0",
+          "timeout_seconds": 60,
+          "retry": 0,
+          "params": {}
         }
-      }
-    ],
-    "post_process": [
+      ]
+    },
+    "teardown": [
       {
-        "step_id": "scan_aee",
-        "action": "builtin:scan_aee",
-        "timeout_seconds": 120,
+        "step_id": "monkey_teardown",
+        "action": "script:monkey_teardown",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
         "retry": 0,
-        "params": {
-          "local_dir": "{log_dir}/aee",
-          "aee_dirs": [
-            "/data/aee_exp",
-            "/data/vendor/aee_exp"
-          ]
-        }
-      },
-      {
-        "step_id": "log_scan",
-        "action": "builtin:log_scan",
-        "timeout_seconds": 120,
-        "retry": 0,
-        "params": {
-          "input_dir": "{log_dir}",
-          "keywords": [
-            "FATAL",
-            "CRASH",
-            "ANR"
-          ]
-        }
+        "params": {}
       }
     ]
   }

@@ -43,11 +43,11 @@ export default function PipelineExecutionTimeline({
   teardownPipeline,
 }: PipelineExecutionTimelineProps) {
   const groups: TimelineGroup[] = [
-    { label: 'Setup Prepare', steps: setupPipeline.stages.prepare ?? [], tone: 'border-slate-200 bg-slate-50' },
-    { label: 'Task Prepare', steps: taskPipeline.stages.prepare ?? [], tone: 'border-slate-200 bg-slate-50' },
-    { label: 'Task Execute', steps: taskPipeline.stages.execute ?? [], tone: 'border-emerald-200 bg-emerald-50' },
-    { label: 'Task Post Process', steps: taskPipeline.stages.post_process ?? [], tone: 'border-amber-200 bg-amber-50' },
-    { label: 'Teardown Post Process', steps: teardownPipeline.stages.post_process ?? [], tone: 'border-amber-200 bg-amber-50' },
+    { label: 'Setup Init', steps: setupPipeline.lifecycle.init ?? [], tone: 'border-slate-200 bg-slate-50' },
+    { label: 'Task Init', steps: taskPipeline.lifecycle.init ?? [], tone: 'border-slate-200 bg-slate-50' },
+    { label: 'Task Patrol', steps: taskPipeline.lifecycle.patrol?.steps ?? [], tone: 'border-emerald-200 bg-emerald-50' },
+    { label: 'Task Teardown', steps: taskPipeline.lifecycle.teardown ?? [], tone: 'border-amber-200 bg-amber-50' },
+    { label: 'Teardown', steps: teardownPipeline.lifecycle.teardown ?? [], tone: 'border-amber-200 bg-amber-50' },
   ];
 
   return (

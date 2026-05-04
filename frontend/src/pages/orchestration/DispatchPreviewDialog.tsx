@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { X, Play, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { api, type PipelineStep, type PipelineStepOverride, type WorkflowRun } from '@/utils/api';
+import { api, type PipelinePhase, type PipelineStep, type PipelineStepOverride, type WorkflowRun } from '@/utils/api';
 
 interface DispatchPreviewDialogProps {
   open: boolean;
@@ -13,27 +13,27 @@ interface DispatchPreviewDialogProps {
   onStarted: (run: WorkflowRun) => void;
 }
 
-const STAGE_LABELS: Record<string, string> = {
-  prepare: 'Prepare',
-  execute: 'Execute',
-  post_process: 'Post Process',
+const PHASE_LABELS: Record<PipelinePhase, string> = {
+  init: 'Init',
+  patrol: 'Patrol',
+  teardown: 'Teardown',
 };
 
-function overrideKey(templateName: string, stage: string, stepId: string) {
-  return `${templateName}::${stage}::${stepId}`;
+function overrideKey(templateName: string, phase: string, stepId: string) {
+  return `${templateName}::${phase}::${stepId}`;
 }
 
 function upsertOverride(
   overrides: PipelineStepOverride[],
   templateName: string,
-  stage: 'prepare' | 'execute' | 'post_process',
+  phase: PipelinePhase,
   stepId: string,
   patch: Partial<PipelineStepOverride>,
 ): PipelineStepOverride[] {
-  const key = overrideKey(templateName, stage, stepId);
-  const existingIndex = overrides.findIndex((item) => overrideKey(item.template_name, item.stage, item.step_id) === key);
+  const key = overrideKey(templateName, phase, stepId);
+  const existingIndex = overrides.findIndex((item) => overrideKey(item.template_name, item.phase, item.step_id) === key);
   const nextItem: PipelineStepOverride = {
-    ...(existingIndex >= 0 ? overrides[existingIndex] : { template_name: templateName, stage, step_id: stepId }),
+    ...(existingIndex >= 0 ? overrides[existingIndex] : { template_name: templateName, phase, step_id: stepId }),
     ...patch,
   };
   if (existingIndex < 0) return [...overrides, nextItem];
@@ -42,12 +42,12 @@ function upsertOverride(
 
 function StepPreviewRow({
   templateName,
-  stage,
+  phase,
   step,
   onOverride,
 }: {
   templateName: string;
-  stage: 'prepare' | 'execute' | 'post_process';
+  phase: PipelinePhase;
   step: PipelineStep;
   onOverride: (patch: Partial<PipelineStepOverride>) => void;
 }) {
@@ -58,7 +58,7 @@ function StepPreviewRow({
         <div className="truncate text-gray-400">{step.action}</div>
       </div>
       <input
-        aria-label={`覆盖 timeout ${templateName} ${stage} ${step.step_id}`}
+        aria-label={`覆盖 timeout ${templateName} ${phase} ${step.step_id}`}
         type="number"
         min={1}
         value={step.timeout_seconds}
@@ -66,7 +66,7 @@ function StepPreviewRow({
         onChange={(event) => onOverride({ timeout_seconds: Math.max(1, Number.parseInt(event.target.value, 10) || 1) })}
       />
       <input
-        aria-label={`覆盖 retry ${templateName} ${stage} ${step.step_id}`}
+        aria-label={`覆盖 retry ${templateName} ${phase} ${step.step_id}`}
         type="number"
         min={0}
         max={10}
@@ -168,20 +168,23 @@ export default function DispatchPreviewDialog({
                     </span>
                   </div>
                   <div className="space-y-3">
-                    {(['prepare', 'execute', 'post_process'] as const).map((stage) => {
-                      const steps = template.resolved_pipeline.stages[stage] ?? [];
+                    {(['init', 'patrol', 'teardown'] as const).map((phase) => {
+                      const lifecycle = template.resolved_pipeline.lifecycle ?? { init: [], teardown: [] };
+                      const steps = phase === 'patrol'
+                        ? lifecycle.patrol?.steps ?? []
+                        : lifecycle[phase] ?? [];
                       if (steps.length === 0) return null;
                       return (
-                        <div key={stage} className="space-y-2">
-                          <div className="text-xs font-medium text-gray-500">{STAGE_LABELS[stage]}</div>
+                        <div key={phase} className="space-y-2">
+                          <div className="text-xs font-medium text-gray-500">{PHASE_LABELS[phase]}</div>
                           {steps.map((step) => (
                             <StepPreviewRow
-                              key={`${stage}-${step.step_id}`}
+                              key={`${phase}-${step.step_id}`}
                               templateName={template.name}
-                              stage={stage}
+                              phase={phase}
                               step={step}
                               onOverride={(patch) => setOverrides((prev) => (
-                                upsertOverride(prev, template.name, stage, step.step_id, patch)
+                                upsertOverride(prev, template.name, phase, step.step_id, patch)
                               ))}
                             />
                           ))}

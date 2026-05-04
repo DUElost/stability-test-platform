@@ -5,7 +5,7 @@ export { hosts, heartbeat, hotUpdate, deploy } from './hosts';
 export { devices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
-export { tools, toolCatalog, builtinCatalog, actionTemplates, scripts } from './tools';
+export { tools, toolCatalog, actionTemplates, scripts } from './tools';
 export { scriptSequences, scriptExecutions } from './scripts';
 export { resourcePools } from './resourcePools';
 export { results, stats } from './analytics';
@@ -23,13 +23,13 @@ export type {
   NotificationChannel, AlertRule,
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,
-  ToolEntry, BuiltinActionEntry, BuiltinActionUpdatePayload,
+  ToolEntry,
   ScriptEntry,
   ScriptSequenceItem, ScriptSequence, ScriptSequencePayload, ScriptSequenceList,
   ScriptExecutionCreatePayload, ScriptExecutionCreated, ScriptExecutionListItem,
   ScriptExecutionList, ScriptExecutionStep, ScriptExecutionJob, ScriptExecutionDetail,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
-  PipelineStep, PipelineDef, PipelineStepOverride, TaskTemplateEntry,
+  PipelineStep, PipelinePhase, PipelinePatrol, PipelineDef, PipelineStepOverride, TaskTemplateEntry,
   WorkflowDefinition, WorkflowDefinitionCreate,
   WorkflowStatus, JobStatus, StepTrace, JobInstance, PaginatedJobList,
   WorkflowRun, WorkflowRunCreate, WorkflowRunPreview, WorkflowRunPreviewTemplate,
@@ -43,7 +43,7 @@ import { hosts, heartbeat, hotUpdate, deploy } from './hosts';
 import { devices } from './devices';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
-import { tools, toolCatalog, builtinCatalog, actionTemplates, scripts } from './tools';
+import { tools, toolCatalog, actionTemplates, scripts } from './tools';
 import { scriptSequences, scriptExecutions } from './scripts';
 import { resourcePools } from './resourcePools';
 import { results, stats } from './analytics';
@@ -70,7 +70,6 @@ export const api = {
   orchestration,
   execution,
   toolCatalog,
-  builtinCatalog,
   actionTemplates,
   scripts,
   scriptSequences,

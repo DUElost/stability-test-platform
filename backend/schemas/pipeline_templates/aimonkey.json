@@ -1,197 +1,65 @@
 {
   "version": 1,
   "description": "[DEPRECATED: use monkey_aee_init + monkey_aee_patrol] AIMonkey stability test: root, configure, push resources, fill storage, run aim, monitor, collect logs",
-  "stages": {
-    "prepare": [
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": [
       {
         "step_id": "check_device",
-        "action": "builtin:check_device",
+        "action": "script:check_device",
+        "version": "1.0.0",
         "timeout_seconds": 30,
-        "retry": 0,
+        "retry": 1,
         "params": {}
       },
       {
         "step_id": "ensure_root",
-        "action": "builtin:ensure_root",
-        "timeout_seconds": 30,
-        "retry": 0,
+        "action": "script:ensure_root",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "max_attempts": 3
+        }
+      },
+      {
+        "step_id": "monkey_setup",
+        "action": "script:monkey_setup",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
+        "retry": 1,
         "params": {}
       },
       {
-        "step_id": "clean_env",
-        "action": "builtin:clean_env",
-        "timeout_seconds": 60,
+        "step_id": "monkey_launch",
+        "action": "script:monkey_launch",
+        "version": "2.0.0",
+        "timeout_seconds": 1200,
         "retry": 0,
-        "params": {
-          "set_properties": {
-            "persist.vendor.debuglogger": "1",
-            "persist.vendor.sys.modemlog.enable": "1",
-            "persist.sys.logkit.ctrlcode": "1"
-          },
-          "clear_logs": true,
-          "log_dirs": [
-            "/data/aee_exp",
-            "/data/vendor/aee_exp",
-            "/data/debuglogger/mobilelog"
-          ]
-        }
-      },
-      {
-        "step_id": "connect_wifi",
-        "action": "builtin:connect_wifi",
-        "timeout_seconds": 30,
-        "retry": 0,
-        "params": {
-          "password": "",
-          "ssid": ""
-        }
-      },
-      {
-        "step_id": "push_resources",
-        "action": "builtin:push_resources",
-        "timeout_seconds": 300,
-        "retry": 0,
-        "params": {
-          "files": [
-            {
-              "local": "{resource_dir}/aim",
-              "remote": "/data/local/tmp/aim",
-              "chmod": "755"
-            },
-            {
-              "local": "{resource_dir}/aimwd",
-              "remote": "/data/local/tmp/aimwd",
-              "chmod": "755"
-            },
-            {
-              "local": "{resource_dir}/aim.jar",
-              "remote": "/data/local/tmp/aim.jar"
-            },
-            {
-              "local": "{resource_dir}/blacklist.txt",
-              "remote": "/sdcard/blacklist.txt"
-            },
-            {
-              "local": "{resource_dir}/aimonkey.apk",
-              "remote": "/data/local/tmp/monkey.apk"
-            }
-          ]
-        }
-      },
-      {
-        "step_id": "fill_storage",
-        "action": "builtin:fill_storage",
-        "timeout_seconds": 300,
-        "retry": 0,
-        "params": {
-          "target_percentage": 60
-        }
+        "params": {}
       }
     ],
-    "execute": [
-      {
-        "step_id": "start_aimwd",
-        "action": "builtin:start_process",
-        "timeout_seconds": 30,
-        "retry": 0,
-        "params": {
-          "command": "/data/local/tmp/aimwd",
-          "background": true
+    "patrol": {
+      "interval_seconds": 300,
+      "steps": [
+        {
+          "step_id": "monkey_check",
+          "action": "script:monkey_check",
+          "version": "1.0.0",
+          "timeout_seconds": 60,
+          "retry": 0,
+          "params": {}
         }
-      },
+      ]
+    },
+    "teardown": [
       {
-        "step_id": "start_aimonkey",
-        "action": "builtin:start_process",
-        "timeout_seconds": 60,
+        "step_id": "monkey_teardown",
+        "action": "script:monkey_teardown",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
         "retry": 0,
-        "params": {
-          "command": "/data/local/tmp/aim --pkg-blacklist-file /sdcard/blacklist.txt --smartuiautomator true --hprof --ignore-crashes --ignore-security-exceptions --ignore-timeouts --throttle 500 --runtime-minutes 10080 --switchuimode -v",
-          "background": true
-        }
-      },
-      {
-        "step_id": "monitor_aimonkey",
-        "action": "builtin:monitor_process",
-        "timeout_seconds": 605000,
-        "retry": 0,
-        "params": {
-          "pull_on_error": true,
-          "check_interval": 5,
-          "duration": 604800,
-          "pid_from_step": "start_aimonkey",
-          "log_paths": [
-            "/data/aee_exp",
-            "/data/vendor/aee_exp"
-          ]
-        }
-      }
-    ],
-    "post_process": [
-      {
-        "step_id": "stop_aimonkey",
-        "action": "builtin:stop_process",
-        "timeout_seconds": 30,
-        "retry": 0,
-        "params": {
-          "pid_from_step": "start_aimonkey"
-        }
-      },
-      {
-        "step_id": "pull_debuglogger",
-        "action": "builtin:adb_pull",
-        "timeout_seconds": 300,
-        "retry": 0,
-        "params": {
-          "local_path": "{log_dir}/debuglogger",
-          "remote_path": "/data/debuglogger"
-        }
-      },
-      {
-        "step_id": "collect_bugreport",
-        "action": "builtin:collect_bugreport",
-        "timeout_seconds": 300,
-        "retry": 0,
-        "params": {
-          "remote_path": "/sdcard/bugreport-aimonkey.txt",
-          "local_dir": "{log_dir}"
-        }
-      },
-      {
-        "step_id": "scan_aee",
-        "action": "builtin:scan_aee",
-        "timeout_seconds": 120,
-        "retry": 0,
-        "params": {
-          "local_dir": "{log_dir}/aee",
-          "aee_dirs": [
-            "/data/aee_exp",
-            "/data/vendor/aee_exp"
-          ]
-        }
-      },
-      {
-        "step_id": "aee_extract",
-        "action": "builtin:aee_extract",
-        "timeout_seconds": 300,
-        "retry": 0,
-        "params": {
-          "input_dir": "{log_dir}/aee",
-          "output_dir": "{log_dir}/aee_decoded"
-        }
-      },
-      {
-        "step_id": "log_scan",
-        "action": "builtin:log_scan",
-        "timeout_seconds": 120,
-        "retry": 0,
-        "params": {
-          "input_dir": "{log_dir}",
-          "keywords": [
-            "FATAL",
-            "CRASH",
-            "ANR"
-          ]
-        }
+        "params": {}
       }
     ]
   }

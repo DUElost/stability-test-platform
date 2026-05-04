@@ -27,7 +27,7 @@ interface PhaseGroup {
   steps: RunStep[];
 }
 
-const PHASE_ORDER = ['prepare', 'execute', 'post_process'];
+const PHASE_ORDER = ['init', 'patrol', 'teardown'];
 
 interface PipelineStepTreeProps {
   steps: RunStep[];

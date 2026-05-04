@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Literal, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from backend.api.schemas import ORMBaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,12 +52,31 @@ class WorkflowDefUpdate(BaseModel):
 
 class PipelineStepOverride(BaseModel):
     template_name: str
-    stage: Literal["prepare", "execute", "post_process"]
+    phase: Optional[Literal["init", "patrol", "teardown"]] = None
+    stage: Optional[str] = Field(default=None, exclude=True)
     step_id: str
     params: Optional[dict] = None
     timeout_seconds: Optional[int] = Field(default=None, ge=1)
     retry: Optional[int] = Field(default=None, ge=0, le=10)
     enabled: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def normalize_phase(self):
+        if self.phase is not None:
+            return self
+        legacy_map = {
+            "prepare": "init",
+            "execute": "init",
+            "post_process": "teardown",
+            "init": "init",
+            "patrol": "patrol",
+            "teardown": "teardown",
+        }
+        normalized = legacy_map.get(self.stage or "")
+        if normalized is None:
+            raise ValueError("phase must be one of: init, patrol, teardown")
+        self.phase = normalized
+        return self
 
 
 class WorkflowRunTrigger(BaseModel):

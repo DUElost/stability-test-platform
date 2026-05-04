@@ -1,7 +1,7 @@
 import apiClient from './client';
 import { unwrapApiResponse } from './client';
 import type {
-  ToolEntry, BuiltinActionEntry, BuiltinActionUpdatePayload,
+  ToolEntry,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
   ScriptEntry,
 } from './types';
@@ -40,17 +40,6 @@ export const toolCatalog = {
     unwrapApiResponse<ToolEntry>(apiClient.put(`/tools/${id}`, data)),
   remove: (id: number) =>
     unwrapApiResponse<void>(apiClient.delete(`/tools/${id}`)),
-};
-
-export const builtinCatalog = {
-  list: (isActive?: boolean) =>
-    unwrapApiResponse<BuiltinActionEntry[]>(
-      apiClient.get('/builtin-actions', { params: isActive != null ? { is_active: isActive } : {} })
-    ),
-  get: (name: string) =>
-    unwrapApiResponse<BuiltinActionEntry>(apiClient.get(`/builtin-actions/${name}`)),
-  update: (name: string, data: BuiltinActionUpdatePayload) =>
-    unwrapApiResponse<BuiltinActionEntry>(apiClient.put(`/builtin-actions/${name}`, data)),
 };
 
 export const actionTemplates = {

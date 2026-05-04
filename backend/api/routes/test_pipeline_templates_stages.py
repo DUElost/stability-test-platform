@@ -13,7 +13,7 @@ def test_builtin_pipeline_templates_do_not_use_legacy_phases():
         assert "phases" not in pipeline_def, f"{path.name} should not contain legacy phases"
 
 
-def test_builtin_pipeline_templates_follow_current_validator_when_migrated():
+def test_builtin_pipeline_templates_follow_current_validator():
     template_files = sorted(TEMPLATES_DIR.glob("*.json"))
     assert template_files, "no builtin pipeline templates found"
 
@@ -21,7 +21,5 @@ def test_builtin_pipeline_templates_follow_current_validator_when_migrated():
         template = _load_template(path)
         pipeline_def = template.pipeline_def
         is_valid, errors = validate_pipeline_def(pipeline_def)
-        if is_valid:
-            assert "lifecycle" in pipeline_def
-            continue
-        assert errors, f"{path.name} invalid pipeline_def should report errors"
+        assert is_valid, f"{path.name} should be valid: {errors}"
+        assert "lifecycle" in pipeline_def

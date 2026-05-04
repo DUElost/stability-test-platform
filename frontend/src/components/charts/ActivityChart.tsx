@@ -105,8 +105,8 @@ export function ActivityChart({
                     return (
                       <div className="bg-popover border border-border rounded-lg p-2 shadow-md text-xs">
                         <div className="text-muted-foreground mb-1">{label}</div>
-                        {payload.map((entry) => (
-                          <div key={entry.dataKey} className="flex items-center gap-2">
+                        {payload.map((entry, index) => (
+                          <div key={String(entry.dataKey ?? index)} className="flex items-center gap-2">
                             <span
                               className="w-2 h-2 rounded-full"
                               style={{ backgroundColor: entry.color }}

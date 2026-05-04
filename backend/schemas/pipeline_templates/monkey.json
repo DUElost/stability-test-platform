@@ -1,29 +1,66 @@
 {
   "version": 1,
   "description": "Standard Android Monkey test: run monkey with specified packages, event count, and throttle",
-  "stages": {
-    "prepare": [
+  "lifecycle": {
+    "timeout_seconds": 604800,
+    "init": [
       {
         "step_id": "check_device",
-        "action": "builtin:check_device",
+        "action": "script:check_device",
+        "version": "1.0.0",
         "timeout_seconds": 30,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "ensure_root",
+        "action": "script:ensure_root",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
+        "params": {
+          "max_attempts": 3
+        }
+      },
+      {
+        "step_id": "monkey_setup",
+        "action": "script:monkey_setup",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
+        "retry": 1,
+        "params": {}
+      },
+      {
+        "step_id": "monkey_launch",
+        "action": "script:monkey_launch",
+        "version": "2.0.0",
+        "timeout_seconds": 1200,
         "retry": 0,
         "params": {}
       }
     ],
-    "execute": [
-      {
-        "step_id": "run_monkey",
-        "action": "builtin:start_process",
-        "timeout_seconds": 3600,
-        "retry": 0,
-        "params": {
-          "timeout": 3600,
-          "command": "monkey -p {packages} --throttle {throttle} {event_count}",
-          "background": false
+    "patrol": {
+      "interval_seconds": 300,
+      "steps": [
+        {
+          "step_id": "monkey_check",
+          "action": "script:monkey_check",
+          "version": "1.0.0",
+          "timeout_seconds": 60,
+          "retry": 0,
+          "params": {}
         }
+      ]
+    },
+    "teardown": [
+      {
+        "step_id": "monkey_teardown",
+        "action": "script:monkey_teardown",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
+        "retry": 0,
+        "params": {}
       }
-    ],
-    "post_process": []
+    ]
   }
 }

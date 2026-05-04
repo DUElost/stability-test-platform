@@ -1,46 +1,28 @@
 {
   "version": 1,
   "description": "GPU stress test: install APK, launch benchmark activity in loops",
-  "stages": {
-    "prepare": [
+  "lifecycle": {
+    "timeout_seconds": 7200,
+    "init": [
       {
         "step_id": "check_device",
-        "action": "builtin:check_device",
+        "action": "script:check_device",
+        "version": "1.0.0",
         "timeout_seconds": 30,
-        "retry": 0,
+        "retry": 1,
         "params": {}
       },
       {
         "step_id": "ensure_root",
-        "action": "builtin:ensure_root",
-        "timeout_seconds": 30,
-        "retry": 0,
-        "params": {}
-      },
-      {
-        "step_id": "install_apk",
-        "action": "builtin:install_apk",
-        "timeout_seconds": 120,
-        "retry": 0,
+        "action": "script:ensure_root",
+        "version": "1.0.0",
+        "timeout_seconds": 60,
+        "retry": 1,
         "params": {
-          "reinstall": true,
-          "apk_path": "{apk_path}"
+          "max_attempts": 3
         }
       }
     ],
-    "execute": [
-      {
-        "step_id": "run_gpu_benchmark",
-        "action": "builtin:start_process",
-        "timeout_seconds": 600,
-        "retry": 0,
-        "params": {
-          "timeout": 600,
-          "command": "am start -n {activity}",
-          "background": false
-        }
-      }
-    ],
-    "post_process": []
+    "teardown": []
   }
 }

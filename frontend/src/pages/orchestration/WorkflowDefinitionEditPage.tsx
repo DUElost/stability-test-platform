@@ -23,7 +23,6 @@ import {
   Save,
   Play,
   Code2,
-  Library,
   Layers3,
   Plus,
   Trash2,
@@ -34,16 +33,61 @@ import {
 } from 'lucide-react';
 
 const EMPTY_PIPELINE: PipelineDef = {
-  stages: { prepare: [], execute: [], post_process: [] },
+  lifecycle: { init: [], teardown: [] },
 };
 
+function normalizeStepArray(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  const steps = (value as { steps?: any[] } | null | undefined)?.steps;
+  if (Array.isArray(steps)) return steps;
+  const stages = (value as { stages?: Record<string, any[]> } | null | undefined)?.stages;
+  if (stages) {
+    return [
+      ...(stages.prepare ?? []),
+      ...(stages.execute ?? []),
+      ...(stages.post_process ?? []),
+    ];
+  }
+  return [];
+}
+
 function normalizePipeline(def?: PipelineDef | null): PipelineDef {
+  const raw = def as any;
+  if (raw?.lifecycle) {
+    const lifecycle = raw.lifecycle;
+    const patrolSteps = normalizeStepArray(lifecycle.patrol);
+    const patrol = lifecycle.patrol && patrolSteps.length > 0
+      ? {
+        interval_seconds: Number(lifecycle.patrol.interval_seconds ?? 60),
+        steps: patrolSteps,
+      }
+      : undefined;
+    return {
+      lifecycle: {
+        ...(lifecycle.timeout_seconds ? { timeout_seconds: lifecycle.timeout_seconds } : {}),
+        init: normalizeStepArray(lifecycle.init),
+        ...(patrol ? { patrol } : {}),
+        teardown: normalizeStepArray(lifecycle.teardown),
+      },
+    };
+  }
+
+  const stages = raw?.stages;
+  if (stages) {
+    return {
+      lifecycle: {
+        init: [
+          ...(stages.prepare ?? []),
+          ...(stages.execute ?? []),
+          ...(stages.post_process ?? []),
+        ],
+        teardown: [],
+      },
+    };
+  }
+
   return {
-    stages: {
-      prepare: def?.stages?.prepare ?? [],
-      execute: def?.stages?.execute ?? [],
-      post_process: def?.stages?.post_process ?? [],
-    },
+    lifecycle: { init: [], teardown: [] },
   };
 }
 
@@ -54,9 +98,9 @@ function pipelineSnapshot(def?: PipelineDef | null) {
 function isPipelineEmpty(def?: PipelineDef | null) {
   const normalized = normalizePipeline(def);
   return (
-    (normalized.stages.prepare?.length ?? 0)
-    + (normalized.stages.execute?.length ?? 0)
-    + (normalized.stages.post_process?.length ?? 0)
+    (normalized.lifecycle.init?.length ?? 0)
+    + (normalized.lifecycle.patrol?.steps?.length ?? 0)
+    + (normalized.lifecycle.teardown?.length ?? 0)
   ) === 0;
 }
 
@@ -149,11 +193,6 @@ export default function WorkflowDefinitionEditPage() {
     }
   }, [wf, basicForm, taskTemplates, setupPipeline, teardownPipeline]);
 
-  const { data: tools } = useQuery({
-    queryKey: ['tool-catalog'],
-    queryFn: () => api.toolCatalog.list(true),
-  });
-
   const { data: actionTemplates } = useQuery({
     queryKey: ['action-templates'],
     queryFn: () => api.actionTemplates.list(true),
@@ -183,15 +222,15 @@ export default function WorkflowDefinitionEditPage() {
 
   const form = basicForm ?? { name: '', description: '', failure_threshold: 0.05 };
 
-  const stageCounts = useMemo(() => {
-    const prepare = effectivePipeline.stages.prepare?.length ?? 0;
-    const execute = effectivePipeline.stages.execute?.length ?? 0;
-    const postProcess = effectivePipeline.stages.post_process?.length ?? 0;
+  const phaseCounts = useMemo(() => {
+    const init = effectivePipeline.lifecycle.init?.length ?? 0;
+    const patrol = effectivePipeline.lifecycle.patrol?.steps?.length ?? 0;
+    const teardown = effectivePipeline.lifecycle.teardown?.length ?? 0;
     return {
-      prepare,
-      execute,
-      postProcess,
-      total: prepare + execute + postProcess,
+      init,
+      patrol,
+      teardown,
+      total: init + patrol + teardown,
     };
   }, [effectivePipeline]);
 
@@ -457,14 +496,6 @@ export default function WorkflowDefinitionEditPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void navigateWithGuard('/orchestration/actions')}
-            >
-              <Library className="mr-1 h-4 w-4" />
-              动作目录
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
               onClick={() => void navigateWithGuard(`/execution/run?workflow=${workflowId}`)}
             >
               <Play className="mr-1 h-4 w-4" />
@@ -554,10 +585,10 @@ export default function WorkflowDefinitionEditPage() {
               <div className="space-y-2">
                 {(taskTemplates ?? []).map((template, index) => {
                   const active = template.key === selectedTemplate?.key;
-                  const counts = normalizePipeline(template.pipeline_def).stages;
-                  const total = (counts.prepare?.length ?? 0)
-                    + (counts.execute?.length ?? 0)
-                    + (counts.post_process?.length ?? 0);
+                  const lifecycle = normalizePipeline(template.pipeline_def).lifecycle;
+                  const total = (lifecycle.init?.length ?? 0)
+                    + (lifecycle.patrol?.steps?.length ?? 0)
+                    + (lifecycle.teardown?.length ?? 0);
                   return (
                     <div
                       key={template.key}
@@ -629,8 +660,7 @@ export default function WorkflowDefinitionEditPage() {
               <StagesPipelineEditor
                 value={effectiveSetupPipeline}
                 onChange={setSetupPipeline}
-                allowedStages={['prepare']}
-                toolOptions={(tools ?? []).map((t) => ({ id: t.id, name: t.name, version: t.version }))}
+                allowedPhases={['init']}
                 scriptOptions={(scriptCatalog ?? []).map((s) => ({
                   id: s.id,
                   name: s.name,
@@ -661,20 +691,19 @@ export default function WorkflowDefinitionEditPage() {
                 <CardTitle>Task Pipeline 定义（{selectedTemplate?.name || '未选择模板'}）</CardTitle>
                 <div className="flex items-center gap-2 text-xs text-gray-500">
                   <Clock3 className="h-3.5 w-3.5" />
-                  总计 {stageCounts.total} 个 Step
+                  总计 {phaseCounts.total} 个 Step
                 </div>
               </div>
               <div className="flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">Prepare {stageCounts.prepare}</span>
-                <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">Execute {stageCounts.execute}</span>
-                <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-700">Post Process {stageCounts.postProcess}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">Init {phaseCounts.init}</span>
+                <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">Patrol {phaseCounts.patrol}</span>
+                <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-700">Teardown {phaseCounts.teardown}</span>
               </div>
             </CardHeader>
             <CardContent>
               <StagesPipelineEditor
                 value={effectivePipeline}
                 onChange={updateSelectedTemplatePipeline}
-                toolOptions={(tools ?? []).map((t) => ({ id: t.id, name: t.name, version: t.version }))}
                 scriptOptions={(scriptCatalog ?? []).map((s) => ({
                   id: s.id,
                   name: s.name,
@@ -707,8 +736,7 @@ export default function WorkflowDefinitionEditPage() {
               <StagesPipelineEditor
                 value={effectiveTeardownPipeline}
                 onChange={setTeardownPipeline}
-                allowedStages={['post_process']}
-                toolOptions={(tools ?? []).map((t) => ({ id: t.id, name: t.name, version: t.version }))}
+                allowedPhases={['teardown']}
                 scriptOptions={(scriptCatalog ?? []).map((s) => ({
                   id: s.id,
                   name: s.name,
@@ -757,10 +785,10 @@ export default function WorkflowDefinitionEditPage() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-gray-500">Step 总数</span>
-                <span className="font-medium text-gray-900">{stageCounts.total}</span>
+                <span className="font-medium text-gray-900">{phaseCounts.total}</span>
               </div>
               <div className="rounded-lg bg-slate-50 p-3 text-xs text-gray-600">
-                建议先在动作目录维护可复用 Action，再回到此处编排 Stage，提高蓝图复用效率。
+                建议先在动作目录维护可复用 Action，再回到此处编排生命周期步骤，提高蓝图复用效率。
               </div>
             </CardContent>
           </Card>
