@@ -34,16 +34,19 @@ def _get_post_retry_base_delay() -> float:
     return float(os.getenv("AGENT_POST_RETRY_BASE_DELAY", "1"))
 
 
-def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "") -> List[Dict[str, Any]]:
+def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
+                       capacity: int = 2) -> List[Dict[str, Any]]:
     """Claim pending jobs via POST /agent/jobs/claim (D1: 统一 claim 路径).
 
     Backend 在 claim 响应中注入 device_serial + watcher_policy，供 JobSession 启动使用。
+    *capacity* should be the Agent's actual available slots to avoid claiming
+    more jobs than the thread pool can execute (orphaned RUNNING jobs).
     """
     agent_secret = _get_agent_secret()
     headers = {"X-Agent-Secret": agent_secret} if agent_secret else {}
     resp = requests.post(
         f"{api_url}/api/v1/agent/jobs/claim",
-        json={"host_id": host_id, "capacity": 10, "agent_instance_id": agent_instance_id},
+        json={"host_id": host_id, "capacity": capacity, "agent_instance_id": agent_instance_id},
         headers=headers,
         timeout=10,
     )

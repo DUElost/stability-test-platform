@@ -38,9 +38,9 @@ def get_async_engine_kwargs(database_url: str) -> Dict[str, object]:
         return {}
     return {
         "pool_pre_ping": True,
-        "pool_size": 10,
-        "max_overflow": 20,
-        "pool_recycle": 3600,
+        "pool_size": 30,
+        "max_overflow": 60,
+        "pool_recycle": 1800,
     }
 
 

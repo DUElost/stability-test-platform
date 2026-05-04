@@ -27,11 +27,6 @@
 │   ├── pipeline_engine.py              # lifecycle 执行引擎
 │   ├── pipeline_runner.py
 │   ├── adb_wrapper.py
-│   ├── test_framework.py               # legacy（AIMonkey 适配）
-│   ├── test_stages.py                  # legacy（AIMonkey 适配）
-│   ├── aimonkey_aee.py
-│   ├── aimonkey_risk.py
-│   ├── aimonkey_stages.py
 │   ├── registry/                       # 本地注册表
 │   │   ├── local_db.py                 # SQLite WAL
 │   │   └── script_registry.py          # script:<name> 解析
@@ -101,7 +96,7 @@ sudo bash install_agent.sh
 
 安装脚本将自动完成：
 - 创建安装目录 `/opt/stability-test-agent`
-- 只部署 `agent/` 包代码（清理测试文件，保留 `test_framework.py` 和 `test_stages.py`）
+- 只部署 `agent/` 包代码（清理测试文件）
 - 配置 Python 虚拟环境并安装依赖
 - 安装 systemd 服务（以 `python -m agent.main` 模块模式启动）
 - 创建管理脚本 `agentctl`
@@ -244,17 +239,13 @@ sudo PYTHONPATH=/opt/stability-test-agent /opt/stability-test-agent/venv/bin/pyt
 
 ### ModuleNotFoundError: No module named 'agent.test_stages'
 
-**原因**：部署时 `test_framework.py` 或 `test_stages.py` 被误删。这两个是生产模块（非测试文件）。
+**原因**：`test_framework.py` / `test_stages.py` / `aimonkey_*.py` 已于 P1-4 清理批次中删除。Pipeline 引擎已切换为 lifecycle-only，AIMonkey 适配代码不再存在。如果系统报这个错，是部署侧引用了已废弃的模块路径。
 
-**修复**：重新同步并安装：
+**修复**：检查并去掉对这些模块的 import（一般来自旧的本地脚本或外部 fork）。重新同步代码：
 ```bash
 rsync -av --delete <source>/backend/agent/ /tmp/agent-install/
 sed -i 's/\r$//' /tmp/agent-install/install_agent.sh
 cd /tmp/agent-install && sudo bash install_agent.sh
-
-# 确认这两个文件存在
-sudo ls /opt/stability-test-agent/agent/test_framework.py
-sudo ls /opt/stability-test-agent/agent/test_stages.py
 ```
 
 ### Shell 脚本报错 `$'\r': command not found`

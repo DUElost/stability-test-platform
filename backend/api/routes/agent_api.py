@@ -137,6 +137,7 @@ class HeartbeatResponse(BaseModel):
     script_catalog_outdated: bool = False
     backpressure: BackpressureInfo
     capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
+    agent_min_version: str = ""  # SemVer floor; Agent refuses to run if below
 
 
 # ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
@@ -530,6 +531,7 @@ async def agent_heartbeat(
     await db.commit()
 
     backpressure = await _get_backpressure()
+    from backend import __version__ as backend_version
     return ok(HeartbeatResponse(
         script_catalog_outdated=scripts_outdated,
         backpressure=BackpressureInfo(log_rate_limit=backpressure),
@@ -537,6 +539,7 @@ async def agent_heartbeat(
             "max_concurrent_jobs": host.max_concurrent_jobs,
             "online_healthy_devices": online_healthy,
         },
+        agent_min_version=backend_version,
     ))
 
 

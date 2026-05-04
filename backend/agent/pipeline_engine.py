@@ -596,6 +596,8 @@ class PipelineEngine:
                 interval = patrol_def.get("interval_seconds", 300)
                 init_completed_at = time.time()
                 iteration = 0
+                last_lease_verify = 0.0
+                _LEASE_REVERIFY_INTERVAL = 300  # re-verify lease every 5 min in patrol
 
                 self._report_job_status_mq("PATROL_RUNNING")
 
@@ -610,6 +612,17 @@ class PipelineEngine:
                         termination_reason = "timeout"
                         logger.info("[Lifecycle] run=%d — timeout reached (%ds), ending patrol loop", self._run_id, timeout_seconds)
                         break
+
+                    # Periodic lease re-verification: catch silent lease loss
+                    # between LeaseRenewer cycles (defense-in-depth)
+                    if time.time() - last_lease_verify > _LEASE_REVERIFY_INTERVAL:
+                        lock_err = self._verify_device_lease()
+                        if lock_err:
+                            termination_reason = "abort"
+                            lifecycle_error = f"lease re-verification failed: {lock_err.error_message}"
+                            logger.error("[Lifecycle] run=%d — lease lost during patrol, aborting", self._run_id)
+                            break
+                        last_lease_verify = time.time()
 
                     iteration += 1
                     logger.info("[Lifecycle] run=%d — [Patrol #%d] starting", self._run_id, iteration)

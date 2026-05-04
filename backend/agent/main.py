@@ -134,6 +134,52 @@ def execute_recovery_actions_impl(
                 local_db.delete_active_job(jid)
 
 
+def _check_agent_version(api_url: str, host_id: str, mount_points, host_info) -> None:
+    """Send a single heartbeat and verify agent version meets backend's minimum.
+
+    Exits the process if the agent is too old.
+    """
+    from . import __version__ as agent_version
+    from .heartbeat import send_heartbeat
+
+    try:
+        resp = send_heartbeat(api_url, host_id, mount_points, host_info=host_info)
+    except Exception:
+        logger.warning("version_check_heartbeat_failed — skipping version guard")
+        return
+
+    if resp is None:
+        logger.warning("version_check_no_response — skipping version guard")
+        return
+
+    min_version = (resp.get("agent_min_version") or "").strip()
+    if not min_version:
+        return  # Backend doesn't enforce a minimum version yet
+
+    if _version_lt(agent_version, min_version):
+        logger.critical(
+            "agent_version_too_old agent=%s required=%s — refusing to start",
+            agent_version, min_version,
+        )
+        sys.exit(1)
+
+    logger.info("version_check_ok agent=%s min=%s", agent_version, min_version)
+
+
+def _version_lt(a: str, b: str) -> bool:
+    """Compare two SemVer strings (no pre-release tags). Returns True if a < b."""
+    try:
+        parts_a = [int(x) for x in a.split(".")]
+        parts_b = [int(x) for x in b.split(".")]
+    except (ValueError, TypeError):
+        return False  # Malformed versions → don't block
+    # Pad shorter list with zeros
+    max_len = max(len(parts_a), len(parts_b))
+    parts_a += [0] * (max_len - len(parts_a))
+    parts_b += [0] * (max_len - len(parts_b))
+    return parts_a < parts_b
+
+
 def run_recovery_sync_if_needed(
     local_db: Any,
     api_url: str,
@@ -408,6 +454,9 @@ def main() -> None:
         execute_actions=_execute_recovery_actions,
     )
 
+    # Version compatibility guard: refuse to run if agent is below backend's min_version
+    _check_agent_version(api_url, host_id, mount_points, host_info)
+
     # StepTrace HTTP 批量上报（Phase 3.7: acked=0 补传 → Phase 4: 唯一上报路径）
     step_trace_uploader = StepTraceUploader(
         api_url, local_db, agent_secret=agent_secret, interval=5.0,
@@ -450,7 +499,8 @@ def main() -> None:
                 logger.info("main_loop_tick active=%d slots=%d", active_count, available_slots)
 
                 if available_slots > 0:
-                    jobs = fetch_pending_jobs(api_url, host_id, agent_instance_id)
+                    jobs = fetch_pending_jobs(api_url, host_id, agent_instance_id,
+                                              capacity=available_slots)
                     jobs = jobs[:available_slots]
 
                     if jobs:

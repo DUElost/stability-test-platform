@@ -17,6 +17,7 @@ IntervalTrigger (see ``app_scheduler.py``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -269,12 +270,28 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_reconcile_lock = asyncio.Lock()
+
+
 async def device_lease_reconcile_once() -> None:
     """Run all reconciler checks in a fixed order.
 
     Each check runs in its own transaction: commit on success, rollback on
     failure.  One check failing does not block the next.
+
+    Guarded by an asyncio.Lock to prevent concurrent execution when a prior
+    cycle runs longer than the APScheduler interval.
     """
+    if _reconcile_lock.locked():
+        logger.warning("reconciler_skip_previous_still_running")
+        _record_check("concurrent_skip", "skipped", None)
+        return
+
+    async with _reconcile_lock:
+        await _reconcile_checks()
+
+
+async def _reconcile_checks() -> None:
     checks: list[tuple[str, callable]] = [
         ("expired_leases", _reconcile_expired_leases),
         ("stale_unknown", _reconcile_stale_unknown_jobs),
