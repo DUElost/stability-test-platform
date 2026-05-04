@@ -82,7 +82,17 @@ class OutboxDrainThread:
                 status_code = e.response.status_code if e.response else None
                 if status_code == 409:
                     current = self._parse_current_status(e.response)
-                    if current and current in self._TERMINAL_STATUSES:
+                    if current is None:
+                        # Plain-string detail (e.g. "invalid or expired fencing_token",
+                        # "device locked by another job", InvalidTransitionError).
+                        # Fencing token is definitively rejected — ack and stop retrying.
+                        self._local_db.ack_terminal(job_id)
+                        sent += 1
+                        logger.info(
+                            "outbox_drain_conflict_ack job=%d (definitive rejection)",
+                            job_id,
+                        )
+                    elif current in self._TERMINAL_STATUSES:
                         self._local_db.ack_terminal(job_id)
                         sent += 1
                         logger.info(

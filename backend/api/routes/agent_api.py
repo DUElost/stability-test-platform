@@ -696,25 +696,16 @@ async def complete_job(
     raw = str(payload.update.get("status", "FAILED")).upper()
     target = _RUN_TO_JOB.get(raw, JobStatus.FAILED)
 
-    # Idempotent: if MQ consumer already transitioned to the same terminal state,
-    # skip the transition but still persist snapshot and release lock.
-    already_terminal = job.status == target.value and job.status in _TERMINAL
+    # Idempotent: if the job is already in *any* terminal state, skip fencing_token
+    # validation and state transition — the outcome is settled and cannot be changed.
+    # This also prevents infinite 409 retry loops when the agent's outbox drain
+    # retries a completion for a job that was already finalised by another path.
+    already_terminal = job.status in _TERMINAL
 
     # ADR-0019 Phase 4b: fencing_token validation
     if not already_terminal:
         valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
         if valid_lease is None:
-            raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
-    else:
-        released_lease = (await db.execute(
-            select(DeviceLease).where(
-                DeviceLease.device_id == job.device_id,
-                DeviceLease.job_id == job_id,
-                DeviceLease.lease_type == LeaseType.JOB.value,
-                DeviceLease.status == LeaseStatus.RELEASED.value,
-            )
-        )).scalars().first()
-        if released_lease is None or released_lease.fencing_token != payload.fencing_token:
             raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
 
     if not already_terminal:
@@ -774,19 +765,16 @@ async def complete_job(
     if payload.watcher_summary:
         _apply_watcher_summary(job, payload.watcher_summary)
 
-    if job.status in _TERMINAL:
+    if job.status in _TERMINAL and not already_terminal:
         await WorkflowAggregator.on_job_terminal(job, db)
         # Release device lease on terminal state (ADR-0019 Phase 2c: device_leases is source of truth)
         released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
         if not released:
-            if already_terminal:
-                logger.debug("release_lease_already_released device=%s job=%s", job.device_id, job_id)
-            else:
-                logger.warning("release_lease_miss device=%s job=%s", job.device_id, job_id)
+            logger.warning("release_lease_miss device=%s job=%s", job.device_id, job_id)
 
     await db.commit()
 
-    if job.status in _TERMINAL:
+    if job.status in _TERMINAL and not already_terminal:
         try:
             from backend.tasks.saq_worker import get_queue
             from saq import Job as SaqJob

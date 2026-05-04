@@ -108,6 +108,33 @@ def _post_with_retry(
             resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
             resp.raise_for_status()
             return
+        except requests.HTTPError as exc:
+            # 409 Conflict is a definitive rejection (invalid fencing_token,
+            # state transition conflict).  Don't retry — let the outbox handle it.
+            if exc.response is not None and exc.response.status_code == 409:
+                logger.warning(
+                    "agent_post_conflict",
+                    extra={"context": context, "status": 409, "detail": str(exc)},
+                )
+                raise
+            last_error = exc
+            if attempt >= post_retries:
+                logger.warning(
+                    "agent_post_failed",
+                    extra={"context": context, "attempts": attempt, "error": str(exc)},
+                )
+                raise
+            delay = retry_base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "agent_post_retry",
+                extra={
+                    "context": context,
+                    "attempt": attempt,
+                    "next_delay_seconds": delay,
+                    "error": str(exc),
+                },
+            )
+            time.sleep(delay)
         except requests.RequestException as exc:
             last_error = exc
             if attempt >= post_retries:
@@ -116,7 +143,6 @@ def _post_with_retry(
                     extra={"context": context, "attempts": attempt, "error": str(exc)},
                 )
                 raise
-
             delay = retry_base_delay * (2 ** (attempt - 1))
             logger.warning(
                 "agent_post_retry",
