@@ -38,7 +38,6 @@ from backend.api.routes.script_sequences import router as script_sequences_route
 from backend.api.routes.script_executions import router as script_executions_router
 # Phase 3: new routers replace legacy workflows + tools
 from backend.api.routes.orchestration import router as orchestration_router
-from backend.api.routes.tool_catalog import router as tool_catalog_router
 from backend.api.routes.action_templates import router as action_templates_router
 from backend.api.routes.agent_api import router as agent_api_router
 from backend.api.routes.resource_pools import router as resource_pools_router
@@ -160,7 +159,6 @@ _fastapi_app.include_router(pipeline_router)
 _fastapi_app.include_router(scripts_router)
 _fastapi_app.include_router(script_sequences_router)
 _fastapi_app.include_router(script_executions_router)
-_fastapi_app.include_router(tool_catalog_router)
 _fastapi_app.include_router(action_templates_router)
 _fastapi_app.include_router(orchestration_router)
 _fastapi_app.include_router(agent_api_router)

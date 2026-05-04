@@ -122,7 +122,6 @@ class StepTraceIn(BaseModel):
 
 class HeartbeatRequest(BaseModel):
     host_id: str
-    tool_catalog_version: str = ""
     script_catalog_version: str = ""
     load: Dict[str, Any] = {}
     capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
@@ -135,7 +134,6 @@ class BackpressureInfo(BaseModel):
 
 
 class HeartbeatResponse(BaseModel):
-    tool_catalog_outdated: bool
     script_catalog_outdated: bool = False
     backpressure: BackpressureInfo
     capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
@@ -485,8 +483,8 @@ async def agent_heartbeat(
     _=Depends(_verify_agent),
 ):
     """
-    Update host last_heartbeat + tool_catalog_version.
-    Returns tool_catalog_outdated flag + current backpressure setting.
+    Update host last_heartbeat.
+    Returns script_catalog_outdated flag + current backpressure setting.
     """
     host = await db.get(Host, payload.host_id)
     # ADR-0019 Phase 1: capacity safe-read
@@ -508,11 +506,6 @@ async def agent_heartbeat(
     elif isinstance(max_jobs_from_capacity, int) and max_jobs_from_capacity > 0:
         host.max_concurrent_jobs = max_jobs_from_capacity
 
-    outdated = (
-        bool(payload.tool_catalog_version)
-        and bool(host.tool_catalog_version)
-        and host.tool_catalog_version != payload.tool_catalog_version
-    )
     scripts_outdated = (
         bool(payload.script_catalog_version)
         and bool(host.script_catalog_version)
@@ -520,8 +513,6 @@ async def agent_heartbeat(
     )
 
     host.last_heartbeat = datetime.now(timezone.utc)
-    if payload.tool_catalog_version:
-        host.tool_catalog_version = payload.tool_catalog_version
     if payload.script_catalog_version:
         host.script_catalog_version = payload.script_catalog_version
     host.status = HostStatus.ONLINE.value
@@ -540,7 +531,6 @@ async def agent_heartbeat(
 
     backpressure = await _get_backpressure()
     return ok(HeartbeatResponse(
-        tool_catalog_outdated=outdated,
         script_catalog_outdated=scripts_outdated,
         backpressure=BackpressureInfo(log_rate_limit=backpressure),
         capacity={

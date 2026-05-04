@@ -25,7 +25,6 @@ def send_heartbeat(
     status: str = "ONLINE",
     host_info: Optional[Dict[str, Any]] = None,
     devices: Optional[List[Dict[str, Any]]] = None,
-    tool_catalog_version: str = "",
     script_catalog_version: str = "",
     # ADR-0019 Phase 3c: 结构化 capacity/health 快照（替代旧版散字段）
     capacity: Optional[Dict[str, Any]] = None,
@@ -58,7 +57,6 @@ def send_heartbeat(
         "host_id": host_id,
         "status": status,
         "mount_status": mount_status,
-        "tool_catalog_version": tool_catalog_version,
         "script_catalog_version": script_catalog_version,
         "extra": system_stats,
         "host": host_info,  # 包含主机信息用于自动创建

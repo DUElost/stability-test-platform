@@ -118,7 +118,6 @@ class PipelineEngine:
         run_id: int,
         log_dir: Optional[str] = None,
         mq_producer=None,
-        tool_registry=None,
         script_registry=None,
         local_db=None,
         api_url: Optional[str] = None,
@@ -132,7 +131,6 @@ class PipelineEngine:
         self._run_id = run_id
         self._log_dir = log_dir
         self._mq = mq_producer
-        self._registry = tool_registry
         self._script_registry = script_registry
         self._local_db = local_db
         self._api_url = api_url

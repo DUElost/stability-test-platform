@@ -165,7 +165,6 @@ class HeartbeatThread:
             self._mount_points,
             host_info=self._host_info,
             devices=devices_list,
-            tool_catalog_version=versions.get("tool_catalog_version", ""),
             script_catalog_version=versions.get("script_catalog_version", ""),
             capacity=cap_result.get("capacity"),
             health=cap_result.get("health"),

@@ -85,9 +85,9 @@ export default function ResourcesPage() {
           />
           <ResourceCard
             title="存储工具"
-            description="存储填充、清理等工具"
+            description="脚本执行与调度"
             icon={HardDrive}
-            to="/tools"
+            to="/scripts"
           />
         </div>
       )}
@@ -119,10 +119,10 @@ export default function ResourcesPage() {
           <CardContent>
             <div className="text-center py-8 text-gray-500">
               <Wrench className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-              <p>存储工具功能</p>
+              <p>脚本执行功能</p>
               <p className="text-sm mt-2">
-                <Link to="/tools" className="text-blue-600 hover:underline">
-                  跳转到工具专项页面
+                <Link to="/scripts" className="text-blue-600 hover:underline">
+                  跳转到脚本专项页面
                 </Link>
               </p>
             </div>

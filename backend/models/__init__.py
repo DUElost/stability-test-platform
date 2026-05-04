@@ -9,7 +9,6 @@ from backend.models.notification import AlertRule, ChannelType, EventType, Notif
 from backend.models.schedule import TaskSchedule
 from backend.models.script import Script
 from backend.models.script_sequence import ScriptSequence
-from backend.models.tool import Tool
 from backend.models.user import User
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
 
@@ -37,7 +36,6 @@ __all__ = [
     "StepTrace",
     "TaskSchedule",
     "TaskTemplate",
-    "Tool",
     "User",
     "WorkflowDefinition",
     "WorkflowRun",

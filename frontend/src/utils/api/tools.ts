@@ -1,46 +1,9 @@
 import apiClient from './client';
 import { unwrapApiResponse } from './client';
 import type {
-  ToolEntry,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
   ScriptEntry,
 } from './types';
-
-export const tools = {
-  listCategories: () =>
-    unwrapApiResponse<string[]>(apiClient.get('/tools/categories')),
-  list: (category?: string) =>
-    unwrapApiResponse<ToolEntry[]>(
-      apiClient.get('/tools', { params: category ? { category } : {} }),
-    ),
-  get: (id: number) =>
-    unwrapApiResponse<ToolEntry>(apiClient.get(`/tools/${id}`)),
-  create: (data: Omit<ToolEntry, 'id' | 'created_at'>) =>
-    unwrapApiResponse<ToolEntry>(apiClient.post('/tools', data)),
-  update: (id: number, data: Partial<Omit<ToolEntry, 'id' | 'created_at'>>) =>
-    unwrapApiResponse<ToolEntry>(apiClient.put(`/tools/${id}`, data)),
-  delete: (id: number) =>
-    unwrapApiResponse<void>(apiClient.delete(`/tools/${id}`)),
-  scan: () =>
-    unwrapApiResponse<{ created: number; updated: number }>(apiClient.post('/tools/scan')),
-  previewScan: () =>
-    unwrapApiResponse<{ tools: any[]; count: number }>(apiClient.get('/tools/scan/preview')),
-};
-
-export const toolCatalog = {
-  list: (isActive?: boolean) =>
-    unwrapApiResponse<ToolEntry[]>(
-      apiClient.get('/tools', { params: isActive != null ? { is_active: isActive } : {} })
-    ),
-  get: (id: number) =>
-    unwrapApiResponse<ToolEntry>(apiClient.get(`/tools/${id}`)),
-  create: (data: Omit<ToolEntry, 'id' | 'created_at'>) =>
-    unwrapApiResponse<ToolEntry>(apiClient.post('/tools', data)),
-  update: (id: number, data: Partial<Omit<ToolEntry, 'id' | 'created_at'>>) =>
-    unwrapApiResponse<ToolEntry>(apiClient.put(`/tools/${id}`, data)),
-  remove: (id: number) =>
-    unwrapApiResponse<void>(apiClient.delete(`/tools/${id}`)),
-};
 
 export const actionTemplates = {
   list: (isActive?: boolean) =>

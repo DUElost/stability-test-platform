@@ -17,7 +17,6 @@ const ResultsPage = lazy(() => import('../pages/results/ResultsPage'));
 const MapReducePage = lazy(() => import('../pages/mapreduce/MapReducePage'));
 const WifiPage = lazy(() => import('../pages/wifi/WifiPage'));
 const UsersPage = lazy(() => import('../pages/users/UsersPage'));
-const ToolsPage = lazy(() => import('../pages/tools/ToolsPage'));
 const NotificationsPage = lazy(() => import('../pages/notifications/NotificationsPage'));
 const SettingsPage = lazy(() => import('../pages/settings/SettingsPage'));
 const ChangePasswordPage = lazy(() => import('../pages/account/ChangePasswordPage'));
@@ -77,7 +76,6 @@ export default function AppRouter() {
 
             <Route path="runs/:runId/report" element={<RunReportPage />} />
 
-            <Route path="tools" element={<ToolsPage />} />
             <Route path="scripts" element={<ScriptLibraryPage />} />
             <Route path="execute" element={<ScriptExecutePage />} />
             <Route path="history" element={<ScriptHistoryPage />} />

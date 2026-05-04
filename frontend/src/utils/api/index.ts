@@ -5,7 +5,7 @@ export { hosts, heartbeat, hotUpdate, deploy } from './hosts';
 export { devices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
-export { tools, toolCatalog, actionTemplates, scripts } from './tools';
+export { actionTemplates, scripts } from './tools';
 export { scriptSequences, scriptExecutions } from './scripts';
 export { resourcePools } from './resourcePools';
 export { results, stats } from './analytics';
@@ -23,7 +23,6 @@ export type {
   NotificationChannel, AlertRule,
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,
-  ToolEntry,
   ScriptEntry,
   ScriptSequenceItem, ScriptSequence, ScriptSequencePayload, ScriptSequenceList,
   ScriptExecutionCreatePayload, ScriptExecutionCreated, ScriptExecutionListItem,
@@ -34,7 +33,6 @@ export type {
   WorkflowStatus, JobStatus, StepTrace, JobInstance, PaginatedJobList,
   WorkflowRun, WorkflowRunCreate, WorkflowRunPreview, WorkflowRunPreviewTemplate,
   WorkflowSummary, JobArtifactEntry,
-  Tool, ToolCategory,
   ResourcePool, ResourcePoolLoad, ResourcePoolCreatePayload,
 } from './types';
 
@@ -43,7 +41,7 @@ import { hosts, heartbeat, hotUpdate, deploy } from './hosts';
 import { devices } from './devices';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
-import { tools, toolCatalog, actionTemplates, scripts } from './tools';
+import { actionTemplates, scripts } from './tools';
 import { scriptSequences, scriptExecutions } from './scripts';
 import { resourcePools } from './resourcePools';
 import { results, stats } from './analytics';
@@ -59,7 +57,6 @@ export const api = {
   devices,
   logs,
   pipeline,
-  tools,
   results,
   stats,
   users,
@@ -69,7 +66,6 @@ export const api = {
   audit,
   orchestration,
   execution,
-  toolCatalog,
   actionTemplates,
   scripts,
   scriptSequences,

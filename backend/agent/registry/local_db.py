@@ -2,7 +2,6 @@
 
 Tables:
   step_trace_cache      — step traces before Redis XADD; acked after confirmation
-  tool_cache            — local copy of the server-side tool catalog
   script_cache          — local copy of the server-side script catalog
   agent_state           — key/value store for last_ack_id and other scalars
   job_terminal_outbox   — terminal-state payloads; retried until server ACKs
@@ -52,13 +51,6 @@ class LocalDB:
                 original_ts   TEXT    NOT NULL,
                 acked         INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(job_id, step_id, event_type)
-            );
-            CREATE TABLE IF NOT EXISTS tool_cache (
-                tool_id      INTEGER PRIMARY KEY,
-                version      TEXT    NOT NULL,
-                script_path  TEXT    NOT NULL,
-                script_class TEXT    NOT NULL,
-                updated_at   TEXT    NOT NULL
             );
             CREATE TABLE IF NOT EXISTS script_cache (
                 cache_key       TEXT    PRIMARY KEY,
@@ -170,62 +162,6 @@ class LocalDB:
                 (after_id,),
             ).fetchall()
         return [dict(row) for row in rows]
-
-    # ------------------------------------------------------------------
-    # tool_cache
-    # ------------------------------------------------------------------
-
-    def save_tool_cache(self, tools: dict) -> None:
-        """Bulk-replace tool cache entries."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            with self._conn:
-                for tool_id, entry in tools.items():
-                    self._conn.execute(
-                        """
-                        INSERT OR REPLACE INTO tool_cache
-                        (tool_id, version, script_path, script_class, updated_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (
-                            tool_id,
-                            entry.get("version", ""),
-                            entry.get("script_path", ""),
-                            entry.get("script_class", ""),
-                            now,
-                        ),
-                    )
-
-    def update_tool_cache(self, tool_id: int, entry: dict) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        with self._lock:
-            with self._conn:
-                self._conn.execute(
-                    """
-                    INSERT OR REPLACE INTO tool_cache
-                    (tool_id, version, script_path, script_class, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        tool_id,
-                        entry.get("version", ""),
-                        entry.get("script_path", ""),
-                        entry.get("script_class", ""),
-                        now,
-                    ),
-                )
-
-    def load_tool_cache(self) -> dict:
-        with self._lock:
-            rows = self._conn.execute("SELECT * FROM tool_cache").fetchall()
-        return {
-            row["tool_id"]: {
-                "version": row["version"],
-                "script_path": row["script_path"],
-                "script_class": row["script_class"],
-            }
-            for row in rows
-        }
 
     # ------------------------------------------------------------------
     # script_cache

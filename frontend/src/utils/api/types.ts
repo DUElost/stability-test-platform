@@ -385,20 +385,6 @@ export interface PaginatedResponse<T> {
 
 // ─── 编排模型类型 ──────────────────────────────────────────────────────────────
 
-export interface ToolEntry {
-  id: number;
-  name: string;
-  version: string;
-  script_path: string;
-  script_class?: string | null;
-  param_schema: Record<string, any>;
-  is_active: boolean;
-  description?: string | null;
-  category?: string | null;
-  created_at: string;
-  updated_at?: string;
-}
-
 export interface ScriptEntry {
   id: number;
   name: string;
@@ -777,10 +763,3 @@ export interface ResourcePoolCreatePayload {
   is_active?: boolean;
 }
 
-// Legacy aliases
-/** @deprecated Use ToolEntry instead */
-export type Tool = ToolEntry;
-/** @deprecated category is now a string on ToolEntry.category */
-export interface ToolCategory {
-  name: string;
-}

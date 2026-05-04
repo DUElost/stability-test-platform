@@ -24,7 +24,6 @@ class Host(Base):
     id                   = Column(String(64), primary_key=True)
     hostname             = Column(String(256), nullable=False, unique=True)
     ip_address           = Column(String(64))
-    tool_catalog_version = Column(String(64))
     script_catalog_version = Column(String(64))
     max_concurrent_jobs  = Column(Integer, nullable=False, default=2)  # ADR-0019 Phase 1
     last_heartbeat       = Column(DateTime(timezone=True))

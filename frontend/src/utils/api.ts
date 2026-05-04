@@ -12,7 +12,6 @@ export type {
   NotificationChannel, AlertRule,
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,
-  ToolEntry,
   ScriptEntry,
   ScriptSequenceItem, ScriptSequence, ScriptSequencePayload, ScriptSequenceList,
   ScriptExecutionCreatePayload, ScriptExecutionCreated, ScriptExecutionListItem,
@@ -23,5 +22,4 @@ export type {
   WorkflowStatus, JobStatus, StepTrace, JobInstance, PaginatedJobList,
   WorkflowRun, WorkflowRunCreate, WorkflowRunPreview, WorkflowRunPreviewTemplate,
   WorkflowSummary, JobArtifactEntry,
-  Tool, ToolCategory,
 } from './api/index';

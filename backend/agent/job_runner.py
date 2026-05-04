@@ -80,7 +80,6 @@ def run_task_wrapper(
     host_id: str,
     state: JobRunnerState,
     mq_producer: Optional[Any] = None,
-    tool_registry: Optional[Any] = None,
     script_registry: Optional[Any] = None,
     local_db: Optional[Any] = None,
 ) -> None:
@@ -172,7 +171,6 @@ def run_task_wrapper(
             api_url,
             host_id=host_id,
             mq_producer=mq_producer,
-            tool_registry=tool_registry,
             script_registry=script_registry,
             local_db=local_db,
             is_aborted=lambda: state.is_aborted(job_id),

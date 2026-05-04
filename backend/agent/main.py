@@ -32,7 +32,6 @@ if __name__ == "__main__" and __package__ is None:
     from agent.outbox_drainer import OutboxDrainThread
     from agent.registry.local_db import LocalDB
     from agent.registry.script_registry import ScriptRegistry
-    from agent.registry.tool_registry import ToolRegistry
     from agent.step_trace_uploader import StepTraceUploader
     from agent.watcher import LogWatcherManager, OutboxDrainer
     from agent.ws_client import AgentWSClient
@@ -49,7 +48,6 @@ else:
     from .outbox_drainer import OutboxDrainThread
     from .registry.local_db import LocalDB
     from .registry.script_registry import ScriptRegistry
-    from .registry.tool_registry import ToolRegistry
     from .step_trace_uploader import StepTraceUploader
     from .watcher import LogWatcherManager, OutboxDrainer
     from .ws_client import AgentWSClient
@@ -244,9 +242,6 @@ def main() -> None:
     db_path = str(BASE_DIR / "agent_state.db")
     local_db.initialize(db_path)
 
-    # 初始化工具注册表
-    tool_registry = ToolRegistry(local_db, api_url, agent_secret)
-    tool_registry.initialize()
     script_registry = ScriptRegistry(local_db, api_url, agent_secret)
     script_registry.initialize()
 
@@ -299,19 +294,6 @@ def main() -> None:
                 except ValueError:
                     pass
             mq_producer.set_log_rate_limit(limit)
-        elif command == "tool_update":
-            try:
-                tool_id = int(payload.get("tool_id", 0))
-                version = payload.get("version", "")
-            except (TypeError, ValueError):
-                tool_id, version = 0, ""
-            if tool_id and tool_registry:
-                threading.Thread(
-                    target=tool_registry.pull_tool_sync,
-                    args=(tool_id, version),
-                    daemon=True,
-                    name=f"tool-pull-{tool_id}",
-                ).start()
         elif command == "abort":
             job_id = payload.get("job_id")
             if job_id:
@@ -340,7 +322,6 @@ def main() -> None:
         poll_interval=poll_interval,
         ws_client=ws_client,
         catalog_versions=lambda: {
-            "tool_catalog_version": tool_registry.version,
             "script_catalog_version": script_registry.version,
         },
         on_scripts_outdated=script_registry.initialize,
@@ -509,7 +490,6 @@ def main() -> None:
                                 host_id,
                                 job_runner_state,
                                 mq_producer,
-                                tool_registry,
                                 script_registry,
                                 local_db,
                             )
