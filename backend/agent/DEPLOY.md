@@ -367,14 +367,14 @@ sudo userdel stability-test
 
 ## Ansible 运维入口
 
-从 2026-04-20 起，Linux agent host 的推荐运维入口为 `ssh/` 下的 Ansible playbook。
+从 2026-04-20 起，Linux agent host 的推荐运维入口为 `tools/ansible/` 下的 Ansible playbook。
 
-- 首次部署：`ssh/playbooks/install_agent.yml`
-- 热更新：`ssh/playbooks/update_agent.yml`
-- 服务管理：`ssh/playbooks/service_agent.yml`
-- 状态检查：`ssh/playbooks/check_agent.yml`
+- 首次部署：`tools/ansible/playbooks/install_agent.yml`
+- 热更新：`tools/ansible/playbooks/update_agent.yml`
+- 服务管理：`tools/ansible/playbooks/service_agent.yml`
+- 状态检查：`tools/ansible/playbooks/check_agent.yml`
 
-详细命令见 `ssh/README.md`。
+详细命令见 `tools/ansible/README.md`。
 
 ---
 

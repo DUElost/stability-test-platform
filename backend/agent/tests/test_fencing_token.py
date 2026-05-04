@@ -79,13 +79,18 @@ def test_run_task_wrapper_missing_fencing_token_raises_key_error(job_runner_stat
         "id": 123,
         "device_id": 1,
         "device_serial": "S1",
-        "pipeline_def": {"stages": {"execute": [{"step_id": "x", "action": "builtin:noop"}]}},
+        "pipeline_def": {
+            "lifecycle": {
+                "init": [{"step_id": "x", "action": "script:noop", "version": "1.0.0", "timeout_seconds": 1}],
+                "teardown": [],
+            }
+        },
         # 故意不写 fencing_token
     }
     mock_adb = MagicMock()
     with pytest.raises(KeyError, match="fencing_token"):
         run_task_wrapper(
-            run, mock_adb, "http://x", "h1", None,
+            run, mock_adb, "http://x", "h1",
             job_runner_state, None, None, None, None,
         )
 
@@ -99,7 +104,12 @@ def test_run_task_wrapper_heartbeat_and_complete_include_token(job_runner_state)
         "device_id": 2,
         "device_serial": "SN-99",
         "fencing_token": "2:3",
-        "pipeline_def": {"stages": {"execute": [{"step_id": "x", "action": "builtin:noop"}]}},
+        "pipeline_def": {
+            "lifecycle": {
+                "init": [{"step_id": "x", "action": "script:noop", "version": "1.0.0", "timeout_seconds": 1}],
+                "teardown": [],
+            }
+        },
     }
     mock_adb = MagicMock()
 
@@ -109,7 +119,7 @@ def test_run_task_wrapper_heartbeat_and_complete_include_token(job_runner_state)
         mock_exec.return_value = {"status": "FINISHED", "exit_code": 0}
 
         run_task_wrapper(
-            run, mock_adb, "http://x", "h1", None,
+            run, mock_adb, "http://x", "h1",
             job_runner_state, None, None, None, None,
         )
 

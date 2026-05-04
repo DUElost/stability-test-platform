@@ -106,6 +106,14 @@
         line: "API_URL={{ agent_api_url }}"
         create: false
 
+    - name: Ensure AGENT_SECRET is set in deployed environment file
+      become: true
+      ansible.builtin.lineinfile:
+        path: "{{ agent_install_dir }}/.env"
+        regexp: "^AGENT_SECRET="
+        line: "AGENT_SECRET={{ agent_secret }}"
+        create: false
+
     - name: Repair ownership on install directory
       become: true
       ansible.builtin.file:

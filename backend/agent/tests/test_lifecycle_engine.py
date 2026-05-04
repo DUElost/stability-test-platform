@@ -30,19 +30,17 @@ def _make_engine(
     adb = MagicMock()
     mq = MagicMock()
     mq.connected = True
-    ws = MagicMock()
 
     engine = PipelineEngine(
         adb=adb,
         serial="MOCK_SERIAL",
         run_id=999,
         log_dir=log_dir or "/tmp/test_logs",
-        ws_client=ws,
         mq_producer=mq,
         api_url=api_url,
         is_aborted=is_aborted or (lambda: False),
     )
-    return engine, adb, mq, ws
+    return engine, adb, mq
 
 
 def _minimal_lifecycle(
@@ -56,34 +54,18 @@ def _minimal_lifecycle(
     return {
         "lifecycle": {
             "timeout_seconds": timeout_seconds,
-            "init": {
-                "stages": {
-                    "prepare": init_steps or [
-                        {"step_id": "init_step", "action": "builtin:check_device", "params": {}, "timeout_seconds": 5}
-                    ],
-                    "execute": [],
-                    "post_process": [],
-                }
-            },
+            "init": init_steps or [
+                {"step_id": "init_step", "action": "script:check_device", "version": "1.0.0", "params": {}, "timeout_seconds": 5}
+            ],
             "patrol": {
                 "interval_seconds": interval_seconds,
-                "stages": {
-                    "prepare": patrol_steps or [
-                        {"step_id": "patrol_step", "action": "builtin:check_device", "params": {}, "timeout_seconds": 5}
-                    ],
-                    "execute": [],
-                    "post_process": [],
-                }
+                "steps": patrol_steps or [
+                    {"step_id": "patrol_step", "action": "script:check_device", "version": "1.0.0", "params": {}, "timeout_seconds": 5}
+                ],
             },
-            "teardown": {
-                "stages": {
-                    "prepare": teardown_steps or [
-                        {"step_id": "teardown_step", "action": "builtin:check_device", "params": {}, "timeout_seconds": 5}
-                    ],
-                    "execute": [],
-                    "post_process": [],
-                }
-            },
+            "teardown": teardown_steps or [
+                {"step_id": "teardown_step", "action": "script:check_device", "version": "1.0.0", "params": {}, "timeout_seconds": 5}
+            ],
         }
     }
 
@@ -93,24 +75,12 @@ def _lifecycle_no_patrol(timeout_seconds=10):
     return {
         "lifecycle": {
             "timeout_seconds": timeout_seconds,
-            "init": {
-                "stages": {
-                    "prepare": [
-                        {"step_id": "init_step", "action": "builtin:check_device", "params": {}, "timeout_seconds": 5}
-                    ],
-                    "execute": [],
-                    "post_process": [],
-                }
-            },
-            "teardown": {
-                "stages": {
-                    "prepare": [
-                        {"step_id": "teardown_step", "action": "builtin:check_device", "params": {}, "timeout_seconds": 5}
-                    ],
-                    "execute": [],
-                    "post_process": [],
-                }
-            },
+            "init": [
+                {"step_id": "init_step", "action": "script:check_device", "version": "1.0.0", "params": {}, "timeout_seconds": 5}
+            ],
+            "teardown": [
+                {"step_id": "teardown_step", "action": "script:check_device", "version": "1.0.0", "params": {}, "timeout_seconds": 5}
+            ],
         }
     }
 
@@ -126,9 +96,9 @@ class TestLifecycleE2EFlow:
     @patch("backend.agent.pipeline_engine.time.time")
     def test_init_patrol_teardown_order(self, mock_time, mock_sleep):
         """Init runs first, then patrol loops, then teardown always runs."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
 
-        # Track execution order via _run_stages_only and _execute_teardown_best_effort
+        # Track execution order via _run_lifecycle_steps and _execute_teardown_best_effort
         execution_log = []
 
         # Simulate time: init at t=0, after init at t=1, patrol#1 starts at t=2,
@@ -143,18 +113,17 @@ class TestLifecycleE2EFlow:
 
         mock_time.side_effect = mock_time_fn
 
-        def mock_run_stages(pipeline_def):
-            stages = pipeline_def.get("stages", {})
-            first_step = (stages.get("prepare") or [{}])[0]
+        def mock_run_steps(phase, steps):
+            first_step = (steps or [{}])[0]
             step_id = first_step.get("step_id", "unknown")
-            execution_log.append(f"stages:{step_id}")
+            execution_log.append(f"{phase}:{step_id}")
             return StepResult(success=True)
 
         def mock_teardown(teardown_def):
             execution_log.append("teardown")
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
-        engine._run_stages_only = mock_run_stages
+        engine._run_lifecycle_steps = mock_run_steps
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
@@ -164,7 +133,7 @@ class TestLifecycleE2EFlow:
         result = engine._execute_lifecycle(pipeline_def)
 
         # Verify order: init first, then at least one patrol, then teardown last
-        assert execution_log[0] == "stages:init_step", "Init must run first"
+        assert execution_log[0] == "init:init_step", "Init must run first"
         assert execution_log[-1] == "teardown", "Teardown must run last"
         assert any("patrol_step" in e for e in execution_log), "Patrol must run at least once"
 
@@ -175,9 +144,8 @@ class TestLifecycleE2EFlow:
 
         execution_log = []
 
-        def mock_run_stages(pipeline_def):
-            stages = pipeline_def.get("stages", {})
-            first_step = (stages.get("prepare") or [{}])[0]
+        def mock_run_steps(phase, steps):
+            first_step = (steps or [{}])[0]
             execution_log.append(first_step.get("step_id", "unknown"))
             return StepResult(success=True)
 
@@ -185,7 +153,7 @@ class TestLifecycleE2EFlow:
             execution_log.append("teardown")
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
-        engine._run_stages_only = mock_run_stages
+        engine._run_lifecycle_steps = mock_run_steps
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
@@ -199,7 +167,7 @@ class TestLifecycleE2EFlow:
     @patch("backend.agent.pipeline_engine.time.time")
     def test_mq_status_reports(self, mock_time, mock_sleep):
         """Lifecycle emits INIT_RUNNING, PATROL_RUNNING, TEARDOWN_RUNNING, COMPLETED."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
 
         # Time: init at t=0, after init at t=1, patrol at t=2, after patrol at t=3,
         # sleep check at t=15 (past 10s timeout)
@@ -213,7 +181,7 @@ class TestLifecycleE2EFlow:
 
         mock_time.side_effect = mock_time_fn
 
-        engine._run_stages_only = lambda pd: StepResult(success=True)
+        engine._run_lifecycle_steps = lambda phase, steps: StepResult(success=True)
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -248,11 +216,11 @@ class TestLifecycleE2EFlow:
 
         mock_time.side_effect = mock_time_fn
 
-        def init_stages(pipeline_def):
+        def init_steps():
             engine._shared["start_monkey"] = {"pid": 42}
             return StepResult(success=True)
 
-        def patrol_stages(pipeline_def):
+        def patrol_steps():
             # Patrol should see the PID from init
             assert "start_monkey" in engine._shared
             assert engine._shared["start_monkey"]["pid"] == 42
@@ -260,21 +228,20 @@ class TestLifecycleE2EFlow:
 
         call_count = [0]
 
-        def mock_run_stages(pipeline_def):
-            stages = pipeline_def.get("stages", {})
-            first_step = (stages.get("prepare") or [{}])[0]
+        def mock_run_steps(phase, steps):
+            first_step = (steps or [{}])[0]
             step_id = first_step.get("step_id", "unknown")
             if "init" in step_id:
-                return init_stages(pipeline_def)
+                return init_steps()
             else:
                 call_count[0] += 1
-                return patrol_stages(pipeline_def)
+                return patrol_steps()
 
         def mock_teardown(teardown_def):
             assert engine._shared["start_monkey"]["pid"] == 42
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
-        engine._run_stages_only = mock_run_stages
+        engine._run_lifecycle_steps = mock_run_steps
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
@@ -295,21 +262,20 @@ class TestPatrolTimingAndTermination:
     @patch("backend.agent.pipeline_engine.time.time")
     def test_timeout_terminates_patrol(self, mock_time, mock_sleep):
         """Patrol loop exits when timeout_seconds is reached."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
         patrol_count = [0]
 
         # Simulate time progression: init_completed_at=0, first timeout check=11 (past 10s)
         time_seq = iter([0, 11, 11, 11, 11, 11])
         mock_time.side_effect = lambda: next(time_seq, 999)
 
-        def mock_run_stages(pipeline_def):
-            stages = pipeline_def.get("stages", {})
-            first_step = (stages.get("prepare") or [{}])[0]
+        def mock_run_steps(phase, steps):
+            first_step = (steps or [{}])[0]
             if "patrol" in first_step.get("step_id", ""):
                 patrol_count[0] += 1
             return StepResult(success=True)
 
-        engine._run_stages_only = mock_run_stages
+        engine._run_lifecycle_steps = mock_run_steps
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -327,20 +293,19 @@ class TestPatrolTimingAndTermination:
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
     def test_cancel_terminates_patrol(self, mock_sleep):
         """Setting engine._canceled triggers abort and runs teardown."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
 
         patrol_count = [0]
 
-        def mock_run_stages(pipeline_def):
-            stages = pipeline_def.get("stages", {})
-            first_step = (stages.get("prepare") or [{}])[0]
+        def mock_run_steps(phase, steps):
+            first_step = (steps or [{}])[0]
             if "patrol" in first_step.get("step_id", ""):
                 patrol_count[0] += 1
                 if patrol_count[0] >= 2:
                     engine._canceled = True
             return StepResult(success=True)
 
-        engine._run_stages_only = mock_run_stages
+        engine._run_lifecycle_steps = mock_run_steps
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -361,16 +326,15 @@ class TestPatrolTimingAndTermination:
 
         patrol_count = [0]
 
-        def mock_run_stages(pipeline_def):
-            stages = pipeline_def.get("stages", {})
-            first_step = (stages.get("prepare") or [{}])[0]
+        def mock_run_steps(phase, steps):
+            first_step = (steps or [{}])[0]
             if "patrol" in first_step.get("step_id", ""):
                 patrol_count[0] += 1
                 if patrol_count[0] >= 3:
                     abort_flag[0] = True
             return StepResult(success=True)
 
-        engine._run_stages_only = mock_run_stages
+        engine._run_lifecycle_steps = mock_run_steps
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -386,12 +350,11 @@ class TestPatrolTimingAndTermination:
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
     def test_patrol_failure_terminates_loop(self, mock_sleep):
         """Patrol returning failure breaks the loop and triggers teardown."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
         patrol_count = [0]
 
-        def mock_run_stages(pipeline_def):
-            stages = pipeline_def.get("stages", {})
-            first_step = (stages.get("prepare") or [{}])[0]
+        def mock_run_steps(phase, steps):
+            first_step = (steps or [{}])[0]
             if "patrol" in first_step.get("step_id", ""):
                 patrol_count[0] += 1
                 if patrol_count[0] >= 2:
@@ -404,7 +367,7 @@ class TestPatrolTimingAndTermination:
             teardown_called[0] = True
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
-        engine._run_stages_only = mock_run_stages
+        engine._run_lifecycle_steps = mock_run_steps
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
@@ -419,17 +382,17 @@ class TestPatrolTimingAndTermination:
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
     def test_init_failure_triggers_teardown(self, mock_sleep):
         """Init failure skips patrol entirely but still runs teardown."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
         teardown_called = [False]
 
-        def mock_run_stages(pipeline_def):
+        def mock_run_steps(phase, steps):
             return StepResult(success=False, error_message="init check_device failed")
 
         def mock_teardown(td):
             teardown_called[0] = True
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
-        engine._run_stages_only = mock_run_stages
+        engine._run_lifecycle_steps = mock_run_steps
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
@@ -445,13 +408,13 @@ class TestPatrolTimingAndTermination:
     @patch("backend.agent.pipeline_engine.time.time")
     def test_termination_reason_in_mq_event(self, mock_time, mock_sleep):
         """The TEARDOWN_RUNNING MQ event contains termination_reason."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
 
         # Simulate: init at t=0, after init at t=1, patrol check at t=100 (past 10s timeout)
         time_seq = iter([0, 1, 100, 100, 100])
         mock_time.side_effect = lambda: next(time_seq, 999)
 
-        engine._run_stages_only = lambda pd: StepResult(success=True)
+        engine._run_lifecycle_steps = lambda phase, steps: StepResult(success=True)
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -479,7 +442,7 @@ class TestTeardownBestEffort:
 
     def test_partial_failure_continues_execution(self):
         """When some teardown steps fail, remaining steps still execute."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
 
@@ -493,23 +456,15 @@ class TestTeardownBestEffort:
                 return StepResult(success=False, error_message="adb: device not found")
             return StepResult(success=True)
 
-        engine._execute_step_stages = mock_execute_step
+        engine._execute_step = mock_execute_step
 
-        teardown_def = {
-            "stages": {
-                "prepare": [
-                    {"step_id": "ensure_root", "action": "builtin:ensure_root", "params": {}, "timeout_seconds": 5}
-                ],
-                "execute": [
-                    {"step_id": "stop_monkey", "action": "builtin:stop_process", "params": {}, "timeout_seconds": 5},
-                    {"step_id": "collect_bugreport", "action": "builtin:collect_bugreport", "params": {}, "timeout_seconds": 5},
-                    {"step_id": "scan_aee", "action": "builtin:scan_aee", "params": {}, "timeout_seconds": 5},
-                ],
-                "post_process": [
-                    {"step_id": "log_scan", "action": "builtin:log_scan", "params": {}, "timeout_seconds": 5}
-                ],
-            }
-        }
+        teardown_def = [
+            {"step_id": "ensure_root", "action": "script:ensure_root", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "stop_monkey", "action": "script:stop_process", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "collect_bugreport", "action": "script:collect_bugreport", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "scan_aee", "action": "script:scan_aee", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "log_scan", "action": "script:log_scan", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+        ]
 
         result = engine._execute_teardown_best_effort(teardown_def)
 
@@ -525,19 +480,12 @@ class TestTeardownBestEffort:
         def mock_execute_step(stage, step):
             return StepResult(success=False, error_message="adb: device not found")
 
-        engine._execute_step_stages = mock_execute_step
+        engine._execute_step = mock_execute_step
 
-        teardown_def = {
-            "stages": {
-                "prepare": [
-                    {"step_id": "step_a", "action": "builtin:check_device", "params": {}, "timeout_seconds": 5}
-                ],
-                "execute": [
-                    {"step_id": "step_b", "action": "builtin:stop_process", "params": {}, "timeout_seconds": 5}
-                ],
-                "post_process": [],
-            }
-        }
+        teardown_def = [
+            {"step_id": "step_a", "action": "script:check_device", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "step_b", "action": "script:stop_process", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+        ]
 
         result = engine._execute_teardown_best_effort(teardown_def)
         assert result.metadata["teardown_status"] == "FAILED"
@@ -555,20 +503,13 @@ class TestTeardownBestEffort:
                 raise ConnectionError("adb connection reset by peer")
             return StepResult(success=True)
 
-        engine._execute_step_stages = mock_execute_step
+        engine._execute_step = mock_execute_step
 
-        teardown_def = {
-            "stages": {
-                "prepare": [],
-                "execute": [
-                    {"step_id": "exploding_step", "action": "builtin:scan_aee", "params": {}, "timeout_seconds": 5},
-                    {"step_id": "after_explosion", "action": "builtin:log_scan", "params": {}, "timeout_seconds": 5},
-                ],
-                "post_process": [
-                    {"step_id": "final_step", "action": "builtin:adb_pull", "params": {}, "timeout_seconds": 5}
-                ],
-            }
-        }
+        teardown_def = [
+            {"step_id": "exploding_step", "action": "script:scan_aee", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "after_explosion", "action": "script:log_scan", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "final_step", "action": "script:adb_pull", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+        ]
 
         result = engine._execute_teardown_best_effort(teardown_def)
         assert executed == ["exploding_step", "after_explosion", "final_step"]
@@ -578,15 +519,13 @@ class TestTeardownBestEffort:
         """When all teardown steps succeed, status is SUCCESS."""
         engine, *_ = _make_engine()
 
-        engine._execute_step_stages = lambda stage, step: StepResult(success=True)
+        engine._execute_step = lambda phase, step: StepResult(success=True)
 
-        teardown_def = {
-            "stages": {
-                "prepare": [{"step_id": "s1", "action": "builtin:check_device", "params": {}, "timeout_seconds": 5}],
-                "execute": [{"step_id": "s2", "action": "builtin:stop_process", "params": {}, "timeout_seconds": 5}],
-                "post_process": [{"step_id": "s3", "action": "builtin:log_scan", "params": {}, "timeout_seconds": 5}],
-            }
-        }
+        teardown_def = [
+            {"step_id": "s1", "action": "script:check_device", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "s2", "action": "script:stop_process", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "s3", "action": "script:log_scan", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+        ]
 
         result = engine._execute_teardown_best_effort(teardown_def)
         assert result.metadata["teardown_status"] == "SUCCESS"
@@ -607,26 +546,18 @@ class TestTeardownBestEffort:
                 return StepResult(success=False, error_message="adb: device offline")
             return StepResult(success=True)
 
-        engine._execute_step_stages = mock_execute_step
+        engine._execute_step = mock_execute_step
 
-        teardown_def = {
-            "stages": {
-                "prepare": [
-                    {"step_id": "ensure_root", "action": "builtin:ensure_root", "params": {}, "timeout_seconds": 5}
-                ],
-                "execute": [
-                    {"step_id": "stop_monkey", "action": "builtin:stop_process", "params": {}, "timeout_seconds": 5},
-                    {"step_id": "collect_bugreport", "action": "builtin:collect_bugreport", "params": {}, "timeout_seconds": 5},
-                    {"step_id": "scan_aee", "action": "builtin:scan_aee", "params": {}, "timeout_seconds": 5},
-                    {"step_id": "export_mobilelogs", "action": "builtin:export_mobilelogs", "params": {}, "timeout_seconds": 5},
-                ],
-                "post_process": [
-                    {"step_id": "aee_extract", "action": "builtin:aee_extract", "params": {}, "timeout_seconds": 5},
-                    {"step_id": "log_scan", "action": "builtin:log_scan", "params": {}, "timeout_seconds": 5},
-                    {"step_id": "adb_pull", "action": "builtin:adb_pull", "params": {}, "timeout_seconds": 5},
-                ],
-            }
-        }
+        teardown_def = [
+            {"step_id": "ensure_root", "action": "script:ensure_root", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "stop_monkey", "action": "script:stop_process", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "collect_bugreport", "action": "script:collect_bugreport", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "scan_aee", "action": "script:scan_aee", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "export_mobilelogs", "action": "script:export_mobilelogs", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "aee_extract", "action": "script:aee_extract", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "log_scan", "action": "script:log_scan", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "adb_pull", "action": "script:adb_pull", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+        ]
 
         result = engine._execute_teardown_best_effort(teardown_def)
 
@@ -639,17 +570,17 @@ class TestTeardownBestEffort:
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
     def test_lifecycle_teardown_runs_even_on_init_exception(self, mock_sleep):
         """If init raises an unexpected exception, teardown still runs via try/finally."""
-        engine, adb, mq, ws = _make_engine()
+        engine, adb, mq = _make_engine()
         teardown_ran = [False]
 
-        def exploding_stages(pipeline_def):
+        def exploding_steps(phase, steps):
             raise RuntimeError("unexpected init crash")
 
         def mock_teardown(td):
             teardown_ran[0] = True
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
-        engine._run_stages_only = exploding_stages
+        engine._run_lifecycle_steps = exploding_steps
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None

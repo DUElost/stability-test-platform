@@ -228,6 +228,7 @@ ADB_PATH=adb
 # ADB 服务端口（默认 5037）。WSL 环境若默认端口被占用需切换（如 5039）：
 # ANDROID_ADB_SERVER_PORT=5037
 LOG_LEVEL=INFO
+AGENT_SECRET=${AGENT_SECRET:-}
 
 # AIMONKEY 资源目录（包含 aim, aim.jar 等文件）
 # AIMONKEY_RESOURCE_DIR=$INSTALL_DIR/resources/aimonkey
@@ -241,6 +242,11 @@ else
     sed -i "s|^API_URL=.*|API_URL=$API_URL|" "$INSTALL_DIR/.env"
     sed -i "s|^HOST_ID=.*|HOST_ID=auto|" "$INSTALL_DIR/.env"
     sed -i "s|^AUTO_REGISTER_HOST=.*|AUTO_REGISTER_HOST=true|" "$INSTALL_DIR/.env"
+    if ! grep -q "^AGENT_SECRET=" "$INSTALL_DIR/.env"; then
+        echo "AGENT_SECRET=${AGENT_SECRET:-}" >> "$INSTALL_DIR/.env"
+    else
+        sed -i "s|^AGENT_SECRET=.*|AGENT_SECRET=${AGENT_SECRET:-}|" "$INSTALL_DIR/.env"
+    fi
     echo_info "配置文件已更新: $INSTALL_DIR/.env"
 fi
 

@@ -18,4 +18,8 @@ agent_adb_path: "adb"
 agent_log_level: "INFO"
 agent_health_log_tail_lines: 40
 agent_agentctl_path: "{{ agent_install_dir }}/agentctl"
-agent_source_dir: "{{ playbook_dir }}/../../backend/agent"
+agent_source_dir: "{{ playbook_dir }}/../../../backend/agent"
+
+# Agent-Backend 双向认证密钥，必须与 Backend .env 中 AGENT_SECRET 一致。
+# 生产环境部署前务必更换此值。
+agent_secret: "change-me-in-production"

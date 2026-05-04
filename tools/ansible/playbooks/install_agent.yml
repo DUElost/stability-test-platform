@@ -35,6 +35,7 @@
         AGENT_INSTALL_DIR: "{{ agent_install_dir }}"
         AGENT_USER: "{{ agent_user }}"
         AGENT_GROUP: "{{ agent_group }}"
+        AGENT_SECRET: "{{ agent_secret }}"
 
     - name: Refresh agentctl command from staged source
       become: true

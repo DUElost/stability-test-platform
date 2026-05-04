@@ -36,7 +36,8 @@ venv-wsl/
 # Codex CLI 本地状态文件（0 字节占位，无业务含义）
 .codex
 # Ansible / SSH 部署本地配置（敏感清单继续忽略，其余自动化文件纳入版本控制）
-ssh/inventory.ini
-ssh/*.retry
+tools/ansible/inventory.ini
+tools/ansible/*.retry
 .worktrees/
 /backend/agent/tools/AIMonkeyTest_20260317
+.deepseek/

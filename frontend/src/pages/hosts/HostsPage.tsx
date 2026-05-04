@@ -87,6 +87,30 @@ export default function HostsPage() {
     },
   });
 
+  const [hotUpdatingHostId, setHotUpdatingHostId] = useState<number | null>(null);
+
+  const hotUpdateMutation = useMutation({
+    mutationFn: (hostId: number) => api.hotUpdate.trigger(hostId),
+    onSuccess: (_data, hostId) => {
+      toast.success(`主机 ${hostId} 热更新完成`);
+      setHotUpdatingHostId(null);
+    },
+    onError: (error: any) => {
+      toast.error(`热更新失败: ${error.response?.data?.detail || error.message}`);
+      setHotUpdatingHostId(null);
+    },
+  });
+
+  const handleHotUpdate = async (hostId: number) => {
+    const ok = await confirmDialog({
+      description: `确定要对主机 ${hostId} 执行热更新吗？此操作将同步代码并重启 Agent 服务。`
+    });
+    if (ok) {
+      setHotUpdatingHostId(hostId);
+      hotUpdateMutation.mutate(hostId);
+    }
+  };
+
   const handleBatchDeploy = async () => {
     if (selectedHostIds.size === 0) return;
     const ok = await confirmDialog({ description: `确定要部署到 ${selectedHostIds.size} 台选中主机吗？` });
@@ -224,6 +248,8 @@ export default function HostsPage() {
           hosts={tableData}
           onDeploy={handleDeploy}
           isDeploying={(hostId: number) => deployMutation.isPending && deployingHostId === hostId}
+          onHotUpdate={handleHotUpdate}
+          isHotUpdating={(hostId: number) => hotUpdateMutation.isPending && hotUpdatingHostId === hostId}
           selectedIds={selectedHostIds}
           onSelectionChange={setSelectedHostIds}
         />

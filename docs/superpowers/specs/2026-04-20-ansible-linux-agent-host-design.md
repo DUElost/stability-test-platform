@@ -4,7 +4,7 @@
 
 ## 背景
 
-当前 Linux agent host 的运维方式以 `backend/agent/install_agent.sh` 和 `backend/agent/sync_agent.sh` 为主，首次部署、热更新、批量重启、状态检查主要依赖人工执行脚本、`ssh` 和 `systemctl`。仓库中虽然已有 `ssh/ansible.cfg`、`ssh/inventory.ini` 和 `ssh/ssh_key.yml`，但目前仅覆盖基础连通性与 SSH 公钥分发，没有形成完整的批量部署与运维闭环。
+当前 Linux agent host 的运维方式以 `backend/agent/install_agent.sh` 和 `backend/agent/sync_agent.sh` 为主，首次部署、热更新、批量重启、状态检查主要依赖人工执行脚本、`ssh` 和 `systemctl`。仓库中虽然已有 `tools/ansible/ansible.cfg`、`tools/ansible/inventory.ini` 和 `tools/ansible/ssh_key.yml`，但目前仅覆盖基础连通性与 SSH 公钥分发，没有形成完整的批量部署与运维闭环。
 
 本次目标是引入 Ansible 作为 Linux agent host 的统一运维入口，替代“手工脚本 + 手工登录目标机”的模式，并以 `172.21.10.36` 作为单机实验对象，逐步扩展到 `linux_hosts`。
 
@@ -35,12 +35,12 @@
 
 ### 当前 Ansible 基础
 
-- `ssh/ansible.cfg` 已设置默认 inventory 为 `./inventory.ini`，并关闭 host key checking。
-- `ssh/inventory.ini` 已维护 `linux_hosts` 分组，并包含实验机 `172.21.10.36`。
+- `tools/ansible/ansible.cfg` 已设置默认 inventory 为 `./inventory.ini`，并关闭 host key checking。
+- `tools/ansible/inventory.ini` 已维护 `linux_hosts` 分组，并包含实验机 `172.21.10.36`。
 - 已验证以下命令可正常执行，说明 Ansible 到目标主机的基础连通性成立：
 
 ```bash
-wsl bash -lc 'cd /mnt/f/stability-test-platform/ssh && ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping -o | grep SUCCESS'
+wsl bash -lc 'cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping -o | grep SUCCESS'
 ```
 
 ### 已确认的设计约束
@@ -63,7 +63,7 @@ wsl bash -lc 'cd /mnt/f/stability-test-platform/ssh && ANSIBLE_CONFIG=./ansible.
 - 服务重启与状态管理
 - 健康检查与诊断输出
 
-该阶段允许复用现有 `install_agent.sh` 和 `sync_agent.sh` 的核心能力，但禁止继续依赖人工 SSH 登录和手工输入。所有运维动作必须通过 `ssh/` 下的 playbook 触发，且支持 `--limit 172.21.10.36`。
+该阶段允许复用现有 `install_agent.sh` 和 `sync_agent.sh` 的核心能力，但禁止继续依赖人工 SSH 登录和手工输入。所有运维动作必须通过 `tools/ansible/` 下的 playbook 触发，且支持 `--limit 172.21.10.36`。
 
 ### Phase B：原生迁移到 Ansible
 
@@ -91,10 +91,10 @@ wsl bash -lc 'cd /mnt/f/stability-test-platform/ssh && ANSIBLE_CONFIG=./ansible.
 
 ## 建议目录结构
 
-Ansible 运维入口统一收敛到 `ssh/`，目录结构如下：
+Ansible 运维入口统一收敛到 `tools/ansible/`，目录结构如下：
 
 ```text
-ssh/
+tools/ansible/
 ├── ansible.cfg
 ├── inventory.ini
 ├── group_vars/

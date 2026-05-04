@@ -39,18 +39,37 @@ def _validate_pipeline_def(pipeline_def: Optional[Dict[str, Any]]) -> Optional[s
     if not (pipeline_def and isinstance(pipeline_def, dict)):
         return "pipeline_def is required"
 
-    is_lifecycle = isinstance(pipeline_def.get("lifecycle"), dict)
-    is_stages = isinstance(pipeline_def.get("stages"), dict)
-    if not is_lifecycle and not is_stages:
-        return "pipeline_def must contain 'stages' or 'lifecycle'"
-    if is_stages and not is_lifecycle:
-        stages = pipeline_def.get("stages", {})
-        has_step = any(
-            isinstance(stages.get(key), list) and len(stages.get(key) or []) > 0
-            for key in ("prepare", "execute", "post_process")
-        )
-        if not has_step:
-            return "pipeline_def.stages must contain at least one step"
+    if "stages" in pipeline_def:
+        return "stages format is not supported; use 'lifecycle'"
+    lifecycle = pipeline_def.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        return "pipeline_def must contain 'lifecycle'"
+
+    init = lifecycle.get("init")
+    if not isinstance(init, list) or not init:
+        return "pipeline_def.lifecycle.init must contain at least one step"
+
+    teardown = lifecycle.get("teardown")
+    if not isinstance(teardown, list):
+        return "pipeline_def.lifecycle.teardown must be a step array"
+
+    patrol = lifecycle.get("patrol")
+    if patrol is not None:
+        if not isinstance(patrol, dict):
+            return "pipeline_def.lifecycle.patrol must be an object"
+        if not isinstance(patrol.get("interval_seconds"), int) or patrol["interval_seconds"] < 1:
+            return "pipeline_def.lifecycle.patrol.interval_seconds must be a positive integer"
+        if not isinstance(patrol.get("steps"), list) or not patrol["steps"]:
+            return "pipeline_def.lifecycle.patrol.steps must contain at least one step"
+
+    for step in init + teardown + (patrol.get("steps", []) if isinstance(patrol, dict) else []):
+        if not isinstance(step, dict):
+            return "pipeline_def lifecycle steps must be objects"
+        action = step.get("action", "")
+        if not isinstance(action, str) or not action.startswith("script:"):
+            return "pipeline_def actions must use script:<name>"
+        if not step.get("version"):
+            return "pipeline_def script actions must define version"
     return None
 
 
@@ -59,7 +78,6 @@ def run_task_wrapper(
     adb: Any,
     api_url: str,
     host_id: str,
-    ws_client: Any,
     state: JobRunnerState,
     mq_producer: Optional[Any] = None,
     tool_registry: Optional[Any] = None,
@@ -153,7 +171,6 @@ def run_task_wrapper(
             adb,
             api_url,
             host_id=host_id,
-            ws_client=ws_client,
             mq_producer=mq_producer,
             tool_registry=tool_registry,
             script_registry=script_registry,

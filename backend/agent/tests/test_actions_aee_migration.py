@@ -536,8 +536,8 @@ class TestAeeExtractBatch:
 # ===========================================================================
 
 class TestPipelineEngineSharedFix:
-    def test_stages_path_writes_metrics_to_shared(self):
-        """Verify _execute_step_stages writes result.metrics to self._shared."""
+    def test_lifecycle_step_writes_metrics_to_shared(self):
+        """Verify _execute_step writes result.metrics to self._shared."""
         from backend.agent.pipeline_engine import PipelineEngine, StepResult
 
         engine = PipelineEngine(
@@ -553,10 +553,16 @@ class TestPipelineEngineSharedFix:
         def fake_action(ctx):
             return StepResult(success=True, metrics=test_metrics)
 
-        with patch.object(engine, "_resolve_action_stages", return_value=fake_action):
+        with patch.object(engine, "_resolve_action", return_value=fake_action):
             with patch.object(engine, "_report_step_trace_mq"):
-                step = {"step_id": "scan_aee", "action": "builtin:scan_aee", "params": {}, "timeout_seconds": 30}
-                result = engine._execute_step_stages("execute", step)
+                step = {
+                    "step_id": "scan_aee",
+                    "action": "script:scan_aee",
+                    "version": "1.0.0",
+                    "params": {},
+                    "timeout_seconds": 30,
+                }
+                result = engine._execute_step("patrol", step)
 
         assert result.success is True
         assert engine._shared["scan_aee"] == test_metrics

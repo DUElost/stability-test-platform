@@ -82,7 +82,7 @@ def test_script_execution_creates_workflow_run_and_job_instances(
     assert job.device_id == sample_device.id
     assert job.host_id == sample_device.host_id
     assert job.status == "PENDING"
-    step = job.pipeline_def["stages"]["execute"][0]
+    step = job.pipeline_def["lifecycle"]["init"][0]
     assert step == {
         "step_id": f"script_0_{script_name}",
         "action": f"script:{script_name}",
@@ -347,7 +347,7 @@ async def test_script_execution_job_is_claimable():
             assert job.status == "RUNNING"
 
             # pipeline_def must contain script:<name> action
-            step = job.pipeline_def["stages"]["execute"][0]
+            step = job.pipeline_def["lifecycle"]["init"][0]
             assert step["action"] == f"script:{script_name}", (
                 f"Expected script:{script_name}, got {step['action']}"
             )

@@ -15,6 +15,13 @@ export const heartbeat = {
     apiClient.post(`/heartbeat`, { host_id: hostId, ...data }),
 };
 
+export const hotUpdate = {
+  trigger: (hostId: number) =>
+    apiClient.post<{ ok: boolean; host_id: number; message: string; duration_ms?: number }>(
+      `/hosts/${hostId}/hot-update`
+    ),
+};
+
 export const deploy = {
   trigger: (hostId: number, installPath: string = '/opt/stability-test-agent') =>
     apiClient.post<{ id: number; host_id: number; status: string; started_at: string }>(

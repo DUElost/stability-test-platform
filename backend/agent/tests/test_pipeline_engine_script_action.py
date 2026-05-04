@@ -59,8 +59,8 @@ print(json.dumps({"metrics": {"value": params["value"], "serial": os.environ["ST
     )
 
     result = engine.execute({
-        "stages": {
-            "prepare": [
+        "lifecycle": {
+            "init": [
                 {
                     "step_id": "echo",
                     "action": "script:echo_params",
@@ -68,12 +68,38 @@ print(json.dumps({"metrics": {"value": params["value"], "serial": os.environ["ST
                     "params": {"value": 7},
                     "timeout_seconds": 5,
                 }
-            ]
+            ],
+            "teardown": [],
         }
     })
 
     assert result.success is True
     assert engine._shared["echo"] == {"value": 7, "serial": "SERIAL001"}
+
+
+def test_pipeline_engine_rejects_top_level_stages_format():
+    engine = PipelineEngine(
+        adb=SimpleNamespace(adb_path="adb"),
+        serial="SERIAL001",
+        run_id=42,
+    )
+
+    result = engine.execute({
+        "stages": {
+            "execute": [
+                {
+                    "step_id": "echo",
+                    "action": "script:echo_params",
+                    "version": "1.0.0",
+                    "params": {},
+                    "timeout_seconds": 5,
+                }
+            ]
+        }
+    })
+
+    assert result.success is False
+    assert "lifecycle" in result.error_message
 
 
 def test_pipeline_engine_reports_script_stdout_and_stderr(tmp_path):
@@ -94,8 +120,8 @@ print("debug stderr", file=sys.stderr)
         script_registry=FakeScriptRegistry(script),
     )
 
-    result = engine._execute_step_stages(
-        "execute",
+    result = engine._execute_step(
+        "init",
         {
             "step_id": "stdout_stderr",
             "action": "script:stdout_stderr",
@@ -125,8 +151,8 @@ def test_pipeline_engine_reports_skipped_script_without_retry(tmp_path):
         script_registry=FakeScriptRegistry(script),
     )
 
-    result = engine._execute_step_stages(
-        "prepare",
+    result = engine._execute_step(
+        "init",
         {
             "step_id": "skip",
             "action": "script:skip",
@@ -152,8 +178,8 @@ def test_pipeline_engine_skips_disabled_step_without_resolving_action():
         mq_producer=mq,
     )
 
-    result = engine._execute_step_stages(
-        "prepare",
+    result = engine._execute_step(
+        "init",
         {
             "step_id": "disabled",
             "action": "builtin:missing_action",
@@ -184,8 +210,8 @@ def test_pipeline_engine_script_timeout_returns_124(tmp_path):
         script_registry=FakeScriptRegistry(script),
     )
 
-    result = engine._execute_step_stages(
-        "prepare",
+    result = engine._execute_step(
+        "init",
         {
             "step_id": "sleep",
             "action": "script:sleep",

@@ -1,7 +1,7 @@
 export { default } from './client';
 export { unwrapApiResponse } from './client';
 export { auth } from './auth';
-export { hosts, heartbeat, deploy } from './hosts';
+export { hosts, heartbeat, hotUpdate, deploy } from './hosts';
 export { devices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
@@ -39,7 +39,7 @@ export type {
 } from './types';
 
 import { auth } from './auth';
-import { hosts, heartbeat, deploy } from './hosts';
+import { hosts, heartbeat, hotUpdate, deploy } from './hosts';
 import { devices } from './devices';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
@@ -54,6 +54,7 @@ export const api = {
   auth,
   hosts,
   heartbeat,
+  hotUpdate,
   deploy,
   devices,
   logs,

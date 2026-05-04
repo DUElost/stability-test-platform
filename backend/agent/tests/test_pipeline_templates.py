@@ -139,7 +139,7 @@ class TestActionCoverage(unittest.TestCase):
 
 
 class TestPipelineExecution(unittest.TestCase):
-    """Test pipeline engine executes stages-format definitions."""
+    """Test pipeline engine executes lifecycle-format definitions."""
 
     def _mock_adb(self):
         adb = MagicMock()
@@ -151,18 +151,19 @@ class TestPipelineExecution(unittest.TestCase):
 
     def _simple_pipeline(self):
         return {
-            "stages": {
-                "prepare": [
+            "lifecycle": {
+                "init": [
                     {
                         "step_id": "check_device",
-                        "action": "builtin:check_device",
+                        "action": "script:check_device",
+                        "version": "1.0.0",
                         "params": {},
                         "timeout_seconds": 5,
                         "retry": 0,
+                        "enabled": False,
                     }
                 ],
-                "execute": [],
-                "post_process": [],
+                "teardown": [],
             }
         }
 
@@ -189,7 +190,7 @@ class TestPipelineExecution(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("legacy phases format", result.error_message)
 
-    def test_engine_stops_on_failed_step(self):
+    def test_engine_rejects_top_level_stages_without_running_steps(self):
         adb = self._mock_adb()
         adb.shell.side_effect = Exception("device disconnected")
 
@@ -219,7 +220,8 @@ class TestPipelineExecution(unittest.TestCase):
         engine = PipelineEngine(adb=adb, serial="FAKE001", run_id=1)
         result = engine.execute(pipeline)
         self.assertFalse(result.success)
-        self.assertEqual(adb.shell.call_count, 2)
+        self.assertIn("lifecycle", result.error_message)
+        self.assertEqual(adb.shell.call_count, 0)
 
     def test_aimonkey_template_loads_and_validates(self):
         with open(TEMPLATE_DIR / "aimonkey.json", encoding="utf-8-sig") as fp:

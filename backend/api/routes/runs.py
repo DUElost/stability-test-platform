@@ -210,16 +210,26 @@ def list_run_steps(run_id: int, db: Session = Depends(get_db)):
         return result
 
     pipeline_def = job.pipeline_def or {}
-    stages = pipeline_def.get("stages", {})
+    lifecycle = pipeline_def.get("lifecycle", {})
     now = datetime.now(timezone.utc)
     result = []
     idx = 0
-    for stage_name, steps in stages.items():
+    phase_steps = [
+        ("init", lifecycle.get("init", [])),
+        (
+            "patrol",
+            (lifecycle.get("patrol") or {}).get("steps", [])
+            if isinstance(lifecycle.get("patrol"), dict)
+            else [],
+        ),
+        ("teardown", lifecycle.get("teardown", [])),
+    ]
+    for phase_name, steps in phase_steps:
         for step in (steps or []):
             result.append(RunStepOut(
                 id=idx,
                 run_id=run_id,
-                phase=stage_name,
+                phase=phase_name,
                 step_order=idx,
                 name=step.get("step_id", f"step_{idx}"),
                 action=step.get("action", ""),

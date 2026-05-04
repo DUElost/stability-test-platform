@@ -8,38 +8,40 @@ from backend.services.dispatcher import (
 
 
 def _step(step_id: str) -> dict:
-    return {"step_id": step_id, "action": "builtin:check_device", "timeout_seconds": 30}
+    return {
+        "step_id": step_id,
+        "action": "script:check_device",
+        "version": "1.0.0",
+        "timeout_seconds": 30,
+    }
 
 
 def test_resolve_pipeline_merges_workflow_setup_task_and_teardown():
-    setup = {"stages": {"prepare": [_step("setup_wifi")]}}
+    setup = {"lifecycle": {"init": [_step("setup_wifi")], "teardown": []}}
     task = {
-        "stages": {
-            "prepare": [_step("task_prepare")],
-            "execute": [_step("task_execute")],
-            "post_process": [_step("task_post")],
-        }
+        "lifecycle": {
+            "init": [_step("task_prepare"), _step("task_execute")],
+            "teardown": [_step("task_post")],
+        },
     }
-    teardown = {"stages": {"post_process": [_step("cleanup")]}}
+    teardown = {"lifecycle": {"init": [], "teardown": [_step("cleanup")]}}
 
     resolved = _resolve_pipeline(setup, task, teardown)
 
     assert resolved == {
-        "stages": {
-            "prepare": [_step("setup_wifi"), _step("task_prepare")],
-            "execute": [_step("task_execute")],
-            "post_process": [_step("task_post"), _step("cleanup")],
+        "lifecycle": {
+            "init": [_step("setup_wifi"), _step("task_prepare"), _step("task_execute")],
+            "teardown": [_step("task_post"), _step("cleanup")],
         }
     }
 
 
 def test_resolve_pipeline_preserves_existing_task_pipeline_when_workflow_pipelines_are_null():
     task = {
-        "stages": {
-            "prepare": [_step("task_prepare")],
-            "execute": [_step("task_execute")],
-            "post_process": [_step("task_post")],
-        }
+        "lifecycle": {
+            "init": [_step("task_prepare"), _step("task_execute")],
+            "teardown": [_step("task_post")],
+        },
     }
 
     assert _resolve_pipeline(None, task, None) == task
@@ -47,17 +49,19 @@ def test_resolve_pipeline_preserves_existing_task_pipeline_when_workflow_pipelin
 
 def test_apply_step_overrides_updates_matching_step_without_mutating_original():
     pipeline = {
-        "stages": {
-            "execute": [
+        "lifecycle": {
+            "init": [
                 {
                     "step_id": "run_monkey",
-                    "action": "builtin:run_shell_script",
+                    "action": "script:run_monkey",
+                    "version": "1.0.0",
                     "params": {"duration": 300, "seed": 1},
                     "timeout_seconds": 400,
                     "retry": 0,
                 },
                 _step("other"),
-            ]
+            ],
+            "teardown": [],
         }
     }
 
@@ -67,7 +71,7 @@ def test_apply_step_overrides_updates_matching_step_without_mutating_original():
         [
             {
                 "template_name": "monkey",
-                "stage": "execute",
+                "stage": "init",
                 "step_id": "run_monkey",
                 "params": {"duration": 600},
                 "timeout_seconds": 700,
@@ -76,31 +80,32 @@ def test_apply_step_overrides_updates_matching_step_without_mutating_original():
             },
             {
                 "template_name": "other_template",
-                "stage": "execute",
+                "stage": "init",
                 "step_id": "other",
                 "enabled": False,
             },
         ],
     )
 
-    updated = resolved["stages"]["execute"][0]
+    updated = resolved["lifecycle"]["init"][0]
     assert updated["params"] == {"duration": 600, "seed": 1}
     assert updated["timeout_seconds"] == 700
     assert updated["retry"] == 1
     assert updated["enabled"] is False
-    assert resolved["stages"]["execute"][1]["step_id"] == "other"
-    assert "enabled" not in resolved["stages"]["execute"][1]
-    assert "enabled" not in pipeline["stages"]["execute"][0]
+    assert resolved["lifecycle"]["init"][1]["step_id"] == "other"
+    assert "enabled" not in resolved["lifecycle"]["init"][1]
+    assert "enabled" not in pipeline["lifecycle"]["init"][0]
 
 
 def test_build_template_preview_counts_disabled_and_executable_steps():
     pipeline = {
-        "stages": {
-            "prepare": [_step("prepare")],
-            "execute": [
+        "lifecycle": {
+            "init": [
+                _step("prepare"),
                 {**_step("enabled"), "enabled": True},
                 {**_step("disabled"), "enabled": False},
             ],
+            "teardown": [],
         }
     }
 

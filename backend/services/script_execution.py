@@ -80,8 +80,8 @@ def validate_active_scripts(db: Session, items: list[dict[str, Any]]) -> None:
 
 def synthesize_script_pipeline(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "stages": {
-            "execute": [
+        "lifecycle": {
+            "init": [
                 {
                     "step_id": f"script_{index}_{item['script_name']}",
                     "action": f"script:{item['script_name']}",
@@ -92,7 +92,8 @@ def synthesize_script_pipeline(items: list[dict[str, Any]]) -> dict[str, Any]:
                     "enabled": True,
                 }
                 for index, item in enumerate(items)
-            ]
+            ],
+            "teardown": [],
         }
     }
 
@@ -297,7 +298,8 @@ def script_execution_detail(db: Session, run_id: int) -> dict[str, Any]:
             .all()
         )
         steps = []
-        for step in (job.pipeline_def or {}).get("stages", {}).get("execute", []) or []:
+        lifecycle = (job.pipeline_def or {}).get("lifecycle", {})
+        for step in lifecycle.get("init", []) or []:
             trace = traces.get(step.get("step_id"))
             steps.append(
                 {

@@ -15,11 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.response import ApiResponse, ok
 from backend.core.database import get_async_db
 from backend.models.action_template import ActionTemplate
-from backend.models.tool import Tool
 
 router = APIRouter(prefix="/api/v1/action-templates", tags=["action-templates"])
 
-ACTION_PATTERN = re.compile(r"^(tool:\d+|builtin:.+|script:.+)$")
+ACTION_PATTERN = re.compile(r"^script:.+$")
 
 
 class ActionTemplateCreate(BaseModel):
@@ -58,15 +57,6 @@ class ActionTemplateOut(BaseModel):
     updated_at: datetime
 
 
-def _tool_id_from_action(action: str) -> Optional[int]:
-    if not action.startswith("tool:"):
-        return None
-    try:
-        return int(action.split(":", 1)[1])
-    except (IndexError, ValueError):
-        return None
-
-
 async def _validate_template_payload(
     *,
     name: str,
@@ -84,7 +74,7 @@ async def _validate_template_payload(
     if not ACTION_PATTERN.match(action):
         raise HTTPException(
             status_code=422,
-            detail="action must match 'builtin:<name>', 'tool:<id>', or 'script:<name>'",
+            detail="action must match 'script:<name>'",
         )
 
     if not isinstance(params, dict):
@@ -95,18 +85,8 @@ async def _validate_template_payload(
     if retry < 0 or retry > 10:
         raise HTTPException(status_code=422, detail="retry must be between 0 and 10")
 
-    tool_id = _tool_id_from_action(action)
-    if tool_id is not None:
-        if not version:
-            raise HTTPException(status_code=422, detail="version is required for tool action")
-        tool = await db.get(Tool, tool_id)
-        if tool is None or not tool.is_active:
-            raise HTTPException(status_code=422, detail=f"tool not found or inactive: {tool_id}")
-    elif action.startswith("script:"):
-        if not version:
-            raise HTTPException(status_code=422, detail="version is required for script action")
-    elif version:
-        raise HTTPException(status_code=422, detail="version is only allowed for tool or script action")
+    if not version:
+        raise HTTPException(status_code=422, detail="version is required for script action")
 
     q = select(ActionTemplate).where(ActionTemplate.name == name)
     if current_id is not None:

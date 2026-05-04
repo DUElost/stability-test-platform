@@ -12,6 +12,7 @@ from backend.core.audit import record_audit
 from backend.models.host import Host
 from backend.api.schemas import HostCreate, HostOut, PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
+from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds
 
 logger = logging.getLogger(__name__)
 
@@ -164,3 +165,68 @@ def update_host(
     db.commit()
     db.refresh(host)
     return _host_to_out(host)
+
+
+@router.post("/{host_id}/hot-update")
+def host_hot_update(
+    host_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """热更新：同步 Agent 代码到目标主机并重启服务。"""
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    if host.status != "ONLINE":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Host is {host.status}, hot-update requires ONLINE status",
+        )
+
+    if not host.ip:
+        raise HTTPException(
+            status_code=400,
+            detail="Host has no IP address configured",
+        )
+
+    ssh_password = (host.extra or {}).get("ssh_password", "")
+    ssh_key_path = (host.extra or {}).get("ssh_key_path", "")
+    ssh_user = host.ssh_user or "root"
+
+    # Fallback: resolve from Ansible inventory if host has no explicit credentials
+    if not ssh_password and not ssh_key_path:
+        inv = _resolve_ssh_creds(host.ip or "")
+        if inv:
+            ssh_user = inv["user"]
+            ssh_password = inv.get("password", "")
+            logger.info("hot_update_using_inventory host=%s ip=%s user=%s",
+                        host_id, host.ip, ssh_user)
+
+    if not ssh_password and not ssh_key_path:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Host has no SSH credentials configured and is not found "
+                "in Ansible inventory. Set ssh_password or ssh_key_path in "
+                "host.extra via PUT /api/v1/hosts/{host_id}."
+            ),
+        )
+
+    result = execute_hot_update(
+        host_ip=host.ip or "",
+        ssh_port=host.ssh_port or 22,
+        ssh_user=ssh_user,
+        ssh_password=ssh_password,
+        ssh_key_path=ssh_key_path or "",
+    )
+
+    if not result["ok"]:
+        raise HTTPException(status_code=502, detail=result["message"])
+
+    return {
+        "ok": True,
+        "host_id": host_id,
+        "message": result["message"],
+        "duration_ms": result.get("duration_ms"),
+    }

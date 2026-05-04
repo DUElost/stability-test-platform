@@ -51,6 +51,8 @@ interface ExpandableHostTableProps {
   hosts: HostTableData[];
   onDeploy?: (hostId: number) => void;
   isDeploying?: (hostId: number) => boolean;
+  onHotUpdate?: (hostId: number) => void;
+  isHotUpdating?: (hostId: number) => boolean;
   selectedIds?: Set<number>;
   onSelectionChange?: (ids: Set<number>) => void;
 }
@@ -96,7 +98,7 @@ function getProgressColor(percentage: number): string {
   return 'bg-emerald-500';
 }
 
-export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _isDeploying, selectedIds, onSelectionChange }: ExpandableHostTableProps) {
+export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _isDeploying, onHotUpdate, isHotUpdating, selectedIds, onSelectionChange }: ExpandableHostTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const selectable = !!onSelectionChange;
 
@@ -203,6 +205,7 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                 <TableHead className="font-medium">内存</TableHead>
                 <TableHead className="font-medium">磁盘</TableHead>
                 <TableHead className="font-medium text-right">心跳</TableHead>
+                <TableHead className="font-medium text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -353,12 +356,28 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                           ? new Date(host.last_heartbeat).toLocaleTimeString()
                           : '-'}
                       </TableCell>
+                      <TableCell className="p-3 text-right">
+                        {host.status === 'ONLINE' && onHotUpdate ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onHotUpdate(host.id);
+                            }}
+                            disabled={isHotUpdating?.(host.id)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
+                          </button>
+                        ) : (
+                          <span className="text-gray-300 text-xs">-</span>
+                        )}
+                      </TableCell>
                     </TableRow>
 
                     {/* Expanded Details */}
                     {isExpanded && (
                       <TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
-                        <TableCell colSpan={selectable ? 12 : 11} className="p-4">
+                        <TableCell colSpan={selectable ? 13 : 12} className="p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             {/* CPU Details */}
                             <div className="bg-white rounded-lg border border-gray-100 p-3">

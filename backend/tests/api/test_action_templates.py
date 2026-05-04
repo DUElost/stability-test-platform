@@ -8,24 +8,7 @@ def _uniq(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
 
 
-def _create_tool(client, name: str = "TemplateTool", version: str = "1.0.0") -> int:
-    resp = client.post(
-        "/api/v1/tools",
-        json={
-            "name": name,
-            "version": version,
-            "script_path": "agent/actions/template_tool.py",
-            "script_class": "TemplateToolAction",
-            "param_schema": {"type": "object", "properties": {}},
-            "is_active": True,
-        },
-    )
-    assert resp.status_code == 201
-    return resp.json()["data"]["id"]
-
-
 def test_action_template_crud(client):
-    tool_id = _create_tool(client, name=_uniq("TemplateToolA"), version="2.0.0")
     template_name = _uniq("root_check_template")
 
     create_resp = client.post(
@@ -33,7 +16,7 @@ def test_action_template_crud(client):
         json={
             "name": template_name,
             "description": "检查设备并确保 root",
-            "action": f"tool:{tool_id}",
+            "action": "script:check_device",
             "version": "2.0.0",
             "params": {"ensure_root": True},
             "timeout_seconds": 180,
@@ -44,7 +27,7 @@ def test_action_template_crud(client):
     assert create_resp.status_code == 201
     created = create_resp.json()["data"]
     assert created["name"] == template_name
-    assert created["action"] == f"tool:{tool_id}"
+    assert created["action"] == "script:check_device"
     assert created["version"] == "2.0.0"
 
     template_id = created["id"]
@@ -67,7 +50,7 @@ def test_action_template_crud(client):
 
 
 def test_action_template_validation(client):
-    # builtin 不允许 version
+    # 只允许 script action
     invalid_builtin = client.post(
         "/api/v1/action-templates",
         json={
@@ -81,19 +64,18 @@ def test_action_template_validation(client):
     )
     assert invalid_builtin.status_code == 422
 
-    # tool action 必须有 version
-    tool_id = _create_tool(client, name=_uniq("TemplateToolB"), version="1.1.0")
-    missing_version = client.post(
+    invalid_tool = client.post(
         "/api/v1/action-templates",
         json={
-            "name": _uniq("invalid_tool_without_version"),
-            "action": f"tool:{tool_id}",
+            "name": _uniq("invalid_tool_action"),
+            "action": "tool:1",
+            "version": "1.0.0",
             "params": {},
             "timeout_seconds": 60,
             "retry": 0,
         },
     )
-    assert missing_version.status_code == 422
+    assert invalid_tool.status_code == 422
 
     # script action 必须有 version
     missing_script_version = client.post(

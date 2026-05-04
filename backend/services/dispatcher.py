@@ -15,7 +15,6 @@ from backend.models.enums import JobStatus
 from backend.models.job import JobInstance, TaskTemplate
 from backend.models.resource_pool import ResourcePool
 from backend.models.script import Script
-from backend.models.tool import Tool
 from backend.models.workflow import WorkflowDefinition, WorkflowRun
 from backend.services.resource_pool import (
     AllocationError,
@@ -31,27 +30,39 @@ class DispatchError(Exception):
 
 
 def _resolve_pipeline(setup: dict | None, task: dict, teardown: dict | None) -> dict:
-    """Compose workflow-level setup/teardown with a task pipeline.
+    """Compose workflow-level setup/teardown lifecycle steps with a task pipeline.
 
-    When workflow-level pipelines are absent, return the task pipeline unchanged
-    so existing TaskTemplate semantics are preserved.
+    When workflow-level pipelines are absent, return the task pipeline unchanged.
     """
     if setup is None and teardown is None:
         return task
 
-    task_stages = (task or {}).get("stages", {})
-    setup_stages = (setup or {}).get("stages", {})
-    teardown_stages = (teardown or {}).get("stages", {})
+    task_lifecycle = deepcopy((task or {}).get("lifecycle", {}))
+    setup_lifecycle = (setup or {}).get("lifecycle", {})
+    teardown_lifecycle = (teardown or {}).get("lifecycle", {})
 
     return {
-        "stages": {
-            "prepare": list(setup_stages.get("prepare") or [])
-            + list(task_stages.get("prepare") or []),
-            "execute": list(task_stages.get("execute") or []),
-            "post_process": list(task_stages.get("post_process") or [])
-            + list(teardown_stages.get("post_process") or []),
+        "lifecycle": {
+            **task_lifecycle,
+            "init": list(setup_lifecycle.get("init") or [])
+            + list(task_lifecycle.get("init") or []),
+            "teardown": list(task_lifecycle.get("teardown") or [])
+            + list(teardown_lifecycle.get("teardown") or []),
         }
     }
+
+
+def _iter_lifecycle_steps(pipeline: dict):
+    lifecycle = (pipeline or {}).get("lifecycle", {})
+    for phase_name in ("init", "teardown"):
+        steps = lifecycle.get(phase_name)
+        if isinstance(steps, list):
+            for step in steps:
+                yield phase_name, step
+    patrol = lifecycle.get("patrol")
+    if isinstance(patrol, dict) and isinstance(patrol.get("steps"), list):
+        for step in patrol["steps"]:
+            yield "patrol", step
 
 
 def _apply_step_overrides(
@@ -60,19 +71,20 @@ def _apply_step_overrides(
     overrides: list[dict] | None,
 ) -> dict:
     """Return a copied pipeline with matching dispatch-time step overrides applied."""
-    resolved = deepcopy(pipeline or {"stages": {}})
+    resolved = deepcopy(pipeline or {"lifecycle": {"init": [], "teardown": []}})
     if not overrides:
         return resolved
 
-    stages = resolved.setdefault("stages", {})
     for override in overrides:
         if override.get("template_name") != template_name:
             continue
-        stage = override.get("stage")
+        phase = override.get("stage")
         step_id = override.get("step_id")
-        if not stage or not step_id:
+        if not phase or not step_id:
             continue
-        for step in stages.get(stage) or []:
+        for phase_name, step in _iter_lifecycle_steps(resolved):
+            if phase_name != phase:
+                continue
             if step.get("step_id") != step_id:
                 continue
             if override.get("params") is not None:
@@ -86,8 +98,7 @@ def _apply_step_overrides(
 
 
 def _build_template_preview(template_name: str, pipeline: dict) -> dict[str, Any]:
-    stages = (pipeline or {}).get("stages", {})
-    steps = [step for stage_steps in stages.values() for step in (stage_steps or [])]
+    steps = [step for _, step in _iter_lifecycle_steps(pipeline)]
     disabled = sum(1 for step in steps if step.get("enabled") is False)
     return {
         "name": template_name,
@@ -116,17 +127,16 @@ def _inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
     if not wifi_params or not wifi_params.get("ssid"):
         return pipeline
 
-    for stage_steps in (pipeline or {}).get("stages", {}).values():
-        for step in (stage_steps or []):
-            action = step.get("action", "")
-            if "connect_wifi" not in action:
-                continue
-            params = dict(step.get("params") or {})
-            if not params.get("ssid"):
-                params["ssid"] = wifi_params["ssid"]
-            if not params.get("password"):
-                params["password"] = wifi_params.get("password", "")
-            step["params"] = params
+    for _, step in _iter_lifecycle_steps(pipeline):
+        action = step.get("action", "")
+        if "connect_wifi" not in action:
+            continue
+        params = dict(step.get("params") or {})
+        if not params.get("ssid"):
+            params["ssid"] = wifi_params["ssid"]
+        if not params.get("password"):
+            params["password"] = wifi_params.get("password", "")
+        step["params"] = params
 
     return pipeline
 
@@ -300,8 +310,7 @@ async def _validate_tool_references(
     db: AsyncSession,
     step_overrides: list[dict] | None = None,
 ) -> None:
-    """Collect tool/script refs from pipeline_defs and verify active catalog entries."""
-    tool_ids: set[int] = set()
+    """Collect script refs from pipeline_defs and verify active catalog entries."""
     script_refs: set[tuple[str, str]] = set()
     for t in templates:
         pipeline_def = _resolve_template_pipeline(wf_def, t, step_overrides)
@@ -311,32 +320,15 @@ async def _validate_tool_references(
                 f"Invalid pipeline_def for template '{t.name}': {'; '.join(errors)}"
             )
 
-        stages = (pipeline_def or {}).get("stages", {})
-        for steps in stages.values():
-            for step in steps:
-                if step.get("enabled") is False:
-                    continue
-                action = step.get("action", "")
-                if action.startswith("tool:"):
-                    try:
-                        tool_ids.add(int(action.split(":", 1)[1]))
-                    except (IndexError, ValueError):
-                        pass
-                elif action.startswith("script:"):
-                    name = action.split(":", 1)[1]
-                    version = step.get("version", "")
-                    if name and version:
-                        script_refs.add((name, version))
-
-    if tool_ids:
-        active_ids = set(
-            (await db.execute(
-                select(Tool.id).where(Tool.id.in_(tool_ids), Tool.is_active.is_(True))
-            )).scalars().all()
-        )
-        missing = tool_ids - active_ids
-        if missing:
-            raise DispatchError(f"Tools not found or inactive: {sorted(missing)}")
+        for _, step in _iter_lifecycle_steps(pipeline_def):
+            if step.get("enabled") is False:
+                continue
+            action = step.get("action", "")
+            if action.startswith("script:"):
+                name = action.split(":", 1)[1]
+                version = step.get("version", "")
+                if name and version:
+                    script_refs.add((name, version))
 
     if not script_refs:
         return

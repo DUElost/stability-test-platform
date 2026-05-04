@@ -1,11 +1,10 @@
 """Pipeline execution engine for the agent.
 
-Parses stages-format pipeline definitions and executes steps in stage order:
-prepare -> execute -> post_process.
+Parses lifecycle-format pipeline definitions and executes script steps:
+init -> patrol loop -> teardown.
 """
 
 import hashlib
-import importlib.util
 import json
 import logging
 import os
@@ -76,7 +75,7 @@ class StepResult:
 
 
 class PipelineAction:
-    """Marker base class for all ``tool:<id>`` Pipeline Action scripts.
+    """Marker base class for legacy Pipeline Action scripts.
 
     Subclasses **must** implement :meth:`run`.  Class-level attributes are used
     by :class:`~backend.agent.tool_discovery.ToolDiscovery` to register the
@@ -118,8 +117,6 @@ class PipelineEngine:
         serial: str,
         run_id: int,
         log_dir: Optional[str] = None,
-        ws_client=None,
-        http_fallback=None,
         mq_producer=None,
         tool_registry=None,
         script_registry=None,
@@ -134,8 +131,6 @@ class PipelineEngine:
         self._serial = serial
         self._run_id = run_id
         self._log_dir = log_dir
-        self._ws = ws_client
-        self._http_fallback = http_fallback
         self._mq = mq_producer
         self._registry = tool_registry
         self._script_registry = script_registry
@@ -154,29 +149,33 @@ class PipelineEngine:
         self._canceled = True
 
     def execute(self, pipeline_def: dict) -> StepResult:
-        """Execute the full pipeline: stages format or lifecycle format."""
+        """Execute the full lifecycle pipeline."""
         # Verify device lock is held before executing
         lock_err = self._verify_device_lease()
         if lock_err:
             return lock_err
 
-        if "lifecycle" in pipeline_def:
-            return self._execute_lifecycle(pipeline_def)
-
         if "stages" in pipeline_def:
-            return self._execute_stages_format(pipeline_def)
+            return StepResult(
+                success=False,
+                exit_code=1,
+                error_message="stages format is not supported; use 'lifecycle'",
+            )
 
         if "phases" in pipeline_def:
             return StepResult(
                 success=False,
                 exit_code=1,
-                error_message="legacy phases format is not supported; use 'stages' or 'lifecycle'",
+                error_message="legacy phases format is not supported; use 'lifecycle'",
             )
+
+        if "lifecycle" in pipeline_def:
+            return self._execute_lifecycle(pipeline_def)
 
         return StepResult(
             success=False,
             exit_code=1,
-            error_message="pipeline_def must contain 'stages' or 'lifecycle'",
+            error_message="pipeline_def must contain 'lifecycle'",
         )
 
     def _verify_device_lease(self) -> Optional[StepResult]:
@@ -309,74 +308,29 @@ class PipelineEngine:
             success=False, exit_code=1, error_message="Action returned no result"
         )
 
-    def _report_step_status(self, step_id: int, status: str, **kwargs):
-        """Report step status via WS or HTTP fallback."""
-        if not step_id:
-            return
-
-        if self._ws and self._ws.connected:
-            self._ws.send_step_update(self._run_id, step_id, status, **kwargs)
-        elif self._http_fallback:
-            try:
-                self._http_fallback(self._run_id, step_id, status, **kwargs)
-            except Exception as e:
-                logger.warning(f"HTTP step status fallback failed: {e}")
-
     # ==================================================================
-    # Stages-format execution (stp-spec §2)
+    # Lifecycle step execution
     # ==================================================================
 
-    def _execute_stages_format(self, pipeline_def: dict) -> StepResult:
-        """Execute new stages-format pipeline: prepare → execute → post_process (serial).
+    def _run_lifecycle_steps(self, phase: str, steps: list[dict]) -> StepResult:
+        """Execute one lifecycle phase without terminal side effects."""
+        for step in steps or []:
+            # Check for lock lost (LeaseRenewer removed us from active set)
+            if self._is_lock_lost():
+                return StepResult(
+                    success=False,
+                    exit_code=1,
+                    error_message="device_lease_lost",
+                )
 
-        This is the top-level entry for standalone stages jobs. It wraps
-        ``_run_stages_only()`` and adds terminal side effects (MQ COMPLETED/FAILED,
-        log archiving).  Lifecycle sub-pipelines should call ``_run_stages_only()``
-        directly to avoid premature terminal events.
-        """
-        result = self._run_stages_only(pipeline_def)
-        if result.success:
-            self._report_job_status_mq("COMPLETED")
-            artifact = self._archive_logs()
-            result.artifact = artifact
-        else:
-            step_hint = result.error_message or "unknown"
-            self._report_job_status_mq("FAILED", reason=f"step_failed:{step_hint}")
-        return result
-
-    def _run_stages_only(self, pipeline_def: dict) -> StepResult:
-        """Execute stages (prepare → execute → post_process) without terminal side effects.
-
-        Returns a StepResult indicating success or failure. Does NOT send
-        MQ terminal status or archive logs — the caller is responsible for that.
-        """
-        # Replace {log_dir} placeholders in pipeline params
-        if self._log_dir:
-            raw = json.dumps(pipeline_def)
-            raw = raw.replace("{log_dir}", self._log_dir.replace("\\", "/"))
-            pipeline_def = json.loads(raw)
-
-        stages_def = pipeline_def.get("stages", {})
-
-        for stage_name in ("prepare", "execute", "post_process"):
-            steps = stages_def.get(stage_name, [])
-            for step in steps:
-                # Check for lock lost (LeaseRenewer removed us from active set)
-                if self._is_lock_lost():
-                    return StepResult(
-                        success=False,
-                        exit_code=1,
-                        error_message="device_lease_lost",
-                    )
-
-                success = self._run_step_with_retry_stages(stage_name, step)
-                if not success:
-                    step_id = step.get("step_id", "unknown")
-                    return StepResult(
-                        success=False,
-                        exit_code=1,
-                        error_message=f"step failed in {stage_name}: {step_id}",
-                    )
+            success = self._run_step_with_retry(phase, step)
+            if not success:
+                step_id = step.get("step_id", "unknown")
+                return StepResult(
+                    success=False,
+                    exit_code=1,
+                    error_message=f"step failed in {phase}: {step_id}",
+                )
 
         return StepResult(success=True)
 
@@ -386,19 +340,19 @@ class PipelineEngine:
             return self._is_aborted()
         return False
 
-    def _run_step_with_retry_stages(self, stage: str, step: dict) -> bool:
+    def _run_step_with_retry(self, phase: str, step: dict) -> bool:
         """Execute a step with retry logic. Returns True on success."""
         max_retry = step.get("retry", 0)
         for attempt in range(max_retry + 1):
-            result = self._execute_step_stages(stage, step)
+            result = self._execute_step(phase, step)
             if result.success:
                 return True
             if attempt < max_retry:
                 time.sleep(5 * (attempt + 1))
         return False
 
-    def _execute_step_stages(self, stage: str, step: dict) -> StepResult:
-        """Execute a single step in stages format. Reports STARTED/COMPLETED/FAILED via MQ."""
+    def _execute_step(self, phase: str, step: dict) -> StepResult:
+        """Execute a single lifecycle step. Reports STARTED/COMPLETED/FAILED via MQ."""
         step_id = step.get("step_id", "unknown")
         action = step.get("action", "")
         params = step.get("params", {})
@@ -408,21 +362,21 @@ class PipelineEngine:
             result = StepResult(success=True, skipped=True, skip_reason="step disabled")
             self._report_step_trace_mq(
                 step_id,
-                stage,
+                phase,
                 "COMPLETED",
                 "SKIPPED",
                 output=result.skip_reason,
             )
             return result
 
-        self._report_step_trace_mq(step_id, stage, "STARTED", "RUNNING")
+        self._report_step_trace_mq(step_id, phase, "STARTED", "RUNNING")
 
         log_file = None
         if self._log_dir:
             import re
 
             safe = re.sub(r"[^\w\-]", "_", step_id)
-            log_file = os.path.join(self._log_dir, f"{stage}_{safe}.log")
+            log_file = os.path.join(self._log_dir, f"{phase}_{safe}.log")
 
         ctx = StepContext(
             adb=self._adb,
@@ -439,12 +393,12 @@ class PipelineEngine:
         )
 
         try:
-            action_fn = self._resolve_action_stages(action, step)
+            action_fn = self._resolve_action(action, step)
             if action_fn is None:
                 result = StepResult(
                     success=False,
                     exit_code=1,
-                    error_message=f"Unknown action: {action}",
+                    error_message=f"Unsupported action: {action}; only script:<name> is supported",
                 )
             else:
                 result = self._run_with_timeout(action_fn, ctx, timeout)
@@ -457,7 +411,7 @@ class PipelineEngine:
         )
         self._report_step_trace_mq(
             step_id,
-            stage,
+            phase,
             event_type,
             status,
             output=result.skip_reason if result.skipped else (result.output or None),
@@ -470,22 +424,8 @@ class PipelineEngine:
 
         return result
 
-    def _resolve_action_stages(self, action: str, step: dict) -> Optional[Callable]:
-        """Resolve action for stages format. tool: uses ToolRegistry; no shell: allowed."""
-        if action.startswith("tool:"):
-            try:
-                tool_id = int(action.split(":", 1)[1])
-            except (IndexError, ValueError):
-                return lambda ctx: StepResult(
-                    success=False,
-                    exit_code=1,
-                    error_message=f"Invalid tool action format: {action}",
-                )
-            required_version = step.get("version", "")
-            return lambda ctx: self._run_tool_action_stages(
-                ctx, tool_id, required_version
-            )
-
+    def _resolve_action(self, action: str, step: dict) -> Optional[Callable]:
+        """Resolve supported lifecycle actions."""
         if action.startswith("script:"):
             return lambda ctx: self._run_script_action(ctx, step)
 
@@ -574,86 +514,6 @@ class PipelineEngine:
             output=_truncate_step_output(combined_output),
         )
 
-    def _run_tool_action_stages(
-        self, ctx: StepContext, tool_id: int, required_version: str
-    ) -> StepResult:
-        """Execute a tool: action via ToolRegistry. Handles version mismatch + PENDING_TOOL."""
-        if self._registry is None:
-            return StepResult(
-                success=False,
-                exit_code=1,
-                error_message="ToolRegistry not available — cannot execute tool: action",
-            )
-
-        from .registry.tool_registry import (
-            ToolEntry,
-            ToolNotFoundLocally,
-            ToolVersionMismatch,
-        )
-
-        try:
-            entry = self._registry.resolve(tool_id, required_version)
-        except ToolVersionMismatch:
-            success = self._registry.pull_tool_sync(tool_id, required_version)
-            if not success:
-                self._report_job_status_mq(
-                    "PENDING_TOOL",
-                    reason=f"tool_pull_failed:network tool_id={tool_id} version={required_version}",
-                )
-                return StepResult(
-                    success=False,
-                    exit_code=1,
-                    error_message=f"tool_pull_failed: tool_id={tool_id} version={required_version}",
-                )
-            try:
-                entry = self._registry.resolve(tool_id, required_version)
-            except ToolNotFoundLocally:
-                self._report_job_status_mq(
-                    "FAILED",
-                    reason=f"tool_version_not_exist:tool_id={tool_id} version={required_version}",
-                )
-                return StepResult(
-                    success=False,
-                    exit_code=1,
-                    error_message=f"tool_version_not_exist: tool_id={tool_id} version={required_version}",
-                )
-        except ToolNotFoundLocally:
-            return StepResult(
-                success=False,
-                exit_code=1,
-                error_message=f"tool_not_found: tool_id={tool_id}",
-            )
-
-        return self._execute_tool_script(ctx, entry)
-
-    def _execute_tool_script(self, ctx: StepContext, entry) -> StepResult:
-        """Dynamically load and execute a tool script from its local path.
-
-        Expects a native Pipeline Action class with run(ctx) -> StepResult interface.
-        """
-        script_path = entry.script_path
-        script_class = entry.script_class
-
-        if not script_path or not os.path.exists(script_path):
-            return StepResult(
-                success=False,
-                exit_code=1,
-                error_message=f"Tool script not found: {script_path!r}",
-            )
-
-        try:
-            spec = importlib.util.spec_from_file_location("_dyn_tool", script_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            tool_cls = getattr(module, script_class)
-
-            result = tool_cls().run(ctx)
-            if not isinstance(result, StepResult):
-                result = StepResult(success=bool(result))
-            return result
-        except Exception as e:
-            return StepResult(success=False, exit_code=1, error_message=str(e))
-
     # ------------------------------------------------------------------
     # MQ reporting helpers
     # ------------------------------------------------------------------
@@ -667,7 +527,7 @@ class PipelineEngine:
         output: Optional[str] = None,
         error_message: Optional[str] = None,
     ) -> None:
-        """Send step_trace via MQ (primary) or WS fallback."""
+        """Send step_trace via MQ (local_db → StepTraceUploader HTTP batch)."""
         if self._mq and self._mq.connected:
             self._mq.send_step_trace(
                 job_id=self._run_id,
@@ -678,44 +538,19 @@ class PipelineEngine:
                 output=output,
                 error_message=error_message,
             )
-            return
-        # WS fallback (best-effort)
-        if self._ws:
-            self._ws.send(
-                {
-                    "type": "step_trace",
-                    "run_id": self._run_id,
-                    "step_id": step_id,
-                    "stage": stage,
-                    "event_type": event_type,
-                    "status": status,
-                    "output": output,
-                }
-            )
 
     def _report_job_status_mq(self, status: str, reason: str = "") -> None:
-        """Send job_status event via MQ (primary) or WS fallback."""
+        """Send job_status event via MQ."""
         if self._mq and self._mq.connected:
             self._mq.send_job_status(self._run_id, status, reason)
-            return
-        if self._ws:
-            self._ws.send(
-                {
-                    "type": "job_status",
-                    "run_id": self._run_id,
-                    "status": status,
-                    "reason": reason,
-                }
-            )
 
     def _make_mq_logger(self, step_id: str, log_file: Optional[str] = None):
-        """Create a logger that writes to SocketIO (primary) and a local file."""
+        """Create a logger that writes to MQ and a local file."""
         return _MQStepLogger(
             mq_producer=self._mq,
             run_id=self._run_id,
             step_id_str=step_id,
             log_file=log_file,
-            ws_client=self._ws,
         )
 
     # ==================================================================
@@ -725,12 +560,10 @@ class PipelineEngine:
     def _execute_lifecycle(self, pipeline_def: dict) -> StepResult:
         """Execute a lifecycle pipeline: init → patrol_loop → teardown (best-effort).
 
-        The lifecycle key contains sub-pipelines for each phase.  Patrol runs
-        in a loop with ``interval_seconds`` between iterations until a
-        termination condition is met.  Teardown always runs via try/finally.
-
-        Uses ``_run_stages_only()`` for sub-pipelines to avoid premature
-        terminal MQ events and log archiving.
+        The lifecycle key contains direct script step lists for init and
+        teardown, and an optional patrol object with interval_seconds + steps.
+        Patrol runs in a loop until a termination condition is met. Teardown
+        always runs via try/finally.
 
         All exit paths flow through a single post-finally block that handles
         terminal MQ status, log archiving, and final StepResult construction.
@@ -760,7 +593,7 @@ class PipelineEngine:
             self._report_job_status_mq("INIT_RUNNING")
             logger.info("[Lifecycle] run=%d — executing init", self._run_id)
 
-            init_result = self._run_stages_only({"stages": init_def["stages"]})
+            init_result = self._run_lifecycle_steps("init", init_def)
             if not init_result.success:
                 # Distinguish lock_lost (abort) from genuine init failure
                 if init_result.error_message == "device_lease_lost":
@@ -795,7 +628,7 @@ class PipelineEngine:
                     iteration += 1
                     logger.info("[Lifecycle] run=%d — [Patrol #%d] starting", self._run_id, iteration)
 
-                    patrol_result = self._run_stages_only({"stages": patrol_def["stages"]})
+                    patrol_result = self._run_lifecycle_steps("patrol", patrol_def["steps"])
 
                     if not patrol_result.success:
                         # Distinguish lock_lost (abort) from genuine patrol failure
@@ -875,7 +708,7 @@ class PipelineEngine:
             metadata=final_metadata,
         )
 
-    def _execute_teardown_best_effort(self, teardown_def: dict) -> StepResult:
+    def _execute_teardown_best_effort(self, teardown_def: list[dict]) -> StepResult:
         """Execute teardown with best-effort semantics: each step runs independently.
 
         Returns a StepResult with metadata["teardown_status"]:
@@ -883,26 +716,23 @@ class PipelineEngine:
         - "DEGRADED" — some steps failed but at least one succeeded
         - "FAILED" — all steps failed
         """
-        stages = teardown_def.get("stages", {})
         total_steps = 0
         failed_steps = 0
         errors = []
 
-        for stage_name in ("prepare", "execute", "post_process"):
-            steps = stages.get(stage_name, [])
-            for step in steps:
-                total_steps += 1
-                step_id = step.get("step_id", "unknown")
-                try:
-                    result = self._execute_step_stages(stage_name, step)
-                    if not result.success:
-                        failed_steps += 1
-                        errors.append(f"{step_id}: {result.error_message}")
-                        logger.warning("[Teardown] step '%s' failed: %s", step_id, result.error_message)
-                except Exception as e:
+        for step in teardown_def or []:
+            total_steps += 1
+            step_id = step.get("step_id", "unknown")
+            try:
+                result = self._execute_step("teardown", step)
+                if not result.success:
                     failed_steps += 1
-                    errors.append(f"{step_id}: {e}")
-                    logger.warning("[Teardown] step '%s' exception: %s", step_id, e)
+                    errors.append(f"{step_id}: {result.error_message}")
+                    logger.warning("[Teardown] step '%s' failed: %s", step_id, result.error_message)
+            except Exception as e:
+                failed_steps += 1
+                errors.append(f"{step_id}: {e}")
+                logger.warning("[Teardown] step '%s' exception: %s", step_id, e)
 
         if failed_steps > 0:
             logger.warning(
@@ -927,7 +757,7 @@ class PipelineEngine:
 
 
 class _MQStepLogger:
-    """Lightweight logger that sends lines via SocketIO (primary) and writes to local file."""
+    """Lightweight logger that sends lines via MQ and writes to local file."""
 
     def __init__(
         self,
@@ -935,10 +765,8 @@ class _MQStepLogger:
         run_id: int,
         step_id_str: str,
         log_file: Optional[str] = None,
-        ws_client=None,
     ):
         self._mq = mq_producer
-        self._ws = ws_client
         self._run_id = run_id
         self._step_id = step_id_str
         self._log_file = log_file
@@ -949,7 +777,6 @@ class _MQStepLogger:
                 pass
 
     def _write(self, message: str, level: str) -> None:
-        sent = False
         if self._mq and self._mq.connected:
             self._mq.send_log(
                 job_id=self._run_id,
@@ -958,13 +785,6 @@ class _MQStepLogger:
                 tag=self._step_id,
                 message=message,
             )
-            sent = True
-
-        if not sent and self._ws and self._ws.connected:
-            try:
-                self._ws.send_log(self._run_id, self._step_id, level, message)
-            except Exception:
-                pass
 
         if self._log_file:
             try:

@@ -507,7 +507,6 @@ def main() -> None:
                                 adb,
                                 api_url,
                                 host_id,
-                                ws_client,
                                 job_runner_state,
                                 mq_producer,
                                 tool_registry,
