@@ -1,4 +1,4 @@
-ansible_become: true
+ansible_become: "{{ agent_require_become | default(true) }}"
 ansible_become_method: sudo
 ansible_become_password: "{{ ansible_password }}"
 
@@ -21,5 +21,6 @@ agent_agentctl_path: "{{ agent_install_dir }}/agentctl"
 agent_source_dir: "{{ playbook_dir }}/../../../backend/agent"
 
 # Agent-Backend 双向认证密钥，必须与 Backend .env 中 AGENT_SECRET 一致。
-# 生产环境部署前务必更换此值。
-agent_secret: "change-me-in-production"
+# 真实值由 group_vars/linux_hosts.vault.yml 提供（ansible-vault 加密）。
+# 仓库不再保留默认值；未注入 vault 时 install/update playbook 会断言失败。
+agent_secret: "{{ vault_agent_secret | mandatory }}"

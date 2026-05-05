@@ -1,0 +1,16 @@
+---
+# Ansible Vault 加密文件：存放仓库不该明文出现的敏感变量。
+#
+# 首次使用：
+#   1. 选择一个本地 vault 密码文件（建议放在仓库外，例如 ~/.ansible/vault_pass.txt，并 chmod 600）。
+#   2. 运行：
+#        ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/vault_pass.txt \
+#          ansible-vault encrypt tools/ansible/group_vars/linux_hosts.vault.yml
+#   3. 编辑：
+#        ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/vault_pass.txt \
+#          ansible-vault edit tools/ansible/group_vars/linux_hosts.vault.yml
+#
+# 占位值会被 install/update playbook 顶部断言拒绝（长度 < 16 或等于占位串）。
+# 全部主机共用同一个 AGENT_SECRET，运维人员只需配置一次。
+
+vault_agent_secret: "REPLACE_WITH_VAULTED_SECRET_AT_LEAST_16_CHARS"

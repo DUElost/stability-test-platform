@@ -2,6 +2,20 @@
   hosts: linux_hosts
   gather_facts: false
 
+  pre_tasks:
+    - name: Validate agent_secret is provided via vault
+      ansible.builtin.assert:
+        that:
+          - agent_secret is defined
+          - agent_secret | length >= 16
+          - agent_secret != "change-me-in-production"
+          - agent_secret != "REPLACE_WITH_VAULTED_SECRET_AT_LEAST_16_CHARS"
+        fail_msg: >-
+          agent_secret 未注入或仍为占位值。请运行
+          `ansible-vault edit tools/ansible/group_vars/linux_hosts.vault.yml`
+          填入真实 AGENT_SECRET（至少 16 字符），并使用
+          `ANSIBLE_VAULT_PASSWORD_FILE` 注入 vault 密码后重试。
+
   tasks:
     - name: Ensure remote temp directory exists
       become: true
@@ -85,10 +99,20 @@
       delay: 5
       until: agent_service_after_install.stdout == "active"
 
+    - name: Run agentctl health after install
+      become: true
+      ansible.builtin.command: "{{ agent_agentctl_path }} health"
+      register: agent_health_after_install
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: agent_health_after_install.rc == 0
+
     - name: Print install summary
       ansible.builtin.debug:
         msg:
           host: "{{ inventory_hostname }}"
           service_state: "{{ agent_service_after_install.stdout | default('unknown') }}"
+          health_rc: "{{ agent_health_after_install.rc | default('skipped') }}"
           api_url: "{{ agent_api_url }}"
           install_dir: "{{ agent_install_dir }}"

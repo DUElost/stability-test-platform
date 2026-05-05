@@ -1,11 +1,14 @@
 # ADR-0019: Android Device Lease 与容量调度模型
 
-- 状态：Proposed
+- 状态：Accepted
 - 优先级：P0
 - 目标里程碑：M3
 - 日期：2026-04-28
+- 实施完成：2026-05-04（Phase 1-6e 全部落地，旧 `device.lock_run_id` / `lock_expires_at` 字段与 `script_batch` / `script_run` 表已通过 migration `u9v0w1x2y3z4` / `v0w1x2y3z4a5` 移除）
 - 决策者：平台研发组
 - 标签：调度, 设备锁, 容量, 租约, 恢复
+
+> 后续运维任务：`Lease TTL 600s → 300s`、`UNKNOWN grace 300s → 120s` 需在 Agent LeaseRenewer 稳定运行至少一周、续租成功率 > 99.9% 后再灰度下调；属持续优化项，不阻塞本 ADR 状态。
 
 ## 背景
 
