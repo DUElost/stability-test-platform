@@ -120,8 +120,7 @@ mkdir -p "$INSTALL_DIR"/{agent,logs,tmp,venv,resources/aimonkey}
 echo_info "复制 Agent 代码..."
 # 只复制 agent 目录（Agent 运行时不依赖 backend/ 其他模块）
 cp -r "$SCRIPT_DIR"/* "$INSTALL_DIR/agent/" 2>/dev/null || true
-# 清理测试文件和非必要文件
-# 注意：test_framework.py 和 test_stages.py 是生产模块，不能删除
+# 清理测试文件和安装辅助文件
 rm -f "$INSTALL_DIR/agent/test_agent"*.py 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/test_aimonkey"*.py 2>/dev/null || true
 rm -f "$INSTALL_DIR/agent/test_main"*.py 2>/dev/null || true
@@ -232,9 +231,6 @@ AGENT_SECRET=${AGENT_SECRET:-}
 
 # AIMONKEY 资源目录（包含 aim, aim.jar 等文件）
 # AIMONKEY_RESOURCE_DIR=$INSTALL_DIR/resources/aimonkey
-
-# 外部测试工具扫描目录
-# EXTERNAL_TOOL_DIR=/home/android/sonic_agent/logs/ftp_log/sonic_tinno/Test_Tool
 EOF
     echo_info "配置文件已创建: $INSTALL_DIR/.env"
 else

@@ -237,11 +237,11 @@ cd /opt/stability-test-agent
 sudo PYTHONPATH=/opt/stability-test-agent /opt/stability-test-agent/venv/bin/python -m agent.main
 ```
 
-### ModuleNotFoundError: No module named 'agent.test_stages'
+### ModuleNotFoundError after upgrade
 
-**原因**：`test_framework.py` / `test_stages.py` / `aimonkey_*.py` 已于 P1-4 清理批次中删除。Pipeline 引擎已切换为 lifecycle-only，AIMonkey 适配代码不再存在。如果系统报这个错，是部署侧引用了已废弃的模块路径。
+**原因**：部署目录中仍保留旧代码，或本地 fork 引用了当前 agent 包中不存在的模块。
 
-**修复**：检查并去掉对这些模块的 import（一般来自旧的本地脚本或外部 fork）。重新同步代码：
+**修复**：重新同步 agent 目录，并用 `--delete` 删除目标机上的过期文件：
 ```bash
 rsync -av --delete <source>/backend/agent/ /tmp/agent-install/
 sed -i 's/\r$//' /tmp/agent-install/install_agent.sh

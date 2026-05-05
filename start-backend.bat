@@ -18,6 +18,17 @@ echo Run .\stop-backend.bat or stop the existing backend process first.
 exit /b 1
 
 :start_backend
+echo Running alembic migrations (upgrade head)...
+pushd "%~dp0backend"
+python -m alembic upgrade head
+set "MIGRATE_RC=%ERRORLEVEL%"
+popd
+if not "%MIGRATE_RC%"=="0" (
+    echo ERROR: Alembic migration failed ^(rc=%MIGRATE_RC%^). Backend NOT started.
+    pause
+    exit /b 1
+)
+
 set "UVICORN_ARGS=backend.main:app --host 0.0.0.0 --port %BACKEND_PORT%"
 
 if /I "%STP_BACKEND_NORELOAD%"=="1" (

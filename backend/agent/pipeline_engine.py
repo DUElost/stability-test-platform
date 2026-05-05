@@ -53,7 +53,7 @@ class StepContext:
         """Alias for run_id — new code should use ctx.job_id.
 
         The underlying field remains run_id for backward compatibility with
-        existing actions / tools / tests (20+ call sites). A future governance
+        existing lifecycle steps and tests (20+ call sites). A future governance
         PR may rename the field once all consumers migrate.
         """
         return self.run_id
@@ -72,28 +72,6 @@ class StepResult:
     metadata: dict = field(default_factory=dict)
     skipped: bool = False
     skip_reason: str = ""
-
-
-class PipelineAction:
-    """Deprecated marker base class kept for legacy compat only.
-
-    The canonical execution model is ``script:<name>`` via ScriptRegistry.
-    This class and its subclasses exist only as adapters for legacy AIMonkey
-    scripts that have not yet been migrated to ``backend/agent/scripts/``.
-
-    New code must use :class:`~backend.agent.registry.script_registry.ScriptRegistry`.
-    """
-
-    TOOL_CATEGORY: str = ""
-    TOOL_DESCRIPTION: str = ""
-
-    @classmethod
-    def get_default_params(cls) -> dict:
-        """Return the default parameter dict surfaced in the UI."""
-        return {}
-
-    def run(self, ctx: StepContext) -> StepResult:  # noqa: D102
-        raise NotImplementedError(f"{type(self).__name__} must implement run(ctx)")
 
 
 class PipelineEngine:

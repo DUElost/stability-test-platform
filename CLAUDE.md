@@ -431,9 +431,9 @@ class StepTrace(Base):
 
 ### Q: 如何添加新的测试类型？
 
-1. 在 `backend/agent/task_executor.py` 添加执行逻辑
-2. 更新前端任务类型选项
-3. 配置默认参数模板
+1. 在 `backend/agent/scripts/<name>/v<version>/` 下放置脚本（python/shell/bat），由 `script_catalog.py` 扫描注册
+2. 在 Pipeline 定义中通过 `action: "script:<name>"` 引用
+3. 更新前端 PipelineEditor 的步骤模板（如需）
 
 ### Q: 设备监控指标如何采集？
 
@@ -511,7 +511,6 @@ class StepTrace(Base):
 - `backend/agent/heartbeat.py` - 心跳发送
 - `backend/agent/device_discovery.py` - 设备发现
 - `backend/agent/system_monitor.py` - 系统监控
-- `backend/agent/task_executor.py` - 任务执行
 - `backend/agent/pipeline_engine.py` - Pipeline 执行引擎（StepContext.job_id 透传）
 - `backend/agent/ws_client.py` - SocketIO 客户端（socketio.Client 同步版）
 - `backend/agent/step_trace_uploader.py` - Step 状态 HTTP 批量上报

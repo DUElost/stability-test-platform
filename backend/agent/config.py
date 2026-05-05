@@ -45,14 +45,6 @@ RUN_LOG_DIR: Path = LOG_DIR / "runs"
 RESOURCE_DIR: Path = BASE_DIR / "resources"
 AIMONKEY_RESOURCE_DIR: Path = RESOURCE_DIR / "aimonkey"
 
-# 工具目录
-BUILTIN_TOOL_DIR: Path = Path(__file__).resolve().parent / "tools"
-EXTERNAL_TOOL_DIR: str = os.environ.get(
-    "EXTERNAL_TOOL_DIR",
-    "/home/android/sonic_agent/logs/ftp_log/sonic_tinno/Test_Tool",
-)
-
-
 def get_run_log_dir(run_id: int) -> str:
     """返回指定 run_id 的日志目录路径"""
     return str(RUN_LOG_DIR / str(run_id))
