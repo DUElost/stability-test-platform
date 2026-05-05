@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>测试计划编排 — Plan → Step 高保真</title>
+  <style>
+    :root {
+      --bg: #f4f7fa; --panel: #ffffff; --panel-soft: #f8fafc;
+      --line: #dbe3ea; --line-strong: #c5d1dc;
+      --text: #172033; --muted: #637083; --soft: #94a3b8;
+      --cyan: #0e7490; --cyan-weak: #e6f7fb;
+      --green: #16a34a; --green-weak: #e9f9ef;
+      --amber: #d97706; --amber-weak: #fff4df;
+      --slate: #64748b; --slate-weak: #f1f5f9;
+      --emerald: #059669; --emerald-weak: #ecfdf5;
+      --indigo: #4f46e5; --indigo-weak: #eef2ff;
+      --purple: #7c3aed; --purple-weak: #f5f3ff;
+      --red: #dc2626; --red-weak: #fff1f2;
+      --shadow: 0 16px 40px rgba(15,23,42,.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+    }
+    .screen {
+      width: 1440px; min-height: 1020px;
+      background: linear-gradient(180deg, #f9fbfd 0%, #edf3f7 100%);
+      display: grid; grid-template-rows: 64px 1fr; overflow: hidden;
+    }
+    .topbar {
+      height: 64px; border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.92); backdrop-filter: blur(12px);
+      padding: 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 20px;
+    }
+    .crumb { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+    .crumb strong { color: var(--text); font-size: 16px; font-weight: 760; }
+    .status {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 9px; border-radius: 999px; font-size: 12px; font-weight: 680;
+      background: var(--green-weak); color: #15803d; border: 1px solid #bbf7d0;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 99px; background: currentColor; }
+    .actions { display: flex; align-items: center; gap: 10px; }
+    .btn {
+      height: 36px; padding: 0 13px; border-radius: 7px;
+      border: 1px solid var(--line-strong); background: #fff; color: var(--text);
+      font-size: 13px; font-weight: 680; display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    }
+    .btn.primary { background: var(--cyan); border-color: var(--cyan); color: #fff; box-shadow: 0 10px 22px rgba(14,116,144,.22); }
+    .btn.success { background: var(--green); border-color: var(--green); color: #fff; box-shadow: 0 10px 22px rgba(22,163,74,.18); }
+    .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+    .workspace { display: grid; grid-template-columns: 260px minmax(0, 1fr) 310px; }
+    .panel { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; }
+    .panel.right { border-right: 0; border-left: 1px solid var(--line); }
+    .panel-head {
+      padding: 15px 16px; border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: #fbfdff;
+    }
+    .panel-title { font-size: 14px; font-weight: 760; }
+    .muted { color: var(--muted); } .small { font-size: 12px; }
+    .chip {
+      border-radius: 999px; background: #f1f5f9; color: #475569;
+      border: 1px solid #e2e8f0; padding: 3px 8px; font-size: 11px; font-weight: 680; white-space: nowrap;
+    }
+    .chip.slate { background: var(--slate-weak); color: #475569; }
+    .chip.emerald { background: var(--emerald-weak); color: #065f46; }
+    .chip.amber { background: var(--amber-weak); color: #b45309; }
+    .chip.cyan { background: var(--cyan-weak); color: var(--cyan); }
+    .chip.indigo { background: var(--indigo-weak); color: #4338ca; }
+    .chip.purple { background: var(--purple-weak); color: #6d28d9; }
+
+    /* ── Left: Plan chain list ── */
+    .plan-meta { padding: 12px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+    .field-label { font-size: 11px; color: var(--muted); font-weight: 720; }
+    .plan-list { padding: 6px; display: grid; gap: 2px; align-content: start; }
+    .plan-item {
+      padding: 9px 10px; border-radius: 6px; cursor: pointer;
+      border: 1px solid transparent; display: grid; gap: 3px;
+    }
+    .plan-item:hover { background: #f8fafc; }
+    .plan-item.active {
+      background: var(--cyan-weak); border-color: #a5f3fc;
+      box-shadow: inset 3px 0 0 var(--cyan);
+    }
+    .plan-item-name { font-size: 13px; font-weight: 700; }
+    .plan-item-meta { display: flex; gap: 4px; flex-wrap: wrap; }
+
+    /* Chain arrow between plans */
+    .chain-sep {
+      display: flex; align-items: center; gap: 6px;
+      padding: 2px 12px 2px 18px; font-size: 10px; color: var(--purple); font-weight: 680;
+    }
+    .chain-sep::before {
+      content: ""; width: 1px; height: 18px;
+      background: repeating-linear-gradient(to bottom, #d8b4fe 0, #d8b4fe 4px, transparent 4px, transparent 8px);
+    }
+
+    .add-plan {
+      margin: 6px; border: 1px dashed #cbd5e1; border-radius: 6px;
+      padding: 9px; text-align: center; font-size: 12px; font-weight: 680;
+      color: var(--muted); cursor: pointer;
+    }
+    .add-plan:hover { border-color: var(--cyan); color: var(--cyan); background: #f7fdff; }
+
+    .chain-footer {
+      padding: 10px 14px; border-top: 1px solid var(--line); background: #fbfdff;
+      font-size: 10px; color: var(--soft); line-height: 1.5;
+    }
+
+    /* ── Center: Canvas ── */
+    .canvas { background: #f8fafc; overflow-y: auto; }
+    .canvas-inner { padding: 14px; display: grid; gap: 12px; }
+
+    .plan-header {
+      background: #fff; border: 1px solid var(--line); border-radius: 10px;
+      padding: 14px 18px; display: grid; gap: 12px; box-shadow: 0 4px 12px rgba(15,23,42,.03);
+    }
+    .plan-header-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .plan-header-top h2 { margin: 0; font-size: 18px; font-weight: 800; }
+    .plan-header-meta { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); align-items: center; }
+    .plan-header-meta .meta-item { display: flex; align-items: center; gap: 4px; }
+    .plan-header-meta select {
+      border: 1px solid var(--line-strong); border-radius: 5px; padding: 3px 6px;
+      font-size: 12px; background: #fff; color: var(--text);
+    }
+    .chain-hint {
+      display: flex; align-items: center; gap: 6px; font-size: 11px;
+      padding: 6px 10px; background: var(--purple-weak); border-radius: 6px; color: #6d28d9;
+    }
+
+    /* Phase section */
+    .phase-section {
+      background: #fff; border: 1px solid var(--line); border-radius: 10px;
+      overflow: hidden; box-shadow: 0 4px 12px rgba(15,23,42,.03);
+    }
+    .phase-head {
+      padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      font-size: 13px; font-weight: 760; border-bottom: 1px solid #edf2f7;
+    }
+    .phase-head.init { background: #f8fafc; color: #334155; }
+    .phase-head.patrol { background: #f0fdf6; color: #065f46; }
+    .phase-head.teardown { background: #fffbeb; color: #92400e; }
+    .phase-body { padding: 10px 16px 14px; display: grid; gap: 6px; }
+
+    /* Step row */
+    .step-row {
+      display: grid; grid-template-columns: 24px 1fr auto; gap: 10px; align-items: center;
+      border: 1px solid var(--line); border-radius: 6px; background: #fff;
+      padding: 8px 10px; cursor: pointer; transition: all .12s;
+    }
+    .step-row:hover { border-color: #bccfdc; }
+    .step-row.selected {
+      border-color: #8bd8e7; background: #f7fdff;
+      box-shadow: 0 0 0 2px rgba(14,116,144,.08);
+    }
+    .step-num {
+      width: 24px; height: 24px; border-radius: 5px;
+      background: #f1f5f9; color: var(--muted); font-size: 11px;
+      font-weight: 780; display: grid; place-items: center; cursor: grab;
+    }
+    .step-info { min-width: 0; }
+    .step-info-top { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 760; }
+    .step-info-top .ver { color: var(--soft); font-size: 10px; font-family: "SFMono-Regular", Consolas, monospace; }
+    .step-info-sub { margin-top: 2px; display: flex; gap: 8px; font-size: 11px; color: var(--muted); }
+    .step-btns { display: flex; gap: 3px; }
+    .step-btns button {
+      width: 26px; height: 26px; border-radius: 5px;
+      border: 1px solid var(--line); background: #fff; color: var(--muted);
+      font-size: 11px; display: grid; place-items: center; cursor: pointer;
+    }
+    .step-btns button:hover { background: #f1f5f9; color: var(--text); }
+    .step-btns button.danger:hover { background: var(--red-weak); color: var(--red); border-color: #fecaca; }
+
+    .add-step {
+      border: 1px dashed #cbd5e1; border-radius: 6px; min-height: 32px;
+      display: grid; place-items: center; font-size: 11px; color: var(--muted); cursor: pointer;
+    }
+    .add-step:hover { border-color: var(--cyan); color: var(--cyan); background: #f7fdff; }
+
+    /* ── Right: Inspector ── */
+    .inspector-body { padding: 10px; display: grid; gap: 8px; }
+    .info-card { border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: #fff; }
+    .info-card-head {
+      padding: 8px 10px; background: #fbfdff; border-bottom: 1px solid var(--line);
+      font-size: 11px; font-weight: 760; display: flex; align-items: center; justify-content: space-between;
+    }
+    .info-card-body { padding: 8px 10px; display: grid; gap: 5px; }
+    .info-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; gap: 10px; }
+    .info-row .key { color: var(--muted); white-space: nowrap; }
+    .info-row .val { color: var(--text); font-weight: 660; text-align: right; }
+    .info-row .val.mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 10px; }
+    .param-chips { display: flex; flex-wrap: wrap; gap: 3px; justify-content: flex-end; }
+    .param-chip {
+      font-size: 10px; background: #f1f5f9; border: 1px solid #e2e8f0;
+      border-radius: 3px; padding: 2px 5px; color: #475569; font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .form-grid { display: grid; gap: 6px; }
+    .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .form-label { font-size: 10px; font-weight: 720; color: #334155; }
+    .form-control {
+      height: 30px; border: 1px solid var(--line-strong); border-radius: 5px;
+      padding: 0 8px; font-size: 12px; display: flex; align-items: center; background: #fff;
+    }
+    .form-control input { border: 0; outline: none; width: 100%; font-size: 12px; background: transparent; }
+    .form-control select { border: 0; outline: none; width: 100%; font-size: 12px; background: transparent; }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; }
+    .toggle { width: 32px; height: 18px; border-radius: 999px; background: #d1d5db; position: relative; cursor: pointer; }
+    .toggle.on { background: var(--green); }
+    .toggle::after {
+      content: ""; position: absolute; top: 2px; left: 2px;
+      width: 14px; height: 14px; border-radius: 99px; background: #fff; transition: transform .15s;
+    }
+    .toggle.on::after { transform: translateX(14px); }
+    .link-row {
+      display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--cyan);
+      font-weight: 680; padding: 7px 9px; border: 1px dashed #a5f3fc;
+      border-radius: 5px; background: var(--cyan-weak); cursor: pointer; justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <main class="screen">
+    <header class="topbar">
+      <div class="crumb">
+        <span>测试计划</span>
+        <span>/</span>
+        <strong>Monkey 稳定性测试</strong>
+        <span class="status"><span class="dot"></span>已保存</span>
+      </div>
+      <div class="actions">
+        <button class="btn ghost">查看 JSON</button>
+        <button class="btn success">发起测试</button>
+        <button class="btn primary">保存修改</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <!-- ═══ LEFT: Plan Chain List ═══ -->
+      <aside class="panel" style="display:grid;grid-template-rows:auto 1fr auto;">
+        <div class="panel-head">
+          <div class="panel-title">执行链</div>
+          <span class="chip purple">3 Plans</span>
+        </div>
+
+        <div class="plan-list">
+          <div class="plan-item active">
+            <div class="plan-item-name">Monkey 稳定性测试</div>
+            <div class="plan-item-meta">
+              <span class="chip slate">Init 2</span>
+              <span class="chip emerald">Patrol 1</span>
+              <span class="chip amber">TDown 2</span>
+            </div>
+          </div>
+
+          <div class="chain-sep">执行后自动触发 &darr;</div>
+
+          <div class="plan-item">
+            <div class="plan-item-name">DDR 专项测试</div>
+            <div class="plan-item-meta">
+              <span class="chip slate">Init 3</span>
+              <span class="chip amber">TDown 1</span>
+            </div>
+          </div>
+
+          <div class="chain-sep">执行后自动触发 &darr;</div>
+
+          <div class="plan-item">
+            <div class="plan-item-name">报告生成 &amp; JIRA</div>
+            <div class="plan-item-meta">
+              <span class="chip slate">Init 1</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="add-plan">+ 追加 Plan 到链末尾</div>
+          <div class="chain-footer">
+            每个 Plan 是一个完整的测试计划。<br/>链式执行：前一个 Plan 完成后自动触发下一个。
+          </div>
+        </div>
+      </aside>
+
+      <!-- ═══ CENTER: Plan Editor Canvas ═══ -->
+      <section class="canvas">
+        <div class="canvas-inner">
+
+          <!-- Plan header -->
+          <div class="plan-header">
+            <div class="plan-header-top">
+              <h2>Monkey 稳定性测试</h2>
+              <span class="chip indigo">当前编辑</span>
+            </div>
+            <div class="plan-header-meta">
+              <div class="meta-item">
+                <span class="field-label">名称</span>
+                <span style="font-weight:660;">Monkey 稳定性测试</span>
+              </div>
+              <div class="meta-item">
+                <span class="field-label">Patrol 间隔</span>
+                <select><option>60s</option><option>30s</option><option>120s</option></select>
+              </div>
+              <div class="meta-item">
+                <span class="field-label">失败阈值</span>
+                <span style="font-weight:660;">5%</span>
+              </div>
+              <div class="meta-item">
+                <span class="field-label">总步骤</span>
+                <span style="font-weight:660;">5</span>
+              </div>
+            </div>
+            <div class="chain-hint">
+              完成 MonKey 稳定性测试 后 &rarr; 自动执行 <strong>DDR 专项测试</strong>
+            </div>
+          </div>
+
+          <!-- Init Phase -->
+          <div class="phase-section">
+            <div class="phase-head init">
+              Init
+              <span class="small muted">一次性初始化 &middot; 2 Steps</span>
+            </div>
+            <div class="phase-body">
+              <div class="step-row">
+                <div class="step-num">1</div>
+                <div class="step-info">
+                  <div class="step-info-top"><span>monkey_setup</span><span class="ver">v1.0.0</span></div>
+                  <div class="step-info-sub"><span>script:monkey_setup</span><span>60s</span><span>retry 0</span></div>
+                </div>
+                <div class="step-btns">
+                  <button title="上移">&#8593;</button>
+                  <button title="下移">&#8595;</button>
+                  <button title="复制">&#9641;</button>
+                  <button class="danger" title="删除">&#10005;</button>
+                </div>
+              </div>
+
+              <div class="step-row selected">
+                <div class="step-num">2</div>
+                <div class="step-info">
+                  <div class="step-info-top"><span>monkey_launch</span><span class="ver">v2.0.0</span></div>
+                  <div class="step-info-sub"><span>script:monkey_launch</span><span>30s</span><span>retry 0</span></div>
+                </div>
+                <div class="step-btns">
+                  <button title="上移">&#8593;</button>
+                  <button title="下移">&#8595;</button>
+                  <button title="复制">&#9641;</button>
+                  <button class="danger" title="删除">&#10005;</button>
+                </div>
+              </div>
+
+              <div class="add-step">+ 添加 Init 步骤</div>
+            </div>
+          </div>
+
+          <!-- Patrol Phase -->
+          <div class="phase-section">
+            <div class="phase-head patrol">
+              Patrol
+              <span class="small" style="color:#065f46;">&#8635; 每 60s 循环 &middot; 1 Step</span>
+            </div>
+            <div class="phase-body">
+              <div class="step-row">
+                <div class="step-num">1</div>
+                <div class="step-info">
+                  <div class="step-info-top"><span>monkey_check</span><span class="ver">v1.0.0</span></div>
+                  <div class="step-info-sub"><span>script:monkey_check</span><span>30s</span><span>retry 0</span></div>
+                </div>
+                <div class="step-btns">
+                  <button title="上移">&#8593;</button>
+                  <button title="下移">&#8595;</button>
+                  <button title="复制">&#9641;</button>
+                  <button class="danger" title="删除">&#10005;</button>
+                </div>
+              </div>
+
+              <div class="add-step">+ 添加 Patrol 步骤</div>
+            </div>
+          </div>
+
+          <!-- Teardown Phase -->
+          <div class="phase-section">
+            <div class="phase-head teardown">
+              Teardown
+              <span class="small muted">收尾清理 &middot; 2 Steps</span>
+            </div>
+            <div class="phase-body">
+              <div class="step-row">
+                <div class="step-num">1</div>
+                <div class="step-info">
+                  <div class="step-info-top"><span>monkey_teardown</span><span class="ver">v1.0.0</span></div>
+                  <div class="step-info-sub"><span>script:monkey_teardown</span><span>30s</span><span>retry 0</span></div>
+                </div>
+                <div class="step-btns">
+                  <button title="上移">&#8593;</button>
+                  <button title="下移">&#8595;</button>
+                  <button title="复制">&#9641;</button>
+                  <button class="danger" title="删除">&#10005;</button>
+                </div>
+              </div>
+
+              <div class="step-row">
+                <div class="step-num">2</div>
+                <div class="step-info">
+                  <div class="step-info-top"><span>clean_env</span><span class="ver">v1.0.0</span></div>
+                  <div class="step-info-sub"><span>script:clean_env</span><span>30s</span><span>retry 0</span></div>
+                </div>
+                <div class="step-btns">
+                  <button title="上移">&#8593;</button>
+                  <button title="下移">&#8595;</button>
+                  <button title="复制">&#9641;</button>
+                  <button class="danger" title="删除">&#10005;</button>
+                </div>
+              </div>
+
+              <div class="add-step">+ 添加 Teardown 步骤</div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ═══ RIGHT: Step Inspector ═══ -->
+      <aside class="panel right" style="display:grid;grid-template-rows:auto 1fr auto;">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">步骤属性</div>
+            <div class="small muted mono">monkey_launch / v2.0.0</div>
+          </div>
+        </div>
+
+        <div class="inspector-body" style="overflow-y:auto;">
+          <div class="info-card">
+            <div class="info-card-head">
+              脚本信息
+              <span class="chip cyan" style="font-size:10px;">来自脚本管理</span>
+            </div>
+            <div class="info-card-body">
+              <div class="info-row"><span class="key">名称</span><span class="val mono">monkey_launch</span></div>
+              <div class="info-row"><span class="key">版本</span><span class="val">v2.0.0</span></div>
+              <div class="info-row"><span class="key">类型 / 分类</span><span class="val">python / device</span></div>
+              <div class="info-row" style="align-items:flex-start;">
+                <span class="key">参数</span>
+                <div class="param-chips">
+                  <span class="param-chip">run_mode</span>
+                  <span class="param-chip">duration_seconds</span>
+                  <span class="param-chip">process_names</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="info-card">
+            <div class="info-card-head">执行配置</div>
+            <div class="info-card-body form-grid">
+              <div class="form-row">
+                <div>
+                  <div class="form-label">超时 (秒)</div>
+                  <div class="form-control"><input type="number" value="30" min="1" /></div>
+                </div>
+                <div>
+                  <div class="form-label">重试次数</div>
+                  <div class="form-control"><input type="number" value="0" min="0" max="5" /></div>
+                </div>
+              </div>
+              <div class="toggle-row">
+                <span class="form-label">启用步骤</span>
+                <div class="toggle on"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="link-row">在脚本管理中编辑参数 &#8599;</div>
+        </div>
+
+        <div style="border-top:1px solid var(--line);padding:8px 12px;background:#fbfdff;font-size:10px;color:var(--soft);line-height:1.5;">
+          脚本的参数和默认值在脚本管理页面维护。<br/>点击左侧 Plan 切换编辑目标，选择步骤查看属性。
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

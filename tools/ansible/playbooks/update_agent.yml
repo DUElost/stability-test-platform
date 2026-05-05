@@ -74,7 +74,6 @@
           --exclude='tests/' \
           --exclude='agentctl.sh' \
           --exclude='install_agent.sh' \
-          --exclude='sync_agent.sh' \
           --exclude='DEPLOY.md' \
           --exclude='.env.example' \
           --exclude='stability-test-agent.service' \

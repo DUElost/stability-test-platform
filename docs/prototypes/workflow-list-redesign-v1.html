@@ -1,0 +1,562 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>工作流列表页高保真设计稿</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --line: #dbe3ea;
+      --line-strong: #c5d1dc;
+      --text: #172033;
+      --muted: #637083;
+      --soft: #94a3b8;
+      --cyan: #0e7490;
+      --cyan-weak: #e6f7fb;
+      --green: #16a34a;
+      --green-weak: #e9f9ef;
+      --amber: #d97706;
+      --amber-weak: #fff4df;
+      --red: #dc2626;
+      --red-weak: #fff1f2;
+      --shadow: 0 18px 45px rgba(15, 23, 42, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+    .screen {
+      width: 1440px;
+      min-height: 980px;
+      display: grid;
+      grid-template-columns: 232px 1fr;
+      background: linear-gradient(180deg, #f8fbfd 0%, #eef4f8 100%);
+    }
+    .sidebar {
+      background: #101827;
+      color: #cbd5e1;
+      padding: 22px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #fff;
+      font-weight: 720;
+      font-size: 15px;
+    }
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #06b6d4, #22c55e);
+      position: relative;
+    }
+    .brand-mark::after {
+      content: "";
+      position: absolute;
+      inset: 9px;
+      border: 2px solid rgba(255,255,255,.9);
+      border-radius: 5px;
+    }
+    .nav-group { display: grid; gap: 6px; }
+    .nav-label {
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin: 8px 8px 4px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      color: #cbd5e1;
+    }
+    .nav-item.active {
+      color: #fff;
+      background: rgba(14, 116, 144, .28);
+      box-shadow: inset 3px 0 0 #22d3ee;
+    }
+    .nav-dot {
+      width: 16px;
+      height: 16px;
+      border-radius: 5px;
+      border: 1px solid rgba(203,213,225,.5);
+    }
+    .main {
+      padding: 24px 28px 34px;
+      display: grid;
+      gap: 20px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .title h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.25;
+      font-weight: 760;
+    }
+    .title p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .btn {
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--text);
+      height: 36px;
+      border-radius: 7px;
+      padding: 0 13px;
+      font-size: 13px;
+      font-weight: 650;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      box-shadow: 0 1px 1px rgba(15,23,42,.03);
+    }
+    .btn.primary {
+      border-color: #0e7490;
+      background: #0e7490;
+      color: #fff;
+      box-shadow: 0 10px 22px rgba(14,116,144,.22);
+    }
+    .btn.success {
+      border-color: #16a34a;
+      background: #16a34a;
+      color: #fff;
+      box-shadow: 0 10px 22px rgba(22,163,74,.18);
+    }
+    .icon {
+      width: 14px;
+      height: 14px;
+      border: 1.8px solid currentColor;
+      border-radius: 4px;
+      position: relative;
+    }
+    .icon.plus::before, .icon.plus::after {
+      content: "";
+      position: absolute;
+      background: currentColor;
+      left: 3px;
+      right: 3px;
+      top: 5px;
+      height: 2px;
+      border-radius: 2px;
+    }
+    .icon.plus::after { transform: rotate(90deg); }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+    }
+    .kpi {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(15,23,42,.04);
+    }
+    .kpi .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .kpi .value {
+      margin-top: 8px;
+      font-size: 25px;
+      font-weight: 780;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .kpi .hint {
+      color: var(--soft);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .content-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      gap: 18px;
+      align-items: start;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .panel-head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .panel-title {
+      font-size: 15px;
+      font-weight: 760;
+    }
+    .toolbar {
+      padding: 14px 18px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+    .search {
+      height: 36px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #fff;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      color: var(--soft);
+      font-size: 13px;
+    }
+    .segment {
+      display: inline-flex;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .segment span {
+      padding: 9px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      border-right: 1px solid var(--line);
+    }
+    .segment span:last-child { border-right: 0; }
+    .segment .on {
+      background: #102033;
+      color: #fff;
+    }
+    .workflow-row {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr) 280px 150px;
+      gap: 14px;
+      align-items: center;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .workflow-row:last-child { border-bottom: 0; }
+    .wf-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 8px;
+      background: var(--cyan-weak);
+      border: 1px solid #bdebf4;
+      display: grid;
+      place-items: center;
+      color: var(--cyan);
+      font-weight: 800;
+      font-size: 14px;
+    }
+    .wf-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 730;
+      font-size: 14px;
+      min-width: 0;
+    }
+    .wf-desc {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chips {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .chip {
+      border-radius: 999px;
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .chip.green { background: var(--green-weak); color: #15803d; border-color: #bbf7d0; }
+    .chip.amber { background: var(--amber-weak); color: #b45309; border-color: #fed7aa; }
+    .chip.cyan { background: var(--cyan-weak); color: var(--cyan); border-color: #a5f3fc; }
+    .pipeline-mini {
+      display: grid;
+      gap: 7px;
+    }
+    .mini-line {
+      display: grid;
+      grid-template-columns: 76px 1fr 44px;
+      gap: 7px;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .bar {
+      height: 7px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+    }
+    .bar span { display: block; height: 100%; border-radius: inherit; background: var(--cyan); }
+    .bar.green span { background: var(--green); }
+    .bar.amber span { background: var(--amber); }
+    .row-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 7px;
+    }
+    .small-btn {
+      width: 32px;
+      height: 32px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #475569;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .side-panel {
+      display: grid;
+      gap: 14px;
+    }
+    .quick-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 12px 30px rgba(15,23,42,.05);
+    }
+    .quick-title {
+      font-size: 14px;
+      font-weight: 760;
+      margin-bottom: 10px;
+    }
+    .script-pick {
+      border: 1px solid var(--line);
+      background: #fbfdff;
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 10px;
+    }
+    .script-pick strong { font-size: 13px; }
+    .script-pick p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .script-name {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      color: var(--cyan);
+      background: var(--cyan-weak);
+      border-radius: 5px;
+      padding: 2px 5px;
+      font-size: 11px;
+      display: inline-block;
+      margin-top: 8px;
+    }
+    .foot-note {
+      color: var(--soft);
+      font-size: 11px;
+      line-height: 1.6;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <main class="screen">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark"></span><span>Stability Test Platform</span></div>
+      <div class="nav-group">
+        <div class="nav-label">Monitor</div>
+        <div class="nav-item"><span class="nav-dot"></span>总览</div>
+        <div class="nav-item"><span class="nav-dot"></span>设备</div>
+        <div class="nav-item"><span class="nav-dot"></span>主机资源</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Orchestration</div>
+        <div class="nav-item active"><span class="nav-dot"></span>工作流设计</div>
+        <div class="nav-item"><span class="nav-dot"></span>脚本库</div>
+        <div class="nav-item"><span class="nav-dot"></span>执行历史</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">Operations</div>
+        <div class="nav-item"><span class="nav-dot"></span>资源池</div>
+        <div class="nav-item"><span class="nav-dot"></span>日志检索</div>
+        <div class="nav-item"><span class="nav-dot"></span>审计</div>
+      </div>
+    </aside>
+
+    <section class="main">
+      <div class="topbar">
+        <div class="title">
+          <h1>工作流设计</h1>
+          <p>把脚本组合成可执行的稳定性测试蓝图；路径自动关联，常用参数可视化填写。</p>
+        </div>
+        <div class="actions">
+          <button class="btn">脚本重新扫描</button>
+          <button class="btn success"><span class="icon plus"></span>从脚本创建</button>
+          <button class="btn primary"><span class="icon plus"></span>新建工作流</button>
+        </div>
+      </div>
+
+      <div class="kpis">
+        <div class="kpi"><div class="label">工作流总数</div><div class="value">18 <span class="hint">+3 本周</span></div></div>
+        <div class="kpi"><div class="label">可直接发起</div><div class="value">14 <span class="hint">已配置必填参数</span></div></div>
+        <div class="kpi"><div class="label">脚本覆盖</div><div class="value">42 <span class="hint">active scripts</span></div></div>
+        <div class="kpi"><div class="label">平均失败阈值</div><div class="value">5% <span class="hint">默认策略</span></div></div>
+      </div>
+
+      <div class="content-grid">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">工作流列表</div>
+            <div class="chip cyan">按最近编辑排序</div>
+          </div>
+          <div class="toolbar">
+            <div class="search">搜索工作流、脚本名、任务模板</div>
+            <div class="segment"><span class="on">全部</span><span>可执行</span><span>需补参数</span></div>
+            <button class="btn">筛选</button>
+          </div>
+
+          <div class="workflow-row">
+            <div class="wf-mark">MA</div>
+            <div>
+              <div class="wf-name">Monkey AEE Lifecycle <span class="chip green">可执行</span></div>
+              <div class="wf-desc">包含环境检查、资源推送、Monkey 前台监控、AEE 巡检与清理。</div>
+              <div class="chips">
+                <span class="chip cyan">3 个任务模板</span>
+                <span class="chip">setup 2</span>
+                <span class="chip">patrol 3</span>
+                <span class="chip">teardown 2</span>
+              </div>
+            </div>
+            <div class="pipeline-mini">
+              <div class="mini-line"><span>必填参数</span><div class="bar green"><span style="width:100%"></span></div><span>完成</span></div>
+              <div class="mini-line"><span>脚本有效</span><div class="bar"><span style="width:92%"></span></div><span>92%</span></div>
+            </div>
+            <div class="row-actions"><button class="small-btn">Run</button><button class="small-btn">Edit</button><button class="small-btn">More</button></div>
+          </div>
+
+          <div class="workflow-row">
+            <div class="wf-mark">PR</div>
+            <div>
+              <div class="wf-name">Push Resources + Smoke <span class="chip amber">需补参数</span></div>
+              <div class="wf-desc">面向资源包推送后的快速冒烟验证，缺少 bundle 与 manifest。</div>
+              <div class="chips">
+                <span class="chip cyan">1 个任务模板</span>
+                <span class="chip amber">2 个必填未设置</span>
+                <span class="chip">script:push_resources</span>
+              </div>
+            </div>
+            <div class="pipeline-mini">
+              <div class="mini-line"><span>必填参数</span><div class="bar amber"><span style="width:55%"></span></div><span>55%</span></div>
+              <div class="mini-line"><span>脚本有效</span><div class="bar"><span style="width:100%"></span></div><span>完成</span></div>
+            </div>
+            <div class="row-actions"><button class="small-btn">Fix</button><button class="small-btn">Edit</button><button class="small-btn">More</button></div>
+          </div>
+
+          <div class="workflow-row">
+            <div class="wf-mark">WI</div>
+            <div>
+              <div class="wf-name">WiFi Reconnect Stability <span class="chip green">可执行</span></div>
+              <div class="wf-desc">SSID 和 password 从 WiFi 资源池注入，页面只保留 timeout 入口。</div>
+              <div class="chips">
+                <span class="chip cyan">2 个任务模板</span>
+                <span class="chip green">资源池自动注入</span>
+                <span class="chip">script:connect_wifi</span>
+              </div>
+            </div>
+            <div class="pipeline-mini">
+              <div class="mini-line"><span>必填参数</span><div class="bar green"><span style="width:100%"></span></div><span>完成</span></div>
+              <div class="mini-line"><span>脚本有效</span><div class="bar"><span style="width:88%"></span></div><span>88%</span></div>
+            </div>
+            <div class="row-actions"><button class="small-btn">Run</button><button class="small-btn">Edit</button><button class="small-btn">More</button></div>
+          </div>
+
+          <div class="workflow-row">
+            <div class="wf-mark">DD</div>
+            <div>
+              <div class="wf-name">DDR Pressure Loop <span class="chip green">可执行</span></div>
+              <div class="wf-desc">高压循环任务，使用默认 retry / timeout，用户只关注持续时长和包名。</div>
+              <div class="chips">
+                <span class="chip cyan">4 个任务模板</span>
+                <span class="chip">duration_seconds</span>
+                <span class="chip">package</span>
+              </div>
+            </div>
+            <div class="pipeline-mini">
+              <div class="mini-line"><span>必填参数</span><div class="bar green"><span style="width:96%"></span></div><span>96%</span></div>
+              <div class="mini-line"><span>脚本有效</span><div class="bar"><span style="width:93%"></span></div><span>93%</span></div>
+            </div>
+            <div class="row-actions"><button class="small-btn">Run</button><button class="small-btn">Edit</button><button class="small-btn">More</button></div>
+          </div>
+        </section>
+
+        <aside class="side-panel">
+          <div class="quick-card">
+            <div class="quick-title">快速创建：从脚本开始</div>
+            <div class="search">输入脚本名，例如 monkey_launch</div>
+            <div class="script-pick">
+              <strong>monkey_launch v2.0.0</strong>
+              <p>自动生成 Step、绑定版本，并只暴露 run_mode、duration_seconds 等必要参数。</p>
+              <span class="script-name">script:monkey_launch</span>
+            </div>
+            <div class="script-pick">
+              <strong>push_resources v1.0.0</strong>
+              <p>路径由脚本库的 nfs_path 维护，页面只选择 bundle / manifest。</p>
+              <span class="script-name">script:push_resources</span>
+            </div>
+            <button class="btn primary" style="width:100%;justify-content:center;margin-top:12px">使用选中脚本创建工作流</button>
+            <div class="foot-note">设计原则：列表页不要求用户理解完整 JSON，只提示“是否可执行”和“还缺哪些必要参数”。</div>
+          </div>
+
+          <div class="quick-card">
+            <div class="quick-title">最近编辑</div>
+            <div class="script-pick"><strong>Monkey AEE Lifecycle</strong><p>8 分钟前保存，新增 teardown 清理步骤。</p></div>
+            <div class="script-pick"><strong>WiFi Reconnect Stability</strong><p>昨日更新，资源池参数改为自动注入。</p></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

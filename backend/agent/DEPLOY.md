@@ -405,57 +405,14 @@ done
 
 ## 热更新（已部署主机的代码同步）
 
-已部署主机无需重新安装，使用 `sync_agent.sh` 只推送代码变更，**保留 `.env` 和所有数据目录不变**。
+已部署主机无需重新安装。当前提供两条互补入口，**保留 `.env` 和所有数据目录不变**：
 
-### 快速同步
+| 入口 | 适用场景 |
+|---|---|
+| 前端「主机管理」页面的「热更新」按钮 | 单台一键热更新；后端 `POST /api/v1/hosts/{host_id}/hot-update` 通过 SSH+rsync 推送代码并重启服务 |
+| `tools/ansible/playbooks/update_agent.yml` | 线下批量热更新；统一回写 `API_URL` / `AGENT_SECRET` |
 
-```bash
-# 进入 WSL（如从 Windows 开发机操作）
-wsl
-
-# WSL 本机
-bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh wsl
-
-# 单台远程主机
-bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh root@172.21.15.10
-
-# 批量（多个 IP）
-bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh 172.21.15.10 172.21.15.11 172.21.15.12
-```
-
-### 从 Windows 命令行快速同步（无需进入 WSL shell）
-
-```powershell
-# PowerShell / Git Bash / Windows Terminal
-wsl -u root -- bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh wsl
-```
-
-### 批量同步（hosts.txt）
-
-在 `backend/agent/` 创建 `hosts.txt`：
-
-```
-# Linux Agent 主机列表
-172.21.15.10
-172.21.15.11
-android@172.21.15.12
-```
-
-然后一键同步全部：
-
-```bash
-bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh --all
-```
-
-### sync_agent.sh 与 install_agent.sh 的区别
-
-| | `install_agent.sh` | `sync_agent.sh` |
-|---|---|---|
-| 用途 | 首次部署 | 代码热更新 |
-| 交互提示 | 需要输入 API_URL / HOST_ID | 无 |
-| `.env` | 创建（若不存在） | **不修改** |
-| venv / logs | 重建 | **不修改** |
-| systemd 服务 | 安装/更新 service 文件 | daemon-reload + restart |
+详细 Ansible 命令见 `tools/ansible/README.md`。
 
 ---
 

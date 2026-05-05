@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>测试步骤编排页高保真设计稿</title>
+  <style>
+    :root {
+      --bg: #f4f7fa;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --line: #dbe3ea;
+      --line-strong: #c5d1dc;
+      --text: #172033;
+      --muted: #637083;
+      --soft: #94a3b8;
+      --navy: #102033;
+      --cyan: #0e7490;
+      --cyan-weak: #e6f7fb;
+      --green: #16a34a;
+      --green-weak: #e9f9ef;
+      --amber: #d97706;
+      --amber-weak: #fff4df;
+      --red: #dc2626;
+      --red-weak: #fff1f2;
+      --shadow: 0 16px 40px rgba(15, 23, 42, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+      overflow: hidden;
+    }
+    .screen {
+      width: 1440px;
+      height: 1030px;
+      background: linear-gradient(180deg, #f9fbfd 0%, #edf3f7 100%);
+      display: grid;
+      grid-template-rows: 64px 1fr;
+      overflow: hidden;
+    }
+    .topbar {
+      height: 64px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(12px);
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+    .crumb {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .crumb strong {
+      color: var(--text);
+      font-size: 16px;
+      font-weight: 760;
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 680;
+      background: var(--green-weak);
+      color: #15803d;
+      border: 1px solid #bbf7d0;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 99px;
+      background: currentColor;
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .btn {
+      height: 36px;
+      padding: 0 13px;
+      border-radius: 7px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 680;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .btn.primary {
+      background: var(--cyan);
+      border-color: var(--cyan);
+      color: #fff;
+      box-shadow: 0 10px 22px rgba(14,116,144,.22);
+    }
+    .btn.success {
+      background: var(--green);
+      border-color: var(--green);
+      color: #fff;
+      box-shadow: 0 10px 22px rgba(22,163,74,.18);
+    }
+    .icon {
+      width: 14px;
+      height: 14px;
+      border: 1.8px solid currentColor;
+      border-radius: 4px;
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .icon.play { border-radius: 99px; }
+    .icon.play::after {
+      content: "";
+      position: absolute;
+      left: 5px;
+      top: 3px;
+      width: 0;
+      height: 0;
+      border-top: 3px solid transparent;
+      border-bottom: 3px solid transparent;
+      border-left: 5px solid currentColor;
+    }
+    .icon.plus::before, .icon.plus::after {
+      content: "";
+      position: absolute;
+      background: currentColor;
+      left: 3px;
+      right: 3px;
+      top: 5px;
+      height: 2px;
+      border-radius: 2px;
+    }
+    .icon.plus::after { transform: rotate(90deg); }
+    .workspace {
+      display: grid;
+      grid-template-columns: 288px minmax(0, 1fr) 366px;
+      gap: 16px;
+      padding: 16px;
+      min-height: 0;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .panel-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: #fbfdff;
+    }
+    .panel-title {
+      font-size: 14px;
+      font-weight: 760;
+    }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .left-panel {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+    }
+    .workflow-meta {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+    }
+    .field {
+      display: grid;
+      gap: 5px;
+    }
+    .label {
+      font-size: 11px;
+      color: var(--muted);
+      font-weight: 720;
+    }
+    .input-like {
+      min-height: 34px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #fff;
+      padding: 8px 10px;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .structure {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+    .tree-section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .tree-title {
+      padding: 10px 11px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: var(--panel-soft);
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 760;
+    }
+    .tree-item {
+      padding: 10px 11px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border-bottom: 1px solid #edf2f7;
+      font-size: 12px;
+    }
+    .tree-item:last-child { border-bottom: 0; }
+    .tree-item.active {
+      background: var(--cyan-weak);
+      color: var(--cyan);
+      box-shadow: inset 3px 0 0 var(--cyan);
+      font-weight: 760;
+    }
+    .chip {
+      border-radius: 999px;
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #e2e8f0;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 680;
+      white-space: nowrap;
+    }
+    .chip.green { background: var(--green-weak); color: #15803d; border-color: #bbf7d0; }
+    .chip.amber { background: var(--amber-weak); color: #b45309; border-color: #fed7aa; }
+    .chip.cyan { background: var(--cyan-weak); color: var(--cyan); border-color: #a5f3fc; }
+    .left-footer {
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      background: #fbfdff;
+      display: grid;
+      gap: 8px;
+    }
+    .canvas {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      min-width: 0;
+    }
+    .summary {
+      padding: 14px 16px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 16px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+    .summary h1 {
+      margin: 0;
+      font-size: 21px;
+      line-height: 1.25;
+      font-weight: 800;
+    }
+    .summary p {
+      margin: 5px 0 0;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .phase-strip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+    .phase-pill {
+      flex: 1;
+      min-width: 0;
+      display: grid;
+      gap: 5px;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 10px 12px;
+    }
+    .phase-pill.active {
+      border-color: #8bd8e7;
+      background: var(--cyan-weak);
+      box-shadow: inset 0 -3px 0 var(--cyan);
+    }
+    .phase-name {
+      font-weight: 760;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .phase-hint { color: var(--muted); font-size: 11px; }
+    .arrow {
+      width: 20px;
+      height: 1px;
+      background: #94a3b8;
+      position: relative;
+      flex: 0 0 auto;
+    }
+    .arrow::after {
+      content: "";
+      position: absolute;
+      right: -1px;
+      top: -4px;
+      width: 8px;
+      height: 8px;
+      border-top: 1px solid #94a3b8;
+      border-right: 1px solid #94a3b8;
+      transform: rotate(45deg);
+    }
+    .step-area {
+      padding: 16px;
+      overflow: hidden;
+      background:
+        linear-gradient(#eef3f7 1px, transparent 1px),
+        linear-gradient(90deg, #eef3f7 1px, transparent 1px);
+      background-size: 24px 24px;
+    }
+    .lane {
+      background: rgba(255,255,255,.92);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 10px 26px rgba(15,23,42,.05);
+      overflow: hidden;
+    }
+    .lane-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+    .lane-title {
+      font-size: 14px;
+      font-weight: 770;
+    }
+    .steps {
+      display: grid;
+      gap: 10px;
+      padding: 13px;
+    }
+    .step-card {
+      display: grid;
+      grid-template-columns: 24px 1fr auto;
+      gap: 11px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 11px 12px;
+      box-shadow: 0 4px 12px rgba(15,23,42,.04);
+    }
+    .step-card.selected {
+      border-color: #8bd8e7;
+      background: #f7fdff;
+      box-shadow: 0 0 0 3px rgba(14,116,144,.10), 0 8px 20px rgba(15,23,42,.06);
+    }
+    .handle {
+      width: 22px;
+      height: 36px;
+      border-radius: 6px;
+      border: 1px dashed #cbd5e1;
+      display: grid;
+      place-items: center;
+      color: #94a3b8;
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .step-main {
+      min-width: 0;
+    }
+    .step-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 780;
+    }
+    .mono {
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .step-meta {
+      margin-top: 6px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .step-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .tiny-btn {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #475569;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .add-step {
+      border: 1px dashed #9cc7d1;
+      border-radius: 8px;
+      background: #f7fdff;
+      color: var(--cyan);
+      min-height: 44px;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 760;
+    }
+    .inspector {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 0;
+    }
+    .inspector-body {
+      padding: 14px;
+      display: grid;
+      gap: 11px;
+      align-content: start;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .section-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+    .section-title {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 770;
+    }
+    .section-body {
+      padding: 11px;
+      display: grid;
+      gap: 9px;
+    }
+    .script-search {
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px 11px;
+      display: grid;
+      gap: 7px;
+    }
+    .script-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+    }
+    .script-row strong {
+      font-size: 13px;
+      color: var(--text);
+    }
+    .path-preview {
+      padding: 9px 10px;
+      border-radius: 7px;
+      background: #f1f5f9;
+      border: 1px dashed #cbd5e1;
+      color: #64748b;
+      line-height: 1.45;
+      font-size: 11px;
+    }
+    .form-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .form-field {
+      display: grid;
+      gap: 5px;
+    }
+    .form-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 720;
+      color: #334155;
+    }
+    .req { color: var(--red); }
+    .control {
+      height: 35px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      border-radius: 7px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+    }
+    .control.textarea {
+      height: 58px;
+      align-items: flex-start;
+      padding-top: 9px;
+      line-height: 1.35;
+      color: #334155;
+    }
+    .hint {
+      color: var(--soft);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .advanced {
+      display: grid;
+      gap: 6px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+    }
+    .advanced-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .inspector-footer {
+      border-top: 1px solid var(--line);
+      padding: 12px 14px;
+      background: #fbfdff;
+      display: grid;
+      gap: 8px;
+    }
+    .preview-line {
+      display: grid;
+      grid-template-columns: 72px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .bar {
+      height: 7px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+    }
+    .bar span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--cyan);
+    }
+    .bar.green span { background: var(--green); }
+  </style>
+</head>
+<body>
+  <main class="screen">
+    <header class="topbar">
+      <div class="crumb">
+        <span>工作流设计</span>
+        <span>/</span>
+        <strong>Monkey AEE Lifecycle</strong>
+        <span class="status"><span class="dot"></span>已保存</span>
+      </div>
+      <div class="actions">
+        <button class="btn">查看 JSON</button>
+        <button class="btn">预览执行链</button>
+        <button class="btn success"><span class="icon play"></span>发起测试</button>
+        <button class="btn primary">保存修改</button>
+      </div>
+    </header>
+
+    <section class="workspace">
+      <aside class="panel left-panel">
+        <div class="panel-head">
+          <div class="panel-title">工作流结构</div>
+          <span class="chip green">18 steps</span>
+        </div>
+        <div class="workflow-meta">
+          <div class="field">
+            <div class="label">名称</div>
+            <div class="input-like">Monkey AEE Lifecycle</div>
+          </div>
+          <div class="field">
+            <div class="label">失败阈值</div>
+            <div class="input-like">5% <span class="muted small">默认策略</span></div>
+          </div>
+        </div>
+        <div class="structure">
+          <div class="tree-section">
+            <div class="tree-title"><span>Setup Pipeline</span><span class="chip">2</span></div>
+            <div class="tree-item"><span>check_device</span><span class="chip green">ready</span></div>
+            <div class="tree-item"><span>ensure_root</span><span class="chip green">ready</span></div>
+          </div>
+
+          <div class="tree-section">
+            <div class="tree-title"><span>Task Templates</span><span class="chip cyan">3</span></div>
+            <div class="tree-item active"><span>default</span><span class="chip">7</span></div>
+            <div class="tree-item"><span>foreground_watch</span><span class="chip">6</span></div>
+            <div class="tree-item"><span>resource_smoke</span><span class="chip amber">fix 2</span></div>
+          </div>
+
+          <div class="tree-section">
+            <div class="tree-title"><span>Teardown Pipeline</span><span class="chip">3</span></div>
+            <div class="tree-item"><span>monkey_teardown</span><span class="chip green">ready</span></div>
+            <div class="tree-item"><span>clean_env</span><span class="chip green">ready</span></div>
+          </div>
+        </div>
+        <div class="left-footer">
+          <button class="btn" style="justify-content:center;width:100%"><span class="icon plus"></span>新增任务模板</button>
+          <div class="hint">结构面板只管理模板、阶段和保存状态；脚本配置来自脚本管理。</div>
+        </div>
+      </aside>
+
+      <section class="panel canvas">
+        <div class="summary">
+          <div>
+            <h1>测试步骤编排</h1>
+            <p>当前模板：default。这里只负责选择脚本、调整顺序和查看配置摘要；参数在脚本管理中维护。</p>
+          </div>
+          <div class="actions">
+            <div class="segment-placeholder"></div>
+            <button class="btn"><span class="icon plus"></span>从脚本库添加</button>
+          </div>
+        </div>
+
+        <div class="phase-strip">
+          <div class="phase-pill"><div class="phase-name">Setup <span class="chip">2</span></div><div class="phase-hint">设备前置检查</div></div>
+          <div class="arrow"></div>
+          <div class="phase-pill active"><div class="phase-name">Task / Patrol <span class="chip cyan">7</span></div><div class="phase-hint">当前正在编辑</div></div>
+          <div class="arrow"></div>
+          <div class="phase-pill"><div class="phase-name">Teardown <span class="chip">3</span></div><div class="phase-hint">收尾和清理</div></div>
+        </div>
+
+        <div class="step-area">
+          <div class="lane">
+            <div class="lane-head">
+              <div>
+                <div class="lane-title">Patrol 阶段</div>
+                <div class="hint">编排页只显示步骤链路；脚本路径、参数模板和默认值来自脚本管理。</div>
+              </div>
+              <span class="chip cyan">每 60s 巡检</span>
+            </div>
+            <div class="steps">
+              <div class="step-card">
+                <div class="handle">1</div>
+                <div class="step-main">
+                  <div class="step-title"><span class="mono">check_device</span><span class="chip green">enabled</span></div>
+                  <div class="step-meta"><span class="chip cyan mono">script:check_device</span><span class="chip">脚本管理已配置</span><span class="chip">timeout 120s</span></div>
+                </div>
+                <div class="step-actions"><button class="tiny-btn">Up</button><button class="tiny-btn">View</button></div>
+              </div>
+
+              <div class="step-card">
+                <div class="handle">2</div>
+                <div class="step-main">
+                  <div class="step-title"><span class="mono">push_resources</span><span class="chip amber">脚本配置待完善</span></div>
+                  <div class="step-meta"><span class="chip cyan mono">script:push_resources</span><span class="chip amber">脚本管理缺少 bundle 模板</span><span class="chip amber">manifest 模板</span></div>
+                </div>
+                <div class="step-actions"><button class="tiny-btn">Open</button><button class="tiny-btn">View</button></div>
+              </div>
+
+              <div class="step-card selected">
+                <div class="handle">3</div>
+                <div class="step-main">
+                  <div class="step-title"><span class="mono">monkey_launch_foreground</span><span class="chip green">脚本配置完整</span></div>
+                  <div class="step-meta"><span class="chip cyan mono">script:monkey_launch</span><span class="chip">profile: foreground_watch</span><span class="chip">duration 3600s</span><span class="chip">retry 默认 0</span></div>
+                </div>
+                <div class="step-actions"><button class="tiny-btn">Copy</button><button class="tiny-btn">View</button></div>
+              </div>
+
+              <div class="step-card">
+                <div class="handle">4</div>
+                <div class="step-main">
+                  <div class="step-title"><span class="mono">monkey_check</span><span class="chip green">enabled</span></div>
+                  <div class="step-meta"><span class="chip cyan mono">script:monkey_check</span><span class="chip">使用脚本默认配置</span><span class="chip">timeout 默认 300s</span></div>
+                </div>
+                <div class="step-actions"><button class="tiny-btn">Down</button><button class="tiny-btn">View</button></div>
+              </div>
+
+              <div class="add-step"><span>添加 Step：从脚本管理选择已配置脚本，编排页不编辑参数</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel inspector">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">脚本来源</div>
+            <div class="small muted mono">monkey_launch_foreground</div>
+          </div>
+          <span class="chip green">来自脚本管理</span>
+        </div>
+
+        <div class="inspector-body">
+          <div class="section-card">
+            <div class="section-title"><span>脚本管理记录</span><span class="chip cyan">只读显示</span></div>
+            <div class="section-body">
+              <div class="script-search">
+                <div class="script-row"><strong class="mono">script:monkey_launch</strong><span class="chip">v2.0.0</span></div>
+                <div class="hint">编排页只引用脚本管理中的 active 版本；替换脚本时从脚本库选择。</div>
+              </div>
+              <div class="path-preview">
+                当前路径由脚本库维护：/opt/stability-test-agent/scripts/monkey_launch/v2.0.0/monkey_launch.py
+              </div>
+            </div>
+          </div>
+
+          <div class="section-card">
+            <div class="section-title"><span>参数配置摘要</span><span class="chip green">脚本管理已配置</span></div>
+            <div class="section-body form-grid">
+              <div class="form-field">
+                <div class="form-label">参数模板</div>
+                <div class="control">foreground_watch <span class="muted">已绑定</span></div>
+                <div class="hint">模板由脚本管理维护，编排页只显示当前 Step 使用哪个模板。</div>
+              </div>
+              <div class="form-field">
+                <div class="form-label">必要参数状态</div>
+                <div class="control">3 / 3 已配置 <span class="muted">完整</span></div>
+                <div class="hint">run_mode、duration_seconds、process_names 已在脚本管理中设置。</div>
+              </div>
+              <div class="form-field">
+                <div class="form-label">当前展示值</div>
+                <div class="control textarea">run_mode=foreground · duration_seconds=3600 · process_names=monkey</div>
+                <div class="hint">仅用于确认编排结果；修改入口在脚本管理。</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="advanced">
+            <div class="advanced-row"><strong>脚本默认值</strong><span class="chip">只读</span></div>
+            <div class="advanced-row"><span>timeout_seconds</span><span>300</span></div>
+            <div class="advanced-row"><span>retry</span><span>0</span></div>
+            <div class="advanced-row"><span>enabled</span><span>true</span></div>
+            <div class="advanced-row"><span>crash_check_enabled</span><span>true</span></div>
+          </div>
+
+          <div class="section-card">
+            <div class="section-title"><span>维护入口</span><span class="chip">脚本管理</span></div>
+            <div class="section-body">
+              <div class="hint">路径、版本、参数 schema 和默认值在脚本管理页维护。</div>
+              <button class="btn primary" style="width:100%;justify-content:center">打开脚本管理</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="inspector-footer">
+          <div class="preview-line"><span>脚本有效</span><div class="bar green"><span style="width:100%"></span></div><span>active</span></div>
+          <div class="preview-line"><span>配置完整</span><div class="bar green"><span style="width:100%"></span></div><span>完成</span></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+</body>
+</html>

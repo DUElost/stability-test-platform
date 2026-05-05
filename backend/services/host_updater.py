@@ -28,14 +28,13 @@ _REMOTE_TAR_PATH = "/tmp/stp-agent-update.tar.gz"
 # Ansible inventory fallback for SSH credentials
 _INVENTORY_PATH = Path(__file__).resolve().parent.parent.parent / "tools" / "ansible" / "inventory.ini"
 
-# Files and dirs excluded from the tarball (same exclusions as sync_agent.sh)
+# Files and dirs excluded from the tarball
 _TAR_EXCLUDES = {
     "__pycache__",
     "tests",
     ".env.example",
     "install_agent.sh",
     "agentctl.sh",
-    "sync_agent.sh",
     "DEPLOY.md",
     "stability-test-agent.service",
     "hosts.txt",
@@ -129,7 +128,6 @@ sudo rsync -av --delete \
     --exclude='.env.example' \
     --exclude='install_agent.sh' \
     --exclude='agentctl.sh' \
-    --exclude='sync_agent.sh' \
     --exclude='DEPLOY.md' \
     --exclude='stability-test-agent.service' \
     --exclude='hosts.txt' \

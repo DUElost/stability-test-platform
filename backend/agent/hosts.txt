@@ -1,4 +1,0 @@
-android@172.21.15.1
-android@172.21.15.2
-android@172.21.15.3
-android@172.21.15.7

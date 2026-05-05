@@ -127,13 +127,8 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 ```
 
 **WSL Agent 热更新**（代码变更后同步，无需重新安装）：
-```bash
-# 方式一：使用 sync_agent.sh（推荐，进入 WSL 执行）
-wsl -u root -- bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh wsl
-
-# 方式二：从 Windows 命令行直接同步
-wsl -u root -- bash -c "rsync -av --delete --exclude='__pycache__' --exclude='.env' --exclude='*.pyc' /mnt/f/stability-test-platform/backend/agent/ /opt/stability-test-agent/agent/ && systemctl restart stability-test-agent"
-```
+- 方式一：前端「主机管理」页点击对应主机的「热更新」按钮（单台一键）。
+- 方式二：`tools/ansible/playbooks/update_agent.yml`（线下批量；详见 `tools/ansible/README.md`）。
 
 > **WSL 注意事项**：
 > - `API_URL` 必须使用 `http://127.0.0.1:8000`（安装脚本自动检测 WSL 并设置）
@@ -461,8 +456,9 @@ class StepTrace(Base):
 - 租约续期由 Agent 的 `LeaseRenewer` 负责
 
 **Agent 代码热更新**：
-- 修改 `backend/agent/` 下的代码后，必须同步到 WSL 并重启 Agent 才能生效
-- 快速同步：`wsl -u root -- bash /mnt/f/stability-test-platform/backend/agent/sync_agent.sh wsl`
+- 修改 `backend/agent/` 下的代码后，必须同步到 WSL/远端并重启 Agent 才能生效
+- 单台一键：前端「主机管理」页点击对应主机的「热更新」按钮（后端 `POST /api/v1/hosts/{host_id}/hot-update`）
+- 线下批量：`tools/ansible/playbooks/update_agent.yml`（详见 `tools/ansible/README.md`）
 - 详见 `backend/agent/DEPLOY.md` 热更新章节
 
 ---
