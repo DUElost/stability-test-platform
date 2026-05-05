@@ -41,3 +41,5 @@ tools/ansible/*.retry
 .worktrees/
 /backend/agent/tools/AIMonkeyTest_20260317
 .deepseek/
+.superpowers/
+/backend/agent/resources/
