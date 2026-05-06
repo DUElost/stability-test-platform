@@ -7,31 +7,12 @@ from sqlalchemy.orm import relationship
 from backend.core.database import Base
 
 
-class TaskTemplate(Base):
-    __tablename__ = "task_template"
-
-    id                     = Column(Integer, primary_key=True)
-    workflow_definition_id = Column(Integer, ForeignKey("workflow_definition.id", ondelete="CASCADE"), nullable=False)
-    name                   = Column(String(256), nullable=False)
-    pipeline_def           = Column(JSONB, nullable=False)
-    platform_filter        = Column(JSONB)
-    sort_order             = Column(Integer, nullable=False, default=0)
-    created_at             = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
-
-    definition = relationship(
-        "backend.models.workflow.WorkflowDefinition",
-        foreign_keys=[workflow_definition_id],
-        back_populates="task_templates",
-    )
-    jobs = relationship("JobInstance", back_populates="task_template", lazy="dynamic")
-
-
 class JobInstance(Base):
     __tablename__ = "job_instance"
 
     id               = Column(Integer, primary_key=True)
-    workflow_run_id  = Column(Integer, ForeignKey("workflow_run.id"), nullable=False)
-    task_template_id = Column(Integer, ForeignKey("task_template.id"), nullable=False)
+    plan_run_id      = Column(Integer, ForeignKey("plan_run.id"), nullable=False)
+    plan_id          = Column(Integer, ForeignKey("plan.id"), nullable=False)
     device_id        = Column(Integer, ForeignKey("device.id"), nullable=False)
     host_id          = Column(String(64), ForeignKey("host.id"))
     status           = Column(String(32), nullable=False, default="PENDING")
@@ -42,17 +23,15 @@ class JobInstance(Base):
     report_json        = Column(JSONB)
     jira_draft_json    = Column(JSONB)
     post_processed_at  = Column(DateTime(timezone=True))
-    # ---- Watcher 生命周期回填（由 Agent 通过 complete.watcher_summary 写入）----
-    # 字段来源见 backend/agent/watcher/contracts.py WatcherSummaryPayload
     watcher_started_at = Column(DateTime(timezone=True))
     watcher_stopped_at = Column(DateTime(timezone=True))
-    watcher_capability = Column(String(32))   # inotifyd_root | inotifyd_shell | polling | unavailable | skipped | stub
+    watcher_capability = Column(String(32))
     log_signal_count   = Column(Integer, nullable=False, default=0, server_default="0")
     created_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
-    workflow_run   = relationship("backend.models.workflow.WorkflowRun", foreign_keys=[workflow_run_id], back_populates="jobs")
-    task_template  = relationship("TaskTemplate", foreign_keys=[task_template_id], back_populates="jobs")
+    plan_run       = relationship("backend.models.plan_run.PlanRun", foreign_keys=[plan_run_id], back_populates="jobs")
+    plan           = relationship("backend.models.plan.Plan", foreign_keys=[plan_id])
     device         = relationship("backend.models.host.Device", foreign_keys=[device_id])
     host           = relationship("backend.models.host.Host", foreign_keys=[host_id])
     step_traces    = relationship("StepTrace", back_populates="job", lazy="dynamic")
@@ -61,7 +40,6 @@ class JobInstance(Base):
 
     __table_args__ = (
         Index("idx_job_instance_status",   "status"),
-        Index("idx_job_instance_workflow",  "workflow_run_id"),
         Index("idx_job_instance_host",      "host_id"),
     )
 

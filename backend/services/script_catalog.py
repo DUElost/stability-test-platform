@@ -136,6 +136,7 @@ def scan_script_root(db: Session, root: str | Path, runtime_root: str | None = N
                 entry_point="",
                 content_sha256=content_sha256,
                 param_schema={},
+                default_params={},
                 is_active=True,
                 created_at=now,
                 updated_at=now,

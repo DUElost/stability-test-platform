@@ -19,8 +19,8 @@ from backend.core.database import get_async_db
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
-from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace, TaskTemplate
-from backend.models.workflow import WorkflowDefinition
+from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
+from backend.models.plan import Plan
 from backend.services.aggregator import WorkflowAggregator
 from backend.services.lease_manager import acquire_lease, extend_lease, release_lease
 from backend.services.reconciler import reconcile_step_traces
@@ -56,7 +56,7 @@ async def _enrich_job_metadata(
 
     返回：
         serial_map:         device_id -> serial
-        watcher_policy_map: job_id    -> watcher_policy (来自 WorkflowDefinition.watcher_policy)
+        watcher_policy_map: job_id    -> watcher_policy (来自 Plan.watcher_policy)
     空 jobs 返回 ({}, {})，避免空集合上的 IN ()（PostgreSQL 会报语法错误）。
     """
     if not jobs:
@@ -68,15 +68,15 @@ async def _enrich_job_metadata(
     )
     serial_map = {row.id: row.serial for row in serial_rows.all()}
 
-    template_ids = {j.task_template_id for j in jobs}
-    # task_template → workflow_definition → watcher_policy
-    policy_rows = await db.execute(
-        select(TaskTemplate.id, WorkflowDefinition.watcher_policy)
-        .join(WorkflowDefinition, WorkflowDefinition.id == TaskTemplate.workflow_definition_id)
-        .where(TaskTemplate.id.in_(template_ids))
-    )
-    template_policy = {row.id: row.watcher_policy for row in policy_rows.all()}
-    watcher_policy_map = {j.id: template_policy.get(j.task_template_id) for j in jobs}
+    plan_ids = {j.plan_id for j in jobs if j.plan_id is not None}
+    # Plan.watcher_policy (ADR-0020: direct lookup, no TaskTemplate/WorkflowDefinition join)
+    plan_policy: Dict[int, Optional[dict]] = {}
+    if plan_ids:
+        policy_rows = await db.execute(
+            select(Plan.id, Plan.watcher_policy).where(Plan.id.in_(plan_ids))
+        )
+        plan_policy = {row.id: row.watcher_policy for row in policy_rows.all()}
+    watcher_policy_map = {j.id: plan_policy.get(j.plan_id) for j in jobs if j.plan_id is not None}
 
     return serial_map, watcher_policy_map
 
@@ -91,14 +91,14 @@ class ClaimRequest(BaseModel):
 
 class JobOut(BaseModel):
     id: int
-    workflow_run_id: int
-    task_template_id: int
+    plan_run_id: Optional[int] = None
+    plan_id: Optional[int] = None
     device_id: int
     device_serial: Optional[str] = None
     host_id: Optional[str]
     status: str
     pipeline_def: dict
-    # Watcher 策略覆盖（来自 WorkflowDefinition.watcher_policy）
+    # Watcher 策略覆盖（来自 Plan.watcher_policy）
     # Agent 解析见 backend/agent/watcher/policy.py WatcherPolicy.from_job
     watcher_policy: Optional[Dict[str, Any]] = None
     fencing_token: str  # ADR-0019 Phase 2b: 必填，来自 DeviceLease.fencing_token
@@ -430,13 +430,13 @@ async def claim_jobs(
     if not claimed:
         return ok([])
 
-    # Enrich response: device_serial + watcher_policy(from WorkflowDefinition)
+    # Enrich response: device_serial + watcher_policy(from Plan)
     serial_map, watcher_policy_map = await _enrich_job_metadata(db, claimed)
 
     return ok([
         JobOut(
-            id=j.id, workflow_run_id=j.workflow_run_id,
-            task_template_id=j.task_template_id, device_id=j.device_id,
+            id=j.id, plan_run_id=j.plan_run_id,
+            plan_id=j.plan_id, device_id=j.device_id,
             device_serial=serial_map.get(j.device_id),
             host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
             watcher_policy=watcher_policy_map.get(j.id),
@@ -653,8 +653,8 @@ async def get_pending_jobs(
 
     return ok([
         JobOut(
-            id=j.id, workflow_run_id=j.workflow_run_id,
-            task_template_id=j.task_template_id, device_id=j.device_id,
+            id=j.id, plan_run_id=j.plan_run_id,
+            plan_id=j.plan_id, device_id=j.device_id,
             device_serial=serial_map.get(j.device_id),
             host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
             watcher_policy=watcher_policy_map.get(j.id),

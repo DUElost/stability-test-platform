@@ -177,8 +177,8 @@ class AgentNamespace(socketio.AsyncNamespace):
 
         sio = get_sio()
         await sio.emit("job_status", payload, namespace="/dashboard", room=f"job:{job_id}")
-        run_id = data.get("workflow_run_id") or data.get("run_id", job_id)
-        await sio.emit("job_status", payload, namespace="/dashboard", room=f"workflow:{run_id}")
+        run_id = data.get("plan_run_id") or data.get("run_id", job_id)
+        await sio.emit("job_status", payload, namespace="/dashboard", room=f"plan:{run_id}")
 
     async def on_heartbeat(self, sid: str, data: dict):
         """Agent relays heartbeat for instant dashboard refresh (no DB write)."""
@@ -306,17 +306,17 @@ async def broadcast_run_job_update(run_id: int, job_id: int, status: str) -> Non
         "type": "JOB_STATUS",
         "payload": {"job_id": job_id, "status": status},
         "timestamp": _now_iso(),
-    }, namespace="/dashboard", room=f"workflow:{run_id}")
+    }, namespace="/dashboard", room=f"plan:{run_id}")
 
 
 async def broadcast_run_workflow_status(run_id: int, status: str) -> None:
-    """Notify frontend that the overall WorkflowRun reached a terminal status."""
+    """Notify frontend that the overall PlanRun reached a terminal status."""
     sio = get_sio()
     await sio.emit("workflow_status", {
         "type": "WORKFLOW_STATUS",
         "payload": {"status": status},
         "timestamp": _now_iso(),
-    }, namespace="/dashboard", room=f"workflow:{run_id}")
+    }, namespace="/dashboard", room=f"plan:{run_id}")
 
 
 async def broadcast_run_update(

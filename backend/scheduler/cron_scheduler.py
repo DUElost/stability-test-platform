@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Cron Schedule Checker — polls task_schedules and dispatches WorkflowRuns.
+Cron Schedule Checker — polls task_schedules and dispatches PlanRuns.
 
 Refactored for APScheduler 4.x: the CronScheduler daemon thread has been
 replaced by two standalone functions invoked via APScheduler IntervalTrigger:
@@ -34,41 +34,41 @@ def _compute_next_run(cron_expression: str, after: datetime) -> datetime:
     return cron.get_next(datetime)
 
 
-async def _dispatch_workflow_async(wf_def_id: int, device_ids: list, db) -> None:
-    """Dispatch a workflow using the provided async session."""
-    from backend.services.dispatcher import dispatch_workflow, DispatchError
+async def _dispatch_plan_async(plan_id: int, device_ids: list, db) -> None:
+    """Dispatch a Plan using the provided async session (ADR-0020)."""
+    from backend.services.plan_dispatcher import dispatch_plan, PlanDispatchError
     try:
-        await dispatch_workflow(
-            workflow_def_id=wf_def_id,
+        await dispatch_plan(
+            plan_id=plan_id,
             device_ids=device_ids,
-            failure_threshold=0.5,
             triggered_by="cron",
             db=db,
+            run_type="SCHEDULE",
         )
-    except DispatchError as exc:
-        logger.error("cron_dispatch_workflow_error wf_def_id=%s: %s", wf_def_id, exc)
+    except PlanDispatchError as exc:
+        logger.error("cron_dispatch_plan_error plan_id=%s: %s", plan_id, exc)
 
 
 async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
-    """Evaluate and fire a single TaskSchedule row."""
-    if sched.workflow_definition_id:
-        from backend.models.workflow import WorkflowRun
+    """Evaluate and fire a single TaskSchedule row (ADR-0020: Plan-based)."""
+    if sched.plan_id:
+        from backend.models.plan_run import PlanRun
 
         stale_cutoff = now - timedelta(minutes=PATROL_TIMEOUT_MINUTES)
         try:
             active_count_result = await db.execute(
-                select(WorkflowRun)
+                select(PlanRun)
                 .where(
-                    WorkflowRun.workflow_definition_id == sched.workflow_definition_id,
-                    WorkflowRun.status == "RUNNING",
-                    WorkflowRun.started_at > stale_cutoff,
+                    PlanRun.plan_id == sched.plan_id,
+                    PlanRun.status == "RUNNING",
+                    PlanRun.started_at > stale_cutoff,
                 )
             )
             active_count = len(active_count_result.scalars().all())
             if active_count > 0:
                 logger.info(
-                    "cron_skip_overlap schedule_id=%s wf_def_id=%s active_runs=%d",
-                    sched.id, sched.workflow_definition_id, active_count,
+                    "cron_skip_overlap schedule_id=%s plan_id=%s active_runs=%d",
+                    sched.id, sched.plan_id, active_count,
                 )
                 sched.next_run_at = _compute_next_run(sched.cron_expression, now)
                 return
@@ -81,16 +81,15 @@ async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
             return
 
         device_ids = sched.device_ids or []
-        await _dispatch_workflow_async(sched.workflow_definition_id, device_ids, db)
+        await _dispatch_plan_async(sched.plan_id, device_ids, db)
         logger.info(
-            "cron_workflow_dispatched schedule_id=%s wf_def_id=%s",
-            sched.id, sched.workflow_definition_id,
+            "cron_plan_dispatched schedule_id=%s plan_id=%s",
+            sched.id, sched.plan_id,
         )
     else:
         logger.error(
-            "cron_schedule_skip_no_workflow schedule_id=%s name=%s — "
-            "workflow_definition_id is required; legacy Task creation "
-            "path has been removed (see ADR-0008)",
+            "cron_schedule_skip_no_plan schedule_id=%s name=%s — "
+            "plan_id is required",
             sched.id, sched.name,
         )
 
@@ -132,11 +131,11 @@ async def check_and_fire_schedules() -> None:
 
 
 def run_retention_cleanup() -> None:
-    """Delete completed WorkflowRuns older than WORKFLOW_RUN_RETENTION_DAYS.
+    """Delete completed PlanRuns older than WORKFLOW_RUN_RETENTION_DAYS (ADR-0020).
 
     Runs as an independent APScheduler job (sync, runs in thread-pool).
     """
-    from backend.models.workflow import WorkflowRun
+    from backend.models.plan_run import PlanRun
     from backend.models.job import JobInstance, StepTrace
 
     now = datetime.now(timezone.utc)
@@ -145,10 +144,10 @@ def run_retention_cleanup() -> None:
     with SessionLocal() as db:
         try:
             stale_runs = (
-                db.query(WorkflowRun)
+                db.query(PlanRun)
                 .filter(
-                    WorkflowRun.status.in_(["SUCCESS", "FAILED", "PARTIAL_SUCCESS", "DEGRADED"]),
-                    WorkflowRun.started_at < cutoff,
+                    PlanRun.status.in_(["SUCCESS", "FAILED", "PARTIAL_SUCCESS", "DEGRADED"]),
+                    PlanRun.started_at < cutoff,
                 )
                 .limit(100)
                 .all()
@@ -159,14 +158,14 @@ def run_retention_cleanup() -> None:
             run_ids = [r.id for r in stale_runs]
             db.query(StepTrace).filter(
                 StepTrace.job_id.in_(
-                    select(JobInstance.id).where(JobInstance.workflow_run_id.in_(run_ids))
+                    select(JobInstance.id).where(JobInstance.plan_run_id.in_(run_ids))
                 )
             ).delete(synchronize_session=False)
             db.query(JobInstance).filter(
-                JobInstance.workflow_run_id.in_(run_ids)
+                JobInstance.plan_run_id.in_(run_ids)
             ).delete(synchronize_session=False)
-            db.query(WorkflowRun).filter(
-                WorkflowRun.id.in_(run_ids)
+            db.query(PlanRun).filter(
+                PlanRun.id.in_(run_ids)
             ).delete(synchronize_session=False)
             db.commit()
             logger.info("retention_cleanup deleted runs=%d", len(stale_runs))

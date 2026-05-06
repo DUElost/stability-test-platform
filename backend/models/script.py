@@ -19,6 +19,7 @@ class Script(Base):
     entry_point = Column(String(256))
     content_sha256 = Column(String(64), nullable=False)
     param_schema = Column(JSONB, nullable=False, default=dict)
+    default_params = Column(JSONB, nullable=False, default=dict, server_default="{}")
     is_active = Column(Boolean, nullable=False, default=True)
     description = Column(Text)
     created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

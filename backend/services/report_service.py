@@ -18,8 +18,9 @@ from urllib.parse import unquote, urlparse
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
 
-from backend.models.job import JobInstance, StepTrace, TaskTemplate as JobTaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance, StepTrace
+from backend.models.plan import Plan
+from backend.models.plan_run import PlanRun
 from backend.models.host import Device, Host
 from backend.api.schemas import (
     DeviceLiteOut,
@@ -201,13 +202,9 @@ def _extract_job_completion_snapshot(db: Session, job_id: int) -> Dict[str, Any]
 
 
 def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]:
-    wf_run = db.get(WorkflowRun, job.workflow_run_id)
-    if not wf_run:
-        return None
-    wf_def = db.get(WorkflowDefinition, wf_run.workflow_definition_id)
-    if not wf_def:
-        return None
-    template = db.get(JobTaskTemplate, job.task_template_id)
+    """ADR-0020: uses PlanRun + Plan instead of WorkflowRun + WorkflowDefinition."""
+    plan_run = db.get(PlanRun, job.plan_run_id) if job.plan_run_id else None
+    plan = db.get(Plan, job.plan_id) if job.plan_id else None
 
     host = db.get(Host, str(job.host_id)) if job.host_id is not None else None
     device = db.get(Device, job.device_id)
@@ -253,12 +250,13 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
         except (TypeError, ValueError):
             host_id_int = 0
 
-    task_status = _WF_STATUS_TO_TASK_STATUS.get(str(wf_run.status).upper(), "PENDING")
+    task_status = _WF_STATUS_TO_TASK_STATUS.get(
+        str(plan_run.status).upper(), "PENDING") if plan_run else "PENDING"
     task_out = TaskOut(
-        id=wf_def.id,
-        name=wf_def.name if not template else f"{wf_def.name}/{template.name}",
-        type="WORKFLOW",
-        template_id=template.id if template else None,
+        id=plan.id if plan else 0,
+        name=plan.name if plan else "unknown",
+        type="PLAN",
+        template_id=None,
         tool_id=None,
         params={},
         tool_snapshot=None,
@@ -269,13 +267,13 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
         is_distributed=False,
         runs_count=None,
         pipeline_def=job.pipeline_def,
-        created_at=wf_def.created_at or job.created_at or datetime.now(timezone.utc),
+        created_at=plan.created_at if plan else (job.created_at or datetime.now(timezone.utc)),
     )
 
     run_status = _JOB_STATUS_TO_RUN_STATUS.get(str(job.status).upper(), str(job.status))
     run_out = RunOut(
         id=job.id,
-        task_id=wf_def.id,
+        task_id=plan.id if plan else 0,
         host_id=host_id_int,
         device_id=job.device_id,
         status=run_status,
@@ -618,20 +616,20 @@ def build_jira_draft(report: RunReportOut) -> JiraDraftOut:
 # ---------------------------------------------------------------------------
 
 def compose_workflow_summary(db: Session, run_id: int) -> Optional[Dict[str, Any]]:
-    """Build an aggregate summary for a WorkflowRun across all its jobs.
+    """ADR-0020: Build an aggregate summary for a PlanRun across all its jobs.
 
     Returns a dict with status matrix, failure distribution, pass rate,
     and per-device breakdown.  Returns None if the run is not found.
     """
-    run = db.get(WorkflowRun, run_id)
+    run = db.get(PlanRun, run_id)
     if run is None:
         return None
 
-    definition = db.get(WorkflowDefinition, run.workflow_definition_id)
+    definition = db.get(Plan, run.plan_id)
 
     jobs: List[JobInstance] = (
         db.query(JobInstance)
-        .filter(JobInstance.workflow_run_id == run_id)
+        .filter(JobInstance.plan_run_id == run_id)
         .all()
     )
 
@@ -672,9 +670,9 @@ def compose_workflow_summary(db: Session, run_id: int) -> Optional[Dict[str, Any
     pass_rate = (completed / total * 100) if total > 0 else 0.0
 
     return {
-        "workflow_run_id": run.id,
-        "workflow_definition_id": run.workflow_definition_id,
-        "workflow_name": definition.name if definition else None,
+        "plan_run_id": run.id,
+        "plan_id": run.plan_id,
+        "plan_name": definition.name if definition else None,
         "status": run.status,
         "failure_threshold": run.failure_threshold,
         "triggered_by": run.triggered_by,

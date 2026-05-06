@@ -31,6 +31,7 @@ class ScriptCreate(BaseModel):
     entry_point: Optional[str] = ""
     content_sha256: str
     param_schema: Dict[str, Any] = Field(default_factory=dict)
+    default_params: Dict[str, Any] = Field(default_factory=dict)
     is_active: bool = True
     description: Optional[str] = None
 
@@ -45,6 +46,7 @@ class ScriptUpdate(BaseModel):
     entry_point: Optional[str] = None
     content_sha256: Optional[str] = None
     param_schema: Optional[Dict[str, Any]] = None
+    default_params: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
     description: Optional[str] = None
 
@@ -60,6 +62,7 @@ class ScriptOut(BaseModel):
     entry_point: Optional[str]
     content_sha256: str
     param_schema: Dict[str, Any]
+    default_params: Dict[str, Any]
     is_active: bool
     description: Optional[str]
     created_at: datetime
@@ -89,6 +92,7 @@ def _script_out(script: Script) -> ScriptOut:
         entry_point=script.entry_point,
         content_sha256=script.content_sha256,
         param_schema=script.param_schema or {},
+        default_params=script.default_params or {},
         is_active=script.is_active,
         description=script.description,
         created_at=script.created_at,
@@ -154,6 +158,7 @@ def create_script(payload: ScriptCreate, db: Session = Depends(get_db)):
         entry_point=payload.entry_point,
         content_sha256=payload.content_sha256,
         param_schema=payload.param_schema,
+        default_params=payload.default_params,
         is_active=payload.is_active,
         description=payload.description,
         created_at=now,
@@ -204,6 +209,14 @@ def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(g
                 detail=f"script name/version already exists: {next_name} {next_version}",
             )
 
+    # ADR-0020: changing default_params on an existing version is rejected;
+    # the caller must create a new version instead.
+    if payload.default_params is not None and payload.default_params != (script.default_params or {}):
+        raise HTTPException(
+            status_code=422,
+            detail="default_params cannot be changed on an existing version; create a new script version instead",
+        )
+
     for field in (
         "name",
         "display_name",
@@ -214,6 +227,7 @@ def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(g
         "entry_point",
         "content_sha256",
         "param_schema",
+        "default_params",
         "is_active",
         "description",
     ):
@@ -222,6 +236,78 @@ def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(g
             setattr(script, field, value)
     script.updated_at = datetime.now(timezone.utc)
     db.commit()
+    db.refresh(script)
+    return ok(_script_out(script))
+
+
+class ScriptVersionCreate(BaseModel):
+    version: str
+    nfs_path: str
+    entry_point: Optional[str] = ""
+    content_sha256: str
+    param_schema: Dict[str, Any] = Field(default_factory=dict)
+    default_params: Dict[str, Any] = Field(...)
+    description: Optional[str] = None
+
+
+@router.post("/{name}/versions", response_model=ApiResponse[ScriptOut], status_code=201)
+def create_script_version(
+    name: str,
+    payload: ScriptVersionCreate,
+    db: Session = Depends(get_db),
+):
+    """Create a new version of an existing script.
+
+    ``default_params`` is required — it defines the canonical defaults
+    for this version and must not be changed after creation.
+    """
+    existing = (
+        db.query(Script)
+        .filter(Script.name == name, Script.version == payload.version)
+        .first()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"script version already exists: {name} {payload.version}",
+        )
+
+    # Inherit category/script_type from the latest active version
+    latest = (
+        db.query(Script)
+        .filter(Script.name == name, Script.is_active.is_(True))
+        .order_by(Script.created_at.desc())
+        .first()
+    )
+    if latest is None:
+        raise HTTPException(status_code=404, detail=f"script '{name}' not found")
+
+    now = datetime.now(timezone.utc)
+    script = Script(
+        name=name,
+        display_name=latest.display_name,
+        category=latest.category,
+        script_type=latest.script_type,
+        version=payload.version,
+        nfs_path=payload.nfs_path,
+        entry_point=payload.entry_point,
+        content_sha256=payload.content_sha256,
+        param_schema=payload.param_schema,
+        default_params=payload.default_params,
+        is_active=True,
+        description=payload.description,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(script)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"script version already exists: {name} {payload.version}",
+        )
     db.refresh(script)
     return ok(_script_out(script))
 

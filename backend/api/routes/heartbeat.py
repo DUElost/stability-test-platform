@@ -170,6 +170,10 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
 
     # Merge extra data without losing system stats
     host_extra = {}
+    # Preserve agent_version across extra rebuild (written by preflight heartbeat path)
+    prev_extra = host.extra or {}
+    if "agent_version" in prev_extra:
+        host_extra["agent_version"] = prev_extra["agent_version"]
     if payload.extra:
         host_extra.update(payload.extra)
     if payload.host:
@@ -179,6 +183,9 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
         host_extra["capacity"] = payload.capacity
     if payload.health:
         host_extra["health"] = payload.health
+    # ADR-0020: persist agent_version from heartbeat payload
+    if payload.agent_version:
+        host_extra["agent_version"] = payload.agent_version
     host.extra = host_extra
 
     # Process devices array

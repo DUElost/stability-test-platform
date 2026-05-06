@@ -56,6 +56,7 @@ class HeartbeatIn(BaseModel):
     health: Optional[Dict[str, Any]] = None    # ADR-0019 Phase 3c
     agent_instance_id: str = ""   # ADR-0019 Phase 3a
     boot_id: str = ""             # ADR-0019 Phase 3a
+    agent_version: Optional[str] = None  # ADR-0020 preflight data source
 
     @field_validator('host_id', mode='before')
     @classmethod

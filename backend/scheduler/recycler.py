@@ -92,8 +92,8 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
     release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
 
     try:
-        from backend.services.aggregator_sync import workflow_aggregator_sync
-        workflow_aggregator_sync(job, db)
+        from backend.services.aggregator_sync import plan_aggregator_sync
+        plan_aggregator_sync(job, db)
     except Exception as e:
         logger.warning("recycler_aggregation_failed job=%d: %s", job.id, e)
 
@@ -106,7 +106,7 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
         "job_timeout",
         extra={
             "job_id": job.id,
-            "workflow_run_id": job.workflow_run_id,
+            "plan_run_id": job.plan_run_id,
             "old_status": old_status,
             "reason": reason,
         },
@@ -116,7 +116,7 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
         "type": "JOB_UPDATE",
         "payload": {
             "job_id": job.id,
-            "workflow_run_id": job.workflow_run_id,
+            "plan_run_id": job.plan_run_id,
             "status": "FAILED",
             "error_code": "TIMEOUT",
             "message": reason,
@@ -155,7 +155,7 @@ def _mark_running_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
         "job_timeout_to_unknown",
         extra={
             "job_id": job.id,
-            "workflow_run_id": job.workflow_run_id,
+            "plan_run_id": job.plan_run_id,
             "old_status": old_status,
             "reason": reason,
         },
@@ -165,7 +165,7 @@ def _mark_running_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
         "type": "JOB_UPDATE",
         "payload": {
             "job_id": job.id,
-            "workflow_run_id": job.workflow_run_id,
+            "plan_run_id": job.plan_run_id,
             "status": "UNKNOWN",
             "error_code": "TIMEOUT",
             "message": reason,
@@ -225,7 +225,7 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
                 event_type=event_type,
                 context={
                     "run_id": job.id,
-                    "task_id": job.workflow_run_id,
+                    "task_id": job.plan_run_id,
                     "task_name": f"job-{job.id}",
                     "task_type": "workflow",
                     "error_message": job.status_reason or "",

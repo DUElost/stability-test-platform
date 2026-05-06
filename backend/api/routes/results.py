@@ -14,8 +14,9 @@ from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
-from backend.models.job import JobInstance, StepTrace, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance, StepTrace
+from backend.models.plan import Plan
+from backend.models.plan_run import PlanRun
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 
@@ -134,9 +135,8 @@ def get_results_summary(
             t in message for t in (
                 "job_instance",
                 "step_trace",
-                "task_template",
-                "workflow_run",
-                "workflow_definition",
+                "plan_run",
+                "plan",
             )
         )
         return (
@@ -170,15 +170,15 @@ def get_results_summary(
                 # QUEUED/RUNNING/UNKNOWN 都视作运行态
                 runs_by_status.running += cnt
 
-        # --- test_type_stats (按 TaskTemplate.name 聚合) ---
+        # --- test_type_stats (按 Plan.name 聚合) ---
         type_rows = (
             db.query(
-                TaskTemplate.name,
+                Plan.name,
                 JobInstance.status,
                 func.count(JobInstance.id),
             )
-            .join(TaskTemplate, JobInstance.task_template_id == TaskTemplate.id)
-            .group_by(TaskTemplate.name, JobInstance.status)
+            .join(Plan, JobInstance.plan_id == Plan.id)
+            .group_by(Plan.name, JobInstance.status)
             .all()
         )
         type_agg: Dict[str, Dict[str, int]] = {}
@@ -194,17 +194,15 @@ def get_results_summary(
                 bucket["failed"] += count_i
         test_type_stats = [TestTypeStat(type=t, **counts) for t, counts in sorted(type_agg.items())]
 
-        # --- recent_runs ---
+        # --- recent_runs (ADR-0020: Plan-based) ---
         recent_rows = (
-            db.query(JobInstance, WorkflowDefinition.name, TaskTemplate.name)
-            .join(WorkflowRun, JobInstance.workflow_run_id == WorkflowRun.id)
-            .join(WorkflowDefinition, WorkflowRun.workflow_definition_id == WorkflowDefinition.id)
-            .join(TaskTemplate, JobInstance.task_template_id == TaskTemplate.id)
+            db.query(JobInstance, Plan.name)
+            .join(Plan, JobInstance.plan_id == Plan.id)
             .order_by(JobInstance.id.desc())
             .limit(limit)
             .all()
         )
-        recent_job_ids = [job.id for job, _wf_name, _template_name in recent_rows]
+        recent_job_ids = [job.id for job, _plan_name in recent_rows]
         snapshot_rows = []
         if recent_job_ids:
             snapshot_rows = (
@@ -219,19 +217,18 @@ def get_results_summary(
         snapshot_map = {int(job_id): output for job_id, output in snapshot_rows}
 
         recent_runs: List[RecentRun] = []
-        for job, wf_name, template_name in recent_rows:
+        for job, plan_name in recent_rows:
             log_summary = _extract_log_summary_from_snapshot(snapshot_map.get(job.id))
             risk = _parse_risk_level(log_summary)
             duration = None
             if job.started_at and job.ended_at:
                 duration = (job.ended_at - job.started_at).total_seconds()
-            workflow_name = str(wf_name or "workflow")
-            template_name_norm = str(template_name or "default")
+            plan_name_norm = str(plan_name or "unknown")
             recent_runs.append(
                 RecentRun(
                     run_id=job.id,
-                    task_name=f"{workflow_name}/{template_name_norm}",
-                    task_type=template_name_norm,
+                    task_name=plan_name_norm,
+                    task_type=plan_name_norm,
                     status=_normalize_job_status(job.status),
                     risk_level=risk,
                     duration_seconds=duration,
