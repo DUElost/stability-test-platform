@@ -24,16 +24,20 @@ config.set_main_option("sqlalchemy.url", _sync_url)
 
 def get_metadata():
     from backend.core.database import Base  # noqa: F401 — import all models for metadata
-    import backend.models.action_template  # noqa: F401
-    import backend.models.audit            # noqa: F401
-    import backend.models.device_lease     # noqa: F401 — ADR-0019 Phase 1
-    import backend.models.enums            # noqa: F401
-    import backend.models.host             # noqa: F401
-    import backend.models.job              # noqa: F401
-    import backend.models.notification     # noqa: F401
-    import backend.models.schedule         # noqa: F401
-    import backend.models.user             # noqa: F401
-    import backend.models.workflow         # noqa: F401
+    import backend.models.action_template      # noqa: F401
+    import backend.models.audit                # noqa: F401
+    import backend.models.device_lease         # noqa: F401 — ADR-0019 Phase 1
+    import backend.models.enums                # noqa: F401
+    import backend.models.host                 # noqa: F401
+    import backend.models.job                  # noqa: F401
+    import backend.models.notification         # noqa: F401
+    import backend.models.plan                 # noqa: F401 — ADR-0020
+    import backend.models.plan_migration_audit # noqa: F401 — ADR-0020 迁移审计
+    import backend.models.plan_run             # noqa: F401 — ADR-0020
+    import backend.models.resource_pool        # noqa: F401
+    import backend.models.schedule             # noqa: F401
+    import backend.models.script               # noqa: F401
+    import backend.models.user                 # noqa: F401
     return Base.metadata
 
 
