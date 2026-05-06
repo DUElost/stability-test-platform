@@ -45,6 +45,8 @@ class HeartbeatThread:
         # ADR-0019 Phase 3a
         agent_instance_id: str = "",
         boot_id: str = "",
+        # ADR-0020: agent version for preflight consistency check
+        agent_version: str = "",
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -60,6 +62,7 @@ class HeartbeatThread:
         self._get_active_device_count = get_active_device_count
         self._agent_instance_id = agent_instance_id
         self._boot_id = boot_id
+        self._agent_version = agent_version
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
@@ -170,6 +173,7 @@ class HeartbeatThread:
             health=cap_result.get("health"),
             agent_instance_id=self._agent_instance_id,
             boot_id=self._boot_id,
+            agent_version=self._agent_version,
             system_stats=system_stats,
             mount_status=mount_status,
         )

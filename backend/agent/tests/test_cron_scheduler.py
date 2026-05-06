@@ -14,31 +14,26 @@ import pytest
 class FakeTaskSchedule:
     """Mimics TaskSchedule ORM row."""
     def __init__(self, id=1, name="patrol", cron_expression="*/3 * * * *",
-                 workflow_definition_id=None, task_type="WORKFLOW",
-                 enabled=True, next_run_at=None, device_ids=None,
-                 tool_id=None, task_template_id=None, params=None,
-                 target_device_id=None):
+                 plan_id=None, enabled=True, next_run_at=None, device_ids=None,
+                 params=None, target_device_id=None):
         self.id = id
         self.name = name
         self.cron_expression = cron_expression
-        self.workflow_definition_id = workflow_definition_id
-        self.task_type = task_type
+        self.plan_id = plan_id
         self.enabled = enabled
         self.next_run_at = next_run_at or datetime.now(timezone.utc)
         self.device_ids = device_ids or []
-        self.tool_id = tool_id
-        self.task_template_id = task_template_id
         self.params = params or {}
         self.target_device_id = target_device_id
         self.last_run_at = None
 
 
-class FakeWorkflowRun:
-    """Mimics WorkflowRun ORM row."""
-    def __init__(self, id=1, workflow_definition_id=1, status="RUNNING",
+class FakePlanRun:
+    """Mimics PlanRun ORM row."""
+    def __init__(self, id=1, plan_id=1, status="RUNNING",
                  started_at=None):
         self.id = id
-        self.workflow_definition_id = workflow_definition_id
+        self.plan_id = plan_id
         self.status = status
         self.started_at = started_at or datetime.now(timezone.utc)
 
@@ -75,7 +70,7 @@ class TestOverlapProtection:
 
         now = datetime.now(timezone.utc)
         sched = FakeTaskSchedule(
-            workflow_definition_id=42,
+            plan_id=42,
             next_run_at=now - timedelta(seconds=10),
         )
 
@@ -98,7 +93,7 @@ class TestOverlapProtection:
 
         now = datetime.now(timezone.utc)
         sched = FakeTaskSchedule(
-            workflow_definition_id=42,
+            plan_id=42,
             device_ids=[1, 2],
             next_run_at=now - timedelta(seconds=10),
         )
@@ -122,7 +117,7 @@ class TestOverlapProtection:
 
         now = datetime.now(timezone.utc)
         sched = FakeTaskSchedule(
-            workflow_definition_id=42,
+            plan_id=42,
             device_ids=[1],
             next_run_at=now - timedelta(seconds=10),
         )
@@ -145,7 +140,7 @@ class TestOverlapProtection:
 
         now = datetime.now(timezone.utc)
         sched = FakeTaskSchedule(
-            workflow_definition_id=42,
+            plan_id=42,
             next_run_at=now - timedelta(seconds=10),
         )
 
@@ -172,13 +167,13 @@ class TestOverlapProtection:
 # ===========================================================================
 
 class TestCleanupOldRuns:
-    """CronScheduler._cleanup_old_runs deletes terminal WorkflowRuns past retention."""
+    """CronScheduler._cleanup_old_runs deletes terminal PlanRuns past retention."""
 
     def test_deletes_stale_runs(self):
         from backend.scheduler.cron_scheduler import CronScheduler
 
         now = datetime.now(timezone.utc)
-        old_run = FakeWorkflowRun(
+        old_run = FakePlanRun(
             id=99,
             status="SUCCESS",
             started_at=now - timedelta(days=5),
@@ -206,7 +201,7 @@ class TestCleanupOldRuns:
         db.delete.assert_not_called()
 
     def test_import_failure_does_not_crash(self):
-        """If WorkflowRun import fails, cleanup should log warning and rollback."""
+        """If PlanRun import fails, cleanup should log warning and rollback."""
         from backend.scheduler.cron_scheduler import CronScheduler
 
         now = datetime.now(timezone.utc)

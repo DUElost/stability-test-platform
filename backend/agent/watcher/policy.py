@@ -1,7 +1,7 @@
 """WatcherPolicy — Device Log Watcher 运行策略。
 
 策略来源优先级（高 → 低）：
-    1. WorkflowDefinition.watcher_policy (DB, 运维可配)
+    1. Plan.watcher_policy (DB, 运维可配)
     2. Agent 环境变量 (WATCHER_*)
     3. DEFAULT_POLICY (代码内兜底)
 
@@ -90,7 +90,7 @@ class WatcherPolicy:
         期望 job_payload 结构:
             {
               "id": 123,
-              "watcher_policy": {                  # 可选, 来自 WorkflowDefinition
+              "watcher_policy": {                  # 可选, 来自 Plan
                   "on_unavailable": "degraded",
                   "required_categories": ["ANR"],
                   "paths": {"ANR": ["/data/anr"]},

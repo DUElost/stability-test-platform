@@ -225,7 +225,9 @@ def main() -> None:
 
     agent_instance_id = generate_agent_instance_id()
     boot_id = read_boot_id()
-    logger.info("agent_identity instance=%s boot=%s", agent_instance_id, boot_id)
+    # ADR-0020: agent version for preflight consistency check
+    from . import __version__ as _agent_pkg_version
+    logger.info("agent_identity instance=%s boot=%s version=%s", agent_instance_id, boot_id, _agent_pkg_version)
 
     # 加载 HOST_ID，支持自动注册
     try:
@@ -376,6 +378,7 @@ def main() -> None:
         get_active_device_count=_get_active_device_count,
         agent_instance_id=agent_instance_id,
         boot_id=boot_id,
+        agent_version=_agent_pkg_version,
     )
     heartbeat_thread.start()
 
