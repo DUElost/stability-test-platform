@@ -66,7 +66,7 @@ CREATE TABLE plan (
 CREATE TABLE plan_step (
     id              SERIAL PRIMARY KEY,
     plan_id         INTEGER NOT NULL REFERENCES plan(id) ON DELETE CASCADE,
-    phase           VARCHAR(16) NOT NULL CHECK (phase IN ('init', 'patrol', 'teardown')),
+    stage           VARCHAR(16) NOT NULL CHECK (stage IN ('init', 'patrol', 'teardown')),
     sort_order      INTEGER NOT NULL DEFAULT 0,
     step_key        VARCHAR(128) NOT NULL,
     script_name     VARCHAR(128) NOT NULL,
@@ -77,15 +77,17 @@ CREATE TABLE plan_step (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (plan_id, step_key)
 );
+
+> **命名约定**：本表使用 `stage` 列名（与 `step_trace.stage` 对齐），值域仍是 ADR 早期文档中提到的"phase"枚举（init / patrol / teardown）。`pipeline_def.lifecycle` 内部分组键仍直接使用枚举值（不出现 `stage` 也不出现 `phase`），是 Agent 协议的稳定面。
 ```
 
 约束：
 
 - `PlanStep.step_key` 是稳定步骤标识，用于生成 `pipeline_def.lifecycle.*[].step_id`，不得随排序变化。
 - `patrol_interval_seconds IS NULL` 表示没有 Patrol 阶段。
-- `patrol_interval_seconds IS NOT NULL` 时必须存在至少一个 enabled patrol step。
-- Init 阶段必须至少存在一个 enabled step，以满足 Agent 侧 lifecycle 校验。
-- Teardown 阶段可为空，但生成的 `pipeline_def.lifecycle.teardown` 必须是数组。
+- `patrol_interval_seconds IS NOT NULL` 时必须存在至少一个 enabled patrol step（`stage = 'patrol'`）。
+- Init 阶段（`stage = 'init'`）必须至少存在一个 enabled step，以满足 Agent 侧 lifecycle 校验。
+- Teardown 阶段（`stage = 'teardown'`）可为空，但生成的 `pipeline_def.lifecycle.teardown` 必须是数组。
 - Dispatcher 生成 lifecycle 时只包含 `enabled = true` 的 PlanStep。
 - Plan 创建以及更新 `next_plan_id` 时必须做链路 DAG 校验，拒绝 `next_plan_id` 形成 A -> B -> A 这类长链循环。数据库 CHECK 只能防自环，不能替代应用层环检测。
 - DAG 校验必须具备事务级一致性保证。实现时应在同一事务内对涉及链路的 Plan 行加行锁，或使用 PostgreSQL advisory lock 后再校验并写入，避免并发提交分别通过本地校验后合并成环。
@@ -190,7 +192,7 @@ CREATE UNIQUE INDEX uniq_plan_run_chain_child
   },
   "steps": [
     {
-      "phase": "init",
+      "stage": "init",
       "sort_order": 0,
       "step_key": "init_0_monkey_setup",
       "script_name": "monkey_setup",

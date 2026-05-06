@@ -98,7 +98,7 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
         logger.warning("recycler_aggregation_failed job=%d: %s", job.id, e)
 
     task_run_state_changes.labels(from_state=old_status, to_state="FAILED").inc()
-    task_run_total.labels(status="failed", task_type="workflow").inc()
+    task_run_total.labels(status="failed", task_type="plan").inc()
     device_lease_released.labels(reason="timeout").inc()
     recycler_timeouts.labels(timeout_type="dispatched").inc()
 
@@ -130,7 +130,7 @@ def _mark_running_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
     Lease stays ACTIVE — the device remains blocked. Reconciler will
     finalize (UNKNOWN→FAILED + release lease) after the grace period.
 
-    Does NOT call release_lease_sync, workflow aggregation, or emit
+    Does NOT call release_lease_sync, PlanRun aggregation, or emit
     FAILED notification.
     """
     if job.status != JobStatus.RUNNING.value:
@@ -227,7 +227,7 @@ def _fill_deferred_post_completions(db, now: datetime) -> int:
                     "run_id": job.id,
                     "task_id": job.plan_run_id,
                     "task_name": f"job-{job.id}",
-                    "task_type": "workflow",
+                    "task_type": "plan",
                     "error_message": job.status_reason or "",
                     "device_serial": str(job.device_id),
                 },
@@ -358,4 +358,3 @@ def _prune_steptrace_artifacts(db, now: datetime) -> None:
             "steptrace_artifacts_pruned",
             extra={"traces_scanned": len(old_traces), "files_deleted": file_deleted_count},
         )
-

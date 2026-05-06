@@ -1,6 +1,6 @@
 """Plan dispatcher — ADR-0020.
 
-Replaces ``dispatch_workflow``.  Dispatches a Plan execution:
+Dispatches a Plan execution:
 1. Load Plan + PlanStep rows
 2. Build lifecycle pipeline_def with params from script.default_params
 3. Create PlanRun
@@ -41,13 +41,18 @@ class PlanDispatchError(Exception):
 def _build_lifecycle_from_steps(
     plan: Plan, steps: list[PlanStep], script_defaults: dict[tuple[str, str], dict]
 ) -> dict:
-    """Build a pipeline_def lifecycle from PlanStep records, injecting
-    script.default_params as step params."""
+    """Build a pipeline_def lifecycle from PlanStep records (ADR-0020 §2 唯一事实源).
+
+    Inputs: ``plan`` 上的 ``patrol_interval_seconds`` / ``timeout_seconds`` 直列 +
+    每行 ``PlanStep`` 的 ``stage``/``sort_order``/``timeout_seconds``/``retry``。
+    Step ``params`` 由 ``script.default_params`` 注入（ADR-0020 §3）。
+    """
     lifecycle: dict[str, Any] = {"init": [], "teardown": []}
     patrol_steps: list[dict] = []
-    patrol_interval: int | None = None
 
     for step in sorted(steps, key=lambda s: (s.stage, s.sort_order)):
+        if step.enabled is False:
+            continue
         default_params = script_defaults.get((step.script_name, step.script_version), {})
         step_def: dict[str, Any] = {
             "step_id": step.step_key,
@@ -63,22 +68,14 @@ def _build_lifecycle_from_steps(
         elif step.stage == "patrol":
             patrol_steps.append(step_def)
 
-    # Inject patrol interval from Plan.lifecycle if available
-    plan_lifecycle = (plan.lifecycle or {}) if isinstance(plan.lifecycle, dict) else {}
-    patrol_config = plan_lifecycle.get("patrol")
-    if isinstance(patrol_config, dict):
-        patrol_interval = patrol_config.get("interval_seconds", 60)
-
     if patrol_steps:
         lifecycle["patrol"] = {
-            "interval_seconds": patrol_interval or 60,
+            "interval_seconds": plan.patrol_interval_seconds or 60,
             "steps": patrol_steps,
         }
 
-    # Copy timeout_seconds from Plan.lifecycle if present
-    plan_timeout = plan_lifecycle.get("timeout_seconds")
-    if plan_timeout is not None:
-        lifecycle["timeout_seconds"] = plan_timeout
+    if plan.timeout_seconds is not None:
+        lifecycle["timeout_seconds"] = plan.timeout_seconds
 
     return lifecycle
 
@@ -125,20 +122,78 @@ def _build_preview(plan: Plan, lifecycle: dict, device_ids: list[int]) -> dict:
     }
 
 
-async def _fetch_script_defaults(
+async def _fetch_script_metadata(
     db: AsyncSession, steps: list[PlanStep]
-) -> dict[tuple[str, str], dict]:
-    """Batch-fetch script.default_params for all referenced scripts."""
+) -> dict[tuple[str, str], dict[str, dict]]:
+    """Batch-fetch script metadata for all referenced scripts."""
     keys = {(s.script_name, s.script_version) for s in steps}
     if not keys:
         return {}
     names = {k[0] for k in keys}
     rows = (await db.execute(
-        select(Script.name, Script.version, Script.default_params).where(
+        select(
+            Script.name,
+            Script.version,
+            Script.default_params,
+            Script.param_schema,
+        ).where(
             Script.name.in_(names), Script.is_active.is_(True)
         )
     )).all()
-    return {(r.name, r.version): (r.default_params or {}) for r in rows}
+    return {
+        (r.name, r.version): {
+            "default_params": r.default_params or {},
+            "param_schema": r.param_schema or {},
+        }
+        for r in rows
+    }
+
+
+def _script_defaults(
+    script_metadata: dict[tuple[str, str], dict[str, dict]]
+) -> dict[tuple[str, str], dict]:
+    return {key: value.get("default_params") or {} for key, value in script_metadata.items()}
+
+
+def _build_plan_snapshot(
+    plan: Plan,
+    steps: list[PlanStep],
+    script_metadata: dict[tuple[str, str], dict[str, dict]],
+    failure_threshold: float,
+) -> dict:
+    return {
+        "plan": {
+            "id": plan.id,
+            "name": plan.name,
+            "description": plan.description,
+            "failure_threshold": failure_threshold,
+            "patrol_interval_seconds": plan.patrol_interval_seconds,
+            "watcher_policy": plan.watcher_policy or {},
+        },
+        "steps": [
+            {
+                "stage": step.stage,
+                "step_key": step.step_key,
+                "script_name": step.script_name,
+                "script_version": step.script_version,
+                "param_schema": (
+                    script_metadata
+                    .get((step.script_name, step.script_version), {})
+                    .get("param_schema", {})
+                ),
+                "default_params": (
+                    script_metadata
+                    .get((step.script_name, step.script_version), {})
+                    .get("default_params", {})
+                ),
+                "timeout_seconds": step.timeout_seconds,
+                "retry": step.retry,
+                "enabled": step.enabled is not False,
+                "sort_order": step.sort_order,
+            }
+            for step in sorted(steps, key=lambda s: (s.stage, s.sort_order))
+        ],
+    }
 
 
 async def preview_plan_dispatch(
@@ -159,7 +214,8 @@ async def preview_plan_dispatch(
     if not steps:
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
 
-    defaults = await _fetch_script_defaults(db, steps)
+    metadata = await _fetch_script_metadata(db, steps)
+    defaults = _script_defaults(metadata)
     lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
     return _build_preview(plan, lifecycle, device_ids)
 
@@ -174,7 +230,6 @@ async def dispatch_plan(
     parent_plan_run_id: int | None = None,
     root_plan_run_id: int | None = None,
     chain_index: int | None = None,
-    failure_threshold_override: float | None = None,
 ) -> PlanRun:
     plan = await db.get(Plan, plan_id)
     if plan is None:
@@ -189,7 +244,8 @@ async def dispatch_plan(
     if not steps:
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
 
-    defaults = await _fetch_script_defaults(db, steps)
+    metadata = await _fetch_script_metadata(db, steps)
+    defaults = _script_defaults(metadata)
     lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
 
     # Validate generated lifecycle
@@ -213,31 +269,25 @@ async def dispatch_plan(
         )
 
     # ── ResourcePool: allocate WiFi per device ──
+    # ADR-0020 §"特殊注入：wifi 资源池"：仅当 lifecycle 中存在 connect_wifi step
+    # 时才申请池配额，避免无谓的锁竞争。
     wifi_allocations: dict[int, dict] = {}
-    try:
-        assignments = await allocate_devices(db, device_ids, resource_type="wifi")
-        for device_id, (_pool, alloc_params) in assignments.items():
-            wifi_allocations[device_id] = alloc_params
-        logger.info(
-            "plan_dispatch_wifi_allocated: devices=%d", len(device_ids)
-        )
-    except AllocationError as exc:
-        logger.warning("plan_dispatch_wifi_allocation_skipped: %s", exc)
+    if any(
+        "connect_wifi" in (step.get("action") or "")
+        for _, step in _iter_lifecycle_steps({"lifecycle": lifecycle})
+    ):
+        try:
+            assignments = await allocate_devices(db, device_ids, resource_type="wifi")
+            for device_id, (_pool, alloc_params) in assignments.items():
+                wifi_allocations[device_id] = alloc_params
+            logger.info(
+                "plan_dispatch_wifi_allocated: devices=%d", len(device_ids)
+            )
+        except AllocationError as exc:
+            logger.warning("plan_dispatch_wifi_allocation_skipped: %s", exc)
 
-    # Build plan_snapshot
-    effective_threshold = (
-        failure_threshold_override
-        if failure_threshold_override is not None
-        else plan.failure_threshold
-    )
-
-    plan_snapshot = {
-        "plan_id": plan.id,
-        "name": plan.name,
-        "failure_threshold": effective_threshold,
-        "lifecycle": lifecycle,
-        "watcher_policy": plan.watcher_policy,
-    }
+    effective_threshold = plan.failure_threshold
+    plan_snapshot = _build_plan_snapshot(plan, steps, metadata, effective_threshold)
 
     pr = PlanRun(
         plan_id=plan.id,
@@ -249,7 +299,7 @@ async def dispatch_plan(
         triggered_by=triggered_by,
         parent_plan_run_id=parent_plan_run_id,
         root_plan_run_id=root_plan_run_id,
-        chain_index=chain_index,
+        chain_index=chain_index or 0,
         started_at=datetime.now(timezone.utc),
     )
     db.add(pr)

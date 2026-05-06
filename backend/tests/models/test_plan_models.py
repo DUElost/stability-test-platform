@@ -14,15 +14,17 @@ from backend.models.script import Script
 
 class TestPlanModel:
     def test_create_minimal_plan(self, db_session):
-        plan = Plan(name="test-plan", lifecycle={"init": [], "teardown": []})
+        plan = Plan(name="test-plan")
         db_session.add(plan)
         db_session.commit()
         assert plan.id is not None
         assert plan.failure_threshold == 0.05
         assert plan.next_plan_id is None
+        assert plan.patrol_interval_seconds is None
+        assert plan.timeout_seconds is None
 
     def test_self_chain_rejected(self, db_session):
-        plan = Plan(name="self-chain", lifecycle={"init": [], "teardown": []})
+        plan = Plan(name="self-chain")
         db_session.add(plan)
         db_session.commit()
         plan.next_plan_id = plan.id
@@ -31,8 +33,8 @@ class TestPlanModel:
             db_session.commit()
 
     def test_chain_to_other_plan(self, db_session):
-        plan_a = Plan(name="plan-a", lifecycle={"init": [], "teardown": []})
-        plan_b = Plan(name="plan-b", lifecycle={"init": [], "teardown": []})
+        plan_a = Plan(name="plan-a")
+        plan_b = Plan(name="plan-b")
         db_session.add_all([plan_a, plan_b])
         db_session.commit()
         plan_a.next_plan_id = plan_b.id
@@ -42,7 +44,7 @@ class TestPlanModel:
 
 class TestPlanStepModel:
     def test_create_step(self, db_session):
-        plan = Plan(name="p", lifecycle={"init": [], "teardown": []})
+        plan = Plan(name="p")
         db_session.add(plan)
         db_session.commit()
         step = PlanStep(
@@ -53,9 +55,10 @@ class TestPlanStepModel:
         db_session.add(step)
         db_session.commit()
         assert step.id is not None
+        assert step.enabled is True
 
     def test_duplicate_step_key_rejected(self, db_session):
-        plan = Plan(name="p", lifecycle={"init": [], "teardown": []})
+        plan = Plan(name="p")
         db_session.add(plan)
         db_session.commit()
         s1 = PlanStep(plan_id=plan.id, step_key="init_0_check",
@@ -71,7 +74,7 @@ class TestPlanStepModel:
             db_session.commit()
 
     def test_invalid_stage_rejected(self, db_session):
-        plan = Plan(name="p", lifecycle={"init": [], "teardown": []})
+        plan = Plan(name="p")
         db_session.add(plan)
         db_session.commit()
         step = PlanStep(
@@ -84,7 +87,7 @@ class TestPlanStepModel:
             db_session.commit()
 
     def test_cascade_delete(self, db_session):
-        plan = Plan(name="p", lifecycle={"init": [], "teardown": []})
+        plan = Plan(name="p")
         db_session.add(plan)
         db_session.commit()
         step = PlanStep(plan_id=plan.id, step_key="s",
@@ -99,7 +102,7 @@ class TestPlanStepModel:
 
 class TestPlanRunModel:
     def _make_plan(self, db_session) -> Plan:
-        plan = Plan(name="pr-plan", lifecycle={"init": [], "teardown": []})
+        plan = Plan(name="pr-plan")
         db_session.add(plan)
         db_session.commit()
         return plan
@@ -108,12 +111,13 @@ class TestPlanRunModel:
         plan = self._make_plan(db_session)
         pr = PlanRun(
             plan_id=plan.id, run_type="MANUAL",
-            plan_snapshot={"name": plan.name, "lifecycle": plan.lifecycle},
+            plan_snapshot={"name": plan.name},
         )
         db_session.add(pr)
         db_session.commit()
         assert pr.id is not None
-        assert pr.next_plan_triggered == "0"
+        assert pr.next_plan_triggered is False
+        assert pr.chain_index == 0
 
     def test_invalid_run_type_rejected(self, db_session):
         plan = self._make_plan(db_session)

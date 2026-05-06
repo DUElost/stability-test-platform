@@ -20,8 +20,7 @@ class TestRunReportFromJobChain:
             name="job-report-workflow",
             description="report from job chain",
             failure_threshold=0.05,
-            lifecycle={"init": [], "teardown": []},
-        )
+                    )
         db_session.add(plan)
         db_session.flush()
 
@@ -104,7 +103,7 @@ class TestRunReportFromJobChain:
         data = response.json()
         assert data["run"]["id"] == job_id
         assert data["task"]["id"] == plan_id
-        assert data["task"]["type"] == "WORKFLOW"
+        assert data["task"]["type"] == "PLAN"
         assert data["summary_metrics"]["restarts"] == 2
         assert data["risk_summary"]["risk_level"] == "HIGH"
         assert len(data["run"]["artifacts"]) == 1

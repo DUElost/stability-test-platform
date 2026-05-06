@@ -20,6 +20,12 @@ vi.mock('../../utils/api', () => ({
       trigger: vi.fn().mockResolvedValue({ data: {} }),
       batchDeploy: vi.fn().mockResolvedValue({ data: {} }),
     },
+    hotUpdate: {
+      trigger: vi.fn().mockResolvedValue({ data: {} }),
+    },
+    planRuns: {
+      list: vi.fn().mockResolvedValue([]),
+    },
   },
 }));
 
@@ -83,14 +89,18 @@ function createWrapper() {
 }
 
 describe('HostsPage', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const { api } = await import('../../utils/api');
+    (api.hosts.list as any).mockResolvedValue({ data: { items: [], total: 0 } });
+    (api.devices.list as any).mockResolvedValue({ data: { items: [], total: 0 } });
+    (api.planRuns.list as any).mockResolvedValue([]);
   });
 
   it('renders loading state initially', async () => {
     const { api } = await import('../../utils/api');
     // Make the promise never resolve to show loading
-    (api.hosts.list as any).mockReturnValue(new Promise(() => {}));
+    (api.hosts.list as any).mockReturnValueOnce(new Promise(() => {}));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -104,7 +114,7 @@ describe('HostsPage', () => {
     render(<HostsPage />, { wrapper: createWrapper() });
 
     expect(screen.getByText('主机管理')).toBeInTheDocument();
-    expect(screen.getByText('添加主机')).toBeInTheDocument();
+    expect((await screen.findAllByText('添加主机')).length).toBeGreaterThan(0);
   });
 
   it('renders empty state when no hosts', async () => {
@@ -123,7 +133,7 @@ describe('HostsPage', () => {
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
 
-    await screen.findByText('主机管理');
+    await screen.findAllByText('添加主机');
 
     // Find any "添加主机" button and click it
     const addButtons = screen.getAllByText('添加主机');

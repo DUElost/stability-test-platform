@@ -1,8 +1,8 @@
 """PlanRun ORM — ADR-0020.
 
-PlanRun replaces WorkflowRun.  Every execution of a Plan (manual, cron, or
-chain-triggered) produces one PlanRun.  Multi-Plan chains produce one PlanRun
-per segment, linked by parent_plan_run_id / root_plan_run_id.
+Every execution of a Plan (manual, cron, or chain-triggered) produces one
+PlanRun.  Multi-Plan chains produce one PlanRun per segment, linked by
+parent_plan_run_id / root_plan_run_id.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -43,8 +44,8 @@ class PlanRun(Base):
 
     parent_plan_run_id  = Column(Integer, ForeignKey("plan_run.id"), nullable=True)
     root_plan_run_id    = Column(Integer, ForeignKey("plan_run.id"), nullable=True)
-    chain_index         = Column(Integer, nullable=True)
-    next_plan_triggered = Column(String(1), nullable=False, default="0")
+    chain_index         = Column(Integer, nullable=False, default=0, server_default="0")
+    next_plan_triggered = Column(Boolean, nullable=False, default=False, server_default="false")
 
     plan = relationship("Plan", foreign_keys=[plan_id],
                         back_populates="runs")
@@ -55,10 +56,6 @@ class PlanRun(Base):
         CheckConstraint(
             "run_type IN ('MANUAL','SCHEDULE','CHAIN')",
             name="ck_plan_run_type",
-        ),
-        CheckConstraint(
-            "next_plan_triggered IN ('0','1')",
-            name="ck_plan_run_next_triggered",
         ),
         Index("idx_plan_run_plan", "plan_id"),
         Index("idx_plan_run_status", "status"),

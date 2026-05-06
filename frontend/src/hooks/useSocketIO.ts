@@ -2,7 +2,7 @@
  * SocketIO hook — replaces useWebSocket with socket.io-client.
  *
  * Maintains a shared singleton connection to the /dashboard namespace.
- * Components subscribe to rooms (e.g. "job:123", "workflow:5") and
+ * Components subscribe to rooms (e.g. "job:123", "plan_run:5") and
  * receive typed events.
  *
  * The return interface mirrors useWebSocket for drop-in replacement.
@@ -89,7 +89,7 @@ function _getDashSocket(): Socket {
   // Wire up event forwarding for all known event types
   const EVENTS = [
     'device_update', 'step_log', 'step_update',
-    'job_status', 'workflow_status',
+    'job_status', 'plan_run_status',
     'run_update', 'task_update', 'report_ready',
     'job_update',
   ];
@@ -151,7 +151,7 @@ function _removeEventListener(event: string, fn: (data: any) => void): void {
 }
 
 // ---------------------------------------------------------------------------
-// Map old WS URL patterns → room + event list
+// Map WS URL patterns → room + event list
 // ---------------------------------------------------------------------------
 
 interface SubscriptionConfig {
@@ -166,7 +166,7 @@ function parseWsUrl(url: string): SubscriptionConfig {
   if (url.includes('/ws/dashboard') || url.endsWith('/dashboard')) {
     return {
       room: null,
-      events: ['device_update', 'run_update', 'task_update', 'report_ready', 'job_update'],
+      events: ['device_update', 'run_update', 'task_update', 'report_ready', 'job_update', 'plan_run_status'],
     };
   }
 
@@ -182,16 +182,16 @@ function parseWsUrl(url: string): SubscriptionConfig {
     return { room: `run:${logsMatch[1]}`, events: ['step_log', 'step_update'] };
   }
 
-  // /ws/workflow-runs/{id}
-  const wfMatch = url.match(/\/ws\/workflow-runs\/(\d+)/);
-  if (wfMatch) {
-    return { room: `workflow:${wfMatch[1]}`, events: ['job_status', 'workflow_status'] };
+  // /ws/plan-runs/{id}
+  const planRunMatch = url.match(/\/ws\/plan-runs\/(\d+)/);
+  if (planRunMatch) {
+    return { room: `plan_run:${planRunMatch[1]}`, events: ['job_status', 'plan_run_status'] };
   }
 
   // Fallback: global subscription
   return {
     room: null,
-    events: ['device_update', 'step_log', 'step_update', 'job_status', 'workflow_status', 'run_update', 'task_update', 'report_ready'],
+    events: ['device_update', 'step_log', 'step_update', 'job_status', 'plan_run_status', 'run_update', 'task_update', 'report_ready'],
   };
 }
 

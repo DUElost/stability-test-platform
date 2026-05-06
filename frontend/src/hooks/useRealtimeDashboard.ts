@@ -40,7 +40,7 @@ export interface ReportReadyEvent {
 }
 
 interface WsMessage {
-  type: 'DEVICE_UPDATE' | 'HEARTBEAT' | 'RUN_UPDATE' | 'TASK_UPDATE' | 'REPORT_READY' | 'WORKFLOW_UPDATE' | 'DEPLOY_UPDATE';
+  type: 'DEVICE_UPDATE' | 'HEARTBEAT' | 'RUN_UPDATE' | 'TASK_UPDATE' | 'REPORT_READY' | 'PLAN_RUN_STATUS' | 'DEPLOY_UPDATE';
   payload: DeviceUpdate | RunStatusUpdate | TaskStatusUpdate | ReportReadyEvent | unknown;
 }
 
@@ -116,8 +116,9 @@ export function useRealtimeDashboard(wsUrl: string) {
         queryClient.invalidateQueries({ queryKey: ['results-summary'] });
         break;
       }
-      case 'WORKFLOW_UPDATE': {
-        queryClient.invalidateQueries({ queryKey: ['workflows'] });
+      case 'PLAN_RUN_STATUS': {
+        queryClient.invalidateQueries({ queryKey: ['plan-runs-list'] });
+        queryClient.invalidateQueries({ queryKey: ['tasks'] });
         break;
       }
       case 'DEPLOY_UPDATE': {

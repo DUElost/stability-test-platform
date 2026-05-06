@@ -4,7 +4,7 @@ When a PlanRun reaches a terminal state (SUCCESS, PARTIAL_SUCCESS),
 automatically dispatch the next Plan in the chain.
 
 Idempotency: uses SELECT ... FOR UPDATE on the parent PlanRun and checks
-``next_plan_triggered`` before dispatching, then writes ``next_plan_triggered='1'``
+``next_plan_triggered`` before dispatching, then writes ``next_plan_triggered=true``
 in the same transaction.  The ``uniq_plan_run_chain_child`` partial unique
 index provides a second layer of protection.
 """
@@ -48,7 +48,7 @@ async def trigger_next_plan(
     locked = (await db.execute(
         select(PlanRun).where(PlanRun.id == plan_run.id).with_for_update()
     )).scalar()
-    if locked is None or locked.next_plan_triggered == "1":
+    if locked is None or locked.next_plan_triggered is True:
         return None  # Already triggered (idempotent)
 
     # Aggregate device_ids from child JobInstances of the parent PlanRun
@@ -83,7 +83,7 @@ async def trigger_next_plan(
     await db.execute(
         update(PlanRun)
         .where(PlanRun.id == plan_run.id)
-        .values(next_plan_triggered="1")
+        .values(next_plan_triggered=True)
     )
     await db.commit()
 
@@ -110,7 +110,7 @@ def trigger_next_plan_sync(
     locked = db.execute(
         select(PlanRun).where(PlanRun.id == plan_run.id).with_for_update()
     ).scalar()
-    if locked is None or locked.next_plan_triggered == "1":
+    if locked is None or locked.next_plan_triggered is True:
         return None
 
     device_rows = db.execute(
@@ -143,7 +143,7 @@ def trigger_next_plan_sync(
     db.execute(
         update(PlanRun)
         .where(PlanRun.id == plan_run.id)
-        .values(next_plan_triggered="1")
+        .values(next_plan_triggered=True)
     )
     db.commit()
 

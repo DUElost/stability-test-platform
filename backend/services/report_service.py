@@ -202,7 +202,7 @@ def _extract_job_completion_snapshot(db: Session, job_id: int) -> Dict[str, Any]
 
 
 def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]:
-    """ADR-0020: uses PlanRun + Plan instead of WorkflowRun + WorkflowDefinition."""
+    """ADR-0020: compose a report from PlanRun + Plan context."""
     plan_run = db.get(PlanRun, job.plan_run_id) if job.plan_run_id else None
     plan = db.get(Plan, job.plan_id) if job.plan_id else None
 
@@ -612,10 +612,10 @@ def build_jira_draft(report: RunReportOut) -> JiraDraftOut:
 
 
 # ---------------------------------------------------------------------------
-# Public API: Workflow-level aggregate summary
+# Public API: PlanRun-level aggregate summary
 # ---------------------------------------------------------------------------
 
-def compose_workflow_summary(db: Session, run_id: int) -> Optional[Dict[str, Any]]:
+def compose_plan_run_summary(db: Session, run_id: int) -> Optional[Dict[str, Any]]:
     """ADR-0020: Build an aggregate summary for a PlanRun across all its jobs.
 
     Returns a dict with status matrix, failure distribution, pass rate,

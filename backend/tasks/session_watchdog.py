@@ -24,7 +24,7 @@ from backend.core.database import AsyncSessionLocal
 from backend.models.enums import HostStatus, JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
-from backend.services.aggregator import WorkflowAggregator
+from backend.services.aggregator import PlanAggregator
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -87,7 +87,7 @@ async def _check_unknown_grace_period(db) -> int:
     for job in stuck_jobs:
         try:
             JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
-            await WorkflowAggregator.on_job_terminal(job, db)
+            await PlanAggregator.on_job_terminal(job, db)
             failed += 1
             logger.warning(
                 "watchdog_grace_expired: job=%d ended_at=%s", job.id, job.ended_at,
@@ -111,4 +111,3 @@ async def session_watchdog_once() -> None:
                 "watchdog_pass: hosts_offline=%d jobs_unknown=%d jobs_failed=%d",
                 hosts_offline, jobs_unknown, jobs_failed,
             )
-

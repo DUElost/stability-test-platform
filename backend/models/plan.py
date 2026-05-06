@@ -1,8 +1,10 @@
 """Plan ORM — ADR-0020.
 
-Plan replaces WorkflowDefinition as the top-level orchestration unit.
-Each Plan maps 1:1 to a former TaskTemplate; multi-template workflows
-become Plan chains via next_plan_id.
+Plan is the top-level orchestration unit.  Multi-stage execution is modeled
+as an explicit Plan chain via next_plan_id.
+
+ADR-0020 §2 唯一事实源：lifecycle 完全由 ``PlanStep`` 行 + ``patrol_interval_seconds``
++ ``timeout_seconds`` 重新组装；Plan 表上不再保留 ``lifecycle`` JSONB 列。
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     DateTime,
@@ -34,7 +37,8 @@ class Plan(Base):
     name              = Column(String(256), nullable=False)
     description       = Column(Text)
     failure_threshold = Column(Float, nullable=False, default=0.05)
-    lifecycle         = Column(JSONB, nullable=False)
+    patrol_interval_seconds = Column(Integer, nullable=True)
+    timeout_seconds   = Column(Integer, nullable=True)
     next_plan_id      = Column(Integer, ForeignKey("plan.id"), nullable=True)
     watcher_policy    = Column(JSONB, nullable=True)
     created_by        = Column(String(128))
@@ -73,6 +77,7 @@ class PlanStep(Base):
     sort_order      = Column(Integer, nullable=False, default=0)
     timeout_seconds = Column(Integer, nullable=True)
     retry           = Column(Integer, nullable=False, default=0)
+    enabled         = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at      = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     plan = relationship("Plan", foreign_keys=[plan_id], back_populates="steps")

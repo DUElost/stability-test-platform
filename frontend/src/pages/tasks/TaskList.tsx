@@ -7,7 +7,7 @@ import { api, type Plan } from '../../utils/api';
 
 export default function TaskList() {
   const { data: tasks, isLoading, isError } = useQuery({
-    queryKey: ['workflows'],
+    queryKey: ['plans'],
     queryFn: () => api.plans.list(0, 200),
     refetchInterval: 5000,
   });
@@ -17,8 +17,8 @@ export default function TaskList() {
   const formattedTasks: Task[] = useMemo(() => {
     return filteredTasks.map((t: Plan) => ({
       id: t.id,
-      name: t.name || `Workflow #${t.id}`,
-      type: 'WORKFLOW' as TaskType,
+      name: t.name || `Plan #${t.id}`,
+      type: 'PLAN' as TaskType,
       status: 'PENDING' as TaskStatus,
       priority: 1,
       created_at: t.created_at,
@@ -36,7 +36,7 @@ export default function TaskList() {
       <div className="space-y-6">
         <div>
           <h2 className="text-2xl font-semibold text-gray-900 mb-1">任务管理</h2>
-          <p className="text-sm text-gray-400">查看和管理稳定性测试工作流定义</p>
+          <p className="text-sm text-gray-400">查看和管理稳定性测试计划</p>
         </div>
         <div className="flex items-center justify-center h-64">
           <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
@@ -50,10 +50,10 @@ export default function TaskList() {
       <div className="space-y-6">
         <div>
           <h2 className="text-2xl font-semibold text-gray-900 mb-1">任务管理</h2>
-          <p className="text-sm text-gray-400">查看和管理稳定性测试工作流定义</p>
+          <p className="text-sm text-gray-400">查看和管理稳定性测试计划</p>
         </div>
         <div className="p-4 bg-red-50 text-red-600 rounded-lg border border-red-100">
-          加载工作流失败，请检查后端连接。
+          加载 Plan 失败，请检查后端连接。
         </div>
       </div>
     );
@@ -64,7 +64,7 @@ export default function TaskList() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-semibold text-gray-900 mb-1">任务管理</h2>
-          <p className="text-sm text-gray-400">查看和管理稳定性测试工作流定义（编排蓝图）</p>
+          <p className="text-sm text-gray-400">查看和管理稳定性测试计划</p>
         </div>
         <div className="flex items-center gap-2">
           <Link
@@ -72,7 +72,7 @@ export default function TaskList() {
             className="inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-medium transition-all"
           >
             <Plus className="w-4 h-4" />
-            新建工作流
+            新建 Plan
           </Link>
         </div>
       </div>
@@ -85,7 +85,7 @@ export default function TaskList() {
         </div>
         <div>
           <div className="text-xl font-semibold text-gray-900">{total}</div>
-          <div className="text-xs text-gray-500">工作流定义</div>
+          <div className="text-xs text-gray-500">Plan 定义</div>
         </div>
       </div>
 

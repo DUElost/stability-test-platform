@@ -35,7 +35,7 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device
 from backend.models.job import JobInstance
-from backend.services.aggregator import WorkflowAggregator
+from backend.services.aggregator import PlanAggregator
 from backend.services.lease_manager import release_lease
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
@@ -142,7 +142,7 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
 
                         try:
                             JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
-                            await WorkflowAggregator.on_job_terminal(job, db)
+                            await PlanAggregator.on_job_terminal(job, db)
                             logger.warning(
                                 "reconciler_unknown_grace_released device=%s job=%s ended_at=%s",
                                 device_id, job_id, job.ended_at,
@@ -201,7 +201,7 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
 
                 try:
                     JobStateMachine.transition(job, JobStatus.FAILED, "unknown_grace_timeout")
-                    await WorkflowAggregator.on_job_terminal(job, db)
+                    await PlanAggregator.on_job_terminal(job, db)
                     failed += 1
                     logger.warning(
                         "reconciler_stale_unknown_finalized device=%s job=%s ended_at=%s",

@@ -4,7 +4,9 @@ Pytest Configuration and Fixtures
 
 import asyncio
 import os
+import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -33,13 +35,17 @@ def compile_jsonb_for_sqlite(type_, compiler, **kwargs):
 # Set test mode before importing app to disable startup background threads
 os.environ["TESTING"] = "1"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-ci"
+os.environ["AGENT_SECRET"] = ""
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 ALLOW_SQLITE_TESTS = os.getenv("ALLOW_SQLITE_TESTS", "0") == "1"
+SQLITE_TEST_DB_PATH: Path | None = None
 
 if not TEST_DATABASE_URL:
     if ALLOW_SQLITE_TESTS:
-        TEST_DATABASE_URL = "sqlite:///:memory:"
+        SQLITE_TEST_DB_PATH = Path(tempfile.gettempdir()) / f"stp_pytest_{os.getpid()}.db"
+        SQLITE_TEST_DB_PATH.unlink(missing_ok=True)
+        TEST_DATABASE_URL = f"sqlite:///{SQLITE_TEST_DB_PATH.as_posix()}"
     else:
         raise RuntimeError(
             "TEST_DATABASE_URL is required for tests (PostgreSQL). "
@@ -49,8 +55,16 @@ if not TEST_DATABASE_URL:
 # Keep runtime modules aligned with the test database.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
-from backend.core.database import async_engine, get_db
+from backend.core.database import async_engine, engine as app_engine, get_db
 from backend.core.database import Base
+from backend.models import action_template as _action_template  # noqa: F401
+from backend.models import audit as _audit  # noqa: F401
+from backend.models import device_lease as _device_lease  # noqa: F401
+from backend.models import notification as _notification  # noqa: F401
+from backend.models import resource_pool as _resource_pool  # noqa: F401
+from backend.models import schedule as _schedule  # noqa: F401
+from backend.models import script as _script  # noqa: F401
+from backend.models import user as _user  # noqa: F401
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
@@ -61,7 +75,7 @@ from backend.core.security import create_access_token
 from backend.main import fastapi_app as app
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="session", autouse=True)
 def engine():
     """Create a test database engine"""
     create_kwargs = {"future": True}
@@ -75,9 +89,23 @@ def engine():
     if TEST_DATABASE_URL.startswith("sqlite"):
         Base.metadata.create_all(bind=engine)
     yield engine
+    try:
+        asyncio.run(async_engine.dispose())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(async_engine.dispose())
+        finally:
+            loop.close()
     if TEST_DATABASE_URL.startswith("sqlite"):
         Base.metadata.drop_all(bind=engine)
     engine.dispose()
+    app_engine.dispose()
+    if SQLITE_TEST_DB_PATH is not None:
+        try:
+            SQLITE_TEST_DB_PATH.unlink(missing_ok=True)
+        except PermissionError:
+            pass
 
 
 @pytest.fixture(scope="function")
@@ -270,8 +298,7 @@ def sample_plan(db_session):
         name="test-plan",
         description="Test plan for unit tests",
         failure_threshold=0.1,
-        lifecycle={"init": [], "teardown": []},
-        created_by="test",
+                created_by="test",
     )
     db_session.add(plan)
     db_session.flush()

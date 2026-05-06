@@ -46,8 +46,7 @@ def _seed_job_with_host(
 
         plan = Plan(
             name=f"wf-{suffix}", description="t", failure_threshold=0.1,
-            lifecycle={"init": [], "teardown": []},
-            created_by="test",
+                        created_by="test",
         )
         db.add(plan)
         db.flush()

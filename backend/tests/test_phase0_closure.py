@@ -282,8 +282,7 @@ class TestDeferredPostCompletion:
             )
             plan = Plan(
                 name=f"wf-{suffix}", failure_threshold=0.5,
-                lifecycle={"init": [], "teardown": []},
-                created_by="pytest",
+                                created_by="pytest",
             )
             db.add_all([host, device, plan])
             db.flush()

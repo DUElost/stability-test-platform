@@ -65,14 +65,14 @@ export default function SchedulesPage() {
 
   const handleSave = async () => {
     try {
-      const planId = form.plan_id ? Number(form.plan_id) : null;
+      const planId = Number(form.plan_id);
       const deviceIds = parseDeviceIds(form.device_ids);
 
-      if (!editing && !planId) {
+      if (!Number.isInteger(planId) || planId <= 0) {
         toast.error('请选择 Plan');
         return;
       }
-      if (planId && deviceIds.length === 0) {
+      if (deviceIds.length === 0) {
         toast.error('请至少填写一个设备 ID');
         return;
       }
@@ -81,15 +81,9 @@ export default function SchedulesPage() {
         name: form.name,
         cron_expression: form.cron_expression,
         enabled: form.enabled,
+        plan_id: planId,
+        device_ids: deviceIds,
       };
-
-      if (planId) {
-        payload.plan_id = planId;
-        payload.device_ids = deviceIds;
-      } else {
-        payload.plan_id = null;
-        payload.device_ids = [];
-      }
 
       if (editing) {
         await api.schedules.update(editing.id, payload);
@@ -131,11 +125,10 @@ export default function SchedulesPage() {
     try {
       const res = await api.schedules.runNow(id);
       const planRunId = res.data.plan_run_id;
-      const taskId = res.data.task_id;
       if (planRunId) {
         toast.success(`Plan 已触发，Run ID: ${planRunId}`);
       } else {
-        toast.success(`任务已创建，ID: ${taskId}`);
+        toast.success('Plan 已触发');
       }
     } catch (err: any) {
       toast.error(err.response?.data?.detail || '执行失败');
@@ -224,9 +217,6 @@ export default function SchedulesPage() {
                   <option key={p.id} value={String(p.id)}>{p.name} (#{p.id})</option>
                 ))}
               </select>
-              {editing && !editing.plan_id && (
-                <p className="text-xs text-amber-600 mt-1">该记录为旧链路定时任务，建议迁移为 Plan 定时任务。</p>
-              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">设备 IDs（逗号分隔）</label>
@@ -289,9 +279,7 @@ export default function SchedulesPage() {
                   <td className="px-4 py-3 font-medium text-gray-900">{s.name}</td>
                   <td className="px-4 py-3 font-mono text-gray-600">{s.cron_expression}</td>
                   <td className="px-4 py-3 text-gray-600">
-                    {s.plan_id
-                      ? `Plan #${s.plan_id} (${(s.device_ids || []).length} devices)`
-                      : `Legacy`}
+                    Plan #{s.plan_id} ({(s.device_ids || []).length} devices)
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${

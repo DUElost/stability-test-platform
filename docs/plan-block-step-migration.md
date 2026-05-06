@@ -30,9 +30,9 @@ Plan 通过 next_plan_id 形成执行链：Plan A 完成后自动触发 Plan B�
 | TaskTemplate（多个） | 无 | 一个 Plan 只对应一个执行单元 |
 | setup_pipeline (JSONB) | Plan 自身的 Init 阶段首部步骤 | 不存为独立概念 |
 | teardown_pipeline (JSONB) | Plan 自身的 Teardown 阶段尾部步骤 | 不存为独立概念 |
-| task_template.pipeline_def.lifecycle.init[] | plan_step (phase='init') | JSON 拆为行 |
-| task_template.pipeline_def.lifecycle.patrol | plan_step (phase='patrol') + plan.patrol_interval_seconds | 间隔时间升级为 Plan 字段 |
-| task_template.pipeline_def.lifecycle.teardown[] | plan_step (phase='teardown') | JSON 拆为行 |
+| task_template.pipeline_def.lifecycle.init[] | plan_step (stage='init') | JSON 拆为行 |
+| task_template.pipeline_def.lifecycle.patrol | plan_step (stage='patrol') + plan.patrol_interval_seconds | 间隔时间升级为 Plan 字段 |
+| task_template.pipeline_def.lifecycle.teardown[] | plan_step (stage='teardown') | JSON 拆为行 |
 | WorkflowRun | PlanRun | 增加 next_plan_triggered |
 | JobInstance | 保留 | task_template_id → plan_id |
 | StepTrace | 保留 | 无变化 |
@@ -61,16 +61,18 @@ CREATE INDEX idx_plan_next ON plan(next_plan_id);
 CREATE TABLE plan_step (
     id              SERIAL PRIMARY KEY,
     plan_id         INTEGER NOT NULL REFERENCES plan(id) ON DELETE CASCADE,
-    phase           VARCHAR(16) NOT NULL CHECK (phase IN ('init', 'patrol', 'teardown')),
+    stage           VARCHAR(16) NOT NULL CHECK (stage IN ('init', 'patrol', 'teardown')),
     sort_order      INTEGER NOT NULL DEFAULT 0,
+    step_key        VARCHAR(256) NOT NULL,
     script_name     VARCHAR(128) NOT NULL,
     script_version  VARCHAR(32) NOT NULL,
-    timeout_seconds INTEGER NOT NULL DEFAULT 300,
+    timeout_seconds INTEGER,
     retry           INTEGER NOT NULL DEFAULT 0,
     enabled         BOOLEAN NOT NULL DEFAULT true,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (plan_id, step_key)
 );
-CREATE INDEX idx_plan_step_plan ON plan_step(plan_id, phase, sort_order);
+CREATE INDEX idx_plan_step_plan ON plan_step(plan_id, stage, sort_order);
 
 -- plan_run 表（替代 workflow_run）
 CREATE TABLE plan_run (
@@ -142,7 +144,7 @@ workflow_run ──────────────────────�
 |------|------|
 | `GET /api/v1/plans` | Plan 分页列表（返回链式关系） |
 | `POST /api/v1/plans` | 创建 Plan（含 steps） |
-| `GET /api/v1/plans/{id}` | Plan 详情（含 steps 按 phase 分组） |
+| `GET /api/v1/plans/{id}` | Plan 详情（含 steps 按 stage 分组） |
 | `PUT /api/v1/plans/{id}` | 更新 Plan 结构 |
 | `DELETE /api/v1/plans/{id}` | 删除 Plan |
 | `POST /api/v1/plans/{id}/run` | 触发执行 |
@@ -160,11 +162,11 @@ workflow_run ──────────────────────�
   "patrol_interval_seconds": 60,
   "next_plan_id": 2,
   "steps": [
-    { "phase": "init",     "sort_order": 0, "script_name": "monkey_setup",    "script_version": "1.0.0", "timeout_seconds": 60 },
-    { "phase": "init",     "sort_order": 1, "script_name": "monkey_launch",   "script_version": "2.0.0", "timeout_seconds": 30 },
-    { "phase": "patrol",   "sort_order": 0, "script_name": "monkey_check",    "script_version": "1.0.0", "timeout_seconds": 30 },
-    { "phase": "teardown", "sort_order": 0, "script_name": "monkey_teardown", "script_version": "1.0.0", "timeout_seconds": 30 },
-    { "phase": "teardown", "sort_order": 1, "script_name": "clean_env",       "script_version": "1.0.0", "timeout_seconds": 30 }
+    { "stage": "init",     "sort_order": 0, "step_key": "init_0_monkey_setup",    "script_name": "monkey_setup",    "script_version": "1.0.0", "timeout_seconds": 60 },
+    { "stage": "init",     "sort_order": 1, "step_key": "init_1_monkey_launch",   "script_name": "monkey_launch",   "script_version": "2.0.0", "timeout_seconds": 30 },
+    { "stage": "patrol",   "sort_order": 0, "step_key": "patrol_0_monkey_check", "script_name": "monkey_check",    "script_version": "1.0.0", "timeout_seconds": 30 },
+    { "stage": "teardown", "sort_order": 0, "step_key": "td_0_monkey_teardown",  "script_name": "monkey_teardown", "script_version": "1.0.0", "timeout_seconds": 30 },
+    { "stage": "teardown", "sort_order": 1, "step_key": "td_1_clean_env",         "script_name": "clean_env",       "script_version": "1.0.0", "timeout_seconds": 30 }
   ]
 }
 ```
@@ -179,12 +181,12 @@ workflow_run ──────────────────────�
 
 # 新: dispatch_plan
 #   1. 加载 Plan + Steps
-#   2. 按 phase 分组组装 pipeline_def（lifecycle 格式）
+#   2. 按 stage 分组组装 pipeline_def（lifecycle 格式）
 #   3. per device 创建 1 个 JobInstance（一个 Plan 只产生一个 Job）
 async def dispatch_plan(plan_id, device_ids, failure_threshold, triggered_by, db):
     plan = await db.get(Plan, plan_id)
     steps = await db.execute(
-        select(PlanStep).where(PlanStep.plan_id == plan_id).order_by(PlanStep.phase, PlanStep.sort_order)
+        select(PlanStep).where(PlanStep.plan_id == plan_id).order_by(PlanStep.stage, PlanStep.sort_order)
     )
     steps = steps.scalars().all()
 
@@ -220,14 +222,14 @@ async def _on_plan_completed(plan_run: PlanRun, db: AsyncSession):
 
 ## 6. Agent 端
 
-**零变化**。pipeline_engine 消费 `{ "lifecycle": { "init": [...], "patrol": {...}, "teardown": [...] } }`，Dispatcher 在创建 Job 时按 phase 组装即可。
+**零变化**。pipeline_engine 消费 `{ "lifecycle": { "init": [...], "patrol": {...}, "teardown": [...] } }`，Dispatcher 在创建 Job 时按 stage 组装即可。
 
 ## 7. 前端
 
 ### 7.1 页面结构
 
 - **Plan 列表页** (`/plans`)：展示所有 Plan，用 `→` 箭头可视化链式关系
-- **Plan 编排页** (`/plans/:id/edit`)：Plan 元信息 + Init/Patrol/Teardown 三个 phase 区域 + 步骤列表
+- **Plan 编排页** (`/plans/:id/edit`)：Plan 元信息 + Init/Patrol/Teardown 三个 stage 区域 + 步骤列表
 - **Plan 只读页** (`/plans/:id`)：同上但只读，顶部有 [发起测试] 按钮
 - **派发页** (`/execution/run`)：选 Plan + 选设备 → 确认执行
 - **Run 矩阵页**：适配新 API，无结构变化

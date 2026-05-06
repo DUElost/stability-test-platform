@@ -120,8 +120,6 @@ def create_schedule(
         name=data.name,
         cron_expression=data.cron_expression,
         plan_id=data.plan_id,
-        params=data.params,
-        target_device_id=data.target_device_id,
         device_ids=data.device_ids or None,
         enabled=data.enabled,
         created_by=current_user.id,
@@ -166,18 +164,13 @@ def update_schedule(
     if data.name is not None:
         sched.name = data.name
 
-    if _field_provided(data, "plan_id"):
+    if _field_provided(data, "plan_id") and data.plan_id is not None:
         sched.plan_id = data.plan_id
     if data.device_ids is not None:
         sched.device_ids = data.device_ids
 
-    if sched.plan_id is not None:
-        _validate_plan_schedule(db, sched.plan_id, sched.device_ids or [])
+    _validate_plan_schedule(db, sched.plan_id, sched.device_ids or [])
 
-    if data.params is not None:
-        sched.params = data.params
-    if data.target_device_id is not None:
-        sched.target_device_id = data.target_device_id
     if data.enabled is not None:
         sched.enabled = data.enabled
 
@@ -266,12 +259,6 @@ def run_schedule_now(
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
     if not sched:
         raise HTTPException(status_code=404, detail="定时任务不存在")
-
-    if sched.plan_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail="该定时任务未关联 Plan，无法执行。请编辑该定时任务并关联一个 Plan。",
-        )
 
     device_ids = [int(x) for x in (sched.device_ids or [])]
     _validate_plan_schedule(db, sched.plan_id, device_ids)

@@ -1,6 +1,5 @@
 """PlanRun API — ADR-0020.
 
-Replaces WorkflowRun queries in ``backend/api/routes/orchestration.py``.
 Provides PlanRun list/detail/jobs/summary endpoints.
 """
 

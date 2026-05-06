@@ -77,7 +77,6 @@ export default function AppRouter() {
             <Route path="hosts" element={<HostsPage />} />
             <Route path="devices" element={<DevicesPage />} />
             <Route path="wifi" element={<WifiPage />} />
-            <Route path="workflows" element={<Navigate to="/orchestration/plans" replace />} />
             <Route path="results" element={<ResultsPage />} />
             <Route path="mapreduce" element={<MapReducePage />} />
             <Route path="users" element={<UsersPage />} />

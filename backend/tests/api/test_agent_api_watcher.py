@@ -40,7 +40,7 @@ from backend.api.routes.agent_api import (
     ingest_log_signals,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, JobLogSignal, StepTrace
@@ -49,12 +49,10 @@ from backend.models.plan_run import PlanRun
 
 
 PIPELINE_DEF = {
-    "stages": {
-        "prepare": [],
-        "execute": [
-            {"step_id": "dummy", "action": "builtin:noop", "timeout_seconds": 1}
+    "lifecycle": {
+        "init": [
+            {"step_id": "dummy", "action": "script:check_device", "version": "1.0.0", "timeout_seconds": 1}
         ],
-        "post_process": [],
     }
 }
 
@@ -98,8 +96,7 @@ def _seed_job_with_policy(
             name=f"plan-{suffix}",
             description="watcher-contract",
             failure_threshold=0.1,
-            lifecycle=PIPELINE_DEF,
-            created_by="pytest",
+                        created_by="pytest",
             watcher_policy=watcher_policy,
         )
         db.add_all([host, device, plan])

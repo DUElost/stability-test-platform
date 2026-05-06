@@ -41,7 +41,6 @@ def _seed_running_job(started_at: datetime, updated_at: datetime) -> dict:
             name=f"wf-{suffix}",
             description="pytest workflow",
             failure_threshold=0.1,
-            lifecycle=LIFECYCLE,
             created_by="pytest",
         )
         db.add(plan)
@@ -162,7 +161,7 @@ def _seed_pending_job(created_at: datetime) -> dict:
 
         plan = Plan(
             name=f"wf-{suffix}", description="pytest", failure_threshold=0.1,
-            lifecycle=LIFECYCLE, created_by="pytest",
+            created_by="pytest",
         )
         db.add(plan)
         db.flush()

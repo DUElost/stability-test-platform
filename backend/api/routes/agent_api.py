@@ -21,7 +21,7 @@ from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan
-from backend.services.aggregator import WorkflowAggregator
+from backend.services.aggregator import PlanAggregator
 from backend.services.lease_manager import acquire_lease, extend_lease, release_lease
 from backend.services.reconciler import reconcile_step_traces
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
@@ -49,6 +49,14 @@ def _verify_agent(x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Se
         raise HTTPException(status_code=401, detail="invalid agent secret")
 
 
+def _as_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 async def _enrich_job_metadata(
     db: AsyncSession, jobs: List[JobInstance],
 ) -> tuple[Dict[int, str], Dict[int, Optional[Dict[str, Any]]]]:
@@ -69,7 +77,7 @@ async def _enrich_job_metadata(
     serial_map = {row.id: row.serial for row in serial_rows.all()}
 
     plan_ids = {j.plan_id for j in jobs if j.plan_id is not None}
-    # Plan.watcher_policy (ADR-0020: direct lookup, no TaskTemplate/WorkflowDefinition join)
+    # Plan.watcher_policy (ADR-0020: direct Plan lookup)
     plan_policy: Dict[int, Optional[dict]] = {}
     if plan_ids:
         policy_rows = await db.execute(
@@ -323,6 +331,7 @@ async def _get_valid_runtime_lease(
     db: AsyncSession,
     job: JobInstance,
     fencing_token: str,
+    allowed_job_statuses: set[str] | None = None,
 ) -> Optional[DeviceLease]:
     """Validate runtime lease for token-gated operations (Phase 4b).
 
@@ -348,10 +357,12 @@ async def _get_valid_runtime_lease(
     if lease.fencing_token != fencing_token:
         return None
     # B: expired lease rejects all runtime operations
-    if lease.expires_at is None or lease.expires_at <= now:
+    expires_at = _as_utc(lease.expires_at)
+    if expires_at is None or expires_at <= now:
         return None
     # C: only RUNNING jobs may perform runtime operations
-    if job.status != JobStatus.RUNNING.value:
+    allowed_statuses = allowed_job_statuses or {JobStatus.RUNNING.value}
+    if job.status not in allowed_statuses:
         return None
     return lease
 
@@ -472,7 +483,7 @@ async def update_job_status(
 
     if job.status in _TERMINAL:
         job.ended_at = datetime.now(timezone.utc)
-        await WorkflowAggregator.on_job_terminal(job, db)
+        await PlanAggregator.on_job_terminal(job, db)
 
     await db.commit()
     return ok({"job_id": job_id, "status": job.status})
@@ -677,7 +688,12 @@ async def job_heartbeat(
         raise HTTPException(status_code=404, detail="job not found")
 
     # ADR-0019 Phase 4b: validate fencing_token via _get_valid_runtime_lease
-    valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
+    valid_lease = await _get_valid_runtime_lease(
+        db,
+        job,
+        payload.fencing_token,
+        allowed_job_statuses={JobStatus.PENDING.value, JobStatus.RUNNING.value},
+    )
     if valid_lease is None:
         raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
 
@@ -781,7 +797,7 @@ async def complete_job(
         _apply_watcher_summary(job, payload.watcher_summary)
 
     if job.status in _TERMINAL and not already_terminal:
-        await WorkflowAggregator.on_job_terminal(job, db)
+        await PlanAggregator.on_job_terminal(job, db)
         # Release device lease on terminal state (ADR-0019 Phase 2c: device_leases is source of truth)
         released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
         if not released:

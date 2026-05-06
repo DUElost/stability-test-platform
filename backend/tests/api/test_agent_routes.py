@@ -19,7 +19,7 @@ from backend.api.routes.agent_api import (
     update_job_step_status,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, StepTrace
@@ -42,6 +42,10 @@ PIPELINE_DEF = {
 }
 
 
+def _as_utc(dt: datetime) -> datetime:
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
 def _seed_job(status: str = JobStatus.PENDING.value) -> dict:
     suffix = uuid4().hex[:8]
     host_id = f"agent-host-{suffix}"
@@ -59,6 +63,8 @@ def _seed_job(status: str = JobStatus.PENDING.value) -> dict:
             serial=f"SERIAL-{suffix}",
             host_id=host_id,
             status="ONLINE",
+            adb_connected=True,
+            adb_state="device",
             tags=[],
             created_at=now,
         )
@@ -66,8 +72,7 @@ def _seed_job(status: str = JobStatus.PENDING.value) -> dict:
             name=f"plan-{suffix}",
             description="pytest plan",
             failure_threshold=0.1,
-            lifecycle=PIPELINE_DEF,
-            created_by="pytest",
+                        created_by="pytest",
         )
         db.add_all([host, device, plan])
         db.flush()
@@ -288,7 +293,7 @@ async def test_job_heartbeat_refreshes_liveness_for_running_job(engine):
         try:
             job = db.get(JobInstance, seed["job_id"])
             assert job is not None
-            assert job.updated_at > old_liveness
+            assert _as_utc(job.updated_at) > old_liveness
         finally:
             db.close()
     finally:
@@ -408,7 +413,7 @@ async def test_extend_lock_success(engine):
         try:
             job = db.get(JobInstance, seed["job_id"])
             assert job is not None
-            assert job.updated_at > old_liveness
+            assert _as_utc(job.updated_at) > old_liveness
         finally:
             db.close()
     finally:

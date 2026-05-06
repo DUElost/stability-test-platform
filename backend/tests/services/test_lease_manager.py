@@ -55,8 +55,7 @@ async def _create_seed(db, suffix, host_id=None, serial=None):
     await db.flush()
 
     plan = Plan(name=f"lmf-{suffix}", failure_threshold=0.1,
-                lifecycle={"init": [], "teardown": []},
-                created_by="test")
+                                created_by="test")
     db.add(plan)
     await db.flush()
     step = PlanStep(
@@ -263,8 +262,7 @@ def test_release_lease_sync_marks_active_to_released():
         plan = Plan(
             name=f"wf-{suffix}", description="sync test",
             failure_threshold=0.1, created_by="pytest",
-            lifecycle={"init": [], "teardown": []},
-        )
+                    )
         db.add(plan)
         db.flush()
 

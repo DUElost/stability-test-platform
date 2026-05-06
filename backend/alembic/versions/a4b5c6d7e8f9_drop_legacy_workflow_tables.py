@@ -139,10 +139,15 @@ def upgrade():
         batch_op.drop_column("task_template_id")
         batch_op.drop_column("tool_id")
         batch_op.drop_column("task_type")
+        # ADR-0020 §3：参数归属脚本管理，TaskSchedule 不再承担参数 override；
+        # 单设备字段被 device_ids 取代，统一为多设备语义。
+        batch_op.drop_column("params")
+        batch_op.drop_column("target_device_id")
 
-        # Add plan_id (nullable at DDL level, validated by API)
+        # Add plan_id NOT NULL (table was DELETE'd above, no existing rows)
         batch_op.add_column(
-            sa.Column("plan_id", sa.Integer(), sa.ForeignKey("plan.id"), nullable=True)
+            sa.Column("plan_id", sa.Integer(),
+                      sa.ForeignKey("plan.id"), nullable=False)
         )
 
     # ── 5. Drop old tables ────────────────────────────────────────────────
@@ -150,6 +155,10 @@ def upgrade():
     op.drop_table("task_template")
     op.drop_table("workflow_definition")
     op.drop_table("script_sequence")
+
+    # ADR-0020 §2 收口：``plan.lifecycle`` 已在 Phase 2 DDL 中被永久移除，``timeout_seconds``
+    # 在 Phase 2 直接建出。已经被 stamp 到 b5c6d7e8f9a0 但 schema 仍含 ``lifecycle`` 的本地
+    # 开发库由 ``c6d7e8f9a0b1_repair_adr0020_stamped_schema`` 幂等修复，本 Phase 不重复处理。
 
     # ── End of single-transaction upgrade ─────────────────────────────────
 

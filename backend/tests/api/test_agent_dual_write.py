@@ -51,7 +51,7 @@ from backend.api.routes.agent_api import (
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan, PlanStep
@@ -82,8 +82,7 @@ def _seed_job(*, status: str = JobStatus.PENDING.value) -> dict:
         )
         plan = Plan(
             name=f"plan-{suffix}", description="dual-write route test",
-            failure_threshold=0.1, lifecycle=PIPELINE_DEF,
-            created_by="pytest",
+            failure_threshold=0.1,             created_by="pytest",
         )
         db.add_all([host, device, plan])
         db.flush()
@@ -1237,8 +1236,7 @@ async def test_active_lease_excludes_device(lease_type):
         dev_b = Device(serial=f"DWB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
             name=f"plan-{suffix}", description="", failure_threshold=0.1,
-            lifecycle=PIPELINE_DEF,
-            created_by="pytest",
+                        created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, plan])
         db.flush()
@@ -1327,8 +1325,7 @@ async def test_capacity_capped_by_max_concurrent_jobs():
         dev_c = Device(serial=f"CC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
             name=f"plan-{suffix}", description="", failure_threshold=0.1,
-            lifecycle=PIPELINE_DEF,
-            created_by="pytest",
+                        created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, dev_c, plan])
         db.flush()
@@ -1417,8 +1414,7 @@ async def test_zero_capacity_returns_empty_no_state_change():
         dev_b = Device(serial=f"ZB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
             name=f"plan-{suffix}", description="", failure_threshold=0.1,
-            lifecycle=PIPELINE_DEF,
-            created_by="pytest",
+                        created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, plan])
         db.flush()
@@ -1549,8 +1545,7 @@ async def test_per_device_first_does_not_waste_capacity():
         dev_c = Device(serial=f"PC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
             name=f"plan-{suffix}", description="", failure_threshold=0.1,
-            lifecycle=PIPELINE_DEF,
-            created_by="pytest",
+                        created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, dev_c, plan])
         db.flush()
@@ -1638,8 +1633,7 @@ async def test_concurrent_claim_capacity_does_not_exceed():
         dev_b = Device(serial=f"CC2-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         plan = Plan(
             name=f"plan-{suffix}", description="", failure_threshold=0.1,
-            lifecycle=PIPELINE_DEF,
-            created_by="pytest",
+                        created_by="pytest",
         )
         db.add_all([host, dev_a, dev_b, plan])
         db.flush()

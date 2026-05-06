@@ -4,19 +4,19 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from backend.models.enums import JobStatus, WorkflowStatus
+from backend.models.enums import JobStatus, PlanRunStatus
 
 _TERMINAL = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED, JobStatus.UNKNOWN}
 
 
-def apply_workflow_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
-    """Apply the shared WorkflowRun terminal aggregation rule."""
+def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
+    """Apply the shared PlanRun terminal aggregation rule."""
     if not all(JobStatus(j.status) in _TERMINAL for j in jobs):
         return False
 
     total = len(jobs)
     if total == 0:
-        run.status = WorkflowStatus.FAILED.value
+        run.status = PlanRunStatus.FAILED.value
         run.ended_at = datetime.now(timezone.utc)
         return True
 
@@ -24,13 +24,13 @@ def apply_workflow_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
     unknown = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.UNKNOWN)
 
     if unknown > 0:
-        run.status = WorkflowStatus.DEGRADED.value
+        run.status = PlanRunStatus.DEGRADED.value
     elif failed == 0:
-        run.status = WorkflowStatus.SUCCESS.value
+        run.status = PlanRunStatus.SUCCESS.value
     elif failed / total <= run.failure_threshold:
-        run.status = WorkflowStatus.PARTIAL_SUCCESS.value
+        run.status = PlanRunStatus.PARTIAL_SUCCESS.value
     else:
-        run.status = WorkflowStatus.FAILED.value
+        run.status = PlanRunStatus.FAILED.value
 
     run.ended_at = datetime.now(timezone.utc)
 

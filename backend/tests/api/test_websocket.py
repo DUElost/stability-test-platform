@@ -60,23 +60,24 @@ class TestBroadcastEnvelope:
         assert msg["payload"]["job_id"] == 42
         assert msg["payload"]["status"] == "COMPLETED"
         assert "timestamp" in msg
-        assert kwargs["room"] == "workflow:10"
+        assert kwargs["room"] == "plan_run:10"
 
     @pytest.mark.asyncio
-    async def test_workflow_status_envelope(self):
-        from backend.realtime.socketio_server import broadcast_run_workflow_status
+    async def test_plan_run_status_envelope(self):
+        from backend.realtime.socketio_server import broadcast_plan_run_status
 
         mock_sio = _make_mock_sio()
         with patch("backend.realtime.socketio_server._sio", mock_sio):
-            await broadcast_run_workflow_status(run_id=10, status="SUCCESS")
+            await broadcast_plan_run_status(run_id=10, status="SUCCESS")
 
         mock_sio.emit.assert_called_once()
         args, kwargs = mock_sio.emit.call_args
+        assert args[0] == "plan_run_status"
         msg = args[1]
-        assert msg["type"] == "WORKFLOW_STATUS"
+        assert msg["type"] == "PLAN_RUN_STATUS"
         assert msg["payload"]["status"] == "SUCCESS"
         assert "timestamp" in msg
-        assert kwargs["room"] == "workflow:10"
+        assert kwargs["room"] == "plan_run:10"
 
     @pytest.mark.asyncio
     async def test_run_update_envelope(self):

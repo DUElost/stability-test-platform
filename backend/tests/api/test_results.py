@@ -36,14 +36,12 @@ class TestResultsSummary:
             name=smoke_type,
             description="",
             failure_threshold=0.05,
-            lifecycle={"init": [], "teardown": []},
-        )
+                    )
         plan_stress = Plan(
             name=stress_type,
             description="",
             failure_threshold=0.05,
-            lifecycle={"init": [], "teardown": []},
-        )
+                    )
         db_session.add_all([plan_smoke, plan_stress])
         db_session.flush()
 

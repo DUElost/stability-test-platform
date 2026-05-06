@@ -19,7 +19,7 @@ from backend.services.plan_dispatcher_sync import (
 
 class TestBuildLifecycle:
     def test_init_and_teardown(self):
-        plan = Plan(name="p", lifecycle={})
+        plan = Plan(name="p")
         steps = [
             PlanStep(plan_id=1, step_key="s1", script_name="init_s",
                      script_version="1.0.0", stage="init", sort_order=0),
@@ -36,7 +36,7 @@ class TestBuildLifecycle:
         assert lc["teardown"][0]["params"] == {"y": 2}
 
     def test_patrol_steps(self):
-        plan = Plan(name="p", lifecycle={"patrol": {"interval_seconds": 30}})
+        plan = Plan(name="p", patrol_interval_seconds=30)
         steps = [
             PlanStep(plan_id=1, step_key="p1", script_name="patrol_s",
                      script_version="1.0.0", stage="patrol", sort_order=0),
@@ -48,7 +48,7 @@ class TestBuildLifecycle:
         assert len(lc["patrol"]["steps"]) == 1
 
     def test_plan_timeout(self):
-        plan = Plan(name="p", lifecycle={"timeout_seconds": 900})
+        plan = Plan(name="p", timeout_seconds=900)
         steps = [
             PlanStep(plan_id=1, step_key="s1", script_name="a",
                      script_version="1.0.0", stage="init", sort_order=0),
@@ -58,7 +58,7 @@ class TestBuildLifecycle:
         assert lc["timeout_seconds"] == 900
 
     def test_sort_order_ordering(self):
-        plan = Plan(name="p", lifecycle={})
+        plan = Plan(name="p")
         steps = [
             PlanStep(plan_id=1, step_key="s3", script_name="a",
                      script_version="1.0.0", stage="init", sort_order=2),
@@ -71,6 +71,19 @@ class TestBuildLifecycle:
         lc = _build_lifecycle_from_steps(plan, steps, defaults)
         keys = [s["step_id"] for s in lc["init"]]
         assert keys == ["s1", "s2", "s3"]
+
+    def test_disabled_steps_are_not_included(self):
+        plan = Plan(name="p")
+        steps = [
+            PlanStep(plan_id=1, step_key="enabled", script_name="a",
+                     script_version="1.0.0", stage="init", sort_order=0,
+                     enabled=True),
+            PlanStep(plan_id=1, step_key="disabled", script_name="a",
+                     script_version="1.0.0", stage="init", sort_order=1,
+                     enabled=False),
+        ]
+        lifecycle = _build_lifecycle_from_steps(plan, steps, {("a", "1.0.0"): {}})
+        assert [s["step_id"] for s in lifecycle["init"]] == ["enabled"]
 
 
 class TestBuildPreview:
@@ -98,7 +111,7 @@ def _plan_fixture(db_session):
         nfs_path="/s/check_device.py", content_sha256="abc",
         default_params={"timeout": 30},
     )
-    plan = Plan(name="dispatch-test", lifecycle={"init": [], "teardown": []})
+    plan = Plan(name="dispatch-test")
     db_session.add_all([host, device, script, plan])
     db_session.commit()
 
@@ -132,6 +145,16 @@ class TestDispatchPlan:
         assert pr.plan_id == plan.id
         assert pr.status == "RUNNING"
         assert pr.run_type == "MANUAL"
+        assert pr.failure_threshold == plan.failure_threshold
+        assert pr.plan_snapshot["plan"]["id"] == plan.id
+        assert pr.plan_snapshot["plan"]["name"] == plan.name
+        assert pr.plan_snapshot["plan"]["failure_threshold"] == plan.failure_threshold
+        assert [s["step_key"] for s in pr.plan_snapshot["steps"]] == [
+            "init_check",
+            "td_clean",
+        ]
+        assert pr.plan_snapshot["steps"][0]["default_params"] == {"timeout": 30}
+        assert "lifecycle" not in pr.plan_snapshot
 
         from backend.models.job import JobInstance
         jobs = db_session.query(JobInstance).filter(

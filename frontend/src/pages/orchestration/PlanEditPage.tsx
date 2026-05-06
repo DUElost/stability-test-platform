@@ -11,7 +11,7 @@ import { ArrowLeft, Save, AlertCircle } from 'lucide-react';
 
 const EMPTY_LIFECYCLE: PipelineDef = {
   lifecycle: {
-    init: [{ step_id: "new_step", action: "script:check_device", version: "1.0.0", timeout_seconds: 30, retry: 0 }],
+    init: [{ step_id: "new_step", action: "script:check_device", version: "1.0.0", timeout_seconds: 30, retry: 0, enabled: true }],
     teardown: [],
   },
 };
@@ -58,20 +58,42 @@ export default function PlanEditPage() {
     enabled: !isNew,
   });
 
-  // Init form
+  // Init form: ADR-0020 §2 唯一事实源 — 从 plan.steps + 直列字段重建 PipelineDef
   useEffect(() => {
     if (plan && !isNew) {
       setName(plan.name);
       setDescription(plan.description || '');
       setFailureThreshold(plan.failure_threshold);
       setNextPlanId(plan.next_plan_id ?? null);
-      const lc = (plan.lifecycle && typeof plan.lifecycle === 'object') ? plan.lifecycle : {};
+
+      const initSteps: any[] = [];
+      const patrolSteps: any[] = [];
+      const teardownSteps: any[] = [];
+      const sorted = [...(plan.steps || [])].sort(
+        (a, b) => a.stage.localeCompare(b.stage) || a.sort_order - b.sort_order
+      );
+      for (const s of sorted) {
+        const stepDef = {
+          step_id: s.step_key,
+          action: `script:${s.script_name}`,
+          version: s.script_version,
+          timeout_seconds: s.timeout_seconds ?? undefined,
+          retry: s.retry,
+          enabled: s.enabled,
+          params: {},
+        };
+        if (s.stage === 'init') initSteps.push(stepDef);
+        else if (s.stage === 'patrol') patrolSteps.push(stepDef);
+        else teardownSteps.push(stepDef);
+      }
       const def: PipelineDef = {
         lifecycle: {
-          init: lc.init || [],
-          patrol: lc.patrol || undefined,
-          teardown: lc.teardown || [],
-          timeout_seconds: lc.timeout_seconds,
+          init: initSteps,
+          patrol: patrolSteps.length
+            ? { interval_seconds: plan.patrol_interval_seconds ?? 60, steps: patrolSteps }
+            : undefined,
+          teardown: teardownSteps,
+          timeout_seconds: plan.timeout_seconds ?? undefined,
         },
       };
       setLifecycle(def);
@@ -115,6 +137,7 @@ export default function PlanEditPage() {
           sort_order: i,
           timeout_seconds: s.timeout_seconds,
           retry: s.retry ?? 0,
+          enabled: s.enabled !== false,
         });
       });
     };
@@ -136,7 +159,8 @@ export default function PlanEditPage() {
         name: name.trim(),
         description: description.trim() || undefined,
         failure_threshold: failureThreshold,
-        lifecycle: lifecycle.lifecycle as any,
+        patrol_interval_seconds: lifecycle.lifecycle.patrol?.interval_seconds ?? null,
+        timeout_seconds: lifecycle.lifecycle.timeout_seconds ?? null,
         next_plan_id: nextPlanId ?? undefined as any,
         steps: buildSteps(),
       };
@@ -276,6 +300,7 @@ export default function PlanEditPage() {
                   <th className="pb-2 font-medium">Step Key</th>
                   <th className="pb-2 font-medium">脚本</th>
                   <th className="pb-2 font-medium">版本</th>
+                  <th className="pb-2 font-medium">启用</th>
                   <th className="pb-2 font-medium">超时(s)</th>
                   <th className="pb-2 font-medium">重试</th>
                 </tr>
@@ -293,6 +318,7 @@ export default function PlanEditPage() {
                     <td className="py-1.5 font-mono text-xs">{s.step_key}</td>
                     <td className="py-1.5">{s.script_name}</td>
                     <td className="py-1.5 text-xs text-gray-500">{s.script_version}</td>
+                    <td className="py-1.5">{s.enabled !== false ? '是' : '否'}</td>
                     <td className="py-1.5">{s.timeout_seconds ?? '-'}</td>
                     <td className="py-1.5">{s.retry ?? 0}</td>
                   </tr>

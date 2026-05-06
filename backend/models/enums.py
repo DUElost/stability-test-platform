@@ -10,7 +10,7 @@ class JobStatus(str, Enum):
     UNKNOWN      = "UNKNOWN"
 
 
-class WorkflowStatus(str, Enum):
+class PlanRunStatus(str, Enum):
     RUNNING         = "RUNNING"
     SUCCESS         = "SUCCESS"
     PARTIAL_SUCCESS = "PARTIAL_SUCCESS"

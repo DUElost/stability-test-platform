@@ -46,8 +46,7 @@ class TestToggleSchedule:
             name="toggle-plan",
             description="for toggle test",
             failure_threshold=0.05,
-            lifecycle={"init": [], "teardown": []},
-        )
+                    )
         db_session.add(plan)
         db_session.commit()
 
@@ -74,8 +73,7 @@ class TestPlanSchedule:
             name="sched-plan",
             description="for schedule",
             failure_threshold=0.05,
-            lifecycle={"init": [], "teardown": []},
-        )
+                    )
         db_session.add(plan)
         db_session.commit()
 
@@ -100,8 +98,7 @@ class TestPlanSchedule:
             name="sched-run-now",
             description="run now plan",
             failure_threshold=0.05,
-            lifecycle={"init": [], "teardown": []},
-        )
+                    )
         db_session.add(plan)
         db_session.commit()
 

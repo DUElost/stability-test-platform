@@ -8,7 +8,7 @@
 
 ### 2026-05-06 — ADR-0020 Plan-based 编排架构落地
 - **架构变更**：WorkflowDefinition + TaskTemplate → Plan + PlanStep；WorkflowRun → PlanRun
-- **5 阶段 Alembic migration**：`w0x1y2z3a4b5` (DDL) → `x1y2z3a4b5c6` (DDL) → `y2z3a4b5c6d7` (DML 定义迁移) → `z3a4b5c6d7e8` (DML 数据迁移) → `a4b5c6d7e8f9` (DDL 删除旧表)
+- **5 阶段 Alembic migration**：`w0x1y2z3a4b5` (DDL 收紧) → `x1y2z3a4b5c6` (DDL 建表，含 `plan_step.enabled` / `plan.patrol_interval_seconds` / `plan.timeout_seconds` / `plan_run.next_plan_triggered Boolean`，**不再有 `plan.lifecycle` 列**) → `y2z3a4b5c6d7` (DML 定义迁移；按 ADR §2 升级为直列字段) → `z3a4b5c6d7e8` (DML 数据迁移；从 `plan_step` 行重建 `plan_snapshot`，回写 `plan_migration_audit.{old_workflow_run_id,new_plan_run_id}`) → `a4b5c6d7e8f9` (DDL：删除旧表 + `task_schedules.plan_id NOT NULL` + 删除 `task_schedules.{params,target_device_id}` + 幂等收敛 `plan.lifecycle`/`plan.timeout_seconds`)
 - **删除旧模块**：`orchestration.py`、`templates.py`、`script_executions.py`、`script_sequences.py`、`dispatcher.py`、`script_execution.py`、`workflow.py`、`script_sequence.py`、`workflow.py` (schema)
 - **新模块**：`backend/api/routes/plans.py`、`backend/api/routes/plan_runs.py`、`backend/services/plan_dispatcher.py`、`backend/services/plan_dispatcher_sync.py`、`backend/models/plan.py`、`backend/models/plan_run.py`、`backend/models/plan_migration_audit.py`
 - **前端**：6 新页面 (PlanList/PlanEdit/PlanExecute/PlanRunList/PlanRunMatrix/ScriptManagement) + PlanLifecycleEditor，删除 17 个旧页面/API模块
@@ -343,8 +343,11 @@ class Plan(Base):
     name: str
     description: Optional[str]
     failure_threshold: float
-    lifecycle: JSONB            # {init: [...], patrol: {...}, teardown: [...]}
-    next_plan_id: Optional[int] # FK -> plan.id (自引用 Plan 链)
+    patrol_interval_seconds: Optional[int]   # ADR-0020 §2 直列字段
+    timeout_seconds: Optional[int]           # ADR-0020 §2 直列字段
+    # 注意：不再保留 lifecycle JSONB 列；lifecycle 由 PlanStep 行 + 上述两个直列字段
+    # 在 dispatcher 阶段重组成 pipeline_def.lifecycle（唯一事实源）。
+    next_plan_id: Optional[int]              # FK -> plan.id (自引用 Plan 链)
     watcher_policy: Optional[JSONB]
     created_by: Optional[str]
     # relationships: steps, runs, next_plan
@@ -359,10 +362,11 @@ class PlanStep(Base):
     step_key: str
     script_name: str
     script_version: str
-    stage: str            # init, patrol, teardown
+    stage: str            # init, patrol, teardown（命名注记：ADR 早期文档称 phase，列名稳定为 stage）
     sort_order: int
     timeout_seconds: Optional[int]
     retry: int
+    enabled: bool         # default true；dispatcher 仅消费 enabled 行
 ```
 
 ### PlanRun（编排执行） — `backend/models/plan_run.py`

@@ -4,6 +4,8 @@ Pure DML (op.execute).  Skips script_execution history.  Chain PlanRuns for
 multi-template workflows via parent_plan_run_id / root_plan_run_id.
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -48,31 +50,74 @@ def _last_id(conn) -> int | None:
     return _pg_last_id(conn) or _sqlite_last_id(conn)
 
 
+def _as_dict(value) -> dict:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+            return loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _plan_snapshot(conn, plan_id: int) -> dict:
     """Build plan_snapshot from current Plan + PlanStep rows."""
     plan_rows = _fetch_all(
         conn,
-        "SELECT id, name, description, failure_threshold, lifecycle, "
-        "       watcher_policy FROM plan WHERE id = :pid",
+        "SELECT id, name, description, failure_threshold, "
+        "       patrol_interval_seconds, watcher_policy "
+        "FROM plan WHERE id = :pid",
         pid=plan_id,
     )
     if not plan_rows:
         return {}
     plan = plan_rows[0]
-    lc = plan.get("lifecycle") or {}
-    if isinstance(lc, str):
-        try:
-            lc = json.loads(lc)
-        except Exception:
-            lc = {}
+    watcher_policy = _as_dict(plan.get("watcher_policy"))
+    patrol_interval_seconds = plan.get("patrol_interval_seconds")
+
+    step_rows = _fetch_all(
+        conn,
+        "SELECT ps.stage, ps.step_key, ps.script_name, ps.script_version, "
+        "       ps.timeout_seconds, ps.retry, ps.sort_order, "
+        "       s.param_schema, s.default_params "
+        "FROM plan_step ps "
+        "LEFT JOIN script s "
+        "  ON s.name = ps.script_name "
+        " AND s.version = ps.script_version "
+        " AND s.is_active = true "
+        "WHERE ps.plan_id = :pid "
+        "ORDER BY ps.stage, ps.sort_order",
+        pid=plan_id,
+    )
 
     return {
-        "plan_id": plan["id"],
-        "name": plan["name"],
-        "failure_threshold": plan.get("failure_threshold", 0.05),
-        "lifecycle": lc,
-        "watcher_policy": plan.get("watcher_policy"),
-        "note": {"snapshot_synthesized": True},
+        "plan": {
+            "id": plan["id"],
+            "name": plan["name"],
+            "description": plan.get("description"),
+            "failure_threshold": plan.get("failure_threshold", 0.05),
+            "patrol_interval_seconds": patrol_interval_seconds,
+            "watcher_policy": watcher_policy,
+        },
+        "steps": [
+            {
+                "stage": row["stage"],
+                "step_key": row["step_key"],
+                "script_name": row["script_name"],
+                "script_version": row["script_version"],
+                "param_schema": _as_dict(row.get("param_schema")),
+                "default_params": _as_dict(row.get("default_params")),
+                "timeout_seconds": row.get("timeout_seconds"),
+                "retry": row.get("retry"),
+                "enabled": True,
+                "sort_order": row.get("sort_order"),
+            }
+            for row in step_rows
+        ],
     }
 
 
@@ -233,6 +278,28 @@ def upgrade():
                     ),
                     {"prid": parent, "rid": root_id, "id": pr_id},
                 )
+
+        # ── Phase 4 audit: persist (workflow_run_id → plan_run_id, plan_id, chain_index) ──
+        # ADR-0020 §Phase 2 audit table 包含 old_workflow_run_id / new_plan_run_id；
+        # 这里在每段 PlanRun 创建后追加一行（与 Phase 3 创建的定义级 audit 行并列）。
+        for ci, (plan_id, pr_id) in enumerate(zip(plan_ids, pr_ids)):
+            conn.execute(
+                text(
+                    "INSERT INTO plan_migration_audit "
+                    "(old_workflow_definition_id, old_workflow_run_id, "
+                    " new_plan_id, new_plan_run_id, chain_index, note, created_at) "
+                    "VALUES (:owd, :owr, :npi, :npr, :ci, :note, :now)"
+                ),
+                {
+                    "owd": wf_id,
+                    "owr": wr_id,
+                    "npi": plan_id,
+                    "npr": pr_id,
+                    "ci": ci,
+                    "note": f"Phase 4: workflow_run #{wr_id} → plan_run #{pr_id} (chain_index={ci})",
+                    "now": _now_iso(),
+                },
+            )
 
         # ── Backfill job_instance ─────────────────────────────────────────
         # For each old JobInstance in this WorkflowRun, find the matching

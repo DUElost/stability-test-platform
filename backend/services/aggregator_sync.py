@@ -4,12 +4,12 @@ from sqlalchemy.orm import Session
 
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
-from backend.services.workflow_aggregation import apply_workflow_aggregation
+from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 from backend.services.plan_chain_trigger import trigger_next_plan_sync
 
 
 def plan_aggregator_sync(job: JobInstance, db: Session) -> None:
-    """ADR-0020: Replaces workflow_aggregator_sync.  Uses PlanRun."""
+    """Aggregate a PlanRun after a child JobInstance reaches terminal state."""
     run = db.get(PlanRun, job.plan_run_id)
     if run is None:
         return
@@ -20,6 +20,6 @@ def plan_aggregator_sync(job: JobInstance, db: Session) -> None:
         .all()
     )
 
-    applied = apply_workflow_aggregation(run, jobs)
+    applied = apply_plan_run_aggregation(run, jobs)
     if applied:
         trigger_next_plan_sync(run, db)

@@ -72,7 +72,7 @@ interface LogsPageProps {
 }
 
 export default function LogsPage({ embedded = false }: LogsPageProps) {
-  const [workflows, setWorkflows] = useState<Plan[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [jobs, setJobs] = useState<PlanRun[]>([]);
 
   const [taskLoading, setTaskLoading] = useState(false);
@@ -108,8 +108,8 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   const toTs = useMemo(() => (quickRange === 'all' ? undefined : new Date().toISOString()), [quickRange]);
 
   const selectedTask = useMemo(
-    () => workflows.find((t) => t.id === selectedTaskId) || null,
-    [workflows, selectedTaskId],
+    () => plans.find((t) => t.id === selectedTaskId) || null,
+    [plans, selectedTaskId],
   );
 
   const selectedRun = useMemo(
@@ -119,12 +119,12 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
 
   const filteredTasks = useMemo(() => {
     const q = taskSearch.trim().toLowerCase();
-    if (!q) return workflows;
-    return workflows.filter((wf) => (
-      wf.name.toLowerCase().includes(q)
-      || (wf.description || '').toLowerCase().includes(q)
+    if (!q) return plans;
+    return plans.filter((plan) => (
+      plan.name.toLowerCase().includes(q)
+      || (plan.description || '').toLowerCase().includes(q)
     ));
-  }, [workflows, taskSearch]);
+  }, [plans, taskSearch]);
 
   const filteredRuns = useMemo(() => {
     const q = runSearch.trim().toLowerCase();
@@ -233,11 +233,11 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   const loadTasks = useCallback(async () => {
     setTaskLoading(true);
     try {
-      const wfList = await api.plans.list(0, 200);
-      setWorkflows(Array.isArray(wfList) ? wfList : []);
+      const planList = await api.plans.list(0, 200);
+      setPlans(Array.isArray(planList) ? planList : []);
     } catch (error) {
-      console.error('加载工作流失败:', error);
-      setWorkflows([]);
+      console.error('加载 Plan 失败:', error);
+      setPlans([]);
     } finally {
       setTaskLoading(false);
     }
@@ -247,8 +247,8 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
     setRunsHydrated(false);
     setRunLoading(true);
     try {
-      const workflowId = taskId && taskId > 0 ? taskId : undefined;
-      const result = await api.planRuns.list(0, 200, workflowId);
+      const planId = taskId && taskId > 0 ? taskId : undefined;
+      const result = await api.planRuns.list(0, 200, planId);
       setJobs(result);
       setSelectedRunId((prev) => {
         if (prev && result.some((job) => job.id === prev)) return prev;
@@ -472,7 +472,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
             <div className="border-b border-gray-100 p-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-medium text-gray-900">任务视图</h3>
-                <span className="text-xs text-gray-400">{workflows.length}</span>
+                <span className="text-xs text-gray-400">{plans.length}</span>
               </div>
               <div className="relative mt-2">
                 <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />

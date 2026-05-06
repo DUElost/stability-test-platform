@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance, StepTrace
-from backend.services.aggregator import WorkflowAggregator
+from backend.services.aggregator import PlanAggregator
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ async def _recompute_job_status(job_id: int, db: AsyncSession) -> None:
             JobStateMachine.transition(job, JobStatus.RUNNING, "reconciled")
         JobStateMachine.transition(job, target, "reconciled_from_replay")
         job.ended_at = datetime.now(timezone.utc)
-        await WorkflowAggregator.on_job_terminal(job, db)
+        await PlanAggregator.on_job_terminal(job, db)
     except InvalidTransitionError as e:
         logger.warning("reconcile transition blocked: %s", e)
 

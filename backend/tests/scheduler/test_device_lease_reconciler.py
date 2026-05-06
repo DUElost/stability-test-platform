@@ -55,7 +55,7 @@ def _seed(host_id: str, device_id: int, job_id: int, status: str) -> None:
                         status="ONLINE", tags=[], created_at=now,
                         adb_connected=True, adb_state="device")
         plan = Plan(name=f"wf-{device_id}", description="reconciler test",
-                    failure_threshold=0.1, lifecycle={"init": [], "teardown": []},
+                    failure_threshold=0.1,
                     created_by="pytest")
         db.add_all([host, device, plan])
         db.flush()

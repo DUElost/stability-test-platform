@@ -88,7 +88,7 @@ function SortableStepCard({ step, index, readOnly, onUpdate, onRemove, onDuplica
           readOnly={readOnly}
         />
         <select
-          className="col-span-4 px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
+          className="col-span-3 px-2 py-1 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
           value={`${scriptName}:${step.version || ''}`}
           onChange={e => {
             const [name, version] = e.target.value.split(':');
@@ -122,6 +122,15 @@ function SortableStepCard({ step, index, readOnly, onUpdate, onRemove, onDuplica
           readOnly={readOnly}
           title="重试次数"
         />
+        <label className="col-span-1 flex items-center justify-center" title="启用">
+          <input
+            type="checkbox"
+            checked={step.enabled !== false}
+            onChange={e => onUpdate(index, { ...step, enabled: e.target.checked })}
+            disabled={readOnly}
+            className="rounded border-gray-300"
+          />
+        </label>
         <div className="col-span-3 flex items-center gap-1 text-xs text-gray-400">
           {matchedScript?.default_params ? (
             <span className="truncate" title={JSON.stringify(matchedScript.default_params)}>

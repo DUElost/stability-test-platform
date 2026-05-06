@@ -10,7 +10,7 @@ export function shouldPollJobData(activeRun?: Pick<PlanJobInstance, 'status'> | 
   return !!activeRun && !isTerminalJobStatus(activeRun.status);
 }
 
-export function getWorkflowDisplayStatus(activeRun?: Pick<PlanJobInstance, 'status'> | null): string {
+export function getPlanRunDisplayStatus(activeRun?: Pick<PlanJobInstance, 'status'> | null): string {
   return activeRun?.status ?? 'PENDING';
 }
 

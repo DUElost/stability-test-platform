@@ -35,9 +35,9 @@ def test_normalize_database_urls_for_sqlite():
 def test_get_async_engine_kwargs_for_postgres_keeps_pool_settings():
     assert get_async_engine_kwargs("postgresql+asyncpg://user:pass@localhost:5432/stp") == {
         "pool_pre_ping": True,
-        "pool_size": 10,
-        "max_overflow": 20,
-        "pool_recycle": 3600,
+        "pool_size": 30,
+        "max_overflow": 60,
+        "pool_recycle": 1800,
     }
 
 

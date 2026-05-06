@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { getLatestArtifact, getWorkflowDisplayStatus, isTerminalJobStatus, shouldPollJobData } from './taskDetailsState';
+import { getLatestArtifact, getPlanRunDisplayStatus, isTerminalJobStatus, shouldPollJobData } from './taskDetailsState';
 
 describe('taskDetailsState', () => {
   it('identifies terminal job statuses', () => {
@@ -17,9 +17,9 @@ describe('taskDetailsState', () => {
     expect(shouldPollJobData(null)).toBe(false);
   });
 
-  it('falls back to pending workflow status when no run exists', () => {
-    expect(getWorkflowDisplayStatus({ status: 'FAILED' })).toBe('FAILED');
-    expect(getWorkflowDisplayStatus(null)).toBe('PENDING');
+  it('falls back to pending PlanRun status when no run exists', () => {
+    expect(getPlanRunDisplayStatus({ status: 'FAILED' })).toBe('FAILED');
+    expect(getPlanRunDisplayStatus(null)).toBe('PENDING');
   });
 
   it('returns the most recent artifact from report payload', () => {

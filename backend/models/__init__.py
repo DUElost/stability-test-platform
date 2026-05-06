@@ -1,4 +1,4 @@
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.action_template import ActionTemplate
 from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
@@ -33,6 +33,7 @@ __all__ = [
     "Plan",
     "PlanMigrationAudit",
     "PlanRun",
+    "PlanRunStatus",
     "PlanStep",
     "ResourceAllocation",
     "ResourcePool",
@@ -40,5 +41,4 @@ __all__ = [
     "StepTrace",
     "TaskSchedule",
     "User",
-    "WorkflowStatus",
 ]

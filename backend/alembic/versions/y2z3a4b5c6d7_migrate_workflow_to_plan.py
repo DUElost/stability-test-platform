@@ -4,6 +4,8 @@ Pure DML (op.execute).  Skips system anchors (__script_execution__ /
 __script_sequence__).  Writes plan_migration_audit for traceability.
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -299,42 +301,18 @@ def upgrade():
 
             steps = _dedup_step_keys(steps)
 
-            # Build lifecycle for Plan
-            plan_lifecycle: dict[str, Any] = {"init": [], "teardown": []}
-            patrol_steps: list[dict] = []
-            patrol_interval: int = 60
-
-            # Copy patrol interval if available
+            # ADR-0020 §2 单事实源：Plan 表不再保留 lifecycle JSONB 列，
+            # 历史 lifecycle 中的 patrol_interval_seconds / timeout_seconds 升级为
+            # Plan 直接列；其余 step 行由 plan_step 表承载。
+            plan_patrol_interval: int | None = None
+            plan_timeout: int | None = None
             if isinstance(lifecycle, dict):
                 p = lifecycle.get("patrol")
-                if isinstance(p, dict):
-                    patrol_interval = p.get("interval_seconds", 60)
+                if isinstance(p, dict) and p.get("interval_seconds") is not None:
+                    plan_patrol_interval = int(p["interval_seconds"])
                 to = lifecycle.get("timeout_seconds")
                 if to is not None:
-                    plan_lifecycle["timeout_seconds"] = to
-
-            for st in steps:
-                if st["stage"] == "patrol":
-                    patrol_steps.append({
-                        "step_id": st["step_key"],
-                        "action": f"script:{st['script_name']}",
-                        "version": st["script_version"],
-                        "timeout_seconds": st["timeout_seconds"],
-                        "retry": st["retry"],
-                    })
-                else:
-                    plan_lifecycle[st["stage"]].append({
-                        "step_id": st["step_key"],
-                        "action": f"script:{st['script_name']}",
-                        "version": st["script_version"],
-                        "timeout_seconds": st["timeout_seconds"],
-                        "retry": st["retry"],
-                    })
-            if patrol_steps:
-                plan_lifecycle["patrol"] = {
-                    "interval_seconds": patrol_interval,
-                    "steps": patrol_steps,
-                }
+                    plan_timeout = int(to)
 
             # Plan name: single-template → workflow name; multi → workflow_name / template_name
             plan_name = (
@@ -351,16 +329,18 @@ def upgrade():
                 plan_row = conn.execute(
                     text(
                         "INSERT INTO plan (name, description, failure_threshold, "
-                        "    lifecycle, next_plan_id, watcher_policy, created_by, "
+                        "    patrol_interval_seconds, timeout_seconds, "
+                        "    next_plan_id, watcher_policy, created_by, "
                         "    created_at, updated_at) "
-                        "VALUES (:name, :desc, :ft, CAST(:lc AS jsonb), :npi, CAST(:wp AS jsonb), "
-                        "    :cb, :now, :now) RETURNING id"
+                        "VALUES (:name, :desc, :ft, :pi, :to_, :npi, "
+                        "    CAST(:wp AS jsonb), :cb, :now, :now) RETURNING id"
                     ),
                     {
                         "name": plan_name,
                         "desc": wf.get("description"),
                         "ft": wf.get("failure_threshold", 0.05),
-                        "lc": json.dumps(plan_lifecycle),
+                        "pi": plan_patrol_interval,
+                        "to_": plan_timeout,
                         "npi": None,
                         "wp": json.dumps(wf.get("watcher_policy")) if wf.get("watcher_policy") else None,
                         "cb": wf.get("created_by"),
@@ -372,16 +352,18 @@ def upgrade():
                 conn.execute(
                     text(
                         "INSERT INTO plan (name, description, failure_threshold, "
-                        "    lifecycle, next_plan_id, watcher_policy, created_by, "
+                        "    patrol_interval_seconds, timeout_seconds, "
+                        "    next_plan_id, watcher_policy, created_by, "
                         "    created_at, updated_at) "
-                        "VALUES (:name, :desc, :ft, :lc, :npi, :wp, "
+                        "VALUES (:name, :desc, :ft, :pi, :to_, :npi, :wp, "
                         "    :cb, :now, :now)"
                     ),
                     {
                         "name": plan_name,
                         "desc": wf.get("description"),
                         "ft": wf.get("failure_threshold", 0.05),
-                        "lc": json.dumps(plan_lifecycle),
+                        "pi": plan_patrol_interval,
+                        "to_": plan_timeout,
                         "npi": None,
                         "wp": json.dumps(wf.get("watcher_policy")) if wf.get("watcher_policy") else None,
                         "cb": wf.get("created_by"),

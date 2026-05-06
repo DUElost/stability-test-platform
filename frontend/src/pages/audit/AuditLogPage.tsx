@@ -66,7 +66,7 @@ export default function AuditLogPage() {
           className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
         >
           <option value="">全部资源</option>
-          <option value="workflow">工作流</option>
+          <option value="plan">Plan</option>
           <option value="tool">工具</option>
           <option value="tool_category">工具分类</option>
           <option value="notification_channel">通知渠道</option>

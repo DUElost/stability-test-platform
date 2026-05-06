@@ -1,7 +1,6 @@
 """Plan API — ADR-0020.
 
-Plan CRUD + run/run/preview endpoints.  Replaces the WorkflowDefinition endpoints
-in ``backend/api/routes/orchestration.py``.
+Plan CRUD + run/preview endpoints.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -41,23 +40,32 @@ class PlanStepIn(BaseModel):
     sort_order: int = 0
     timeout_seconds: Optional[int] = None
     retry: int = Field(default=0, ge=0, le=5)
+    enabled: bool = True
 
 
 class PlanCreate(BaseModel):
+    """ADR-0020 §2：Plan 仅持有 step 行 + 直列字段，不再接受 lifecycle JSON。"""
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     description: Optional[str] = None
     failure_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
-    lifecycle: dict
+    patrol_interval_seconds: Optional[int] = Field(default=None, ge=1)
+    timeout_seconds: Optional[int] = Field(default=None, ge=1)
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: List[PlanStepIn] = Field(default_factory=list)
 
 
 class PlanUpdate(BaseModel):
+    """ADR-0020 §2：所有字段可选，但 lifecycle 已删除。"""
+    model_config = ConfigDict(extra="forbid")
+
     name: Optional[str] = None
     description: Optional[str] = None
     failure_threshold: Optional[float] = None
-    lifecycle: Optional[dict] = None
+    patrol_interval_seconds: Optional[int] = Field(default=None, ge=1)
+    timeout_seconds: Optional[int] = Field(default=None, ge=1)
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: Optional[List[PlanStepIn]] = None
@@ -72,6 +80,7 @@ class PlanStepOut(BaseModel):
     sort_order: int
     timeout_seconds: Optional[int] = None
     retry: int
+    enabled: bool
 
     class Config:
         from_attributes = True
@@ -82,7 +91,8 @@ class PlanOut(BaseModel):
     name: str
     description: Optional[str] = None
     failure_threshold: float
-    lifecycle: dict
+    patrol_interval_seconds: Optional[int] = None
+    timeout_seconds: Optional[int] = None
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     created_by: Optional[str] = None
@@ -95,8 +105,9 @@ class PlanOut(BaseModel):
 
 
 class PlanRunTrigger(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     device_ids: List[int]
-    failure_threshold: Optional[float] = None
 
 
 class PlanRunOut(BaseModel):
@@ -117,10 +128,7 @@ class PlanRunOut(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
-    """Warn about PlanStep entries that reference non-existent or inactive Scripts.
-
-    Does NOT reject the request — missing scripts may be registered later.
-    """
+    """Reject PlanStep entries that reference non-existent or inactive Scripts."""
     if not steps:
         return
     keys = {(s.script_name, s.script_version) for s in steps}
@@ -135,13 +143,58 @@ def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
     missing = keys - existing
     if missing:
         formatted = [f"{n}:{v}" for n, v in sorted(missing)]
-        logger.warning(
-            "plan_script_refs_unknown missing=%s — Plan will still be created",
-            formatted,
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "INVALID_SCRIPT_REFS", "missing": formatted},
         )
 
 
-def _validate_lifecycle(lifecycle: dict) -> None:
+def _assemble_lifecycle_for_validation(
+    steps: list[PlanStepIn],
+    patrol_interval_seconds: int | None,
+    timeout_seconds: int | None,
+) -> dict:
+    """ADR-0020 §2：从 PlanStep 行 + 直列字段组装 lifecycle，仅用于 ``validate_pipeline_def``。
+
+    与 dispatcher 的最终生成逻辑保持一致；params 字段使用 ``{}`` 占位，因为
+    脚本的 default_params 在校验阶段不重要（pipeline_validator 只验结构）。
+    """
+    lifecycle: dict = {"init": [], "teardown": []}
+    patrol_steps: list[dict] = []
+    for s in sorted(steps, key=lambda x: (x.stage, x.sort_order)):
+        if s.enabled is False:
+            continue
+        step_def = {
+            "step_id": s.step_key,
+            "action": f"script:{s.script_name}",
+            "version": s.script_version,
+            "params": {},
+            "timeout_seconds": s.timeout_seconds,
+            "retry": s.retry,
+        }
+        if s.stage in ("init", "teardown"):
+            lifecycle[s.stage].append(step_def)
+        else:
+            patrol_steps.append(step_def)
+    if patrol_steps:
+        lifecycle["patrol"] = {
+            "interval_seconds": patrol_interval_seconds or 60,
+            "steps": patrol_steps,
+        }
+    if timeout_seconds is not None:
+        lifecycle["timeout_seconds"] = timeout_seconds
+    return lifecycle
+
+
+def _validate_assembled_lifecycle(
+    steps: list[PlanStepIn],
+    patrol_interval_seconds: int | None,
+    timeout_seconds: int | None,
+) -> None:
+    """先组装、再用统一的 pipeline_validator 校验。"""
+    lifecycle = _assemble_lifecycle_for_validation(
+        steps, patrol_interval_seconds, timeout_seconds
+    )
     is_valid, errors = validate_pipeline_def({"lifecycle": lifecycle})
     if not is_valid:
         raise HTTPException(
@@ -156,7 +209,8 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
         name=plan.name,
         description=plan.description,
         failure_threshold=plan.failure_threshold,
-        lifecycle=plan.lifecycle or {},
+        patrol_interval_seconds=plan.patrol_interval_seconds,
+        timeout_seconds=plan.timeout_seconds,
         next_plan_id=plan.next_plan_id,
         watcher_policy=plan.watcher_policy,
         created_by=plan.created_by,
@@ -169,31 +223,41 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
 MAX_CHAIN_DEPTH = 20
 
 
-def _validate_plan_dag(db: Session, plan_id: int,
+def _validate_plan_dag(db: Session, plan_id: int | None,
                         next_plan_id: int | None) -> None:
-    """Prevent DAG cycles.
+    """Prevent DAG cycles (ADR-0020 §2).
 
-    Takes a PostgreSQL advisory lock on *plan_id* to serialise concurrent
-    chain modifications, then walks the ``next_plan_id`` chain up to
-    ``MAX_CHAIN_DEPTH`` hops.  Self-loops and cycles are rejected.
+    锁定语义：
+    - 更新已存在 Plan：对 ``plan_id`` 行加 advisory lock。
+    - 创建新 Plan（``plan_id is None``）：若有 ``next_plan_id`` 则锁目标行，
+      避免和"目标 Plan 自身正在被改 next_plan_id"的事务并发产生环。
+      自身尚无 ID，无需锁；插入后由数据库 CHECK + 唯一索引兜底。
+    - 自环：``plan_id is not None and next_plan_id == plan_id`` 直接 422。
+
+    然后顺着 ``next_plan_id`` 走链，最多 ``MAX_CHAIN_DEPTH`` 跳。
     """
     if next_plan_id is None:
         return
 
-    # Advisory lock: prevent concurrent chain edits on the same plan.
-    # Skip on SQLite — no concurrent access, and the function doesn't exist.
-    if not db.get_bind().dialect.name.startswith("sqlite"):
-        db.execute(text("SELECT pg_advisory_xact_lock(:pid)"), {"pid": plan_id})
-
-    if next_plan_id == plan_id:
+    # 自环（仅在 update 场景下有 plan_id）
+    if plan_id is not None and next_plan_id == plan_id:
         raise HTTPException(status_code=422, detail="next_plan_id cannot reference self")
+
+    # Advisory lock 目标，缩小锁竞争面：
+    #   - update：锁当前行（防"我"被并发改）
+    #   - create：锁目标 next_plan_id 行（防目标的链路被并发改）
+    if not db.get_bind().dialect.name.startswith("sqlite"):
+        lock_key = plan_id if plan_id is not None else next_plan_id
+        db.execute(text("SELECT pg_advisory_xact_lock(:pid)"), {"pid": int(lock_key)})
 
     target = db.get(Plan, next_plan_id)
     if target is None:
         raise HTTPException(status_code=404,
                             detail=f"next_plan_id {next_plan_id} not found")
 
-    visited = {plan_id}
+    visited: set[int] = set()
+    if plan_id is not None:
+        visited.add(plan_id)
     cursor = next_plan_id
     depth = 0
     while cursor is not None:
@@ -202,7 +266,7 @@ def _validate_plan_dag(db: Session, plan_id: int,
                 status_code=422,
                 detail=f"Cycle detected: plan {cursor} appears more than once in chain",
             )
-        if cursor == plan_id:
+        if plan_id is not None and cursor == plan_id:
             raise HTTPException(
                 status_code=422,
                 detail="next_plan_id creates a cycle back to the current plan",
@@ -226,8 +290,10 @@ def create_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    _validate_lifecycle(payload.lifecycle)
-    _validate_plan_dag(db, 0, payload.next_plan_id)
+    _validate_assembled_lifecycle(
+        payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds
+    )
+    _validate_plan_dag(db, None, payload.next_plan_id)
     _validate_script_refs(db, payload.steps)
 
     now = datetime.now(timezone.utc)
@@ -235,7 +301,8 @@ def create_plan(
         name=payload.name,
         description=payload.description,
         failure_threshold=payload.failure_threshold,
-        lifecycle=payload.lifecycle,
+        patrol_interval_seconds=payload.patrol_interval_seconds,
+        timeout_seconds=payload.timeout_seconds,
         next_plan_id=payload.next_plan_id,
         watcher_policy=payload.watcher_policy,
         created_by=current_user.username if current_user else None,
@@ -255,6 +322,7 @@ def create_plan(
             sort_order=s.sort_order,
             timeout_seconds=s.timeout_seconds,
             retry=s.retry,
+            enabled=s.enabled,
             created_at=now,
         ))
 
@@ -314,9 +382,10 @@ def update_plan(
         plan.description = payload.description
     if payload.failure_threshold is not None:
         plan.failure_threshold = payload.failure_threshold
-    if payload.lifecycle is not None:
-        _validate_lifecycle(payload.lifecycle)
-        plan.lifecycle = payload.lifecycle
+    if payload.patrol_interval_seconds is not None:
+        plan.patrol_interval_seconds = payload.patrol_interval_seconds
+    if payload.timeout_seconds is not None:
+        plan.timeout_seconds = payload.timeout_seconds
     if payload.watcher_policy is not None:
         plan.watcher_policy = payload.watcher_policy
 
@@ -331,6 +400,11 @@ def update_plan(
     # Step replacement
     if payload.steps is not None:
         _validate_script_refs(db, payload.steps)
+        _validate_assembled_lifecycle(
+            payload.steps,
+            plan.patrol_interval_seconds,
+            plan.timeout_seconds,
+        )
         db.execute(text("DELETE FROM plan_step WHERE plan_id = :pid"), {"pid": plan_id})
         now = datetime.now(timezone.utc)
         for s in payload.steps:
@@ -343,6 +417,7 @@ def update_plan(
                 sort_order=s.sort_order,
                 timeout_seconds=s.timeout_seconds,
                 retry=s.retry,
+                enabled=s.enabled,
                 created_at=now,
             ))
 
@@ -409,7 +484,6 @@ def run_plan(
             triggered_by=current_user.username if current_user else "api",
             db=db,
             run_type="MANUAL",
-            failure_threshold_override=payload.failure_threshold,
         )
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=str(e))

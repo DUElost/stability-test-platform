@@ -185,6 +185,7 @@ async def extend_lease(
             DeviceLease.expires_at > now,  # Phase 4b: refuse to extend expired lease
         )
         .values(renewed_at=now, expires_at=expires_at)
+        .execution_options(synchronize_session=False)
     )
 
     if result.rowcount:

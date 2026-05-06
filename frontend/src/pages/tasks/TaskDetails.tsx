@@ -7,7 +7,7 @@ import { PipelineStepTree, type StepUpdateMessage } from '../../components/pipel
 import { api, AgentLogOut, JiraDraft, type Plan, type PlanJobInstance, type PlanRun, type RunStep } from '../../utils/api';
 import apiClient from '../../utils/api/client';
 import { useSocketIO as useWebSocket } from '../../hooks/useSocketIO';
-import { getLatestArtifact, getWorkflowDisplayStatus, shouldPollJobData } from './taskDetailsState';
+import { getLatestArtifact, getPlanRunDisplayStatus, shouldPollJobData } from './taskDetailsState';
 
 // ---------- Types ----------
 
@@ -61,7 +61,7 @@ export default function TaskDetails() {
   });
 
   const activeRun = jobs?.[0];
-  const workflowStatusLabel = getWorkflowDisplayStatus(activeRun);
+  const planRunStatusLabel = getPlanRunDisplayStatus(activeRun);
   const shouldPollActiveRun = shouldPollJobData(activeRun);
   const { data: runReport } = useQuery({
     queryKey: ['runs', activeRun?.id, 'report'],
@@ -252,12 +252,12 @@ export default function TaskDetails() {
               <h2 className="text-lg font-semibold">{task.name}</h2>
               <div className="flex items-center gap-2 mt-1">
                 <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
-                  workflowStatusLabel === 'RUNNING' ? 'bg-green-100 text-green-700' :
-                  workflowStatusLabel === 'COMPLETED' ? 'bg-indigo-100 text-indigo-700' :
-                  workflowStatusLabel === 'FAILED' ? 'bg-red-100 text-red-700' :
+                  planRunStatusLabel === 'RUNNING' ? 'bg-green-100 text-green-700' :
+                  planRunStatusLabel === 'COMPLETED' ? 'bg-indigo-100 text-indigo-700' :
+                  planRunStatusLabel === 'FAILED' ? 'bg-red-100 text-red-700' :
                   'bg-slate-100 text-slate-600'
                 }`}>
-                  {workflowStatusLabel}
+                  {planRunStatusLabel}
                 </span>
                 {activeRun && (
                   <span className="text-xs text-slate-500">Run #{activeRun.id}</span>
@@ -309,7 +309,7 @@ export default function TaskDetails() {
               </div>
               <div>
                 <label className="text-slate-500 block">Status</label>
-                <span className="font-medium">{workflowStatusLabel}</span>
+                <span className="font-medium">{planRunStatusLabel}</span>
               </div>
               {activeRun && (
                 <>
@@ -463,7 +463,7 @@ export default function TaskDetails() {
           <LogViewer wsUrl={wsUrl} />
         ) : (
           <div className="flex items-center justify-center h-full text-slate-400">
-            {workflowStatusLabel === 'PENDING'
+            {planRunStatusLabel === 'PENDING'
               ? 'Task is pending dispatch...'
               : 'No active run available'}
           </div>

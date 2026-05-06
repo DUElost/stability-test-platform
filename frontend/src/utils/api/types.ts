@@ -322,9 +322,7 @@ export interface TaskSchedule {
   id: number;
   name: string;
   cron_expression: string;
-  params: Record<string, any>;
-  target_device_id?: number | null;
-  plan_id?: number | null;
+  plan_id: number;
   device_ids?: number[] | null;
   enabled: boolean;
   last_run_at?: string | null;
@@ -336,26 +334,21 @@ export interface TaskSchedule {
 export interface TaskScheduleCreatePayload {
   name: string;
   cron_expression: string;
-  params?: Record<string, any>;
   enabled?: boolean;
-  plan_id?: number | null;
+  plan_id: number;
   device_ids?: number[];
-  target_device_id?: number | null;
 }
 
 export interface TaskScheduleUpdatePayload {
   name?: string;
   cron_expression?: string;
-  params?: Record<string, any>;
   enabled?: boolean;
-  plan_id?: number | null;
+  plan_id?: number;
   device_ids?: number[];
-  target_device_id?: number | null;
 }
 
 export interface ScheduleRunNowResult {
   message: string;
-  task_id?: number | null;
   plan_run_id?: number | null;
   plan_id?: number | null;
 }
@@ -491,6 +484,7 @@ export interface PlanStep {
   sort_order: number;
   timeout_seconds?: number | null;
   retry: number;
+  enabled: boolean;
 }
 
 export interface PlanStepCreate {
@@ -501,14 +495,17 @@ export interface PlanStepCreate {
   sort_order?: number;
   timeout_seconds?: number | null;
   retry?: number;
+  enabled?: boolean;
 }
 
+// ADR-0020 §2 唯一事实源：Plan 不再包含 lifecycle JSON，前端按 PlanStep 行 + 直列字段交互。
 export interface Plan {
   id: number;
   name: string;
   description?: string | null;
   failure_threshold: number;
-  lifecycle: Record<string, any>;
+  patrol_interval_seconds?: number | null;
+  timeout_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: Record<string, any> | null;
   created_by?: string | null;
@@ -521,7 +518,8 @@ export interface PlanCreate {
   name: string;
   description?: string;
   failure_threshold?: number;
-  lifecycle: Record<string, any>;
+  patrol_interval_seconds?: number | null;
+  timeout_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: Record<string, any> | null;
   steps?: PlanStepCreate[];
@@ -531,7 +529,8 @@ export interface PlanUpdate {
   name?: string;
   description?: string;
   failure_threshold?: number;
-  lifecycle?: Record<string, any>;
+  patrol_interval_seconds?: number | null;
+  timeout_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: Record<string, any> | null;
   steps?: PlanStepCreate[];
@@ -554,7 +553,6 @@ export interface PlanRun {
 
 export interface PlanRunCreate {
   device_ids: number[];
-  failure_threshold?: number;
 }
 
 export interface PlanRunPreview {

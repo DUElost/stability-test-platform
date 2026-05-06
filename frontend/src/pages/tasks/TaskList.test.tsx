@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
-const mockWorkflows = [
+const mockPlans = [
   { id: 1, name: 'Monkey Test #1', description: null, failure_threshold: 0.05, created_at: '2026-01-01T00:00:00', updated_at: '2026-01-01T00:00:00' },
   { id: 2, name: 'MTBF Test #2', description: 'MTBF suite', failure_threshold: 0.1, created_at: '2026-01-01T01:00:00', updated_at: '2026-01-01T01:00:00' },
   { id: 3, name: 'DDR Test #3', description: null, failure_threshold: 0.05, created_at: '2026-01-01T02:00:00', updated_at: '2026-01-01T02:00:00' },
@@ -13,7 +13,7 @@ const mockWorkflows = [
 vi.mock('../../utils/api', () => ({
   api: {
     plans: {
-      list: vi.fn().mockResolvedValue(mockWorkflows),
+      list: vi.fn().mockResolvedValue(mockPlans),
     },
   },
 }));
@@ -88,7 +88,7 @@ describe('TaskList', () => {
     render(<TaskList />, { wrapper: createWrapper() });
 
     await screen.findByText('任务管理');
-    expect(screen.getByText('新建工作流')).toBeInTheDocument();
+    expect(screen.getByText('新建 Plan')).toBeInTheDocument();
   });
 
   it('renders loading state initially', async () => {
@@ -108,12 +108,12 @@ describe('TaskList', () => {
     const TaskList = (await import('./TaskList')).default;
     render(<TaskList />, { wrapper: createWrapper() });
 
-    await screen.findByText('加载工作流失败，请检查后端连接。');
+    await screen.findByText('加载 Plan 失败，请检查后端连接。');
   });
 
-  it('renders task table with workflows', async () => {
+  it('renders task table with plans', async () => {
     const { api } = await import('../../utils/api');
-    (api.plans.list as any).mockResolvedValue(mockWorkflows);
+    (api.plans.list as any).mockResolvedValue(mockPlans);
 
     const TaskList = (await import('./TaskList')).default;
     render(<TaskList />, { wrapper: createWrapper() });
@@ -129,7 +129,7 @@ describe('TaskList', () => {
 
     await screen.findByText('任务管理');
 
-    const link = screen.getByText('新建工作流').closest('a');
+    const link = screen.getByText('新建 Plan').closest('a');
     expect(link).toHaveAttribute('href', '/orchestration/plans');
   });
 });
