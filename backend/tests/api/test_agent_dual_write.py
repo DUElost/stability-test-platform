@@ -38,12 +38,16 @@ from backend.api.routes.agent_api import (
     _RunCompleteIn,
     _claim_jobs_for_host,
     ClaimRequest,
+    JobStatusUpdate,
+    StepTraceIn,
     claim_jobs,
     complete_job,
     extend_job_lock,
     get_pending_jobs,
     job_heartbeat,
     recovery_sync,
+    update_job_status,
+    upload_step_traces,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
@@ -711,6 +715,78 @@ async def test_complete_job_idempotent_replay_wrong_token_returns_409():
         assert exc_info.value.status_code == 409
     finally:
         _cleanup_seed(seed)
+
+
+# ── C5b: legacy status/steps fencing_token 校验 ─────────────────────────────
+
+@pytest.mark.asyncio
+async def test_update_job_status_wrong_token_returns_409():
+    """错误 fencing_token → /jobs/{id}/status 不得推进状态。"""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    _setup_lock_and_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc_info:
+                await update_job_status(
+                    job_id=seed["job_id"],
+                    payload=JobStatusUpdate(status="FAILED", fencing_token="WRONG_TOKEN"),
+                    db=async_db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 409
+        assert "fencing_token" in exc_info.value.detail.lower()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_update_job_status_missing_token_raises_validation_error():
+    """缺 fencing_token → Pydantic 拒收 JobStatusUpdate 构造。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        JobStatusUpdate(status="FAILED")
+
+
+@pytest.mark.asyncio
+async def test_upload_step_traces_wrong_token_returns_409():
+    """错误 fencing_token → /steps 不得写入 StepTrace 或推进 job 状态。"""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    _setup_lock_and_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc_info:
+                await upload_step_traces(
+                    traces=[
+                        StepTraceIn(
+                            job_id=seed["job_id"],
+                            step_id="fenced-step",
+                            event_type="FAILED",
+                            status="FAILED",
+                            fencing_token="WRONG_TOKEN",
+                        )
+                    ],
+                    db=async_db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 409
+        assert "fencing_token" in exc_info.value.detail.lower()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_upload_step_traces_missing_token_raises_validation_error():
+    """缺 fencing_token → Pydantic 拒收 StepTraceIn 构造。"""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        StepTraceIn(
+            job_id=1,
+            step_id="missing-token",
+            event_type="COMPLETED",
+            status="COMPLETED",
+        )
 
 
 # ── C6: session_watchdog release_lease ──────────────────────────────────────

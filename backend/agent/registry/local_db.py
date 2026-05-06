@@ -49,6 +49,7 @@ class LocalDB:
                 output        TEXT,
                 error_message TEXT,
                 original_ts   TEXT    NOT NULL,
+                fencing_token TEXT    NOT NULL DEFAULT '',
                 acked         INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(job_id, step_id, event_type)
             );
@@ -110,8 +111,40 @@ class LocalDB:
                 claimed_at    TEXT    NOT NULL
             );
         """)
+        self._ensure_step_trace_schema()
+        self._backfill_step_trace_tokens()
         self._conn.commit()
         logger.info(f"LocalDB initialized: {db_path}")
+
+    def _ensure_step_trace_schema(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(step_trace_cache)").fetchall()
+        }
+        if "fencing_token" not in columns:
+            self._conn.execute(
+                "ALTER TABLE step_trace_cache "
+                "ADD COLUMN fencing_token TEXT NOT NULL DEFAULT ''"
+            )
+
+    def _backfill_step_trace_tokens(self) -> None:
+        self._conn.execute(
+            """
+            UPDATE step_trace_cache
+            SET fencing_token = (
+                SELECT active_job_registry.fencing_token
+                FROM active_job_registry
+                WHERE active_job_registry.job_id = step_trace_cache.job_id
+            )
+            WHERE fencing_token = ''
+              AND EXISTS (
+                SELECT 1
+                FROM active_job_registry
+                WHERE active_job_registry.job_id = step_trace_cache.job_id
+                  AND active_job_registry.fencing_token <> ''
+              )
+            """
+        )
 
     def close(self) -> None:
         with self._lock:
@@ -133,6 +166,7 @@ class LocalDB:
         output: Optional[str] = None,
         error_message: Optional[str] = None,
         original_ts: Optional[datetime] = None,
+        fencing_token: str = "",
     ) -> int:
         """Insert (or ignore duplicate) step trace. Returns row id."""
         ts = (original_ts or datetime.now(timezone.utc)).isoformat()
@@ -141,10 +175,20 @@ class LocalDB:
                 cursor = self._conn.execute(
                     """
                     INSERT OR IGNORE INTO step_trace_cache
-                    (job_id, step_id, stage, event_type, status, output, error_message, original_ts)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (job_id, step_id, stage, event_type, status, output, error_message, original_ts, fencing_token)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (job_id, step_id, stage, event_type, status, output, error_message, ts),
+                    (
+                        job_id,
+                        step_id,
+                        stage,
+                        event_type,
+                        status,
+                        output,
+                        error_message,
+                        ts,
+                        fencing_token,
+                    ),
                 )
                 return cursor.lastrowid
 

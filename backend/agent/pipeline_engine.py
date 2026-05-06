@@ -501,6 +501,7 @@ class PipelineEngine:
                 status=status,
                 output=output,
                 error_message=error_message,
+                fencing_token=self._fencing_token,
             )
 
     def _report_job_status_mq(self, status: str, reason: str = "") -> None:

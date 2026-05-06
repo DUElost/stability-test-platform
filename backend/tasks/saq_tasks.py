@@ -7,6 +7,7 @@ and keyword arguments that were passed at enqueue time.
 """
 
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ async def post_completion_task(ctx: dict, *, job_id: int) -> None:
 
     logger.info("saq_post_completion_start job_id=%d", job_id)
     try:
-        run_post_completion_async(job_id)
+        await asyncio.to_thread(run_post_completion_async, job_id)
     except Exception:
         logger.exception("saq_post_completion_failed job_id=%d", job_id)
         raise
@@ -36,8 +37,6 @@ async def send_notification_task(
     ``dispatch_notification`` opens its own DB session and makes blocking
     HTTP calls — acceptable for a worker thread.
     """
-    import asyncio
-
     from backend.services.notification_service import dispatch_notification
 
     logger.info("saq_notification_start event_type=%s", event_type)

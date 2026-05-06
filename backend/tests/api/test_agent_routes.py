@@ -461,6 +461,7 @@ async def test_extend_lock_conflict():
 @pytest.mark.asyncio
 async def test_update_job_step_status_upserts_trace():
     seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
@@ -471,6 +472,7 @@ async def test_update_job_step_status_upserts_trace():
                     status="RUNNING",
                     started_at="2026-03-01T10:00:00Z",
                     error_message=None,
+                    fencing_token=token,
                 ),
                 db=async_db,
                 _=None,

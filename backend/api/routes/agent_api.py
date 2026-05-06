@@ -107,6 +107,7 @@ class JobOut(BaseModel):
 class JobStatusUpdate(BaseModel):
     status: str
     reason: str = ""
+    fencing_token: str
 
 
 class StepTraceIn(BaseModel):
@@ -118,6 +119,7 @@ class StepTraceIn(BaseModel):
     output: Optional[str] = None
     error_message: Optional[str] = None
     original_ts: Optional[str] = None
+    fencing_token: str
 
 
 class HeartbeatRequest(BaseModel):
@@ -354,6 +356,17 @@ async def _get_valid_runtime_lease(
     return lease
 
 
+async def _require_valid_runtime_lease(
+    db: AsyncSession,
+    job: JobInstance,
+    fencing_token: str,
+) -> DeviceLease:
+    valid_lease = await _get_valid_runtime_lease(db, job, fencing_token)
+    if valid_lease is None:
+        raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
+    return valid_lease
+
+
 async def _resume_expired_lease_for_recovery(
     db: AsyncSession,
     lease: DeviceLease,
@@ -445,6 +458,8 @@ async def update_job_status(
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
+    await _require_valid_runtime_lease(db, job, payload.fencing_token)
+
     try:
         new_status = JobStatus(payload.status.upper())
     except ValueError:
@@ -472,6 +487,12 @@ async def upload_step_traces(
 ):
     """Batch idempotent StepTrace upsert (Agent replay on reconnect)."""
     host_id = "unknown"
+    for trace in traces:
+        job = await db.get(JobInstance, trace.job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="job not found")
+        await _require_valid_runtime_lease(db, job, trace.fencing_token)
+
     raw = [t.model_dump() for t in traces]
     inserted = await reconcile_step_traces(host_id, raw, db)
     return ok({"inserted": inserted, "total": len(traces)})
@@ -582,6 +603,7 @@ class _StepStatusIn(BaseModel):
     finished_at: Optional[str] = None
     exit_code: Optional[int] = None
     error_message: Optional[str] = None
+    fencing_token: str
 
 
 # ── Compat endpoints (mirroring old /runs/* interface under /jobs/*) ──────────
@@ -840,6 +862,11 @@ async def update_job_step_status(
         "error_message": payload.error_message,
         "original_ts": payload.started_at or datetime.now(timezone.utc).isoformat(),
     }
+    job = await db.get(JobInstance, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    await _require_valid_runtime_lease(db, job, payload.fencing_token)
+
     await reconcile_step_traces("agent", [trace], db)
     return ok({"job_id": job_id, "step_id": step_id, "status": payload.status})
 

@@ -113,4 +113,5 @@ def _to_payload(trace: Dict[str, Any]) -> Dict[str, Any]:
         "output": trace.get("output"),
         "error_message": trace.get("error_message"),
         "original_ts": trace.get("original_ts"),
+        "fencing_token": trace.get("fencing_token", ""),
     }

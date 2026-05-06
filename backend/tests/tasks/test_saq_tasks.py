@@ -13,27 +13,35 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_post_completion_task_calls_run():
-    """post_completion_task delegates to run_post_completion_async."""
+    """post_completion_task delegates blocking post-completion via to_thread."""
     with patch(
         "backend.services.post_completion.run_post_completion_async"
-    ) as mock_run:
+    ) as mock_run, patch(
+        "asyncio.to_thread",
+        new_callable=AsyncMock,
+    ) as mock_to_thread:
         from backend.tasks.saq_tasks import post_completion_task
 
         await post_completion_task({}, job_id=42)
-        mock_run.assert_called_once_with(42)
+        mock_to_thread.assert_awaited_once_with(mock_run, 42)
+        mock_run.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_post_completion_task_reraises():
-    """post_completion_task bubbles up exceptions for SAQ retry."""
+    """post_completion_task bubbles up to_thread exceptions for SAQ retry."""
     with patch(
-        "backend.services.post_completion.run_post_completion_async",
+        "backend.services.post_completion.run_post_completion_async"
+    ) as mock_run, patch(
+        "asyncio.to_thread",
+        new_callable=AsyncMock,
         side_effect=RuntimeError("db gone"),
     ):
         from backend.tasks.saq_tasks import post_completion_task
 
         with pytest.raises(RuntimeError, match="db gone"):
             await post_completion_task({}, job_id=99)
+        mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
