@@ -5,8 +5,9 @@ Tests for run-oriented API routes after removing the legacy /tasks* compatibilit
 import json
 from datetime import datetime, timezone
 
-from backend.models.job import JobInstance, StepTrace, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance, StepTrace
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 
 
 class TestRunReportFromJobChain:
@@ -15,40 +16,29 @@ class TestRunReportFromJobChain:
     def test_get_run_report_from_job_snapshot(self, client, db_session, sample_device, tmp_path):
         now = datetime.now(timezone.utc)
 
-        wf = WorkflowDefinition(
+        plan = Plan(
             name="job-report-workflow",
             description="report from job chain",
             failure_threshold=0.05,
-            created_at=now,
-            updated_at=now,
+            lifecycle={"init": [], "teardown": []},
         )
-        db_session.add(wf)
+        db_session.add(plan)
         db_session.flush()
 
-        template = TaskTemplate(
-            workflow_definition_id=wf.id,
-            name="default",
-            pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
-            sort_order=0,
-            created_at=now,
-        )
-        db_session.add(template)
-        db_session.flush()
-
-        wf_run = WorkflowRun(
-            workflow_definition_id=wf.id,
+        plan_run = PlanRun(
+            plan_id=plan.id,
             status="SUCCESS",
             failure_threshold=0.05,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
             triggered_by="pytest",
-            started_at=now,
-            ended_at=now,
         )
-        db_session.add(wf_run)
+        db_session.add(plan_run)
         db_session.flush()
 
         job = JobInstance(
-            workflow_run_id=wf_run.id,
-            task_template_id=template.id,
+            plan_run_id=plan_run.id,
+            plan_id=plan.id,
             device_id=sample_device.id,
             host_id=sample_device.host_id,
             status="COMPLETED",
@@ -62,7 +52,7 @@ class TestRunReportFromJobChain:
         db_session.add(job)
         db_session.flush()
         job_id = job.id
-        wf_id = wf.id
+        plan_id = plan.id
 
         risk_path = tmp_path / "risk_summary.json"
         risk_path.write_text(
@@ -113,7 +103,7 @@ class TestRunReportFromJobChain:
         assert response.status_code == 200
         data = response.json()
         assert data["run"]["id"] == job_id
-        assert data["task"]["id"] == wf_id
+        assert data["task"]["id"] == plan_id
         assert data["task"]["type"] == "WORKFLOW"
         assert data["summary_metrics"]["restarts"] == 2
         assert data["risk_summary"]["risk_level"] == "HIGH"

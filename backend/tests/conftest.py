@@ -53,8 +53,10 @@ from backend.core.database import async_engine, get_db
 from backend.core.database import Base
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, TaskTemplate as JobTaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_migration_audit import PlanMigrationAudit
+from backend.models.plan_run import PlanRun
 from backend.core.security import create_access_token
 from backend.main import fastapi_app as app
 
@@ -226,44 +228,75 @@ def sample_busy_device(db_session, sample_host):
     return device
 
 
-# ── Model fixtures (WorkflowDefinition / WorkflowRun / JobInstance) ────────
+# ── Script fixtures ─────────────────────────────────────────────────────────
 
 
 @pytest.fixture
-def sample_workflow_definition(db_session):
-    """Create a sample WorkflowDefinition."""
-    wd = WorkflowDefinition(
-        name="test-workflow",
-        description="Test workflow for unit tests",
+def sample_script(db_session):
+    """Create Script rows referenced by PlanSteps in tests."""
+    from backend.models.script import Script
+
+    scripts = [
+        ("check_device", "1.0.0"),
+        ("check_device", "v1.0.0"),
+    ]
+    for name, version in scripts:
+        existing = db_session.query(Script).filter(
+            Script.name == name, Script.version == version
+        ).first()
+        if existing:
+            continue
+        db_session.add(Script(
+            name=name,
+            script_type="python",
+            version=version,
+            nfs_path=f"/nfs/scripts/{name}/{version}",
+            content_sha256="0" * 64,
+            is_active=True,
+            default_params={},
+            param_schema={},
+        ))
+    db_session.commit()
+    return db_session.query(Script).all()
+
+
+# ── Model fixtures (Plan / PlanRun / JobInstance) ──────────────────────────
+
+
+@pytest.fixture
+def sample_plan(db_session):
+    """Create a sample Plan with steps."""
+    plan = Plan(
+        name="test-plan",
+        description="Test plan for unit tests",
         failure_threshold=0.1,
+        lifecycle={"init": [], "teardown": []},
         created_by="test",
     )
-    db_session.add(wd)
-    db_session.commit()
-    return wd
+    db_session.add(plan)
+    db_session.flush()
 
-
-@pytest.fixture
-def sample_task_template(db_session, sample_workflow_definition):
-    """Create a sample TaskTemplate within a WorkflowDefinition."""
-    tt = JobTaskTemplate(
-        workflow_definition_id=sample_workflow_definition.id,
-        name="test-template",
-        pipeline_def={"version": 1, "stages": [{"name": "test", "steps": []}]},
+    step = PlanStep(
+        plan_id=plan.id,
+        step_key="check_device",
+        script_name="check_device",
+        script_version="v1.0.0",
+        stage="init",
         sort_order=0,
     )
-    db_session.add(tt)
+    db_session.add(step)
     db_session.commit()
-    return tt
+    return plan
 
 
 @pytest.fixture
-def sample_workflow_run(db_session, sample_workflow_definition):
-    """Create a sample WorkflowRun."""
-    run = WorkflowRun(
-        workflow_definition_id=sample_workflow_definition.id,
+def sample_plan_run(db_session, sample_plan):
+    """Create a sample PlanRun."""
+    run = PlanRun(
+        plan_id=sample_plan.id,
         status="RUNNING",
-        failure_threshold=sample_workflow_definition.failure_threshold,
+        failure_threshold=sample_plan.failure_threshold,
+        plan_snapshot={"name": sample_plan.name, "plan_id": sample_plan.id},
         triggered_by="test",
     )
     db_session.add(run)
@@ -272,15 +305,15 @@ def sample_workflow_run(db_session, sample_workflow_definition):
 
 
 @pytest.fixture
-def sample_job_instance(db_session, sample_workflow_run, sample_task_template, sample_device, sample_host):
+def sample_job_instance(db_session, sample_plan_run, sample_plan, sample_device, sample_host):
     """Create a sample JobInstance."""
     job = JobInstance(
-        workflow_run_id=sample_workflow_run.id,
-        task_template_id=sample_task_template.id,
+        plan_run_id=sample_plan_run.id,
+        plan_id=sample_plan.id,
         device_id=sample_device.id,
         host_id=sample_host.id,
         status=JobStatus.PENDING.value,
-        pipeline_def=sample_task_template.pipeline_def,
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
     )
     db_session.add(job)
     db_session.commit()
@@ -288,15 +321,15 @@ def sample_job_instance(db_session, sample_workflow_run, sample_task_template, s
 
 
 @pytest.fixture
-def sample_running_job(db_session, sample_workflow_run, sample_task_template, sample_device, sample_host):
+def sample_running_job(db_session, sample_plan_run, sample_plan, sample_device, sample_host):
     """Create a sample running JobInstance."""
     job = JobInstance(
-        workflow_run_id=sample_workflow_run.id,
-        task_template_id=sample_task_template.id,
+        plan_run_id=sample_plan_run.id,
+        plan_id=sample_plan.id,
         device_id=sample_device.id,
         host_id=sample_host.id,
         status=JobStatus.RUNNING.value,
-        pipeline_def=sample_task_template.pipeline_def,
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
         started_at=datetime.now(timezone.utc),
     )
     db_session.add(job)

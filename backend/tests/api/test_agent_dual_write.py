@@ -53,14 +53,14 @@ from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, StepTrace, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance, StepTrace
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 
 PIPELINE_DEF = {
-    "stages": {
-        "prepare": [],
-        "execute": [{"step_id": "dummy", "action": "builtin:noop", "timeout_seconds": 1}],
-        "post_process": [],
+    "lifecycle": {
+        "init": [],
+        "teardown": [],
     }
 }
 
@@ -80,31 +80,25 @@ def _seed_job(*, status: str = JobStatus.PENDING.value) -> dict:
             status="ONLINE", tags=[], created_at=now,
             adb_connected=True, adb_state="device",
         )
-        wf = WorkflowDefinition(
-            name=f"wf-{suffix}", description="dual-write route test",
-            failure_threshold=0.1, created_by="pytest",
-            created_at=now, updated_at=now,
+        plan = Plan(
+            name=f"plan-{suffix}", description="dual-write route test",
+            failure_threshold=0.1, lifecycle=PIPELINE_DEF,
+            created_by="pytest",
         )
-        db.add_all([host, device, wf])
+        db.add_all([host, device, plan])
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
+        plan_run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL", triggered_by="pytest",
         )
-        db.add(tpl)
-        db.flush()
-
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
-            failure_threshold=0.1, triggered_by="pytest", started_at=now,
-        )
-        db.add(run)
+        db.add(plan_run)
         db.flush()
 
         job = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=plan_run.id, plan_id=plan.id,
             device_id=device.id, host_id=host_id,
             status=status, pipeline_def=PIPELINE_DEF,
             created_at=now, updated_at=now,
@@ -115,8 +109,8 @@ def _seed_job(*, status: str = JobStatus.PENDING.value) -> dict:
 
         return {
             "host_id": host_id, "device_id": device.id,
-            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
-            "workflow_run_id": run.id, "job_id": job.id,
+            "plan_id": plan.id, "plan_run_id": plan_run.id,
+            "job_id": job.id,
         }
     finally:
         db.close()
@@ -131,17 +125,14 @@ def _cleanup_seed(seed: dict) -> None:
             db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
             db.query(JobInstance).filter(JobInstance.id == job_id).delete()
 
-        run_id = seed.get("workflow_run_id")
+        run_id = seed.get("plan_run_id")
         if run_id:
-            db.query(WorkflowRun).filter(WorkflowRun.id == run_id).delete()
+            db.query(PlanRun).filter(PlanRun.id == run_id).delete()
 
-        tpl_id = seed.get("task_template_id")
-        if tpl_id:
-            db.query(TaskTemplate).filter(TaskTemplate.id == tpl_id).delete()
-
-        wf_id = seed.get("workflow_definition_id")
-        if wf_id:
-            db.query(WorkflowDefinition).filter(WorkflowDefinition.id == wf_id).delete()
+        plan_id = seed.get("plan_id")
+        if plan_id:
+            db.query(PlanStep).filter(PlanStep.plan_id == plan_id).delete()
+            db.query(Plan).filter(Plan.id == plan_id).delete()
 
         device_id = seed.get("device_id")
         if device_id:
@@ -1114,8 +1105,7 @@ def _cleanup_custom(seed: dict) -> None:
         # Collect all IDs by type
         job_ids = set()
         run_ids = set()
-        tpl_ids = set()
-        wf_ids = set()
+        plan_ids = set()
         device_ids = set()
         host_id = None
         for key, val in seed.items():
@@ -1127,12 +1117,10 @@ def _cleanup_custom(seed: dict) -> None:
                 device_ids.add(val)
         if "host_id" in seed:
             host_id = seed["host_id"]
-        if "workflow_run_id" in seed:
-            run_ids.add(seed["workflow_run_id"])
-        if "task_template_id" in seed:
-            tpl_ids.add(seed["task_template_id"])
-        if "workflow_definition_id" in seed:
-            wf_ids.add(seed["workflow_definition_id"])
+        if "plan_run_id" in seed:
+            run_ids.add(seed["plan_run_id"])
+        if "plan_id" in seed:
+            plan_ids.add(seed["plan_id"])
 
         # Delete leases by device_id (for job_id=None leases) and by job_id
         for did in device_ids:
@@ -1142,11 +1130,10 @@ def _cleanup_custom(seed: dict) -> None:
             db.query(StepTrace).filter(StepTrace.job_id == jid).delete()
             db.query(JobInstance).filter(JobInstance.id == jid).delete()
         for rid in run_ids:
-            db.query(WorkflowRun).filter(WorkflowRun.id == rid).delete()
-        for tid in tpl_ids:
-            db.query(TaskTemplate).filter(TaskTemplate.id == tid).delete()
-        for wid in wf_ids:
-            db.query(WorkflowDefinition).filter(WorkflowDefinition.id == wid).delete()
+            db.query(PlanRun).filter(PlanRun.id == rid).delete()
+        for pid in plan_ids:
+            db.query(PlanStep).filter(PlanStep.plan_id == pid).delete()
+            db.query(Plan).filter(Plan.id == pid).delete()
         for did in device_ids:
             db.query(Device).filter(Device.id == did).delete()
         if host_id:
@@ -1178,15 +1165,14 @@ async def test_skip_locked_skips_manually_locked_job():
             dev_b.host_id = host_id
         if job_b:
             job_b.host_id = host_id
-            job_b.workflow_run_id = seed_a["workflow_run_id"]
-            job_b.task_template_id = seed_a["task_template_id"]
+            job_b.plan_run_id = seed_a["plan_run_id"]
+            job_b.plan_id = seed_a["plan_id"]
         db_sync.flush()
         # Delete seed_b's orphan records (no longer referenced)
-        run_b = db_sync.get(WorkflowRun, seed_b["workflow_run_id"])
-        tpl_b = db_sync.get(TaskTemplate, seed_b["task_template_id"])
-        wf_b = db_sync.get(WorkflowDefinition, seed_b["workflow_definition_id"])
+        run_b = db_sync.get(PlanRun, seed_b["plan_run_id"])
+        plan_b = db_sync.get(Plan, seed_b["plan_id"])
         host_b = db_sync.get(Host, seed_b["host_id"])
-        for obj in (run_b, tpl_b, wf_b, host_b):
+        for obj in (run_b, plan_b, host_b):
             if obj:
                 db_sync.delete(obj)
         db_sync.commit()
@@ -1196,9 +1182,8 @@ async def test_skip_locked_skips_manually_locked_job():
     merged_seed = {
         "host_id": host_id,
         "device_id_a": seed_a["device_id"], "device_id_b": seed_b["device_id"],
-        "workflow_definition_id": seed_a["workflow_definition_id"],
-        "task_template_id": seed_a["task_template_id"],
-        "workflow_run_id": seed_a["workflow_run_id"],
+        "plan_id": seed_a["plan_id"],
+        "plan_run_id": seed_a["plan_run_id"],
         "job_id_a": seed_a["job_id"], "job_id_b": seed_b["job_id"],
     }
 
@@ -1250,36 +1235,32 @@ async def test_active_lease_excludes_device(lease_type):
         )
         dev_a = Device(serial=f"DWA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"DWB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
-        wf = WorkflowDefinition(
-            name=f"wf-{suffix}", description="", failure_threshold=0.1,
-            created_by="pytest", created_at=now, updated_at=now,
+        plan = Plan(
+            name=f"plan-{suffix}", description="", failure_threshold=0.1,
+            lifecycle=PIPELINE_DEF,
+            created_by="pytest",
         )
-        db.add_all([host, dev_a, dev_b, wf])
+        db.add_all([host, dev_a, dev_b, plan])
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
-        )
-        db.add(tpl)
-        db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
-            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
         db.flush()
 
         job_a = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_a.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now, updated_at=now,
         )
         job_b = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_b.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now, updated_at=now,
@@ -1302,8 +1283,7 @@ async def test_active_lease_excludes_device(lease_type):
 
         seed = {
             "host_id": host_id, "device_id_a": dev_a.id, "device_id_b": dev_b.id,
-            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
-            "workflow_run_id": run.id, "job_id_a": job_a.id, "job_id_b": job_b.id,
+            "plan_id": plan.id, "plan_run_id": run.id, "job_id_a": job_a.id, "job_id_b": job_b.id,
         }
     finally:
         db.close()
@@ -1345,24 +1325,20 @@ async def test_capacity_capped_by_max_concurrent_jobs():
         dev_a = Device(serial=f"CA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"CB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_c = Device(serial=f"CC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
-        wf = WorkflowDefinition(
-            name=f"wf-{suffix}", description="", failure_threshold=0.1,
-            created_by="pytest", created_at=now, updated_at=now,
+        plan = Plan(
+            name=f"plan-{suffix}", description="", failure_threshold=0.1,
+            lifecycle=PIPELINE_DEF,
+            created_by="pytest",
         )
-        db.add_all([host, dev_a, dev_b, dev_c, wf])
+        db.add_all([host, dev_a, dev_b, dev_c, plan])
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
-        )
-        db.add(tpl)
-        db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
-            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
         db.flush()
@@ -1379,13 +1355,13 @@ async def test_capacity_capped_by_max_concurrent_jobs():
         db.add(lease)
 
         job_b = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_b.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now, updated_at=now,
         )
         job_c = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_c.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now + timedelta(seconds=1), updated_at=now,
@@ -1395,8 +1371,7 @@ async def test_capacity_capped_by_max_concurrent_jobs():
 
         seed = {
             "host_id": host_id, "device_id_a": dev_a.id, "device_id_b": dev_b.id,
-            "device_id_c": dev_c.id, "workflow_definition_id": wf.id,
-            "task_template_id": tpl.id, "workflow_run_id": run.id,
+            "device_id_c": dev_c.id, "plan_id": plan.id, "plan_run_id": run.id,
             "job_id_b": job_b.id, "job_id_c": job_c.id,
         }
     finally:
@@ -1440,24 +1415,20 @@ async def test_zero_capacity_returns_empty_no_state_change():
         )
         dev_a = Device(serial=f"ZA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"ZB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
-        wf = WorkflowDefinition(
-            name=f"wf-{suffix}", description="", failure_threshold=0.1,
-            created_by="pytest", created_at=now, updated_at=now,
+        plan = Plan(
+            name=f"plan-{suffix}", description="", failure_threshold=0.1,
+            lifecycle=PIPELINE_DEF,
+            created_by="pytest",
         )
-        db.add_all([host, dev_a, dev_b, wf])
+        db.add_all([host, dev_a, dev_b, plan])
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
-        )
-        db.add(tpl)
-        db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
-            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
         db.flush()
@@ -1474,7 +1445,7 @@ async def test_zero_capacity_returns_empty_no_state_change():
         db.add(lease)
 
         job_b = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_b.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now, updated_at=now,
@@ -1484,8 +1455,7 @@ async def test_zero_capacity_returns_empty_no_state_change():
 
         seed = {
             "host_id": host_id, "device_id_a": dev_a.id, "device_id_b": dev_b.id,
-            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
-            "workflow_run_id": run.id, "job_id_b": job_b.id,
+            "plan_id": plan.id, "plan_run_id": run.id, "job_id_b": job_b.id,
         }
     finally:
         db.close()
@@ -1577,42 +1547,38 @@ async def test_per_device_first_does_not_waste_capacity():
         dev_a = Device(serial=f"PA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"PB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_c = Device(serial=f"PC-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
-        wf = WorkflowDefinition(
-            name=f"wf-{suffix}", description="", failure_threshold=0.1,
-            created_by="pytest", created_at=now, updated_at=now,
+        plan = Plan(
+            name=f"plan-{suffix}", description="", failure_threshold=0.1,
+            lifecycle=PIPELINE_DEF,
+            created_by="pytest",
         )
-        db.add_all([host, dev_a, dev_b, dev_c, wf])
+        db.add_all([host, dev_a, dev_b, dev_c, plan])
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
-        )
-        db.add(tpl)
-        db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
-            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
         db.flush()
 
         job_a = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_a.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now, updated_at=now,
         )
         job_b = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_b.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now + timedelta(seconds=1), updated_at=now,
         )
         job_c = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_c.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now + timedelta(seconds=2), updated_at=now,
@@ -1623,8 +1589,7 @@ async def test_per_device_first_does_not_waste_capacity():
         seed = {
             "host_id": host_id,
             "device_id_a": dev_a.id, "device_id_b": dev_b.id, "device_id_c": dev_c.id,
-            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
-            "workflow_run_id": run.id,
+            "plan_id": plan.id, "plan_run_id": run.id,
             "job_a": job_a.id, "job_b": job_b.id, "job_c": job_c.id,
         }
     finally:
@@ -1671,36 +1636,32 @@ async def test_concurrent_claim_capacity_does_not_exceed():
         )
         dev_a = Device(serial=f"CC1-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"CC2-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
-        wf = WorkflowDefinition(
-            name=f"wf-{suffix}", description="", failure_threshold=0.1,
-            created_by="pytest", created_at=now, updated_at=now,
+        plan = Plan(
+            name=f"plan-{suffix}", description="", failure_threshold=0.1,
+            lifecycle=PIPELINE_DEF,
+            created_by="pytest",
         )
-        db.add_all([host, dev_a, dev_b, wf])
+        db.add_all([host, dev_a, dev_b, plan])
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
-        )
-        db.add(tpl)
-        db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
-            failure_threshold=0.1, triggered_by="pytest", started_at=now,
+        run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=0.1, plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL", triggered_by="pytest",
         )
         db.add(run)
         db.flush()
 
         job_a = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_a.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now, updated_at=now,
         )
         job_b = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=dev_b.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now + timedelta(seconds=1), updated_at=now,
@@ -1710,8 +1671,7 @@ async def test_concurrent_claim_capacity_does_not_exceed():
 
         seed = {
             "host_id": host_id, "device_id_a": dev_a.id, "device_id_b": dev_b.id,
-            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
-            "workflow_run_id": run.id, "job_id_a": job_a.id, "job_id_b": job_b.id,
+            "plan_id": plan.id, "plan_run_id": run.id, "job_id_a": job_a.id, "job_id_b": job_b.id,
         }
     finally:
         db.close()
@@ -2497,7 +2457,7 @@ def test_hosts_api_returns_capacity_health():
 async def test_claim_filters_unhealthy_devices():
     """adb_connected=false 的设备不进入 claim 候选.
 
-    两个设备共用一个 WorkflowDefinition/WorkflowRun/TaskTemplate，
+    两个设备共用一个 Plan/PlanRun，
     各有一个 PENDING job。只 expect healthy device 被 claim。
     """
     suffix = uuid4().hex[:8]

@@ -22,10 +22,11 @@ from sqlalchemy import select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 from backend.scheduler.device_lease_reconciler import (
     _reconcile_expired_leases,
     _reconcile_stale_unknown_jobs,
@@ -45,7 +46,7 @@ PIPELINE_DEF = {
 
 
 def _seed(host_id: str, device_id: int, job_id: int, status: str) -> None:
-    """Create minimal host + device + job → WorkflowDefinition → WorkflowRun."""
+    """Create minimal host + device + job via Plan / PlanRun."""
     now = datetime.now(timezone.utc)
     db = SessionLocal()
     try:
@@ -53,23 +54,26 @@ def _seed(host_id: str, device_id: int, job_id: int, status: str) -> None:
         device = Device(id=device_id, serial=f"DW-{device_id}", host_id=host_id,
                         status="ONLINE", tags=[], created_at=now,
                         adb_connected=True, adb_state="device")
-        wf = WorkflowDefinition(name=f"wf-{device_id}", description="reconciler test",
-                                failure_threshold=0.1, created_by="pytest",
-                                created_at=now, updated_at=now)
-        db.add_all([host, device, wf])
+        plan = Plan(name=f"wf-{device_id}", description="reconciler test",
+                    failure_threshold=0.1, lifecycle={"init": [], "teardown": []},
+                    created_by="pytest")
+        db.add_all([host, device, plan])
         db.flush()
 
-        tpl = TaskTemplate(workflow_definition_id=wf.id, name=f"tpl-{device_id}",
-                           pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now)
-        db.add(tpl)
+        step = PlanStep(plan_id=plan.id, step_key="default",
+                        script_name="dummy", script_version="v1.0.0",
+                        stage="init", sort_order=0)
+        db.add(step)
         db.flush()
 
-        run = WorkflowRun(workflow_definition_id=wf.id, status=WorkflowStatus.RUNNING.value,
-                          failure_threshold=0.1, triggered_by="pytest", started_at=now)
+        run = PlanRun(plan_id=plan.id, status="RUNNING",
+                      failure_threshold=0.1, triggered_by="pytest",
+                      plan_snapshot={"name": plan.name, "plan_id": plan.id},
+                      run_type="MANUAL", started_at=now)
         db.add(run)
         db.flush()
 
-        job = JobInstance(id=job_id, workflow_run_id=run.id, task_template_id=tpl.id,
+        job = JobInstance(id=job_id, plan_run_id=run.id, plan_id=plan.id,
                           device_id=device_id, host_id=host_id, status=status,
                           pipeline_def=PIPELINE_DEF, created_at=now, updated_at=now,
                           started_at=now if status == JobStatus.RUNNING.value else None)
@@ -116,9 +120,9 @@ def _cleanup(host_id: str, device_id: int) -> None:
         db.execute(DeviceLease.__table__.delete())
         db.execute(ResourceAllocation.__table__.delete())
         db.execute(JobInstance.__table__.delete())
-        db.execute(TaskTemplate.__table__.delete())
-        db.execute(WorkflowRun.__table__.delete())
-        db.execute(WorkflowDefinition.__table__.delete())
+        db.execute(PlanStep.__table__.delete())
+        db.execute(PlanRun.__table__.delete())
+        db.execute(Plan.__table__.delete())
         db.execute(Device.__table__.delete().where(Device.id == device_id))
         db.execute(Host.__table__.delete().where(Host.id == host_id))
         db.commit()

@@ -1,8 +1,8 @@
-"""Tests for schedules API routes"""
+"""Tests for schedules API routes — ADR-0020 (Plan-based)."""
 import pytest
 from datetime import datetime, timezone
 
-from backend.models.workflow import WorkflowDefinition
+from backend.models.plan import Plan
 
 
 class TestListSchedules:
@@ -15,6 +15,7 @@ class TestListSchedules:
 
 class TestCreateSchedule:
     def test_create_schedule(self, client, auth_headers):
+        """plan_id is required; task_name / task_type are gone."""
         response = client.post(
             "/api/v1/schedules",
             json={
@@ -27,10 +28,8 @@ class TestCreateSchedule:
             },
             headers=auth_headers,
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["name"] == "Daily Monkey"
-        assert data["cron_expr"] == "0 8 * * *"
+        # Missing required plan_id → 422
+        assert response.status_code == 422
 
     def test_create_schedule_missing_fields(self, client, auth_headers):
         response = client.post(
@@ -42,43 +41,50 @@ class TestCreateSchedule:
 
 
 class TestToggleSchedule:
-    def test_toggle_schedule(self, client, auth_headers):
+    def test_toggle_schedule(self, client, auth_headers, db_session, sample_device):
+        plan = Plan(
+            name="toggle-plan",
+            description="for toggle test",
+            failure_threshold=0.05,
+            lifecycle={"init": [], "teardown": []},
+        )
+        db_session.add(plan)
+        db_session.commit()
+
         r = client.post(
             "/api/v1/schedules",
             json={
                 "name": "Toggle",
                 "cron_expr": "0 0 * * *",
-                "task_name": "T",
-                "task_type": "MONKEY",
-                "task_params": {},
+                "plan_id": plan.id,
+                "device_ids": [sample_device.id],
                 "enabled": True,
             },
             headers=auth_headers,
         )
+        assert r.status_code == 200
         sched_id = r.json()["id"]
         resp = client.post(f"/api/v1/schedules/{sched_id}/toggle", headers=auth_headers)
         assert resp.status_code == 200
 
 
-class TestWorkflowSchedule:
-    def test_create_workflow_schedule(self, client, auth_headers, db_session, sample_device):
-        now = datetime.now(timezone.utc)
-        wf = WorkflowDefinition(
-            name="sched-workflow",
+class TestPlanSchedule:
+    def test_create_plan_schedule(self, client, auth_headers, db_session, sample_device):
+        plan = Plan(
+            name="sched-plan",
             description="for schedule",
             failure_threshold=0.05,
-            created_at=now,
-            updated_at=now,
+            lifecycle={"init": [], "teardown": []},
         )
-        db_session.add(wf)
+        db_session.add(plan)
         db_session.commit()
 
         response = client.post(
             "/api/v1/schedules",
             json={
-                "name": "Workflow Daily",
+                "name": "Plan Daily",
                 "cron_expr": "0 3 * * *",
-                "workflow_definition_id": wf.id,
+                "plan_id": plan.id,
                 "device_ids": [sample_device.id],
                 "enabled": True,
             },
@@ -86,28 +92,25 @@ class TestWorkflowSchedule:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["workflow_definition_id"] == wf.id
+        assert data["plan_id"] == plan.id
         assert data["device_ids"] == [sample_device.id]
-        assert data["task_type"] == "WORKFLOW"
 
-    def test_run_now_workflow_schedule(self, client, auth_headers, db_session, sample_device, monkeypatch):
-        now = datetime.now(timezone.utc)
-        wf = WorkflowDefinition(
+    def test_run_now_plan_schedule(self, client, auth_headers, db_session, sample_device, monkeypatch):
+        plan = Plan(
             name="sched-run-now",
-            description="run now workflow",
+            description="run now plan",
             failure_threshold=0.05,
-            created_at=now,
-            updated_at=now,
+            lifecycle={"init": [], "teardown": []},
         )
-        db_session.add(wf)
+        db_session.add(plan)
         db_session.commit()
 
         create_resp = client.post(
             "/api/v1/schedules",
             json={
-                "name": "Workflow RunNow",
+                "name": "Plan RunNow",
                 "cron_expr": "0 4 * * *",
-                "workflow_definition_id": wf.id,
+                "plan_id": plan.id,
                 "device_ids": [sample_device.id],
                 "enabled": True,
             },
@@ -117,12 +120,11 @@ class TestWorkflowSchedule:
         sched_id = create_resp.json()["id"]
 
         monkeypatch.setattr(
-            "backend.api.routes.schedules._dispatch_workflow_sync",
-            lambda workflow_definition_id, device_ids: 9527,
+            "backend.api.routes.schedules._dispatch_plan_sync_wrapper",
+            lambda plan_id, device_ids: 9527,
         )
 
         run_resp = client.post(f"/api/v1/schedules/{sched_id}/run-now", headers=auth_headers)
         assert run_resp.status_code == 200
         payload = run_resp.json()
-        assert payload["workflow_run_id"] == 9527
-        assert payload["task_id"] is None
+        assert payload["plan_run_id"] == 9527

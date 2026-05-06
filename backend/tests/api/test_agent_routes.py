@@ -22,8 +22,9 @@ from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, StepTrace, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance, StepTrace
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 
 
 PIPELINE_DEF = {
@@ -61,40 +62,30 @@ def _seed_job(status: str = JobStatus.PENDING.value) -> dict:
             tags=[],
             created_at=now,
         )
-        wf = WorkflowDefinition(
-            name=f"wf-{suffix}",
-            description="pytest workflow",
+        plan = Plan(
+            name=f"plan-{suffix}",
+            description="pytest plan",
             failure_threshold=0.1,
+            lifecycle=PIPELINE_DEF,
             created_by="pytest",
-            created_at=now,
-            updated_at=now,
         )
-        db.add_all([host, device, wf])
+        db.add_all([host, device, plan])
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id,
-            name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF,
-            sort_order=0,
-            created_at=now,
-        )
-        db.add(tpl)
-        db.flush()
-
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
+        plan_run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
             failure_threshold=0.1,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
             triggered_by="pytest",
-            started_at=now,
         )
-        db.add(run)
+        db.add(plan_run)
         db.flush()
 
         job = JobInstance(
-            workflow_run_id=run.id,
-            task_template_id=tpl.id,
+            plan_run_id=plan_run.id,
+            plan_id=plan.id,
             device_id=device.id,
             host_id=host_id,
             status=status,
@@ -110,9 +101,8 @@ def _seed_job(status: str = JobStatus.PENDING.value) -> dict:
             "host_id": host_id,
             "device_id": device.id,
             "device_serial": device.serial,
-            "workflow_definition_id": wf.id,
-            "task_template_id": tpl.id,
-            "workflow_run_id": run.id,
+            "plan_id": plan.id,
+            "plan_run_id": plan_run.id,
             "job_id": job.id,
         }
     finally:
@@ -184,17 +174,14 @@ def _cleanup_seed(seed: dict) -> None:
             db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
             db.query(JobInstance).filter(JobInstance.id == job_id).delete()
 
-        run_id = seed.get("workflow_run_id")
+        run_id = seed.get("plan_run_id")
         if run_id:
-            db.query(WorkflowRun).filter(WorkflowRun.id == run_id).delete()
+            db.query(PlanRun).filter(PlanRun.id == run_id).delete()
 
-        tpl_id = seed.get("task_template_id")
-        if tpl_id:
-            db.query(TaskTemplate).filter(TaskTemplate.id == tpl_id).delete()
-
-        wf_id = seed.get("workflow_definition_id")
-        if wf_id:
-            db.query(WorkflowDefinition).filter(WorkflowDefinition.id == wf_id).delete()
+        plan_id = seed.get("plan_id")
+        if plan_id:
+            db.query(PlanStep).filter(PlanStep.plan_id == plan_id).delete()
+            db.query(Plan).filter(Plan.id == plan_id).delete()
 
         device_id = seed.get("device_id")
         if device_id:
@@ -327,13 +314,13 @@ async def test_complete_job_maps_finished_to_completed():
         db = SessionLocal()
         try:
             job = db.get(JobInstance, seed["job_id"])
-            run = db.get(WorkflowRun, seed["workflow_run_id"])
+            plan_run = db.get(PlanRun, seed["plan_run_id"])
             assert job is not None
-            assert run is not None
+            assert plan_run is not None
             assert job.status == JobStatus.COMPLETED.value
             assert job.ended_at is not None
-            assert run.status == WorkflowStatus.SUCCESS.value
-            assert run.ended_at is not None
+            assert plan_run.status == "SUCCESS"
+            assert plan_run.ended_at is not None
         finally:
             db.close()
     finally:

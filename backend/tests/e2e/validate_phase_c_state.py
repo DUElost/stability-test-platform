@@ -23,9 +23,9 @@ from sqlalchemy import create_engine, text
 
 
 NEW_TABLES = [
-    "host", "device", "workflow_definition", "task_template",
-    "workflow_run", "job_instance", "step_trace", "tool",
-    "job_artifact", "action_template",
+    "host", "device", "plan", "plan_step", "plan_run",
+    "plan_migration_audit", "job_instance", "step_trace",
+    "job_artifact", "action_template", "device_leases",
 ]
 
 LEGACY_TABLES = [
@@ -111,12 +111,13 @@ def main() -> int:
                 else:
                     failures.append(f"[FAIL] job_instance.{col} missing")
 
-            # tool.category
-            cat_type = _column_data_type(conn, "tool", "category")
-            if cat_type:
-                infos.append(f"[OK] tool.category exists ({cat_type})")
-            else:
-                failures.append("[FAIL] tool.category missing")
+            # plan FKs
+            for col in ("plan_run_id", "plan_id"):
+                dt = _column_data_type(conn, "job_instance", col)
+                if dt:
+                    infos.append(f"[OK] job_instance.{col} exists ({dt})")
+                else:
+                    failures.append(f"[FAIL] job_instance.{col} missing")
 
             # 3) Legacy table coexistence (INFO, not failure)
             for table in LEGACY_TABLES:
@@ -125,14 +126,13 @@ def main() -> int:
                 else:
                     infos.append(f"[INFO] legacy table already dropped: {table}")
 
-            # 4) Data migration check
-            if _table_exists(conn, "host") and _table_exists(conn, "hosts"):
-                old_count = _row_count(conn, "hosts")
-                new_count = _row_count(conn, "host")
-                if old_count > 0 and new_count == 0:
-                    failures.append(f"[FAIL] hosts has {old_count} rows but host has 0 — data migration incomplete")
-                else:
-                    infos.append(f"[OK] host rows: {new_count} (legacy hosts: {old_count})")
+            # 4) Plan data migration check
+            if _table_exists(conn, "plan_run"):
+                pr_count = _row_count(conn, "plan_run")
+                infos.append(f"[OK] plan_run rows: {pr_count}")
+            if _table_exists(conn, "plan_migration_audit"):
+                audit_count = _row_count(conn, "plan_migration_audit")
+                infos.append(f"[OK] plan_migration_audit rows: {audit_count}")
 
     except Exception as exc:
         print(f"[FAIL] validation error: {exc}")

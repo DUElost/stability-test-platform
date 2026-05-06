@@ -1,7 +1,7 @@
 """Agent API watcher 契约测试 —— 覆盖 C1 扩展的三处端点。
 
 端点：
-  1. POST /agent/jobs/claim           : 响应带 device_serial + watcher_policy（来自 WorkflowDefinition）
+  1. POST /agent/jobs/claim           : 响应带 device_serial + watcher_policy（来自 Plan）
   2. POST /agent/jobs/{id}/complete   : 接受 watcher_summary，回填 JobInstance.watcher_*
   3. POST /agent/log-signals          : 幂等 upsert (job_id, seq_no)，累加 log_signal_count
 
@@ -43,8 +43,9 @@ from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, JobLogSignal, StepTrace, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance, JobLogSignal, StepTrace
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 
 
 PIPELINE_DEF = {
@@ -93,41 +94,31 @@ def _seed_job_with_policy(
             tags=[],
             created_at=now,
         )
-        wf = WorkflowDefinition(
-            name=f"wf-{suffix}",
+        plan = Plan(
+            name=f"plan-{suffix}",
             description="watcher-contract",
             failure_threshold=0.1,
+            lifecycle=PIPELINE_DEF,
             created_by="pytest",
             watcher_policy=watcher_policy,
-            created_at=now,
-            updated_at=now,
         )
-        db.add_all([host, device, wf])
+        db.add_all([host, device, plan])
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id,
-            name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF,
-            sort_order=0,
-            created_at=now,
-        )
-        db.add(tpl)
-        db.flush()
-
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
+        plan_run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
             failure_threshold=0.1,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
             triggered_by="pytest",
-            started_at=now,
         )
-        db.add(run)
+        db.add(plan_run)
         db.flush()
 
         job = JobInstance(
-            workflow_run_id=run.id,
-            task_template_id=tpl.id,
+            plan_run_id=plan_run.id,
+            plan_id=plan.id,
             device_id=device.id,
             host_id=host_id,
             status=job_status,
@@ -143,9 +134,8 @@ def _seed_job_with_policy(
             "host_id": host_id,
             "device_id": device.id,
             "device_serial": device.serial,
-            "workflow_definition_id": wf.id,
-            "task_template_id": tpl.id,
-            "workflow_run_id": run.id,
+            "plan_id": plan.id,
+            "plan_run_id": plan_run.id,
             "job_id": job.id,
         }
     finally:
@@ -162,17 +152,14 @@ def _cleanup_seed(seed: dict) -> None:
             db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
             db.query(JobInstance).filter(JobInstance.id == job_id).delete()
 
-        run_id = seed.get("workflow_run_id")
+        run_id = seed.get("plan_run_id")
         if run_id:
-            db.query(WorkflowRun).filter(WorkflowRun.id == run_id).delete()
+            db.query(PlanRun).filter(PlanRun.id == run_id).delete()
 
-        tpl_id = seed.get("task_template_id")
-        if tpl_id:
-            db.query(TaskTemplate).filter(TaskTemplate.id == tpl_id).delete()
-
-        wf_id = seed.get("workflow_definition_id")
-        if wf_id:
-            db.query(WorkflowDefinition).filter(WorkflowDefinition.id == wf_id).delete()
+        plan_id = seed.get("plan_id")
+        if plan_id:
+            db.query(PlanStep).filter(PlanStep.plan_id == plan_id).delete()
+            db.query(Plan).filter(Plan.id == plan_id).delete()
 
         device_id = seed.get("device_id")
         if device_id:
@@ -230,7 +217,7 @@ def _setup_watcher_lease(seed: dict) -> str:
 
 @pytest.mark.asyncio
 async def test_claim_returns_device_serial_and_watcher_policy():
-    """claim 成功时 JobOut 必须包含 device_serial + watcher_policy（取自 WorkflowDefinition）。"""
+    """claim 成功时 JobOut 必须包含 device_serial + watcher_policy（取自 Plan）。"""
     seed = _seed_job_with_policy(watcher_policy=DEFAULT_WATCHER_POLICY)
     try:
         await async_engine.dispose()
@@ -248,7 +235,7 @@ async def test_claim_returns_device_serial_and_watcher_policy():
         assert item.device_id == seed["device_id"]
         # 新增契约字段：device_serial
         assert item.device_serial == seed["device_serial"]
-        # 新增契约字段：watcher_policy（来自 WorkflowDefinition）
+        # 新增契约字段：watcher_policy（来自 Plan）
         assert item.watcher_policy == DEFAULT_WATCHER_POLICY
         # Job 已被原子转为 RUNNING
         assert item.status == JobStatus.RUNNING.value
@@ -257,8 +244,8 @@ async def test_claim_returns_device_serial_and_watcher_policy():
 
 
 @pytest.mark.asyncio
-async def test_claim_returns_null_watcher_policy_when_workflow_has_none():
-    """WorkflowDefinition.watcher_policy 为空时 claim 响应 watcher_policy=None（不中断业务）。"""
+async def test_claim_returns_null_watcher_policy_when_plan_has_none():
+    """Plan.watcher_policy 为空时 claim 响应 watcher_policy=None（不中断业务）。"""
     seed = _seed_job_with_policy(watcher_policy=None)
     try:
         await async_engine.dispose()

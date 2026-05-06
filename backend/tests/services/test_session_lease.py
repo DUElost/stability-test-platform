@@ -6,10 +6,11 @@ from uuid import uuid4
 import pytest
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
-from backend.models.enums import HostStatus, JobStatus, WorkflowStatus
+from backend.models.enums import HostStatus, JobStatus
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 
 
 PIPELINE_DEF = {
@@ -22,7 +23,7 @@ PIPELINE_DEF = {
 
 
 def _seed() -> dict:
-    """Create Host + Device + WorkflowDefinition + TaskTemplate + WorkflowRun + JobInstance."""
+    """Create Host + Device + Plan + PlanStep + PlanRun + JobInstance."""
     suffix = uuid4().hex[:8]
     host_id = f"lease-host-{suffix}"
     now = datetime.now(timezone.utc)
@@ -36,29 +37,33 @@ def _seed() -> dict:
         db.add_all([host, device])
         db.flush()
 
-        wf = WorkflowDefinition(
+        plan = Plan(
             name=f"wf-{suffix}", description="t", failure_threshold=0.1,
-            created_by="test", created_at=now, updated_at=now,
+            lifecycle={"init": [], "teardown": []},
+            created_by="test",
         )
-        db.add(wf)
+        db.add(plan)
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
+        step = PlanStep(
+            plan_id=plan.id, step_key="default",
+            script_name="dummy", script_version="v1.0.0",
+            stage="init", sort_order=0,
         )
-        db.add(tpl)
+        db.add(step)
         db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id, status=WorkflowStatus.RUNNING.value,
+        run = PlanRun(
+            plan_id=plan.id, status="RUNNING",
             failure_threshold=0.1, triggered_by="test", started_at=now,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
         )
         db.add(run)
         db.flush()
 
         job = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id, device_id=device.id,
+            plan_run_id=run.id, plan_id=plan.id, device_id=device.id,
             host_id=host_id, status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=now, updated_at=now,
         )
@@ -67,7 +72,7 @@ def _seed() -> dict:
 
         return {
             "host_id": host_id, "device_id": device.id,
-            "wf_id": wf.id, "run_id": run.id, "job_id": job.id,
+            "plan_id": plan.id, "run_id": run.id, "job_id": job.id,
         }
     finally:
         db.close()

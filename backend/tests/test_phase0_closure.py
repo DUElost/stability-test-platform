@@ -260,10 +260,11 @@ class TestDeferredPostCompletion:
     def test_fill_deferred_post_completions(self):
         """Create an orphan terminal job, verify SAQ enqueue for post-completion."""
         from backend.core.database import SessionLocal
-        from backend.models.enums import HostStatus, JobStatus, WorkflowStatus
+        from backend.models.enums import HostStatus, JobStatus
         from backend.models.host import Device, Host
-        from backend.models.job import JobInstance, TaskTemplate
-        from backend.models.workflow import WorkflowDefinition, WorkflowRun
+        from backend.models.job import JobInstance
+        from backend.models.plan import Plan, PlanStep
+        from backend.models.plan_run import PlanRun
 
         suffix = uuid4().hex[:8]
         now = datetime.now(timezone.utc)
@@ -279,36 +280,39 @@ class TestDeferredPostCompletion:
                 serial=f"S-{suffix}", host_id=host_id,
                 status="ONLINE", tags=[], created_at=now,
             )
-            wf = WorkflowDefinition(
+            plan = Plan(
                 name=f"wf-{suffix}", failure_threshold=0.5,
-                created_by="pytest", created_at=now, updated_at=now,
+                lifecycle={"init": [], "teardown": []},
+                created_by="pytest",
             )
-            db.add_all([host, device, wf])
+            db.add_all([host, device, plan])
             db.flush()
 
-            tpl = TaskTemplate(
-                workflow_definition_id=wf.id, name=f"t-{suffix}",
-                pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
-                sort_order=0, created_at=now,
+            step = PlanStep(
+                plan_id=plan.id, step_key="default",
+                script_name="dummy", script_version="v1.0.0",
+                stage="init", sort_order=0,
             )
-            db.add(tpl)
+            db.add(step)
             db.flush()
 
-            run = WorkflowRun(
-                workflow_definition_id=wf.id,
-                status=WorkflowStatus.FAILED.value,
+            run = PlanRun(
+                plan_id=plan.id,
+                status="FAILED",
                 failure_threshold=0.5, triggered_by="pytest",
                 started_at=now, ended_at=now,
+                plan_snapshot={"name": plan.name, "plan_id": plan.id},
+                run_type="MANUAL",
             )
             db.add(run)
             db.flush()
 
             job = JobInstance(
-                workflow_run_id=run.id, task_template_id=tpl.id,
+                plan_run_id=run.id, plan_id=plan.id,
                 device_id=device.id, host_id=host_id,
                 status=JobStatus.FAILED.value,
                 status_reason="test_timeout",
-                pipeline_def=tpl.pipeline_def,
+                pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
                 created_at=now, updated_at=now,
                 started_at=now,
                 ended_at=now - timedelta(seconds=300),
@@ -352,9 +356,9 @@ class TestDeferredPostCompletion:
 
             db.query(StepTrace).filter(StepTrace.job_id == job_id).delete()
             db.query(JobInstance).filter(JobInstance.id == job_id).delete()
-            db.query(WorkflowRun).filter(WorkflowRun.id == run.id).delete()
-            db.query(TaskTemplate).filter(TaskTemplate.id == tpl.id).delete()
-            db.query(WorkflowDefinition).filter(WorkflowDefinition.id == wf.id).delete()
+            db.query(PlanRun).filter(PlanRun.id == run.id).delete()
+            db.query(PlanStep).filter(PlanStep.plan_id == plan.id).delete()
+            db.query(Plan).filter(Plan.id == plan.id).delete()
             db.query(Device).filter(Device.id == device.id).delete()
             db.query(Host).filter(Host.id == host_id).delete()
             db.commit()

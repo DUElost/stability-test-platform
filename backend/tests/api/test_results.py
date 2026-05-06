@@ -3,8 +3,9 @@
 import json
 from datetime import datetime, timedelta, timezone
 
-from backend.models.job import JobInstance, StepTrace, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance, StepTrace
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 
 
 class TestResultsSummary:
@@ -31,93 +32,82 @@ class TestResultsSummary:
         smoke_type = f"Smoke-{suffix}"
         stress_type = f"Stress-{suffix}"
 
-        wf = WorkflowDefinition(
-            name="results-wf",
-            description="results aggregation",
-            failure_threshold=0.05,
-            created_at=now,
-            updated_at=now,
-        )
-        db_session.add(wf)
-        db_session.flush()
-
-        tpl_smoke = TaskTemplate(
-            workflow_definition_id=wf.id,
+        plan_smoke = Plan(
             name=smoke_type,
-            pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
-            sort_order=0,
-            created_at=now,
+            description="",
+            failure_threshold=0.05,
+            lifecycle={"init": [], "teardown": []},
         )
-        tpl_stress = TaskTemplate(
-            workflow_definition_id=wf.id,
+        plan_stress = Plan(
             name=stress_type,
-            pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
-            sort_order=1,
-            created_at=now,
+            description="",
+            failure_threshold=0.05,
+            lifecycle={"init": [], "teardown": []},
         )
-        db_session.add_all([tpl_smoke, tpl_stress])
+        db_session.add_all([plan_smoke, plan_stress])
         db_session.flush()
 
-        wf_run = WorkflowRun(
-            workflow_definition_id=wf.id,
+        plan_run = PlanRun(
+            plan_id=plan_smoke.id,
             status="RUNNING",
             failure_threshold=0.05,
+            plan_snapshot={"name": plan_smoke.name, "plan_id": plan_smoke.id},
+            run_type="MANUAL",
             triggered_by="pytest",
-            started_at=now,
-            ended_at=None,
-            result_summary=None,
         )
-        db_session.add(wf_run)
+        db_session.add(plan_run)
         db_session.flush()
+
+        pipeline_def = {"lifecycle": {"init": [], "teardown": []}}
 
         jobs = [
             JobInstance(
-                workflow_run_id=wf_run.id,
-                task_template_id=tpl_smoke.id,
+                plan_run_id=plan_run.id,
+                plan_id=plan_smoke.id,
                 device_id=sample_device.id,
                 host_id=sample_device.host_id,
                 status="COMPLETED",
                 status_reason=None,
-                pipeline_def=tpl_smoke.pipeline_def,
+                pipeline_def=pipeline_def,
                 started_at=now - timedelta(minutes=12),
                 ended_at=now - timedelta(minutes=10),
                 created_at=now - timedelta(minutes=12),
                 updated_at=now - timedelta(minutes=10),
             ),
             JobInstance(
-                workflow_run_id=wf_run.id,
-                task_template_id=tpl_stress.id,
+                plan_run_id=plan_run.id,
+                plan_id=plan_stress.id,
                 device_id=sample_device.id,
                 host_id=sample_device.host_id,
                 status="FAILED",
                 status_reason="tool failed",
-                pipeline_def=tpl_stress.pipeline_def,
+                pipeline_def=pipeline_def,
                 started_at=now - timedelta(minutes=9),
                 ended_at=now - timedelta(minutes=8),
                 created_at=now - timedelta(minutes=9),
                 updated_at=now - timedelta(minutes=8),
             ),
             JobInstance(
-                workflow_run_id=wf_run.id,
-                task_template_id=tpl_stress.id,
+                plan_run_id=plan_run.id,
+                plan_id=plan_stress.id,
                 device_id=sample_device.id,
                 host_id=sample_device.host_id,
                 status="ABORTED",
                 status_reason="manual stop",
-                pipeline_def=tpl_stress.pipeline_def,
+                pipeline_def=pipeline_def,
                 started_at=now - timedelta(minutes=7),
                 ended_at=now - timedelta(minutes=7),
                 created_at=now - timedelta(minutes=7),
                 updated_at=now - timedelta(minutes=7),
             ),
             JobInstance(
-                workflow_run_id=wf_run.id,
-                task_template_id=tpl_smoke.id,
+                plan_run_id=plan_run.id,
+                plan_id=plan_smoke.id,
                 device_id=sample_device.id,
                 host_id=sample_device.host_id,
                 status="RUNNING",
                 status_reason=None,
-                pipeline_def=tpl_smoke.pipeline_def,
+                pipeline_def=pipeline_def,
                 started_at=now - timedelta(minutes=3),
                 ended_at=None,
                 created_at=now - timedelta(minutes=3),
@@ -179,6 +169,6 @@ class TestResultsSummary:
         assert len(data["recent_runs"]) == 3
         assert data["recent_runs"][0]["run_id"] == jobs[3].id
         assert data["recent_runs"][0]["status"] == "RUNNING"
-        assert data["recent_runs"][0]["task_name"] == f"results-wf/{smoke_type}"
+        assert smoke_type in data["recent_runs"][0]["task_name"]
         assert data["recent_runs"][1]["run_id"] == jobs[2].id
         assert data["recent_runs"][1]["status"] == "CANCELED"

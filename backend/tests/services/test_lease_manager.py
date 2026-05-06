@@ -23,8 +23,9 @@ from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, TaskTemplate as JobTaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 from backend.services.lease_manager import (
     acquire_lease,
     extend_lease,
@@ -42,7 +43,7 @@ pytestmark = pytest.mark.skipif(
 
 
 async def _create_seed(db, suffix, host_id=None, serial=None):
-    """Create Host + Device + WorkflowFKs + JobInstance (PENDING).
+    """Create Host + Device + Plan/PlanStep/PlanRun + JobInstance (PENDING).
     Returns (host, device, job) with flushed IDs."""
     now = datetime.now(timezone.utc)
     hid = host_id or f"lmh-{suffix}"
@@ -53,21 +54,27 @@ async def _create_seed(db, suffix, host_id=None, serial=None):
     db.add_all([host, device])
     await db.flush()
 
-    wd = WorkflowDefinition(name=f"lmf-{suffix}", failure_threshold=0.1, created_by="test")
-    db.add(wd)
+    plan = Plan(name=f"lmf-{suffix}", failure_threshold=0.1,
+                lifecycle={"init": [], "teardown": []},
+                created_by="test")
+    db.add(plan)
     await db.flush()
-    tt = JobTaskTemplate(
-        workflow_definition_id=wd.id, name=f"lmt-{suffix}",
-        pipeline_def={"version": 1, "stages": []}, sort_order=0,
+    step = PlanStep(
+        plan_id=plan.id, step_key="default",
+        script_name="dummy", script_version="v1.0.0",
+        stage="init", sort_order=0,
     )
-    db.add(tt)
+    db.add(step)
     await db.flush()
-    wr = WorkflowRun(workflow_definition_id=wd.id, status="RUNNING", failure_threshold=0.1, triggered_by="test")
-    db.add(wr)
+    pr = PlanRun(plan_id=plan.id, status="RUNNING", failure_threshold=0.1,
+                 triggered_by="test",
+                 plan_snapshot={"name": plan.name, "plan_id": plan.id},
+                 run_type="MANUAL")
+    db.add(pr)
     await db.flush()
 
     job = JobInstance(
-        workflow_run_id=wr.id, task_template_id=tt.id,
+        plan_run_id=pr.id, plan_id=plan.id,
         device_id=device.id, host_id=host.id,
         status=JobStatus.PENDING.value,
         pipeline_def={"version": 1, "stages": []},
@@ -99,11 +106,10 @@ class TestAcquireLeaseMain:
             await db.commit()
 
             # 同一设备上创建第二个 JobInstance（不同 job_id）
-            wd = (await db.execute(select(WorkflowDefinition).limit(1))).scalars().first()
-            wr = (await db.execute(select(WorkflowRun).limit(1))).scalars().first()
-            tt = (await db.execute(select(JobTaskTemplate).limit(1))).scalars().first()
+            plan = (await db.execute(select(Plan).limit(1))).scalars().first()
+            pr = (await db.execute(select(PlanRun).limit(1))).scalars().first()
             job2 = JobInstance(
-                workflow_run_id=wr.id, task_template_id=tt.id,
+                plan_run_id=pr.id, plan_id=plan.id,
                 device_id=did, host_id=host.id,
                 status=JobStatus.COMPLETED.value,
                 pipeline_def={"version": 1, "stages": []},
@@ -254,32 +260,34 @@ def test_release_lease_sync_marks_active_to_released():
         db.add_all([host, device])
         db.flush()
 
-        wf = WorkflowDefinition(
+        plan = Plan(
             name=f"wf-{suffix}", description="sync test",
             failure_threshold=0.1, created_by="pytest",
-            created_at=now, updated_at=now,
+            lifecycle={"init": [], "teardown": []},
         )
-        db.add(wf)
+        db.add(plan)
         db.flush()
 
-        tpl = JobTaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},
-            sort_order=0, created_at=now,
+        step = PlanStep(
+            plan_id=plan.id, step_key="default",
+            script_name="dummy", script_version="v1.0.0",
+            stage="init", sort_order=0,
         )
-        db.add(tpl)
+        db.add(step)
         db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
+        run = PlanRun(
+            plan_id=plan.id,
             status="RUNNING", failure_threshold=0.1,
             triggered_by="pytest", started_at=now,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
         )
         db.add(run)
         db.flush()
 
         job = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=device.id, host_id=host.id,
             status=JobStatus.RUNNING.value,
             pipeline_def={"stages": {"prepare": [], "execute": [], "post_process": []}},

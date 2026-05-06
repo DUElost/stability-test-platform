@@ -3,13 +3,15 @@ from uuid import uuid4
 
 from backend.core.database import SessionLocal
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, WorkflowStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, TaskTemplate
-from backend.models.workflow import WorkflowDefinition, WorkflowRun
+from backend.models.job import JobInstance
+from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 from backend.scheduler import recycler
 
 
+LIFECYCLE = {"init": [], "teardown": []}
 PIPELINE_DEF = {"stages": {"prepare": [], "execute": [], "post_process": []}}
 
 
@@ -35,40 +37,42 @@ def _seed_running_job(started_at: datetime, updated_at: datetime) -> dict:
         db.add_all([host, device])
         db.flush()
 
-        wf = WorkflowDefinition(
+        plan = Plan(
             name=f"wf-{suffix}",
             description="pytest workflow",
             failure_threshold=0.1,
+            lifecycle=LIFECYCLE,
             created_by="pytest",
-            created_at=started_at,
-            updated_at=updated_at,
         )
-        db.add(wf)
+        db.add(plan)
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id,
-            name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF,
+        step = PlanStep(
+            plan_id=plan.id,
+            step_key="default",
+            script_name="dummy",
+            script_version="v1.0.0",
+            stage="init",
             sort_order=0,
-            created_at=started_at,
         )
-        db.add(tpl)
+        db.add(step)
         db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id,
-            status=WorkflowStatus.RUNNING.value,
+        run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
             failure_threshold=0.1,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
             triggered_by="pytest",
             started_at=started_at,
+            run_type="MANUAL",
         )
         db.add(run)
         db.flush()
 
         job = JobInstance(
-            workflow_run_id=run.id,
-            task_template_id=tpl.id,
+            plan_run_id=run.id,
+            plan_id=plan.id,
             device_id=device.id,
             host_id=host_id,
             status=JobStatus.RUNNING.value,
@@ -84,9 +88,8 @@ def _seed_running_job(started_at: datetime, updated_at: datetime) -> dict:
         return {
             "host_id": host_id,
             "device_id": device.id,
-            "workflow_definition_id": wf.id,
-            "task_template_id": tpl.id,
-            "workflow_run_id": run.id,
+            "plan_id": plan.id,
+            "plan_run_id": run.id,
             "job_id": job.id,
         }
     finally:
@@ -99,9 +102,9 @@ def _cleanup_seed(seed: dict) -> None:
     try:
         db.query(DeviceLease).filter(DeviceLease.job_id == seed["job_id"]).delete()
         db.query(JobInstance).filter(JobInstance.id == seed["job_id"]).delete()
-        db.query(WorkflowRun).filter(WorkflowRun.id == seed["workflow_run_id"]).delete()
-        db.query(TaskTemplate).filter(TaskTemplate.id == seed["task_template_id"]).delete()
-        db.query(WorkflowDefinition).filter(WorkflowDefinition.id == seed["workflow_definition_id"]).delete()
+        db.query(PlanRun).filter(PlanRun.id == seed["plan_run_id"]).delete()
+        db.query(PlanStep).filter(PlanStep.plan_id == seed["plan_id"]).delete()
+        db.query(Plan).filter(Plan.id == seed["plan_id"]).delete()
         db.query(Device).filter(Device.id == seed["device_id"]).delete()
         db.query(Host).filter(Host.id == seed["host_id"]).delete()
         db.commit()
@@ -157,29 +160,35 @@ def _seed_pending_job(created_at: datetime) -> dict:
         db.add_all([host, device])
         db.flush()
 
-        wf = WorkflowDefinition(
+        plan = Plan(
             name=f"wf-{suffix}", description="pytest", failure_threshold=0.1,
-            created_by="pytest", created_at=now, updated_at=now,
+            lifecycle=LIFECYCLE, created_by="pytest",
         )
-        db.add(wf)
+        db.add(plan)
         db.flush()
 
-        tpl = TaskTemplate(
-            workflow_definition_id=wf.id, name=f"tpl-{suffix}",
-            pipeline_def=PIPELINE_DEF, sort_order=0, created_at=now,
+        step = PlanStep(
+            plan_id=plan.id,
+            step_key="default",
+            script_name="dummy",
+            script_version="v1.0.0",
+            stage="init",
+            sort_order=0,
         )
-        db.add(tpl)
+        db.add(step)
         db.flush()
 
-        run = WorkflowRun(
-            workflow_definition_id=wf.id, status=WorkflowStatus.RUNNING.value,
+        run = PlanRun(
+            plan_id=plan.id, status="RUNNING",
             failure_threshold=0.1, triggered_by="pytest", started_at=now,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL",
         )
         db.add(run)
         db.flush()
 
         job = JobInstance(
-            workflow_run_id=run.id, task_template_id=tpl.id,
+            plan_run_id=run.id, plan_id=plan.id,
             device_id=device.id, host_id=host_id,
             status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
             created_at=created_at, updated_at=created_at,
@@ -189,8 +198,8 @@ def _seed_pending_job(created_at: datetime) -> dict:
 
         return {
             "host_id": host_id, "device_id": device.id,
-            "workflow_definition_id": wf.id, "task_template_id": tpl.id,
-            "workflow_run_id": run.id, "job_id": job.id,
+            "plan_id": plan.id,
+            "plan_run_id": run.id, "job_id": job.id,
         }
     finally:
         db.close()

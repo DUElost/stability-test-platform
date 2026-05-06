@@ -46,8 +46,8 @@ def test_apply_workflow_aggregation_uses_single_status_rule():
 async def test_async_workflow_aggregator_delegates_to_shared_rule():
     from backend.services.aggregator import WorkflowAggregator
 
-    terminal_job = SimpleNamespace(workflow_run_id=10)
-    run = SimpleNamespace(id=10)
+    terminal_job = SimpleNamespace(plan_run_id=10)
+    run = SimpleNamespace(id=10, status="RUNNING")
     jobs = [_job(JobStatus.COMPLETED)]
 
     result = MagicMock()
@@ -64,10 +64,10 @@ async def test_async_workflow_aggregator_delegates_to_shared_rule():
 
 
 def test_sync_workflow_aggregator_delegates_to_shared_rule():
-    from backend.services.aggregator_sync import workflow_aggregator_sync
+    from backend.services.aggregator_sync import plan_aggregator_sync
 
-    terminal_job = SimpleNamespace(workflow_run_id=11)
-    run = SimpleNamespace(id=11)
+    terminal_job = SimpleNamespace(plan_run_id=11)
+    run = SimpleNamespace(id=11, status="RUNNING")
     jobs = [_job(JobStatus.COMPLETED)]
 
     query = MagicMock()
@@ -78,6 +78,6 @@ def test_sync_workflow_aggregator_delegates_to_shared_rule():
     db.query.return_value = query
 
     with patch("backend.services.aggregator_sync.apply_workflow_aggregation") as mock_apply:
-        workflow_aggregator_sync(terminal_job, db)
+        plan_aggregator_sync(terminal_job, db)
 
     mock_apply.assert_called_once_with(run, jobs)
