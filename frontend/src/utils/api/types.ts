@@ -193,14 +193,6 @@ export interface JiraDraft {
   extra: Record<string, any>;
 }
 
-export interface TaskTemplate {
-  type: string;
-  name: string;
-  description: string;
-  default_params: Record<string, any>;
-  script_paths: Record<string, string>;
-}
-
 export interface PipelineTemplate {
   name: string;
   description: string;
@@ -330,12 +322,9 @@ export interface TaskSchedule {
   id: number;
   name: string;
   cron_expression: string;
-  task_template_id?: number | null;
-  tool_id?: number | null;
-  task_type: string;
   params: Record<string, any>;
   target_device_id?: number | null;
-  workflow_definition_id?: number | null;
+  plan_id?: number | null;
   device_ids?: number[] | null;
   enabled: boolean;
   last_run_at?: string | null;
@@ -347,33 +336,28 @@ export interface TaskSchedule {
 export interface TaskScheduleCreatePayload {
   name: string;
   cron_expression: string;
-  task_type?: string;
   params?: Record<string, any>;
   enabled?: boolean;
-  workflow_definition_id?: number | null;
+  plan_id?: number | null;
   device_ids?: number[];
-  task_template_id?: number | null;
-  tool_id?: number | null;
   target_device_id?: number | null;
 }
 
 export interface TaskScheduleUpdatePayload {
   name?: string;
   cron_expression?: string;
-  task_type?: string;
   params?: Record<string, any>;
   enabled?: boolean;
-  workflow_definition_id?: number | null;
+  plan_id?: number | null;
   device_ids?: number[];
-  task_template_id?: number | null;
-  tool_id?: number | null;
   target_device_id?: number | null;
 }
 
 export interface ScheduleRunNowResult {
   message: string;
   task_id?: number | null;
-  workflow_run_id?: number | null;
+  plan_run_id?: number | null;
+  plan_id?: number | null;
 }
 
 export interface PaginatedResponse<T> {
@@ -396,123 +380,11 @@ export interface ScriptEntry {
   entry_point?: string | null;
   content_sha256: string;
   param_schema: Record<string, any>;
+  default_params: Record<string, any>;
   is_active: boolean;
   description?: string | null;
   created_at?: string;
   updated_at?: string;
-}
-
-export interface ScriptSequenceItem {
-  script_name: string;
-  version: string;
-  params?: Record<string, any>;
-  timeout_seconds?: number;
-  retry?: number;
-}
-
-export interface ScriptSequence {
-  id: number;
-  name: string;
-  description?: string | null;
-  items: ScriptSequenceItem[];
-  on_failure: 'stop' | string;
-  created_by?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface ScriptSequencePayload {
-  name: string;
-  description?: string | null;
-  items: ScriptSequenceItem[];
-  on_failure?: 'stop';
-}
-
-export interface ScriptSequenceList {
-  items: ScriptSequence[];
-  total: number;
-  skip: number;
-  limit: number;
-}
-
-export interface ScriptExecutionCreatePayload {
-  sequence_id?: number | null;
-  items?: ScriptSequenceItem[];
-  device_ids: number[];
-  on_failure?: 'stop';
-}
-
-export interface ScriptExecutionCreated {
-  workflow_run_id: number;
-  job_ids: number[];
-  device_count: number;
-  step_count: number;
-}
-
-export interface ScriptExecutionListItem {
-  workflow_run_id: number;
-  status: string;
-  started_at: string;
-  ended_at?: string | null;
-  sequence_id?: number | null;
-  step_count: number;
-  device_count: number;
-  device_serials: string[];
-  script_names: string;
-  host_name?: string | null;
-}
-
-export interface ScriptExecutionList {
-  items: ScriptExecutionListItem[];
-  total: number;
-  skip: number;
-  limit: number;
-}
-
-export interface ScriptExecutionStep {
-  step_id: string;
-  script_name: string;
-  version?: string;
-  params: Record<string, any>;
-  timeout_seconds?: number;
-  retry: number;
-  status: string;
-  output?: string | null;
-  error_message?: string | null;
-}
-
-export interface ScriptExecutionJob {
-  id: number;
-  device_id: number;
-  device_serial?: string | null;
-  device_model?: string | null;
-  host_id?: string | null;
-  host_name?: string | null;
-  status: string;
-  status_reason?: string | null;
-  started_at?: string | null;
-  ended_at?: string | null;
-  watcher_capability?: string | null;
-  log_signal_count: number;
-  steps: ScriptExecutionStep[];
-  artifacts: Array<{
-    id: number;
-    storage_uri: string;
-    artifact_type: string;
-    size_bytes?: number | null;
-    checksum?: string | null;
-    created_at: string;
-  }>;
-}
-
-export interface ScriptExecutionDetail {
-  workflow_run_id: number;
-  mode: 'script_execution';
-  status: string;
-  sequence_id?: number | null;
-  items: ScriptSequenceItem[];
-  on_failure: 'stop' | string;
-  jobs: ScriptExecutionJob[];
 }
 
 export interface ActionTemplateEntry {
@@ -577,45 +449,6 @@ export interface PipelineDef {
   };
 }
 
-export interface PipelineStepOverride {
-  template_name: string;
-  phase: PipelinePhase;
-  step_id: string;
-  params?: Record<string, any>;
-  timeout_seconds?: number;
-  retry?: number;
-  enabled?: boolean;
-}
-
-export interface TaskTemplateEntry {
-  id: number;
-  workflow_definition_id: number;
-  name: string;
-  sort_order: number;
-  pipeline_def: PipelineDef;
-}
-
-export interface WorkflowDefinition {
-  id: number;
-  name: string;
-  description?: string | null;
-  failure_threshold: number;
-  setup_pipeline?: PipelineDef | null;
-  teardown_pipeline?: PipelineDef | null;
-  task_templates?: TaskTemplateEntry[];
-  created_at: string;
-}
-
-export interface WorkflowDefinitionCreate {
-  name: string;
-  description?: string;
-  failure_threshold?: number;
-  setup_pipeline?: PipelineDef | null;
-  teardown_pipeline?: PipelineDef | null;
-  task_templates?: Omit<TaskTemplateEntry, 'id' | 'workflow_definition_id'>[];
-}
-
-export type WorkflowStatus = 'RUNNING' | 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED' | 'DEGRADED';
 export type JobStatus =
   | 'PENDING'
   | 'RUNNING'
@@ -637,97 +470,6 @@ export interface StepTrace {
   original_ts: string;
 }
 
-export interface JobInstance {
-  id: number;
-  workflow_run_id: number;
-  workflow_definition_id?: number | null;
-  task_template_id: number;
-  host_id: string;
-  device_id: number;
-  device_serial?: string | null;
-  status: JobStatus;
-  status_reason?: string | null;
-  started_at?: string | null;
-  ended_at?: string | null;
-  created_at: string;
-  updated_at?: string;
-  step_traces?: StepTrace[];
-}
-
-export interface PaginatedJobList {
-  items: JobInstance[];
-  total: number;
-  skip: number;
-  limit: number;
-}
-
-export interface WorkflowRun {
-  id: number;
-  workflow_definition_id: number;
-  status: WorkflowStatus;
-  failure_threshold: number;
-  triggered_by?: string | null;
-  started_at: string;
-  ended_at?: string | null;
-  jobs?: JobInstance[];
-}
-
-export interface WorkflowRunCreate {
-  device_ids: number[];
-  failure_threshold?: number;
-  step_overrides?: PipelineStepOverride[];
-}
-
-export interface WorkflowRunPreviewTemplate {
-  id?: number;
-  name: string;
-  sort_order?: number;
-  resolved_pipeline: PipelineDef;
-  total_steps: number;
-  disabled_steps: number;
-  executable_steps: number;
-}
-
-export interface WorkflowRunPreview {
-  workflow_definition_id: number;
-  failure_threshold: number;
-  device_ids: number[];
-  device_count: number;
-  template_count: number;
-  job_count: number;
-  executable_steps_per_device: number;
-  templates: WorkflowRunPreviewTemplate[];
-}
-
-export interface WorkflowSummary {
-  workflow_run_id: number;
-  workflow_definition_id: number;
-  workflow_name?: string | null;
-  status: string;
-  failure_threshold: number;
-  triggered_by?: string | null;
-  started_at?: string | null;
-  ended_at?: string | null;
-  result_summary?: Record<string, any> | null;
-  statistics: {
-    total_jobs: number;
-    status_distribution: Record<string, number>;
-    pass_rate: number;
-    failed_count: number;
-    avg_duration_seconds: number;
-  };
-  device_results: Array<{
-    job_id: number;
-    device_id: number;
-    device_serial?: string | null;
-    status: string;
-    status_reason?: string | null;
-    started_at?: string | null;
-    ended_at?: string | null;
-    duration_seconds?: number | null;
-  }>;
-}
-
 export interface JobArtifactEntry {
   id: number;
   job_id: number;
@@ -736,6 +478,119 @@ export interface JobArtifactEntry {
   size_bytes?: number | null;
   checksum?: string | null;
   created_at?: string | null;
+}
+
+// ─── Plan / PlanRun (ADR-0020) ──────────────────────────────────────────────────
+
+export interface PlanStep {
+  id: number;
+  step_key: string;
+  script_name: string;
+  script_version: string;
+  stage: 'init' | 'patrol' | 'teardown';
+  sort_order: number;
+  timeout_seconds?: number | null;
+  retry: number;
+}
+
+export interface PlanStepCreate {
+  step_key: string;
+  script_name: string;
+  script_version: string;
+  stage: 'init' | 'patrol' | 'teardown';
+  sort_order?: number;
+  timeout_seconds?: number | null;
+  retry?: number;
+}
+
+export interface Plan {
+  id: number;
+  name: string;
+  description?: string | null;
+  failure_threshold: number;
+  lifecycle: Record<string, any>;
+  next_plan_id?: number | null;
+  watcher_policy?: Record<string, any> | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  steps: PlanStep[];
+}
+
+export interface PlanCreate {
+  name: string;
+  description?: string;
+  failure_threshold?: number;
+  lifecycle: Record<string, any>;
+  next_plan_id?: number | null;
+  watcher_policy?: Record<string, any> | null;
+  steps?: PlanStepCreate[];
+}
+
+export interface PlanUpdate {
+  name?: string;
+  description?: string;
+  failure_threshold?: number;
+  lifecycle?: Record<string, any>;
+  next_plan_id?: number | null;
+  watcher_policy?: Record<string, any> | null;
+  steps?: PlanStepCreate[];
+}
+
+export type PlanRunStatus = 'RUNNING' | 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED' | 'DEGRADED';
+export type PlanRunType = 'MANUAL' | 'SCHEDULE' | 'CHAIN';
+
+export interface PlanRun {
+  id: number;
+  plan_id: number;
+  status: PlanRunStatus;
+  failure_threshold: number;
+  run_type: PlanRunType;
+  triggered_by?: string | null;
+  started_at: string;
+  ended_at?: string | null;
+  result_summary?: Record<string, any> | null;
+}
+
+export interface PlanRunCreate {
+  device_ids: number[];
+  failure_threshold?: number;
+}
+
+export interface PlanRunPreview {
+  plan_id: number;
+  plan_name: string;
+  device_ids: number[];
+  device_count: number;
+  job_count: number;
+  total_steps: number;
+  lifecycle: Record<string, any>;
+}
+
+export interface PlanJobInstance {
+  id: number;
+  plan_run_id?: number | null;
+  plan_id?: number | null;
+  device_id: number;
+  device_serial?: string | null;
+  host_id?: string | null;
+  status: JobStatus;
+  status_reason?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  created_at?: string | null;
+  step_traces?: StepTrace[];
+}
+
+export interface PlanRunSummary {
+  plan_run_id: number;
+  status: string;
+  total_jobs: number;
+  status_counts: Record<string, number>;
+  pass_rate: number;
+  started_at?: string | null;
+  ended_at?: string | null;
+  result_summary?: Record<string, any> | null;
 }
 
 // ─── ResourcePool ────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, type RuntimeLogEntry, type WorkflowDefinition, type JobInstance } from '@/utils/api';
+import { api, type RuntimeLogEntry, type Plan, type PlanRun } from '@/utils/api';
 import { useSocketIO as useWebSocket, type WebSocketMessage } from '@/hooks/useSocketIO';
 import {
   FileSearch,
@@ -72,8 +72,8 @@ interface LogsPageProps {
 }
 
 export default function LogsPage({ embedded = false }: LogsPageProps) {
-  const [workflows, setWorkflows] = useState<WorkflowDefinition[]>([]);
-  const [jobs, setJobs] = useState<JobInstance[]>([]);
+  const [workflows, setWorkflows] = useState<Plan[]>([]);
+  const [jobs, setJobs] = useState<PlanRun[]>([]);
 
   const [taskLoading, setTaskLoading] = useState(false);
   const [runLoading, setRunLoading] = useState(false);
@@ -132,7 +132,6 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
     return jobs.filter((job) => (
       String(job.id).includes(q)
       || job.status.toLowerCase().includes(q)
-      || (job.status_reason || '').toLowerCase().includes(q)
     ));
   }, [jobs, runSearch]);
 
@@ -234,7 +233,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   const loadTasks = useCallback(async () => {
     setTaskLoading(true);
     try {
-      const wfList = await api.orchestration.list(0, 200);
+      const wfList = await api.plans.list(0, 200);
       setWorkflows(Array.isArray(wfList) ? wfList : []);
     } catch (error) {
       console.error('加载工作流失败:', error);
@@ -249,13 +248,12 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
     setRunLoading(true);
     try {
       const workflowId = taskId && taskId > 0 ? taskId : undefined;
-      const result = await api.execution.listJobs(0, 200, workflowId);
-      const items = result.items;
-      setJobs(items);
+      const result = await api.planRuns.list(0, 200, workflowId);
+      setJobs(result);
       setSelectedRunId((prev) => {
-        if (prev && items.some((job) => job.id === prev)) return prev;
+        if (prev && result.some((job) => job.id === prev)) return prev;
         if (taskId === null) return null;
-        return items.length > 0 ? items[0].id : null;
+        return result.length > 0 ? result[0].id : null;
       });
     } catch (error) {
       console.error('加载执行记录失败:', error);
@@ -595,7 +593,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                         </div>
                         <span className="rounded bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">{job.status}</span>
                       </div>
-                      <div className="mt-1 text-[11px] text-gray-500">{job.status_reason || job.device_serial || `设备 #${job.device_id}`}</div>
+                      <div className="mt-1 text-[11px] text-gray-500">{job.run_type} | {job.triggered_by || 'auto'}</div>
                     </button>
                   ))}
                 </div>

@@ -3,19 +3,19 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, Loader2 } from 'lucide-react';
 import { TaskDataTable, type Task, type TaskStatus, type TaskType } from '../../components/task/TaskDataTable';
-import { api, type WorkflowDefinition } from '../../utils/api';
+import { api, type Plan } from '../../utils/api';
 
 export default function TaskList() {
   const { data: tasks, isLoading, isError } = useQuery({
     queryKey: ['workflows'],
-    queryFn: () => api.orchestration.list(0, 200),
+    queryFn: () => api.plans.list(0, 200),
     refetchInterval: 5000,
   });
 
   const filteredTasks = useMemo(() => tasks ?? [], [tasks]);
 
   const formattedTasks: Task[] = useMemo(() => {
-    return filteredTasks.map((t: WorkflowDefinition) => ({
+    return filteredTasks.map((t: Plan) => ({
       id: t.id,
       name: t.name || `Workflow #${t.id}`,
       type: 'WORKFLOW' as TaskType,
@@ -28,7 +28,7 @@ export default function TaskList() {
   const total = filteredTasks.length;
 
   const handleViewDetail = (task: Task) => {
-    window.location.href = `/orchestration/workflows/${task.id}`;
+    window.location.href = `/orchestration/plans/${task.id}`;
   };
 
   if (isLoading) {
@@ -68,7 +68,7 @@ export default function TaskList() {
         </div>
         <div className="flex items-center gap-2">
           <Link
-            to="/orchestration/workflows"
+            to="/orchestration/plans"
             className="inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-medium transition-all"
           >
             <Plus className="w-4 h-4" />

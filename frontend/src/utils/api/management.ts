@@ -47,15 +47,6 @@ export const schedules = {
   runNow: (id: number) => apiClient.post<ScheduleRunNowResult>(`/schedules/${id}/run-now`),
 };
 
-export const templates = {
-  list: (skip = 0, limit = 50) =>
-    apiClient.get<PaginatedResponse<any>>('/templates', { params: { skip, limit } }),
-  get: (id: number) => apiClient.get<any>(`/templates/${id}`),
-  create: (data: any) => apiClient.post<any>('/templates', data),
-  update: (id: number, data: any) => apiClient.put<any>(`/templates/${id}`, data),
-  delete: (id: number) => apiClient.delete<void>(`/templates/${id}`),
-};
-
 export const audit = {
   list: (
     skip = 0,

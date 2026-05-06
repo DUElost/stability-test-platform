@@ -39,4 +39,12 @@ export const scripts = {
     unwrapApiResponse<{ created: number; skipped: number; deactivated: number; conflicts: any[] }>(
       apiClient.post('/scripts/scan'),
     ),
+  createVersion: (name: string, data: {
+    version: string;
+    nfs_path: string;
+    content_sha256: string;
+    param_schema?: Record<string, any>;
+    default_params: Record<string, any>;
+  }) =>
+    unwrapApiResponse<ScriptEntry>(apiClient.post(`/scripts/${name}/versions`, data)),
 };

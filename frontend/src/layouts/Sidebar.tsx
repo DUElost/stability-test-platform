@@ -14,6 +14,7 @@ import {
   AlertCircle,
   Shield,
   Rocket,
+  Code2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -37,11 +38,11 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: '脚本执行',
+    label: 'Plan 编排 (ADR-0020)',
     items: [
-      { path: '/scripts', label: '脚本库', icon: FileBox },
-      { path: '/execute', label: '执行任务', icon: Rocket },
-      { path: '/history', label: '执行记录', icon: ListTodo },
+      { path: '/orchestration/plans', label: 'Plan 管理', icon: FileBox },
+      { path: '/execution/plan-execute', label: 'Plan 执行', icon: Rocket },
+      { path: '/execution/plan-runs', label: 'Plan 记录', icon: ListTodo },
     ],
   },
   {
@@ -62,6 +63,8 @@ const navGroups: NavGroup[] = [
   {
     label: '系统管理',
     items: [
+      { path: '/script-management', label: '脚本管理', icon: Code2 },
+      { path: '/schedules', label: '定时调度', icon: Rocket },
       { path: '/audit', label: '操作日志', icon: Shield },
     ],
   },

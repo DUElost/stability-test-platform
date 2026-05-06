@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, type JiraDraft, type JobInstance } from '@/utils/api';
+import { api, type JiraDraft, type PlanRun } from '@/utils/api';
+import apiClient from '@/utils/api/client';
 import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
 
 const PRIORITY_BADGE: Record<string, string> = {
@@ -14,7 +15,7 @@ const PRIORITY_BADGE: Record<string, string> = {
 };
 
 interface RunWithDraft {
-  run: JobInstance;
+  run: PlanRun;
   draft: JiraDraft | null;
 }
 
@@ -35,13 +36,12 @@ export default function IssueTrackerPage() {
   const { data: runsData, isLoading, refetch } = useQuery({
     queryKey: ['runs-with-jira-drafts'],
     queryFn: async () => {
-      const result = await api.execution.listJobs(0, 50);
-      const runs = result.items;
+      const runs = await api.planRuns.list(0, 50);
 
       const runsWithDrafts: RunWithDraft[] = await Promise.all(
-        runs.map(async (run: JobInstance) => {
+        runs.map(async (run: PlanRun) => {
           try {
-            const draftResp = await api.execution.getCachedJobJiraDraft(run.id);
+            const draftResp = await apiClient.get(`/runs/${run.id}/jira-draft/cached`);
             return { run, draft: draftResp.data };
           } catch {
             return { run, draft: null };
@@ -97,7 +97,7 @@ export default function IssueTrackerPage() {
                   <div
                     key={run.id}
                     className="flex items-start gap-4 p-4 rounded-lg border hover:bg-gray-50 cursor-pointer transition-colors"
-                    onClick={() => navigate(`/runs/${run.id}/report`)}
+                    onClick={() => navigate(`/execution/plan-runs/${run.id}`)}
                   >
                     <AlertCircle className="w-5 h-5 text-orange-500 mt-0.5" />
                     <div className="flex-1 min-w-0">
@@ -108,7 +108,7 @@ export default function IssueTrackerPage() {
                         </span>
                       </div>
                       <div className="text-sm text-gray-500 mt-1">
-                        {draft?.project_key}-{draft?.issue_type} | 工作流 #{run.workflow_definition_id ?? '-'} | Job #{run.id}
+                        {draft?.project_key}-{draft?.issue_type} | Plan #{run.plan_id ?? '-'} | Job #{run.id}
                       </div>
                       <div className="text-sm text-gray-400 mt-1">
                         {draft?.description ? `${draft.description.substring(0, 100)}...` : '-'}

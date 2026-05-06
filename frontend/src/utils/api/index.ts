@@ -6,17 +6,17 @@ export { devices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
 export { actionTemplates, scripts } from './tools';
-export { scriptSequences, scriptExecutions } from './scripts';
 export { resourcePools } from './resourcePools';
 export { results, stats } from './analytics';
-export { users, notifications, schedules, templates, audit } from './management';
-export { orchestration, execution } from './orchestration';
+export { users, notifications, schedules, audit } from './management';
+export { plans } from './plans';
+export { planRuns } from './planRuns';
 
 export type {
   Host, Device, Task, RunStep, TaskRun,
   RuntimeLogEntry, RuntimeLogQueryResponse, LogArtifact,
   RunRiskSummary, RunRiskAlert, RunReport, JiraDraft,
-  TaskTemplate, PipelineTemplate, AgentLogOut, User,
+  PipelineTemplate, AgentLogOut, User,
   RunsByStatus, TestTypeStat, RiskDistribution, RecentRun, ResultsSummary,
   ActivityPoint, ActivityResponse, DeviceMetricPoint, DeviceMetricsResponse,
   CompletionTrendPoint, CompletionTrendResponse,
@@ -24,16 +24,13 @@ export type {
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,
   ScriptEntry,
-  ScriptSequenceItem, ScriptSequence, ScriptSequencePayload, ScriptSequenceList,
-  ScriptExecutionCreatePayload, ScriptExecutionCreated, ScriptExecutionListItem,
-  ScriptExecutionList, ScriptExecutionStep, ScriptExecutionJob, ScriptExecutionDetail,
   ActionTemplateEntry, ActionTemplateCreatePayload, ActionTemplateUpdatePayload,
-  PipelineStep, PipelinePhase, PipelinePatrol, PipelineDef, PipelineStepOverride, TaskTemplateEntry,
-  WorkflowDefinition, WorkflowDefinitionCreate,
-  WorkflowStatus, JobStatus, StepTrace, JobInstance, PaginatedJobList,
-  WorkflowRun, WorkflowRunCreate, WorkflowRunPreview, WorkflowRunPreviewTemplate,
-  WorkflowSummary, JobArtifactEntry,
+  PipelineStep, PipelinePhase, PipelinePatrol, PipelineDef,
+  JobStatus, StepTrace, JobArtifactEntry,
   ResourcePool, ResourcePoolLoad, ResourcePoolCreatePayload,
+  Plan, PlanStep, PlanStepCreate, PlanCreate, PlanUpdate,
+  PlanRunStatus, PlanRunType, PlanRun, PlanRunCreate, PlanRunPreview,
+  PlanJobInstance, PlanRunSummary,
 } from './types';
 
 import { auth } from './auth';
@@ -42,11 +39,11 @@ import { devices } from './devices';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
 import { actionTemplates, scripts } from './tools';
-import { scriptSequences, scriptExecutions } from './scripts';
 import { resourcePools } from './resourcePools';
 import { results, stats } from './analytics';
-import { users, notifications, schedules, templates, audit } from './management';
-import { orchestration, execution } from './orchestration';
+import { users, notifications, schedules, audit } from './management';
+import { plans } from './plans';
+import { planRuns } from './planRuns';
 
 export const api = {
   auth,
@@ -62,13 +59,10 @@ export const api = {
   users,
   notifications,
   schedules,
-  templates,
   audit,
-  orchestration,
-  execution,
   actionTemplates,
   scripts,
-  scriptSequences,
-  scriptExecutions,
   resourcePools,
+  plans,
+  planRuns,
 };

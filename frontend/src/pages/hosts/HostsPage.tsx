@@ -32,10 +32,10 @@ export default function HostsPage() {
     queryKey: ['active-jobs'],
     queryFn: async () => {
       const [pending, running] = await Promise.all([
-        api.execution.listJobs(0, 200, undefined, 'PENDING'),
-        api.execution.listJobs(0, 200, undefined, 'RUNNING'),
+        api.planRuns.list(0, 200, undefined, 'PENDING'),
+        api.planRuns.list(0, 200, undefined, 'RUNNING'),
       ]);
-      return [...pending.items, ...running.items];
+      return [...pending, ...running];
     },
     refetchInterval: 10000,
   });

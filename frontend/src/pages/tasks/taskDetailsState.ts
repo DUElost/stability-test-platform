@@ -1,16 +1,16 @@
-import type { JobInstance, LogArtifact, RunReport } from '../../utils/api';
+import type { PlanJobInstance, LogArtifact, RunReport } from '../../utils/api';
 
-const TERMINAL_JOB_STATUSES = new Set<JobInstance['status']>(['COMPLETED', 'FAILED', 'ABORTED']);
+const TERMINAL_JOB_STATUSES = new Set<PlanJobInstance['status']>(['COMPLETED', 'FAILED', 'ABORTED']);
 
-export function isTerminalJobStatus(status?: JobInstance['status'] | null): boolean {
+export function isTerminalJobStatus(status?: PlanJobInstance['status'] | null): boolean {
   return status ? TERMINAL_JOB_STATUSES.has(status) : false;
 }
 
-export function shouldPollJobData(activeRun?: Pick<JobInstance, 'status'> | null): boolean {
+export function shouldPollJobData(activeRun?: Pick<PlanJobInstance, 'status'> | null): boolean {
   return !!activeRun && !isTerminalJobStatus(activeRun.status);
 }
 
-export function getWorkflowDisplayStatus(activeRun?: Pick<JobInstance, 'status'> | null): string {
+export function getWorkflowDisplayStatus(activeRun?: Pick<PlanJobInstance, 'status'> | null): string {
   return activeRun?.status ?? 'PENDING';
 }
 

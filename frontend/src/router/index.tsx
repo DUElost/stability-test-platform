@@ -21,22 +21,18 @@ const NotificationsPage = lazy(() => import('../pages/notifications/Notification
 const SettingsPage = lazy(() => import('../pages/settings/SettingsPage'));
 const ChangePasswordPage = lazy(() => import('../pages/account/ChangePasswordPage'));
 const SchedulesPage = lazy(() => import('../pages/schedules/SchedulesPage'));
-const TemplatesPage = lazy(() => import('../pages/templates/TemplatesPage'));
 const AuditLogPage = lazy(() => import('../pages/audit/AuditLogPage'));
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage'));
 const IssueTrackerPage = lazy(() => import('../pages/issues/IssueTrackerPage'));
 const ResourcesPage = lazy(() => import('../pages/resources/ResourcesPage'));
 const TaskRunsPage = lazy(() => import('../pages/task-runs/TaskRunsPage'));
-const ScriptLibraryPage = lazy(() => import('../pages/scripts/ScriptLibraryPage'));
-const ScriptExecutePage = lazy(() => import('../pages/execution/ScriptExecutePage'));
-const ScriptHistoryPage = lazy(() => import('../pages/execution/ScriptHistoryPage'));
-
-// 新编排层页面
-const WorkflowDefinitionListPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionListPage'));
-const WorkflowDefinitionEditPage = lazy(() => import('../pages/orchestration/WorkflowDefinitionEditPage'));
-const DispatchEntryPage = lazy(() => import('../pages/execution/DispatchEntryPage'));
-const WorkflowRunMatrixPage = lazy(() => import('../pages/execution/WorkflowRunMatrixPage'));
-const WorkflowRunListPage = lazy(() => import('../pages/execution/WorkflowRunListPage'));
+// ADR-0020 Plan 层页面
+const PlanListPage = lazy(() => import('../pages/orchestration/PlanListPage'));
+const PlanEditPage = lazy(() => import('../pages/orchestration/PlanEditPage'));
+const PlanExecutePage = lazy(() => import('../pages/execution/PlanExecutePage'));
+const PlanRunListPage = lazy(() => import('../pages/execution/PlanRunListPage'));
+const PlanRunMatrixPage = lazy(() => import('../pages/execution/PlanRunMatrixPage'));
+const ScriptManagementPage = lazy(() => import('../pages/scripts/ScriptManagementPage'));
 
 // 检查是否已登录
 function isAuthenticated() {
@@ -70,44 +66,39 @@ export default function AppRouter() {
 
             <Route path="tasks">
               <Route index element={<TaskList />} />
-              <Route path="new" element={<Navigate to="/execute" replace />} />
+              <Route path="new" element={<Navigate to="/execution/plan-execute" replace />} />
               <Route path=":taskId" element={<TaskDetails />} />
             </Route>
 
             <Route path="runs/:runId/report" element={<RunReportPage />} />
 
-            <Route path="scripts" element={<ScriptLibraryPage />} />
-            <Route path="execute" element={<ScriptExecutePage />} />
-            <Route path="history" element={<ScriptHistoryPage />} />
+            <Route path="script-management" element={<ScriptManagementPage />} />
 
             <Route path="hosts" element={<HostsPage />} />
             <Route path="devices" element={<DevicesPage />} />
             <Route path="wifi" element={<WifiPage />} />
-            {/* /workflows → redirect to new orchestration page (backend endpoint now returns ApiResponse format) */}
-            <Route path="workflows" element={<Navigate to="/orchestration/workflows" replace />} />
+            <Route path="workflows" element={<Navigate to="/orchestration/plans" replace />} />
             <Route path="results" element={<ResultsPage />} />
-            <Route path="logs" element={<Navigate to="/history" replace />} />
             <Route path="mapreduce" element={<MapReducePage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="account/password" element={<ChangePasswordPage />} />
             <Route path="schedules" element={<SchedulesPage />} />
-            <Route path="templates" element={<TemplatesPage />} />
             <Route path="audit" element={<AuditLogPage />} />
             <Route path="issue-tracker" element={<IssueTrackerPage />} />
             <Route path="resources" element={<ResourcesPage />} />
             <Route path="task-runs" element={<TaskRunsPage />} />
 
-            {/* 编排层路由 */}
+            {/* ADR-0020 Plan 路由 */}
             <Route path="orchestration">
-              <Route path="workflows" element={<WorkflowDefinitionListPage />} />
-              <Route path="workflows/:id" element={<WorkflowDefinitionEditPage />} />
+              <Route path="plans" element={<PlanListPage />} />
+              <Route path="plans/:id" element={<PlanEditPage />} />
             </Route>
             <Route path="execution">
-              <Route path="run" element={<DispatchEntryPage />} />
-              <Route path="runs" element={<WorkflowRunListPage />} />
-              <Route path="runs/:runId" element={<WorkflowRunMatrixPage />} />
+              <Route path="plan-execute" element={<PlanExecutePage />} />
+              <Route path="plan-runs" element={<PlanRunListPage />} />
+              <Route path="plan-runs/:runId" element={<PlanRunMatrixPage />} />
             </Route>
 
             {/* 404 */}

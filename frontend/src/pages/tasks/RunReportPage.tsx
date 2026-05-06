@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { api, RunReport, JiraDraft } from '@/utils/api';
+import { RunReport, JiraDraft } from '@/utils/api';
+import apiClient from '@/utils/api/client';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -41,8 +42,8 @@ export default function RunReportPage() {
     const id = parseInt(runId, 10);
     setLoading(true);
     Promise.all([
-      api.execution.getCachedJobReport(id).then((r) => r.data).catch(() => null),
-      api.execution.getCachedJobJiraDraft(id).then((r) => r.data).catch(() => null),
+      apiClient.get(`/runs/${id}/report/cached`).then((r) => r.data).catch(() => null),
+      apiClient.get(`/runs/${id}/jira-draft/cached`).then((r) => r.data).catch(() => null),
     ])
       .then(([r, j]) => {
         if (r) setReport(r);
@@ -96,7 +97,7 @@ export default function RunReportPage() {
         </div>
         <div className="flex items-center gap-2">
           <a
-            href={api.execution.getJobReportExportUrl(0, parseInt(runId!, 10), 'markdown')}
+            href={`/api/v1/runs/${parseInt(runId!, 10)}/report/export?format=markdown`}
             download
           >
             <Button variant="outline" size="sm">
@@ -105,7 +106,7 @@ export default function RunReportPage() {
             </Button>
           </a>
           <a
-            href={api.execution.getJobReportExportUrl(0, parseInt(runId!, 10), 'json')}
+            href={`/api/v1/runs/${parseInt(runId!, 10)}/report/export?format=json`}
             download
           >
             <Button variant="outline" size="sm">

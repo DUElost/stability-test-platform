@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { LogViewer } from '../../components/log/LogViewer';
 import { XTerminal, type XTerminalHandle } from '../../components/log/XTerminal';
 import { PipelineStepTree, type StepUpdateMessage } from '../../components/pipeline/PipelineStepTree';
-import { api, AgentLogOut, JiraDraft, type JobInstance, type WorkflowDefinition } from '../../utils/api';
+import { api, AgentLogOut, JiraDraft, type Plan, type PlanJobInstance, type PlanRun, type RunStep } from '../../utils/api';
+import apiClient from '../../utils/api/client';
 import { useSocketIO as useWebSocket } from '../../hooks/useSocketIO';
 import { getLatestArtifact, getWorkflowDisplayStatus, shouldPollJobData } from './taskDetailsState';
 
@@ -23,6 +24,7 @@ const MAX_LINES_PER_STEP = 5000;
 export default function TaskDetails() {
   const { taskId } = useParams();
   const id = Number(taskId);
+  const navigate = useNavigate();
   const [agentLogContent, setAgentLogContent] = useState<string>('');
   const [showAgentLog, setShowAgentLog] = useState(false);
   const [jiraDraftContent, setJiraDraftContent] = useState<string>('');
@@ -35,16 +37,26 @@ export default function TaskDetails() {
   const xtermRef = useRef<XTerminalHandle>(null);
   const manualSelection = useRef(false);
 
-  const { data: task } = useQuery<WorkflowDefinition>({
+  const { data: task, isLoading: taskLoading, isError: taskError } = useQuery<Plan>({
     queryKey: ['tasks', id],
-    queryFn: () => api.orchestration.get(id),
-    enabled: !!id,
+    queryFn: () => api.plans.get(id),
+    enabled: Number.isFinite(id) && id > 0,
+    retry: false,
   });
 
-  const { data: jobs } = useQuery<JobInstance[]>({
-    queryKey: ['tasks', id, 'jobs'],
-    queryFn: () => api.execution.listJobs(0, 200, id).then(r => r.items),
-    enabled: !!id,
+  // Fetch latest plan run, then its jobs
+  const { data: planRuns } = useQuery<PlanRun[]>({
+    queryKey: ['tasks', id, 'plan-runs'],
+    queryFn: () => api.planRuns.list(0, 1, id),
+    enabled: !!task,
+  });
+
+  const activePlanRun = planRuns?.[0];
+
+  const { data: jobs } = useQuery<PlanJobInstance[]>({
+    queryKey: ['tasks', id, 'plan-runs', activePlanRun?.id, 'jobs'],
+    queryFn: () => activePlanRun ? api.planRuns.listJobs(activePlanRun.id) : Promise.resolve([]),
+    enabled: !!activePlanRun,
     refetchInterval: (data) => (data?.some((job) => shouldPollJobData(job)) ? 5000 : false),
   });
 
@@ -53,7 +65,7 @@ export default function TaskDetails() {
   const shouldPollActiveRun = shouldPollJobData(activeRun);
   const { data: runReport } = useQuery({
     queryKey: ['runs', activeRun?.id, 'report'],
-    queryFn: () => api.execution.getCachedJobReport(activeRun!.id).then(res => res.data),
+    queryFn: () => apiClient.get(`/runs/${activeRun!.id}/report/cached`).then(res => res.data),
     enabled: !!activeRun?.id,
     refetchInterval: shouldPollActiveRun ? 5000 : false,
   });
@@ -64,7 +76,7 @@ export default function TaskDetails() {
   // Fetch RunSteps for pipeline tasks
   const { data: runSteps } = useQuery({
     queryKey: ['runs', activeRun?.id, 'steps'],
-    queryFn: () => api.execution.getJobSteps(activeRun!.id).then(res => res.data),
+    queryFn: () => apiClient.get(`/runs/${activeRun!.id}/steps`).then(res => res.data),
     enabled: !!activeRun?.id,
     refetchInterval: shouldPollActiveRun ? 5000 : false,
   });
@@ -92,7 +104,7 @@ export default function TaskDetails() {
       // Resolve to a stable step key (prefer step name for stages format)
       let stepKey = '';
       if (typeof step_id === 'number') {
-        const matched = runSteps?.find(s => s.id === step_id);
+        const matched = runSteps?.find((s: RunStep) => s.id === step_id);
         stepKey = matched?.name || String(step_id);
       } else {
         stepKey = String(step_id);
@@ -136,7 +148,7 @@ export default function TaskDetails() {
   // When selected step changes, load buffered logs into XTerminal (12.6)
   useEffect(() => {
     if (!selectedStepId || !runSteps?.length) return;
-    const step = runSteps.find(s => s.id === selectedStepId);
+    const step = runSteps.find((s: RunStep) => s.id === selectedStepId);
     setSelectedStepName(step?.name || null);
   }, [selectedStepId, runSteps]);
 
@@ -155,7 +167,7 @@ export default function TaskDetails() {
   }, []);
 
   // Get the selected step name for download filename
-  const selectedStep = runSteps?.find(s => s.id === selectedStepId);
+  const selectedStep = runSteps?.find((s: RunStep) => s.id === selectedStepId);
 
   // Agent log mutation
   const queryAgentLogMutation = useMutation({
@@ -181,7 +193,7 @@ export default function TaskDetails() {
   const createJiraDraftMutation = useMutation({
     mutationFn: async () => {
       if (!activeRun?.id) throw new Error('No run_id available');
-      return api.execution.createJobJiraDraft(activeRun.workflow_run_id, activeRun.id);
+      return apiClient.post(`/runs/${activeRun.id}/jira-draft`).then(res => res.data);
     },
     onSuccess: (data: JiraDraft) => {
       setJiraDraftContent(
@@ -196,7 +208,36 @@ export default function TaskDetails() {
     },
   });
 
-  if (!task) return <div>Loading...</div>;
+  if (taskLoading) return <div>Loading...</div>;
+
+  if (taskError || !task) {
+    return (
+      <div className="max-w-2xl bg-white rounded-lg shadow-sm border border-slate-200 p-6">
+        <h1 className="text-xl font-semibold text-slate-900">未找到 Plan</h1>
+        <p className="mt-2 text-sm text-slate-600">
+          当前页面需要 Plan ID。若 {Number.isFinite(id) ? id : taskId} 是 Job ID，请查看对应的运行报告。
+        </p>
+        <div className="mt-5 flex gap-3">
+          {Number.isFinite(id) && id > 0 && (
+            <button
+              type="button"
+              onClick={() => navigate(`/runs/${id}/report`)}
+              className="px-4 py-2 rounded bg-indigo-600 text-white text-sm hover:bg-indigo-500 transition-colors"
+            >
+              查看运行报告
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => navigate('/execution/plan-runs')}
+            className="px-4 py-2 rounded border border-slate-300 text-slate-700 text-sm hover:bg-slate-50 transition-colors"
+          >
+            返回 PlanRun 列表
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ---------- Render ----------
 
@@ -245,7 +286,7 @@ export default function TaskDetails() {
                   {queryAgentLogMutation.isPending ? 'Querying...' : 'Agent Logs'}
                 </button>
                 <button
-                  onClick={() => window.open(api.execution.getJobReportExportUrl(0, activeRun.id, 'markdown'), '_blank')}
+                  onClick={() => window.open(`/api/v1/runs/${activeRun.id}/report/export?format=markdown`, '_blank')}
                   className="w-full px-3 py-1.5 bg-indigo-600 text-white text-xs rounded hover:bg-indigo-500 transition-colors"
                 >
                   Export Report
@@ -330,7 +371,7 @@ export default function TaskDetails() {
                         className="mt-2 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-500"
                         onClick={() => {
                           window.open(
-                            api.execution.artifactDownloadUrl(task.id, activeRun.id, latestArtifact.id),
+                            api.planRuns.artifactDownloadUrl(activePlanRun?.id ?? 0, activeRun.id, latestArtifact.id),
                             '_blank'
                           );
                         }}
@@ -357,7 +398,7 @@ export default function TaskDetails() {
                   Query agent logs from Linux host via SSH
                 </p>
                 <button
-                  onClick={() => window.open(api.execution.getJobReportExportUrl(0, activeRun.id, 'markdown'), '_blank')}
+                  onClick={() => window.open(`/api/v1/runs/${activeRun.id}/report/export?format=markdown`, '_blank')}
                   className="mt-3 w-full px-4 py-2 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-500 transition-colors"
                 >
                   Export Run Report (Markdown)

@@ -4,28 +4,24 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { api, type JobInstance } from '@/utils/api';
+import { api, type PlanRun } from '@/utils/api';
 import { formatLocalDateTime, parseIsoToDate } from '@/utils/time';
 import { Play, Clock, CheckCircle, XCircle, AlertCircle, ChevronRight } from 'lucide-react';
 
 const STATUS_BADGE: Record<string, string> = {
-  COMPLETED: 'bg-green-100 text-green-700',
+  SUCCESS: 'bg-green-100 text-green-700',
+  PARTIAL_SUCCESS: 'bg-emerald-100 text-emerald-700',
   FAILED: 'bg-red-100 text-red-700',
   RUNNING: 'bg-blue-100 text-blue-700',
-  PENDING: 'bg-gray-100 text-gray-600',
-  PENDING_TOOL: 'bg-gray-100 text-gray-600',
-  ABORTED: 'bg-yellow-100 text-yellow-700',
-  UNKNOWN: 'bg-gray-100 text-gray-600',
+  DEGRADED: 'bg-yellow-100 text-yellow-700',
 };
 
 const STATUS_ICON: Record<string, React.ElementType> = {
-  COMPLETED: CheckCircle,
+  SUCCESS: CheckCircle,
+  PARTIAL_SUCCESS: CheckCircle,
   FAILED: XCircle,
   RUNNING: Play,
-  PENDING: Clock,
-  PENDING_TOOL: Clock,
-  ABORTED: AlertCircle,
-  UNKNOWN: AlertCircle,
+  DEGRADED: AlertCircle,
 };
 
 function formatDuration(seconds: number | null): string {
@@ -50,11 +46,11 @@ export default function TaskRunsPage() {
     queryKey: ['task-runs', page, pageSize],
     queryFn: async () => {
       const skip = (page - 1) * pageSize;
-      const result = await api.execution.listJobs(skip, pageSize);
+      const items = await api.planRuns.list(skip, pageSize);
       return {
-        items: result.items,
-        total: result.total,
-        total_pages: Math.ceil(result.total / pageSize),
+        items,
+        total: items.length,
+        total_pages: Math.ceil(items.length / pageSize) || 1,
       };
     },
   });
@@ -66,8 +62,8 @@ export default function TaskRunsPage() {
           <h1 className="text-2xl font-semibold text-gray-900">任务实例</h1>
           <p className="text-gray-500 mt-1">查看所有任务执行记录</p>
         </div>
-        <Button onClick={() => navigate('/orchestration/workflows')}>
-          新建工作流
+        <Button onClick={() => navigate('/orchestration/plans')}>
+          新建 Plan
         </Button>
       </div>
 
@@ -88,30 +84,30 @@ export default function TaskRunsPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              {data?.items.map((job: JobInstance) => {
+              {data?.items.map((job: PlanRun) => {
                 const StatusIcon = STATUS_ICON[job.status] || Clock;
                 const statusBadgeClass = STATUS_BADGE[job.status] || 'bg-gray-100 text-gray-600';
                 return (
                   <div
                     key={job.id}
                     className="flex items-center gap-4 p-4 rounded-lg border hover:bg-gray-50 cursor-pointer transition-colors"
-                    onClick={() => navigate(`/runs/${job.id}/report`)}
+                    onClick={() => navigate(`/execution/plan-runs/${job.id}`)}
                   >
                     <StatusIcon className={`w-5 h-5 ${
-                      job.status === 'COMPLETED' ? 'text-green-500' :
+                      job.status === 'SUCCESS' || job.status === 'PARTIAL_SUCCESS' ? 'text-green-500' :
                       job.status === 'FAILED' ? 'text-red-500' :
                       job.status === 'RUNNING' ? 'text-blue-500' :
                       'text-gray-400'
                     }`} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium truncate">工作流 #{job.workflow_definition_id ?? '-'}</span>
+                        <span className="font-medium truncate">Plan #{job.plan_id ?? '-'}</span>
                         <span className={`px-2 py-0.5 rounded-full text-xs ${statusBadgeClass}`}>
                           {job.status}
                         </span>
                       </div>
                       <div className="text-sm text-gray-500 mt-1">
-                        {job.device_serial ? `${job.device_serial}` : `设备 #${job.device_id}`} | 主机 {job.host_id}
+                        {job.run_type} | {job.triggered_by || 'auto'}
                       </div>
                     </div>
                     <div className="text-right text-sm text-gray-500">

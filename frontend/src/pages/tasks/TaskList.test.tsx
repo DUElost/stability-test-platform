@@ -12,7 +12,7 @@ const mockWorkflows = [
 
 vi.mock('../../utils/api', () => ({
   api: {
-    orchestration: {
+    plans: {
       list: vi.fn().mockResolvedValue(mockWorkflows),
     },
   },
@@ -93,7 +93,7 @@ describe('TaskList', () => {
 
   it('renders loading state initially', async () => {
     const { api } = await import('../../utils/api');
-    (api.orchestration.list as any).mockReturnValue(new Promise(() => {}));
+    (api.plans.list as any).mockReturnValue(new Promise(() => {}));
 
     const TaskList = (await import('./TaskList')).default;
     render(<TaskList />, { wrapper: createWrapper() });
@@ -103,7 +103,7 @@ describe('TaskList', () => {
 
   it('renders error state on failure', async () => {
     const { api } = await import('../../utils/api');
-    (api.orchestration.list as any).mockRejectedValue(new Error('network error'));
+    (api.plans.list as any).mockRejectedValue(new Error('network error'));
 
     const TaskList = (await import('./TaskList')).default;
     render(<TaskList />, { wrapper: createWrapper() });
@@ -113,7 +113,7 @@ describe('TaskList', () => {
 
   it('renders task table with workflows', async () => {
     const { api } = await import('../../utils/api');
-    (api.orchestration.list as any).mockResolvedValue(mockWorkflows);
+    (api.plans.list as any).mockResolvedValue(mockWorkflows);
 
     const TaskList = (await import('./TaskList')).default;
     render(<TaskList />, { wrapper: createWrapper() });
@@ -123,13 +123,13 @@ describe('TaskList', () => {
     expect(screen.getByTestId('task-data-table')).toBeInTheDocument();
   });
 
-  it('"新建工作流" links to /orchestration/workflows', async () => {
+  it('"新建 Plan" links to /orchestration/plans', async () => {
     const TaskList = (await import('./TaskList')).default;
     render(<TaskList />, { wrapper: createWrapper() });
 
     await screen.findByText('任务管理');
 
     const link = screen.getByText('新建工作流').closest('a');
-    expect(link).toHaveAttribute('href', '/orchestration/workflows');
+    expect(link).toHaveAttribute('href', '/orchestration/plans');
   });
 });

@@ -158,7 +158,7 @@ describe('api module', () => {
   });
 
   describe('api namespace methods', () => {
-    it('exports hosts, devices, tasks, and other namespaces', async () => {
+    it('exports hosts, devices, plans, planRuns, and other namespaces', async () => {
       const { api } = await import('./api');
       expect(api.hosts).toBeDefined();
       expect(api.hosts.list).toBeInstanceOf(Function);
@@ -166,24 +166,22 @@ describe('api module', () => {
       expect(api.hosts.update).toBeInstanceOf(Function);
       expect(api.devices).toBeDefined();
       expect(api.devices.list).toBeInstanceOf(Function);
-      expect(api.orchestration).toBeDefined();
-      expect(api.orchestration.list).toBeInstanceOf(Function);
-      expect(api.orchestration.delete).toBeInstanceOf(Function);
-      expect(api.execution).toBeDefined();
-      expect(api.execution.listJobs).toBeInstanceOf(Function);
+      expect(api.plans).toBeDefined();
+      expect(api.plans.list).toBeInstanceOf(Function);
+      expect(api.plans.delete).toBeInstanceOf(Function);
+      expect(api.planRuns).toBeDefined();
+      expect(api.planRuns.list).toBeInstanceOf(Function);
       expect(api.auth).toBeDefined();
       expect(api.auth.login).toBeInstanceOf(Function);
       expect(api.results).toBeDefined();
       expect(api.stats).toBeDefined();
       expect(api.notifications).toBeDefined();
       expect(api.schedules).toBeDefined();
-      expect(api.templates).toBeDefined();
       expect(api.audit).toBeDefined();
-      expect(api.scriptSequences).toBeDefined();
-      expect(api.scriptSequences.list).toBeInstanceOf(Function);
-      expect(api.scriptExecutions).toBeDefined();
-      expect(api.scriptExecutions.create).toBeInstanceOf(Function);
-      expect(api.scriptExecutions.get).toBeInstanceOf(Function);
+      expect(api.scripts).toBeDefined();
+      expect(api.scripts.list).toBeInstanceOf(Function);
+      expect(api.actionTemplates).toBeDefined();
+      expect(api.actionTemplates.list).toBeInstanceOf(Function);
     });
   });
 });
