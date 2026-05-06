@@ -6,6 +6,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-05-06 — ADR-0020 Plan-based 编排架构落地
+- **架构变更**：WorkflowDefinition + TaskTemplate → Plan + PlanStep；WorkflowRun → PlanRun
+- **5 阶段 Alembic migration**：`w0x1y2z3a4b5` (DDL) → `x1y2z3a4b5c6` (DDL) → `y2z3a4b5c6d7` (DML 定义迁移) → `z3a4b5c6d7e8` (DML 数据迁移) → `a4b5c6d7e8f9` (DDL 删除旧表)
+- **删除旧模块**：`orchestration.py`、`templates.py`、`script_executions.py`、`script_sequences.py`、`dispatcher.py`、`script_execution.py`、`workflow.py`、`script_sequence.py`、`workflow.py` (schema)
+- **新模块**：`backend/api/routes/plans.py`、`backend/api/routes/plan_runs.py`、`backend/services/plan_dispatcher.py`、`backend/services/plan_dispatcher_sync.py`、`backend/models/plan.py`、`backend/models/plan_run.py`、`backend/models/plan_migration_audit.py`
+- **前端**：6 新页面 (PlanList/PlanEdit/PlanExecute/PlanRunList/PlanRunMatrix/ScriptManagement) + PlanLifecycleEditor，删除 17 个旧页面/API模块
+- **API 变更**：`/api/v1/workflows` → `/api/v1/plans`，`/api/v1/workflow-runs` → `/api/v1/plan-runs`
+- **JobInstance**：`workflow_run_id`/`task_template_id` → `plan_run_id`/`plan_id` (NOT NULL)
+- **TaskSchedule**：`workflow_definition_id`/`task_template_id`/`tool_id`/`task_type` → `plan_id`
+
 ### 2026-04-20 — ADR-0018 Watcher 子系统主线完成
 - **Stage 5A — Watcher 基础设施**：新建 `backend/agent/watcher/`（sources/batcher/emitter/manager/policy/contracts/exceptions），Alembic `k9f0a1b2c3d4`（watcher 生命周期字段）+ `m1g2h3i4j5k6`（设备 active job 部分唯一索引），`JobLogSignal` ORM + `backend/agent/job_session.py` + `POST /api/v1/agent/log-signals` + `claim` PENDING→RUNNING
 - **Stage 5B1 — LogPuller**：per-device async adb pull → NFS + sha256/size_bytes/first_lines 富化；`DeviceLogWatcher.attach_puller` + `_on_pull_done` 回调；`LogWatcherManager` 在 `nfs_base_dir` 非空时注入
@@ -151,7 +161,17 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 | POST | `/api/v1/hosts` | 创建主机 |
 | GET | `/api/v1/devices` | 列出所有设备 |
 | POST | `/api/v1/devices` | 创建设备 |
-| GET | `/api/v1/jobs` | 全量 Job 分页列表（支持 workflow_id/status 筛选） |
+| GET | `/api/v1/plans` | 列出全部 Plan |
+| POST | `/api/v1/plans` | 创建 Plan |
+| GET | `/api/v1/plans/{id}` | 获取 Plan 详情 |
+| PUT | `/api/v1/plans/{id}` | 更新 Plan |
+| DELETE | `/api/v1/plans/{id}` | 删除 Plan |
+| POST | `/api/v1/plans/{id}/run/preview` | 预览 Plan 扇出 |
+| POST | `/api/v1/plans/{id}/run` | 触发 PlanRun |
+| GET | `/api/v1/plan-runs` | PlanRun 列表 |
+| GET | `/api/v1/plan-runs/{id}` | PlanRun 详情 |
+| GET | `/api/v1/plan-runs/{id}/jobs` | PlanRun 关联 Job 列表 |
+| GET | `/api/v1/plan-runs/{id}/summary` | PlanRun 聚合概览 |
 | GET | `/api/v1/runs/{run_id}/report` | 获取 Job 报告 |
 | GET | `/api/v1/runs/{run_id}/report/cached` | 获取缓存 Job 报告 |
 | GET | `/api/v1/runs/{run_id}/report/export` | 导出 Job 报告（markdown/json） |
@@ -164,9 +184,7 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 | POST | `/api/v1/agent/logs` | 查询 Agent SSH 日志 |
 | GET | `/api/v1/pipeline/templates` | 列出内置 Pipeline 模板 |
 | GET | `/api/v1/pipeline/templates/{name}` | 获取指定 Pipeline 模板 |
-| GET | `/api/v1/workflow-runs/{run_id}/jobs/{job_id}/report` | 编排层 Job 报告 |
-| POST | `/api/v1/workflow-runs/{run_id}/jobs/{job_id}/jira-draft` | 编排层 JIRA 草稿 |
-| GET | `/api/v1/workflow-runs/{run_id}/summary` | Workflow 聚合概览 |
+| GET | `/api/v1/jobs` | 全量 Job 分页列表（支持 plan_id/status 筛选） |
 
 ### Agent API 端点
 
@@ -271,6 +289,10 @@ prometheus-client
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | Redis 连接（SAQ broker） |
 | `SAQ_CONCURRENCY` | `10` | SAQ Worker 并发数 |
 | `AGENT_SECRET` | （空） | Agent SocketIO 连接密钥（生产环境必须设置） |
+| `STP_NFS_ROOT` | `/mnt/storage/test-platform` | NFS 挂载根（生产侧），脚本/日志/产物的根目录 |
+| `STP_SCRIPT_ROOT` | `${STP_NFS_ROOT}/scripts` | 脚本扫描根。**开发环境必须显式覆盖**为 `<repo>/backend/agent/scripts` |
+| `STP_SCRIPT_RUNTIME_ROOT` | （空） | Agent 实际访问脚本的 NFS 路径前缀；扫描机=运行机时留空，跨机时指向 Agent 上的 NFS 挂载点 |
+| `STP_WATCHER_ENABLED` | `false` | Agent 侧 Watcher 子系统灰度开关（ADR-0018） |
 
 ---
 
@@ -313,43 +335,54 @@ class Device(Base):
     lease_generation: int
 ```
 
-### WorkflowDefinition（工作流定义） — `backend/models/workflow.py`
+### Plan（编排计划） — `backend/models/plan.py`
 ```python
-class WorkflowDefinition(Base):
-    __tablename__ = "workflow_definition"
+class Plan(Base):
+    __tablename__ = "plan"
     id: int
     name: str
     description: Optional[str]
     failure_threshold: float
+    lifecycle: JSONB            # {init: [...], patrol: {...}, teardown: [...]}
+    next_plan_id: Optional[int] # FK -> plan.id (自引用 Plan 链)
+    watcher_policy: Optional[JSONB]
     created_by: Optional[str]
-    # relationships: task_templates, runs
+    # relationships: steps, runs, next_plan
 ```
 
-### TaskTemplate（任务模板） — `backend/models/job.py`
+### PlanStep（编排步骤） — `backend/models/plan.py`
 ```python
-class TaskTemplate(Base):
-    __tablename__ = "task_template"
+class PlanStep(Base):
+    __tablename__ = "plan_step"
     id: int
-    workflow_definition_id: int  # FK -> workflow_definition.id
-    name: str
-    pipeline_def: JSONB          # Pipeline 定义
-    platform_filter: Optional[JSONB]
+    plan_id: int          # FK -> plan.id
+    step_key: str
+    script_name: str
+    script_version: str
+    stage: str            # init, patrol, teardown
     sort_order: int
+    timeout_seconds: Optional[int]
+    retry: int
 ```
 
-### WorkflowRun（工作流执行） — `backend/models/workflow.py`
+### PlanRun（编排执行） — `backend/models/plan_run.py`
 ```python
-class WorkflowRun(Base):
-    __tablename__ = "workflow_run"
+class PlanRun(Base):
+    __tablename__ = "plan_run"
     id: int
-    workflow_definition_id: int
-    status: str          # RUNNING, SUCCESS, PARTIAL_SUCCESS, FAILED, DEGRADED
+    plan_id: int
+    status: str                  # RUNNING, SUCCESS, PARTIAL_SUCCESS, FAILED, DEGRADED
     failure_threshold: float
+    plan_snapshot: JSONB
+    run_type: str                # MANUAL, SCHEDULE, CHAIN
+    parent_plan_run_id: Optional[int]  # FK -> plan_run.id (Plan 链)
+    root_plan_run_id: Optional[int]
+    chain_index: int
     triggered_by: Optional[str]
     started_at: datetime
     ended_at: Optional[datetime]
     result_summary: Optional[JSONB]
-    # relationships: definition, jobs
+    # relationships: plan, jobs, parent_run, root_run
 ```
 
 ### JobInstance（任务执行记录） — `backend/models/job.py`
@@ -357,11 +390,11 @@ class WorkflowRun(Base):
 class JobInstance(Base):
     __tablename__ = "job_instance"
     id: int
-    workflow_run_id: int    # FK -> workflow_run.id
-    task_template_id: int   # FK -> task_template.id
-    device_id: int          # FK -> device.id
-    host_id: str            # FK -> host.id
-    status: str             # PENDING, RUNNING, COMPLETED, FAILED, ABORTED
+    plan_run_id: int       # FK -> plan_run.id (NOT NULL)
+    plan_id: int           # FK -> plan.id (NOT NULL)
+    device_id: int         # FK -> device.id
+    host_id: str           # FK -> host.id
+    status: str            # PENDING, RUNNING, COMPLETED, FAILED, ABORTED
     status_reason: Optional[str]
     pipeline_def: JSONB
     started_at: Optional[datetime]
@@ -369,7 +402,7 @@ class JobInstance(Base):
     report_json: Optional[JSONB]
     jira_draft_json: Optional[JSONB]
     post_processed_at: Optional[datetime]
-    # relationships: workflow_run, task_template, device, host, step_traces, artifacts
+    # relationships: plan_run, plan, device, host, step_traces, artifacts
 ```
 
 ### StepTrace（步骤执行追踪） — `backend/models/job.py`
@@ -394,6 +427,105 @@ class StepTrace(Base):
 - **TaskSchedule** — `backend/models/schedule.py`（定时调度）
 - **ActionTemplate** — `backend/models/action_template.py`（Action 模板）
 - **JobArtifact** — `backend/models/job.py`（Job 产物）
+- **Script** — `backend/models/script.py`（脚本目录元数据，详见下章）
+
+---
+
+## 脚本目录与扫描机制（ADR-0020）
+
+> 唯一支持的 action 类型：`script:<name>`。脚本是 Plan 编排的最小执行单元；同名脚本通过 `version` 区分，**版本即参数**——已存在版本的 `default_params` 不允许修改，参数变更必须新建版本。
+
+### 目录契约
+
+```
+<STP_SCRIPT_ROOT>/
+  <name>/                       ← 一级=脚本名（默认作为 display_name）
+    v<version>/                 ← 二级=必须以 v 开头的语义化版本号目录
+      <entry>.{py,sh,bat,cmd}   ← 入口=该目录里第一个非 "_" 开头的可识别脚本文件
+      _adb.py                   ← "_" 开头的辅助模块在扫描时被跳过
+```
+
+仓库现有脚本（`backend/agent/scripts/`，category 固定 `device`）：
+`check_device` / `clean_env` / `connect_wifi` / `ensure_root` / `fill_storage` /
+`install_apk` / `monkey_check` / `monkey_launch (v1.0.0 + v2.0.0)` /
+`monkey_setup` / `monkey_teardown` / `push_resources`
+
+实现位置：`backend/services/script_catalog.py`、`backend/api/routes/scripts.py`、`backend/agent/registry/script_registry.py`。
+
+### 扫描根：dev vs prod 对照
+
+| 场景 | `STP_SCRIPT_ROOT` | `STP_SCRIPT_RUNTIME_ROOT` | 说明 |
+|------|------------------|--------------------------|------|
+| 开发本机（Windows + 本机 Agent） | `<repo>/backend/agent/scripts` | （空） | 扫描机=运行机，路径直接复用 |
+| WSL 联调 | `<repo>/backend/agent/scripts` | `/opt/stability-test-agent/scripts` | 后端在 Windows 扫描，Agent 在 WSL 跑，需要重写 `nfs_path` |
+| 生产 | `${STP_NFS_ROOT}/scripts` | 同 `STP_SCRIPT_ROOT`（一般留空） | 后端与 Agent 同时挂载 NFS，路径一致 |
+
+### 扫描行为（POST `/api/v1/scripts/scan`）
+
+| 结果计数 | 含义 | 后续动作 |
+|---------|------|---------|
+| `created` | 磁盘有、DB 无 → INSERT | 自动 `is_active=true`，`category=device`，`default_params={}` |
+| `skipped` | 磁盘 sha256 与 DB 一致 | 若曾被 deactivate，扫描会自动恢复 active |
+| `conflicts` | 同 (name, version) 但 sha256 不一致 | **不动 DB**；需手动 `POST /scripts/{name}/versions` 新建版本 |
+| `deactivated` | DB 有、当前根下磁盘无 | 标记 `is_active=false`，不删行（保留审计） |
+
+### 字段权属
+
+| 字段 | 扫描入库默认 | 通用 PUT 修改 | 创建新版本 | Agent 运行时是否消费 |
+|------|--------------|---------------|-----------|--------------------|
+| `name` | 一级目录名 | 允许 | 路径参数 | ✅ 解析 `script:<name>` |
+| `display_name` | =name | 允许 | 继承最新版 | ❌ 仅 UI |
+| `category` | `device` 固定 | 允许 | 继承最新版 | ❌ 仅 UI 过滤 |
+| `script_type` | 后缀映射（py/sh/bat/cmd） | 允许 | 继承最新版 | ✅ 决定 runner |
+| `version` | 二级目录 v 后部分 | 允许 | **必填** | ✅ |
+| `nfs_path` | runtime_root + 相对路径 | 允许 | **必填** | ✅ subprocess argv |
+| `entry_point` | 写空串 | 允许 | 可选 | ❌ 当前未消费（已死字段） |
+| `content_sha256` | 文件实际 sha | 允许 | **必填** | ❌ 仅审计 |
+| `param_schema` | `{}` | 允许 | 可选 | ❌ 当前未做校验 |
+| `default_params` | `{}` | **422 拒绝** | **必填** | ✅ 注入 step.params → `STP_STEP_PARAMS` |
+| `is_active` | `true` | 允许 | 自动 true | ✅ ScriptRegistry 仅同步 active |
+| `description` | null | 允许 | 可选 | ❌ 仅 UI |
+
+**ADR-0020 不变量**：已存在版本不允许改 `default_params`（`backend/api/routes/scripts.py:214-218` 422 拦截），必须 `POST /api/v1/scripts/{name}/versions` 新建版本。
+**前端入口**（`frontend/src/pages/scripts/ScriptManagementPage.tsx`）：仅暴露 *搜索 / 查看参数 / 新建版本* 三个动作；通用 PUT 接口未通过 UI 暴露。
+
+### 完整链路（文件 → DB → Plan → Agent 执行）
+
+```
+[1] 文件系统：backend/agent/scripts/<name>/v<version>/<entry>.py
+       │  POST /api/v1/scripts/scan
+       ▼
+[2] DB.script (name, version, nfs_path, content_sha256, default_params, is_active)
+       │  Plan 创建：PlanStep(script_name, script_version, stage, sort_order, ...)
+       │  ⚠ PlanStep 不存 params；版本即参数
+       │  POST /api/v1/plans/{id}/run
+       ▼
+[3] plan_dispatcher_sync._build_lifecycle_from_steps:
+       step_def.params = deepcopy(Script.default_params)   ← 从 DB 取
+       → _inject_wifi_params 仅对 connect_wifi 注入资源池 ssid/password
+       → 写入 JobInstance.pipeline_def + PlanRun.plan_snapshot
+       │  Agent claim 拉到 pipeline_def
+       ▼
+[4] ScriptRegistry.resolve(name, version) → ScriptEntry(nfs_path, script_type, sha256)
+       │
+       ▼
+[5] pipeline_engine._run_script_action:
+       subprocess.run(
+         [python|bash|cmd, nfs_path],
+         env={STP_DEVICE_SERIAL, STP_ADB_PATH, STP_LOG_DIR, STP_NFS_ROOT, STP_JOB_ID,
+              STP_STEP_PARAMS = json.dumps(step.params)},
+         timeout = step.timeout_seconds,
+         cwd = nfs_path 所在目录)
+       │
+       ▼
+[6] 脚本通过 _adb.py 的 params() 读 STP_STEP_PARAMS → stdout 输出 JSON
+       {"success": bool, "metrics": {...}, "skipped": ?, "skip_reason": ?}
+       → StepResult → step_trace 上报 → JobStatus 终态 → PlanRun aggregator
+```
+
+### 特殊注入：wifi 资源池
+
+`plan_dispatcher_sync._inject_wifi_params` 仅对 action 含 `connect_wifi` 的步骤注入 `{ssid, password, pool_name, pool_id}`，源自 `ResourcePool` 分配。这是当前唯一打破「params 完全来自 default_params」纯抽象的特例。
 
 ---
 
@@ -429,6 +561,14 @@ class StepTrace(Base):
 1. 在 `backend/agent/scripts/<name>/v<version>/` 下放置脚本（python/shell/bat），由 `script_catalog.py` 扫描注册
 2. 在 Pipeline 定义中通过 `action: "script:<name>"` 引用
 3. 更新前端 PipelineEditor 的步骤模板（如需）
+
+### Q: 脚本如何扫描入库？开发环境路径怎么设？
+
+1. **开发本机**：先设 `STP_SCRIPT_ROOT=<repo>/backend/agent/scripts`（后端启动前的 env 或 `.env`），然后 `POST /api/v1/scripts/scan`
+2. **WSL 联调**：再加 `STP_SCRIPT_RUNTIME_ROOT=/opt/stability-test-agent/scripts`，扫描时会重写 `nfs_path`，Agent 才能在 WSL 侧访问到
+3. **生产**：`STP_SCRIPT_ROOT` 默认 `${STP_NFS_ROOT}/scripts`（即 `/mnt/storage/test-platform/scripts`），后端与 Agent 同挂 NFS，`runtime_root` 留空
+4. 修改已存在版本的 `default_params` 会被 422 拒绝，须 `POST /api/v1/scripts/{name}/versions` 新建版本
+5. 完整链路与字段权属表见 *§脚本目录与扫描机制*
 
 ### Q: 设备监控指标如何采集？
 
@@ -470,33 +610,39 @@ class StepTrace(Base):
 - `backend/core/database.py` - 数据库配置（同步 + 异步引擎）
 - `backend/models/enums.py` - 所有枚举定义（单一源）
 - `backend/models/host.py` - Host / Device ORM
-- `backend/models/workflow.py` - WorkflowDefinition / WorkflowRun ORM
-- `backend/models/job.py` - TaskTemplate / JobInstance / StepTrace / JobArtifact ORM
+- `backend/models/plan.py` - Plan / PlanStep ORM
+- `backend/models/plan_run.py` - PlanRun ORM
+- `backend/models/job.py` - JobInstance / StepTrace / JobArtifact / JobLogSignal ORM
 - `backend/models/user.py` - User ORM
 - `backend/models/notification.py` - NotificationChannel / AlertRule ORM
 - `backend/models/schedule.py` - TaskSchedule ORM
 - `backend/models/audit.py` - AuditLog ORM
-- `backend/models/` - 所有 ORM 模型均按领域拆分（host, job, tool, workflow 等）
-- `backend/api/schemas.py` - Pydantic 模型
+- `backend/models/` - 所有 ORM 模型均按领域拆分（plan, plan_run, host, job 等）
+- `backend/api/schemas/` - Pydantic 模型（按领域拆分）
 
 ### 后端 API
-- `backend/api/routes/orchestration.py` - 工作流管理（CRUD + 执行 + 报告）
+- `backend/api/routes/plans.py` - Plan CRUD + 触发执行 + 预览
+- `backend/api/routes/plan_runs.py` - PlanRun 查询 + Job 列表 + 聚合摘要
 - `backend/api/routes/hosts.py` - 主机管理
 - `backend/api/routes/devices.py` - 设备管理
 - `backend/api/routes/runs.py` - Job 报告/JIRA 草稿/步骤/产物下载
 - `backend/api/routes/logs.py` - 运行时日志查询/Agent SSH 日志
 - `backend/api/routes/heartbeat.py` - 心跳处理
-- `backend/api/routes/websocket.py` - WebSocket 端点（deprecated stubs）
 - `backend/api/routes/metrics.py` - Prometheus 指标端点
 - `backend/api/routes/pipeline.py` - Pipeline 模板 API
+- `backend/api/routes/scripts.py` - Script 管理 API
+- `backend/api/routes/schedules.py` - 定时调度 API
+- `backend/api/routes/agent_api.py` - Agent 认领/上报
 
-### 基础设施层（ADR-0018）
+### 基础设施层
+- `backend/services/plan_dispatcher.py` - Plan 异步分发器
+- `backend/services/plan_dispatcher_sync.py` - Plan 同步分发器
+- `backend/services/aggregator.py` / `aggregator_sync.py` - PlanRun 终态聚合
 - `backend/scheduler/app_scheduler.py` - APScheduler 4.x 统一调度器
 - `backend/scheduler/recycler.py` - Recycler 纯函数（APScheduler job 回调）
 - `backend/scheduler/cron_scheduler.py` - Cron 调度纯函数（APScheduler job 回调）
 - `backend/tasks/saq_tasks.py` - SAQ 异步任务定义
 - `backend/tasks/saq_worker.py` - SAQ Worker 生命周期管理
-- `backend/tasks/session_watchdog.py` - Session Watchdog 纯函数（APScheduler job 回调）
 - `backend/realtime/socketio_server.py` - python-socketio 服务端（/agent + /dashboard）
 - `backend/realtime/log_writer.py` - 异步日志文件持久化
 - `backend/core/metrics.py` - Prometheus 指标定义与工具函数
@@ -550,4 +696,4 @@ class StepTrace(Base):
 
 ---
 
-*最后更新时间：2026-04-24 (P0/P1 项目结构治理完成)*
+*最后更新时间：2026-05-06 (ADR-0020 脚本目录与扫描机制文档收口)*
