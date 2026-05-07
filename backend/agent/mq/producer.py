@@ -88,7 +88,7 @@ class MQProducer:
         tag: str,
         message: str,
     ) -> Optional[str]:
-        """No-op: log streaming now handled by SocketIO ws_client."""
+        """No-op: log streaming now handled by SocketIO sio_client."""
         return None
 
     def close(self) -> None:

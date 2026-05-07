@@ -1,7 +1,7 @@
 """Agent-side script content verification (ADR-0021).
 
 Pure helpers used by the SocketIO ``verify_scripts`` RPC handler.  Splitting
-them out of ``ws_client.py`` keeps the handler thin and makes the verification
+them out of ``socketio_client.py`` keeps the handler thin and makes the verification
 logic unit-testable without spinning up SocketIO.
 """
 

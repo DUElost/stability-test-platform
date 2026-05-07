@@ -34,7 +34,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.registry.script_registry import ScriptRegistry
     from agent.step_trace_uploader import StepTraceUploader
     from agent.watcher import LogWatcherManager, OutboxDrainer
-    from agent.ws_client import AgentWSClient
+    from agent.socketio_client import AgentSocketIOClient
 else:
     from .adb_wrapper import AdbWrapper
     from .api_client import complete_run, fetch_pending_jobs, sync_recovery
@@ -50,7 +50,7 @@ else:
     from .registry.script_registry import ScriptRegistry
     from .step_trace_uploader import StepTraceUploader
     from .watcher import LogWatcherManager, OutboxDrainer
-    from .ws_client import AgentWSClient
+    from .socketio_client import AgentSocketIOClient
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -280,10 +280,10 @@ def main() -> None:
     adb = AdbWrapper(adb_path=adb_path)
     # 启动 WebSocket 客户端（best-effort，失败时降级到 HTTP）
     agent_secret = os.getenv("AGENT_SECRET", "")
-    ws_client = AgentWSClient(api_url, host_id, agent_secret)
-    ws_client.connect()
+    sio_client = AgentSocketIOClient(api_url, host_id, agent_secret)
+    sio_client.connect()
     # Start background reconnect loop for auto-recovery on disconnect
-    ws_client.start_reconnect_loop()
+    sio_client.start_reconnect_loop()
 
     # 初始化本地 SQLite WAL 缓存
     local_db = LocalDB()
@@ -302,7 +302,7 @@ def main() -> None:
             adb=adb,
             adb_path=adb_path,          # InotifydSource.Popen 需要 adb 二进制路径
             local_db=local_db,
-            ws_client=ws_client,
+            sio_client=sio_client,
             api_url=api_url,
             agent_secret=agent_secret,
             nfs_base_dir=nfs_base_dir,
@@ -368,7 +368,7 @@ def main() -> None:
         mount_points=mount_points,
         host_info=host_info,
         poll_interval=poll_interval,
-        ws_client=ws_client,
+        sio_client=sio_client,
         catalog_versions=lambda: {
             "script_catalog_version": script_registry.version,
         },
@@ -426,7 +426,7 @@ def main() -> None:
         local_db.delete_active_job(jid)
 
     # 必须在闭包定义之后注册，避免 _handle_control 中 _deregister_active_job 引用未绑定
-    ws_client.set_control_handler(_handle_control)
+    sio_client.set_control_handler(_handle_control)
 
     # 启动终态 Outbox Drain 线程
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
@@ -594,7 +594,7 @@ def main() -> None:
         lease_renewer.stop()
         mq_producer.close()
         local_db.close()
-        ws_client.disconnect()
+        sio_client.disconnect()
         logger.info("agent_shutdown_complete")
 
 

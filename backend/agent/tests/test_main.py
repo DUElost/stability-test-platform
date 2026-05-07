@@ -72,7 +72,7 @@ class TestHeartbeatThread(unittest.TestCase):
             mount_points=[],
             host_info={"ip": "127.0.0.1"},
             poll_interval=poll_interval,
-            ws_client=None,  # No WS, use HTTP fallback
+            sio_client=None,  # No WS, use HTTP fallback
         )
 
         ht.start()
@@ -118,7 +118,7 @@ class TestHeartbeatThread(unittest.TestCase):
             mount_points=[],
             host_info={"ip": "127.0.0.1"},
             poll_interval=0.1,
-            ws_client=mock_ws,
+            sio_client=mock_ws,
         )
 
         ht.start()
@@ -143,7 +143,7 @@ class TestHeartbeatThread(unittest.TestCase):
             mount_points=[],
             host_info={"ip": "127.0.0.1"},
             poll_interval=10.0,  # Long interval
-            ws_client=None,
+            sio_client=None,
         )
 
         ht.start()

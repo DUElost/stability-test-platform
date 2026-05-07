@@ -34,7 +34,7 @@ class HeartbeatThread:
         mount_points: List[str],
         host_info: Dict[str, Any],
         poll_interval: float,
-        ws_client=None,
+        sio_client=None,
         catalog_versions: Optional[Callable[[], Dict[str, str]]] = None,
         on_scripts_outdated: Optional[Callable[[], None]] = None,
         # ADR-0019 Phase 1
@@ -54,7 +54,7 @@ class HeartbeatThread:
         self._mount_points = mount_points
         self._host_info = host_info
         self._poll_interval = poll_interval
-        self._ws_client = ws_client
+        self._sio_client = sio_client
         self._catalog_versions = catalog_versions
         self._on_scripts_outdated = on_scripts_outdated
         self._max_concurrent_jobs = max_concurrent_jobs
@@ -184,12 +184,12 @@ class HeartbeatThread:
                 logger.warning("script_catalog_refresh_failed: %s", exc)
 
         # WS push 复用同一份 stats（不再重复 collect_system_stats / check_mounts）
-        if self._ws_client and self._ws_client.connected:
+        if self._sio_client and self._sio_client.connected:
             try:
                 stats = dict(system_stats)
                 stats["devices"] = devices_list
                 stats["mount_status"] = mount_status
-                self._ws_client.send_heartbeat(stats)
+                self._sio_client.send_heartbeat(stats)
                 logger.debug("heartbeat_ws_push_sent")
             except Exception as e:
                 logger.debug("heartbeat_ws_push_failed: %s", e)

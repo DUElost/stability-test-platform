@@ -1,6 +1,6 @@
 """SocketIO client for agent-to-backend real-time communication.
 
-Replaces the legacy raw-WebSocket ``AgentWSClient`` with ``socketio.Client``
+Replaces the legacy raw-WebSocket client with ``socketio.Client``
 (sync mode) to match the Agent's threading model.
 
 Features:
@@ -29,7 +29,7 @@ except ImportError:
     _HAS_SOCKETIO = False
     logger.warning("python-socketio not installed, SocketIO log streaming disabled")
 
-from backend.agent.script_verifier import verify_scripts_payload
+from .script_verifier import verify_scripts_payload
 
 
 def _env_int(key: str, default: int) -> int:
@@ -46,7 +46,7 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
-class AgentWSClient:
+class AgentSocketIOClient:
     """Synchronous SocketIO client for the agent process.
 
     Drop-in replacement for the legacy WebSocket client. The public API
@@ -292,8 +292,8 @@ class StepLogger:
     Also optionally writes logs to a local file.
     """
 
-    def __init__(self, ws_client: AgentWSClient, run_id: int, step_id: int | str, log_file: Optional[str] = None):
-        self._ws = ws_client
+    def __init__(self, sio_client: AgentSocketIOClient, run_id: int, step_id: int | str, log_file: Optional[str] = None):
+        self._sio = sio_client
         self._run_id = run_id
         self._step_id = step_id
         self._log_file = log_file
@@ -313,7 +313,7 @@ class StepLogger:
         self._line_count += 1
         ts = datetime.now(timezone.utc).isoformat() + "Z"
 
-        self._ws.send_log(self._run_id, self._step_id, level, message)
+        self._sio.send_log(self._run_id, self._step_id, level, message)
 
         if self._log_file:
             try:
