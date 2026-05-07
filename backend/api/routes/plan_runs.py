@@ -22,6 +22,10 @@ from backend.core.database import get_db
 from backend.models.host import Device
 from backend.models.job import JobArtifact, JobInstance, StepTrace
 from backend.models.plan_run import PlanRun
+from backend.services.plan_run_abort import (
+    PlanRunAbortError,
+    abort_plan_run,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
@@ -198,6 +202,46 @@ def list_plan_run_jobs(run_id: int, db: Session = Depends(get_db)):
         _job_out(j, traces_by_job.get(j.id, []), devices.get(j.device_id))
         for j in jobs
     ])
+
+
+# ── Abort ────────────────────────────────────────────────────────────────
+
+
+class PlanRunAbortIn(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.post(
+    "/plan-runs/{run_id}/abort", response_model=ApiResponse[dict]
+)
+def abort_plan_run_endpoint(
+    run_id: int,
+    payload: Optional[PlanRunAbortIn] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0021 D7 — abort a PlanRun.
+
+    Returns 409 if the PlanRun is already terminal.  Otherwise releases
+    active leases / marks PENDING jobs ABORTED / closes the run, then
+    returns immediately (Agent drain happens asynchronously).
+    """
+    reason = (payload.reason if payload else None) or "aborted_by_user"
+    try:
+        summary = abort_plan_run(
+            run_id,
+            db=db,
+            reason=reason,
+            triggered_by=current_user.username if current_user else "api",
+            audit_user_id=current_user.id if current_user else None,
+            audit_username=current_user.username if current_user else None,
+        )
+    except PlanRunAbortError as exc:
+        msg = str(exc)
+        if "not found" in msg:
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=409, detail=msg)
+    return ok(summary)
 
 
 @router.get("/plan-runs/{run_id}/summary", response_model=ApiResponse[dict])

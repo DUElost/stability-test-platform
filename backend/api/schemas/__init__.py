@@ -1,5 +1,11 @@
 from backend.api.schemas.base import ORMBaseModel, PaginatedResponse, _isoformat_utc
-from backend.api.schemas.host import HostCreate, HostOut, HostLiteOut, HeartbeatIn
+from backend.api.schemas.host import (
+    HostCreate,
+    HostOut,
+    HostLiteOut,
+    HostActiveJob,
+    HeartbeatIn,
+)
 from backend.api.schemas.device import DeviceCreate, DeviceOut, DeviceLiteOut
 from backend.api.schemas.task import (
     TaskCreate, TaskOut, TaskDispatch,
@@ -36,6 +42,7 @@ __all__ = [
     "HostCreate",
     "HostOut",
     "HostLiteOut",
+    "HostActiveJob",
     "HeartbeatIn",
     "DeviceCreate",
     "DeviceOut",

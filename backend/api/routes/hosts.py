@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import logging
 import os
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -9,10 +10,13 @@ from typing import Any, List
 
 from backend.core.database import get_db
 from backend.core.audit import record_audit
+from backend.models.enums import JobStatus
 from backend.models.host import Host
-from backend.api.schemas import HostCreate, HostOut, PaginatedResponse
+from backend.models.job import JobInstance
+from backend.api.schemas import HostActiveJob, HostCreate, HostOut, PaginatedResponse
 from backend.api.routes.auth import get_current_active_user, User
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds
+from backend.services.plan_run_abort import abort_jobs_for_host
 
 logger = logging.getLogger(__name__)
 
@@ -47,17 +51,45 @@ def _ensure_host_status_up_to_date(host: Host) -> bool:
         return True
     return False
 
-def _host_to_out(h: Host) -> HostOut:
+_ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+
+
+def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
     """从 ORM 对象构造 HostOut，从 host.extra 中提取 capacity/health。
 
     不能仅靠 HostOut.model_validate(h) —— Pydantic 不会自动从 JSON 列
     的嵌套 key 映射到顶层字段。此 helper 在 validate 后补充。
+
+    若提供 ``db``，会一并查询 host 上的活跃 Job 列表（ADR-0021 hot-update gate）。
     """
     out = HostOut.model_validate(h) if hasattr(HostOut, "model_validate") else HostOut.from_orm(h)
     extra = h.extra or {}
     out.capacity = extra.get("capacity")
     out.health = extra.get("health")
     out.max_concurrent_jobs = h.max_concurrent_jobs
+
+    if db is not None:
+        active_jobs = (
+            db.query(JobInstance)
+            .filter(
+                JobInstance.host_id == h.id,
+                JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+            )
+            .order_by(JobInstance.id)
+            .all()
+        )
+        out.active_jobs = [
+            HostActiveJob(
+                id=j.id,
+                plan_run_id=j.plan_run_id,
+                plan_id=j.plan_id,
+                device_id=j.device_id,
+                status=j.status,
+                started_at=j.started_at,
+            )
+            for j in active_jobs
+        ]
+        out.active_job_count = len(active_jobs)
     return out
 
 
@@ -127,7 +159,7 @@ def get_host(host_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="host not found")
     if _ensure_host_status_up_to_date(host):
         db.commit()
-    return _host_to_out(host)
+    return _host_to_out(host, db=db)
 
 
 @router.put("/{host_id}", response_model=HostOut)
@@ -167,13 +199,59 @@ def update_host(
     return _host_to_out(host)
 
 
+HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS = float(
+    os.getenv("HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS", "45")
+)
+HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS = float(
+    os.getenv("HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS", "1.0")
+)
+
+
+def _wait_until_no_active_jobs(
+    db: Session, host_id: str, *, timeout_seconds: float
+) -> tuple[bool, list[int]]:
+    """Poll until ``host_id`` has zero PENDING/RUNNING jobs or the timeout
+    elapses.  Returns (ok, lingering_job_ids)."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        db.expire_all()
+        rows = (
+            db.query(JobInstance.id)
+            .filter(
+                JobInstance.host_id == host_id,
+                JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+            )
+            .all()
+        )
+        ids = [r[0] for r in rows]
+        if not ids:
+            return True, []
+        if time.monotonic() >= deadline:
+            return False, ids
+        time.sleep(HOT_UPDATE_ABORT_POLL_INTERVAL_SECONDS)
+
+
 @router.post("/{host_id}/hot-update")
 def host_hot_update(
     host_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
+    abort_running_jobs: bool = Query(
+        False,
+        description=(
+            "ADR-0021: 当 host 上有 RUNNING/PENDING Job 时, 默认拒绝热更新 (409). "
+            "传 ?abort_running_jobs=true 串联 abort 流程: "
+            "释放租约 → 等 Agent 自然退出 (≤45s) → 执行热更新."
+        ),
+    ),
 ):
-    """热更新：同步 Agent 代码到目标主机并重启服务。"""
+    """热更新：同步 Agent 代码到目标主机并重启服务。
+
+    ADR-0021 D8 — soft-lock policy:
+        active_job_count == 0 → 直接 hot-update
+        active_job_count > 0  → 默认 409, 列出 active_jobs;
+                                ?abort_running_jobs=true 走 abort 串联.
+    """
     host = db.get(Host, host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
@@ -190,11 +268,83 @@ def host_hot_update(
             detail="Host has no IP address configured",
         )
 
+    # ── ADR-0021 D8 active-job gate ────────────────────────────────────────
+    active_jobs_rows = (
+        db.query(JobInstance)
+        .filter(
+            JobInstance.host_id == host_id,
+            JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+        )
+        .order_by(JobInstance.id)
+        .all()
+    )
+    active_summary = [
+        {
+            "id": j.id,
+            "plan_run_id": j.plan_run_id,
+            "plan_id": j.plan_id,
+            "device_id": j.device_id,
+            "status": j.status,
+        }
+        for j in active_jobs_rows
+    ]
+    aborted_summary: dict[str, Any] | None = None
+
+    if active_summary:
+        if not abort_running_jobs:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "HOST_HAS_ACTIVE_JOBS",
+                    "message": (
+                        f"Host {host_id} has {len(active_summary)} active job(s). "
+                        "Pass ?abort_running_jobs=true to abort them then hot-update."
+                    ),
+                    "active_jobs": active_summary,
+                },
+            )
+
+        # Compound path: abort then wait then update.
+        aborted_summary = abort_jobs_for_host(
+            host_id,
+            db=db,
+            reason="aborted_for_host_update",
+            triggered_by=current_user.username if current_user else "api",
+            audit_user_id=current_user.id if current_user else None,
+            audit_username=current_user.username if current_user else None,
+        )
+        logger.info(
+            "hot_update_abort_initiated host=%s plan_runs=%s aborted_jobs=%s",
+            host_id,
+            aborted_summary["plan_runs"],
+            aborted_summary["aborted_jobs"],
+        )
+
+        ok_drained, lingering = _wait_until_no_active_jobs(
+            db, host_id,
+            timeout_seconds=HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS,
+        )
+        if not ok_drained:
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "code": "ABORT_DRAIN_TIMEOUT",
+                    "message": (
+                        f"Aborted jobs but {len(lingering)} job(s) on host {host_id} "
+                        f"did not reach a terminal state within "
+                        f"{HOT_UPDATE_ABORT_POLL_TIMEOUT_SECONDS}s. "
+                        "Investigate the agent or retry."
+                    ),
+                    "lingering_jobs": lingering,
+                    "abort_summary": aborted_summary,
+                },
+            )
+
+    # ── SSH credentials ────────────────────────────────────────────────────
     ssh_password = (host.extra or {}).get("ssh_password", "")
     ssh_key_path = (host.extra or {}).get("ssh_key_path", "")
     ssh_user = host.ssh_user or "root"
 
-    # Fallback: resolve from Ansible inventory if host has no explicit credentials
     if not ssh_password and not ssh_key_path:
         inv = _resolve_ssh_creds(host.ip or "")
         if inv:
@@ -213,6 +363,24 @@ def host_hot_update(
             ),
         )
 
+    record_audit(
+        db,
+        action="hot_update",
+        resource_type="host",
+        resource_id=None,
+        details={
+            "host_id": host_id,
+            "ip": host.ip,
+            "abort_running_jobs": abort_running_jobs,
+            "aborted_jobs": (
+                aborted_summary["aborted_jobs"] if aborted_summary else []
+            ),
+        },
+        user_id=current_user.id if current_user else None,
+        username=current_user.username if current_user else None,
+    )
+    db.commit()
+
     result = execute_hot_update(
         host_ip=host.ip or "",
         ssh_port=host.ssh_port or 22,
@@ -229,4 +397,5 @@ def host_hot_update(
         "host_id": host_id,
         "message": result["message"],
         "duration_ms": result.get("duration_ms"),
+        "abort_summary": aborted_summary,
     }

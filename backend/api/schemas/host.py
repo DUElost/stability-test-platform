@@ -15,6 +15,16 @@ class HostCreate(BaseModel):
     ssh_key_path: Optional[str] = None
 
 
+class HostActiveJob(BaseModel):
+    """ADR-0021: per-host snapshot of an active Job for the hot-update gate."""
+    id: int
+    plan_run_id: Optional[int] = None
+    plan_id: Optional[int] = None
+    device_id: int
+    status: str
+    started_at: Optional[datetime] = None
+
+
 class HostOut(ORMBaseModel):
     id: str
     name: Optional[str] = None
@@ -30,6 +40,9 @@ class HostOut(ORMBaseModel):
     capacity: Optional[Dict[str, Any]] = None
     health: Optional[Dict[str, Any]] = None
     max_concurrent_jobs: Optional[int] = None
+    # ADR-0021: hot-update guard — populated only on GET /hosts/{id}.
+    active_job_count: int = 0
+    active_jobs: List[HostActiveJob] = Field(default_factory=list)
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod
