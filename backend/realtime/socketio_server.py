@@ -12,6 +12,7 @@ Auth:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -27,6 +28,19 @@ _AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 _WS_TOKEN = os.getenv("WS_TOKEN", "dev-token-12345")
 
 _sio: Optional[socketio.AsyncServer] = None
+_agent_ns: Optional["AgentNamespace"] = None
+
+
+class AgentNotConnectedError(Exception):
+    """Raised when an RPC targets a host that has no active agent connection."""
+
+    def __init__(self, host_id: str):
+        self.host_id = host_id
+        super().__init__(f"agent for host '{host_id}' is not connected")
+
+
+class AgentRpcError(Exception):
+    """Raised when an Agent RPC fails (timeout, malformed ack, etc.)."""
 
 
 def get_sio() -> socketio.AsyncServer:
@@ -70,6 +84,19 @@ def create_sio_server() -> socketio.AsyncServer:
 class AgentNamespace(socketio.AsyncNamespace):
     """Handles Agent connections on /agent namespace."""
 
+    def __init__(self, namespace: str):
+        super().__init__(namespace)
+        self._host_to_sid: dict[str, str] = {}
+        self._lock = asyncio.Lock()
+
+    def get_sid(self, host_id: str) -> Optional[str]:
+        """Return the SocketIO sid for a connected agent, or None."""
+        return self._host_to_sid.get(str(host_id))
+
+    def connected_host_ids(self) -> list[str]:
+        """Return host_ids with an active connection (testing helper)."""
+        return list(self._host_to_sid.keys())
+
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None):
         auth = auth or {}
         provided_secret = auth.get("agent_secret", "")
@@ -90,6 +117,9 @@ class AgentNamespace(socketio.AsyncNamespace):
         async with self.session(sid) as session:
             session["host_id"] = host_id
 
+        async with self._lock:
+            self._host_to_sid[str(host_id)] = sid
+
         await self.enter_room(sid, f"agent:{host_id}")
         record_socketio_connection("/agent", True)
         logger.info("agent_sio_connected sid=%s host_id=%s", sid, host_id)
@@ -97,6 +127,10 @@ class AgentNamespace(socketio.AsyncNamespace):
     async def on_disconnect(self, sid: str):
         async with self.session(sid) as session:
             host_id = session.get("host_id", "?")
+        async with self._lock:
+            tracked_sid = self._host_to_sid.get(str(host_id))
+            if tracked_sid == sid:
+                self._host_to_sid.pop(str(host_id), None)
         record_socketio_connection("/agent", False)
         logger.info("agent_sio_disconnected sid=%s host_id=%s", sid, host_id)
 
@@ -257,11 +291,78 @@ class DashboardNamespace(socketio.AsyncNamespace):
 
 
 def _register_agent_namespace(sio: socketio.AsyncServer) -> None:
-    sio.register_namespace(AgentNamespace("/agent"))
+    global _agent_ns
+    _agent_ns = AgentNamespace("/agent")
+    sio.register_namespace(_agent_ns)
 
 
 def _register_dashboard_namespace(sio: socketio.AsyncServer) -> None:
     sio.register_namespace(DashboardNamespace("/dashboard"))
+
+
+def get_agent_namespace() -> "AgentNamespace":
+    """Return the registered AgentNamespace instance.
+
+    Raises ``RuntimeError`` if SocketIO has not been initialised yet.
+    """
+    if _agent_ns is None:
+        raise RuntimeError(
+            "AgentNamespace not registered — call create_sio_server() first"
+        )
+    return _agent_ns
+
+
+async def call_agent_rpc(
+    host_id: str,
+    event: str,
+    data: dict,
+    *,
+    timeout: float = 10.0,
+) -> dict:
+    """Invoke an RPC on a connected agent and await its ack response.
+
+    Internally uses ``sio.call(event, data, to=sid, ...)`` which relies on
+    the SocketIO ack mechanism.  The agent's handler must ``return`` the
+    response value for it to be auto-forwarded as the ack payload.
+
+    Raises:
+        RuntimeError: if SocketIO has not been initialised.
+        AgentNotConnectedError: if no agent is currently connected for ``host_id``.
+        AgentRpcError: on RPC timeout or transport-level failure.
+    """
+    sio = get_sio()
+    ns = get_agent_namespace()
+    sid = ns.get_sid(host_id)
+    if not sid:
+        raise AgentNotConnectedError(str(host_id))
+
+    try:
+        ack = await sio.call(
+            event,
+            data,
+            to=sid,
+            namespace="/agent",
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError as exc:
+        raise AgentRpcError(
+            f"agent rpc '{event}' to host '{host_id}' timed out after {timeout}s"
+        ) from exc
+    except Exception as exc:
+        raise AgentRpcError(
+            f"agent rpc '{event}' to host '{host_id}' failed: {exc}"
+        ) from exc
+
+    if ack is None:
+        raise AgentRpcError(
+            f"agent rpc '{event}' to host '{host_id}' returned no ack payload"
+        )
+    if not isinstance(ack, dict):
+        raise AgentRpcError(
+            f"agent rpc '{event}' to host '{host_id}' returned non-dict ack: "
+            f"{type(ack).__name__}"
+        )
+    return ack
 
 
 # ---------------------------------------------------------------------------

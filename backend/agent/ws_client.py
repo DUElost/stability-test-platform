@@ -29,6 +29,8 @@ except ImportError:
     _HAS_SOCKETIO = False
     logger.warning("python-socketio not installed, SocketIO log streaming disabled")
 
+from backend.agent.script_verifier import verify_scripts_payload
+
 
 def _env_int(key: str, default: int) -> int:
     try:
@@ -110,6 +112,29 @@ class AgentWSClient:
                         self._control_handler(data)
                     except Exception as e:
                         logger.warning("sio_control_handler_error: %s", e)
+
+            @sio.on("verify_scripts", namespace="/agent")
+            def _on_verify_scripts(data):
+                """ADR-0021 dispatch gate: server requests sha256 verification.
+
+                Returning a dict from a sync ``socketio.Client`` handler
+                automatically forwards it as the ack payload.
+                """
+                try:
+                    payload = data or {}
+                    expected = payload.get("expected") or []
+                    return verify_scripts_payload(
+                        expected,
+                        host_id=str(self._host_id),
+                    )
+                except Exception as exc:
+                    logger.exception("sio_verify_scripts_failed: %s", exc)
+                    return {
+                        "host_id": str(self._host_id),
+                        "agent_version": os.getenv("STP_AGENT_VERSION", "unknown"),
+                        "results": [],
+                        "error": f"handler_exception: {exc}",
+                    }
 
             self._sio = sio
             url = self._build_url()
