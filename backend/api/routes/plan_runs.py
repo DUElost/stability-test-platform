@@ -73,6 +73,13 @@ class PlanRunOut(BaseModel):
     started_at: str
     ended_at: Optional[str] = None
     result_summary: Optional[dict] = None
+    # ADR-0021: dispatch gate progress lives under run_context.precheck.
+    run_context: Optional[dict] = None
+    plan_snapshot: Optional[dict] = None
+    parent_plan_run_id: Optional[int] = None
+    root_plan_run_id: Optional[int] = None
+    chain_index: int = 0
+    next_plan_triggered: bool = False
     jobs: list[JobInstanceOut] = []
 
     class Config:
@@ -85,6 +92,27 @@ def _iso(v) -> str | None:
     if v is None:
         return None
     return v.isoformat()
+
+
+def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None) -> PlanRunOut:
+    return PlanRunOut(
+        id=pr.id,
+        plan_id=pr.plan_id,
+        status=pr.status,
+        failure_threshold=pr.failure_threshold,
+        run_type=pr.run_type,
+        triggered_by=pr.triggered_by,
+        started_at=_iso(pr.started_at) or "",
+        ended_at=_iso(pr.ended_at),
+        result_summary=pr.result_summary,
+        run_context=pr.run_context,
+        plan_snapshot=pr.plan_snapshot,
+        parent_plan_run_id=pr.parent_plan_run_id,
+        root_plan_run_id=pr.root_plan_run_id,
+        chain_index=pr.chain_index or 0,
+        next_plan_triggered=bool(pr.next_plan_triggered),
+        jobs=jobs or [],
+    )
 
 
 def _step_out(t: StepTrace) -> StepTraceOut:
@@ -126,12 +154,7 @@ def list_plan_runs(
     if status is not None:
         q = q.where(PlanRun.status == status.upper())
     runs = db.execute(q.offset(skip).limit(limit)).scalars().all()
-    return ok([PlanRunOut(
-        id=r.id, plan_id=r.plan_id, status=r.status,
-        failure_threshold=r.failure_threshold, run_type=r.run_type,
-        triggered_by=r.triggered_by, started_at=_iso(r.started_at) or "",
-        ended_at=_iso(r.ended_at), result_summary=r.result_summary,
-    ) for r in runs])
+    return ok([_plan_run_out(r) for r in runs])
 
 
 @router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunOut])
@@ -142,13 +165,7 @@ def get_plan_run(run_id: int, db: Session = Depends(get_db)):
     jobs = db.execute(
         select(JobInstance).where(JobInstance.plan_run_id == run_id)
     ).scalars().all()
-    return ok(PlanRunOut(
-        id=pr.id, plan_id=pr.plan_id, status=pr.status,
-        failure_threshold=pr.failure_threshold, run_type=pr.run_type,
-        triggered_by=pr.triggered_by, started_at=_iso(pr.started_at) or "",
-        ended_at=_iso(pr.ended_at), result_summary=pr.result_summary,
-        jobs=[_job_out(j, []) for j in jobs],
-    ))
+    return ok(_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs]))
 
 
 @router.get("/plan-runs/{run_id}/jobs", response_model=ApiResponse[list[JobInstanceOut]])

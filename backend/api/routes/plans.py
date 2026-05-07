@@ -120,6 +120,13 @@ class PlanRunOut(BaseModel):
     started_at: datetime
     ended_at: Optional[datetime] = None
     result_summary: Optional[dict] = None
+    # ADR-0021: dispatch gate progress lives under run_context.precheck.
+    run_context: Optional[dict] = None
+    plan_snapshot: Optional[dict] = None
+    parent_plan_run_id: Optional[int] = None
+    root_plan_run_id: Optional[int] = None
+    chain_index: int = 0
+    next_plan_triggered: bool = False
 
     class Config:
         from_attributes = True
@@ -492,4 +499,9 @@ def run_plan(
         failure_threshold=pr.failure_threshold, run_type=pr.run_type,
         triggered_by=pr.triggered_by, started_at=pr.started_at,
         ended_at=pr.ended_at, result_summary=pr.result_summary,
+        run_context=pr.run_context, plan_snapshot=pr.plan_snapshot,
+        parent_plan_run_id=pr.parent_plan_run_id,
+        root_plan_run_id=pr.root_plan_run_id,
+        chain_index=pr.chain_index or 0,
+        next_plan_triggered=bool(pr.next_plan_triggered),
     ))

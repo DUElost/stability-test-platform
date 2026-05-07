@@ -20,6 +20,14 @@ from backend.api.schemas.notification import (
 )
 from backend.api.schemas.schedule import TaskScheduleCreate, TaskScheduleUpdate, TaskScheduleOut
 from backend.api.schemas.audit import AuditLogOut
+from backend.api.schemas.plan_run_precheck import (
+    PrecheckPhase,
+    PrecheckHostStatus,
+    PrecheckFinalResult,
+    PrecheckScriptResult,
+    PrecheckHostState,
+    PrecheckSummary,
+)
 
 __all__ = [
     "ORMBaseModel",
@@ -62,4 +70,10 @@ __all__ = [
     "TaskScheduleUpdate",
     "TaskScheduleOut",
     "AuditLogOut",
+    "PrecheckPhase",
+    "PrecheckHostStatus",
+    "PrecheckFinalResult",
+    "PrecheckScriptResult",
+    "PrecheckHostState",
+    "PrecheckSummary",
 ]
