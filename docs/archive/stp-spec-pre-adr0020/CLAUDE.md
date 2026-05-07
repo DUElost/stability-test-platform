@@ -1,3 +1,7 @@
+> ⚠️ **历史文档（HISTORICAL）—— ADR-0020 之前的 stp-spec** ｜ 不要作为开发依据 ｜ 当前权威源见 [`./README.md`](./README.md)
+
+---
+
 # Stability Test Platform — Claude Code 开发规范入口
 
 ## 项目概述

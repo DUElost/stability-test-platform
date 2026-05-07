@@ -1,3 +1,7 @@
+> ⚠️ **历史文档（HISTORICAL）—— ADR-0020 之前的 stp-spec** ｜ 不要作为开发依据 ｜ 当前权威源见 [`../README.md`](../README.md)
+
+---
+
 # 后端开发规范：API、业务逻辑、异常处理
 
 > 读本文档前请先读 [`../architecture/ARCHITECTURE.md`](../architecture/ARCHITECTURE.md)

@@ -1,3 +1,7 @@
+> ⚠️ **历史文档（HISTORICAL）—— ADR-0020 之前的 stp-spec** ｜ 不要作为开发依据 ｜ 当前权威源见 [`../README.md`](../README.md)
+
+---
+
 # 数据库规范：Schema 定义与迁移
 
 > 使用 SQLAlchemy 2.0 + Alembic 迁移，数据库：PostgreSQL 15

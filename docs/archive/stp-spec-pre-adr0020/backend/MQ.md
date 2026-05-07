@@ -1,3 +1,7 @@
+> ⚠️ **历史文档（HISTORICAL）—— ADR-0020 之前的 stp-spec** ｜ 不要作为开发依据 ｜ 当前权威源见 [`../README.md`](../README.md)
+
+---
+
 # 消息队列规范：Redis Stream
 
 ## 1. Topic 设计
