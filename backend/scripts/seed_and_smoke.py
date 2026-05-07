@@ -43,10 +43,10 @@ PLAN_PAYLOAD: dict[str, Any] = {
     "name": DEFAULT_PLAN_NAME,
     "description": "ADR-0020 dispatcher 烟雾测试 — 真实 10.36 设备",
     "failure_threshold": 0.05,
-    "lifecycle": {
-        "patrol": {"interval_seconds": 60},
-        "timeout_seconds": 300,
-    },
+    # ADR-0020 §2：lifecycle 由 dispatcher 从 PlanStep 行 + 下面两个直列字段实时装配，
+    # PlanCreate 已开启 extra="forbid"，请求体中不能再带 lifecycle 字段。
+    "patrol_interval_seconds": 60,
+    "timeout_seconds": 300,
     "watcher_policy": None,
     "next_plan_id": None,
     "steps": [

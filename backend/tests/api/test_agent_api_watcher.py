@@ -53,6 +53,7 @@ PIPELINE_DEF = {
         "init": [
             {"step_id": "dummy", "action": "script:check_device", "version": "1.0.0", "timeout_seconds": 1}
         ],
+        "teardown": [],
     }
 }
 
