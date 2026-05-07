@@ -68,4 +68,21 @@ async def publish_control_command(
         raise
 
 
-SAQ_FUNCTIONS = [post_completion_task, send_notification_task, publish_control_command]
+async def precheck_and_dispatch_task(ctx: dict, *, plan_run_id: int) -> None:
+    """ADR-0021 — Run the dispatch gate for ``plan_run_id``.
+
+    Defers to :func:`backend.services.plan_precheck.precheck_and_dispatch_task`
+    to keep the heavy logic out of this module's import surface.
+    """
+    from backend.services.plan_precheck import (
+        precheck_and_dispatch_task as _impl,
+    )
+    await _impl(ctx, plan_run_id=plan_run_id)
+
+
+SAQ_FUNCTIONS = [
+    post_completion_task,
+    send_notification_task,
+    publish_control_command,
+    precheck_and_dispatch_task,
+]

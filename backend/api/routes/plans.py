@@ -23,8 +23,10 @@ from backend.models.plan_run import PlanRun
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     dispatch_plan_sync,
+    prepare_plan_run,
     preview_plan_dispatch_sync,
 )
+from backend.tasks.saq_worker import enqueue_sync
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
@@ -484,8 +486,18 @@ def run_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    """ADR-0021: MANUAL dispatch goes through the precheck gate.
+
+    Steps:
+      1. ``prepare_plan_run`` — create PlanRun row + plan_snapshot synchronously,
+         status=RUNNING, run_context.dispatch_device_ids set.
+      2. Enqueue SAQ task ``precheck_and_dispatch`` with the new plan_run_id;
+         it verifies / syncs / re-verifies / dispatches asynchronously.
+      3. Return the PlanRun row immediately.  The frontend can navigate to
+         the PlanRun detail page and watch ``run_context.precheck`` evolve.
+    """
     try:
-        pr = dispatch_plan_sync(
+        pr = prepare_plan_run(
             plan_id=plan_id,
             device_ids=payload.device_ids,
             triggered_by=current_user.username if current_user else "api",
@@ -494,6 +506,20 @@ def run_plan(
         )
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    enqueue_sync(
+        "precheck_and_dispatch_task",
+        key=f"precheck:{pr.id}",
+        timeout=600,
+        retries=0,
+        plan_run_id=pr.id,
+    )
+    logger.info(
+        "manual_dispatch_enqueued plan=%d plan_run=%d devices=%d by=%s",
+        plan_id, pr.id, len(payload.device_ids),
+        current_user.username if current_user else "api",
+    )
+
     return ok(PlanRunOut(
         id=pr.id, plan_id=pr.plan_id, status=pr.status,
         failure_threshold=pr.failure_threshold, run_type=pr.run_type,

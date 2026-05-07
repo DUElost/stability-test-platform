@@ -300,17 +300,27 @@ def preview_plan_dispatch_sync(
     return _build_preview(plan, lifecycle, device_ids)
 
 
-def dispatch_plan_sync(
+def prepare_plan_run(
     plan_id: int,
     device_ids: list[int],
     triggered_by: str,
     db: Session,
+    *,
     run_type: str = "MANUAL",
     run_context: dict | None = None,
     parent_plan_run_id: int | None = None,
     root_plan_run_id: int | None = None,
     chain_index: int | None = None,
 ) -> PlanRun:
+    """ADR-0021 C3 — Stage 1 of dispatch: create PlanRun + plan_snapshot only.
+
+    The dispatch gate (precheck) runs against this PlanRun, then on success
+    invokes :func:`complete_plan_run_dispatch` to materialise JobInstance rows
+    and resource allocations.
+
+    ``device_ids`` is captured into ``run_context['dispatch_device_ids']`` so
+    the gate can recover them without re-validating against API state.
+    """
     plan = db.get(Plan, plan_id)
     if plan is None:
         raise PlanDispatchError(f"Plan {plan_id} not found")
@@ -320,7 +330,6 @@ def dispatch_plan_sync(
         .where(PlanStep.plan_id == plan_id)
         .order_by(PlanStep.stage, PlanStep.sort_order)
     ).scalars().all()
-
     if not steps:
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
 
@@ -334,7 +343,87 @@ def dispatch_plan_sync(
             f"Plan {plan_id} generated invalid lifecycle: {'; '.join(errors)}"
         )
 
-    # Device → host mapping
+    effective_threshold = plan.failure_threshold
+    plan_snapshot = _build_plan_snapshot(plan, steps, metadata, effective_threshold)
+
+    merged_run_ctx = dict(run_context or {})
+    merged_run_ctx.setdefault("dispatch_device_ids", list(device_ids))
+
+    pr = PlanRun(
+        plan_id=plan.id,
+        status="RUNNING",
+        failure_threshold=effective_threshold,
+        plan_snapshot=plan_snapshot,
+        run_type=run_type,
+        run_context=merged_run_ctx,
+        triggered_by=triggered_by,
+        parent_plan_run_id=parent_plan_run_id,
+        root_plan_run_id=root_plan_run_id,
+        chain_index=chain_index or 0,
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(pr)
+    db.flush()
+    db.commit()
+    db.refresh(pr)
+    logger.info(
+        "plan_run_prepared plan=%d plan_run=%d devices=%d type=%s",
+        plan_id, pr.id, len(device_ids), run_type,
+    )
+    return pr
+
+
+def complete_plan_run_dispatch(
+    plan_run_id: int,
+    db: Session,
+) -> None:
+    """ADR-0021 C3 — Stage 2 of dispatch: materialise JobInstances + allocations.
+
+    Reads ``plan_snapshot`` and ``run_context['dispatch_device_ids']`` from
+    the PlanRun row.  Idempotent: if JobInstances already exist for this
+    plan_run, returns immediately.
+
+    Note: this is the same logic that used to live inline in
+    ``dispatch_plan_sync`` after the PlanRun INSERT — relocated here so the
+    dispatch gate (SAQ task) can call it independently after precheck.
+    """
+    pr = db.get(PlanRun, plan_run_id)
+    if pr is None:
+        raise PlanDispatchError(f"PlanRun {plan_run_id} not found")
+
+    existing_jobs = db.execute(
+        select(JobInstance.id).where(JobInstance.plan_run_id == plan_run_id).limit(1)
+    ).first()
+    if existing_jobs is not None:
+        logger.info(
+            "complete_plan_run_dispatch_skip plan_run=%d (jobs already created)",
+            plan_run_id,
+        )
+        return
+
+    plan = db.get(Plan, pr.plan_id)
+    if plan is None:
+        raise PlanDispatchError(f"Plan {pr.plan_id} not found")
+
+    steps = db.execute(
+        select(PlanStep)
+        .where(PlanStep.plan_id == pr.plan_id)
+        .order_by(PlanStep.stage, PlanStep.sort_order)
+    ).scalars().all()
+    if not steps:
+        raise PlanDispatchError(f"Plan {pr.plan_id} has no steps")
+
+    metadata = _fetch_script_metadata(db, steps)
+    defaults = _script_defaults(metadata)
+    lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
+
+    run_ctx = pr.run_context or {}
+    device_ids = list(run_ctx.get("dispatch_device_ids") or [])
+    if not device_ids:
+        raise PlanDispatchError(
+            f"PlanRun {plan_run_id}: run_context.dispatch_device_ids is empty"
+        )
+
     device_rows = db.execute(
         select(Device.id, Device.host_id).where(Device.id.in_(device_ids))
     ).all()
@@ -346,8 +435,6 @@ def dispatch_plan_sync(
             "plan_dispatch_devices_without_host: device_ids=%s", orphan_devices
         )
 
-    # WiFi allocation (best-effort).  ADR-0020 §"特殊注入：wifi 资源池"：
-    # 仅当 lifecycle 中存在 connect_wifi step 时才申请池配额，避免无谓的锁竞争。
     wifi_allocations: dict[int, dict] = {}
     if any(
         "connect_wifi" in (step.get("action") or "")
@@ -360,25 +447,6 @@ def dispatch_plan_sync(
             logger.info("plan_dispatch_wifi_allocated: devices=%d", len(device_ids))
         except AllocationError as exc:
             logger.warning("plan_dispatch_wifi_allocation_skipped: %s", exc)
-
-    effective_threshold = plan.failure_threshold
-    plan_snapshot = _build_plan_snapshot(plan, steps, metadata, effective_threshold)
-
-    pr = PlanRun(
-        plan_id=plan.id,
-        status="RUNNING",
-        failure_threshold=effective_threshold,
-        plan_snapshot=plan_snapshot,
-        run_type=run_type,
-        run_context=run_context,
-        triggered_by=triggered_by,
-        parent_plan_run_id=parent_plan_run_id,
-        root_plan_run_id=root_plan_run_id,
-        chain_index=chain_index or 0,
-        started_at=datetime.now(timezone.utc),
-    )
-    db.add(pr)
-    db.flush()
 
     now = datetime.now(timezone.utc)
     job_device_pairs: dict[int, int] = {}
@@ -419,11 +487,42 @@ def dispatch_plan_sync(
 
     db.commit()
     db.refresh(pr)
-
     logger.info(
-        "dispatched_plan plan=%d plan_run=%d devices=%d jobs=%d type=%s",
-        plan_id, pr.id, len(device_ids), len(device_ids), run_type,
+        "plan_run_dispatch_completed plan=%d plan_run=%d jobs=%d",
+        pr.plan_id, pr.id, len(device_ids),
     )
+
+
+def dispatch_plan_sync(
+    plan_id: int,
+    device_ids: list[int],
+    triggered_by: str,
+    db: Session,
+    run_type: str = "MANUAL",
+    run_context: dict | None = None,
+    parent_plan_run_id: int | None = None,
+    root_plan_run_id: int | None = None,
+    chain_index: int | None = None,
+) -> PlanRun:
+    """ADR-0020 — One-shot sync dispatch (PlanRun + Jobs in one transaction).
+
+    Used by SCHEDULE (cron) and CHAIN trigger paths which intentionally
+    skip the ADR-0021 dispatch gate.  MANUAL goes through
+    :func:`prepare_plan_run` + the SAQ ``precheck_and_dispatch`` task instead.
+    """
+    pr = prepare_plan_run(
+        plan_id=plan_id,
+        device_ids=device_ids,
+        triggered_by=triggered_by,
+        db=db,
+        run_type=run_type,
+        run_context=run_context,
+        parent_plan_run_id=parent_plan_run_id,
+        root_plan_run_id=root_plan_run_id,
+        chain_index=chain_index,
+    )
+    complete_plan_run_dispatch(pr.id, db=db)
+    db.refresh(pr)
     return pr
 
 
