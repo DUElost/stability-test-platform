@@ -1,0 +1,226 @@
+import {
+  AlertTriangle,
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  ShieldAlert,
+  Minus,
+} from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
+import type { WatcherCategory, WatcherSummary } from '@/utils/api/types';
+
+interface Props {
+  data: WatcherSummary | undefined;
+  isLoading?: boolean;
+  /** Window minutes filter; lifted up so the parent can sync URL params. */
+  windowMinutes?: number;
+  onWindowChange?: (minutes: number) => void;
+}
+
+const WINDOW_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 15, label: '15 分钟' },
+  { value: 60, label: '1 小时' },
+  { value: 360, label: '6 小时' },
+  { value: 1440, label: '24 小时' },
+];
+
+const CATEGORY_LABEL: Record<string, string> = {
+  AEE: '主进程崩溃 (AEE)',
+  VENDOR_AEE: '厂商进程崩溃',
+  ANR: '应用无响应 (ANR)',
+  TOMBSTONE: 'Native Tombstone',
+  MOBILELOG: 'mobile log 异常',
+};
+
+const CATEGORY_TONE: Record<string, string> = {
+  AEE: 'border-red-300 bg-red-50',
+  VENDOR_AEE: 'border-red-300 bg-red-50',
+  ANR: 'border-amber-300 bg-amber-50',
+  TOMBSTONE: 'border-purple-300 bg-purple-50',
+  MOBILELOG: 'border-blue-300 bg-blue-50',
+};
+
+function fmtTime(ts: string | null | undefined): string {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return d.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function CategoryRow({ cat }: { cat: WatcherCategory }) {
+  const tone = CATEGORY_TONE[cat.category] ?? 'border-gray-300 bg-gray-50';
+  const trend = cat.trend_change;
+  return (
+    <div
+      data-testid={`watcher-cat-${cat.category}`}
+      className={`grid grid-cols-[1fr_auto_auto] items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${tone}`}
+    >
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-xs font-semibold text-gray-900">
+          <span className="font-mono uppercase tracking-wider">{cat.category}</span>
+          <span className="font-normal text-gray-500">
+            {CATEGORY_LABEL[cat.category] ?? '—'}
+          </span>
+        </div>
+        <div className="mt-0.5 text-[10.5px] text-gray-500">
+          影响 {cat.affected_device_count} 台设备
+          {cat.latest_device_serial && (
+            <>
+              {' · 最近 '}
+              <span className="font-mono text-gray-700">
+                {cat.latest_device_serial}
+              </span>{' '}
+              <span className="text-gray-400">{fmtTime(cat.latest_detected_at)}</span>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="text-right">
+        <div className="font-mono text-lg font-bold tabular-nums text-gray-900">
+          {cat.count}
+        </div>
+        <div className="text-[10px] uppercase tracking-wider text-gray-400">条</div>
+      </div>
+      <div
+        data-testid={`watcher-cat-${cat.category}-trend`}
+        className={`flex w-14 items-center justify-end gap-0.5 text-[11px] font-mono ${
+          trend > 0
+            ? 'text-red-600'
+            : trend < 0
+            ? 'text-green-600'
+            : 'text-gray-400'
+        }`}
+      >
+        {trend > 0 ? (
+          <ArrowUp className="h-3 w-3" />
+        ) : trend < 0 ? (
+          <ArrowDown className="h-3 w-3" />
+        ) : (
+          <Minus className="h-3 w-3" />
+        )}
+        {trend === 0 ? '0' : trend > 0 ? `+${trend}` : `${trend}`}
+      </div>
+    </div>
+  );
+}
+
+export default function WatcherSummaryCard({
+  data,
+  isLoading = false,
+  windowMinutes = 60,
+  onWindowChange,
+}: Props) {
+  const total = data?.total ?? 0;
+  const affected = data?.affected_device_count ?? 0;
+  const totalDevices = data?.total_devices ?? 0;
+  const rate = data?.abnormal_rate ?? 0;
+  const threshold = data?.threshold ?? 0;
+  const exceeded = data?.exceeded ?? false;
+  const cats = data?.categories ?? [];
+
+  return (
+    <section data-testid="watcher-summary" className="space-y-2">
+      <div className="mx-1 flex items-center gap-2.5">
+        <span className="h-3 w-1 rounded-sm bg-gradient-to-b from-blue-600 to-blue-400" />
+        <span className="text-xs font-bold uppercase tracking-wider text-gray-700">
+          Watcher 异常聚合
+        </span>
+        {data && (
+          <span className="text-[11px] text-gray-500">
+            窗口 {data.window_minutes} 分钟 · 共 {total} 条 · 影响 {affected}/{totalDevices} 台
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1 rounded-md border bg-white p-0.5 text-[11px]">
+          {WINDOW_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              data-testid={`watcher-window-${opt.value}`}
+              onClick={() => onWindowChange?.(opt.value)}
+              className={`rounded px-2 py-0.5 ${
+                windowMinutes === opt.value
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'text-gray-500 hover:bg-gray-100'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+        {/* Threshold banner */}
+        {data && exceeded && (
+          <div
+            data-testid="watcher-threshold-banner"
+            className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800"
+          >
+            <ShieldAlert className="h-4 w-4 shrink-0" />
+            <span className="font-semibold">超过阈值 {(threshold * 100).toFixed(0)}%</span>
+            <span className="text-red-700">
+              · 当前异常率 <b className="font-mono">{(rate * 100).toFixed(1)}%</b>
+              ({affected}/{totalDevices})
+            </span>
+          </div>
+        )}
+
+        {data && !exceeded && total > 0 && (
+          <div
+            data-testid="watcher-warn-banner"
+            className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>异常率 <b className="font-mono">{(rate * 100).toFixed(1)}%</b> · 阈值 {(threshold * 100).toFixed(0)}%</span>
+          </div>
+        )}
+
+        {/* Body */}
+        {isLoading && cats.length === 0 ? (
+          <div className="space-y-2 p-3">
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-12 w-full" />
+          </div>
+        ) : cats.length === 0 ? (
+          <div className="py-10 text-center text-xs text-gray-400">
+            <Activity className="mx-auto mb-2 h-5 w-5 opacity-30" />
+            该窗口内未检测到异常
+          </div>
+        ) : (
+          <div className="space-y-2 p-3">
+            {cats.map((c) => (
+              <CategoryRow key={c.category} cat={c} />
+            ))}
+          </div>
+        )}
+
+        {/* Bottom progress bar */}
+        {data && totalDevices > 0 && (
+          <div className="border-t bg-gray-50 px-4 py-2">
+            <div className="mb-1 flex items-center justify-between text-[10.5px] text-gray-500">
+              <span>设备异常率</span>
+              <span className="font-mono">
+                {(rate * 100).toFixed(1)}% · 阈值 {(threshold * 100).toFixed(0)}%
+              </span>
+            </div>
+            <div className="relative h-1.5 overflow-hidden rounded-full bg-gray-200">
+              <div
+                className={`h-full transition-all ${
+                  exceeded ? 'bg-red-500' : rate > 0 ? 'bg-amber-500' : 'bg-green-500'
+                }`}
+                style={{ width: `${Math.min(100, rate * 100)}%` }}
+              />
+              {threshold > 0 && (
+                <div
+                  data-testid="watcher-threshold-marker"
+                  className="absolute top-0 h-full w-px bg-gray-700"
+                  style={{ left: `${Math.min(100, threshold * 100)}%` }}
+                />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}

@@ -303,6 +303,69 @@ apscheduler_job_duration = Histogram(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
+# PlanRun / Patrol / Watcher Metrics (ADR-0020 / ADR-0021 / ADR-0022)
+# ============================================================================
+
+# PlanRun lifecycle
+plan_run_terminal_total = Counter(
+    'stability_plan_run_terminal_total',
+    'Total PlanRuns reaching a terminal status',
+    ['status']  # SUCCESS / PARTIAL_SUCCESS / FAILED / DEGRADED
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+plan_run_active = Gauge(
+    'stability_plan_run_active',
+    'Number of currently RUNNING PlanRuns',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+plan_run_pass_rate = Histogram(
+    'stability_plan_run_pass_rate',
+    'Distribution of pass_rate at PlanRun terminal aggregation',
+    ['status'],
+    buckets=[0.0, 0.5, 0.8, 0.9, 0.95, 0.98, 0.99, 1.0]
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ADR-0021 dispatch gate
+dispatch_gate_runs_total = Counter(
+    'stability_dispatch_gate_runs_total',
+    'Total dispatch-gate runs (precheck → sync → re-verify)',
+    ['outcome']  # passed / synced_passed / failed / skipped
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+dispatch_gate_duration_seconds = Histogram(
+    'stability_dispatch_gate_duration_seconds',
+    'Wall-clock duration of the full dispatch gate per PlanRun',
+    ['outcome'],
+    buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0]
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ADR-0022 patrol heartbeat / backoff
+patrol_heartbeat_total = Counter(
+    'stability_patrol_heartbeat_total',
+    'Total patrol heartbeat aggregates received from agents',
+    ['has_failures']  # 'true' if failed_delta > 0 else 'false'
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+patrol_failure_streak_observed = Histogram(
+    'stability_patrol_failure_streak_observed',
+    'Distribution of current_failure_streak observed at heartbeat time',
+    buckets=[0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 15, 20]
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+patrol_manual_action_total = Counter(
+    'stability_patrol_manual_action_total',
+    'Total user-initiated manual interventions on patrol jobs',
+    ['action']  # manual_retry / manual_exit
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ADR-0018 log signals (watcher)
+log_signal_total = Counter(
+    'stability_log_signal_total',
+    'Total log signals ingested via /agent/log-signals',
+    ['category']  # AEE / VENDOR_AEE / ANR / TOMBSTONE / MOBILELOG
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
 # Build Info
 # ============================================================================
 
@@ -403,6 +466,45 @@ def record_api_request(method: str, endpoint: str, status_code: int, duration: f
         method=method,
         endpoint=endpoint
     ).observe(duration)
+
+
+def record_plan_run_terminal(status: str, pass_rate: Optional[float] = None):
+    """Record a PlanRun reaching a terminal status (ADR-0020 aggregation)."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    plan_run_terminal_total.labels(status=status).inc()
+    if pass_rate is not None:
+        plan_run_pass_rate.labels(status=status).observe(max(0.0, min(1.0, pass_rate)))
+
+
+def record_dispatch_gate(outcome: str, duration_seconds: float):
+    """Record a single dispatch-gate run with its outcome and duration."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    dispatch_gate_runs_total.labels(outcome=outcome).inc()
+    dispatch_gate_duration_seconds.labels(outcome=outcome).observe(duration_seconds)
+
+
+def record_patrol_heartbeat(failed_delta: int, current_failure_streak: int):
+    """Record a patrol heartbeat aggregate from /agent/jobs/{id}/patrol-heartbeat."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    patrol_heartbeat_total.labels(has_failures="true" if failed_delta > 0 else "false").inc()
+    patrol_failure_streak_observed.observe(max(0, int(current_failure_streak or 0)))
+
+
+def record_patrol_manual_action(action: str):
+    """Record a user-initiated patrol manual_retry / manual_exit."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    patrol_manual_action_total.labels(action=action).inc()
+
+
+def record_log_signal_ingested(category: str):
+    """Record one log signal accepted by the platform (ADR-0018)."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    log_signal_total.labels(category=(category or "UNKNOWN").upper()).inc()
 
 
 def get_metrics_response():

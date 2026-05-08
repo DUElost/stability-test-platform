@@ -272,3 +272,75 @@ class TestManualExit:
             headers=auth_headers,
         )
         assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# ADR-0021 C5c — SocketIO invalidation hint emission
+# ---------------------------------------------------------------------------
+
+
+class TestManualActionEmitsJobStatusInvalidation:
+    """The sync manual-retry / manual-exit endpoints must publish a lightweight
+    JOB_STATUS event to ``plan_run:{run_id}`` so the dashboard can drop its
+    cached devices/timeline payloads and refetch.  We patch the imported
+    ``schedule_emit`` symbol because ``_emit_job_status_invalidation`` does a
+    deferred import to avoid SocketIO bootstrapping in test environments.
+    """
+
+    def test_manual_retry_emits_job_status_to_plan_run_room(
+        self, client, auth_headers, db_session, manual_chain, monkeypatch,
+    ):
+        captured: list[tuple[str, dict, str | None]] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data, room))
+
+        # Patch in the realtime module so the deferred import inside the
+        # endpoint sees our fake.
+        from backend.realtime import socketio_server
+        monkeypatch.setattr(socketio_server, "schedule_emit", fake_schedule_emit)
+
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        job = _make_job(
+            db_session, pr.id, plan.id, manual_chain["device"].id, streak=3,
+        )
+        resp = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-retry",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+
+        assert captured, "expected schedule_emit to be invoked"
+        event, data, room = captured[-1]
+        assert event == "job_status"
+        assert room == f"plan_run:{pr.id}"
+        assert data["payload"]["job_id"] == job.id
+        assert data["payload"]["reason"] == "manual_retry"
+
+    def test_manual_exit_emits_job_status_to_plan_run_room(
+        self, client, auth_headers, db_session, manual_chain, monkeypatch,
+    ):
+        captured: list[tuple[str, dict, str | None]] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data, room))
+
+        from backend.realtime import socketio_server
+        monkeypatch.setattr(socketio_server, "schedule_emit", fake_schedule_emit)
+
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        job = _make_job(db_session, pr.id, plan.id, manual_chain["device"].id)
+        resp = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-exit",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+
+        assert captured, "expected schedule_emit to be invoked"
+        event, data, room = captured[-1]
+        assert event == "job_status"
+        assert room == f"plan_run:{pr.id}"
+        assert data["payload"]["job_id"] == job.id
+        assert data["payload"]["reason"] == "manual_exit_pending"

@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from backend.core.metrics import record_plan_run_terminal
 from backend.models.enums import JobStatus, PlanRunStatus
 
 _TERMINAL = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED, JobStatus.UNKNOWN}
@@ -18,6 +19,7 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
     if total == 0:
         run.status = PlanRunStatus.FAILED.value
         run.ended_at = datetime.now(timezone.utc)
+        record_plan_run_terminal(run.status, pass_rate=0.0)
         return True
 
     failed = sum(1 for j in jobs if JobStatus(j.status) in {JobStatus.FAILED, JobStatus.ABORTED})
@@ -35,11 +37,13 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
     run.ended_at = datetime.now(timezone.utc)
 
     completed = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.COMPLETED)
+    pass_rate = round(completed / total, 4) if total else 0
     run.result_summary = {
         "total": total,
         "completed": completed,
         "failed": failed,
         "unknown": unknown,
-        "pass_rate": round(completed / total, 4) if total else 0,
+        "pass_rate": pass_rate,
     }
+    record_plan_run_terminal(run.status, pass_rate=float(pass_rate))
     return True

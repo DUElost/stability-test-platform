@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -33,6 +34,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.database import SessionLocal
+from backend.core.metrics import record_dispatch_gate
 from backend.models.host import Device, Host
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
@@ -231,16 +233,21 @@ async def _drive_dispatch_gate(
     own_session = db is None
     if own_session:
         db = SessionLocal()
+    # ── Prometheus dispatch_gate 指标:全程统计耗时 + 出口 outcome ──
+    gate_started_at = time.monotonic()
+    gate_outcome = "failed"  # 默认失败,成功路径会显式覆写
     try:
         pr = db.get(PlanRun, plan_run_id)
         if pr is None:
             logger.warning("precheck_no_such_plan_run plan_run=%d", plan_run_id)
+            gate_outcome = "skipped"
             return
         if pr.status != "RUNNING":
             logger.info(
                 "precheck_skip_non_running plan_run=%d status=%s",
                 plan_run_id, pr.status,
             )
+            gate_outcome = "skipped"
             return
 
         precheck = initialise_precheck_state(plan_run_id, db)
@@ -358,6 +365,8 @@ async def _drive_dispatch_gate(
 
         await asyncio.to_thread(complete_plan_run_dispatch, plan_run_id, db)
         logger.info("precheck_dispatched plan_run=%d", plan_run_id)
+        # 区分:有 sync 阶段走过 = synced_passed;否则 = passed
+        gate_outcome = "synced_passed" if out_of_sync_hosts else "passed"
 
     except Exception:
         logger.exception("precheck_unexpected_failure plan_run=%d", plan_run_id)
@@ -384,6 +393,7 @@ async def _drive_dispatch_gate(
             logger.exception("precheck_failure_persist_error plan_run=%d", plan_run_id)
         raise
     finally:
+        record_dispatch_gate(gate_outcome, time.monotonic() - gate_started_at)
         if own_session:
             db.close()
 

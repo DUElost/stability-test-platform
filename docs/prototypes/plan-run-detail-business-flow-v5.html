@@ -1,0 +1,860 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PlanRun #1842</title>
+<style>
+:root{--bg:#0b1120;--panel:#0f172a;--line:#1e293b;--line-2:#243049;--text:#e5e7eb;--mute:#94a3b8;--soft:#cbd5e1;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6;--violet:#8b5cf6;--orange:#f97316;--gray:#64748b}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:13px/1.55 system-ui,-apple-system,sans-serif}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1640px;margin:0 auto;padding:14px 18px 64px}
+
+.topbar{display:flex;align-items:center;gap:14px;padding:12px 14px;background:linear-gradient(180deg,#0f172a,#0c1426);border:1px solid var(--line);border-radius:12px}
+.topbar .crumb{color:var(--mute);font-size:12px}
+.topbar .crumb b{color:var(--soft)}
+.topbar h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.2px}
+.topbar .meta{display:flex;gap:14px;color:var(--mute);font-size:12px;flex-wrap:wrap}
+.topbar .meta b{color:var(--soft);font-weight:500}
+.topbar .actions{margin-left:auto;display:flex;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:8px;border:1px solid var(--line-2);background:#0c1426;color:var(--soft);font-size:12px;cursor:pointer}
+.btn:hover{background:#142039}
+.btn.primary{background:#1e40af;border-color:#1e40af;color:#fff}
+.btn.primary:hover{background:#1d4ed8}
+.btn.danger{background:#7f1d1d;border-color:#991b1b;color:#fee2e2}
+.btn.danger:hover{background:#991b1b}
+.btn.ghost{background:transparent}
+
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid transparent}
+.pill.run{background:rgba(249,115,22,.12);color:#fdba74;border-color:rgba(249,115,22,.4)}
+.pill.ok{background:rgba(34,197,94,.12);color:#86efac;border-color:rgba(34,197,94,.4)}
+.pill.fail{background:rgba(239,68,68,.12);color:#fca5a5;border-color:rgba(239,68,68,.4)}
+.pill.warn{background:rgba(245,158,11,.14);color:#fcd34d;border-color:rgba(245,158,11,.4)}
+.pill.info{background:rgba(59,130,246,.14);color:#93c5fd;border-color:rgba(59,130,246,.4)}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:currentColor}
+.dot.live{box-shadow:0 0 0 0 rgba(249,115,22,.7);animation:pulse 1.6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(249,115,22,.55)}70%{box-shadow:0 0 0 10px rgba(249,115,22,0)}100%{box-shadow:0 0 0 0 rgba(249,115,22,0)}}
+
+.chain-strip{margin-top:12px;display:flex;align-items:center;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+.chain-strip .label{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.6px;margin-right:14px;flex-shrink:0}
+.chain-link{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;border:1px solid var(--line-2);font-size:12px;flex-shrink:0;background:#0c1426}
+.chain-link.done{border-color:rgba(34,197,94,.3);color:#86efac}
+.chain-link.active{border-color:rgba(249,115,22,.45);color:#fdba74;background:rgba(249,115,22,.08);box-shadow:0 0 0 3px rgba(249,115,22,.08)}
+.chain-link.pending{border-color:var(--line-2);color:var(--mute)}
+.chain-link b{font-weight:600}
+.chain-link .idx{display:inline-flex;width:18px;height:18px;border-radius:50%;background:#0a1224;border:1px solid currentColor;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+.chain-arrow{color:var(--gray);padding:0 8px;font-size:14px;flex-shrink:0}
+.chain-strip .meta-tail{margin-left:auto;display:flex;gap:14px;color:var(--mute);font-size:11px;flex-shrink:0;padding-left:16px}
+.chain-strip .meta-tail b{color:var(--soft)}
+
+.section{margin-top:14px}
+.section-title{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.8px;margin:0 4px 8px}
+.section-title::after{content:"";flex:1;height:1px;background:var(--line)}
+.section-title .tail{font-size:11px;color:var(--mute);text-transform:none;letter-spacing:0}
+.section-title .tail b{color:var(--soft)}
+
+.flow-canvas{background:linear-gradient(180deg,#0f172a,#0d1729);border:1px solid var(--line);border-radius:14px;padding:18px 18px 16px}
+.flow-track{display:flex;align-items:stretch;gap:0}
+.flow-link{flex:0 0 38px;align-self:center;height:4px;border-radius:2px;background:var(--line-2);position:relative}
+.flow-link.done{background:var(--green)}
+.flow-link.active-from-done{background:linear-gradient(90deg,var(--green) 0%,var(--orange) 100%)}
+.flow-link.active-to-pending{background:linear-gradient(90deg,var(--orange) 0%,var(--gray) 100%)}
+.flow-link.pending{background:var(--line-2)}
+.flow-link::after{content:"";position:absolute;right:-6px;top:50%;transform:translateY(-50%);width:0;height:0;border-left:7px solid currentColor;border-top:5px solid transparent;border-bottom:5px solid transparent}
+.flow-link.done::after{color:var(--green)}
+.flow-link.active-from-done::after{color:var(--orange)}
+.flow-link.active-to-pending::after{color:var(--gray)}
+.flow-link.pending::after{color:var(--line-2)}
+
+.flow-node{flex:1 1 0;min-width:0;padding:14px 14px 12px;border-radius:12px;border:1px solid var(--line-2);background:#0c1426;display:flex;flex-direction:column;gap:8px;position:relative}
+.flow-node.endcap{flex:0 0 124px;background:transparent;border-style:dashed;align-items:center;justify-content:center;text-align:center}
+.flow-node.endcap .endcap-icon{font-size:22px;line-height:1;margin-bottom:4px}
+.flow-node.endcap .endcap-label{font-size:12px;color:var(--soft);font-weight:600}
+.flow-node.endcap .endcap-meta{font-size:11px;color:var(--mute);margin-top:2px}
+.flow-node.start{color:#86efac}
+.flow-node.archive{color:var(--mute)}
+.flow-node.done{border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.05)}
+.flow-node.active{border-color:var(--orange);background:linear-gradient(180deg,rgba(249,115,22,.08),rgba(249,115,22,.02));box-shadow:0 0 0 4px rgba(249,115,22,.12)}
+.flow-node.pending{opacity:.66}
+
+.node-head{display:flex;align-items:center;gap:8px}
+.node-head .num{font-size:11px;color:var(--mute);font-weight:700;width:20px;height:20px;border-radius:50%;border:1px solid var(--line-2);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.flow-node.done .node-head .num{color:var(--green);border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+.flow-node.active .node-head .num{color:var(--orange);border-color:var(--orange);background:rgba(249,115,22,.1)}
+.node-head .title{font-size:14px;font-weight:600;color:var(--text);margin-right:auto}
+.node-head .stage-pill{font-size:10px;letter-spacing:.4px;color:var(--mute);padding:2px 6px;border:1px solid var(--line-2);border-radius:4px;text-transform:uppercase;font-weight:700}
+
+.node-body{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.node-stat{display:flex;align-items:baseline;gap:5px;font-size:12px;color:var(--soft)}
+.node-stat .num{font-size:18px;font-weight:600;color:var(--text);line-height:1}
+.node-stat .lbl{font-size:11px;color:var(--mute)}
+.node-stat.ok .num{color:#86efac}
+.node-stat.fail .num{color:#fca5a5}
+.node-stat.warn .num{color:#fcd34d}
+.node-foot{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--mute);padding-top:6px;border-top:1px dashed var(--line-2);margin-top:auto}
+.node-foot b{color:var(--soft);font-weight:500}
+
+.node-loop{display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.3);border-radius:8px;font-size:12px;color:#fdba74;font-weight:500}
+.loop-icon{display:inline-block;width:14px;height:14px;border:2px solid #fdba74;border-top-color:transparent;border-radius:50%;animation:spin 1.5s linear infinite}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.node-loop b{color:#fed7aa;font-weight:600}
+
+.flow-summary{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line-2);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.progress-bar{flex:1 1 380px;height:8px;background:var(--line);border-radius:4px;overflow:hidden;position:relative}
+.progress-bar .seg{height:100%;float:left}
+.progress-bar .seg.ok{background:var(--green)}
+.progress-bar .seg.fail{background:var(--red)}
+.progress-bar .seg.warn{background:var(--amber)}
+.progress-bar .seg.run{background:var(--orange);background-image:linear-gradient(45deg,rgba(255,255,255,.18) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.18) 50%,rgba(255,255,255,.18) 75%,transparent 75%);background-size:14px 14px;animation:slide 1s linear infinite}
+@keyframes slide{from{background-position:0 0}to{background-position:14px 0}}
+.summary-stat{display:flex;align-items:baseline;gap:6px;font-size:12px;color:var(--mute);padding:0 12px;border-left:1px solid var(--line-2)}
+.summary-stat:first-of-type{border-left:none;padding-left:0}
+.summary-stat .num{font-size:18px;font-weight:600;color:var(--text)}
+.summary-stat.ok .num{color:#86efac}
+.summary-stat.fail .num{color:#fca5a5}
+.summary-stat.run .num{color:#fdba74}
+
+.main-grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:14px;margin-top:14px}
+.aux-grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:14px;margin-top:14px}
+.side-stack{display:grid;gap:12px;align-content:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;overflow:hidden}
+.panel-head{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.panel-head .ttl{font-size:13px;font-weight:600}
+.panel-head .sub{font-size:11px;color:var(--mute);margin-left:6px}
+.panel-head .tail{margin-left:auto;display:flex;gap:6px;align-items:center;font-size:11px;color:var(--mute)}
+.panel-head .tail .toggle{padding:3px 8px;border-radius:6px;border:1px solid var(--line-2);background:transparent;color:var(--mute);font-size:11px;cursor:pointer}
+.panel-head .tail .toggle.on{color:var(--orange);border-color:rgba(249,115,22,.4);background:rgba(249,115,22,.08)}
+.matrix-wrap{padding:8px 14px 14px}
+.host-group{margin-top:14px}
+.host-group:first-child{margin-top:6px}
+.host-head{display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0c1426;border:1px solid var(--line-2);border-radius:8px 8px 0 0;border-bottom:none}
+.host-head .name{font-size:13px;font-weight:600;color:#dbeafe}
+.host-head .ip{font-size:11px;color:var(--mute);font-family:Menlo,Consolas,monospace}
+.host-head .stat{font-size:11px;color:var(--mute);display:flex;gap:6px;align-items:center}
+.host-head .stat .ok{color:#86efac}
+.host-head .stat .fail{color:#fca5a5}
+.host-head .stat .run{color:#fdba74}
+.host-head .tail{margin-left:auto;display:flex;gap:6px;font-size:11px;color:var(--mute)}
+.device-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px;padding:8px;background:#0a1224;border:1px solid var(--line-2);border-top:none;border-radius:0 0 8px 8px}
+.dev-card{padding:8px 10px;border-radius:8px;background:#0f172a;border:1px solid var(--line-2);cursor:pointer;display:flex;flex-direction:column;gap:5px;position:relative;min-height:84px}
+.dev-card:hover{border-color:#334155;background:#142039}
+.dev-card.selected{border-color:#3b82f6;background:rgba(59,130,246,.08);box-shadow:0 0 0 2px rgba(59,130,246,.2)}
+.dev-card .top{display:flex;align-items:center;gap:6px}
+.dev-card .serial{font-family:Menlo,Consolas,monospace;font-size:11px;color:#dbeafe;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.dev-card .stage-tag{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px;text-transform:uppercase;flex-shrink:0}
+.dev-card .stage-tag.init{background:rgba(59,130,246,.18);color:#93c5fd}
+.dev-card .stage-tag.patrol{background:rgba(249,115,22,.18);color:#fdba74}
+.dev-card .stage-tag.teardown{background:rgba(139,92,246,.18);color:#c4b5fd}
+.dev-card .stage-tag.archived{background:rgba(34,197,94,.18);color:#86efac}
+.dev-card .stage-tag.fail{background:rgba(239,68,68,.18);color:#fca5a5}
+.dev-card .progress{display:flex;gap:1px;height:4px;border-radius:2px;overflow:hidden;background:var(--line)}
+.dev-card .progress .seg{flex:1}
+.dev-card .progress .seg.ok{background:var(--green)}
+.dev-card .progress .seg.fail{background:var(--red)}
+.dev-card .progress .seg.run{background:var(--orange);background-size:8px 8px;animation:slide 1s linear infinite}
+.dev-card .progress .seg.pending{background:var(--line-2)}
+.dev-card .meta{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--mute);flex-wrap:wrap}
+.dev-card .meta .it{display:inline-flex;align-items:center;gap:3px}
+.dev-card .badge-corner{position:absolute;top:6px;right:6px;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:600}
+.dev-card .badge-corner.crash{background:rgba(239,68,68,.2);color:#fca5a5}
+.dev-card .badge-corner.tomb{background:rgba(245,158,11,.18);color:#fcd34d}
+.dev-card .badge-corner.anr{background:rgba(245,158,11,.18);color:#fcd34d}
+.stage-steps{display:flex;flex-direction:column;gap:0}
+.step-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:12px;position:relative}
+.step-row:last-child{border-bottom:none}
+.step-row.active{background:rgba(249,115,22,.06)}
+.step-row .step-num{width:22px;height:22px;border-radius:50%;background:#0c1426;border:1px solid var(--line-2);font-size:10px;font-weight:700;color:var(--mute);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.step-row.ok .step-num{color:#86efac;border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+.step-row.fail .step-num{color:#fca5a5;border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.1)}
+.step-row.active .step-num{color:var(--orange);border-color:var(--orange);background:rgba(249,115,22,.12)}
+.step-row .step-title{flex:1;color:var(--text);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.step-row .step-title .ver{font-size:10px;color:var(--mute);margin-left:6px;font-family:Menlo,Consolas,monospace}
+.step-row .step-stat{font-size:11px;color:var(--mute);font-family:Menlo,Consolas,monospace}
+.step-row.fail .step-stat{color:#fca5a5}
+.step-row.active .step-stat{color:#fdba74}
+.stage-foot{padding:8px 12px;font-size:11px;color:var(--mute);background:#0a1224;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.alert-list{display:flex;flex-direction:column}
+.alert-row{padding:9px 12px;border-bottom:1px solid var(--line);display:flex;gap:9px;font-size:12px;align-items:flex-start}
+.alert-row:last-child{border-bottom:none}
+.alert-row .ic{width:24px;height:24px;border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px}
+.alert-row .ic.crit{background:rgba(239,68,68,.18);color:#fca5a5}
+.alert-row .ic.warn{background:rgba(245,158,11,.18);color:#fcd34d}
+.alert-row .ic.info{background:rgba(59,130,246,.18);color:#93c5fd}
+.alert-row .body{flex:1;min-width:0}
+.alert-row .ttl{font-weight:500;color:var(--text);display:flex;align-items:center;gap:8px}
+.alert-row .ttl .who{font-size:10px;color:var(--mute);font-family:Menlo,Consolas,monospace}
+.alert-row .desc{font-size:11px;color:var(--mute);margin-top:2px;line-height:1.5}
+.alert-row .acts{margin-top:5px;display:flex;gap:6px;flex-wrap:wrap}
+.alert-row .ts{font-size:10px;color:var(--gray);font-family:Menlo,Consolas,monospace;flex-shrink:0;margin-top:2px}
+
+.event-stream{font-family:Menlo,Consolas,monospace;font-size:11px;max-height:240px;overflow-y:auto}
+.ev{display:grid;grid-template-columns:62px 60px 1fr;gap:8px;padding:5px 12px;border-bottom:1px solid #0c1426;align-items:start}
+.ev .ts{color:var(--gray)}
+.ev .lvl{font-weight:600;text-align:center;letter-spacing:.4px;font-size:10px}
+.ev .lvl.ok{color:#86efac}
+.ev .lvl.fail{color:#fca5a5}
+.ev .lvl.warn{color:#fcd34d}
+.ev .lvl.info{color:#93c5fd}
+.ev .msg{color:var(--soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev .msg b{color:var(--text);font-weight:500}
+.table-wrap{overflow-x:auto}
+table.dev-table{width:100%;border-collapse:collapse;font-size:12px;min-width:900px}
+table.dev-table th{background:#0c1426;padding:8px 10px;text-align:left;font-weight:500;color:var(--mute);font-size:11px;border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;z-index:1}
+table.dev-table td{padding:8px 10px;border-bottom:1px solid var(--line)}
+table.dev-table tbody tr:hover{background:#0c1426}
+table.dev-table tbody tr.selected{background:rgba(59,130,246,.06)}
+table.dev-table .serial{font-family:Menlo,Consolas,monospace;color:#dbeafe;font-size:11px}
+table.dev-table .host{color:var(--mute);font-size:11px}
+table.dev-table .stage{color:var(--soft);font-size:11px}
+table.dev-table .num{font-family:Menlo,Consolas,monospace;text-align:right;color:var(--soft)}
+table.dev-table .num.ok{color:#86efac}
+table.dev-table .num.fail{color:#fca5a5}
+table.dev-table .row-progress{display:flex;gap:1px;height:5px;width:90px;border-radius:3px;overflow:hidden;background:var(--line)}
+table.dev-table .row-progress .seg{flex:1}
+table.dev-table .row-progress .seg.ok{background:var(--green)}
+table.dev-table .row-progress .seg.fail{background:var(--red)}
+table.dev-table .row-progress .seg.run{background:var(--orange)}
+table.dev-table .row-progress .seg.pending{background:var(--line-2)}
+table.dev-table .last-step{color:var(--mute);font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.watcher-panel{display:flex;flex-direction:column}
+.watcher-row{padding:9px 12px;border-bottom:1px solid var(--line);display:flex;gap:9px;align-items:center;font-size:12px}
+.watcher-row:last-child{border-bottom:none}
+.watcher-row .ic{width:28px;height:28px;border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:14px}
+.watcher-row .ic.aee{background:rgba(239,68,68,.18);color:#fca5a5}
+.watcher-row .ic.tomb{background:rgba(245,158,11,.18);color:#fcd34d}
+.watcher-row .ic.anr{background:rgba(245,158,11,.18);color:#fcd34d}
+.watcher-row .ic.kpi{background:rgba(59,130,246,.18);color:#93c5fd}
+.watcher-row .body{flex:1;min-width:0}
+.watcher-row .ttl{font-weight:500;color:var(--text);font-size:12px}
+.watcher-row .meta{font-size:11px;color:var(--mute);font-family:Menlo,Consolas,monospace;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.watcher-row .num{font-family:Menlo,Consolas,monospace;font-weight:600;font-size:14px;color:var(--soft)}
+.watcher-row .num.fail{color:#fca5a5}
+.watcher-row .num.warn{color:#fcd34d}
+.watcher-row .num.info{color:#93c5fd}
+.next-panel-body{padding:12px 14px;display:flex;flex-direction:column;gap:12px}
+.next-card{padding:10px 12px;border-radius:8px;border:1px solid var(--line-2);background:#0c1426}
+.next-card .nc-head{display:flex;align-items:center;gap:8px;font-size:12px}
+.next-card .nc-head b{color:var(--text);font-weight:600}
+.next-card .nc-desc{font-size:11px;color:var(--mute);margin-top:5px;line-height:1.5}
+.next-card .nc-meta{font-size:11px;color:var(--soft);margin-top:8px;display:flex;gap:12px;padding-top:7px;border-top:1px dashed var(--line-2);font-family:Menlo,Consolas,monospace}
+.next-card .nc-meta .lbl{color:var(--mute);font-family:inherit}
+.threshold-bar{margin-top:8px;padding:8px 10px;border-radius:8px;background:#0a1224;border:1px solid var(--line-2)}
+.threshold-bar .tb-head{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--mute);margin-bottom:5px}
+.threshold-bar .tb-head b{color:var(--soft)}
+.threshold-bar .bar{height:6px;background:var(--line);border-radius:3px;position:relative;overflow:hidden}
+.threshold-bar .fill{height:100%;background:linear-gradient(90deg,var(--green) 0%,var(--amber) 60%,var(--red) 100%);width:18%;border-radius:3px}
+.threshold-bar .marker{position:absolute;top:-3px;width:2px;height:12px;background:#fff}
+
+.legend{display:flex;gap:14px;padding:8px 14px;color:var(--mute);font-size:11px;border-top:1px solid var(--line);background:#0a1224}
+.legend .lg{display:inline-flex;align-items:center;gap:5px}
+.legend .sw{width:10px;height:10px;border-radius:2px;display:inline-block}
+.legend .sw.ok{background:var(--green)}
+.legend .sw.fail{background:var(--red)}
+.legend .sw.run{background:var(--orange)}
+.legend .sw.pending{background:var(--line-2)}
+
+@media (max-width:1320px){.main-grid,.aux-grid{grid-template-columns:1fr}.side-stack{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:920px){.side-stack{grid-template-columns:1fr}.flow-track{flex-wrap:wrap;gap:10px}.flow-link{display:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="topbar">
+<div>
+<div class="crumb"><a href="#">Plans</a> / <a href="#">foreground_watch</a> / <b>Run #1842</b></div>
+<h1 style="margin-top:2px">PlanRun #1842 · foreground_watch &nbsp;
+<span class="pill run"><span class="dot live"></span>RUNNING</span>
+<span class="pill info" style="margin-left:6px">CHAIN · 2 / 3</span>
+</h1>
+</div>
+<div class="meta">
+<span><b>触发</b> SCHEDULE · cron @02:00</span>
+<span><b>开始</b> 2026-05-08 02:00:18</span>
+<span><b>已运行</b> 7h 13m</span>
+<span><b>SLA</b> 6h</span>
+<span><b>Failure 阈值</b> 5%</span>
+</div>
+<div class="actions">
+<button class="btn ghost">导出报告</button>
+<button class="btn">复制运行链接</button>
+<button class="btn danger">中止本段</button>
+<button class="btn primary">中止整链</button>
+</div>
+</div>
+
+<div class="chain-strip">
+<span class="label">Plan 链</span>
+<span class="chain-link done">
+<span class="idx">①</span><b>smoke_pre</b>
+<span style="color:var(--mute);font-size:11px">PlanRun #1840</span>
+<span style="color:#86efac;font-size:11px">✓ 100%</span>
+</span>
+<span class="chain-arrow">›</span>
+<span class="chain-link active">
+<span class="idx">②</span><b>foreground_watch</b>
+<span style="color:var(--mute);font-size:11px">PlanRun #1842 · 当前</span>
+<span style="color:#fdba74;font-size:11px"><span class="dot live" style="background:#f97316;width:6px;height:6px"></span>RUNNING 73%</span>
+</span>
+<span class="chain-arrow">›</span>
+<span class="chain-link pending">
+<span class="idx">③</span><b>resource_post</b>
+<span style="font-size:11px">待触发 · next_plan_triggered = false</span>
+</span>
+<span class="meta-tail">
+<span><b>Root</b> #1840</span>
+<span><b>Parent</b> #1840</span>
+<span><b>Chain Index</b> 1</span>
+</span>
+</div>
+
+<div class="section">
+<div class="section-title">
+业务流执行链路 · Plan Lifecycle
+<span class="tail">① init → ② patrol（循环）→ ③ teardown · 当前 <b style="color:#fdba74">②patrol 第 12 / 30 轮</b></span>
+</div>
+<div class="flow-canvas">
+<div class="flow-track">
+
+<div class="flow-node endcap start">
+<div class="endcap-icon">▶</div>
+<div class="endcap-label">开始</div>
+<div class="endcap-meta">02:00:18</div>
+</div>
+
+<div class="flow-link done"></div>
+
+<div class="flow-node done">
+<div class="node-head">
+<span class="num">1</span>
+<span class="title">Init 准备</span>
+<span class="stage-pill">stage:init</span>
+</div>
+<div class="node-body">
+<div class="node-stat ok"><span class="num">119</span><span class="lbl">完成</span></div>
+<div class="node-stat fail"><span class="num">1</span><span class="lbl">失败</span></div>
+</div>
+<div class="node-foot">
+check_device · ensure_root · clean_env · push_resources
+<span style="margin-left:auto"><b>耗时</b> 18m</span>
+</div>
+</div>
+
+<div class="flow-link active-from-done"></div>
+
+<div class="flow-node active">
+<div class="node-head">
+<span class="num">2</span>
+<span class="title">Patrol 巡检</span>
+<span class="stage-pill">stage:patrol</span>
+</div>
+<div class="node-loop">
+<span class="loop-icon"></span>
+<span><b>第 12 / 30 轮</b> · 周期 30s · 已循环 6m</span>
+</div>
+<div class="node-body">
+<div class="node-stat"><span class="num">88</span><span class="lbl">运行中</span></div>
+<div class="node-stat fail"><span class="num">3</span><span class="lbl">失败</span></div>
+<div class="node-stat warn"><span class="num">2</span><span class="lbl">超时</span></div>
+</div>
+<div class="node-foot">
+monkey_launch v2.0 · monkey_check · 数据采集
+<span style="margin-left:auto"><b>剩余</b> 18 轮</span>
+</div>
+</div>
+
+<div class="flow-link active-to-pending"></div>
+
+<div class="flow-node pending">
+<div class="node-head">
+<span class="num">3</span>
+<span class="title">Teardown 收尾</span>
+<span class="stage-pill">stage:teardown</span>
+</div>
+<div class="node-body">
+<div class="node-stat"><span class="num">0</span><span class="lbl">待执行</span></div>
+</div>
+<div class="node-foot">
+monkey_teardown · 日志收集 · 制品归档
+<span style="margin-left:auto"><b>预估</b> 12m</span>
+</div>
+</div>
+
+<div class="flow-link pending"></div>
+
+<div class="flow-node endcap archive">
+<div class="endcap-icon">⊙</div>
+<div class="endcap-label">归档</div>
+<div class="endcap-meta">88 已归档</div>
+</div>
+
+</div>
+
+<div class="flow-summary">
+<div class="progress-bar" title="全部 120 设备执行分布">
+<div class="seg ok" style="width:74%"></div>
+<div class="seg run" style="width:18%"></div>
+<div class="seg fail" style="width:5%"></div>
+<div class="seg warn" style="width:3%"></div>
+</div>
+<div class="summary-stat ok"><span class="num">88</span><span>已完成</span></div>
+<div class="summary-stat run"><span class="num">22</span><span>运行中</span></div>
+<div class="summary-stat fail"><span class="num">6</span><span>失败</span></div>
+<div class="summary-stat"><span class="num">4</span><span>异常</span></div>
+<div class="summary-stat" style="margin-left:auto;color:var(--mute)">
+<span class="num" style="font-size:14px;color:var(--soft)">120</span>
+<span>设备总数</span>
+</div>
+</div>
+</div>
+</div>
+
+<div class="main-grid">
+
+<div class="panel" style="overflow:visible">
+<div class="panel-head">
+<span class="ttl">设备执行矩阵</span>
+<span class="sub">按主机分组 · 4 hosts · 120 devices</span>
+<div class="tail">
+<button class="toggle on">分组</button>
+<button class="toggle">表格</button>
+<span style="margin-left:8px">筛选：</span>
+<select class="btn" style="padding:3px 8px">
+<option>全部阶段</option><option>init</option><option>patrol</option><option>teardown</option>
+</select>
+<select class="btn" style="padding:3px 8px">
+<option>全部状态</option><option>运行中</option><option>失败</option><option>异常</option>
+</select>
+</div>
+</div>
+<div class="matrix-wrap" style="max-height:660px;overflow-y:auto">
+
+<div class="host-group">
+<div class="host-head">
+<span class="name">host-101</span>
+<span class="ip">172.21.15.101</span>
+<span class="stat"><span class="ok">●25</span> / <span class="run">●5</span> / <span class="fail">●2</span></span>
+<span class="tail"><span class="resource">CPU 62%</span> · <span class="resource">RAM 4.1G</span> · <span class="resource">NFS ✓</span></span>
+</div>
+<div class="device-grid">
+<div class="dev-card selected">
+<div class="top"><span class="serial">SN-A101</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 84%</span><span class="it">🌡 36°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-A102</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 78%</span><span class="it">🌡 38°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-A103</span><span class="stage-tag patrol">PATROL</span></div>
+<span class="badge-corner crash">CRASH</span>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 72%</span><span class="it">🌡 42°</span><span class="it">11/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-A104</span><span class="stage-tag fail">FAILED</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg fail"></span><span class="seg pending"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 91%</span><span class="it">🌡 35°</span><span class="it">init 失败</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-A105</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 80%</span><span class="it">🌡 37°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-A106</span><span class="stage-tag patrol">PATROL</span></div>
+<span class="badge-corner tomb">TOMB</span>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 76%</span><span class="it">🌡 39°</span><span class="it">11/30</span></div>
+</div>
+</div>
+</div>
+
+<div class="host-group">
+<div class="host-head">
+<span class="name">host-102</span>
+<span class="ip">172.21.15.102</span>
+<span class="stat"><span class="ok">●22</span> / <span class="run">●6</span> / <span class="fail">●2</span></span>
+<span class="tail"><span class="resource">CPU 71%</span> · <span class="resource">RAM 4.6G</span> · <span class="resource">NFS ✓</span></span>
+</div>
+<div class="device-grid">
+<div class="dev-card">
+<div class="top"><span class="serial">SN-B201</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 82%</span><span class="it">🌡 36°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-B202</span><span class="stage-tag patrol">PATROL</span></div>
+<span class="badge-corner anr">ANR</span>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 75%</span><span class="it">🌡 41°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-B203</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 88%</span><span class="it">🌡 34°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-B204</span><span class="stage-tag fail">FAILED</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg fail"></span><span class="seg pending"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 79%</span><span class="it">🌡 38°</span><span class="it">init 失败</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-B205</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 92%</span><span class="it">🌡 35°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-B206</span><span class="stage-tag archived">ARCHIVED</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg ok"></span><span class="seg ok"></span></div>
+<div class="meta"><span class="it">🔋 95%</span><span class="it">🌡 33°</span><span class="it">已完成</span></div>
+</div>
+</div>
+</div>
+
+<div class="host-group">
+<div class="host-head">
+<span class="name">host-103</span>
+<span class="ip">172.21.15.103</span>
+<span class="stat"><span class="ok">●24</span> / <span class="run">●5</span> / <span class="fail">●1</span></span>
+<span class="tail"><span class="resource">CPU 58%</span> · <span class="resource">RAM 3.9G</span> · <span class="resource">NFS ✓</span></span>
+</div>
+<div class="device-grid">
+<div class="dev-card">
+<div class="top"><span class="serial">SN-C301</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 81%</span><span class="it">🌡 37°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-C302</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 86%</span><span class="it">🌡 35°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-C303</span><span class="stage-tag archived">ARCHIVED</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg ok"></span><span class="seg ok"></span></div>
+<div class="meta"><span class="it">🔋 94%</span><span class="it">🌡 33°</span><span class="it">已完成</span></div>
+</div>
+</div>
+</div>
+
+<div class="host-group">
+<div class="host-head">
+<span class="name">host-104</span>
+<span class="ip">172.21.15.104</span>
+<span class="stat"><span class="ok">●17</span> / <span class="run">●6</span> / <span class="fail">●1</span></span>
+<span class="tail"><span class="resource">CPU 49%</span> · <span class="resource">RAM 3.2G</span> · <span class="resource">NFS ✓</span></span>
+</div>
+<div class="device-grid">
+<div class="dev-card">
+<div class="top"><span class="serial">SN-D401</span><span class="stage-tag init">INIT</span></div>
+<div class="progress"><span class="seg run"></span><span class="seg pending"></span><span class="seg pending"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 90%</span><span class="it">🌡 34°</span><span class="it">push_res</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-D402</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 77%</span><span class="it">🌡 39°</span><span class="it">12/30</span></div>
+</div>
+<div class="dev-card">
+<div class="top"><span class="serial">SN-D403</span><span class="stage-tag patrol">PATROL</span></div>
+<div class="progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></div>
+<div class="meta"><span class="it">🔋 83%</span><span class="it">🌡 36°</span><span class="it">11/30</span></div>
+</div>
+</div>
+</div>
+
+</div>
+<div class="legend">
+<span class="lg"><span class="sw ok"></span>已完成步骤</span>
+<span class="lg"><span class="sw run"></span>运行中</span>
+<span class="lg"><span class="sw fail"></span>失败</span>
+<span class="lg"><span class="sw pending"></span>未开始</span>
+<span style="margin-left:auto">点击设备卡片查看详细 Pipeline 与日志</span>
+</div>
+</div>
+
+<div class="side-stack">
+
+<div class="panel">
+<div class="panel-head">
+<span class="ttl">当前阶段步骤</span>
+<span class="sub">SN-A101 · patrol stage</span>
+<div class="tail"><span style="font-size:10px;font-family:Menlo,Consolas,monospace">第12轮</span></div>
+</div>
+<div class="stage-steps">
+<div class="step-row ok">
+<span class="step-num">✓</span>
+<span class="step-title">monkey_launch <span class="ver">v2.0.0</span></span>
+<span class="step-stat">2.4s</span>
+</div>
+<div class="step-row ok">
+<span class="step-num">✓</span>
+<span class="step-title">monkey_check <span class="ver">v1.0.0</span></span>
+<span class="step-stat">0.8s</span>
+</div>
+<div class="step-row active">
+<span class="step-num">●</span>
+<span class="step-title">data_collect <span class="ver">v1.2.0</span></span>
+<span class="step-stat">1.2s ↻</span>
+</div>
+<div class="step-row">
+<span class="step-num">3</span>
+<span class="step-title">heartbeat_check <span class="ver">v1.0.0</span></span>
+<span class="step-stat">—</span>
+</div>
+</div>
+<div class="stage-foot">
+<span><b style="color:var(--soft)">巡检间隔</b> 30s</span>
+<span><b style="color:var(--soft)">超时</b> 5m / 步</span>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-head">
+<span class="ttl">需要介入</span>
+<span class="sub">3 项</span>
+<div class="tail"><a href="#">全部 →</a></div>
+</div>
+<div class="alert-list">
+<div class="alert-row">
+<span class="ic crit">!</span>
+<div class="body">
+<div class="ttl">3 设备 init 失败 <span class="who">SN-A104, SN-B204, SN-D405</span></div>
+<div class="desc">push_resources 阶段 NFS 写入超时 → 已自动 abort，未达 5% 阈值</div>
+<div class="acts">
+<button class="btn" style="padding:3px 8px;font-size:11px">查看日志</button>
+<button class="btn" style="padding:3px 8px;font-size:11px">手动重试</button>
+</div>
+</div>
+<div class="ts">02:13</div>
+</div>
+<div class="alert-row">
+<span class="ic warn">!</span>
+<div class="body">
+<div class="ttl">SN-A103 触发 AEE crash <span class="who">db8 mediaserver</span></div>
+<div class="desc">Watcher 已捕获 1 次 AEE，正在拉取 db8 → NFS</div>
+<div class="acts">
+<button class="btn" style="padding:3px 8px;font-size:11px">下载产物</button>
+</div>
+</div>
+<div class="ts">08:42</div>
+</div>
+<div class="alert-row">
+<span class="ic info">i</span>
+<div class="body">
+<div class="ttl">下游 plan resource_post 待触发</div>
+<div class="desc">达到收尾后将自动进入 chain index = 2，预计 02:45 启动</div>
+</div>
+<div class="ts">08:55</div>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-head">
+<span class="ttl">实时事件流</span>
+<span class="sub">socketio /dashboard</span>
+<div class="tail">
+<button class="toggle on">实时</button>
+<button class="toggle">暂停</button>
+</div>
+</div>
+<div class="event-stream">
+<div class="ev"><span class="ts">09:13:42</span><span class="lvl ok">OK</span><span class="msg"><b>SN-A101</b> patrol#12 monkey_check 完成</span></div>
+<div class="ev"><span class="ts">09:13:38</span><span class="lvl info">INF</span><span class="msg"><b>SN-D401</b> push_resources 进度 78%</span></div>
+<div class="ev"><span class="ts">09:13:35</span><span class="lvl warn">WRN</span><span class="msg"><b>SN-A103</b> AEE 信号 → 拉取 db8</span></div>
+<div class="ev"><span class="ts">09:13:30</span><span class="lvl ok">OK</span><span class="msg"><b>SN-B205</b> patrol#12 完成</span></div>
+<div class="ev"><span class="ts">09:13:24</span><span class="lvl info">INF</span><span class="msg"><b>SN-A102</b> patrol#12 启动</span></div>
+<div class="ev"><span class="ts">09:13:20</span><span class="lvl ok">OK</span><span class="msg"><b>SN-C303</b> teardown 归档</span></div>
+<div class="ev"><span class="ts">09:13:15</span><span class="lvl warn">WRN</span><span class="msg"><b>SN-A106</b> tombstone → 上报</span></div>
+<div class="ev"><span class="ts">09:13:08</span><span class="lvl info">INF</span><span class="msg">aggregator 计算 success_rate = 95.8%</span></div>
+<div class="ev"><span class="ts">09:13:02</span><span class="lvl ok">OK</span><span class="msg"><b>SN-B202</b> ANR 自恢复</span></div>
+<div class="ev"><span class="ts">09:12:55</span><span class="lvl info">INF</span><span class="msg">recycler 扫描 0 超时</span></div>
+</div>
+</div>
+
+</div>
+</div>
+
+<div class="aux-grid">
+
+<div class="panel">
+<div class="panel-head">
+<span class="ttl">设备同步表</span>
+<span class="sub">点击行联动设备矩阵高亮</span>
+<div class="tail">
+<input type="text" placeholder="搜索 serial / host" class="btn" style="padding:3px 8px"/>
+<button class="btn">导出 CSV</button>
+</div>
+</div>
+<div class="table-wrap" style="max-height:380px">
+<table class="dev-table">
+<thead><tr>
+<th>设备</th><th>主机</th><th>当前阶段</th><th>进度</th>
+<th class="num">已用</th><th class="num">剩余</th><th class="num">异常</th><th>最近步骤</th>
+</tr></thead>
+<tbody>
+<tr class="selected">
+<td><span class="serial">SN-A101</span></td>
+<td class="host">host-101</td>
+<td><span class="stage">patrol · 12/30</span></td>
+<td><span class="row-progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></span></td>
+<td class="num">5h12m</td><td class="num">~2h8m</td><td class="num">0</td>
+<td class="last-step">monkey_check OK · 0.8s</td>
+</tr>
+<tr>
+<td><span class="serial">SN-A103</span></td>
+<td class="host">host-101</td>
+<td><span class="stage">patrol · 11/30</span></td>
+<td><span class="row-progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></span></td>
+<td class="num">4h58m</td><td class="num">~2h22m</td><td class="num fail">1 AEE</td>
+<td class="last-step">db8 拉取中 / 412KB</td>
+</tr>
+<tr>
+<td><span class="serial">SN-A104</span></td>
+<td class="host">host-101</td>
+<td><span class="stage" style="color:#fca5a5">init · failed</span></td>
+<td><span class="row-progress"><span class="seg ok"></span><span class="seg fail"></span><span class="seg pending"></span><span class="seg pending"></span></span></td>
+<td class="num">12m</td><td class="num">—</td><td class="num fail">init</td>
+<td class="last-step">push_resources 超时</td>
+</tr>
+<tr>
+<td><span class="serial">SN-B202</span></td>
+<td class="host">host-102</td>
+<td><span class="stage">patrol · 12/30</span></td>
+<td><span class="row-progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></span></td>
+<td class="num">5h09m</td><td class="num">~2h11m</td><td class="num warn">1 ANR</td>
+<td class="last-step">monkey_launch OK</td>
+</tr>
+<tr>
+<td><span class="serial">SN-B206</span></td>
+<td class="host">host-102</td>
+<td><span class="stage" style="color:#86efac">archived</span></td>
+<td><span class="row-progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg ok"></span><span class="seg ok"></span></span></td>
+<td class="num">7h11m</td><td class="num">—</td><td class="num">0</td>
+<td class="last-step">teardown OK · 归档</td>
+</tr>
+<tr>
+<td><span class="serial">SN-D401</span></td>
+<td class="host">host-104</td>
+<td><span class="stage" style="color:#93c5fd">init · running</span></td>
+<td><span class="row-progress"><span class="seg run"></span><span class="seg pending"></span><span class="seg pending"></span><span class="seg pending"></span></span></td>
+<td class="num">3m</td><td class="num">~7h</td><td class="num">0</td>
+<td class="last-step">push_resources 78%</td>
+</tr>
+<tr>
+<td><span class="serial">SN-A106</span></td>
+<td class="host">host-101</td>
+<td><span class="stage">patrol · 11/30</span></td>
+<td><span class="row-progress"><span class="seg ok"></span><span class="seg ok"></span><span class="seg run"></span><span class="seg pending"></span></span></td>
+<td class="num">5h02m</td><td class="num">~2h18m</td><td class="num warn">1 TOMB</td>
+<td class="last-step">tombstone 已上报</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+
+<div class="side-stack">
+
+<div class="panel">
+<div class="panel-head">
+<span class="ttl">Watcher 异常聚合</span>
+<span class="sub">log_signal · job_artifact</span>
+<div class="tail"><a href="#">下载 →</a></div>
+</div>
+<div class="watcher-panel">
+<div class="watcher-row">
+<span class="ic aee">⚠</span>
+<div class="body"><div class="ttl">AEE 异常</div><div class="meta">5 db8 文件 · 3.2MB · 涉及 3 设备</div></div>
+<span class="num fail">5</span>
+</div>
+<div class="watcher-row">
+<span class="ic tomb">☠</span>
+<div class="body"><div class="ttl">Tombstone</div><div class="meta">2 文件 · 1.1MB · SN-A106 / SN-A301</div></div>
+<span class="num warn">2</span>
+</div>
+<div class="watcher-row">
+<span class="ic anr">!</span>
+<div class="body"><div class="ttl">ANR</div><div class="meta">3 traces · 480KB · com.example.app</div></div>
+<span class="num warn">3</span>
+</div>
+<div class="watcher-row">
+<span class="ic kpi">∑</span>
+<div class="body"><div class="ttl">已上传产物</div><div class="meta">237 个 · 总大小 178MB · NFS 已挂载</div></div>
+<span class="num info">237</span>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<div class="panel-head">
+<span class="ttl">链路下一步预测</span>
+<span class="sub">aggregator + chain</span>
+</div>
+<div class="next-panel-body">
+<div class="next-card">
+<div class="nc-head"><span class="pill warn"><span class="dot"></span>预测</span><b>本段 PARTIAL_SUCCESS</b></div>
+<div class="nc-desc">当前失败率 5.0% = 阈值 5%（边界）。若 patrol 阶段再增 1 例 init 失败将转为 FAILED。</div>
+<div class="nc-meta">
+<span><span class="lbl">success_rate:</span> 95.0%</span>
+<span><span class="lbl">eta:</span> 02:42</span>
+</div>
+</div>
+
+<div class="threshold-bar">
+<div class="tb-head"><span>失败率</span><span><b>5.0%</b> / 阈值 5%</span></div>
+<div class="bar"><div class="fill" style="width:100%;"></div><div class="marker" style="left:100%"></div></div>
+</div>
+
+<div class="next-card">
+<div class="nc-head"><span class="pill info"><span class="dot"></span>下一段</span><b>resource_post</b></div>
+<div class="nc-desc">chain_index = 2，触发条件：本段 status ∈ {SUCCESS, PARTIAL_SUCCESS}。next_plan_triggered 当前为 false。</div>
+<div class="nc-meta">
+<span><span class="lbl">eta:</span> 02:45</span>
+<span><span class="lbl">trigger:</span> auto</span>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+</div>
+
+</div>
+
+<script>
+document.querySelectorAll('.dev-card').forEach(card => {
+  card.addEventListener('click', () => {
+    document.querySelectorAll('.dev-card').forEach(c => c.classList.remove('selected'));
+    card.classList.add('selected');
+    const serial = card.querySelector('.serial')?.textContent;
+    const subEl = document.querySelector('.side-stack .panel:first-child .panel-head .sub');
+    if (subEl && serial) subEl.textContent = serial + ' · patrol stage';
+  });
+});
+
+document.querySelectorAll('table.dev-table tbody tr').forEach(tr => {
+  tr.addEventListener('click', () => {
+    document.querySelectorAll('table.dev-table tbody tr').forEach(t => t.classList.remove('selected'));
+    tr.classList.add('selected');
+  });
+});
+
+document.querySelectorAll('.toggle').forEach(b => {
+  b.addEventListener('click', e => {
+    const group = e.target.parentElement;
+    group.querySelectorAll('.toggle').forEach(x => x.classList.remove('on'));
+    e.target.classList.add('on');
+  });
+});
+</script>
+
+</body>
+</html>

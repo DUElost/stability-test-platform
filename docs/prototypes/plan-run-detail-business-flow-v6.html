@@ -1,0 +1,872 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PlanRun #1842 - 业务流执行详情 v6</title>
+<style>
+:root{--bg:#0b1120;--panel:#0f172a;--line:#1e293b;--line-2:#243049;--text:#e5e7eb;--mute:#94a3b8;--soft:#cbd5e1;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6;--violet:#8b5cf6;--orange:#f97316;--gray:#64748b}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:13px/1.55 system-ui,-apple-system,sans-serif}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1640px;margin:0 auto;padding:14px 18px 64px}
+
+.topbar{display:flex;align-items:center;gap:14px;padding:12px 14px;background:linear-gradient(180deg,#0f172a,#0c1426);border:1px solid var(--line);border-radius:12px}
+.topbar .crumb{color:var(--mute);font-size:12px}
+.topbar .crumb b{color:var(--soft)}
+.topbar h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.2px}
+.topbar .meta{display:flex;gap:14px;color:var(--mute);font-size:12px;flex-wrap:wrap}
+.topbar .meta b{color:var(--soft);font-weight:500}
+.topbar .actions{margin-left:auto;display:flex;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:8px;border:1px solid var(--line-2);background:#0c1426;color:var(--soft);font-size:12px;cursor:pointer}
+.btn:hover{background:#142039}
+.btn.primary{background:#1e40af;border-color:#1e40af;color:#fff}
+.btn.primary:hover{background:#1d4ed8}
+.btn.danger{background:#7f1d1d;border-color:#991b1b;color:#fee2e2}
+.btn.danger:hover{background:#991b1b}
+.btn.ghost{background:transparent}
+
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid transparent}
+.pill.run{background:rgba(249,115,22,.12);color:#fdba74;border-color:rgba(249,115,22,.4)}
+.pill.ok{background:rgba(34,197,94,.12);color:#86efac;border-color:rgba(34,197,94,.4)}
+.pill.fail{background:rgba(239,68,68,.12);color:#fca5a5;border-color:rgba(239,68,68,.4)}
+.pill.warn{background:rgba(245,158,11,.14);color:#fcd34d;border-color:rgba(245,158,11,.4)}
+.pill.info{background:rgba(59,130,246,.14);color:#93c5fd;border-color:rgba(59,130,246,.4)}
+.dot{width:7px;height:7px;border-radius:50%;display:inline-block;background:currentColor}
+.dot.live{box-shadow:0 0 0 0 rgba(249,115,22,.7);animation:pulse 1.6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(249,115,22,.55)}70%{box-shadow:0 0 0 10px rgba(249,115,22,0)}100%{box-shadow:0 0 0 0 rgba(249,115,22,0)}}
+
+.chain-strip{margin-top:12px;display:flex;align-items:center;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+.chain-strip .label{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.6px;margin-right:14px;flex-shrink:0}
+.chain-link{display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:8px;border:1px solid var(--line-2);font-size:12px;flex-shrink:0;background:#0c1426}
+.chain-link.done{border-color:rgba(34,197,94,.3);color:#86efac}
+.chain-link.active{border-color:rgba(249,115,22,.45);color:#fdba74;background:rgba(249,115,22,.08);box-shadow:0 0 0 3px rgba(249,115,22,.08)}
+.chain-link.pending{border-color:var(--line-2);color:var(--mute)}
+.chain-link b{font-weight:600}
+.chain-link .idx{display:inline-flex;width:18px;height:18px;border-radius:50%;background:#0a1224;border:1px solid currentColor;align-items:center;justify-content:center;font-size:10px;font-weight:700}
+.chain-arrow{color:var(--gray);padding:0 8px;font-size:14px;flex-shrink:0}
+.chain-strip .meta-tail{margin-left:auto;display:flex;gap:14px;color:var(--mute);font-size:11px;flex-shrink:0;padding-left:16px}
+.chain-strip .meta-tail b{color:var(--soft)}
+
+.section{margin-top:14px}
+.section-title{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.8px;margin:0 4px 8px}
+.section-title::after{content:"";flex:1;height:1px;background:var(--line)}
+.section-title .tail{font-size:11px;color:var(--mute);text-transform:none;letter-spacing:0}
+.section-title .tail b{color:var(--soft)}
+
+.flow-canvas{background:linear-gradient(180deg,#0f172a,#0d1729);border:1px solid var(--line);border-radius:14px;padding:16px 18px 14px}
+.flow-track{display:flex;align-items:stretch;gap:0}
+.flow-link{flex:0 0 32px;align-self:center;height:3px;border-radius:2px;background:var(--line-2);position:relative}
+.flow-link.done{background:var(--green)}
+.flow-link.active-from-done{background:linear-gradient(90deg,var(--green) 0%,var(--orange) 100%)}
+.flow-link.active-to-pending{background:linear-gradient(90deg,var(--orange) 0%,var(--gray) 100%)}
+.flow-link.pending{background:var(--line-2)}
+.flow-link::after{content:"";position:absolute;right:-5px;top:50%;transform:translateY(-50%);width:0;height:0;border-left:6px solid currentColor;border-top:4px solid transparent;border-bottom:4px solid transparent}
+.flow-link.done::after{color:var(--green)}
+.flow-link.active-from-done::after{color:var(--orange)}
+.flow-link.active-to-pending::after{color:var(--gray)}
+.flow-link.pending::after{color:var(--line-2)}
+
+.flow-node{flex:1 1 0;min-width:0;padding:10px 12px;border-radius:10px;border:1px solid var(--line-2);background:#0c1426;display:flex;flex-direction:column;gap:6px;position:relative}
+.flow-node.endcap{flex:0 0 96px;background:transparent;border-style:dashed;align-items:center;justify-content:center;text-align:center;padding:8px}
+.flow-node.endcap .endcap-icon{font-size:18px;line-height:1;margin-bottom:2px}
+.flow-node.endcap .endcap-label{font-size:11px;color:var(--soft);font-weight:600}
+.flow-node.endcap .endcap-meta{font-size:10px;color:var(--mute);margin-top:1px}
+.flow-node.start{color:#86efac}
+.flow-node.archive{color:var(--mute)}
+.flow-node.done{border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.05)}
+.flow-node.active{border-color:var(--orange);background:linear-gradient(180deg,rgba(249,115,22,.08),rgba(249,115,22,.02));box-shadow:0 0 0 3px rgba(249,115,22,.1)}
+.flow-node.pending{opacity:.6}
+
+.node-head{display:flex;align-items:center;gap:6px}
+.node-head .num{font-size:10px;color:var(--mute);font-weight:700;width:18px;height:18px;border-radius:50%;border:1px solid var(--line-2);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}
+.flow-node.done .node-head .num{color:var(--green);border-color:rgba(34,197,94,.5);background:rgba(34,197,94,.1)}
+.flow-node.active .node-head .num{color:var(--orange);border-color:var(--orange);background:rgba(249,115,22,.1)}
+.node-head .title{font-size:13px;font-weight:600;color:var(--text);margin-right:auto}
+.node-head .stage-pill{font-size:9px;letter-spacing:.4px;color:var(--mute);padding:1px 5px;border:1px solid var(--line-2);border-radius:3px;text-transform:uppercase;font-weight:700}
+
+.node-body{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.node-stat{display:flex;align-items:baseline;gap:4px;font-size:11px;color:var(--soft)}
+.node-stat .num{font-size:16px;font-weight:600;color:var(--text);line-height:1}
+.node-stat .lbl{font-size:10px;color:var(--mute)}
+.node-stat.ok .num{color:#86efac}
+.node-stat.fail .num{color:#fca5a5}
+.node-stat.warn .num{color:#fcd34d}
+
+.node-loop{display:flex;align-items:center;gap:6px;padding:4px 8px;background:rgba(249,115,22,.1);border:1px solid rgba(249,115,22,.3);border-radius:6px;font-size:11px;color:#fdba74;font-weight:500}
+.loop-icon{display:inline-block;width:11px;height:11px;border:2px solid #fdba74;border-top-color:transparent;border-radius:50%;animation:spin 1.5s linear infinite}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.node-loop b{color:#fed7aa;font-weight:600}
+
+.flow-summary{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line-2);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.progress-bar{flex:1 1 380px;height:8px;background:var(--line);border-radius:4px;overflow:hidden;position:relative}
+.progress-bar .seg{height:100%;float:left}
+.progress-bar .seg.ok{background:var(--green)}
+.progress-bar .seg.fail{background:var(--red)}
+.progress-bar .seg.warn{background:var(--amber)}
+.progress-bar .seg.run{background:var(--orange);background-image:linear-gradient(45deg,rgba(255,255,255,.18) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.18) 50%,rgba(255,255,255,.18) 75%,transparent 75%);background-size:14px 14px;animation:slide 1s linear infinite}
+@keyframes slide{from{background-position:0 0}to{background-position:14px 0}}
+.summary-stat{display:flex;align-items:baseline;gap:6px;font-size:12px;color:var(--mute);padding:0 12px;border-left:1px solid var(--line-2)}
+.summary-stat:first-of-type{border-left:none;padding-left:0}
+.summary-stat .num{font-size:18px;font-weight:600;color:var(--text)}
+.summary-stat.ok .num{color:#86efac}
+.summary-stat.fail .num{color:#fca5a5}
+.summary-stat.run .num{color:#fdba74}
+
+.main-grid{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;margin-top:14px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;overflow:hidden}
+.panel-head{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.panel-head .ttl{font-size:13px;font-weight:600}
+.panel-head .sub{font-size:11px;color:var(--mute);margin-left:6px}
+.panel-head .tail{margin-left:auto;display:flex;gap:6px;align-items:center;font-size:11px;color:var(--mute)}
+
+.view-toggle{display:flex;gap:0;border:1px solid var(--line-2);border-radius:6px;overflow:hidden}
+.view-toggle .vt{padding:4px 10px;border:none;background:transparent;color:var(--mute);font-size:11px;cursor:pointer;border-right:1px solid var(--line-2)}
+.view-toggle .vt:last-child{border-right:none}
+.view-toggle .vt.on{background:rgba(59,130,246,.14);color:#93c5fd}
+.view-toggle .vt:hover:not(.on){background:#142039;color:var(--soft)}
+
+.legend-bar{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:#0a1224}
+.legend-btn{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line-2);background:#0c1426;color:var(--soft);font-size:11px;cursor:pointer}
+.legend-btn:hover{background:#142039}
+.legend-btn.on{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.1);color:#93c5fd}
+.legend-btn .sw{width:9px;height:9px;border-radius:2px}
+.legend-btn .sw.completed{background:#9ee7b6}
+.legend-btn .sw.running{background:var(--orange);background-image:linear-gradient(45deg,rgba(255,255,255,.2) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.2) 50%,rgba(255,255,255,.2) 75%,transparent 75%);background-size:6px 6px}
+.legend-btn .sw.failed{background:var(--red)}
+.legend-btn .sw.risk{background:var(--amber)}
+.legend-btn .sw.unknown{background:var(--violet)}
+.legend-btn .sw.pending{background:#475569}
+.legend-btn .cnt{color:var(--mute);font-weight:600;margin-left:1px}
+.legend-btn.on .cnt{color:#93c5fd}
+
+.host-chips{padding:8px 14px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:#0a1224}
+.host-chips .lbl{font-size:11px;color:var(--mute);margin-right:4px}
+.host-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:6px;border:1px solid var(--line-2);background:#0c1426;color:var(--soft);font-size:11px;cursor:pointer;font-family:Menlo,Consolas,monospace}
+.host-chip:hover{background:#142039}
+.host-chip.on{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.1);color:#93c5fd}
+.host-chip .dots{display:inline-flex;gap:2px}
+.host-chip .dots .d{width:5px;height:5px;border-radius:50%}
+.host-chip .dots .d.ok{background:#9ee7b6}
+.host-chip .dots .d.run{background:var(--orange)}
+.host-chip .dots .d.fail{background:var(--red)}
+.host-chip .dots .d.warn{background:var(--amber)}
+
+.search-box{padding:8px 14px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;background:#0a1224}
+.search-box input{flex:1;padding:5px 10px;background:#0c1426;border:1px solid var(--line-2);border-radius:6px;color:var(--soft);font-size:12px;outline:none}
+.search-box input:focus{border-color:rgba(59,130,246,.5)}
+
+.view-host-tabs{padding:8px 14px;border-bottom:1px solid var(--line);display:flex;gap:6px;align-items:center;background:#0a1224;flex-wrap:wrap}
+.view-host-tabs .lbl{font-size:11px;color:var(--mute);margin-right:4px}
+
+.minimap-wrap{padding:14px;overflow-y:auto;max-height:560px}
+.minimap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(20px,1fr));gap:5px;max-width:920px}
+.cell{width:100%;aspect-ratio:1;border-radius:4px;border:1px solid transparent;cursor:pointer;position:relative;transition:transform .12s ease,box-shadow .12s ease}
+.cell:hover{transform:translateY(-1px) scale(1.08);box-shadow:0 0 0 2px rgba(59,130,246,.35);z-index:2}
+.cell.active{box-shadow:0 0 0 2px #3b82f6;z-index:2}
+.cell.dim{opacity:.18}
+.cell.completed{background:#9ee7b6}
+.cell.running{background:var(--orange);background-image:linear-gradient(45deg,rgba(255,255,255,.25) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.25) 50%,rgba(255,255,255,.25) 75%,transparent 75%);background-size:6px 6px;animation:slide 1s linear infinite}
+.cell.failed{background:var(--red)}
+.cell.risk{background:var(--amber)}
+.cell.unknown{background:var(--violet)}
+.cell.pending{background:#475569;opacity:.6}
+.cell::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#020617;border:1px solid var(--line-2);color:var(--soft);font-size:11px;padding:5px 8px;border-radius:6px;white-space:nowrap;font-family:Menlo,Consolas,monospace;opacity:0;pointer-events:none;transition:opacity .12s ease;z-index:10}
+.cell:hover::after{opacity:1}
+
+.host-group{margin-top:10px}
+.host-group:first-child{margin-top:0}
+.host-head{display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0c1426;border:1px solid var(--line-2);border-radius:8px 8px 0 0;border-bottom:none}
+.host-head .name{font-size:13px;font-weight:600;color:#dbeafe}
+.host-head .ip{font-size:11px;color:var(--mute);font-family:Menlo,Consolas,monospace}
+.host-head .stat{font-size:11px;color:var(--mute);display:flex;gap:6px;align-items:center}
+.host-head .stat .ok{color:#86efac}
+.host-head .stat .fail{color:#fca5a5}
+.host-head .stat .run{color:#fdba74}
+.host-head .tail{margin-left:auto;display:flex;gap:6px;font-size:11px;color:var(--mute)}
+.cards-wrap{padding:10px 14px;max-height:560px;overflow-y:auto}
+.device-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px;padding:8px;background:#0a1224;border:1px solid var(--line-2);border-top:none;border-radius:0 0 8px 8px}
+
+.dev-card{padding:8px 10px;border-radius:8px;background:#0f172a;border:1px solid var(--line-2);cursor:pointer;display:flex;flex-direction:column;gap:5px;position:relative;min-height:84px}
+.dev-card:hover{border-color:#334155;background:#142039}
+.dev-card.selected{border-color:#3b82f6;background:rgba(59,130,246,.08);box-shadow:0 0 0 2px rgba(59,130,246,.2)}
+.dev-card .top{display:flex;align-items:center;gap:6px}
+.dev-card .serial{font-family:Menlo,Consolas,monospace;font-size:11px;color:#dbeafe;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.dev-card .stage-tag{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px;text-transform:uppercase;flex-shrink:0}
+.dev-card .stage-tag.init{background:rgba(59,130,246,.18);color:#93c5fd}
+.dev-card .stage-tag.patrol{background:rgba(249,115,22,.18);color:#fdba74}
+.dev-card .stage-tag.teardown{background:rgba(139,92,246,.18);color:#c4b5fd}
+.dev-card .stage-tag.archived{background:rgba(34,197,94,.18);color:#86efac}
+.dev-card .stage-tag.fail{background:rgba(239,68,68,.18);color:#fca5a5}
+.dev-card .progress{display:flex;gap:1px;height:4px;border-radius:2px;overflow:hidden;background:var(--line)}
+.dev-card .progress .seg{flex:1}
+.dev-card .progress .seg.ok{background:var(--green)}
+.dev-card .progress .seg.fail{background:var(--red)}
+.dev-card .progress .seg.run{background:var(--orange);background-image:linear-gradient(45deg,rgba(255,255,255,.2) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.2) 50%,rgba(255,255,255,.2) 75%,transparent 75%);background-size:8px 8px;animation:slide 1s linear infinite}
+.dev-card .progress .seg.pending{background:var(--line-2)}
+.dev-card .meta{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--mute);flex-wrap:wrap}
+.dev-card .badge-corner{position:absolute;top:6px;right:6px;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:600}
+.dev-card .badge-corner.crash{background:rgba(239,68,68,.2);color:#fca5a5}
+.dev-card .badge-corner.tomb{background:rgba(245,158,11,.18);color:#fcd34d}
+.dev-card .badge-corner.anr{background:rgba(245,158,11,.18);color:#fcd34d}
+
+/* ===== Right Panel: Tab + Event Stream + Step Rows ===== */
+.tab-bar{display:flex;border-bottom:1px solid var(--line);background:#0a1224;padding:0 8px}
+.tab-btn{padding:10px 14px;font-size:12px;color:var(--mute);background:transparent;border:none;border-bottom:2px solid transparent;cursor:pointer;font-weight:600;letter-spacing:.2px;display:flex;align-items:center;gap:6px}
+.tab-btn:hover{color:var(--fg)}
+.tab-btn.active{color:#60a5fa;border-bottom-color:#3b82f6}
+.tab-btn .badge{background:var(--line-2);color:var(--fg);font-size:10px;padding:1px 6px;border-radius:8px;font-weight:700}
+.tab-btn.active .badge{background:rgba(59,130,246,.25);color:#93c5fd}
+.tab-panel{display:none;padding:0}
+.tab-panel.active{display:block}
+
+.event-stream{max-height:520px;overflow-y:auto;padding:6px 0}
+.event-row{display:grid;grid-template-columns:62px 12px 1fr;gap:8px;padding:7px 14px;border-bottom:1px solid #131c33;font-size:11.5px;align-items:start}
+.event-row:hover{background:rgba(59,130,246,.04)}
+.event-row .ts{color:var(--mute);font-family:Menlo,Consolas,monospace;font-size:10.5px;padding-top:2px}
+.event-row .dot{width:8px;height:8px;border-radius:50%;margin-top:5px}
+.event-row .dot.info{background:#60a5fa}
+.event-row .dot.ok{background:var(--green)}
+.event-row .dot.warn{background:var(--orange)}
+.event-row .dot.err{background:var(--red)}
+.event-row .body{display:flex;flex-direction:column;gap:2px}
+.event-row .title{color:#e6ecff;font-weight:600}
+.event-row .desc{color:var(--mute);font-size:11px;line-height:1.5}
+.event-row .desc code{background:#0a1224;color:#93c5fd;padding:1px 4px;border-radius:3px;font-family:Menlo,Consolas,monospace;font-size:10.5px}
+.event-row .desc .tag{display:inline-block;padding:0 5px;border-radius:3px;font-size:10px;margin-right:4px}
+.event-row .desc .tag.aee{background:rgba(239,68,68,.15);color:#fca5a5}
+.event-row .desc .tag.tomb{background:rgba(245,158,11,.15);color:#fcd34d}
+.event-row .desc .tag.anr{background:rgba(245,158,11,.15);color:#fcd34d}
+
+.steps-list{padding:6px 0;max-height:520px;overflow-y:auto}
+.steps-empty{padding:40px 16px;text-align:center;color:var(--mute);font-size:12px}
+.steps-empty .hint{color:#475569;font-size:11px;margin-top:6px}
+.step-row{padding:8px 14px;border-bottom:1px solid #131c33;display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;font-size:12px}
+.step-row .ico{width:18px;height:18px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
+.step-row .ico.ok{background:var(--green)}
+.step-row .ico.run{background:var(--orange)}
+.step-row .ico.fail{background:var(--red)}
+.step-row .ico.pend{background:var(--line-2);color:var(--mute)}
+.step-row .ico.skip{background:#64748b}
+.step-row .name{color:#e6ecff;font-weight:500}
+.step-row .name .stage-pill{display:inline-block;font-size:9px;padding:0 5px;border-radius:3px;margin-right:6px;background:var(--line-2);color:var(--mute);letter-spacing:.4px;text-transform:uppercase;font-weight:700;vertical-align:middle}
+.step-row .name .stage-pill.init{background:rgba(59,130,246,.15);color:#93c5fd}
+.step-row .name .stage-pill.patrol{background:rgba(249,115,22,.15);color:#fdba74}
+.step-row .name .stage-pill.teardown{background:rgba(139,92,246,.15);color:#c4b5fd}
+.step-row .meta{font-family:Menlo,Consolas,monospace;font-size:10px;color:var(--mute)}
+.step-context{padding:10px 14px;background:#0a1224;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--mute);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.step-context .label{color:#94a3b8;font-weight:600}
+.step-context .val{color:#e6ecff;font-family:Menlo,Consolas,monospace;font-size:11px}
+.step-context .clear-btn{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--mute);padding:3px 10px;border-radius:6px;cursor:pointer;font-size:10.5px}
+.step-context .clear-btn:hover{color:#e6ecff;border-color:#475569}
+
+/* ===== Watcher Aggregate (bottom horizontal row) ===== */
+.metric-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}
+.metric-card{background:#0f172a;border:1px solid var(--line-2);border-radius:8px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden}
+.metric-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
+.metric-card.aee::before{background:var(--red)}
+.metric-card.tomb::before{background:var(--orange)}
+.metric-card.anr::before{background:#fbbf24}
+.metric-card.total::before{background:#60a5fa}
+.metric-card .head{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.5px;font-weight:700}
+.metric-card .head .name{color:#cbd5e1}
+.metric-card .head .trend{font-size:10px;padding:1px 6px;border-radius:3px;background:var(--line-2);color:var(--mute);text-transform:none;letter-spacing:0}
+.metric-card .head .trend.up{background:rgba(239,68,68,.15);color:#fca5a5}
+.metric-card .head .trend.down{background:rgba(34,197,94,.15);color:#86efac}
+.metric-card .num{font-size:24px;font-weight:700;color:#fff;line-height:1}
+.metric-card .sub{font-size:10.5px;color:var(--mute)}
+.metric-card .sub b{color:#e6ecff;font-weight:600}
+
+@keyframes slide{from{background-position:0 0}to{background-position:24px 0}}
+
+@media (max-width:1280px){
+  .main-grid{grid-template-columns:1fr}
+  .metric-row{grid-template-columns:repeat(2,1fr)}
+  .flow-canvas{flex-wrap:wrap}
+}
+
+/* ===== v6 body class shim (maps actual HTML to styling) ===== */
+
+/* topbar */
+.topbar .left{display:flex;align-items:center;gap:14px;flex:1;min-width:0}
+.topbar .right{display:flex;align-items:center;gap:8px;margin-left:auto}
+.topbar .brand{font-size:15px;font-weight:700;color:#60a5fa;letter-spacing:.4px;flex-shrink:0}
+.topbar .crumbs{color:var(--mute);font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.topbar .crumbs .sep{color:#475569}
+.topbar .crumbs .cur{color:#e6ecff;font-weight:600}
+.status-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:11px;font-weight:600;border:1px solid transparent}
+.status-pill .d{width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulse 1.6s infinite}
+.status-pill.running{background:rgba(249,115,22,.12);color:#fdba74;border-color:rgba(249,115,22,.4)}
+
+/* chain (uses chain-node naming in body) */
+.chain-node{display:flex;align-items:center;gap:10px;padding:7px 12px;border-radius:8px;border:1px solid var(--line-2);font-size:12px;flex-shrink:0;background:#0c1426;min-width:0}
+.chain-node.done{border-color:rgba(34,197,94,.3);color:#86efac}
+.chain-node.current{border-color:rgba(249,115,22,.45);color:#fdba74;background:rgba(249,115,22,.08);box-shadow:0 0 0 3px rgba(249,115,22,.08)}
+.chain-node.pending{border-color:var(--line-2);color:var(--mute);opacity:.75}
+.chain-node .idx{display:inline-flex;width:20px;height:20px;border-radius:50%;background:#0a1224;border:1px solid currentColor;align-items:center;justify-content:center;font-size:10px;font-weight:700;flex-shrink:0}
+.chain-node .info{display:flex;flex-direction:column;gap:1px;min-width:0}
+.chain-node .info .title{font-size:12px;font-weight:600;color:#e6ecff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chain-node.done .info .title{color:#bbf7d0}
+.chain-node.current .info .title{color:#fed7aa}
+.chain-node.pending .info .title{color:var(--soft)}
+.chain-node .info .meta{font-size:10.5px;color:var(--mute)}
+.chain-node .here{display:inline-block;font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;background:rgba(249,115,22,.2);color:#fed7aa;letter-spacing:.4px;margin-left:6px;vertical-align:middle}
+
+/* section heading (uses section-head + .title .bar in body) */
+.section-head{display:flex;align-items:center;gap:10px;margin:0 4px 8px}
+.section-head .title{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:#cbd5e1}
+.section-head .title .bar{display:inline-block;width:3px;height:13px;background:linear-gradient(180deg,#60a5fa,#3b82f6);border-radius:2px}
+.section-head .meta{margin-left:auto;font-size:11px;color:var(--mute)}
+
+/* flow-canvas / nodes / endcaps as built */
+.flow-canvas{display:flex;align-items:stretch;gap:0}
+.flow-end{flex:0 0 96px;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:8px;border:1px dashed var(--line-2);border-radius:10px;background:transparent}
+.flow-end .ico{font-size:20px;line-height:1;color:#86efac;margin-bottom:3px}
+.flow-end .cap{font-size:11px;color:var(--soft);font-weight:600}
+.flow-end .ts{font-size:10px;color:var(--mute);font-family:Menlo,Consolas,monospace;margin-top:2px}
+.flow-node.current{border-color:var(--orange);background:linear-gradient(180deg,rgba(249,115,22,.08),rgba(249,115,22,.02));box-shadow:0 0 0 3px rgba(249,115,22,.1)}
+.flow-node .node-head{display:flex;align-items:center;gap:6px}
+.flow-node .node-head .stage{font-size:9px;letter-spacing:.5px;padding:1px 6px;border-radius:3px;text-transform:uppercase;font-weight:700;background:var(--line-2);color:var(--mute)}
+.flow-node .node-head .stage.init{background:rgba(59,130,246,.18);color:#93c5fd}
+.flow-node .node-head .stage.patrol{background:rgba(249,115,22,.18);color:#fdba74}
+.flow-node .node-head .stage.teardown{background:rgba(139,92,246,.18);color:#c4b5fd}
+.flow-node .node-head .status{margin-left:auto;font-size:11px;color:var(--mute)}
+.flow-node .node-head .status.running{color:#fdba74}
+.flow-node.done .node-head .status{color:#86efac}
+.flow-node .node-title{font-size:13px;font-weight:600;color:#e6ecff;line-height:1.3}
+.flow-node .node-stats{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap}
+.flow-node .node-stats .stat{display:flex;flex-direction:column;gap:1px}
+.flow-node .node-stats .stat .num{font-size:16px;font-weight:700;color:#e6ecff;line-height:1}
+.flow-node .node-stats .stat .num.ok{color:#86efac}
+.flow-node .node-stats .stat .num.err{color:#fca5a5}
+.flow-node .node-stats .stat .lbl{font-size:10px;color:var(--mute);text-transform:uppercase;letter-spacing:.4px}
+
+/* progress bar in summary (uses prog-line / prog-bar / prog-fill / prog-stats / s.ok in body) */
+.prog-line{display:flex;align-items:center;gap:14px;width:100%;flex-wrap:wrap}
+.prog-bar{flex:1 1 320px;height:8px;background:var(--line);border-radius:4px;overflow:hidden;position:relative}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--green) 0%,var(--green) 73%,var(--orange) 73%,var(--orange) 91.7%,var(--red) 91.7%,var(--red) 96.7%,var(--amber) 96.7%);transition:width .3s ease}
+.prog-stats{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.prog-stats .s{font-size:11px;color:var(--mute);padding:0 10px;border-left:1px solid var(--line-2)}
+.prog-stats .s:first-child{border-left:none;padding-left:0}
+.prog-stats .s b{font-size:15px;font-weight:700;color:#e6ecff;margin-right:3px}
+.prog-stats .s.ok b{color:#86efac}
+.prog-stats .s.run b{color:#fdba74}
+.prog-stats .s.fail b{color:#fca5a5}
+.prog-stats .s.risk b{color:#fcd34d}
+.prog-stats .s.total b{color:#93c5fd}
+
+/* panel-head .t / .cnt aliases */
+.panel-head .t{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#e6ecff}
+.panel-head .t .bar{display:inline-block;width:3px;height:13px;background:linear-gradient(180deg,#60a5fa,#3b82f6);border-radius:2px}
+.panel-head .t .cnt{font-size:11px;color:var(--mute);font-weight:500;margin-left:6px}
+
+/* view-toggle uses .vbtn.active in body */
+.view-toggle .vbtn{padding:5px 12px;border:none;background:transparent;color:var(--mute);font-size:11px;cursor:pointer;border-right:1px solid var(--line-2);font-weight:500}
+.view-toggle .vbtn:last-child{border-right:none}
+.view-toggle .vbtn.active{background:rgba(59,130,246,.14);color:#93c5fd}
+.view-toggle .vbtn:hover:not(.active){background:#142039;color:var(--soft)}
+.view-toggle{margin-left:auto}
+
+/* legend-btn uses .active in body */
+.legend-btn.active{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.1);color:#93c5fd}
+.legend-btn .sw.all{background:linear-gradient(135deg,#9ee7b6 0 25%,var(--orange) 25% 50%,var(--red) 50% 75%,var(--amber) 75%)}
+.legend-btn b{font-weight:700;color:#e6ecff;margin-left:3px}
+.legend-btn.active b{color:#93c5fd}
+
+/* host-chip uses .active and .dot.ok/.warn / .ct in body */
+.host-chip.active{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.1);color:#93c5fd}
+.host-chip .dot{width:6px;height:6px;border-radius:50%;display:inline-block}
+.host-chip .dot.ok{background:#86efac}
+.host-chip .dot.warn{background:var(--amber)}
+.host-chip .dot.fail{background:var(--red)}
+.host-chip .ct{font-size:10px;color:var(--mute);font-weight:600;margin-left:3px}
+.host-chip.active .ct{color:#93c5fd}
+
+/* search-box used as input element directly in body */
+input.search-box{flex:1 1 200px;padding:5px 10px;background:#0c1426;border:1px solid var(--line-2);border-radius:6px;color:var(--soft);font-size:12px;outline:none;font-family:inherit;margin-left:auto;min-width:200px;max-width:300px}
+input.search-box:focus{border-color:rgba(59,130,246,.5)}
+
+/* view-pane (no CSS yet) */
+.view-pane.active{display:block}
+
+/* host-head .hn / .stat / .tail used in body */
+.host-head .hn{font-size:12px;font-weight:600;color:#dbeafe;font-family:Menlo,Consolas,monospace}
+</style>
+</head>
+<body>
+
+<!-- ===== Topbar ===== -->
+<div class="topbar">
+  <div class="left">
+    <div class="brand">⬢ STP</div>
+    <div class="crumbs">
+      <span>编排</span>
+      <span class="sep">/</span>
+      <span>Plan 列表</span>
+      <span class="sep">/</span>
+      <span>Plan #42 · 多机型 Monkey 主链</span>
+      <span class="sep">/</span>
+      <span class="cur">PlanRun #1280</span>
+    </div>
+  </div>
+  <div class="right">
+    <span class="status-pill running"><span class="d"></span>RUNNING · 已运行 2h 14m</span>
+    <button class="btn">导出报告</button>
+    <button class="btn danger">中止 PlanRun</button>
+  </div>
+</div>
+
+<!-- ===== Plan Chain Strip ===== -->
+<div class="chain-strip">
+  <div class="chain-label">Plan 链</div>
+  <div class="chain-track">
+    <div class="chain-node done">
+      <span class="idx">1</span>
+      <div class="info"><div class="title">Plan #41 · 设备健康预检</div><div class="meta">PlanRun #1278 · 全部 SUCCESS · 8m</div></div>
+    </div>
+    <div class="chain-arrow">→</div>
+    <div class="chain-node current">
+      <span class="idx">2</span>
+      <div class="info"><div class="title">Plan #42 · 多机型 Monkey 主链 <span class="here">当前</span></div><div class="meta">PlanRun #1280 · RUNNING · 进度 73% · 阈值 5%</div></div>
+    </div>
+    <div class="chain-arrow">→</div>
+    <div class="chain-node pending">
+      <span class="idx">3</span>
+      <div class="info"><div class="title">Plan #43 · 结果汇总与归档</div><div class="meta">条件触发 · failure_rate &lt; 5% · 未启动</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Section: Business Flow ===== -->
+<div class="section">
+  <div class="section-head">
+    <div class="title"><span class="bar"></span>业务流执行链路</div>
+    <div class="meta">Plan #42 · lifecycle 重组 · 5 节点 · 当前 patrol 阶段</div>
+  </div>
+  <div class="flow-canvas">
+    <!-- 触发 -->
+    <div class="flow-end">
+      <div class="ico">▶</div>
+      <div class="cap">触发</div>
+      <div class="ts">14:02:18</div>
+    </div>
+    <div class="flow-link done"></div>
+    <!-- init -->
+    <div class="flow-node done">
+      <div class="node-head"><span class="stage init">INIT</span><span class="status">✓ 完成</span></div>
+      <div class="node-title">前置准备</div>
+      <div class="node-stats">
+        <div class="stat"><span class="num">3</span><span class="lbl">步骤</span></div>
+        <div class="stat"><span class="num">120</span><span class="lbl">设备</span></div>
+        <div class="stat"><span class="num ok">120</span><span class="lbl">就绪</span></div>
+      </div>
+    </div>
+    <div class="flow-link done"></div>
+    <!-- patrol -->
+    <div class="flow-node current">
+      <div class="node-head"><span class="stage patrol">PATROL</span><span class="status running">⟳ 进行中</span></div>
+      <div class="node-title">巡检循环 · 60s</div>
+      <div class="node-stats">
+        <div class="stat"><span class="num">5</span><span class="lbl">步骤</span></div>
+        <div class="stat"><span class="num">22</span><span class="lbl">运行</span></div>
+        <div class="stat"><span class="num err">6</span><span class="lbl">失败</span></div>
+      </div>
+    </div>
+    <div class="flow-link pending"></div>
+    <!-- teardown -->
+    <div class="flow-node pending">
+      <div class="node-head"><span class="stage teardown">TEARDOWN</span><span class="status">○ 等待</span></div>
+      <div class="node-title">收尾清理</div>
+      <div class="node-stats">
+        <div class="stat"><span class="num">2</span><span class="lbl">步骤</span></div>
+        <div class="stat"><span class="num">—</span><span class="lbl">触发</span></div>
+        <div class="stat"><span class="num">—</span><span class="lbl">完成</span></div>
+      </div>
+    </div>
+    <div class="flow-link pending"></div>
+    <!-- 终点 -->
+    <div class="flow-end">
+      <div class="ico">⌾</div>
+      <div class="cap">归档</div>
+      <div class="ts">预计 16:30</div>
+    </div>
+  </div>
+  <div class="flow-summary">
+    <div class="prog-line">
+      <div class="prog-bar"><div class="prog-fill" style="width:73%"></div></div>
+      <div class="prog-stats">
+        <span class="s ok"><b>88</b> 已完成</span>
+        <span class="s run"><b>22</b> 运行中</span>
+        <span class="s fail"><b>6</b> 失败</span>
+        <span class="s risk"><b>4</b> 异常</span>
+        <span class="s total"><b>120</b> 设备总数</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Main Grid: Device Overview + Timeline ===== -->
+<div class="main-grid">
+
+  <!-- LEFT: Device Overview (minimap merged with sync table) -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="t"><span class="bar"></span>设备总览 <span class="cnt">120 台</span></div>
+      <div class="view-toggle">
+        <button class="vbtn active" data-view="minimap">缩略图</button>
+        <button class="vbtn" data-view="cards">卡片</button>
+        <button class="vbtn" data-view="table">表格</button>
+      </div>
+    </div>
+
+    <!-- Legend filter (status counts, clickable) -->
+    <div class="legend-bar">
+      <button class="legend-btn active" data-status="all"><span class="sw all"></span>全部 <b>120</b></button>
+      <button class="legend-btn" data-status="completed"><span class="sw completed"></span>已完成 <b>88</b></button>
+      <button class="legend-btn" data-status="running"><span class="sw running"></span>运行中 <b>22</b></button>
+      <button class="legend-btn" data-status="failed"><span class="sw failed"></span>失败 <b>6</b></button>
+      <button class="legend-btn" data-status="risk"><span class="sw risk"></span>异常 <b>4</b></button>
+      <button class="legend-btn" data-status="unknown"><span class="sw unknown"></span>未知 <b>0</b></button>
+    </div>
+
+    <!-- Host filter chips -->
+    <div class="host-chips">
+      <button class="host-chip active" data-host="all">全部主机</button>
+      <button class="host-chip" data-host="host-101"><span class="dot ok"></span>host-101 <span class="ct">30</span></button>
+      <button class="host-chip" data-host="host-102"><span class="dot ok"></span>host-102 <span class="ct">30</span></button>
+      <button class="host-chip" data-host="host-103"><span class="dot warn"></span>host-103 <span class="ct">30</span></button>
+      <button class="host-chip" data-host="host-104"><span class="dot ok"></span>host-104 <span class="ct">30</span></button>
+      <input class="search-box" type="search" placeholder="搜索 serial / 机型..." id="device-search">
+    </div>
+
+    <!-- View: Minimap -->
+    <div class="view-pane active" id="view-minimap">
+      <div class="minimap-wrap">
+        <div class="minimap-grid" id="minimap"></div>
+      </div>
+    </div>
+
+    <!-- View: Cards (host-grouped) -->
+    <div class="view-pane" id="view-cards" style="display:none">
+      <div class="cards-wrap" id="cards-content"></div>
+    </div>
+
+    <!-- View: Table (sync data) -->
+    <div class="view-pane" id="view-table" style="display:none">
+      <div style="overflow-x:auto;max-height:560px">
+        <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+          <thead style="position:sticky;top:0;background:#0a1224;z-index:1">
+            <tr style="text-align:left;color:#94a3b8;border-bottom:1px solid var(--line)">
+              <th style="padding:8px 12px;font-weight:600">Serial</th>
+              <th style="padding:8px 12px;font-weight:600">主机</th>
+              <th style="padding:8px 12px;font-weight:600">阶段</th>
+              <th style="padding:8px 12px;font-weight:600">当前步骤</th>
+              <th style="padding:8px 12px;font-weight:600">进度</th>
+              <th style="padding:8px 12px;font-weight:600">异常</th>
+              <th style="padding:8px 12px;font-weight:600">最后心跳</th>
+            </tr>
+          </thead>
+          <tbody id="table-content"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Timeline tabs (event stream + current device steps) -->
+  <div class="panel">
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="events">全局事件流 <span class="badge">142</span></button>
+      <button class="tab-btn" data-tab="steps">当前设备步骤</button>
+    </div>
+
+    <!-- Tab: Events -->
+    <div class="tab-panel active" id="tab-events">
+      <div class="event-stream" id="event-stream"></div>
+    </div>
+
+    <!-- Tab: Current device steps -->
+    <div class="tab-panel" id="tab-steps">
+      <div class="step-context" id="step-context">
+        <span class="label">未选中设备</span>
+        <span class="val">点击左侧任一格子查看其执行步骤</span>
+      </div>
+      <div class="steps-list" id="steps-list">
+        <div class="steps-empty">暂无设备<div class="hint">在左侧设备总览中点击单元格选中设备</div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ===== Watcher Aggregate (bottom horizontal row) ===== -->
+<div class="section">
+  <div class="section-head">
+    <div class="title"><span class="bar"></span>Watcher 异常聚合 · 最近 1h</div>
+    <div class="meta">来源：log-signal outbox · ADR-0018</div>
+  </div>
+  <div class="metric-row">
+    <div class="metric-card aee">
+      <div class="head"><span class="name">AEE Crash</span><span class="trend up">+2 / 10m</span></div>
+      <div class="num">3</div>
+      <div class="sub">影响 <b>3</b> 台 · 最近 <b>device-A1F3</b> · 14:38:22</div>
+    </div>
+    <div class="metric-card tomb">
+      <div class="head"><span class="name">Tombstone</span><span class="trend">持平</span></div>
+      <div class="num">2</div>
+      <div class="sub">影响 <b>2</b> 台 · 最近 <b>device-C2E7</b> · 14:35:11</div>
+    </div>
+    <div class="metric-card anr">
+      <div class="head"><span class="name">ANR</span><span class="trend up">+1</span></div>
+      <div class="num">5</div>
+      <div class="sub">影响 <b>4</b> 台 · 最近 <b>device-B7D9</b> · 14:36:48</div>
+    </div>
+    <div class="metric-card total">
+      <div class="head"><span class="name">总计</span><span class="trend up">+3 / 10m</span></div>
+      <div class="num">10</div>
+      <div class="sub">异常率 <b>8.3%</b> · 阈值 <b>5%</b> · <span style="color:#fca5a5">已超限</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const HOSTS = ['host-101','host-102','host-103','host-104'];
+const DEVICES = [];
+(function buildDevices(){
+  const status = [];
+  for(let i=0;i<88;i++) status.push('completed');
+  for(let i=0;i<22;i++) status.push('running');
+  for(let i=0;i<6;i++)  status.push('failed');
+  for(let i=0;i<4;i++)  status.push('risk');
+  for(let i=status.length-1;i>0;i--){const j=(i*9301+49297)%(i+1);[status[i],status[j]]=[status[j],status[i]]}
+  for(let i=0;i<120;i++){
+    const host = HOSTS[Math.floor(i/30)];
+    const st = status[i];
+    let stage = 'patrol';
+    if(st==='completed') stage = 'archived';
+    else if(st==='failed') stage = 'fail';
+    const badge = (st==='risk') ? (['crash','tomb','anr'])[i%3] : null;
+    const stepName = st==='completed'?'teardown.archive_logs':(st==='failed'?'patrol.monkey_check':(st==='risk'?'patrol.monkey_launch':'patrol.monkey_setup'));
+    const prog = st==='completed'?'10/10':(st==='failed'?'4/10':(st==='risk'?'7/10':(3+i%6)+'/10'));
+    DEVICES.push({
+      idx:i,
+      serial:'device-'+host.slice(-1)+(i%30+1).toString(16).toUpperCase().padStart(2,'F'),
+      host, status:st, stage, step:stepName, progress:prog, badge,
+      heartbeat: (14+Math.floor(i/60)).toString().padStart(2,'0')+':'+(i%60).toString().padStart(2,'0')+':'+((i*7)%60).toString().padStart(2,'0')
+    });
+  }
+})();
+
+const state = { view:'minimap', statusFilter:'all', hostFilter:'all', search:'', selectedIdx:null };
+
+function cellMatches(d){
+  if(state.statusFilter!=='all' && d.status!==state.statusFilter) return false;
+  if(state.hostFilter!=='all' && d.host!==state.hostFilter) return false;
+  if(state.search && !d.serial.toLowerCase().includes(state.search.toLowerCase())) return false;
+  return true;
+}
+
+function renderMinimap(){
+  const root = document.getElementById('minimap');
+  root.innerHTML = '';
+  DEVICES.forEach(d=>{
+    const cell = document.createElement('div');
+    cell.className = 'cell '+d.status;
+    cell.dataset.idx = d.idx;
+    cell.dataset.tip = d.serial+' · '+d.host+' · '+d.stage+' · '+d.step;
+    if(!cellMatches(d)) cell.style.opacity = '.18';
+    if(state.selectedIdx===d.idx) cell.style.outline='2px solid #60a5fa';
+    cell.onclick = ()=>selectDevice(d.idx);
+    root.appendChild(cell);
+  });
+}
+
+function renderDevCard(d){
+  const stageMap = {init:'INIT',patrol:'PATROL',teardown:'TEARDOWN',archived:'已归档',fail:'失败'};
+  const segs = [];
+  const total=10, done = parseInt(d.progress.split('/')[0]);
+  for(let i=0;i<total;i++){
+    if(d.status==='failed' && i===done) segs.push('<span class="seg fail"></span>');
+    else if(i<done) segs.push('<span class="seg ok"></span>');
+    else if(i===done && d.status==='running') segs.push('<span class="seg run"></span>');
+    else segs.push('<span class="seg pending"></span>');
+  }
+  const badge = d.badge ? '<span class="badge-corner '+d.badge+'">'+d.badge.toUpperCase()+'</span>' : '';
+  const sel = state.selectedIdx===d.idx ? ' selected' : '';
+  return '<div class="dev-card'+sel+'" data-idx="'+d.idx+'">'+
+    badge+
+    '<div class="top"><span class="serial">'+d.serial+'</span><span class="stage-tag '+d.stage+'">'+stageMap[d.stage]+'</span></div>'+
+    '<div class="progress">'+segs.join('')+'</div>'+
+    '<div class="meta"><span>'+d.step+'</span> · <span>'+d.progress+'</span></div>'+
+    '</div>';
+}
+
+function renderCards(){
+  const root = document.getElementById('cards-content');
+  const filtered = DEVICES.filter(cellMatches);
+  const byHost = {};
+  filtered.forEach(d=>{(byHost[d.host]=byHost[d.host]||[]).push(d)});
+  let html = '';
+  Object.keys(byHost).sort().forEach(h=>{
+    const list = byHost[h];
+    const ok = list.filter(d=>d.status==='completed').length;
+    const fail = list.filter(d=>d.status==='failed').length;
+    const run = list.filter(d=>d.status==='running').length;
+    html += '<div class="host-group">'+
+      '<div class="host-head">'+
+        '<span class="hn">'+h+'</span>'+
+        '<span class="stat"><span class="ok">●'+ok+'</span> <span class="run">●'+run+'</span> <span class="fail">●'+fail+'</span> · 共 '+list.length+'</span>'+
+        '<span class="tail">'+list.length+' 设备</span>'+
+      '</div>'+
+      '<div class="device-grid">'+ list.map(renderDevCard).join('') +'</div>'+
+    '</div>';
+  });
+  if(!html) html = '<div class="steps-empty">无符合条件的设备</div>';
+  root.innerHTML = html;
+  root.querySelectorAll('.dev-card').forEach(el=>{ el.onclick = ()=>selectDevice(parseInt(el.dataset.idx)); });
+}
+
+function renderTable(){
+  const tbody = document.getElementById('table-content');
+  const filtered = DEVICES.filter(cellMatches);
+  const stageMap = {init:'INIT',patrol:'PATROL',teardown:'TEARDOWN',archived:'已归档',fail:'失败'};
+  const statusMap = {
+    completed:'<span style="color:#86efac">●已完成</span>',
+    running:  '<span style="color:#fdba74">●运行中</span>',
+    failed:   '<span style="color:#fca5a5">●失败</span>',
+    risk:     '<span style="color:#fcd34d">●异常</span>'
+  };
+  tbody.innerHTML = filtered.map(d=>{
+    const sel = state.selectedIdx===d.idx ? 'background:rgba(59,130,246,.08)' : '';
+    const badge = d.badge ? '<span style="background:rgba(239,68,68,.15);color:#fca5a5;padding:1px 6px;border-radius:3px;font-size:10px">'+d.badge.toUpperCase()+'</span>' : '—';
+    return '<tr data-idx="'+d.idx+'" style="border-bottom:1px solid #131c33;cursor:pointer;'+sel+'">'+
+      '<td style="padding:6px 12px;font-family:Menlo,Consolas,monospace;color:#dbeafe">'+d.serial+'</td>'+
+      '<td style="padding:6px 12px;color:#cbd5e1">'+d.host+'</td>'+
+      '<td style="padding:6px 12px"><span style="font-size:9px;padding:1px 6px;border-radius:3px;background:rgba(249,115,22,.18);color:#fdba74;font-weight:700">'+stageMap[d.stage]+'</span></td>'+
+      '<td style="padding:6px 12px;font-family:Menlo,Consolas,monospace;color:#94a3b8;font-size:10.5px">'+d.step+'</td>'+
+      '<td style="padding:6px 12px;color:#cbd5e1">'+d.progress+' '+(statusMap[d.status]||'')+'</td>'+
+      '<td style="padding:6px 12px">'+badge+'</td>'+
+      '<td style="padding:6px 12px;font-family:Menlo,Consolas,monospace;color:var(--mute);font-size:10.5px">'+d.heartbeat+'</td>'+
+      '</tr>';
+  }).join('') || '<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--mute)">无符合条件的设备</td></tr>';
+  tbody.querySelectorAll('tr[data-idx]').forEach(el=>{ el.onclick = ()=>selectDevice(parseInt(el.dataset.idx)); });
+}
+
+function renderEvents(){
+  const events = [
+    {ts:'14:38:22',k:'err', title:'AEE Crash 检测',         desc:'<span class="tag aee">AEE</span> <code>device-A1F3</code> 触发 <code>monkey_launch</code> · system_server'},
+    {ts:'14:37:55',k:'warn',title:'Watcher 异常聚合升级',    desc:'累计 <b style="color:#fca5a5">10</b> 异常 / 1h，超过阈值 <code>5%</code> · 当前 <b>8.3%</b>'},
+    {ts:'14:36:48',k:'warn',title:'ANR',                    desc:'<span class="tag anr">ANR</span> <code>device-B7D9</code> · com.android.systemui 阻塞 8.2s'},
+    {ts:'14:35:11',k:'warn',title:'Tombstone',              desc:'<span class="tag tomb">TOMB</span> <code>device-C2E7</code> · /data/tombstones/tombstone_03'},
+    {ts:'14:34:02',k:'ok',  title:'patrol 周期 #14 完成',    desc:'118/120 设备成功，2 失败：<code>device-A1F3</code>, <code>device-B7D9</code>'},
+    {ts:'14:33:00',k:'info',title:'patrol 周期 #14 启动',    desc:'巡检 5 步骤 × 120 设备，预计 60s'},
+    {ts:'14:32:45',k:'ok',  title:'阶段 init 完成',          desc:'120 设备前置检查通过 · 用时 <b>2m 15s</b>'},
+    {ts:'14:30:30',k:'info',title:'init 步骤 connect_wifi', desc:'已连接 SSID <code>STP-LAB-5G</code>，120/120 成功'},
+    {ts:'14:30:08',k:'info',title:'init 步骤 ensure_root',  desc:'120 设备 root 检查通过'},
+    {ts:'14:30:00',k:'info',title:'init 步骤 check_device', desc:'120 设备健康检查启动'},
+    {ts:'14:02:18',k:'ok',  title:'PlanRun #1280 启动',     desc:'触发方式 MANUAL · 用户 <b>dai.lv</b> · plan_snapshot 已固化'}
+  ];
+  document.getElementById('event-stream').innerHTML = events.map(e=>
+    '<div class="event-row">'+
+      '<span class="ts">'+e.ts+'</span>'+
+      '<span class="dot '+e.k+'"></span>'+
+      '<div class="body"><span class="title">'+e.title+'</span><span class="desc">'+e.desc+'</span></div>'+
+    '</div>'
+  ).join('');
+}
+
+function renderSteps(){
+  const ctx = document.getElementById('step-context');
+  const list = document.getElementById('steps-list');
+  if(state.selectedIdx===null){
+    ctx.innerHTML = '<span class="label">未选中设备</span><span class="val">点击左侧任一格子查看其执行步骤</span>';
+    list.innerHTML = '<div class="steps-empty">暂无设备<div class="hint">在左侧设备总览中点击单元格选中设备</div></div>';
+    return;
+  }
+  const d = DEVICES[state.selectedIdx];
+  ctx.innerHTML =
+    '<span class="label">已选</span><span class="val">'+d.serial+'</span>'+
+    '<span class="label">主机</span><span class="val">'+d.host+'</span>'+
+    '<span class="label">阶段</span><span class="val">'+d.stage.toUpperCase()+'</span>'+
+    '<span class="label">进度</span><span class="val">'+d.progress+'</span>'+
+    '<button class="clear-btn" onclick="clearSelection()">清除</button>';
+  const lastIco = d.status==='failed'?'fail':(d.status==='running'?'run':'ok');
+  const tailIco = d.status==='completed'?'ok':'pend';
+  const steps = [
+    {stage:'init',name:'check_device',ico:'ok'},
+    {stage:'init',name:'ensure_root',ico:'ok'},
+    {stage:'init',name:'connect_wifi',ico:'ok'},
+    {stage:'patrol',name:'monkey_setup',ico:'ok'},
+    {stage:'patrol',name:'monkey_launch',ico:lastIco},
+    {stage:'patrol',name:'monkey_check',ico:tailIco},
+    {stage:'patrol',name:'monkey_teardown',ico:tailIco},
+    {stage:'patrol',name:'fill_storage',ico:tailIco},
+    {stage:'teardown',name:'clean_env',ico:tailIco},
+    {stage:'teardown',name:'archive_logs',ico:tailIco}
+  ];
+  const icoMap = {ok:'✓',run:'⟳',fail:'✗',pend:'○',skip:'/'};
+  const tsBase = 14*3600 + 30*60;
+  list.innerHTML = steps.map((s,i)=>{
+    const ts = tsBase + i*73;
+    const hh = Math.floor(ts/3600).toString().padStart(2,'0');
+    const mm = Math.floor((ts%3600)/60).toString().padStart(2,'0');
+    const ss = (ts%60).toString().padStart(2,'0');
+    const dur = s.ico==='ok'?(20+i*7)+'s':(s.ico==='run'?(5+i)+'s · ⟳':'—');
+    return '<div class="step-row">'+
+      '<div class="ico '+s.ico+'">'+icoMap[s.ico]+'</div>'+
+      '<div class="name"><span class="stage-pill '+s.stage+'">'+s.stage+'</span>'+s.name+'</div>'+
+      '<div class="meta">'+hh+':'+mm+':'+ss+' · '+dur+'</div>'+
+      '</div>';
+  }).join('');
+}
+
+function selectDevice(idx){
+  state.selectedIdx = idx;
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab==='steps'));
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active', p.id==='tab-steps'));
+  renderAll();
+}
+function clearSelection(){ state.selectedIdx = null; renderAll(); }
+
+function switchView(v){
+  state.view = v;
+  document.querySelectorAll('.vbtn').forEach(b=>b.classList.toggle('active', b.dataset.view===v));
+  document.getElementById('view-minimap').style.display = v==='minimap'?'block':'none';
+  document.getElementById('view-cards').style.display   = v==='cards'?'block':'none';
+  document.getElementById('view-table').style.display   = v==='table'?'block':'none';
+  renderAll();
+}
+
+function renderAll(){
+  if(state.view==='minimap') renderMinimap();
+  if(state.view==='cards')   renderCards();
+  if(state.view==='table')   renderTable();
+  renderSteps();
+}
+
+document.querySelectorAll('.vbtn').forEach(b=>b.onclick=()=>switchView(b.dataset.view));
+document.querySelectorAll('.legend-btn').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.legend-btn').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  state.statusFilter = b.dataset.status;
+  renderAll();
+});
+document.querySelectorAll('.host-chip').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.host-chip').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  state.hostFilter = b.dataset.host;
+  renderAll();
+});
+document.getElementById('device-search').oninput = e=>{ state.search = e.target.value; renderAll(); };
+document.querySelectorAll('.tab-btn').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tab-btn').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active', p.id==='tab-'+b.dataset.tab));
+});
+
+renderMinimap();
+renderEvents();
+renderSteps();
+</script>
+</body>
+</html>

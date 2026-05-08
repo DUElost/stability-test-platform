@@ -92,6 +92,8 @@ function _getDashSocket(): Socket {
     'job_status', 'plan_run_status',
     'run_update', 'task_update', 'report_ready',
     'job_update',
+    // ADR-0021 C5c — watcher 异常增量推送 (broadcast room: plan_run:{id})
+    'watcher_signal',
   ];
   for (const event of EVENTS) {
     socket.on(event, (data: any) => {
@@ -185,7 +187,12 @@ function parseWsUrl(url: string): SubscriptionConfig {
   // /ws/plan-runs/{id}
   const planRunMatch = url.match(/\/ws\/plan-runs\/(\d+)/);
   if (planRunMatch) {
-    return { room: `plan_run:${planRunMatch[1]}`, events: ['job_status', 'plan_run_status'] };
+    return {
+      room: `plan_run:${planRunMatch[1]}`,
+      // ADR-0021 C5c: include watcher_signal so the frontend can invalidate
+      // the WatcherSummary query as soon as the agent posts a log_signal.
+      events: ['job_status', 'plan_run_status', 'watcher_signal'],
+    };
   }
 
   // Fallback: global subscription

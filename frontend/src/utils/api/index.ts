@@ -31,6 +31,7 @@ export type {
   Plan, PlanStep, PlanStepCreate, PlanCreate, PlanUpdate,
   PlanRunStatus, PlanRunType, PlanRun, PlanRunCreate, PlanRunPreview,
   PlanJobInstance, PlanRunSummary,
+  HostActiveJob,
 } from './types';
 
 import { auth } from './auth';

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
 from backend.core.database import get_async_db
+from backend.core.metrics import record_log_signal_ingested, record_patrol_heartbeat
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
@@ -994,6 +995,11 @@ async def patrol_heartbeat(
     )
     await db.commit()
 
+    record_patrol_heartbeat(
+        failed_delta=payload.failed_delta,
+        current_failure_streak=payload.current_failure_streak,
+    )
+
     # Re-fetch to return canonical values + any pending manual_action newly set.
     refreshed = await db.get(JobInstance, job_id)
     return ok(PatrolHeartbeatOut(
@@ -1096,8 +1102,13 @@ async def ingest_log_signals(
     # PostgreSQL 幂等 upsert：ON CONFLICT (job_id, seq_no) DO NOTHING
     stmt = pg_insert(JobLogSignal).values(rows)
     stmt = stmt.on_conflict_do_nothing(index_elements=["job_id", "seq_no"])
-    # RETURNING id 以统计实际新增条数（冲突行不返回）
-    stmt = stmt.returning(JobLogSignal.id, JobLogSignal.job_id)
+    # RETURNING id + (job_id, seq_no, category) 以统计实际新增条数 + Prometheus 分类
+    stmt = stmt.returning(
+        JobLogSignal.id,
+        JobLogSignal.job_id,
+        JobLogSignal.seq_no,
+        JobLogSignal.category,
+    )
     result = await db.execute(stmt)
     inserted_rows = result.all()
 
@@ -1114,6 +1125,48 @@ async def ingest_log_signals(
         )
 
     await db.commit()
+
+    # ── Prometheus 埋点:仅对实际入库的 signal 计数(冲突丢弃的不计) ──
+    for row in inserted_rows:
+        record_log_signal_ingested(row.category)
+
+    # ── ADR-0021 C5c: 推 watcher_signal 增量到 plan_run room ──
+    # 事件作为 invalidation hint 使用,前端收到后 refetch /watcher-summary。
+    # 失败不影响入库结果(socket 服务未起 / 未连前端时静默)。
+    if inserted_rows:
+        try:
+            from backend.realtime.socketio_server import broadcast_watcher_signal
+
+            job_ids = list({row.job_id for row in inserted_rows})
+            run_map_rows = (
+                (
+                    await db.execute(
+                        select(JobInstance.id, JobInstance.plan_run_id)
+                        .where(JobInstance.id.in_(job_ids))
+                    )
+                ).all()
+            )
+            run_id_by_job: Dict[int, int] = {
+                jid: rid for jid, rid in run_map_rows if rid is not None
+            }
+            # Build a lookup from the original payload for device_serial enrichment.
+            serial_by_seq: Dict[tuple, Optional[str]] = {
+                (s.job_id, s.seq_no): s.device_serial for s in payload.signals
+            }
+            for row in inserted_rows:
+                run_id = run_id_by_job.get(row.job_id)
+                if run_id is None:
+                    continue
+                await broadcast_watcher_signal(
+                    run_id,
+                    job_id=row.job_id,
+                    device_serial=serial_by_seq.get((row.job_id, row.seq_no)),
+                    category=row.category,
+                    inserted_count=1,
+                )
+        except Exception:
+            logger.debug("broadcast_watcher_signal_failed", exc_info=True)
+
     return ok({"inserted": len(inserted_rows), "total": len(payload.signals)})
 
 

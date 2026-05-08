@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PlanRun #1280 — 业务流执行详情 v7</title>
+<style>
+:root{
+  --bg:#0b1120;--panel:#0f172a;--panel-2:#0c1426;--line:#1e293b;--line-2:#243049;
+  --fg:#e6ecff;--mute:#94a3b8;--soft:#cbd5e1;
+  --green:#22c55e;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6;--violet:#8b5cf6;--orange:#f97316;--gray:#64748b;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:13px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1480px;margin:0 auto;padding:14px 18px 64px}
+
+/* ===== Topbar ===== */
+.topbar{display:flex;align-items:center;gap:14px;padding:10px 14px;background:linear-gradient(180deg,#0f172a,#0c1426);border:1px solid var(--line);border-radius:12px}
+.topbar .brand{font-size:14px;font-weight:700;color:#60a5fa;letter-spacing:.4px}
+.topbar .crumbs{color:var(--mute);font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.topbar .crumbs .sep{color:#475569}
+.topbar .crumbs .cur{color:var(--fg);font-weight:600}
+.topbar .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.status-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 12px;border-radius:999px;font-size:11px;font-weight:600}
+.status-pill .d{width:7px;height:7px;border-radius:50%;background:currentColor;animation:pulse 1.6s infinite}
+.status-pill.running{background:rgba(249,115,22,.12);color:#fdba74;border:1px solid rgba(249,115,22,.4)}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(249,115,22,.55)}70%{box-shadow:0 0 0 8px rgba(249,115,22,0)}100%{box-shadow:0 0 0 0 rgba(249,115,22,0)}}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:8px;border:1px solid var(--line-2);background:#0c1426;color:var(--soft);font-size:12px;cursor:pointer}
+.btn:hover{background:#142039}
+.btn.danger{background:#7f1d1d;border-color:#991b1b;color:#fee2e2}
+
+/* ===== Plan Chain (compact single-line) ===== */
+.plan-chain{margin-top:10px;display:flex;align-items:center;gap:6px;padding:6px 12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow-x:auto;white-space:nowrap}
+.plan-chain .lbl{font-size:10px;color:var(--mute);text-transform:uppercase;letter-spacing:.6px;margin-right:6px;flex-shrink:0;font-weight:700}
+.cnode{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;font-size:11.5px;border:1px solid var(--line-2);background:#0c1426;flex-shrink:0;line-height:1}
+.cnode .ic{font-size:11px;line-height:1}
+.cnode .id{font-family:Menlo,Consolas,monospace;font-size:10px;color:var(--mute)}
+.cnode .nm{font-weight:600}
+.cnode .tag{font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:var(--line-2);color:var(--mute);letter-spacing:.4px}
+.cnode.done{border-color:rgba(34,197,94,.35);color:#bbf7d0}
+.cnode.done .ic{color:var(--green)}
+.cnode.cur{border-color:rgba(249,115,22,.5);color:#fed7aa;background:rgba(249,115,22,.08);box-shadow:0 0 0 2px rgba(249,115,22,.12)}
+.cnode.cur .ic{color:var(--orange)}
+.cnode.cur .tag{background:rgba(249,115,22,.25);color:#fed7aa}
+.cnode.pend{border-color:var(--line-2);color:var(--mute)}
+.cnode .meta{color:var(--mute);font-size:10.5px;font-weight:400;margin-left:2px}
+.carrow{color:#475569;flex-shrink:0;font-size:14px;line-height:1}
+
+/* ===== Section ===== */
+.section{margin-top:14px}
+.section-head{display:flex;align-items:center;gap:10px;margin:0 4px 8px}
+.section-head .t{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--soft);text-transform:uppercase;letter-spacing:.6px}
+.section-head .t .bar{width:3px;height:13px;background:linear-gradient(180deg,#60a5fa,#3b82f6);border-radius:2px}
+.section-head .meta{margin-left:auto;font-size:11px;color:var(--mute)}
+.section-head .meta b{color:var(--soft);font-weight:600}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+
+/* ===== Flow Timeline (业务流 + 事件流 融合) ===== */
+.flow-timeline{display:grid;grid-template-columns:280px 1fr;min-height:360px}
+/* 左侧：5 节点垂直链 + 进度条 */
+.ft-spine{padding:14px 14px 14px 18px;border-right:1px solid var(--line);background:#0a1224;display:flex;flex-direction:column;gap:0}
+.ft-node{position:relative;padding:8px 0 8px 22px;cursor:pointer;border-radius:6px}
+.ft-node:hover{background:rgba(59,130,246,.05)}
+.ft-node.active{background:rgba(59,130,246,.08)}
+.ft-node::before{content:"";position:absolute;left:6px;top:14px;bottom:-2px;width:2px;background:var(--line-2)}
+.ft-node:last-child::before{display:none}
+.ft-node.done::before{background:var(--green)}
+.ft-node.cur::before{background:linear-gradient(180deg,var(--orange) 0%,var(--orange) 50%,var(--line-2) 50%)}
+.ft-node .dot{position:absolute;left:0;top:10px;width:14px;height:14px;border-radius:50%;background:#0a1224;border:2px solid var(--line-2);z-index:1;display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--mute);font-weight:700}
+.ft-node.done .dot{border-color:var(--green);color:var(--green);background:rgba(34,197,94,.1)}
+.ft-node.cur .dot{border-color:var(--orange);color:var(--orange);background:rgba(249,115,22,.15);box-shadow:0 0 0 3px rgba(249,115,22,.18);animation:pulse-orange 1.6s infinite}
+.ft-node.pend .dot{border-color:var(--line-2);color:#475569}
+@keyframes pulse-orange{0%,100%{box-shadow:0 0 0 3px rgba(249,115,22,.12)}50%{box-shadow:0 0 0 5px rgba(249,115,22,.22)}}
+.ft-node .head{display:flex;align-items:center;gap:6px}
+.ft-node .stage{font-size:9px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:1px 5px;border-radius:3px;background:var(--line-2);color:var(--mute)}
+.ft-node.done .stage{background:rgba(34,197,94,.18);color:#86efac}
+.ft-node.cur .stage{background:rgba(249,115,22,.2);color:#fdba74}
+.ft-node .ttl{font-size:12.5px;font-weight:600;color:var(--fg)}
+.ft-node.pend .ttl{color:var(--mute)}
+.ft-node .mt{font-size:10.5px;color:var(--mute);margin-top:2px}
+.ft-node .mt b{color:var(--soft);font-weight:600}
+.ft-node .mt .ok{color:#86efac}
+.ft-node .mt .err{color:#fca5a5}
+
+/* 进度条（嵌入左下） */
+.ft-progress{margin:auto 0 0;padding:10px 0 0;border-top:1px dashed var(--line-2)}
+.ft-progress .pbar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;display:flex}
+.ft-progress .pbar .seg{height:100%}
+.ft-progress .pbar .ok{background:var(--green)}
+.ft-progress .pbar .run{background:var(--orange);background-image:linear-gradient(45deg,rgba(255,255,255,.22) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.22) 50%,rgba(255,255,255,.22) 75%,transparent 75%);background-size:8px 8px;animation:slide 1s linear infinite}
+.ft-progress .pbar .fail{background:var(--red)}
+.ft-progress .pbar .risk{background:var(--amber)}
+@keyframes slide{from{background-position:0 0}to{background-position:14px 0}}
+.ft-progress .pstats{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 10px;margin-top:7px;font-size:10.5px}
+.ft-progress .pstats .s{color:var(--mute)}
+.ft-progress .pstats .s b{font-size:13px;font-weight:700;color:var(--fg);margin-right:3px}
+.ft-progress .pstats .s.ok b{color:#86efac}
+.ft-progress .pstats .s.run b{color:#fdba74}
+.ft-progress .pstats .s.fail b{color:#fca5a5}
+.ft-progress .pstats .s.risk b{color:#fcd34d}
+.ft-progress .total{margin-top:6px;font-size:10.5px;color:var(--mute);text-align:center;padding-top:5px;border-top:1px solid var(--line)}
+.ft-progress .total b{color:#93c5fd;font-weight:700}
+
+/* 右侧：聚合事件流 */
+.ft-events{padding:6px 0;max-height:560px;overflow-y:auto}
+.ft-events .filter-bar{padding:8px 14px;border-bottom:1px solid var(--line);display:flex;gap:6px;align-items:center;flex-wrap:wrap;background:#0c1426;position:sticky;top:0;z-index:2}
+.ft-events .filter-bar .lbl{font-size:10px;color:var(--mute);text-transform:uppercase;letter-spacing:.5px;margin-right:4px}
+.ft-events .filter-bar .fbtn{padding:3px 9px;border-radius:999px;border:1px solid var(--line-2);background:#0a1224;color:var(--soft);font-size:11px;cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.ft-events .filter-bar .fbtn:hover{background:#142039}
+.ft-events .filter-bar .fbtn.active{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.12);color:#93c5fd}
+.ft-events .filter-bar .fbtn .ct{font-size:10px;color:var(--mute);font-weight:700}
+.ft-events .filter-bar .fbtn.active .ct{color:#93c5fd}
+.evt{display:grid;grid-template-columns:64px 14px 1fr auto;gap:8px;padding:8px 14px;border-bottom:1px solid #131c33;font-size:11.5px;align-items:start}
+.evt:hover{background:rgba(59,130,246,.04)}
+.evt .ts{color:var(--mute);font-family:Menlo,Consolas,monospace;font-size:10.5px;padding-top:2px}
+.evt .axis{position:relative;width:14px;display:flex;justify-content:center;padding-top:5px}
+.evt .axis::before{content:"";position:absolute;top:0;bottom:-8px;left:50%;width:1px;background:var(--line-2);transform:translateX(-50%)}
+.evt:last-child .axis::before{bottom:50%}
+.evt .axis .nd{width:8px;height:8px;border-radius:50%;background:var(--line-2);z-index:1;border:1px solid #0a1224}
+.evt.info .axis .nd{background:#60a5fa}
+.evt.ok .axis .nd{background:var(--green)}
+.evt.warn .axis .nd{background:var(--amber)}
+.evt.err .axis .nd{background:var(--red)}
+.evt .body{display:flex;flex-direction:column;gap:2px}
+.evt .body .title{color:var(--fg);font-weight:600}
+.evt .body .desc{color:var(--mute);font-size:11px;line-height:1.5}
+.evt .body .desc code{background:#0a1224;color:#93c5fd;padding:1px 4px;border-radius:3px;font-family:Menlo,Consolas,monospace;font-size:10.5px}
+.evt .body .desc .tag{display:inline-block;padding:0 5px;border-radius:3px;font-size:10px;margin-right:4px;font-weight:700}
+.evt .body .desc .tag.aee{background:rgba(239,68,68,.16);color:#fca5a5}
+.evt .body .desc .tag.tomb{background:rgba(245,158,11,.16);color:#fcd34d}
+.evt .body .desc .tag.anr{background:rgba(245,158,11,.16);color:#fcd34d}
+.evt .stage-chip{font-size:9px;font-weight:700;letter-spacing:.4px;padding:1px 5px;border-radius:3px;text-transform:uppercase;align-self:center;flex-shrink:0}
+.evt .stage-chip.init{background:rgba(59,130,246,.15);color:#93c5fd}
+.evt .stage-chip.patrol{background:rgba(249,115,22,.15);color:#fdba74}
+.evt .stage-chip.teardown{background:rgba(139,92,246,.15);color:#c4b5fd}
+.evt .stage-chip.system{background:var(--line-2);color:var(--mute)}
+
+
+/* ===== Device Overview header & filters ===== */
+.device-overview{display:flex;flex-direction:column}
+.do-header{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#0c1426}
+.do-header .ttl{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--fg)}
+.do-header .ttl .bar{width:3px;height:13px;background:linear-gradient(180deg,#60a5fa,#3b82f6);border-radius:2px}
+.do-header .ttl .cnt{font-size:11px;color:var(--mute);font-weight:500;margin-left:6px}
+.do-header .view-toggle{display:flex;border:1px solid var(--line-2);border-radius:6px;overflow:hidden;margin-left:auto}
+.do-header .view-toggle .vbtn{padding:4px 10px;background:transparent;border:none;color:var(--mute);font-size:11px;cursor:pointer;border-right:1px solid var(--line-2);font-weight:500}
+.do-header .view-toggle .vbtn:last-child{border-right:none}
+.do-header .view-toggle .vbtn.active{background:rgba(59,130,246,.14);color:#93c5fd}
+
+.do-filters{padding:8px 14px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:#0a1224}
+.lg-btn{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;border:1px solid var(--line-2);background:#0c1426;color:var(--soft);font-size:11px;cursor:pointer}
+.lg-btn:hover{background:#142039}
+.lg-btn.active{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.12);color:#93c5fd}
+.lg-btn .sw{width:9px;height:9px;border-radius:2px;display:inline-block}
+.lg-btn .sw.all{background:linear-gradient(135deg,#9ee7b6 0 25%,var(--orange) 25% 50%,var(--red) 50% 75%,var(--amber) 75%)}
+.lg-btn .sw.completed{background:#9ee7b6}
+.lg-btn .sw.running{background:var(--orange)}
+.lg-btn .sw.failed{background:var(--red)}
+.lg-btn .sw.risk{background:var(--amber)}
+.lg-btn .sw.unknown{background:var(--violet)}
+.lg-btn b{font-weight:700;color:var(--fg);margin-left:2px}
+.lg-btn.active b{color:#93c5fd}
+.do-filters .sep{width:1px;height:14px;background:var(--line-2);margin:0 2px}
+.hc-btn{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:6px;border:1px solid var(--line-2);background:#0c1426;color:var(--soft);font-size:11px;cursor:pointer;font-family:Menlo,Consolas,monospace}
+.hc-btn:hover{background:#142039}
+.hc-btn.active{border-color:rgba(59,130,246,.5);background:rgba(59,130,246,.12);color:#93c5fd}
+.hc-btn .dot{width:5px;height:5px;border-radius:50%;display:inline-block}
+.hc-btn .dot.ok{background:#86efac}
+.hc-btn .dot.warn{background:var(--amber)}
+.hc-btn .ct{font-size:10px;color:var(--mute);font-weight:600;margin-left:1px}
+.do-filters input[type=search]{flex:1;min-width:140px;max-width:240px;padding:4px 9px;background:#0c1426;border:1px solid var(--line-2);border-radius:6px;color:var(--soft);font-size:12px;outline:none;margin-left:auto}
+
+/* views: minimap / cards / table */
+.view-pane{display:none}
+.view-pane.active{display:block}
+.minimap-wrap{padding:14px 18px;overflow-y:auto;max-height:400px}
+.minimap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(22px,1fr));gap:5px;max-width:100%}
+.cell{width:100%;aspect-ratio:1;border-radius:4px;border:1px solid transparent;cursor:pointer;position:relative;transition:transform .12s ease,box-shadow .12s ease}
+.cell:hover{transform:translateY(-1px) scale(1.12);box-shadow:0 0 0 2px rgba(59,130,246,.45);z-index:2}
+.cell.selected{box-shadow:0 0 0 2px #3b82f6;z-index:2}
+.cell.dim{opacity:.16}
+.cell.completed{background:#9ee7b6}
+.cell.running{background:var(--orange);background-image:linear-gradient(45deg,rgba(255,255,255,.28) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.28) 50%,rgba(255,255,255,.28) 75%,transparent 75%);background-size:6px 6px;animation:slide 1s linear infinite}
+.cell.failed{background:var(--red)}
+.cell.risk{background:var(--amber)}
+.cell.unknown{background:var(--violet)}
+.cell::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#020617;border:1px solid var(--line-2);color:var(--soft);font-size:11px;padding:4px 8px;border-radius:6px;white-space:nowrap;font-family:Menlo,Consolas,monospace;opacity:0;pointer-events:none;transition:opacity .12s ease;z-index:10}
+.cell:hover::after{opacity:1}
+
+.cards-wrap{padding:10px 14px;max-height:440px;overflow-y:auto;display:flex;flex-direction:column;gap:10px}
+.host-group{border:1px solid var(--line-2);border-radius:8px;overflow:hidden;background:#0a1224}
+.host-head{display:flex;align-items:center;gap:10px;padding:7px 12px;background:#0c1426;border-bottom:1px solid var(--line-2);font-size:11.5px}
+.host-head .hn{font-weight:700;color:#dbeafe;font-family:Menlo,Consolas,monospace}
+.host-head .stat{color:var(--mute);font-size:10.5px}
+.host-head .stat .ok{color:#86efac;font-weight:600}
+.host-head .stat .run{color:#fdba74;font-weight:600}
+.host-head .stat .fail{color:#fca5a5;font-weight:600}
+.host-head .tail{margin-left:auto;color:var(--mute);font-size:10.5px}
+.dgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px;padding:8px}
+.dcard{padding:7px 9px;border-radius:6px;background:#0f172a;border:1px solid var(--line-2);cursor:pointer;display:flex;flex-direction:column;gap:4px;position:relative;min-height:74px}
+.dcard:hover{border-color:#334155;background:#142039}
+.dcard.selected{border-color:#3b82f6;background:rgba(59,130,246,.08);box-shadow:0 0 0 2px rgba(59,130,246,.18)}
+.dcard .row1{display:flex;align-items:center;gap:6px}
+.dcard .serial{font-family:Menlo,Consolas,monospace;font-size:11px;color:#dbeafe;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.dcard .stg{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px;text-transform:uppercase;flex-shrink:0;background:var(--line-2);color:var(--mute)}
+.dcard .stg.init{background:rgba(59,130,246,.18);color:#93c5fd}
+.dcard .stg.patrol{background:rgba(249,115,22,.18);color:#fdba74}
+.dcard .stg.archived{background:rgba(34,197,94,.18);color:#86efac}
+.dcard .stg.fail{background:rgba(239,68,68,.18);color:#fca5a5}
+.dcard .pgr{display:flex;gap:1px;height:4px;border-radius:2px;overflow:hidden;background:var(--line)}
+.dcard .pgr .seg{flex:1}
+.dcard .pgr .seg.ok{background:var(--green)}
+.dcard .pgr .seg.fail{background:var(--red)}
+.dcard .pgr .seg.run{background:var(--orange);background-image:linear-gradient(45deg,rgba(255,255,255,.2) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.2) 50%,rgba(255,255,255,.2) 75%,transparent 75%);background-size:8px 8px;animation:slide 1s linear infinite}
+.dcard .pgr .seg.pending{background:var(--line-2)}
+.dcard .row2{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--mute)}
+.dcard .badge{position:absolute;top:5px;right:5px;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700}
+.dcard .badge.crash{background:rgba(239,68,68,.2);color:#fca5a5}
+.dcard .badge.tomb,.dcard .badge.anr{background:rgba(245,158,11,.18);color:#fcd34d}
+
+.tbl-wrap{overflow:auto;max-height:440px}
+.tbl-wrap table{width:100%;border-collapse:collapse;font-size:11.5px}
+.tbl-wrap thead th{position:sticky;top:0;background:#0c1426;color:#94a3b8;border-bottom:1px solid var(--line);padding:8px 12px;text-align:left;font-weight:600;z-index:1}
+.tbl-wrap tbody tr{border-bottom:1px solid #131c33;cursor:pointer}
+.tbl-wrap tbody tr:hover{background:rgba(59,130,246,.04)}
+.tbl-wrap tbody tr.selected{background:rgba(59,130,246,.1)}
+.tbl-wrap tbody td{padding:6px 12px;color:var(--soft)}
+.tbl-wrap tbody td.mono{font-family:Menlo,Consolas,monospace;color:#dbeafe}
+.tbl-wrap tbody td.muted{color:var(--mute);font-family:Menlo,Consolas,monospace;font-size:10.5px}
+
+/* ===== Selected device drawer (设备步骤抽屉) ===== */
+.do-drawer{border-top:1px solid var(--line);background:#0a1224;display:none}
+.do-drawer.open{display:block}
+.do-drawer .ctx{padding:8px 14px;background:linear-gradient(180deg,#0c1426,#0a1224);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:11.5px}
+.do-drawer .ctx .lbl{color:#94a3b8;font-weight:600;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px}
+.do-drawer .ctx .val{color:var(--fg);font-family:Menlo,Consolas,monospace;font-size:11.5px;font-weight:600}
+.do-drawer .ctx .stg{font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;letter-spacing:.4px;text-transform:uppercase;background:rgba(249,115,22,.2);color:#fdba74}
+.do-drawer .ctx .close-x{margin-left:auto;background:transparent;border:1px solid var(--line);color:var(--mute);padding:3px 10px;border-radius:6px;cursor:pointer;font-size:10.5px}
+.do-drawer .ctx .close-x:hover{color:var(--fg);border-color:#475569}
+.steps-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0;padding:0}
+.steps-list{padding:6px 0;max-height:280px;overflow-y:auto}
+.step-row{display:grid;grid-template-columns:24px 1fr auto auto;gap:10px;padding:6px 14px;border-bottom:1px solid #131c33;font-size:11.5px;align-items:center}
+.step-row .ico{width:18px;height:18px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
+.step-row .ico.ok{background:var(--green)}
+.step-row .ico.run{background:var(--orange)}
+.step-row .ico.fail{background:var(--red)}
+.step-row .ico.pend{background:var(--line-2);color:var(--mute)}
+.step-row .name{color:var(--fg)}
+.step-row .name b{font-weight:600}
+.step-row .stage-pill{display:inline-block;font-size:9px;padding:0 5px;border-radius:3px;margin-right:6px;background:var(--line-2);color:var(--mute);letter-spacing:.4px;text-transform:uppercase;font-weight:700;vertical-align:middle}
+.step-row .stage-pill.init{background:rgba(59,130,246,.15);color:#93c5fd}
+.step-row .stage-pill.patrol{background:rgba(249,115,22,.15);color:#fdba74}
+.step-row .stage-pill.teardown{background:rgba(139,92,246,.15);color:#c4b5fd}
+.step-row .ts{font-family:Menlo,Consolas,monospace;font-size:10.5px;color:var(--mute)}
+.step-row .dur{font-family:Menlo,Consolas,monospace;font-size:10.5px;color:var(--soft)}
+.step-row .dur.run{color:#fdba74}
+.step-row .dur.fail{color:#fca5a5}
+
+/* ===== Watcher Aggregate (横排 4 卡) ===== */
+.metric-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.metric-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 14px;display:flex;flex-direction:column;gap:5px;position:relative;overflow:hidden}
+.metric-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px}
+.metric-card.aee::before{background:var(--red)}
+.metric-card.tomb::before{background:var(--orange)}
+.metric-card.anr::before{background:#fbbf24}
+.metric-card.total::before{background:#60a5fa}
+.metric-card .head{display:flex;align-items:center;justify-content:space-between;font-size:10.5px;color:var(--mute);text-transform:uppercase;letter-spacing:.5px;font-weight:700}
+.metric-card .head .name{color:#cbd5e1}
+.metric-card .head .trend{font-size:10px;padding:1px 6px;border-radius:3px;background:var(--line-2);color:var(--mute);text-transform:none;letter-spacing:0}
+.metric-card .head .trend.up{background:rgba(239,68,68,.15);color:#fca5a5}
+.metric-card .num{font-size:22px;font-weight:700;color:var(--fg);line-height:1}
+.metric-card .sub{font-size:10.5px;color:var(--mute)}
+.metric-card .sub b{color:var(--fg);font-weight:600}
+
+@media (max-width:1180px){
+  .flow-timeline{grid-template-columns:1fr}
+  .ft-spine{border-right:none;border-bottom:1px solid var(--line)}
+  .metric-row{grid-template-columns:repeat(2,1fr)}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- ===== Topbar ===== -->
+<div class="topbar">
+  <div class="brand">⬢ STP</div>
+  <div class="crumbs">
+    <span>编排</span><span class="sep">/</span>
+    <span>Plan #42</span><span class="sep">/</span>
+    <span class="cur">PlanRun #1280</span>
+  </div>
+  <div class="right">
+    <span class="status-pill running"><span class="d"></span>RUNNING · 2h 14m</span>
+    <button class="btn">导出报告</button>
+    <button class="btn danger">中止 PlanRun</button>
+  </div>
+</div>
+
+<!-- ===== Plan 链 (单行紧凑) ===== -->
+<div class="plan-chain">
+  <span class="lbl">Plan 链</span>
+  <span class="cnode done"><span class="ic">✓</span><span class="id">#41</span><span class="nm">健康预检</span><span class="meta">8m</span></span>
+  <span class="carrow">›</span>
+  <span class="cnode cur"><span class="ic">⟳</span><span class="id">#42</span><span class="nm">多机型 Monkey 主链</span><span class="tag">当前</span><span class="meta">73% · 阈值 5%</span></span>
+  <span class="carrow">›</span>
+  <span class="cnode pend"><span class="ic">○</span><span class="id">#43</span><span class="nm">结果汇总</span><span class="meta">条件触发 · failure_rate &lt; 5%</span></span>
+</div>
+
+<!-- ===== 业务流时间线 (业务流 + 事件流 融合) ===== -->
+<div class="section">
+  <div class="section-head">
+    <div class="t"><span class="bar"></span>业务流时间线</div>
+    <div class="meta">5 节点 · 当前 <b>PATROL</b> 阶段 · 共 <b>142</b> 事件</div>
+  </div>
+  <div class="panel flow-timeline">
+    <!-- 左：5节点垂直链 + 进度条 -->
+    <div class="ft-spine" id="ft-spine">
+      <div class="ft-node done" data-stage="trigger">
+        <span class="dot">▶</span>
+        <div class="head"><span class="ttl">触发</span></div>
+        <div class="mt">14:02:18 · MANUAL · <b>dai.lv</b></div>
+      </div>
+      <div class="ft-node done" data-stage="init">
+        <span class="dot">✓</span>
+        <div class="head"><span class="stage">INIT</span><span class="ttl">前置准备</span></div>
+        <div class="mt">3 步骤 · <span class="ok">120/120 就绪</span> · 2m 15s</div>
+      </div>
+      <div class="ft-node cur active" data-stage="patrol">
+        <span class="dot">⟳</span>
+        <div class="head"><span class="stage">PATROL</span><span class="ttl">巡检循环 · 60s</span></div>
+        <div class="mt">5 步骤 · 周期 #14 · <b>22 运行</b> / <span class="err">6 失败</span></div>
+      </div>
+      <div class="ft-node pend" data-stage="teardown">
+        <span class="dot">○</span>
+        <div class="head"><span class="stage">TEARDOWN</span><span class="ttl">收尾清理</span></div>
+        <div class="mt">2 步骤 · 等待 patrol 完成</div>
+      </div>
+      <div class="ft-node pend" data-stage="archive">
+        <span class="dot">⌾</span>
+        <div class="head"><span class="ttl">归档</span></div>
+        <div class="mt">预计 16:30</div>
+      </div>
+      <div class="ft-progress">
+        <div class="pbar">
+          <div class="seg ok" style="width:73.3%"></div>
+          <div class="seg run" style="width:18.3%"></div>
+          <div class="seg fail" style="width:5%"></div>
+          <div class="seg risk" style="width:3.4%"></div>
+        </div>
+        <div class="pstats">
+          <span class="s ok"><b>88</b>已完成</span>
+          <span class="s run"><b>22</b>运行中</span>
+          <span class="s fail"><b>6</b>失败</span>
+          <span class="s risk"><b>4</b>异常</span>
+        </div>
+        <div class="total"><b>120</b> 设备总数</div>
+      </div>
+    </div>
+    <!-- 右：事件流 (按节点筛选) -->
+    <div class="ft-events">
+      <div class="filter-bar">
+        <span class="lbl">阶段筛选</span>
+        <button class="fbtn active" data-stg="all">全部 <span class="ct">142</span></button>
+        <button class="fbtn" data-stg="trigger">触发 <span class="ct">1</span></button>
+        <button class="fbtn" data-stg="init">INIT <span class="ct">5</span></button>
+        <button class="fbtn" data-stg="patrol">PATROL <span class="ct">128</span></button>
+        <button class="fbtn" data-stg="teardown">TEARDOWN <span class="ct">0</span></button>
+        <button class="fbtn" data-stg="system">系统 <span class="ct">8</span></button>
+      </div>
+      <div id="event-list"></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ===== 设备总览 (内嵌选中设备步骤抽屉) ===== -->
+<div class="section">
+  <div class="section-head">
+    <div class="t"><span class="bar"></span>设备总览</div>
+    <div class="meta">4 主机 · <b>120</b> 设备 · 提示：点击格子 / 卡片 / 行查看该设备执行步骤</div>
+  </div>
+  <div class="panel device-overview">
+    <div class="do-header">
+      <div class="ttl"><span class="bar"></span>设备执行矩阵 <span class="cnt">120 台</span></div>
+      <div class="view-toggle">
+        <button class="vbtn active" data-view="minimap">缩略图</button>
+        <button class="vbtn" data-view="cards">卡片</button>
+        <button class="vbtn" data-view="table">表格</button>
+      </div>
+    </div>
+    <div class="do-filters">
+      <button class="lg-btn active" data-status="all"><span class="sw all"></span>全部<b>120</b></button>
+      <button class="lg-btn" data-status="completed"><span class="sw completed"></span>已完成<b>88</b></button>
+      <button class="lg-btn" data-status="running"><span class="sw running"></span>运行中<b>22</b></button>
+      <button class="lg-btn" data-status="failed"><span class="sw failed"></span>失败<b>6</b></button>
+      <button class="lg-btn" data-status="risk"><span class="sw risk"></span>异常<b>4</b></button>
+      <span class="sep"></span>
+      <button class="hc-btn active" data-host="all">全部主机</button>
+      <button class="hc-btn" data-host="host-101"><span class="dot ok"></span>host-101<span class="ct">30</span></button>
+      <button class="hc-btn" data-host="host-102"><span class="dot ok"></span>host-102<span class="ct">30</span></button>
+      <button class="hc-btn" data-host="host-103"><span class="dot warn"></span>host-103<span class="ct">30</span></button>
+      <button class="hc-btn" data-host="host-104"><span class="dot ok"></span>host-104<span class="ct">30</span></button>
+      <input type="search" id="device-search" placeholder="搜索 serial / 机型..." />
+    </div>
+    <div class="do-body">
+      <div class="view-pane active" id="view-minimap">
+        <div class="minimap-wrap"><div class="minimap-grid" id="minimap"></div></div>
+      </div>
+      <div class="view-pane" id="view-cards">
+        <div class="cards-wrap" id="cards-content"></div>
+      </div>
+      <div class="view-pane" id="view-table">
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th>Serial</th><th>主机</th><th>阶段</th><th>当前步骤</th><th>进度</th><th>异常</th><th>最后心跳</th>
+            </tr></thead>
+            <tbody id="table-content"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <!-- 选中设备步骤抽屉（默认隐藏） -->
+    <div class="do-drawer" id="drawer">
+      <div class="ctx" id="drawer-ctx"></div>
+      <div class="steps-list" id="drawer-steps"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Watcher 异常聚合 (横排) ===== -->
+<div class="section">
+  <div class="section-head">
+    <div class="t"><span class="bar"></span>Watcher 异常聚合 · 最近 1h</div>
+    <div class="meta">来源：log-signal outbox · ADR-0018</div>
+  </div>
+  <div class="metric-row">
+    <div class="metric-card aee">
+      <div class="head"><span class="name">AEE Crash</span><span class="trend up">+2 / 10m</span></div>
+      <div class="num">3</div>
+      <div class="sub">影响 <b>3</b> 台 · 最近 <b>device-A1F3</b> · 14:38:22</div>
+    </div>
+    <div class="metric-card tomb">
+      <div class="head"><span class="name">Tombstone</span><span class="trend">持平</span></div>
+      <div class="num">2</div>
+      <div class="sub">影响 <b>2</b> 台 · 最近 <b>device-C2E7</b> · 14:35:11</div>
+    </div>
+    <div class="metric-card anr">
+      <div class="head"><span class="name">ANR</span><span class="trend up">+1</span></div>
+      <div class="num">5</div>
+      <div class="sub">影响 <b>4</b> 台 · 最近 <b>device-B7D9</b> · 14:36:48</div>
+    </div>
+    <div class="metric-card total">
+      <div class="head"><span class="name">总计</span><span class="trend up">+3 / 10m</span></div>
+      <div class="num">10</div>
+      <div class="sub">异常率 <b>8.3%</b> · 阈值 <b>5%</b> · <span style="color:#fca5a5">已超限</span></div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+const HOSTS = ['host-101','host-102','host-103','host-104'];
+const DEVICES = [];
+(function build(){
+  const status = [];
+  for(let i=0;i<88;i++) status.push('completed');
+  for(let i=0;i<22;i++) status.push('running');
+  for(let i=0;i<6;i++)  status.push('failed');
+  for(let i=0;i<4;i++)  status.push('risk');
+  for(let i=status.length-1;i>0;i--){const j=(i*9301+49297)%(i+1);[status[i],status[j]]=[status[j],status[i]]}
+  for(let i=0;i<120;i++){
+    const host = HOSTS[Math.floor(i/30)];
+    const st = status[i];
+    let stage = 'patrol';
+    if(st==='completed') stage = 'archived';
+    else if(st==='failed') stage = 'fail';
+    const badge = (st==='risk') ? (['crash','tomb','anr'])[i%3] : null;
+    const stepName = st==='completed'?'teardown.archive_logs':(st==='failed'?'patrol.monkey_check':(st==='risk'?'patrol.monkey_launch':'patrol.monkey_setup'));
+    const prog = st==='completed'?'10/10':(st==='failed'?'4/10':(st==='risk'?'7/10':(3+i%6)+'/10'));
+    DEVICES.push({
+      idx:i,
+      serial:'device-'+host.slice(-1)+(i%30+1).toString(16).toUpperCase().padStart(2,'F'),
+      host, status:st, stage, step:stepName, progress:prog, badge,
+      heartbeat:(14+Math.floor(i/60)).toString().padStart(2,'0')+':'+(i%60).toString().padStart(2,'0')+':'+((i*7)%60).toString().padStart(2,'0')
+    });
+  }
+})();
+
+const EVENTS = [
+  {ts:'14:38:22',k:'err', stg:'patrol', title:'AEE Crash 检测',  desc:'<span class="tag aee">AEE</span> <code>device-A1F3</code> 触发 <code>monkey_launch</code> · system_server'},
+  {ts:'14:37:55',k:'warn',stg:'system', title:'Watcher 阈值告警', desc:'累计 <b style="color:#fca5a5">10</b> 异常 / 1h，超阈值 <code>5%</code> · 当前 <b>8.3%</b>'},
+  {ts:'14:36:48',k:'warn',stg:'patrol', title:'ANR',             desc:'<span class="tag anr">ANR</span> <code>device-B7D9</code> · com.android.systemui 阻塞 8.2s'},
+  {ts:'14:35:11',k:'warn',stg:'patrol', title:'Tombstone',       desc:'<span class="tag tomb">TOMB</span> <code>device-C2E7</code> · /data/tombstones/tombstone_03'},
+  {ts:'14:34:02',k:'ok',  stg:'patrol', title:'patrol 周期 #14 完成', desc:'118/120 设备成功，2 失败：<code>device-A1F3</code>, <code>device-B7D9</code>'},
+  {ts:'14:33:00',k:'info',stg:'patrol', title:'patrol 周期 #14 启动', desc:'巡检 5 步骤 × 120 设备，预计 60s'},
+  {ts:'14:32:45',k:'ok',  stg:'init',   title:'阶段 INIT 完成',   desc:'120 设备前置检查通过 · 用时 <b>2m 15s</b>'},
+  {ts:'14:30:30',k:'info',stg:'init',   title:'connect_wifi',    desc:'已连接 SSID <code>STP-LAB-5G</code>，120/120 成功'},
+  {ts:'14:30:08',k:'info',stg:'init',   title:'ensure_root',     desc:'120 设备 root 检查通过'},
+  {ts:'14:30:00',k:'info',stg:'init',   title:'check_device',    desc:'120 设备健康检查启动'},
+  {ts:'14:02:18',k:'ok',  stg:'trigger',title:'PlanRun #1280 启动', desc:'触发方式 MANUAL · 用户 <b>dai.lv</b> · plan_snapshot 已固化'}
+];
+
+const state = { view:'minimap', statusFilter:'all', hostFilter:'all', search:'', selectedIdx:null, eventStage:'all' };
+
+function cellMatches(d){
+  if(state.statusFilter!=='all' && d.status!==state.statusFilter) return false;
+  if(state.hostFilter!=='all' && d.host!==state.hostFilter) return false;
+  if(state.search && !d.serial.toLowerCase().includes(state.search.toLowerCase())) return false;
+  return true;
+}
+
+function renderMinimap(){
+  const root = document.getElementById('minimap');
+  let h = '';
+  DEVICES.forEach(d=>{
+    const dim = !cellMatches(d) ? ' dim' : '';
+    const sel = state.selectedIdx===d.idx ? ' selected' : '';
+    h += '<div class="cell '+d.status+dim+sel+'" data-idx="'+d.idx+'" data-tip="'+d.serial+' · '+d.host+' · '+d.stage+' · '+d.step+'"></div>';
+  });
+  root.innerHTML = h;
+  root.querySelectorAll('.cell').forEach(el=>{ el.onclick = ()=>selectDevice(parseInt(el.dataset.idx)); });
+}
+
+function renderCards(){
+  const root = document.getElementById('cards-content');
+  const filtered = DEVICES.filter(cellMatches);
+  const byHost = {};
+  filtered.forEach(d=>{(byHost[d.host]=byHost[d.host]||[]).push(d)});
+  let html = '';
+  const hosts = Object.keys(byHost).sort();
+  hosts.forEach(h=>{
+    const list = byHost[h];
+    const ok = list.filter(d=>d.status==='completed').length;
+    const fail = list.filter(d=>d.status==='failed').length;
+    const run = list.filter(d=>d.status==='running').length;
+    html += '<div class="host-group">'+
+      '<div class="host-head">'+
+        '<span class="hn">'+h+'</span>'+
+        '<span class="stat"><span class="ok">●'+ok+'</span> <span class="run">●'+run+'</span> <span class="fail">●'+fail+'</span></span>'+
+        '<span class="tail">'+list.length+' 设备</span>'+
+      '</div>'+
+      '<div class="dgrid">'+ list.map(devCard).join('') +'</div>'+
+    '</div>';
+  });
+  if(!html) html = '<div style="padding:30px;text-align:center;color:var(--mute);font-size:12px">无符合条件的设备</div>';
+  root.innerHTML = html;
+  root.querySelectorAll('.dcard').forEach(el=>{ el.onclick = ()=>selectDevice(parseInt(el.dataset.idx)); });
+}
+
+function devCard(d){
+  const stageMap = {init:'INIT',patrol:'PATROL',teardown:'TEARDOWN',archived:'已归档',fail:'失败'};
+  const total=10, done = parseInt(d.progress.split('/')[0]);
+  const segs=[];
+  for(let i=0;i<total;i++){
+    if(d.status==='failed' && i===done) segs.push('<span class="seg fail"></span>');
+    else if(i<done) segs.push('<span class="seg ok"></span>');
+    else if(i===done && d.status==='running') segs.push('<span class="seg run"></span>');
+    else segs.push('<span class="seg pending"></span>');
+  }
+  const badge = d.badge ? '<span class="badge '+d.badge+'">'+d.badge.toUpperCase()+'</span>' : '';
+  const sel = state.selectedIdx===d.idx ? ' selected' : '';
+  return '<div class="dcard'+sel+'" data-idx="'+d.idx+'">'+badge+
+    '<div class="row1"><span class="serial">'+d.serial+'</span><span class="stg '+d.stage+'">'+stageMap[d.stage]+'</span></div>'+
+    '<div class="pgr">'+segs.join('')+'</div>'+
+    '<div class="row2"><span>'+d.step+'</span> · <span>'+d.progress+'</span></div>'+
+    '</div>';
+}
+
+function renderTable(){
+  const tbody = document.getElementById('table-content');
+  const filtered = DEVICES.filter(cellMatches);
+  const stageMap = {init:'INIT',patrol:'PATROL',teardown:'TEARDOWN',archived:'已归档',fail:'失败'};
+  const stColor = {completed:'#86efac',running:'#fdba74',failed:'#fca5a5',risk:'#fcd34d'};
+  const stLabel = {completed:'已完成',running:'运行中',failed:'失败',risk:'异常'};
+  let html = filtered.map(d=>{
+    const sel = state.selectedIdx===d.idx ? ' class="selected"' : '';
+    const badge = d.badge ? '<span style="background:rgba(239,68,68,.15);color:#fca5a5;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700">'+d.badge.toUpperCase()+'</span>' : '<span style="color:var(--mute)">—</span>';
+    return '<tr'+sel+' data-idx="'+d.idx+'">'+
+      '<td class="mono">'+d.serial+'</td>'+
+      '<td>'+d.host+'</td>'+
+      '<td><span class="dcard-stg" style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:3px;background:rgba(249,115,22,.18);color:#fdba74">'+stageMap[d.stage]+'</span></td>'+
+      '<td class="muted">'+d.step+'</td>'+
+      '<td>'+d.progress+' <span style="color:'+stColor[d.status]+';font-weight:600">●'+stLabel[d.status]+'</span></td>'+
+      '<td>'+badge+'</td>'+
+      '<td class="muted">'+d.heartbeat+'</td>'+
+      '</tr>';
+  }).join('');
+  if(!html) html = '<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--mute)">无符合条件的设备</td></tr>';
+  tbody.innerHTML = html;
+  tbody.querySelectorAll('tr[data-idx]').forEach(el=>{ el.onclick = ()=>selectDevice(parseInt(el.dataset.idx)); });
+}
+
+function renderEvents(){
+  const list = state.eventStage==='all' ? EVENTS : EVENTS.filter(e=>e.stg===state.eventStage);
+  const stageLabel = {init:'INIT',patrol:'PATROL',teardown:'TEARDOWN',trigger:'触发',system:'系统'};
+  document.getElementById('event-list').innerHTML = list.map(e=>
+    '<div class="evt '+e.k+'">'+
+      '<span class="ts">'+e.ts+'</span>'+
+      '<span class="axis"><span class="nd"></span></span>'+
+      '<div class="body"><span class="title">'+e.title+'</span><span class="desc">'+e.desc+'</span></div>'+
+      '<span class="stage-chip '+e.stg+'">'+stageLabel[e.stg]+'</span>'+
+    '</div>'
+  ).join('') || '<div style="padding:30px;text-align:center;color:var(--mute);font-size:12px">该阶段暂无事件</div>';
+}
+
+function renderDrawer(){
+  const drawer = document.getElementById('drawer');
+  const ctx = document.getElementById('drawer-ctx');
+  const list = document.getElementById('drawer-steps');
+  if(state.selectedIdx===null){ drawer.classList.remove('open'); return; }
+  drawer.classList.add('open');
+  const d = DEVICES[state.selectedIdx];
+  const stageMap = {init:'INIT',patrol:'PATROL',teardown:'TEARDOWN',archived:'已归档',fail:'失败'};
+  ctx.innerHTML =
+    '<span class="lbl">已选设备</span><span class="val">'+d.serial+'</span>'+
+    '<span class="lbl">主机</span><span class="val">'+d.host+'</span>'+
+    '<span class="lbl">阶段</span><span class="stg">'+stageMap[d.stage]+'</span>'+
+    '<span class="lbl">进度</span><span class="val">'+d.progress+'</span>'+
+    '<button class="close-x" onclick="clearSelection()">✕ 关闭</button>';
+  const lastIco = d.status==='failed'?'fail':(d.status==='running'?'run':'ok');
+  const tailIco = d.status==='completed'?'ok':'pend';
+  const steps = [
+    {stage:'init',name:'check_device',ico:'ok'},
+    {stage:'init',name:'ensure_root',ico:'ok'},
+    {stage:'init',name:'connect_wifi',ico:'ok'},
+    {stage:'patrol',name:'monkey_setup',ico:'ok'},
+    {stage:'patrol',name:'monkey_launch',ico:lastIco},
+    {stage:'patrol',name:'monkey_check',ico:tailIco},
+    {stage:'patrol',name:'monkey_teardown',ico:tailIco},
+    {stage:'patrol',name:'fill_storage',ico:tailIco},
+    {stage:'teardown',name:'clean_env',ico:tailIco},
+    {stage:'teardown',name:'archive_logs',ico:tailIco}
+  ];
+  const icoMap = {ok:'✓',run:'⟳',fail:'✗',pend:'○'};
+  const tsBase = 14*3600 + 30*60;
+  list.innerHTML = steps.map((s,i)=>{
+    const ts = tsBase + i*73;
+    const hh = Math.floor(ts/3600).toString().padStart(2,'0');
+    const mm = Math.floor((ts%3600)/60).toString().padStart(2,'0');
+    const ss = (ts%60).toString().padStart(2,'0');
+    const durCls = s.ico==='run'?' run':(s.ico==='fail'?' fail':'');
+    const durTxt = s.ico==='ok'?(20+i*7)+'s':(s.ico==='run'?(5+i)+'s ⟳':(s.ico==='fail'?'FAIL':'—'));
+    return '<div class="step-row">'+
+      '<div class="ico '+s.ico+'">'+icoMap[s.ico]+'</div>'+
+      '<div class="name"><span class="stage-pill '+s.stage+'">'+s.stage+'</span><b>'+s.name+'</b></div>'+
+      '<div class="ts">'+hh+':'+mm+':'+ss+'</div>'+
+      '<div class="dur'+durCls+'">'+durTxt+'</div>'+
+      '</div>';
+  }).join('');
+  drawer.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+function selectDevice(idx){ state.selectedIdx = idx; renderAll(); }
+function clearSelection(){ state.selectedIdx = null; renderAll(); }
+
+function switchView(v){
+  state.view = v;
+  document.querySelectorAll('.do-header .vbtn').forEach(b=>b.classList.toggle('active', b.dataset.view===v));
+  document.querySelectorAll('.view-pane').forEach(p=>p.classList.toggle('active', p.id==='view-'+v));
+  renderCurrentView();
+}
+
+function renderCurrentView(){
+  if(state.view==='minimap') renderMinimap();
+  else if(state.view==='cards') renderCards();
+  else renderTable();
+}
+
+function renderAll(){
+  renderCurrentView();
+  renderDrawer();
+}
+
+/* ===== Wire up ===== */
+document.querySelectorAll('.do-header .vbtn').forEach(b=>b.onclick=()=>switchView(b.dataset.view));
+document.querySelectorAll('.lg-btn').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.lg-btn').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  state.statusFilter = b.dataset.status;
+  renderAll();
+});
+document.querySelectorAll('.hc-btn').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.hc-btn').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  state.hostFilter = b.dataset.host;
+  renderAll();
+});
+document.getElementById('device-search').oninput = e=>{ state.search = e.target.value; renderAll(); };
+document.querySelectorAll('.fbtn').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.fbtn').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');
+  state.eventStage = b.dataset.stg;
+  renderEvents();
+});
+document.querySelectorAll('.ft-node').forEach(n=>n.onclick=()=>{
+  const stg = n.dataset.stage;
+  document.querySelectorAll('.fbtn').forEach(x=>x.classList.toggle('active', x.dataset.stg===stg));
+  state.eventStage = stg;
+  renderEvents();
+});
+
+renderMinimap();
+renderEvents();
+</script>
+</body>
+</html>

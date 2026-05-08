@@ -80,6 +80,10 @@ class StepTrace(Base):
     __table_args__ = (
         UniqueConstraint("job_id", "step_id", "event_type", name="uq_step_trace_idempotent"),
         Index("idx_step_trace_job", "job_id"),
+        # ADR-0021/ADR-0022 C5a₂: timeline 端点按 (job_id, stage) GROUP BY 聚合
+        Index("idx_step_trace_job_stage", "job_id", "stage"),
+        # events 端点按 (job_id, status, original_ts) 扫描失败步骤并按时间排序
+        Index("idx_step_trace_job_status_ts", "job_id", "status", "original_ts"),
     )
 
 

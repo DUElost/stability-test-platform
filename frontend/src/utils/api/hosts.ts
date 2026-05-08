@@ -1,9 +1,16 @@
-import apiClient from './client';
+import apiClient, { unwrapApiResponse } from './client';
 import type { Host, PaginatedResponse } from './types';
 
 export const hosts = {
   list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<Host>>('/hosts', { params: { skip, limit } }),
-  get: (id: number) => apiClient.get<Host>(`/hosts/${id}`),
+  get: (id: number | string) => apiClient.get<Host>(`/hosts/${id}`),
+  /**
+   * ADR-0021 hot-update gate — fetch the live `active_jobs` snapshot for a host.
+   * Wraps `GET /hosts/{id}` and unwraps the ApiResponse envelope so callers
+   * receive the typed `Host` directly (with `active_jobs` populated).
+   */
+  getDetail: (id: number | string) =>
+    unwrapApiResponse<Host>(apiClient.get(`/hosts/${id}`)),
   create: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
     apiClient.post<Host>('/hosts', data),
   update: (id: number, data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
@@ -15,10 +22,39 @@ export const heartbeat = {
     apiClient.post(`/heartbeat`, { host_id: hostId, ...data }),
 };
 
+export interface HotUpdateResult {
+  ok: boolean;
+  host_id: number;
+  message: string;
+  duration_ms?: number;
+  // Present when the request was issued with abort_running_jobs=true.
+  aborted?: {
+    plan_runs?: number[];
+    aborted_jobs?: number[];
+    drained_lingering_jobs?: number[];
+  };
+}
+
 export const hotUpdate = {
-  trigger: (hostId: number) =>
-    apiClient.post<{ ok: boolean; host_id: number; message: string; duration_ms?: number }>(
-      `/hosts/${hostId}/hot-update`
+  /**
+   * Trigger a hot-update.  When `abortRunningJobs=true`, the backend will
+   * abort any active Jobs on the host first (release leases, wait ≤45s for
+   * the Agent to drain), then run the hot-update.
+   *
+   * Without that flag and with active Jobs present, the backend returns 409
+   * with `detail.active_jobs` populated — the caller should pop the confirm
+   * dialog and ask the user to opt into the abort path.
+   */
+  trigger: (
+    hostId: number | string,
+    opts: { abortRunningJobs?: boolean } = {},
+  ) =>
+    apiClient.post<HotUpdateResult>(
+      `/hosts/${hostId}/hot-update`,
+      undefined,
+      opts.abortRunningJobs
+        ? { params: { abort_running_jobs: true } }
+        : undefined,
     ),
 };
 

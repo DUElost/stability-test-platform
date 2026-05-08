@@ -1,5 +1,15 @@
 // ─── 基础实体类型 ──────────────────────────────────────────────────────────────
 
+// ADR-0021 hot-update gate: per-host snapshot of an active Job.
+export interface HostActiveJob {
+  id: number;
+  plan_run_id?: number | null;
+  plan_id?: number | null;
+  device_id: number;
+  status: string;
+  started_at?: string | null;
+}
+
 export interface Host {
   id: number;
   name: string;
@@ -29,6 +39,9 @@ export interface Host {
     mount_ok: boolean;
     adb_ok: boolean;
   };
+  // ADR-0021 hot-update gate — populated only on GET /hosts/{id}.
+  active_job_count?: number;
+  active_jobs?: HostActiveJob[];
 }
 
 export interface Device {
@@ -549,6 +562,13 @@ export interface PlanRun {
   started_at: string;
   ended_at?: string | null;
   result_summary?: Record<string, any> | null;
+  // ADR-0021 dispatch gate progress (PrecheckState typed below)
+  run_context?: { precheck?: PrecheckState } & Record<string, any> | null;
+  plan_snapshot?: Record<string, any> | null;
+  parent_plan_run_id?: number | null;
+  root_plan_run_id?: number | null;
+  chain_index?: number;
+  next_plan_triggered?: boolean;
 }
 
 export interface PlanRunCreate {
@@ -589,6 +609,201 @@ export interface PlanRunSummary {
   started_at?: string | null;
   ended_at?: string | null;
   result_summary?: Record<string, any> | null;
+}
+
+// ─── ADR-0021 dispatch gate precheck (PlanRun.run_context.precheck) ──────────
+
+export type PrecheckPhase = 'verifying' | 'syncing' | 'reverifying' | 'ready' | 'failed';
+export type PrecheckHostStatus = 'pending' | 'ok' | 'syncing' | 'synced' | 'failed';
+
+export interface PrecheckScriptCheck {
+  name: string;
+  version: string;
+  expected_sha256?: string | null;
+  actual_sha256?: string | null;
+  matched: boolean;
+  reason?: string | null;
+}
+
+export interface PrecheckHostState {
+  status: PrecheckHostStatus;
+  checked_at?: string | null;
+  synced_at?: string | null;
+  scripts: PrecheckScriptCheck[];
+  sync_attempts: number;
+  error?: string | null;
+}
+
+export interface PrecheckState {
+  phase: PrecheckPhase;
+  started_at: string;
+  completed_at?: string | null;
+  hosts: Record<string, PrecheckHostState>;
+  final_result?: 'ready' | 'failed' | null;
+  errors: string[];
+}
+
+// ─── ADR-0021/0022 C5a₂ aggregation endpoints (PlanRunDetailPage) ────────────
+
+export interface ChainNode {
+  plan_id: number;
+  plan_name?: string | null;
+  plan_run_id?: number | null;          // null when status === 'pending' (next not yet triggered)
+  status: string;                        // PlanRun.status or 'pending'
+  chain_index: number;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_seconds?: number | null;
+  failure_threshold: number;
+  pass_rate?: number | null;
+  is_current: boolean;
+  is_blocked: boolean;
+  block_reason?: string | null;
+}
+
+export interface PlanChain {
+  plan_run_id: number;
+  root_plan_run_id: number;
+  nodes: ChainNode[];                    // ordered by chain_index ascending
+}
+
+export type StageStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+export interface StageStep {
+  step_key: string;
+  script_name: string;
+  stage: 'init' | 'patrol' | 'teardown';
+  sort_order: number;
+  device_total: number;
+  device_succeeded: number;
+  device_failed: number;
+  device_running: number;
+}
+
+export interface TimelineStage {
+  stage: 'init' | 'patrol' | 'teardown';
+  status: StageStatus;
+  started_at?: string | null;
+  ended_at?: string | null;
+  duration_seconds?: number | null;
+  device_total: number;
+  device_succeeded: number;
+  device_failed: number;
+  // patrol-only
+  patrol_cycle_index?: number | null;
+  patrol_active_devices?: number | null;
+  patrol_interval_seconds?: number | null;
+  steps: StageStep[];
+}
+
+export interface PlanRunTimeline {
+  plan_run_id: number;
+  current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending';
+  stages: TimelineStage[];
+  triggered_at: string;
+  triggered_by?: string | null;
+  run_type: PlanRunType;
+  plan_name?: string | null;
+}
+
+export type EventStage = 'trigger' | 'init' | 'patrol' | 'teardown' | 'system';
+export type EventSeverity = 'ok' | 'info' | 'warn' | 'err';
+export type EventCategory = 'trigger' | 'step' | 'log_signal' | 'audit';
+
+export interface PlanRunEvent {
+  ts: string;
+  stage: EventStage;
+  severity: EventSeverity;
+  category: EventCategory;
+  title: string;
+  description: string;
+  job_id?: number | null;
+  device_id?: number | null;
+  device_serial?: string | null;
+  ref?: { type: string; id: number } | null;
+}
+
+export interface PlanRunEventsPayload {
+  plan_run_id: number;
+  events: PlanRunEvent[];
+  total: number;                         // total under current filter (post-facet)
+  facets: {
+    by_stage: Record<string, number>;    // includes 'all'
+    by_severity: Record<string, number>; // includes 'all'
+  };
+}
+
+export type DeviceUiStatus = 'completed' | 'running' | 'failed' | 'risk' | 'backoff' | 'pending';
+
+export interface DeviceMatrixItem {
+  device_id: number;
+  device_serial?: string | null;
+  device_model?: string | null;
+  host_id?: string | null;
+  job_id: number;
+  job_status: JobStatus;
+  ui_status: DeviceUiStatus;
+  current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending' | 'failed';
+  current_step?: string | null;
+  patrol_cycle_count: number;
+  patrol_success_cycle_count: number;
+  patrol_failed_cycle_count: number;
+  current_failure_streak: number;
+  next_retry_at?: string | null;
+  manual_action?: 'RETRY_NOW' | 'EXIT_REQUESTED' | null;
+  log_signal_count: number;
+  last_heartbeat_at?: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+}
+
+export interface PlanRunDevicesPayload {
+  plan_run_id: number;
+  total: number;
+  by_status: Record<string, number>;     // includes 'all'
+  by_host: Record<string, number>;
+  devices: DeviceMatrixItem[];
+}
+
+export interface WatcherCategory {
+  category: string;                      // AEE / VENDOR_AEE / ANR / TOMBSTONE / MOBILELOG
+  count: number;
+  affected_device_count: number;
+  trend_change: number;                  // current window - previous (same length) window
+  latest_device_serial?: string | null;
+  latest_detected_at?: string | null;
+}
+
+export interface WatcherSummary {
+  plan_run_id: number;
+  window_minutes: number;
+  window_start_at: string;
+  window_end_at: string;
+  categories: WatcherCategory[];
+  total: number;
+  affected_device_count: number;
+  total_devices: number;
+  abnormal_rate: number;                 // affected / total_devices
+  threshold: number;
+  exceeded: boolean;
+}
+
+export interface JobManualActionResult {
+  job_id: number;
+  plan_run_id: number;
+  action: 'manual_retry' | 'manual_exit';
+  status: JobStatus;
+  manual_action?: string | null;
+  next_retry_at?: string | null;
+  current_failure_streak: number;
+}
+
+export interface PlanRunAbortResult {
+  plan_run_id: number;
+  status: string;
+  released_lease_count?: number;
+  aborted_pending_count?: number;
+  drained_running_count?: number;
 }
 
 // ─── ResourcePool ────────────────────────────────────────────────────────────────

@@ -420,6 +420,39 @@ async def broadcast_plan_run_status(run_id: int, status: str) -> None:
     }, namespace="/dashboard", room=f"plan_run:{run_id}")
 
 
+async def broadcast_watcher_signal(
+    run_id: int,
+    *,
+    job_id: int,
+    device_serial: Optional[str],
+    category: str,
+    inserted_count: int = 1,
+) -> None:
+    """ADR-0021 C5c — push watcher anomaly increment to plan_run subscribers.
+
+    Frontend uses this purely as an *invalidation hint* — it triggers a
+    refetch of `/plan-runs/{id}/watcher-summary` rather than mutating the
+    cached payload directly.  This keeps the event payload tiny and avoids
+    drift between the in-memory aggregate and the server-side window query.
+    """
+    sio = get_sio()
+    await sio.emit(
+        "watcher_signal",
+        {
+            "type": "WATCHER_SIGNAL",
+            "payload": {
+                "job_id": int(job_id),
+                "device_serial": device_serial,
+                "category": category,
+                "inserted_count": int(inserted_count),
+            },
+            "timestamp": _now_iso(),
+        },
+        namespace="/dashboard",
+        room=f"plan_run:{run_id}",
+    )
+
+
 async def broadcast_run_update(
     run_id: int, task_id: int, status: str,
     progress: int = 0, message: str = "",

@@ -1,0 +1,1381 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlanRunDetail 风险优先静态原型</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --surface-soft: #f8fafc;
+      --line: #d9e2ec;
+      --line-strong: #bdc9d7;
+      --text: #172033;
+      --muted: #66758a;
+      --soft: #94a3b8;
+      --green: #16a34a;
+      --green-soft: #e9f9ef;
+      --blue: #2563eb;
+      --blue-soft: #eaf2ff;
+      --gray: #94a3b8;
+      --gray-soft: #f1f5f9;
+      --red: #dc2626;
+      --red-soft: #fff1f2;
+      --orange: #f97316;
+      --orange-soft: #fff7ed;
+      --purple: #7c3aed;
+      --purple-soft: #f5f3ff;
+      --navy: #102033;
+      --cyan: #0e7490;
+      --cyan-soft: #e6f7fb;
+      --shadow: 0 16px 42px rgba(15, 23, 42, .08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 1200px;
+      background: linear-gradient(180deg, #fbfdff 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .page {
+      width: 1440px;
+      min-height: 1024px;
+      margin: 0 auto;
+      padding: 20px 24px 28px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .topbar,
+    .summary-card,
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      min-height: 56px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+    }
+
+    .crumb {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .crumb strong {
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .run-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #fed7aa;
+      background: var(--orange-soft);
+      color: #c2410c;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      font-weight: 720;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .btn {
+      height: 34px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--text);
+      border-radius: 7px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 13px;
+      font-weight: 690;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      border-color: var(--cyan);
+      background: var(--cyan);
+      color: #fff;
+      box-shadow: 0 10px 22px rgba(14, 116, 144, .18);
+    }
+
+    .icon {
+      width: 14px;
+      height: 14px;
+      border: 1.8px solid currentColor;
+      border-radius: 4px;
+      display: inline-block;
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .summary-card {
+      padding: 16px;
+      display: grid;
+      grid-template-columns: .95fr 1.25fr;
+      gap: 16px;
+      align-items: stretch;
+    }
+
+    .answer {
+      border: 1px solid #fecaca;
+      background: linear-gradient(180deg, #fff7f7 0%, #fff 100%);
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      align-content: center;
+      gap: 10px;
+    }
+
+    .answer-label {
+      color: var(--red);
+      font-size: 12px;
+      font-weight: 760;
+      text-transform: uppercase;
+    }
+
+    .answer h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.25;
+      font-weight: 820;
+    }
+
+    .answer p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      padding: 12px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 680;
+    }
+
+    .metric .value {
+      margin-top: 8px;
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    .metric .hint {
+      margin-top: 3px;
+      color: var(--soft);
+      font-size: 11px;
+    }
+
+    .device-grid {
+      display: grid;
+      grid-template-columns: repeat(12, 14px);
+      gap: 5px;
+      align-content: start;
+    }
+
+    .device-grid.large {
+      grid-template-columns: repeat(20, 18px);
+      gap: 7px;
+    }
+
+    .device-cell {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      position: relative;
+      transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
+    }
+
+    .device-grid.large .device-cell {
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+    }
+
+    .device-cell:hover,
+    .device-cell.active {
+      transform: translateY(-1px);
+      box-shadow: 0 0 0 3px rgba(14, 116, 144, .16);
+      z-index: 2;
+    }
+
+    .device-cell.dim {
+      opacity: .18;
+    }
+
+    .device-cell.COMPLETED { background: #9ee7b6; opacity: .56; }
+    .device-cell.RUNNING { background: var(--blue); }
+    .device-cell.PENDING { background: #cbd5e1; opacity: .72; }
+    .device-cell.FAILED { background: var(--red); }
+    .device-cell.RISK { background: var(--orange); }
+    .device-cell.UNKNOWN { background: var(--purple); }
+    .device-cell.OFFLINE {
+      background: #e2e8f0;
+      border-color: #334155;
+      box-shadow: inset 0 0 0 1px #334155;
+    }
+    .device-cell.SKIPPED {
+      background:
+        repeating-linear-gradient(135deg, #cbd5e1 0 3px, #f8fafc 3px 6px);
+      border-color: #cbd5e1;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+
+    .legend-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 5px 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .legend-btn.active {
+      border-color: var(--cyan);
+      color: var(--cyan);
+      background: var(--cyan-soft);
+    }
+
+    .legend-swatch {
+      width: 9px;
+      height: 9px;
+      border-radius: 3px;
+      border: 1px solid transparent;
+    }
+
+    .sw-COMPLETED { background: #9ee7b6; }
+    .sw-RUNNING { background: var(--blue); }
+    .sw-PENDING { background: #cbd5e1; }
+    .sw-FAILED { background: var(--red); }
+    .sw-RISK { background: var(--orange); }
+    .sw-UNKNOWN { background: var(--purple); }
+    .sw-OFFLINE { background: #e2e8f0; border-color: #334155; }
+    .sw-SKIPPED { background: repeating-linear-gradient(135deg, #cbd5e1 0 2px, #fff 2px 4px); border-color: #cbd5e1; }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid var(--line);
+      padding: 0 2px;
+    }
+
+    .tab {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 11px 12px;
+      font-size: 13px;
+      font-weight: 720;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+    }
+
+    .tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .risk-layout {
+      display: grid;
+      grid-template-columns: 330px minmax(0, 1fr) 320px;
+      gap: 16px;
+      margin-top: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      overflow: hidden;
+    }
+
+    .panel-head {
+      min-height: 48px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+      padding: 12px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 780;
+    }
+
+    .panel-body {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .execution-progress {
+      margin-top: 16px;
+    }
+
+    .panel-title-stack {
+      display: grid;
+      gap: 3px;
+    }
+
+    .panel-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .progress-shell {
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .sync-card {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 13px;
+      display: grid;
+      gap: 11px;
+    }
+
+    .sync-title,
+    .stage-card-title {
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .sync-main {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .host-sync-list {
+      display: grid;
+      gap: 7px;
+    }
+
+    .host-sync {
+      display: grid;
+      grid-template-columns: 76px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .progress-track {
+      height: 7px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+    }
+
+    .progress-track span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--cyan);
+    }
+
+    .progress-track.warning span { background: var(--orange); }
+    .progress-track.done span { background: var(--green); }
+
+    .flow-block {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 13px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .stage-flow {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+    }
+
+    .flow-node {
+      min-height: 88px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      padding: 10px;
+      display: grid;
+      align-content: space-between;
+      gap: 8px;
+    }
+
+    .flow-node.active {
+      border-color: #fed7aa;
+      background: #fffaf3;
+    }
+
+    .flow-node.failed {
+      border-color: #fecaca;
+      background: #fff8f8;
+    }
+
+    .flow-node .name {
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .flow-node .meta {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .flow-note {
+      border-left: 3px solid var(--orange);
+      background: var(--orange-soft);
+      color: #9a3412;
+      padding: 9px 11px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .stage-board {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .stage-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 13px;
+      display: grid;
+      gap: 11px;
+    }
+
+    .stage-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .step-breakdown {
+      display: grid;
+      gap: 8px;
+    }
+
+    .step-line {
+      display: grid;
+      grid-template-columns: 120px 1fr 46px;
+      gap: 8px;
+      align-items: center;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .step-name {
+      color: var(--text);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-weight: 700;
+    }
+
+    .device-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .device-badge {
+      border: 1px solid var(--line);
+      background: var(--surface-soft);
+      border-radius: 999px;
+      padding: 3px 7px;
+      font-size: 11px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      color: #475569;
+    }
+
+    .device-badge.red { background: var(--red-soft); color: var(--red); border-color: #fecaca; }
+    .device-badge.orange { background: var(--orange-soft); color: #c2410c; border-color: #fed7aa; }
+    .device-badge.purple { background: var(--purple-soft); color: var(--purple); border-color: #ddd6fe; }
+
+    .finding {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 10px;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 11px;
+    }
+
+    .finding.critical { border-color: #fecaca; background: #fff8f8; }
+    .finding.warning { border-color: #fed7aa; background: #fffaf3; }
+
+    .finding-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 900;
+    }
+
+    .finding.critical .finding-icon { background: var(--red-soft); color: var(--red); }
+    .finding.warning .finding-icon { background: var(--orange-soft); color: #c2410c; }
+
+    .finding strong {
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .finding p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .queue-item {
+      display: grid;
+      grid-template-columns: 8px 1fr auto;
+      gap: 11px;
+      align-items: center;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 11px;
+    }
+
+    .severity-line {
+      width: 8px;
+      height: 48px;
+      border-radius: 999px;
+    }
+
+    .severity-line.red { background: var(--red); }
+    .severity-line.orange { background: var(--orange); }
+    .severity-line.purple { background: var(--purple); }
+
+    .queue-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 780;
+    }
+
+    .queue-meta {
+      margin-top: 5px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--gray-soft);
+      color: #475569;
+      padding: 3px 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .chip.red { background: var(--red-soft); color: var(--red); border-color: #fecaca; }
+    .chip.orange { background: var(--orange-soft); color: #c2410c; border-color: #fed7aa; }
+    .chip.purple { background: var(--purple-soft); color: var(--purple); border-color: #ddd6fe; }
+    .chip.green { background: var(--green-soft); color: #15803d; border-color: #bbf7d0; }
+    .chip.blue { background: var(--blue-soft); color: var(--blue); border-color: #bfdbfe; }
+
+    .timeline {
+      display: grid;
+      gap: 12px;
+    }
+
+    .timeline-item {
+      display: grid;
+      grid-template-columns: 74px 1fr;
+      gap: 10px;
+      font-size: 12px;
+    }
+
+    .timeline-time {
+      color: var(--soft);
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    .timeline-text {
+      border-left: 2px solid var(--line);
+      padding-left: 10px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .timeline-text strong {
+      color: var(--text);
+    }
+
+    .overview-layout {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 16px;
+      margin-top: 16px;
+      align-items: start;
+    }
+
+    .filterbar {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto auto;
+      gap: 9px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+
+    .input-control,
+    .input-like,
+    .select-like {
+      height: 34px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #fff;
+      padding: 0 11px;
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 110px;
+    }
+
+    .input-control {
+      width: 100%;
+      color: var(--text);
+      outline: none;
+    }
+
+    .input-control::placeholder {
+      color: var(--muted);
+    }
+
+    .device-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .device-row {
+      display: grid;
+      grid-template-columns: 9px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      font-size: 12px;
+    }
+
+    .device-row .name {
+      font-weight: 760;
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    .phase-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .phase-lane {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .phase-lane h3 {
+      margin: 0;
+      padding: 11px 13px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-soft);
+      font-size: 13px;
+    }
+
+    .step-row {
+      display: grid;
+      grid-template-columns: 92px 1fr 88px;
+      gap: 10px;
+      padding: 10px 13px;
+      border-bottom: 1px solid #edf2f7;
+      font-size: 12px;
+      align-items: center;
+    }
+
+    .step-row:last-child { border-bottom: 0; }
+
+    .artifact-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .artifact {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 13px;
+    }
+
+    .artifact strong { font-size: 13px; }
+    .artifact p { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+
+    .job-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .job-table th,
+    .job-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #edf2f7;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .job-table th {
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-weight: 760;
+    }
+
+    .muted { color: var(--muted); }
+    .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+    .hidden { display: none !important; }
+
+    .tooltip {
+      position: fixed;
+      pointer-events: none;
+      z-index: 20;
+      min-width: 230px;
+      max-width: 300px;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 18px 42px rgba(15, 23, 42, .28);
+      font-size: 12px;
+      line-height: 1.55;
+      display: none;
+    }
+
+    .tooltip strong { color: #fff; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div class="crumb">
+        <span>执行详情</span>
+        <span>/</span>
+        <strong>PlanRun #1842</strong>
+        <span class="run-status"><span class="dot"></span>需要介入</span>
+      </div>
+      <div class="actions">
+        <button class="btn">刷新</button>
+        <button class="btn">打开日志总览</button>
+        <button class="btn primary">导出报告</button>
+      </div>
+    </header>
+
+    <section class="summary-card">
+      <div class="answer">
+        <div class="answer-label">结论</div>
+        <h1>需要人介入：2 台失败，4 台 watcher 高频告警，2 台 UNKNOWN，3 台离线。</h1>
+        <p>优先查看离线失败设备、UNKNOWN 设备和 watcher 告警队列。正常完成设备默认不展开细节。</p>
+      </div>
+
+      <div class="metric-grid">
+        <div class="metric"><div class="label">总设备</div><div class="value">120</div><div class="hint">10 hosts</div></div>
+        <div class="metric"><div class="label">完成正常</div><div class="value">88</div><div class="hint">低饱和显示</div></div>
+        <div class="metric"><div class="label">需关注</div><div class="value">11</div><div class="hint">失败、风险、UNKNOWN、离线</div></div>
+        <div class="metric"><div class="label">运行中</div><div class="value">12</div><div class="hint">最近 30s 有信号</div></div>
+      </div>
+
+    </section>
+
+    <nav class="tabs" aria-label="执行详情标签页">
+      <button class="tab active" data-tab="risk">风险优先</button>
+      <button class="tab" data-tab="overview">设备概览</button>
+      <button class="tab" data-tab="phase">阶段与日志</button>
+      <button class="tab" data-tab="artifacts">制品与报告</button>
+      <button class="tab" data-tab="raw">原始 Job</button>
+    </nav>
+
+    <section id="tab-risk" class="tab-content active">
+      <section class="panel execution-progress">
+        <div class="panel-head">
+          <div class="panel-title-stack">
+            <div class="panel-title">当前执行进展</div>
+            <div class="panel-subtitle">按计划编排结构聚合：本地脚本热更新 → 执行节点同步 → 设备阶段状态</div>
+          </div>
+          <span class="chip orange">Patrol 进行中</span>
+        </div>
+        <div class="panel-body">
+          <div class="progress-shell">
+            <aside class="sync-card">
+              <div class="stage-card-head">
+                <div class="sync-title">脚本热更新同步</div>
+                <span class="chip blue">4 / 5 节点</span>
+              </div>
+              <div class="sync-main">
+                本地编排脚本包 <span class="mono">foreground_watch@v2.4.1</span> 已完成校验，正在同步到执行节点。
+              </div>
+              <div class="host-sync-list">
+                <div class="host-sync"><span class="mono">host-a01</span><div class="progress-track done"><span style="width:100%"></span></div><span>完成</span></div>
+                <div class="host-sync"><span class="mono">host-a02</span><div class="progress-track done"><span style="width:100%"></span></div><span>完成</span></div>
+                <div class="host-sync"><span class="mono">host-a03</span><div class="progress-track warning"><span style="width:82%"></span></div><span>重试</span></div>
+                <div class="host-sync"><span class="mono">host-a04</span><div class="progress-track done"><span style="width:100%"></span></div><span>完成</span></div>
+                <div class="host-sync"><span class="mono">host-a05</span><div class="progress-track"><span style="width:64%"></span></div><span>同步中</span></div>
+              </div>
+            </aside>
+
+            <div class="flow-block">
+              <div class="stage-flow" aria-label="执行链路状态">
+                <div class="flow-node">
+                  <div class="name">本地脚本包</div>
+                  <div class="meta">校验完成<br><span class="mono">8 scripts</span></div>
+                  <span class="chip green">完成</span>
+                </div>
+                <div class="flow-node active">
+                  <div class="name">节点同步</div>
+                  <div class="meta">host-a03 重试<br>host-a05 同步中</div>
+                  <span class="chip orange">进行中</span>
+                </div>
+                <div class="flow-node">
+                  <div class="name">Job 下发</div>
+                  <div class="meta">120 jobs<br>117 acknowledged</div>
+                  <span class="chip blue">97.5%</span>
+                </div>
+                <div class="flow-node failed">
+                  <div class="name">Init</div>
+                  <div class="meta">111 完成<br>1 失败停留</div>
+                  <span class="chip red">1 失败</span>
+                </div>
+                <div class="flow-node active">
+                  <div class="name">Patrol</div>
+                  <div class="meta">12 运行中<br>4 watcher 告警</div>
+                  <span class="chip orange">当前阶段</span>
+                </div>
+                <div class="flow-node failed">
+                  <div class="name">Teardown</div>
+                  <div class="meta">88 完成<br>1 失败停留</div>
+                  <span class="chip red">1 失败</span>
+                </div>
+              </div>
+              <div class="flow-note">
+                当前优先看三类卡点：脚本包同步未完成的 host-a03 / host-a05、Init 阶段失败的 DVC-018、Patrol watcher 与 UNKNOWN 设备。
+              </div>
+            </div>
+          </div>
+
+          <div class="stage-board">
+            <article class="stage-card">
+              <div class="stage-card-head">
+                <div class="stage-card-title">Init 设备状态</div>
+                <span class="chip red">1 停留</span>
+              </div>
+              <div class="step-breakdown">
+                <div class="step-line"><span class="step-name">check_device</span><div class="progress-track done"><span style="width:100%"></span></div><span>111</span></div>
+                <div class="step-line"><span class="step-name">prepare_env</span><div class="progress-track done"><span style="width:92%"></span></div><span>110</span></div>
+                <div class="step-line"><span class="step-name">host_sync</span><div class="progress-track warning"><span style="width:98%"></span></div><span>1</span></div>
+              </div>
+              <div class="device-badges">
+                <span class="device-badge red">DVC-018 host_sync</span>
+              </div>
+            </article>
+
+            <article class="stage-card">
+              <div class="stage-card-head">
+                <div class="stage-card-title">Patrol 当前环节</div>
+                <span class="chip orange">12 运行中</span>
+              </div>
+              <div class="step-breakdown">
+                <div class="step-line"><span class="step-name">launch_app</span><div class="progress-track"><span style="width:25%"></span></div><span>3</span></div>
+                <div class="step-line"><span class="step-name">monkey_loop</span><div class="progress-track"><span style="width:42%"></span></div><span>5</span></div>
+                <div class="step-line"><span class="step-name">watcher_collect</span><div class="progress-track warning"><span style="width:33%"></span></div><span>4</span></div>
+              </div>
+              <div class="device-badges">
+                <span class="device-badge orange">DVC-011 watcher</span>
+                <span class="device-badge orange">DVC-044 watcher</span>
+                <span class="device-badge purple">DVC-077 heartbeat</span>
+              </div>
+            </article>
+
+            <article class="stage-card">
+              <div class="stage-card-head">
+                <div class="stage-card-title">失败停留点</div>
+                <span class="chip red">2 失败</span>
+              </div>
+              <div class="step-breakdown">
+                <div class="step-line"><span class="step-name">init.host_sync</span><div class="progress-track warning"><span style="width:50%"></span></div><span>1</span></div>
+                <div class="step-line"><span class="step-name">teardown.pull_logs</span><div class="progress-track warning"><span style="width:50%"></span></div><span>1</span></div>
+                <div class="step-line"><span class="step-name">patrol.heartbeat</span><div class="progress-track warning"><span style="width:100%"></span></div><span>2</span></div>
+              </div>
+              <div class="device-badges">
+                <span class="device-badge red">DVC-091 pull_logs</span>
+                <span class="device-badge purple">DVC-103 heartbeat</span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <div class="risk-layout">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">关键结论</div>
+            <span class="chip red">按严重度</span>
+          </div>
+          <div class="panel-body">
+            <div class="finding critical">
+              <div class="finding-icon">2</div>
+              <div><strong>2 台设备失败</strong><p>优先看 DVC-018 的 Init host_sync 与 DVC-091 的 teardown pull_logs 停留点。</p></div>
+            </div>
+            <div class="finding warning">
+              <div class="finding-icon">4</div>
+              <div><strong>watcher 高频告警</strong><p>集中在 host-a03，AEE 与 ANR 信号连续出现。</p></div>
+            </div>
+            <div class="finding warning">
+              <div class="finding-icon">2</div>
+              <div><strong>状态不可信</strong><p>DVC-077 与 DVC-103 进入 UNKNOWN，最后信号距今 9 分钟。</p></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">风险设备队列</div>
+            <span class="muted">默认隐藏正常设备</span>
+          </div>
+          <div id="riskQueue" class="panel-body"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">最近异常时间线</div>
+            <span class="chip orange">近 20 分钟</span>
+          </div>
+          <div class="panel-body timeline">
+            <div class="timeline-item"><div class="timeline-time">14:28:40</div><div class="timeline-text"><strong>DVC-018</strong> 停在 init / host_sync，job 3018 标记 FAILED。</div></div>
+            <div class="timeline-item"><div class="timeline-time">14:27:12</div><div class="timeline-text"><strong>DVC-077</strong> heartbeat 缺失，状态转 UNKNOWN。</div></div>
+            <div class="timeline-item"><div class="timeline-time">14:25:51</div><div class="timeline-text"><strong>host-a03</strong> watcher AEE 信号 4 次聚合。</div></div>
+            <div class="timeline-item"><div class="timeline-time">14:22:08</div><div class="timeline-text"><strong>DVC-091</strong> 停在 teardown / pull_logs，制品已上传。</div></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="tab-overview" class="tab-content">
+      <div class="overview-layout">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">设备概览</div>
+            <span class="muted">点击图例筛选，点击色块进入设备详情</span>
+          </div>
+          <div class="filterbar">
+            <input id="deviceSearch" class="input-control" placeholder="搜索设备 / host / job id" />
+            <div class="select-like">状态：全部</div>
+            <div class="select-like">Host：全部</div>
+            <div class="select-like">模板：全部</div>
+            <div class="select-like">阶段：全部</div>
+          </div>
+          <div class="panel-body">
+            <div id="largeGrid" class="device-grid large" aria-label="设备状态概览大图"></div>
+            <div id="largeLegend" class="legend"></div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <div class="panel-head">
+            <div class="panel-title">筛选结果</div>
+            <span id="resultCount" class="chip">120 台</span>
+          </div>
+          <div id="deviceList" class="panel-body device-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="tab-phase" class="tab-content">
+      <div class="phase-grid">
+        <section class="phase-lane">
+          <h3>阶段时间线</h3>
+          <div class="step-row"><span class="mono">init</span><span>设备检查、资源准备</span><span class="chip green">完成</span></div>
+          <div class="step-row"><span class="mono">patrol</span><span>monkey 前台监控、watcher 聚合</span><span class="chip orange">告警</span></div>
+          <div class="step-row"><span class="mono">teardown</span><span>日志拉取、环境清理</span><span class="chip red">2 失败</span></div>
+        </section>
+        <section class="phase-lane">
+          <h3>日志聚合</h3>
+          <div class="step-row"><span class="mono">AEE</span><span>host-a03 / 4 devices</span><span class="chip orange">4</span></div>
+          <div class="step-row"><span class="mono">ANR</span><span>DVC-044 / DVC-052</span><span class="chip orange">2</span></div>
+          <div class="step-row"><span class="mono">offline</span><span>DVC-018 / DVC-091</span><span class="chip red">2</span></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="tab-artifacts" class="tab-content">
+      <div class="artifact-grid">
+        <article class="artifact"><strong>执行报告</strong><p>HTML / JSON 报告已生成，可直接导出给外部评审。</p></article>
+        <article class="artifact"><strong>Watcher 产物</strong><p>AEE、ANR、tombstone、mobilelog 按设备聚合。</p></article>
+        <article class="artifact"><strong>JIRA 草稿</strong><p>已基于失败与高频告警生成 3 个问题草稿。</p></article>
+      </div>
+    </section>
+
+    <section id="tab-raw" class="tab-content">
+      <table class="job-table">
+        <thead>
+          <tr><th>Job ID</th><th>Serial</th><th>Host</th><th>Status</th><th>Stage</th><th>Step</th><th>Last Signal</th><th>Reason</th></tr>
+        </thead>
+        <tbody id="rawRows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip"></div>
+
+  <script>
+    const STATUS_LABELS = {
+      COMPLETED: '完成',
+      RUNNING: '运行中',
+      PENDING: '等待',
+      FAILED: '失败',
+      RISK: '风险',
+      UNKNOWN: 'UNKNOWN',
+      OFFLINE: '离线',
+      SKIPPED: '跳过'
+    };
+
+    const STATUS_ORDER = ['FAILED', 'RISK', 'UNKNOWN', 'OFFLINE', 'RUNNING', 'PENDING', 'SKIPPED', 'COMPLETED'];
+
+    function statusForIndex(i) {
+      if ([18, 91].includes(i)) return 'FAILED';
+      if ([11, 28, 44, 52].includes(i)) return 'RISK';
+      if ([77, 103].includes(i)) return 'UNKNOWN';
+      if ([6, 63, 109].includes(i)) return 'OFFLINE';
+      if ([7, 8, 9, 10, 21, 22, 35, 36, 57, 58, 79, 80].includes(i)) return 'RUNNING';
+      if ([12, 13, 14, 15, 86, 87].includes(i)) return 'PENDING';
+      if ([31, 32, 33].includes(i)) return 'SKIPPED';
+      return 'COMPLETED';
+    }
+
+    function stageForDevice(status, i) {
+      if (status === 'PENDING') return 'dispatch';
+      if (status === 'SKIPPED') return 'disabled';
+      if (i === 18) return 'init';
+      if (i === 91) return 'teardown';
+      if (['RUNNING', 'RISK', 'UNKNOWN'].includes(status)) return 'patrol';
+      if (status === 'OFFLINE') return i === 6 ? 'init' : 'patrol';
+      return 'completed';
+    }
+
+    function stepForDevice(status, i) {
+      if (i === 18) return 'host_sync';
+      if (i === 91) return 'pull_logs';
+      if (status === 'RISK') return 'watcher_collect';
+      if (status === 'UNKNOWN') return 'heartbeat_guard';
+      if (status === 'OFFLINE') return i === 6 ? 'host_sync' : 'device_heartbeat';
+      if (status === 'RUNNING') {
+        const patrolSteps = ['launch_app', 'monkey_loop', 'watcher_collect'];
+        return patrolSteps[i % patrolSteps.length];
+      }
+      if (status === 'PENDING') return 'wait_host_capacity';
+      if (status === 'SKIPPED') return 'disabled_by_template';
+      return 'report_ready';
+    }
+
+    const devices = Array.from({ length: 120 }, (_, index) => {
+      const i = index + 1;
+      const status = statusForIndex(i);
+      const host = `host-a${String((i % 10) + 1).padStart(2, '0')}`;
+      return {
+        jobId: 3000 + i,
+        deviceId: i,
+        serial: `DVC-${String(i).padStart(3, '0')}`,
+        hostName: host,
+        status,
+        severity: ['FAILED', 'UNKNOWN', 'OFFLINE'].includes(status) ? 'critical' : status === 'RISK' ? 'warning' : 'normal',
+        lastSignalAt: `2026-05-07 14:${String(10 + (i % 40)).padStart(2, '0')}:${String(10 + (i % 49)).padStart(2, '0')}`,
+        signalCount: status === 'RISK' ? 8 + (i % 6) : status === 'COMPLETED' ? 0 : 1 + (i % 3),
+        reason: reasonForStatus(status, i),
+        template: i % 3 === 0 ? 'foreground_watch' : i % 3 === 1 ? 'default' : 'resource_smoke',
+        phase: stageForDevice(status, i),
+        currentStep: stepForDevice(status, i)
+      };
+    });
+
+    let activeFilter = null;
+    let selectedDeviceId = null;
+    let searchQuery = '';
+
+    function reasonForStatus(status, i) {
+      if (status === 'FAILED') return i === 18 ? 'host offline before teardown' : 'teardown timeout, artifacts uploaded';
+      if (status === 'RISK') return 'watcher AEE / ANR high frequency';
+      if (status === 'UNKNOWN') return 'last heartbeat stale, state untrusted';
+      if (status === 'OFFLINE') return 'device offline';
+      if (status === 'SKIPPED') return 'disabled or skipped by template';
+      if (status === 'RUNNING') return 'active heartbeat in last 30s';
+      if (status === 'PENDING') return 'waiting for host capacity';
+      return 'normal completed';
+    }
+
+    function counts() {
+      return devices.reduce((acc, item) => {
+        acc[item.status] = (acc[item.status] || 0) + 1;
+        return acc;
+      }, {});
+    }
+
+    function renderLegend(targetId) {
+      const target = document.getElementById(targetId);
+      const c = counts();
+      target.innerHTML = STATUS_ORDER
+        .filter(status => c[status])
+        .map(status => `
+          <button class="legend-btn ${activeFilter === status ? 'active' : ''}" data-status="${status}">
+            <span class="legend-swatch sw-${status}"></span>${STATUS_LABELS[status]} ${c[status]}
+          </button>
+        `).join('');
+      target.querySelectorAll('.legend-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const status = btn.dataset.status;
+          activeFilter = activeFilter === status ? null : status;
+          renderAll();
+        });
+      });
+    }
+
+    function renderGrid(targetId) {
+      const target = document.getElementById(targetId);
+      target.innerHTML = devices.map(item => {
+        const dim = !matchesFilters(item) ? 'dim' : '';
+        const active = selectedDeviceId === item.deviceId ? 'active' : '';
+        return `<button class="device-cell ${item.status} ${dim} ${active}" data-id="${item.deviceId}" aria-label="${item.serial} ${STATUS_LABELS[item.status]}"></button>`;
+      }).join('');
+      target.querySelectorAll('.device-cell').forEach(cell => {
+        const item = devices.find(d => d.deviceId === Number(cell.dataset.id));
+        cell.addEventListener('mouseenter', (event) => showTooltip(event, item));
+        cell.addEventListener('mousemove', (event) => moveTooltip(event));
+        cell.addEventListener('mouseleave', hideTooltip);
+        cell.addEventListener('click', () => {
+          selectedDeviceId = item.deviceId;
+          renderAll();
+        });
+      });
+    }
+
+    function showTooltip(event, item) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.innerHTML = `
+        <strong>${item.serial}</strong><br>
+        Job #${item.jobId} · ${item.hostName}<br>
+        状态：${STATUS_LABELS[item.status]} · ${item.severity}<br>
+        位置：${item.phase} / ${item.currentStep}<br>
+        最后更新时间：${item.lastSignalAt}<br>
+        信号数：${item.signalCount}<br>
+        原因：${item.reason}
+      `;
+      tooltip.style.display = 'block';
+      moveTooltip(event);
+    }
+
+    function moveTooltip(event) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.style.left = `${event.clientX + 14}px`;
+      tooltip.style.top = `${event.clientY + 14}px`;
+    }
+
+    function hideTooltip() {
+      document.getElementById('tooltip').style.display = 'none';
+    }
+
+    function filteredDevices() {
+      return devices.filter(matchesFilters);
+    }
+
+    function matchesFilters(item) {
+      const statusMatched = !activeFilter || item.status === activeFilter;
+      const queryMatched = !searchQuery || [item.serial, item.hostName, String(item.jobId)]
+        .some(value => value.toLowerCase().includes(searchQuery));
+      return statusMatched && queryMatched;
+    }
+
+    function renderRiskQueue() {
+      const target = document.getElementById('riskQueue');
+      const risks = devices
+        .filter(item => ['FAILED', 'RISK', 'UNKNOWN', 'OFFLINE'].includes(item.status))
+        .sort((a, b) => {
+          const weight = { FAILED: 1, UNKNOWN: 2, OFFLINE: 3, RISK: 4 };
+          return weight[a.status] - weight[b.status];
+        });
+      target.innerHTML = risks.slice(0, 9).map(item => {
+        const line = item.status === 'FAILED' ? 'red' : item.status === 'UNKNOWN' ? 'purple' : 'orange';
+        const chip = item.status === 'FAILED' ? 'red' : item.status === 'UNKNOWN' ? 'purple' : 'orange';
+        return `
+          <div class="queue-item">
+            <span class="severity-line ${line}"></span>
+            <div>
+              <div class="queue-title"><span class="mono">${item.serial}</span><span class="chip ${chip}">${STATUS_LABELS[item.status]}</span></div>
+              <div class="queue-meta">
+                <span>Job #${item.jobId}</span><span>${item.hostName}</span><span>${item.phase} / ${item.currentStep}</span><span>${item.reason}</span>
+              </div>
+            </div>
+            <button class="btn">查看</button>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderDeviceList() {
+      const target = document.getElementById('deviceList');
+      const filtered = filteredDevices();
+      const list = filtered.slice(0, 10);
+      document.getElementById('resultCount').textContent = `${filtered.length} 台`;
+      target.innerHTML = list.map(item => {
+        const line = item.status === 'FAILED' ? 'red' : item.status === 'UNKNOWN' ? 'purple' : item.status === 'RISK' ? 'orange' : 'blue';
+        return `
+          <div class="device-row">
+            <span class="severity-line ${line}" style="height:36px"></span>
+            <div>
+              <div class="name">${item.serial}</div>
+              <div class="muted">${item.hostName} · Job #${item.jobId} · ${item.phase} / ${item.currentStep}</div>
+            </div>
+            <span class="chip">${STATUS_LABELS[item.status]}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderRawRows() {
+      const target = document.getElementById('rawRows');
+      target.innerHTML = devices.slice(0, 18).map(item => `
+        <tr>
+          <td class="mono">#${item.jobId}</td>
+          <td class="mono">${item.serial}</td>
+          <td>${item.hostName}</td>
+          <td><span class="chip">${STATUS_LABELS[item.status]}</span></td>
+          <td>${item.phase}</td>
+          <td class="mono">${item.currentStep}</td>
+          <td>${item.lastSignalAt}</td>
+          <td>${item.reason}</td>
+        </tr>
+      `).join('');
+    }
+
+    function bindTabs() {
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach(item => item.classList.remove('active'));
+          document.querySelectorAll('.tab-content').forEach(item => item.classList.remove('active'));
+          tab.classList.add('active');
+          document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+        });
+      });
+    }
+
+    function bindSearch() {
+      const input = document.getElementById('deviceSearch');
+      input.addEventListener('input', () => {
+        searchQuery = input.value.trim().toLowerCase();
+        renderAll();
+      });
+    }
+
+    function renderAll() {
+      renderGrid('largeGrid');
+      renderLegend('largeLegend');
+      renderRiskQueue();
+      renderDeviceList();
+      renderRawRows();
+    }
+
+    bindTabs();
+    bindSearch();
+    renderAll();
+  </script>
+</body>
+</html>

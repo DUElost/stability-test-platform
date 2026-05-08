@@ -5,6 +5,7 @@ import { useToast } from '../../components/ui/toast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { ExpandableHostTable, type HostTableData } from '../../components/network/ExpandableHostTable';
 import { AddHostModal } from './components/AddHostModal';
+import HostHotUpdateConfirmDialog from '../../components/host/HostHotUpdateConfirmDialog';
 import { api } from '../../utils/api';
 import { CleanCard } from '../../components/ui/clean-card';
 import { CleanButton } from '../../components/ui/clean-button';
@@ -87,28 +88,64 @@ export default function HostsPage() {
     },
   });
 
-  const [hotUpdatingHostId, setHotUpdatingHostId] = useState<number | null>(null);
+  const [hotUpdatingHostId, setHotUpdatingHostId] = useState<number | string | null>(null);
+  const [pendingHotUpdateHostId, setPendingHotUpdateHostId] = useState<
+    number | string | null
+  >(null);
 
   const hotUpdateMutation = useMutation({
-    mutationFn: (hostId: number) => api.hotUpdate.trigger(hostId),
-    onSuccess: (_data, hostId) => {
-      toast.success(`主机 ${hostId} 热更新完成`);
+    mutationFn: (vars: { hostId: number | string; abortRunningJobs: boolean }) =>
+      api.hotUpdate.trigger(vars.hostId, { abortRunningJobs: vars.abortRunningJobs }),
+    onSuccess: (_data, vars) => {
+      toast.success(
+        vars.abortRunningJobs
+          ? `主机 ${vars.hostId} 已中止活跃 Job 并完成热更新`
+          : `主机 ${vars.hostId} 热更新完成`,
+      );
       setHotUpdatingHostId(null);
+      setPendingHotUpdateHostId(null);
+      queryClient.invalidateQueries({ queryKey: ['hosts'] });
+      queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
+      queryClient.invalidateQueries({ queryKey: ['active-jobs'] });
     },
-    onError: (error: any) => {
-      toast.error(`热更新失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: any, vars) => {
+      // 409 with active_jobs surfaces here when the user (or our default
+      // path) requested a hot-update without abort_running_jobs.  The dialog
+      // itself prevents this by enforcing the toggle before enabling
+      // confirm, but the mutation is still defensive for direct API misuse.
+      const detail = error?.response?.data?.detail;
+      if (
+        error?.response?.status === 409 &&
+        detail &&
+        typeof detail === 'object' &&
+        Array.isArray(detail.active_jobs)
+      ) {
+        toast.error(
+          `主机 ${vars.hostId} 仍有 ${detail.active_jobs.length} 个活跃 Job — 请勾选「中止并热更新」`,
+        );
+        // Re-open the dialog so the user can opt into the abort path.
+        setPendingHotUpdateHostId(vars.hostId);
+      } else {
+        toast.error(
+          `热更新失败: ${
+            typeof detail === 'string' ? detail : error?.message ?? '未知错误'
+          }`,
+        );
+      }
       setHotUpdatingHostId(null);
     },
   });
 
-  const handleHotUpdate = async (hostId: number) => {
-    const ok = await confirmDialog({
-      description: `确定要对主机 ${hostId} 执行热更新吗？此操作将同步代码并重启 Agent 服务。`
-    });
-    if (ok) {
-      setHotUpdatingHostId(hostId);
-      hotUpdateMutation.mutate(hostId);
-    }
+  const handleHotUpdate = (hostId: number | string) => {
+    setPendingHotUpdateHostId(hostId);
+  };
+
+  const handleHotUpdateConfirm = (
+    hostId: number | string,
+    opts: { abortRunningJobs: boolean },
+  ) => {
+    setHotUpdatingHostId(hostId);
+    hotUpdateMutation.mutate({ hostId, abortRunningJobs: opts.abortRunningJobs });
   };
 
   const handleBatchDeploy = async () => {
@@ -269,6 +306,15 @@ export default function HostsPage() {
         onClose={() => setIsModalOpen(false)}
         onSubmit={(data) => createMutation.mutate(data)}
         isSubmitting={createMutation.isPending}
+      />
+
+      <HostHotUpdateConfirmDialog
+        hostId={pendingHotUpdateHostId}
+        onClose={() => {
+          if (!hotUpdateMutation.isPending) setPendingHotUpdateHostId(null);
+        }}
+        onConfirm={handleHotUpdateConfirm}
+        isHotUpdatePending={hotUpdateMutation.isPending}
       />
     </div>
   );

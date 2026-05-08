@@ -461,6 +461,72 @@ async def test_log_signals_increments_log_signal_count():
 
 
 @pytest.mark.asyncio
+async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatch):
+    """ADR-0021 C5c — 每条新入库 signal → broadcast_watcher_signal 一次,
+    并附带正确的 plan_run_id / job_id / device_serial / category。
+    冲突丢弃的不应触发推送。"""
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    plan_run_id = seed["plan_run_id"]
+    captured: list[dict] = []
+
+    async def fake_broadcast(run_id, *, job_id, device_serial, category, inserted_count=1):
+        captured.append({
+            "run_id": run_id,
+            "job_id": job_id,
+            "device_serial": device_serial,
+            "category": category,
+            "inserted_count": inserted_count,
+        })
+
+    # Patch through the broadcast helper symbol.  The endpoint imports it
+    # lazily inside the handler so we patch the source module.
+    from backend.realtime import socketio_server
+    monkeypatch.setattr(
+        socketio_server, "broadcast_watcher_signal", fake_broadcast,
+    )
+
+    signals = [
+        _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=10, category="AEE"),
+        _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=11, category="ANR"),
+    ]
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            r1 = await ingest_log_signals(
+                payload=LogSignalBatchIn(signals=signals),
+                db=async_db,
+                _=None,
+            )
+        assert r1.data == {"inserted": 2, "total": 2}
+        assert len(captured) == 2
+        # All pushes target the right plan_run room and carry the original device_serial
+        for c in captured:
+            assert c["run_id"] == plan_run_id
+            assert c["job_id"] == seed["job_id"]
+            assert c["device_serial"] == seed["device_serial"]
+        assert {c["category"] for c in captured} == {"AEE", "ANR"}
+
+        # ── Re-send the same seq_no=10 → ON CONFLICT DO NOTHING; the broadcast
+        # MUST NOT fire again for the duplicate.
+        captured.clear()
+        dup = _make_signal(
+            seed["job_id"], seed["device_serial"], seed["host_id"],
+            seq_no=10, category="AEE",
+        )
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            r2 = await ingest_log_signals(
+                payload=LogSignalBatchIn(signals=[dup]),
+                db=async_db,
+                _=None,
+            )
+        assert r2.data == {"inserted": 0, "total": 1}
+        assert captured == [], "broadcast must not fire for ON CONFLICT no-ops"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
 async def test_log_signals_contract_violation_returns_400():
     """非法 category → 契约校验直接 400，整批不入库。"""
     from fastapi import HTTPException

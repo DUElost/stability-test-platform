@@ -204,10 +204,36 @@ lifecycle:
 
 ### 后端改动
 
-- `backend/models/job.py`: JobInstance 加 8 列
-- `backend/api/routes/agent_api.py`: 新增 `POST /jobs/{id}/patrol-heartbeat`
-- `backend/api/routes/plan_runs.py`: 新增 `POST /plan-runs/{run_id}/jobs/{job_id}/manual-retry|manual-exit`
-- alembic migration `d7e8f9a0b1c2_add_patrol_heartbeat_columns.py`
+- `backend/models/job.py`: JobInstance 加 8 列 + `idx_step_trace_job_stage` / `idx_step_trace_job_status_ts` 复合索引(C5a₂)
+- `backend/api/routes/agent_api.py`: 新增 `POST /jobs/{id}/patrol-heartbeat`(本 ADR)+ `record_log_signal_ingested` 埋点(C5a₂)
+- `backend/api/routes/plan_runs.py`: 新增 `POST /plan-runs/{run_id}/jobs/{job_id}/manual-retry|manual-exit`(本 ADR)+ 5 个聚合端点(C5a₂,见下表)
+- `backend/services/plan_run_aggregation.py`: 终态聚合时 `record_plan_run_terminal()`(C5a₂)
+- `backend/services/plan_precheck.py`: 全程 `record_dispatch_gate(outcome, duration)`(C5a₂)
+- `backend/core/metrics.py`: 新增 6 类 PlanRun/patrol/log_signal/dispatch_gate Prometheus 指标族(C5a₂)
+- alembic migration `d7e8f9a0b1c2_add_patrol_heartbeat_columns.py`(本 ADR)+ `e8f9a0b1c2d3_add_step_trace_aggregation_indexes.py`(C5a₂)
+
+#### C5a₂ 聚合端点(供 PlanRunDetailPage 调用)
+
+| 端点 | 用途 | 数据来源 | 性能依赖 |
+|---|---|---|---|
+| `GET /plan-runs/{id}/chain` | 沿 `parent_plan_run_id` 回溯 + 候选 next Plan(含 block_reason) | `plan_run` + `plan` | `idx_plan_run_root` |
+| `GET /plan-runs/{id}/timeline` | 三阶段(init/patrol/teardown)聚合,含 patrol_cycle_index / active_devices | `step_trace` GROUP BY (job_id, stage) + `JobInstance.patrol_*_cycle_count` | `idx_step_trace_job_stage` + `idx_job_instance_patrol_heartbeat` |
+| `GET /plan-runs/{id}/events?stage=&severity=&limit=&offset=` | 多源事件流(trigger / step 失败 / log_signal / audit) | 4 表 UNION,内存合并排序 | `idx_step_trace_job_status_ts` + `idx_job_log_signal_detected` + `ix_audit_resource` |
+| `GET /plan-runs/{id}/devices?status=&host_id=` | per-device matrix + by_status/by_host facet,含 backoff/risk 派生 | `JobInstance` + `Device` | `idx_job_instance_status` |
+| `GET /plan-runs/{id}/watcher-summary?window_minutes=` | log_signal 按 category 聚合 + trend(对比上一窗口)+ exceeded 标志 | `JobLogSignal` GROUP BY category | `idx_job_log_signal_category` + `idx_job_log_signal_detected` |
+
+#### C5a₂ Prometheus 指标族
+
+| 指标 | 类型 | 标签 | 触发点 |
+|---|---|---|---|
+| `stability_plan_run_terminal_total` | Counter | `status` | `apply_plan_run_aggregation` 终态时 |
+| `stability_plan_run_pass_rate` | Histogram | `status` | 同上(buckets: 0/0.5/0.8/0.9/0.95/0.98/0.99/1.0) |
+| `stability_dispatch_gate_runs_total` | Counter | `outcome` | `_drive_dispatch_gate` finally(passed/synced_passed/failed/skipped) |
+| `stability_dispatch_gate_duration_seconds` | Histogram | `outcome` | 同上 |
+| `stability_patrol_heartbeat_total` | Counter | `has_failures` | `POST /agent/jobs/{id}/patrol-heartbeat` |
+| `stability_patrol_failure_streak_observed` | Histogram | — | 同上(观察到的 streak 分布) |
+| `stability_patrol_manual_action_total` | Counter | `action` | manual-retry / manual-exit 端点 |
+| `stability_log_signal_total` | Counter | `category` | `POST /agent/log-signals` 每条入库的 signal |
 
 ### 前端改动 (本 ADR 不做,后续 C5b/C5c 跟进)
 
@@ -223,10 +249,11 @@ lifecycle:
 4. `backend/tests/agent/test_pipeline_engine_patrol.py` — patrol 成功不写 trace / 失败写 trace / 退避计算 / manual-exit 跳出
 5. `backend/tests/agent/test_manual_exit_release.py` — manual-exit 后下个 Plan 能 acquire 同 device
 6. `backend/tests/services/test_failure_threshold_includes_backoff.py` — 退避中 job 计入 failure_threshold
+7. `backend/tests/api/test_plan_run_aggregation_endpoints.py`(C5a₂)— 5 端点 15 cases:chain 链/timeline stage 聚合/events 多源融合/devices facet+派生/watcher-summary trend
 
 ## 不在本 ADR 范围
 
 - **stall 检测**(D10): 留给后续 ADR
-- **patrol 成功率聚合到 PlanRun.result_summary**: 留给 C5a₂ 聚合端点
+- **patrol 成功率聚合到 PlanRun.result_summary**: 已落地于 C5a₂ `/plan-runs/{id}/timeline` 聚合返回(无需写回 result_summary)
 - **设备级"健康度评分"**: 长期治理,不在本期
 - **退避策略的全局/Plan/Agent 三级覆盖优先级**: 本期只支持全局默认 + Plan 覆盖

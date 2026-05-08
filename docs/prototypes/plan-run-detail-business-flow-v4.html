@@ -1,0 +1,1409 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlanRunDetail 业务流贯穿版静态原型 V4</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --surface: #ffffff;
+      --surface-soft: #f8fafc;
+      --line: #d7e0ea;
+      --line-strong: #b8c6d6;
+      --text: #162033;
+      --muted: #65758a;
+      --soft: #91a0b4;
+      --green: #16a34a;
+      --green-soft: #eaf8ef;
+      --blue: #2563eb;
+      --blue-soft: #eaf2ff;
+      --red: #dc2626;
+      --red-soft: #fff1f2;
+      --orange: #f97316;
+      --orange-soft: #fff7ed;
+      --purple: #7c3aed;
+      --purple-soft: #f5f3ff;
+      --cyan: #0e7490;
+      --cyan-soft: #e6f7fb;
+      --gray-soft: #f1f5f9;
+      --shadow: 0 14px 38px rgba(15, 23, 42, .08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 1320px;
+      background: linear-gradient(180deg, #fbfdff 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+    }
+
+    .page {
+      width: 1480px;
+      margin: 0 auto;
+      padding: 16px 22px 28px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .panel,
+    .topbar,
+    .chain-strip,
+    .lane-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+    }
+
+    /* ========== Topbar ========== */
+    .topbar {
+      padding: 12px 18px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 18px;
+    }
+    .topbar-left { display: grid; gap: 6px; }
+    .crumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .crumb strong {
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .crumb .run-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #fed7aa;
+      background: var(--orange-soft);
+      color: #c2410c;
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-size: 12px;
+      font-weight: 760;
+      margin-left: 4px;
+    }
+    .meta-line {
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+    .meta-line strong { color: var(--text); font-weight: 700; }
+    .meta-line .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+
+    .actions { display: flex; gap: 8px; }
+    .btn {
+      height: 34px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--text);
+      border-radius: 7px;
+      padding: 0 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease;
+    }
+    .btn:hover { border-color: var(--cyan); background: var(--cyan-soft); }
+    .btn.primary { border-color: var(--cyan); background: var(--cyan); color: #fff; }
+    .btn.danger { border-color: #fecaca; color: var(--red); }
+    .btn.danger:hover { background: var(--red-soft); }
+
+    .dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+
+    /* ========== Plan Chain Strip ========== */
+    .chain-strip {
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .chain-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 740;
+      white-space: nowrap;
+    }
+    .chain-flow {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      flex: 1;
+    }
+    .chain-node {
+      display: grid;
+      gap: 3px;
+      padding: 8px 14px;
+      border: 1px solid var(--line);
+      background: var(--surface-soft);
+      border-radius: 8px;
+      min-width: 220px;
+      position: relative;
+    }
+    .chain-node.done { border-color: #bbf7d0; background: var(--green-soft); }
+    .chain-node.current {
+      border-color: var(--cyan);
+      background: var(--cyan-soft);
+      box-shadow: 0 0 0 3px rgba(14, 116, 144, .12);
+    }
+    .chain-node.pending { border-style: dashed; color: var(--muted); }
+    .chain-arrow {
+      align-self: center;
+      color: var(--soft);
+      font-size: 18px;
+      padding: 0 8px;
+    }
+    .chain-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .chain-meta {
+      color: var(--muted);
+      font-size: 11px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .chain-status-icon { font-size: 12px; }
+    .chain-status-icon.done { color: var(--green); }
+    .chain-status-icon.current { color: var(--cyan); }
+    .chain-status-icon.pending { color: var(--soft); }
+
+    /* ========== Business Flow Lane ========== */
+    .lane-card { padding: 0; overflow: hidden; }
+    .lane-head {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .lane-title { font-size: 14px; font-weight: 800; }
+    .lane-subtitle { color: var(--muted); font-size: 12px; }
+
+    .lane-body {
+      padding: 14px 16px 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .stage-row {
+      display: grid;
+      grid-template-columns: 280px 1fr 280px 200px;
+      gap: 14px;
+      align-items: stretch;
+    }
+
+    .stage-col {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 12px 13px;
+      display: grid;
+      gap: 8px;
+      position: relative;
+      cursor: pointer;
+      transition: border-color .16s ease;
+    }
+    .stage-col:hover { border-color: var(--cyan); }
+    .stage-col.active {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(14, 116, 144, .14);
+    }
+    .stage-col.failed { border-color: #fecaca; background: #fff8f8; }
+    .stage-col.running { border-color: #fed7aa; background: #fffaf3; }
+    .stage-col.done { border-color: #bbf7d0; background: #f6fdf8; }
+    .stage-col.pending { border-color: #cbd5e1; background: #f8fafc; color: var(--muted); }
+
+    .stage-col::after {
+      content: "›";
+      position: absolute;
+      right: -16px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--soft);
+      font-weight: 800;
+      z-index: 2;
+    }
+    .stage-col:last-child::after { display: none; }
+
+    .stage-head-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .stage-name {
+      font-size: 14px;
+      font-weight: 820;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .stage-name-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .stage-name-icon.init { background: var(--blue); }
+    .stage-name-icon.patrol { background: var(--orange); }
+    .stage-name-icon.teardown { background: var(--purple); }
+    .stage-name-icon.archive { background: var(--green); }
+
+    .stage-numbers {
+      display: flex;
+      gap: 10px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .stage-numbers strong { color: var(--text); font-weight: 800; font-size: 13px; }
+
+    .stage-progress {
+      height: 8px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+    }
+    .stage-progress span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--cyan);
+    }
+    .stage-col.failed .stage-progress span { background: var(--red); }
+    .stage-col.running .stage-progress span { background: var(--orange); }
+    .stage-col.done .stage-progress span { background: var(--green); }
+    .stage-col.pending .stage-progress span { background: #cbd5e1; }
+
+    .stage-counts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 2px;
+    }
+    .count-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 2px 7px;
+      font-size: 11px;
+      font-weight: 740;
+      color: var(--muted);
+      background: #fff;
+    }
+    .count-pill .swatch { width: 8px; height: 8px; border-radius: 999px; }
+    .count-pill.green { color: #15803d; border-color: #bbf7d0; }
+    .count-pill.green .swatch { background: var(--green); }
+    .count-pill.red { color: var(--red); border-color: #fecaca; }
+    .count-pill.red .swatch { background: var(--red); }
+    .count-pill.orange { color: #c2410c; border-color: #fed7aa; }
+    .count-pill.orange .swatch { background: var(--orange); }
+    .count-pill.blue { color: var(--blue); border-color: #bfdbfe; }
+    .count-pill.blue .swatch { background: var(--blue); }
+    .count-pill.purple { color: var(--purple); border-color: #ddd6fe; }
+    .count-pill.purple .swatch { background: var(--purple); }
+    .count-pill.gray .swatch { background: #cbd5e1; }
+
+    .patrol-loop {
+      border-top: 1px dashed #fed7aa;
+      padding-top: 7px;
+      margin-top: 4px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: #c2410c;
+      font-weight: 760;
+    }
+    .patrol-loop .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+
+    /* ========== Distribution Strip ========== */
+    .dist-wrap {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface-soft);
+      padding: 10px 14px 12px;
+    }
+    .dist-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .dist-head strong { color: var(--text); font-weight: 800; }
+    .dist-bar {
+      display: flex;
+      gap: 2px;
+      height: 18px;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .dist-bar .seg {
+      height: 100%;
+      cursor: pointer;
+      transition: filter .16s ease;
+    }
+    .dist-bar .seg:hover { filter: brightness(1.1); }
+    .dist-bar .seg.completed { background: #a7e8bd; }
+    .dist-bar .seg.running { background: var(--blue); }
+    .dist-bar .seg.pending { background: #cbd5e1; }
+    .dist-bar .seg.failed { background: var(--red); }
+    .dist-bar .seg.risk { background: var(--orange); }
+    .dist-bar .seg.unknown { background: var(--purple); }
+    .dist-bar .seg.offline { background: #475569; }
+    .dist-bar .seg.skipped {
+      background: repeating-linear-gradient(135deg, #cbd5e1 0 3px, #fff 3px 6px);
+    }
+
+    .dist-legend {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .dist-legend .item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .dist-legend .item .sw {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+    }
+
+    /* ========== Main Grid (3 cols) ========== */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr) 340px;
+      gap: 12px;
+      align-items: start;
+    }
+
+    .panel-head {
+      padding: 11px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .panel-title { font-size: 14px; font-weight: 800; }
+    .panel-subtitle { color: var(--muted); font-size: 12px; }
+    .panel-body { padding: 13px; display: grid; gap: 11px; }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--gray-soft);
+      color: #475569;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 740;
+      white-space: nowrap;
+    }
+    .chip.red { background: var(--red-soft); color: var(--red); border-color: #fecaca; }
+    .chip.orange { background: var(--orange-soft); color: #c2410c; border-color: #fed7aa; }
+    .chip.purple { background: var(--purple-soft); color: var(--purple); border-color: #ddd6fe; }
+    .chip.green { background: var(--green-soft); color: #15803d; border-color: #bbf7d0; }
+    .chip.blue { background: var(--blue-soft); color: var(--blue); border-color: #bfdbfe; }
+    .chip.cyan { background: var(--cyan-soft); color: var(--cyan); border-color: #a5f3fc; }
+    .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+    .muted { color: var(--muted); }
+
+    /* ===== Left: Step Tree ===== */
+    .step-banner {
+      border: 1px solid #fed7aa;
+      background: #fffaf3;
+      border-radius: 8px;
+      padding: 10px 11px;
+      display: grid;
+      gap: 4px;
+    }
+    .step-banner .title { font-size: 13px; font-weight: 800; color: #c2410c; }
+    .step-banner .meta { font-size: 11px; color: var(--muted); display: flex; gap: 10px; }
+
+    .step-tree { display: grid; gap: 6px; }
+    .step-row {
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 9px 11px;
+      transition: border-color .14s ease;
+      cursor: pointer;
+    }
+    .step-row:hover { border-color: var(--cyan); }
+    .step-row.failed { border-color: #fecaca; background: #fff8f8; }
+    .step-row.running { border-color: #fed7aa; background: #fffaf3; }
+    .step-row.done { border-color: #d1ecdb; background: #f7fdf9; }
+    .step-row.pending { color: var(--muted); }
+
+    .step-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 800;
+      color: #fff;
+    }
+    .step-icon.done { background: var(--green); }
+    .step-icon.running { background: var(--orange); }
+    .step-icon.failed { background: var(--red); }
+    .step-icon.pending { background: #cbd5e1; }
+
+    .step-name {
+      font-size: 12px;
+      font-weight: 800;
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .step-version {
+      font-size: 10px;
+      color: var(--soft);
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .step-counts {
+      display: flex;
+      gap: 4px;
+    }
+
+    /* ===== Center: Device Matrix ===== */
+    .matrix-filter {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      gap: 8px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+    .input-control,
+    .select-like {
+      height: 32px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #fff;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: default;
+    }
+    .input-control { width: 100%; color: var(--text); outline: none; }
+    .select-like { cursor: pointer; min-width: 110px; }
+
+    .summary-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .host-row {
+      display: grid;
+      grid-template-columns: 92px 1fr 60px 70px;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #edf2f7;
+      padding: 8px 14px;
+      transition: background .14s ease;
+    }
+    .host-row:last-child { border-bottom: none; }
+    .host-row:hover { background: var(--surface-soft); }
+    .host-row.alert { background: #fff8f8; }
+
+    .host-label { display: grid; gap: 1px; }
+    .host-label .name {
+      font-size: 12px;
+      font-weight: 800;
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .host-label .meta { font-size: 10px; color: var(--muted); }
+
+    .device-pile {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+    }
+    .device-cell {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: transform .14s ease;
+      border: 1px solid transparent;
+    }
+    .device-cell:hover {
+      transform: scale(1.3);
+      box-shadow: 0 0 0 2px rgba(14, 116, 144, .18);
+    }
+    .device-cell.completed { background: #a7e8bd; }
+    .device-cell.running { background: var(--blue); }
+    .device-cell.pending { background: #cbd5e1; }
+    .device-cell.failed { background: var(--red); }
+    .device-cell.risk { background: var(--orange); }
+    .device-cell.unknown { background: var(--purple); }
+    .device-cell.offline { background: #475569; }
+    .device-cell.skipped {
+      background: repeating-linear-gradient(135deg, #cbd5e1 0 2px, #fff 2px 4px);
+      border-color: #cbd5e1;
+    }
+    .device-cell.dim { opacity: .25; }
+
+    .host-progress {
+      font-size: 11px;
+      color: var(--muted);
+      text-align: right;
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .host-status { text-align: right; }
+
+    /* ===== Right: Intervention + Event Stream ===== */
+    .queue-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 6px 1fr;
+      gap: 9px;
+      cursor: pointer;
+      transition: border-color .14s ease;
+    }
+    .queue-card:hover { border-color: var(--cyan); }
+    .severity-line {
+      width: 6px;
+      border-radius: 999px;
+      background: var(--orange);
+    }
+    .severity-line.red { background: var(--red); }
+    .severity-line.purple { background: var(--purple); }
+    .severity-line.gray { background: #475569; }
+
+    .queue-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .queue-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .event-stream { display: grid; gap: 8px; }
+    .event-item {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .event-time {
+      color: var(--soft);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+    }
+    .event-text {
+      border-left: 2px solid var(--line);
+      padding-left: 8px;
+    }
+    .event-text strong { color: var(--text); font-weight: 800; }
+    .event-item.failed .event-text { border-left-color: var(--red); }
+    .event-item.risk .event-text { border-left-color: var(--orange); }
+    .event-item.recover .event-text { border-left-color: var(--green); }
+
+    /* ===== Bottom: Auxiliary Cards ===== */
+    .aux-grid {
+      display: grid;
+      grid-template-columns: 1fr 360px 360px;
+      gap: 12px;
+    }
+
+    .sync-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .sync-table th, .sync-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #edf2f7;
+      text-align: left;
+    }
+    .sync-table th {
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-weight: 740;
+      font-size: 11px;
+    }
+    .sync-progress {
+      width: 100px;
+      height: 6px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    .sync-progress span {
+      display: block;
+      height: 100%;
+      background: var(--cyan);
+    }
+    .sync-progress.warn span { background: var(--orange); }
+    .sync-progress.done span { background: var(--green); }
+
+    .artifact-list { display: grid; gap: 9px; }
+    .artifact-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+    }
+    .artifact-row .name { font-size: 12px; font-weight: 800; }
+    .artifact-row .meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .artifact-row .count {
+      font-size: 18px;
+      font-weight: 830;
+      color: var(--cyan);
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    .next-plan-info {
+      border: 1px dashed var(--line-strong);
+      border-radius: 8px;
+      padding: 11px 12px;
+      background: var(--surface-soft);
+      display: grid;
+      gap: 6px;
+    }
+    .next-plan-info .label { font-size: 11px; color: var(--muted); font-weight: 740; }
+    .next-plan-info .name { font-size: 13px; font-weight: 800; font-family: "SFMono-Regular", Consolas, monospace; }
+    .next-plan-info .desc { font-size: 11px; color: var(--muted); line-height: 1.5; }
+    .next-plan-info .trigger {
+      margin-top: 4px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .next-plan-info .trigger strong { color: var(--text); font-weight: 760; }
+
+    /* ===== Tooltip ===== */
+    .tooltip {
+      position: fixed;
+      pointer-events: none;
+      z-index: 30;
+      min-width: 240px;
+      max-width: 320px;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 18px 42px rgba(15, 23, 42, .28);
+      font-size: 12px;
+      line-height: 1.55;
+      display: none;
+    }
+    .tooltip strong { color: #fff; }
+  </style>
+</head>
+<body>
+  <main class="page">
+
+    <!-- ========== Topbar ========== -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="crumb">
+          <span>执行详情</span>
+          <span>/</span>
+          <strong>PlanRun #1842</strong>
+          <span class="run-status"><span class="dot"></span>运行中 · 需要介入</span>
+        </div>
+        <div class="meta-line">
+          <span>Plan：<strong>foreground_watch</strong></span>
+          <span>触发：<strong>SCHEDULE</strong> · cron <span class="mono">0 */2 * * *</span></span>
+          <span>触发者：<strong>dai.lv</strong></span>
+          <span>开始时间：<span class="mono">2026-05-08 13:46:12</span></span>
+          <span>已运行：<strong>42m 18s</strong></span>
+          <span>失败阈值：<strong>5%</strong>（当前 <strong>1.7%</strong>）</span>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn">刷新</button>
+        <button class="btn">暂停</button>
+        <button class="btn danger">中止 PlanRun</button>
+        <button class="btn primary">导出报告</button>
+      </div>
+    </header>
+
+    <!-- ========== Plan Chain ========== -->
+    <section class="chain-strip" aria-label="Plan 链上下文">
+      <div class="chain-label">Plan 链</div>
+      <div class="chain-flow">
+        <div class="chain-node done">
+          <div class="chain-title">
+            <span class="chain-status-icon done">✓</span>
+            smoke_pre
+            <span class="chip green">已完成</span>
+          </div>
+          <div class="chain-meta">PlanRun #1841 · chain_index 0 · 5m 12s · 120/120</div>
+        </div>
+        <div class="chain-arrow">›</div>
+        <div class="chain-node current">
+          <div class="chain-title">
+            <span class="chain-status-icon current">●</span>
+            foreground_watch
+            <span class="chip cyan">当前 · chain_index 1</span>
+          </div>
+          <div class="chain-meta">PlanRun #1842 · 运行中 42m 18s · root #1841</div>
+        </div>
+        <div class="chain-arrow">›</div>
+        <div class="chain-node pending">
+          <div class="chain-title">
+            <span class="chain-status-icon pending">○</span>
+            resource_post
+            <span class="chip">待触发</span>
+          </div>
+          <div class="chain-meta">next_plan_id = 47 · 终态满足后自动入队</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== Business Flow Lane ========== -->
+    <section class="lane-card" aria-label="业务流泳道">
+      <div class="lane-head">
+        <div>
+          <div class="lane-title">业务流</div>
+          <div class="lane-subtitle">init → patrol（循环）→ teardown → 归档；点击阶段卡进入下方钻取</div>
+        </div>
+        <div class="actions">
+          <span class="chip cyan">总设备 120 台 / 10 hosts</span>
+          <span class="chip orange">需介入 11</span>
+          <span class="chip green">已完成 88</span>
+        </div>
+      </div>
+
+      <div class="lane-body">
+
+        <!-- 4 stage columns -->
+        <div class="stage-row">
+          <article class="stage-col failed" data-stage="init">
+            <div class="stage-head-row">
+              <div class="stage-name">
+                <span class="stage-name-icon init">①</span>Init
+              </div>
+              <span class="chip red">1 失败</span>
+            </div>
+            <div class="stage-numbers">
+              <span><strong>3</strong> 步骤</span>
+              <span><strong>119</strong> 通过</span>
+              <span><strong>1</strong> 失败</span>
+            </div>
+            <div class="stage-progress"><span style="width:99%"></span></div>
+            <div class="stage-counts">
+              <span class="count-pill green"><span class="swatch"></span>119 OK</span>
+              <span class="count-pill red"><span class="swatch"></span>1 host_sync</span>
+            </div>
+            <div class="muted" style="font-size:11px">stp_check · ensure_root · install_apk</div>
+          </article>
+
+          <article class="stage-col running active" data-stage="patrol">
+            <div class="stage-head-row">
+              <div class="stage-name">
+                <span class="stage-name-icon patrol">②</span>Patrol
+              </div>
+              <span class="chip orange">运行中</span>
+            </div>
+            <div class="stage-numbers">
+              <span><strong>5</strong> 步骤</span>
+              <span><strong>78</strong> 在循环</span>
+              <span><strong>6</strong> 风险</span>
+              <span><strong>2</strong> 失踪</span>
+            </div>
+            <div class="stage-progress"><span style="width:66%"></span></div>
+            <div class="stage-counts">
+              <span class="count-pill blue"><span class="swatch"></span>78 RUNNING</span>
+              <span class="count-pill orange"><span class="swatch"></span>6 RISK</span>
+              <span class="count-pill purple"><span class="swatch"></span>2 UNKNOWN</span>
+              <span class="count-pill gray"><span class="swatch"></span>3 OFFLINE</span>
+            </div>
+            <div class="patrol-loop">
+              <span>第 <span class="mono">12</span> 轮 / 预计 <span class="mono">~30</span> 轮</span>
+              <span>周期 <span class="mono">30s</span></span>
+            </div>
+          </article>
+
+          <article class="stage-col pending" data-stage="teardown">
+            <div class="stage-head-row">
+              <div class="stage-name">
+                <span class="stage-name-icon teardown">③</span>Teardown
+              </div>
+              <span class="chip">未启动</span>
+            </div>
+            <div class="stage-numbers">
+              <span><strong>2</strong> 步骤</span>
+              <span><strong>0</strong> 已执行</span>
+            </div>
+            <div class="stage-progress"><span style="width:0%"></span></div>
+            <div class="muted" style="font-size:11px">monkey_teardown · pull_logs</div>
+            <div class="muted" style="font-size:11px">触发条件：patrol 终态 / abort</div>
+          </article>
+
+          <article class="stage-col done" data-stage="archive">
+            <div class="stage-head-row">
+              <div class="stage-name">
+                <span class="stage-name-icon archive">✓</span>归档
+              </div>
+              <span class="chip green">88 完成</span>
+            </div>
+            <div class="stage-numbers">
+              <span><strong>88</strong> COMPLETED</span>
+            </div>
+            <div class="stage-progress"><span style="width:100%"></span></div>
+            <div class="stage-counts">
+              <span class="count-pill green"><span class="swatch"></span>88 折叠</span>
+            </div>
+            <div class="muted" style="font-size:11px">报告生成中 · 平均耗时 38m 06s</div>
+          </article>
+        </div>
+
+        <!-- Distribution band -->
+        <div class="dist-wrap">
+          <div class="dist-head">
+            <div><strong>120 台设备</strong> 在业务流上的当前分布</div>
+            <div>悬停色段查看明细，点击进入下方钻取</div>
+          </div>
+          <div class="dist-bar">
+            <div class="seg failed" style="width:0.83%" title="init.host_sync FAILED · 1 台"></div>
+            <div class="seg completed" style="width:6.5%" title="init 全部通过 · 进入 patrol"></div>
+            <div class="seg running" style="width:38%" title="patrol RUNNING · 78 台"></div>
+            <div class="seg risk" style="width:5%" title="patrol RISK · 6 台"></div>
+            <div class="seg unknown" style="width:1.7%" title="patrol UNKNOWN · 2 台"></div>
+            <div class="seg offline" style="width:2.5%" title="OFFLINE · 3 台"></div>
+            <div class="seg failed" style="width:0.83%" title="teardown.pull_logs FAILED · 1 台"></div>
+            <div class="seg pending" style="width:5%" title="未下发 · 6 台"></div>
+            <div class="seg skipped" style="width:2.5%" title="模板禁用 · 3 台"></div>
+            <div class="seg completed" style="width:37%" title="归档 · 88 台 (折叠)"></div>
+          </div>
+          <div class="dist-legend">
+            <span class="item"><span class="sw" style="background:var(--red)"></span>失败 2</span>
+            <span class="item"><span class="sw" style="background:var(--blue)"></span>运行 78</span>
+            <span class="item"><span class="sw" style="background:var(--orange)"></span>风险 6</span>
+            <span class="item"><span class="sw" style="background:var(--purple)"></span>失踪 2</span>
+            <span class="item"><span class="sw" style="background:#475569"></span>离线 3</span>
+            <span class="item"><span class="sw" style="background:#cbd5e1"></span>待下发 6</span>
+            <span class="item"><span class="sw" style="background:repeating-linear-gradient(135deg, #cbd5e1 0 3px, #fff 3px 6px)"></span>跳过 3</span>
+            <span class="item"><span class="sw" style="background:#a7e8bd"></span>归档 88</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== Main Grid: 3 cols ========== -->
+    <section class="main-grid">
+
+      <!-- LEFT: current stage step tree -->
+      <aside class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">当前阶段步骤</div>
+            <div class="panel-subtitle">点击「业务流」泳道切换阶段</div>
+          </div>
+          <span class="chip orange">Patrol</span>
+        </div>
+        <div class="panel-body">
+          <div class="step-banner">
+            <div class="title">Patrol · 第 12 轮</div>
+            <div class="meta">
+              <span>周期 <span class="mono">30s</span></span>
+              <span>累计 <span class="mono">12×</span></span>
+              <span>下轮 <span class="mono">14:30:08</span></span>
+            </div>
+          </div>
+
+          <div class="step-tree" id="stepTree">
+            <div class="step-row done">
+              <span class="step-icon done">✓</span>
+              <div>
+                <div class="step-name">launch_app</div>
+                <div class="step-version">v1.2.0 · timeout 30s</div>
+              </div>
+              <div class="step-counts">
+                <span class="count-pill green"><span class="swatch"></span>78</span>
+              </div>
+            </div>
+
+            <div class="step-row running">
+              <span class="step-icon running">●</span>
+              <div>
+                <div class="step-name">monkey_loop</div>
+                <div class="step-version">v2.0.0 · timeout 600s · retry 1</div>
+              </div>
+              <div class="step-counts">
+                <span class="count-pill blue"><span class="swatch"></span>78</span>
+                <span class="count-pill orange"><span class="swatch"></span>6</span>
+              </div>
+            </div>
+
+            <div class="step-row running">
+              <span class="step-icon running">●</span>
+              <div>
+                <div class="step-name">watcher_collect</div>
+                <div class="step-version">v1.5.2 · AEE/ANR/tombstone</div>
+              </div>
+              <div class="step-counts">
+                <span class="count-pill orange"><span class="swatch"></span>12</span>
+              </div>
+            </div>
+
+            <div class="step-row failed">
+              <span class="step-icon failed">✗</span>
+              <div>
+                <div class="step-name">heartbeat_guard</div>
+                <div class="step-version">v1.0.0 · interval 30s</div>
+              </div>
+              <div class="step-counts">
+                <span class="count-pill purple"><span class="swatch"></span>2</span>
+              </div>
+            </div>
+
+            <div class="step-row pending">
+              <span class="step-icon pending">○</span>
+              <div>
+                <div class="step-name">pull_partial_logs</div>
+                <div class="step-version">v1.1.0 · 等待本轮终态</div>
+              </div>
+              <div class="step-counts">
+                <span class="count-pill gray"><span class="swatch"></span>等待</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="step-banner" style="border-color: #cbd5e1; background: var(--surface-soft); color: var(--muted)">
+            <div class="title" style="color: var(--text)">已完成阶段 — Init</div>
+            <div class="meta">
+              <span><span class="mono">stp_check</span> ✓ 120</span>
+              <span><span class="mono">ensure_root</span> ✓ 120</span>
+              <span><span class="mono">install_apk</span> ✓ 119 / ✗ 1</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- CENTER: device matrix (host-grouped) -->
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">设备矩阵（按 Host 分组）</div>
+            <div class="panel-subtitle">每行 1 个 Host · 12 台设备 · 色块=Job 当前位置</div>
+          </div>
+          <span class="muted" style="font-size: 12px">悬停查看 Job 详情</span>
+        </div>
+        <div class="matrix-filter">
+          <input class="input-control" placeholder="搜索 Serial / Host / Job ID / 当前步骤" />
+          <button class="select-like">状态：全部</button>
+          <button class="select-like">阶段：全部</button>
+          <button class="select-like">Host：全部</button>
+        </div>
+        <div class="summary-row">
+          <span class="count-pill green"><span class="swatch"></span>完成 88</span>
+          <span class="count-pill blue"><span class="swatch"></span>运行 78</span>
+          <span class="count-pill orange"><span class="swatch"></span>风险 6</span>
+          <span class="count-pill red"><span class="swatch"></span>失败 2</span>
+          <span class="count-pill purple"><span class="swatch"></span>失踪 2</span>
+          <span class="count-pill gray"><span class="swatch"></span>离线 3 · 待下发 6 · 跳过 3</span>
+        </div>
+        <div id="hostMatrix"></div>
+      </section>
+
+      <!-- RIGHT: intervention queue + event stream -->
+      <aside class="panel">
+        <div class="panel-head">
+          <div class="panel-title">需要介入</div>
+          <span class="chip red">11 项</span>
+        </div>
+        <div class="panel-body" id="interventionList"></div>
+
+        <div class="panel-head">
+          <div class="panel-title">实时事件流</div>
+          <span class="chip orange">最近 20 分钟</span>
+        </div>
+        <div class="panel-body event-stream">
+          <div class="event-item failed">
+            <span class="event-time">14:28:40</span>
+            <span class="event-text"><strong>DVC-018</strong> init.host_sync 失败 · 重试 2/2</span>
+          </div>
+          <div class="event-item risk">
+            <span class="event-time">14:27:12</span>
+            <span class="event-text"><strong>DVC-077</strong> patrol.heartbeat_guard 心跳超时（UNKNOWN）</span>
+          </div>
+          <div class="event-item risk">
+            <span class="event-time">14:25:51</span>
+            <span class="event-text"><strong>host-a03</strong> 脚本同步重试，sha256 不匹配</span>
+          </div>
+          <div class="event-item failed">
+            <span class="event-time">14:22:08</span>
+            <span class="event-text"><strong>DVC-091</strong> teardown.pull_logs 拉取超时</span>
+          </div>
+          <div class="event-item recover">
+            <span class="event-time">14:18:33</span>
+            <span class="event-text"><strong>DVC-044</strong> 从 RISK 恢复至 RUNNING</span>
+          </div>
+          <div class="event-item">
+            <span class="event-time">14:14:09</span>
+            <span class="event-text"><strong>PlanRun</strong> 进入 Patrol 第 1 轮 · 117 台进入循环</span>
+          </div>
+          <div class="event-item">
+            <span class="event-time">13:46:12</span>
+            <span class="event-text"><strong>PlanRun</strong> 由 chain（root #1841）触发 · 已扇出 120 Job</span>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <!-- ========== Auxiliary Section ========== -->
+    <section class="aux-grid">
+      <article class="panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">脚本同步状态（Host 级）</div>
+            <div class="panel-subtitle">每台 Host 拉取 NFS 脚本快照，sha256 不匹配会触发重试</div>
+          </div>
+          <span class="chip orange">4/5 节点 OK</span>
+        </div>
+        <table class="sync-table">
+          <thead>
+            <tr><th>Host</th><th>Bundle</th><th>进度</th><th>耗时</th><th>状态</th><th>最后错误</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="mono">host-a01</td><td class="mono">8 scripts</td>
+              <td><div class="sync-progress done"><span style="width:100%"></span></div>100%</td>
+              <td class="mono">12.4s</td><td><span class="chip green">完成</span></td><td>—</td></tr>
+            <tr><td class="mono">host-a02</td><td class="mono">8 scripts</td>
+              <td><div class="sync-progress done"><span style="width:100%"></span></div>100%</td>
+              <td class="mono">11.8s</td><td><span class="chip green">完成</span></td><td>—</td></tr>
+            <tr style="background:#fffaf3"><td class="mono">host-a03</td><td class="mono">8 scripts</td>
+              <td><div class="sync-progress warn"><span style="width:82%"></span></div>82%</td>
+              <td class="mono">26.1s</td><td><span class="chip orange">重试 1/3</span></td>
+              <td class="muted">monkey_launch sha256 mismatch</td></tr>
+            <tr><td class="mono">host-a04</td><td class="mono">8 scripts</td>
+              <td><div class="sync-progress done"><span style="width:100%"></span></div>100%</td>
+              <td class="mono">13.0s</td><td><span class="chip green">完成</span></td><td>—</td></tr>
+            <tr><td class="mono">host-a05</td><td class="mono">8 scripts</td>
+              <td><div class="sync-progress"><span style="width:64%"></span></div>64%</td>
+              <td class="mono">18.6s</td><td><span class="chip blue">同步中</span></td><td>—</td></tr>
+          </tbody>
+        </table>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div class="panel-title">Watcher 产物</div>
+          <span class="muted" style="font-size: 12px">本次 PlanRun 累计</span>
+        </div>
+        <div class="panel-body artifact-list">
+          <div class="artifact-row">
+            <div>
+              <div class="name">AEE</div>
+              <div class="meta">前台异常 · 12 台触发 / 23 文件</div>
+            </div>
+            <div class="count">23</div>
+          </div>
+          <div class="artifact-row">
+            <div>
+              <div class="name">ANR</div>
+              <div class="meta">应用无响应 · 6 台 / 9 文件</div>
+            </div>
+            <div class="count">9</div>
+          </div>
+          <div class="artifact-row">
+            <div>
+              <div class="name">tombstone</div>
+              <div class="meta">native crash · 2 台 / 3 文件</div>
+            </div>
+            <div class="count">3</div>
+          </div>
+          <div class="artifact-row">
+            <div>
+              <div class="name">mobilelog</div>
+              <div class="meta">分卷归档 · 全部设备</div>
+            </div>
+            <div class="count">120</div>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head">
+          <div class="panel-title">链路下一步预测</div>
+          <span class="chip">next_plan_id = 47</span>
+        </div>
+        <div class="panel-body">
+          <div class="next-plan-info">
+            <div class="label">下一个 Plan</div>
+            <div class="name">resource_post</div>
+            <div class="desc">在 foreground_watch 终态命中 SUCCESS / PARTIAL_SUCCESS 后自动创建 PlanRun #1843，root_plan_run_id 沿用 1841。</div>
+            <div class="trigger">触发条件：<strong>失败率 ≤ 5%</strong> · 当前 <strong>1.7%</strong> 满足</div>
+            <div class="trigger">设备复用：<strong>120 → 117</strong>（DVC-018/091 标记为 chain 跳过）</div>
+          </div>
+          <div class="next-plan-info" style="border-style: solid">
+            <div class="label">本次终态预测</div>
+            <div class="name" style="color: var(--orange)">PARTIAL_SUCCESS</div>
+            <div class="desc">2 台失败 + 2 台 UNKNOWN，按当前阈值不会回滚 chain；patrol 还有 ~18 轮，需关注 RISK 设备是否升级为 FAILED。</div>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip"></div>
+
+  <script>
+    const STATUS_LABELS = {
+      completed: '完成', running: '运行中', pending: '待下发',
+      failed: '失败', risk: '风险', unknown: '失踪', offline: '离线', skipped: '跳过'
+    };
+
+    function statusFor(i) {
+      if ([18, 91].includes(i)) return 'failed';
+      if ([11, 28, 44, 52, 60, 73].includes(i)) return 'risk';
+      if ([77, 103].includes(i)) return 'unknown';
+      if ([6, 63, 109].includes(i)) return 'offline';
+      if ([7,8,9,10,21,22,35,36,57,58,79,80].includes(i)) return 'running';
+      if ([12, 13, 14, 15, 86, 87].includes(i)) return 'pending';
+      if ([31, 32, 33].includes(i)) return 'skipped';
+      return 'completed';
+    }
+    function stepFor(status, i) {
+      if (i === 18) return 'init.host_sync';
+      if (i === 6) return 'init.host_sync';
+      if (i === 91) return 'teardown.pull_logs';
+      if (status === 'risk') return 'patrol.watcher_collect';
+      if (status === 'unknown') return 'patrol.heartbeat_guard';
+      if (status === 'offline') return 'patrol.device_offline';
+      if (status === 'running') {
+        const steps = ['patrol.launch_app', 'patrol.monkey_loop', 'patrol.watcher_collect'];
+        return steps[i % steps.length];
+      }
+      if (status === 'pending') return 'dispatch.wait_capacity';
+      if (status === 'skipped') return 'template.disabled';
+      return 'archive.report_ready';
+    }
+    function reasonFor(status, i) {
+      if (status === 'failed') return i === 18 ? 'init host_sync 重试 2/2 失败' : 'teardown pull_logs 超时 600s';
+      if (status === 'risk') return 'AEE/ANR 高频出现';
+      if (status === 'unknown') return '心跳超时 90s, 状态不可信';
+      if (status === 'offline') return '设备离线';
+      if (status === 'skipped') return '模板禁用';
+      if (status === 'running') return 'patrol 循环中, 心跳正常';
+      if (status === 'pending') return '等待 host 容量';
+      return 'patrol 终态完成, 报告已生成';
+    }
+
+    const devices = Array.from({ length: 120 }, (_, idx) => {
+      const i = idx + 1;
+      const status = statusFor(i);
+      const hostIdx = (i - 1) % 10 + 1;
+      const host = `host-a${String(hostIdx).padStart(2, '0')}`;
+      const step = stepFor(status, i);
+      return {
+        jobId: 3000 + i,
+        deviceId: i,
+        serial: `DVC-${String(i).padStart(3, '0')}`,
+        host,
+        status,
+        step,
+        scriptVersion: status === 'failed' ? 'v1.2.0' : 'v2.0.0',
+        reason: reasonFor(status, i),
+        lastSignalAt: `2026-05-08 14:${String(10 + (i % 40)).padStart(2,'0')}:${String(10 + (i % 49)).padStart(2,'0')}`,
+        round: ['running', 'risk', 'unknown'].includes(status) ? 12 : null
+      };
+    });
+
+    /* ========== Render device matrix grouped by host ========== */
+    function renderHostMatrix() {
+      const root = document.getElementById('hostMatrix');
+      const byHost = new Map();
+      devices.forEach(d => {
+        if (!byHost.has(d.host)) byHost.set(d.host, []);
+        byHost.get(d.host).push(d);
+      });
+
+      const rows = [];
+      for (const [host, list] of byHost.entries()) {
+        const stats = list.reduce((acc, d) => { acc[d.status] = (acc[d.status] || 0) + 1; return acc; }, {});
+        const ok = stats.completed || 0;
+        const issues = (stats.failed || 0) + (stats.risk || 0) + (stats.unknown || 0) + (stats.offline || 0);
+        const total = list.length;
+        const status = issues > 0 ? (stats.failed > 0 ? 'failed' : stats.unknown > 0 ? 'unknown' : 'risk') : 'completed';
+        const chipCls = status === 'failed' ? 'red' : status === 'unknown' ? 'purple' : status === 'risk' ? 'orange' : 'green';
+        const chipText = issues > 0 ? `${issues} 异常` : '全部正常';
+
+        rows.push(`
+          <div class="host-row ${issues > 0 ? 'alert' : ''}">
+            <div class="host-label">
+              <span class="name">${host}</span>
+              <span class="meta">${total} 台 · ${ok} ✓</span>
+            </div>
+            <div class="device-pile">
+              ${list.map(d => `<button class="device-cell ${d.status}" data-id="${d.deviceId}" aria-label="${d.serial}"></button>`).join('')}
+            </div>
+            <div class="host-progress">${ok}/${total}</div>
+            <div class="host-status"><span class="chip ${chipCls}">${chipText}</span></div>
+          </div>
+        `);
+      }
+      root.innerHTML = rows.join('');
+
+      root.querySelectorAll('.device-cell').forEach(cell => {
+        const item = devices.find(d => d.deviceId === Number(cell.dataset.id));
+        cell.addEventListener('mouseenter', e => showTooltip(e, item));
+        cell.addEventListener('mousemove', moveTooltip);
+        cell.addEventListener('mouseleave', hideTooltip);
+      });
+    }
+
+    /* ========== Render intervention list (top 6) ========== */
+    function renderInterventionList() {
+      const root = document.getElementById('interventionList');
+      const weight = { failed: 1, unknown: 2, offline: 3, risk: 4 };
+      const items = devices
+        .filter(d => ['failed', 'risk', 'unknown', 'offline'].includes(d.status))
+        .sort((a, b) => weight[a.status] - weight[b.status])
+        .slice(0, 6);
+
+      const syncRetryCard = `
+        <div class="queue-card">
+          <span class="severity-line"></span>
+          <div>
+            <div class="queue-title">
+              <span class="mono">host-a03</span>
+              <span class="chip orange">脚本同步</span>
+            </div>
+            <div class="queue-meta">
+              monkey_launch sha256 不匹配 · 已重试 1/3<br>
+              影响：本机 12 台未拿到最新脚本
+            </div>
+          </div>
+        </div>
+      `;
+
+      const cards = items.map(item => {
+        const lineCls = item.status === 'failed' ? 'red' : item.status === 'unknown' ? 'purple' : item.status === 'offline' ? 'gray' : '';
+        const chipCls = item.status === 'failed' ? 'red' : item.status === 'unknown' ? 'purple' : item.status === 'offline' ? 'gray' : 'orange';
+        return `
+          <div class="queue-card">
+            <span class="severity-line ${lineCls}"></span>
+            <div>
+              <div class="queue-title">
+                <span class="mono">${item.serial}</span>
+                <span class="chip ${chipCls}">${STATUS_LABELS[item.status]}</span>
+              </div>
+              <div class="queue-meta">
+                Job #${item.jobId} · ${item.host}<br>
+                <span class="mono">${item.step}</span>${item.round ? ` · 第 ${item.round} 轮` : ''}<br>
+                ${item.reason}
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      root.innerHTML = [syncRetryCard, ...cards].join('');
+    }
+
+    /* ========== Tooltip ========== */
+    function showTooltip(e, item) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.innerHTML = `
+        <strong>${item.serial}</strong> · Job #${item.jobId}<br>
+        Host：${item.host}<br>
+        状态：${STATUS_LABELS[item.status]}<br>
+        位置：<span style="color:#94a3b8">${item.step}</span>${item.round ? ` · 第 ${item.round} 轮` : ''}<br>
+        脚本：${item.scriptVersion}<br>
+        最后信号：${item.lastSignalAt}<br>
+        原因：${item.reason}
+      `;
+      tooltip.style.display = 'block';
+      moveTooltip(e);
+    }
+    function moveTooltip(e) {
+      const tooltip = document.getElementById('tooltip');
+      const x = Math.min(window.innerWidth - 340, e.clientX + 14);
+      const y = Math.min(window.innerHeight - 180, e.clientY + 14);
+      tooltip.style.left = `${x}px`;
+      tooltip.style.top = `${y}px`;
+    }
+    function hideTooltip() {
+      document.getElementById('tooltip').style.display = 'none';
+    }
+
+    /* ========== Stage card click → highlight ========== */
+    function bindStageCards() {
+      document.querySelectorAll('.stage-col').forEach(col => {
+        col.addEventListener('click', () => {
+          document.querySelectorAll('.stage-col').forEach(c => c.classList.remove('active'));
+          col.classList.add('active');
+        });
+      });
+    }
+
+    renderHostMatrix();
+    renderInterventionList();
+    bindStageCards();
+  </script>
+</body>
+</html>

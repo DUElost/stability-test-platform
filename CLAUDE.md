@@ -6,6 +6,86 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-05-08 — ADR-0021 C6 — 主机热更新二次确认 + 中止运行中 Job 一键复合
+- **新增前端组件** `frontend/src/components/host/HostHotUpdateConfirmDialog.tsx`:
+  - 打开时按需 `GET /api/v1/hosts/{id}` 获取**权威** `active_jobs` 快照(列表端点不返回此字段);
+  - `active_job_count == 0` 渲染绿色 ShieldCheck banner,确认按钮直接可用 → 等价旧路径;
+  - `> 0` 渲染琥珀 banner + 受影响 Job 列表 (`#id` / `Device #x` / `PlanRun #y` / `RUNNING|PENDING` / `started_at`),并要求用户**手动勾选**红色「我已知悉」复选框才能解锁红色「中止 Job 并热更新」按钮;
+  - 未勾选时按钮 disabled 并显示「需先勾选确认」,杜绝误操作;
+  - 切换 host 时自动重置勾选,加载中显示 skeleton + cancel 始终可用。
+- **API client 扩展** `frontend/src/utils/api/hosts.ts`:
+  - 新增 `hosts.getDetail(id)` (unwrap 端点) — `useQuery` 友好;
+  - `hotUpdate.trigger(hostId, { abortRunningJobs })` 拼接 `?abort_running_jobs=true` query 参数,触发后端 abort → 等 Agent 自然退出 (≤45s) → 热更新串联流程;
+  - 新增 `HotUpdateResult` 类型暴露 `aborted.{plan_runs, aborted_jobs, drained_lingering_jobs}` 字段。
+- **类型扩展** `frontend/src/utils/api/types.ts`:
+  - 新增 `HostActiveJob` 接口 (id / plan_run_id / plan_id / device_id / status / started_at);
+  - `Host` 增补 `active_jobs?: HostActiveJob[]` + `active_job_count?: number`(仅在 detail 端点 populated)。
+- **HostsPage 集成** `frontend/src/pages/hosts/HostsPage.tsx`:
+  - `pendingHotUpdateHostId` state 替代旧 `useConfirm` 一行确认;
+  - mutation 完成后 invalidate `['hosts'] / ['host-detail', hostId] / ['active-jobs']` 三个 queryKey,确保表格 + dialog + 全局活跃 Job 计数同步刷新;
+  - 防御性 409 fallback:若调用绕过 dialog 直接 trigger 且后端返回 `409 + detail.active_jobs`,自动重新打开 dialog 引导用户走 abort 路径;
+  - mutation 进行中禁止关闭 dialog,避免误关丢失上下文。
+- **测试覆盖**:
+  - `HostHotUpdateConfirmDialog.test.tsx` 新增 6 cases,覆盖空 hostId / active=0 直确认 / active>0 强制勾选 / 加载中 disabled / 取消不触发 / host 切换重置勾选;
+  - HostsPage 现有 5 cases 全部回归通过;
+  - 全量 frontend `npx vitest run` 19 文件 / 109 cases 全绿,`npx tsc --noEmit` 通过。
+- **ADR-0021 实施切片**:C6 行更新为完整实施细节,标注 6 cases Vitest + HostsPage 5 case 回归。
+- 依赖:无新增
+
+### 2026-05-08 — ADR-0021 C5c — 设备总览 + Watcher 聚合 + SocketIO 增量推送
+- **3 个新组件**(`frontend/src/components/plan-run/`):
+  - `DeviceMatrixCard` — 表格 / 缩略图双视图;status/host facet 过滤;BACKOFF / RISK 状态色;失败连击 ≥3 红字加粗;`manual_action=EXIT_REQUESTED` 显示「退出待执行」
+  - `DeviceDetailDrawer` — 完整 KV 字段 + 「立即重试」/「退出该设备」按钮(AlertDialog 二次确认 + reason 描述);终态 / 已请求时按钮 disabled;支持跳转 Job 报告
+  - `WatcherSummaryCard` — 4 个时间窗 chip(15min/1h/6h/24h);category 行(trend ↑↓ 箭头 + 颜色 + 影响设备数 + latest serial);超阈值红色 banner / 未超但有信号 amber banner;底部 abnormal_rate 进度条 + threshold marker
+- **PlanRunDetailPage 收口**:替换 2 个 C5b placeholder;接入 `useSocketIO('/ws/plan-runs/{id}')`:
+  - `JOB_STATUS` 推送 → invalidate `devices` + `timeline` + `events`
+  - `PLAN_RUN_STATUS` 推送 → invalidate `run` + `chain` + `timeline` + `devices`
+  - `WATCHER_SIGNAL` 推送 → invalidate `watcher-summary` + `events`
+  - 推送只作"invalidation hint",refetch 解出权威态(避免前端缓存与服务端漂移)
+- **后端推送扩展**(`backend/realtime/socketio_server.py`):
+  - 新 `broadcast_watcher_signal(run_id, *, job_id, device_serial, category, inserted_count)` — 推 `watcher_signal` 事件到 `plan_run:{id}` room
+  - `ingest_log_signals` 仅对 ON CONFLICT 实际入库的行推送(冲突丢弃不推);通过 `select(JobInstance.id, plan_run_id)` 反查 PlanRun 路由
+  - 新 helper `_emit_job_status_invalidation` (`backend/api/routes/plan_runs.py`) — sync 的 `manual_retry_job` / `manual_exit_job` 通过 `schedule_emit` 桥接异步推送 `job_status` 到 plan_run room
+- **`useSocketIO` 扩展**:`EVENTS` 列表加 `watcher_signal`;`parseWsUrl('/ws/plan-runs/{id}')` 解析事件清单同时包含 `job_status` / `plan_run_status` / `watcher_signal` 三类
+- **测试**:
+  - Vitest 12 新增:`DeviceMatrixCard.test.tsx`(5) + `WatcherSummaryCard.test.tsx`(4) + `PlanRunDetailPage.test.tsx`(+3:DeviceMatrix/Watcher 渲染 + 抽屉重试 confirm 流转 + 3 种 SocketIO 推送的精确 invalidation 范围)
+  - pytest 3 新增:`test_log_signals_broadcasts_watcher_signal_per_inserted_row`(PG-only:每条入库 1 推 + 冲突 0 推) + `test_manual_retry_emits_job_status_to_plan_run_room` + `test_manual_exit_emits_job_status_to_plan_run_room`(patch `schedule_emit` 验证 event/room/payload)
+- **回归**:全量 frontend `npx vitest run` — **18 文件 / 103 case 全过**;后端 PG 模式 watcher + manual_retry_exit + plan_run_aggregation **31 新 case 全过**(2 个 pre-existing claim_jobs 失败已识别为与 C5c 改动无关)
+- 依赖:无新增
+
+### 2026-05-08 — ADR-0021 C5b — PlanRunDetailPage 骨架 + 4 块组件 + Vitest
+- **新页面**:`frontend/src/pages/execution/PlanRunDetailPage.tsx` — 路由 `/execution/plan-runs/:runId`,旧 `PlanRunMatrixPage` 降级到 `/execution/plan-runs/:runId/matrix`
+- **4 个组件**(`frontend/src/components/plan-run/`):
+  - `PlanRunTopbar` — status pill(含运行中实时秒级 tick)+ 中止 PlanRun 按钮(终态隐藏)+ AlertDialog 二次确认 + 导出报告占位
+  - `PlanChainBreadcrumb` — 紧凑单行 Plan 链;current 节点高亮 + 旋转 spinner;blocked 节点(尚未触发的下游)显示"暂不触发"+ tooltip 暴露 `block_reason`;历史节点可点击导航
+  - `DispatchGateCard` — 派发门禁卡片;phase 徽章(verifying/syncing/reverifying/ready/failed)+ 主机 × 脚本矩阵(sha256 短码 + matched 标记)+ sync_attempts 计数;终态保留显示用于审计,运行中 ready 自动收起
+  - `BusinessFlowTimeline` — 双栏:左侧纵向阶段 stepper(init/patrol/teardown,展开后显示步骤聚合 device_succeeded/failed),右侧事件流(stage + severity 双过滤器 + facet 计数 + 空态)
+- **API 客户端扩展**(`frontend/src/utils/api/planRuns.ts`):新增 `getChain` / `getTimeline` / `getEvents` / `getDevices` / `getWatcherSummary` / `abort` / `manualRetryJob` / `manualExitJob` 8 个方法
+- **类型扩展**(`frontend/src/utils/api/types.ts`):`PrecheckState` / `PrecheckHostState` / `PrecheckScriptCheck` (ADR-0021 dispatch gate)、`PlanChain` / `PlanRunTimeline` / `PlanRunEventsPayload` / `PlanRunDevicesPayload` / `WatcherSummary` (5 端点),`PlanRun.run_context.precheck` 字段
+- **设备总览 + Watcher 卡片**仍是 placeholder,留给 C5c
+- **测试**:Vitest 12 cases / 3 文件全过 — `PlanChainBreadcrumb.test.tsx`(3) + `BusinessFlowTimeline.test.tsx`(5) + `PlanRunDetailPage.test.tsx`(4 集成)
+- **回归**:全量 frontend `npx vitest run` — 16 文件 / 91 case 通过(`toast.test.tsx` 抛错为其自身 negative case 故意触发,非回归)
+- 依赖:无新增
+
+### 2026-05-08 — ADR-0021/0022 C5a₂ — PlanRun 聚合端点 + 复合索引 + Prometheus 监控
+- **5 个聚合端点**(`backend/api/routes/plan_runs.py`):
+  - `GET /api/v1/plan-runs/{id}/chain` — 沿 `parent_plan_run_id` 回溯 + 候选 next Plan(含 `block_reason`)
+  - `GET /api/v1/plan-runs/{id}/timeline` — 三阶段聚合,patrol 含 `patrol_cycle_index` / `active_devices` / `interval_seconds`
+  - `GET /api/v1/plan-runs/{id}/events?stage=&severity=&limit=&offset=` — 多源事件流(trigger / step 失败 / log_signal / audit)+ facets + 分页
+  - `GET /api/v1/plan-runs/{id}/devices?status=&host_id=` — per-device matrix,`ui_status` 派生(completed/running/failed/risk/backoff/pending)
+  - `GET /api/v1/plan-runs/{id}/watcher-summary?window_minutes=` — log_signal 按 category 聚合 + trend(对比上一窗口)+ exceeded
+- **新增复合索引**(alembic `e8f9a0b1c2d3`,同步加在 `JobInstance.__table_args__`):
+  - `idx_step_trace_job_stage` ON (job_id, stage) — timeline 端点 GROUP BY
+  - `idx_step_trace_job_status_ts` ON (job_id, status, original_ts) — events 端点失败 step 时序排序
+- **Prometheus 指标族**(`backend/core/metrics.py`,8 个新指标族):
+  - `stability_plan_run_terminal_total` / `stability_plan_run_pass_rate` — terminal 聚合时埋点(`plan_run_aggregation.py`)
+  - `stability_dispatch_gate_runs_total` / `stability_dispatch_gate_duration_seconds` — `_drive_dispatch_gate` finally 埋点(`plan_precheck.py`)
+  - `stability_patrol_heartbeat_total` / `stability_patrol_failure_streak_observed` — patrol-heartbeat 端点埋点
+  - `stability_patrol_manual_action_total` — manual-retry / manual-exit 端点埋点
+  - `stability_log_signal_total` — `/agent/log-signals` 每条入库 signal 埋点
+- **测试**:`backend/tests/api/test_plan_run_aggregation_endpoints.py` 新增 15 cases(全 SQLite 兼容,无需 PostgreSQL)
+- 验证:backend 全量 265 passed + 102 skipped
+
 ### 2026-05-06 — ADR-0020 Plan-based 编排架构落地
 - **架构变更**：WorkflowDefinition + TaskTemplate → Plan + PlanStep；WorkflowRun → PlanRun
 - **5 阶段 Alembic migration**：`w0x1y2z3a4b5` (DDL 收紧) → `x1y2z3a4b5c6` (DDL 建表，含 `plan_step.enabled` / `plan.patrol_interval_seconds` / `plan.timeout_seconds` / `plan_run.next_plan_triggered Boolean`，**不再有 `plan.lifecycle` 列**) → `y2z3a4b5c6d7` (DML 定义迁移；按 ADR §2 升级为直列字段) → `z3a4b5c6d7e8` (DML 数据迁移；从 `plan_step` 行重建 `plan_snapshot`，回写 `plan_migration_audit.{old_workflow_run_id,new_plan_run_id}`) → `a4b5c6d7e8f9` (DDL：删除旧表 + `task_schedules.plan_id NOT NULL` + 删除 `task_schedules.{params,target_device_id}` + 幂等收敛 `plan.lifecycle`/`plan.timeout_seconds`)
@@ -172,6 +252,14 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 | GET | `/api/v1/plan-runs/{id}` | PlanRun 详情 |
 | GET | `/api/v1/plan-runs/{id}/jobs` | PlanRun 关联 Job 列表 |
 | GET | `/api/v1/plan-runs/{id}/summary` | PlanRun 聚合概览 |
+| GET | `/api/v1/plan-runs/{id}/chain` | Plan 链(parent + current + 候选 next) |
+| GET | `/api/v1/plan-runs/{id}/timeline` | 业务流时间线(三阶段聚合 + patrol heartbeat) |
+| GET | `/api/v1/plan-runs/{id}/events` | 事件流(trigger/step/log_signal/audit 多源融合,支持 stage/severity 过滤+分页) |
+| GET | `/api/v1/plan-runs/{id}/devices` | 设备总览矩阵(含 ui_status 派生 + by_status/by_host facet) |
+| GET | `/api/v1/plan-runs/{id}/watcher-summary` | Watcher 异常聚合(按 category + trend) |
+| POST | `/api/v1/plan-runs/{id}/abort` | 中止 PlanRun(ADR-0021 D7) |
+| POST | `/api/v1/plan-runs/{id}/jobs/{job_id}/manual-retry` | patrol 退避中手动立即重试(ADR-0022 D7) |
+| POST | `/api/v1/plan-runs/{id}/jobs/{job_id}/manual-exit` | patrol 退避中手动退出(跳 teardown) |
 | GET | `/api/v1/runs/{run_id}/report` | 获取 Job 报告 |
 | GET | `/api/v1/runs/{run_id}/report/cached` | 获取缓存 Job 报告 |
 | GET | `/api/v1/runs/{run_id}/report/export` | 导出 Job 报告（markdown/json） |
@@ -195,6 +283,8 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 | POST | `/api/v1/agent/jobs/{id}/complete` | 完成任务 |
 | POST | `/api/v1/agent/jobs/{id}/extend_lock` | 续期设备锁 |
 | POST | `/api/v1/agent/jobs/{job_id}/steps/{step_id}/status` | 更新步骤状态（HTTP fallback） |
+| POST | `/api/v1/agent/jobs/{job_id}/patrol-heartbeat` | patrol 周期聚合心跳（ADR-0022） |
+| POST | `/api/v1/agent/log-signals` | watcher 异常事件批量上送（ADR-0018） |
 
 ### SocketIO 端点
 

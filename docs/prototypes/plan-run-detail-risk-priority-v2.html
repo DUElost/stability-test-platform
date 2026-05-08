@@ -1,0 +1,1339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PlanRunDetail 执行链路优先静态原型 V2</title>
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --surface: #ffffff;
+      --surface-soft: #f8fafc;
+      --line: #d7e0ea;
+      --line-strong: #b8c6d6;
+      --text: #162033;
+      --muted: #65758a;
+      --soft: #91a0b4;
+      --green: #16a34a;
+      --green-soft: #eaf8ef;
+      --blue: #2563eb;
+      --blue-soft: #eaf2ff;
+      --red: #dc2626;
+      --red-soft: #fff1f2;
+      --orange: #f97316;
+      --orange-soft: #fff7ed;
+      --purple: #7c3aed;
+      --purple-soft: #f5f3ff;
+      --cyan: #0e7490;
+      --cyan-soft: #e6f7fb;
+      --gray-soft: #f1f5f9;
+      --shadow: 0 14px 38px rgba(15, 23, 42, .08);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 1240px;
+      background: linear-gradient(180deg, #fbfdff 0%, var(--bg) 100%);
+      color: var(--text);
+      font-family: Inter, "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    .page {
+      width: 1480px;
+      min-height: 1040px;
+      margin: 0 auto;
+      padding: 18px 24px 28px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .topbar,
+    .summary-strip,
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      min-height: 58px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .crumb {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .crumb strong {
+      color: var(--text);
+      font-size: 18px;
+      font-weight: 780;
+    }
+
+    .run-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #fed7aa;
+      background: var(--orange-soft);
+      color: #c2410c;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 12px;
+      font-weight: 760;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .btn {
+      height: 34px;
+      border: 1px solid var(--line-strong);
+      background: #fff;
+      color: var(--text);
+      border-radius: 7px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease, transform .16s ease;
+    }
+
+    .btn:hover { border-color: var(--cyan); background: var(--cyan-soft); }
+    .btn.primary { border-color: var(--cyan); background: var(--cyan); color: #fff; }
+
+    .summary-strip {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-soft);
+      padding: 11px;
+      display: grid;
+      align-content: center;
+      gap: 5px;
+    }
+
+    .metric .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .metric .value {
+      font-size: 23px;
+      font-weight: 830;
+    }
+
+    .metric .hint {
+      color: var(--soft);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      border-bottom: 1px solid var(--line);
+      padding: 0 2px;
+    }
+
+    .tab {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 11px 12px;
+      font-size: 13px;
+      font-weight: 730;
+      border-bottom: 3px solid transparent;
+      cursor: pointer;
+    }
+
+    .tab.active {
+      color: var(--cyan);
+      border-bottom-color: var(--cyan);
+    }
+
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    .trace-layout {
+      display: grid;
+      grid-template-columns: 330px minmax(0, 1fr) 340px;
+      gap: 14px;
+      align-items: start;
+      margin-top: 14px;
+    }
+
+    .panel { overflow: hidden; }
+
+    .panel-head {
+      min-height: 48px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+      padding: 12px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .panel-title-stack { display: grid; gap: 3px; }
+    .panel-title { font-size: 14px; font-weight: 800; }
+    .panel-subtitle { color: var(--muted); font-size: 12px; }
+
+    .panel-body {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--gray-soft);
+      color: #475569;
+      padding: 3px 7px;
+      font-size: 11px;
+      font-weight: 740;
+      white-space: nowrap;
+    }
+
+    .chip.red { background: var(--red-soft); color: var(--red); border-color: #fecaca; }
+    .chip.orange { background: var(--orange-soft); color: #c2410c; border-color: #fed7aa; }
+    .chip.purple { background: var(--purple-soft); color: var(--purple); border-color: #ddd6fe; }
+    .chip.green { background: var(--green-soft); color: #15803d; border-color: #bbf7d0; }
+    .chip.blue { background: var(--blue-soft); color: var(--blue); border-color: #bfdbfe; }
+    .chip.cyan { background: var(--cyan-soft); color: var(--cyan); border-color: #a5f3fc; }
+
+    .mono { font-family: "SFMono-Regular", Consolas, monospace; }
+    .muted { color: var(--muted); }
+
+    .spine {
+      position: relative;
+      display: grid;
+      gap: 10px;
+    }
+
+    .spine::before {
+      content: "";
+      position: absolute;
+      left: 18px;
+      top: 18px;
+      bottom: 18px;
+      width: 2px;
+      background: #dbe5ef;
+    }
+
+    .spine-node {
+      position: relative;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 11px 11px 11px 44px;
+      display: grid;
+      gap: 8px;
+      cursor: pointer;
+      transition: border-color .16s ease, background .16s ease;
+    }
+
+    .spine-node::before {
+      content: "";
+      position: absolute;
+      left: 11px;
+      top: 15px;
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      border: 3px solid #fff;
+      background: var(--cyan);
+      box-shadow: 0 0 0 1px var(--line-strong);
+    }
+
+    .spine-node.active {
+      border-color: #fed7aa;
+      background: #fffaf3;
+    }
+
+    .spine-node.selected {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(14, 116, 144, .12);
+    }
+
+    .spine-node.failed {
+      border-color: #fecaca;
+      background: #fff8f8;
+    }
+
+    .spine-node.done::before { background: var(--green); }
+    .spine-node.active::before { background: var(--orange); }
+    .spine-node.failed::before { background: var(--red); }
+
+    .spine-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 820;
+    }
+
+    .spine-meta {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .progress-track {
+      height: 7px;
+      border-radius: 999px;
+      background: #e2e8f0;
+      overflow: hidden;
+    }
+
+    .progress-track span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--cyan);
+    }
+
+    .progress-track.done span { background: var(--green); }
+    .progress-track.warning span { background: var(--orange); }
+    .progress-track.failed span { background: var(--red); }
+
+    .command-strip {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 11px;
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .command-main {
+      display: grid;
+      gap: 4px;
+    }
+
+    .command-title {
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .command-subtitle {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .stage-detail {
+      display: grid;
+      gap: 11px;
+    }
+
+    .stage-section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .stage-section-head {
+      padding: 10px 11px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-soft);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stage-section-title {
+      font-size: 13px;
+      font-weight: 820;
+    }
+
+    .stage-section-body {
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .step-group {
+      border: 1px solid #e5edf5;
+      background: #fbfdff;
+      border-radius: 8px;
+      padding: 9px;
+      display: grid;
+      gap: 7px;
+    }
+
+    .step-group.hot { border-color: #fed7aa; background: #fffaf3; }
+    .step-group.failed { border-color: #fecaca; background: #fff8f8; }
+
+    .step-group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .step-name {
+      font-size: 12px;
+      font-weight: 800;
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    .device-pile {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .device-token {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 4px 7px;
+      color: #475569;
+      font-size: 11px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      cursor: pointer;
+      transition: transform .14s ease, border-color .14s ease;
+    }
+
+    .device-token:hover,
+    .device-token.active {
+      transform: translateY(-1px);
+      border-color: var(--cyan);
+      box-shadow: 0 6px 14px rgba(14, 116, 144, .12);
+    }
+
+    .device-token.red { background: var(--red-soft); color: var(--red); border-color: #fecaca; }
+    .device-token.orange { background: var(--orange-soft); color: #c2410c; border-color: #fed7aa; }
+    .device-token.purple { background: var(--purple-soft); color: var(--purple); border-color: #ddd6fe; }
+    .device-token.blue { background: var(--blue-soft); color: var(--blue); border-color: #bfdbfe; }
+    .device-token.gray { background: #f8fafc; color: #475569; border-color: #cbd5e1; }
+
+    .side-list {
+      display: grid;
+      gap: 9px;
+    }
+
+    .queue-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      display: grid;
+      grid-template-columns: 8px 1fr;
+      gap: 10px;
+    }
+
+    .severity-line {
+      width: 8px;
+      height: 46px;
+      border-radius: 999px;
+      background: var(--orange);
+    }
+
+    .severity-line.red { background: var(--red); }
+    .severity-line.purple { background: var(--purple); }
+
+    .queue-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .queue-meta {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .mini-log {
+      display: grid;
+      gap: 9px;
+    }
+
+    .log-item {
+      display: grid;
+      grid-template-columns: 70px 1fr;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .log-time {
+      color: var(--soft);
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+
+    .log-text {
+      border-left: 2px solid var(--line);
+      padding-left: 9px;
+    }
+
+    .overview-layout {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 14px;
+      align-items: start;
+      margin-top: 14px;
+    }
+
+    .filterbar {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto auto;
+      gap: 9px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+
+    .input-control,
+    .select-like {
+      height: 34px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: #fff;
+      padding: 0 11px;
+      display: flex;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 110px;
+      cursor: default;
+    }
+
+    .input-control {
+      width: 100%;
+      color: var(--text);
+      outline: none;
+    }
+
+    button.select-like {
+      cursor: pointer;
+    }
+
+    .device-grid {
+      display: grid;
+      grid-template-columns: repeat(20, 18px);
+      gap: 7px;
+      align-content: start;
+    }
+
+    .device-cell {
+      width: 18px;
+      height: 18px;
+      border-radius: 5px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: transform .14s ease, opacity .14s ease, box-shadow .14s ease;
+    }
+
+    .device-cell:hover,
+    .device-cell.active {
+      transform: scale(1.2);
+      box-shadow: 0 0 0 3px rgba(14, 116, 144, .16);
+      z-index: 2;
+    }
+
+    .device-cell.dim { opacity: .18; }
+    .device-cell.COMPLETED { background: #a7e8bd; opacity: .62; }
+    .device-cell.RUNNING { background: var(--blue); }
+    .device-cell.PENDING { background: #cbd5e1; }
+    .device-cell.FAILED { background: var(--red); }
+    .device-cell.RISK { background: var(--orange); }
+    .device-cell.UNKNOWN { background: var(--purple); }
+    .device-cell.OFFLINE { background: #e2e8f0; border-color: #334155; }
+    .device-cell.SKIPPED {
+      background: repeating-linear-gradient(135deg, #cbd5e1 0 2px, #fff 2px 4px);
+      border-color: #cbd5e1;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .legend-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      border-radius: 999px;
+      padding: 4px 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .legend-btn.active {
+      color: var(--cyan);
+      border-color: var(--cyan);
+      background: var(--cyan-soft);
+    }
+
+    .legend-swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      border: 1px solid transparent;
+    }
+
+    .sw-COMPLETED { background: #a7e8bd; }
+    .sw-RUNNING { background: var(--blue); }
+    .sw-PENDING { background: #cbd5e1; }
+    .sw-FAILED { background: var(--red); }
+    .sw-RISK { background: var(--orange); }
+    .sw-UNKNOWN { background: var(--purple); }
+    .sw-OFFLINE { background: #e2e8f0; border-color: #334155; }
+    .sw-SKIPPED { background: repeating-linear-gradient(135deg, #cbd5e1 0 2px, #fff 2px 4px); border-color: #cbd5e1; }
+
+    .device-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .device-row {
+      display: grid;
+      grid-template-columns: 8px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      font-size: 12px;
+    }
+
+    .phase-grid,
+    .artifact-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .phase-card,
+    .artifact {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 13px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .phase-card h3,
+    .artifact strong {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    .phase-row {
+      display: grid;
+      grid-template-columns: 120px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .job-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 12px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .job-table th,
+    .job-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #edf2f7;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .job-table th {
+      background: var(--surface-soft);
+      color: var(--muted);
+      font-weight: 780;
+    }
+
+    .tooltip {
+      position: fixed;
+      pointer-events: none;
+      z-index: 20;
+      min-width: 250px;
+      max-width: 320px;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 18px 42px rgba(15, 23, 42, .28);
+      font-size: 12px;
+      line-height: 1.55;
+      display: none;
+    }
+
+    .tooltip strong { color: #fff; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div class="crumb">
+        <span>执行详情</span>
+        <span>/</span>
+        <strong>PlanRun #1842</strong>
+        <span class="run-status"><span class="dot"></span>需要介入</span>
+      </div>
+      <div class="actions">
+        <button class="btn">刷新</button>
+        <button class="btn">打开日志总览</button>
+        <button class="btn primary">导出报告</button>
+      </div>
+    </header>
+
+    <section class="summary-strip">
+      <div class="metric"><div class="label">总设备</div><div class="value">120</div><div class="hint">10 hosts</div></div>
+      <div class="metric"><div class="label">脚本同步</div><div class="value">4/5</div><div class="hint">1 节点重试</div></div>
+      <div class="metric"><div class="label">Job 下发</div><div class="value">117</div><div class="hint">3 台未确认</div></div>
+      <div class="metric"><div class="label">Patrol 中</div><div class="value">12</div><div class="hint">3 个环节</div></div>
+      <div class="metric"><div class="label">需介入</div><div class="value">11</div><div class="hint">失败/风险/离线</div></div>
+      <div class="metric"><div class="label">完成</div><div class="value">88</div><div class="hint">不展开</div></div>
+    </section>
+
+    <nav class="tabs" aria-label="执行详情标签页">
+      <button class="tab active" data-tab="trace">执行链路</button>
+      <button class="tab" data-tab="overview">设备概览</button>
+      <button class="tab" data-tab="phase">阶段与日志</button>
+      <button class="tab" data-tab="artifacts">制品与报告</button>
+      <button class="tab" data-tab="raw">原始 Job</button>
+    </nav>
+
+    <section id="tab-trace" class="tab-content active">
+      <div class="trace-layout">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title-stack">
+              <div class="panel-title">执行链路</div>
+              <div class="panel-subtitle">纵向链路导航，点击阶段筛选设备停留位置</div>
+            </div>
+            <span class="chip blue">当前 Patrol</span>
+          </div>
+          <div class="panel-body">
+            <div class="spine" id="spine"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title-stack">
+              <div class="panel-title">阶段停留详情</div>
+              <div class="panel-subtitle">从脚本热更新到设备执行阶段，按环节聚合设备</div>
+            </div>
+            <div class="actions">
+              <span id="stageFilterLabel" class="chip cyan">全部阶段</span>
+              <button class="btn" id="clearStageFilter">清除筛选</button>
+            </div>
+          </div>
+          <div class="panel-body">
+            <div class="command-strip">
+              <div class="command-main">
+                <div class="command-title">脚本包 foreground_watch@v2.4.1</div>
+                <div class="command-subtitle">本地校验完成，host-a03 正在重试，host-a05 仍在同步。</div>
+              </div>
+              <span class="chip orange">节点同步未完成</span>
+              <span class="chip blue">当前 Patrol</span>
+            </div>
+            <div class="stage-detail" id="stageDetail"></div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <div class="panel-head">
+            <div class="panel-title">介入队列</div>
+            <span class="chip red">Top 9</span>
+          </div>
+          <div id="interventionQueue" class="panel-body side-list"></div>
+          <div class="panel-head">
+            <div class="panel-title">最近状态变化</div>
+            <span class="chip orange">近 20 分钟</span>
+          </div>
+          <div class="panel-body mini-log">
+            <div class="log-item"><div class="log-time">14:28:40</div><div class="log-text"><strong>DVC-018</strong> 停在 init / host_sync。</div></div>
+            <div class="log-item"><div class="log-time">14:27:12</div><div class="log-text"><strong>DVC-077</strong> heartbeat 缺失，进入 UNKNOWN。</div></div>
+            <div class="log-item"><div class="log-time">14:25:51</div><div class="log-text"><strong>host-a03</strong> watcher AEE 信号聚合。</div></div>
+            <div class="log-item"><div class="log-time">14:22:08</div><div class="log-text"><strong>DVC-091</strong> 停在 teardown / pull_logs。</div></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="tab-overview" class="tab-content">
+      <div class="overview-layout">
+        <section class="panel">
+          <div class="panel-head">
+            <div class="panel-title">设备概览</div>
+            <span class="muted">点击图例筛选，点击色块选中设备</span>
+          </div>
+          <div class="filterbar">
+            <input id="deviceSearch" class="input-control" placeholder="搜索设备 / host / job id / 当前环节" />
+            <div class="select-like">状态：全部</div>
+            <button class="select-like" id="overviewStageLabel" type="button">阶段：全部</button>
+            <div class="select-like">Host：全部</div>
+            <div class="select-like">模板：全部</div>
+          </div>
+          <div class="panel-body">
+            <div id="largeGrid" class="device-grid" aria-label="设备状态概览"></div>
+            <div id="largeLegend" class="legend"></div>
+          </div>
+        </section>
+
+        <aside class="panel">
+          <div class="panel-head">
+            <div class="panel-title">筛选结果</div>
+            <span id="resultCount" class="chip">120 台</span>
+          </div>
+          <div id="deviceList" class="panel-body device-list"></div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="tab-phase" class="tab-content">
+      <div class="phase-grid">
+        <article class="phase-card">
+          <h3>脚本与节点</h3>
+          <div class="phase-row"><span class="mono">local_validate</span><div class="progress-track done"><span style="width:100%"></span></div><span class="chip green">完成</span></div>
+          <div class="phase-row"><span class="mono">host-a03</span><div class="progress-track warning"><span style="width:82%"></span></div><span class="chip orange">重试</span></div>
+          <div class="phase-row"><span class="mono">host-a05</span><div class="progress-track"><span style="width:64%"></span></div><span class="chip blue">同步中</span></div>
+        </article>
+        <article class="phase-card">
+          <h3>Patrol 日志聚合</h3>
+          <div class="phase-row"><span class="mono">watcher_collect</span><div class="progress-track warning"><span style="width:100%"></span></div><span class="chip orange">4</span></div>
+          <div class="phase-row"><span class="mono">heartbeat_guard</span><div class="progress-track warning"><span style="width:50%"></span></div><span class="chip purple">2</span></div>
+          <div class="phase-row"><span class="mono">device_heartbeat</span><div class="progress-track failed"><span style="width:100%"></span></div><span class="chip red">2</span></div>
+        </article>
+        <article class="phase-card">
+          <h3>失败停留点</h3>
+          <div class="phase-row"><span class="mono">init.host_sync</span><div class="progress-track failed"><span style="width:100%"></span></div><span class="chip red">DVC-018</span></div>
+          <div class="phase-row"><span class="mono">teardown.pull_logs</span><div class="progress-track failed"><span style="width:100%"></span></div><span class="chip red">DVC-091</span></div>
+          <div class="phase-row"><span class="mono">patrol.heartbeat</span><div class="progress-track warning"><span style="width:100%"></span></div><span class="chip purple">2</span></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="tab-artifacts" class="tab-content">
+      <div class="artifact-grid">
+        <article class="artifact"><strong>脚本同步记录</strong><p class="muted">记录每个 host 的同步版本、耗时、重试次数和最后错误。</p></article>
+        <article class="artifact"><strong>Watcher 产物</strong><p class="muted">AEE、ANR、tombstone、mobilelog 按设备与当前环节归档。</p></article>
+        <article class="artifact"><strong>JIRA 草稿</strong><p class="muted">按停留点聚合生成问题草稿，避免一台设备一个孤立问题。</p></article>
+      </div>
+    </section>
+
+    <section id="tab-raw" class="tab-content">
+      <table class="job-table">
+        <thead>
+          <tr><th>Job ID</th><th>Serial</th><th>Host</th><th>Status</th><th>Stage</th><th>Step</th><th>Script</th><th>Last Signal</th><th>Reason</th></tr>
+        </thead>
+        <tbody id="rawRows"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip"></div>
+
+  <script>
+    const STATUS_LABELS = {
+      COMPLETED: '完成',
+      RUNNING: '运行中',
+      PENDING: '等待',
+      FAILED: '失败',
+      RISK: '风险',
+      UNKNOWN: 'UNKNOWN',
+      OFFLINE: '离线',
+      SKIPPED: '跳过'
+    };
+
+    const STATUS_ORDER = ['FAILED', 'RISK', 'UNKNOWN', 'OFFLINE', 'RUNNING', 'PENDING', 'SKIPPED', 'COMPLETED'];
+    const STAGE_LABELS = {
+      sync: '节点同步',
+      dispatch: 'Job 下发',
+      init: 'Init',
+      patrol: 'Patrol',
+      teardown: 'Teardown',
+      completed: '完成',
+      disabled: '跳过'
+    };
+
+    const syncNodes = [
+      { host: 'host-a01', step: 'sync_done', status: '完成', progress: 100, tone: 'green' },
+      { host: 'host-a02', step: 'sync_done', status: '完成', progress: 100, tone: 'green' },
+      { host: 'host-a03', step: 'sync_retry', status: '重试', progress: 82, tone: 'orange' },
+      { host: 'host-a04', step: 'sync_done', status: '完成', progress: 100, tone: 'green' },
+      { host: 'host-a05', step: 'sync_pending', status: '同步中', progress: 64, tone: 'blue' }
+    ];
+
+    const stageNodes = [
+      { key: 'sync', title: '本地脚本热更新', chip: '4/5 节点', kind: 'active', meta: 'host-a03 重试，host-a05 同步中。', progress: 80 },
+      { key: 'dispatch', title: 'Job 下发', chip: '117/120', kind: 'active', meta: '120 个 job 已创建，117 个设备确认配置。', progress: 97 },
+      { key: 'init', title: 'Init', chip: '1 失败', kind: 'failed', meta: 'DVC-018 停在 host_sync，DVC-006 离线。', progress: 92 },
+      { key: 'patrol', title: 'Patrol', chip: '20 台', kind: 'active', meta: 'watcher_collect、heartbeat_guard 仍有告警。', progress: 66 },
+      { key: 'teardown', title: 'Teardown', chip: '1 失败', kind: 'failed', meta: 'DVC-091 停在 pull_logs。', progress: 73 },
+      { key: 'completed', title: '完成归档', chip: '88 完成', kind: 'done', meta: '正常设备折叠，不进入默认排查队列。', progress: 100 }
+    ];
+
+    function statusForIndex(i) {
+      if ([18, 91].includes(i)) return 'FAILED';
+      if ([11, 28, 44, 52].includes(i)) return 'RISK';
+      if ([77, 103].includes(i)) return 'UNKNOWN';
+      if ([6, 63, 109].includes(i)) return 'OFFLINE';
+      if ([7, 8, 9, 10, 21, 22, 35, 36, 57, 58, 79, 80].includes(i)) return 'RUNNING';
+      if ([12, 13, 14, 15, 86, 87].includes(i)) return 'PENDING';
+      if ([31, 32, 33].includes(i)) return 'SKIPPED';
+      return 'COMPLETED';
+    }
+
+    function stageForDevice(status, i) {
+      if (status === 'PENDING') return 'dispatch';
+      if (status === 'SKIPPED') return 'disabled';
+      if (i === 18 || i === 6) return 'init';
+      if (i === 91) return 'teardown';
+      if (['RUNNING', 'RISK', 'UNKNOWN', 'OFFLINE'].includes(status)) return 'patrol';
+      return 'completed';
+    }
+
+    function stepForDevice(status, i) {
+      if (i === 18 || i === 6) return 'host_sync';
+      if (i === 91) return 'pull_logs';
+      if (status === 'RISK') return 'watcher_collect';
+      if (status === 'UNKNOWN') return 'heartbeat_guard';
+      if (status === 'OFFLINE') return 'device_heartbeat';
+      if (status === 'RUNNING') {
+        const patrolSteps = ['launch_app', 'monkey_loop', 'watcher_collect'];
+        return patrolSteps[i % patrolSteps.length];
+      }
+      if (status === 'PENDING') return 'wait_host_capacity';
+      if (status === 'SKIPPED') return 'disabled_by_template';
+      return 'report_ready';
+    }
+
+    function reasonForStatus(status, i) {
+      if (status === 'FAILED') return i === 18 ? 'init host_sync failed' : 'teardown pull_logs timeout';
+      if (status === 'RISK') return 'watcher AEE / ANR high frequency';
+      if (status === 'UNKNOWN') return 'last heartbeat stale, state untrusted';
+      if (status === 'OFFLINE') return 'device offline';
+      if (status === 'SKIPPED') return 'disabled or skipped by template';
+      if (status === 'RUNNING') return 'active heartbeat in last 30s';
+      if (status === 'PENDING') return 'waiting for host capacity';
+      return 'normal completed';
+    }
+
+    const devices = Array.from({ length: 120 }, (_, index) => {
+      const i = index + 1;
+      const status = statusForIndex(i);
+      const host = `host-a${String((i % 10) + 1).padStart(2, '0')}`;
+      const phase = stageForDevice(status, i);
+      const currentStep = stepForDevice(status, i);
+      return {
+        jobId: 3000 + i,
+        deviceId: i,
+        serial: `DVC-${String(i).padStart(3, '0')}`,
+        hostName: host,
+        status,
+        severity: ['FAILED', 'UNKNOWN', 'OFFLINE'].includes(status) ? 'critical' : status === 'RISK' ? 'warning' : 'normal',
+        lastSignalAt: `2026-05-07 14:${String(10 + (i % 40)).padStart(2, '0')}:${String(10 + (i % 49)).padStart(2, '0')}`,
+        signalCount: status === 'RISK' ? 8 + (i % 6) : status === 'COMPLETED' ? 0 : 1 + (i % 3),
+        reason: reasonForStatus(status, i),
+        template: i % 3 === 0 ? 'foreground_watch' : i % 3 === 1 ? 'default' : 'resource_smoke',
+        phase,
+        currentStep,
+        scriptName: currentStep,
+        scriptVersion: 'v1.8.0'
+      };
+    });
+
+    let activeStatus = null;
+    let activeStage = null;
+    let selectedDeviceId = null;
+    let searchQuery = '';
+
+    function counts() {
+      return devices.reduce((acc, item) => {
+        acc[item.status] = (acc[item.status] || 0) + 1;
+        return acc;
+      }, {});
+    }
+
+    function tokenColor(item) {
+      if (item.status === 'FAILED') return 'red';
+      if (item.status === 'RISK') return 'orange';
+      if (item.status === 'UNKNOWN') return 'purple';
+      if (item.status === 'RUNNING') return 'blue';
+      if (item.status === 'OFFLINE') return 'gray';
+      return '';
+    }
+
+    function chipColor(status) {
+      if (status === 'FAILED') return 'red';
+      if (status === 'RISK') return 'orange';
+      if (status === 'UNKNOWN') return 'purple';
+      if (status === 'RUNNING') return 'blue';
+      if (status === 'COMPLETED') return 'green';
+      return '';
+    }
+
+    function matchesFilters(item) {
+      const statusMatched = !activeStatus || item.status === activeStatus;
+      const stageMatched = !activeStage
+        || (activeStage === 'sync' ? ['host-a03', 'host-a05'].includes(item.hostName) : item.phase === activeStage);
+      const queryMatched = !searchQuery || [item.serial, item.hostName, String(item.jobId), item.phase, item.currentStep, item.scriptName]
+        .some(value => value.toLowerCase().includes(searchQuery));
+      return statusMatched && stageMatched && queryMatched;
+    }
+
+    function filteredDevices() {
+      return devices.filter(matchesFilters);
+    }
+
+    function groupedByStep(stage) {
+      const items = devices.filter(item => item.phase === stage && (stage === 'completed' || item.status !== 'COMPLETED'));
+      const groups = new Map();
+      items.forEach(item => {
+        if (!groups.has(item.currentStep)) groups.set(item.currentStep, []);
+        groups.get(item.currentStep).push(item);
+      });
+      return Array.from(groups.entries()).map(([step, list]) => ({ step, list }));
+    }
+
+    function renderToken(item) {
+      return `
+        <button class="device-token ${tokenColor(item)} ${selectedDeviceId === item.deviceId ? 'active' : ''}" data-id="${item.deviceId}">
+          ${item.serial}
+        </button>
+      `;
+    }
+
+    function bindTokenEvents(scope) {
+      scope.querySelectorAll('.device-token').forEach(token => {
+        if (!token.dataset.id) return;
+        const item = devices.find(d => d.deviceId === Number(token.dataset.id));
+        token.addEventListener('mouseenter', event => showTooltip(event, item));
+        token.addEventListener('mousemove', moveTooltip);
+        token.addEventListener('mouseleave', hideTooltip);
+        token.addEventListener('click', () => {
+          selectedDeviceId = item.deviceId;
+          renderAll();
+        });
+      });
+    }
+
+    function renderSpine() {
+      const target = document.getElementById('spine');
+      target.innerHTML = stageNodes.map(node => `
+        <button class="spine-node ${node.kind} ${activeStage === node.key ? 'selected' : ''}" data-stage="${node.key}">
+          <div class="spine-title">
+            <span>${node.title}</span>
+            <span class="chip ${node.kind === 'failed' ? 'red' : node.kind === 'done' ? 'green' : 'orange'}">${node.chip}</span>
+          </div>
+          <div class="spine-meta">${node.meta}</div>
+          <div class="progress-track ${node.kind === 'failed' ? 'failed' : node.kind === 'done' ? 'done' : 'warning'}"><span style="width:${node.progress}%"></span></div>
+        </button>
+      `).join('');
+      target.querySelectorAll('.spine-node').forEach(node => {
+        node.addEventListener('click', () => {
+          activeStatus = null;
+          activeStage = activeStage === node.dataset.stage ? null : node.dataset.stage;
+          renderAll();
+        });
+      });
+    }
+
+    function stageCount(stage) {
+      if (stage === 'sync') return syncNodes.filter(item => item.status !== '完成').length;
+      return devices.filter(item => item.phase === stage && (stage === 'completed' || item.status !== 'COMPLETED')).length;
+    }
+
+    function renderStageSection(stage) {
+      const tone = stage === 'patrol' ? 'orange' : stage === 'init' || stage === 'teardown' ? 'red' : stage === 'completed' ? 'green' : 'blue';
+      if (stage === 'sync') {
+        return `
+          <section class="stage-section">
+            <div class="stage-section-head">
+              <div class="stage-section-title">${STAGE_LABELS[stage]}</div>
+              <span class="chip orange">${stageCount(stage)} 节点需看</span>
+            </div>
+            <div class="stage-section-body">
+              ${syncNodes.map(node => `
+                <div class="step-group ${node.tone === 'orange' ? 'hot' : ''}">
+                  <div class="step-group-head">
+                    <span class="step-name">${node.step}</span>
+                    <span class="chip ${node.tone}">${node.status}</span>
+                  </div>
+                  <div class="progress-track ${node.tone === 'green' ? 'done' : 'warning'}"><span style="width:${node.progress}%"></span></div>
+                  <div class="device-pile"><span class="device-token gray">${node.host}</span></div>
+                </div>
+              `).join('')}
+            </div>
+          </section>
+        `;
+      }
+
+      const groups = groupedByStep(stage);
+      return `
+        <section class="stage-section">
+          <div class="stage-section-head">
+            <div class="stage-section-title">${STAGE_LABELS[stage]}</div>
+            <span class="chip ${tone}">${stageCount(stage)} 台</span>
+          </div>
+          <div class="stage-section-body">
+            ${groups.map(group => `
+              <div class="step-group ${group.list.some(item => item.status === 'FAILED') ? 'failed' : group.list.some(item => ['RISK', 'UNKNOWN'].includes(item.status)) ? 'hot' : ''}">
+                <div class="step-group-head">
+                  <span class="step-name">${group.step}</span>
+                  <span class="chip">${group.list.length}</span>
+                </div>
+                <div class="device-pile">${stage === 'completed' ? `<span class="device-token gray">${group.list.length} folded</span>` : `${group.list.slice(0, 12).map(renderToken).join('')}${group.list.length > 12 ? `<span class="device-token gray">+${group.list.length - 12}</span>` : ''}`}</div>
+              </div>
+            `).join('') || `<div class="muted">暂无设备停留</div>`}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderStageDetail() {
+      const target = document.getElementById('stageDetail');
+      const stages = activeStage ? [activeStage] : ['sync', 'dispatch', 'init', 'patrol', 'teardown', 'completed'];
+      target.innerHTML = stages.map(renderStageSection).join('');
+      bindTokenEvents(target);
+      document.getElementById('stageFilterLabel').textContent = activeStage ? `${STAGE_LABELS[activeStage]} 筛选中` : '全部阶段';
+      document.getElementById('overviewStageLabel').textContent = activeStage ? `阶段：${STAGE_LABELS[activeStage]}` : '阶段：全部';
+    }
+
+    function renderInterventionQueue() {
+      const target = document.getElementById('interventionQueue');
+      const syncRiskItems = syncNodes
+        .filter(item => item.status !== '完成')
+        .map(item => `
+          <div class="queue-card">
+            <span class="severity-line"></span>
+            <div>
+              <div class="queue-title"><span class="mono">${item.host}</span><span class="chip orange">节点</span></div>
+              <div class="queue-meta">脚本同步 · ${item.step}<br>foreground_watch@v2.4.1<br>${item.status}，进度 ${item.progress}%</div>
+            </div>
+          </div>
+        `);
+      const riskItems = devices
+        .filter(item => ['FAILED', 'RISK', 'UNKNOWN', 'OFFLINE'].includes(item.status))
+        .sort((a, b) => {
+          const weight = { FAILED: 1, UNKNOWN: 2, OFFLINE: 3, RISK: 4, RUNNING: 5, COMPLETED: 9, PENDING: 8, SKIPPED: 8 };
+          return weight[a.status] - weight[b.status];
+        })
+        .slice(0, 7);
+      const deviceCards = riskItems.map(item => {
+        const line = item.status === 'FAILED' ? 'red' : item.status === 'UNKNOWN' ? 'purple' : '';
+        return `
+          <div class="queue-card">
+            <span class="severity-line ${line}"></span>
+            <div>
+              <div class="queue-title"><span class="mono">${item.serial}</span><span class="chip ${chipColor(item.status)}">${STATUS_LABELS[item.status]}</span></div>
+              <div class="queue-meta">Job #${item.jobId} · ${item.hostName}<br>${item.phase} / ${item.currentStep}<br>${item.reason}</div>
+            </div>
+          </div>
+        `;
+      });
+      target.innerHTML = [...syncRiskItems, ...deviceCards].join('');
+    }
+
+    function renderLegend(targetId) {
+      const target = document.getElementById(targetId);
+      const c = counts();
+      target.innerHTML = STATUS_ORDER
+        .filter(status => c[status])
+        .map(status => `
+          <button class="legend-btn ${activeStatus === status ? 'active' : ''}" data-status="${status}">
+            <span class="legend-swatch sw-${status}"></span>${STATUS_LABELS[status]} ${c[status]}
+          </button>
+        `).join('');
+      target.querySelectorAll('.legend-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          activeStatus = activeStatus === btn.dataset.status ? null : btn.dataset.status;
+          renderAll();
+        });
+      });
+    }
+
+    function renderGrid(targetId) {
+      const target = document.getElementById(targetId);
+      target.innerHTML = devices.map(item => {
+        const dim = !matchesFilters(item) ? 'dim' : '';
+        const active = selectedDeviceId === item.deviceId ? 'active' : '';
+        return `<button class="device-cell ${item.status} ${dim} ${active}" data-id="${item.deviceId}" aria-label="${item.serial} ${STATUS_LABELS[item.status]}"></button>`;
+      }).join('');
+      target.querySelectorAll('.device-cell').forEach(cell => {
+        const item = devices.find(d => d.deviceId === Number(cell.dataset.id));
+        cell.addEventListener('mouseenter', event => showTooltip(event, item));
+        cell.addEventListener('mousemove', moveTooltip);
+        cell.addEventListener('mouseleave', hideTooltip);
+        cell.addEventListener('click', () => {
+          selectedDeviceId = item.deviceId;
+          renderAll();
+        });
+      });
+    }
+
+    function renderDeviceList() {
+      const target = document.getElementById('deviceList');
+      const filtered = filteredDevices();
+      document.getElementById('resultCount').textContent = `${filtered.length} 台`;
+      target.innerHTML = filtered.slice(0, 10).map(item => {
+        const line = item.status === 'FAILED' ? 'red' : item.status === 'UNKNOWN' ? 'purple' : '';
+        return `
+          <div class="device-row">
+            <span class="severity-line ${line}" style="height:36px"></span>
+            <div>
+              <div class="mono" style="font-weight:780">${item.serial}</div>
+              <div class="muted">${item.hostName} · Job #${item.jobId} · ${item.phase} / ${item.currentStep}</div>
+            </div>
+            <span class="chip ${chipColor(item.status)}">${STATUS_LABELS[item.status]}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderRawRows() {
+      const target = document.getElementById('rawRows');
+      target.innerHTML = devices.slice(0, 22).map(item => `
+        <tr>
+          <td class="mono">#${item.jobId}</td>
+          <td class="mono">${item.serial}</td>
+          <td>${item.hostName}</td>
+          <td><span class="chip ${chipColor(item.status)}">${STATUS_LABELS[item.status]}</span></td>
+          <td>${item.phase}</td>
+          <td class="mono">${item.currentStep}</td>
+          <td class="mono">${item.scriptName}@${item.scriptVersion}</td>
+          <td>${item.lastSignalAt}</td>
+          <td>${item.reason}</td>
+        </tr>
+      `).join('');
+    }
+
+    function showTooltip(event, item) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.innerHTML = `
+        <strong>${item.serial}</strong><br>
+        Job #${item.jobId} · ${item.hostName}<br>
+        状态：${STATUS_LABELS[item.status]} · ${item.severity}<br>
+        位置：${item.phase} / ${item.currentStep}<br>
+        脚本：${item.scriptName}@${item.scriptVersion}<br>
+        最后更新时间：${item.lastSignalAt}<br>
+        原因：${item.reason}
+      `;
+      tooltip.style.display = 'block';
+      moveTooltip(event);
+    }
+
+    function moveTooltip(event) {
+      const tooltip = document.getElementById('tooltip');
+      tooltip.style.left = `${event.clientX + 14}px`;
+      tooltip.style.top = `${event.clientY + 14}px`;
+    }
+
+    function hideTooltip() {
+      document.getElementById('tooltip').style.display = 'none';
+    }
+
+    function bindTabs() {
+      document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach(item => item.classList.remove('active'));
+          document.querySelectorAll('.tab-content').forEach(item => item.classList.remove('active'));
+          tab.classList.add('active');
+          document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+        });
+      });
+    }
+
+    function bindSearch() {
+      const input = document.getElementById('deviceSearch');
+      input.addEventListener('input', () => {
+        searchQuery = input.value.trim().toLowerCase();
+        renderAll();
+      });
+      document.getElementById('clearStageFilter').addEventListener('click', () => {
+        activeStage = null;
+        renderAll();
+      });
+      document.getElementById('overviewStageLabel').addEventListener('click', () => {
+        activeStage = null;
+        renderAll();
+      });
+    }
+
+    function renderAll() {
+      renderSpine();
+      renderStageDetail();
+      renderInterventionQueue();
+      renderGrid('largeGrid');
+      renderLegend('largeLegend');
+      renderDeviceList();
+      renderRawRows();
+    }
+
+    bindTabs();
+    bindSearch();
+    renderAll();
+  </script>
+</body>
+</html>
