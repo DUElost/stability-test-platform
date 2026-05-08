@@ -13,6 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+def _schedule_ts(value: datetime) -> datetime:
+    return value.replace(tzinfo=None)
+
+
 class FakeTaskSchedule:
     """Mimics TaskSchedule ORM row (ADR-0020：仅 plan_id 触发，无 params/target)."""
 
@@ -34,6 +38,7 @@ def _make_db(*, dedup_hit: bool = False, active_runs: int = 0,
     db = MagicMock()
     db.get_bind.return_value = MagicMock(dialect=MagicMock(name="sqlite"))
     db.commit = AsyncMock()
+    db.rollback = AsyncMock()
 
     def execute_factory():
         calls = {"i": 0}
@@ -69,6 +74,37 @@ def _make_db(*, dedup_hit: bool = False, active_runs: int = 0,
 
 class TestFireSchedule:
     @pytest.mark.asyncio
+    async def test_postgresql_dedup_query_binds_jsonb_containment_value(self):
+        """PostgreSQL JSONB dedup query must bind schedule context for asyncpg."""
+        from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
+
+        from backend.scheduler.cron_scheduler import _recently_triggered_by_schedule
+
+        dialect = MagicMock()
+        dialect.name = "postgresql"
+        bind = MagicMock()
+        bind.dialect = dialect
+        db = MagicMock()
+        db.get_bind.return_value = bind
+
+        async def execute(stmt, *args, **kwargs):
+            compiled = stmt.compile(dialect=PGDialect_asyncpg())
+            sql = str(compiled)
+            assert ":sc::jsonb" not in sql
+            assert {"schedule_id": 66} in compiled.params.values()
+            row = MagicMock()
+            row.first.return_value = None
+            return row
+
+        db.execute = AsyncMock(side_effect=execute)
+
+        result = await _recently_triggered_by_schedule(
+            db, 66, datetime.now(timezone.utc),
+        )
+
+        assert result is False
+
+    @pytest.mark.asyncio
     async def test_dedup_skips_dispatch(self):
         """Same schedule fired in dedup window → skip dispatch."""
         from backend.scheduler.cron_scheduler import _fire_schedule
@@ -84,7 +120,7 @@ class TestFireSchedule:
             await _fire_schedule(db, sched, now)
 
         mock_dispatch.assert_not_called()
-        assert sched.next_run_at == now + timedelta(minutes=3)
+        assert sched.next_run_at == _schedule_ts(now + timedelta(minutes=3))
         assert sched.last_run_at is None
 
     @pytest.mark.asyncio
@@ -103,7 +139,7 @@ class TestFireSchedule:
             await _fire_schedule(db, sched, now)
 
         mock_dispatch.assert_not_called()
-        assert sched.next_run_at == now + timedelta(minutes=3)
+        assert sched.next_run_at == _schedule_ts(now + timedelta(minutes=3))
         assert sched.last_run_at is None
 
     @pytest.mark.asyncio
@@ -125,8 +161,8 @@ class TestFireSchedule:
             await _fire_schedule(db, sched, now)
 
         mock_dispatch.assert_awaited_once_with(42, [1, 2], db, schedule_id=7)
-        assert sched.last_run_at == now
-        assert sched.next_run_at == now + timedelta(minutes=3)
+        assert sched.last_run_at == _schedule_ts(now)
+        assert sched.next_run_at == _schedule_ts(now + timedelta(minutes=3))
 
     @pytest.mark.asyncio
     async def test_dedup_failure_fails_open(self):
@@ -145,6 +181,7 @@ class TestFireSchedule:
             await _fire_schedule(db, sched, now)
 
         mock_dispatch.assert_awaited_once()
+        db.rollback.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_overlap_failure_fails_closed(self):
@@ -162,8 +199,43 @@ class TestFireSchedule:
             await _fire_schedule(db, sched, now)
 
         mock_dispatch.assert_not_called()
-        assert sched.next_run_at == now + timedelta(minutes=3)
+        db.rollback.assert_awaited_once()
+        assert sched.next_run_at == _schedule_ts(now + timedelta(minutes=3))
         assert sched.last_run_at is None
+
+
+# ===========================================================================
+# TaskSchedule timestamp values — PostgreSQL TIMESTAMP WITHOUT TIME ZONE
+# ===========================================================================
+
+class TestTaskScheduleTimestamps:
+    def test_scheduler_next_run_is_naive_utc(self):
+        from backend.scheduler.cron_scheduler import _compute_next_run
+
+        result = _compute_next_run(
+            "0 2 * * *",
+            datetime(2026, 5, 8, 12, 41, tzinfo=timezone.utc),
+        )
+
+        assert result.tzinfo is None
+
+    def test_schedule_api_next_run_is_naive_utc(self):
+        from backend.api.routes.schedules import _compute_next_run
+
+        result = _compute_next_run(
+            "0 2 * * *",
+            datetime(2026, 5, 8, 12, 41, tzinfo=timezone.utc),
+        )
+
+        assert result.tzinfo is None
+
+    def test_task_schedule_created_at_default_is_naive_utc(self):
+        from backend.models.schedule import TaskSchedule
+
+        default_factory = TaskSchedule.__table__.c.created_at.default.arg
+        result = default_factory(None)
+
+        assert result.tzinfo is None
 
 
 # ===========================================================================

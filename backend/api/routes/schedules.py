@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from backend.core.database import get_db
 from backend.core.audit import record_audit
 from backend.models.host import Device
-from backend.models.schedule import TaskSchedule
+from backend.models.schedule import TaskSchedule, schedule_timestamp
 from backend.models.plan import Plan
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas import (
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/api/v1/schedules", tags=["schedules"])
 def _compute_next_run(cron_expression: str, after: datetime) -> datetime:
     from croniter import croniter
     cron = croniter(cron_expression, after)
-    return cron.get_next(datetime)
+    return schedule_timestamp(cron.get_next(datetime))
 
 
 def _validate_cron(expr: str) -> None:

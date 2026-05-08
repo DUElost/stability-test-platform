@@ -5,6 +5,17 @@ from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, JS
 from backend.core.database import Base
 
 
+def schedule_timestamp(value: datetime) -> datetime:
+    """Return UTC-naive datetime for task_schedules timestamp columns."""
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _utcnow_schedule_timestamp(ctx=None) -> datetime:
+    return schedule_timestamp(datetime.now(timezone.utc))
+
+
 class TaskSchedule(Base):
     """Cron-based Plan scheduling (ADR-0020).
 
@@ -23,5 +34,5 @@ class TaskSchedule(Base):
     last_run_at = Column(DateTime, nullable=True)
     next_run_at = Column(DateTime, nullable=True)
     created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    created_at = Column(DateTime, default=_utcnow_schedule_timestamp, nullable=False)
     device_ids = Column(JSON, nullable=True)

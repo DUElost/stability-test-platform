@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
-from backend.models.schedule import TaskSchedule
+from backend.models.schedule import TaskSchedule, schedule_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,11 @@ def _compute_next_run(cron_expression: str, after: datetime) -> datetime:
     """Compute next run time using croniter."""
     from croniter import croniter
     cron = croniter(cron_expression, after)
-    return cron.get_next(datetime)
+    return schedule_timestamp(cron.get_next(datetime))
+
+
+def _next_schedule_run(cron_expression: str, after: datetime) -> datetime:
+    return schedule_timestamp(_compute_next_run(cron_expression, after))
 
 
 async def _dispatch_plan_async(
@@ -77,9 +81,8 @@ async def _recently_triggered_by_schedule(
             .where(
                 PlanRun.parent_plan_run_id.is_(None),
                 PlanRun.started_at >= since,
-                text("run_context @> :sc::jsonb"),
+                PlanRun.run_context.contains({"schedule_id": int(schedule_id)}),
             )
-            .params(sc=f'{{"schedule_id": {int(schedule_id)}}}')
             .limit(1)
         )
     else:
@@ -100,23 +103,30 @@ async def _recently_triggered_by_schedule(
 
 async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
     """Evaluate and fire a single TaskSchedule row (ADR-0020: Plan-based)."""
-    if sched.plan_id:
+    schedule_id = sched.id
+    plan_id = sched.plan_id
+    cron_expression = sched.cron_expression
+    schedule_name = sched.name
+    device_ids = list(sched.device_ids or [])
+
+    if plan_id:
         from backend.models.plan_run import PlanRun
 
         # ── 1. schedule 抖动去重（ADR-0020 §"落地 9"）──
         dedup_since = now - timedelta(seconds=SCHEDULE_DEDUP_WINDOW_SECONDS)
         try:
-            if await _recently_triggered_by_schedule(db, sched.id, dedup_since):
+            if await _recently_triggered_by_schedule(db, schedule_id, dedup_since):
                 logger.info(
                     "cron_skip_dedup schedule_id=%s plan_id=%s window=%.1fs",
-                    sched.id, sched.plan_id, SCHEDULE_DEDUP_WINDOW_SECONDS,
+                    schedule_id, plan_id, SCHEDULE_DEDUP_WINDOW_SECONDS,
                 )
-                sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+                sched.next_run_at = _next_schedule_run(cron_expression, now)
                 return
         except Exception:
+            await db.rollback()
             logger.warning(
                 "cron_dedup_check_failed schedule_id=%s — failing open",
-                sched.id, exc_info=True,
+                schedule_id, exc_info=True,
             )
 
         # ── 2. plan 重叠跳过（避免对同一 plan 同时多窗口运行） ──
@@ -125,7 +135,7 @@ async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
             active_count_result = await db.execute(
                 select(PlanRun)
                 .where(
-                    PlanRun.plan_id == sched.plan_id,
+                    PlanRun.plan_id == plan_id,
                     PlanRun.status == "RUNNING",
                     PlanRun.started_at > stale_cutoff,
                 )
@@ -134,38 +144,38 @@ async def _fire_schedule(db, sched: "TaskSchedule", now: datetime) -> None:
             if active_count > 0:
                 logger.info(
                     "cron_skip_overlap schedule_id=%s plan_id=%s active_runs=%d",
-                    sched.id, sched.plan_id, active_count,
+                    schedule_id, plan_id, active_count,
                 )
-                sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+                sched.next_run_at = _next_schedule_run(cron_expression, now)
                 return
         except Exception as e:
+            await db.rollback()
             logger.warning(
                 "overlap_check_failed schedule_id=%s, skipping dispatch (fail-closed): %s",
-                sched.id, e,
+                schedule_id, e,
             )
-            sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+            sched.next_run_at = _next_schedule_run(cron_expression, now)
             return
 
-        device_ids = sched.device_ids or []
         await _dispatch_plan_async(
-            sched.plan_id, device_ids, db, schedule_id=sched.id,
+            plan_id, device_ids, db, schedule_id=schedule_id,
         )
         logger.info(
             "cron_plan_dispatched schedule_id=%s plan_id=%s",
-            sched.id, sched.plan_id,
+            schedule_id, plan_id,
         )
     else:
         logger.error(
             "cron_schedule_skip_no_plan schedule_id=%s name=%s — "
             "plan_id is required",
-            sched.id, sched.name,
+            schedule_id, schedule_name,
         )
 
-    sched.last_run_at = now
-    sched.next_run_at = _compute_next_run(sched.cron_expression, now)
+    sched.last_run_at = schedule_timestamp(now)
+    sched.next_run_at = _next_schedule_run(cron_expression, now)
     logger.info(
         "cron_schedule_updated schedule_id=%s next_run=%s",
-        sched.id, sched.next_run_at,
+        schedule_id, sched.next_run_at,
     )
 
 
@@ -178,7 +188,7 @@ async def check_and_fire_schedules() -> None:
     async with AsyncSessionLocal() as db:
         now = datetime.now(timezone.utc)
         # next_run_at is TIMESTAMP WITHOUT TIME ZONE; strip tz for comparison
-        now_naive = now.replace(tzinfo=None)
+        now_naive = schedule_timestamp(now)
         result = await db.execute(
             select(TaskSchedule).where(
                 TaskSchedule.enabled == True,  # noqa: E712
@@ -192,6 +202,7 @@ async def check_and_fire_schedules() -> None:
                 await _fire_schedule(db, sched, now)
             except Exception:
                 logger.exception("cron_schedule_execute_error schedule_id=%s", sched.id)
+                await db.rollback()
 
         if schedules:
             await db.commit()
