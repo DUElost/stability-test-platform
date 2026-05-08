@@ -887,6 +887,132 @@ async def update_job_step_status(
     return ok({"job_id": job_id, "step_id": step_id, "status": payload.status})
 
 
+# ── ADR-0022: Patrol Heartbeat ────────────────────────────────────────────────
+
+
+class PatrolHeartbeatIn(BaseModel):
+    """ADR-0022 D3: per-cycle patrol aggregation upload (no step_trace written).
+
+    Contract:
+      cycle_index: monotonic; server uses MAX(existing, payload) so out-of-order
+        heartbeats do not regress the cycle counter.
+      success_delta / failed_delta: positive integers added to the running totals
+        in the same UPDATE.  Either may be 0.  Agent should send delta=1 per
+        cycle in the normal path (success XOR failure).
+      current_step: best-effort; UI uses it for the device matrix.
+      current_failure_streak: Agent-computed value (server overwrites the column).
+      next_retry_at: ISO8601 string; null when not in backoff.
+      manual_action_observed: optional echo-back: when Agent has consumed a
+        RETRY_NOW or EXIT_REQUESTED, it sends the value here so the server can
+        clear the column atomically.
+    """
+
+    fencing_token: str
+    cycle_index: int
+    success_delta: int = 0
+    failed_delta: int = 0
+    current_step: Optional[str] = None
+    current_failure_streak: int = 0
+    next_retry_at: Optional[str] = None
+    manual_action_observed: Optional[str] = None
+
+
+class PatrolHeartbeatOut(BaseModel):
+    """Mirror of the post-update job_instance patrol fields, plus pending
+    manual_action so the Agent can short-circuit its sleep loop without a
+    separate poll endpoint.
+    """
+
+    job_id: int
+    patrol_cycle_count: int
+    patrol_success_cycle_count: int
+    patrol_failed_cycle_count: int
+    current_failure_streak: int
+    next_retry_at: Optional[str] = None
+    manual_action: Optional[str] = None  # pending action for Agent to honor
+
+
+@router.post(
+    "/jobs/{job_id}/patrol-heartbeat",
+    response_model=ApiResponse[PatrolHeartbeatOut],
+)
+async def patrol_heartbeat(
+    job_id: int,
+    payload: PatrolHeartbeatIn,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """ADR-0022 D2/D3: receive a patrol cycle aggregate, update job_instance
+    counter columns atomically, return current pending manual_action.
+
+    Does NOT write to step_trace.  Out-of-order safe: cycle_count is monotonic
+    via GREATEST().  Empty deltas are accepted (pure heartbeat / mid-cycle ping).
+    """
+    job = await db.get(JobInstance, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+
+    await _require_valid_runtime_lease(db, job, payload.fencing_token)
+
+    if payload.success_delta < 0 or payload.failed_delta < 0:
+        raise HTTPException(status_code=400, detail="delta must be non-negative")
+    if payload.cycle_index < 0:
+        raise HTTPException(status_code=400, detail="cycle_index must be non-negative")
+    if payload.current_failure_streak < 0:
+        raise HTTPException(status_code=400, detail="current_failure_streak must be non-negative")
+
+    next_retry_dt = None
+    if payload.next_retry_at:
+        try:
+            next_retry_dt = datetime.fromisoformat(payload.next_retry_at.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"invalid next_retry_at: {payload.next_retry_at}")
+
+    now = datetime.now(timezone.utc)
+
+    # Atomic UPDATE — out-of-order heartbeats use GREATEST() to avoid regression.
+    update_values: Dict[str, Any] = {
+        "patrol_cycle_count":         func.greatest(JobInstance.patrol_cycle_count, payload.cycle_index),
+        "patrol_success_cycle_count": JobInstance.patrol_success_cycle_count + payload.success_delta,
+        "patrol_failed_cycle_count":  JobInstance.patrol_failed_cycle_count + payload.failed_delta,
+        "current_failure_streak":     payload.current_failure_streak,
+        "next_retry_at":              next_retry_dt,
+        "last_patrol_heartbeat_at":   now,
+        "updated_at":                 now,
+    }
+    if payload.current_step is not None:
+        update_values["current_patrol_step"] = payload.current_step
+
+    # If Agent reports it consumed/observed a manual_action, clear it.
+    if payload.manual_action_observed:
+        update_values["manual_action"] = None
+
+    await db.execute(
+        update(JobInstance)
+        .where(JobInstance.id == job_id)
+        .values(**update_values)
+    )
+    await db.commit()
+
+    # Re-fetch to return canonical values + any pending manual_action newly set.
+    refreshed = await db.get(JobInstance, job_id)
+    return ok(PatrolHeartbeatOut(
+        job_id=job_id,
+        patrol_cycle_count=refreshed.patrol_cycle_count or 0,
+        patrol_success_cycle_count=refreshed.patrol_success_cycle_count or 0,
+        patrol_failed_cycle_count=refreshed.patrol_failed_cycle_count or 0,
+        current_failure_streak=refreshed.current_failure_streak or 0,
+        next_retry_at=_iso_or_none(refreshed.next_retry_at),
+        manual_action=refreshed.manual_action,
+    ))
+
+
+def _iso_or_none(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None:
+        return None
+    return _as_utc(dt).isoformat()
+
+
 # ── Log Signal ingestion ──────────────────────────────────────────────────────
 
 class LogSignalIn(BaseModel):

@@ -5,6 +5,7 @@ import os
 from typing import Any, Callable, Dict, Optional
 
 from .config import get_run_log_dir
+from .patrol_heartbeat_uploader import PatrolHeartbeatUploader
 from .pipeline_engine import PipelineEngine
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,10 @@ def execute_pipeline_run(
 
     agent_secret = os.getenv("AGENT_SECRET", "")
 
+    # ADR-0022: per-run heartbeat uploader for patrol stage aggregation.
+    # Stateless on the Agent side; safe to instantiate per job.
+    patrol_heartbeat = PatrolHeartbeatUploader(api_url=api_url, agent_secret=agent_secret)
+
     engine = PipelineEngine(
         adb=adb,
         serial=device_serial,
@@ -41,13 +46,16 @@ def execute_pipeline_run(
         agent_secret=agent_secret,
         is_aborted=is_aborted,
         fencing_token=fencing_token,
+        patrol_heartbeat_uploader=patrol_heartbeat,
     )
 
     result = engine.execute(pipeline_def)
 
     status = "FINISHED" if result.success else "FAILED"
     if not result.success and isinstance(getattr(result, "metadata", None), dict):
-        if result.metadata.get("termination_reason") == "abort":
+        # ADR-0022: manual_exit shares the abort-style terminal semantics
+        # (skip teardown + status=ABORTED) — surface as CANCELED upstream.
+        if result.metadata.get("termination_reason") in ("abort", "manual_exit"):
             status = "CANCELED"
 
     return {

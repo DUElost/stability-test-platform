@@ -26,10 +26,18 @@ def _make_engine(
     api_url=None,
     log_dir=None,
 ):
-    """Create a PipelineEngine with mocked external dependencies."""
+    """Create a PipelineEngine with mocked external dependencies.
+
+    ADR-0022: a stub patrol_heartbeat_uploader is injected so tests that
+    drive the patrol loop don't accidentally hit the network.  Tests that
+    care about heartbeat semantics live in test_pipeline_engine_patrol.py.
+    """
     adb = MagicMock()
     mq = MagicMock()
     mq.connected = True
+
+    stub_uploader = MagicMock()
+    stub_uploader.send.return_value = {"manual_action": None}
 
     engine = PipelineEngine(
         adb=adb,
@@ -39,8 +47,16 @@ def _make_engine(
         mq_producer=mq,
         api_url=api_url,
         is_aborted=is_aborted or (lambda: False),
+        patrol_heartbeat_uploader=stub_uploader,
     )
     return engine, adb, mq
+
+
+def _patrol_returns(success: int = 1, failed: int = 0, last_failed=None):
+    """Helper: stub for engine._run_patrol_cycle_steps return signature."""
+    def _stub(steps):
+        return success, failed, last_failed
+    return _stub
 
 
 def _minimal_lifecycle(
@@ -119,11 +135,17 @@ class TestLifecycleE2EFlow:
             execution_log.append(f"{phase}:{step_id}")
             return StepResult(success=True)
 
+        def mock_patrol_cycle(steps):
+            first_step = (steps or [{}])[0]
+            execution_log.append(f"patrol:{first_step.get('step_id', 'unknown')}")
+            return 1, 0, None  # success_count=1, failed_count=0, last_failed=None
+
         def mock_teardown(teardown_def):
             execution_log.append("teardown")
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
         engine._run_lifecycle_steps = mock_run_steps
+        engine._run_patrol_cycle_steps = mock_patrol_cycle  # ADR-0022 patrol entry
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
@@ -182,6 +204,7 @@ class TestLifecycleE2EFlow:
         mock_time.side_effect = mock_time_fn
 
         engine._run_lifecycle_steps = lambda phase, steps: StepResult(success=True)
+        engine._run_patrol_cycle_steps = _patrol_returns(success=1)
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -220,28 +243,24 @@ class TestLifecycleE2EFlow:
             engine._shared["start_monkey"] = {"pid": 42}
             return StepResult(success=True)
 
-        def patrol_steps():
-            # Patrol should see the PID from init
-            assert "start_monkey" in engine._shared
-            assert engine._shared["start_monkey"]["pid"] == 42
-            return StepResult(success=True)
-
         call_count = [0]
 
         def mock_run_steps(phase, steps):
-            first_step = (steps or [{}])[0]
-            step_id = first_step.get("step_id", "unknown")
-            if "init" in step_id:
-                return init_steps()
-            else:
-                call_count[0] += 1
-                return patrol_steps()
+            # init only — patrol now goes through _run_patrol_cycle_steps
+            return init_steps()
+
+        def mock_patrol_cycle(steps):
+            assert "start_monkey" in engine._shared
+            assert engine._shared["start_monkey"]["pid"] == 42
+            call_count[0] += 1
+            return 1, 0, None  # patrol cycle success aggregate
 
         def mock_teardown(teardown_def):
             assert engine._shared["start_monkey"]["pid"] == 42
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
         engine._run_lifecycle_steps = mock_run_steps
+        engine._run_patrol_cycle_steps = mock_patrol_cycle  # ADR-0022 patrol entry
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
@@ -269,13 +288,12 @@ class TestPatrolTimingAndTermination:
         time_seq = iter([0, 11, 11, 11, 11, 11])
         mock_time.side_effect = lambda: next(time_seq, 999)
 
-        def mock_run_steps(phase, steps):
-            first_step = (steps or [{}])[0]
-            if "patrol" in first_step.get("step_id", ""):
-                patrol_count[0] += 1
-            return StepResult(success=True)
+        def mock_patrol_cycle(steps):
+            patrol_count[0] += 1
+            return 1, 0, None
 
-        engine._run_lifecycle_steps = mock_run_steps
+        engine._run_lifecycle_steps = lambda phase, steps: StepResult(success=True)
+        engine._run_patrol_cycle_steps = mock_patrol_cycle  # ADR-0022 patrol entry
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -297,15 +315,14 @@ class TestPatrolTimingAndTermination:
 
         patrol_count = [0]
 
-        def mock_run_steps(phase, steps):
-            first_step = (steps or [{}])[0]
-            if "patrol" in first_step.get("step_id", ""):
-                patrol_count[0] += 1
-                if patrol_count[0] >= 2:
-                    engine._canceled = True
-            return StepResult(success=True)
+        def mock_patrol_cycle(steps):
+            patrol_count[0] += 1
+            if patrol_count[0] >= 2:
+                engine._canceled = True
+            return 1, 0, None
 
-        engine._run_lifecycle_steps = mock_run_steps
+        engine._run_lifecycle_steps = lambda phase, steps: StepResult(success=True)
+        engine._run_patrol_cycle_steps = mock_patrol_cycle  # ADR-0022
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -326,15 +343,14 @@ class TestPatrolTimingAndTermination:
 
         patrol_count = [0]
 
-        def mock_run_steps(phase, steps):
-            first_step = (steps or [{}])[0]
-            if "patrol" in first_step.get("step_id", ""):
-                patrol_count[0] += 1
-                if patrol_count[0] >= 3:
-                    abort_flag[0] = True
-            return StepResult(success=True)
+        def mock_patrol_cycle(steps):
+            patrol_count[0] += 1
+            if patrol_count[0] >= 3:
+                abort_flag[0] = True
+            return 1, 0, None
 
-        engine._run_lifecycle_steps = mock_run_steps
+        engine._run_lifecycle_steps = lambda phase, steps: StepResult(success=True)
+        engine._run_patrol_cycle_steps = mock_patrol_cycle  # ADR-0022
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )
@@ -348,18 +364,23 @@ class TestPatrolTimingAndTermination:
         assert not result.success  # abort is not "successful"
 
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
-    def test_patrol_failure_terminates_loop(self, mock_sleep):
-        """Patrol returning failure breaks the loop and triggers teardown."""
+    def test_patrol_failure_no_longer_terminates_loop(self, mock_sleep):
+        """ADR-0022: patrol failure now triggers backoff, NOT termination.
+
+        Replaces the legacy contract "any patrol step failure breaks the loop"
+        with the new heartbeat+backoff model: failed cycles increment the
+        streak and continue.  The loop only terminates on cancel/timeout/
+        manual_exit/lock_lost — not on script failures.
+        """
         engine, adb, mq = _make_engine()
         patrol_count = [0]
 
-        def mock_run_steps(phase, steps):
-            first_step = (steps or [{}])[0]
-            if "patrol" in first_step.get("step_id", ""):
-                patrol_count[0] += 1
-                if patrol_count[0] >= 2:
-                    return StepResult(success=False, error_message="device unreachable")
-            return StepResult(success=True)
+        def mock_patrol_cycle(steps):
+            patrol_count[0] += 1
+            if patrol_count[0] >= 5:
+                engine._canceled = True
+            # All cycles fail (1 success + 1 failed step → cycle-failed)
+            return 1, 1, "patrol_step"
 
         teardown_called = [False]
 
@@ -367,7 +388,8 @@ class TestPatrolTimingAndTermination:
             teardown_called[0] = True
             return StepResult(success=True, metadata={"teardown_status": "SUCCESS"})
 
-        engine._run_lifecycle_steps = mock_run_steps
+        engine._run_lifecycle_steps = lambda phase, steps: StepResult(success=True)
+        engine._run_patrol_cycle_steps = mock_patrol_cycle  # ADR-0022
         engine._execute_teardown_best_effort = mock_teardown
         engine._verify_device_lease = lambda: None
         engine._archive_logs = lambda: None
@@ -375,9 +397,11 @@ class TestPatrolTimingAndTermination:
         pipeline_def = _minimal_lifecycle(timeout_seconds=9999, interval_seconds=0.001)
         result = engine._execute_lifecycle(pipeline_def)
 
-        assert result.metadata["termination_reason"] == "patrol_failure"
+        # Failure does NOT terminate; only cancel does
+        assert result.metadata["termination_reason"] == "abort"
+        # Patrol kept running through multiple failed cycles
+        assert patrol_count[0] >= 5
         assert teardown_called[0] is True
-        assert "patrol #2 failed" in result.error_message
 
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
     def test_init_failure_triggers_teardown(self, mock_sleep):
@@ -415,6 +439,7 @@ class TestPatrolTimingAndTermination:
         mock_time.side_effect = lambda: next(time_seq, 999)
 
         engine._run_lifecycle_steps = lambda phase, steps: StepResult(success=True)
+        engine._run_patrol_cycle_steps = _patrol_returns(success=1)  # ADR-0022
         engine._execute_teardown_best_effort = lambda td: StepResult(
             success=True, metadata={"teardown_status": "SUCCESS"}
         )

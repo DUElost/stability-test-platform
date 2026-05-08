@@ -91,6 +91,7 @@ class PipelineEngine:
         nfs_root: Optional[str] = None,
         is_aborted: Optional[Callable[[], bool]] = None,
         fencing_token: Optional[str] = None,
+        patrol_heartbeat_uploader=None,  # ADR-0022
     ):
         self._adb = adb
         self._serial = serial
@@ -105,6 +106,7 @@ class PipelineEngine:
         self._nfs_root = nfs_root if nfs_root is not None else os.getenv("STP_NFS_ROOT", "")
         self._is_aborted = is_aborted
         self._fencing_token = fencing_token or ""  # ADR-0019 Phase 2b
+        self._patrol_heartbeat = patrol_heartbeat_uploader  # ADR-0022
         self._shared: dict = {}
         self._canceled = False
 
@@ -315,8 +317,19 @@ class PipelineEngine:
                 time.sleep(5 * (attempt + 1))
         return False
 
-    def _execute_step(self, phase: str, step: dict) -> StepResult:
-        """Execute a single lifecycle step. Reports STARTED/COMPLETED/FAILED via MQ."""
+    def _execute_step(
+        self,
+        phase: str,
+        step: dict,
+        *,
+        suppress_success_trace: bool = False,
+    ) -> StepResult:
+        """Execute a single lifecycle step. Reports STARTED/COMPLETED/FAILED via MQ.
+
+        ADR-0022: when ``suppress_success_trace=True`` (used for patrol stage
+        success-path), the STARTED + COMPLETED traces are skipped to avoid
+        per-cycle volume blow-up.  Failure / SKIPPED traces are always written.
+        """
         step_id = step.get("step_id", "unknown")
         action = step.get("action", "")
         params = step.get("params", {})
@@ -324,6 +337,7 @@ class PipelineEngine:
 
         if step.get("enabled") is False:
             result = StepResult(success=True, skipped=True, skip_reason="step disabled")
+            # Always trace SKIPPED — meaningful signal even in patrol.
             self._report_step_trace_mq(
                 step_id,
                 phase,
@@ -333,7 +347,8 @@ class PipelineEngine:
             )
             return result
 
-        self._report_step_trace_mq(step_id, phase, "STARTED", "RUNNING")
+        if not suppress_success_trace:
+            self._report_step_trace_mq(step_id, phase, "STARTED", "RUNNING")
 
         log_file = None
         if self._log_dir:
@@ -373,14 +388,22 @@ class PipelineEngine:
         status = "SKIPPED" if result.success and result.skipped else (
             "COMPLETED" if result.success else "FAILED"
         )
-        self._report_step_trace_mq(
-            step_id,
-            phase,
-            event_type,
-            status,
-            output=result.skip_reason if result.skipped else (result.output or None),
-            error_message=result.error_message if not result.success else None,
+
+        # ADR-0022: skip COMPLETED trace for patrol-success path; FAILED always traces.
+        skip_completion_trace = (
+            suppress_success_trace
+            and result.success
+            and not result.skipped  # SKIPPED still traces (rare, meaningful)
         )
+        if not skip_completion_trace:
+            self._report_step_trace_mq(
+                step_id,
+                phase,
+                event_type,
+                status,
+                output=result.skip_reason if result.skipped else (result.output or None),
+                error_message=result.error_message if not result.success else None,
+            )
 
         # Store metrics in shared context (mirrors legacy _execute_step behavior)
         if result.metrics:
@@ -572,89 +595,27 @@ class PipelineEngine:
 
             elif patrol_def:
                 # ── Phase 2: Patrol loop (only if init succeeded) ──
-                interval = patrol_def.get("interval_seconds", 300)
-                init_completed_at = time.time()
-                iteration = 0
-                last_lease_verify = 0.0
-                _LEASE_REVERIFY_INTERVAL = 300  # re-verify lease every 5 min in patrol
-
-                self._report_job_status_mq("PATROL_RUNNING")
-
-                while True:
-                    # Check termination conditions before each patrol
-                    if self._is_lock_lost() or self._canceled:
-                        termination_reason = "abort"
-                        logger.info("[Lifecycle] run=%d — abort detected, ending patrol loop", self._run_id)
-                        break
-
-                    if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
-                        termination_reason = "timeout"
-                        logger.info("[Lifecycle] run=%d — timeout reached (%ds), ending patrol loop", self._run_id, timeout_seconds)
-                        break
-
-                    # Periodic lease re-verification: catch silent lease loss
-                    # between LeaseRenewer cycles (defense-in-depth)
-                    if time.time() - last_lease_verify > _LEASE_REVERIFY_INTERVAL:
-                        lock_err = self._verify_device_lease()
-                        if lock_err:
-                            termination_reason = "abort"
-                            lifecycle_error = f"lease re-verification failed: {lock_err.error_message}"
-                            logger.error("[Lifecycle] run=%d — lease lost during patrol, aborting", self._run_id)
-                            break
-                        last_lease_verify = time.time()
-
-                    iteration += 1
-                    logger.info("[Lifecycle] run=%d — [Patrol #%d] starting", self._run_id, iteration)
-
-                    patrol_result = self._run_lifecycle_steps("patrol", patrol_def["steps"])
-
-                    if not patrol_result.success:
-                        # Distinguish lock_lost (abort) from genuine patrol failure
-                        if patrol_result.error_message == "device_lease_lost":
-                            termination_reason = "abort"
-                        else:
-                            termination_reason = "patrol_failure"
-                            lifecycle_error = f"patrol #{iteration} failed: {patrol_result.error_message}"
-                        logger.error("[Lifecycle] run=%d — [Patrol #%d] failed: %s", self._run_id, iteration, patrol_result.error_message)
-                        break
-
-                    # Report patrol progress
-                    time_elapsed = time.time() - init_completed_at
-                    time_remaining = max(0, timeout_seconds - time_elapsed) if timeout_seconds > 0 else -1
-                    next_patrol_at = (datetime.now(timezone.utc) + timedelta(seconds=interval)).isoformat() + "Z" if interval > 0 else ""
-
-                    self._report_job_status_mq(
-                        "PATROL_RUNNING",
-                        reason=f"iteration={iteration} next_in={interval}s remaining={int(time_remaining)}s",
-                    )
-
-                    logger.info(
-                        "[Lifecycle] run=%d — [Patrol #%d] completed, next in %ds (remaining: %ds)",
-                        self._run_id, iteration, interval, int(time_remaining),
-                    )
-
-                    # Fixed-delay wait with abort/timeout checking (sleep in 5s chunks)
-                    sleep_remaining = interval
-                    while sleep_remaining > 0:
-                        chunk = min(sleep_remaining, 5)
-                        time.sleep(chunk)
-                        sleep_remaining -= chunk
-                        if self._is_lock_lost() or self._canceled:
-                            termination_reason = "abort"
-                            break
-                        if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
-                            termination_reason = "timeout"
-                            logger.info("[Lifecycle] run=%d — timeout reached during sleep, ending patrol loop", self._run_id)
-                            break
-                    if termination_reason in ("abort", "timeout"):
-                        break
+                # ADR-0022: per-cycle aggregate via patrol_heartbeat_uploader,
+                # exponential backoff on consecutive failure, manual_action
+                # observation for runtime intervention.
+                termination_reason, lifecycle_error = self._run_patrol_loop(
+                    patrol_def, timeout_seconds, init_completed_at=time.time(),
+                )
 
         finally:
-            # ── Phase 3: Teardown (best-effort, always runs) ──
-            self._report_job_status_mq("TEARDOWN_RUNNING", reason=f"termination_reason={termination_reason}")
-            logger.info("[Lifecycle] run=%d — executing teardown (reason: %s)", self._run_id, termination_reason)
-
-            teardown_result = self._execute_teardown_best_effort(teardown_def)
+            # ── Phase 3: Teardown (best-effort) ──
+            # ADR-0022 BO4: manual_exit skips teardown entirely; the device
+            # is reclaimed via lease release + the next Plan's init re-checks.
+            if termination_reason == "manual_exit":
+                logger.info(
+                    "[Lifecycle] run=%d — manual_exit: skipping teardown (ADR-0022 BO4)",
+                    self._run_id,
+                )
+                teardown_result = None
+            else:
+                self._report_job_status_mq("TEARDOWN_RUNNING", reason=f"termination_reason={termination_reason}")
+                logger.info("[Lifecycle] run=%d — executing teardown (reason: %s)", self._run_id, termination_reason)
+                teardown_result = self._execute_teardown_best_effort(teardown_def)
 
         # ── Unified exit: terminal MQ + artifact + StepResult ──
         success = termination_reason in ("completed", "timeout")
@@ -663,7 +624,7 @@ class PipelineEngine:
         # Map termination_reason to MQ terminal status
         if success:
             mq_status = "COMPLETED"
-        elif termination_reason == "abort":
+        elif termination_reason in ("abort", "manual_exit"):
             mq_status = "ABORTED"
         else:
             mq_status = "FAILED"
@@ -675,7 +636,10 @@ class PipelineEngine:
 
         # Merge teardown metadata into final result
         final_metadata = {"termination_reason": termination_reason}
-        if teardown_result and isinstance(teardown_result.metadata, dict):
+        if teardown_result is None:
+            # ADR-0022 BO4: manual_exit explicitly skipped teardown
+            final_metadata["teardown_status"] = "SKIPPED"
+        elif isinstance(teardown_result.metadata, dict):
             final_metadata["teardown_status"] = teardown_result.metadata.get("teardown_status", "UNKNOWN")
 
         return StepResult(
@@ -685,6 +649,202 @@ class PipelineEngine:
             artifact=artifact,
             metadata=final_metadata,
         )
+
+    # ==================================================================
+    # ADR-0022: Patrol loop with heartbeat aggregation + backoff +
+    #           manual_action observation
+    # ==================================================================
+
+    def _run_patrol_loop(
+        self,
+        patrol_def: dict,
+        timeout_seconds: int,
+        *,
+        init_completed_at: float,
+    ) -> tuple[str, str]:
+        """Execute the patrol stage with ADR-0022 semantics.
+
+        Returns ``(termination_reason, lifecycle_error)`` in the same format
+        the caller expects: termination_reason ∈ {completed, timeout, abort,
+        patrol_failure, manual_exit}.
+
+        Per-cycle behavior (vs. legacy "fail-fast on any step"):
+          1. Run all patrol steps best-effort (single-step failure no longer
+             aborts the cycle).  Failures are still traced; successes are not
+             (suppress_success_trace=True).
+          2. Aggregate ``success_delta`` / ``failed_delta`` per cycle and POST
+             /patrol-heartbeat to the server.  Server returns pending
+             ``manual_action`` so we can short-circuit sleep / exit patrol.
+          3. If any step failed, increment ``failure_streak`` and compute
+             ``backoff_seconds`` via exponential formula (D4).  If
+             ``failure_streak == 0`` (cycle clean), reset and use the
+             configured ``interval_seconds`` instead.
+          4. If ``manual_action == EXIT_REQUESTED`` from any heartbeat,
+             return termination_reason='manual_exit' and skip teardown
+             (BO4: handled in the caller's finally / unified-exit block by
+             treating manual_exit identically to abort).
+        """
+        from backend.agent.patrol_heartbeat_uploader import compute_backoff_seconds
+
+        interval = patrol_def.get("interval_seconds", 300)
+        backoff_policy = patrol_def.get("backoff_policy") or {}
+        backoff_base = float(backoff_policy.get("base_seconds", 60.0))
+        backoff_growth = float(backoff_policy.get("growth_factor", 2.0))
+        backoff_max = float(backoff_policy.get("max_interval_seconds", 3600.0))
+
+        steps = patrol_def.get("steps", [])
+        iteration = 0
+        failure_streak = 0
+        last_lease_verify = 0.0
+        last_observed_action: Optional[str] = None
+        _LEASE_REVERIFY_INTERVAL = 300
+
+        self._report_job_status_mq("PATROL_RUNNING")
+        termination_reason = "completed"
+        lifecycle_error = ""
+
+        while True:
+            # ── Termination checks before each cycle ──
+            if self._is_lock_lost() or self._canceled:
+                logger.info("[Lifecycle] run=%d — abort detected, ending patrol loop", self._run_id)
+                return "abort", ""
+
+            if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
+                logger.info("[Lifecycle] run=%d — timeout reached (%ds), ending patrol loop", self._run_id, timeout_seconds)
+                return "timeout", ""
+
+            if last_observed_action == "EXIT_REQUESTED":
+                logger.info("[Lifecycle] run=%d — manual EXIT_REQUESTED observed, ending patrol", self._run_id)
+                return "manual_exit", ""
+
+            # Periodic lease re-verification: defense-in-depth
+            if time.time() - last_lease_verify > _LEASE_REVERIFY_INTERVAL:
+                lock_err = self._verify_device_lease()
+                if lock_err:
+                    logger.error("[Lifecycle] run=%d — lease lost during patrol", self._run_id)
+                    return "abort", f"lease re-verification failed: {lock_err.error_message}"
+                last_lease_verify = time.time()
+
+            iteration += 1
+            logger.info("[Lifecycle] run=%d — [Patrol #%d] starting (streak=%d)", self._run_id, iteration, failure_streak)
+
+            # ── Run all steps best-effort, collect success/failure aggregate ──
+            success_count, failed_count, last_failed_step = self._run_patrol_cycle_steps(steps)
+
+            # If lease was lost mid-cycle, _run_patrol_cycle_steps surfaces it
+            # via the canceled flag; check explicitly.
+            if self._is_lock_lost() or self._canceled:
+                return "abort", ""
+
+            had_failure = failed_count > 0
+            if had_failure:
+                failure_streak += 1
+                next_sleep = compute_backoff_seconds(
+                    failure_streak,
+                    base_seconds=backoff_base,
+                    growth_factor=backoff_growth,
+                    max_seconds=backoff_max,
+                )
+                logger.warning(
+                    "[Lifecycle] run=%d — [Patrol #%d] %d/%d steps failed (last=%s), backoff=%.0fs streak=%d",
+                    self._run_id, iteration, failed_count, success_count + failed_count,
+                    last_failed_step or "?", next_sleep, failure_streak,
+                )
+            else:
+                failure_streak = 0
+                next_sleep = float(interval)
+
+            # Compute next_retry_at for server-side display
+            next_retry_dt = (
+                datetime.now(timezone.utc) + timedelta(seconds=int(next_sleep))
+                if next_sleep > 0 else None
+            )
+
+            # ── Send heartbeat (best-effort) and observe manual_action ──
+            current_step_for_ui = last_failed_step or (steps[-1].get("step_id") if steps else None)
+            ack = None
+            if self._patrol_heartbeat is not None:
+                ack = self._patrol_heartbeat.send(
+                    job_id=self._run_id,
+                    fencing_token=self._fencing_token,
+                    cycle_index=iteration,
+                    success_delta=1 if success_count > 0 and not had_failure else 0,
+                    failed_delta=1 if had_failure else 0,
+                    current_step=current_step_for_ui,
+                    current_failure_streak=failure_streak,
+                    next_retry_at=next_retry_dt if had_failure else None,
+                    manual_action_observed=last_observed_action,
+                )
+                if isinstance(ack, dict):
+                    last_observed_action = ack.get("manual_action") or None
+
+            # ── Status MQ update for live UI ──
+            time_elapsed = time.time() - init_completed_at
+            time_remaining = max(0, timeout_seconds - time_elapsed) if timeout_seconds > 0 else -1
+            self._report_job_status_mq(
+                "PATROL_RUNNING",
+                reason=(
+                    f"iteration={iteration} next_in={int(next_sleep)}s "
+                    f"remaining={int(time_remaining)}s streak={failure_streak}"
+                ),
+            )
+
+            # ── Sleep until next cycle, breakable by abort/manual_action ──
+            if last_observed_action == "EXIT_REQUESTED":
+                logger.info("[Lifecycle] run=%d — manual EXIT_REQUESTED observed post-cycle, ending patrol", self._run_id)
+                return "manual_exit", ""
+            if last_observed_action == "RETRY_NOW":
+                # Skip sleep; loop immediately
+                logger.info("[Lifecycle] run=%d — manual RETRY_NOW observed, skipping backoff sleep", self._run_id)
+                last_observed_action = None  # consume locally; server-side cleared via next heartbeat
+                continue
+
+            sleep_remaining = next_sleep
+            while sleep_remaining > 0:
+                chunk = min(sleep_remaining, 5.0)
+                time.sleep(chunk)
+                sleep_remaining -= chunk
+                if self._is_lock_lost() or self._canceled:
+                    return "abort", ""
+                if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
+                    logger.info("[Lifecycle] run=%d — timeout reached during sleep", self._run_id)
+                    return "timeout", ""
+
+    def _run_patrol_cycle_steps(self, steps: list[dict]) -> tuple[int, int, Optional[str]]:
+        """ADR-0022: best-effort execution of one patrol cycle.
+
+        Unlike :func:`_run_lifecycle_steps`, a single step failure does NOT
+        abort the cycle — we keep running so the cycle's success/failed counts
+        are accurate.  Returns ``(success_count, failed_count, last_failed_step_id)``.
+
+        Lease loss is the one exception: it sets ``self._canceled`` so the
+        outer loop terminates promptly without finishing the cycle.
+        """
+        success = 0
+        failed = 0
+        last_failed: Optional[str] = None
+        for step in steps or []:
+            if self._is_lock_lost():
+                self._canceled = True
+                return success, failed, last_failed
+
+            step_id = step.get("step_id", "unknown")
+            try:
+                result = self._execute_step("patrol", step, suppress_success_trace=True)
+            except Exception as exc:
+                # Defensive: _execute_step already catches; this is paranoia.
+                logger.warning("[Patrol] step %s exception: %s", step_id, exc)
+                failed += 1
+                last_failed = step_id
+                continue
+
+            if result.success:
+                success += 1
+            else:
+                failed += 1
+                last_failed = step_id
+
+        return success, failed, last_failed
 
     def _execute_teardown_best_effort(self, teardown_def: list[dict]) -> StepResult:
         """Execute teardown with best-effort semantics: each step runs independently.

@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
@@ -18,7 +20,9 @@ from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.core.audit import record_audit
 from backend.core.database import get_db
+from backend.models.enums import JobStatus
 from backend.models.host import Device
 from backend.models.job import JobArtifact, JobInstance, StepTrace
 from backend.models.plan_run import PlanRun
@@ -242,6 +246,171 @@ def abort_plan_run_endpoint(
             raise HTTPException(status_code=404, detail=msg)
         raise HTTPException(status_code=409, detail=msg)
     return ok(summary)
+
+
+# ── ADR-0022: Manual retry / exit for patrol-backoff jobs ───────────────────
+
+
+_NON_TERMINAL_JOB_STATUSES = {
+    JobStatus.PENDING.value,
+    JobStatus.RUNNING.value,
+}
+
+
+class JobManualActionIn(BaseModel):
+    reason: Optional[str] = None
+
+
+class JobManualActionOut(BaseModel):
+    job_id: int
+    plan_run_id: int
+    action: str          # 'manual_retry' | 'manual_exit'
+    status: str          # job status after the action
+    manual_action: Optional[str] = None
+    next_retry_at: Optional[str] = None
+    current_failure_streak: int = 0
+
+
+def _load_job_in_run(db: Session, run_id: int, job_id: int) -> JobInstance:
+    job = db.get(JobInstance, job_id)
+    if job is None or job.plan_run_id != run_id:
+        raise HTTPException(status_code=404, detail="job not found in this plan run")
+    return job
+
+
+@router.post(
+    "/plan-runs/{run_id}/jobs/{job_id}/manual-retry",
+    response_model=ApiResponse[JobManualActionOut],
+)
+def manual_retry_job(
+    run_id: int,
+    job_id: int,
+    payload: Optional[JobManualActionIn] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0022 D7: clear backoff and force the next patrol cycle to run now.
+
+    Sets ``next_retry_at = now()`` and ``manual_action = 'RETRY_NOW'`` so the
+    Agent picks it up on the next heartbeat.  **Does not reset**
+    ``current_failure_streak`` — diagnostic information is preserved.
+    """
+    job = _load_job_in_run(db, run_id, job_id)
+    if job.status not in _NON_TERMINAL_JOB_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"job is in terminal status {job.status}; cannot retry",
+        )
+
+    reason = (payload.reason if payload else None) or "manual_retry"
+    now = datetime.now(timezone.utc)
+
+    job.next_retry_at = now
+    job.manual_action = "RETRY_NOW"
+    job.updated_at = now
+    db.flush()
+
+    record_audit(
+        db,
+        action="patrol_manual_retry",
+        resource_type="job_instance",
+        resource_id=job_id,
+        details={
+            "plan_run_id": run_id,
+            "reason": reason,
+            "current_failure_streak": job.current_failure_streak or 0,
+            "triggered_by": current_user.username if current_user else None,
+        },
+        user_id=current_user.id if current_user else None,
+        username=current_user.username if current_user else None,
+    )
+    db.commit()
+    db.refresh(job)
+
+    logger.info(
+        "patrol_manual_retry plan_run=%d job=%d streak=%d",
+        run_id, job_id, job.current_failure_streak or 0,
+    )
+
+    return ok(JobManualActionOut(
+        job_id=job_id,
+        plan_run_id=run_id,
+        action="manual_retry",
+        status=job.status,
+        manual_action=job.manual_action,
+        next_retry_at=_iso(job.next_retry_at),
+        current_failure_streak=job.current_failure_streak or 0,
+    ))
+
+
+@router.post(
+    "/plan-runs/{run_id}/jobs/{job_id}/manual-exit",
+    response_model=ApiResponse[JobManualActionOut],
+)
+def manual_exit_job(
+    run_id: int,
+    job_id: int,
+    payload: Optional[JobManualActionIn] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0022 D7: request that the Agent skip the rest of patrol and abort.
+
+    Sets ``manual_action = 'EXIT_REQUESTED'``.  The Agent observes this on the
+    next heartbeat and exits the patrol loop **without running teardown** (BO4).
+    Recycler / device lease release ensures the device returns to the pool.
+
+    The job's status remains its current (PENDING/RUNNING) value here; it
+    transitions to ABORTED once the Agent reports the terminal state via
+    /jobs/{id}/complete (or via Recycler's stall detection).
+    """
+    job = _load_job_in_run(db, run_id, job_id)
+    if job.status not in _NON_TERMINAL_JOB_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"job is in terminal status {job.status}; cannot exit",
+        )
+
+    reason = (payload.reason if payload else None) or "manual_exit"
+    now = datetime.now(timezone.utc)
+
+    job.manual_action = "EXIT_REQUESTED"
+    if not job.status_reason:
+        job.status_reason = f"patrol_manual_exit_pending: {reason}"
+    job.updated_at = now
+    db.flush()
+
+    record_audit(
+        db,
+        action="patrol_manual_exit",
+        resource_type="job_instance",
+        resource_id=job_id,
+        details={
+            "plan_run_id": run_id,
+            "reason": reason,
+            "current_failure_streak": job.current_failure_streak or 0,
+            "triggered_by": current_user.username if current_user else None,
+        },
+        user_id=current_user.id if current_user else None,
+        username=current_user.username if current_user else None,
+    )
+    db.commit()
+    db.refresh(job)
+
+    logger.info(
+        "patrol_manual_exit plan_run=%d job=%d streak=%d",
+        run_id, job_id, job.current_failure_streak or 0,
+    )
+
+    return ok(JobManualActionOut(
+        job_id=job_id,
+        plan_run_id=run_id,
+        action="manual_exit",
+        status=job.status,
+        manual_action=job.manual_action,
+        next_retry_at=_iso(job.next_retry_at),
+        current_failure_streak=job.current_failure_streak or 0,
+    ))
 
 
 @router.get("/plan-runs/{run_id}/summary", response_model=ApiResponse[dict])

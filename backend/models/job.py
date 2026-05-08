@@ -27,6 +27,21 @@ class JobInstance(Base):
     watcher_stopped_at = Column(DateTime(timezone=True))
     watcher_capability = Column(String(32))
     log_signal_count   = Column(Integer, nullable=False, default=0, server_default="0")
+
+    # ── ADR-0022: patrol heartbeat aggregation ──
+    # 取代每周期 per-step step_trace 的写入；patrol 成功 step 不再写 trace,
+    # 改由 Agent 周期性调用 POST /agent/jobs/{id}/patrol-heartbeat 累积统计。
+    patrol_cycle_count          = Column(Integer, nullable=False, default=0, server_default="0")
+    patrol_success_cycle_count  = Column(Integer, nullable=False, default=0, server_default="0")
+    patrol_failed_cycle_count   = Column(Integer, nullable=False, default=0, server_default="0")
+    current_patrol_step         = Column(Text)
+    last_patrol_heartbeat_at    = Column(DateTime(timezone=True))
+    # 退避: streak 累计连续失败次数; next_retry_at 非空表示退避中
+    current_failure_streak      = Column(Integer, nullable=False, default=0, server_default="0")
+    next_retry_at               = Column(DateTime(timezone=True))
+    # 手动干预: NULL / RETRY_NOW / EXIT_REQUESTED ; Agent 下一周期检查后清零或响应
+    manual_action               = Column(String(32))
+
     created_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -41,6 +56,8 @@ class JobInstance(Base):
     __table_args__ = (
         Index("idx_job_instance_status",   "status"),
         Index("idx_job_instance_host",      "host_id"),
+        # ADR-0022: stall 检测 + per-PlanRun 设备矩阵聚合
+        Index("idx_job_instance_patrol_heartbeat", "plan_run_id", "last_patrol_heartbeat_at"),
     )
 
 
