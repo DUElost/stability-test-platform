@@ -29,10 +29,11 @@ async def reconcile_step_traces(
     host_id: str,
     traces: List[dict],
     db: AsyncSession,
-) -> int:
+) -> dict:
     """
     Idempotently insert StepTraces from Agent replay.
-    Returns count of newly inserted rows.
+
+    Returns ``{"inserted": int, "transitioned_jobs": list[int]}``.
     Unique constraint (job_id, step_id, event_type) prevents duplicates.
     """
     inserted = 0
@@ -61,19 +62,30 @@ async def reconcile_step_traces(
             inserted += 1
             affected_jobs.add(int(t["job_id"]))
 
+    transitioned_jobs: list[int] = []
     for job_id in affected_jobs:
-        await _recompute_job_status(job_id, db)
+        job_ok, _plan_run_terminal = await _recompute_job_status(job_id, db)
+        if job_ok:
+            transitioned_jobs.append(job_id)
 
     await db.commit()
-    logger.info("reconcile: host=%s inserted=%d/%d", host_id, inserted, len(traces))
-    return inserted
+    logger.info(
+        "reconcile: host=%s inserted=%d/%d transitioned=%d",
+        host_id, inserted, len(traces), len(transitioned_jobs),
+    )
+    return {"inserted": inserted, "transitioned_jobs": transitioned_jobs}
 
 
-async def _recompute_job_status(job_id: int, db: AsyncSession) -> None:
-    """Transition UNKNOWN/RUNNING jobs to terminal based on StepTrace events."""
+async def _recompute_job_status(
+    job_id: int, db: AsyncSession,
+) -> tuple[bool, bool]:
+    """Transition UNKNOWN/RUNNING jobs to terminal based on StepTrace events.
+
+    Returns ``(job_transitioned, plan_run_terminal)``.
+    """
     job = await db.get(JobInstance, job_id)
     if job is None or job.status in _TERMINAL:
-        return
+        return False, False
 
     traces_result = await db.execute(
         select(StepTrace).where(StepTrace.job_id == job_id)
@@ -89,16 +101,21 @@ async def _recompute_job_status(job_id: int, db: AsyncSession) -> None:
     elif has_completed and job.status == JobStatus.UNKNOWN.value:
         target = JobStatus.COMPLETED
     else:
-        return
+        return False, False
 
+    plan_run_terminal = False
     try:
         if target == JobStatus.COMPLETED and job.status == JobStatus.UNKNOWN.value:
             JobStateMachine.transition(job, JobStatus.RUNNING, "reconciled")
         JobStateMachine.transition(job, target, "reconciled_from_replay")
         job.ended_at = datetime.now(timezone.utc)
-        await PlanAggregator.on_job_terminal(job, db)
+        # on_job_terminal may transition PlanRun; caller pushes after commit
+        applied, _ = await PlanAggregator.on_job_terminal(job, db)
+        plan_run_terminal = applied
     except InvalidTransitionError as e:
         logger.warning("reconcile transition blocked: %s", e)
+
+    return True, plan_run_terminal
 
 
 def _parse_ts(ts_str: str | None) -> datetime:

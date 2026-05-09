@@ -23,6 +23,7 @@ class HostActiveJob(BaseModel):
     device_id: int
     status: str
     started_at: Optional[datetime] = None
+    abort_pending: bool = False  # v3: PlanRun.run_context 含 abort_requested
 
 
 class HostOut(ORMBaseModel):

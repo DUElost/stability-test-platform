@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+
+from backend.realtime.socketio_server import schedule_emit
 from typing import Optional
 
 from sqlalchemy import update
@@ -196,6 +198,40 @@ def abort_plan_run(
         username=audit_username,
     )
     db.commit()
+
+    # ── SocketIO push — align with _emit_job_status_invalidation pattern ──
+    ts = datetime.now(timezone.utc).isoformat()
+    room = f"plan_run:{plan_run_id}"
+    for jid in aborted_jobs:
+        schedule_emit(
+            "job_status",
+            {
+                "type": "JOB_STATUS",
+                "payload": {
+                    "job_id": jid,
+                    "plan_run_id": plan_run_id,
+                    "status": "ABORTED",
+                    "reason": reason,
+                },
+                "timestamp": ts,
+            },
+            namespace="/dashboard",
+            room=room,
+        )
+    schedule_emit(
+        "plan_run_status",
+        {
+            "type": "PLAN_RUN_STATUS",
+            "payload": {
+                "plan_run_id": plan_run_id,
+                "status": pr.status,
+            },
+            "timestamp": ts,
+        },
+        namespace="/dashboard",
+        room=room,
+    )
+
     db.refresh(pr)
 
     logger.info(

@@ -179,6 +179,11 @@ function StageRow({
               <b className="font-semibold">{stage.device_failed}</b> 失败
             </span>
           )}
+          {(stage.device_skipped ?? 0) > 0 && (
+            <span className="text-gray-400">
+              <b className="font-semibold">{stage.device_skipped}</b> 已跳过
+            </span>
+          )}
           <span>
             <b className="font-semibold text-gray-800">{stage.steps.length}</b>{' '}
             步骤
@@ -224,6 +229,9 @@ function StageRow({
                   {s.device_succeeded}/{s.device_total}
                   {s.device_failed > 0 && (
                     <span className="ml-1 text-red-600">· {s.device_failed} 失败</span>
+                  )}
+                  {(s.device_skipped ?? 0) > 0 && (
+                    <span className="ml-1 text-gray-400">· {s.device_skipped} 跳过</span>
                   )}
                 </span>
               </div>
@@ -337,8 +345,25 @@ export default function BusinessFlowTimeline({
     return `${stagesCount} 阶段 · 当前 ${cur} · 共 ${totalEvents} 事件`;
   }, [stages.length, currentStage, totalEvents]);
 
+  const abortedCount = timeline?.aborted_job_count ?? 0;
+
   return (
     <section data-testid="business-flow-timeline" className="space-y-2">
+      {/* v3: abort summary banner */}
+      {abortedCount > 0 && (
+        <div
+          data-testid="timeline-abort-banner"
+          className="mx-1 flex items-center gap-2 rounded border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+        >
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            已中止{' '}
+            <b className="font-mono">{abortedCount}</b>{' '}
+            个 Job (abort 覆盖,PlanRun 强制 FAILED)
+          </span>
+        </div>
+      )}
+
       <div className="mx-1 flex items-center gap-2.5">
         <span className="h-3 w-1 rounded-sm bg-gradient-to-b from-blue-600 to-blue-400" />
         <span className="text-xs font-bold uppercase tracking-wider text-gray-700">

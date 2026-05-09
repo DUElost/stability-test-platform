@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
@@ -590,7 +590,7 @@ def get_plan_run_chain(run_id: int, db: Session = Depends(get_db)):
     root_id = pr.root_plan_run_id or pr.id
     chain_runs = db.execute(
         select(PlanRun)
-        .where(or_(PlanRun.id == root_id, PlanRun.root_plan_run_id == root_id))
+        .where((PlanRun.id == root_id) | (PlanRun.root_plan_run_id == root_id))
         .order_by(PlanRun.chain_index.asc(), PlanRun.id.asc())
     ).scalars().all()
 
@@ -661,9 +661,10 @@ class StageStepOut(BaseModel):
     stage: str
     sort_order: int
     device_total: int                  # = PlanRun jobs 总数
-    device_succeeded: int              # status='SUCCESS' step_trace 计数
-    device_failed: int                 # status in {FAILED,ERROR,...} step_trace 计数
-    device_running: int                # = total - succeeded - failed (粗略)
+    device_succeeded: int              # event_type=COMPLETED + status=COMPLETED
+    device_failed: int                 # event_type=FAILED or status=FAILED
+    device_skipped: int = 0            # v3: event_type=COMPLETED + status=SKIPPED
+    device_running: int                # = max(0, total - succeeded - failed - skipped)
 
 
 class StageOut(BaseModel):
@@ -675,6 +676,7 @@ class StageOut(BaseModel):
     device_total: int
     device_succeeded: int = 0
     device_failed: int = 0
+    device_skipped: int = 0            # v3: summed from steps
     # patrol 专属(从 JobInstance.patrol_*_cycle_count 聚合)
     patrol_cycle_index: Optional[int] = None
     patrol_active_devices: Optional[int] = None
@@ -686,6 +688,7 @@ class PlanRunTimelineOut(BaseModel):
     plan_run_id: int
     current_stage: str                 # init / patrol / teardown / done / pending
     stages: list[StageOut]
+    aborted_job_count: int = 0         # v3: ABORTED jobs 计数 (顶层 banner 用)
     triggered_at: str
     triggered_by: Optional[str] = None
     run_type: str
@@ -765,27 +768,40 @@ def get_plan_run_timeline(run_id: int, db: Session = Depends(get_db)):
             for s in rows
         ]
 
-    # 2) 聚合 step_trace:按 (stage, step_id) 分桶,统计 succeeded / failed
-    #    使用 idx_step_trace_job_stage 走索引扫描
+    # 2) 聚合 step_trace:按 (stage, step_id, event_type, status) 分桶
+    #    v3: 基于真实 (event_type, status) 组合; 排除 STARTED 中间事件
     step_agg: dict[tuple[str, str], dict[str, int]] = {}
     if job_ids:
         agg_rows = db.execute(
             select(
                 StepTrace.stage,
                 StepTrace.step_id,
+                StepTrace.event_type,
                 StepTrace.status,
                 func.count(StepTrace.id),
             )
-            .where(StepTrace.job_id.in_(job_ids))
-            .group_by(StepTrace.stage, StepTrace.step_id, StepTrace.status)
+            .where(
+                StepTrace.job_id.in_(job_ids),
+                StepTrace.event_type != "STARTED",
+            )
+            .group_by(
+                StepTrace.stage, StepTrace.step_id,
+                StepTrace.event_type, StepTrace.status,
+            )
         ).all()
-        for stage, step_id, status, cnt in agg_rows:
+        for stage, step_id, event_type, status, cnt in agg_rows:
             key = (stage, step_id)
-            bucket = step_agg.setdefault(key, {"succeeded": 0, "failed": 0})
-            if status == "SUCCESS":
+            bucket = step_agg.setdefault(
+                key, {"succeeded": 0, "failed": 0, "skipped": 0},
+            )
+            if event_type == "COMPLETED" and status == "COMPLETED":
                 bucket["succeeded"] += cnt
-            else:
+            elif event_type == "COMPLETED" and status == "SKIPPED":
+                bucket["skipped"] += cnt
+            elif event_type == "FAILED" or status == "FAILED":
                 bucket["failed"] += cnt
+            # event_type=RUN_COMPLETE + step_id=__job__: step_id 不在
+            # plan_snapshot, 不会被纳入 stage 桶, 无需特殊处理
 
     # 3) 按 stage 组织 steps;按 plan_snapshot 顺序保留
     stages_def: dict[str, list[StageStepOut]] = {"init": [], "patrol": [], "teardown": []}
@@ -794,10 +810,11 @@ def get_plan_run_timeline(run_id: int, db: Session = Depends(get_db)):
         if stage not in stages_def:
             continue
         key = (stage, s.get("step_key", ""))
-        agg = step_agg.get(key, {"succeeded": 0, "failed": 0})
+        agg = step_agg.get(key, {"succeeded": 0, "failed": 0, "skipped": 0})
         succeeded = agg["succeeded"]
         failed = agg["failed"]
-        running = max(0, job_total - succeeded - failed) if has_running else 0
+        skipped = agg["skipped"]
+        running = max(0, job_total - succeeded - failed - skipped) if has_running else 0
         stages_def[stage].append(StageStepOut(
             step_key=s.get("step_key", ""),
             script_name=s.get("script_name", ""),
@@ -806,6 +823,7 @@ def get_plan_run_timeline(run_id: int, db: Session = Depends(get_db)):
             device_total=job_total,
             device_succeeded=succeeded,
             device_failed=failed,
+            device_skipped=skipped,
             device_running=running,
         ))
 
@@ -822,7 +840,7 @@ def get_plan_run_timeline(run_id: int, db: Session = Depends(get_db)):
             and _aware(j.last_patrol_heartbeat_at) >= live_threshold
         )
 
-    # 5) 每 stage 的 succeeded/failed 总数(求和 step 级)
+    # 5) 每 stage 的 succeeded/failed/skipped 总数(求和 step 级)
     def _sum_stage(stage_name: str, accessor: str) -> int:
         return sum(getattr(s, accessor) for s in stages_def.get(stage_name, []))
 
@@ -863,6 +881,7 @@ def get_plan_run_timeline(run_id: int, db: Session = Depends(get_db)):
         steps = stages_def.get(stage_name, [])
         succeeded = _sum_stage(stage_name, "device_succeeded")
         failed    = _sum_stage(stage_name, "device_failed")
+        skipped   = _sum_stage(stage_name, "device_skipped")
         st = _stage_status_from_steps(
             stage_name,
             pr_status=pr.status,
@@ -882,6 +901,7 @@ def get_plan_run_timeline(run_id: int, db: Session = Depends(get_db)):
             device_total=job_total,
             device_succeeded=succeeded,
             device_failed=failed,
+            device_skipped=skipped,
             steps=steps,
         )
         if stage_name == "patrol":
@@ -892,10 +912,13 @@ def get_plan_run_timeline(run_id: int, db: Session = Depends(get_db)):
             )
         stages_out.append(stage_obj)
 
+    aborted_job_count = sum(1 for j in jobs if j.status == JobStatus.ABORTED.value)
+
     return ok(PlanRunTimelineOut(
         plan_run_id=pr.id,
         current_stage=current_stage,
         stages=stages_out,
+        aborted_job_count=aborted_job_count,
         triggered_at=_iso(pr.started_at) or "",
         triggered_by=pr.triggered_by,
         run_type=pr.run_type,
@@ -988,14 +1011,20 @@ def get_plan_run_events(
         ref={"type": "plan_run", "id": pr.id},
     ))
 
-    # 2) step_trace 失败事件(走 idx_step_trace_job_status_ts 索引)
+    # 2) step_trace 失败 / abort 事件
+    #    v3: 收紧 WHERE — 只取 event_type=FAILED 或 RUN_COMPLETE + terminal status;
+    #    区分 ABORTED (warn + "Job 已中止") 与 FAILED (err + "Job 失败")
     if job_ids:
         bad_traces = db.execute(
             select(StepTrace)
             .where(
-                and_(
-                    StepTrace.job_id.in_(job_ids),
-                    StepTrace.status != "SUCCESS",
+                (StepTrace.job_id.in_(job_ids))
+                & (
+                    (StepTrace.event_type == "FAILED")
+                    | (
+                        (StepTrace.event_type == "RUN_COMPLETE")
+                        & (StepTrace.status.in_(["FAILED", "ABORTED"]))
+                    )
                 )
             )
             .order_by(StepTrace.original_ts.desc())
@@ -1003,12 +1032,34 @@ def get_plan_run_events(
         ).scalars().all()
         for t in bad_traces:
             dev_id = job_to_device.get(t.job_id)
+            is_aborted = (
+                t.step_id == "__job__"
+                and t.event_type == "RUN_COMPLETE"
+                and t.status == "ABORTED"
+            )
+            is_job_failed = (
+                t.step_id == "__job__"
+                and t.event_type == "RUN_COMPLETE"
+                and t.status == "FAILED"
+            )
+            if is_aborted:
+                title = f"Job #{t.job_id} 已中止"
+                evt_severity = "warn"
+                evt_stage = "system"
+            elif is_job_failed:
+                title = f"Job #{t.job_id} 失败"
+                evt_severity = "err"
+                evt_stage = "system"
+            else:
+                title = f"{t.stage}.{t.step_id} 失败"
+                evt_severity = "err"
+                evt_stage = t.stage if t.stage in {"init", "patrol", "teardown"} else "system"
             events.append(EventOut(
                 ts=_iso(t.original_ts) or "",
-                stage=t.stage if t.stage in {"init", "patrol", "teardown"} else "system",
-                severity="err",
+                stage=evt_stage,
+                severity=evt_severity,
                 category="step",
-                title=f"{t.stage}.{t.step_id} 失败",
+                title=title,
                 description=(t.error_message or "")[:512],
                 job_id=t.job_id,
                 device_id=dev_id,
@@ -1041,10 +1092,8 @@ def get_plan_run_events(
 
     # 4) audit_logs(plan_run / job_instance / dispatch_gate)
     audit_q = select(AuditLog).where(
-        or_(
-            and_(AuditLog.resource_type == "plan_run", AuditLog.resource_id == run_id),
-            and_(AuditLog.resource_type == "job_instance", AuditLog.resource_id.in_(job_ids or [-1])),
-        )
+        ((AuditLog.resource_type == "plan_run") & (AuditLog.resource_id == run_id))
+        | ((AuditLog.resource_type == "job_instance") & (AuditLog.resource_id.in_(job_ids or [-1])))
     ).order_by(AuditLog.timestamp.desc()).limit(_MAX_EVENTS_LIMIT)
     for log in db.execute(audit_q).scalars().all():
         sev = "warn" if "abort" in (log.action or "") or "fail" in (log.action or "") else "info"
@@ -1308,11 +1357,9 @@ def get_plan_run_watcher_summary(
             func.max(JobLogSignal.detected_at),
         )
         .where(
-            and_(
-                JobLogSignal.job_id.in_(job_ids),
-                JobLogSignal.detected_at >= cur_start,
-                JobLogSignal.detected_at <= now,
-            )
+            (JobLogSignal.job_id.in_(job_ids))
+            & (JobLogSignal.detected_at >= cur_start)
+            & (JobLogSignal.detected_at <= now)
         )
         .group_by(JobLogSignal.category)
     ).all()
@@ -1321,11 +1368,9 @@ def get_plan_run_watcher_summary(
     prev_rows = db.execute(
         select(JobLogSignal.category, func.count(JobLogSignal.id))
         .where(
-            and_(
-                JobLogSignal.job_id.in_(job_ids),
-                JobLogSignal.detected_at >= prev_start,
-                JobLogSignal.detected_at < cur_start,
-            )
+            (JobLogSignal.job_id.in_(job_ids))
+            & (JobLogSignal.detected_at >= prev_start)
+            & (JobLogSignal.detected_at < cur_start)
         )
         .group_by(JobLogSignal.category)
     ).all()
@@ -1337,10 +1382,8 @@ def get_plan_run_watcher_summary(
         latest_rows = db.execute(
             select(JobLogSignal.category, JobLogSignal.device_serial, JobLogSignal.detected_at)
             .where(
-                and_(
-                    JobLogSignal.job_id.in_(job_ids),
-                    JobLogSignal.detected_at >= cur_start,
-                )
+                (JobLogSignal.job_id.in_(job_ids))
+                & (JobLogSignal.detected_at >= cur_start)
             )
             .order_by(JobLogSignal.detected_at.desc())
         ).all()
@@ -1350,10 +1393,8 @@ def get_plan_run_watcher_summary(
     # 受影响设备数(去重所有 category)
     affected_total = db.execute(
         select(func.count(func.distinct(JobLogSignal.device_serial))).where(
-            and_(
-                JobLogSignal.job_id.in_(job_ids),
-                JobLogSignal.detected_at >= cur_start,
-            )
+            (JobLogSignal.job_id.in_(job_ids))
+            & (JobLogSignal.detected_at >= cur_start)
         )
     ).scalar() or 0
 

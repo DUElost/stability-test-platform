@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 import os
@@ -106,7 +107,31 @@ def _mark_missing_devices_offline(
 
 
 @router.post("/heartbeat")
-async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool = Depends(verify_agent_secret)):
+async def heartbeat(
+    payload: HeartbeatIn,
+    db: Session = Depends(get_db),
+    _: bool = Depends(verify_agent_secret),
+):
+    response, ws_device_updates = await asyncio.to_thread(
+        _process_heartbeat_with_db, payload, db
+    )
+
+    if ws_device_updates:
+        try:
+            from backend.realtime.socketio_server import broadcast_device_update
+
+            for update in ws_device_updates:
+                await broadcast_device_update(update)
+        except Exception as exc:
+            logger.warning(f"device_update_broadcast_failed: {exc}")
+
+    return response
+
+
+def _process_heartbeat_with_db(
+    payload: HeartbeatIn,
+    db: Session,
+) -> tuple[dict, List[Dict[str, Any]]]:
     host_info = payload.host or {}
     ip = host_info.get("ip")
     is_auto_register = _is_auto_register_sentinel(payload.host_id)
@@ -330,15 +355,6 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
         )
     ).scalar() or 0
 
-    if ws_device_updates:
-        try:
-            from backend.realtime.socketio_server import broadcast_device_update
-
-            for update in ws_device_updates:
-                await broadcast_device_update(update)
-        except Exception as exc:
-            logger.warning(f"device_update_broadcast_failed: {exc}")
-
     return {
         "ok": True,
         "host_id": host.id,
@@ -350,4 +366,4 @@ async def heartbeat(payload: HeartbeatIn, db: Session = Depends(get_db), _: bool
             "online_healthy_devices": online_healthy_count,
             "backend_available_slots": max(0, host.max_concurrent_jobs - active_job_lease_count),
         },
-    }
+    }, ws_device_updates

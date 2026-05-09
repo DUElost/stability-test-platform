@@ -69,6 +69,8 @@ def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
     out.max_concurrent_jobs = h.max_concurrent_jobs
 
     if db is not None:
+        from backend.models.plan_run import PlanRun
+
         active_jobs = (
             db.query(JobInstance)
             .filter(
@@ -78,6 +80,23 @@ def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
             .order_by(JobInstance.id)
             .all()
         )
+        # v3: preload PlanRun 以检测 abort_requested
+        pr_ids = {j.plan_run_id for j in active_jobs}
+        pr_map: dict[int, Any] = {}
+        if pr_ids:
+            pr_rows = (
+                db.query(PlanRun)
+                .filter(PlanRun.id.in_(pr_ids))
+                .all()
+            )
+            pr_map = {pr.id: pr for pr in pr_rows}
+
+        def _abort_pending(j: JobInstance) -> bool:
+            pr = pr_map.get(j.plan_run_id)
+            if pr is None or pr.run_context is None:
+                return False
+            return isinstance(pr.run_context, dict) and "abort_requested" in pr.run_context
+
         out.active_jobs = [
             HostActiveJob(
                 id=j.id,
@@ -86,6 +105,7 @@ def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
                 device_id=j.device_id,
                 status=j.status,
                 started_at=j.started_at,
+                abort_pending=_abort_pending(j),
             )
             for j in active_jobs
         ]
@@ -269,6 +289,10 @@ def host_hot_update(
         )
 
     # ── ADR-0021 D8 active-job gate ────────────────────────────────────────
+    from backend.models.plan_run import PlanRun
+    from backend.scheduler.device_lease_reconciler import _ABORT_REAPER_GRACE_SECONDS
+    from backend.scheduler.app_scheduler import RECONCILER_INTERVAL
+
     active_jobs_rows = (
         db.query(JobInstance)
         .filter(
@@ -278,6 +302,23 @@ def host_hot_update(
         .order_by(JobInstance.id)
         .all()
     )
+
+    # v3: preload PlanRun to detect abort_requested
+    pr_ids = {j.plan_run_id for j in active_jobs_rows}
+    pr_map: dict[int, Any] = {}
+    if pr_ids:
+        pr_rows = db.query(PlanRun).filter(PlanRun.id.in_(pr_ids)).all()
+        pr_map = {pr.id: pr for pr in pr_rows}
+
+    def _job_abort_pending(j: JobInstance) -> bool:
+        pr = pr_map.get(j.plan_run_id)
+        if pr is None or pr.run_context is None:
+            return False
+        return (
+            isinstance(pr.run_context, dict)
+            and "abort_requested" in pr.run_context
+        )
+
     active_summary = [
         {
             "id": j.id,
@@ -285,6 +326,7 @@ def host_hot_update(
             "plan_id": j.plan_id,
             "device_id": j.device_id,
             "status": j.status,
+            "abort_pending": _job_abort_pending(j),
         }
         for j in active_jobs_rows
     ]
@@ -292,6 +334,40 @@ def host_hot_update(
 
     if active_summary:
         if not abort_running_jobs:
+            all_abort_pending = all(item["abort_pending"] for item in active_summary)
+            if all_abort_pending:
+                # 所有 active job 都在 abort 收口中 → 返回 HOST_ABORT_PENDING
+                # 计算 retry_after_seconds: 最晚 abort_requested.at 距现在最短剩余
+                min_remaining = _ABORT_REAPER_GRACE_SECONDS
+                now_ts = datetime.now(timezone.utc)
+                for item in active_summary:
+                    pr = pr_map.get(item["plan_run_id"])
+                    if pr is None:
+                        continue
+                    rc = pr.run_context or {}
+                    at_str = rc.get("abort_requested", {}).get("at", "")
+                    if at_str:
+                        try:
+                            at_dt = datetime.fromisoformat(at_str.replace("Z", "+00:00"))
+                            elapsed = (now_ts - at_dt).total_seconds()
+                            remaining = max(0, _ABORT_REAPER_GRACE_SECONDS - elapsed)
+                            if remaining < min_remaining:
+                                min_remaining = remaining
+                        except (ValueError, TypeError):
+                            pass
+                retry_after = int(min_remaining + RECONCILER_INTERVAL)
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "HOST_ABORT_PENDING",
+                        "message": (
+                            f"Abort is still draining for {len(active_summary)} job(s) "
+                            f"on host {host_id}. Retry in approximately {retry_after}s."
+                        ),
+                        "active_jobs": active_summary,
+                        "retry_after_seconds": retry_after,
+                    },
+                )
             raise HTTPException(
                 status_code=409,
                 detail={

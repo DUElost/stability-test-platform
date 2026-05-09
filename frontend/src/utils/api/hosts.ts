@@ -35,6 +35,21 @@ export interface HotUpdateResult {
   };
 }
 
+/** v3: 409 response detail shape for hot-update gate errors. */
+export interface HotUpdateConflictDetail {
+  code: 'HOST_HAS_ACTIVE_JOBS' | 'HOST_ABORT_PENDING';
+  message: string;
+  active_jobs?: Array<{
+    id: number;
+    plan_run_id?: number | null;
+    plan_id?: number | null;
+    device_id: number;
+    status: string;
+    abort_pending?: boolean;
+  }>;
+  retry_after_seconds?: number;  // present when code=HOST_ABORT_PENDING
+}
+
 export const hotUpdate = {
   /**
    * Trigger a hot-update.  When `abortRunningJobs=true`, the backend will

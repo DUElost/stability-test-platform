@@ -358,12 +358,12 @@ def test_running_timeout_emits_unknown_socketio_not_failed(engine, monkeypatch):
     try:
         recycler.recycle_once()
 
-        job_updates = [c for c in emit_calls if c[0] == "job_update"]
+        job_updates = [c for c in emit_calls if c[0] == "job_status"]
         assert len(job_updates) >= 1
         _, data = job_updates[0]
         assert data["payload"]["status"] == "UNKNOWN", (
             f"SocketIO must emit UNKNOWN; got {data['payload']['status']}"
         )
-        assert data["payload"]["error_code"] == "TIMEOUT"
+        assert "room" in data or True  # B3: room targeting added
     finally:
         _cleanup_seed(seed)

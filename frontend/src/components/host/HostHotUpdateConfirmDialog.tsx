@@ -63,9 +63,18 @@ function ActiveJobRow({ job }: { job: HostActiveJob }) {
       >
         {job.status}
       </span>
-      <span className="font-mono text-[10.5px] text-gray-400">
-        {fmtTime(job.started_at)}
-      </span>
+      {job.abort_pending ? (
+        <span
+          data-testid={`hot-update-job-abort-pending-${job.id}`}
+          className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
+        >
+          收口中…
+        </span>
+      ) : (
+        <span className="font-mono text-[10.5px] text-gray-400">
+          {fmtTime(job.started_at)}
+        </span>
+      )}
     </div>
   );
 }
@@ -100,15 +109,20 @@ export default function HostHotUpdateConfirmDialog({
   const activeCount = detail?.active_job_count ?? 0;
   const hasActive = activeCount > 0;
 
+  // v3: abort 收口中 — 所有 active job 均已标记 abort_requested (abort reaper 待收割).
+  const allAbortPending = hasActive && (detail?.active_jobs ?? []).every((j) => j.abort_pending);
+
   // Confirm rules:
   //   - loading host detail        → disabled
   //   - hot-update mutation flying → disabled
+  //   - all-abort-pending          → disabled (abort 收口中,等待 reaper 收割)
   //   - active=0                   → enabled (direct hot-update)
   //   - active>0 + NOT opted in    → disabled (forces user to acknowledge)
   //   - active>0 + opted in        → enabled (abort_running_jobs=true)
   const confirmDisabled =
     detailQ.isLoading ||
     isHotUpdatePending ||
+    allAbortPending ||
     (hasActive && !abortChecked);
 
   const handleConfirm = () => {
@@ -154,6 +168,36 @@ export default function HostHotUpdateConfirmDialog({
               <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
               该主机当前无活跃 Job,可直接执行热更新
             </div>
+          ) : allAbortPending ? (
+            <>
+              <div
+                data-testid="host-abort-draining-banner"
+                className="flex items-center gap-2 rounded border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+              >
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                <span>
+                  Abort 收口中 —{' '}
+                  <b
+                    data-testid="host-active-job-count"
+                    className="font-mono"
+                  >
+                    {activeCount}
+                  </b>{' '}
+                  个 Job 正在退出,请稍后重试
+                </span>
+              </div>
+
+              <div className="rounded-md border bg-white">
+                <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+                  <Server className="h-3 w-3" /> 收口中的 Job
+                </div>
+                <div className="max-h-40 overflow-y-auto">
+                  {detail?.active_jobs?.map((j) => (
+                    <ActiveJobRow key={j.id} job={j} />
+                  ))}
+                </div>
+              </div>
+            </>
           ) : (
             <>
               <div className="flex items-center gap-2 rounded border-l-4 border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -227,7 +271,9 @@ export default function HostHotUpdateConfirmDialog({
             {isHotUpdatePending && (
               <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
             )}
-            {hasActive && abortChecked
+            {allAbortPending
+              ? 'Abort 收口中…'
+              : hasActive && abortChecked
               ? '中止 Job 并热更新'
               : hasActive
               ? '需先勾选确认'

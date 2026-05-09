@@ -8,6 +8,7 @@ export interface HostActiveJob {
   device_id: number;
   status: string;
   started_at?: string | null;
+  abort_pending?: boolean;  // v3: PlanRun.run_context 含 abort_requested
 }
 
 export interface Host {
@@ -383,7 +384,6 @@ export interface ScriptEntry {
   script_type: 'python' | 'shell' | 'bat' | string;
   version: string;
   nfs_path: string;
-  entry_point?: string | null;
   content_sha256: string;
   param_schema: Record<string, any>;
   default_params: Record<string, any>;
@@ -677,6 +677,7 @@ export interface StageStep {
   device_total: number;
   device_succeeded: number;
   device_failed: number;
+  device_skipped?: number;  // v3: event_type=COMPLETED + status=SKIPPED
   device_running: number;
 }
 
@@ -689,6 +690,7 @@ export interface TimelineStage {
   device_total: number;
   device_succeeded: number;
   device_failed: number;
+  device_skipped?: number;  // v3: summed from steps
   // patrol-only
   patrol_cycle_index?: number | null;
   patrol_active_devices?: number | null;
@@ -700,6 +702,7 @@ export interface PlanRunTimeline {
   plan_run_id: number;
   current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending';
   stages: TimelineStage[];
+  aborted_job_count?: number;  // v3: ABORTED jobs 计数
   triggered_at: string;
   triggered_by?: string | null;
   run_type: PlanRunType;
