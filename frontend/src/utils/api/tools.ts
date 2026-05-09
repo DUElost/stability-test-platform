@@ -36,7 +36,7 @@ export const scripts = {
   remove: (id: number) =>
     unwrapApiResponse<void>(apiClient.delete(`/scripts/${id}`)),
   scan: () =>
-    unwrapApiResponse<{ created: number; skipped: number; deactivated: number; conflicts: any[] }>(
+    unwrapApiResponse<{ created: number; skipped: number; deactivated: number; conflicts: { name: string; version: string }[] }>(
       apiClient.post('/scripts/scan'),
     ),
   createVersion: (name: string, data: {
@@ -45,6 +45,7 @@ export const scripts = {
     content_sha256: string;
     param_schema?: Record<string, any>;
     default_params: Record<string, any>;
+    description?: string;
   }) =>
     unwrapApiResponse<ScriptEntry>(apiClient.post(`/scripts/${name}/versions`, data)),
 };

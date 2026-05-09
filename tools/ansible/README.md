@@ -28,48 +28,26 @@ cp inventory.example.ini inventory.ini
 
 `tools/ansible/inventory.ini` 已在仓库根 `.gitignore` 中排除，不会被提交。
 
-### 2. 准备 Ansible Vault
+### 2. 配置全局 AGENT_SECRET
 
-创建本地 vault 密码文件，建议放在仓库外：
+全部 Linux Agent 主机默认共用后端 `backend/.env` 中的 `AGENT_SECRET`。
+测试环境允许使用后端 `.env` 中的默认值；正式环境建议通过环境变量或 Vault 覆盖为真实值。
+`install_agent.yml` / `update_agent.yml` 会按以下顺序读取：
 
-```bash
-mkdir -p ~/.ansible
-printf '%s\n' '<你的-vault-密码>' > ~/.ansible/vault_pass.txt
-chmod 600 ~/.ansible/vault_pass.txt
-```
+1. 有效的 `vault_agent_secret`
+2. 当前 shell 环境变量 `AGENT_SECRET`
+3. 本仓库 `backend/.env` 中的 `AGENT_SECRET`
 
-让当前 shell 使用该 vault 密码文件：
-
-```bash
-export ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/vault_pass.txt
-```
-
-如需长期生效，可写入 `~/.bashrc`：
+通常本地测试环境无需额外配置，只要 `backend/.env` 已有有效 `AGENT_SECRET` 即可。
+如果要在正式环境覆盖，可使用环境变量：
 
 ```bash
-echo 'export ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/vault_pass.txt' >> ~/.bashrc
-source ~/.bashrc
+export AGENT_SECRET="<与后端一致且长度至少 16 的 AGENT_SECRET>"
 ```
 
-### 3. 配置全局 AGENT_SECRET
+也可以使用 Ansible Vault 管理 `vault_agent_secret`，但不是日常测试同步的必需步骤。
 
-全部 Linux Agent 主机共用一个 `AGENT_SECRET`。配置一次后，后续首次部署和热更新会自动从 vault 读取。
-
-```bash
-cd /mnt/f/stability-test-platform/tools/ansible
-ansible-vault encrypt group_vars/linux_hosts.vault.yml
-ansible-vault edit group_vars/linux_hosts.vault.yml
-```
-
-在 vault 文件中填入真实值：
-
-```yaml
-vault_agent_secret: "<与后端 .env 一致且长度至少 16 的 AGENT_SECRET>"
-```
-
-如果未注入 vault、仍是占位值，或长度小于 16，`install_agent.yml` / `update_agent.yml` 会在第一步断言失败并终止。
-
-### 4. 设置默认工作目录（推荐）
+### 3. 设置默认工作目录（推荐）
 
 后续命令都建议在 Ansible 目录下执行：
 
@@ -150,7 +128,11 @@ wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 - `serial: "20%"`：分批更新。
 - `max_fail_percentage: 0`：任何失败都视为批次失败。
 - `any_errors_fatal: true`：单批失败立即停止，不继续推下一批。
+- 本地 `rsync --dry-run --itemize-changes` 先比对正式目录，有差异才同步。
+- 无代码、`agentctl`、环境变量差异时跳过备份、同步和重启。
 - 自动备份 + 失败回滚。
+
+控制端需要安装 `rsync`；使用密码登录的节点还需要安装 `sshpass`。
 
 推荐发布顺序：
 
@@ -185,10 +167,16 @@ wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 
 ### 自动回滚机制
 
-每次同步代码前，playbook 会先备份当前目录：
+检测到代码差异时，playbook 会先备份当前目录：
 
 ```text
 /opt/stability-test-agent/agent/ -> /opt/stability-test-agent/agent.bak.<timestamp>/
+```
+
+检测到 `agentctl` 差异时，会额外备份：
+
+```text
+/opt/stability-test-agent/agentctl -> /opt/stability-test-agent/agentctl.bak.<timestamp>
 ```
 
 如果更新后出现以下任一失败：
@@ -199,10 +187,11 @@ wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 playbook 会自动执行 rescue：
 
 1. 用 `agent.bak.<timestamp>/` 回滚 `/opt/stability-test-agent/agent/`。
-2. 重启 `stability-test-agent`。
-3. 抛错终止当前批次。
+2. 如本次更新过 `agentctl`，用 `agentctl.bak.<timestamp>` 回滚 `/opt/stability-test-agent/agentctl`。
+3. 重启 `stability-test-agent`。
+4. 抛错终止当前批次。
 
-默认只保留最近 1 份 `agent.bak.*` 备份。
+默认只保留最近 1 份 `agent.bak.*` 和 `agentctl.bak.*` 备份。
 
 ## 切换 API 地址
 
@@ -259,34 +248,25 @@ ansible-playbook playbooks/update_agent.yml --limit agent_prod
 
 ## 故障排查
 
-### `Mandatory variable 'vault_agent_secret' not defined`
-
-原因：没有注入 Ansible Vault 变量。
-
-处理：
-
-```bash
-export ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/vault_pass.txt
-ansible-vault edit group_vars/linux_hosts.vault.yml
-```
-
-确认 `vault_agent_secret` 已填入真实值。
-
 ### `agent_secret | length >= 16` 断言失败
 
-原因：`vault_agent_secret` 长度不足 16。
+原因：未能从 `vault_agent_secret`、环境变量 `AGENT_SECRET` 或 `backend/.env` 读取到有效密钥，或密钥长度不足 16。
 
-处理：把 `vault_agent_secret` 改成至少 16 字符，并确保与后端 `.env` 中 `AGENT_SECRET` 一致。
+处理：确认 `backend/.env` 中存在有效 `AGENT_SECRET`，或执行前设置环境变量：
+
+```bash
+export AGENT_SECRET="<与后端一致且长度至少 16 的 AGENT_SECRET>"
+```
 
 ### `agent_secret` 仍为占位值
 
-原因：vault 文件中仍是：
+原因：传入的 `vault_agent_secret` / `AGENT_SECRET` 仍是：
 
-```yaml
-vault_agent_secret: "REPLACE_WITH_VAULTED_SECRET_AT_LEAST_16_CHARS"
+```text
+REPLACE_WITH_VAULTED_SECRET_AT_LEAST_16_CHARS
 ```
 
-处理：用 `ansible-vault edit group_vars/linux_hosts.vault.yml` 改为真实值。
+处理：删除占位覆盖值，或改为与后端一致的真实值。日常测试环境优先使用 `backend/.env`。
 
 ### update_agent 因 health 失败回滚
 

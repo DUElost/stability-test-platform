@@ -1,22 +1,39 @@
 import { useState, useMemo } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useToast } from '@/components/ui/toast';
 import { api, type ScriptEntry } from '@/utils/api';
-import { Search, FileCode, Code2, Tag } from 'lucide-react';
+import { Search, FileCode, Code2, Tag, RefreshCw, AlertCircle } from 'lucide-react';
 import ScriptVersionDialog from './ScriptVersionDialog';
 
 export default function ScriptManagementPage() {
   const queryClient = useQueryClient();
+  const toast = useToast();
   const [search, setSearch] = useState('');
   const [showVersionDialog, setShowVersionDialog] = useState(false);
   const [versionTarget, setVersionTarget] = useState<ScriptEntry | null>(null);
   const [showJson, setShowJson] = useState<Record<string, boolean>>({});
 
-  const { data: scripts, isLoading } = useQuery({
+  const { data: scripts, isLoading, isError, error } = useQuery({
     queryKey: ['scripts-active'],
     queryFn: () => api.scripts.list(true),
+  });
+
+  const scanMut = useMutation({
+    mutationFn: () => api.scripts.scan(),
+    onSuccess: (result) => {
+      toast.success(
+        `扫描完成: 新增 ${result.created}, 跳过 ${result.skipped}, 停用 ${result.deactivated}` +
+        (result.conflicts.length ? `, 冲突 ${result.conflicts.length}` : ''),
+      );
+      queryClient.invalidateQueries({ queryKey: ['scripts-active'] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`扫描失败: ${msg}`);
+    },
   });
 
   const filtered = useMemo(() => {
@@ -58,10 +75,28 @@ export default function ScriptManagementPage() {
             onChange={e => setSearch(e.target.value)}
             className="w-full pl-9 pr-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20" />
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={scanMut.isPending}
+          onClick={() => scanMut.mutate()}
+        >
+          <RefreshCw className={`w-4 h-4 mr-1.5 ${scanMut.isPending ? 'animate-spin' : ''}`} />
+          {scanMut.isPending ? '扫描中…' : '扫描脚本目录'}
+        </Button>
       </div>
 
       {isLoading ? (
         <div className="space-y-3"><Skeleton className="h-24 w-full" /><Skeleton className="h-24 w-full" /></div>
+      ) : isError ? (
+        <Card><CardContent className="py-12 text-center text-gray-400">
+          <AlertCircle className="w-10 h-10 mx-auto mb-3 text-red-300" />
+          <p className="text-sm text-red-600 font-medium">加载脚本列表失败</p>
+          <p className="text-xs text-gray-400 mt-1">{(error as Error)?.message || '请检查后端服务是否正常'}</p>
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => queryClient.invalidateQueries({ queryKey: ['scripts-active'] })}>
+            <RefreshCw className="w-3.5 h-3.5 mr-1" />重试
+          </Button>
+        </CardContent></Card>
       ) : filtered.length === 0 ? (
         <Card><CardContent className="py-12 text-center text-gray-400">
           <FileCode className="w-10 h-10 mx-auto mb-3 text-gray-300" />

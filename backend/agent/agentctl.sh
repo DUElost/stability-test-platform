@@ -103,6 +103,34 @@ disable_service() {
 }
 
 # 健康检查
+check_server_connection() {
+    local url="$1/health"
+    local status=""
+
+    if command -v curl &>/dev/null; then
+        status=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 "$url" 2>/dev/null || true)
+        echo "$status" | grep -q "200\|404"
+        return $?
+    fi
+
+    if command -v wget &>/dev/null; then
+        wget -q -O /dev/null -T 5 "$url" 2>/dev/null
+        return $?
+    fi
+
+    python3 - "$url" <<'PY'
+import sys
+import urllib.request
+
+url = sys.argv[1]
+try:
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        sys.exit(0 if resp.status in (200, 404) else 1)
+except Exception:
+    sys.exit(1)
+PY
+}
+
 health_check() {
     echo -e "${BLUE}健康检查:${NC}"
     echo ""
@@ -170,7 +198,7 @@ health_check() {
     # 检查网络连接
     API_URL=$(grep "^API_URL=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2)
     API_URL=${API_URL:-http://127.0.0.1:8000}
-    if curl -s -o /dev/null -w "%{http_code}" "$API_URL/health" 2>/dev/null | grep -q "200\|404"; then
+    if check_server_connection "$API_URL"; then
         echo -e "  服务器连接: ${GREEN}正常${NC}"
     else
         echo -e "  服务器连接: ${YELLOW}无法连接${NC}"

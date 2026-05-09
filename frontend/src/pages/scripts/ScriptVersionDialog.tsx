@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { api, type ScriptEntry } from '@/utils/api';
@@ -18,7 +18,20 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
   const [contentSha256, setContentSha256] = useState('');
   const [defaultParamsText, setDefaultParamsText] = useState('');
   const [paramSchemaText, setParamSchemaText] = useState('');
+  const [description, setDescription] = useState('');
   const [parseError, setParseError] = useState('');
+
+  // Reset form when dialog opens with a different script
+  useEffect(() => {
+    if (!open || !script) return;
+    setVersion('');
+    setNfsPath('');
+    setContentSha256('');
+    setDefaultParamsText('');
+    setParamSchemaText('');
+    setDescription('');
+    setParseError('');
+  }, [script, open]);
 
   if (!open || !script) return null;
 
@@ -50,6 +63,7 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
         content_sha256: contentSha256.trim(),
         param_schema: paramSchema,
         default_params: defaultParams,
+        description: description.trim() || undefined,
       });
       toast.success(`版本 ${version} 已创建`);
       onCreated();
@@ -77,6 +91,12 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
             <input type="text" value={version} onChange={e => setVersion(e.target.value)} required
               className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               placeholder="如 2.0.0" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">描述</label>
+            <input type="text" value={description} onChange={e => setDescription(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              placeholder="此版本的变更说明…" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">NFS 路径</label>

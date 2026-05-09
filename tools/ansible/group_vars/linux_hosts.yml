@@ -20,7 +20,30 @@ agent_health_log_tail_lines: 40
 agent_agentctl_path: "{{ agent_install_dir }}/agentctl"
 agent_source_dir: "{{ playbook_dir }}/../../../backend/agent"
 
-# Agent-Backend 双向认证密钥，必须与 Backend .env 中 AGENT_SECRET 一致。
-# 真实值由 group_vars/linux_hosts.vault.yml 提供（ansible-vault 加密）。
-# 仓库不再保留默认值；未注入 vault 时 install/update playbook 会断言失败。
-agent_secret: "{{ vault_agent_secret | mandatory }}"
+# Agent-Backend 双向认证密钥，默认所有 Linux Agent 共用 Backend .env 中的 AGENT_SECRET。
+# 覆盖优先级：有效 vault_agent_secret > 本机环境变量 AGENT_SECRET > backend/.env。
+# 这样测试环境无需手动传 vault，也避免把真实 secret 写入被 git 跟踪的文件。
+agent_secret_placeholder_values:
+  - ""
+  - "REPLACE_WITH_VAULTED_SECRET_AT_LEAST_16_CHARS"
+
+agent_secret_from_vault: "{{ vault_agent_secret | default('', true) | trim }}"
+agent_secret_from_env: "{{ lookup('ansible.builtin.env', 'AGENT_SECRET') | default('', true) | trim }}"
+agent_secret_from_backend_env: >-
+  {{
+    lookup(
+      'ansible.builtin.ini',
+      'AGENT_SECRET type=properties file=' ~ inventory_dir ~ '/../../backend/.env',
+      errors='ignore'
+    ) | default('', true) | trim
+  }}
+agent_secret: >-
+  {{
+    agent_secret_from_vault
+    if agent_secret_from_vault not in agent_secret_placeholder_values
+    else (
+      agent_secret_from_env
+      if agent_secret_from_env not in agent_secret_placeholder_values
+      else agent_secret_from_backend_env
+    )
+  }}
