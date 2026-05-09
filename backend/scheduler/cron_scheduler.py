@@ -216,6 +216,8 @@ def run_retention_cleanup() -> None:
     """
     from backend.models.plan_run import PlanRun
     from backend.models.job import JobInstance, StepTrace
+    from backend.models.device_lease import DeviceLease
+    from backend.models.resource_pool import ResourceAllocation
 
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=PLAN_RUN_RETENTION_DAYS)
@@ -235,11 +237,24 @@ def run_retention_cleanup() -> None:
                 return
 
             run_ids = [r.id for r in stale_runs]
+
+            # Subquery: job IDs belonging to stale PlanRuns
+            stale_job_ids = select(JobInstance.id).where(
+                JobInstance.plan_run_id.in_(run_ids)
+            )
+
+            # FK order: child tables first
             db.query(StepTrace).filter(
-                StepTrace.job_id.in_(
-                    select(JobInstance.id).where(JobInstance.plan_run_id.in_(run_ids))
-                )
+                StepTrace.job_id.in_(stale_job_ids)
             ).delete(synchronize_session=False)
+            db.query(DeviceLease).filter(
+                DeviceLease.job_id.in_(stale_job_ids)
+            ).delete(synchronize_session=False)
+            db.query(ResourceAllocation).filter(
+                ResourceAllocation.job_instance_id.in_(stale_job_ids)
+            ).delete(synchronize_session=False)
+
+            # job_artifact / job_log_signal have ON DELETE CASCADE — DB handles them
             db.query(JobInstance).filter(
                 JobInstance.plan_run_id.in_(run_ids)
             ).delete(synchronize_session=False)
