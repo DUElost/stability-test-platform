@@ -16,7 +16,6 @@ class Script(Base):
     script_type = Column(String(16), nullable=False)
     version = Column(String(32), nullable=False)
     nfs_path = Column(Text, nullable=False)
-    entry_point = Column(String(256))
     content_sha256 = Column(String(64), nullable=False)
     param_schema = Column(JSONB, nullable=False, default=dict)
     default_params = Column(JSONB, nullable=False, default=dict, server_default="{}")

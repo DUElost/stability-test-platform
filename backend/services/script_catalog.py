@@ -55,8 +55,7 @@ def _iter_script_entries(root: Path) -> Iterable[Tuple[str, str, str, Path, str]
     """Yield (category, name, version, entry, script_type).
 
     Layout: ``root/<name>/v<version>/<entry>.py`` (flat, 2 levels under root).
-    Category is fixed at ``device`` — manifest-based override may be added
-    when host-side scripts return.
+    Category is fixed at ``device``.
     """
     for name_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         name = name_dir.name
@@ -133,7 +132,6 @@ def scan_script_root(db: Session, root: str | Path, runtime_root: str | None = N
                 script_type=script_type,
                 version=version,
                 nfs_path=_runtime_path(root_path, entry, runtime_root),
-                entry_point="",
                 content_sha256=content_sha256,
                 param_schema={},
                 default_params={},

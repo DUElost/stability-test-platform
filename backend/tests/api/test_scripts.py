@@ -16,7 +16,6 @@ def test_script_crud_and_soft_delete(client):
         "script_type": "python",
         "version": "1.0.0",
         "nfs_path": "/mnt/storage/test-platform/scripts/resource/push_bundle/v1.0.0/push_bundle.py",
-        "entry_point": "",
         "content_sha256": "a" * 64,
         "param_schema": {"bundle_name": {"type": "string", "required": True}},
         "description": "Push resource bundle",

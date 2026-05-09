@@ -28,7 +28,6 @@ class ScriptCreate(BaseModel):
     script_type: str
     version: str
     nfs_path: str
-    entry_point: Optional[str] = ""
     content_sha256: str
     param_schema: Dict[str, Any] = Field(default_factory=dict)
     default_params: Dict[str, Any] = Field(default_factory=dict)
@@ -43,7 +42,6 @@ class ScriptUpdate(BaseModel):
     script_type: Optional[str] = None
     version: Optional[str] = None
     nfs_path: Optional[str] = None
-    entry_point: Optional[str] = None
     content_sha256: Optional[str] = None
     param_schema: Optional[Dict[str, Any]] = None
     default_params: Optional[Dict[str, Any]] = None
@@ -59,7 +57,6 @@ class ScriptOut(BaseModel):
     script_type: str
     version: str
     nfs_path: str
-    entry_point: Optional[str]
     content_sha256: str
     param_schema: Dict[str, Any]
     default_params: Dict[str, Any]
@@ -89,7 +86,6 @@ def _script_out(script: Script) -> ScriptOut:
         script_type=script.script_type,
         version=script.version,
         nfs_path=script.nfs_path,
-        entry_point=script.entry_point,
         content_sha256=script.content_sha256,
         param_schema=script.param_schema or {},
         default_params=script.default_params or {},
@@ -155,7 +151,6 @@ def create_script(payload: ScriptCreate, db: Session = Depends(get_db)):
         script_type=payload.script_type,
         version=payload.version,
         nfs_path=payload.nfs_path,
-        entry_point=payload.entry_point,
         content_sha256=payload.content_sha256,
         param_schema=payload.param_schema,
         default_params=payload.default_params,
@@ -224,7 +219,6 @@ def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(g
         "script_type",
         "version",
         "nfs_path",
-        "entry_point",
         "content_sha256",
         "param_schema",
         "default_params",
@@ -243,7 +237,6 @@ def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(g
 class ScriptVersionCreate(BaseModel):
     version: str
     nfs_path: str
-    entry_point: Optional[str] = ""
     content_sha256: str
     param_schema: Dict[str, Any] = Field(default_factory=dict)
     default_params: Dict[str, Any] = Field(...)
@@ -290,7 +283,6 @@ def create_script_version(
         script_type=latest.script_type,
         version=payload.version,
         nfs_path=payload.nfs_path,
-        entry_point=payload.entry_point,
         content_sha256=payload.content_sha256,
         param_schema=payload.param_schema,
         default_params=payload.default_params,

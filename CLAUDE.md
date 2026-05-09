@@ -573,9 +573,8 @@ class StepTrace(Base):
 | `script_type` | 后缀映射（py/sh/bat/cmd） | 允许 | 继承最新版 | ✅ 决定 runner |
 | `version` | 二级目录 v 后部分 | 允许 | **必填** | ✅ |
 | `nfs_path` | runtime_root + 相对路径 | 允许 | **必填** | ✅ subprocess argv |
-| `entry_point` | 写空串 | 允许 | 可选 | ❌ 当前未消费（已死字段） |
 | `content_sha256` | 文件实际 sha | 允许 | **必填** | ❌ 仅审计 |
-| `param_schema` | `{}` | 允许 | 可选 | ❌ 当前未做校验 |
+| `param_schema` | `{}` | 允许 | 可选 | ❌ 后端不校验；前端 ScriptVersionDialog/ScriptManagementPage 录入与展示 |
 | `default_params` | `{}` | **422 拒绝** | **必填** | ✅ 注入 step.params → `STP_STEP_PARAMS` |
 | `is_active` | `true` | 允许 | 自动 true | ✅ ScriptRegistry 仅同步 active |
 | `description` | null | 允许 | 可选 | ❌ 仅 UI |
