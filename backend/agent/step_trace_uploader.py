@@ -94,12 +94,77 @@ class StepTraceUploader:
             headers=headers,
             timeout=15,
         )
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            if _status_code(exc) in (404, 409):
+                return self._resolve_rejected_batch(batch, headers)
+            raise
         for t in batch:
             self._local_db.mark_acked(t["id"])
             self._last_id = max(self._last_id, t["id"])
         logger.info("step_trace_uploaded count=%d", len(batch))
         return len(batch)
+
+    def _resolve_rejected_batch(
+        self,
+        batch: List[Dict[str, Any]],
+        headers: Dict[str, str],
+    ) -> int:
+        if len(batch) == 1:
+            trace = batch[0]
+            self._ack_rejected_trace(trace)
+            self._last_id = max(self._last_id, trace["id"])
+            return 1
+
+        resolved = 0
+        all_resolved = True
+        for trace in batch:
+            try:
+                resp = requests.post(
+                    f"{self._api_url}/api/v1/agent/steps",
+                    json=[_to_payload(trace)],
+                    headers=headers,
+                    timeout=15,
+                )
+                resp.raise_for_status()
+            except requests.HTTPError as exc:
+                if _status_code(exc) in (404, 409):
+                    self._ack_rejected_trace(trace)
+                    resolved += 1
+                    continue
+                all_resolved = False
+                logger.warning(
+                    "step_trace_upload_retry trace_id=%s status=%s",
+                    trace.get("id"), _status_code(exc),
+                )
+                break
+            except Exception as exc:
+                all_resolved = False
+                logger.warning(
+                    "step_trace_upload_retry trace_id=%s error=%s",
+                    trace.get("id"), exc,
+                )
+                break
+
+            self._local_db.mark_acked(trace["id"])
+            resolved += 1
+
+        if all_resolved:
+            self._last_id = max(self._last_id, max(t["id"] for t in batch))
+        logger.info("step_trace_upload_resolved count=%d/%d", resolved, len(batch))
+        return resolved
+
+    def _ack_rejected_trace(self, trace: Dict[str, Any]) -> None:
+        self._local_db.mark_acked(trace["id"])
+        logger.info(
+            "step_trace_upload_rejected_ack trace_id=%s job_id=%s",
+            trace.get("id"), trace.get("job_id"),
+        )
+
+
+def _status_code(exc: requests.HTTPError) -> Optional[int]:
+    return exc.response.status_code if exc.response is not None else None
 
 
 def _to_payload(trace: Dict[str, Any]) -> Dict[str, Any]:

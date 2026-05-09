@@ -82,6 +82,22 @@ def _deregister_active_device(did: int) -> None:
         _active_device_ids.discard(did)
 
 
+def _cleanup_after_lease_lost(
+    *,
+    job_id: int,
+    device_id: Optional[int],
+    active_jobs_lock: Any,
+    active_job_ids: Set[int],
+    active_device_ids: Set[int],
+    local_db: Any,
+) -> None:
+    with active_jobs_lock:
+        active_job_ids.discard(job_id)
+        if device_id is not None:
+            active_device_ids.discard(device_id)
+    local_db.delete_active_job(job_id)
+
+
 def execute_recovery_actions_impl(
     resp: dict,
     active_jobs_by_id: dict,
@@ -385,10 +401,14 @@ def main() -> None:
     # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处清理外部状态）
     def _on_lease_lost(jid: int, device_id: Optional[int]) -> None:
         try:
-            with _active_jobs_lock:
-                if device_id:
-                    _active_device_ids.discard(device_id)
-            local_db.delete_active_job(jid)
+            _cleanup_after_lease_lost(
+                job_id=jid,
+                device_id=device_id,
+                active_jobs_lock=_active_jobs_lock,
+                active_job_ids=_active_job_ids,
+                active_device_ids=_active_device_ids,
+                local_db=local_db,
+            )
         except Exception:
             logger.exception("on_lease_lost_cleanup_failed", extra={
                 "job_id": jid,

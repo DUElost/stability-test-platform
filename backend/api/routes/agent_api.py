@@ -22,6 +22,8 @@ from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan
+from backend.models.plan_run import PlanRun
+from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.lease_manager import acquire_lease, extend_lease, release_lease
 from backend.services.reconciler import reconcile_step_traces
@@ -506,8 +508,20 @@ async def upload_step_traces(
         await _require_valid_runtime_lease(db, job, trace.fencing_token)
 
     raw = [t.model_dump() for t in traces]
-    inserted = await reconcile_step_traces(host_id, raw, db)
-    return ok({"inserted": inserted, "total": len(traces)})
+    result = await reconcile_step_traces(host_id, raw, db)
+
+    # Push job_status / plan_run_status for transitioned jobs (B5)
+    for tj_id in result["transitioned_jobs"]:
+        job = await db.get(JobInstance, tj_id)
+        if job is not None:
+            await broadcast_run_job_update(job.plan_run_id, tj_id, job.status.value)
+            pr = await db.get(PlanRun, job.plan_run_id)
+            if pr is not None and pr.status in {
+                "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+            }:
+                await broadcast_plan_run_status(pr.id, pr.status)
+
+    return ok({"inserted": result["inserted"], "total": len(traces)})
 
 
 @router.post("/heartbeat", response_model=ApiResponse[HeartbeatResponse])
@@ -807,6 +821,14 @@ async def complete_job(
     await db.commit()
 
     if job.status in _TERMINAL and not already_terminal:
+        # ── SocketIO push: job completed/failed → notify PlanRun subscribers ──
+        await broadcast_run_job_update(job.plan_run_id, job_id, job.status.value)
+        run = await db.get(PlanRun, job.plan_run_id)
+        if run is not None and run.status in {
+            "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+        }:
+            await broadcast_plan_run_status(run.id, run.status)
+
         try:
             from backend.tasks.saq_worker import get_queue
             from saq import Job as SaqJob
@@ -884,7 +906,19 @@ async def update_job_step_status(
         raise HTTPException(status_code=404, detail="job not found")
     await _require_valid_runtime_lease(db, job, payload.fencing_token)
 
-    await reconcile_step_traces("agent", [trace], db)
+    result = await reconcile_step_traces("agent", [trace], db)
+
+    # Push job_status / plan_run_status if the job transitioned (B5)
+    for tj_id in result["transitioned_jobs"]:
+        job = await db.get(JobInstance, tj_id)
+        if job is not None:
+            await broadcast_run_job_update(job.plan_run_id, tj_id, job.status.value)
+            pr = await db.get(PlanRun, job.plan_run_id)
+            if pr is not None and pr.status in {
+                "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+            }:
+                await broadcast_plan_run_status(pr.id, pr.status)
+
     return ok({"job_id": job_id, "step_id": step_id, "status": payload.status})
 
 

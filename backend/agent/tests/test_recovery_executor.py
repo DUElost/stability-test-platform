@@ -2,14 +2,37 @@
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+import backend.agent.main as agent_main
 from backend.agent.main import execute_recovery_actions_impl, run_recovery_sync_if_needed
 
 
 class TestRecoveryExecutor:
+    def test_cleanup_after_lease_lost_clears_active_sets(self):
+        """lease lost cleanup must clear active job/device sets and local state."""
+        local_db = MagicMock()
+        active_job_ids = {7}
+        active_device_ids = {70}
+
+        assert hasattr(agent_main, "_cleanup_after_lease_lost")
+
+        agent_main._cleanup_after_lease_lost(
+            job_id=7,
+            device_id=70,
+            active_jobs_lock=threading.Lock(),
+            active_job_ids=active_job_ids,
+            active_device_ids=active_device_ids,
+            local_db=local_db,
+        )
+
+        assert 7 not in active_job_ids
+        assert 70 not in active_device_ids
+        local_db.delete_active_job.assert_called_once_with(7)
+
     def test_execute_resume_registers_token_and_active_id(self):
         """RESUME action → register_active_job called with job_id, token, device_id."""
         local_db = MagicMock()

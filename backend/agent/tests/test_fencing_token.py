@@ -11,6 +11,7 @@ from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
@@ -20,7 +21,7 @@ from backend.agent.job_runner import JobRunnerState, run_task_wrapper
 from backend.agent.lease_renewer import LeaseRenewer
 from backend.agent.pipeline_engine import PipelineEngine
 from backend.agent.registry.local_db import LocalDB
-from backend.agent.step_trace_uploader import _to_payload
+from backend.agent.step_trace_uploader import StepTraceUploader, _to_payload
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -291,6 +292,81 @@ def test_step_trace_uploader_payload_includes_fencing_token():
     })
 
     assert payload["fencing_token"] == "91:2"
+
+
+class _FakeStepTraceDB:
+    def __init__(self, traces):
+        self._traces = list(traces)
+        self.acked = []
+
+    def get_unacked_traces(self, after_id=0):
+        return [
+            t for t in self._traces
+            if t["id"] > after_id and t["id"] not in self.acked
+        ]
+
+    def mark_acked(self, trace_id):
+        self.acked.append(trace_id)
+
+
+class _FakeHTTPResponse:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(response=self)
+
+
+def _trace(trace_id, job_id):
+    return {
+        "id": trace_id,
+        "job_id": job_id,
+        "step_id": f"step-{trace_id}",
+        "stage": "init",
+        "event_type": "FAILED",
+        "status": "FAILED",
+        "output": None,
+        "error_message": "boom",
+        "original_ts": "2026-05-06T00:00:00+00:00",
+        "fencing_token": f"{job_id}:1",
+    }
+
+
+def test_step_trace_uploader_acks_single_409_rejection():
+    """失效 fencing_token 的 step_trace 不应无限重试刷 409。"""
+    local_db = _FakeStepTraceDB([_trace(1, 101)])
+    uploader = StepTraceUploader("http://server", local_db)
+
+    with patch(
+        "backend.agent.step_trace_uploader.requests.post",
+        return_value=_FakeHTTPResponse(409),
+    ):
+        uploaded = uploader._upload_once()
+
+    assert uploaded == 1
+    assert local_db.acked == [1]
+
+
+def test_step_trace_uploader_splits_batch_conflict_before_ack():
+    """批量 409 时逐条确认，避免把同批次有效 trace 直接丢弃。"""
+    local_db = _FakeStepTraceDB([_trace(1, 101), _trace(2, 102)])
+    uploader = StepTraceUploader("http://server", local_db)
+
+    def post_side_effect(url, json, headers, timeout):
+        if len(json) > 1:
+            return _FakeHTTPResponse(409)
+        return _FakeHTTPResponse(200 if json[0]["job_id"] == 101 else 409)
+
+    with patch(
+        "backend.agent.step_trace_uploader.requests.post",
+        side_effect=post_side_effect,
+    ) as mock_post:
+        uploaded = uploader._upload_once()
+
+    assert uploaded == 2
+    assert local_db.acked == [1, 2]
+    assert mock_post.call_count == 3
 
 
 def test_pipeline_engine_step_trace_mq_includes_fencing_token():
