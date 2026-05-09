@@ -514,7 +514,7 @@ async def upload_step_traces(
     for tj_id in result["transitioned_jobs"]:
         job = await db.get(JobInstance, tj_id)
         if job is not None:
-            await broadcast_run_job_update(job.plan_run_id, tj_id, job.status.value)
+            await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
             pr = await db.get(PlanRun, job.plan_run_id)
             if pr is not None and pr.status in {
                 "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
@@ -822,7 +822,7 @@ async def complete_job(
 
     if job.status in _TERMINAL and not already_terminal:
         # ── SocketIO push: job completed/failed → notify PlanRun subscribers ──
-        await broadcast_run_job_update(job.plan_run_id, job_id, job.status.value)
+        await broadcast_run_job_update(job.plan_run_id, job_id, job.status)
         run = await db.get(PlanRun, job.plan_run_id)
         if run is not None and run.status in {
             "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
@@ -912,7 +912,7 @@ async def update_job_step_status(
     for tj_id in result["transitioned_jobs"]:
         job = await db.get(JobInstance, tj_id)
         if job is not None:
-            await broadcast_run_job_update(job.plan_run_id, tj_id, job.status.value)
+            await broadcast_run_job_update(job.plan_run_id, tj_id, job.status)
             pr = await db.get(PlanRun, job.plan_run_id)
             if pr is not None and pr.status in {
                 "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
