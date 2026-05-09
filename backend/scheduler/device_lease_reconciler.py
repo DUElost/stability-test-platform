@@ -35,6 +35,7 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device
 from backend.models.job import JobInstance
+from backend.models.plan_run import PlanRun
 from backend.services.aggregator import PlanAggregator
 from backend.services.lease_manager import release_lease
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
@@ -42,6 +43,7 @@ from backend.services.state_machine import InvalidTransitionError, JobStateMachi
 logger = logging.getLogger(__name__)
 
 _UNKNOWN_GRACE_SECONDS = int(os.getenv("UNKNOWN_GRACE_SECONDS", "300"))
+_ABORT_REAPER_GRACE_SECONDS = int(os.getenv("ABORT_REAPER_GRACE_SECONDS", "60"))
 
 # ── Phase 4b: terminal statuses for D5 cleanup.  Does NOT include UNKNOWN —
 #    UNKNOWN must go through the grace-period branch.
@@ -259,6 +261,91 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Check 0 (v3): abort reaper — RUNNING + abort_requested + grace → ABORTED
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_ABORT_REAPER_BROADCASTS: dict[str, list[dict]] = {}
+
+
+async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
+    """P1: 扫描 RUNNING job 且 PlanRun.run_context 含 abort_requested 且
+    grace 已到 → 防御性释放 lease → JobStateMachine.transition ABORTED →
+    PlanAggregator 驱动 PlanRun 终态聚合。
+
+    返回 (aborted_count, broadcast_items) — 每项 dict:
+        {type, job_id, plan_run_id, status, plan_run_terminal}
+    """
+    now = datetime.now(timezone.utc)
+    grace_deadline = now - timedelta(seconds=_ABORT_REAPER_GRACE_SECONDS)
+
+    # PG JSONB path extraction:
+    #   run_context -> 'abort_requested'  → JSONB sub-object (or NULL if key missing)
+    #   ... ->> 'at'                      → text (or NULL if key missing)
+    #   ISO 8601 text comparison is lexicographically = chronologically correct
+    abort_at_text = (
+        PlanRun.run_context['abort_requested']['at']
+        .astext
+    )
+    rows = (await db.execute(
+        select(JobInstance, PlanRun)
+        .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
+        .where(
+            JobInstance.status == JobStatus.RUNNING.value,
+            abort_at_text.isnot(None),
+            abort_at_text < grace_deadline.isoformat(),
+        )
+    )).all()
+
+    aborted_count = 0
+    broadcast_items: list[dict] = []
+
+    for job, pr in rows:
+        try:
+            async with db.begin_nested():
+                # 防御性释放任何残留 ACTIVE lease
+                await release_lease(db, job.device_id, job.id, LeaseType.JOB)
+
+                try:
+                    JobStateMachine.transition(
+                        job, JobStatus.ABORTED, "aborted_reaper_timeout",
+                    )
+                except InvalidTransitionError:
+                    logger.debug(
+                        "abort_reaper_skip_transition job=%d status=%s",
+                        job.id, job.status,
+                    )
+                    continue
+
+                job.ended_at = now
+
+                # 驱动 PlanRun 终态聚合
+                plan_run_terminal = False
+                applied, new_pr_status = await PlanAggregator.on_job_terminal(job, db)
+                plan_run_terminal = applied
+
+                aborted_count += 1
+                broadcast_items.append({
+                    "type": "job_status",
+                    "job_id": job.id,
+                    "plan_run_id": job.plan_run_id,
+                    "status": "ABORTED",
+                    "plan_run_terminal": plan_run_terminal,
+                })
+
+                logger.warning(
+                    "abort_reaper job=%d plan_run=%d -> ABORTED",
+                    job.id, job.plan_run_id,
+                )
+        except Exception:
+            logger.exception(
+                "abort_reaper_failed job=%d plan_run=%d",
+                job.id, job.plan_run_id,
+            )
+
+    return aborted_count, broadcast_items
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -292,18 +379,40 @@ async def device_lease_reconcile_once() -> None:
 
 
 async def _reconcile_checks() -> None:
-    checks: list[tuple[str, callable]] = [
-        ("expired_leases", _reconcile_expired_leases),
-        ("stale_unknown", _reconcile_stale_unknown_jobs),
-        ("terminal_job_active_lease", _reconcile_terminal_job_active_leases),
+    from backend.realtime.socketio_server import (
+        broadcast_plan_run_status,
+        broadcast_run_job_update,
+    )
+
+    checks: list[tuple[str, callable, bool]] = [
+        ("aborted_running_jobs", _reconcile_aborted_running_jobs, True),  # P1: 优先级最高
+        ("expired_leases", _reconcile_expired_leases, False),
+        ("stale_unknown", _reconcile_stale_unknown_jobs, False),
+        ("terminal_job_active_lease", _reconcile_terminal_job_active_leases, False),
     ]
 
-    for label, check_fn in checks:
+    for label, check_fn, has_broadcast in checks:
         async with AsyncSessionLocal() as db:
             try:
                 result = await check_fn(db)
                 await db.commit()
                 _record_check(label, "success", result)
+
+                # P1 reaper: commit 后 broadcast
+                if has_broadcast and result is not None:
+                    _aborted_count, broadcast_items = result
+                    for item in broadcast_items:
+                        await broadcast_run_job_update(
+                            item["plan_run_id"],
+                            item["job_id"],
+                            item["status"],
+                        )
+                        if item.get("plan_run_terminal"):
+                            pr = await db.get(PlanRun, item["plan_run_id"])
+                            if pr is not None:
+                                await broadcast_plan_run_status(
+                                    pr.id, pr.status,
+                                )
             except Exception:
                 await db.rollback()
                 logger.exception("reconciler_check_failed check=%s", label)
@@ -315,7 +424,13 @@ def _record_check(label: str, outcome: str, result) -> None:
     try:
         reconciler_runs.labels(check=label, outcome=outcome).inc()
 
-        if label == "expired_leases" and result is not None:
+        if label == "aborted_running_jobs" and result is not None:
+            aborted_count, _broadcast_items = result
+            if aborted_count:
+                reconciler_actions.labels(
+                    action="to_aborted", reason="abort_reaper_timeout",
+                ).inc(aborted_count)
+        elif label == "expired_leases" and result is not None:
             unknown, failed, terminal = result
             if unknown:
                 reconciler_actions.labels(action="to_unknown", reason="lease_expired").inc(unknown)
