@@ -684,7 +684,7 @@ class PipelineEngine:
              (BO4: handled in the caller's finally / unified-exit block by
              treating manual_exit identically to abort).
         """
-        from backend.agent.patrol_heartbeat_uploader import compute_backoff_seconds
+        from .patrol_heartbeat_uploader import compute_backoff_seconds
 
         interval = patrol_def.get("interval_seconds", 300)
         backoff_policy = patrol_def.get("backoff_policy") or {}

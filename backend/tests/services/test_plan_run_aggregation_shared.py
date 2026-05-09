@@ -37,6 +37,8 @@ def test_apply_plan_run_aggregation_uses_single_status_rule():
         "total": 3,
         "completed": 2,
         "failed": 1,
+        "failed_only": 1,
+        "aborted": 0,
         "unknown": 0,
         "pass_rate": 0.6667,
     }

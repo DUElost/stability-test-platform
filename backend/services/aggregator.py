@@ -19,10 +19,13 @@ class PlanAggregator:
     """ADR-0020: PlanRun terminal aggregation + chain trigger."""
 
     @staticmethod
-    async def on_job_terminal(job: JobInstance, db: AsyncSession) -> None:
+    async def on_job_terminal(
+        job: JobInstance, db: AsyncSession,
+    ) -> tuple[bool, str | None]:
+        """Returns ``(applied, new_status)`` — caller should push after commit."""
         run = await db.get(PlanRun, job.plan_run_id)
         if run is None:
-            return
+            return False, None
 
         result = await db.execute(
             select(JobInstance).where(JobInstance.plan_run_id == run.id)
@@ -32,3 +35,4 @@ class PlanAggregator:
         applied = apply_plan_run_aggregation(run, jobs)
         if applied:
             await trigger_next_plan(run, db)
+        return applied, run.status if applied else None

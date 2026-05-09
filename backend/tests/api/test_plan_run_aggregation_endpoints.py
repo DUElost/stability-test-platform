@@ -180,20 +180,20 @@ def chain_setup(db_session):
     base_ts = _now() - timedelta(minutes=3)
     db_session.add_all([
         StepTrace(job_id=j1.id, step_id="check_device", stage="init",
-                  status="SUCCESS", event_type="step_completed",
+                  status="COMPLETED", event_type="COMPLETED",
                   original_ts=base_ts + timedelta(seconds=5)),
         StepTrace(job_id=j1.id, step_id="ensure_root", stage="init",
-                  status="SUCCESS", event_type="step_completed",
+                  status="COMPLETED", event_type="COMPLETED",
                   original_ts=base_ts + timedelta(seconds=10)),
         StepTrace(job_id=j3.id, step_id="check_device", stage="init",
-                  status="SUCCESS", event_type="step_completed",
+                  status="COMPLETED", event_type="COMPLETED",
                   original_ts=base_ts + timedelta(seconds=5)),
         StepTrace(job_id=j3.id, step_id="ensure_root", stage="init",
-                  status="SUCCESS", event_type="step_completed",
+                  status="COMPLETED", event_type="COMPLETED",
                   original_ts=base_ts + timedelta(seconds=10)),
         StepTrace(job_id=j3.id, step_id="patrol.monkey_launch",
                   stage="patrol", status="FAILED",
-                  event_type="step_failed",
+                  event_type="FAILED",
                   error_message="monkey crashed",
                   original_ts=base_ts + timedelta(minutes=2)),
     ])
@@ -356,7 +356,8 @@ class TestEventsEndpoint:
     ):
         cur_run = chain_setup["current_run"]
         resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/events", headers=auth_headers,
+            f"/api/v1/plan-runs/{cur_run.id}/events",
+            headers=auth_headers,
         )
         assert resp.status_code == 200, resp.text
         data = resp.json()["data"]

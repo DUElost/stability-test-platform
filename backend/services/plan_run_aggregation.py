@@ -22,14 +22,19 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
         record_plan_run_terminal(run.status, pass_rate=0.0)
         return True
 
-    failed = sum(1 for j in jobs if JobStatus(j.status) in {JobStatus.FAILED, JobStatus.ABORTED})
+    failed_only = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.FAILED)
+    aborted = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.ABORTED)
     unknown = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.UNKNOWN)
 
+    # v3: abort 是有意终止信号, 不参与 failure_threshold 容忍判断;
+    #     任何 ABORTED → FAILED (覆盖 threshold).
     if unknown > 0:
         run.status = PlanRunStatus.DEGRADED.value
-    elif failed == 0:
+    elif failed_only + aborted == 0:
         run.status = PlanRunStatus.SUCCESS.value
-    elif failed / total <= run.failure_threshold:
+    elif aborted > 0:
+        run.status = PlanRunStatus.FAILED.value
+    elif failed_only / total <= run.failure_threshold:
         run.status = PlanRunStatus.PARTIAL_SUCCESS.value
     else:
         run.status = PlanRunStatus.FAILED.value
@@ -41,7 +46,9 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
     run.result_summary = {
         "total": total,
         "completed": completed,
-        "failed": failed,
+        "failed": failed_only + aborted,   # 兼容字段: terminal failure 总数
+        "failed_only": failed_only,        # v3: 自然失败 (不含 aborted)
+        "aborted": aborted,                # v3: abort 终止数
         "unknown": unknown,
         "pass_rate": pass_rate,
     }
