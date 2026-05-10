@@ -296,6 +296,10 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
         )).all()
     except (sqlalchemy.exc.DataError, sqlalchemy.exc.DBAPIError):
         logger.warning("abort_reaper_timestamptz_cast_failed, fallback to string compare")
+        # Rollback the failed transaction so the fallback query can execute.
+        # Without this, PostgreSQL raises InFailedSQLTransactionError for any
+        # subsequent statement in the same transaction.
+        await db.rollback()
         rows = (await db.execute(
             select(JobInstance, PlanRun)
             .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
