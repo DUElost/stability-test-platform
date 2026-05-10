@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
+import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TrendingUp } from 'lucide-react';
@@ -69,7 +70,7 @@ export function CompletionTrendChart({
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-[200px]">
+        <StableResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
               <XAxis
@@ -128,7 +129,7 @@ export function CompletionTrendChart({
               />
             </LineChart>
           </ResponsiveContainer>
-        </div>
+        </StableResponsiveContainer>
       </CardContent>
     </Card>
   );

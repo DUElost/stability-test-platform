@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts';
+import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Activity } from 'lucide-react';
@@ -70,7 +71,7 @@ export function ActivityChart({
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-[200px]">
+        <StableResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
               <defs>
@@ -149,7 +150,7 @@ export function ActivityChart({
               />
             </AreaChart>
           </ResponsiveContainer>
-        </div>
+        </StableResponsiveContainer>
       </CardContent>
     </Card>
   );

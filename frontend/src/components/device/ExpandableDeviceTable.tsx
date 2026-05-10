@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment } from 'react';
 import { cn } from '@/lib/utils';
 import {
   Table,
@@ -189,6 +189,9 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
       {/* Search */}
       <div className="bg-white rounded-lg border border-gray-200 p-3">
         <input
+          id="device-search"
+          name="device-search"
+          aria-label="搜索设备"
           type="text"
           placeholder="搜索设备序列号/型号/主机..."
           value={searchQuery}
@@ -218,7 +221,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
               const StatusIcon = config.icon;
 
               return (
-                <>
+                <Fragment key={device.id}>
                   <TableRow
                     key={device.id}
                     className={cn(
@@ -377,7 +380,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                       </TableCell>
                     </TableRow>
                   )}
-                </>
+                </Fragment>
               );
             })}
           </TableBody>

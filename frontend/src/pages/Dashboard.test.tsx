@@ -6,10 +6,39 @@ import { MemoryRouter } from 'react-router-dom';
 // Mock dependencies before importing Dashboard
 vi.mock('../utils/api', () => ({
   api: {
-    hosts: {
-      list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
-    },
     stats: {
+      dashboardSummary: vi.fn().mockResolvedValue({
+        data: {
+          hosts: {
+            total: 453,
+            online: 1,
+            offline: 451,
+            degraded: 1,
+            avg_cpu_load: 0.36,
+            avg_ram_usage: 23.87,
+            avg_disk_usage: 8.07,
+            online_rate: 0.0022,
+          },
+          devices: {
+            total: 483,
+            idle: 1,
+            testing: 0,
+            offline: 482,
+            error: 0,
+            low_battery: 169,
+            high_temp: 0,
+          },
+          alerts: {
+            total: 169,
+            low_battery: 169,
+            high_temp: 0,
+            error: 0,
+          },
+          host_resources: [
+            { ip: '172.21.10.36', cpu_load: 0.36, ram_usage: 23.87, disk_usage: 8.07 },
+          ],
+        },
+      }),
       activity: vi.fn().mockResolvedValue({ data: { points: [], hours: 24 } }),
       completionTrend: vi.fn().mockResolvedValue({ data: { points: [], days: 7 } }),
     },
@@ -18,11 +47,9 @@ vi.mock('../utils/api', () => ({
 
 vi.mock('../hooks/useRealtimeDashboard', () => ({
   useRealtimeDashboard: vi.fn(() => ({
-    devices: [],
     isConnected: false,
     lastUpdateTime: new Date('2026-01-01T12:00:00'),
-    isLoading: false,
-    isError: false,
+    lastMessage: null,
   })),
 }));
 
@@ -59,6 +86,16 @@ function createWrapper() {
 }
 
 describe('Dashboard', () => {
+  it('renders authoritative dashboard summary instead of paginated list length', async () => {
+    const Dashboard = (await import('./Dashboard')).default;
+    render(<Dashboard />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText('453')).toBeInTheDocument();
+    expect(await screen.findByText('483')).toBeInTheDocument();
+    expect(screen.getByText('169')).toBeInTheDocument();
+    expect(screen.getByText('0.2%')).toBeInTheDocument();
+  });
+
   it('renders page title', async () => {
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
@@ -69,7 +106,7 @@ describe('Dashboard', () => {
   it('renders stat cards', async () => {
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
-    expect(screen.getByText('主机总数')).toBeInTheDocument();
+    expect(await screen.findByText('主机总数')).toBeInTheDocument();
     expect(screen.getByText('设备总数')).toBeInTheDocument();
     expect(screen.getByText('测试中')).toBeInTheDocument();
     expect(screen.getByText('告警')).toBeInTheDocument();
@@ -88,35 +125,24 @@ describe('Dashboard', () => {
   });
 
   it('renders error state when data loading fails', async () => {
-    const { useRealtimeDashboard } = await import('../hooks/useRealtimeDashboard');
-    (useRealtimeDashboard as any).mockReturnValue({
-      devices: [],
-      isConnected: false,
-      lastUpdateTime: new Date(),
-      isLoading: false,
-      isError: true,
-    });
+    const { api } = await import('../utils/api');
+    (api.stats.dashboardSummary as any).mockRejectedValue(new Error('Network Error'));
 
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
-    expect(screen.getByText('数据加载失败')).toBeInTheDocument();
+    expect(await screen.findByText('数据加载失败')).toBeInTheDocument();
   });
 
-  it('shows hosts data when loaded', async () => {
+  it('shows connected status when ws is on', async () => {
     const { useRealtimeDashboard } = await import('../hooks/useRealtimeDashboard');
     (useRealtimeDashboard as any).mockReturnValue({
-      devices: [
-        { serial: 'DEV1', model: 'Pixel', status: 'ONLINE', battery_level: 80, temperature: 30, network_latency: 10 },
-        { serial: 'DEV2', model: 'Galaxy', status: 'BUSY', battery_level: 50, temperature: 35, network_latency: 20 },
-      ],
       isConnected: true,
       lastUpdateTime: new Date(),
-      isLoading: false,
-      isError: false,
+      lastMessage: null,
     });
 
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
-    expect(screen.getByText('实时连接')).toBeInTheDocument();
+    expect(await screen.findByText('实时连接')).toBeInTheDocument();
   });
 });

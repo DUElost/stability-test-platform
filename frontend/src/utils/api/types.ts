@@ -310,6 +310,50 @@ export interface CompletionTrendResponse {
   days: number;
 }
 
+// ─── Dashboard Summary (权威聚合接口,替代分页列表) ──────────────────────────────
+
+export interface DashboardHostSummary {
+  total: number;
+  online: number;
+  offline: number;
+  degraded: number;
+  avg_cpu_load: number;
+  avg_ram_usage: number;
+  avg_disk_usage: number;
+  online_rate: number;
+}
+
+export interface DashboardDeviceSummary {
+  total: number;
+  idle: number;
+  testing: number;
+  offline: number;
+  error: number;
+  low_battery: number;
+  high_temp: number;
+}
+
+export interface DashboardAlertSummary {
+  total: number;
+  low_battery: number;
+  high_temp: number;
+  error: number;
+}
+
+export interface DashboardHostResourcePoint {
+  ip: string;
+  cpu_load: number;
+  ram_usage: number;
+  disk_usage: number;
+}
+
+export interface DashboardSummary {
+  hosts: DashboardHostSummary;
+  devices: DashboardDeviceSummary;
+  alerts: DashboardAlertSummary;
+  host_resources: DashboardHostResourcePoint[];
+}
+
 // ─── 通知/调度/审计类型 ──────────────────────────────────────────────────────
 
 export interface NotificationChannel {

@@ -7,6 +7,7 @@ import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -39,7 +40,7 @@ os.environ["AGENT_SECRET"] = ""
 
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
 ALLOW_SQLITE_TESTS = os.getenv("ALLOW_SQLITE_TESTS", "0") == "1"
-SQLITE_TEST_DB_PATH: Path | None = None
+SQLITE_TEST_DB_PATH: Optional[Path] = None
 
 if not TEST_DATABASE_URL:
     if ALLOW_SQLITE_TESTS:

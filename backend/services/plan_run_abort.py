@@ -157,13 +157,13 @@ def abort_plan_run(
                 aborted_jobs.append(job.id)
         # Mark abort_requested so reconciler / aggregator know this is intentional.
         run_ctx["abort_requested"] = {
-            "at": now.isoformat() + "Z",
+            "at": now.isoformat(),
             "reason": reason,
             "triggered_by": triggered_by,
         }
 
     # In-precheck path: no jobs to release; we close the PlanRun directly.
-    now_iso = datetime.now(timezone.utc).isoformat() + "Z"
+    now_iso = datetime.now(timezone.utc).isoformat()
     if in_precheck:
         precheck["phase"] = "failed"
         precheck["final_result"] = "aborted"

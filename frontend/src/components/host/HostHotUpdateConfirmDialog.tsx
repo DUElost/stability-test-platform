@@ -30,6 +30,8 @@ interface Props {
     opts: { abortRunningJobs: boolean },
   ) => void;
   isHotUpdatePending?: boolean;
+  /** Seconds the user should wait before retrying (HOST_ABORT_PENDING 409). */
+  retryAfterSeconds?: number;
 }
 
 function fmtTime(ts?: string | null): string {
@@ -84,8 +86,27 @@ export default function HostHotUpdateConfirmDialog({
   onClose,
   onConfirm,
   isHotUpdatePending = false,
+  retryAfterSeconds,
 }: Props) {
   const [abortChecked, setAbortChecked] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+
+  // Live countdown for retry_after_seconds
+  useEffect(() => {
+    if (!retryAfterSeconds || retryAfterSeconds <= 0) {
+      setCountdown(0);
+      return;
+    }
+    setCountdown(retryAfterSeconds);
+    const t = setInterval(() => {
+      setCountdown((n) => {
+        const next = n - 1;
+        if (next <= 0) clearInterval(t);
+        return Math.max(0, next);
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [retryAfterSeconds]);
 
   // Always fetch the live host snapshot when the dialog opens — the host list
   // payload doesn't include the per-host `active_jobs` array, so we must hit
@@ -183,7 +204,11 @@ export default function HostHotUpdateConfirmDialog({
                   >
                     {activeCount}
                   </b>{' '}
-                  个 Job 正在退出,请稍后重试
+                  个 Job 正在退出{countdown > 0 ? (
+                    <span data-testid="host-retry-after">
+                      , 预计 <b className="font-mono">{countdown}</b> 秒后可重试
+                    </span>
+                  ) : ', 请稍后重试'}
                 </span>
               </div>
 

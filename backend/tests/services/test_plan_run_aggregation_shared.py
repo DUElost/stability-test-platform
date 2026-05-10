@@ -83,3 +83,86 @@ def test_sync_plan_aggregator_delegates_to_shared_rule():
         plan_aggregator_sync(terminal_job, db)
 
     mock_apply.assert_called_once_with(run, jobs)
+
+
+# ── v3 §P4: abort → FAILED override ─────────────────────────────────────────
+
+
+def test_aggregation_aborted_overrides_partial_success():
+    """v3 §P4: any ABORTED → FAILED, even if failed_only/total ≤ threshold."""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=1, status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.5, ended_at=None, result_summary=None,
+    )
+    jobs = [
+        _job(JobStatus.COMPLETED), _job(JobStatus.COMPLETED),
+        _job(JobStatus.COMPLETED), _job(JobStatus.ABORTED),
+    ]
+    applied = apply_plan_run_aggregation(run, jobs)
+
+    assert applied is True
+    assert run.status == PlanRunStatus.FAILED.value
+    assert run.result_summary["aborted"] == 1
+    assert run.result_summary["failed_only"] == 0
+    assert run.result_summary["failed"] == 1
+
+
+def test_aggregation_pure_failed_below_threshold_still_partial():
+    """failed_only 内 threshold 仍可落 PARTIAL_SUCCESS."""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=2, status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.5, ended_at=None, result_summary=None,
+    )
+    jobs = [
+        _job(JobStatus.COMPLETED), _job(JobStatus.COMPLETED),
+        _job(JobStatus.FAILED),
+    ]
+    apply_plan_run_aggregation(run, jobs)
+
+    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
+    assert run.result_summary["aborted"] == 0
+    assert run.result_summary["failed_only"] == 1
+    assert run.result_summary["failed"] == 1
+
+
+def test_aggregation_unknown_overrides_aborted():
+    """unknown 优先级最高 → DEGRADED."""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=3, status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.5, ended_at=None, result_summary=None,
+    )
+    jobs = [
+        _job(JobStatus.COMPLETED), _job(JobStatus.ABORTED),
+        _job(JobStatus.UNKNOWN),
+    ]
+    apply_plan_run_aggregation(run, jobs)
+
+    assert run.status == PlanRunStatus.DEGRADED.value
+    assert run.result_summary["unknown"] == 1
+    assert run.result_summary["aborted"] == 1
+
+
+def test_aggregation_only_aborted_no_failed():
+    """仅 aborted 无 failed_only → FAILED."""
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=4, status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.5, ended_at=None, result_summary=None,
+    )
+    jobs = [
+        _job(JobStatus.COMPLETED), _job(JobStatus.COMPLETED),
+        _job(JobStatus.ABORTED),
+    ]
+    apply_plan_run_aggregation(run, jobs)
+
+    assert run.status == PlanRunStatus.FAILED.value
+    assert run.result_summary["aborted"] == 1
+    assert run.result_summary["failed_only"] == 0
+    assert run.result_summary["failed"] == 1

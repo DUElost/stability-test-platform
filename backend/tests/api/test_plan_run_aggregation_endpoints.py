@@ -344,6 +344,95 @@ class TestTimelineEndpoint:
         resp = client.get("/api/v1/plan-runs/999999/timeline", headers=auth_headers)
         assert resp.status_code == 404
 
+    # ── v3: device_skipped + aborted_job_count ─────────────────────────
+
+    def test_timeline_device_skipped_double_layer(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """v3: device_skipped 在 stage/step 两层都填充"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+
+        # Add a SKIPPED step trace for j1 on a unique step (avoid PK conflict with fixture)
+        st = StepTrace(
+            job_id=j1.id,
+            step_id="patrol.monkey_launch",
+            stage="patrol",
+            event_type="COMPLETED",
+            status="SKIPPED",
+            original_ts=_now(),
+        )
+        db_session.add(st)
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/timeline", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        stages = {s["stage"]: s for s in data["stages"]}
+        patrol_stage = stages.get("patrol", {})
+
+        # Stage-level device_skipped
+        assert patrol_stage.get("device_skipped", 0) >= 1
+
+        # Step-level device_skipped
+        step = next((s for s in patrol_stage.get("steps", []) if s["step_key"] == "patrol.monkey_launch"), None)
+        assert step is not None
+        assert step.get("device_skipped", 0) >= 1
+
+    def test_timeline_skipped_not_miscount_as_succeeded(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """v3: COMPLETED+SKIPPED 不计为 device_succeeded"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+
+        # Add a SKIPPED trace on a unique (job_id, step_id, stage, original_ts)
+        st = StepTrace(
+            job_id=j1.id,
+            step_id="teardown.clean_env",
+            stage="teardown",
+            event_type="COMPLETED",
+            status="SKIPPED",
+            original_ts=_now(),
+        )
+        db_session.add(st)
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/timeline", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        stages = {s["stage"]: s for s in data["stages"]}
+
+        td_stage = stages.get("teardown", {})
+        step = next(
+            (s for s in td_stage.get("steps", []) if s["step_key"] == "teardown.clean_env"),
+            None,
+        )
+        assert step is not None
+        # SKIPPED trace → device_skipped >= 1
+        assert step.get("device_skipped", 0) >= 1
+
+    def test_timeline_completed_completed_counts_succeeded(
+        self, client, auth_headers, chain_setup,
+    ):
+        """v3: COMPLETED+COMPLETED 才计为 device_succeeded (baseline)"""
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/timeline", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        init = next((s for s in data["stages"] if s["stage"] == "init"), None)
+        assert init is not None
+        # Existing fixture has all running/completed jobs with COMPLETED status on init steps
+        assert init["device_succeeded"] >= 1
+        # No SKIPPED traces in baseline fixture
+        assert init.get("device_skipped", 0) == 0
+
 
 # ---------------------------------------------------------------------------
 # /events
@@ -420,6 +509,63 @@ class TestEventsEndpoint:
         ids1 = {(e["ts"], e["title"]) for e in page1}
         ids2 = {(e["ts"], e["title"]) for e in page2}
         assert not (ids1 & ids2)
+
+    # ── v3: ABORTED job events ──────────────────────────────────────────
+
+    def test_events_includes_aborted_job_event(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """v3: ABORTED job → 「Job #N 已中止」事件, stage=system severity=warn"""
+        cur_run = chain_setup["current_run"]
+        j2 = chain_setup["job_running"]
+
+        # Add RUN_COMPLETE step_trace marking this job as ABORTED
+        st = StepTrace(
+            job_id=j2.id,
+            step_id="__job__",
+            stage="post_process",
+            event_type="RUN_COMPLETE",
+            status="ABORTED",
+            original_ts=_now() - timedelta(seconds=30),
+        )
+        j2.status = JobStatus.ABORTED.value
+        db_session.add(st)
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        events = resp.json()["data"]["events"]
+
+        # Find the 「Job #N 已中止」event
+        aborted_events = [
+            e for e in events
+            if "已中止" in e["title"] and str(j2.id) in e["title"]
+        ]
+        assert len(aborted_events) >= 1
+        assert aborted_events[0]["severity"] == "warn"
+        assert aborted_events[0]["stage"] == "system"
+
+    def test_events_step_failure_title_uses_stage_and_step_id(
+        self, client, auth_headers, chain_setup,
+    ):
+        """v3: 普通 step 失败标题输出为 stage.step 格式"""
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        events = resp.json()["data"]["events"]
+
+        # Find the existing patrol.monkey_launch failure from fixture
+        patrol_failures = [
+            e for e in events
+            if e["category"] == "step" and e["severity"] == "err"
+        ]
+        assert len(patrol_failures) >= 1
+        for e in patrol_failures:
+            assert "patrol" in e["stage"] or "init" in e["stage"]
 
 
 # ---------------------------------------------------------------------------

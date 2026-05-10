@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { ResultsSummary, ActivityResponse, DeviceMetricsResponse, CompletionTrendResponse } from './types';
+import type { ResultsSummary, ActivityResponse, DeviceMetricsResponse, CompletionTrendResponse, DashboardSummary } from './types';
 
 export const results = {
   summary: (limit?: number) =>
@@ -13,4 +13,6 @@ export const stats = {
     apiClient.get<DeviceMetricsResponse>(`/stats/device/${deviceId}/metrics`, { params: { hours } }),
   completionTrend: (days: number = 7) =>
     apiClient.get<CompletionTrendResponse>('/stats/completion-trend', { params: { days } }),
+  dashboardSummary: () =>
+    apiClient.get<DashboardSummary>('/stats/dashboard-summary'),
 };

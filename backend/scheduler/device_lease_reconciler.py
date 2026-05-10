@@ -22,7 +22,9 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
+import sqlalchemy.exc
 from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import TIMESTAMP
 
 from backend.core.database import AsyncSessionLocal
 from backend.core.metrics import (
@@ -278,23 +280,31 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     now = datetime.now(timezone.utc)
     grace_deadline = now - timedelta(seconds=_ABORT_REAPER_GRACE_SECONDS)
 
-    # PG JSONB path extraction:
-    #   run_context -> 'abort_requested'  → JSONB sub-object (or NULL if key missing)
-    #   ... ->> 'at'                      → text (or NULL if key missing)
-    #   ISO 8601 text comparison is lexicographically = chronologically correct
-    abort_at_text = (
-        PlanRun.run_context['abort_requested']['at']
-        .astext
-    )
-    rows = (await db.execute(
-        select(JobInstance, PlanRun)
-        .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
-        .where(
-            JobInstance.status == JobStatus.RUNNING.value,
-            abort_at_text.isnot(None),
-            abort_at_text < grace_deadline.isoformat(),
-        )
-    )).all()
+    # PG JSONB path extraction with timestamptz cast:
+    #   run_context -> 'abort_requested' ->> 'at' → text
+    #   ... ::timestamptz → native PG comparison against grace_deadline
+    abort_at_text = PlanRun.run_context['abort_requested']['at'].astext
+    try:
+        rows = (await db.execute(
+            select(JobInstance, PlanRun)
+            .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
+            .where(
+                JobInstance.status == JobStatus.RUNNING.value,
+                abort_at_text.isnot(None),
+                abort_at_text.cast(TIMESTAMP(timezone=True)) < grace_deadline,
+            )
+        )).all()
+    except (sqlalchemy.exc.DataError, sqlalchemy.exc.DBAPIError):
+        logger.warning("abort_reaper_timestamptz_cast_failed, fallback to string compare")
+        rows = (await db.execute(
+            select(JobInstance, PlanRun)
+            .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
+            .where(
+                JobInstance.status == JobStatus.RUNNING.value,
+                abort_at_text.isnot(None),
+                abort_at_text < grace_deadline.isoformat(),
+            )
+        )).all()
 
     aborted_count = 0
     broadcast_items: list[dict] = []

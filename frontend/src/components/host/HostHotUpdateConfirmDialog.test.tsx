@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import HostHotUpdateConfirmDialog from './HostHotUpdateConfirmDialog';
 
 const mocks = vi.hoisted(() => ({
@@ -20,6 +20,7 @@ function renderDialog(props: {
   onClose?: () => void;
   onConfirm?: (hostId: number | string, opts: { abortRunningJobs: boolean }) => void;
   isHotUpdatePending?: boolean;
+  retryAfterSeconds?: number;
 }) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -31,6 +32,7 @@ function renderDialog(props: {
         onClose={props.onClose ?? vi.fn()}
         onConfirm={props.onConfirm ?? vi.fn()}
         isHotUpdatePending={props.isHotUpdatePending}
+        retryAfterSeconds={props.retryAfterSeconds}
       />
     </QueryClientProvider>,
   );
@@ -172,5 +174,49 @@ describe('HostHotUpdateConfirmDialog', () => {
     expect(screen.queryByTestId('host-hot-update-abort-toggle')).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId('host-hot-update-confirm'));
     expect(onConfirm).toHaveBeenLastCalledWith('host-B', { abortRunningJobs: false });
+  });
+
+  // ── v3: retry_after_seconds live countdown ──────────────────────────
+
+  describe('retryAfterSeconds countdown', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('decrements countdown every second in the abort-draining banner', async () => {
+      mocks.getDetail.mockResolvedValueOnce({
+        id: 'host-999',
+        active_job_count: 1,
+        active_jobs: [
+          {
+            id: 9001,
+            plan_run_id: 99,
+            plan_id: 9,
+            device_id: 5,
+            status: 'RUNNING',
+            started_at: '2026-05-08T12:00:00Z',
+            abort_pending: true,
+          },
+        ],
+      });
+      renderDialog({ hostId: 'host-999', retryAfterSeconds: 75 });
+
+      // Let async queries resolve under fake timers
+      await act(() => vi.advanceTimersByTimeAsync(500));
+
+      // Banner visible with initial countdown
+      const retryEl = screen.getByTestId('host-retry-after');
+      expect(retryEl).toHaveTextContent('75');
+
+      // Advance 2 seconds — countdown must decrement
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(retryEl).toHaveTextContent('73');
+    });
   });
 });

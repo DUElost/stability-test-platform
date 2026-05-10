@@ -92,6 +92,9 @@ export default function HostsPage() {
   const [pendingHotUpdateHostId, setPendingHotUpdateHostId] = useState<
     number | string | null
   >(null);
+  const [pendingRetryAfter, setPendingRetryAfter] = useState<number | undefined>(
+    undefined,
+  );
 
   const hotUpdateMutation = useMutation({
     mutationFn: (vars: { hostId: number | string; abortRunningJobs: boolean }) =>
@@ -125,6 +128,11 @@ export default function HostsPage() {
         );
         // Re-open the dialog so the user can opt into the abort path.
         setPendingHotUpdateHostId(vars.hostId);
+        setPendingRetryAfter(
+          typeof detail.retry_after_seconds === 'number'
+            ? detail.retry_after_seconds
+            : undefined,
+        );
       } else {
         toast.error(
           `热更新失败: ${
@@ -315,6 +323,7 @@ export default function HostsPage() {
         }}
         onConfirm={handleHotUpdateConfirm}
         isHotUpdatePending={hotUpdateMutation.isPending}
+        retryAfterSeconds={pendingRetryAfter}
       />
     </div>
   );

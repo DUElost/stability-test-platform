@@ -337,8 +337,9 @@ def host_hot_update(
             all_abort_pending = all(item["abort_pending"] for item in active_summary)
             if all_abort_pending:
                 # 所有 active job 都在 abort 收口中 → 返回 HOST_ABORT_PENDING
-                # 计算 retry_after_seconds: 最晚 abort_requested.at 距现在最短剩余
-                min_remaining = _ABORT_REAPER_GRACE_SECONDS
+                # 计算 retry_after_seconds: 取最晚 abort 的 Job 剩余 grace，
+                # 确保用户按此时间重试时所有 Job 都已被 reaper 收割
+                max_remaining = 0
                 now_ts = datetime.now(timezone.utc)
                 for item in active_summary:
                     pr = pr_map.get(item["plan_run_id"])
@@ -351,11 +352,11 @@ def host_hot_update(
                             at_dt = datetime.fromisoformat(at_str.replace("Z", "+00:00"))
                             elapsed = (now_ts - at_dt).total_seconds()
                             remaining = max(0, _ABORT_REAPER_GRACE_SECONDS - elapsed)
-                            if remaining < min_remaining:
-                                min_remaining = remaining
+                            if remaining > max_remaining:
+                                max_remaining = remaining
                         except (ValueError, TypeError):
                             pass
-                retry_after = int(min_remaining + RECONCILER_INTERVAL)
+                retry_after = int(max_remaining + RECONCILER_INTERVAL)
                 raise HTTPException(
                     status_code=409,
                     detail={

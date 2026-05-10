@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
+import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PieChart as PieChartIcon } from 'lucide-react';
@@ -90,7 +91,7 @@ export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-[200px]">
+        <StableResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
@@ -149,7 +150,7 @@ export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
               />
             </PieChart>
           </ResponsiveContainer>
-        </div>
+        </StableResponsiveContainer>
       </CardContent>
     </Card>
   );

@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Cell } from 'recharts';
+import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Server } from 'lucide-react';
@@ -78,7 +79,7 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="h-[200px]">
+        <StableResponsiveContainer>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
               <XAxis
@@ -127,7 +128,7 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
               </Bar>
             </BarChart>
           </ResponsiveContainer>
-        </div>
+        </StableResponsiveContainer>
       </CardContent>
     </Card>
   );

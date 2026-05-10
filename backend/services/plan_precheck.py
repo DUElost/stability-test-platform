@@ -58,7 +58,15 @@ MAX_SYNC_ATTEMPTS = 1
 
 
 def _utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat() + "Z"
+    """Return UTC now as ISO-8601 string with Z suffix.
+
+    >>> _utc_iso()
+    '2026-05-10T06:45:36.712Z'
+
+    Note: do NOT use ``datetime.now(timezone.utc).isoformat() + 'Z'`` —
+    that produces ``+00:00Z`` which PostgreSQL cannot parse.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
 def _initial_precheck_state(host_ids: list[str]) -> dict:
