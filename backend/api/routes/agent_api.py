@@ -1035,15 +1035,27 @@ async def patrol_heartbeat(
     )
 
     # Re-fetch to return canonical values + any pending manual_action newly set.
-    refreshed = await db.get(JobInstance, job_id)
+    # Use explicit column selection to avoid lazy-load / MissingGreenlet issues
+    # on async PostgreSQL when expire_on_commit fires.
+    result = await db.execute(
+        select(
+            JobInstance.patrol_cycle_count,
+            JobInstance.patrol_success_cycle_count,
+            JobInstance.patrol_failed_cycle_count,
+            JobInstance.current_failure_streak,
+            JobInstance.next_retry_at,
+            JobInstance.manual_action,
+        ).where(JobInstance.id == job_id)
+    )
+    row = result.one()
     return ok(PatrolHeartbeatOut(
         job_id=job_id,
-        patrol_cycle_count=refreshed.patrol_cycle_count or 0,
-        patrol_success_cycle_count=refreshed.patrol_success_cycle_count or 0,
-        patrol_failed_cycle_count=refreshed.patrol_failed_cycle_count or 0,
-        current_failure_streak=refreshed.current_failure_streak or 0,
-        next_retry_at=_iso_or_none(refreshed.next_retry_at),
-        manual_action=refreshed.manual_action,
+        patrol_cycle_count=row.patrol_cycle_count or 0,
+        patrol_success_cycle_count=row.patrol_success_cycle_count or 0,
+        patrol_failed_cycle_count=row.patrol_failed_cycle_count or 0,
+        current_failure_streak=row.current_failure_streak or 0,
+        next_retry_at=_iso_or_none(row.next_retry_at),
+        manual_action=row.manual_action,
     ))
 
 

@@ -12,6 +12,7 @@ from typing import Any
 
 from sqlalchemy import select, and_, func
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.enums import JobStatus
@@ -347,6 +348,8 @@ def prepare_plan_run(
     plan_snapshot = _build_plan_snapshot(plan, steps, metadata, effective_threshold)
 
     merged_run_ctx = dict(run_context or {})
+    # IH1: dispatch_device_ids is critical — plan_precheck.py L101-105 explicitly
+    # asserts this list is non-empty.  Keep this line exactly as it was.
     merged_run_ctx.setdefault("dispatch_device_ids", list(device_ids))
 
     pr = PlanRun(
@@ -364,6 +367,17 @@ def prepare_plan_run(
     )
     db.add(pr)
     db.flush()
+
+    # Backfill dispatch_state.enqueue_key now that plan_run.id is assigned.
+    # The dispatcher gate and precheck_reaper both use this key to look up
+    # the SAQ job state.  Without it, orphan detection cannot correlate
+    # PlanRun rows with their SAQ precheck jobs.
+    dispatch_state = merged_run_ctx.get("dispatch_state")
+    if dispatch_state:
+        dispatch_state["enqueue_key"] = f"precheck:{pr.id}"
+        pr.run_context = {**merged_run_ctx, "dispatch_state": dispatch_state}
+        flag_modified(pr, "run_context")
+
     db.commit()
     db.refresh(pr)
     logger.info(

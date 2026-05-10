@@ -61,8 +61,26 @@ async def _after_process(ctx: dict) -> None:
 
 
 async def start_saq_worker() -> None:
-    """Connect the queue and launch the SAQ worker as a background task."""
+    """Connect the queue and launch the SAQ worker as a background task.
+
+    Idempotent: if the worker is already running, this is a no-op.  If a
+    previous worker task exists but has exited, the old queue is
+    disconnected before reconnecting.
+    """
     global _queue, _worker, _worker_task, _loop
+
+    if _queue is not None and _worker_task is not None and not _worker_task.done():
+        logger.info("saq_worker_start_skip already_running")
+        return
+
+    if _queue is not None:
+        try:
+            await _queue.disconnect()
+        except Exception:
+            logger.debug("saq_worker_disconnect_previous_error", exc_info=True)
+        _queue = None
+    _worker = None
+    _worker_task = None
 
     _loop = asyncio.get_running_loop()
 
@@ -153,3 +171,60 @@ def enqueue_sync(
         _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue())
     except RuntimeError:
         logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)
+
+
+# ---------------------------------------------------------------------------
+# Sync read helpers — for callers running in sync threads (e.g. reaper)
+# ---------------------------------------------------------------------------
+
+from typing import Any, Coroutine  # noqa: E402 (keep with related helpers)
+
+
+async def _get_saq_job_state(key: str) -> dict | None:
+    """Return the SAQ job dict for *key*, or None if not found."""
+    if _queue is None:
+        return None
+    job = await _queue.job(key)
+    return job.to_dict() if job else None
+
+
+async def _is_worker_alive(worker_id: str | None) -> bool:
+    """Return True if *worker_id* is present in the SAQ worker registry."""
+    if not worker_id or _queue is None:
+        return False
+    info = await _queue.info()
+    return worker_id in (info.get("workers") or {})
+
+
+def _read_from_loop(coro: Coroutine[Any, Any, Any], timeout: float = 3.0) -> Any:
+    """Run *coro* on the main event loop from a thread-pool thread.
+
+    Only call from thread pool (APScheduler sync jobs), **never** from
+    coroutines on ``_loop`` itself — doing so would deadlock.
+
+    The short *timeout* is a safety net for Redis hangs; it should never
+    fire in normal operation.  When it does fire the caller gets ``None``
+    and a task may be left orphaned on the loop (acceptable for reaper
+    correctness — orphan detection degrades gracefully to "skip").
+
+    Callers must ensure *coro* is only constructed when ``_loop`` is known
+    to be non-None, to avoid "coroutine was never awaited" warnings.
+    """
+    if _loop is None:
+        return None
+    future = asyncio.run_coroutine_threadsafe(coro, _loop)
+    return future.result(timeout=timeout)
+
+
+def get_saq_job_state_sync(key: str) -> dict | None:
+    """Sync wrapper: return SAQ job state dict, or None."""
+    if _loop is None:
+        return None
+    return _read_from_loop(_get_saq_job_state(key))
+
+
+def is_worker_alive_sync(worker_id: str | None) -> bool:
+    """Sync wrapper: return True if the SAQ worker owning *worker_id* is alive."""
+    if _loop is None:
+        return False
+    return bool(_read_from_loop(_is_worker_alive(worker_id)))

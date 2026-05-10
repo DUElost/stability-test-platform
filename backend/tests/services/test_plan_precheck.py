@@ -340,3 +340,78 @@ class TestRunPlanEndpointEnqueues:
         assert enq.call_args.args[0] == "precheck_and_dispatch_task"
         assert kwargs["plan_run_id"] == data["id"]
         assert kwargs["key"] == f"precheck:{data['id']}"
+
+
+# ---------------------------------------------------------------------------
+# dispatch_state structure (ADR-0021 audit)
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchStatePersistence:
+    def test_run_plan_records_dispatch_state(
+        self, client, auth_headers, db_session, gate_chain
+    ):
+        plan_id = gate_chain["plan"].id
+        device_ids = [gate_chain["device_a"].id]
+
+        with patch("backend.api.routes.plans.enqueue_sync"):
+            resp = client.post(
+                f"/api/v1/plans/{plan_id}/run",
+                json={"device_ids": device_ids},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200, resp.text
+        plan_run_id = resp.json()["data"]["id"]
+
+        pr = db_session.get(PlanRun, plan_run_id)
+        assert pr is not None
+
+        state = pr.run_context["dispatch_state"]
+        assert state["enqueue_key"] == f"precheck:{plan_run_id}"
+        assert state["requeue_attempts"] == 0
+        assert state["status"] == "queued"
+        assert state["enqueued_at"] is not None
+        assert state["started_at"] is None
+        assert state["completed_at"] is None
+        assert state["last_error"] is None
+
+        # dispatch_device_ids must still be present
+        assert pr.run_context["dispatch_device_ids"] == device_ids
+
+    def test_gate_updates_dispatch_state_on_run(
+        self, db_session, gate_chain
+    ):
+        pr = _prepare_run(db_session, gate_chain)
+        # Simulate dispatch_state being seeded (as API would do)
+        run_ctx = dict(pr.run_context or {})
+        run_ctx["dispatch_state"] = {
+            "enqueue_key": f"precheck:{pr.id}",
+            "requeue_attempts": 0,
+            "status": "queued",
+            "enqueued_at": "2026-05-10T07:00:00.000Z",
+            "started_at": None,
+            "completed_at": None,
+            "last_error": None,
+        }
+        pr.run_context = run_ctx
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(pr, "run_context")
+        db_session.commit()
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            return _ack_ok(host_id, "aabbcc11")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        state = pr_after.run_context["dispatch_state"]
+        assert state["status"] == "completed"
+        assert state["started_at"] is not None
+        assert state["completed_at"] is not None
+        assert state["last_error"] is None

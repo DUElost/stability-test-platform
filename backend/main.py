@@ -94,7 +94,14 @@ async def lifespan(app: FastAPI):
         logger.info("apscheduler_started")
 
         # SAQ async task queue (post-completion, notifications, control commands)
-        await start_saq_worker()
+        # Controlled by STP_ENABLE_INPROCESS_SAQ — disable in production when
+        # you want to run SAQ as a standalone worker process instead of
+        # in-process (avoids orphan jobs on hot-reload).
+        ENABLE_INPROCESS_SAQ = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
+        if ENABLE_INPROCESS_SAQ:
+            await start_saq_worker()
+        else:
+            logger.warning("saq_worker_disabled_by_env")
 
     yield
 

@@ -200,3 +200,70 @@ async def test_stop_saq_worker_awaits_async_worker_stop():
         mod._worker_task = original_worker_task
         mod._queue = original_queue
         mod._loop = original_loop
+
+
+# ---------------------------------------------------------------------------
+# SAQ worker start/stop idempotency (ADR-0021 audit)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_saq_worker_is_idempotent(monkeypatch):
+    """start_saq_worker is a no-op when the worker is already running."""
+    import backend.tasks.saq_worker as mod
+
+    fake_queue = MagicMock()
+    fake_queue.connect = AsyncMock()
+    fake_worker = MagicMock()
+    fake_worker.start = AsyncMock()
+
+    monkeypatch.setattr(mod.Queue, "from_url", lambda *args, **kwargs: fake_queue)
+    monkeypatch.setattr(mod, "Worker", lambda *args, **kwargs: fake_worker)
+
+    await mod.start_saq_worker()
+    await mod.start_saq_worker()
+
+    fake_queue.connect.assert_awaited_once()
+
+
+def test_get_saq_job_state_sync_returns_none_when_queue_missing():
+    """get_saq_job_state_sync returns None when the SAQ queue is not initialised."""
+    import backend.tasks.saq_worker as mod
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    try:
+        mod._queue = None
+        mod._loop = None
+        assert mod.get_saq_job_state_sync("precheck:1") is None
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
+
+
+@pytest.mark.asyncio
+async def test_start_saq_worker_recreates_queue_after_stopped_worker(monkeypatch):
+    """start_saq_worker disconnects old queue before reconnecting when previous
+    worker task has completed."""
+    import backend.tasks.saq_worker as mod
+
+    old_queue = MagicMock()
+    old_queue.disconnect = AsyncMock()
+    fake_queue = MagicMock()
+    fake_queue.connect = AsyncMock()
+    fake_worker = MagicMock()
+    fake_worker.start = AsyncMock()
+
+    # Simulate a completed (done) worker task.
+    done_task = asyncio.create_task(asyncio.sleep(0))
+    await done_task
+
+    monkeypatch.setattr(mod.Queue, "from_url", lambda *args, **kwargs: fake_queue)
+    monkeypatch.setattr(mod, "Worker", lambda *args, **kwargs: fake_worker)
+    mod._queue = old_queue
+    mod._worker_task = done_task
+
+    await mod.start_saq_worker()
+
+    old_queue.disconnect.assert_awaited_once()
+    fake_queue.connect.assert_awaited_once()

@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/config';
+import { ensureFreshAccessToken } from '@/utils/auth';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -30,6 +31,8 @@ let _dashStatus: ConnectionStatus = 'disconnected';
 const _dashStatusListeners = new Set<(s: ConnectionStatus) => void>();
 const _dashEventListeners = new Map<string, Set<(data: any) => void>>();
 
+let _authRecoveryInFlight = false;
+
 function _notifyDashStatus(status: ConnectionStatus) {
   _dashStatus = status;
   _dashStatusListeners.forEach(fn => fn(status));
@@ -43,15 +46,8 @@ function _getDashSocket(): Socket {
     return _dashSocket;
   }
 
-  // First call: create the namespace socket
-  const authPayload: Record<string, string> = {};
-
-  // Try to get token synchronously from localStorage first for initial connect
-  const storedToken = localStorage.getItem('access_token');
-  if (storedToken) {
-    authPayload.token = storedToken;
-  }
-
+  // Use function-based auth so the token is always fresh at handshake time.
+  // Static auth payload is stale the moment localStorage is updated.
   const socket = io(`${API_BASE_URL}/dashboard`, {
     path: '/socket.io',
     transports: ['websocket', 'polling'],
@@ -60,7 +56,11 @@ function _getDashSocket(): Socket {
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 30000,
-    auth: authPayload,
+    auth: (cb: (payload: Record<string, string>) => void) => {
+      void ensureFreshAccessToken(60).then((token) => {
+        cb(token ? { token } : {});
+      });
+    },
     forceNew: false,
   });
 
@@ -83,6 +83,22 @@ function _getDashSocket(): Socket {
 
   socket.on('connect_error', (err) => {
     console.error('[SIO/dashboard] Connection error:', err.message);
+
+    // If the server rejected our token as invalid, try a one-time refresh
+    // and reconnect.  Guard against concurrent recovery loops.
+    if (err.message === 'Invalid token' && !_authRecoveryInFlight) {
+      _authRecoveryInFlight = true;
+      socket.disconnect();
+      void ensureFreshAccessToken(0).then((fresh) => {
+        if (fresh) {
+          (socket as any).auth = { token: fresh };
+          socket.connect();
+        }
+        _authRecoveryInFlight = false;
+      });
+      return;
+    }
+
     _notifyDashStatus('error');
   });
 

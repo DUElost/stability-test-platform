@@ -496,6 +496,15 @@ def run_plan(
       3. Return the PlanRun row immediately.  The frontend can navigate to
          the PlanRun detail page and watch ``run_context.precheck`` evolve.
     """
+    initial_dispatch_state = {
+        "enqueue_key": None,
+        "requeue_attempts": 0,
+        "status": "queued",
+        "enqueued_at": datetime.now(timezone.utc).isoformat(),
+        "started_at": None,
+        "completed_at": None,
+        "last_error": None,
+    }
     try:
         pr = prepare_plan_run(
             plan_id=plan_id,
@@ -503,9 +512,12 @@ def run_plan(
             triggered_by=current_user.username if current_user else "api",
             db=db,
             run_type="MANUAL",
+            run_context={"dispatch_state": initial_dispatch_state},
         )
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    assert pr.run_context["dispatch_state"]["enqueue_key"] == f"precheck:{pr.id}"
 
     enqueue_sync(
         "precheck_and_dispatch_task",

@@ -18,6 +18,10 @@ Failure modes — all set ``PlanRun.status='FAILED'`` +
 State is persisted into ``run_context.precheck`` after every transition so
 the frontend PlanRunDetailPage can render progress live via SocketIO room
 ``plan_run:{id}``.
+
+Additionally, ``run_context.dispatch_state`` is kept in sync at each major
+boundary so that the ``precheck_reaper`` can determine whether a precheck job
+has been lost, swept, or stalled, and recover accordingly.
 """
 
 from __future__ import annotations
@@ -231,6 +235,21 @@ def _sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional
     return True, None
 
 
+def _update_dispatch_state(pr: PlanRun, db: Session, **patch: object) -> None:
+    """Persist incremental changes to ``run_context.dispatch_state``.
+
+    Updates are committed immediately so the reaper always sees the
+    latest authoritative state from the SAQ worker process.
+    """
+    run_ctx = dict(pr.run_context or {})
+    state = dict(run_ctx.get("dispatch_state") or {})
+    state.update(patch)
+    run_ctx["dispatch_state"] = state
+    pr.run_context = run_ctx
+    flag_modified(pr, "run_context")
+    db.commit()
+
+
 async def _drive_dispatch_gate(
     plan_run_id: int, *, db: Optional[Session] = None
 ) -> None:
@@ -257,6 +276,14 @@ async def _drive_dispatch_gate(
             )
             gate_outcome = "skipped"
             return
+
+        # Mark dispatch_state as running now that we've picked up the job.
+        _update_dispatch_state(
+            pr, db,
+            status="running",
+            started_at=_utc_iso(),
+            last_error=None,
+        )
 
         precheck = initialise_precheck_state(plan_run_id, db)
         host_ids = list(precheck["hosts"].keys())
@@ -376,6 +403,13 @@ async def _drive_dispatch_gate(
         # 区分:有 sync 阶段走过 = synced_passed;否则 = passed
         gate_outcome = "synced_passed" if out_of_sync_hosts else "passed"
 
+        _update_dispatch_state(
+            pr, db,
+            status="completed",
+            completed_at=_utc_iso(),
+            last_error=None,
+        )
+
     except Exception:
         logger.exception("precheck_unexpected_failure plan_run=%d", plan_run_id)
         try:
@@ -441,6 +475,14 @@ def _mark_precheck_failed(
         "reason": error,
     }
     flag_modified(pr, "run_context")
+
+    # Keep dispatch_state in sync so the reaper won't double-process this run.
+    dispatch_state = dict(run_ctx.get("dispatch_state") or {})
+    dispatch_state["status"] = "failed"
+    dispatch_state["completed_at"] = _utc_iso()
+    dispatch_state["last_error"] = f"precheck:{error}"
+    run_ctx["dispatch_state"] = dispatch_state
+
     db.commit()
     logger.info("precheck_failed plan_run=%d error=%s", plan_run_id, error)
 

@@ -34,6 +34,7 @@ RECONCILER_INTERVAL = int(os.getenv("RECONCILER_INTERVAL_SECONDS", "15"))
 CRON_POLL_INTERVAL = float(os.getenv("CRON_POLL_INTERVAL", "30"))
 RETENTION_CLEANUP_INTERVAL = int(os.getenv("RETENTION_CLEANUP_INTERVAL_SECONDS", "3600"))
 QUEUE_DEPTH_INTERVAL = int(os.getenv("QUEUE_DEPTH_POLL_INTERVAL_SECONDS", "15"))
+PRECHECK_REAPER_INTERVAL = int(os.getenv("PRECHECK_REAPER_INTERVAL_SECONDS", "45"))
 
 MISFIRE_GRACE = timedelta(seconds=60)
 
@@ -167,3 +168,17 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=saq_queue_depth_poll interval=%ds", QUEUE_DEPTH_INTERVAL)
+
+    from backend.scheduler.precheck_reaper import precheck_reaper_job
+
+    await scheduler.add_schedule(
+        _instrumented("precheck_reaper", precheck_reaper_job),
+        IntervalTrigger(seconds=PRECHECK_REAPER_INTERVAL),
+        id="precheck_reaper",
+        misfire_grace_time=MISFIRE_GRACE,
+        conflict_policy=ConflictPolicy.replace,
+    )
+    logger.info(
+        "schedule_registered id=precheck_reaper interval=%ds",
+        PRECHECK_REAPER_INTERVAL,
+    )

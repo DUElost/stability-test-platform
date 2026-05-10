@@ -13,7 +13,7 @@
     8. 输出 PlanRun + JobInstance + StepTrace 摘要
 
 使用示例：
-    set STP_ADMIN_PASSWORD=admin
+    set STP_ADMIN_PASSWORD=<your-password>
     python backend/scripts/seed_and_smoke.py
     python backend/scripts/seed_and_smoke.py --no-hot-update --no-wait
     python backend/scripts/seed_and_smoke.py --device-id 2429 --timeout 900
@@ -280,8 +280,8 @@ def main() -> None:
                    help=f"后端地址（default: {DEFAULT_BACKEND}）")
     p.add_argument("--username", default=os.getenv("STP_ADMIN_USER", "admin"),
                    help="登录用户名（env: STP_ADMIN_USER）")
-    p.add_argument("--password", default=os.getenv("STP_ADMIN_PASSWORD", "admin"),
-                   help="登录密码（env: STP_ADMIN_PASSWORD）")
+    p.add_argument("--password", default=os.getenv("STP_ADMIN_PASSWORD"),
+                   help="登录密码（env: STP_ADMIN_PASSWORD, required unless set in env）")
     p.add_argument("--target-host-id", default=DEFAULT_HOST_ID,
                    help=f"热更新目标 host_id（default: {DEFAULT_HOST_ID}）")
     p.add_argument("--device-id", type=int, default=DEFAULT_DEVICE_ID,
@@ -295,6 +295,9 @@ def main() -> None:
     p.add_argument("--poll-interval", type=int, default=5,
                    help="轮询间隔秒数（default: 5）")
     args = p.parse_args()
+
+    if not args.password:
+        die("Missing admin password: set STP_ADMIN_PASSWORD or pass --password explicitly.")
 
     client = APIClient(args.backend)
     try:
