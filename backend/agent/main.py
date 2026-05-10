@@ -28,7 +28,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
     from agent.job_runner import JobRunnerState, run_task_wrapper
     from agent.lease_renewer import LeaseRenewer
-    from agent.mq.producer import MQProducer
+    from agent.mq.producer import StepTraceWriter
     from agent.outbox_drainer import OutboxDrainThread
     from agent.registry.local_db import LocalDB
     from agent.registry.script_registry import ScriptRegistry
@@ -44,7 +44,7 @@ else:
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
-    from .mq.producer import MQProducer
+    from .mq.producer import StepTraceWriter
     from .outbox_drainer import OutboxDrainThread
     from .registry.local_db import LocalDB
     from .registry.script_registry import ScriptRegistry
@@ -343,7 +343,7 @@ def main() -> None:
         logger.info("watcher_subsystem_disabled (STP_WATCHER_ENABLED=false)")
 
     # Step trace local writer (Redis XADD removed in Phase 4; HTTP upload via StepTraceUploader)
-    mq_producer = MQProducer("", host_id, local_db=local_db)
+    mq_producer = StepTraceWriter("", host_id, local_db=local_db)
 
     # Control commands via SocketIO (replaces Redis ControlListener)
     def _handle_control(data):

@@ -36,41 +36,21 @@ class JobRunnerState:
 
 
 def _validate_pipeline_def(pipeline_def: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not (pipeline_def and isinstance(pipeline_def, dict)):
+    """Validate pipeline structure via shared semantic validator (imported from core).
+
+    This function is a thin adapter that converts the shared
+    ``validate_lifecycle_semantics`` return type to the str-or-None form
+    expected by the agent job runner.
+    """
+    from backend.core.pipeline_validator import validate_lifecycle_semantics
+
+    if not pipeline_def or not isinstance(pipeline_def, dict):
         return "pipeline_def is required"
 
-    if "stages" in pipeline_def:
-        return "stages format is not supported; use 'lifecycle'"
-    lifecycle = pipeline_def.get("lifecycle")
-    if not isinstance(lifecycle, dict):
-        return "pipeline_def must contain 'lifecycle'"
-
-    init = lifecycle.get("init")
-    if not isinstance(init, list) or not init:
-        return "pipeline_def.lifecycle.init must contain at least one step"
-
-    teardown = lifecycle.get("teardown")
-    if not isinstance(teardown, list):
-        return "pipeline_def.lifecycle.teardown must be a step array"
-
-    patrol = lifecycle.get("patrol")
-    if patrol is not None:
-        if not isinstance(patrol, dict):
-            return "pipeline_def.lifecycle.patrol must be an object"
-        if not isinstance(patrol.get("interval_seconds"), int) or patrol["interval_seconds"] < 1:
-            return "pipeline_def.lifecycle.patrol.interval_seconds must be a positive integer"
-        if not isinstance(patrol.get("steps"), list) or not patrol["steps"]:
-            return "pipeline_def.lifecycle.patrol.steps must contain at least one step"
-
-    for step in init + teardown + (patrol.get("steps", []) if isinstance(patrol, dict) else []):
-        if not isinstance(step, dict):
-            return "pipeline_def lifecycle steps must be objects"
-        action = step.get("action", "")
-        if not isinstance(action, str) or not action.startswith("script:"):
-            return "pipeline_def actions must use script:<name>"
-        if not step.get("version"):
-            return "pipeline_def script actions must define version"
-    return None
+    ok_sem, errors = validate_lifecycle_semantics(pipeline_def)
+    if ok_sem:
+        return None
+    return "; ".join(errors)
 
 
 def run_task_wrapper(

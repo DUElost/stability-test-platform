@@ -17,11 +17,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class MQProducer:
-    """Local step-trace writer. Redis XADD removed in Phase 4.
+class StepTraceWriter:
+    """Local step-trace writer — persists to SQLite WAL via LocalDB.
 
-    Retained as a thin wrapper around LocalDB for backward compatibility
-    with callers (pipeline_engine, etc.) that still reference MQProducer.
+    Formerly MQProducer (Redis XADD removed in Phase 4). Renamed to
+    reflect the actual storage backend: no message queue is involved.
     """
 
     def __init__(self, redis_url: str, host_id: str, local_db: Optional["LocalDB"] = None):

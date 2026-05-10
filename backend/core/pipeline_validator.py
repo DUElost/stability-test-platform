@@ -52,18 +52,15 @@ def _validate_action_versions(pipeline_def: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def validate_pipeline_def(pipeline_def: Dict[str, Any]) -> Tuple[bool, List[str]]:
-    """Validate a pipeline definition against the JSON Schema.
+def validate_lifecycle_semantics(pipeline_def: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """Validate lifecycle structure and action semantics (no JSON Schema dependency).
 
-    Supports only lifecycle format:
-    { "lifecycle": { "init": [...], "patrol": { "steps": [...] }, "teardown": [...] } }
+    This is the shared semantic validator used by both the backend API
+    (before dispatch) and the agent (before execution).  It does NOT depend on
+    jsonschema — that layer is added by ``validate_pipeline_def``.
 
-    Returns:
-        (is_valid, errors) where errors is a list of human-readable error strings.
+    Returns (is_valid, errors_list).
     """
-    if Draft7Validator is None:
-        return False, ["jsonschema library not installed; pipeline validation cannot proceed. Install with: pip install jsonschema"]
-
     if not isinstance(pipeline_def, dict):
         return False, ["(root): pipeline_def must be an object"]
 
@@ -76,7 +73,6 @@ def validate_pipeline_def(pipeline_def: Dict[str, Any]) -> Tuple[bool, List[str]
     if "lifecycle" not in pipeline_def:
         return False, ["(root): pipeline must define 'lifecycle'"]
 
-    # Semantic validation before JSON Schema
     lifecycle = pipeline_def.get("lifecycle")
     if not isinstance(lifecycle, dict):
         return False, ["(root): lifecycle must be an object"]
@@ -107,6 +103,25 @@ def validate_pipeline_def(pipeline_def: Dict[str, Any]) -> Tuple[bool, List[str]
     action_version_errors = _validate_action_versions(pipeline_def)
     if action_version_errors:
         return False, action_version_errors
+
+    return True, []
+
+
+def validate_pipeline_def(pipeline_def: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    """Validate a pipeline definition — semantics + JSON Schema.
+
+    Supports only lifecycle format:
+    { "lifecycle": { "init": [...], "patrol": { "steps": [...] }, "teardown": [...] } }
+
+    Returns:
+        (is_valid, errors) where errors is a list of human-readable error strings.
+    """
+    if Draft7Validator is None:
+        return False, ["jsonschema library not installed; pipeline validation cannot proceed. Install with: pip install jsonschema"]
+
+    ok_sem, errors_sem = validate_lifecycle_semantics(pipeline_def)
+    if not ok_sem:
+        return False, errors_sem
 
     # JSON Schema validation
     schema = _load_schema()
