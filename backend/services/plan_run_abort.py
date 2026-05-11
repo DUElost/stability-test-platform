@@ -41,6 +41,7 @@ from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
+from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
 logger = logging.getLogger(__name__)
 
@@ -133,16 +134,17 @@ def abort_plan_run(
     released_leases = 0
 
     if not in_precheck:
-        active_jobs = (
+        all_jobs = (
             db.query(JobInstance)
             .filter(
                 JobInstance.plan_run_id == plan_run_id,
-                JobInstance.status.in_(
-                    [JobStatus.PENDING.value, JobStatus.RUNNING.value]
-                ),
             )
             .all()
         )
+        active_jobs = [
+            job for job in all_jobs
+            if job.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+        ]
         now = datetime.now(timezone.utc)
         for job in active_jobs:
             if job.status == JobStatus.PENDING.value:
@@ -161,6 +163,22 @@ def abort_plan_run(
             "reason": reason,
             "triggered_by": triggered_by,
         }
+
+        has_active_jobs = any(
+            job.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+            for job in all_jobs
+        )
+        if not has_active_jobs:
+            if all_jobs:
+                apply_plan_run_aggregation(pr, all_jobs)
+            else:
+                pr.status = "FAILED"
+                pr.ended_at = now
+                pr.result_summary = {
+                    "aborted": True,
+                    "reason": reason,
+                    "empty_run": True,
+                }
 
     # In-precheck path: no jobs to release; we close the PlanRun directly.
     now_iso = datetime.now(timezone.utc).isoformat()
