@@ -57,10 +57,10 @@ echo "Starting FastAPI server on http://localhost:${BACKEND_PORT}"
 echo "Press Ctrl+C to stop the server."
 echo
 
-if [ "${STP_BACKEND_NORELOAD:-}" = "1" ]; then
-  echo "Auto-reload disabled."
-  exec uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT"
+if [ "${STP_BACKEND_RELOAD:-}" = "1" ]; then
+  echo "[WARN] Dev mode: auto-reload enabled. Do not use for real-device validation."
+  exec uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload
 fi
 
-echo "Auto-reload enabled."
-exec uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT" --reload
+echo "[SAFE] Real-device mode: starting backend without auto-reload."
+exec uvicorn backend.main:app --host 0.0.0.0 --port "$BACKEND_PORT"
