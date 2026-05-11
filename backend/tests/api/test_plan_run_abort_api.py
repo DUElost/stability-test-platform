@@ -200,6 +200,70 @@ class TestPlanRunAbort:
         assert pr_after.run_context["precheck"]["final_result"] == "aborted"
         assert pr_after.run_context["precheck"]["phase"] == "failed"
 
+    def test_abort_running_plan_run_without_jobs_marks_run_failed(
+        self, client, auth_headers, db_session, abort_chain
+    ):
+        plan = abort_chain["plan"]
+        pr = _make_plan_run(
+            db_session,
+            plan.id,
+            run_context={"dispatch_device_ids": [abort_chain["dev1"].id]},
+        )
+
+        resp = client.post(
+            f"/api/v1/plan-runs/{pr.id}/abort",
+            json={"reason": "用户取消"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()["data"]
+        assert body["phase"] == "running"
+        assert body["aborted_jobs"] == []
+        assert body["released_leases"] == 0
+        assert body["status"] == "FAILED"
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status == "FAILED"
+        assert pr_after.ended_at is not None
+        assert pr_after.result_summary["aborted"] is True
+        assert pr_after.result_summary["reason"] == "用户取消"
+        assert pr_after.run_context["abort_requested"]["reason"] == "用户取消"
+
+    def test_abort_running_plan_run_with_only_pending_jobs_marks_run_failed(
+        self, client, auth_headers, db_session, abort_chain
+    ):
+        plan = abort_chain["plan"]
+        pr = _make_plan_run(
+            db_session,
+            plan.id,
+            run_context={"dispatch_device_ids": [abort_chain["dev1"].id]},
+        )
+        pending_job = _make_job(
+            db_session,
+            pr.id,
+            plan.id,
+            abort_chain["dev1"].id,
+            "h-abort",
+            status=JobStatus.PENDING.value,
+        )
+
+        resp = client.post(
+            f"/api/v1/plan-runs/{pr.id}/abort",
+            json={"reason": "用户取消"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()["data"]
+        assert body["status"] == "FAILED"
+        assert body["aborted_jobs"] == [pending_job.id]
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status == "FAILED"
+        assert pr_after.ended_at is not None
+        assert db_session.get(JobInstance, pending_job.id).status == JobStatus.ABORTED.value
+
     def test_abort_terminal_plan_run_returns_409(
         self, client, auth_headers, db_session, abort_chain
     ):
