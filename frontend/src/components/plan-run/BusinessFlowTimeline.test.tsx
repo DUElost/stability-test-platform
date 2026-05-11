@@ -113,6 +113,9 @@ describe('BusinessFlowTimeline', () => {
     expect(screen.getByTestId('stage-row-patrol')).toHaveTextContent('进行中');
     expect(screen.getByTestId('stage-row-patrol')).toHaveTextContent('#142');
     expect(screen.getByTestId('stage-row-teardown')).toHaveTextContent('等待');
+    expect(screen.getByTestId('business-flow-timeline')).toHaveTextContent(
+      '共 3 条状态/关键事件',
+    );
   });
 
   it('renders events with severity badges and stage chips', () => {

@@ -968,6 +968,143 @@ def _log_signal_title(category: str) -> str:
     }.get(cat, cat or "异常事件")
 
 
+def _min_aware_dt(*values: datetime | None) -> datetime | None:
+    present = [_aware(v) for v in values if v is not None]
+    return min(present) if present else None
+
+
+def _max_aware_dt(*values: datetime | None) -> datetime | None:
+    present = [_aware(v) for v in values if v is not None]
+    return max(present) if present else None
+
+
+def _job_has_patrol_signal(job: JobInstance) -> bool:
+    return (
+        (job.patrol_cycle_count or 0) > 0
+        or job.last_patrol_heartbeat_at is not None
+        or bool(job.current_patrol_step)
+    )
+
+
+def _build_synthetic_stage_events(
+    pr: PlanRun,
+    jobs: list[JobInstance],
+    stage_meta: dict[str, dict[str, object]],
+) -> list[EventOut]:
+    if not jobs:
+        return []
+
+    patrol_jobs = [job for job in jobs if _job_has_patrol_signal(job)]
+    patrol_cycle_index = max((job.patrol_cycle_count or 0) for job in jobs)
+    latest_patrol_heartbeat = _max_aware_dt(
+        *(job.last_patrol_heartbeat_at for job in jobs)
+    )
+    patrol_started_at = _min_aware_dt(
+        stage_meta["patrol"]["started_at"],
+        *(job.started_at for job in patrol_jobs),
+        latest_patrol_heartbeat,
+    )
+    live_threshold = datetime.now(timezone.utc) - _LIVE_PATROL_HEARTBEAT_WINDOW
+    patrol_active_devices = sum(
+        1
+        for job in jobs
+        if job.last_patrol_heartbeat_at
+        and _aware(job.last_patrol_heartbeat_at) >= live_threshold
+    )
+    events: list[EventOut] = []
+    init_started_at = _aware(stage_meta["init"]["started_at"])
+    init_ended_at = _aware(stage_meta["init"]["ended_at"])
+    teardown_started_at = _aware(stage_meta["teardown"]["started_at"])
+    teardown_ended_at = _aware(stage_meta["teardown"]["ended_at"])
+    init_has_terminal_success = bool(stage_meta["init"]["has_terminal_success"])
+    init_has_failure = bool(stage_meta["init"]["has_failure"])
+    teardown_has_terminal_success = bool(stage_meta["teardown"]["has_terminal_success"])
+    teardown_has_failure = bool(stage_meta["teardown"]["has_failure"])
+
+    init_completed_at = _max_aware_dt(
+        init_ended_at,
+        init_started_at,
+        patrol_started_at,
+        pr.started_at,
+    )
+    if (
+        patrol_started_at
+        or teardown_started_at
+        or (
+            pr.status in _TERMINAL_PR_STATUSES
+            and init_has_terminal_success
+            and not init_has_failure
+        )
+    ):
+        events.append(EventOut(
+            ts=_iso(init_completed_at) or "",
+            stage="init",
+            severity="ok",
+            category="system",
+            title="INIT 完成",
+            description="已进入后续执行阶段",
+            ref={"type": "plan_run", "id": pr.id},
+        ))
+
+    if patrol_started_at:
+        events.append(EventOut(
+            ts=_iso(patrol_started_at) or "",
+            stage="patrol",
+            severity="info",
+            category="system",
+            title="PATROL 开始",
+            description="巡检阶段已启动",
+            ref={"type": "plan_run", "id": pr.id},
+        ))
+
+    patrol_progress_at = _max_aware_dt(
+        latest_patrol_heartbeat,
+        _aware(stage_meta["patrol"]["ended_at"]),
+        _aware(stage_meta["patrol"]["started_at"]),
+        *(job.started_at for job in patrol_jobs),
+    )
+    if pr.status not in _TERMINAL_PR_STATUSES and patrol_cycle_index > 0 and patrol_progress_at:
+        heartbeat_window_minutes = int(_LIVE_PATROL_HEARTBEAT_WINDOW.total_seconds() // 60)
+        patrol_desc = (
+            f"最近 {heartbeat_window_minutes} 分钟内 {patrol_active_devices} 台设备上报心跳"
+            if patrol_active_devices > 0
+            else "已记录巡检进展"
+        )
+        events.append(EventOut(
+            ts=_iso(patrol_progress_at) or "",
+            stage="patrol",
+            severity="info",
+            category="system",
+            title=f"PATROL 进行中 · 周期 #{patrol_cycle_index}",
+            description=patrol_desc,
+            ref={"type": "plan_run", "id": pr.id},
+        ))
+
+    if teardown_started_at:
+        events.append(EventOut(
+            ts=_iso(teardown_started_at) or "",
+            stage="teardown",
+            severity="info",
+            category="system",
+            title="TEARDOWN 开始",
+            description="开始收尾清理",
+            ref={"type": "plan_run", "id": pr.id},
+        ))
+
+    if teardown_ended_at and teardown_has_terminal_success and not teardown_has_failure:
+        events.append(EventOut(
+            ts=_iso(teardown_ended_at) or "",
+            stage="teardown",
+            severity="ok",
+            category="system",
+            title="TEARDOWN 完成",
+            description="收尾阶段已结束",
+            ref={"type": "plan_run", "id": pr.id},
+        ))
+
+    return [event for event in events if event.ts]
+
+
 @router.get("/plan-runs/{run_id}/events", response_model=ApiResponse[PlanRunEventsOut])
 def get_plan_run_events(
     run_id: int,
@@ -977,8 +1114,8 @@ def get_plan_run_events(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """ADR-0021/ADR-0022 C5a₂: 业务流事件流 — 融合 step_trace 失败 / log_signal /
-    audit_logs / PlanRun trigger 4 个数据源,统一封装为 EventOut。
+    """ADR-0021/ADR-0022 C5a₂: 业务流事件流 — 融合 trigger / 合成阶段进展 /
+    step_trace 失败 / log_signal / audit_logs,统一封装为 EventOut。
 
     支持 stage / severity 维度过滤;facets 始终基于"未过滤"的全集计算
     (前端过滤标签上的总数显示原本的总量,而 events 列表是当前过滤后的页)。
@@ -998,6 +1135,50 @@ def get_plan_run_events(
         ).all()
         devices_by_id = {r.id: r.serial for r in rows}
 
+    stage_meta: dict[str, dict[str, object]] = {
+        "init": {
+            "started_at": None,
+            "ended_at": None,
+            "has_terminal_success": False,
+            "has_failure": False,
+        },
+        "patrol": {
+            "started_at": None,
+            "ended_at": None,
+            "has_terminal_success": False,
+            "has_failure": False,
+        },
+        "teardown": {
+            "started_at": None,
+            "ended_at": None,
+            "has_terminal_success": False,
+            "has_failure": False,
+        },
+    }
+    if job_ids:
+        trace_rows = db.execute(
+            select(
+                StepTrace.stage,
+                StepTrace.event_type,
+                StepTrace.status,
+                StepTrace.original_ts,
+            ).where(StepTrace.job_id.in_(job_ids))
+        ).all()
+        for trace_stage, event_type, status, original_ts in trace_rows:
+            if trace_stage not in stage_meta:
+                continue
+            bucket = stage_meta[trace_stage]
+            started_at = bucket["started_at"]
+            ended_at = bucket["ended_at"]
+            if started_at is None or original_ts < started_at:
+                bucket["started_at"] = original_ts
+            if ended_at is None or original_ts > ended_at:
+                bucket["ended_at"] = original_ts
+            if event_type == "COMPLETED" and status in {"COMPLETED", "SKIPPED"}:
+                bucket["has_terminal_success"] = True
+            if event_type == "FAILED" or status in {"FAILED", "ABORTED"}:
+                bucket["has_failure"] = True
+
     events: list[EventOut] = []
 
     # 1) trigger 事件 — PlanRun 自身
@@ -1011,7 +1192,10 @@ def get_plan_run_events(
         ref={"type": "plan_run", "id": pr.id},
     ))
 
-    # 2) step_trace 失败 / abort 事件
+    # 2) 有限的阶段进展合成事件,避免活跃 patrol 只剩 trigger/异常事件
+    events.extend(_build_synthetic_stage_events(pr, jobs, stage_meta))
+
+    # 3) step_trace 失败 / abort 事件
     #    v3: 收紧 WHERE — 只取 event_type=FAILED 或 RUN_COMPLETE + terminal status;
     #    区分 ABORTED (warn + "Job 已中止") 与 FAILED (err + "Job 失败")
     if job_ids:
@@ -1067,7 +1251,7 @@ def get_plan_run_events(
                 ref={"type": "step_trace", "id": t.id},
             ))
 
-    # 3) log_signal 事件(watcher 异常)
+    # 4) log_signal 事件(watcher 异常)
     if job_ids:
         signal_rows = db.execute(
             select(JobLogSignal)
@@ -1090,7 +1274,7 @@ def get_plan_run_events(
                 ref={"type": "log_signal", "id": s.id},
             ))
 
-    # 4) audit_logs(plan_run / job_instance / dispatch_gate)
+    # 5) audit_logs(plan_run / job_instance / dispatch_gate)
     audit_q = select(AuditLog).where(
         ((AuditLog.resource_type == "plan_run") & (AuditLog.resource_id == run_id))
         | ((AuditLog.resource_type == "job_instance") & (AuditLog.resource_id.in_(job_ids or [-1])))
@@ -1107,7 +1291,7 @@ def get_plan_run_events(
             ref={"type": "audit_log", "id": log.id},
         ))
 
-    # 5) facets — 基于全集
+    # 6) facets — 基于全集
     facets_stage: dict[str, int] = {}
     facets_sev:   dict[str, int] = {}
     for e in events:
@@ -1116,14 +1300,14 @@ def get_plan_run_events(
     facets_stage["all"] = len(events)
     facets_sev["all"]   = len(events)
 
-    # 6) 过滤
+    # 7) 过滤
     filtered = events
     if stage and stage.lower() != "all":
         filtered = [e for e in filtered if e.stage == stage.lower()]
     if severity and severity.lower() != "all":
         filtered = [e for e in filtered if e.severity == severity.lower()]
 
-    # 7) 按 ts 倒序 + 分页
+    # 8) 按 ts 倒序 + 分页
     filtered.sort(key=lambda e: e.ts, reverse=True)
     total = len(filtered)
     page = filtered[offset: offset + limit]

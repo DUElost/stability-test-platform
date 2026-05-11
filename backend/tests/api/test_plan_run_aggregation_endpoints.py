@@ -491,6 +491,176 @@ class TestEventsEndpoint:
         assert all(e["stage"] == "trigger" for e in events)
         assert len(events) >= 1
 
+    def test_events_include_patrol_progress_when_patrol_is_active(
+        self, client, auth_headers, chain_setup,
+    ):
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/events?limit=100",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["total"] >= 2
+        assert any(
+            e["stage"] == "patrol"
+            and e["category"] == "system"
+            and "PATROL 开始" in e["title"]
+            for e in data["events"]
+        )
+        assert any(
+            e["stage"] == "patrol"
+            and e["category"] == "system"
+            and "PATROL 进行中" in e["title"]
+            for e in data["events"]
+        )
+
+    def test_events_do_not_fake_init_completed_when_run_fails_in_init(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        plan_cur = chain_setup["plan_current"]
+        device = chain_setup["device_failed"]
+
+        run = PlanRun(
+            plan_id=plan_cur.id,
+            status=PlanRunStatus.FAILED.value,
+            failure_threshold=0.05,
+            plan_snapshot={
+                "plan": {"id": plan_cur.id, "name": plan_cur.name},
+                "steps": [
+                    {
+                        "step_key": "check_device",
+                        "script_name": "check_device",
+                        "script_version": "v1.0.0",
+                        "stage": "init",
+                        "sort_order": 0,
+                    },
+                ],
+            },
+            run_type="MANUAL",
+            triggered_by="test",
+            started_at=_now() - timedelta(minutes=2),
+            ended_at=_now() - timedelta(minutes=1),
+        )
+        db_session.add(run)
+        db_session.flush()
+
+        job = JobInstance(
+            plan_run_id=run.id,
+            plan_id=plan_cur.id,
+            device_id=device.id,
+            host_id=device.host_id,
+            status=JobStatus.FAILED.value,
+            status_reason="init_step_failed: check_device",
+            pipeline_def={"lifecycle": {}},
+            started_at=_now() - timedelta(minutes=2),
+            ended_at=_now() - timedelta(minutes=1),
+        )
+        db_session.add(job)
+        db_session.flush()
+
+        db_session.add(
+            StepTrace(
+                job_id=job.id,
+                step_id="check_device",
+                stage="init",
+                status="FAILED",
+                event_type="FAILED",
+                error_message="device offline",
+                original_ts=_now() - timedelta(minutes=1, seconds=30),
+            )
+        )
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{run.id}/events?limit=100",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        titles = [e["title"] for e in resp.json()["data"]["events"]]
+        assert "INIT 完成" not in titles
+
+    def test_events_do_not_fake_teardown_completed_when_teardown_failed(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        plan_cur = chain_setup["plan_current"]
+        device = chain_setup["device_failed"]
+        base_ts = _now() - timedelta(minutes=3)
+
+        run = PlanRun(
+            plan_id=plan_cur.id,
+            status=PlanRunStatus.FAILED.value,
+            failure_threshold=0.05,
+            plan_snapshot={
+                "plan": {"id": plan_cur.id, "name": plan_cur.name},
+                "steps": [
+                    {
+                        "step_key": "check_device",
+                        "script_name": "check_device",
+                        "script_version": "v1.0.0",
+                        "stage": "init",
+                        "sort_order": 0,
+                    },
+                    {
+                        "step_key": "teardown.clean_env",
+                        "script_name": "clean_env",
+                        "script_version": "v1.0.0",
+                        "stage": "teardown",
+                        "sort_order": 0,
+                    },
+                ],
+            },
+            run_type="MANUAL",
+            triggered_by="test",
+            started_at=base_ts,
+            ended_at=base_ts + timedelta(minutes=2),
+        )
+        db_session.add(run)
+        db_session.flush()
+
+        job = JobInstance(
+            plan_run_id=run.id,
+            plan_id=plan_cur.id,
+            device_id=device.id,
+            host_id=device.host_id,
+            status=JobStatus.FAILED.value,
+            status_reason="teardown_failed: clean_env",
+            pipeline_def={"lifecycle": {}},
+            started_at=base_ts,
+            ended_at=base_ts + timedelta(minutes=2),
+        )
+        db_session.add(job)
+        db_session.flush()
+
+        db_session.add_all([
+            StepTrace(
+                job_id=job.id,
+                step_id="check_device",
+                stage="init",
+                status="COMPLETED",
+                event_type="COMPLETED",
+                original_ts=base_ts + timedelta(seconds=5),
+            ),
+            StepTrace(
+                job_id=job.id,
+                step_id="teardown.clean_env",
+                stage="teardown",
+                status="FAILED",
+                event_type="FAILED",
+                error_message="cleanup crashed",
+                original_ts=base_ts + timedelta(minutes=2),
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{run.id}/events?limit=100",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        titles = [e["title"] for e in resp.json()["data"]["events"]]
+        assert "TEARDOWN 完成" not in titles
+
     def test_events_pagination(self, client, auth_headers, chain_setup):
         cur_run = chain_setup["current_run"]
         resp1 = client.get(

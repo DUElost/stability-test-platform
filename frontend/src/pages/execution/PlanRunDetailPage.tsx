@@ -210,6 +210,7 @@ export default function PlanRunDetailPage() {
   }
 
   const precheck = runQ.data?.run_context?.precheck ?? null;
+  const dispatchState = runQ.data?.run_context?.dispatch_state ?? null;
 
   return (
     <div className="mx-auto max-w-[1480px] space-y-3 px-1 pb-12">
@@ -251,7 +252,11 @@ export default function PlanRunDetailPage() {
 
       {/* Dispatch gate (precheck) — only renders when precheck context exists
           AND the gate is in-progress / failed / terminal-archived. */}
-      <DispatchGateCard precheck={precheck} isTerminal={isTerminal} />
+      <DispatchGateCard
+        precheck={precheck}
+        dispatchState={dispatchState}
+        isTerminal={isTerminal}
+      />
 
       {/* Business flow timeline */}
       <BusinessFlowTimeline

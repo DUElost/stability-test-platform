@@ -180,8 +180,16 @@ beforeEach(() => {
   });
   mocks.getEvents.mockResolvedValue({
     plan_run_id: 12,
-    total: 1,
+    total: 3,
     events: [
+      {
+        ts: '2026-05-08T12:31:20Z',
+        stage: 'patrol',
+        severity: 'info',
+        category: 'system',
+        title: 'PATROL 进行中 · 周期 #12',
+        description: '最近 3 分钟内 1 台设备上报心跳',
+      },
       {
         ts: '2026-05-08T12:30:00Z',
         stage: 'patrol',
@@ -192,10 +200,18 @@ beforeEach(() => {
         device_serial: 'DEV-3064',
         job_id: 3064,
       },
+      {
+        ts: '2026-05-08T12:00:00Z',
+        stage: 'trigger',
+        severity: 'ok',
+        category: 'trigger',
+        title: 'PlanRun #12 启动',
+        description: '触发方式 MANUAL · 用户 tester@local',
+      },
     ],
     facets: {
-      by_stage: { all: 1, patrol: 1 },
-      by_severity: { all: 1, err: 1 },
+      by_stage: { all: 3, trigger: 1, patrol: 2 },
+      by_severity: { all: 3, ok: 1, info: 1, err: 1 },
     },
   });
   mocks.abort.mockResolvedValue({ plan_run_id: 12, status: 'FAILED' });
@@ -311,6 +327,12 @@ describe('PlanRunDetailPage', () => {
     expect(await screen.findByTestId('device-row-3002')).toHaveTextContent('退避');
     // Threshold banner since exceeded=true
     expect(await screen.findByTestId('watcher-threshold-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('business-flow-timeline')).toHaveTextContent(
+      '共 3 条状态/关键事件',
+    );
+    expect(screen.getByTestId('event-list')).toHaveTextContent(
+      'PATROL 进行中 · 周期 #12',
+    );
   });
 
   it('aborts the PlanRun via the Topbar confirm dialog', async () => {
@@ -411,5 +433,100 @@ describe('PlanRunDetailPage', () => {
     expect(screen.queryByTestId('dispatch-gate-card')).not.toBeInTheDocument();
     // Topbar should NOT render the abort button on terminal runs.
     expect(screen.queryByTestId('plan-run-abort-btn')).not.toBeInTheDocument();
+  });
+
+  it('keeps a compact dispatch summary visible for active runs after precheck ready', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'RUNNING',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: null,
+      run_context: {
+        precheck: {
+          phase: 'ready',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:01:00Z',
+          hosts: {
+            'host-101': {
+              status: 'ok',
+              checked_at: '2026-05-08T11:00:10Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: null,
+            },
+          },
+          final_result: 'passed',
+          errors: [],
+        },
+        dispatch_state: {
+          status: 'completed',
+          enqueued_at: '2026-05-08T11:01:01Z',
+          started_at: '2026-05-08T11:01:05Z',
+          completed_at: '2026-05-08T11:01:20Z',
+          last_error: null,
+        },
+      },
+    });
+
+    renderPage();
+
+    await waitFor(() => screen.getByTestId('plan-run-status-pill'));
+    expect(screen.getByTestId('dispatch-gate-card')).toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-gate-card')).toHaveTextContent('派发摘要');
+    expect(screen.getByTestId('dispatch-gate-card')).toHaveTextContent('completed');
+    expect(screen.getByTestId('dispatch-gate-card')).toHaveTextContent('门禁通过');
+    expect(screen.queryByTestId('dispatch-gate-host-host-101')).not.toBeInTheDocument();
+  });
+
+  it('keeps host details visible while dispatch is still running after precheck ready', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'RUNNING',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: null,
+      run_context: {
+        precheck: {
+          phase: 'ready',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:01:00Z',
+          hosts: {
+            'host-101': {
+              status: 'ok',
+              checked_at: '2026-05-08T11:00:10Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: null,
+            },
+          },
+          final_result: 'passed',
+          errors: [],
+        },
+        dispatch_state: {
+          status: 'running',
+          enqueued_at: '2026-05-08T11:01:01Z',
+          started_at: '2026-05-08T11:01:05Z',
+          completed_at: null,
+          last_error: null,
+        },
+      },
+    });
+
+    renderPage();
+
+    await waitFor(() => screen.getByTestId('plan-run-status-pill'));
+    expect(screen.getByTestId('dispatch-gate-card')).toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-gate-host-host-101')).toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-gate-card')).not.toHaveTextContent('派发完成');
+    expect(screen.queryByText('门禁通过，活跃 run 保留摘要态展示')).not.toBeInTheDocument();
   });
 });

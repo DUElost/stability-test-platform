@@ -342,7 +342,7 @@ export default function BusinessFlowTimeline({
   const headerMeta = useMemo(() => {
     const stagesCount = stages.length;
     const cur = currentStage ? STAGE_LABEL[currentStage as TimelineStage['stage']] || currentStage.toUpperCase() : '—';
-    return `${stagesCount} 阶段 · 当前 ${cur} · 共 ${totalEvents} 事件`;
+    return `${stagesCount} 阶段 · 当前 ${cur} · 共 ${totalEvents} 条状态/关键事件`;
   }, [stages.length, currentStage, totalEvents]);
 
   const abortedCount = timeline?.aborted_job_count ?? 0;

@@ -755,7 +755,7 @@ export interface PlanRunTimeline {
 
 export type EventStage = 'trigger' | 'init' | 'patrol' | 'teardown' | 'system';
 export type EventSeverity = 'ok' | 'info' | 'warn' | 'err';
-export type EventCategory = 'trigger' | 'step' | 'log_signal' | 'audit';
+export type EventCategory = 'trigger' | 'step' | 'log_signal' | 'audit' | 'system';
 
 export interface PlanRunEvent {
   ts: string;
@@ -877,4 +877,3 @@ export interface ResourcePoolCreatePayload {
   host_group?: string | null;
   is_active?: boolean;
 }
-
