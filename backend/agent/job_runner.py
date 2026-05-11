@@ -42,7 +42,10 @@ def _validate_pipeline_def(pipeline_def: Optional[Dict[str, Any]]) -> Optional[s
     ``validate_lifecycle_semantics`` return type to the str-or-None form
     expected by the agent job runner.
     """
-    from backend.core.pipeline_validator import validate_lifecycle_semantics
+    try:
+        from backend.core.pipeline_validator import validate_lifecycle_semantics
+    except ImportError:
+        from .pipeline_validator import validate_lifecycle_semantics
 
     if not pipeline_def or not isinstance(pipeline_def, dict):
         return "pipeline_def is required"
