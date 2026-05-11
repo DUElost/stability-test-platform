@@ -100,7 +100,7 @@ class APIClient:
     def login(self, username: str, password: str) -> None:
         r = self._client.post(
             "/api/v1/auth/login",
-            json={"username": username, "password": password},
+            data={"username": username, "password": password},
         )
         if r.status_code != 200:
             die(f"login status={r.status_code} body={r.text[:300]}")
