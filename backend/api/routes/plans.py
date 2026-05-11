@@ -500,7 +500,7 @@ def run_plan(
         "enqueue_key": None,
         "requeue_attempts": 0,
         "status": "queued",
-        "enqueued_at": datetime.now(timezone.utc).isoformat(),
+        "enqueued_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
         "started_at": None,
         "completed_at": None,
         "last_error": None,

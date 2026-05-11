@@ -229,6 +229,4 @@ def reconcile_stale_precheck_runs(db: Session | None = None) -> dict[str, int]:
 
 def precheck_reaper_job() -> None:
     """APScheduler-compatible callback (sync, runs in thread pool)."""
-    import time as _time
-
     reconcile_stale_precheck_runs()

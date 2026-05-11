@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -49,3 +50,26 @@ def test_missing_password_exits_clearly():
 
     with pytest.raises(SystemExit):
         die("Missing admin password: set STP_ADMIN_PASSWORD or pass --password explicitly.")
+
+
+def test_api_client_login_posts_form_data():
+    from backend.scripts.seed_and_smoke import APIClient
+
+    client = APIClient("http://example.test")
+    real_client = client._client
+    real_client.close()
+
+    response = MagicMock(status_code=200)
+    response.json.return_value = {"access_token": "token-123"}
+
+    mock_client = MagicMock()
+    mock_client.post.return_value = response
+    client._client = mock_client
+
+    client.login("admin", "pw")
+
+    mock_client.post.assert_called_once_with(
+        "/api/v1/auth/login",
+        data={"username": "admin", "password": "pw"},
+    )
+    assert client._token == "token-123"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -372,6 +373,7 @@ class TestDispatchStatePersistence:
         assert state["requeue_attempts"] == 0
         assert state["status"] == "queued"
         assert state["enqueued_at"] is not None
+        datetime.strptime(state["enqueued_at"], "%Y-%m-%dT%H:%M:%S.%fZ")
         assert state["started_at"] is None
         assert state["completed_at"] is None
         assert state["last_error"] is None
