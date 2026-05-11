@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -8,12 +8,22 @@ import { useToast } from '@/components/ui/toast';
 import { api, type PlanRunPreview } from '@/utils/api';
 import { Play, Smartphone, AlertCircle, Eye } from 'lucide-react';
 
+type DeviceSummary = {
+  id: number;
+  serial: string;
+  model?: string | null;
+  host_id?: string | number | null;
+  status: string;
+};
+
+const isSchedulable = (device: DeviceSummary) => device.status === 'ONLINE';
+
 function DeviceRow({
   device,
   selected,
   onToggle,
 }: {
-  device: any;
+  device: DeviceSummary;
   selected: boolean;
   onToggle: () => void;
 }) {
@@ -22,10 +32,15 @@ function DeviceRow({
     OFFLINE: 'bg-gray-300',
     BUSY: 'bg-yellow-400',
   } as Record<string, string>)[device.status] ?? 'bg-gray-300';
+  const disabled = !isSchedulable(device);
 
   return (
-    <label className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 cursor-pointer">
-      <input type="checkbox" checked={selected} onChange={onToggle} disabled={device.status === 'OFFLINE'} className="rounded" />
+    <label
+      className={`flex items-center gap-3 rounded-lg px-3 py-2.5 ${
+        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-gray-50'
+      }`}
+    >
+      <input type="checkbox" checked={selected} onChange={onToggle} disabled={disabled} className="rounded" />
       <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColor}`} />
       <span className="font-mono text-sm text-gray-800">{device.serial}</span>
       {device.model && <span className="text-xs text-gray-500 flex-1 truncate">{device.model}</span>}
@@ -91,18 +106,39 @@ export default function PlanExecutePage() {
 
 
   const allDevices = devicesResp?.items ?? [];
+  const schedulableDeviceIds = useMemo(
+    () => new Set(allDevices.filter(isSchedulable).map((d: DeviceSummary) => d.id)),
+    [allDevices],
+  );
+  const selectedSchedulableDeviceIds = useMemo(
+    () => Array.from(selectedDeviceIds).filter(id => schedulableDeviceIds.has(id)),
+    [selectedDeviceIds, schedulableDeviceIds],
+  );
   const filteredDevices = allDevices.filter(d =>
     !deviceFilter || d.serial.includes(deviceFilter) ||
     (d.model ?? '').toLowerCase().includes(deviceFilter.toLowerCase())
   );
 
-  const toggleDevice = (id: number) => {
-    setSelectedDeviceIds(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  useEffect(() => {
+    setSelectedDeviceIds(prev => {
+      const next = new Set(Array.from(prev).filter(id => schedulableDeviceIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [schedulableDeviceIds]);
+
+  const toggleDevice = (device: DeviceSummary) => {
+    if (!isSchedulable(device)) return;
+    setSelectedDeviceIds(prev => {
+      const next = new Set(prev);
+      if (next.has(device.id)) next.delete(device.id);
+      else next.add(device.id);
+      return next;
+    });
   };
 
   const toggleAll = () => {
-    const available = filteredDevices.filter(d => d.status !== 'OFFLINE').map(d => d.id);
-    const allSelected = available.every(id => selectedDeviceIds.has(id));
+    const available = filteredDevices.filter(isSchedulable).map(d => d.id);
+    const allSelected = available.length > 0 && available.every(id => selectedDeviceIds.has(id));
     if (allSelected) {
       setSelectedDeviceIds(prev => { const next = new Set(prev); available.forEach(id => next.delete(id)); return next; });
     } else {
@@ -113,11 +149,11 @@ export default function PlanExecutePage() {
   const handlePreview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPlanId) { toast.error('请选择 Plan'); return; }
-    if (selectedDeviceIds.size === 0) { toast.error('请至少选择一台设备'); return; }
+    if (selectedSchedulableDeviceIds.length === 0) { toast.error('请至少选择一台设备'); return; }
 
     try {
       const p = await api.plans.previewRun(selectedPlanId, {
-        device_ids: Array.from(selectedDeviceIds),
+        device_ids: selectedSchedulableDeviceIds,
       });
       setPreview(p);
       setShowPreview(true);
@@ -131,7 +167,7 @@ export default function PlanExecutePage() {
     setSubmitting(true);
     try {
       const run = await api.plans.run(selectedPlanId, {
-        device_ids: Array.from(selectedDeviceIds),
+        device_ids: selectedSchedulableDeviceIds,
       });
       toast.success('Plan 已发起执行');
       setShowPreview(false);
@@ -143,7 +179,7 @@ export default function PlanExecutePage() {
     }
   };
 
-  const availableCount = allDevices.filter(d => d.status !== 'OFFLINE').length;
+  const availableCount = allDevices.filter(isSchedulable).length;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -179,7 +215,7 @@ export default function PlanExecutePage() {
             <CardTitle className="text-base">
               <div className="flex items-center justify-between">
                 <span>2. 选择设备</span>
-                <span className="text-sm font-normal text-gray-500">已选 {selectedDeviceIds.size} / {availableCount} 台可用</span>
+                <span className="text-sm font-normal text-gray-500">已选 {selectedSchedulableDeviceIds.length} / {availableCount} 台可用</span>
               </div>
             </CardTitle>
           </CardHeader>
@@ -197,8 +233,8 @@ export default function PlanExecutePage() {
                   <Button type="button" variant="outline" size="sm" onClick={toggleAll}>全选/取消</Button>
                 </div>
                 <div className="max-h-60 overflow-y-auto border rounded-lg divide-y">
-                  {filteredDevices.map((d: any) => (
-                    <DeviceRow key={d.id} device={d} selected={selectedDeviceIds.has(d.id)} onToggle={() => toggleDevice(d.id)} />
+                  {filteredDevices.map((d: DeviceSummary) => (
+                    <DeviceRow key={d.id} device={d} selected={selectedDeviceIds.has(d.id)} onToggle={() => toggleDevice(d)} />
                   ))}
                 </div>
               </>
@@ -220,7 +256,7 @@ export default function PlanExecutePage() {
 
         <div className="flex justify-end gap-2">
           <Button type="button" variant="outline" onClick={() => navigate(-1)}>取消</Button>
-          <Button type="submit" disabled={!selectedPlanId || selectedDeviceIds.size === 0}>
+          <Button type="submit" disabled={!selectedPlanId || selectedSchedulableDeviceIds.length === 0}>
             <Eye className="w-4 h-4 mr-2" />预览并发起
           </Button>
         </div>
