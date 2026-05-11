@@ -34,13 +34,13 @@
    ```
    服务将运行在 `http://localhost:8000`
 
-   > **实机验证注意**：连接真实设备跑稳定性测试时，必须先关闭热重载，避免 SAQ worker
-   > 在代码变更时复刻出孤儿 job 和状态漂移。在当前终端执行：
-   > ```powershell
-   > $env:STP_BACKEND_NORELOAD = "1"
-   > .\start-backend.bat
-   > ```
-   > 或者手动启动时去掉 `--reload`（见下方"方式二"的对应说明）。
+   > **实机验证注意**：`start-backend.bat` 默认即为安全模式，不会开启热重载。
+   > 只有在明确需要本地开发热重载时，才在当前终端执行：
+   > ```powershell
+   > $env:STP_BACKEND_RELOAD = "1"
+   > .\start-backend.bat
+   > ```
+   > 真实设备全链路验证不要设置该变量。
 
 2. **启动前端服务**（新开终端）
    ```bash
@@ -70,11 +70,12 @@ venv\Scripts\activate
 # 安装依赖
 pip install fastapi uvicorn sqlalchemy pydantic paramiko asyncssh psutil requests aiohttp
 
-# 日常开发（热重载）
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
-
-# 实机验证（无热重载）—— 避免 SAQ worker 孤儿 job 和状态漂移
-uvicorn backend.main:app --host 0.0.0.0 --port 8000
+# 实机验证 / 默认安全模式（无热重载）
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+# 日常开发（显式开启热重载）
+set STP_BACKEND_RELOAD=1
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 #### 启动前端
@@ -284,7 +285,11 @@ cd frontend && npm run type-check
 ## 开发模式
 
 ### 后端热重载
-使用 `--reload` 参数启动，代码修改会自动重新加载。
+默认启动脚本不会开启热重载，适合真实设备联调和稳定性验证。
+
+只有显式设置 `STP_BACKEND_RELOAD=1` 时，`start-backend.bat` / `start-backend-wsl.sh`
+
+才会以 `--reload` 启动开发模式。
 
 ### 前端热更新
 Vite 默认支持热模块替换（HMR），修改组件后自动刷新。

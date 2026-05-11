@@ -31,12 +31,12 @@ if not "%MIGRATE_RC%"=="0" (
 
 set "UVICORN_ARGS=backend.main:app --host 0.0.0.0 --port %BACKEND_PORT%"
 
-if /I "%STP_BACKEND_NORELOAD%"=="1" (
-    echo Starting backend without auto-reload...
-    python -m uvicorn %UVICORN_ARGS%
-) else (
-    echo Starting backend with auto-reload enabled...
+if /I "%STP_BACKEND_RELOAD%"=="1" (
+    echo [WARN] Dev mode: auto-reload enabled. Do not use for real-device validation.
     python -m uvicorn %UVICORN_ARGS% --reload
+) else (
+    echo [SAFE] Real-device mode: starting backend without auto-reload.
+    python -m uvicorn %UVICORN_ARGS%
 )
 
 pause
