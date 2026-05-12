@@ -28,7 +28,7 @@ const TERMINAL: ReadonlyArray<PlanRunStatus> = [
   'DEGRADED',
 ];
 
-const FAST_REFETCH_MS = 5_000;
+const FAST_REFETCH_MS = 10_000;
 const SLOW_REFETCH_MS = 30_000;
 
 export default function PlanRunDetailPage() {
