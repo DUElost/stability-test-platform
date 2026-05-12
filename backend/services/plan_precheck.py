@@ -362,6 +362,16 @@ def _push_mismatched_scripts(
             except Exception as exc:
                 failed.append(f"{script['name']}: SFTP failed: {exc}")
 
+            # Also push _adb.py helper from the same local directory if present
+            local_dir = os.path.dirname(local_path)
+            adb_helper = os.path.join(local_dir, "_adb.py")
+            if os.path.isfile(adb_helper):
+                adb_remote = os.path.join(remote_dir, "_adb.py")
+                try:
+                    sftp.put(adb_helper, adb_remote)
+                except Exception:
+                    pass  # best-effort, script may still import from another location
+
         sftp.close()
 
         if pushed > 0:
