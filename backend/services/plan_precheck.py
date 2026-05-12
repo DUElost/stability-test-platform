@@ -47,7 +47,7 @@ from backend.realtime.socketio_server import (
     AgentRpcError,
     call_agent_rpc,
 )
-from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds
+from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, _AGENT_SOURCE_DIR
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     complete_plan_run_dispatch,
@@ -250,6 +250,150 @@ def _update_dispatch_state(pr: PlanRun, db: Session, **patch: object) -> None:
     db.commit()
 
 
+# ── 轻量级定向脚本同步（仅推送 mismatched 文件，无需重启 Agent）──
+
+# remote prefix that maps to local _AGENT_SOURCE_DIR
+_REMOTE_AGENT_PREFIX = "/opt/stability-test-agent/agent/"
+
+
+def _nfs_path_to_local(nfs_path: str) -> str | None:
+    """Map an agent-side nfs_path to a local (backend-side) file path.
+
+    Only handles scripts under the standard agent install prefix.
+    Returns None for paths outside that tree (e.g. custom NFS mounts).
+    """
+    if not nfs_path.startswith(_REMOTE_AGENT_PREFIX):
+        return None
+    rel = nfs_path[len(_REMOTE_AGENT_PREFIX):]
+    local = str(_AGENT_SOURCE_DIR / rel)
+    return local
+
+
+def _get_ssh_client(host_ip: str, host_ssh_port: int, ssh_user: str,
+                    ssh_password: str, ssh_key_path: str):
+    """Create a connected paramiko SSH client."""
+    import paramiko
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    kwargs: dict[str, Any] = {
+        "hostname": host_ip, "port": host_ssh_port,
+        "username": ssh_user, "timeout": 15,
+    }
+    if ssh_key_path:
+        kwargs["key_filename"] = ssh_key_path
+    elif ssh_password:
+        kwargs["password"] = ssh_password
+    client.connect(**kwargs)
+    return client
+
+
+def _push_mismatched_scripts(
+    host_id: str, mismatched: list[dict], db: Session,
+) -> tuple[bool, str | None]:
+    """SFTP only the mismatched script files to the agent host.
+
+    ``mismatched`` is a list of ``{name, version, nfs_path, sha256}``
+    entries from ``_expected_scripts_for_run`` for scripts where the
+    agent's actual sha256 differed.
+    """
+    host = db.get(Host, host_id)
+    if host is None:
+        return False, "host_not_found"
+    if not host.ip:
+        return False, "host_missing_ip"
+
+    extra = host.extra or {}
+    ssh_password = extra.get("ssh_password", "")
+    ssh_key_path = extra.get("ssh_key_path", "")
+    ssh_user = host.ssh_user or "root"
+
+    if not ssh_password and not ssh_key_path:
+        inv = _resolve_ssh_creds(host.ip)
+        if inv:
+            ssh_user = inv["user"]
+            ssh_password = inv.get("password", "")
+
+    if not ssh_password and not ssh_key_path:
+        return False, "no_ssh_credentials"
+
+    import paramiko
+
+    pushed = 0
+    failed: list[str] = []
+    client = None
+    try:
+        client = _get_ssh_client(
+            host.ip, host.ssh_port or 22, ssh_user,
+            ssh_password, ssh_key_path or "",
+        )
+        sftp = client.open_sftp()
+
+        for script in mismatched:
+            nfs_path = script.get("nfs_path", "")
+            local_path = _nfs_path_to_local(nfs_path)
+            if not local_path:
+                failed.append(f"{script['name']}: cannot map nfs_path")
+                continue
+
+            import os
+            if not os.path.isfile(local_path):
+                failed.append(f"{script['name']}: local file not found: {local_path}")
+                continue
+
+            # Ensure remote directory exists
+            remote_dir = os.path.dirname(nfs_path)
+            try:
+                sftp.stat(remote_dir)
+            except FileNotFoundError:
+                # create directory tree
+                parts = remote_dir.lstrip("/").split("/")
+                path = ""
+                for p in parts:
+                    path = f"{path}/{p}"
+                    try:
+                        sftp.stat(path)
+                    except FileNotFoundError:
+                        sftp.mkdir(path)
+
+            # Upload the file
+            try:
+                sftp.put(local_path, nfs_path)
+                pushed += 1
+            except Exception as exc:
+                failed.append(f"{script['name']}: SFTP failed: {exc}")
+
+        sftp.close()
+
+        if pushed > 0:
+            # Fix CRLF from Windows sources and ensure executable
+            cmd_parts = []
+            for script in mismatched:
+                nfs = script.get("nfs_path", "")
+                if nfs:
+                    cmd_parts.append(f"sed -i 's/\\r$//' '{nfs}' 2>/dev/null || true")
+                    cmd_parts.append(f"chmod 755 '{nfs}' 2>/dev/null || true")
+            if cmd_parts:
+                client.exec_command("; ".join(cmd_parts))
+
+    except Exception as exc:
+        return False, f"ssh_exception: {exc}"
+    finally:
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    if failed:
+        return False, f"partial_fail: pushed={pushed}, failed={'; '.join(failed)}"
+
+    logger.info(
+        "lightweight_sync_done host=%s pushed=%d scripts=%s",
+        host_id, pushed, [s["name"] for s in mismatched],
+    )
+    return True, None
+
+
 async def _drive_dispatch_gate(
     plan_run_id: int, *, db: Optional[Session] = None
 ) -> None:
@@ -329,33 +473,60 @@ async def _drive_dispatch_gate(
             )
             return
 
-        # ── Phase 2: sync (only mismatched hosts) ─────────────────────────
+        # ── Phase 2: sync (only mismatched hosts, lightweight) ───────────
         if out_of_sync_hosts:
             precheck["phase"] = "syncing"
             _persist_precheck(plan_run_id, precheck, db)
 
+            # Collect mismatched script entries per host
             sync_failures: list[tuple[str, str]] = []
             for hid in out_of_sync_hosts:
                 host_state = precheck["hosts"][hid]
                 host_state["sync_attempts"] += 1
-                if host_state["sync_attempts"] > MAX_SYNC_ATTEMPTS:
-                    sync_failures.append((hid, "sync_attempts_exhausted"))
+
+                # Determine which scripts are mismatched for this host
+                scripts = host_state.get("scripts") or []
+                mismatched_names = {
+                    s["name"] for s in scripts
+                    if not s.get("ok") and s.get("exists") and s.get("actual_sha")
+                }
+                mismatched_entries = [
+                    es for es in expected_scripts
+                    if es["name"] in mismatched_names
+                ]
+
+                if not mismatched_entries:
+                    sync_failures.append((hid, "no_mismatched_entries"))
                     host_state["status"] = "failed"
-                    host_state["error"] = "sync_attempts_exhausted"
+                    host_state["error"] = "no_mismatched_entries"
                     continue
 
+                # Try lightweight push first
                 ok_sync, err_sync = await asyncio.to_thread(
-                    _sync_host_via_hot_update, hid, db
+                    _push_mismatched_scripts, hid, mismatched_entries, db
                 )
-                if not ok_sync:
-                    sync_failures.append((hid, err_sync or "unknown"))
-                    host_state["status"] = "failed"
-                    host_state["error"] = err_sync
-                    continue
+                if ok_sync:
+                    host_state["synced_at"] = _utc_iso()
+                    host_state["status"] = "synced"
+                    host_state["error"] = None
+                else:
+                    # Lightweight failed — fall back to full hot-update
+                    logger.warning(
+                        "lightweight_sync_failed host=%s error=%s — falling back to hot-update",
+                        hid, err_sync,
+                    )
+                    ok_hot, err_hot = await asyncio.to_thread(
+                        _sync_host_via_hot_update, hid, db
+                    )
+                    if ok_hot:
+                        host_state["synced_at"] = _utc_iso()
+                        host_state["status"] = "synced"
+                        host_state["error"] = None
+                    else:
+                        sync_failures.append((hid, err_hot or "hot_update_failed"))
+                        host_state["status"] = "failed"
+                        host_state["error"] = err_hot or "hot_update_failed"
 
-                host_state["synced_at"] = _utc_iso()
-                host_state["status"] = "synced"
-                host_state["error"] = None
                 _persist_precheck(plan_run_id, precheck, db)
 
             if sync_failures:
@@ -365,8 +536,8 @@ async def _drive_dispatch_gate(
                 )
                 return
 
-            # Give Agent processes time to come back online after restart.
-            await asyncio.sleep(SYNC_SETTLE_SECONDS)
+            # Brief settle for Agent file cache (no restart needed for lightweight)
+            await asyncio.sleep(2.0)
 
             # ── Phase 3: re-verify synced hosts ────────────────────────────
             reverify_results = await _gather_verify(out_of_sync_hosts, expected_scripts)
