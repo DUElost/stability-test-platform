@@ -3,7 +3,6 @@ import {
   Check,
   Loader2,
   Circle,
-  ChevronDown,
   AlertTriangle,
   Activity,
   XCircle,
@@ -257,13 +256,13 @@ function PrecheckRow({
 function StageRow({
   stage,
   isCurrent,
-  isExpanded,
-  onToggle,
+  isActive,
+  onClick,
 }: {
   stage: TimelineStage;
   isCurrent: boolean;
-  isExpanded: boolean;
-  onToggle: () => void;
+  isActive: boolean;
+  onClick: () => void;
 }) {
   let nodeIcon: React.ElementType = Circle;
   let nodeCls = 'border-gray-300 text-gray-400 bg-white';
@@ -283,130 +282,44 @@ function StageRow({
   if (isCurrent) {
     nodeIcon = Loader2;
     nodeCls = 'border-orange-500 text-white bg-orange-500';
-    cardCls =
-      'border-orange-400 bg-gradient-to-b from-orange-50 to-white ring-2 ring-orange-200';
+    cardCls = 'border-orange-400 bg-gradient-to-b from-orange-50 to-white ring-2 ring-orange-200';
+  }
+  if (isActive) {
+    cardCls = cardCls + ' ring-2 ring-blue-300';
   }
   const NodeIcon = nodeIcon;
 
   return (
     <div data-testid={`stage-row-${stage.stage}`} className="relative grid grid-cols-[24px_1fr] gap-3 py-1.5">
-      {/* Axis + node */}
       <div className="relative flex justify-center">
-        <span
-          className={`relative z-10 flex h-5 w-5 items-center justify-center rounded-full border-2 ${nodeCls}`}
-        >
+        <span className={`relative z-10 flex h-5 w-5 items-center justify-center rounded-full border-2 ${nodeCls}`}>
           <NodeIcon className={`h-3 w-3 ${isCurrent ? 'animate-spin' : ''}`} />
         </span>
-        {/* Vertical line — drawn from the node down */}
         <span className="absolute left-1/2 top-5 -bottom-2 w-px -translate-x-1/2 bg-gray-200" />
       </div>
-
-      {/* Stage card */}
-      <button
-        type="button"
-        onClick={onToggle}
-        className={`flex flex-col gap-1 rounded-lg border px-3 py-2 text-left transition-shadow ${cardCls} hover:shadow-sm`}
-      >
+      <button type="button" onClick={onClick} className={`flex flex-col gap-1 rounded-lg border px-3 py-2 text-left transition-shadow ${cardCls} hover:shadow-sm`}>
         <div className="flex items-center gap-2">
-          <span className="rounded bg-gray-200/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-gray-600">
-            {STAGE_LABEL[stage.stage]}
-          </span>
-          <span className="flex-1 truncate text-sm font-semibold text-gray-900">
-            {STAGE_TITLE[stage.stage]}
-          </span>
-          <span className="text-[11px] font-medium text-gray-600">
-            {STAGE_STATUS_LABEL[stage.status]}
-          </span>
-          <ChevronDown
-            className={`h-3 w-3 text-gray-400 transition-transform ${
-              isExpanded ? 'rotate-180' : ''
-            }`}
-          />
+          <span className="rounded bg-gray-200/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-gray-600">{STAGE_LABEL[stage.stage]}</span>
+          <span className="flex-1 truncate text-sm font-semibold text-gray-900">{STAGE_TITLE[stage.stage]}</span>
+          <span className="text-[11px] font-medium text-gray-600">{STAGE_STATUS_LABEL[stage.status]}</span>
         </div>
-        <div className="flex flex-wrap gap-3 text-[11px] text-gray-500">
-          <span>
-            <b className="font-semibold text-gray-800">
-              {stage.device_succeeded}
-            </b>{' '}
-            就绪
-          </span>
-          {stage.device_failed > 0 && (
-            <span className="text-red-600">
-              <b className="font-semibold">{stage.device_failed}</b> 失败
-            </span>
-          )}
-          {(stage.device_skipped ?? 0) > 0 && (
-            <span className="text-gray-400">
-              <b className="font-semibold">{stage.device_skipped}</b> 已跳过
-            </span>
-          )}
-          <span>
-            <b className="font-semibold text-gray-800">{stage.steps.length}</b>{' '}
-            步骤
-          </span>
-          {stage.duration_seconds != null && (
-            <span>{fmtDuration(stage.duration_seconds)}</span>
-          )}
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+          {stage.device_succeeded > 0 && <span><b className="font-semibold text-gray-800">{stage.device_succeeded}</b> 就绪</span>}
+          {stage.device_failed > 0 && <span className="text-red-600"><b className="font-semibold">{stage.device_failed}</b> 失败</span>}
+          {(stage.device_skipped ?? 0) > 0 && <span className="text-gray-400"><b className="font-semibold">{stage.device_skipped}</b> 跳过</span>}
+          <span><b className="font-semibold text-gray-800">{stage.steps.length}</b> 步骤</span>
+          {stage.duration_seconds != null && <span>{fmtDuration(stage.duration_seconds)}</span>}
           {stage.stage === 'patrol' && stage.patrol_cycle_index != null && (
-            <span>
-              周期 <b className="font-semibold text-gray-800">#{stage.patrol_cycle_index}</b>
-              {stage.patrol_interval_seconds && (
-                <span className="text-gray-400">
-                  {' '}
-                  · interval {stage.patrol_interval_seconds}s
-                </span>
-              )}
+            <span>周期 <b className="font-semibold text-gray-800">#{stage.patrol_cycle_index}</b>
+              {stage.patrol_interval_seconds && <span className="text-gray-400"> · interval {stage.patrol_interval_seconds}s</span>}
             </span>
           )}
         </div>
-        {/* Step summary — always visible even when collapsed */}
+        {/* Step names — always visible */}
         {stage.steps.length > 0 && (
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+          <div className="flex flex-wrap gap-x-3 text-[11px] text-gray-500">
             {stage.steps.map((s) => (
-              <span key={s.step_key}>
-                {s.script_name || s.step_key}{' '}
-                <span className="text-gray-400">
-                  {s.device_succeeded}/{s.device_total}
-                  {s.device_failed > 0 && (
-                    <span className="ml-0.5 text-red-500">· {s.device_failed} 失败</span>
-                  )}
-                </span>
-              </span>
-            ))}
-          </div>
-        )}
-        {isExpanded && stage.steps.length > 0 && (
-          <div className="mt-1 space-y-1 border-t border-gray-200 pt-2 text-[11px]">
-            {stage.steps.map((s) => (
-              <div
-                key={s.step_key}
-                className="flex items-center gap-2"
-                data-testid={`stage-step-${stage.stage}-${s.step_key}`}
-              >
-                <span
-                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                    s.device_failed > 0
-                      ? 'bg-red-500'
-                      : s.device_running > 0
-                      ? 'bg-orange-500'
-                      : s.device_succeeded > 0
-                      ? 'bg-green-500'
-                      : 'bg-gray-300'
-                  }`}
-                />
-                <span className="flex-1 truncate text-gray-700">
-                  {s.script_name || s.step_key}
-                </span>
-                <span className="text-gray-500">
-                  {s.device_succeeded}/{s.device_total}
-                  {s.device_failed > 0 && (
-                    <span className="ml-1 text-red-600">· {s.device_failed} 失败</span>
-                  )}
-                  {(s.device_skipped ?? 0) > 0 && (
-                    <span className="ml-1 text-gray-400">· {s.device_skipped} 跳过</span>
-                  )}
-                </span>
-              </div>
+              <span key={s.step_key}>{s.script_name || s.step_key} <span className="text-gray-400">{s.device_succeeded}/{s.device_total}{s.device_failed > 0 && <span className="ml-0.5 text-red-500">· {s.device_failed} 失败</span>}</span></span>
             ))}
           </div>
         )}
@@ -497,12 +410,8 @@ export default function BusinessFlowTimeline({
   precheck,
   dispatchState,
 }: Props) {
-  // expanded stages — only used internally, not lifted
-  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => ({
-    init: false,
-    patrol: true, // open patrol by default since it's the long-running phase
-    teardown: false,
-  }));
+  // Active stage for detail view (null = show events)
+  const [activeStage, setActiveStage] = useState<string | null>(null);
 
   const stages = timeline?.stages ?? [];
   const currentStage = timeline?.current_stage;
@@ -516,7 +425,7 @@ export default function BusinessFlowTimeline({
   const headerMeta = useMemo(() => {
     const stagesCount = stages.length;
     const cur = currentStage ? STAGE_LABEL[currentStage as TimelineStage['stage']] || currentStage.toUpperCase() : '—';
-    return `${stagesCount} 阶段 · 当前 ${cur} · 共 ${totalEvents} 条状态/关键事件`;
+    return `${stagesCount} 阶段 · 当前 ${cur} · 共 ${totalEvents} 条`;
   }, [stages.length, currentStage, totalEvents]);
 
   const abortedCount = timeline?.aborted_job_count ?? 0;
@@ -564,10 +473,8 @@ export default function BusinessFlowTimeline({
                   key={stage.stage}
                   stage={stage}
                   isCurrent={currentStage === stage.stage}
-                  isExpanded={!!expanded[stage.stage]}
-                  onToggle={() =>
-                    setExpanded((e) => ({ ...e, [stage.stage]: !e[stage.stage] }))
-                  }
+                  isActive={activeStage === stage.stage}
+                  onClick={() => setActiveStage(activeStage === stage.stage ? null : stage.stage)}
                 />
               ))}
             </div>
