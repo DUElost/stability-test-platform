@@ -359,6 +359,22 @@ function StageRow({
             </span>
           )}
         </div>
+        {/* Step summary — always visible even when collapsed */}
+        {stage.steps.length > 0 && (
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+            {stage.steps.map((s) => (
+              <span key={s.step_key}>
+                {s.script_name || s.step_key}{' '}
+                <span className="text-gray-400">
+                  {s.device_succeeded}/{s.device_total}
+                  {s.device_failed > 0 && (
+                    <span className="ml-0.5 text-red-500">· {s.device_failed} 失败</span>
+                  )}
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
         {isExpanded && stage.steps.length > 0 && (
           <div className="mt-1 space-y-1 border-t border-gray-200 pt-2 text-[11px]">
             {stage.steps.map((s) => (
@@ -378,8 +394,8 @@ function StageRow({
                       : 'bg-gray-300'
                   }`}
                 />
-                <span className="flex-1 truncate font-mono text-gray-700">
-                  {s.step_key}
+                <span className="flex-1 truncate text-gray-700">
+                  {s.script_name || s.step_key}
                 </span>
                 <span className="text-gray-500">
                   {s.device_succeeded}/{s.device_total}
