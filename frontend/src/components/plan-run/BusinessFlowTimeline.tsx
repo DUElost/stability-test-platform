@@ -423,10 +423,41 @@ export default function BusinessFlowTimeline({
 
   const abortedCount = timeline?.aborted_job_count ?? 0;
 
-  // Selected stage detail
-  const selectedStage = activeStage
-    ? stages.find((s) => s.stage === activeStage)
+  // Selected stage (for stepper highlight + right panel step rows)
+  const selectedStage: TimelineStage | null = activeStage
+    ? (stages.find((s) => s.stage === activeStage) ?? null)
     : null;
+
+  // Stage step rows computed outside JSX
+  const stageStepRows = useMemo(() => {
+    if (!selectedStage) return null;
+    return selectedStage.steps.map((s) => {
+      const hasFailed = s.device_failed > 0;
+      const hasRunning = s.device_running > 0;
+      const sev: EventSeverity = hasFailed ? 'err' : hasRunning ? 'info' : 'ok';
+      const Icon = SEVERITY_ICON[sev];
+      const stageKey = selectedStage.stage;
+      const chip = (STAGE_CHIP_CLS as Record<string, string>)[stageKey] || 'bg-gray-100 text-gray-600';
+      const label = (STAGE_LABEL as Record<string, string>)[stageKey] || stageKey;
+      return { key: s.step_key, element: (
+        <div key={s.step_key} className="grid grid-cols-[64px_18px_1fr_auto] items-start gap-2 border-b border-gray-100 px-3 py-2 text-xs last:border-b-0 hover:bg-gray-50/60">
+          <span className="font-mono text-[10.5px] text-gray-400">—</span>
+          <span className="flex justify-center pt-0.5">
+            <Icon className={`h-3.5 w-3.5 ${sev === 'err' ? 'text-red-500' : sev === 'info' ? 'text-orange-500' : 'text-green-500'}`} />
+          </span>
+          <div className="min-w-0">
+            <div className="truncate font-medium text-gray-900">{s.script_name || s.step_key}</div>
+            <div className="mt-0.5 text-[10.5px] text-gray-400">
+              {s.device_succeeded}/{s.device_total} 设备
+              {s.device_failed > 0 && <span className="ml-1 text-red-500">· {s.device_failed} 失败</span>}
+              {(s.device_skipped ?? 0) > 0 && <span className="ml-1 text-gray-400">· {s.device_skipped} 跳过</span>}
+            </div>
+          </div>
+          <span className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${chip}`}>{label}</span>
+        </div>
+      )};
+    });
+  }, [selectedStage]);
 
   return (
     <section data-testid="business-flow-timeline" className="space-y-2">
@@ -481,47 +512,6 @@ export default function BusinessFlowTimeline({
 
         {/* Right: events + optional stage detail */}
         <div className="flex min-h-[340px] flex-col">
-          {/* Stage detail panel — shown when a stage is selected */}
-          {selectedStage && (
-            <div className="border-b bg-blue-50/40 px-4 py-3">
-              <div className="mb-2 flex items-center gap-2">
-                <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-blue-700">
-                  {STAGE_LABEL[selectedStage.stage as TimelineStage['stage']]}
-                </span>
-                <span className="text-sm font-semibold text-gray-800">
-                  {STAGE_TITLE[selectedStage.stage as TimelineStage['stage']]} 步骤详情
-                </span>
-                <button
-                  onClick={() => setActiveStage(null)}
-                  className="ml-auto text-[10px] text-gray-400 hover:text-gray-600"
-                >
-                  收起 ✕
-                </button>
-              </div>
-              {selectedStage.steps.length === 0 ? (
-                <div className="py-2 text-center text-xs text-gray-400">该阶段无步骤定义</div>
-              ) : (
-                <div className="space-y-1">
-                  {selectedStage.steps.map((s) => (
-                    <div key={s.step_key} className="flex items-center gap-2 text-[11px]">
-                      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                        s.device_failed > 0 ? 'bg-red-500' :
-                        s.device_running > 0 ? 'bg-orange-500' :
-                        s.device_succeeded > 0 ? 'bg-green-500' : 'bg-gray-300'
-                      }`} />
-                      <span className="flex-1 font-mono text-gray-700">{s.script_name || s.step_key}</span>
-                      <span className="text-gray-500">
-                        {s.device_succeeded}/{s.device_total}
-                        {s.device_failed > 0 && <span className="ml-1 text-red-500">· {s.device_failed} 失败</span>}
-                        {(s.device_skipped ?? 0) > 0 && <span className="ml-1 text-gray-400">· {s.device_skipped} 跳过</span>}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Events filter bar */}
           <div className="flex flex-wrap items-center gap-1 border-b bg-white px-3 py-2">
             <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
@@ -589,9 +579,12 @@ export default function BusinessFlowTimeline({
                 </span>
               </div>
             ) : (
-              eventList.map((e, idx) => (
-                <EventRow key={`${e.ts}-${e.category}-${idx}`} event={e} />
-              ))
+              <div className="flex flex-col">
+                {stageStepRows?.map((r) => r.element)}
+                {eventList.map((e, idx) => (
+                  <EventRow key={`${e.ts}-${e.category}-${idx}`} event={e} />
+                ))}
+              </div>
             )}
           </div>
         </div>
