@@ -488,7 +488,7 @@ async def _drive_dispatch_gate(
                 scripts = host_state.get("scripts") or []
                 mismatched_names = {
                     s["name"] for s in scripts
-                    if not s.get("ok") and s.get("exists") and s.get("actual_sha")
+                    if not s.get("ok")  # sha_mismatch or not_exists
                 }
                 mismatched_entries = [
                     es for es in expected_scripts
