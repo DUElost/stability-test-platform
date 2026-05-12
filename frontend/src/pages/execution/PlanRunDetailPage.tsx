@@ -16,7 +16,6 @@ import type {
 } from '@/utils/api/types';
 import PlanRunTopbar from '@/components/plan-run/PlanRunTopbar';
 import PlanChainBreadcrumb from '@/components/plan-run/PlanChainBreadcrumb';
-import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
 import BusinessFlowTimeline from '@/components/plan-run/BusinessFlowTimeline';
 import DeviceMatrixCard from '@/components/plan-run/DeviceMatrixCard';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
@@ -250,14 +249,6 @@ export default function PlanRunDetailPage() {
         }
       />
 
-      {/* Dispatch gate (precheck) — only renders when precheck context exists
-          AND the gate is in-progress / failed / terminal-archived. */}
-      <DispatchGateCard
-        precheck={precheck}
-        dispatchState={dispatchState}
-        isTerminal={isTerminal}
-      />
-
       {/* Business flow timeline */}
       <BusinessFlowTimeline
         timeline={timelineQ.data}
@@ -267,6 +258,8 @@ export default function PlanRunDetailPage() {
         onStageFilterChange={setStageFilter}
         onSeverityFilterChange={setSeverityFilter}
         isLoading={timelineQ.isLoading || eventsQ.isLoading}
+        precheck={precheck}
+        dispatchState={dispatchState}
       />
 
       {/* Device matrix */}

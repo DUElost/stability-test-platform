@@ -9,6 +9,9 @@ import {
   XCircle,
   Info,
   CheckCircle2,
+  Clock,
+  ShieldCheck,
+  ShieldX,
 } from 'lucide-react';
 import type {
   EventSeverity,
@@ -28,6 +31,9 @@ interface Props {
   onStageFilterChange?: (s: EventStage | 'all') => void;
   onSeverityFilterChange?: (s: EventSeverity | 'all') => void;
   isLoading?: boolean;
+  /** precheck state from run_context — renders above INIT in the stepper */
+  precheck?: Record<string, any> | null;
+  dispatchState?: Record<string, any> | null;
 }
 
 const STAGE_LABEL: Record<TimelineStage['stage'], string> = {
@@ -97,6 +103,156 @@ function fmtDuration(seconds: number | null | undefined): string {
 }
 
 // ── Left column: vertical stepper ─────────────────────────────────────────
+
+/** Compact precheck row that sits above the INIT/PATROL/TEARDOWN stages
+ *  in the left stepper column.  Replaces the standalone DispatchGateCard. */
+function PrecheckRow({
+  precheck,
+  dispatchState,
+}: {
+  precheck?: Record<string, any> | null;
+  dispatchState?: Record<string, any> | null;
+}) {
+  if (!precheck) return null;
+
+  const phase = precheck.phase ?? 'unknown';
+  const finalResult = precheck.final_result;
+  const hosts = (precheck.hosts ?? {}) as Record<string, Record<string, any>>;
+  const hostEntries = Object.entries(hosts);
+  const totalHosts = hostEntries.length;
+  const okHosts = hostEntries.filter(([, h]) => h.status === 'ok').length;
+  const syncingHosts = hostEntries.filter(([, h]) => h.status === 'syncing').length;
+  const failedHosts = hostEntries.filter(([, h]) => h.status === 'failed').length;
+
+  // Compute total scripts and verified count
+  let totalScripts = 0;
+  let verifiedScripts = 0;
+  for (const [, h] of hostEntries) {
+    const scripts = (h.scripts ?? []) as Array<Record<string, any>>;
+    totalScripts += scripts.length;
+    verifiedScripts += scripts.filter((s) => s.ok).length;
+  }
+
+  const isDone = finalResult === 'ready' || phase === 'ready';
+  const isRunning = phase === 'verifying' || phase === 'syncing' || dispatchState?.status === 'running';
+  const isFailed = phase === 'failed' || finalResult === 'failed' || failedHosts > 0;
+
+  let nodeIcon: React.ElementType = Clock;
+  let nodeCls = 'border-blue-400 text-blue-600 bg-blue-50';
+  let cardCls = 'border-blue-200 bg-blue-50/50';
+  let statusText = '等待中';
+  let statusColor = 'text-blue-600';
+
+  if (isDone) {
+    nodeIcon = ShieldCheck;
+    nodeCls = 'border-green-500 text-green-600 bg-green-50';
+    cardCls = 'border-green-300 bg-green-50/50';
+    statusText = '✓ 通过';
+    statusColor = 'text-green-600';
+  } else if (isFailed) {
+    nodeIcon = ShieldX;
+    nodeCls = 'border-red-500 text-red-600 bg-red-50';
+    cardCls = 'border-red-300 bg-red-50/50';
+    statusText = '✗ 失败';
+    statusColor = 'text-red-600';
+  } else if (isRunning) {
+    nodeIcon = Loader2;
+    nodeCls = 'border-amber-500 text-white bg-amber-500';
+    cardCls = 'border-amber-400 bg-gradient-to-b from-amber-50 to-white ring-2 ring-amber-200';
+    statusText = '⟳ ' + (phase === 'syncing' ? '同步中' : '校验中');
+    statusColor = 'text-amber-600';
+  }
+
+  const NodeIcon = nodeIcon;
+
+  return (
+    <div data-testid="precheck-row" className="relative grid grid-cols-[24px_1fr] gap-3 py-1.5">
+      <div className="relative flex justify-center">
+        <span
+          className={`relative z-10 flex h-5 w-5 items-center justify-center rounded-full border-2 ${nodeCls}`}
+        >
+          <NodeIcon className={`h-3 w-3 ${isRunning && !isDone ? 'animate-spin' : ''}`} />
+        </span>
+        <span className={`absolute left-1/2 top-5 -bottom-2 w-px -translate-x-1/2 ${isDone ? 'bg-green-300' : isFailed ? 'bg-red-300' : 'bg-gray-200'}`} />
+      </div>
+      <div className={`flex flex-col gap-1 rounded-lg border px-3 py-2 ${cardCls}`}>
+        <div className="flex items-center gap-2">
+          <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-violet-700">
+            预检
+          </span>
+          <span className="flex-1 truncate text-sm font-semibold text-gray-900">
+            健康预检
+          </span>
+          <span className={`text-[11px] font-medium ${statusColor}`}>
+            {statusText}
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+          <span>
+            <b className="font-semibold text-gray-800">{totalHosts}</b> 主机
+          </span>
+          <span>
+            <b
+              className={`font-semibold ${
+                verifiedScripts === totalScripts && totalScripts > 0
+                  ? 'text-green-700'
+                  : 'text-gray-800'
+              }`}
+            >
+              {verifiedScripts}/{totalScripts}
+            </b>{' '}
+            脚本
+          </span>
+          {okHosts > 0 && isDone && (
+            <span className="text-green-600">
+              <b className="font-semibold">{okHosts}</b> 就绪
+            </span>
+          )}
+          {failedHosts > 0 && (
+            <span className="text-red-600">
+              <b className="font-semibold">{failedHosts}</b> 失败
+            </span>
+          )}
+          {syncingHosts > 0 && (
+            <span className="text-amber-600">
+              <b className="font-semibold">{syncingHosts}</b> 同步中
+            </span>
+          )}
+        </div>
+        {/* Host x script mini-detail (always visible when there's data) */}
+        {hostEntries.length > 0 && (
+          <div className="mt-1 space-y-0.5 border-t border-gray-200/70 pt-1.5 text-[10.5px]">
+            {hostEntries.map(([hid, h]) => {
+              const scripts = (h.scripts ?? []) as Array<Record<string, any>>;
+              const hOk = scripts.filter((s) => s.ok).length;
+              return (
+                <div key={hid} className="flex items-center gap-1.5 text-gray-500">
+                  <span
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                      h.status === 'ok' ? 'bg-green-500' :
+                      h.status === 'failed' ? 'bg-red-500' :
+                      h.status === 'syncing' ? 'bg-amber-500' :
+                      'bg-gray-300'
+                    }`}
+                  />
+                  <span className="font-mono text-[10px] truncate" title={hid}>
+                    {hid.length > 20 ? hid.slice(-20) : hid}
+                  </span>
+                  <span className="ml-auto shrink-0">
+                    {hOk}/{scripts.length} 匹配
+                    {h.error && (
+                      <span className="ml-1 text-red-500">{h.error}</span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function StageRow({
   stage,
@@ -322,6 +478,8 @@ export default function BusinessFlowTimeline({
   onStageFilterChange,
   onSeverityFilterChange,
   isLoading = false,
+  precheck,
+  dispatchState,
 }: Props) {
   // expanded stages — only used internally, not lifted
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => ({
@@ -384,6 +542,7 @@ export default function BusinessFlowTimeline({
             </div>
           ) : (
             <div className="relative space-y-0">
+              <PrecheckRow precheck={precheck} dispatchState={dispatchState} />
               {stages.map((stage) => (
                 <StageRow
                   key={stage.stage}
