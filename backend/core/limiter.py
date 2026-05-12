@@ -7,7 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 # Rate limit configuration
-RATE_LIMIT_REQUESTS = 100  # requests
+RATE_LIMIT_REQUESTS = 300  # requests
 RATE_LIMIT_WINDOW = 60  # seconds
 
 
