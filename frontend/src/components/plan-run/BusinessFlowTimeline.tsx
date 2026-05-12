@@ -108,9 +108,13 @@ function fmtDuration(seconds: number | null | undefined): string {
 function PrecheckRow({
   precheck,
   dispatchState,
+  isActive,
+  onClick,
 }: {
   precheck?: Record<string, any> | null;
   dispatchState?: Record<string, any> | null;
+  isActive?: boolean;
+  onClick?: () => void;
 }) {
   if (!precheck) return null;
 
@@ -174,7 +178,7 @@ function PrecheckRow({
         </span>
         <span className={`absolute left-1/2 top-5 -bottom-2 w-px -translate-x-1/2 ${isDone ? 'bg-green-300' : isFailed ? 'bg-red-300' : 'bg-gray-200'}`} />
       </div>
-      <div className={`flex flex-col gap-1 rounded-lg border px-3 py-2 ${cardCls}`}>
+      <button type="button" onClick={onClick} className={`flex flex-col gap-1 rounded-lg border px-3 py-2 text-left transition-shadow ${cardCls} ${isActive ? 'ring-2 ring-blue-300' : ''} hover:shadow-sm`}>
         <div className="flex items-center gap-2">
           <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-violet-700">
             预检
@@ -248,7 +252,7 @@ function PrecheckRow({
             })}
           </div>
         )}
-      </div>
+      </button>
     </div>
   );
 }
@@ -430,6 +434,42 @@ export default function BusinessFlowTimeline({
 
   // Stage step rows computed outside JSX
   const stageStepRows = useMemo(() => {
+    // Precheck scripts
+    if (activeStage === '__precheck__' && precheck) {
+      const hosts = (precheck.hosts ?? {}) as Record<string, Record<string, any>>;
+      const rows: Array<{ key: string; element: React.ReactElement }> = [];
+      for (const [hid, h] of Object.entries(hosts)) {
+        const scripts = (h.scripts ?? []) as Array<Record<string, any>>;
+        for (const s of scripts) {
+          const ok = s.ok === true;
+          const sev: EventSeverity = ok ? 'ok' : 'err';
+          const Icon = SEVERITY_ICON[sev];
+          rows.push({
+            key: `${hid}-${s.name}-${s.version}`,
+            element: (
+              <div key={`${hid}-${s.name}-${s.version}`} className="grid grid-cols-[64px_18px_1fr_auto] items-start gap-2 border-b border-gray-100 px-3 py-2 text-xs last:border-b-0 hover:bg-gray-50/60">
+                <span className="font-mono text-[10.5px] text-gray-400">—</span>
+                <span className="flex justify-center pt-0.5">
+                  <Icon className={`h-3.5 w-3.5 ${ok ? 'text-green-500' : 'text-red-500'}`} />
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-gray-900">{s.name}@{s.version}</div>
+                  <div className="mt-0.5 text-[10.5px] text-gray-400">
+                    {s.error || (ok ? '验证通过' : '不匹配')}
+                  </div>
+                </div>
+                <span className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-violet-100 text-violet-700">
+                  预检
+                </span>
+              </div>
+            ),
+          });
+        }
+      }
+      return rows;
+    }
+
+    // Stage steps
     if (!selectedStage) return null;
     return selectedStage.steps.map((s) => {
       const hasFailed = s.device_failed > 0;
@@ -496,7 +536,12 @@ export default function BusinessFlowTimeline({
             </div>
           ) : (
             <div className="relative space-y-0">
-              <PrecheckRow precheck={precheck} dispatchState={dispatchState} />
+              <PrecheckRow
+                precheck={precheck}
+                dispatchState={dispatchState}
+                isActive={activeStage === '__precheck__'}
+                onClick={() => setActiveStage(activeStage === '__precheck__' ? null : '__precheck__')}
+              />
               {stages.map((stage) => (
                 <StageRow
                   key={stage.stage}
