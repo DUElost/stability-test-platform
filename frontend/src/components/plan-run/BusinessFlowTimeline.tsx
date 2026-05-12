@@ -303,24 +303,17 @@ function StageRow({
           <span className="flex-1 truncate text-sm font-semibold text-gray-900">{STAGE_TITLE[stage.stage]}</span>
           <span className="text-[11px] font-medium text-gray-600">{STAGE_STATUS_LABEL[stage.status]}</span>
         </div>
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+        <div className="flex flex-wrap gap-x-3 text-[11px] text-gray-500">
           {stage.device_succeeded > 0 && <span><b className="font-semibold text-gray-800">{stage.device_succeeded}</b> 就绪</span>}
           {stage.device_failed > 0 && <span className="text-red-600"><b className="font-semibold">{stage.device_failed}</b> 失败</span>}
           {(stage.device_skipped ?? 0) > 0 && <span className="text-gray-400"><b className="font-semibold">{stage.device_skipped}</b> 跳过</span>}
           <span><b className="font-semibold text-gray-800">{stage.steps.length}</b> 步骤</span>
           {stage.duration_seconds != null && <span>{fmtDuration(stage.duration_seconds)}</span>}
-          {stage.stage === 'patrol' && stage.patrol_cycle_index != null && (
-            <span>周期 <b className="font-semibold text-gray-800">#{stage.patrol_cycle_index}</b>
-              {stage.patrol_interval_seconds && <span className="text-gray-400"> · interval {stage.patrol_interval_seconds}s</span>}
-            </span>
-          )}
         </div>
-        {/* Step names — always visible */}
-        {stage.steps.length > 0 && (
-          <div className="flex flex-wrap gap-x-3 text-[11px] text-gray-500">
-            {stage.steps.map((s) => (
-              <span key={s.step_key}>{s.script_name || s.step_key} <span className="text-gray-400">{s.device_succeeded}/{s.device_total}{s.device_failed > 0 && <span className="ml-0.5 text-red-500">· {s.device_failed} 失败</span>}</span></span>
-            ))}
+        {stage.stage === 'patrol' && stage.patrol_cycle_index != null && (
+          <div className="text-[10.5px] text-gray-400">
+            周期 <b className="font-semibold text-gray-600">#{stage.patrol_cycle_index}</b>
+            {stage.patrol_interval_seconds && <span> · interval {stage.patrol_interval_seconds}s</span>}
           </div>
         )}
       </button>
