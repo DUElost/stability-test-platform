@@ -1275,9 +1275,12 @@ def get_plan_run_events(
             ))
 
     # 5) audit_logs(plan_run / job_instance / dispatch_gate)
+    # AuditLog.resource_id 列宽到 String(64) 后(g0b1c2d3e4f5 迁移),需将整型主键
+    # 转字符串再比较;PG 严格类型不会做隐式 varchar=int 转换。
+    job_id_strs = [str(j) for j in (job_ids or [-1])]
     audit_q = select(AuditLog).where(
-        ((AuditLog.resource_type == "plan_run") & (AuditLog.resource_id == run_id))
-        | ((AuditLog.resource_type == "job_instance") & (AuditLog.resource_id.in_(job_ids or [-1])))
+        ((AuditLog.resource_type == "plan_run") & (AuditLog.resource_id == str(run_id)))
+        | ((AuditLog.resource_type == "job_instance") & (AuditLog.resource_id.in_(job_id_strs)))
     ).order_by(AuditLog.timestamp.desc()).limit(_MAX_EVENTS_LIMIT)
     for log in db.execute(audit_q).scalars().all():
         sev = "warn" if "abort" in (log.action or "") or "fail" in (log.action or "") else "info"

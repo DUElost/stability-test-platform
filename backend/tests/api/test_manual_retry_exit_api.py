@@ -138,7 +138,7 @@ class TestManualRetry:
         audit = db_session.execute(
             select(AuditLog)
             .where(AuditLog.action == "patrol_manual_retry")
-            .where(AuditLog.resource_id == job.id)
+            .where(AuditLog.resource_id == str(job.id))
         ).scalars().first()
         assert audit is not None
         assert audit.details["plan_run_id"] == pr.id
@@ -229,7 +229,7 @@ class TestManualExit:
         audit = db_session.execute(
             select(AuditLog)
             .where(AuditLog.action == "patrol_manual_exit")
-            .where(AuditLog.resource_id == job.id)
+            .where(AuditLog.resource_id == str(job.id))
         ).scalars().first()
         assert audit is not None
         assert audit.details["reason"] == "设备故障"

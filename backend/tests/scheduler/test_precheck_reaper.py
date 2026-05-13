@@ -160,6 +160,23 @@ def test_reaper_reenqueues_missing_precheck_once(db_session):
 
 def test_reaper_skips_planrun_with_jobs(db_session):
     """A RUNNING PlanRun that already has JobInstance rows is skipped."""
+    from datetime import datetime, timezone
+    from backend.models.enums import HostStatus
+    from backend.models.host import Device, Host
+
+    # PG 严格 FK:JobInstance.device_id / host_id 必须先有 Device / Host 行。
+    now = datetime.now(timezone.utc)
+    host = Host(
+        id="h-A", hostname="h-A",
+        status=HostStatus.ONLINE.value, created_at=now,
+    )
+    device = Device(
+        id=2429, serial="DEV-2429", host_id="h-A",
+        status="ONLINE", tags=[], created_at=now,
+    )
+    db_session.add_all([host, device])
+    db_session.flush()
+
     run_ctx = {
         "dispatch_device_ids": [2429],
         "dispatch_state": {

@@ -19,7 +19,7 @@ def record_audit(
     *,
     action: str,
     resource_type: str,
-    resource_id: Optional[str] = None,
+    resource_id: Optional[Any] = None,
     details: Optional[Dict[str, Any]] = None,
     user_id: Optional[int] = None,
     username: Optional[str] = None,
@@ -34,12 +34,15 @@ def record_audit(
         elif request.client:
             ip_address = request.client.host
 
+    # AuditLog.resource_id 是 String(64),需把整型主键(job_id / plan_run_id / ...)
+    # 转字符串后再入库;PG 严格类型不会做隐式 int→varchar 转换。
+    resource_id_str = None if resource_id is None else str(resource_id)
     entry = AuditLog(
         user_id=user_id,
         username=username,
         action=action,
         resource_type=resource_type,
-        resource_id=resource_id,
+        resource_id=resource_id_str,
         details=details or {},
         ip_address=ip_address,
     )
