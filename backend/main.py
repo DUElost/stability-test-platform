@@ -76,6 +76,20 @@ async def lifespan(app: FastAPI):
     scheduler = None
 
     if os.getenv("TESTING") != "1":
+        # AGENT_SECRET fail-fast: non-dev 环境必须配置 secret，否则 Agent
+        # 控制面（REST /api/v1/agent/* 与 SocketIO /agent）会因 _verify_agent
+        # 的 compare_digest("", "") == True 而完全放行。
+        _stp_env = os.getenv("STP_ENV", "dev").lower()
+        _agent_secret_configured = bool(os.getenv("AGENT_SECRET"))
+        if _stp_env in {"prod", "production", "staging"} and not _agent_secret_configured:
+            raise RuntimeError(
+                f"AGENT_SECRET required in non-dev environment (STP_ENV={_stp_env})"
+            )
+        logger.info(
+            "startup_security_config env=%s agent_secret_configured=%s",
+            _stp_env, _agent_secret_configured,
+        )
+
         # Redis — retained for SAQ broker (task queue)
         redis_client = await aioredis.from_url(
             os.getenv("REDIS_URL", "redis://localhost:6379/0"),

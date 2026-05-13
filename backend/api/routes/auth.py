@@ -1,5 +1,6 @@
 """Authentication API routes."""
 import os
+import secrets
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -28,27 +29,17 @@ AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 def verify_agent_secret(x_agent_secret: Optional[str] = Header(None)) -> bool:
     """Verify agent secret for callback endpoints.
 
-    Returns True if secret is valid or not configured (for development).
-    Raises 401 if secret is invalid.
+    无差别比较：dev 下 AGENT_SECRET == "" 且 header 缺失 → 双方为 "" → 通过；
+    prod 下 main.py lifespan 已保证 AGENT_SECRET 非空（启动期 RuntimeError）。
+    secrets.compare_digest 防时序攻击。
     """
-    if not AGENT_SECRET:
-        # No secret configured - allow all (development mode)
-        return True
-
-    if not x_agent_secret:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Agent secret required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    if x_agent_secret != AGENT_SECRET:
+    provided = x_agent_secret or ""
+    if not secrets.compare_digest(provided, AGENT_SECRET):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid agent secret",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     return True
 
 

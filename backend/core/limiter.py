@@ -70,7 +70,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     _SKIP_EXACT = frozenset({"/", "/docs", "/openapi.json", "/health", "/redoc", "/metrics", "/metrics/health"})
     _SKIP_PREFIXES = (
         "/api/v1/heartbeat",
-        "/api/v1/agent/jobs/",  # job claim/heartbeat/complete/steps
+        # /api/v1/agent/jobs/ 已移出豁免清单：依赖 _verify_agent + lifespan fail-fast
+        # 提供认证保护，限流作为第二道防线（300 req/min/IP）。
         "/ws/",
         "/ws",
     )

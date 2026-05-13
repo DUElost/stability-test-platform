@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -102,12 +103,12 @@ class AgentNamespace(socketio.AsyncNamespace):
         provided_secret = auth.get("agent_secret", "")
         host_id = auth.get("host_id", "")
 
-        if _AGENT_SECRET and provided_secret != _AGENT_SECRET:
+        if not secrets.compare_digest(provided_secret or "", _AGENT_SECRET):
             logger.warning("agent_sio_auth_failed sid=%s host_id=%s", sid, host_id)
             raise socketio.exceptions.ConnectionRefusedError("Invalid agent secret")
 
-        if not _AGENT_SECRET and os.getenv("ENV", "").lower() == "production":
-            logger.warning("agent_sio_rejected sid=%s: AGENT_SECRET not configured in production", sid)
+        if not _AGENT_SECRET and os.getenv("STP_ENV", "").lower() in {"prod", "production", "staging"}:
+            logger.warning("agent_sio_rejected sid=%s: AGENT_SECRET not configured in %s", sid, os.getenv("STP_ENV"))
             raise socketio.exceptions.ConnectionRefusedError("AGENT_SECRET not configured")
 
         if not host_id:

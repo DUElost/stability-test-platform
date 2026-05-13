@@ -6,6 +6,7 @@ Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
 import json
 import logging
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -48,7 +49,11 @@ class _LockAcquireFailed(Exception):
 
 
 def _verify_agent(x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret")):
-    if _AGENT_SECRET and x_agent_secret != _AGENT_SECRET:
+    # 无差别比较：dev 下 _AGENT_SECRET == "" 且 header 缺失 → 双方为 "" → 通过；
+    # prod 下 lifespan 已保证 _AGENT_SECRET 非空（main.py 启动期 RuntimeError）。
+    # secrets.compare_digest 防时序攻击。
+    provided = x_agent_secret or ""
+    if not secrets.compare_digest(provided, _AGENT_SECRET):
         raise HTTPException(status_code=401, detail="invalid agent secret")
 
 
