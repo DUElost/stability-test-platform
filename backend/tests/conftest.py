@@ -348,6 +348,7 @@ def sample_plan_run(db_session, sample_plan):
         status="RUNNING",
         failure_threshold=sample_plan.failure_threshold,
         plan_snapshot={"name": sample_plan.name, "plan_id": sample_plan.id},
+        run_type="MANUAL",
         triggered_by="test",
     )
     db_session.add(run)

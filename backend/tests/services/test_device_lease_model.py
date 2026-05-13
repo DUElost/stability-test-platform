@@ -5,14 +5,17 @@ from uuid import uuid4
 
 import pytest
 
-from backend.models.enums import HostStatus, LeaseStatus, LeaseType
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
+from backend.models.job import JobInstance
+from backend.models.plan import Plan
+from backend.models.plan_run import PlanRun
 
 
 @pytest.fixture
 def seed(db_session):
-    """Create Host + Device in the test DB."""
+    """Create Host + Device + Plan + PlanRun + JobInstance for FK-bound DeviceLease tests."""
     suffix = uuid4().hex[:8]
     host = Host(
         id=f"lease-host-{suffix}",
@@ -27,9 +30,39 @@ def seed(db_session):
         tags=[],
         created_at=datetime.now(timezone.utc),
     )
-    db_session.add_all([host, device])
+    plan = Plan(
+        name=f"lease-plan-{suffix}",
+        description="DeviceLease test plan",
+        failure_threshold=0.1,
+        created_by="test",
+    )
+    db_session.add_all([host, device, plan])
     db_session.flush()
-    return {"host_id": host.id, "device_id": device.id}
+    plan_run = PlanRun(
+        plan_id=plan.id,
+        status="RUNNING",
+        failure_threshold=0.1,
+        plan_snapshot={"name": plan.name, "plan_id": plan.id},
+        run_type="MANUAL",
+        triggered_by="test",
+    )
+    db_session.add(plan_run)
+    db_session.flush()
+    job = JobInstance(
+        plan_run_id=plan_run.id,
+        plan_id=plan.id,
+        device_id=device.id,
+        host_id=host.id,
+        status=JobStatus.PENDING.value,
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+    )
+    db_session.add(job)
+    db_session.flush()
+    return {
+        "host_id": host.id,
+        "device_id": device.id,
+        "job_id": job.id,
+    }
 
 
 class TestDeviceLeaseModel:
@@ -68,7 +101,7 @@ class TestDeviceLeaseModel:
         now = datetime.now(timezone.utc)
         lease = DeviceLease(
             device_id=seed["device_id"],
-            job_id=42,
+            job_id=seed["job_id"],
             host_id=seed["host_id"],
             lease_type=LeaseType.JOB.value,
             status=LeaseStatus.ACTIVE.value,
@@ -83,7 +116,7 @@ class TestDeviceLeaseModel:
         db_session.flush()
 
         fetched = db_session.get(DeviceLease, lease.id)
-        assert fetched.job_id == 42
+        assert fetched.job_id == seed["job_id"]
         assert fetched.lease_type == LeaseType.JOB.value
         assert fetched.reason is None
         assert fetched.holder is None
@@ -92,7 +125,7 @@ class TestDeviceLeaseModel:
         now = datetime.now(timezone.utc)
         lease = DeviceLease(
             device_id=seed["device_id"],
-            job_id=99,
+            job_id=seed["job_id"],
             host_id=seed["host_id"],
             lease_type=LeaseType.SCRIPT.value,
             status=LeaseStatus.ACTIVE.value,

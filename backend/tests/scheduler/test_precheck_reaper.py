@@ -9,12 +9,30 @@ import pytest
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.models.job import JobInstance
+from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.scheduler.precheck_reaper import (
     reconcile_stale_precheck_runs,
     _is_stale_iso,
     _is_stale_epoch_ms,
 )
+
+
+@pytest.fixture(autouse=True)
+def _seed_plan_one(db_session):
+    """PG 严格 FK:测试里直接写 plan_id=1 需要先有对应的 Plan 行(SQLite 弱 FK 时此问题被掩盖)。"""
+    if db_session.get(Plan, 1) is None:
+        db_session.add(
+            Plan(
+                id=1,
+                name="reaper-test-plan",
+                description="stub plan for reaper tests",
+                failure_threshold=0.05,
+                created_by="test",
+            )
+        )
+        db_session.flush()
+    yield
 
 
 # ── Unit helpers ───────────────────────────────────────────────────────────

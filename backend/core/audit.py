@@ -19,7 +19,7 @@ def record_audit(
     *,
     action: str,
     resource_type: str,
-    resource_id: Optional[int] = None,
+    resource_id: Optional[str] = None,
     details: Optional[Dict[str, Any]] = None,
     user_id: Optional[int] = None,
     username: Optional[str] = None,

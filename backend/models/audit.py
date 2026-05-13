@@ -22,7 +22,7 @@ class AuditLog(Base):
     username      = Column(String(128))
     action        = Column(String(64), nullable=False)
     resource_type = Column(String(64), nullable=False)
-    resource_id   = Column(Integer)
+    resource_id   = Column(String(64))
     details       = Column(JSON, default=dict)
     ip_address    = Column(String(64))
     timestamp     = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
