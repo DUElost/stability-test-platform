@@ -87,8 +87,10 @@ def engine():
         create_kwargs["pool_pre_ping"] = True
 
     engine = create_engine(TEST_DATABASE_URL, **create_kwargs)
-    if TEST_DATABASE_URL.startswith("sqlite"):
-        Base.metadata.create_all(bind=engine)
+    # alembic 链路从 001_add_device_monitoring 起就假设 devices 表已存在,
+    # 无法在空库上 `alembic upgrade head`。测试库统一用 ORM 视角建表;
+    # 真正的迁移健康单独通过本地 dev DB / 预生产校验。
+    Base.metadata.create_all(bind=engine)
     yield engine
     try:
         asyncio.run(async_engine.dispose())
