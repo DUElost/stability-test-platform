@@ -124,6 +124,27 @@ def db_session(engine):
     connection.close()
 
 
+@pytest.fixture(autouse=True)
+def dispose_async_engine_between_tests():
+    """Dispose asyncpg pool before pytest tears down the current test loop."""
+    yield
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.run(async_engine.dispose())
+        return
+
+    if loop.is_closed():
+        temp_loop = asyncio.new_event_loop()
+        try:
+            temp_loop.run_until_complete(async_engine.dispose())
+        finally:
+            temp_loop.close()
+        return
+
+    loop.run_until_complete(async_engine.dispose())
+
+
 @pytest.fixture
 def client(db_session):
     """Create FastAPI test client with test database"""

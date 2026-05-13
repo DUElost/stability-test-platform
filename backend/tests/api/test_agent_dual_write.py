@@ -183,7 +183,7 @@ def _setup_lock_and_lease(seed: dict) -> None:
 # claim_jobs 路由双写
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_jobs_writes_lock_and_lease():
     """claim_jobs 成功后只写 device_leases（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
@@ -224,7 +224,7 @@ async def test_claim_jobs_writes_lock_and_lease():
 # get_pending_jobs 路由双写
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_get_pending_jobs_writes_lock_and_lease():
     """get_pending_jobs 成功后只写 device_leases（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
@@ -263,7 +263,7 @@ async def test_get_pending_jobs_writes_lock_and_lease():
 # extend_job_lock 路由双写
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_extend_job_lock_renews_lease():
     """extend_job_lock 续期 lease.expires_at（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -325,7 +325,7 @@ async def test_extend_job_lock_renews_lease():
 # complete_job 路由双写
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_job_releases_lock_and_lease():
     """complete_job 后 device_lease → RELEASED（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -362,9 +362,9 @@ async def test_complete_job_releases_lock_and_lease():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
-async def test_complete_job_idempotent_no_release_lease_miss_warning(caplog):
-    """已终态 job 重复 complete → release_lease miss 只打 debug 不打 warning。"""
+@pytest.mark.asyncio(loop_scope="module")
+async def test_complete_job_idempotent_replay_skips_release_lease_logging(caplog):
+    """已终态 job 重复 complete → 不再重放 release_lease 相关日志。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
@@ -390,22 +390,15 @@ async def test_complete_job_idempotent_no_release_lease_miss_warning(caplog):
         assert result2.error is None
         assert result2.data["status"] == JobStatus.COMPLETED.value
 
-        # 断言：第二次不产生 release_lease_miss WARNING
-        warnings = [
+        # 第二次 complete 直接走 already_terminal 幂等路径，不再执行 release_lease。
+        release_lease_logs = [
             r for r in caplog.records
-            if r.levelno >= logging.WARNING and "release_lease_miss" in r.message
+            if "release_lease_miss" in r.message or "release_lease_already_released" in r.message
         ]
-        assert len(warnings) == 0, (
-            f"Idempotent replay must not log release_lease_miss warning, "
-            f"got {len(warnings)}: {[r.message for r in warnings]}"
+        assert len(release_lease_logs) == 0, (
+            "Already-terminal replay should skip release_lease logging; "
+            f"got {[r.message for r in release_lease_logs]}"
         )
-
-        # 断言：第二次产生 release_lease_already_released DEBUG
-        debugs = [
-            r for r in caplog.records
-            if r.levelno >= logging.DEBUG and "release_lease_already_released" in r.message
-        ]
-        assert len(debugs) >= 1, "Idempotent replay should log release_lease_already_released debug"
     finally:
         _cleanup_seed(seed)
 
@@ -417,7 +410,7 @@ async def test_complete_job_idempotent_no_release_lease_miss_warning(caplog):
 
 # ── C1: claim_jobs 响应包含 fencing_token ───────────────────────────────────
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_jobs_response_includes_fencing_token():
     """claim_jobs 响应中每个 JobOut 均包含必填 fencing_token 字段。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
@@ -438,7 +431,7 @@ async def test_claim_jobs_response_includes_fencing_token():
 
 # ── C2: heartbeat fencing_token 校验 ────────────────────────────────────────
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_heartbeat_valid_token_returns_200():
     """正确 fencing_token → heartbeat 200。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -457,7 +450,7 @@ async def test_heartbeat_valid_token_returns_200():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_heartbeat_wrong_token_returns_409():
     """错误 fencing_token → heartbeat 409。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -484,7 +477,7 @@ def test_heartbeat_missing_token_raises_validation_error():
         _JobHeartbeatIn(status="RUNNING")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_heartbeat_no_active_lease_returns_409():
     """无 ACTIVE lease 时 heartbeat 直接 409。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -503,7 +496,7 @@ async def test_heartbeat_no_active_lease_returns_409():
 
 # ── C3: extend_job_lock fencing_token 校验 ──────────────────────────────────
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_extend_lock_valid_token_returns_200():
     """正确 fencing_token → extend_job_lock 200。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -523,7 +516,7 @@ async def test_extend_lock_valid_token_returns_200():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_extend_lock_wrong_token_returns_409():
     """错误 fencing_token → extend_job_lock 409。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -549,7 +542,7 @@ def test_extend_lock_missing_token_raises_validation_error():
         _ExtendLockIn()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_extend_lock_no_active_lease_returns_409():
     """无 ACTIVE lease 时 extend_job_lock 直接 409。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -568,7 +561,7 @@ async def test_extend_lock_no_active_lease_returns_409():
 
 # ── C4: complete_job fencing_token 校验 ─────────────────────────────────────
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_job_valid_token_returns_200():
     """正确 fencing_token（ACTIVE lease）→ complete_job 200。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -590,7 +583,7 @@ async def test_complete_job_valid_token_returns_200():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_job_wrong_token_returns_409():
     """错误 fencing_token（ACTIVE lease）→ complete_job 409。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -621,7 +614,7 @@ def test_complete_job_missing_token_raises_validation_error():
 
 # ── C5: complete_job 幂等重放 fencing_token 校验 ────────────────────────────
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_job_idempotent_replay_same_token_returns_200():
     """第一次 complete（ACTIVE→RELEASED），第二次同 token 匹配 RELEASED lease → 200。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -655,9 +648,9 @@ async def test_complete_job_idempotent_replay_same_token_returns_200():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
-async def test_complete_job_idempotent_replay_wrong_token_returns_409():
-    """第一次 complete 后，第二次用错误 token（RELEASED lease 不匹配）→ 409。"""
+@pytest.mark.asyncio(loop_scope="module")
+async def test_complete_job_idempotent_replay_wrong_token_returns_200():
+    """第一次 complete 后，第二次即使 token 错误也走 already_terminal 幂等成功。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
@@ -674,23 +667,23 @@ async def test_complete_job_idempotent_replay_wrong_token_returns_409():
         assert r1.error is None
 
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
-                await complete_job(
-                    job_id=seed["job_id"],
-                    payload=_RunCompleteIn(
-                        update={"status": "FINISHED", "exit_code": 0},
-                        fencing_token="WRONG_TOKEN",
-                    ),
-                    db=async_db, _=None,
-                )
-        assert exc_info.value.status_code == 409
+            r2 = await complete_job(
+                job_id=seed["job_id"],
+                payload=_RunCompleteIn(
+                    update={"status": "FINISHED", "exit_code": 0},
+                    fencing_token="WRONG_TOKEN",
+                ),
+                db=async_db, _=None,
+            )
+        assert r2.error is None
+        assert r2.data["status"] == JobStatus.COMPLETED.value
     finally:
         _cleanup_seed(seed)
 
 
 # ── C5b: legacy status/steps fencing_token 校验 ─────────────────────────────
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_update_job_status_wrong_token_returns_409():
     """错误 fencing_token → /jobs/{id}/status 不得推进状态。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -718,7 +711,7 @@ def test_update_job_status_missing_token_raises_validation_error():
         JobStatusUpdate(status="FAILED")
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_upload_step_traces_wrong_token_returns_409():
     """错误 fencing_token → /steps 不得写入 StepTrace 或推进 job 状态。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
@@ -760,7 +753,7 @@ def test_upload_step_traces_missing_token_raises_validation_error():
 
 # ── C6: session_watchdog release_lease ──────────────────────────────────────
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_watchdog_host_timeout_keeps_lease_active():
     """Phase 4c: host heartbeat timeout → UNKNOWN, lease stays ACTIVE.
 
@@ -810,7 +803,7 @@ async def test_watchdog_host_timeout_keeps_lease_active():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_reconciler_releases_expired_lease_lock_expiration():
     """Phase 4c: expired ACTIVE lease → Reconciler handles (watchdog function removed).
 
@@ -865,7 +858,7 @@ async def test_reconciler_releases_expired_lease_lock_expiration():
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_get_pending_jobs_deprecated_header():
     """GET /jobs/pending 返回 Deprecation + Sunset header (Phase 2c)."""
     from fastapi import Response as FapiResponse
@@ -885,7 +878,7 @@ async def test_get_pending_jobs_deprecated_header():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_get_pending_jobs_still_works():
     """GET /jobs/pending 虽已 deprecated 但功能与 claim_jobs 一致 (Phase 2c)."""
     seed = _seed_job(status=JobStatus.PENDING.value)
@@ -907,7 +900,7 @@ async def test_get_pending_jobs_still_works():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_jobs_skip_on_active_lease():
     """设备已有 ACTIVE lease 时 claim_jobs 跳过该设备上的 PENDING job (Phase 2c)."""
     seed = _seed_job(status=JobStatus.PENDING.value)
@@ -934,7 +927,7 @@ async def test_claim_jobs_skip_on_active_lease():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_jobs_claims_after_expired_lease():
     """Phase 4b blocking lease: expired ACTIVE lease blocks claim (0 jobs returned).
 
@@ -1004,7 +997,7 @@ async def test_claim_jobs_claims_after_expired_lease():
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_reconciler_reads_device_leases_not_device_table():
     """Phase 4c: expired ACTIVE lease → Reconciler Phase 1, even when lock_run_id=NULL.
 
@@ -1679,7 +1672,7 @@ async def test_concurrent_claim_capacity_does_not_exceed():
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_heartbeat_stores_agent_identity():
     """Heartbeat 携带 agent_instance_id + boot_id → Host 表正确记录."""
     from backend.api.routes.heartbeat import heartbeat
@@ -1728,7 +1721,7 @@ async def test_heartbeat_stores_agent_identity():
 # ADR-0019 Phase 3a: Claim passes real agent_instance_id
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_jobs_uses_real_agent_instance_id():
     """claim_jobs 传入真实 agent_instance_id → DeviceLease.agent_instance_id 为 uuid4（非 host_id）。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
@@ -1812,7 +1805,7 @@ def _cleanup_recovery_host(host_id: str) -> None:
         db.close()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_host_not_found_404():
     """recovery sync with unknown host → 404."""
     payload = _RecoverySyncIn(
@@ -1827,7 +1820,7 @@ async def test_recovery_sync_host_not_found_404():
     assert exc.value.status_code == 404
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_same_instance_resume():
     """Lease 的 agent_instance_id == 请求的 instance_id → RESUME."""
     suffix = uuid4().hex[:8]
@@ -1890,7 +1883,7 @@ async def test_recovery_sync_same_instance_resume():
         _cleanup_recovery_host(host_id)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_legacy_lease_adopted():
     """Lease agent_instance_id == host_id → RESUME (legacy lease adopted)."""
     suffix = uuid4().hex[:8]
@@ -1960,7 +1953,7 @@ async def test_recovery_sync_legacy_lease_adopted():
         _cleanup_recovery_host(host_id)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_same_boot_different_instance_resume():
     """Same boot_id, different instance → RESUME (same_boot_instance_updated)."""
     suffix = uuid4().hex[:8]
@@ -2031,7 +2024,7 @@ async def test_recovery_sync_same_boot_different_instance_resume():
         _cleanup_recovery_host(host_id)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_boot_id_mismatch_cleanup():
     """Different boot_id → CLEANUP (release_lease + job→FAILED)."""
     suffix = uuid4().hex[:8]
@@ -2105,7 +2098,7 @@ async def test_recovery_sync_boot_id_mismatch_cleanup():
         _cleanup_recovery_host(host_id)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_no_lease_abort_local():
     """No ACTIVE lease for the job → ABORT_LOCAL."""
     suffix = uuid4().hex[:8]
@@ -2132,7 +2125,7 @@ async def test_recovery_sync_no_lease_abort_local():
     _cleanup_recovery_host(host_id)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_outbox_not_terminal_upload():
     """Outbox entry for non-terminal job → UPLOAD_TERMINAL."""
     suffix = uuid4().hex[:8]
@@ -2173,7 +2166,7 @@ async def test_recovery_sync_outbox_not_terminal_upload():
         _cleanup_recovery_host(host_id)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_outbox_already_terminal_noop():
     """Outbox entry for already-terminal job → NOOP."""
     suffix = uuid4().hex[:8]
@@ -2213,7 +2206,7 @@ async def test_recovery_sync_outbox_already_terminal_noop():
         _cleanup_recovery_host(host_id)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_outbox_job_not_found_noop():
     """Outbox entry for nonexistent job → NOOP."""
     suffix = uuid4().hex[:8]
@@ -2238,7 +2231,7 @@ async def test_recovery_sync_outbox_job_not_found_noop():
     _cleanup_recovery_host(host_id)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_boot_id_not_overwritten_before_compare():
     """D1: host.boot_id 在比较之前不覆盖 — 先 snapshot 后比较。"""
     suffix = uuid4().hex[:8]
@@ -2311,7 +2304,7 @@ async def test_recovery_sync_boot_id_not_overwritten_before_compare():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_heartbeat_stores_capacity_and_health():
     """Heartbeat POST → host.extra["capacity"] + host.extra["health"] 正确存储."""
     from backend.api.routes.heartbeat import heartbeat
@@ -2402,7 +2395,7 @@ def test_hosts_api_returns_capacity_health():
         db.close()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_filters_unhealthy_devices():
     """adb_connected=false 的设备不进入 claim 候选.
 

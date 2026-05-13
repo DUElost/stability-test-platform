@@ -39,7 +39,7 @@ from backend.api.routes.agent_api import (
     complete_job,
     ingest_log_signals,
 )
-from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
+from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
@@ -92,6 +92,8 @@ def _seed_job_with_policy(
             status="ONLINE",
             tags=[],
             created_at=now,
+            adb_connected=True,
+            adb_state="device",
         )
         plan = Plan(
             name=f"plan-{suffix}",
@@ -213,12 +215,11 @@ def _setup_watcher_lease(seed: dict) -> str:
 # C1.1: claim 响应带 device_serial + watcher_policy
 # ----------------------------------------------------------------------
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_returns_device_serial_and_watcher_policy():
     """claim 成功时 JobOut 必须包含 device_serial + watcher_policy（取自 Plan）。"""
     seed = _seed_job_with_policy(watcher_policy=DEFAULT_WATCHER_POLICY)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
                 payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
@@ -241,12 +242,11 @@ async def test_claim_returns_device_serial_and_watcher_policy():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_claim_returns_null_watcher_policy_when_plan_has_none():
     """Plan.watcher_policy 为空时 claim 响应 watcher_policy=None（不中断业务）。"""
     seed = _seed_job_with_policy(watcher_policy=None)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
                 payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
@@ -266,7 +266,7 @@ async def test_claim_returns_null_watcher_policy_when_plan_has_none():
 # C1.2: complete 接受 watcher_summary 并回填 watcher_* 列
 # ----------------------------------------------------------------------
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_with_watcher_summary_persists_fields():
     """Agent 上报 watcher_summary 时，JobInstance.watcher_* 列全部写入。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
@@ -280,7 +280,6 @@ async def test_complete_with_watcher_summary_persists_fields():
     }
     token = _setup_watcher_lease(seed)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await complete_job(
                 job_id=seed["job_id"],
@@ -311,13 +310,12 @@ async def test_complete_with_watcher_summary_persists_fields():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_without_watcher_summary_keeps_columns_null():
     """未启用 watcher 的旧 Agent 上报不带 summary → watcher_* 列保持 None。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
     token = _setup_watcher_lease(seed)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await complete_job(
                 job_id=seed["job_id"],
@@ -365,13 +363,12 @@ def _make_signal(job_id: int, device_serial: str, host_id: str, seq_no: int, **o
     return LogSignalIn(**base)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_log_signals_inserts_unique_per_seq_no():
     """同 (job_id, seq_no) 重复上送只入库一次（ON CONFLICT DO NOTHING）。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
     sig1 = _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=1)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             r1 = await ingest_log_signals(
                 payload=LogSignalBatchIn(signals=[sig1]),
@@ -386,7 +383,6 @@ async def test_log_signals_inserts_unique_per_seq_no():
             seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=1,
             path_on_device="/data/anr/should_be_ignored",
         )
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             r2 = await ingest_log_signals(
                 payload=LogSignalBatchIn(signals=[sig1_dup]),
@@ -409,7 +405,7 @@ async def test_log_signals_inserts_unique_per_seq_no():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_log_signals_increments_log_signal_count():
     """批量 3 条不同 seq_no → job_instance.log_signal_count += 3。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
@@ -418,7 +414,6 @@ async def test_log_signals_increments_log_signal_count():
         for i in range(1, 4)
     ]
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await ingest_log_signals(
                 payload=LogSignalBatchIn(signals=signals),
@@ -441,7 +436,6 @@ async def test_log_signals_increments_log_signal_count():
             _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=2),
             _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=4),
         ]
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             r2 = await ingest_log_signals(
                 payload=LogSignalBatchIn(signals=extra),
@@ -460,7 +454,7 @@ async def test_log_signals_increments_log_signal_count():
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatch):
     """ADR-0021 C5c — 每条新入库 signal → broadcast_watcher_signal 一次,
     并附带正确的 plan_run_id / job_id / device_serial / category。
@@ -490,7 +484,6 @@ async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatc
         _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=11, category="ANR"),
     ]
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             r1 = await ingest_log_signals(
                 payload=LogSignalBatchIn(signals=signals),
@@ -513,7 +506,6 @@ async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatc
             seed["job_id"], seed["device_serial"], seed["host_id"],
             seq_no=10, category="AEE",
         )
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             r2 = await ingest_log_signals(
                 payload=LogSignalBatchIn(signals=[dup]),
@@ -526,7 +518,7 @@ async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatc
         _cleanup_seed(seed)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="module")
 async def test_log_signals_contract_violation_returns_400():
     """非法 category → 契约校验直接 400，整批不入库。"""
     from fastapi import HTTPException
@@ -537,7 +529,6 @@ async def test_log_signals_contract_violation_returns_400():
         category="INVALID_CATEGORY",
     )
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as excinfo:
                 await ingest_log_signals(
