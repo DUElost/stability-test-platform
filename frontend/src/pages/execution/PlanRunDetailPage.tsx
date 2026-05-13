@@ -14,9 +14,9 @@ import type {
   EventStage,
   PlanRunStatus,
 } from '@/utils/api/types';
-import PlanRunTopbar from '@/components/plan-run/PlanRunTopbar';
-import PlanChainBreadcrumb from '@/components/plan-run/PlanChainBreadcrumb';
+import PlanRunHero, { type PlanRunHeroSummaryStats } from '@/components/plan-run/PlanRunHero';
 import BusinessFlowTimeline from '@/components/plan-run/BusinessFlowTimeline';
+import DeviceMinimap from '@/components/plan-run/DeviceMinimap';
 import DeviceMatrixCard from '@/components/plan-run/DeviceMatrixCard';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import WatcherSummaryCard from '@/components/plan-run/WatcherSummaryCard';
@@ -58,13 +58,6 @@ export default function PlanRunDetailPage() {
   const isTerminal = !!runQ.data && TERMINAL.includes(runQ.data.status);
   const refetchInterval = isTerminal ? false : FAST_REFETCH_MS;
 
-  const chainQ = useQuery({
-    queryKey: ['plan-run-chain', id],
-    queryFn: () => api.planRuns.getChain(id),
-    enabled: !!id,
-    refetchInterval: isTerminal ? false : SLOW_REFETCH_MS,
-  });
-
   const timelineQ = useQuery({
     queryKey: ['plan-run-timeline', id],
     queryFn: () => api.planRuns.getTimeline(id),
@@ -99,28 +92,31 @@ export default function PlanRunDetailPage() {
     queryKey: ['plan-run-watcher', id, watcherWindow],
     queryFn: () => api.planRuns.getWatcherSummary(id, watcherWindow),
     enabled: !!id,
-    // Watcher window summaries are heavier — refresh half as often as the
-    // device matrix.  watcher_signal SocketIO events still trigger immediate
-    // invalidation below so we don't lose responsiveness.
     refetchInterval: isTerminal ? false : SLOW_REFETCH_MS,
   });
 
+  // ── Derive hero summary stats ──
+  const heroSummary = useMemo((): PlanRunHeroSummaryStats => {
+    const devicesData = devicesQ.data;
+    const timelineData = timelineQ.data;
+    return {
+      hostCount: Object.keys(devicesData?.by_host ?? {}).length || undefined,
+      deviceCount: devicesData?.total,
+      currentStage: timelineData?.current_stage ?? null,
+      patrolCycle: timelineData?.stages?.find((s) => s.stage === 'patrol')?.patrol_cycle_index ?? null,
+    };
+  }, [devicesQ.data, timelineQ.data]);
+
   // ── SocketIO event-driven invalidation ──
-  // We deliberately do NOT mutate cached payloads inline — every push is
-  // treated as an invalidation hint, and the next refetch resolves authoritative
-  // state.  This matches the documented contract of the dashboard namespace.
   const onSocketMessage = useCallback(
     (msg: SocketIOMessage<unknown>) => {
       if (!id) return;
       if (msg.type === 'JOB_STATUS') {
-        // A single device's status changed; refresh the per-device matrix +
-        // timeline aggregations.  Keep the chain query alone to avoid noise.
         qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
       } else if (msg.type === 'PLAN_RUN_STATUS') {
         qc.invalidateQueries({ queryKey: ['plan-run', id] });
-        qc.invalidateQueries({ queryKey: ['plan-run-chain', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
       } else if (msg.type === 'WATCHER_SIGNAL') {
@@ -176,12 +172,13 @@ export default function PlanRunDetailPage() {
     },
   });
 
-  // ── Loading + error states ──
+  // ── Plan name ──
   const planName = useMemo(
     () => timelineQ.data?.plan_name ?? null,
     [timelineQ.data?.plan_name],
   );
 
+  // ── Error / invalid states ──
   if (!id || Number.isNaN(id)) {
     return (
       <div className="flex h-64 items-center justify-center text-sm text-gray-500">
@@ -225,11 +222,11 @@ export default function PlanRunDetailPage() {
         </Button>
       </div>
 
-      {/* Topbar */}
+      {/* Hero / summary card */}
       {runQ.isLoading ? (
-        <Skeleton className="h-12 w-full rounded-xl" />
+        <Skeleton className="h-20 w-full rounded-xl" />
       ) : (
-        <PlanRunTopbar
+        <PlanRunHero
           run={runQ.data}
           planName={planName}
           isAborting={abortMut.isPending}
@@ -237,16 +234,19 @@ export default function PlanRunDetailPage() {
           onExportReport={() =>
             toast.info('导出报告 — 功能开发中')
           }
+          summary={heroSummary}
         />
       )}
 
-      {/* Plan chain */}
-      <PlanChainBreadcrumb
-        chain={chainQ.data}
-        isLoading={chainQ.isLoading}
-        onNavigateRun={(runIdToOpen) =>
-          navigate(`/execution/plan-runs/${runIdToOpen}`)
-        }
+      {/* Device minimap (replaces Plan chain) */}
+      <DeviceMinimap
+        data={devicesQ.data}
+        isLoading={devicesQ.isLoading}
+        statusFilter={deviceStatusFilter}
+        hostFilter={deviceHostFilter}
+        onStatusFilterChange={setDeviceStatusFilter}
+        onHostFilterChange={setDeviceHostFilter}
+        onSelectDevice={setSelectedDevice}
       />
 
       {/* Business flow timeline */}
@@ -262,7 +262,7 @@ export default function PlanRunDetailPage() {
         dispatchState={dispatchState}
       />
 
-      {/* Device matrix */}
+      {/* Device table */}
       <DeviceMatrixCard
         data={devicesQ.data}
         isLoading={devicesQ.isLoading}

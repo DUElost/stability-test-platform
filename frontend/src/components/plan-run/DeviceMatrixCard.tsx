@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import {
   Filter,
   CheckCircle2,
@@ -19,7 +19,6 @@ import type {
 interface Props {
   data: PlanRunDevicesPayload | undefined;
   isLoading?: boolean;
-  /** Filter values are lifted up so the parent can sync URL params later. */
   statusFilter?: DeviceUiStatus | 'all';
   hostFilter?: string | 'all';
   onStatusFilterChange?: (s: DeviceUiStatus | 'all') => void;
@@ -71,8 +70,6 @@ export default function DeviceMatrixCard({
   onHostFilterChange,
   onSelectDevice,
 }: Props) {
-  const [view, setView] = useState<'grid' | 'table'>('table');
-
   const total = data?.total ?? 0;
   const devices = data?.devices ?? [];
   const byStatus = data?.by_status ?? { all: 0 };
@@ -93,28 +90,6 @@ export default function DeviceMatrixCard({
         <span className="text-[11px] text-gray-500">
           {total} 设备 · {hosts.length} Host
         </span>
-        <div className="ml-auto flex items-center gap-1 rounded-md border bg-white p-0.5 text-[11px]">
-          <button
-            type="button"
-            data-testid="device-view-table"
-            onClick={() => setView('table')}
-            className={`rounded px-2 py-0.5 ${
-              view === 'table' ? 'bg-blue-100 text-blue-700' : 'text-gray-500'
-            }`}
-          >
-            表格
-          </button>
-          <button
-            type="button"
-            data-testid="device-view-grid"
-            onClick={() => setView('grid')}
-            className={`rounded px-2 py-0.5 ${
-              view === 'grid' ? 'bg-blue-100 text-blue-700' : 'text-gray-500'
-            }`}
-          >
-            缩略图
-          </button>
-        </div>
       </div>
 
       <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
@@ -165,7 +140,7 @@ export default function DeviceMatrixCard({
           )}
         </div>
 
-        {/* Body */}
+        {/* Table body */}
         {isLoading && devices.length === 0 ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-8 w-full" />
@@ -177,10 +152,8 @@ export default function DeviceMatrixCard({
             <Activity className="mx-auto mb-2 h-5 w-5 opacity-30" />
             该过滤条件下暂无设备
           </div>
-        ) : view === 'table' ? (
-          <DeviceTable devices={devices} onSelect={onSelectDevice} />
         ) : (
-          <DeviceGrid devices={devices} onSelect={onSelectDevice} />
+          <DeviceTable devices={devices} onSelect={onSelectDevice} />
         )}
       </div>
     </section>
@@ -286,70 +259,6 @@ function DeviceTable({
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-// ── Grid (mini-map) view ──────────────────────────────────────────────────
-
-// ── Minimap (缩略图) — prototype v8 design ─────────────────────────────
-
-const MINIMAP_CELL_CLS: Record<DeviceUiStatus, string> = {
-  completed:
-    'bg-green-400/90 hover:bg-green-500',
-  running:
-    'bg-orange-500 bg-[linear-gradient(45deg,rgba(255,255,255,.35)_25%,transparent_25%,transparent_50%,rgba(255,255,255,.35)_50%,rgba(255,255,255,.35)_75%,transparent_75%)] bg-[length:8px_8px] [animation:dev-stripe_1s_linear_infinite]',
-  failed:
-    'bg-red-500/90 hover:bg-red-600',
-  risk:
-    'bg-amber-400/90 hover:bg-amber-500',
-  backoff:
-    'bg-purple-400/80 hover:bg-purple-500',
-  pending:
-    'bg-gray-300 hover:bg-gray-400',
-};
-
-const CELL_LABEL: Record<DeviceUiStatus, string> = {
-  running: '运行中',
-  completed: '完成',
-  failed: '失败',
-  risk: '风险',
-  backoff: '退避',
-  pending: '等待',
-};
-
-function DeviceGrid({
-  devices,
-  onSelect,
-}: {
-  devices: DeviceMatrixItem[];
-  onSelect?: (d: DeviceMatrixItem) => void;
-}) {
-  return (
-    <div className="p-3">
-      <style>{`
-        @keyframes dev-stripe {
-          from { background-position: 0 0; }
-          to   { background-position: 8px 0; }
-        }
-      `}</style>
-      <div className="grid gap-1.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(24px, 1fr))' }}>
-        {devices.map((d) => {
-          const cellCls = MINIMAP_CELL_CLS[d.ui_status] ?? 'bg-gray-300';
-          const label = CELL_LABEL[d.ui_status] ?? d.ui_status;
-          const serial = d.device_serial || `D${d.device_id}`;
-          return (
-            <button
-              key={d.job_id}
-              type="button"
-              data-testid={`device-cell-${d.job_id}`}
-              onClick={() => onSelect?.(d)}
-              title={`${serial} · ${label}${d.host_id ? ` · ${d.host_id}` : ''}`}
-              className={`relative aspect-square w-full rounded-sm ring-1 ring-inset ring-black/10 transition-all hover:z-10 hover:scale-125 hover:shadow-lg hover:ring-2 hover:ring-blue-500 ${cellCls}`}
-            />
-          );
-        })}
-      </div>
     </div>
   );
 }

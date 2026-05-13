@@ -111,14 +111,6 @@ describe('DeviceMatrixCard', () => {
     expect(screen.getByTestId('device-status-filter-backoff')).toHaveTextContent('1');
   });
 
-  it('switches to grid view and back', () => {
-    render(<DeviceMatrixCard data={fixture} />);
-    fireEvent.click(screen.getByTestId('device-view-grid'));
-    expect(screen.getByTestId('device-cell-3001')).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('device-view-table'));
-    expect(screen.getByTestId('device-row-3001')).toBeInTheDocument();
-  });
-
   it('forwards filter changes to parent', () => {
     const onStatus = vi.fn();
     const onHost = vi.fn();

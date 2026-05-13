@@ -7,7 +7,6 @@ import { ToastProvider } from '@/components/ui/toast';
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   getRun: vi.fn(),
-  getChain: vi.fn(),
   getTimeline: vi.fn(),
   getEvents: vi.fn(),
   getDevices: vi.fn(),
@@ -31,7 +30,6 @@ vi.mock('@/utils/api', () => ({
   api: {
     planRuns: {
       get: mocks.getRun,
-      getChain: mocks.getChain,
       getTimeline: mocks.getTimeline,
       getEvents: mocks.getEvents,
       getDevices: mocks.getDevices,
@@ -125,22 +123,6 @@ beforeEach(() => {
         errors: [],
       },
     },
-  });
-  mocks.getChain.mockResolvedValue({
-    plan_run_id: 12,
-    root_plan_run_id: 12,
-    nodes: [
-      {
-        plan_id: 7,
-        plan_name: '24h 烧机',
-        plan_run_id: 12,
-        status: 'RUNNING',
-        chain_index: 0,
-        failure_threshold: 0.05,
-        is_current: true,
-        is_blocked: false,
-      },
-    ],
   });
   mocks.getTimeline.mockResolvedValue({
     plan_run_id: 12,
@@ -308,27 +290,23 @@ beforeEach(() => {
 });
 
 describe('PlanRunDetailPage', () => {
-  it('renders Topbar / PlanChain / DispatchGate / Timeline / DeviceMatrix / Watcher', async () => {
+  it('renders Hero / Minimap / Timeline / DeviceTable / Watcher', async () => {
     renderPage();
     await waitFor(() =>
       expect(screen.getByTestId('plan-run-status-pill')).toHaveTextContent('RUNNING'),
     );
-    expect(screen.getByTestId('chain-node-7')).toHaveTextContent('24h 烧机');
-    expect(screen.getByTestId('dispatch-gate-card')).toHaveTextContent(
-      '同步漂移主机',
-    );
-    expect(screen.getByTestId('dispatch-gate-host-host-202')).toHaveTextContent(
-      '同步中',
-    );
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('健康预检');
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-202');
     expect(screen.getByTestId('business-flow-timeline')).toBeInTheDocument();
     expect(await screen.findByTestId('device-matrix')).toBeInTheDocument();
+    expect(await screen.findByTestId('device-minimap')).toBeInTheDocument();
     expect(await screen.findByTestId('watcher-summary')).toBeInTheDocument();
     // BACKOFF row visible with red failure streak
     expect(await screen.findByTestId('device-row-3002')).toHaveTextContent('退避');
     // Threshold banner since exceeded=true
     expect(await screen.findByTestId('watcher-threshold-banner')).toBeInTheDocument();
     expect(screen.getByTestId('business-flow-timeline')).toHaveTextContent(
-      '共 3 条状态/关键事件',
+      '共 3 条',
     );
     expect(screen.getByTestId('event-list')).toHaveTextContent(
       'PATROL 进行中 · 周期 #12',
@@ -376,7 +354,6 @@ describe('PlanRunDetailPage', () => {
     mocks.getEvents.mockClear();
     mocks.getWatcherSummary.mockClear();
     mocks.getRun.mockClear();
-    mocks.getChain.mockClear();
 
     // Push a JOB_STATUS event — devices/timeline/events should refetch, but
     // watcher should not (only WATCHER_SIGNAL invalidates watcher).
@@ -401,9 +378,8 @@ describe('PlanRunDetailPage', () => {
     expect(mocks.getEvents).toHaveBeenCalled();
     expect(mocks.getDevices).not.toHaveBeenCalled();
 
-    // Reset and push PLAN_RUN_STATUS — should refetch run + chain + timeline + devices.
+    // Reset and push PLAN_RUN_STATUS — should refetch run + timeline + devices.
     mocks.getRun.mockClear();
-    mocks.getChain.mockClear();
     mocks.getTimeline.mockClear();
     mocks.getDevices.mockClear();
     mocks.socketCallback.current!({
@@ -411,7 +387,6 @@ describe('PlanRunDetailPage', () => {
       payload: { status: 'SUCCESS' },
     });
     await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
-    expect(mocks.getChain).toHaveBeenCalled();
     expect(mocks.getTimeline).toHaveBeenCalled();
     expect(mocks.getDevices).toHaveBeenCalled();
   });
@@ -430,12 +405,12 @@ describe('PlanRunDetailPage', () => {
     });
     renderPage();
     await waitFor(() => screen.getByTestId('plan-run-status-pill'));
-    expect(screen.queryByTestId('dispatch-gate-card')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
     // Topbar should NOT render the abort button on terminal runs.
     expect(screen.queryByTestId('plan-run-abort-btn')).not.toBeInTheDocument();
   });
 
-  it('keeps a compact dispatch summary visible for active runs after precheck ready', async () => {
+  it('keeps precheck summary visible for active runs after precheck ready', async () => {
     mocks.getRun.mockResolvedValueOnce({
       id: 12,
       plan_id: 7,
@@ -476,11 +451,8 @@ describe('PlanRunDetailPage', () => {
     renderPage();
 
     await waitFor(() => screen.getByTestId('plan-run-status-pill'));
-    expect(screen.getByTestId('dispatch-gate-card')).toBeInTheDocument();
-    expect(screen.getByTestId('dispatch-gate-card')).toHaveTextContent('派发摘要');
-    expect(screen.getByTestId('dispatch-gate-card')).toHaveTextContent('completed');
-    expect(screen.getByTestId('dispatch-gate-card')).toHaveTextContent('门禁通过');
-    expect(screen.queryByTestId('dispatch-gate-host-host-101')).not.toBeInTheDocument();
+    expect(screen.getByTestId('precheck-row')).toBeInTheDocument();
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('通过');
   });
 
   it('keeps host details visible while dispatch is still running after precheck ready', async () => {
@@ -495,20 +467,20 @@ describe('PlanRunDetailPage', () => {
       ended_at: null,
       run_context: {
         precheck: {
-          phase: 'ready',
+          phase: 'syncing',
           started_at: '2026-05-08T11:00:05Z',
-          completed_at: '2026-05-08T11:01:00Z',
+          completed_at: null,
           hosts: {
             'host-101': {
-              status: 'ok',
+              status: 'syncing',
               checked_at: '2026-05-08T11:00:10Z',
               synced_at: null,
               scripts: [],
-              sync_attempts: 0,
+              sync_attempts: 1,
               error: null,
             },
           },
-          final_result: 'passed',
+          final_result: null,
           errors: [],
         },
         dispatch_state: {
@@ -524,9 +496,8 @@ describe('PlanRunDetailPage', () => {
     renderPage();
 
     await waitFor(() => screen.getByTestId('plan-run-status-pill'));
-    expect(screen.getByTestId('dispatch-gate-card')).toBeInTheDocument();
-    expect(screen.getByTestId('dispatch-gate-host-host-101')).toBeInTheDocument();
-    expect(screen.getByTestId('dispatch-gate-card')).not.toHaveTextContent('派发完成');
-    expect(screen.queryByText('门禁通过，活跃 run 保留摘要态展示')).not.toBeInTheDocument();
+    expect(screen.getByTestId('precheck-row')).toBeInTheDocument();
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('同步中');
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-101');
   });
 });
