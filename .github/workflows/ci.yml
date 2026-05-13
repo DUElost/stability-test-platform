@@ -37,6 +37,9 @@ jobs:
         run: pip install -r backend/requirements.txt
       - name: Compile check
         run: python -m compileall backend/ -q
+      - name: Apply database migrations
+        working-directory: backend
+        run: alembic upgrade head
       - name: Run tests
         run: pytest backend/tests/ -v
 
