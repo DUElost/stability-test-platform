@@ -188,7 +188,6 @@ async def test_claim_jobs_writes_lock_and_lease():
     """claim_jobs 成功后只写 device_leases（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
                 payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
@@ -428,7 +427,6 @@ async def test_claim_jobs_response_includes_fencing_token():
     """claim_jobs 响应中每个 JobOut 均包含必填 fencing_token 字段。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
                 payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
