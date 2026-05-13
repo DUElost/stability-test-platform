@@ -49,7 +49,7 @@ from backend.api.routes.agent_api import (
     update_job_status,
     upload_step_traces,
 )
-from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
+from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.host import Device, Host
@@ -229,7 +229,6 @@ async def test_get_pending_jobs_writes_lock_and_lease():
     """get_pending_jobs 成功后只写 device_leases（Phase 6d：投影列已废止）。"""
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await get_pending_jobs(
                 host_id=seed["host_id"], limit=5,
@@ -290,7 +289,6 @@ async def test_extend_job_lock_renews_lease():
         finally:
             db.close()
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await extend_job_lock(
                 job_id=seed["job_id"],
@@ -334,7 +332,6 @@ async def test_complete_job_releases_lock_and_lease():
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await complete_job(
                 job_id=seed["job_id"],
@@ -373,7 +370,6 @@ async def test_complete_job_idempotent_no_release_lease_miss_warning(caplog):
     token = f"{seed['device_id']}:1"
     try:
         # 第一次 complete
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result1 = await complete_job(
                 job_id=seed["job_id"],
@@ -385,7 +381,6 @@ async def test_complete_job_idempotent_no_release_lease_miss_warning(caplog):
 
         # 第二次 complete（幂等重放）—— 需要重建 session
         caplog.set_level(logging.DEBUG, logger="backend.api.routes.agent_api")
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result2 = await complete_job(
                 job_id=seed["job_id"],
@@ -450,7 +445,6 @@ async def test_heartbeat_valid_token_returns_200():
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await job_heartbeat(
                 job_id=seed["job_id"],
@@ -469,7 +463,6 @@ async def test_heartbeat_wrong_token_returns_409():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
                 await job_heartbeat(
@@ -496,7 +489,6 @@ async def test_heartbeat_no_active_lease_returns_409():
     """无 ACTIVE lease 时 heartbeat 直接 409。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
                 await job_heartbeat(
@@ -518,7 +510,6 @@ async def test_extend_lock_valid_token_returns_200():
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await extend_job_lock(
                 job_id=seed["job_id"],
@@ -538,7 +529,6 @@ async def test_extend_lock_wrong_token_returns_409():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
                 await extend_job_lock(
@@ -564,7 +554,6 @@ async def test_extend_lock_no_active_lease_returns_409():
     """无 ACTIVE lease 时 extend_job_lock 直接 409。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
                 await extend_job_lock(
@@ -586,7 +575,6 @@ async def test_complete_job_valid_token_returns_200():
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await complete_job(
                 job_id=seed["job_id"],
@@ -608,7 +596,6 @@ async def test_complete_job_wrong_token_returns_409():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
                 await complete_job(
@@ -641,7 +628,6 @@ async def test_complete_job_idempotent_replay_same_token_returns_200():
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             r1 = await complete_job(
                 job_id=seed["job_id"],
@@ -654,7 +640,6 @@ async def test_complete_job_idempotent_replay_same_token_returns_200():
         assert r1.error is None
         assert r1.data["status"] == JobStatus.COMPLETED.value
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             r2 = await complete_job(
                 job_id=seed["job_id"],
@@ -677,7 +662,6 @@ async def test_complete_job_idempotent_replay_wrong_token_returns_409():
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             r1 = await complete_job(
                 job_id=seed["job_id"],
@@ -689,7 +673,6 @@ async def test_complete_job_idempotent_replay_wrong_token_returns_409():
             )
         assert r1.error is None
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
                 await complete_job(
@@ -713,7 +696,6 @@ async def test_update_job_status_wrong_token_returns_409():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
                 await update_job_status(
@@ -742,7 +724,6 @@ async def test_upload_step_traces_wrong_token_returns_409():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             with pytest.raises(HTTPException) as exc_info:
                 await upload_step_traces(
@@ -799,7 +780,6 @@ async def test_watchdog_host_timeout_keeps_lease_active():
         finally:
             db.close()
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             hosts_off, jobs_unknown = await _check_host_heartbeat_timeouts(async_db)
             await async_db.commit()
@@ -853,7 +833,6 @@ async def test_reconciler_releases_expired_lease_lock_expiration():
         finally:
             db.close()
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             unknown, failed, terminal = await _reconcile_expired_leases(async_db)
             await async_db.commit()
@@ -893,7 +872,6 @@ async def test_get_pending_jobs_deprecated_header():
 
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
-        await async_engine.dispose()
         r = FapiResponse()
         async with AsyncSessionLocal() as async_db:
             result = await get_pending_jobs(
@@ -912,7 +890,6 @@ async def test_get_pending_jobs_still_works():
     """GET /jobs/pending 虽已 deprecated 但功能与 claim_jobs 一致 (Phase 2c)."""
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await get_pending_jobs(
                 host_id=seed["host_id"], limit=5,
@@ -936,7 +913,6 @@ async def test_claim_jobs_skip_on_active_lease():
     seed = _seed_job(status=JobStatus.PENDING.value)
     _setup_lock_and_lease(seed)
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
                 payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
@@ -998,7 +974,6 @@ async def test_claim_jobs_claims_after_expired_lease():
         db.close()
 
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
                 payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
@@ -1064,7 +1039,6 @@ async def test_reconciler_reads_device_leases_not_device_table():
         db.close()
 
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             unknown, failed, terminal = await _reconcile_expired_leases(async_db)
             await async_db.commit()
@@ -1185,7 +1159,6 @@ async def test_skip_locked_skips_manually_locked_job():
     }
 
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as db_a:
             async with db_a.begin():
                 locked = (await db_a.execute(
@@ -1285,7 +1258,6 @@ async def test_active_lease_excludes_device(lease_type):
         db.close()
 
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             claimed, _ = await _claim_jobs_for_host(
                 async_db, host_id, capacity=10,
@@ -1373,7 +1345,6 @@ async def test_capacity_capped_by_max_concurrent_jobs():
         db.close()
 
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             claimed, _ = await _claim_jobs_for_host(
                 async_db, host_id, capacity=10,
@@ -1455,7 +1426,6 @@ async def test_zero_capacity_returns_empty_no_state_change():
         db.close()
 
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             claimed, _ = await _claim_jobs_for_host(
                 async_db, host_id, capacity=10,
@@ -1511,7 +1481,6 @@ async def test_expired_active_lease_allows_claim():
         db.close()
 
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             claimed, _ = await _claim_jobs_for_host(
                 async_db, seed["host_id"], capacity=10,
@@ -1589,7 +1558,6 @@ async def test_per_device_first_does_not_waste_capacity():
         db.close()
 
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             claimed, _ = await _claim_jobs_for_host(
                 async_db, host_id, capacity=2,
@@ -1678,7 +1646,6 @@ async def test_concurrent_claim_capacity_does_not_exceed():
                 )
                 results.append(claimed)
 
-        await async_engine.dispose()
         tasks = [_claim(AsyncSessionLocal()), _claim(AsyncSessionLocal())]
         await asyncio.gather(*tasks)
 
@@ -1767,7 +1734,6 @@ async def test_claim_jobs_uses_real_agent_instance_id():
     seed = _seed_job(status=JobStatus.PENDING.value)
     real_instance_id = uuid4().hex
     try:
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
                 payload=ClaimRequest(
@@ -1910,7 +1876,6 @@ async def test_recovery_sync_same_instance_resume():
             )],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -1970,7 +1935,6 @@ async def test_recovery_sync_legacy_lease_adopted():
             )],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -2042,7 +2006,6 @@ async def test_recovery_sync_same_boot_different_instance_resume():
             )],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -2113,7 +2076,6 @@ async def test_recovery_sync_boot_id_mismatch_cleanup():
             )],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -2159,7 +2121,6 @@ async def test_recovery_sync_no_lease_abort_local():
         )],
     )
 
-    await async_engine.dispose()
     async with AsyncSessionLocal() as async_db:
         result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -2199,7 +2160,6 @@ async def test_recovery_sync_outbox_not_terminal_upload():
             pending_outbox=[_OutboxEntry(job_id=seed["job_id"], event_type="RUN_COMPLETED")],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -2240,7 +2200,6 @@ async def test_recovery_sync_outbox_already_terminal_noop():
             pending_outbox=[_OutboxEntry(job_id=seed["job_id"])],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -2268,7 +2227,6 @@ async def test_recovery_sync_outbox_job_not_found_noop():
         pending_outbox=[_OutboxEntry(job_id=99999)],
     )
 
-    await async_engine.dispose()
     async with AsyncSessionLocal() as async_db:
         result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -2326,7 +2284,6 @@ async def test_recovery_sync_boot_id_not_overwritten_before_compare():
             )],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
 
@@ -2490,8 +2447,7 @@ async def test_claim_filters_unhealthy_devices():
         db_sync.commit()
 
         try:
-            await async_engine.dispose()
-            async with AsyncSessionLocal() as async_db:
+                async with AsyncSessionLocal() as async_db:
                 claimed, _ = await _claim_jobs_for_host(async_db, host_id, capacity=5)
 
             claimed_device_ids = {j.device_id for j in claimed}
@@ -2583,7 +2539,6 @@ async def test_watchdog_does_not_release_grace_held_lease():
         finally:
             db.close()
 
-        await async_engine.dispose()
         await session_watchdog_once()
 
         db2 = SessionLocal()
@@ -2626,7 +2581,6 @@ async def test_heartbeat_blocking_lease_reduces_available_slots():
             db.close()
 
         # 1. Heartbeat view: expired ACTIVE lease is counted
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             active_count = (await async_db.execute(
                 select(func.count()).select_from(DeviceLease).where(
@@ -2638,7 +2592,6 @@ async def test_heartbeat_blocking_lease_reduces_available_slots():
             assert active_count == 1, f"Expired ACTIVE lease must be counted; got {active_count}"
 
         # 2. Claim: blocking lease prevents claim
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             claimed, tokens = await _claim_jobs_for_host(async_db, seed["host_id"], capacity=10)
             assert len(claimed) == 0, (
@@ -2701,7 +2654,6 @@ async def test_recovery_sync_unknown_within_grace_resumes():
             )],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
             await async_db.commit()
@@ -2779,7 +2731,6 @@ async def test_recovery_sync_unknown_grace_expired_cleanup():
             )],
         )
 
-        await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await recovery_sync(payload, db=async_db, _=None)
             await async_db.commit()
