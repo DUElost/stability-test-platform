@@ -2447,7 +2447,7 @@ async def test_claim_filters_unhealthy_devices():
         db_sync.commit()
 
         try:
-                async with AsyncSessionLocal() as async_db:
+            async with AsyncSessionLocal() as async_db:
                 claimed, _ = await _claim_jobs_for_host(async_db, host_id, capacity=5)
 
             claimed_device_ids = {j.device_id for j in claimed}
