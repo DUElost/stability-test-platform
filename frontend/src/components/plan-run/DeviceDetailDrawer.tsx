@@ -112,6 +112,16 @@ export default function DeviceDetailDrawer({
             rows={[
               ['当前步骤', device.current_step || '—', true],
               ['Job 状态', device.job_status, false],
+              ...(device.status_reason
+                ? [[
+                    '状态原因',
+                    device.status_reason,
+                    false,
+                    device.ui_status === 'failed'
+                      ? 'text-red-600 font-semibold'
+                      : 'text-amber-700 font-semibold',
+                  ] as [string, string, boolean, string]]
+                : []),
               ['巡检周期', `#${device.patrol_cycle_count}`, false],
               ['周期成功 / 失败', `${device.patrol_success_cycle_count} / ${device.patrol_failed_cycle_count}`, false],
               ['连续失败连击', String(device.current_failure_streak), false],
@@ -226,16 +236,16 @@ export default function DeviceDetailDrawer({
   );
 }
 
-function KvList({ rows }: { rows: Array<[string, string, boolean]> }) {
+function KvList({ rows }: { rows: Array<[string, string, boolean, string?]> }) {
   return (
     <dl className="divide-y rounded-lg border">
-      {rows.map(([k, v, mono]) => (
+      {rows.map(([k, v, mono, extraCls]) => (
         <div key={k} className="flex items-start justify-between px-3 py-1.5 text-xs">
-          <dt className="text-gray-500">{k}</dt>
+          <dt className={`text-gray-500 ${extraCls || ''}`}>{k}</dt>
           <dd
             className={`max-w-[60%] text-right text-gray-900 ${
               mono ? 'font-mono' : ''
-            }`}
+            } ${extraCls || ''}`}
           >
             {v}
           </dd>

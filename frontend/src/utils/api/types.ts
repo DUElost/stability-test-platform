@@ -802,6 +802,8 @@ export interface DeviceMatrixItem {
   last_heartbeat_at?: string | null;
   started_at?: string | null;
   ended_at?: string | null;
+  /** Failure reason e.g. "pending_timeout: agent never claimed job" */
+  status_reason?: string | null;
 }
 
 export interface PlanRunDevicesPayload {

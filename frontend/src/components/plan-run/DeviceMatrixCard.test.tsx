@@ -71,6 +71,7 @@ const fixture: PlanRunDevicesPayload = {
       last_heartbeat_at: null,
       started_at: '2026-05-08T11:00:00Z',
       ended_at: '2026-05-08T11:30:00Z',
+      status_reason: 'patrol_step_failed: monkey_launch',
     },
     {
       device_id: 4,
@@ -151,5 +152,16 @@ describe('DeviceMatrixCard', () => {
       />,
     );
     expect(screen.getByText('该过滤条件下暂无设备')).toBeInTheDocument();
+  });
+
+  it('exposes status_reason as title tooltip on the status pill for failed devices', () => {
+    render(<DeviceMatrixCard data={fixture} />);
+    const failedRow = screen.getByTestId('device-row-3003');
+    // pill is the first <span> with the gradient/ring classes; assert title carries the full reason
+    const pill = failedRow.querySelector('span[title]') as HTMLElement | null;
+    expect(pill).not.toBeNull();
+    expect(pill!.getAttribute('title')).toBe('patrol_step_failed: monkey_launch');
+    // Inline truncated text should NOT be rendered (we moved reason to tooltip + drawer)
+    expect(failedRow).not.toHaveTextContent('patrol_step_failed: monkey_launch');
   });
 });

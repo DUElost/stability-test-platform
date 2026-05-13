@@ -820,6 +820,29 @@ class TestDevicesEndpoint:
         by_serial = {d["device_serial"]: d for d in resp.json()["data"]["devices"]}
         assert by_serial["dev-aa-02"]["ui_status"] == "backoff"
 
+    def test_devices_propagates_status_reason_from_failed_job(
+        self, client, auth_headers, chain_setup,
+    ):
+        """ADR-0021: DeviceMatrixItem 必须透传 JobInstance.status_reason，
+        前端据此在抽屉/tooltip 展示失败原因（pending_timeout、
+        patrol_step_failed 等）。"""
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        by_serial = {d["device_serial"]: d for d in resp.json()["data"]["devices"]}
+        # j3 (FAILED) — fixture sets status_reason="patrol_step_failed: monkey_launch"
+        failed = by_serial["dev-bb-01"]
+        assert failed["ui_status"] == "failed"
+        assert failed["status_reason"] == "patrol_step_failed: monkey_launch"
+        # j2 (RUNNING/risk) — fixture leaves status_reason unset
+        running = by_serial["dev-aa-02"]
+        assert running["status_reason"] is None
+        # j1 (COMPLETED) — likewise unset
+        completed = by_serial["dev-aa-01"]
+        assert completed["status_reason"] is None
+
 
 # ---------------------------------------------------------------------------
 # /watcher-summary

@@ -212,6 +212,7 @@ function DeviceTable({
                 <td className="px-2 py-2">
                   <span
                     className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${cfg.cls}`}
+                    title={d.status_reason || undefined}
                   >
                     <Icon
                       className={`h-3 w-3 ${
