@@ -382,6 +382,55 @@ async def test_complete_job_persists_run_complete_snapshot():
 
 
 @pytest.mark.asyncio
+async def test_complete_job_persists_error_message_to_status_reason():
+    """ADR-0021: Agent /complete 通过 update.error_message 上送的失败原因
+    必须落到 JobInstance.status_reason —— 这是前端 device matrix 抽屉/tooltip
+    展示 "状态原因" 的数据源。
+
+    端到端串联：pipeline_engine 生成 lifecycle_error → job_runner 写入
+    complete_payload['error_message'] → api_client._build_complete_payload 包成
+    {update: {error_message}} → agent_api.complete_job → JobStateMachine.transition
+    → state_machine.py: job.status_reason = reason。
+    """
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    reason = "lifecycle init failed: monkey_resource_push timeout"
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await complete_job(
+                job_id=seed["job_id"],
+                payload=_RunCompleteIn(
+                    update={
+                        "status": "FAILED",
+                        "exit_code": 1,
+                        "error_code": "PIPELINE_ERROR",
+                        "error_message": reason,
+                    },
+                    fencing_token=token,
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data["status"] == JobStatus.FAILED.value
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.FAILED.value
+            assert job.status_reason == reason, (
+                f"Expected status_reason={reason!r}, got {job.status_reason!r} — "
+                "Agent 失败原因没有透传到 DB，前端展示不出来"
+            )
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
 async def test_extend_lock_success(engine):
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)
