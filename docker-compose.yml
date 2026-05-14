@@ -35,6 +35,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
+    # Local secret source; generated from .env.server.example by tools/prepare_env.py
+    # or the start-backend launchers when missing.
     env_file: .env.server
     depends_on:
       postgres:

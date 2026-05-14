@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import Request
 from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.session import object_session
 
@@ -67,6 +68,74 @@ def record_audit(
         # 缺少 audit_logs 表时降级：仅记录告警，不阻塞主流程
         if object_session(entry) is db:
             db.expunge(entry)
+        logger.warning(
+            "audit_logs_missing_skip: %s %s/%s by %s",
+            action,
+            resource_type,
+            resource_id,
+            username or user_id or "anonymous",
+        )
+        return None
+
+    logger.info(
+        "audit: %s %s/%s by %s",
+        action,
+        resource_type,
+        resource_id,
+        username or user_id or "anonymous",
+    )
+    return entry
+
+
+async def record_audit_async(
+    db: AsyncSession,
+    *,
+    action: str,
+    resource_type: str,
+    resource_id: Optional[Any] = None,
+    details: Optional[Dict[str, Any]] = None,
+    user_id: Optional[int] = None,
+    username: Optional[str] = None,
+    request: Optional[Request] = None,
+) -> Optional[AuditLog]:
+    """Record an audit entry for routes backed by AsyncSession."""
+    ip_address = None
+    if request:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            ip_address = forwarded.split(",")[0].strip()
+        elif request.client:
+            ip_address = request.client.host
+
+    resource_id_str = None if resource_id is None else str(resource_id)
+    entry = AuditLog(
+        user_id=user_id,
+        username=username,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id_str,
+        details=details or {},
+        ip_address=ip_address,
+    )
+    try:
+        async with db.begin_nested():
+            db.add(entry)
+            await db.flush()
+    except (ProgrammingError, OperationalError) as exc:
+        message = str(exc)
+        is_missing_audit_table = (
+            "audit_logs" in message
+            and (
+                "does not exist" in message.lower()
+                or "undefinedtable" in message.lower()
+                or "不存在" in message
+            )
+        )
+        if not is_missing_audit_table:
+            raise
+
+        if object_session(entry) is db.sync_session:
+            db.sync_session.expunge(entry)
         logger.warning(
             "audit_logs_missing_skip: %s %s/%s by %s",
             action,

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.api.response import ApiResponse
+from backend.api.routes.auth import require_admin, User
+from backend.core.audit import record_audit_async
 from backend.core.database import get_async_db
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.services.resource_pool import get_pool_load_summary
@@ -54,6 +56,7 @@ class ResourcePoolLoad(BaseModel):
 async def list_pools(
     resource_type: Optional[str] = None,
     db: AsyncSession = Depends(get_async_db),
+    _current_user: User = Depends(require_admin),
 ):
     clauses = []
     if resource_type:
@@ -66,13 +69,20 @@ async def list_pools(
 
 
 @router.get("/loads")
-async def pool_loads(db: AsyncSession = Depends(get_async_db)):
+async def pool_loads(
+    db: AsyncSession = Depends(get_async_db),
+    _current_user: User = Depends(require_admin),
+):
     summary = await get_pool_load_summary(db)
     return ApiResponse(data=[ResourcePoolLoad(**s) for s in summary])
 
 
 @router.get("/{pool_id}")
-async def get_pool(pool_id: int, db: AsyncSession = Depends(get_async_db)):
+async def get_pool(
+    pool_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    _current_user: User = Depends(require_admin),
+):
     pool = await db.get(ResourcePool, pool_id)
     if not pool:
         raise HTTPException(status_code=404, detail="Resource pool not found")
@@ -80,7 +90,12 @@ async def get_pool(pool_id: int, db: AsyncSession = Depends(get_async_db)):
 
 
 @router.post("", status_code=201)
-async def create_pool(body: ResourcePoolIn, db: AsyncSession = Depends(get_async_db)):
+async def create_pool(
+    body: ResourcePoolIn,
+    db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     pool = ResourcePool(
         name=body.name,
         resource_type=body.resource_type,
@@ -90,13 +105,30 @@ async def create_pool(body: ResourcePoolIn, db: AsyncSession = Depends(get_async
         is_active=body.is_active,
     )
     db.add(pool)
+    await db.flush()
+    await record_audit_async(
+        db,
+        action="create",
+        resource_type="resource_pool",
+        resource_id=pool.id,
+        details={"name": pool.name, "resource_type": pool.resource_type, "host_group": pool.host_group},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     await db.commit()
     await db.refresh(pool)
     return ApiResponse(data=ResourcePoolOut.model_validate(pool))
 
 
 @router.put("/{pool_id}")
-async def update_pool(pool_id: int, body: ResourcePoolIn, db: AsyncSession = Depends(get_async_db)):
+async def update_pool(
+    pool_id: int,
+    body: ResourcePoolIn,
+    db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     pool = await db.get(ResourcePool, pool_id)
     if not pool:
         raise HTTPException(status_code=404, detail="Resource pool not found")
@@ -107,15 +139,40 @@ async def update_pool(pool_id: int, body: ResourcePoolIn, db: AsyncSession = Dep
     pool.max_concurrent_devices = body.max_concurrent_devices
     pool.host_group = body.host_group
     pool.is_active = body.is_active
+    await record_audit_async(
+        db,
+        action="update",
+        resource_type="resource_pool",
+        resource_id=pool.id,
+        details={"name": pool.name, "resource_type": pool.resource_type, "host_group": pool.host_group},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     await db.commit()
     await db.refresh(pool)
     return ApiResponse(data=ResourcePoolOut.model_validate(pool))
 
 
 @router.delete("/{pool_id}", status_code=204)
-async def delete_pool(pool_id: int, db: AsyncSession = Depends(get_async_db)):
+async def delete_pool(
+    pool_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     pool = await db.get(ResourcePool, pool_id)
     if not pool:
         raise HTTPException(status_code=404, detail="Resource pool not found")
+    await record_audit_async(
+        db,
+        action="delete",
+        resource_type="resource_pool",
+        resource_id=pool.id,
+        details={"name": pool.name, "resource_type": pool.resource_type, "host_group": pool.host_group},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     await db.delete(pool)
     await db.commit()

@@ -1,5 +1,6 @@
 @echo off
 setlocal
+cd /d "%~dp0"
 
 if not "%~1"=="" set "BACKEND_PORT=%~1"
 if not defined BACKEND_PORT set "BACKEND_PORT=8000"
@@ -18,6 +19,14 @@ echo Run .\stop-backend.bat or stop the existing backend process first.
 exit /b 1
 
 :start_backend
+echo Preparing local backend env file...
+python tools\prepare_env.py --template backend\.env.example --target backend\.env
+if errorlevel 1 (
+    echo ERROR: Failed to prepare backend\.env from backend\.env.example.
+    pause
+    exit /b 1
+)
+
 echo Running alembic migrations (upgrade head)...
 pushd "%~dp0backend"
 python -m alembic upgrade head

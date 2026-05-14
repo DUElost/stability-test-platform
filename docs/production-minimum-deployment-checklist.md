@@ -71,7 +71,7 @@ pip install -r backend/requirements.txt
 创建后端环境文件 `/opt/stability-test-platform/.env.backend`：
 
 ```bash
-cp deploy/control-plane/env/.env.backend.example /opt/stability-test-platform/.env.backend
+python3 tools/prepare_env.py --template deploy/control-plane/env/.env.backend.example --target /opt/stability-test-platform/.env.backend
 ```
 
 ### 3.4 前端构建

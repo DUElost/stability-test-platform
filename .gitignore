@@ -12,7 +12,15 @@ dist/
 build/
 venv/
 env/
-.env
+.env*
+!.env.example
+!.env.server.example
+!backend/.env.example
+!backend/agent/.env.example
+!frontend/.env.example
+!deploy/postgres/.env.example
+!deploy/control-plane/env/
+!deploy/control-plane/env/.env.backend.example
 .venv
 *.db
 *.sqlite

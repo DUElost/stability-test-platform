@@ -21,6 +21,9 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+echo "Preparing local backend env file..."
+python3 tools/prepare_env.py --template backend/.env.example --target backend/.env
+
 if [ ! -f "${VENV_DIR}/bin/activate" ]; then
   echo "Creating Linux virtual environment at ${VENV_DIR}..."
   mkdir -p "${VENV_DIR}"

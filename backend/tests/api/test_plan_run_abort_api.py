@@ -288,7 +288,7 @@ class TestPlanRunAbort:
 
 class TestHostActiveJobs:
     def test_get_host_includes_active_jobs(
-        self, client, db_session, abort_chain
+        self, client, db_session, abort_chain, auth_headers
     ):
         plan = abort_chain["plan"]
         pr = _make_plan_run(db_session, plan.id)
@@ -298,7 +298,7 @@ class TestHostActiveJobs:
             status=JobStatus.RUNNING.value,
         )
 
-        resp = client.get("/api/v1/hosts/h-abort")
+        resp = client.get("/api/v1/hosts/h-abort", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["active_job_count"] == 1
@@ -315,22 +315,58 @@ class TestHostActiveJobs:
 
 class TestHostHotUpdateSoftLock:
     def test_hot_update_no_active_jobs_proceeds(
-        self, client, auth_headers, db_session, abort_chain
+        self, client, admin_headers, db_session, abort_chain
     ):
         with patch(
             "backend.api.routes.hosts.execute_hot_update",
             return_value={"ok": True, "message": "ok", "duration_ms": 100},
         ):
             resp = client.post(
-                "/api/v1/hosts/h-abort/hot-update", headers=auth_headers,
+                "/api/v1/hosts/h-abort/hot-update", headers=admin_headers,
             )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["ok"] is True
         assert body["abort_summary"] is None
 
+    def test_hot_update_with_sync_agent_secret_passes_secret_to_executor(
+        self, client, admin_headers, db_session, abort_chain, monkeypatch
+    ):
+        monkeypatch.setenv("AGENT_SECRET", "sync-secret-1234567890")
+
+        with patch(
+            "backend.api.routes.hosts.execute_hot_update",
+            return_value={"ok": True, "message": "ok", "duration_ms": 100},
+        ) as mock_exec:
+            resp = client.post(
+                "/api/v1/hosts/h-abort/hot-update?sync_agent_secret=true",
+                headers=admin_headers,
+            )
+
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_exec.call_args
+        assert kwargs["sync_agent_secret"] is True
+        assert kwargs["agent_secret"] == "sync-secret-1234567890"
+
+    def test_hot_update_with_sync_agent_secret_rejects_placeholder_secret(
+        self, client, admin_headers, db_session, abort_chain, monkeypatch
+    ):
+        monkeypatch.setenv("AGENT_SECRET", "change-me-in-production")
+
+        with patch("backend.api.routes.hosts.execute_hot_update") as mock_exec:
+            resp = client.post(
+                "/api/v1/hosts/h-abort/hot-update?sync_agent_secret=true",
+                headers=admin_headers,
+            )
+
+        assert resp.status_code == 409, resp.text
+        assert resp.json()["detail"] == (
+            "Local AGENT_SECRET is not configured or still using a placeholder value."
+        )
+        mock_exec.assert_not_called()
+
     def test_hot_update_with_active_jobs_default_returns_409(
-        self, client, auth_headers, db_session, abort_chain
+        self, client, admin_headers, db_session, abort_chain
     ):
         plan = abort_chain["plan"]
         pr = _make_plan_run(db_session, plan.id)
@@ -342,7 +378,7 @@ class TestHostHotUpdateSoftLock:
 
         with patch("backend.api.routes.hosts.execute_hot_update") as mock_exec:
             resp = client.post(
-                "/api/v1/hosts/h-abort/hot-update", headers=auth_headers,
+                "/api/v1/hosts/h-abort/hot-update", headers=admin_headers,
             )
         assert resp.status_code == 409, resp.text
         body = resp.json()
@@ -351,7 +387,7 @@ class TestHostHotUpdateSoftLock:
         mock_exec.assert_not_called()
 
     def test_hot_update_with_abort_running_jobs_drains_and_proceeds(
-        self, client, auth_headers, db_session, abort_chain
+        self, client, admin_headers, db_session, abort_chain
     ):
         plan = abort_chain["plan"]
         pr = _make_plan_run(db_session, plan.id)
@@ -369,7 +405,7 @@ class TestHostHotUpdateSoftLock:
         ) as mock_exec:
             resp = client.post(
                 "/api/v1/hosts/h-abort/hot-update?abort_running_jobs=true",
-                headers=auth_headers,
+                headers=admin_headers,
             )
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -385,7 +421,7 @@ class TestHostHotUpdateSoftLock:
         )
 
     def test_hot_update_drain_timeout_returns_504(
-        self, client, auth_headers, db_session, abort_chain, monkeypatch
+        self, client, admin_headers, db_session, abort_chain, monkeypatch
     ):
         plan = abort_chain["plan"]
         pr = _make_plan_run(db_session, plan.id)
@@ -406,7 +442,7 @@ class TestHostHotUpdateSoftLock:
         with patch("backend.api.routes.hosts.execute_hot_update") as mock_exec:
             resp = client.post(
                 "/api/v1/hosts/h-abort/hot-update?abort_running_jobs=true",
-                headers=auth_headers,
+                headers=admin_headers,
             )
         assert resp.status_code == 504, resp.text
         body = resp.json()

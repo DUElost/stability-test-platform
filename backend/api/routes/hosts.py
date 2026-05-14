@@ -14,7 +14,7 @@ from backend.models.enums import JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
 from backend.api.schemas import HostActiveJob, HostCreate, HostOut, PaginatedResponse
-from backend.api.routes.auth import get_current_active_user, User
+from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds
 from backend.services.plan_run_abort import abort_jobs_for_host
 
@@ -52,6 +52,19 @@ def _ensure_host_status_up_to_date(host: Host) -> bool:
     return False
 
 _ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+_AGENT_SECRET_PLACEHOLDER = "change-me-in-production"
+
+
+def _get_syncable_agent_secret() -> str:
+    secret = os.getenv("AGENT_SECRET", "").strip()
+    if not secret or secret == _AGENT_SECRET_PLACEHOLDER:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Local AGENT_SECRET is not configured or still using a placeholder value."
+            ),
+        )
+    return secret
 
 
 def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
@@ -63,7 +76,10 @@ def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
     若提供 ``db``，会一并查询 host 上的活跃 Job 列表（ADR-0021 hot-update gate）。
     """
     out = HostOut.model_validate(h) if hasattr(HostOut, "model_validate") else HostOut.from_orm(h)
-    extra = h.extra or {}
+    extra = dict(h.extra or {})
+    for key in ("ssh_password", "ssh_key_path", "password", "secret", "token", "private_key"):
+        extra.pop(key, None)
+    out.extra = extra
     out.capacity = extra.get("capacity")
     out.health = extra.get("health")
     out.max_concurrent_jobs = h.max_concurrent_jobs
@@ -117,7 +133,7 @@ router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
 
 @router.post("", response_model=HostOut)
-def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user), request: Request = None):
+def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin), request: Request = None):
     host_id = str(uuid.uuid4())
     host = Host(
         id=host_id,
@@ -154,6 +170,7 @@ def list_hosts(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     query = db.query(Host).order_by(Host.id)
     total = query.count()
@@ -173,7 +190,7 @@ def list_hosts(
 
 
 @router.get("/{host_id}", response_model=HostOut)
-def get_host(host_id: str, db: Session = Depends(get_db)):
+def get_host(host_id: str, db: Session = Depends(get_db), _current_user: User = Depends(get_current_active_user)):
     host = db.get(Host, host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
@@ -187,7 +204,7 @@ def update_host(
     host_id: str,
     payload: HostCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
     request: Request = None,
 ):
     """更新主机信息"""
@@ -255,7 +272,7 @@ def _wait_until_no_active_jobs(
 def host_hot_update(
     host_id: str,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
     abort_running_jobs: bool = Query(
         False,
         description=(
@@ -263,6 +280,10 @@ def host_hot_update(
             "传 ?abort_running_jobs=true 串联 abort 流程: "
             "释放租约 → 等 Agent 自然退出 (≤45s) → 执行热更新."
         ),
+    ),
+    sync_agent_secret: bool = Query(
+        False,
+        description="可选: 同步本机后端 AGENT_SECRET 到远端 Agent .env。",
     ),
 ):
     """热更新：同步 Agent 代码到目标主机并重启服务。
@@ -440,6 +461,8 @@ def host_hot_update(
             ),
         )
 
+    agent_secret = _get_syncable_agent_secret() if sync_agent_secret else ""
+
     record_audit(
         db,
         action="hot_update",
@@ -449,6 +472,7 @@ def host_hot_update(
             "host_id": host_id,
             "ip": host.ip,
             "abort_running_jobs": abort_running_jobs,
+            "sync_agent_secret": sync_agent_secret,
             "aborted_jobs": (
                 aborted_summary["aborted_jobs"] if aborted_summary else []
             ),
@@ -464,6 +488,8 @@ def host_hot_update(
         ssh_user=ssh_user,
         ssh_password=ssh_password,
         ssh_key_path=ssh_key_path or "",
+        sync_agent_secret=sync_agent_secret,
+        agent_secret=agent_secret,
     )
 
     if not result["ok"]:

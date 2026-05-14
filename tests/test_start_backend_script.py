@@ -29,6 +29,14 @@ def test_start_backend_script_checks_port_before_launch():
     assert "stop-backend.bat" in script
 
 
+def test_start_backend_scripts_prepare_env_before_launch():
+    script = (REPO_ROOT / "start-backend.bat").read_text(encoding="utf-8")
+    wsl_script = (REPO_ROOT / "start-backend-wsl.sh").read_text(encoding="utf-8")
+
+    assert 'python tools\\prepare_env.py --template backend\\.env.example --target backend\\.env' in script
+    assert 'python3 tools/prepare_env.py --template backend/.env.example --target backend/.env' in wsl_script
+
+
 def test_stop_backend_script_stops_windows_port_before_wsl():
     script = (REPO_ROOT / "stop-backend.bat").read_text(encoding="utf-8")
 

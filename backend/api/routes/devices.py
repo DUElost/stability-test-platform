@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 from typing import Any, List, Optional
 
 from backend.core.database import get_db
+from backend.core.audit import record_audit
 from backend.models.host import Host, Device
 from backend.api.schemas import DeviceCreate, DeviceOut, PaginatedResponse
-from backend.api.routes.auth import get_current_active_user, User
+from backend.api.routes.auth import get_current_active_user, require_admin, User
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,12 @@ router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
 
 
 @router.post("", response_model=DeviceOut)
-def create_device(payload: DeviceCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_active_user)):
+def create_device(
+    payload: DeviceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     # 检查序列号是否已存在
     existing = db.query(Device).filter(Device.serial == payload.serial).first()
     if existing:
@@ -90,6 +96,17 @@ def create_device(payload: DeviceCreate, db: Session = Depends(get_db), current_
         tags=payload.tags,
     )
     db.add(device)
+    db.flush()
+    record_audit(
+        db,
+        action="create",
+        resource_type="device",
+        resource_id=device.id,
+        details={"serial": device.serial, "model": device.model, "host_id": device.host_id},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(device)
     return device
@@ -103,6 +120,7 @@ def list_devices(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=1200),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     query = db.query(Device).order_by(Device.last_seen.desc().nullslast())
 
@@ -136,7 +154,11 @@ def list_devices(
 
 
 @router.get("/{device_id}", response_model=DeviceOut)
-def get_device(device_id: int, db: Session = Depends(get_db)):
+def get_device(
+    device_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     device = db.get(Device, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="device not found")
@@ -150,13 +172,24 @@ def update_device_tags(
     device_id: int,
     tags: List[str],
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
 ):
     """Update device tags."""
     device = db.get(Device, device_id)
     if not device:
         raise HTTPException(status_code=404, detail="device not found")
     device.tags = tags
+    record_audit(
+        db,
+        action="update_tags",
+        resource_type="device",
+        resource_id=device.id,
+        details={"serial": device.serial, "tags": tags},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(device)
     return device

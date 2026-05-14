@@ -53,7 +53,7 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r backend/requirements.txt
 
-cp deploy/control-plane/env/.env.backend.example "$CONTROL_DIR/.env.backend"
+python3 tools/prepare_env.py --template deploy/control-plane/env/.env.backend.example --target "$CONTROL_DIR/.env.backend"
 mkdir -p "$CONTROL_DIR/logs"
 
 cp deploy/control-plane/systemd/stability-backend.service /tmp/stability-backend.service

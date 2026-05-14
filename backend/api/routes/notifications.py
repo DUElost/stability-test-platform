@@ -21,7 +21,7 @@ from backend.api.schemas import (
 from backend.core.database import get_db
 from backend.core.audit import record_audit
 from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel
-from backend.api.routes.auth import get_current_active_user, User
+from backend.api.routes.auth import require_admin, User
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def list_channels(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
 ):
     query = db.query(NotificationChannel).order_by(NotificationChannel.id)
     total = query.count()
@@ -52,7 +52,7 @@ def list_channels(
 def create_channel(
     body: NotificationChannelCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
     request: Request = None,
 ):
     channel = NotificationChannel(
@@ -83,7 +83,7 @@ def update_channel(
     channel_id: int,
     body: NotificationChannelUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
     request: Request = None,
 ):
     channel = db.get(NotificationChannel, channel_id)
@@ -116,7 +116,7 @@ def update_channel(
 def delete_channel(
     channel_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
     request: Request = None,
 ):
     channel = db.get(NotificationChannel, channel_id)
@@ -146,7 +146,7 @@ def delete_channel(
 def test_channel(
     channel_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
 ):
     """Send a test notification through the channel."""
     channel = db.get(NotificationChannel, channel_id)
@@ -172,7 +172,7 @@ def list_rules(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
 ):
     base = db.query(AlertRule).order_by(AlertRule.id)
     total = base.count()
@@ -190,7 +190,7 @@ def list_rules(
 def create_rule(
     body: AlertRuleCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
     request: Request = None,
 ):
     # Validate channel exists
@@ -230,7 +230,7 @@ def update_rule(
     rule_id: int,
     body: AlertRuleUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
     request: Request = None,
 ):
     rule = db.get(AlertRule, rule_id)
@@ -272,7 +272,7 @@ def update_rule(
 def delete_rule(
     rule_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_admin),
     request: Request = None,
 ):
     rule = db.get(AlertRule, rule_id)

@@ -8,7 +8,7 @@ def _uniq(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
 
 
-def test_action_template_crud(client):
+def test_action_template_crud(client, admin_headers, auth_headers):
     template_name = _uniq("root_check_template")
 
     create_resp = client.post(
@@ -23,6 +23,7 @@ def test_action_template_crud(client):
             "retry": 1,
             "is_active": True,
         },
+        headers=admin_headers,
     )
     assert create_resp.status_code == 201
     created = create_resp.json()["data"]
@@ -31,25 +32,29 @@ def test_action_template_crud(client):
     assert created["version"] == "2.0.0"
 
     template_id = created["id"]
-    get_resp = client.get(f"/api/v1/action-templates/{template_id}")
+    get_resp = client.get(f"/api/v1/action-templates/{template_id}", headers=auth_headers)
     assert get_resp.status_code == 200
     assert get_resp.json()["data"]["id"] == template_id
 
     update_resp = client.put(
         f"/api/v1/action-templates/{template_id}",
         json={"retry": 2, "description": "updated"},
+        headers=admin_headers,
     )
     assert update_resp.status_code == 200
     updated = update_resp.json()["data"]
     assert updated["retry"] == 2
     assert updated["description"] == "updated"
 
-    deactivate_resp = client.delete(f"/api/v1/action-templates/{template_id}")
+    deactivate_resp = client.delete(
+        f"/api/v1/action-templates/{template_id}",
+        headers=admin_headers,
+    )
     assert deactivate_resp.status_code == 200
     assert deactivate_resp.json()["data"]["deactivated"] == template_id
 
 
-def test_action_template_validation(client):
+def test_action_template_validation(client, admin_headers):
     # 只允许 script action
     invalid_builtin = client.post(
         "/api/v1/action-templates",
@@ -61,6 +66,7 @@ def test_action_template_validation(client):
             "timeout_seconds": 60,
             "retry": 0,
         },
+        headers=admin_headers,
     )
     assert invalid_builtin.status_code == 422
 
@@ -74,6 +80,7 @@ def test_action_template_validation(client):
             "timeout_seconds": 60,
             "retry": 0,
         },
+        headers=admin_headers,
     )
     assert invalid_tool.status_code == 422
 
@@ -87,6 +94,7 @@ def test_action_template_validation(client):
             "timeout_seconds": 60,
             "retry": 0,
         },
+        headers=admin_headers,
     )
     assert missing_script_version.status_code == 422
 
@@ -100,7 +108,24 @@ def test_action_template_validation(client):
             "timeout_seconds": 600,
             "retry": 0,
         },
+        headers=admin_headers,
     )
     assert valid_script.status_code == 201
     assert valid_script.json()["data"]["action"] == "script:push_bundle"
     assert valid_script.json()["data"]["version"] == "2.0.0"
+
+
+def test_action_template_writes_require_admin(client, auth_headers):
+    response = client.post(
+        "/api/v1/action-templates",
+        json={
+            "name": _uniq("operator_template"),
+            "action": "script:check_device",
+            "version": "1.0.0",
+            "params": {},
+            "timeout_seconds": 60,
+            "retry": 0,
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 403

@@ -7,13 +7,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import distinct
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
+from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.models.script import Script
 from backend.services.script_catalog import scan_script_root
@@ -97,7 +99,10 @@ def _script_out(script: Script) -> ScriptOut:
 
 
 @router.get("/categories", response_model=ApiResponse[List[str]])
-def list_script_categories(db: Session = Depends(get_db)):
+def list_script_categories(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     rows = (
         db.query(distinct(Script.category))
         .filter(Script.category.isnot(None))
@@ -108,11 +113,25 @@ def list_script_categories(db: Session = Depends(get_db)):
 
 
 @router.post("/scan", response_model=ApiResponse[dict])
-def scan_scripts(db: Session = Depends(get_db)):
+def scan_scripts(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     try:
         result = scan_script_root(db, _script_root(), _script_runtime_root())
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    record_audit(
+        db,
+        action="scan",
+        resource_type="script_catalog",
+        details=result.to_dict(),
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
     return ok(result.to_dict())
 
 
@@ -121,6 +140,7 @@ def list_scripts(
     is_active: Optional[bool] = None,
     category: Optional[str] = None,
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     query = db.query(Script).order_by(Script.name, Script.version)
     if is_active is not None:
@@ -131,7 +151,12 @@ def list_scripts(
 
 
 @router.post("", response_model=ApiResponse[ScriptOut], status_code=201)
-def create_script(payload: ScriptCreate, db: Session = Depends(get_db)):
+def create_script(
+    payload: ScriptCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     existing = (
         db.query(Script)
         .filter(Script.name == payload.name, Script.version == payload.version)
@@ -161,6 +186,17 @@ def create_script(payload: ScriptCreate, db: Session = Depends(get_db)):
     )
     db.add(script)
     try:
+        db.flush()
+        record_audit(
+            db,
+            action="create",
+            resource_type="script",
+            resource_id=script.id,
+            details={"name": script.name, "version": script.version, "is_active": script.is_active},
+            user_id=current_user.id,
+            username=current_user.username,
+            request=request,
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -173,7 +209,11 @@ def create_script(payload: ScriptCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/{script_id}", response_model=ApiResponse[ScriptOut])
-def get_script(script_id: int, db: Session = Depends(get_db)):
+def get_script(
+    script_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     script = db.get(Script, script_id)
     if script is None:
         raise HTTPException(status_code=404, detail="script not found")
@@ -181,7 +221,13 @@ def get_script(script_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{script_id}", response_model=ApiResponse[ScriptOut])
-def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(get_db)):
+def update_script(
+    script_id: int,
+    payload: ScriptUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     script = db.get(Script, script_id)
     if script is None:
         raise HTTPException(status_code=404, detail="script not found")
@@ -229,6 +275,16 @@ def update_script(script_id: int, payload: ScriptUpdate, db: Session = Depends(g
         if value is not None:
             setattr(script, field, value)
     script.updated_at = datetime.now(timezone.utc)
+    record_audit(
+        db,
+        action="update",
+        resource_type="script",
+        resource_id=script.id,
+        details={"name": script.name, "version": script.version, "is_active": script.is_active},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     db.refresh(script)
     return ok(_script_out(script))
@@ -248,6 +304,8 @@ def create_script_version(
     name: str,
     payload: ScriptVersionCreate,
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
 ):
     """Create a new version of an existing script.
 
@@ -293,6 +351,17 @@ def create_script_version(
     )
     db.add(script)
     try:
+        db.flush()
+        record_audit(
+            db,
+            action="create_version",
+            resource_type="script",
+            resource_id=script.id,
+            details={"name": script.name, "version": script.version},
+            user_id=current_user.id,
+            username=current_user.username,
+            request=request,
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -305,11 +374,26 @@ def create_script_version(
 
 
 @router.delete("/{script_id}", response_model=ApiResponse[dict])
-def deactivate_script(script_id: int, db: Session = Depends(get_db)):
+def deactivate_script(
+    script_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     script = db.get(Script, script_id)
     if script is None:
         raise HTTPException(status_code=404, detail="script not found")
     script.is_active = False
     script.updated_at = datetime.now(timezone.utc)
+    record_audit(
+        db,
+        action="deactivate",
+        resource_type="script",
+        resource_id=script.id,
+        details={"name": script.name, "version": script.version},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     db.commit()
     return ok({"deactivated": script_id})

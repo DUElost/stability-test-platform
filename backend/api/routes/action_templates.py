@@ -7,12 +7,14 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, ok
+from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.core.audit import record_audit_async
 from backend.core.database import get_async_db
 from backend.models.action_template import ActionTemplate
 
@@ -102,6 +104,7 @@ async def list_action_templates(
     skip: int = 0,
     limit: int = 200,
     db: AsyncSession = Depends(get_async_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     q = select(ActionTemplate).order_by(ActionTemplate.updated_at.desc(), ActionTemplate.id.desc())
     if is_active is not None:
@@ -114,6 +117,8 @@ async def list_action_templates(
 async def create_action_template(
     payload: ActionTemplateCreate,
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
 ):
     await _validate_template_payload(
         name=payload.name,
@@ -139,13 +144,28 @@ async def create_action_template(
         updated_at=now,
     )
     db.add(item)
+    await db.flush()
+    await record_audit_async(
+        db,
+        action="create",
+        resource_type="action_template",
+        resource_id=item.id,
+        details={"name": item.name, "action": item.action, "version": item.version, "is_active": item.is_active},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     await db.commit()
     await db.refresh(item)
     return ok(_out(item))
 
 
 @router.get("/{template_id}", response_model=ApiResponse[ActionTemplateOut])
-async def get_action_template(template_id: int, db: AsyncSession = Depends(get_async_db)):
+async def get_action_template(
+    template_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     item = await db.get(ActionTemplate, template_id)
     if item is None:
         raise HTTPException(status_code=404, detail="action template not found")
@@ -157,6 +177,8 @@ async def update_action_template(
     template_id: int,
     payload: ActionTemplateUpdate,
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
 ):
     item = await db.get(ActionTemplate, template_id)
     if item is None:
@@ -200,18 +222,43 @@ async def update_action_template(
         item.is_active = payload.is_active
     item.updated_at = datetime.now(timezone.utc)
 
+    await record_audit_async(
+        db,
+        action="update",
+        resource_type="action_template",
+        resource_id=item.id,
+        details={"name": item.name, "action": item.action, "version": item.version, "is_active": item.is_active},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     await db.commit()
     await db.refresh(item)
     return ok(_out(item))
 
 
 @router.delete("/{template_id}", response_model=ApiResponse[dict])
-async def deactivate_action_template(template_id: int, db: AsyncSession = Depends(get_async_db)):
+async def deactivate_action_template(
+    template_id: int,
+    db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
     item = await db.get(ActionTemplate, template_id)
     if item is None:
         raise HTTPException(status_code=404, detail="action template not found")
     item.is_active = False
     item.updated_at = datetime.now(timezone.utc)
+    await record_audit_async(
+        db,
+        action="deactivate",
+        resource_type="action_template",
+        resource_id=item.id,
+        details={"name": item.name, "action": item.action, "version": item.version},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
     await db.commit()
     return ok({"deactivated": template_id})
 

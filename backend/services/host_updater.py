@@ -9,6 +9,7 @@ Uses paramiko (already a project dependency) to:
 
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import os
@@ -105,6 +106,8 @@ set -e
 INSTALL_DIR="{install_dir}"
 SERVICE_NAME="{service_name}"
 TAR_PATH="{tar_path}"
+SYNC_AGENT_SECRET="{sync_agent_secret}"
+AGENT_SECRET_B64="{agent_secret_b64}"
 
 if [ ! -d "$INSTALL_DIR" ]; then
     echo "ERROR: Agent not installed at $INSTALL_DIR"
@@ -133,6 +136,37 @@ sudo rsync -av --delete \
     --exclude='hosts.txt' \
     "$TMPDIR/" "$INSTALL_DIR/agent/"
 
+if [ "$SYNC_AGENT_SECRET" = "1" ]; then
+    sudo INSTALL_DIR="$INSTALL_DIR" AGENT_SECRET_B64="$AGENT_SECRET_B64" python3 - <<'PY'
+import base64
+import os
+import pathlib
+import sys
+
+env_path = pathlib.Path(os.environ["INSTALL_DIR"]) / ".env"
+if not env_path.exists():
+    print("ERROR: Agent env file missing at " + str(env_path), file=sys.stderr)
+    raise SystemExit(1)
+
+secret = base64.b64decode(os.environ["AGENT_SECRET_B64"]).decode("utf-8")
+lines = env_path.read_text(encoding="utf-8").splitlines()
+updated_lines = []
+replaced = False
+
+for line in lines:
+    if line.startswith("AGENT_SECRET="):
+        updated_lines.append("AGENT_SECRET=" + secret)
+        replaced = True
+    else:
+        updated_lines.append(line)
+
+if not replaced:
+    updated_lines.append("AGENT_SECRET=" + secret)
+
+env_path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+PY
+fi
+
 # Fix ownership
 sudo chown -R {user}:{group} "$INSTALL_DIR"
 
@@ -147,6 +181,33 @@ else
     echo "WARN: service may not be running, check: systemctl status $SERVICE_NAME"
 fi
 """
+
+
+def _build_remote_script(
+    *,
+    install_dir: str,
+    service_name: str,
+    tar_path: str,
+    user: str,
+    group: str,
+    sync_agent_secret: bool = False,
+    agent_secret: str = "",
+) -> str:
+    agent_secret_b64 = ""
+    if sync_agent_secret:
+        agent_secret_b64 = base64.b64encode(agent_secret.encode("utf-8")).decode(
+            "ascii"
+        )
+
+    return _REMOTE_SCRIPT.format(
+        install_dir=install_dir,
+        service_name=service_name,
+        tar_path=tar_path,
+        sync_agent_secret="1" if sync_agent_secret else "0",
+        agent_secret_b64=agent_secret_b64,
+        user=user,
+        group=group,
+    )
 
 
 def _ssh_connect(host_ip: str, port: int, username: str,
@@ -186,6 +247,8 @@ def execute_hot_update(
     ssh_key_path: str = "",
     install_user: str = "android",
     install_group: str = "android",
+    sync_agent_secret: bool = False,
+    agent_secret: str = "",
 ) -> dict:
     """Execute a hot-update on a remote Linux host.
 
@@ -218,12 +281,14 @@ def execute_hot_update(
             sftp.chmod(_REMOTE_TAR_PATH, 0o644)
 
             # 4. Execute remote script
-            script = _REMOTE_SCRIPT.format(
+            script = _build_remote_script(
                 install_dir=_REMOTE_INSTALL_DIR,
                 service_name=_REMOTE_SERVICE_NAME,
                 tar_path=_REMOTE_TAR_PATH,
                 user=install_user,
                 group=install_group,
+                sync_agent_secret=sync_agent_secret,
+                agent_secret=agent_secret,
             )
 
             logger.info("hot_update_executing host=%s", host_ip)
