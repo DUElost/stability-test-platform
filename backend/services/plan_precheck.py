@@ -580,6 +580,32 @@ async def _drive_dispatch_gate(
         _persist_precheck(plan_run_id, precheck, db)
 
         await asyncio.to_thread(complete_plan_run_dispatch, plan_run_id, db)
+
+        # ADR-0023 C1 阶段 2 协调:complete_plan_run_dispatch 在 keys 校验失败时
+        # 不抛异常,而是内部写入 PlanRun.status='FAILED' + result_summary。
+        # 重读 status 决策 dispatch_state 与 gate_outcome,避免被默认的 ready 分支覆盖。
+        db.expire(pr)
+        pr = db.get(PlanRun, plan_run_id)
+        if pr is not None and pr.status == "FAILED":
+            result_summary = pr.result_summary or {}
+            missing = result_summary.get("missing_scripts") or []
+            last_error = (
+                f"dispatch_failed: {','.join(missing)}"
+                if missing else "dispatch_failed"
+            )
+            _update_dispatch_state(
+                pr, db,
+                status="failed",
+                completed_at=_utc_iso(),
+                last_error=last_error,
+            )
+            gate_outcome = "failed"
+            logger.info(
+                "precheck_dispatch_failed plan_run=%d missing=%s",
+                plan_run_id, missing,
+            )
+            return
+
         logger.info("precheck_dispatched plan_run=%d", plan_run_id)
         # 区分:有 sync 阶段走过 = synced_passed;否则 = passed
         gate_outcome = "synced_passed" if out_of_sync_hosts else "passed"

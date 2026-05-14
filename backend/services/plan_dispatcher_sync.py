@@ -29,22 +29,68 @@ ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
 
 
 class PlanDispatchError(Exception):
-    pass
+    """Dispatcher 失败的统一异常。
+
+    ``missing_scripts`` 在 ADR-0023 C1 fail-fast 路径中携带缺失的
+    ``"name:version"`` 列表,供端点层格式化为
+    ``{"code":"INVALID_SCRIPT_REFS","missing":[...]}`` 响应体。
+    """
+
+    def __init__(
+        self, message: str, *, missing_scripts: list[str] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.missing_scripts = list(missing_scripts) if missing_scripts else None
+
+    def detail(self) -> dict | str:
+        """格式化为 FastAPI HTTPException detail。
+
+        若携带 ``missing_scripts``,返回结构化 dict 与 plans 创建侧
+        ``_validate_script_refs`` 的 422 响应体保持字段一致(便于前端共用
+        错误处理)。否则退化为原始消息字符串。
+        """
+        if self.missing_scripts:
+            return {
+                "code": "INVALID_SCRIPT_REFS",
+                "missing": self.missing_scripts,
+            }
+        return str(self)
 
 
 # ── Pure helpers (shared with async version) ──────────────────────────────
 
+def _check_script_keys_complete(
+    steps: list[PlanStep],
+    metadata: dict[tuple[str, str], dict[str, dict]],
+) -> list[str]:
+    """ADR-0023 C1 — 返回缺失的 ``"name:version"`` 列表。
+
+    "缺失"统一表达 *不存在* 与 *已 deactivate* 两种情况:
+    ``_fetch_script_metadata`` 只查 ``is_active=true``,两类都不会落入 metadata
+    map,呈现为同一种 keys 缺失。
+    """
+    required = {(s.script_name, s.script_version) for s in steps if s.enabled is not False}
+    have = set(metadata.keys())
+    missing = sorted(required - have)
+    return [f"{name}:{version}" for name, version in missing]
+
+
 def _build_lifecycle_from_steps(
     plan: Plan, steps: list[PlanStep], script_defaults: dict[tuple[str, str], dict]
 ) -> dict:
-    """Build a pipeline_def lifecycle from PlanStep records (ADR-0020 §2 唯一事实源)."""
+    """Build a pipeline_def lifecycle from PlanStep records (ADR-0020 §2 唯一事实源).
+
+    ADR-0023 C1: 上游必须保证 ``script_defaults`` 覆盖所有 enabled step 的
+    ``(name, version)`` 键。此处用下标访问而非 ``.get(..., {})``——缺失即 KeyError,
+    符合 fail-fast。
+    """
     lifecycle: dict[str, Any] = {"init": [], "teardown": []}
     patrol_steps: list[dict] = []
 
     for step in sorted(steps, key=lambda s: (s.stage, s.sort_order)):
         if step.enabled is False:
             continue
-        default_params = script_defaults.get((step.script_name, step.script_version), {})
+        default_params = script_defaults[(step.script_name, step.script_version)]
         step_def: dict[str, Any] = {
             "step_id": step.step_key,
             "action": f"script:{step.script_name}",
@@ -126,6 +172,7 @@ def _fetch_script_metadata(
             Script.version,
             Script.default_params,
             Script.param_schema,
+            Script.nfs_path,
         ).where(
             Script.name.in_(names), Script.is_active.is_(True)
         )
@@ -134,6 +181,7 @@ def _fetch_script_metadata(
         (r.name, r.version): {
             "default_params": r.default_params or {},
             "param_schema": r.param_schema or {},
+            "nfs_path": r.nfs_path or "",
         }
         for r in rows
     }
@@ -166,6 +214,11 @@ def _build_plan_snapshot(
                 "step_key": step.step_key,
                 "script_name": step.script_name,
                 "script_version": step.script_version,
+                "nfs_path": (
+                    script_metadata
+                    .get((step.script_name, step.script_version), {})
+                    .get("nfs_path", "")
+                ),
                 "param_schema": (
                     script_metadata
                     .get((step.script_name, step.script_version), {})
@@ -296,6 +349,12 @@ def preview_plan_dispatch_sync(
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
 
     metadata = _fetch_script_metadata(db, steps)
+    missing = _check_script_keys_complete(steps, metadata)
+    if missing:
+        raise PlanDispatchError(
+            f"Plan {plan_id}: scripts unavailable at preview: {', '.join(missing)}",
+            missing_scripts=missing,
+        )
     defaults = _script_defaults(metadata)
     lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
     return _build_preview(plan, lifecycle, device_ids)
@@ -335,6 +394,14 @@ def prepare_plan_run(
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
 
     metadata = _fetch_script_metadata(db, steps)
+    missing = _check_script_keys_complete(steps, metadata)
+    if missing:
+        # ADR-0023 C1 阶段 1:prepare 阶段同步拒绝,不创建 PlanRun 行。
+        # 端点层捕获 → HTTP 400 + {"code":"INVALID_SCRIPT_REFS","missing":[...]}
+        raise PlanDispatchError(
+            f"Plan {plan_id}: scripts unavailable at prepare: {', '.join(missing)}",
+            missing_scripts=missing,
+        )
     defaults = _script_defaults(metadata)
     lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
 
@@ -428,6 +495,33 @@ def complete_plan_run_dispatch(
         raise PlanDispatchError(f"Plan {pr.plan_id} has no steps")
 
     metadata = _fetch_script_metadata(db, steps)
+    missing = _check_script_keys_complete(steps, metadata)
+    if missing:
+        # ADR-0023 C1 阶段 2:prepare 与 complete 之间的窗口内脚本被失活。
+        # 此时 PlanRun 行已存在且前端正在观测,不能回退;转为 FAILED 终态
+        # 供审计,**不 raise**——_drive_dispatch_gate 重读 status 决策。
+        from backend.core.audit import record_audit
+        pr.status = "FAILED"
+        pr.ended_at = datetime.now(timezone.utc)
+        pr.result_summary = {
+            "dispatch_failed": True,
+            "missing_scripts": missing,
+        }
+        flag_modified(pr, "result_summary")
+        record_audit(
+            db,
+            action="plan_dispatch_failed",
+            resource_type="plan_run",
+            resource_id=pr.id,
+            details={"missing_scripts": missing, "reason": "scripts_unavailable_at_dispatch"},
+        )
+        db.commit()
+        logger.warning(
+            "plan_dispatch_failed_missing_scripts plan_run=%d missing=%s",
+            plan_run_id, missing,
+        )
+        return
+
     defaults = _script_defaults(metadata)
     lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
 

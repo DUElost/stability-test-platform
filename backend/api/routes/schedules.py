@@ -265,7 +265,7 @@ def run_schedule_now(
     try:
         plan_run_id = _dispatch_plan_sync_wrapper(sched.plan_id, device_ids)
     except PlanDispatchError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=exc.detail())
     return {
         "message": "Plan 已触发",
         "plan_run_id": plan_run_id,

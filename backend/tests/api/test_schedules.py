@@ -125,3 +125,52 @@ class TestPlanSchedule:
         assert run_resp.status_code == 200
         payload = run_resp.json()
         assert payload["plan_run_id"] == 9527
+
+    def test_run_now_returns_400_invalid_script_refs(
+        self, client, auth_headers, db_session, sample_device, monkeypatch,
+    ):
+        """ADR-0023 C1:wrapper 抛 PlanDispatchError(missing_scripts=...)
+        时,/schedules/{id}/run-now 必须与 plans 端点同形状(400 + INVALID_SCRIPT_REFS)。"""
+        plan = Plan(
+            name="sched-run-now-failfast",
+            description="run now plan with missing script",
+            failure_threshold=0.05,
+        )
+        db_session.add(plan)
+        db_session.commit()
+
+        create_resp = client.post(
+            "/api/v1/schedules",
+            json={
+                "name": "Plan RunNow FailFast",
+                "cron_expr": "0 5 * * *",
+                "plan_id": plan.id,
+                "device_ids": [sample_device.id],
+                "enabled": True,
+            },
+            headers=auth_headers,
+        )
+        assert create_resp.status_code == 200
+        sched_id = create_resp.json()["id"]
+
+        from backend.services.plan_dispatcher_sync import PlanDispatchError
+
+        def _wrapper_raises(plan_id, device_ids):
+            raise PlanDispatchError(
+                "scripts unavailable: check_device:1.0.0",
+                missing_scripts=["check_device:1.0.0"],
+            )
+
+        monkeypatch.setattr(
+            "backend.api.routes.schedules._dispatch_plan_sync_wrapper",
+            _wrapper_raises,
+        )
+
+        run_resp = client.post(
+            f"/api/v1/schedules/{sched_id}/run-now",
+            headers=auth_headers,
+        )
+        assert run_resp.status_code == 400, run_resp.text
+        detail = run_resp.json()["detail"]
+        assert detail["code"] == "INVALID_SCRIPT_REFS"
+        assert detail["missing"] == ["check_device:1.0.0"]

@@ -417,3 +417,81 @@ class TestDispatchStatePersistence:
         assert state["started_at"] is not None
         assert state["completed_at"] is not None
         assert state["last_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# ADR-0023 C1 — Gate coordinates with complete-time fail-fast
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchGateCoordinatesCompleteFailure:
+    """precheck Phase 4 后,若 complete_plan_run_dispatch 内部写 FAILED
+    (脚本在 prepare 到 complete 之间被失活),gate 必须重读 status 并把
+    dispatch_state 收口为 ``failed``,而不是按默认 ready 路径写 ``completed``。"""
+
+    def test_complete_failed_overrides_default_dispatch_state(
+        self, db_session, gate_chain
+    ):
+        from sqlalchemy.orm.attributes import flag_modified
+        from backend.models.plan_run import PlanRun
+
+        pr = _prepare_run(db_session, gate_chain)
+        run_ctx = dict(pr.run_context or {})
+        run_ctx["dispatch_state"] = {
+            "enqueue_key": f"precheck:{pr.id}",
+            "requeue_attempts": 0,
+            "status": "queued",
+            "enqueued_at": "2026-05-10T07:00:00.000Z",
+            "started_at": None,
+            "completed_at": None,
+            "last_error": None,
+        }
+        pr.run_context = run_ctx
+        flag_modified(pr, "run_context")
+        db_session.commit()
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            return _ack_ok(host_id, "aabbcc11")
+
+        def _fake_complete(plan_run_id, db):
+            # 模拟 ADR-0023 C1 阶段 2:complete 内部捕获 keys 缺失,
+            # 写 FAILED + result_summary,但不抛异常。
+            from datetime import datetime, timezone as _tz
+            row = db.get(PlanRun, plan_run_id)
+            row.status = "FAILED"
+            row.ended_at = datetime.now(_tz.utc)
+            row.result_summary = {
+                "dispatch_failed": True,
+                "missing_scripts": ["check_device:1.0.0"],
+            }
+            flag_modified(row, "result_summary")
+            db.commit()
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ), patch(
+            "backend.services.plan_precheck.complete_plan_run_dispatch",
+            side_effect=_fake_complete,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        # PlanRun 已是 FAILED,result_summary 完整保留
+        assert pr_after.status == "FAILED"
+        assert pr_after.result_summary == {
+            "dispatch_failed": True,
+            "missing_scripts": ["check_device:1.0.0"],
+        }
+        # dispatch_state.status 必须是 "failed",last_error 携带 missing keys
+        state = pr_after.run_context["dispatch_state"]
+        assert state["status"] == "failed"
+        assert state["completed_at"] is not None
+        assert state["last_error"] is not None
+        assert "check_device:1.0.0" in state["last_error"]
+        # Job 不应该被创建
+        from backend.models.job import JobInstance
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0

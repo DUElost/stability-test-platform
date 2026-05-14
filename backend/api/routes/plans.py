@@ -475,7 +475,7 @@ def preview_plan_run(
             db=db,
         )
     except PlanDispatchError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=e.detail())
     return ok(preview)
 
 
@@ -515,7 +515,7 @@ def run_plan(
             run_context={"dispatch_state": initial_dispatch_state},
         )
     except PlanDispatchError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=e.detail())
 
     assert pr.run_context["dispatch_state"]["enqueue_key"] == f"precheck:{pr.id}"
 

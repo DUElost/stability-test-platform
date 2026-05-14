@@ -137,3 +137,68 @@ class TestPlanDispatch:
             "failure_threshold": 0.9,
         }, headers=auth_headers)
         assert resp.status_code == 422
+
+
+# ── ADR-0023 C1: fail-fast script availability gate ─────────────────────
+
+
+class TestPlanDispatchFailFast:
+    """ADR-0023 C1:Plan 创建后引用脚本被失活,/run 与 /run/preview 必须返回
+    400 + 统一 ``{code: INVALID_SCRIPT_REFS, missing: [...]}`` 形状。"""
+
+    @staticmethod
+    def _create_plan(client, auth_headers) -> int:
+        name = _uniq("ff")
+        resp = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        return resp.json()["data"]["id"]
+
+    @staticmethod
+    def _deactivate_check_device(db_session) -> None:
+        from backend.models.script import Script
+        rows = db_session.query(Script).filter(
+            Script.name == "check_device", Script.version == "1.0.0",
+        ).all()
+        for r in rows:
+            r.is_active = False
+        db_session.commit()
+
+    def test_preview_returns_400_invalid_script_refs(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        plan_id = self._create_plan(client, auth_headers)
+        self._deactivate_check_device(db_session)
+
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run/preview",
+            json={"device_ids": [sample_device.id]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "INVALID_SCRIPT_REFS"
+        assert detail["missing"] == ["check_device:1.0.0"]
+
+    def test_run_returns_400_invalid_script_refs_no_plan_run(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        plan_id = self._create_plan(client, auth_headers)
+        self._deactivate_check_device(db_session)
+
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "INVALID_SCRIPT_REFS"
+        assert detail["missing"] == ["check_device:1.0.0"]
+
+        # fail-fast 阶段 1:必须在 INSERT 之前拒绝,无 PlanRun 行落库
+        from backend.models.plan_run import PlanRun
+        assert db_session.query(PlanRun).filter(
+            PlanRun.plan_id == plan_id
+        ).count() == 0

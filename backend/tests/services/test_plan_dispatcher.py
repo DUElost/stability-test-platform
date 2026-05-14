@@ -190,3 +190,242 @@ class TestValidation:
                 triggered_by="test",
                 db=db_session,
             )
+
+
+# ── ADR-0023 C1: fail-fast on missing script metadata ───────────────────
+
+
+class TestPlanDispatchErrorDetail:
+    """``PlanDispatchError.detail()`` 为端点层的统一格式化入口。"""
+
+    def test_detail_with_missing_scripts(self):
+        exc = PlanDispatchError(
+            "scripts unavailable: a:1.0.0",
+            missing_scripts=["a:1.0.0", "b:v2"],
+        )
+        d = exc.detail()
+        assert d == {"code": "INVALID_SCRIPT_REFS", "missing": ["a:1.0.0", "b:v2"]}
+
+    def test_detail_without_missing_scripts_falls_back_to_str(self):
+        exc = PlanDispatchError("plan not found")
+        assert exc.detail() == "plan not found"
+
+
+@pytest.fixture
+def _failfast_fixture(db_session):
+    """C1 fail-fast 共享 fixture:Plan 引用一个 *存在但即将失活* 的 Script。"""
+    host = Host(id="h-failfast", hostname="hff",
+                status=HostStatus.ONLINE.value)
+    device = Device(serial="S-failfast", host_id="h-failfast", status="ONLINE")
+    script = Script(
+        name="check_device", script_type="python", version="1.0.0",
+        nfs_path="/nfs/scripts/check_device/v1.0.0/check_device.py",
+        content_sha256="ff" * 32,
+        default_params={"timeout": 30}, is_active=True,
+    )
+    plan = Plan(name="failfast-test")
+    db_session.add_all([host, device, script, plan])
+    db_session.commit()
+
+    db_session.add(PlanStep(
+        plan_id=plan.id, step_key="init_check",
+        script_name="check_device", script_version="1.0.0",
+        stage="init", sort_order=0, timeout_seconds=30, retry=0,
+    ))
+    db_session.commit()
+    return plan, device, host, script
+
+
+class TestFailFastSyncDispatch:
+    def test_preview_rejects_deactivated_script(self, db_session, _failfast_fixture):
+        from backend.services.plan_dispatcher_sync import preview_plan_dispatch_sync
+
+        plan, device, _host, script = _failfast_fixture
+        script.is_active = False
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as excinfo:
+            preview_plan_dispatch_sync(
+                plan_id=plan.id, device_ids=[device.id], db=db_session,
+            )
+        assert excinfo.value.missing_scripts == ["check_device:1.0.0"]
+
+    def test_prepare_rejects_deactivated_no_plan_run_row(
+        self, db_session, _failfast_fixture,
+    ):
+        from backend.services.plan_dispatcher_sync import prepare_plan_run
+
+        plan, device, _host, script = _failfast_fixture
+        script.is_active = False
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as excinfo:
+            prepare_plan_run(
+                plan_id=plan.id, device_ids=[device.id],
+                triggered_by="test", db=db_session,
+            )
+        assert excinfo.value.missing_scripts == ["check_device:1.0.0"]
+
+        # PlanRun 行没有被创建:fail-fast 必须在 INSERT 之前。
+        from backend.models.plan_run import PlanRun
+        assert db_session.query(PlanRun).filter(
+            PlanRun.plan_id == plan.id
+        ).count() == 0
+
+    def test_prepare_rejects_nonexistent_script(self, db_session, _failfast_fixture):
+        from backend.services.plan_dispatcher_sync import prepare_plan_run
+
+        plan, device, _host, _script = _failfast_fixture
+        # 加一个引用根本不存在的 (name, version) 的 step
+        db_session.add(PlanStep(
+            plan_id=plan.id, step_key="bogus",
+            script_name="ghost_script", script_version="9.9.9",
+            stage="init", sort_order=1, timeout_seconds=10, retry=0,
+        ))
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as excinfo:
+            prepare_plan_run(
+                plan_id=plan.id, device_ids=[device.id],
+                triggered_by="test", db=db_session,
+            )
+        # 不存在与 deactivate 在 keys 缺失这一层统一表达
+        assert "ghost_script:9.9.9" in (excinfo.value.missing_scripts or [])
+
+    def test_prepare_partial_missing_lists_only_missing(
+        self, db_session, _failfast_fixture,
+    ):
+        """三个 step 中只有一个的脚本失活,missing_scripts 精确为长度 1。"""
+        from backend.services.plan_dispatcher_sync import prepare_plan_run
+
+        plan, device, _host, _script = _failfast_fixture
+        # 再加两个引用其他 active 脚本的 step
+        good_a = Script(
+            name="aux_a", script_type="python", version="1.0.0",
+            nfs_path="/nfs/scripts/aux_a/v1.0.0/aux_a.py",
+            content_sha256="aa" * 32, default_params={},
+            param_schema={}, is_active=True,
+        )
+        good_b = Script(
+            name="aux_b", script_type="python", version="1.0.0",
+            nfs_path="/nfs/scripts/aux_b/v1.0.0/aux_b.py",
+            content_sha256="bb" * 32, default_params={},
+            param_schema={}, is_active=True,
+        )
+        db_session.add_all([good_a, good_b])
+        db_session.add_all([
+            PlanStep(
+                plan_id=plan.id, step_key="aux_a_step",
+                script_name="aux_a", script_version="1.0.0",
+                stage="init", sort_order=1, timeout_seconds=10, retry=0,
+            ),
+            PlanStep(
+                plan_id=plan.id, step_key="aux_b_step",
+                script_name="aux_b", script_version="1.0.0",
+                stage="teardown", sort_order=0, timeout_seconds=10, retry=0,
+            ),
+        ])
+        # 失活其中第一个 step 的脚本
+        good_a.is_active = False
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as excinfo:
+            prepare_plan_run(
+                plan_id=plan.id, device_ids=[device.id],
+                triggered_by="test", db=db_session,
+            )
+        assert excinfo.value.missing_scripts == ["aux_a:1.0.0"]
+
+    def test_complete_writes_failed_when_script_deactivated_after_prepare(
+        self, db_session, _failfast_fixture,
+    ):
+        """prepare 成功后,在 complete 之前脚本被失活 → 内部写 FAILED + audit,不抛异常。"""
+        from backend.services.plan_dispatcher_sync import (
+            complete_plan_run_dispatch, prepare_plan_run,
+        )
+        from backend.models.audit import AuditLog
+        from backend.models.plan_run import PlanRun
+
+        plan, device, _host, script = _failfast_fixture
+        pr = prepare_plan_run(
+            plan_id=plan.id, device_ids=[device.id],
+            triggered_by="test", db=db_session,
+        )
+        assert pr.status == "RUNNING"  # prepare 成功
+
+        # 模拟时间窗内脚本被失活
+        script.is_active = False
+        db_session.commit()
+
+        # complete 内部捕获,不抛
+        complete_plan_run_dispatch(pr.id, db=db_session)
+
+        db_session.refresh(pr)
+        assert pr.status == "FAILED"
+        assert pr.ended_at is not None
+        assert pr.result_summary == {
+            "dispatch_failed": True,
+            "missing_scripts": ["check_device:1.0.0"],
+        }
+        # JobInstance 不该被创建
+        from backend.models.job import JobInstance
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0
+
+        # audit log 落了
+        audit = db_session.query(AuditLog).filter(
+            AuditLog.action == "plan_dispatch_failed",
+            AuditLog.resource_id == str(pr.id),
+        ).first()
+        assert audit is not None
+        assert audit.details["missing_scripts"] == ["check_device:1.0.0"]
+
+    def test_plan_snapshot_includes_nfs_path(self, db_session, _failfast_fixture):
+        """ADR-0023 D3 实施前提:plan_snapshot.steps[i] 持有 nfs_path,为 DeviceDetailDrawer 准备。"""
+        from backend.services.plan_dispatcher_sync import prepare_plan_run
+
+        plan, device, _host, script = _failfast_fixture
+        pr = prepare_plan_run(
+            plan_id=plan.id, device_ids=[device.id],
+            triggered_by="test", db=db_session,
+        )
+        step_entries = pr.plan_snapshot["steps"]
+        assert step_entries[0]["nfs_path"] == script.nfs_path
+
+
+class TestFailFastAsyncDispatch:
+    """ADR-0023 C1 — async dispatcher 路径(SCHEDULE / async CHAIN)对偶覆盖。
+
+    Note: async ``dispatch_plan`` 端到端需要 ``AsyncSessionLocal`` 与测试 sync
+    session 共享提交可见性。SQLite + sync 事务回滚 fixture 下两边连接不互通
+    (sync 持有未 COMMIT 的 transaction,asyncpg/aiosqlite 看不到 Plan 行),所以
+    端到端覆盖留给真实 PG 集成测试。这里仅以 unit 方式确认 async 模块的
+    ``_check_script_keys_complete`` 与 ``PlanDispatchError`` 行为与 sync 路径
+    线对线一致。
+    """
+
+    def test_async_check_script_keys_complete_returns_missing(self):
+        from backend.services.plan_dispatcher import _check_script_keys_complete
+
+        steps = [
+            PlanStep(plan_id=1, step_key="a", script_name="alpha",
+                     script_version="1.0.0", stage="init", sort_order=0),
+            PlanStep(plan_id=1, step_key="b", script_name="beta",
+                     script_version="2.0.0", stage="init", sort_order=1),
+        ]
+        metadata = {("alpha", "1.0.0"): {"default_params": {}}}
+        missing = _check_script_keys_complete(steps, metadata)
+        assert missing == ["beta:2.0.0"]
+
+    def test_async_plan_dispatch_error_detail_shape(self):
+        from backend.services.plan_dispatcher import (
+            PlanDispatchError as AsyncPlanDispatchError,
+        )
+
+        exc = AsyncPlanDispatchError(
+            "scripts unavailable: foo:1",
+            missing_scripts=["foo:1"],
+        )
+        assert exc.detail() == {"code": "INVALID_SCRIPT_REFS", "missing": ["foo:1"]}
+        assert AsyncPlanDispatchError("plan not found").detail() == "plan not found"
