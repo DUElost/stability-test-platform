@@ -18,6 +18,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from backend.core.ssh_security import create_ssh_client
+
 logger = logging.getLogger(__name__)
 
 # Paths
@@ -48,7 +50,7 @@ _TAR_EXCLUDE_SUFFIXES = (".pyc",)
 def _resolve_ssh_creds(host_ip: str) -> dict | None:
     """Look up SSH credentials from Ansible inventory by IP.
 
-    Returns dict with keys: user, password, port, or None if not found.
+    Returns dict with keys: user, password, key_path, port, or None if not found.
     """
     if not _INVENTORY_PATH.exists():
         return None
@@ -70,6 +72,8 @@ def _resolve_ssh_creds(host_ip: str) -> dict | None:
                 return {
                     "user": parts.get("ansible_user", "android"),
                     "password": parts.get("ansible_password", ""),
+                    "key_path": parts.get("ansible_ssh_private_key_file", "")
+                    or parts.get("ansible_private_key_file", ""),
                     "port": int(parts.get("ansible_port", "22")),
                 }
     except Exception:
@@ -212,29 +216,18 @@ def _build_remote_script(
 
 def _ssh_connect(host_ip: str, port: int, username: str,
                  password: str = "", key_path: str = "",
+                 known_hosts_path: str = "",
                  timeout: int = 30):
     """Establish a paramiko SSH connection, returning (client, sftp)."""
-    import paramiko
-
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-    connect_kwargs = {
-        "hostname": host_ip,
-        "port": port,
-        "username": username,
-        "timeout": timeout,
-    }
-
-    if key_path and os.path.exists(key_path):
-        connect_kwargs["key_filename"] = key_path
-    elif password:
-        connect_kwargs["password"] = password
-    else:
-        # Let paramiko try default keys
-        pass
-
-    client.connect(**connect_kwargs)
+    client = create_ssh_client(
+        hostname=host_ip,
+        port=port,
+        username=username,
+        password=password,
+        key_path=key_path,
+        known_hosts_path=known_hosts_path,
+        timeout=timeout,
+    )
     sftp = client.open_sftp()
     return client, sftp
 
@@ -245,6 +238,7 @@ def execute_hot_update(
     ssh_user: str = "root",
     ssh_password: str = "",
     ssh_key_path: str = "",
+    known_hosts_path: str = "",
     install_user: str = "android",
     install_group: str = "android",
     sync_agent_secret: bool = False,
@@ -272,6 +266,7 @@ def execute_hot_update(
             username=ssh_user,
             password=ssh_password,
             key_path=ssh_key_path,
+            known_hosts_path=known_hosts_path,
         )
 
         try:

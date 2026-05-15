@@ -8,8 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from typing import Any, List
 
-from backend.core.database import get_db
 from backend.core.audit import record_audit
+from backend.core.database import get_db
+from backend.core.ssh_security import (
+    SshSecurityConfigError,
+    encrypt_ssh_password,
+    resolve_host_ssh_credentials,
+)
 from backend.models.enums import JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
@@ -135,6 +140,10 @@ router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 @router.post("", response_model=HostOut)
 def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin), request: Request = None):
     host_id = str(uuid.uuid4())
+    try:
+        encrypted_password = encrypt_ssh_password(payload.ssh_password) or None
+    except SshSecurityConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     host = Host(
         id=host_id,
         hostname=payload.name,
@@ -145,6 +154,8 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
         ssh_user=payload.ssh_user,
         ssh_auth_type=payload.ssh_auth_type,
         ssh_key_path=payload.ssh_key_path,
+        ssh_password_enc=encrypted_password,
+        ssh_known_hosts_path=payload.ssh_known_hosts_path,
     )
     db.add(host)
     db.flush()
@@ -220,6 +231,12 @@ def update_host(
     host.ssh_user = payload.ssh_user
     host.ssh_auth_type = payload.ssh_auth_type
     host.ssh_key_path = payload.ssh_key_path
+    host.ssh_known_hosts_path = payload.ssh_known_hosts_path
+    if payload.ssh_password is not None:
+        try:
+            host.ssh_password_enc = encrypt_ssh_password(payload.ssh_password) or None
+        except SshSecurityConfigError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     record_audit(
         db,
@@ -439,25 +456,19 @@ def host_hot_update(
             )
 
     # ── SSH credentials ────────────────────────────────────────────────────
-    ssh_password = (host.extra or {}).get("ssh_password", "")
-    ssh_key_path = (host.extra or {}).get("ssh_key_path", "")
-    ssh_user = host.ssh_user or "root"
-
-    if not ssh_password and not ssh_key_path:
-        inv = _resolve_ssh_creds(host.ip or "")
-        if inv:
-            ssh_user = inv["user"]
-            ssh_password = inv.get("password", "")
-            logger.info("hot_update_using_inventory host=%s ip=%s user=%s",
-                        host_id, host.ip, ssh_user)
-
-    if not ssh_password and not ssh_key_path:
+    try:
+        creds, _migrated = resolve_host_ssh_credentials(
+            host, inventory_lookup=_resolve_ssh_creds,
+        )
+    except SshSecurityConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not creds.password and not creds.key_path:
         raise HTTPException(
             status_code=400,
             detail=(
                 "Host has no SSH credentials configured and is not found "
-                "in Ansible inventory. Set ssh_password or ssh_key_path in "
-                "host.extra via PUT /api/v1/hosts/{host_id}."
+                "in Ansible inventory. Set ssh_password or ssh_key_path via "
+                "PUT /api/v1/hosts/{host_id}."
             ),
         )
 
@@ -485,9 +496,10 @@ def host_hot_update(
     result = execute_hot_update(
         host_ip=host.ip or "",
         ssh_port=host.ssh_port or 22,
-        ssh_user=ssh_user,
-        ssh_password=ssh_password,
-        ssh_key_path=ssh_key_path or "",
+        ssh_user=creds.user,
+        ssh_password=creds.password,
+        ssh_key_path=creds.key_path,
+        known_hosts_path=creds.known_hosts_path,
         sync_agent_secret=sync_agent_secret,
         agent_secret=agent_secret,
     )

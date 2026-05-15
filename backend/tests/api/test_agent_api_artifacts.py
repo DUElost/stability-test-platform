@@ -37,6 +37,11 @@ from backend.tests.api.test_agent_api_watcher import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _set_nfs_root(monkeypatch):
+    monkeypatch.setenv("STP_NFS_ROOT", "/mnt/nfs")
+
+
 # ----------------------------------------------------------------------
 # helper
 # ----------------------------------------------------------------------
@@ -215,6 +220,28 @@ async def test_ingest_artifact_rejects_empty_storage_uri():
                 )
         assert excinfo.value.status_code == 400
         assert "storage_uri" in str(excinfo.value.detail).lower()
+    finally:
+        _cleanup_with_artifacts(seed)
+
+
+@pytest.mark.asyncio
+async def test_ingest_artifact_rejects_storage_uri_outside_nfs_root():
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as excinfo:
+                await ingest_artifact(
+                    job_id=seed["job_id"],
+                    payload=ArtifactIn(
+                        storage_uri="file:///etc/passwd",
+                        artifact_type="aee_crash",
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert excinfo.value.status_code == 400
+        assert "STP_NFS_ROOT" in str(excinfo.value.detail)
     finally:
         _cleanup_with_artifacts(seed)
 

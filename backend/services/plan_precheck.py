@@ -39,6 +39,11 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.database import SessionLocal
 from backend.core.metrics import record_dispatch_gate
+from backend.core.ssh_security import (
+    SshSecurityConfigError,
+    create_ssh_client,
+    resolve_host_ssh_credentials,
+)
 from backend.models.host import Device, Host
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
@@ -205,27 +210,23 @@ def _sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional
     if not host.ip:
         return False, "host_missing_ip"
 
-    extra = host.extra or {}
-    ssh_password = extra.get("ssh_password", "")
-    ssh_key_path = extra.get("ssh_key_path", "")
-    ssh_user = host.ssh_user or "root"
-
-    if not ssh_password and not ssh_key_path:
-        inv = _resolve_ssh_creds(host.ip)
-        if inv:
-            ssh_user = inv["user"]
-            ssh_password = inv.get("password", "")
-
-    if not ssh_password and not ssh_key_path:
+    try:
+        creds, _migrated = resolve_host_ssh_credentials(
+            host, inventory_lookup=_resolve_ssh_creds,
+        )
+    except SshSecurityConfigError as exc:
+        return False, f"ssh_security_config_error: {exc}"
+    if not creds.password and not creds.key_path:
         return False, "no_ssh_credentials"
 
     try:
         result = execute_hot_update(
             host_ip=host.ip,
             ssh_port=host.ssh_port or 22,
-            ssh_user=ssh_user,
-            ssh_password=ssh_password,
-            ssh_key_path=ssh_key_path or "",
+            ssh_user=creds.user,
+            ssh_password=creds.password,
+            ssh_key_path=creds.key_path,
+            known_hosts_path=creds.known_hosts_path,
         )
     except Exception as exc:
         return False, f"hot_update_exception: {exc}"
@@ -270,21 +271,18 @@ def _nfs_path_to_local(nfs_path: str) -> str | None:
 
 
 def _get_ssh_client(host_ip: str, host_ssh_port: int, ssh_user: str,
-                    ssh_password: str, ssh_key_path: str):
+                    ssh_password: str, ssh_key_path: str,
+                    known_hosts_path: str = ""):
     """Create a connected paramiko SSH client."""
-    import paramiko
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    kwargs: dict[str, Any] = {
-        "hostname": host_ip, "port": host_ssh_port,
-        "username": ssh_user, "timeout": 15,
-    }
-    if ssh_key_path:
-        kwargs["key_filename"] = ssh_key_path
-    elif ssh_password:
-        kwargs["password"] = ssh_password
-    client.connect(**kwargs)
-    return client
+    return create_ssh_client(
+        hostname=host_ip,
+        port=host_ssh_port,
+        username=ssh_user,
+        password=ssh_password,
+        key_path=ssh_key_path,
+        known_hosts_path=known_hosts_path,
+        timeout=15,
+    )
 
 
 def _push_mismatched_scripts(
@@ -302,18 +300,13 @@ def _push_mismatched_scripts(
     if not host.ip:
         return False, "host_missing_ip"
 
-    extra = host.extra or {}
-    ssh_password = extra.get("ssh_password", "")
-    ssh_key_path = extra.get("ssh_key_path", "")
-    ssh_user = host.ssh_user or "root"
-
-    if not ssh_password and not ssh_key_path:
-        inv = _resolve_ssh_creds(host.ip)
-        if inv:
-            ssh_user = inv["user"]
-            ssh_password = inv.get("password", "")
-
-    if not ssh_password and not ssh_key_path:
+    try:
+        creds, _migrated = resolve_host_ssh_credentials(
+            host, inventory_lookup=_resolve_ssh_creds,
+        )
+    except SshSecurityConfigError as exc:
+        return False, f"ssh_security_config_error: {exc}"
+    if not creds.password and not creds.key_path:
         return False, "no_ssh_credentials"
 
     import paramiko
@@ -323,8 +316,8 @@ def _push_mismatched_scripts(
     client = None
     try:
         client = _get_ssh_client(
-            host.ip, host.ssh_port or 22, ssh_user,
-            ssh_password, ssh_key_path or "",
+            host.ip, host.ssh_port or 22, creds.user,
+            creds.password, creds.key_path, creds.known_hosts_path,
         )
         sftp = client.open_sftp()
 

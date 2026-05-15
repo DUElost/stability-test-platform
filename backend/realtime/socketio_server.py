@@ -21,11 +21,12 @@ from typing import Any, Dict, Optional
 
 import socketio
 
+from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
+from backend.core.cors import get_cors_allowed_origins
 from backend.core.metrics import record_socketio_connection
 
 logger = logging.getLogger(__name__)
 
-_AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 _WS_TOKEN = os.getenv("WS_TOKEN", "dev-token-12345")
 
 _sio: Optional[socketio.AsyncServer] = None
@@ -59,8 +60,7 @@ def create_sio_server() -> socketio.AsyncServer:
     """Create and configure the SocketIO AsyncServer singleton."""
     global _sio
 
-    cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
-    origins = [o.strip() for o in cors_origins.split(",") if o.strip()] or "*"
+    origins = get_cors_allowed_origins()
 
     sio = socketio.AsyncServer(
         async_mode="asgi",
@@ -103,13 +103,15 @@ class AgentNamespace(socketio.AsyncNamespace):
         provided_secret = auth.get("agent_secret", "")
         host_id = auth.get("host_id", "")
 
-        if not secrets.compare_digest(provided_secret or "", _AGENT_SECRET):
+        try:
+            expected = require_agent_secret()
+        except AgentSecretNotConfiguredError:
+            logger.warning("agent_sio_rejected sid=%s: AGENT_SECRET not configured", sid)
+            raise socketio.exceptions.ConnectionRefusedError("AGENT_SECRET not configured")
+
+        if not secrets.compare_digest(provided_secret or "", expected):
             logger.warning("agent_sio_auth_failed sid=%s host_id=%s", sid, host_id)
             raise socketio.exceptions.ConnectionRefusedError("Invalid agent secret")
-
-        if not _AGENT_SECRET and os.getenv("STP_ENV", "").lower() in {"prod", "production", "staging"}:
-            logger.warning("agent_sio_rejected sid=%s: AGENT_SECRET not configured in %s", sid, os.getenv("STP_ENV"))
-            raise socketio.exceptions.ConnectionRefusedError("AGENT_SECRET not configured")
 
         if not host_id:
             logger.warning("agent_sio_no_host_id sid=%s", sid)

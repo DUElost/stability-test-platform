@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 from datetime import datetime, timedelta, timezone
 
@@ -20,6 +20,11 @@ from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.core.artifact_paths import (
+    ArtifactPathError,
+    ArtifactPathNotFoundError,
+    resolve_local_artifact_path,
+)
 from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.metrics import record_patrol_manual_action
@@ -1692,12 +1697,13 @@ def _artifact_download_target(storage_uri: str) -> dict[str, str]:
     scheme = parsed.scheme.lower()
     if scheme in {"http", "https"}:
         return {"kind": "redirect", "url": storage_uri}
-    if scheme != "file":
-        raise HTTPException(status_code=400, detail=f"unsupported artifact scheme: {scheme or 'empty'}")
-    p = Path(("//" + parsed.netloc + unquote(parsed.path)) if parsed.netloc else unquote(parsed.path))
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail=f"artifact file not found: {p}")
-    return {"kind": "local", "path": str(p)}
+    try:
+        local_path = resolve_local_artifact_path(storage_uri, must_exist=True)
+    except ArtifactPathNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ArtifactPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"kind": "local", "path": str(local_path)}
 
 
 @router.get(

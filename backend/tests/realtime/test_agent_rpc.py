@@ -57,11 +57,11 @@ def patched_namespace(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_agent_namespace_tracks_sid_on_connect(patched_namespace, monkeypatch):
-    monkeypatch.setattr(socketio_server, "_AGENT_SECRET", "")
-    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AGENT_SECRET", "socket-secret-123456")
 
     await patched_namespace.on_connect(
-        "sid-A", environ={}, auth={"agent_secret": "", "host_id": "host-101"}
+        "sid-A", environ={}, auth={"agent_secret": "socket-secret-123456", "host_id": "host-101"}
     )
     assert patched_namespace.get_sid("host-101") == "sid-A"
     assert patched_namespace.connected_host_ids() == ["host-101"]
@@ -69,11 +69,11 @@ async def test_agent_namespace_tracks_sid_on_connect(patched_namespace, monkeypa
 
 @pytest.mark.asyncio
 async def test_agent_namespace_drops_sid_on_disconnect(patched_namespace, monkeypatch):
-    monkeypatch.setattr(socketio_server, "_AGENT_SECRET", "")
-    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AGENT_SECRET", "socket-secret-123456")
 
     await patched_namespace.on_connect(
-        "sid-A", environ={}, auth={"agent_secret": "", "host_id": "host-101"}
+        "sid-A", environ={}, auth={"agent_secret": "socket-secret-123456", "host_id": "host-101"}
     )
     await patched_namespace.on_disconnect("sid-A")
     assert patched_namespace.get_sid("host-101") is None
@@ -86,19 +86,32 @@ async def test_agent_namespace_disconnect_with_stale_sid_keeps_current_mapping(
 ):
     """If host reconnects with a new sid, an older sid's disconnect must
     NOT erase the live mapping."""
-    monkeypatch.setattr(socketio_server, "_AGENT_SECRET", "")
-    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("AGENT_SECRET", "socket-secret-123456")
 
     await patched_namespace.on_connect(
-        "sid-old", environ={}, auth={"agent_secret": "", "host_id": "host-X"}
+        "sid-old", environ={}, auth={"agent_secret": "socket-secret-123456", "host_id": "host-X"}
     )
     await patched_namespace.on_connect(
-        "sid-new", environ={}, auth={"agent_secret": "", "host_id": "host-X"}
+        "sid-new", environ={}, auth={"agent_secret": "socket-secret-123456", "host_id": "host-X"}
     )
     assert patched_namespace.get_sid("host-X") == "sid-new"
 
     await patched_namespace.on_disconnect("sid-old")
     assert patched_namespace.get_sid("host-X") == "sid-new"
+
+
+@pytest.mark.asyncio
+async def test_agent_namespace_rejects_when_server_secret_missing(
+    patched_namespace, monkeypatch
+):
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.delenv("AGENT_SECRET", raising=False)
+
+    with pytest.raises(Exception, match="AGENT_SECRET not configured"):
+        await patched_namespace.on_connect(
+            "sid-A", environ={}, auth={"agent_secret": "", "host_id": "host-101"}
+        )
 
 
 @pytest.mark.asyncio

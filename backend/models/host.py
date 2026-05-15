@@ -38,6 +38,8 @@ class Host(Base):
     ssh_user      = Column(String(64), nullable=True)
     ssh_auth_type = Column(String(32), default="password", nullable=True)
     ssh_key_path  = Column(String(256), nullable=True)
+    ssh_password_enc = Column(String(1024), nullable=True)
+    ssh_known_hosts_path = Column(String(512), nullable=True)
     extra         = Column(JSON, default=dict, nullable=True)
     mount_status  = Column(JSON, default=dict, nullable=True)
     updated_at    = Column(DateTime(timezone=True), onupdate=lambda: datetime.now(timezone.utc), nullable=True)

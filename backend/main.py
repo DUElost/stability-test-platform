@@ -39,6 +39,12 @@ from backend.api.routes.resource_pools import router as resource_pools_router
 # ADR-0020: Plan-based orchestration
 from backend.api.routes.plans import router as plans_router
 from backend.api.routes.plan_runs import router as plan_runs_router
+from backend.core.agent_secret import (
+    AgentSecretNotConfiguredError,
+    is_agent_secret_configured,
+    require_agent_secret,
+)
+from backend.core.cors import get_cors_config
 from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
@@ -76,18 +82,14 @@ async def lifespan(app: FastAPI):
     scheduler = None
 
     if os.getenv("TESTING") != "1":
-        # AGENT_SECRET fail-fast: non-dev 环境必须配置 secret，否则 Agent
-        # 控制面（REST /api/v1/agent/* 与 SocketIO /agent）会因 _verify_agent
-        # 的 compare_digest("", "") == True 而完全放行。
-        _stp_env = os.getenv("STP_ENV", "dev").lower()
-        _agent_secret_configured = bool(os.getenv("AGENT_SECRET"))
-        if _stp_env in {"prod", "production", "staging"} and not _agent_secret_configured:
-            raise RuntimeError(
-                f"AGENT_SECRET required in non-dev environment (STP_ENV={_stp_env})"
-            )
+        get_cors_config()
+        try:
+            require_agent_secret()
+        except AgentSecretNotConfiguredError as exc:
+            raise RuntimeError("AGENT_SECRET required when TESTING!=1") from exc
         logger.info(
-            "startup_security_config env=%s agent_secret_configured=%s",
-            _stp_env, _agent_secret_configured,
+            "startup_security_config testing=%s agent_secret_configured=%s",
+            os.getenv("TESTING"), is_agent_secret_configured(),
         )
 
         # Redis — retained for SAQ broker (task queue)
@@ -150,14 +152,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"data": None, "error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}})
 _fastapi_app.add_middleware(RateLimitMiddleware)
 
-_cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
-allow_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
 _fastapi_app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    **get_cors_config(),
 )
 
 _fastapi_app.include_router(auth_router)

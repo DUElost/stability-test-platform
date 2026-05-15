@@ -141,7 +141,7 @@ def hot_update(client: APIClient, host_id: str) -> bool:
     if r.status_code != 200:
         warn(f"hot-update 失败 status={r.status_code} body={r.text[:300]}")
         warn("继续，但 10.36 节点的 Agent 代码可能不是最新的。")
-        warn("（如果是 SSH 凭据缺失，请先在 host.extra 配置 ssh_password 或加 Ansible inventory；")
+        warn("（如果是 SSH 凭据缺失，请先在 Host 配置里设置 ssh_password/ssh_key_path 或加 Ansible inventory；")
         warn(" 或者用 --no-hot-update 跳过此步）")
         return False
     body = r.json()

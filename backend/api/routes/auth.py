@@ -1,5 +1,4 @@
 """Authentication API routes."""
-import os
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -9,6 +8,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.database import get_db
 from backend.core.security import (
     create_access_token,
@@ -22,19 +22,21 @@ from backend.models.user import User
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
-# Agent callback authentication
-AGENT_SECRET = os.getenv("AGENT_SECRET", "")
-
 
 def verify_agent_secret(x_agent_secret: Optional[str] = Header(None)) -> bool:
     """Verify agent secret for callback endpoints.
 
-    无差别比较：dev 下 AGENT_SECRET == "" 且 header 缺失 → 双方为 "" → 通过；
-    prod 下 main.py lifespan 已保证 AGENT_SECRET 非空（启动期 RuntimeError）。
     secrets.compare_digest 防时序攻击。
     """
+    try:
+        expected = require_agent_secret()
+    except AgentSecretNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     provided = x_agent_secret or ""
-    if not secrets.compare_digest(provided, AGENT_SECRET):
+    if not secrets.compare_digest(provided, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid agent secret",

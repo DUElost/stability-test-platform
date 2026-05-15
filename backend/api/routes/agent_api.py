@@ -16,6 +16,8 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
+from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
+from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
 from backend.core.database import get_async_db
 from backend.core.metrics import record_log_signal_ingested, record_patrol_heartbeat
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
@@ -33,7 +35,6 @@ from backend.services.state_machine import InvalidTransitionError, JobStateMachi
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
 
-_AGENT_SECRET = os.getenv("AGENT_SECRET", "")
 _DEVICE_LOCK_LEASE_SECONDS = int(os.getenv("DEVICE_LOCK_LEASE_SECONDS", "600"))
 _TERMINAL = {
     JobStatus.COMPLETED.value,
@@ -49,11 +50,13 @@ class _LockAcquireFailed(Exception):
 
 
 def _verify_agent(x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret")):
-    # 无差别比较：dev 下 _AGENT_SECRET == "" 且 header 缺失 → 双方为 "" → 通过；
-    # prod 下 lifespan 已保证 _AGENT_SECRET 非空（main.py 启动期 RuntimeError）。
     # secrets.compare_digest 防时序攻击。
+    try:
+        expected = require_agent_secret()
+    except AgentSecretNotConfiguredError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     provided = x_agent_secret or ""
-    if not secrets.compare_digest(provided, _AGENT_SECRET):
+    if not secrets.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="invalid agent secret")
 
 
@@ -1277,6 +1280,10 @@ async def ingest_artifact(
     """
     if not payload.storage_uri:
         raise HTTPException(status_code=400, detail="storage_uri is required")
+    try:
+        resolve_local_artifact_path(payload.storage_uri, must_exist=False)
+    except ArtifactPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if payload.artifact_type not in _ARTIFACT_TYPE_WHITELIST:
         raise HTTPException(

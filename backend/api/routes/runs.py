@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.encoders import jsonable_encoder
@@ -19,6 +19,11 @@ from sqlalchemy.orm import Session
 
 from backend.api.schemas import JiraDraftOut, RunReportOut, RunStepOut
 from backend.api.routes.auth import get_current_active_user, User
+from backend.core.artifact_paths import (
+    ArtifactPathError,
+    ArtifactPathNotFoundError,
+    resolve_local_artifact_path,
+)
 from backend.core.database import get_db
 from backend.services.report_service import compose_run_report, build_jira_draft, _model_to_dict
 
@@ -80,19 +85,12 @@ def _artifact_download_target(storage_uri: str) -> dict[str, str]:
     scheme = parsed.scheme.lower()
     if scheme in {"http", "https"}:
         return {"kind": "redirect", "url": storage_uri}
-
-    if scheme != "file":
-        raise HTTPException(status_code=400, detail=f"unsupported artifact scheme: {scheme or 'empty'}")
-
-    if parsed.netloc and parsed.path:
-        local_path = Path(f"//{parsed.netloc}{unquote(parsed.path)}")
-    elif parsed.netloc and not parsed.path:
-        local_path = Path(unquote(parsed.netloc))
-    else:
-        local_path = Path(unquote(parsed.path))
-
-    if not local_path.exists() or not local_path.is_file():
-        raise HTTPException(status_code=404, detail=f"artifact file not found: {local_path}")
+    try:
+        local_path = resolve_local_artifact_path(storage_uri, must_exist=True)
+    except ArtifactPathNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ArtifactPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"kind": "local", "path": str(local_path)}
 
 

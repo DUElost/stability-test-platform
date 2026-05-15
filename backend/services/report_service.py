@@ -13,11 +13,11 @@ import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
-from urllib.parse import unquote, urlparse
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
 
+from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
@@ -72,14 +72,12 @@ def _model_to_dict(payload: Any) -> Dict[str, Any]:
 
 
 def _artifact_local_path(storage_uri: str) -> Optional[Path]:
-    parsed = urlparse(storage_uri)
-    if parsed.scheme.lower() != "file":
+    if storage_uri.startswith(("http://", "https://")):
         return None
-    if parsed.netloc and parsed.path:
-        return Path(f"//{parsed.netloc}{unquote(parsed.path)}")
-    if parsed.netloc and not parsed.path:
-        return Path(unquote(parsed.netloc))
-    return Path(unquote(parsed.path))
+    try:
+        return resolve_local_artifact_path(storage_uri, must_exist=False)
+    except ArtifactPathError:
+        return None
 
 
 def _load_json_file(path: Path) -> Optional[Dict[str, Any]]:

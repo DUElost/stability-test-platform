@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
@@ -24,9 +25,10 @@ class TestArtifactDownloadTarget(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             artifact_path = Path(temp_dir) / "run-1.tar.gz"
             artifact_path.write_text("dummy", encoding="utf-8")
-            target = _artifact_download_target(f"file://{artifact_path}")
-            self.assertEqual(target["kind"], "local")
-            self.assertEqual(Path(target["path"]), artifact_path)
+            with patch.dict("os.environ", {"STP_NFS_ROOT": temp_dir}):
+                target = _artifact_download_target(f"file://{artifact_path}")
+                self.assertEqual(target["kind"], "local")
+                self.assertEqual(Path(target["path"]), artifact_path)
 
     def test_http_uri_returns_redirect(self):
         url = "https://example.com/artifacts/run-1.tar.gz"
@@ -35,9 +37,21 @@ class TestArtifactDownloadTarget(unittest.TestCase):
         self.assertEqual(target["url"], url)
 
     def test_missing_file_raises_404(self):
-        with self.assertRaises(HTTPException) as ctx:
-            _artifact_download_target("file:///tmp/not-exist-xyz.tar.gz")
-        self.assertEqual(ctx.exception.status_code, 404)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing = Path(temp_dir) / "not-exist-xyz.tar.gz"
+            with patch.dict("os.environ", {"STP_NFS_ROOT": temp_dir}):
+                with self.assertRaises(HTTPException) as ctx:
+                    _artifact_download_target(f"file://{missing}")
+                self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_file_uri_outside_nfs_root_raises_400(self):
+        with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as outside_dir:
+            artifact_path = Path(outside_dir) / "run-1.tar.gz"
+            artifact_path.write_text("dummy", encoding="utf-8")
+            with patch.dict("os.environ", {"STP_NFS_ROOT": root_dir}):
+                with self.assertRaises(HTTPException) as ctx:
+                    _artifact_download_target(f"file://{artifact_path}")
+                self.assertEqual(ctx.exception.status_code, 400)
 
     def test_load_risk_summary_from_tar_artifact(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -54,11 +68,12 @@ class TestArtifactDownloadTarget(unittest.TestCase):
                 storage_uri=f"file://{archive_path}",
                 created_at=datetime.now(timezone.utc),
             )
-            summary = _load_risk_summary_from_artifacts([artifact])
-            self.assertIsNotNone(summary)
-            assert summary is not None
-            self.assertEqual(summary.get("risk_level"), "HIGH")
-            self.assertEqual(summary.get("counts", {}).get("events_total"), 2)
+            with patch.dict("os.environ", {"STP_NFS_ROOT": temp_dir}):
+                summary = _load_risk_summary_from_artifacts([artifact])
+                self.assertIsNotNone(summary)
+                assert summary is not None
+                self.assertEqual(summary.get("risk_level"), "HIGH")
+                self.assertEqual(summary.get("counts", {}).get("events_total"), 2)
 
 
 if __name__ == "__main__":

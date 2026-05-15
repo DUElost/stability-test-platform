@@ -2,6 +2,7 @@
 Tests for hosts API routes
 """
 import pytest
+from cryptography.fernet import Fernet
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -94,6 +95,34 @@ class TestCreateHost:
         data = response.json()
         assert data["ssh_auth_type"] == "key"
         # ssh_key_path is intentionally excluded from output for security
+
+    def test_create_host_encrypts_ssh_password(self, client, admin_headers, db_session, monkeypatch):
+        from backend.models.host import Host
+
+        monkeypatch.setenv("SSH_CREDENTIALS_FERNET_KEY", Fernet.generate_key().decode())
+        response = client.post(
+            "/api/v1/hosts",
+            json={
+                "name": "password-host",
+                "ip": "192.168.1.206",
+                "ssh_port": 22,
+                "ssh_user": "root",
+                "ssh_auth_type": "password",
+                "ssh_password": "top-secret-password",
+                "ssh_known_hosts_path": "/etc/stp/known_hosts",
+            },
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "ssh_password" not in data
+        assert "ssh_known_hosts_path" not in data
+
+        host = db_session.get(Host, data["id"])
+        assert host is not None
+        assert getattr(host, "ssh_password_enc", "")
+        assert host.ssh_password_enc != "top-secret-password"
+        assert "ssh_password" not in (host.extra or {})
 
     def test_create_host_forbidden_for_non_admin(self, client, auth_headers):
         response = client.post(

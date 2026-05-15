@@ -5,9 +5,7 @@ Extracted from tasks.py (Wave 8) — independent log functionality.
 
 import asyncio
 import logging
-import os
 import re
-import shlex
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -18,7 +16,16 @@ from sqlalchemy.orm import Session
 from backend.api.schemas import AgentLogOut, AgentLogQuery
 from backend.api.routes.auth import get_current_active_user, User, verify_agent_secret
 from backend.core.database import get_db
+from backend.core.ssh_security import (
+    LOG_FILE_NOT_FOUND_MARKER,
+    LOG_PATH_FORBIDDEN_MARKER,
+    SshSecurityConfigError,
+    build_remote_log_tail_command,
+    create_ssh_client,
+    resolve_host_ssh_credentials,
+)
 from backend.models.host import Host
+from backend.services.host_updater import _resolve_ssh_creds
 
 router = APIRouter(prefix="/api/v1", tags=["logs"])
 logger = logging.getLogger(__name__)
@@ -171,41 +178,51 @@ def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db), _: boo
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
 
-    if not re.match(r'^[a-zA-Z0-9_./\-\s]+$', query.log_path):
-        raise HTTPException(status_code=400, detail="Invalid log_path: contains disallowed characters")
+    try:
+        cmd = build_remote_log_tail_command(query.log_path, query.lines)
+    except (ValueError, SshSecurityConfigError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     ssh_host = host.ip
     ssh_port = host.ssh_port or 22
-    ssh_user = host.ssh_user or "root"
-    ssh_password = host.extra.get("ssh_password") if host.extra else None
-    ssh_key_path = host.extra.get("ssh_key_path") if host.extra else None
 
     try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        creds, migrated = resolve_host_ssh_credentials(
+            host, inventory_lookup=_resolve_ssh_creds,
+        )
+        if migrated:
+            db.commit()
+        if not creds.password and not creds.key_path:
+            return AgentLogOut(
+                host_id=query.host_id,
+                log_path=query.log_path,
+                content="",
+                lines_read=0,
+                error="SSH credentials are not configured for this host.",
+            )
 
-        connect_kwargs = {
-            "hostname": ssh_host,
-            "port": ssh_port,
-            "username": ssh_user,
-            "timeout": 10,
-        }
-
-        if ssh_key_path and os.path.exists(ssh_key_path):
-            connect_kwargs["key_filename"] = ssh_key_path
-        elif ssh_password:
-            connect_kwargs["password"] = ssh_password
-
-        client.connect(**connect_kwargs)
-
-        cmd = f"tail -n {query.lines} {shlex.quote(query.log_path)} 2>/dev/null || echo 'LOG_FILE_NOT_FOUND'"
+        client = create_ssh_client(
+            hostname=ssh_host,
+            port=ssh_port,
+            username=creds.user,
+            password=creds.password,
+            key_path=creds.key_path,
+            known_hosts_path=creds.known_hosts_path,
+            timeout=10,
+        )
         stdin, stdout, stderr = client.exec_command(cmd)
         content = stdout.read().decode("utf-8", errors="replace")
         error = stderr.read().decode("utf-8", errors="replace")
 
         client.close()
 
-        if content.strip() == "LOG_FILE_NOT_FOUND":
+        if content.strip() == LOG_PATH_FORBIDDEN_MARKER:
+            raise HTTPException(
+                status_code=400,
+                detail="log_path must stay under configured SSH log roots",
+            )
+
+        if content.strip() == LOG_FILE_NOT_FOUND_MARKER:
             return AgentLogOut(
                 host_id=query.host_id,
                 log_path=query.log_path,
@@ -230,7 +247,7 @@ def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db), _: boo
             log_path=query.log_path,
             content="",
             lines_read=0,
-            error="SSH authentication failed. Please check ssh_user and ssh_password/ssh_key.",
+            error="SSH authentication failed. Please check ssh credentials and known_hosts.",
         )
     except paramiko.SSHException as e:
         return AgentLogOut(
@@ -239,6 +256,14 @@ def query_agent_logs(query: AgentLogQuery, db: Session = Depends(get_db), _: boo
             content="",
             lines_read=0,
             error=f"SSH connection error: {str(e)}",
+        )
+    except (SshSecurityConfigError, FileNotFoundError) as e:
+        return AgentLogOut(
+            host_id=query.host_id,
+            log_path=query.log_path,
+            content="",
+            lines_read=0,
+            error=f"SSH security configuration error: {str(e)}",
         )
     except Exception as e:
         return AgentLogOut(

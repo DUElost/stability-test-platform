@@ -13,6 +13,8 @@ class HostCreate(BaseModel):
     ssh_user: Optional[str] = None
     ssh_auth_type: str = "password"
     ssh_key_path: Optional[str] = None
+    ssh_password: Optional[str] = None
+    ssh_known_hosts_path: Optional[str] = None
 
 
 class HostActiveJob(BaseModel):
