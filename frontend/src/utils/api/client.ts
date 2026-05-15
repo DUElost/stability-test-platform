@@ -67,5 +67,5 @@ export async function unwrapApiResponse<T>(request: Promise<{ data: { data?: T; 
   const resp = await request;
   const body = resp.data as any;
   if (body?.error) throw new Error(`[${body.error.code}] ${body.error.message}`);
-  return body?.data ?? body;
+  return body.data as T;
 }

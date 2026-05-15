@@ -4,10 +4,11 @@ import { useQuery } from '@tanstack/react-query';
 import { Plus, Loader2 } from 'lucide-react';
 import { TaskDataTable, type Task, type TaskStatus, type TaskType } from '../../components/task/TaskDataTable';
 import { api, type Plan } from '../../utils/api';
+import { planKeys } from '@/utils/api/queryKeys';
 
 export default function TaskList() {
   const { data: tasks, isLoading, isError } = useQuery({
-    queryKey: ['plans'],
+    queryKey: planKeys.list(200),
     queryFn: () => api.plans.list(0, 200),
     refetchInterval: 5000,
   });
