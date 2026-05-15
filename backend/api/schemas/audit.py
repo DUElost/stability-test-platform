@@ -12,7 +12,7 @@ class AuditLogOut(ORMBaseModel):
     username: Optional[str] = None
     action: str
     resource_type: str
-    resource_id: Optional[int] = None
+    resource_id: Optional[str] = None
     details: Dict[str, Any] = Field(default_factory=dict)
     ip_address: Optional[str] = None
     timestamp: datetime

@@ -1,15 +1,56 @@
 """可复用 Action 模板 API 测试。"""
 
 import pytest
+from sqlalchemy.orm import sessionmaker
 from uuid import uuid4
+
+from backend.core.security import create_access_token, get_password_hash
+from backend.models.user import User
 
 
 def _uniq(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
 
 
-def test_action_template_crud(client, admin_headers, auth_headers):
+@pytest.fixture
+def async_visible_headers(engine):
+    """Seed committed users so async audit writes can satisfy user FK checks."""
+    Session = sessionmaker(bind=engine)
+    session = Session()
+
+    admin_username = _uniq("admin")
+    user_username = _uniq("user")
+    session.add_all([
+        User(
+            username=admin_username,
+            hashed_password=get_password_hash("adminpass123"),
+            role="admin",
+            is_active="Y",
+        ),
+        User(
+            username=user_username,
+            hashed_password=get_password_hash("testpass123"),
+            role="user",
+            is_active="Y",
+        ),
+    ])
+    session.commit()
+    session.close()
+
+    return {
+        "admin": {
+            "Authorization": f"Bearer {create_access_token(data={'sub': admin_username, 'role': 'admin'})}",
+        },
+        "user": {
+            "Authorization": f"Bearer {create_access_token(data={'sub': user_username, 'role': 'user'})}",
+        },
+    }
+
+
+def test_action_template_crud(client, async_visible_headers):
     template_name = _uniq("root_check_template")
+    admin_headers = async_visible_headers["admin"]
+    auth_headers = async_visible_headers["user"]
 
     create_resp = client.post(
         "/api/v1/action-templates",
@@ -54,7 +95,8 @@ def test_action_template_crud(client, admin_headers, auth_headers):
     assert deactivate_resp.json()["data"]["deactivated"] == template_id
 
 
-def test_action_template_validation(client, admin_headers):
+def test_action_template_validation(client, async_visible_headers):
+    admin_headers = async_visible_headers["admin"]
     # 只允许 script action
     invalid_builtin = client.post(
         "/api/v1/action-templates",
@@ -115,7 +157,8 @@ def test_action_template_validation(client, admin_headers):
     assert valid_script.json()["data"]["version"] == "2.0.0"
 
 
-def test_action_template_writes_require_admin(client, auth_headers):
+def test_action_template_writes_require_admin(client, async_visible_headers):
+    auth_headers = async_visible_headers["user"]
     response = client.post(
         "/api/v1/action-templates",
         json={

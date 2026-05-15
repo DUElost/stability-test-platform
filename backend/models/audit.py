@@ -25,4 +25,8 @@ class AuditLog(Base):
     resource_id   = Column(String(64))
     details       = Column(JSON, default=dict)
     ip_address    = Column(String(64))
-    timestamp     = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    timestamp     = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
