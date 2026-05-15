@@ -148,8 +148,8 @@ def abort_plan_run(
         now = datetime.now(timezone.utc)
         for job in active_jobs:
             if job.status == JobStatus.PENDING.value:
-                job.status = JobStatus.ABORTED.value
-                job.status_reason = reason
+                from backend.services.state_machine import JobStateMachine
+                JobStateMachine.transition(job, JobStatus.ABORTED, reason)
                 job.ended_at = now
                 aborted_jobs.append(job.id)
             else:
