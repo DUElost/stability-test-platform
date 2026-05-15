@@ -106,11 +106,21 @@ def trigger_next_plan_sync(
     if plan is None or plan.next_plan_id is None:
         return None
 
-    # Pessimistic lock the parent
-    locked = db.execute(
-        select(PlanRun).where(PlanRun.id == plan_run.id).with_for_update()
-    ).scalar()
-    if locked is None or locked.next_plan_triggered is True:
+    # (1) Atomically mark triggered + commit — prevents concurrent duplicate dispatch.
+    #     Uses UPDATE ... RETURNING instead of with_for_update() because
+    #     dispatch_plan_sync() commits internally and would release the lock
+    #     before next_plan_triggered is persisted.
+    result = db.execute(
+        update(PlanRun)
+        .where(PlanRun.id == plan_run.id)
+        .where(PlanRun.next_plan_triggered.is_(False))
+        .values(next_plan_triggered=True)
+        .returning(PlanRun.id)
+    )
+    locked_id = result.scalar()
+    db.commit()  # 释放锁；next_plan_triggered 已持久化
+    if locked_id is None:
+        # 另一个并发调用已经标记/触发
         return None
 
     device_rows = db.execute(
@@ -139,13 +149,6 @@ def trigger_next_plan_sync(
     except SyncPlanDispatchError as exc:
         logger.error("plan_chain_dispatch_sync_failed parent=%d err=%s", plan_run.id, exc)
         return None
-
-    db.execute(
-        update(PlanRun)
-        .where(PlanRun.id == plan_run.id)
-        .values(next_plan_triggered=True)
-    )
-    db.commit()
 
     logger.info(
         "plan_chain_triggered_sync parent=%d child=%d chain_index=%d",
