@@ -16,6 +16,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
+from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
 from backend.core.database import get_async_db
@@ -490,7 +491,11 @@ async def update_job_status(
     try:
         JobStateMachine.transition(job, new_status, payload.reason)
     except InvalidTransitionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise_api_http_error(
+            status_code=409,
+            code="INVALID_JOB_TRANSITION",
+            message="job status transition rejected",
+        )
 
     if job.status in _TERMINAL:
         job.ended_at = datetime.now(timezone.utc)
@@ -1320,7 +1325,11 @@ async def ingest_artifact(
     try:
         resolve_local_artifact_path(payload.storage_uri, must_exist=False)
     except ArtifactPathError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_api_http_error(
+            status_code=400,
+            code="INVALID_ARTIFACT_PATH",
+            message="artifact path is invalid or outside the allowed root",
+        )
 
     if payload.artifact_type not in _ARTIFACT_TYPE_WHITELIST:
         raise HTTPException(

@@ -142,3 +142,17 @@ def test_script_endpoints_require_auth_and_admin_for_writes(client, admin_header
         headers=auth_headers,
     )
     assert create_resp.status_code == 403
+
+
+def test_script_scan_missing_root_returns_structured_error(
+    client, monkeypatch, admin_headers, tmp_path
+):
+    missing_root = tmp_path / "missing-script-root"
+    monkeypatch.setenv("STP_SCRIPT_ROOT", str(missing_root))
+
+    resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["detail"]["code"] == "SCRIPT_ROOT_NOT_FOUND"
+    assert body["detail"]["message"]

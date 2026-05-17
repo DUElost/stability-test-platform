@@ -161,14 +161,14 @@ def list_plan_runs(
     skip: int = 0,
     limit: int = 50,
     plan_id: Optional[int] = None,
-    status: Optional[str] = None,
+    status: Optional[PlanRunStatus] = Query(default=None),
     db: Session = Depends(get_db),
 ):
     q = select(PlanRun).order_by(PlanRun.started_at.desc())
     if plan_id is not None:
         q = q.where(PlanRun.plan_id == plan_id)
     if status is not None:
-        q = q.where(PlanRun.status == status.upper())
+        q = q.where(PlanRun.status == status.value)
     runs = db.execute(q.offset(skip).limit(limit)).scalars().all()
     return ok([_plan_run_out(r) for r in runs])
 

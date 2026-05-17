@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
+from backend.api.error_helpers import raise_api_http_error
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.core.audit import record_audit
 from backend.core.database import get_db
@@ -121,7 +122,11 @@ def scan_scripts(
     try:
         result = scan_script_root(db, _script_root(), _script_runtime_root())
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise_api_http_error(
+            status_code=400,
+            code="SCRIPT_ROOT_NOT_FOUND",
+            message="script root not found or unreadable",
+        )
     record_audit(
         db,
         action="scan",

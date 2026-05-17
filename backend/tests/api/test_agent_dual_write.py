@@ -703,6 +703,26 @@ async def test_update_job_status_wrong_token_returns_409():
         _cleanup_seed(seed)
 
 
+@pytest.mark.asyncio(loop_scope="module")
+async def test_update_job_status_invalid_transition_returns_structured_error():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lock_and_lease(seed)
+    try:
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc_info:
+                await update_job_status(
+                    job_id=seed["job_id"],
+                    payload=JobStatusUpdate(status="RUNNING", fencing_token=token),
+                    db=async_db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["code"] == "INVALID_JOB_TRANSITION"
+        assert "Cannot transition" not in exc_info.value.detail["message"]
+    finally:
+        _cleanup_seed(seed)
+
+
 def test_update_job_status_missing_token_raises_validation_error():
     """缺 fencing_token → Pydantic 拒收 JobStatusUpdate 构造。"""
     from pydantic import ValidationError

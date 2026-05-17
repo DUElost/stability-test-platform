@@ -236,3 +236,25 @@ class TestPlanRunOutCarriesRunContext:
         body = resp.json()["data"]
         assert body["run_context"] is None
         assert body["chain_index"] == 0
+
+    def test_list_plan_runs_rejects_invalid_status_filter(
+        self, client, db_session
+    ):
+        plan = _create_minimal_plan(db_session)
+        pr = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=0.05,
+            plan_snapshot={"plan_id": plan.id, "steps": []},
+            run_type="MANUAL",
+            run_context=None,
+            triggered_by="testuser",
+            chain_index=0,
+            started_at=datetime.now(timezone.utc),
+        )
+        db_session.add(pr)
+        db_session.commit()
+
+        resp = client.get("/api/v1/plan-runs?status=PENDING")
+
+        assert resp.status_code == 422, resp.text

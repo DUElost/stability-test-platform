@@ -12,10 +12,12 @@ from backend.api.routes.agent_api import (
     _JobHeartbeatIn,
     _RunCompleteIn,
     _StepStatusIn,
+    JobStatusUpdate,
     complete_job,
     extend_job_lock,
     get_pending_jobs,
     job_heartbeat,
+    update_job_status,
     update_job_step_status,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
@@ -259,6 +261,29 @@ async def test_job_heartbeat_transitions_to_running():
             assert job.started_at is not None
         finally:
             db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_update_job_status_invalid_transition_returns_structured_error():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc_info:
+                await update_job_status(
+                    job_id=seed["job_id"],
+                    payload=JobStatusUpdate(status="RUNNING", fencing_token=token),
+                    db=async_db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == {
+            "code": "INVALID_JOB_TRANSITION",
+            "message": "job status transition rejected",
+        }
     finally:
         _cleanup_seed(seed)
 
