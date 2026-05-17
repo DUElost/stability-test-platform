@@ -317,6 +317,7 @@
           become: true
           ansible.builtin.systemd:
             name: "{{ agent_service_name }}"
+            enabled: true
             state: restarted
             daemon_reload: true
           when: agent_update_requires_restart | bool
@@ -367,6 +368,7 @@
           become: true
           ansible.builtin.systemd:
             name: "{{ agent_service_name }}"
+            enabled: true
             state: restarted
             daemon_reload: true
 

@@ -76,3 +76,11 @@ def test_update_agent_previews_and_syncs_service_unit():
     assert "{{ agent_source_dir }}/stability-test-agent.service" in text
     assert "/etc/systemd/system/{{ agent_service_name }}.service" in text
     assert "agent_service_change_lines | length > 0" in text
+
+
+def test_update_agent_reenables_service_on_restart_and_rollback():
+    text = PLAYBOOK.read_text(encoding="utf-8")
+
+    assert "Reload systemd and restart service" in text
+    assert "Restart service after rollback" in text
+    assert "enabled: true" in text
