@@ -30,134 +30,18 @@ from backend.services.resource_pool import (
     allocate_devices,
     create_allocations,
 )
+from backend.services.plan_dispatcher_core import (
+    PlanDispatchError,
+    build_lifecycle_from_steps as _build_lifecycle_from_steps,
+    build_plan_snapshot as _build_plan_snapshot,
+    build_preview as _build_preview,
+    check_script_keys_complete as _check_script_keys_complete,
+    inject_wifi_params as _inject_wifi_params,
+    iter_lifecycle_steps as _iter_lifecycle_steps,
+    script_defaults as _script_defaults,
+)
 
 logger = logging.getLogger(__name__)
-
-
-class PlanDispatchError(Exception):
-    """Dispatcher 失败的统一异常(async 对偶版本)。
-
-    ``missing_scripts`` 在 ADR-0023 C1 fail-fast 路径中携带缺失的
-    ``"name:version"`` 列表,与 ``plan_dispatcher_sync.PlanDispatchError``
-    保持字段一致。两个 dispatcher 各自维护一份异常类是 ADR-0020 落地时
-    的历史约定(``plan_chain_trigger`` 对两者各自 import + 别名)。
-    """
-
-    def __init__(
-        self, message: str, *, missing_scripts: list[str] | None = None
-    ) -> None:
-        super().__init__(message)
-        self.missing_scripts = list(missing_scripts) if missing_scripts else None
-
-    def detail(self) -> dict | str:
-        """端点层统一格式化入口:有 ``missing_scripts`` 时返回结构化错误体,
-        否则回退到 ``str(self)``。与 ``plan_dispatcher_sync`` 等价。"""
-        if self.missing_scripts:
-            return {"code": "INVALID_SCRIPT_REFS", "missing": self.missing_scripts}
-        return str(self)
-
-
-def _check_script_keys_complete(
-    steps: list[PlanStep],
-    metadata: dict[tuple[str, str], dict[str, dict]],
-) -> list[str]:
-    """ADR-0023 C1 — 返回缺失的 ``"name:version"`` 列表(async 对偶)。
-
-    与 ``plan_dispatcher_sync._check_script_keys_complete`` 行为一致;两个
-    dispatcher 各自持有一份纯函数版本是 ADR-0020 落地时的历史约定,
-    便于审计独立。
-    """
-    required = {(s.script_name, s.script_version) for s in steps if s.enabled is not False}
-    have = set(metadata.keys())
-    missing = sorted(required - have)
-    return [f"{name}:{version}" for name, version in missing]
-
-
-def _build_lifecycle_from_steps(
-    plan: Plan, steps: list[PlanStep], script_defaults: dict[tuple[str, str], dict]
-) -> dict:
-    """Build a pipeline_def lifecycle from PlanStep records (ADR-0020 §2 唯一事实源).
-
-    Inputs: ``plan`` 上的 ``patrol_interval_seconds`` / ``timeout_seconds`` 直列 +
-    每行 ``PlanStep`` 的 ``stage``/``sort_order``/``timeout_seconds``/``retry``。
-    Step ``params`` 由 ``script.default_params`` 注入(ADR-0020 §3)。
-
-    ADR-0023 C1: 上游必须保证 ``script_defaults`` 覆盖所有 enabled step 的
-    ``(name, version)`` 键。此处用下标访问而非 ``.get(..., {})``——缺失即 KeyError。
-    """
-    lifecycle: dict[str, Any] = {"init": [], "teardown": []}
-    patrol_steps: list[dict] = []
-
-    for step in sorted(steps, key=lambda s: (s.stage, s.sort_order)):
-        if step.enabled is False:
-            continue
-        default_params = script_defaults[(step.script_name, step.script_version)]
-        step_def: dict[str, Any] = {
-            "step_id": step.step_key,
-            "action": f"script:{step.script_name}",
-            "version": step.script_version,
-            "params": deepcopy(default_params),
-            "timeout_seconds": step.timeout_seconds,
-            "retry": step.retry,
-        }
-
-        if step.stage in ("init", "teardown"):
-            lifecycle[step.stage].append(step_def)
-        elif step.stage == "patrol":
-            patrol_steps.append(step_def)
-
-    if patrol_steps:
-        lifecycle["patrol"] = {
-            "interval_seconds": plan.patrol_interval_seconds or 60,
-            "steps": patrol_steps,
-        }
-
-    if plan.timeout_seconds is not None:
-        lifecycle["timeout_seconds"] = plan.timeout_seconds
-
-    return lifecycle
-
-
-def _iter_lifecycle_steps(pipeline: dict):
-    lifecycle = (pipeline or {}).get("lifecycle", {})
-    for phase_name in ("init", "teardown"):
-        steps = lifecycle.get(phase_name)
-        if isinstance(steps, list):
-            for step in steps:
-                yield phase_name, step
-    patrol = lifecycle.get("patrol")
-    if isinstance(patrol, dict) and isinstance(patrol.get("steps"), list):
-        for step in patrol["steps"]:
-            yield "patrol", step
-
-
-def _inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
-    if not wifi_params or not wifi_params.get("ssid"):
-        return pipeline
-    for _, step in _iter_lifecycle_steps(pipeline):
-        action = step.get("action", "")
-        if "connect_wifi" not in action:
-            continue
-        params = dict(step.get("params") or {})
-        if not params.get("ssid"):
-            params["ssid"] = wifi_params["ssid"]
-        if not params.get("password"):
-            params["password"] = wifi_params.get("password", "")
-        step["params"] = params
-    return pipeline
-
-
-def _build_preview(plan: Plan, lifecycle: dict, device_ids: list[int]) -> dict:
-    steps = list(_iter_lifecycle_steps({"lifecycle": lifecycle}))
-    return {
-        "plan_id": plan.id,
-        "plan_name": plan.name,
-        "device_ids": device_ids,
-        "device_count": len(device_ids),
-        "job_count": len(device_ids),
-        "total_steps": len(steps),
-        "lifecycle": lifecycle,
-    }
 
 
 async def _fetch_script_metadata(
@@ -187,60 +71,6 @@ async def _fetch_script_metadata(
         }
         for r in rows
     }
-
-
-def _script_defaults(
-    script_metadata: dict[tuple[str, str], dict[str, dict]]
-) -> dict[tuple[str, str], dict]:
-    return {key: value.get("default_params") or {} for key, value in script_metadata.items()}
-
-
-def _build_plan_snapshot(
-    plan: Plan,
-    steps: list[PlanStep],
-    script_metadata: dict[tuple[str, str], dict[str, dict]],
-    failure_threshold: float,
-) -> dict:
-    return {
-        "plan": {
-            "id": plan.id,
-            "name": plan.name,
-            "description": plan.description,
-            "failure_threshold": failure_threshold,
-            "patrol_interval_seconds": plan.patrol_interval_seconds,
-            "watcher_policy": plan.watcher_policy or {},
-        },
-        "steps": [
-            {
-                "stage": step.stage,
-                "step_key": step.step_key,
-                "script_name": step.script_name,
-                "script_version": step.script_version,
-                "nfs_path": (
-                    script_metadata
-                    .get((step.script_name, step.script_version), {})
-                    .get("nfs_path", "")
-                ),
-                "param_schema": (
-                    script_metadata
-                    .get((step.script_name, step.script_version), {})
-                    .get("param_schema", {})
-                ),
-                "default_params": (
-                    script_metadata
-                    .get((step.script_name, step.script_version), {})
-                    .get("default_params", {})
-                ),
-                "timeout_seconds": step.timeout_seconds,
-                "retry": step.retry,
-                "enabled": step.enabled is not False,
-                "sort_order": step.sort_order,
-            }
-            for step in sorted(steps, key=lambda s: (s.stage, s.sort_order))
-        ],
-    }
-
-
 async def preview_plan_dispatch(
     plan_id: int,
     device_ids: list[int],

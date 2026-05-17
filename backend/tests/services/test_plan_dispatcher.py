@@ -429,3 +429,35 @@ class TestFailFastAsyncDispatch:
         )
         assert exc.detail() == {"code": "INVALID_SCRIPT_REFS", "missing": ["foo:1"]}
         assert AsyncPlanDispatchError("plan not found").detail() == "plan not found"
+
+
+class TestDispatcherCoreSharing:
+    def test_sync_and_async_dispatchers_reexport_shared_core_helpers(self):
+        from backend.services import plan_dispatcher_core
+        from backend.services import plan_dispatcher as async_dispatcher
+        from backend.services import plan_dispatcher_sync as sync_dispatcher
+
+        assert (
+            async_dispatcher.PlanDispatchError
+            is plan_dispatcher_core.PlanDispatchError
+        )
+        assert (
+            sync_dispatcher.PlanDispatchError
+            is plan_dispatcher_core.PlanDispatchError
+        )
+        assert (
+            async_dispatcher._build_lifecycle_from_steps
+            is plan_dispatcher_core.build_lifecycle_from_steps
+        )
+        assert (
+            sync_dispatcher._build_lifecycle_from_steps
+            is plan_dispatcher_core.build_lifecycle_from_steps
+        )
+        assert (
+            async_dispatcher._build_plan_snapshot
+            is plan_dispatcher_core.build_plan_snapshot
+        )
+        assert (
+            sync_dispatcher._build_plan_snapshot
+            is plan_dispatcher_core.build_plan_snapshot
+        )

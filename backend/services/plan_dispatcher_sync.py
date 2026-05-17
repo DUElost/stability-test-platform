@@ -22,141 +22,20 @@ from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
 from backend.models.script import Script
+from backend.services.plan_dispatcher_core import (
+    PlanDispatchError,
+    build_lifecycle_from_steps as _build_lifecycle_from_steps,
+    build_plan_snapshot as _build_plan_snapshot,
+    build_preview as _build_preview,
+    check_script_keys_complete as _check_script_keys_complete,
+    inject_wifi_params as _inject_wifi_params,
+    iter_lifecycle_steps as _iter_lifecycle_steps,
+    script_defaults as _script_defaults,
+)
 
 logger = logging.getLogger(__name__)
 
 ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
-
-
-class PlanDispatchError(Exception):
-    """Dispatcher 失败的统一异常。
-
-    ``missing_scripts`` 在 ADR-0023 C1 fail-fast 路径中携带缺失的
-    ``"name:version"`` 列表,供端点层格式化为
-    ``{"code":"INVALID_SCRIPT_REFS","missing":[...]}`` 响应体。
-    """
-
-    def __init__(
-        self, message: str, *, missing_scripts: list[str] | None = None
-    ) -> None:
-        super().__init__(message)
-        self.missing_scripts = list(missing_scripts) if missing_scripts else None
-
-    def detail(self) -> dict | str:
-        """格式化为 FastAPI HTTPException detail。
-
-        若携带 ``missing_scripts``,返回结构化 dict 与 plans 创建侧
-        ``_validate_script_refs`` 的 422 响应体保持字段一致(便于前端共用
-        错误处理)。否则退化为原始消息字符串。
-        """
-        if self.missing_scripts:
-            return {
-                "code": "INVALID_SCRIPT_REFS",
-                "missing": self.missing_scripts,
-            }
-        return str(self)
-
-
-# ── Pure helpers (shared with async version) ──────────────────────────────
-
-def _check_script_keys_complete(
-    steps: list[PlanStep],
-    metadata: dict[tuple[str, str], dict[str, dict]],
-) -> list[str]:
-    """ADR-0023 C1 — 返回缺失的 ``"name:version"`` 列表。
-
-    "缺失"统一表达 *不存在* 与 *已 deactivate* 两种情况:
-    ``_fetch_script_metadata`` 只查 ``is_active=true``,两类都不会落入 metadata
-    map,呈现为同一种 keys 缺失。
-    """
-    required = {(s.script_name, s.script_version) for s in steps if s.enabled is not False}
-    have = set(metadata.keys())
-    missing = sorted(required - have)
-    return [f"{name}:{version}" for name, version in missing]
-
-
-def _build_lifecycle_from_steps(
-    plan: Plan, steps: list[PlanStep], script_defaults: dict[tuple[str, str], dict]
-) -> dict:
-    """Build a pipeline_def lifecycle from PlanStep records (ADR-0020 §2 唯一事实源).
-
-    ADR-0023 C1: 上游必须保证 ``script_defaults`` 覆盖所有 enabled step 的
-    ``(name, version)`` 键。此处用下标访问而非 ``.get(..., {})``——缺失即 KeyError,
-    符合 fail-fast。
-    """
-    lifecycle: dict[str, Any] = {"init": [], "teardown": []}
-    patrol_steps: list[dict] = []
-
-    for step in sorted(steps, key=lambda s: (s.stage, s.sort_order)):
-        if step.enabled is False:
-            continue
-        default_params = script_defaults[(step.script_name, step.script_version)]
-        step_def: dict[str, Any] = {
-            "step_id": step.step_key,
-            "action": f"script:{step.script_name}",
-            "version": step.script_version,
-            "params": deepcopy(default_params),
-            "timeout_seconds": step.timeout_seconds,
-            "retry": step.retry,
-        }
-
-        if step.stage in ("init", "teardown"):
-            lifecycle[step.stage].append(step_def)
-        elif step.stage == "patrol":
-            patrol_steps.append(step_def)
-
-    if patrol_steps:
-        lifecycle["patrol"] = {
-            "interval_seconds": plan.patrol_interval_seconds or 60,
-            "steps": patrol_steps,
-        }
-
-    if plan.timeout_seconds is not None:
-        lifecycle["timeout_seconds"] = plan.timeout_seconds
-
-    return lifecycle
-
-
-def _iter_lifecycle_steps(pipeline: dict):
-    lifecycle = (pipeline or {}).get("lifecycle", {})
-    for phase_name in ("init", "teardown"):
-        steps = lifecycle.get(phase_name)
-        if isinstance(steps, list):
-            for step in steps:
-                yield phase_name, step
-    patrol = lifecycle.get("patrol")
-    if isinstance(patrol, dict) and isinstance(patrol.get("steps"), list):
-        for step in patrol["steps"]:
-            yield "patrol", step
-
-
-def _inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
-    if not wifi_params or not wifi_params.get("ssid"):
-        return pipeline
-    for _, step in _iter_lifecycle_steps(pipeline):
-        action = step.get("action", "")
-        if "connect_wifi" not in action:
-            continue
-        params = dict(step.get("params") or {})
-        if not params.get("ssid"):
-            params["ssid"] = wifi_params["ssid"]
-        if not params.get("password"):
-            params["password"] = wifi_params.get("password", "")
-        step["params"] = params
-    return pipeline
-
-
-def _build_preview(plan: Plan, lifecycle: dict, device_ids: list[int]) -> dict:
-    steps = list(_iter_lifecycle_steps({"lifecycle": lifecycle}))
-    return {
-        "plan_id": plan.id,
-        "plan_name": plan.name,
-        "device_ids": device_ids,
-        "device_count": len(device_ids),
-        "job_count": len(device_ids),
-        "total_steps": len(steps),
-        "lifecycle": lifecycle,
-    }
 
 
 def _fetch_script_metadata(
@@ -185,60 +64,6 @@ def _fetch_script_metadata(
         }
         for r in rows
     }
-
-
-def _script_defaults(
-    script_metadata: dict[tuple[str, str], dict[str, dict]]
-) -> dict[tuple[str, str], dict]:
-    return {key: value.get("default_params") or {} for key, value in script_metadata.items()}
-
-
-def _build_plan_snapshot(
-    plan: Plan,
-    steps: list[PlanStep],
-    script_metadata: dict[tuple[str, str], dict[str, dict]],
-    failure_threshold: float,
-) -> dict:
-    return {
-        "plan": {
-            "id": plan.id,
-            "name": plan.name,
-            "description": plan.description,
-            "failure_threshold": failure_threshold,
-            "patrol_interval_seconds": plan.patrol_interval_seconds,
-            "watcher_policy": plan.watcher_policy or {},
-        },
-        "steps": [
-            {
-                "stage": step.stage,
-                "step_key": step.step_key,
-                "script_name": step.script_name,
-                "script_version": step.script_version,
-                "nfs_path": (
-                    script_metadata
-                    .get((step.script_name, step.script_version), {})
-                    .get("nfs_path", "")
-                ),
-                "param_schema": (
-                    script_metadata
-                    .get((step.script_name, step.script_version), {})
-                    .get("param_schema", {})
-                ),
-                "default_params": (
-                    script_metadata
-                    .get((step.script_name, step.script_version), {})
-                    .get("default_params", {})
-                ),
-                "timeout_seconds": step.timeout_seconds,
-                "retry": step.retry,
-                "enabled": step.enabled is not False,
-                "sort_order": step.sort_order,
-            }
-            for step in sorted(steps, key=lambda s: (s.stage, s.sort_order))
-        ],
-    }
-
-
 # ── Sync resource pool helpers ────────────────────────────────────────────
 
 def _sync_allocate_devices(
