@@ -13,9 +13,13 @@ import {
 import type {
   EventSeverity,
   EventStage,
+  PlanDispatchState,
   PlanRunEvent,
   PlanRunEventsPayload,
   PlanRunTimeline,
+  PrecheckHostState,
+  PrecheckScriptCheck,
+  PrecheckState,
   TimelineStage,
 } from '@/utils/api/types';
 
@@ -27,8 +31,8 @@ interface Props {
   onStageFilterChange?: (s: EventStage | 'all') => void;
   onSeverityFilterChange?: (s: EventSeverity | 'all') => void;
   isLoading?: boolean;
-  precheck?: Record<string, any> | null;
-  dispatchState?: Record<string, any> | null;
+  precheck?: PrecheckState | null;
+  dispatchState?: PlanDispatchState | null;
 }
 
 const STAGE_LABEL: Record<TimelineStage['stage'], string> = {
@@ -98,8 +102,8 @@ function PrecheckRow({
   isActive,
   onClick,
 }: {
-  precheck?: Record<string, any> | null;
-  dispatchState?: Record<string, any> | null;
+  precheck?: PrecheckState | null;
+  dispatchState?: PlanDispatchState | null;
   isActive?: boolean;
   onClick?: () => void;
 }) {
@@ -107,7 +111,7 @@ function PrecheckRow({
 
   const phase = precheck.phase ?? 'unknown';
   const finalResult = precheck.final_result;
-  const hosts = (precheck.hosts ?? {}) as Record<string, Record<string, any>>;
+  const hosts: Record<string, PrecheckHostState> = precheck.hosts ?? {};
   const hostEntries = Object.entries(hosts);
   const totalHosts = hostEntries.length;
   const okHosts = hostEntries.filter(([, h]) => h.status === 'ok').length;
@@ -117,7 +121,7 @@ function PrecheckRow({
   let totalScripts = 0;
   let verifiedScripts = 0;
   for (const [, h] of hostEntries) {
-    const scripts = (h.scripts ?? []) as Array<Record<string, any>>;
+    const scripts: PrecheckScriptCheck[] = h.scripts ?? [];
     totalScripts += scripts.length;
     verifiedScripts += scripts.filter((s) => s.ok).length;
   }
@@ -191,7 +195,7 @@ function PrecheckRow({
         {hostEntries.length > 0 && (
           <div className="mt-1 space-y-0.5 border-t border-gray-200/60 pt-1.5 text-[10.5px]">
             {hostEntries.map(([hid, h]) => {
-              const scripts = (h.scripts ?? []) as Array<Record<string, any>>;
+              const scripts: PrecheckScriptCheck[] = h.scripts ?? [];
               const hOk = scripts.filter((s) => s.ok).length;
               return (
                 <div key={hid} className="flex items-center gap-1.5 text-gray-500">
@@ -370,10 +374,10 @@ export default function BusinessFlowTimeline({
   // Stage step rows for the right panel when a stage is selected
   const stageStepRows = useMemo(() => {
     if (activeStage === '__precheck__' && precheck) {
-      const hosts = (precheck.hosts ?? {}) as Record<string, Record<string, any>>;
+      const hosts: Record<string, PrecheckHostState> = precheck.hosts ?? {};
       const rows: Array<{ key: string; element: React.ReactElement }> = [];
       for (const [hid, h] of Object.entries(hosts)) {
-        const scripts = (h.scripts ?? []) as Array<Record<string, any>>;
+        const scripts: PrecheckScriptCheck[] = h.scripts ?? [];
         for (const s of scripts) {
           const ok = s.ok === true;
           const sev: EventSeverity = ok ? 'ok' : 'err';

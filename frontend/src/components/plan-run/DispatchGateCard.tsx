@@ -218,7 +218,7 @@ export default function DispatchGateCard({
           {hostEntries.map(([hostId, state]) => {
             const badge = HOST_STATUS_BADGE[state.status];
             const totalScripts = state.scripts.length;
-            const matchedScripts = state.scripts.filter((s) => s.matched).length;
+            const matchedScripts = state.scripts.filter((s) => s.ok).length;
             return (
               <div
                 key={hostId}
@@ -262,15 +262,15 @@ export default function DispatchGateCard({
                       <div
                         key={`${s.name}-${s.version}-${idx}`}
                         className={`flex items-center justify-between gap-2 rounded px-2 py-1 ${
-                          s.matched ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'
+                          s.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'
                         }`}
                       >
                         <span className="truncate font-mono">
                           {s.name}@{s.version}
                         </span>
                         <span className="shrink-0 font-mono text-[10px] text-gray-500">
-                          {s.matched ? '✓ ' : '✗ '}
-                          {shortSha(s.actual_sha256)}
+                          {s.ok ? '✓ ' : '✗ '}
+                          {shortSha(s.actual_sha)}
                         </span>
                       </div>
                     ))}

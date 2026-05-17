@@ -490,13 +490,15 @@ export interface PipelinePatrol {
   steps: PipelineStep[];
 }
 
+export interface PipelineLifecycle {
+  timeout_seconds?: number;
+  init: PipelineStep[];
+  patrol?: PipelinePatrol;
+  teardown: PipelineStep[];
+}
+
 export interface PipelineDef {
-  lifecycle: {
-    timeout_seconds?: number;
-    init: PipelineStep[];
-    patrol?: PipelinePatrol;
-    teardown: PipelineStep[];
-  };
+  lifecycle: PipelineLifecycle;
 }
 
 export type JobStatus =
@@ -555,6 +557,26 @@ export interface PlanStepCreate {
   enabled?: boolean;
 }
 
+export type WatcherUnavailableAction = 'fail' | 'degraded' | 'skip';
+
+export interface WatcherPolicy {
+  paths?: Record<string, string[]>;
+  required_categories?: string[];
+  on_unavailable?: WatcherUnavailableAction;
+  batch_interval_seconds?: number;
+  batch_max_events?: number;
+  event_queue_maxsize?: number;
+  pull_max_file_mb?: number;
+  nfs_quota_mb?: number;
+  inotifyd_reconnect_delay?: number;
+  polling_interval_seconds?: number;
+  probe_timeout_seconds?: number;
+  exit_drain_timeout_seconds?: number;
+  emit_via_socketio?: boolean;
+  emit_via_http_outbox?: boolean;
+  log_level?: string;
+}
+
 // ADR-0020 §2 唯一事实源：Plan 不再包含 lifecycle JSON，前端按 PlanStep 行 + 直列字段交互。
 export interface Plan {
   id: number;
@@ -564,7 +586,7 @@ export interface Plan {
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
   next_plan_id?: number | null;
-  watcher_policy?: Record<string, any> | null;
+  watcher_policy?: WatcherPolicy | null;
   created_by?: string | null;
   created_at: string;
   updated_at: string;
@@ -578,7 +600,7 @@ export interface PlanCreate {
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
   next_plan_id?: number | null;
-  watcher_policy?: Record<string, any> | null;
+  watcher_policy?: WatcherPolicy | null;
   steps?: PlanStepCreate[];
 }
 
@@ -589,12 +611,48 @@ export interface PlanUpdate {
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
   next_plan_id?: number | null;
-  watcher_policy?: Record<string, any> | null;
+  watcher_policy?: WatcherPolicy | null;
   steps?: PlanStepCreate[];
 }
 
 export type PlanRunStatus = 'RUNNING' | 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED' | 'DEGRADED';
 export type PlanRunType = 'MANUAL' | 'SCHEDULE' | 'CHAIN';
+
+export interface PlanDispatchState {
+  enqueue_key?: string | null;
+  requeue_attempts?: number;
+  status?: 'queued' | 'running' | 'completed' | 'failed' | string;
+  enqueued_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  last_error?: string | null;
+}
+
+export interface PlanSnapshotStep {
+  stage: 'init' | 'patrol' | 'teardown';
+  step_key: string;
+  script_name: string;
+  script_version: string;
+  nfs_path: string;
+  param_schema: Record<string, unknown>;
+  default_params: Record<string, unknown>;
+  timeout_seconds?: number | null;
+  retry: number;
+  enabled: boolean;
+  sort_order: number;
+}
+
+export interface PlanSnapshot {
+  plan: {
+    id: number;
+    name: string;
+    description?: string | null;
+    failure_threshold: number;
+    patrol_interval_seconds?: number | null;
+    watcher_policy: WatcherPolicy | Record<string, never>;
+  };
+  steps: PlanSnapshotStep[];
+}
 
 export interface PlanRun {
   id: number;
@@ -605,10 +663,10 @@ export interface PlanRun {
   triggered_by?: string | null;
   started_at: string;
   ended_at?: string | null;
-  result_summary?: Record<string, any> | null;
+  result_summary?: Record<string, unknown> | null;
   // ADR-0021 dispatch gate progress (PrecheckState typed below)
-  run_context?: { precheck?: PrecheckState } & Record<string, any> | null;
-  plan_snapshot?: Record<string, any> | null;
+  run_context?: PlanRunContext | null;
+  plan_snapshot?: PlanSnapshot | null;
   parent_plan_run_id?: number | null;
   root_plan_run_id?: number | null;
   chain_index?: number;
@@ -626,7 +684,7 @@ export interface PlanRunPreview {
   device_count: number;
   job_count: number;
   total_steps: number;
-  lifecycle: Record<string, any>;
+  lifecycle: PipelineLifecycle;
 }
 
 export interface PlanJobInstance {
@@ -659,14 +717,16 @@ export interface PlanRunSummary {
 
 export type PrecheckPhase = 'verifying' | 'syncing' | 'reverifying' | 'ready' | 'failed';
 export type PrecheckHostStatus = 'pending' | 'ok' | 'syncing' | 'synced' | 'failed';
+export type PrecheckFinalResult = 'ready' | 'failed' | 'aborted';
 
 export interface PrecheckScriptCheck {
   name: string;
   version: string;
-  expected_sha256?: string | null;
-  actual_sha256?: string | null;
-  matched: boolean;
-  reason?: string | null;
+  expected_sha: string;
+  actual_sha?: string | null;
+  exists: boolean;
+  ok: boolean;
+  error?: string | null;
 }
 
 export interface PrecheckHostState {
@@ -683,8 +743,16 @@ export interface PrecheckState {
   started_at: string;
   completed_at?: string | null;
   hosts: Record<string, PrecheckHostState>;
-  final_result?: 'ready' | 'failed' | null;
+  final_result?: PrecheckFinalResult | null;
   errors: string[];
+}
+
+export interface PlanRunContext {
+  precheck?: PrecheckState;
+  dispatch_state?: PlanDispatchState | null;
+  dispatch_device_ids?: number[];
+  abort_requested?: boolean;
+  [key: string]: unknown;
 }
 
 // ─── ADR-0021/0022 C5a₂ aggregation endpoints (PlanRunDetailPage) ────────────
