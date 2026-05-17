@@ -6,8 +6,10 @@
   any_errors_fatal: true
 
   vars:
-    agent_backup_dir: "{{ agent_install_dir }}/agent.bak.{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ')) }}"
-    agent_agentctl_backup_path: "{{ agent_install_dir }}/agentctl.bak.{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ')) }}"
+    agent_update_timestamp: "{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ')) }}"
+    agent_backup_dir: "{{ agent_install_dir }}/agent.bak.{{ agent_update_timestamp }}"
+    agent_agentctl_backup_path: "{{ agent_install_dir }}/agentctl.bak.{{ agent_update_timestamp }}"
+    agent_service_backup_path: "/etc/systemd/system/{{ agent_service_name }}.service.bak.{{ agent_update_timestamp }}"
     agent_rsync_remote: "{{ ansible_user }}@{{ ansible_host | default(inventory_hostname) }}"
     agent_rsync_ssh_command: >-
       ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
@@ -29,6 +31,10 @@
     - name: Load agent_install_excludes from role defaults
       ansible.builtin.include_vars:
         file: "{{ playbook_dir }}/../roles/agent_deploy/defaults/main.yml"
+
+    - name: Freeze update backup timestamp
+      ansible.builtin.set_fact:
+        agent_update_timestamp: "{{ agent_update_timestamp }}"
 
     - name: Validate local rsync is available
       delegate_to: localhost
@@ -130,10 +136,35 @@
       register: agentctl_diff
       changed_when: false
 
+    - name: Preview service unit changes with rsync dry-run
+      delegate_to: localhost
+      become: false
+      ansible.builtin.shell: |
+        set -euo pipefail
+        run_rsync() {
+          if [ -n "${SSHPASS:-}" ]; then
+            sshpass -e rsync "$@"
+          else
+            rsync "$@"
+          fi
+        }
+
+        run_rsync -aic --dry-run --no-owner --no-group --itemize-changes --chmod=F644 \
+          --rsync-path='sudo rsync' \
+          -e "{{ agent_rsync_ssh_command }}" \
+          "{{ agent_source_dir }}/stability-test-agent.service" "{{ agent_rsync_remote }}:/etc/systemd/system/{{ agent_service_name }}.service"
+      args:
+        executable: /bin/bash
+      environment:
+        SSHPASS: "{{ ansible_password | default('') }}"
+      register: agent_service_diff
+      changed_when: false
+
     - name: Record rsync change summary
       ansible.builtin.set_fact:
         agent_code_change_lines: "{{ agent_code_diff.stdout_lines | default([]) | reject('equalto', '') | reject('match', '^\\.[^ ]\\s{10}') | reject('match', '^\\.[fd]\\.\\.t\\.\\.\\.\\.\\.\\.\\s') | reject('match', '.*(__pycache__/|\\.pyc$).*') | list }}"
         agentctl_change_lines: "{{ agentctl_diff.stdout_lines | default([]) | reject('equalto', '') | reject('match', '^\\.[^ ]\\s{10}') | list }}"
+        agent_service_change_lines: "{{ agent_service_diff.stdout_lines | default([]) | reject('equalto', '') | reject('match', '^\\.[^ ]\\s{10}') | list }}"
 
     - name: Update API_URL in deployed environment file
       become: true
@@ -164,6 +195,7 @@
           {{
             (agent_code_change_lines | length > 0)
             or (agentctl_change_lines | length > 0)
+            or (agent_service_change_lines | length > 0)
             or (agent_env_changed | bool)
           }}
 
@@ -184,6 +216,13 @@
         cmd: "cp -a {{ agent_install_dir }}/agentctl {{ agent_agentctl_backup_path }}"
         creates: "{{ agent_agentctl_backup_path }}"
       when: agentctl_change_lines | length > 0
+
+    - name: Snapshot current service unit before sync
+      become: true
+      ansible.builtin.command:
+        cmd: "cp -a /etc/systemd/system/{{ agent_service_name }}.service {{ agent_service_backup_path }}"
+        creates: "{{ agent_service_backup_path }}"
+      when: agent_service_change_lines | length > 0
 
     - name: Run upgrade with rollback on health failure
       block:
@@ -233,6 +272,29 @@
           environment:
             SSHPASS: "{{ ansible_password | default('') }}"
           when: agentctl_change_lines | length > 0
+
+        - name: Refresh systemd service unit from local source
+          delegate_to: localhost
+          become: false
+          ansible.builtin.shell: |
+            set -euo pipefail
+            run_rsync() {
+              if [ -n "${SSHPASS:-}" ]; then
+                sshpass -e rsync "$@"
+              else
+                rsync "$@"
+              fi
+            }
+
+            run_rsync -aic --no-owner --no-group --itemize-changes --chmod=F644 \
+              --rsync-path='sudo rsync' \
+              -e "{{ agent_rsync_ssh_command }}" \
+              "{{ agent_source_dir }}/stability-test-agent.service" "{{ agent_rsync_remote }}:/etc/systemd/system/{{ agent_service_name }}.service"
+          args:
+            executable: /bin/bash
+          environment:
+            SSHPASS: "{{ ansible_password | default('') }}"
+          when: agent_service_change_lines | length > 0
 
         - name: Refresh /usr/local/bin/agentctl symlink
           become: true
@@ -295,6 +357,12 @@
             cmd: "cp -a {{ agent_agentctl_backup_path }} {{ agent_install_dir }}/agentctl"
           when: agentctl_change_lines | length > 0
 
+        - name: Roll back service unit from snapshot
+          become: true
+          ansible.builtin.command:
+            cmd: "cp -a {{ agent_service_backup_path }} /etc/systemd/system/{{ agent_service_name }}.service"
+          when: agent_service_change_lines | length > 0
+
         - name: Restart service after rollback
           become: true
           ansible.builtin.systemd:
@@ -322,7 +390,9 @@
       ansible.builtin.shell: |
         cd "{{ agent_install_dir }}" && \
           ls -1dt agent.bak.* 2>/dev/null | tail -n +2 | xargs -r rm -rf && \
-          ls -1dt agentctl.bak.* 2>/dev/null | tail -n +2 | xargs -r rm -f
+          ls -1dt agentctl.bak.* 2>/dev/null | tail -n +2 | xargs -r rm -f && \
+          cd /etc/systemd/system && \
+          ls -1dt "{{ agent_service_name }}".service.bak.* 2>/dev/null | tail -n +2 | xargs -r rm -f
       changed_when: false
 
     - name: Tail error log after update
@@ -340,9 +410,11 @@
           api_url: "{{ agent_api_url }}"
           code_change_count: "{{ agent_code_change_lines | default([]) | length }}"
           agentctl_change_count: "{{ agentctl_change_lines | default([]) | length }}"
+          service_unit_change_count: "{{ agent_service_change_lines | default([]) | length }}"
           env_changed: "{{ agent_env_changed | default(false) }}"
           restart_required: "{{ agent_update_requires_restart | default(false) }}"
           backup_dir: "{{ agent_backup_dir if (agent_code_change_lines | default([]) | length > 0) else 'skipped' }}"
           agentctl_backup: "{{ agent_agentctl_backup_path if (agentctl_change_lines | default([]) | length > 0) else 'skipped' }}"
+          service_unit_backup: "{{ agent_service_backup_path if (agent_service_change_lines | default([]) | length > 0) else 'skipped' }}"
           health_rc: "{{ agent_health_after_update.rc | default('skipped') }}"
           error_log_tail: "{{ agent_update_error_log.stdout_lines | default([]) }}"
