@@ -1,10 +1,17 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Column, DateTime, Enum as SAEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
+from backend.models.enums import JobStatus
+
+JOB_STATUS_DB_ENUM = SAEnum(
+    *(status.value for status in JobStatus),
+    name="job_status",
+    validate_strings=True,
+)
 
 
 class JobInstance(Base):
@@ -15,7 +22,7 @@ class JobInstance(Base):
     plan_id          = Column(Integer, ForeignKey("plan.id"), nullable=False)
     device_id        = Column(Integer, ForeignKey("device.id"), nullable=False)
     host_id          = Column(String(64), ForeignKey("host.id"))
-    status           = Column(String(32), nullable=False, default="PENDING")
+    status           = Column(JOB_STATUS_DB_ENUM, nullable=False, default=JobStatus.PENDING.value)
     status_reason    = Column(Text)
     pipeline_def     = Column(JSONB, nullable=False)
     started_at         = Column(DateTime(timezone=True))
@@ -55,6 +62,7 @@ class JobInstance(Base):
 
     __table_args__ = (
         Index("idx_job_instance_status",   "status"),
+        Index("idx_job_instance_plan_run_status", "plan_run_id", "status"),
         Index("idx_job_instance_host",      "host_id"),
         # ADR-0022: stall 检测 + per-PlanRun 设备矩阵聚合
         Index("idx_job_instance_patrol_heartbeat", "plan_run_id", "last_patrol_heartbeat_at"),

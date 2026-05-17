@@ -14,6 +14,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    Enum as SAEnum,
     Float,
     ForeignKey,
     Index,
@@ -25,6 +26,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
+from backend.models.enums import PlanRunStatus
+
+PLAN_RUN_STATUS_DB_ENUM = SAEnum(
+    *(status.value for status in PlanRunStatus),
+    name="plan_run_status",
+    validate_strings=True,
+)
 
 
 class PlanRun(Base):
@@ -32,7 +40,7 @@ class PlanRun(Base):
 
     id                = Column(Integer, primary_key=True)
     plan_id           = Column(Integer, ForeignKey("plan.id"), nullable=False)
-    status            = Column(String(32), nullable=False, default="RUNNING")
+    status            = Column(PLAN_RUN_STATUS_DB_ENUM, nullable=False, default=PlanRunStatus.RUNNING.value)
     failure_threshold = Column(Float, nullable=False, default=0.05)
     plan_snapshot     = Column(JSONB, nullable=False)
     run_type          = Column(String(16), nullable=False)
