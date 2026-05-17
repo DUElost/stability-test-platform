@@ -22,7 +22,7 @@ def test_migrate_legacy_host_ssh_credentials_persists_fields(monkeypatch, db_ses
     db_session.add(host)
     db_session.commit()
 
-    summary = migrate_legacy_host_ssh_credentials(db_session)
+    summary = migrate_legacy_host_ssh_credentials(db_session, host_ids=[host.id])
 
     assert summary["scanned"] == 1
     assert summary["changed"] == 1
@@ -51,7 +51,7 @@ def test_migrate_legacy_host_ssh_credentials_dry_run_keeps_db_unchanged(monkeypa
     db_session.add(host)
     db_session.commit()
 
-    summary = migrate_legacy_host_ssh_credentials(db_session, dry_run=True)
+    summary = migrate_legacy_host_ssh_credentials(db_session, dry_run=True, host_ids=[host.id])
 
     assert summary["changed"] == 1
     assert summary["dry_run"] is True
