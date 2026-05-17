@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: stp
       POSTGRES_USER: stp
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
@@ -38,6 +38,8 @@ services:
     # Local secret source; generated from .env.server.example by tools/prepare_env.py
     # or the start-backend launchers when missing.
     env_file: .env.server
+    environment:
+      DATABASE_URL: postgresql+asyncpg://stp:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/stp
     depends_on:
       postgres:
         condition: service_healthy

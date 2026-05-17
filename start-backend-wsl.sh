@@ -23,6 +23,7 @@ fi
 
 echo "Preparing local backend env file..."
 python3 tools/prepare_env.py --template backend/.env.example --target backend/.env
+python3 tools/ensure_backend_dev_secrets.py --env-file backend/.env
 
 if [ ! -f "${VENV_DIR}/bin/activate" ]; then
   echo "Creating Linux virtual environment at ${VENV_DIR}..."

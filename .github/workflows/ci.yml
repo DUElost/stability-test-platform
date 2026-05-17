@@ -37,8 +37,10 @@ jobs:
         run: pip install -r backend/requirements.txt
       - name: Compile check
         run: python -m compileall backend/ -q
-      - name: Run tests
-        run: pytest backend/tests/ -v
+      - name: Run backend tests
+        run: python -m pytest backend/tests/ -v
+      - name: Run agent tests
+        run: python -m pytest backend/agent/tests/ -v
 
   frontend-check:
     runs-on: ubuntu-latest
@@ -49,10 +51,13 @@ jobs:
           node-version: "20"
       - name: Install dependencies
         working-directory: frontend
-        run: npm install
+        run: npm ci
       - name: TypeScript check
         working-directory: frontend
         run: npx tsc --noEmit
+      - name: Run vitest
+        working-directory: frontend
+        run: npx vitest run
       - name: Build
         working-directory: frontend
         run: npm run build

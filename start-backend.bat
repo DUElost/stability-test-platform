@@ -26,6 +26,12 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+python tools\ensure_backend_dev_secrets.py --env-file backend\.env
+if errorlevel 1 (
+    echo ERROR: Failed to ensure backend\.env has a valid AGENT_SECRET.
+    pause
+    exit /b 1
+)
 
 echo Running alembic migrations (upgrade head)...
 pushd "%~dp0backend"

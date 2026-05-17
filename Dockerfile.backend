@@ -6,8 +6,14 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ backend/
+RUN useradd --system --create-home --home-dir /home/appuser appuser \
+    && chown -R appuser:appuser /app
 
 ENV PYTHONPATH=/app
 EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD python -c "from urllib.request import urlopen; import sys; sys.exit(0 if urlopen('http://127.0.0.1:8000/health', timeout=3).getcode() == 200 else 1)"
+
+USER appuser
 
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
