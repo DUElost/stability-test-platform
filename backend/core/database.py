@@ -16,6 +16,8 @@ def is_sqlite_url(database_url: str) -> bool:
 def normalize_sync_database_url(database_url: str) -> str:
     if database_url.startswith("postgresql+asyncpg://"):
         return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgresql+psycopg2://"):
+        return database_url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
     if database_url.startswith("postgresql://"):
         return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
     if database_url.startswith("sqlite+aiosqlite://"):
@@ -26,6 +28,8 @@ def normalize_sync_database_url(database_url: str) -> str:
 def normalize_async_database_url(database_url: str) -> str:
     if database_url.startswith("postgresql+psycopg://"):
         return database_url.replace("postgresql+psycopg://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgresql+psycopg2://"):
+        return database_url.replace("postgresql+psycopg2://", "postgresql+asyncpg://", 1)
     if database_url.startswith("postgresql://"):
         return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     if database_url.startswith("sqlite://"):

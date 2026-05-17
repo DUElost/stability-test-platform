@@ -3,7 +3,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Union
 
-from jose import JWTError, jwt
+import jwt
+from jwt import InvalidTokenError
 from passlib.context import CryptContext
 
 # Security configuration
@@ -11,7 +12,7 @@ _PLACEHOLDER = "your-secret-key-here-change-in-production"
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "")
 if not SECRET_KEY or SECRET_KEY == _PLACEHOLDER:
     if os.getenv("TESTING") == "1":
-        SECRET_KEY = "test-secret-key-for-testing"
+        SECRET_KEY = "test-secret-key-for-testing-32-bytes-ok"
     else:
         raise RuntimeError(
             "JWT_SECRET_KEY environment variable must be set. "
@@ -88,5 +89,5 @@ def decode_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
-    except JWTError:
+    except InvalidTokenError:
         return None

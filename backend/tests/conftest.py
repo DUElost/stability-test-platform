@@ -4,12 +4,10 @@ Pytest Configuration and Fixtures
 
 import asyncio
 import os
-import tempfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Optional
 
 import pytest
+from testcontainers.postgres import PostgresContainer
 
 
 def pytest_configure(config):
@@ -23,35 +21,39 @@ def pytest_configure(config):
     )
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-
-
-@compiles(JSONB, "sqlite")
-def compile_jsonb_for_sqlite(type_, compiler, **kwargs):
-    return "JSON"
 
 # Set test mode before importing app to disable startup background threads
 os.environ["TESTING"] = "1"
-os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-ci"
+os.environ["JWT_SECRET_KEY"] = "test-secret-key-for-ci-32-bytes-ok"
 os.environ["AGENT_SECRET"] = ""
 
-TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
-ALLOW_SQLITE_TESTS = os.getenv("ALLOW_SQLITE_TESTS", "0") == "1"
-SQLITE_TEST_DB_PATH: Optional[Path] = None
+_TEST_DB_CONTAINER: PostgresContainer | None = None
 
-if not TEST_DATABASE_URL:
-    if ALLOW_SQLITE_TESTS:
-        SQLITE_TEST_DB_PATH = Path(tempfile.gettempdir()) / f"stp_pytest_{os.getpid()}.db"
-        SQLITE_TEST_DB_PATH.unlink(missing_ok=True)
-        TEST_DATABASE_URL = f"sqlite:///{SQLITE_TEST_DB_PATH.as_posix()}"
-    else:
-        raise RuntimeError(
-            "TEST_DATABASE_URL is required for tests (PostgreSQL). "
-            "For local quick SQLite tests only, set ALLOW_SQLITE_TESTS=1."
-        )
+
+def _normalize_test_database_url(database_url: str) -> str:
+    if database_url.startswith("postgresql+psycopg2://"):
+        return database_url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://", 1)
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+    return database_url
+
+
+def _resolve_test_database_url() -> str:
+    global _TEST_DB_CONTAINER
+
+    configured = os.getenv("TEST_DATABASE_URL")
+    if configured:
+        return _normalize_test_database_url(configured)
+
+    _TEST_DB_CONTAINER = PostgresContainer("postgres:16")
+    _TEST_DB_CONTAINER.start()
+    return _normalize_test_database_url(_TEST_DB_CONTAINER.get_connection_url())
+
+
+TEST_DATABASE_URL = _resolve_test_database_url()
 
 # Keep runtime modules aligned with the test database.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
@@ -79,14 +81,7 @@ from backend.main import fastapi_app as app
 @pytest.fixture(scope="session", autouse=True)
 def engine():
     """Create a test database engine"""
-    create_kwargs = {"future": True}
-    if TEST_DATABASE_URL.startswith("sqlite"):
-        create_kwargs["connect_args"] = {"check_same_thread": False}
-        create_kwargs["poolclass"] = StaticPool
-    else:
-        create_kwargs["pool_pre_ping"] = True
-
-    engine = create_engine(TEST_DATABASE_URL, **create_kwargs)
+    engine = create_engine(TEST_DATABASE_URL, future=True, pool_pre_ping=True)
     # alembic 链路从 001_add_device_monitoring 起就假设 devices 表已存在,
     # 无法在空库上 `alembic upgrade head`。测试库统一用 ORM 视角建表;
     # 真正的迁移健康单独通过本地 dev DB / 预生产校验。
@@ -100,15 +95,10 @@ def engine():
             loop.run_until_complete(async_engine.dispose())
         finally:
             loop.close()
-    if TEST_DATABASE_URL.startswith("sqlite"):
-        Base.metadata.drop_all(bind=engine)
     engine.dispose()
     app_engine.dispose()
-    if SQLITE_TEST_DB_PATH is not None:
-        try:
-            SQLITE_TEST_DB_PATH.unlink(missing_ok=True)
-        except PermissionError:
-            pass
+    if _TEST_DB_CONTAINER is not None:
+        _TEST_DB_CONTAINER.stop()
 
 
 @pytest.fixture(scope="function")

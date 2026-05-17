@@ -11,6 +11,10 @@ def test_normalize_sync_database_url_for_postgres_drivers():
         == "postgresql+psycopg://user:pass@localhost:5432/stp"
     )
     assert (
+        normalize_sync_database_url("postgresql+psycopg2://user:pass@localhost:5432/stp")
+        == "postgresql+psycopg://user:pass@localhost:5432/stp"
+    )
+    assert (
         normalize_sync_database_url("postgresql://user:pass@localhost:5432/stp")
         == "postgresql+psycopg://user:pass@localhost:5432/stp"
     )
@@ -19,6 +23,10 @@ def test_normalize_sync_database_url_for_postgres_drivers():
 def test_normalize_async_database_url_for_postgres_drivers():
     assert (
         normalize_async_database_url("postgresql+psycopg://user:pass@localhost:5432/stp")
+        == "postgresql+asyncpg://user:pass@localhost:5432/stp"
+    )
+    assert (
+        normalize_async_database_url("postgresql+psycopg2://user:pass@localhost:5432/stp")
         == "postgresql+asyncpg://user:pass@localhost:5432/stp"
     )
     assert (
