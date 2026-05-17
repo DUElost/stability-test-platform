@@ -3,10 +3,9 @@
 When a PlanRun reaches a terminal state (SUCCESS, PARTIAL_SUCCESS),
 automatically dispatch the next Plan in the chain.
 
-Idempotency: uses SELECT ... FOR UPDATE on the parent PlanRun and checks
-``next_plan_triggered`` before dispatching, then writes ``next_plan_triggered=true``
-in the same transaction.  The ``uniq_plan_run_chain_child`` partial unique
-index provides a second layer of protection.
+Idempotency: atomically persists ``next_plan_triggered=true`` before dispatch.
+The ``uniq_plan_run_chain_child`` partial unique index provides a second
+layer of protection.
 """
 
 from __future__ import annotations
@@ -44,14 +43,7 @@ async def trigger_next_plan(
     if plan is None or plan.next_plan_id is None:
         return None
 
-    # Lock the parent PlanRun row to serialize chain dispatch.
-    locked = (await db.execute(
-        select(PlanRun).where(PlanRun.id == plan_run.id).with_for_update()
-    )).scalar()
-    if locked is None or locked.next_plan_triggered is True:
-        return None  # Already triggered (idempotent)
-
-    # Aggregate device_ids from child JobInstances of the parent PlanRun
+    # Aggregate device_ids from child JobInstances of the parent PlanRun.
     device_rows = (await db.execute(
         select(JobInstance.device_id).where(
             JobInstance.plan_run_id == plan_run.id
@@ -60,6 +52,21 @@ async def trigger_next_plan(
     device_ids = list({r.device_id for r in device_rows})
     if not device_ids:
         logger.warning("plan_chain_trigger_no_devices plan_run=%d", plan_run.id)
+        return None
+
+    # Atomically mark triggered before dispatch. dispatch_plan() commits
+    # internally, so row locks would not survive long enough to protect
+    # the subsequent next_plan_triggered write.
+    result = await db.execute(
+        update(PlanRun)
+        .where(PlanRun.id == plan_run.id)
+        .where(PlanRun.next_plan_triggered.is_(False))
+        .values(next_plan_triggered=True)
+        .returning(PlanRun.id)
+    )
+    locked_id = result.scalar()
+    await db.commit()
+    if locked_id is None:
         return None
 
     chain_index = (plan_run.chain_index or 0) + 1
@@ -78,14 +85,6 @@ async def trigger_next_plan(
     except AsyncPlanDispatchError as exc:
         logger.error("plan_chain_dispatch_failed parent=%d err=%s", plan_run.id, exc)
         return None
-
-    # Mark parent as triggered
-    await db.execute(
-        update(PlanRun)
-        .where(PlanRun.id == plan_run.id)
-        .values(next_plan_triggered=True)
-    )
-    await db.commit()
 
     logger.info(
         "plan_chain_triggered parent=%d child=%d chain_index=%d",

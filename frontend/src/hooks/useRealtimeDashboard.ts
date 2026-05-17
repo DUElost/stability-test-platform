@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSocketIO as useWebSocket } from './useSocketIO';
+import { SOCKET_MESSAGE_TYPES, type SocketMessageType } from '@/utils/socketEvents';
 
 interface DeviceUpdate {
   serial: string;
@@ -39,7 +40,7 @@ export interface ReportReadyEvent {
 }
 
 interface WsMessage {
-  type: 'DEVICE_UPDATE' | 'HEARTBEAT' | 'RUN_UPDATE' | 'TASK_UPDATE' | 'REPORT_READY' | 'PLAN_RUN_STATUS' | 'DEPLOY_UPDATE';
+  type: SocketMessageType | 'HEARTBEAT';
   payload: DeviceUpdate | RunStatusUpdate | TaskStatusUpdate | ReportReadyEvent | unknown;
 }
 
@@ -56,11 +57,12 @@ export function useRealtimeDashboard(wsUrl: string) {
     setLastUpdateTime(new Date());
 
     switch (lastMessage.type) {
-      case 'DEVICE_UPDATE': {
+      case SOCKET_MESSAGE_TYPES.DEVICE_UPDATE: {
         queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
         break;
       }
-      case 'RUN_UPDATE': {
+      case SOCKET_MESSAGE_TYPES.RUN_UPDATE:
+      case SOCKET_MESSAGE_TYPES.JOB_STATUS: {
         const now = Date.now();
         if (now - _lastInvalidateTime > INVALIDATE_THROTTLE_MS) {
           _lastInvalidateTime = now;
@@ -70,21 +72,21 @@ export function useRealtimeDashboard(wsUrl: string) {
         }
         break;
       }
-      case 'TASK_UPDATE': {
+      case SOCKET_MESSAGE_TYPES.TASK_UPDATE: {
         queryClient.invalidateQueries({ queryKey: ['tasks'] });
         break;
       }
-      case 'REPORT_READY': {
+      case SOCKET_MESSAGE_TYPES.REPORT_READY: {
         queryClient.invalidateQueries({ queryKey: ['results'] });
         queryClient.invalidateQueries({ queryKey: ['results-summary'] });
         break;
       }
-      case 'PLAN_RUN_STATUS': {
+      case SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS: {
         queryClient.invalidateQueries({ queryKey: ['plan-runs-list'] });
         queryClient.invalidateQueries({ queryKey: ['tasks'] });
         break;
       }
-      case 'DEPLOY_UPDATE': {
+      case SOCKET_MESSAGE_TYPES.DEPLOY_UPDATE: {
         queryClient.invalidateQueries({ queryKey: ['deployments'] });
         break;
       }

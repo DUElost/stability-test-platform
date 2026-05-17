@@ -1,5 +1,5 @@
 export { default } from './client';
-export { unwrapApiResponse } from './client';
+export { ApiError, unwrapApiResponse } from './client';
 export { auth } from './auth';
 export { hosts, heartbeat, hotUpdate, deploy } from './hosts';
 export { devices } from './devices';

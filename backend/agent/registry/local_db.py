@@ -26,18 +26,25 @@ class LocalDB:
     """Thread-safe SQLite WAL wrapper. Call initialize() before any other method."""
 
     def __init__(self) -> None:
-        self._conn: Optional[sqlite3.Connection] = None
-        self._lock = threading.Lock()
+        self._db_path: Optional[str] = None
+        self._lock = threading.RLock()
+        self._thread_local = threading.local()
+        self._connections: Dict[int, sqlite3.Connection] = {}
+        self._closed = False
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        return self._get_conn()
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def initialize(self, db_path: str) -> None:
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=FULL")
+        with self._lock:
+            self._db_path = db_path
+            self._closed = False
+            conn = self._get_conn()
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS step_trace_cache (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,8 +120,28 @@ class LocalDB:
         """)
         self._ensure_step_trace_schema()
         self._backfill_step_trace_tokens()
-        self._conn.commit()
+        conn.commit()
         logger.info(f"LocalDB initialized: {db_path}")
+
+    def _new_connection(self) -> sqlite3.Connection:
+        if not self._db_path:
+            raise RuntimeError("LocalDB is not initialized")
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=FULL")
+        return conn
+
+    def _get_conn(self) -> sqlite3.Connection:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("LocalDB is closed")
+            conn = getattr(self._thread_local, "conn", None)
+            if conn is None:
+                conn = self._new_connection()
+                self._thread_local.conn = conn
+                self._connections[threading.get_ident()] = conn
+            return conn
 
     def _ensure_step_trace_schema(self) -> None:
         columns = {
@@ -148,9 +175,11 @@ class LocalDB:
 
     def close(self) -> None:
         with self._lock:
-            if self._conn:
-                self._conn.close()
-                self._conn = None
+            for conn in self._connections.values():
+                conn.close()
+            self._connections.clear()
+            self._thread_local = threading.local()
+            self._closed = True
 
     # ------------------------------------------------------------------
     # step_trace_cache

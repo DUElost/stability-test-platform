@@ -1,5 +1,15 @@
 import axios from 'axios';
 
+export class ApiError extends Error {
+  code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+  }
+}
+
 const apiClient = axios.create({
   baseURL: '/api/v1',
   headers: {
@@ -66,6 +76,6 @@ export default apiClient;
 export async function unwrapApiResponse<T>(request: Promise<{ data: { data?: T; error?: { code: string; message: string } | null } }>): Promise<T> {
   const resp = await request;
   const body = resp.data as any;
-  if (body?.error) throw new Error(`[${body.error.code}] ${body.error.message}`);
+  if (body?.error) throw new ApiError(body.error.code, body.error.message);
   return body.data as T;
 }

@@ -1,6 +1,6 @@
 // Domain-split API modules — see frontend/src/utils/api/ for individual files.
 // This barrel preserves backward-compat: `import { api } from '@/utils/api'` still works.
-export { default, api, unwrapApiResponse } from './api/index';
+export { ApiError, default, api, unwrapApiResponse } from './api/index';
 export type {
   Host, Device, Task, RunStep, TaskRun,
   RuntimeLogEntry, RuntimeLogQueryResponse, LogArtifact,

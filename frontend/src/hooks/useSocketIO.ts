@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/config';
 import { ensureFreshAccessToken } from '@/utils/auth';
+import { SOCKET_EVENT_NAMES } from '@/utils/socketEvents';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
 
@@ -104,12 +105,17 @@ function _getDashSocket(): Socket {
 
   // Wire up event forwarding for all known event types
   const EVENTS = [
-    'device_update', 'step_log', 'step_update',
-    'job_status', 'plan_run_status',
-    'run_update', 'task_update', 'report_ready',
-    'job_update',
+    SOCKET_EVENT_NAMES.deviceUpdate,
+    SOCKET_EVENT_NAMES.stepLog,
+    SOCKET_EVENT_NAMES.stepUpdate,
+    SOCKET_EVENT_NAMES.jobStatus,
+    SOCKET_EVENT_NAMES.planRunStatus,
+    SOCKET_EVENT_NAMES.runUpdate,
+    SOCKET_EVENT_NAMES.taskUpdate,
+    SOCKET_EVENT_NAMES.reportReady,
+    SOCKET_EVENT_NAMES.jobUpdate,
     // ADR-0021 C5c — watcher 异常增量推送 (broadcast room: plan_run:{id})
-    'watcher_signal',
+    SOCKET_EVENT_NAMES.watcherSignal,
   ];
   for (const event of EVENTS) {
     socket.on(event, (data: any) => {
@@ -184,20 +190,27 @@ function parseWsUrl(url: string): SubscriptionConfig {
   if (url.includes('/ws/dashboard') || url.endsWith('/dashboard')) {
     return {
       room: null,
-      events: ['device_update', 'run_update', 'task_update', 'report_ready', 'job_update', 'plan_run_status'],
+      events: [
+        SOCKET_EVENT_NAMES.deviceUpdate,
+        SOCKET_EVENT_NAMES.runUpdate,
+        SOCKET_EVENT_NAMES.taskUpdate,
+        SOCKET_EVENT_NAMES.reportReady,
+        SOCKET_EVENT_NAMES.jobUpdate,
+        SOCKET_EVENT_NAMES.planRunStatus,
+      ],
     };
   }
 
   // /ws/jobs/{id}/logs
   const jobLogsMatch = url.match(/\/ws\/jobs\/(\d+)\/logs/);
   if (jobLogsMatch) {
-    return { room: `job:${jobLogsMatch[1]}`, events: ['step_log', 'step_update'] };
+    return { room: `job:${jobLogsMatch[1]}`, events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate] };
   }
 
   // /ws/logs/{id}
   const logsMatch = url.match(/\/ws\/logs\/(\d+)/);
   if (logsMatch) {
-    return { room: `run:${logsMatch[1]}`, events: ['step_log', 'step_update'] };
+    return { room: `run:${logsMatch[1]}`, events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate] };
   }
 
   // /ws/plan-runs/{id}
@@ -207,14 +220,23 @@ function parseWsUrl(url: string): SubscriptionConfig {
       room: `plan_run:${planRunMatch[1]}`,
       // ADR-0021 C5c: include watcher_signal so the frontend can invalidate
       // the WatcherSummary query as soon as the agent posts a log_signal.
-      events: ['job_status', 'plan_run_status', 'watcher_signal'],
+      events: [SOCKET_EVENT_NAMES.jobStatus, SOCKET_EVENT_NAMES.planRunStatus, SOCKET_EVENT_NAMES.watcherSignal],
     };
   }
 
   // Fallback: global subscription
   return {
     room: null,
-    events: ['device_update', 'step_log', 'step_update', 'job_status', 'plan_run_status', 'run_update', 'task_update', 'report_ready'],
+    events: [
+      SOCKET_EVENT_NAMES.deviceUpdate,
+      SOCKET_EVENT_NAMES.stepLog,
+      SOCKET_EVENT_NAMES.stepUpdate,
+      SOCKET_EVENT_NAMES.jobStatus,
+      SOCKET_EVENT_NAMES.planRunStatus,
+      SOCKET_EVENT_NAMES.runUpdate,
+      SOCKET_EVENT_NAMES.taskUpdate,
+      SOCKET_EVENT_NAMES.reportReady,
+    ],
   };
 }
 

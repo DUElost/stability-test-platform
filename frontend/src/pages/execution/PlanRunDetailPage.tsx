@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { useSocketIO, type SocketIOMessage } from '@/hooks/useSocketIO';
 import { api } from '@/utils/api';
+import { SOCKET_MESSAGE_TYPES } from '@/utils/socketEvents';
 import type {
   DeviceMatrixItem,
   DeviceUiStatus,
@@ -111,15 +112,15 @@ export default function PlanRunDetailPage() {
   const onSocketMessage = useCallback(
     (msg: SocketIOMessage<unknown>) => {
       if (!id) return;
-      if (msg.type === 'JOB_STATUS') {
+      if (msg.type === SOCKET_MESSAGE_TYPES.JOB_STATUS) {
         qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
-      } else if (msg.type === 'PLAN_RUN_STATUS') {
+      } else if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS) {
         qc.invalidateQueries({ queryKey: ['plan-run', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
-      } else if (msg.type === 'WATCHER_SIGNAL') {
+      } else if (msg.type === SOCKET_MESSAGE_TYPES.WATCHER_SIGNAL) {
         qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
       }

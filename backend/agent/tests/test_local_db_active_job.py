@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -55,6 +56,24 @@ class TestActiveJobRegistry:
         """delete 不存在的 job 不抛异常."""
         db.delete_active_job(999)
         assert db.get_active_jobs() == []
+
+    def test_connections_are_thread_local(self, db):
+        """不同线程应拿到不同 SQLite connection，避免跨线程共享单连接。"""
+        main_conn = db._conn
+        worker_conn = []
+
+        def worker():
+            db.save_active_job(3, 30, "token-3")
+            worker_conn.append(db._conn)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        assert worker_conn
+        assert worker_conn[0] is not main_conn
+        jobs = db.get_active_jobs()
+        assert any(job["job_id"] == 3 for job in jobs)
 
 
 class TestPendingOutbox:
