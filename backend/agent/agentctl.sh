@@ -132,6 +132,8 @@ PY
 }
 
 health_check() {
+    local exit_code=0
+
     echo -e "${BLUE}健康检查:${NC}"
     echo ""
 
@@ -140,6 +142,7 @@ health_check() {
         echo -e "  服务状态: ${GREEN}运行中${NC}"
     else
         echo -e "  服务状态: ${RED}已停止${NC}"
+        exit_code=1
     fi
 
     # 检查开机自启
@@ -160,6 +163,7 @@ health_check() {
         echo -e "    Host ID: $HOST_ID"
     else
         echo -e "  配置文件: ${RED}不存在${NC}"
+        exit_code=1
     fi
 
     # 检查日志文件
@@ -175,6 +179,7 @@ health_check() {
         echo -e "  Python 环境: ${GREEN}正常${NC}"
     else
         echo -e "  Python 环境: ${RED}异常${NC}"
+        exit_code=1
     fi
 
     # 检查 ADB
@@ -202,9 +207,11 @@ health_check() {
         echo -e "  服务器连接: ${GREEN}正常${NC}"
     else
         echo -e "  服务器连接: ${YELLOW}无法连接${NC}"
+        exit_code=1
     fi
 
     echo ""
+    return "$exit_code"
 }
 
 # 显示帮助

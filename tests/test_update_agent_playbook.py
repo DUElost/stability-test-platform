@@ -48,3 +48,31 @@ def test_update_agent_only_backs_up_and_restarts_when_changes_exist():
     assert "reject('match', '^\\\\.[fd]\\\\.\\\\.t\\\\.\\\\.\\\\.\\\\.\\\\.\\\\.\\\\s')" in text
     assert "__pycache__/" in text
     assert "\\\\.pyc$" in text
+
+
+def test_update_agent_uses_stable_backup_timestamp():
+    text = PLAYBOOK.read_text(encoding="utf-8")
+
+    assert 'agent_update_timestamp: "{{ ansible_date_time.iso8601_basic_short' in text
+    assert 'agent_backup_dir: "{{ agent_install_dir }}/agent.bak.{{ agent_update_timestamp }}"' in text
+    assert (
+        'agent_agentctl_backup_path: "{{ agent_install_dir }}/agentctl.bak.{{ agent_update_timestamp }}"'
+        in text
+    )
+    assert (
+        'agent_service_backup_path: "/etc/systemd/system/{{ agent_service_name }}.service.bak.{{ agent_update_timestamp }}"'
+        in text
+    )
+
+
+def test_update_agent_previews_and_syncs_service_unit():
+    text = PLAYBOOK.read_text(encoding="utf-8")
+    task_names = {task.get("name") for task in _tasks()}
+
+    assert "Preview service unit changes with rsync dry-run" in task_names
+    assert "Refresh systemd service unit from local source" in text
+    assert "Snapshot current service unit before sync" in text
+    assert "Roll back service unit from snapshot" in text
+    assert "{{ agent_source_dir }}/stability-test-agent.service" in text
+    assert "/etc/systemd/system/{{ agent_service_name }}.service" in text
+    assert "agent_service_change_lines | length > 0" in text

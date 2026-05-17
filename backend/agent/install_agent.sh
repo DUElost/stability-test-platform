@@ -300,49 +300,13 @@ systemctl daemon-reload
 
 # 9. 创建管理脚本
 echo_info "创建管理脚本..."
-cat > "$INSTALL_DIR/agentctl" << 'EOCTL'
-#!/bin/bash
-# Stability Test Platform Agent 管理脚本
+if [ ! -f "$SCRIPT_DIR/agentctl.sh" ]; then
+    echo_error "缺少管理脚本: $SCRIPT_DIR/agentctl.sh"
+    exit 1
+fi
 
-show_help() {
-    echo "用法: sudo $0 {start|stop|restart|status|logs|enable|disable|help}"
-    echo ""
-    echo "命令:"
-    echo "  start     启动 Agent 服务"
-    echo "  stop      停止 Agent 服务"
-    echo "  restart   重启 Agent 服务"
-    echo "  status    查看服务状态"
-    echo "  logs      查看服务日志 (journalctl)"
-    echo "  logfile   查看 Agent 错误日志文件"
-    echo "  enable    设置开机自启"
-    echo "  disable   取消开机自启"
-    echo "  help      显示此帮助信息"
-    echo ""
-    echo "或者直接使用 systemctl 命令:"
-    echo "  sudo systemctl start stability-test-agent"
-    echo "  sudo systemctl stop stability-test-agent"
-    echo "  sudo systemctl restart stability-test-agent"
-    echo "  sudo systemctl status stability-test-agent"
-    echo ""
-    echo "查看日志:"
-    echo "  sudo cat /opt/stability-test-agent/logs/agent_error.log"
-    echo "  sudo tail -f /opt/stability-test-agent/logs/agent.log"
-}
-
-case "$1" in
-    start)   sudo systemctl start stability-test-agent ;;
-    stop)    sudo systemctl stop stability-test-agent ;;
-    restart) sudo systemctl restart stability-test-agent ;;
-    status)  sudo systemctl status stability-test-agent ;;
-    logs)    sudo journalctl -u stability-test-agent -f ;;
-    logfile) sudo cat /opt/stability-test-agent/logs/agent_error.log ;;
-    enable)  sudo systemctl enable stability-test-agent ;;
-    disable) sudo systemctl disable stability-test-agent ;;
-    help|--help|-h) show_help ;;
-    *)       echo "未知命令: $1"; show_help; exit 1 ;;
-esac
-EOCTL
-chmod +x "$INSTALL_DIR/agentctl"
+install -m 755 "$SCRIPT_DIR/agentctl.sh" "$INSTALL_DIR/agentctl"
+chown "$USER:$GROUP" "$INSTALL_DIR/agentctl"
 
 # 创建全局命令链接
 if [ -d "/usr/local/bin" ]; then
