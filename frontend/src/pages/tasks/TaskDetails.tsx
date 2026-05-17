@@ -7,6 +7,7 @@ import { PipelineStepTree, type StepUpdateMessage } from '../../components/pipel
 import { api, AgentLogOut, JiraDraft, type Plan, type PlanJobInstance, type PlanRun, type RunStep } from '../../utils/api';
 import apiClient from '../../utils/api/client';
 import { useSocketIO as useWebSocket } from '../../hooks/useSocketIO';
+import { SOCKET_MESSAGE_TYPES } from '../../utils/socketEvents';
 import { getLatestArtifact, getPlanRunDisplayStatus, shouldPollJobData } from './taskDetailsState';
 
 // ---------- Types ----------
@@ -97,7 +98,7 @@ export default function TaskDetails() {
   useEffect(() => {
     if (!lastMessage) return;
 
-    if (lastMessage.type === 'STEP_LOG') {
+    if (lastMessage.type === SOCKET_MESSAGE_TYPES.STEP_LOG) {
       const { step_id, msg, level, ts } = lastMessage.payload as any;
       if (step_id === undefined || step_id === null) return;
 
@@ -125,10 +126,10 @@ export default function TaskDetails() {
       }
     }
 
-    if (lastMessage.type === 'STEP_UPDATE') {
+    if (lastMessage.type === SOCKET_MESSAGE_TYPES.STEP_UPDATE) {
       const payload = lastMessage.payload as any;
       const update: StepUpdateMessage = {
-        type: 'STEP_UPDATE',
+        type: SOCKET_MESSAGE_TYPES.STEP_UPDATE,
         step_id: payload.step_id,
         status: payload.status,
         started_at: payload.started_at,

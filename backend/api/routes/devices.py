@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import cast
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import Session
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from backend.core.database import get_db
 from backend.core.audit import record_audit
@@ -112,7 +112,7 @@ def create_device(
     return device
 
 
-@router.get("", response_model=Any)
+@router.get("", response_model=Union[List[DeviceOut], PaginatedResponse])
 def list_devices(
     request: Request,
     tags: Optional[str] = Query(None, description="Comma-separated tag filter"),

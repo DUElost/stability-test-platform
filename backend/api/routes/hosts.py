@@ -6,7 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
-from typing import Any, List
+from typing import Any, List, Union
 
 from backend.core.audit import record_audit
 from backend.core.database import get_db
@@ -175,7 +175,7 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
     return _host_to_out(host)
 
 
-@router.get("", response_model=Any)
+@router.get("", response_model=Union[List[HostOut], PaginatedResponse])
 def list_hosts(
     request: Request,
     skip: int = Query(0, ge=0),
