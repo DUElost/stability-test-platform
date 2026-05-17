@@ -198,7 +198,7 @@ recycler_runs = Counter(
 recycler_timeouts = Counter(
     'stability_recycler_timeouts_total',
     'Total number of timeouts detected by recycler',
-    ['timeout_type']  # dispatched, running, host, device_lock
+    ['timeout_type']  # dispatched, running, patrol_stall (ADR-0022 D10), host, device_lock
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 recycler_duration = Histogram(

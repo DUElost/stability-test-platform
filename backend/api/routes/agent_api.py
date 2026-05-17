@@ -995,6 +995,24 @@ async def patrol_heartbeat(
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
+    # ADR-0022 D10: Job 已非 RUNNING(典型:recycler 已把 status 推到 UNKNOWN)→
+    # 直接 409 JOB_NOT_RUNNING,与 L1033 CAS 失配的契约统一。本 slice 仅落 backend
+    # ground truth;Agent 端如何消费此 code(理想:停 patrol 循环并触发 /recovery/sync)
+    # 留给下一 slice — 当前 patrol_heartbeat_uploader.py 收到 409 只 log + return None,
+    # lease-lost 收口由 LeaseRenewer (lease_renewer.py:152-167) 通过续租 409/404
+    # 触发 _on_lease_lost 兜底完成。
+    if job.status != JobStatus.RUNNING.value:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "JOB_NOT_RUNNING",
+                "message": (
+                    f"Job {job_id} status={job.status} (not RUNNING); "
+                    "trigger /agent/recovery/sync to re-establish lease before next patrol cycle"
+                ),
+            },
+        )
+
     await _require_valid_runtime_lease(db, job, payload.fencing_token)
 
     if payload.success_delta < 0 or payload.failed_delta < 0:
@@ -1030,11 +1048,30 @@ async def patrol_heartbeat(
     if payload.manual_action_observed:
         update_values["manual_action"] = None
 
-    await db.execute(
+    # ADR-0022 D10: 写侧 CAS — status='RUNNING' guard 防御「预校验通过、CAS 阶段
+    # recycler patrol_stall pass 在 _require_valid_runtime_lease 通过后才 commit」
+    # 的 race。0 行返回 → 与改动 A 同 code 同语义,统一 JOB_NOT_RUNNING 出口。
+    result = await db.execute(
         update(JobInstance)
-        .where(JobInstance.id == job_id)
+        .where(
+            JobInstance.id == job_id,
+            JobInstance.status == JobStatus.RUNNING.value,
+        )
         .values(**update_values)
+        .returning(JobInstance.id)
     )
+    if result.first() is None:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "JOB_NOT_RUNNING",
+                "message": (
+                    f"Job {job_id} status flipped during patrol-heartbeat write; "
+                    "trigger /agent/recovery/sync to re-establish lease before next patrol cycle"
+                ),
+            },
+        )
     await db.commit()
 
     record_patrol_heartbeat(

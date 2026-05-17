@@ -406,3 +406,144 @@ class TestPatrolHeartbeatErrors:
             assert exc.value.status_code == 400
         finally:
             _cleanup_patrol_chain(seed)
+
+
+# ---------------------------------------------------------------------------
+# ADR-0022 D10 — JOB_NOT_RUNNING contract (双侧 CAS)
+# ---------------------------------------------------------------------------
+
+
+class TestPatrolHeartbeatStallContract:
+    @pytest.mark.asyncio
+    async def test_patrol_heartbeat_returns_409_when_job_not_running(self):
+        """改动 A — Job status 在请求进入时已非 RUNNING(典型: recycler 已 CAS 推到 UNKNOWN)
+        → helper 之前直接 409 JOB_NOT_RUNNING;DB 上 last_patrol_heartbeat_at 不被更新。"""
+        from fastapi import HTTPException
+        from sqlalchemy import update as sa_update
+
+        seed = _seed_patrol_chain()
+        try:
+            db = SessionLocal()
+            try:
+                db.execute(
+                    sa_update(JobInstance)
+                    .where(JobInstance.id == seed["job_id"])
+                    .values(status=JobStatus.UNKNOWN.value, last_patrol_heartbeat_at=None)
+                )
+                db.commit()
+            finally:
+                db.close()
+
+            with pytest.raises(HTTPException) as exc:
+                await _call_heartbeat(
+                    seed["job_id"],
+                    PatrolHeartbeatIn(
+                        fencing_token=seed["token"],
+                        cycle_index=1,
+                        success_delta=1,
+                    ),
+                )
+            assert exc.value.status_code == 409
+            assert isinstance(exc.value.detail, dict)
+            assert exc.value.detail.get("code") == "JOB_NOT_RUNNING"
+            assert "recovery/sync" in exc.value.detail.get("message", "")
+
+            db = SessionLocal()
+            try:
+                refreshed = db.get(JobInstance, seed["job_id"])
+                assert refreshed.last_patrol_heartbeat_at is None, (
+                    "改动 A 必须在 helper 之前拦截,heartbeat 写入路径不应执行"
+                )
+                assert refreshed.patrol_cycle_count == 0
+            finally:
+                db.close()
+        finally:
+            _cleanup_patrol_chain(seed)
+
+    @pytest.mark.asyncio
+    async def test_patrol_heartbeat_succeeds_when_status_running(self):
+        """改动 B regression — CAS 添加 status='RUNNING' guard 不破坏正常 happy path。"""
+        seed = _seed_patrol_chain()
+        try:
+            resp = await _call_heartbeat(
+                seed["job_id"],
+                PatrolHeartbeatIn(
+                    fencing_token=seed["token"],
+                    cycle_index=1,
+                    success_delta=1,
+                ),
+            )
+            assert resp.data.patrol_cycle_count == 1
+
+            db = SessionLocal()
+            try:
+                refreshed = db.get(JobInstance, seed["job_id"])
+                assert refreshed.status == JobStatus.RUNNING.value
+                assert refreshed.last_patrol_heartbeat_at is not None
+                assert refreshed.patrol_cycle_count == 1
+            finally:
+                db.close()
+        finally:
+            _cleanup_patrol_chain(seed)
+
+    @pytest.mark.asyncio
+    async def test_patrol_heartbeat_cas_returns_409_when_status_races_after_precheck(
+        self, monkeypatch
+    ):
+        """改动 B — 罕见 race:改动 A 通过(快照看到 RUNNING),helper 在执行期间
+        recycler 把行 flip 到 UNKNOWN,然后 CAS WHERE status='RUNNING' 失配 → 0 行 → 409。
+
+        通过 monkeypatch _require_valid_runtime_lease 让它在通过前用单独的同步 session
+        把真实 DB 行的 status flip 到 UNKNOWN,精确模拟「预校验后、CAS 前」的 race 窗口。
+        """
+        from fastapi import HTTPException
+        from sqlalchemy import update as sa_update
+        from backend.api.routes import agent_api as agent_api_mod
+
+        seed = _seed_patrol_chain()
+        try:
+            async def _race_flip_then_pass(db, job, fencing_token):
+                """模拟 race:在 CAS 之前另一会话把行 flip。"""
+                sync = SessionLocal()
+                try:
+                    sync.execute(
+                        sa_update(JobInstance)
+                        .where(JobInstance.id == seed["job_id"])
+                        .values(status=JobStatus.UNKNOWN.value)
+                    )
+                    sync.commit()
+                finally:
+                    sync.close()
+                return None
+
+            monkeypatch.setattr(
+                agent_api_mod,
+                "_require_valid_runtime_lease",
+                _race_flip_then_pass,
+            )
+
+            with pytest.raises(HTTPException) as exc:
+                await _call_heartbeat(
+                    seed["job_id"],
+                    PatrolHeartbeatIn(
+                        fencing_token=seed["token"],
+                        cycle_index=1,
+                        success_delta=1,
+                    ),
+                )
+            assert exc.value.status_code == 409
+            assert isinstance(exc.value.detail, dict)
+            assert exc.value.detail.get("code") == "JOB_NOT_RUNNING"
+            assert "flipped" in exc.value.detail.get("message", "")
+
+            db = SessionLocal()
+            try:
+                refreshed = db.get(JobInstance, seed["job_id"])
+                assert refreshed.status == JobStatus.UNKNOWN.value
+                assert refreshed.patrol_cycle_count == 0, (
+                    "CAS 失配后必须 rollback,counter 不应被写入"
+                )
+            finally:
+                db.close()
+        finally:
+            _cleanup_patrol_chain(seed)
