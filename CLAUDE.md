@@ -541,7 +541,7 @@ class StepTrace(Base):
 
 仓库现有脚本（`backend/agent/scripts/`，category 固定 `device`）：
 `check_device` / `clean_env` / `connect_wifi` / `ensure_root` / `fill_storage` /
-`install_apk` / `monkey_check` / `monkey_launch (v1.0.0 + v2.0.0)` /
+`flash_firmware` / `install_apk` / `monkey_check` / `monkey_launch (v1.0.0 + v2.0.0)` /
 `monkey_setup` / `monkey_teardown` / `push_resources`
 
 实现位置：`backend/services/script_catalog.py`、`backend/api/routes/scripts.py`、`backend/agent/registry/script_registry.py`。

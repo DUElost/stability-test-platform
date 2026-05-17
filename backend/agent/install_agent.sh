@@ -138,6 +138,23 @@ chown -R "$USER:$GROUP" "$INSTALL_DIR"
 chmod 750 "$INSTALL_DIR"
 chmod 640 "$INSTALL_DIR/agent/"*.py 2>/dev/null || true
 
+# 4b. flashtool 二进制可执行 + udev 规则（自动刷机功能依赖）
+FLASHTOOL_DIR="$INSTALL_DIR/agent/resources/flashtool"
+if [ -d "$FLASHTOOL_DIR" ]; then
+    echo_info "配置 flash_tool 可执行权限..."
+    find "$FLASHTOOL_DIR" -maxdepth 3 -type f \( -name "flash_tool" -o -name "flash_tool.sh" -o -name "modemmanagercmd.sh" \) -exec chmod +x {} \; 2>/dev/null || true
+
+    # 部署 udev 规则：MTK preloader / ttyACM 设备权限
+    UDEV_SRC=$(find "$FLASHTOOL_DIR" -maxdepth 3 -name "99-ttyacms.rules" -type f 2>/dev/null | head -n 1)
+    if [ -n "$UDEV_SRC" ] && [ -d /etc/udev/rules.d ]; then
+        cp "$UDEV_SRC" /etc/udev/rules.d/99-ttyacms.rules 2>/dev/null && \
+            udevadm control --reload-rules 2>/dev/null && \
+            udevadm trigger 2>/dev/null && \
+            echo_info "udev 规则已部署: 99-ttyacms.rules" || \
+            echo_warn "udev 规则部署失败，刷机可能需要 sudo 才能访问 USB"
+    fi
+fi
+
 # 5. 创建 Python 虚拟环境
 echo_info "创建 Python 虚拟环境..."
 if [ ! -d "$INSTALL_DIR/venv/bin" ]; then
