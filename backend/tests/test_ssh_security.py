@@ -42,6 +42,18 @@ def test_resolve_host_ssh_credentials_migrates_legacy_extra(monkeypatch, db_sess
     assert host.extra == {"rack": "A3"}
 
 
+def test_encrypt_ssh_password_preserves_leading_and_trailing_whitespace(monkeypatch):
+    from backend.core.ssh_security import decrypt_ssh_password, encrypt_ssh_password
+
+    monkeypatch.setenv("SSH_CREDENTIALS_FERNET_KEY", Fernet.generate_key().decode())
+    raw = "  secret-with-padding  "
+
+    encrypted = encrypt_ssh_password(raw)
+
+    assert encrypted
+    assert decrypt_ssh_password(encrypted) == raw
+
+
 def test_normalize_remote_log_path_rejects_traversal(monkeypatch):
     from backend.core.ssh_security import normalize_remote_log_path
 

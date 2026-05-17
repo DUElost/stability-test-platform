@@ -31,8 +31,8 @@ class ResolvedSshCredentials:
 
 
 def encrypt_ssh_password(password: str) -> str:
-    secret = (password or "").strip()
-    if not secret:
+    secret = password or ""
+    if secret == "":
         return ""
     return _get_fernet().encrypt(secret.encode("utf-8")).decode("utf-8")
 
@@ -60,7 +60,7 @@ def resolve_host_ssh_credentials(
         host.ssh_key_path = legacy_key_path
         migrated = True
 
-    legacy_password = str(extra.pop("ssh_password", "") or "").strip()
+    legacy_password = str(extra.pop("ssh_password", "") or "")
     if legacy_password and not getattr(host, "ssh_password_enc", None):
         host.ssh_password_enc = encrypt_ssh_password(legacy_password)
         migrated = True
@@ -78,7 +78,7 @@ def resolve_host_ssh_credentials(
         inventory_creds = inventory_lookup(host_ip) if host_ip else None
         if inventory_creds:
             user = (inventory_creds.get("user") or user).strip() or user
-            password = (inventory_creds.get("password") or "").strip()
+            password = inventory_creds.get("password") or ""
             key_path = (
                 inventory_creds.get("key_path")
                 or inventory_creds.get("private_key")

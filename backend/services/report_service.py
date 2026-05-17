@@ -17,7 +17,10 @@ from typing import Any, Dict, List, Optional, Set
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
 
-from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
+from backend.core.artifact_paths import (
+    ArtifactPathError,
+    coerce_local_artifact_path,
+)
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
@@ -75,7 +78,7 @@ def _artifact_local_path(storage_uri: str) -> Optional[Path]:
     if storage_uri.startswith(("http://", "https://")):
         return None
     try:
-        return resolve_local_artifact_path(storage_uri, must_exist=False)
+        return coerce_local_artifact_path(storage_uri)
     except ArtifactPathError:
         return None
 

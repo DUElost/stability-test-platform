@@ -246,6 +246,32 @@ async def test_ingest_artifact_rejects_storage_uri_outside_nfs_root():
         _cleanup_with_artifacts(seed)
 
 
+@pytest.mark.asyncio
+async def test_ingest_artifact_accepts_storage_uri_under_watcher_nfs_root(monkeypatch):
+    monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage/test-platform")
+    monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/nfs/stability")
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await ingest_artifact(
+                job_id=seed["job_id"],
+                payload=ArtifactIn(
+                    storage_uri="/mnt/nfs/stability/jobs/1/AEE/1700000000_db.0.0",
+                    artifact_type="aee_crash",
+                    size_bytes=1024,
+                    checksum="d" * 64,
+                    source_category="AEE",
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data.created is True
+    finally:
+        _cleanup_with_artifacts(seed)
+
+
 # ----------------------------------------------------------------------
 # 5. size_bytes 负数
 # ----------------------------------------------------------------------

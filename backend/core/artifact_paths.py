@@ -1,4 +1,4 @@
-"""Helpers for validating artifact storage paths under STP_NFS_ROOT."""
+"""Helpers for validating local artifact storage paths."""
 
 from __future__ import annotations
 
@@ -31,17 +31,35 @@ def get_stp_nfs_root() -> Path:
     return Path(os.getenv("STP_NFS_ROOT", DEFAULT_STP_NFS_ROOT)).resolve(strict=False)
 
 
-def resolve_local_artifact_path(storage_uri: str, *, must_exist: bool = False) -> Path:
+def get_local_artifact_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for raw_root in (
+        os.getenv("STP_NFS_ROOT", DEFAULT_STP_NFS_ROOT),
+        os.getenv("STP_WATCHER_NFS_BASE_DIR", ""),
+    ):
+        raw_root = (raw_root or "").strip()
+        if not raw_root:
+            continue
+        resolved_root = Path(raw_root).resolve(strict=False)
+        if resolved_root not in roots:
+            roots.append(resolved_root)
+    return tuple(roots)
+
+
+def coerce_local_artifact_path(storage_uri: str) -> Path:
     raw = (storage_uri or "").strip()
     if not raw:
         raise ArtifactPathError("storage_uri is required")
+    return _coerce_local_path(raw).resolve(strict=False)
 
-    local_path = _coerce_local_path(raw)
-    resolved_path = local_path.resolve(strict=False)
-    nfs_root = get_stp_nfs_root()
-    if not resolved_path.is_relative_to(nfs_root):
+
+def resolve_local_artifact_path(storage_uri: str, *, must_exist: bool = False) -> Path:
+    resolved_path = coerce_local_artifact_path(storage_uri)
+    allowed_roots = get_local_artifact_roots()
+    if not any(resolved_path.is_relative_to(root) for root in allowed_roots):
         raise ArtifactPathOutsideRootError(
-            f"artifact path must stay under STP_NFS_ROOT: {nfs_root}"
+            "artifact path must stay under STP_NFS_ROOT or "
+            f"STP_WATCHER_NFS_BASE_DIR: {', '.join(str(root) for root in allowed_roots)}"
         )
 
     if must_exist and (not resolved_path.exists() or not resolved_path.is_file()):
