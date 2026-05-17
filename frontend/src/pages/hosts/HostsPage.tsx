@@ -29,18 +29,6 @@ export default function HostsPage() {
     refetchInterval: 10000,
   });
 
-  const { data: activeJobs } = useQuery({
-    queryKey: ['active-jobs'],
-    queryFn: async () => {
-      const [pending, running] = await Promise.all([
-        api.planRuns.list(0, 200, undefined, 'PENDING'),
-        api.planRuns.list(0, 200, undefined, 'RUNNING'),
-      ]);
-      return [...pending, ...running];
-    },
-    refetchInterval: 10000,
-  });
-
   const createMutation = useMutation({
     mutationFn: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
       api.hosts.create(data),
@@ -109,7 +97,6 @@ export default function HostsPage() {
       setPendingHotUpdateHostId(null);
       queryClient.invalidateQueries({ queryKey: ['hosts'] });
       queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
-      queryClient.invalidateQueries({ queryKey: ['active-jobs'] });
     },
     onError: (error: any, vars) => {
       // 409 with active_jobs surfaces here when the user (or our default
@@ -177,20 +164,6 @@ export default function HostsPage() {
     return countMap;
   }, [devices]);
 
-  const activeTasksMap = useMemo(() => {
-    if (!activeJobs) return new Map<number, number>();
-    const countMap = new Map<number, number>();
-    activeJobs.forEach((job: any) => {
-      if (job.host_id) {
-        const hostKey = Number(job.host_id);
-        if (!isNaN(hostKey)) {
-          countMap.set(hostKey, (countMap.get(hostKey) || 0) + 1);
-        }
-      }
-    });
-    return countMap;
-  }, [activeJobs]);
-
   // Transform data for expandable table
   const tableData: HostTableData[] = useMemo(() => {
     if (!hosts) return [];
@@ -223,7 +196,7 @@ export default function HostsPage() {
             }))
           : [],
         device_count: deviceCountMap.get(host.id) || 0,
-        active_tasks: activeTasksMap.get(host.id) || 0,
+        active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
         // ADR-0019 Phase 3c: structured capacity/health
         max_concurrent_jobs: host.max_concurrent_jobs,
         effective_slots: host.capacity?.effective_slots,
@@ -231,7 +204,7 @@ export default function HostsPage() {
         health_reasons: host.health?.reasons,
       };
     });
-  }, [hosts, deviceCountMap, activeTasksMap]);
+  }, [hosts, deviceCountMap]);
 
   if (isLoading) {
     return (

@@ -162,4 +162,30 @@ describe('HostsPage', () => {
     expect(screen.getByText('Worker-02')).toBeInTheDocument();
     expect(screen.getByTestId('host-table')).toBeInTheDocument();
   });
+
+  it('does not query plan runs to compute host active task counts', async () => {
+    const { api } = await import('../../utils/api');
+    (api.hosts.list as any).mockResolvedValue({
+      data: {
+        items: [
+          {
+            id: 1,
+            name: 'Worker-01',
+            ip: '172.21.15.10',
+            status: 'ONLINE',
+            extra: {},
+            mount_status: {},
+            capacity: { active_jobs: 2, effective_slots: 1, max_concurrent_jobs: 3 },
+          },
+        ],
+        total: 1,
+      },
+    });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByText('Worker-01');
+    expect(api.planRuns.list).not.toHaveBeenCalled();
+  });
 });
