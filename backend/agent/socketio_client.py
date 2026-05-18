@@ -68,10 +68,27 @@ class AgentSocketIOClient:
         self._sio: Optional[Any] = None
         self._stop_event = threading.Event()
         self._control_handler: Optional[Any] = None
+        # 审计 Agent #5: buffer 溢出丢弃计数,_emit/_replay_buffer prepend 路径共享。
+        self._dropped_count = 0
 
     @property
     def connected(self) -> bool:
         return self._connected
+
+    @property
+    def dropped_count(self) -> int:
+        """Number of buffer-overflow drops since process start.
+
+        审计 Agent #5: 暴露给 heartbeat stats 或外部监控,区分"buffer 内积压"与"实际丢消息"。
+        """
+        return self._dropped_count
+
+    def reset_dropped_count(self) -> int:
+        """Read and reset ``_dropped_count``. Used by heartbeat to report delta-since-last."""
+        with self._lock:
+            v = self._dropped_count
+            self._dropped_count = 0
+            return v
 
     def set_control_handler(self, handler) -> None:
         """Register a callback for 'control' events from the server."""
@@ -196,24 +213,55 @@ class AgentSocketIOClient:
                 self._stop_event.wait(5.0)
 
     def _replay_buffer(self):
-        """Replay buffered messages after reconnection."""
-        if not self._buffer:
-            return
-        count = len(self._buffer)
+        """Replay buffered messages after reconnection.
+
+        审计 Agent #5: 三段式保证顺序与并发安全。
+        Why: 旧实现 popleft → emit → 失败 appendleft 与并发 ``_emit.append`` 互相穿插,
+            重连失败时 buffer 顺序可能错乱(部分 drained items prepend 回头,新 append 的
+            消息穿插其间)。
+        How to apply:
+            1. 锁内一次性 drain 到本地 list 并清空 buffer
+            2. 释放锁后按 FIFO 逐条 emit;期间并发 ``_emit`` 仍可正常进入 buffer 尾
+            3. emit 失败时加锁,把未发送的 drained 切片整体 prepend 回 buffer 头
+        """
+        with self._lock:
+            if not self._buffer:
+                return
+            drained: list[dict] = list(self._buffer)
+            self._buffer.clear()
+        count = len(drained)
         logger.info("sio_replaying %d buffered messages", count)
         replayed = 0
-        while self._buffer:
-            msg = self._buffer.popleft()
+        for idx, msg in enumerate(drained):
+            event = msg.pop("_event", "step_log")
             try:
-                event = msg.pop("_event", "step_log")
                 self._sio.emit(event, msg, namespace="/agent")
                 replayed += 1
             except Exception as e:
-                self._buffer.appendleft(msg)
+                # 失败:把 (失败的 msg + drained[idx+1:]) prepend 回 buffer 头,顺序不变。
+                msg["_event"] = event
+                with self._lock:
+                    self._prepend_locked([msg] + drained[idx + 1:])
                 logger.warning("sio_replay_failed after %d messages: %s", replayed, e)
                 self._connected = False
                 return
         logger.info("sio_replayed %d messages", replayed)
+
+    def _prepend_locked(self, items: list[dict]) -> None:
+        """Prepend ``items`` to ``_buffer`` head preserving original order.
+
+        必须在持有 ``self._lock`` 时调用。``deque(maxlen=N).appendleft`` 满载时丢右端(最新),
+        每次溢出自增 ``_dropped_count``,首次和每 100 次触发周期 warning。
+        """
+        for m in reversed(items):
+            if len(self._buffer) >= self.MAX_BUFFER:
+                self._dropped_count += 1
+                if self._dropped_count == 1 or self._dropped_count % 100 == 0:
+                    logger.warning(
+                        "sio_buffer_overflow_dropped count=%d max=%d",
+                        self._dropped_count, self.MAX_BUFFER,
+                    )
+            self._buffer.appendleft(m)
 
     def _next_seq(self, run_id: int) -> int:
         with self._lock:
@@ -232,12 +280,27 @@ class AgentSocketIOClient:
                     logger.warning("sio_emit_failed: %s", e)
                     self._connected = False
                     data["_event"] = event
-                    self._buffer.append(data)
+                    self._append_locked(data)
                     return False
             else:
                 data["_event"] = event
-                self._buffer.append(data)
+                self._append_locked(data)
                 return False
+
+    def _append_locked(self, data: dict) -> None:
+        """Append to ``_buffer`` tail. 必须在持有 ``self._lock`` 时调用。
+
+        审计 Agent #5: ``deque(maxlen=N).append`` 满载时丢左端(最旧),每次溢出自增
+        ``_dropped_count`` 并周期 warning。
+        """
+        if len(self._buffer) >= self.MAX_BUFFER:
+            self._dropped_count += 1
+            if self._dropped_count == 1 or self._dropped_count % 100 == 0:
+                logger.warning(
+                    "sio_buffer_overflow_dropped count=%d max=%d",
+                    self._dropped_count, self.MAX_BUFFER,
+                )
+        self._buffer.append(data)
 
     def send(self, message: dict) -> bool:
         """Legacy compatibility: route to appropriate emit based on message type."""

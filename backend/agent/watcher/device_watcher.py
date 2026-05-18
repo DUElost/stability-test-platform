@@ -367,7 +367,7 @@ class DeviceLogWatcher:
         if artifact_type is None:
             return
         try:
-            from ...artifact_uploader import ArtifactUploader
+            from ..artifact_uploader import ArtifactUploader
             ArtifactUploader.instance().submit(
                 job_id=self._job_id,
                 artifact_type=artifact_type,

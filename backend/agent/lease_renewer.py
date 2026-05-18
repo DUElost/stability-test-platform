@@ -79,6 +79,22 @@ class LeaseRenewer:
     def _renewal_loop(self) -> None:
         while not self._stop_event.is_set():
             with self._jobs_lock:
+                # ADR-0019 Phase 3b 审计 #4: fencing_token 与 _active_job_ids 一致性 watchdog。
+                # Why: 异常路径若漏调 _deregister_active_job,token 会残留导致死租约持续续期。
+                # How to apply: 每个 tick 开始前扫描差集,主动清理孤立 token。
+                orphan_tokens = [
+                    jid for jid in self._fencing_tokens
+                    if jid not in self._job_ids
+                ]
+                for jid in orphan_tokens:
+                    device_id = self._device_ids.pop(jid, None)
+                    self._fencing_tokens.pop(jid, None)
+                    logger.warning("lease_renewer_orphan_token_purged", extra={
+                        "agent_instance_id": self._agent_instance_id,
+                        "job_id": jid,
+                        "device_id": device_id,
+                        "reason": "token_held_without_active_job_id",
+                    })
                 token_jobs = list(self._fencing_tokens.keys())
 
             for job_id in token_jobs:

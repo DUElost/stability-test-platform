@@ -3,6 +3,11 @@
 Design mirrors OutboxDrainThread: daemon thread, start()/stop()/drain_sync() API,
 _stop_event.wait(interval) loop.
 
+审计 Agent #6: 在 Phase A/B 主路径之外增加退避 + 死信。
+- 普通失败 → ``bump_step_trace_attempt`` + 指数退避
+- 达到 ``_MAX_ATTEMPTS`` → ``mark_step_trace_dead_letter``,行不再被取出
+- 监控指标(``uploaded_total`` / ``failed_total`` / ``dead_letter_total``)暴露给 heartbeat
+
 Phase A (current): MQ is the primary write path; Uploader picks up acked=0 leftovers
   when Redis fails.  In practice it's a hot-standby补传.
 Phase B (Phase 4): MQ XADD removed; Uploader becomes the sole upload path.
@@ -24,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 class StepTraceUploader:
     _BATCH_LIMIT = 100
+    # 审计 Agent #6: 持续失败超过此值的 trace 进入死信,不再阻塞 buffer。
+    _MAX_ATTEMPTS = 10
+    # 网络/5xx 失败时进入指数退避,最长 5 分钟一次。
+    _BACKOFF_MAX = 300.0
 
     def __init__(
         self,
@@ -39,6 +48,47 @@ class StepTraceUploader:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._last_id = 0
+        # 审计 Agent #6: 当前轮次的退避时长;0 表示正常 interval。
+        self._current_backoff = 0.0
+        # 监控指标(累计自进程启动)
+        self._uploaded_total = 0
+        self._failed_total = 0
+        self._dead_letter_total = 0
+        self._metrics_lock = threading.Lock()
+
+    # ── monitoring ─────────────────────────────────────────────────────
+
+    @property
+    def uploaded_total(self) -> int:
+        return self._uploaded_total
+
+    @property
+    def failed_total(self) -> int:
+        return self._failed_total
+
+    @property
+    def dead_letter_total(self) -> int:
+        return self._dead_letter_total
+
+    @property
+    def current_backoff(self) -> float:
+        return self._current_backoff
+
+    def snapshot_metrics(self) -> Dict[str, Any]:
+        """Read all counters atomically. Used by heartbeat stats."""
+        with self._metrics_lock:
+            return {
+                "uploaded_total": self._uploaded_total,
+                "failed_total": self._failed_total,
+                "dead_letter_total": self._dead_letter_total,
+                "current_backoff": self._current_backoff,
+            }
+
+    def _bump_metric(self, key: str, delta: int = 1) -> None:
+        with self._metrics_lock:
+            setattr(self, key, getattr(self, key) + delta)
+
+    # ── lifecycle ──────────────────────────────────────────────────────
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -70,15 +120,33 @@ class StepTraceUploader:
             total += n
         return total
 
+    # ── main loop ──────────────────────────────────────────────────────
+
     def _loop(self) -> None:
         while not self._stop_event.is_set():
-            self._stop_event.wait(self._interval)
+            wait = self._current_backoff or self._interval
+            self._stop_event.wait(wait)
             if self._stop_event.is_set():
                 break
             try:
-                self._upload_once()
+                n = self._upload_once()
+                if n > 0:
+                    # 成功上传 → 重置退避
+                    self._current_backoff = 0.0
             except Exception:
                 logger.exception("step_trace_upload_error")
+                self._advance_backoff()
+
+    def _advance_backoff(self) -> None:
+        """指数退避:失败后下一次 wait 翻倍,封顶 ``_BACKOFF_MAX``。"""
+        next_backoff = max(self._current_backoff, self._interval) * 2
+        self._current_backoff = min(next_backoff, self._BACKOFF_MAX)
+        logger.warning(
+            "step_trace_upload_backoff next_wait=%.1fs",
+            self._current_backoff,
+        )
+
+    # ── upload paths ───────────────────────────────────────────────────
 
     def _upload_once(self) -> int:
         traces = self._local_db.get_unacked_traces(after_id=self._last_id)
@@ -88,21 +156,29 @@ class StepTraceUploader:
         headers: Dict[str, str] = {}
         if self._agent_secret:
             headers["X-Agent-Secret"] = self._agent_secret
-        resp = requests.post(
-            f"{self._api_url}/api/v1/agent/steps",
-            json=[_to_payload(t) for t in batch],
-            headers=headers,
-            timeout=15,
-        )
         try:
+            resp = requests.post(
+                f"{self._api_url}/api/v1/agent/steps",
+                json=[_to_payload(t) for t in batch],
+                headers=headers,
+                timeout=15,
+            )
             resp.raise_for_status()
         except requests.HTTPError as exc:
-            if _status_code(exc) in (404, 409):
+            status = _status_code(exc)
+            if status in (404, 409):
                 return self._resolve_rejected_batch(batch, headers)
+            # 5xx 或其他 HTTP 错误 → 累计 attempts,超阈值进死信,再上抛触发 _loop 退避
+            self._bump_or_dead_letter_batch(batch, f"http_{status}: {exc}")
+            raise
+        except requests.RequestException as exc:
+            # 网络层错误同上
+            self._bump_or_dead_letter_batch(batch, f"network: {exc}")
             raise
         for t in batch:
             self._local_db.mark_acked(t["id"])
             self._last_id = max(self._last_id, t["id"])
+        self._bump_metric("_uploaded_total", len(batch))
         logger.info("step_trace_uploaded count=%d", len(batch))
         return len(batch)
 
@@ -119,7 +195,9 @@ class StepTraceUploader:
 
         resolved = 0
         all_resolved = True
-        for trace in batch:
+        rejected_remaining: List[Dict[str, Any]] = []
+        broke_at_idx: Optional[int] = None
+        for idx, trace in enumerate(batch):
             try:
                 resp = requests.post(
                     f"{self._api_url}/api/v1/agent/steps",
@@ -129,31 +207,58 @@ class StepTraceUploader:
                 )
                 resp.raise_for_status()
             except requests.HTTPError as exc:
-                if _status_code(exc) in (404, 409):
+                status = _status_code(exc)
+                if status in (404, 409):
                     self._ack_rejected_trace(trace)
                     resolved += 1
                     continue
                 all_resolved = False
+                broke_at_idx = idx
                 logger.warning(
                     "step_trace_upload_retry trace_id=%s status=%s",
-                    trace.get("id"), _status_code(exc),
+                    trace.get("id"), status,
                 )
+                rejected_remaining = batch[idx:]
                 break
             except Exception as exc:
                 all_resolved = False
+                broke_at_idx = idx
                 logger.warning(
                     "step_trace_upload_retry trace_id=%s error=%s",
                     trace.get("id"), exc,
                 )
+                rejected_remaining = batch[idx:]
                 break
 
             self._local_db.mark_acked(trace["id"])
+            self._bump_metric("_uploaded_total", 1)
             resolved += 1
 
         if all_resolved:
             self._last_id = max(self._last_id, max(t["id"] for t in batch))
+        elif rejected_remaining:
+            # 审计 Agent #6: 剩余未处理 trace 累计 attempts;超阈值进死信,避免下轮反复重试。
+            self._bump_or_dead_letter_batch(
+                rejected_remaining,
+                f"resolve_break_at_idx_{broke_at_idx}",
+            )
         logger.info("step_trace_upload_resolved count=%d/%d", resolved, len(batch))
         return resolved
+
+    def _bump_or_dead_letter_batch(
+        self, batch: List[Dict[str, Any]], error: str,
+    ) -> None:
+        """累计 attempts;超 ``_MAX_ATTEMPTS`` 进死信(标记 dead_letter=1)。"""
+        for trace in batch:
+            new_attempts = self._local_db.bump_step_trace_attempt(trace["id"], error)
+            self._bump_metric("_failed_total", 1)
+            if new_attempts >= self._MAX_ATTEMPTS:
+                self._local_db.mark_step_trace_dead_letter(trace["id"], error)
+                self._bump_metric("_dead_letter_total", 1)
+                logger.warning(
+                    "step_trace_dead_letter trace_id=%s job_id=%s attempts=%d error=%s",
+                    trace["id"], trace.get("job_id"), new_attempts, error[:200],
+                )
 
     def _ack_rejected_trace(self, trace: Dict[str, Any]) -> None:
         self._local_db.mark_acked(trace["id"])

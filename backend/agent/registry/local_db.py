@@ -153,6 +153,24 @@ class LocalDB:
                 "ALTER TABLE step_trace_cache "
                 "ADD COLUMN fencing_token TEXT NOT NULL DEFAULT ''"
             )
+        # 审计 Agent #6: step_trace_cache 需要 attempts/last_error/dead_letter 三列以承载死信。
+        # Why: 上游 step_trace_uploader 持续 5xx 时旧实现会无限重试,挤占 buffer。
+        # How to apply: idempotent ALTER TABLE,与 fencing_token 同套路;get_unacked_traces 过滤 dead_letter。
+        if "attempts" not in columns:
+            self._conn.execute(
+                "ALTER TABLE step_trace_cache "
+                "ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0"
+            )
+        if "last_error" not in columns:
+            self._conn.execute(
+                "ALTER TABLE step_trace_cache "
+                "ADD COLUMN last_error TEXT"
+            )
+        if "dead_letter" not in columns:
+            self._conn.execute(
+                "ALTER TABLE step_trace_cache "
+                "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _backfill_step_trace_tokens(self) -> None:
         self._conn.execute(
@@ -231,8 +249,53 @@ class LocalDB:
     def get_unacked_traces(self, after_id: int = 0) -> list:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM step_trace_cache WHERE id > ? AND acked=0 ORDER BY original_ts ASC",
+                "SELECT * FROM step_trace_cache "
+                "WHERE id > ? AND acked = 0 AND dead_letter = 0 "
+                "ORDER BY original_ts ASC",
                 (after_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def bump_step_trace_attempt(self, trace_id: int, error: str) -> int:
+        """+1 attempts, set last_error, return new attempts count.
+
+        审计 Agent #6: 与 ``bump_terminal_attempt`` / ``bump_log_signal_attempt`` 同口径。
+        Why: 死信判定需要看新 attempts;原子两步走避免漂移。
+        """
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE step_trace_cache "
+                    "SET attempts = attempts + 1, last_error = ? WHERE id = ?",
+                    (error[:500] if error else None, trace_id),
+                )
+                row = self._conn.execute(
+                    "SELECT attempts FROM step_trace_cache WHERE id = ?",
+                    (trace_id,),
+                ).fetchone()
+                return int(row["attempts"]) if row else 0
+
+    def mark_step_trace_dead_letter(self, trace_id: int, error: str) -> None:
+        """标记 trace 为死信(不再尝试上传)。
+
+        审计 Agent #6: dead_letter=1 表示永久失败;保留行用于审计而不删除。
+        """
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE step_trace_cache "
+                    "SET dead_letter = 1, last_error = ? WHERE id = ?",
+                    (error[:500] if error else None, trace_id),
+                )
+
+    def get_step_trace_dead_letters(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """返回死信样本,供 heartbeat / 监控查询。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, job_id, step_id, event_type, attempts, last_error "
+                "FROM step_trace_cache WHERE dead_letter = 1 "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
 

@@ -359,7 +359,25 @@ class PipelineEngine:
 
             except requests.HTTPError:
 
-                logger.error("lock_verification_failed run=%d status=%s", self._run_id, resp.status_code)
+                # 审计 #2: 5xx 视为瞬态,进入重试;其它 4xx (非 409/401) 视为契约错误立即 fail。
+                # Why: 服务端瞬断会让 long-running patrol 立刻 abort,代价过大。
+                # How to apply: 与 _extend_lock 同口径退避;最终耗尽再返回失败。
+                status_code = resp.status_code if resp is not None else None
+                if status_code is not None and 500 <= status_code < 600:
+                    logger.warning(
+                        "lock_verify_attempt_%d_failed_5xx run=%d status=%s",
+                        attempt, self._run_id, status_code,
+                    )
+                    if attempt < len(retry_delays):
+                        time.sleep(delay)
+                        continue
+                    return StepResult(
+                        success=False,
+                        exit_code=1,
+                        error_message=f"lock_verification_http_{status_code}",
+                    )
+
+                logger.error("lock_verification_failed run=%d status=%s", self._run_id, status_code)
 
                 return StepResult(
 
@@ -367,7 +385,7 @@ class PipelineEngine:
 
                     exit_code=1,
 
-                    error_message=f"lock_verification_http_{resp.status_code}",
+                    error_message=f"lock_verification_http_{status_code}",
 
                 )
 
