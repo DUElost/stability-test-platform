@@ -12,6 +12,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
+import { disconnectDashSocket } from '@/hooks/useSocketIO';
 
 interface HeaderProps {
   onMenuClick?: () => void;
@@ -26,6 +27,7 @@ export default function Header({ onMenuClick, showMenuButton = false }: HeaderPr
   const handleLogout = () => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    disconnectDashSocket();
     navigate('/login');
   };
   return (

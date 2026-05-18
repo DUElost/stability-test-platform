@@ -34,9 +34,67 @@ const _dashEventListeners = new Map<string, Set<(data: any) => void>>();
 
 let _authRecoveryInFlight = false;
 
+// 审计 Frontend #3: 旧实现 _dashSocket 永不释放 ── 用户登出 / 关闭所有订阅页面后
+// socket 仍持有过期 token + 占用 reconnection 配额。
+// Why: SPA 中长期保留共享连接是性能优化,但缺一个"全部 hook unmount 时优雅关闭"的兜底。
+// How to apply:
+//   - 每个 useSocketIO 调用进入 _hookRefcount,unmount 时 -1
+//   - 0 时启动 30s idle timer (兼容 StrictMode 双挂载 / 页面跳转闪断)
+//   - 期间任何新 hook 取消 timer
+//   - 登出时 disconnectDashSocket() 强制清理
+let _hookRefcount = 0;
+let _idleDisconnectTimer: ReturnType<typeof setTimeout> | null = null;
+const _IDLE_DISCONNECT_MS = 30_000;
+
 function _notifyDashStatus(status: ConnectionStatus) {
   _dashStatus = status;
   _dashStatusListeners.forEach(fn => fn(status));
+}
+
+function _cancelIdleDisconnect() {
+  if (_idleDisconnectTimer) {
+    clearTimeout(_idleDisconnectTimer);
+    _idleDisconnectTimer = null;
+  }
+}
+
+function _scheduleIdleDisconnect() {
+  _cancelIdleDisconnect();
+  _idleDisconnectTimer = setTimeout(() => {
+    _idleDisconnectTimer = null;
+    if (_hookRefcount === 0) {
+      disconnectDashSocket();
+    }
+  }, _IDLE_DISCONNECT_MS);
+}
+
+/**
+ * 审计 Frontend #3: 强制断开共享 dashboard socket 并重置所有内部状态。
+ *
+ * 调用时机:
+ *   - 用户主动登出 (Header / AppShell)
+ *   - 401 refresh 失败兜底跳 /login (auth.ts / client.ts)
+ *
+ * Why: SocketIO 不能携带过期 token 继续重连,且重连配额是无限大,
+ *      不显式 disconnect 会造成 server-side 反复鉴权失败 + log noise。
+ */
+export function disconnectDashSocket(): void {
+  _cancelIdleDisconnect();
+  const sock = _dashSocket;
+  _dashSocket = null;
+  _activeRooms.clear();
+  _dashEventListeners.clear();
+  _authRecoveryInFlight = false;
+  _hookRefcount = 0;
+  if (sock) {
+    try {
+      sock.removeAllListeners();
+      sock.disconnect();
+    } catch {
+      // ignore — best-effort teardown
+    }
+  }
+  _notifyDashStatus('disconnected');
 }
 
 function _getDashSocket(): Socket {
@@ -289,6 +347,10 @@ export function useSocketIO<T = unknown>(
   useEffect(() => {
     if (!enabled) return;
 
+    // 审计 Frontend #3: 这个 hook 实例进入活跃集合,取消任何 pending 的 idle 断连。
+    _hookRefcount += 1;
+    _cancelIdleDisconnect();
+
     const handler = (status: ConnectionStatus) => {
       setConnectionStatus(status);
       if (status === 'connected') callbacksRef.current.onConnect?.();
@@ -302,6 +364,12 @@ export function useSocketIO<T = unknown>(
 
     return () => {
       _dashStatusListeners.delete(handler);
+      _hookRefcount = Math.max(0, _hookRefcount - 1);
+      if (_hookRefcount === 0) {
+        // 全部 hook unmount → 30s 后空闲断连
+        // (覆盖 StrictMode 双挂载 + 页面切换间的瞬时全卸载)
+        _scheduleIdleDisconnect();
+      }
     };
   }, [enabled]);
 

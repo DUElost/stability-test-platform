@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-// 防抖：避免并发刷新导致重复请求
+// 防抖：避免并发刷新导致重复请求 (axios interceptor + WebSocket auth 共用)
 let _refreshInFlight: Promise<string | null> | null = null;
 
 function _base64UrlDecode(input: string): string | null {
@@ -46,7 +46,16 @@ export function upsertWsToken(url: string, token: string): string {
   }
 }
 
-async function _refreshAccessToken(): Promise<string | null> {
+/**
+ * 审计 Frontend #5: 唯一的 refresh token 入口。
+ *
+ * Why: 旧实现 client.ts interceptor 与 auth.ts 各有一份独立的 refresh 逻辑,
+ * 并发 401 会同时调用 /auth/refresh,后端启用 rotation 时拿到 stale refresh_token
+ * 会直接拒绝并踢登录。
+ * How to apply: client.ts interceptor 与 ensureFreshAccessToken 都走这里,
+ * `_refreshInFlight` 保证整页只有一个在飞的 refresh。
+ */
+export async function refreshAccessToken(): Promise<string | null> {
   if (_refreshInFlight) return _refreshInFlight;
 
   _refreshInFlight = (async () => {
@@ -86,5 +95,5 @@ export async function ensureFreshAccessToken(thresholdSeconds = 60): Promise<str
   const now = Math.floor(Date.now() / 1000);
   if (exp - now > thresholdSeconds) return token;
 
-  return _refreshAccessToken();
+  return refreshAccessToken();
 }

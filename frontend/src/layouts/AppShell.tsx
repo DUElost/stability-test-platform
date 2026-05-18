@@ -3,6 +3,7 @@ import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { Menu, Bell, ChevronRight, FileText, Settings, LogOut, User, ChevronDown, Loader2, BellRing, Users, Shield, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { disconnectDashSocket } from '@/hooks/useSocketIO';
 
 /**
  * 主应用布局 - 源自 web 样板设计风格
@@ -47,6 +48,7 @@ export default function AppShell() {
   const handleLogout = () => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
+    disconnectDashSocket();
     navigate('/login');
   };
 
