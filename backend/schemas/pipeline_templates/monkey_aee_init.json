@@ -31,9 +31,17 @@
         "params": {}
       },
       {
+        "step_id": "monkey_resource_push",
+        "action": "script:monkey_resource_push",
+        "version": "1.0.0",
+        "timeout_seconds": 600,
+        "retry": 1,
+        "params": {}
+      },
+      {
         "step_id": "monkey_launch",
         "action": "script:monkey_launch",
-        "version": "2.0.0",
+        "version": "5.0.0",
         "timeout_seconds": 1200,
         "retry": 0,
         "params": {}

@@ -541,8 +541,17 @@ class StepTrace(Base):
 
 仓库现有脚本（`backend/agent/scripts/`，category 固定 `device`）：
 `check_device` / `clean_env` / `connect_wifi` / `ensure_root` / `fill_storage` /
-`flash_firmware` / `install_apk` / `monkey_check` / `monkey_launch (v1.0.0 + v2.0.0)` /
-`monkey_setup` / `monkey_teardown` / `push_resources`
+`flash_firmware` / `install_apk` / `monkey_check` / `monkey_launch (v5.0.0 主推；v1.0.0 / v2.0.0 / v4.0.0 为历史保留)` /
+`monkey_resource_push (v1.0.0，配套 launch v5)` / `monkey_setup` / `monkey_teardown` / `push_resources`
+
+> **monkey lifecycle 推荐链**（ADR-0020 init 一次性 + patrol 周期性契约）：
+> - init: `check_device` → `ensure_root` → `monkey_setup` → `monkey_resource_push v1.0.0` → `monkey_launch v5.0.0`
+> - patrol: `monkey_check`（周期检测；失败连击/退避/manual-retry 由后端状态机驱动）
+> - teardown: `monkey_teardown`
+>
+> v5 仅做"启动 MonkeyTest.sh + aimwd 看门狗",~15s 内完成 post-check 即退出,资源推送拆到独立的
+> `monkey_resource_push` 步;v1/v2/v4 通过 python 加载 AIMonkeyTest 库整包做(推资源+启动),
+> v2/v4 还包含违反 init 一次性契约的 foreground 长跑监控分支,新增 Plan 请勿继续使用。
 
 实现位置：`backend/services/script_catalog.py`、`backend/api/routes/scripts.py`、`backend/agent/registry/script_registry.py`。
 

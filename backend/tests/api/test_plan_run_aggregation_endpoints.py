@@ -94,7 +94,7 @@ def chain_setup(db_session):
                  script_name="ensure_root", script_version="v1.0.0",
                  stage="init", sort_order=1),
         PlanStep(plan_id=plan_cur.id, step_key="patrol.monkey_launch",
-                 script_name="monkey_launch", script_version="v2.0.0",
+                 script_name="monkey_launch", script_version="v5.0.0",
                  stage="patrol", sort_order=0),
         PlanStep(plan_id=plan_cur.id, step_key="teardown.clean_env",
                  script_name="clean_env", script_version="v1.0.0",
