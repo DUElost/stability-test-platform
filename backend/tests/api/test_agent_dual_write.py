@@ -146,7 +146,7 @@ def _cleanup_seed(seed: dict) -> None:
         db.close()
 
 
-def _setup_lock_and_lease(seed: dict) -> None:
+def _setup_lock_and_lease(seed: dict) -> str:
     """Pre-populate ACTIVE lease for extend/complete tests.
 
     Phase 6d: device_leases is the sole source of truth — no projection
@@ -175,6 +175,7 @@ def _setup_lock_and_lease(seed: dict) -> None:
         )
         db.add(lease)
         db.commit()
+        return fencing_token
     finally:
         db.close()
 

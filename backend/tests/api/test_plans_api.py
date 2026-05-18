@@ -78,6 +78,55 @@ class TestPlanCRUD:
         get_resp = client.get(f"/api/v1/plans/{plan_id}")
         assert get_resp.status_code == 404
 
+    def test_update_plan_rejected_for_non_owner(self, client, auth_headers, sample_script):
+        # 审计 #8: plans.py update/delete 必须拒绝非 owner 非 admin。
+        from backend.core.security import create_access_token
+        from backend.models.user import User
+        from backend.tests.conftest import db_session  # type: ignore[attr-defined]
+
+        name = _uniq("plan")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        other_token = create_access_token(data={"sub": "otheruser", "role": "user"})
+        other_headers = {"Authorization": f"Bearer {other_token}"}
+
+        # 准备 otheruser 用户记录
+        from backend.core.database import SessionLocal
+        with SessionLocal() as s:
+            if not s.query(User).filter(User.username == "otheruser").first():
+                from backend.core.security import get_password_hash
+                s.add(User(
+                    username="otheruser",
+                    hashed_password=get_password_hash("x"),
+                    role="user",
+                    is_active="Y",
+                ))
+                s.commit()
+
+        update = client.put(f"/api/v1/plans/{plan_id}", json={
+            "name": f"{name}_hack",
+        }, headers=other_headers)
+        assert update.status_code == 403
+
+        delete = client.delete(f"/api/v1/plans/{plan_id}", headers=other_headers)
+        assert delete.status_code == 403
+
+    def test_admin_can_modify_other_users_plan(self, client, auth_headers, admin_headers, sample_script):
+        # admin 应该可以修改任何用户的 Plan
+        name = _uniq("plan")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        update = client.put(f"/api/v1/plans/{plan_id}", json={
+            "name": f"{name}_admin_renamed",
+        }, headers=admin_headers)
+        assert update.status_code == 200, update.text
+
     def test_create_empty_steps_rejected(self, client, auth_headers):
         # Init 至少一个 enabled step 是 ADR §2 的不变量
         payload = {"name": _uniq("bad"), "steps": []}

@@ -32,6 +32,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
 
 
+def _require_plan_owner_or_admin(plan: Plan, user: User) -> None:
+    """Plan 写操作鉴权:admin 或 plan 的 created_by 才放行。
+
+    Why: 审计 #8 提出 plans.py:441 delete_plan 仅需登录,任意 user 可删他人 Plan。
+    How to apply: 任何 update/delete plan 端点都先调用此 helper。
+    """
+    if user.role == "admin":
+        return
+    owner = (plan.created_by or "").strip()
+    if owner and owner == user.username:
+        return
+    raise HTTPException(
+        status_code=403,
+        detail="only the plan owner or an admin can modify this plan",
+    )
+
+
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class PlanStepIn(BaseModel):
@@ -384,6 +401,7 @@ def update_plan(
     plan = db.get(Plan, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="plan not found")
+    _require_plan_owner_or_admin(plan, current_user)
 
     if payload.name is not None:
         plan.name = payload.name
@@ -446,6 +464,7 @@ def delete_plan(
     plan = db.get(Plan, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="plan not found")
+    _require_plan_owner_or_admin(plan, current_user)
 
     active_run = db.query(PlanRun).filter(
         PlanRun.plan_id == plan_id, PlanRun.status == "RUNNING"

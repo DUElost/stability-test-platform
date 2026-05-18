@@ -1328,7 +1328,10 @@ async def ingest_artifact(
         raise_api_http_error(
             status_code=400,
             code="INVALID_ARTIFACT_PATH",
-            message="artifact path is invalid or outside the allowed root",
+            message=(
+                "artifact path is invalid or outside the allowed root "
+                f"(STP_NFS_ROOT/STP_WATCHER_NFS_BASE_DIR): {exc}"
+            ),
         )
 
     if payload.artifact_type not in _ARTIFACT_TYPE_WHITELIST:

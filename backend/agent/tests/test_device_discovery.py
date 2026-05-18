@@ -53,8 +53,13 @@ def test_discover_devices_returns_empty_on_exception(adb_path: str):
 def test_collect_device_info_success(adb_path: str, serial: str, completed_process_factory):
     check_result = completed_process_factory(stdout="test\n", returncode=0)
     battery_result = completed_process_factory(stdout="level: 87\ntemperature: 356\n", returncode=0)
+    build_result = completed_process_factory(stdout="SP-L2-20260518\n", returncode=0)
 
-    with patch.object(device_module.subprocess, "run", side_effect=[check_result, battery_result]) as mock_run:
+    with patch.object(
+        device_module.subprocess,
+        "run",
+        side_effect=[check_result, battery_result, build_result],
+    ) as mock_run:
         with patch.object(device_module, "_ping_with_fallback", return_value=23.4) as mock_ping:
             info = device_module.collect_device_info(adb_path, serial)
 
@@ -66,10 +71,14 @@ def test_collect_device_info_success(adb_path: str, serial: str, completed_proce
         "battery_level": 87,
         "temperature": 35,
         "network_latency": 23.4,
+        "build_display_id": "SP-L2-20260518",
     }
-    assert mock_run.call_count == 2
+    assert mock_run.call_count == 3
     assert mock_run.call_args_list[0].args[0] == [adb_path, "-s", serial, "shell", "echo", "test"]
     assert mock_run.call_args_list[1].args[0] == [adb_path, "-s", serial, "shell", "dumpsys", "battery"]
+    assert mock_run.call_args_list[2].args[0] == [
+        adb_path, "-s", serial, "shell", "getprop", "ro.build.display.id",
+    ]
     mock_ping.assert_called_once_with(adb_path, serial, "223.5.5.5", fallback="8.8.8.8")
 
 
@@ -88,6 +97,7 @@ def test_collect_device_info_returns_early_when_adb_check_failed(adb_path: str, 
         "battery_level": None,
         "temperature": None,
         "network_latency": None,
+        "build_display_id": None,
     }
     mock_run.assert_called_once()
     mock_ping.assert_not_called()
