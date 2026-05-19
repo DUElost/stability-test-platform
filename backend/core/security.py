@@ -1,11 +1,13 @@
 """Security utilities for authentication and authorization."""
 import os
 from datetime import datetime, timedelta, timezone
+from http.cookies import SimpleCookie
 from typing import Optional, Union
 
 import jwt
 from jwt import InvalidTokenError
 from passlib.context import CryptContext
+from starlette.responses import Response
 
 # Security configuration
 _PLACEHOLDER = "your-secret-key-here-change-in-production"
@@ -21,6 +23,9 @@ if not SECRET_KEY or SECRET_KEY == _PLACEHOLDER:
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 480
 REFRESH_TOKEN_EXPIRE_DAYS = 30
+ACCESS_COOKIE_NAME = os.getenv("AUTH_ACCESS_COOKIE_NAME", "stp_access_token")
+REFRESH_COOKIE_NAME = os.getenv("AUTH_REFRESH_COOKIE_NAME", "stp_refresh_token")
+AUTH_COOKIE_PATH = os.getenv("AUTH_COOKIE_PATH", "/")
 
 # Password hashing context
 # 使用 bcrypt 并设置 truncate_error=False 以自动截断超过 72 字节的密码
@@ -29,6 +34,28 @@ pwd_context = CryptContext(
     deprecated="auto",
     bcrypt__truncate_error=False,
 )
+
+
+def is_auth_cookie_secure() -> bool:
+    return os.getenv("AUTH_COOKIE_SECURE", "0") == "1"
+
+
+def _get_cookie_samesite() -> str:
+    cookie_samesite = os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower()
+    if cookie_samesite not in {"lax", "strict", "none"}:
+        return "lax"
+    return cookie_samesite
+
+
+def validate_production_auth_cookie_settings() -> None:
+    if os.getenv("ENV", "").strip().lower() != "production":
+        return
+    if not is_auth_cookie_secure():
+        raise RuntimeError("AUTH_COOKIE_SECURE=1 required when ENV=production")
+    if _get_cookie_samesite() == "none":
+        raise RuntimeError(
+            "AUTH_COOKIE_SAMESITE=none is not supported in production without CSRF protection"
+        )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -91,3 +118,52 @@ def decode_token(token: str) -> Optional[dict]:
         return payload
     except InvalidTokenError:
         return None
+
+
+def set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    response.set_cookie(
+        ACCESS_COOKIE_NAME,
+        access_token,
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        httponly=True,
+        secure=is_auth_cookie_secure(),
+        samesite=_get_cookie_samesite(),
+        path=AUTH_COOKIE_PATH,
+    )
+    response.set_cookie(
+        REFRESH_COOKIE_NAME,
+        refresh_token,
+        max_age=REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        httponly=True,
+        secure=is_auth_cookie_secure(),
+        samesite=_get_cookie_samesite(),
+        path=AUTH_COOKIE_PATH,
+    )
+
+
+def clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(
+        ACCESS_COOKIE_NAME,
+        path=AUTH_COOKIE_PATH,
+        secure=is_auth_cookie_secure(),
+        samesite=_get_cookie_samesite(),
+        httponly=True,
+    )
+    response.delete_cookie(
+        REFRESH_COOKIE_NAME,
+        path=AUTH_COOKIE_PATH,
+        secure=is_auth_cookie_secure(),
+        samesite=_get_cookie_samesite(),
+        httponly=True,
+    )
+
+
+def extract_cookie_token(cookie_header: str | None, cookie_name: str) -> Optional[str]:
+    if not cookie_header:
+        return None
+    cookie = SimpleCookie()
+    cookie.load(cookie_header)
+    morsel = cookie.get(cookie_name)
+    if morsel is None:
+        return None
+    return morsel.value or None

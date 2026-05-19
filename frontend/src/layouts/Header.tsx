@@ -12,7 +12,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Badge } from '@/components/ui/badge';
+import { clearAppQueryCache } from '@/components/QueryProvider';
 import { disconnectDashSocket } from '@/hooks/useSocketIO';
+import { api } from '@/utils/api';
 
 interface HeaderProps {
   onMenuClick?: () => void;
@@ -24,9 +26,13 @@ export default function Header({ onMenuClick, showMenuButton = false }: HeaderPr
   const navigate = useNavigate();
   const toast = useToast();
 
-  const handleLogout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
+  const handleLogout = async () => {
+    try {
+      await api.auth.logout();
+    } catch {
+      // ignore — local UI should still transition to login
+    }
+    clearAppQueryCache();
     disconnectDashSocket();
     navigate('/login');
   };

@@ -48,6 +48,7 @@ from backend.core.cors import get_cors_config
 from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
+from backend.core.security import validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
@@ -82,6 +83,7 @@ async def lifespan(app: FastAPI):
     scheduler = None
 
     if os.getenv("TESTING") != "1":
+        validate_production_auth_cookie_settings()
         get_cors_config()
         try:
             require_agent_secret()

@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { clearAppQueryCache } from '@/components/QueryProvider';
+import { disconnectDashSocket } from '@/hooks/useSocketIO';
 import { refreshAccessToken } from '@/utils/auth';
 
 export class ApiError extends Error {
@@ -13,17 +15,26 @@ export class ApiError extends Error {
 
 const apiClient = axios.create({
   baseURL: '/api/v1',
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
+function shouldSkipRefresh(url: unknown): boolean {
+  const value = typeof url === 'string' ? url : '';
+  return value.includes('/auth/login')
+    || value.includes('/auth/token')
+    || value.includes('/auth/refresh')
+    || value.includes('/auth/logout');
+}
+
+function isLoginRequest(url: unknown): boolean {
+  return typeof url === 'string' && url.includes('/auth/login');
+}
+
 apiClient.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('access_token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
     if (import.meta.env.DEV) console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
@@ -42,21 +53,23 @@ apiClient.interceptors.response.use(
     if (import.meta.env.DEV) console.error('[API] Response error:', error);
 
     if (error.response?.status === 401) {
-      const refreshToken = localStorage.getItem('refresh_token');
-      if (refreshToken && error.config && !error.config.__retry) {
+      if (error.config && !error.config.__retry && !shouldSkipRefresh(error.config.url)) {
         error.config.__retry = true;
-        // 审计 Frontend #5: 走唯一的防抖 refreshAccessToken,避免并发 401 同时多次 refresh
-        // 导致 refresh_token rotation 失效被踢登录。
-        const newAccess = await refreshAccessToken();
-        if (newAccess) {
-          error.config.headers.Authorization = `Bearer ${newAccess}`;
+        // 审计 Frontend #5: 走唯一的防抖 refreshAccessToken,避免并发 401 同时多次 refresh。
+        // 当前浏览器端已切到 HttpOnly cookie，会话恢复成功后直接重放原请求即可。
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
           return apiClient(error.config);
         }
-        // refreshAccessToken 在失败时已清理本地 token 并跳转 /login
+      }
+
+      if (isLoginRequest(error.config?.url)) {
         return Promise.reject(error);
-      } else {
-        localStorage.removeItem('access_token');
-        localStorage.removeItem('refresh_token');
+      }
+
+      clearAppQueryCache();
+      disconnectDashSocket();
+      if (window.location.pathname !== '/login') {
         window.location.href = '/login';
       }
     }

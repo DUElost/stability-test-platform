@@ -24,6 +24,7 @@ import socketio
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.cors import get_cors_allowed_origins
 from backend.core.metrics import record_socketio_connection
+from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,8 @@ class DashboardNamespace(socketio.AsyncNamespace):
     async def on_connect(self, sid: str, environ: dict, auth: dict | None = None):
         auth = auth or {}
         token = auth.get("token", "")
+        if not token:
+            token = extract_cookie_token(environ.get("HTTP_COOKIE"), ACCESS_COOKIE_NAME) or ""
 
         if os.getenv("ENV", "").lower() == "production" and not token:
             raise socketio.exceptions.ConnectionRefusedError("Authentication required")

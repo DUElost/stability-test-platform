@@ -69,7 +69,7 @@ def test_api_client_login_posts_form_data():
     client.login("admin", "pw")
 
     mock_client.post.assert_called_once_with(
-        "/api/v1/auth/login",
+        "/api/v1/auth/token",
         data={"username": "admin", "password": "pw"},
     )
     assert client._token == "token-123"

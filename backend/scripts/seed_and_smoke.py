@@ -3,7 +3,7 @@
 真实环境：10.36 节点（host_id=auto-fdaf1d55e319）+ 一台 ONLINE 设备。
 
 流程：
-    1. 登录 admin 拿 JWT
+    1. 通过 token 入口登录 admin，拿 Bearer token
     2. 热更新 Agent 代码（同步本地代码到 10.36，可 --no-hot-update 跳过）
     3. 同名 Plan 已存在则 DELETE 重建
     4. 创建 Plan（4 步：init x2 / patrol x1 / teardown x1）
@@ -99,7 +99,7 @@ class APIClient:
 
     def login(self, username: str, password: str) -> None:
         r = self._client.post(
-            "/api/v1/auth/login",
+            "/api/v1/auth/token",
             data={"username": username, "password": password},
         )
         if r.status_code != 200:

@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { API_BASE_URL } from '@/config';
-import { ensureFreshAccessToken } from '@/utils/auth';
+import { refreshAccessToken } from '@/utils/auth';
 import { SOCKET_EVENT_NAMES } from '@/utils/socketEvents';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -105,21 +105,15 @@ function _getDashSocket(): Socket {
     return _dashSocket;
   }
 
-  // Use function-based auth so the token is always fresh at handshake time.
-  // Static auth payload is stale the moment localStorage is updated.
   const socket = io(`${API_BASE_URL}/dashboard`, {
     path: '/socket.io',
     transports: ['websocket', 'polling'],
     autoConnect: true,
+    withCredentials: true,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 30000,
-    auth: (cb: (payload: Record<string, string>) => void) => {
-      void ensureFreshAccessToken(60).then((token) => {
-        cb(token ? { token } : {});
-      });
-    },
     forceNew: false,
   });
 
@@ -148,9 +142,8 @@ function _getDashSocket(): Socket {
     if (err.message === 'Invalid token' && !_authRecoveryInFlight) {
       _authRecoveryInFlight = true;
       socket.disconnect();
-      void ensureFreshAccessToken(0).then((fresh) => {
+      void refreshAccessToken().then((fresh) => {
         if (fresh) {
-          (socket as any).auth = { token: fresh };
           socket.connect();
         }
         _authRecoveryInFlight = false;

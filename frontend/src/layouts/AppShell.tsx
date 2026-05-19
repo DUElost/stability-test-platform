@@ -3,7 +3,9 @@ import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { Menu, Bell, ChevronRight, FileText, Settings, LogOut, User, ChevronDown, Loader2, BellRing, Users, Shield, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { clearAppQueryCache } from '@/components/QueryProvider';
 import { disconnectDashSocket } from '@/hooks/useSocketIO';
+import { api } from '@/utils/api';
 
 /**
  * 主应用布局 - 源自 web 样板设计风格
@@ -45,9 +47,13 @@ export default function AppShell() {
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
   const toggleSidebarCollapse = () => setSidebarCollapsed(!sidebarCollapsed);
 
-  const handleLogout = () => {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('refresh_token');
+  const handleLogout = async () => {
+    try {
+      await api.auth.logout();
+    } catch {
+      // ignore — local UI should still transition to login
+    }
+    clearAppQueryCache();
     disconnectDashSocket();
     navigate('/login');
   };

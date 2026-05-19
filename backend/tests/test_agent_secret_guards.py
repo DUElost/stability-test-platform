@@ -38,3 +38,29 @@ async def test_lifespan_requires_agent_secret_outside_testing(monkeypatch):
     with pytest.raises(RuntimeError, match="AGENT_SECRET required"):
         async with lifespan(fastapi_app):
             pass
+
+
+@pytest.mark.asyncio
+async def test_lifespan_requires_secure_auth_cookies_in_production(monkeypatch):
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("AGENT_SECRET", "test-agent-secret")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "lax")
+
+    with pytest.raises(RuntimeError, match="AUTH_COOKIE_SECURE=1"):
+        async with lifespan(fastapi_app):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_lifespan_rejects_samesite_none_without_csrf_protection(monkeypatch):
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("AGENT_SECRET", "test-agent-secret")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "1")
+    monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "none")
+
+    with pytest.raises(RuntimeError, match="AUTH_COOKIE_SAMESITE=none"):
+        async with lifespan(fastapi_app):
+            pass

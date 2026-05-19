@@ -1,5 +1,5 @@
 /**
- * Tests for useSocketIO hook — token refresh before Socket.IO handshake.
+ * Tests for useSocketIO hook — cookie-based Socket.IO handshake + refresh recovery.
  *
  * Because useSocketIO maintains module-level singletons (_dashSocket,
  * _authRecoveryInFlight), each test must reset them.  We do this by
@@ -40,7 +40,6 @@ function createFakeSocket() {
 describe('useSocketIO — token auth', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.clear();
     // Reset the module registry so each test gets a fresh singleton.
     vi.resetModules();
   });
@@ -49,23 +48,15 @@ describe('useSocketIO — token auth', () => {
     vi.restoreAllMocks();
   });
 
-  it('uses a function-based auth callback (not a static payload)', async () => {
-    const ensureFreshAccessToken = vi.fn().mockResolvedValue('fresh-access-token');
+  it('uses cookie credentials for the Socket.IO handshake', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(true);
     const socket = createFakeSocket();
 
-    let capturedAuthCb: ((payload: Record<string, string>) => void) | null = null;
-    const ioMock = vi.fn((_url: string, opts: any) => {
-      // Simulate Socket.IO invoking the auth callback during handshake.
-      if (typeof opts.auth === 'function') {
-        capturedAuthCb = opts.auth;
-        opts.auth((payload: Record<string, string>) => {
-          socket.auth = payload;
-        });
-      }
+    const ioMock = vi.fn((_url: string, _opts: any) => {
       return socket;
     });
 
-    vi.doMock('@/utils/auth', () => ({ ensureFreshAccessToken }));
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
     vi.doMock('socket.io-client', () => ({ io: ioMock }));
 
     const { useSocketIO } = await import('@/hooks/useSocketIO');
@@ -75,27 +66,21 @@ describe('useSocketIO — token auth', () => {
       expect(ioMock).toHaveBeenCalled();
     });
 
-    expect(capturedAuthCb).toBeInstanceOf(Function);
+    expect(ioMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        withCredentials: true,
+      }),
+    );
   });
 
-  it('recovers from Invalid token by refreshing and reconnecting', async () => {
-    // ensureFreshAccessToken: first call from auth cb, second from recovery.
-    const ensureFreshAccessToken = vi.fn()
-      .mockResolvedValueOnce('first-token')
-      .mockResolvedValueOnce('refreshed-token');
+  it('recovers from Invalid token by refreshing cookie session and reconnecting', async () => {
+    const refreshAccessToken = vi.fn().mockResolvedValue(true);
 
     const socket = createFakeSocket();
-    const ioMock = vi.fn((_url: string, opts: any) => {
-      // Simulate Socket.IO invoking the auth callback during handshake.
-      if (typeof opts.auth === 'function') {
-        opts.auth((payload: Record<string, string>) => {
-          socket.auth = payload;
-        });
-      }
-      return socket;
-    });
+    const ioMock = vi.fn(() => socket);
 
-    vi.doMock('@/utils/auth', () => ({ ensureFreshAccessToken }));
+    vi.doMock('@/utils/auth', () => ({ refreshAccessToken }));
     vi.doMock('socket.io-client', () => ({ io: ioMock }));
 
     const { useSocketIO } = await import('@/hooks/useSocketIO');
@@ -106,19 +91,13 @@ describe('useSocketIO — token auth', () => {
       expect(ioMock).toHaveBeenCalled();
     });
 
-    // The auth callback runs synchronously inside ioMock, so
-    // ensureFreshAccessToken should already have been called once.
-    expect(ensureFreshAccessToken).toHaveBeenCalledTimes(1);
-
-    // Now emit the Invalid token connect_error.
     act(() => {
       socket.emitLocal('connect_error', new Error('Invalid token'));
     });
 
-    // The recovery path should call ensureFreshAccessToken a second time.
     await waitFor(
       () => {
-        expect(ensureFreshAccessToken).toHaveBeenCalledTimes(2);
+        expect(refreshAccessToken).toHaveBeenCalledTimes(1);
       },
       { timeout: 3000 }
     );

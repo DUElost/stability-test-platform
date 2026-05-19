@@ -29,9 +29,8 @@ vi.mock('socket.io-client', () => {
   return { io, default: { io } };
 });
 
-// auth.ts uses axios; mock the post that ensureFreshAccessToken would not actually call without a token
+// auth.ts uses axios; mock refreshAccessToken to keep this suite isolated from real HTTP calls.
 vi.mock('@/utils/auth', () => ({
-  ensureFreshAccessToken: vi.fn(async () => null),
   refreshAccessToken: vi.fn(async () => null),
 }));
 

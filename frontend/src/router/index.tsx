@@ -1,6 +1,8 @@
 import { lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
 import AppShell from '../layouts/AppShell';
+import { useAuthSession } from '@/hooks/useAuthSession';
 
 // Auth pages stay as static imports (always needed on first load)
 import LoginPage from '../pages/auth/LoginPage';
@@ -37,19 +39,27 @@ const PlanRunDetailPage = lazy(() => import('../pages/execution/PlanRunDetailPag
 const PlanRunMatrixPage = lazy(() => import('../pages/execution/PlanRunMatrixPage'));
 const ScriptManagementPage = lazy(() => import('../pages/scripts/ScriptManagementPage'));
 
-// 检查是否已登录
-function isAuthenticated() {
-  return !!localStorage.getItem('access_token');
+function AuthGateLoading() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">
+      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+      校验登录状态中...
+    </div>
+  );
 }
 
 // 受保护的路由组件
 function ProtectedRoute() {
-  return isAuthenticated() ? <Outlet /> : <Navigate to="/login" replace />;
+  const sessionQ = useAuthSession();
+  if (sessionQ.isLoading) return <AuthGateLoading />;
+  return sessionQ.isSuccess ? <Outlet /> : <Navigate to="/login" replace />;
 }
 
 // 公开路由组件（已登录用户重定向到首页）
 function PublicRoute() {
-  return !isAuthenticated() ? <Outlet /> : <Navigate to="/" replace />;
+  const sessionQ = useAuthSession();
+  if (sessionQ.isLoading) return <AuthGateLoading />;
+  return sessionQ.isSuccess ? <Navigate to="/" replace /> : <Outlet />;
 }
 
 export default function AppRouter() {

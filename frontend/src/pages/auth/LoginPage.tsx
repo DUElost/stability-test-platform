@@ -4,7 +4,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertCircle } from 'lucide-react';
-import axios from 'axios';
+import { clearAppQueryCache } from '@/components/QueryProvider';
+import { api } from '@/utils/api';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -19,22 +20,8 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const formData = new URLSearchParams();
-      formData.append('username', username);
-      formData.append('password', password);
-
-      const response = await axios.post('/api/v1/auth/login', formData, {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-      });
-
-      const { access_token, refresh_token } = response.data;
-
-      // 存储 token
-      localStorage.setItem('access_token', access_token);
-      localStorage.setItem('refresh_token', refresh_token);
-
+      await api.auth.login(username, password);
+      clearAppQueryCache();
       navigate('/');
     } catch (err: any) {
       setError(err.response?.data?.detail || '登录失败');

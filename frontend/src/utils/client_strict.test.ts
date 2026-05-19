@@ -60,21 +60,15 @@ describe('refreshAccessToken — 单飞行防抖 (审计 Frontend #5)', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    localStorage.clear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    localStorage.clear();
   });
 
   it('concurrent calls reuse the in-flight refresh promise', async () => {
-    const postSpy = vi.fn().mockResolvedValue({
-      data: { access_token: 'new-access', refresh_token: 'new-refresh' },
-    });
+    const postSpy = vi.fn().mockResolvedValue({ data: { ok: true } });
     vi.doMock('axios', () => ({ default: { post: postSpy } }));
-
-    localStorage.setItem('refresh_token', 'cur-refresh');
 
     const { refreshAccessToken } = await import('@/utils/auth');
     const [r1, r2, r3] = await Promise.all([
@@ -84,45 +78,42 @@ describe('refreshAccessToken — 单飞行防抖 (审计 Frontend #5)', () => {
     ]);
 
     expect(postSpy).toHaveBeenCalledTimes(1);
-    expect(postSpy).toHaveBeenCalledWith('/api/v1/auth/refresh', {
-      refresh_token: 'cur-refresh',
-    });
-    expect(r1).toBe('new-access');
-    expect(r2).toBe('new-access');
-    expect(r3).toBe('new-access');
-    expect(localStorage.getItem('access_token')).toBe('new-access');
-    expect(localStorage.getItem('refresh_token')).toBe('new-refresh');
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/v1/auth/refresh',
+      undefined,
+      expect.objectContaining({ withCredentials: true }),
+    );
+    expect(r1).toBe(true);
+    expect(r2).toBe(true);
+    expect(r3).toBe(true);
   });
 
   it('subsequent call after in-flight resolves issues a fresh POST', async () => {
     const postSpy = vi
       .fn()
-      .mockResolvedValueOnce({
-        data: { access_token: 'a1', refresh_token: 'r1' },
-      })
-      .mockResolvedValueOnce({
-        data: { access_token: 'a2', refresh_token: 'r2' },
-      });
+      .mockResolvedValueOnce({ data: { ok: true } })
+      .mockResolvedValueOnce({ data: { ok: true } });
     vi.doMock('axios', () => ({ default: { post: postSpy } }));
-
-    localStorage.setItem('refresh_token', 'cur');
 
     const { refreshAccessToken } = await import('@/utils/auth');
     await refreshAccessToken();
     await refreshAccessToken();
 
     expect(postSpy).toHaveBeenCalledTimes(2);
-    expect(localStorage.getItem('access_token')).toBe('a2');
   });
 
-  it('returns null and clears tokens when no refresh_token present', async () => {
-    const postSpy = vi.fn();
+  it('returns false when cookie refresh fails', async () => {
+    const postSpy = vi.fn().mockRejectedValue(new Error('401'));
     vi.doMock('axios', () => ({ default: { post: postSpy } }));
+    Object.defineProperty(window, 'location', {
+      writable: true,
+      value: { pathname: '/login', href: '/login' },
+    });
 
     const { refreshAccessToken } = await import('@/utils/auth');
     const result = await refreshAccessToken();
 
-    expect(result).toBeNull();
-    expect(postSpy).not.toHaveBeenCalled();
+    expect(result).toBe(false);
+    expect(postSpy).toHaveBeenCalledTimes(1);
   });
 });

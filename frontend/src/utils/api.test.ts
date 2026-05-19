@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
 
+const mocks = vi.hoisted(() => ({
+  clearAppQueryCache: vi.fn(),
+  disconnectDashSocket: vi.fn(),
+}));
+
 // We need to test the module-level interceptors, so we'll import after mocking
 vi.mock('axios', () => {
   const interceptors = {
@@ -22,6 +27,14 @@ vi.mock('axios', () => {
   };
 });
 
+vi.mock('@/components/QueryProvider', () => ({
+  clearAppQueryCache: mocks.clearAppQueryCache,
+}));
+
+vi.mock('@/hooks/useSocketIO', () => ({
+  disconnectDashSocket: mocks.disconnectDashSocket,
+}));
+
 describe('api module', () => {
   let requestFulfilled: (config: any) => any;
   let responseRejected: (error: any) => any;
@@ -29,13 +42,11 @@ describe('api module', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
-    localStorage.clear();
     // Re-import to trigger interceptor registration
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
-    localStorage.clear();
   });
 
   it('creates axios instance with correct baseURL', async () => {
@@ -44,6 +55,7 @@ describe('api module', () => {
       expect.objectContaining({
         baseURL: '/api/v1',
         headers: { 'Content-Type': 'application/json' },
+        withCredentials: true,
       })
     );
   });
@@ -62,14 +74,7 @@ describe('api module', () => {
       requestFulfilled = instance.interceptors.request.use.mock.calls[0][0];
     });
 
-    it('attaches Bearer token from localStorage', () => {
-      localStorage.setItem('access_token', 'test-jwt-token');
-      const config = { headers: {} as any, method: 'get', url: '/hosts' };
-      const result = requestFulfilled(config);
-      expect(result.headers.Authorization).toBe('Bearer test-jwt-token');
-    });
-
-    it('does not attach Authorization when no token exists', () => {
+    it('does not attach Authorization header for cookie-based auth', () => {
       const config = { headers: {} as any, method: 'get', url: '/hosts' };
       const result = requestFulfilled(config);
       expect(result.headers.Authorization).toBeUndefined();
@@ -83,16 +88,28 @@ describe('api module', () => {
       responseRejected = instance.interceptors.response.use.mock.calls[0][1];
     });
 
-    it('clears tokens and redirects on 401 without refresh_token', async () => {
-      localStorage.setItem('access_token', 'expired');
+    it('attempts cookie-based refresh on 401 for non-auth endpoints', async () => {
+      (axios.post as any).mockResolvedValueOnce({ data: { ok: true } });
       const error = { response: { status: 401 }, config: {} };
 
-      // window.location.href is not easily testable in jsdom, but we can verify localStorage is cleared
-      const originalHref = window.location.href;
-      Object.defineProperty(window, 'location', {
-        writable: true,
-        value: { href: originalHref },
-      });
+      try {
+        await responseRejected(error);
+      } catch {
+        // api instance retry is not fully mocked here
+      }
+
+      expect(axios.post).toHaveBeenCalledWith(
+        '/api/v1/auth/refresh',
+        undefined,
+        expect.objectContaining({ withCredentials: true }),
+      );
+    });
+
+    it('does not attempt refresh for auth login failures', async () => {
+      const error = {
+        response: { status: 401 },
+        config: { headers: {} as any, url: '/auth/login' },
+      };
 
       try {
         await responseRejected(error);
@@ -100,43 +117,10 @@ describe('api module', () => {
         // expected rejection
       }
 
-      expect(localStorage.getItem('access_token')).toBeNull();
-      expect(localStorage.getItem('refresh_token')).toBeNull();
-    });
-
-    it('attempts token refresh on 401 when refresh_token exists', async () => {
-      localStorage.setItem('access_token', 'expired');
-      localStorage.setItem('refresh_token', 'valid-refresh');
-
-      const newTokens = {
-        access_token: 'new-access',
-        refresh_token: 'new-refresh',
-      };
-      (axios.post as any).mockResolvedValueOnce({ data: newTokens });
-
-      const instance = (axios.create as any).mock.results[0].value;
-      instance.mockResolvedValueOnce?.({ data: 'retried' });
-
-      const error = {
-        response: { status: 401 },
-        config: { headers: {} as any, __retry: undefined },
-      };
-
-      try {
-        await responseRejected(error);
-      } catch {
-        // may reject if instance call is not properly mocked
-      }
-
-      // Verify refresh was attempted
-      expect(axios.post).toHaveBeenCalledWith('/api/v1/auth/refresh', {
-        refresh_token: 'valid-refresh',
-      });
+      expect(axios.post).not.toHaveBeenCalled();
     });
 
     it('does not retry if __retry flag is already set', async () => {
-      localStorage.setItem('refresh_token', 'valid-refresh');
-
       const error = {
         response: { status: 401 },
         config: { headers: {}, __retry: true },
@@ -144,7 +128,7 @@ describe('api module', () => {
 
       Object.defineProperty(window, 'location', {
         writable: true,
-        value: { href: '' },
+        value: { pathname: '/login', href: '/login' },
       });
 
       try {
@@ -154,6 +138,28 @@ describe('api module', () => {
       }
 
       expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    it('clears cached queries before redirecting after terminal 401', async () => {
+      const error = {
+        response: { status: 401 },
+        config: { headers: {}, __retry: true, url: '/hosts' },
+      };
+
+      Object.defineProperty(window, 'location', {
+        writable: true,
+        value: { pathname: '/dashboard', href: '/dashboard' },
+      });
+
+      try {
+        await responseRejected(error);
+      } catch {
+        // expected rejection
+      }
+
+      expect(mocks.clearAppQueryCache).toHaveBeenCalledTimes(1);
+      expect(mocks.disconnectDashSocket).toHaveBeenCalledTimes(1);
+      expect(window.location.href).toBe('/login');
     });
   });
 

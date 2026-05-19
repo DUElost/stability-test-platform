@@ -10,6 +10,16 @@ class TestListUsers:
         assert "items" in data
         assert "total" in data
 
+    def test_list_users_accepts_cookie_session(self, client, admin_user):
+        login = client.post(
+            "/api/v1/auth/login",
+            data={"username": "admin", "password": "adminpass123"},
+        )
+        assert login.status_code == 200
+
+        response = client.get("/api/v1/users")
+        assert response.status_code == 200
+
 
 class TestCreateUser:
     def test_create_user(self, client, admin_headers):

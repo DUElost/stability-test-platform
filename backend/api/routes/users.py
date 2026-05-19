@@ -3,19 +3,16 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.api.routes.auth import get_current_active_user, require_admin
 from backend.core.database import get_db
-from backend.core.security import get_password_hash, verify_password, decode_token
+from backend.core.security import get_password_hash, verify_password
 from backend.models.user import User as UserModel
 from backend.api.schemas import PaginatedResponse
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
-
-# OAuth2 scheme for authentication
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 
 class UserCreate(BaseModel):
@@ -46,52 +43,6 @@ class UserOut(BaseModel):
 class PasswordChange(BaseModel):
     old_password: str
     new_password: str
-
-
-def get_current_active_user(token: Optional[str] = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> UserModel:
-    """Get current active user from JWT token."""
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    username: str = payload.get("sub")
-    if not username:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    user = db.query(UserModel).filter(UserModel.username == username).first()
-    if not user or user.is_active != "Y":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return user
-
-
-def require_admin(current_user: UserModel = Depends(get_current_active_user)) -> UserModel:
-    """Require admin role."""
-    if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required",
-        )
-    return current_user
 
 
 @router.get("", response_model=PaginatedResponse)
