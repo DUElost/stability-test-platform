@@ -64,3 +64,17 @@ async def test_lifespan_rejects_samesite_none_without_csrf_protection(monkeypatc
     with pytest.raises(RuntimeError, match="AUTH_COOKIE_SAMESITE=none"):
         async with lifespan(fastapi_app):
             pass
+
+
+@pytest.mark.asyncio
+async def test_lifespan_rejects_csrf_disabled_in_production(monkeypatch):
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("ENV", "production")
+    monkeypatch.setenv("AGENT_SECRET", "test-agent-secret")
+    monkeypatch.setenv("AUTH_COOKIE_SECURE", "1")
+    monkeypatch.setenv("AUTH_COOKIE_SAMESITE", "lax")
+    monkeypatch.setenv("STP_CSRF_ENABLED", "0")
+
+    with pytest.raises(RuntimeError, match="STP_CSRF_ENABLED"):
+        async with lifespan(fastapi_app):
+            pass

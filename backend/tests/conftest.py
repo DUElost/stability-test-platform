@@ -148,9 +148,14 @@ def client(db_session):
 
     app.dependency_overrides[get_db] = override_get_db
 
-    # Disable rate limiting middleware for tests by clearing middleware stack
+    # Disable rate limiting + CSRF Origin middleware for tests by clearing middleware stack.
+    # CSRF is exhaustively covered in isolation by test_csrf_origin_middleware.py — integration
+    # tests focus on cookie/session/RBAC semantics and TestClient does not set Origin by default.
     original_middleware = app.user_middleware.copy()
-    app.user_middleware = [m for m in app.user_middleware if "RateLimit" not in str(m.cls)]
+    app.user_middleware = [
+        m for m in app.user_middleware
+        if "RateLimit" not in str(m.cls) and "CSRFOrigin" not in str(m.cls)
+    ]
 
     with TestClient(app) as test_client:
         yield test_client

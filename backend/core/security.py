@@ -56,6 +56,11 @@ def validate_production_auth_cookie_settings() -> None:
         raise RuntimeError(
             "AUTH_COOKIE_SAMESITE=none is not supported in production without CSRF protection"
         )
+    csrf_raw = os.getenv("STP_CSRF_ENABLED", "1").strip().lower()
+    if csrf_raw in {"0", "false", "no", "off"}:
+        raise RuntimeError(
+            "STP_CSRF_ENABLED must remain enabled when ENV=production"
+        )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

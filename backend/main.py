@@ -44,7 +44,8 @@ from backend.core.agent_secret import (
     is_agent_secret_configured,
     require_agent_secret,
 )
-from backend.core.cors import get_cors_config
+from backend.core.cors import get_cors_allowed_origins, get_cors_config
+from backend.core.csrf import CSRFOriginMiddleware, is_csrf_enabled
 from backend.core.database import async_engine, engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
@@ -152,6 +153,13 @@ async def invalid_transition_handler(request: Request, exc: InvalidTransitionErr
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"data": None, "error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}})
+# 中间件注册顺序遵循 Starlette LIFO:最先 add 的在请求链最内层。
+# 期望请求链:CORS(最外,确保 4xx 也带 CORS 头) → RateLimit → CSRF(最内,贴近路由)
+_fastapi_app.add_middleware(
+    CSRFOriginMiddleware,
+    allowed_origins=get_cors_allowed_origins(),
+    enabled=is_csrf_enabled(),
+)
 _fastapi_app.add_middleware(RateLimitMiddleware)
 
 _fastapi_app.add_middleware(
