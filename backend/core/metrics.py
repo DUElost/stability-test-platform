@@ -375,6 +375,16 @@ build_info = Info(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
+# Security: CSRF Origin/Referer Middleware
+# ============================================================================
+
+csrf_rejected_total = Counter(
+    'stability_csrf_rejected_total',
+    'Total number of /api/v1/* unsafe requests rejected by CSRFOriginMiddleware',
+    ['reason']  # origin_not_allowed | referer_not_allowed | missing_origin_and_referer
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
 # Decorators and Utilities
 # ============================================================================
 

@@ -12,6 +12,10 @@ Why: 浏览器 cookie 会话切换后,所有 cookie-authed 写操作天然暴露
   5) Referer header → scheme://host[:port] in allowed_origins → 命中
 
 降级:STP_CSRF_ENABLED=0 / false / no 关闭整体中间件,便于排障。
+
+可观测:被拒请求按 reason 维度计数到 stability_csrf_rejected_total
+(origin_not_allowed | referer_not_allowed | missing_origin_and_referer),
+便于在 Prometheus 看攻击面/误配置面。
 """
 from __future__ import annotations
 
@@ -22,6 +26,8 @@ from urllib.parse import urlparse
 from starlette.datastructures import Headers
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+from backend.core.metrics import csrf_rejected_total
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 DEFAULT_PROTECTED_PREFIX = "/api/v1/"
@@ -76,16 +82,22 @@ class CSRFOriginMiddleware:
             return await self.app(scope, receive, send)
 
         origin = headers.get("origin")
+        reason: str
         if origin and origin != "null":
             if origin in self.allowed:
                 return await self.app(scope, receive, send)
+            reason = "origin_not_allowed"
         else:
             referer = headers.get("referer")
             if referer:
                 normalized = _origin_from_url(referer)
                 if normalized and normalized in self.allowed:
                     return await self.app(scope, receive, send)
+                reason = "referer_not_allowed"
+            else:
+                reason = "missing_origin_and_referer"
 
+        csrf_rejected_total.labels(reason=reason).inc()
         response = JSONResponse(
             {"detail": "CSRF check failed"},
             status_code=403,

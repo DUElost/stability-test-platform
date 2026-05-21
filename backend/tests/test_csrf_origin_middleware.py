@@ -3,10 +3,19 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from prometheus_client import REGISTRY
 
 from backend.core.csrf import CSRFOriginMiddleware
 
 ALLOWED = ("http://localhost:5173", "http://127.0.0.1:5173")
+
+
+def _metric(reason: str) -> float:
+    value = REGISTRY.get_sample_value(
+        "stability_csrf_rejected_total",
+        {"reason": reason},
+    )
+    return value or 0.0
 
 
 def _build_app(enabled: bool = True) -> TestClient:
@@ -139,3 +148,50 @@ def test_other_safe_methods_pass(method):
     client = _build_app()
     r = client.request(method, "/api/v1/ping")
     assert r.status_code in (200, 405)
+
+
+def test_metric_increments_on_origin_not_allowed():
+    client = _build_app()
+    before = _metric("origin_not_allowed")
+    r = client.post("/api/v1/ping", headers={"Origin": "https://evil.example.com"})
+    assert r.status_code == 403
+    assert _metric("origin_not_allowed") == before + 1
+
+
+def test_metric_increments_on_referer_not_allowed():
+    client = _build_app()
+    before = _metric("referer_not_allowed")
+    r = client.post(
+        "/api/v1/ping",
+        headers={"Referer": "https://attacker.example.com/x"},
+    )
+    assert r.status_code == 403
+    assert _metric("referer_not_allowed") == before + 1
+
+
+def test_metric_increments_on_missing_origin_and_referer():
+    client = _build_app()
+    before = _metric("missing_origin_and_referer")
+    r = client.post("/api/v1/ping")
+    assert r.status_code == 403
+    assert _metric("missing_origin_and_referer") == before + 1
+
+
+def test_metric_does_not_increment_on_passes():
+    client = _build_app()
+    snapshot = {r: _metric(r) for r in (
+        "origin_not_allowed", "referer_not_allowed", "missing_origin_and_referer"
+    )}
+    # 三类放行场景:Bearer / 合法 Origin / 安全方法
+    assert client.post(
+        "/api/v1/ping",
+        headers={"Origin": "https://x.example.com", "Authorization": "Bearer abc"},
+    ).status_code == 200
+    assert client.post(
+        "/api/v1/ping",
+        headers={"Origin": "http://localhost:5173"},
+    ).status_code == 200
+    assert client.get("/api/v1/ping").status_code == 200
+
+    for reason, value in snapshot.items():
+        assert _metric(reason) == value, f"{reason} unexpectedly incremented"
