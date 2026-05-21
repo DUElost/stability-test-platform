@@ -1,0 +1,28 @@
+# Normalize all text files to LF in the repo; Windows checkouts will get
+# CRLF in the working tree automatically. Eliminates EOL noise that has
+# polluted PlanEditPage.tsx twice in this project's history.
+* text=auto eol=lf
+
+# Force LF for files that must stay LF regardless of OS — shell scripts
+# the Agent installer ships to Linux hosts and YAML pipelines.
+*.sh         text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+
+# Explicit binary types — Git will not attempt EOL conversion or text diff.
+*.png        binary
+*.jpg        binary
+*.jpeg       binary
+*.gif        binary
+*.ico        binary
+*.pdf        binary
+*.zip        binary
+*.gz         binary
+*.tar        binary
+*.woff       binary
+*.woff2      binary
+*.ttf        binary
+*.eot        binary
+*.db         binary
+*.sqlite     binary
+*.sqlite3    binary
