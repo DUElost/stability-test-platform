@@ -67,6 +67,7 @@ from backend.models import notification as _notification  # noqa: F401
 from backend.models import resource_pool as _resource_pool  # noqa: F401
 from backend.models import schedule as _schedule  # noqa: F401
 from backend.models import script as _script  # noqa: F401
+from backend.models import token_blacklist as _token_blacklist  # noqa: F401
 from backend.models import user as _user  # noqa: F401
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus
 from backend.models.host import Device, Host

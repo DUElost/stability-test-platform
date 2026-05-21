@@ -1,4 +1,5 @@
 """Authentication API routes."""
+import logging
 import secrets
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,6 +24,9 @@ from backend.core.security import (
     verify_password,
 )
 from backend.models.user import User
+from backend.services.token_blacklist import is_revoked, revoke
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=False)
@@ -252,6 +256,15 @@ def refresh(
     if not payload_data or payload_data.get("type") != "refresh":
         return _refresh_unauthorized("Invalid refresh token")
 
+    jti = payload_data.get("jti")
+    if jti:
+        if is_revoked(db, jti):
+            return _refresh_unauthorized("Invalid refresh token")
+    else:
+        # Grace 期:本提交之前签发的 refresh 没有 jti。WARN 但放行,30 天后
+        # 所有旧 token 自然过期 → 那时可将本分支改为直接 401。
+        logger.warning("refresh_token_missing_jti grace_window_active sub=%s", payload_data.get("sub"))
+
     username: str = payload_data.get("sub")
     if not username:
         return _refresh_unauthorized("Invalid refresh token")
@@ -266,7 +279,29 @@ def refresh(
 
 
 @router.post("/logout")
-def logout(response: Response):
+def logout(
+    request: Request,
+    response: Response,
+    payload: TokenRefresh | None = None,
+    db: Session = Depends(get_db),
+):
+    """Clear auth cookies and blacklist the presented refresh jti.
+
+    幂等:重复 logout / 已黑 jti / 解码失败的 token 都返回 200,不暴露细节给探测。
+    """
+    refresh_token = payload.refresh_token if payload else None
+    if not refresh_token:
+        refresh_token = request.cookies.get(REFRESH_COOKIE_NAME)
+
+    if refresh_token:
+        decoded = decode_token(refresh_token)
+        if decoded and decoded.get("type") == "refresh":
+            jti = decoded.get("jti")
+            exp_ts = decoded.get("exp")
+            if jti and exp_ts:
+                expires_at = datetime.fromtimestamp(exp_ts, tz=timezone.utc)
+                revoke(db, jti=jti, expires_at=expires_at, reason="logout")
+
     clear_auth_cookies(response)
     return {"ok": True}
 
