@@ -104,17 +104,33 @@ def engine():
 
 @pytest.fixture(scope="function")
 def db_session(engine):
-    """Create a fresh database session for each test"""
-    connection = engine.connect()
-    transaction = connection.begin()
-    Session = sessionmaker(bind=connection)
+    """Per-test session with full isolation via TRUNCATE ... RESTART IDENTITY.
+
+    Why not nested transactions: many routes/fixtures call ``session.commit()``,
+    which immediately escapes a SAVEPOINT and persists to PG. The old rollback
+    pattern silently leaked data across cases (see uq_script_name_version
+    collisions and 484-host accumulation). TRUNCATE + RESTART IDENTITY is the
+    only sound option once commits cannot be funnelled through SAVEPOINTs.
+    """
+    # Reverse-dependency order so CASCADE just confirms what we ordered.
+    table_names = ", ".join(
+        f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables)
+    )
+    with engine.begin() as conn:
+        if conn.dialect.name == "postgresql":
+            conn.exec_driver_sql(
+                f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"
+            )
+        else:
+            for table in reversed(Base.metadata.sorted_tables):
+                conn.execute(table.delete())
+
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
     session = Session()
-
-    yield session
-
-    session.close()
-    transaction.rollback()
-    connection.close()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 @pytest.fixture(autouse=True)
