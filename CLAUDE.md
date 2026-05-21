@@ -6,6 +6,53 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-05-21 — ADR-0024 — 浏览器 Web 会话安全化(Cookie + CSRF + Refresh 黑名单 + 可观测)
+- **背景**:登录会话此前是 `Authorization: Bearer` + localStorage,XSS 即 token 泄露;`POST /auth/logout` 服务端无感知,refresh token 30 天内任何副本仍可换 access;CSRF 完全靠浏览器默认 `SameSite` 兜底,无指标无告警。本周一次性收口:HttpOnly Cookie + CSRF 中间件 + refresh 黑名单 + 拒绝原因指标 + 生产 guard。详见 [ADR-0024](./docs/adr/ADR-0024-browser-session-security-hardening.md)。
+- **会话载体切换**(`f26eb43`):
+  - `POST /api/v1/auth/login` 不再回 token,改 `Set-Cookie: stp_access_token/stp_refresh_token; HttpOnly; SameSite=lax`(`backend/api/routes/auth.py` + `backend/core/security.py`);
+  - 保留 `POST /api/v1/auth/token` 旧 Bearer 路径仅供 Swagger / 脚本 / CI,前端走 cookie;
+  - `get_current_user` 双模式:优先 Authorization,缺失回退 cookie → Agent / server-to-server 零改动;
+  - `validate_production_auth_cookie_settings()` 在 lifespan 启动期硬校验,`ENV=production` 若 `AUTH_COOKIE_SECURE!=1` / `SAMESITE=none` 直接 `RuntimeError`,避免上线后被发现。
+- **CSRF Origin/Referer 中间件**(`6caae14`):
+  - 新建 `backend/core/csrf.py` `CSRFOriginMiddleware`,挂在 `CORS(外) → RateLimit → CSRF(内)` LIFO 链最内层 → 4xx 响应仍带 CORS 头;
+  - 判定顺序:SAFE_METHODS / Bearer / X-Agent-Secret / Origin in 白名单 / Referer normalized in 白名单 → 否则 403;严格 string match 不做子域 relax,`Origin: null` 一律拒;
+  - 白名单复用 `get_cors_allowed_origins()` 单一事实源,降级开关 `STP_CSRF_ENABLED=0` 仅排障用,production guard 拒绝该降级;
+  - 18 cases Pytest 覆盖(`backend/tests/test_csrf_origin_middleware.py`):安全方法 / Bearer / Agent / 子域拒绝 / 缺 Origin 缺 Referer / 中间件禁用 / `Origin: null` / 4 metrics 增量场景。
+- **Refresh token 服务端可吊销**(`1388432`):
+  - `create_access_token` / `create_refresh_token` 注入 `jti = uuid4().hex`(`backend/core/security.py`);
+  - 新表 `revoked_refresh_token(jti PK, revoked_at, expires_at, reason)` + `idx_revoked_refresh_token_expires_at`(`backend/models/token_blacklist.py` + alembic `f1a2b3c4d5e6_add_revoked_refresh_token.py`);
+  - `POST /auth/logout` 解 cookie/body 取 refresh → 写黑名单,`pg_insert.on_conflict_do_nothing() + RETURNING jti` 判真实插入(rowcount 在 psycopg3 + ON CONFLICT 下不可靠);
+  - `POST /auth/refresh` 解出 jti 查黑名单命中 401(`WWW-Authenticate: Bearer`);无 token / 解码失败一律 200 不暴露内部状态;
+  - **Grace 兼容**:本提交前签发的 refresh 无 jti,refresh 路由写 WARN `refresh_token_missing_jti grace_window_active` 后放行;30 天后旧 token 自然过期,**2026-06-21** 收紧分支为 401(已记入日历提醒);
+  - APScheduler `revoked_token_cleanup` 每日清 expired 行(`backend/scheduler/revoked_token_cleanup.py` + `app_scheduler.py:REVOKED_TOKEN_CLEANUP_INTERVAL`,默认 24h,30min misfire grace);
+  - 9 cases Pytest 覆盖(`backend/tests/api/test_refresh_token_blacklist.py`):jti 注入 / 幂等吊销 / 未知 jti / 过期清理 / logout→refresh 拒 / logout 幂等 / 无 token 仍 200 / legacy 无 jti grace 放行 / 黑名单后 body 模式被拒。
+- **CSRF 拒绝指标按 reason 分类**(`a6a633d`):
+  - 新 Counter `stability_csrf_rejected_total{reason}`(`backend/core/metrics.py`),三档:
+    - `origin_not_allowed` — 有 Origin 但不在白名单(典型攻击征兆)
+    - `referer_not_allowed` — 无 Origin,Referer 也不可信(浏览器降级 / 隐私模式)
+    - `missing_origin_and_referer` — 两者都缺(curl / 脚本 / 探测)
+  - 放行路径不计数,Grafana 可直接 split 三类趋势区分攻击 / 误配置 / 探测;
+  - 推荐 AlertManager 规则:`rate(stability_csrf_rejected_total{reason="origin_not_allowed"}[5m]) > 10`(待 ADR-0011 第二层落地);
+  - 4 新 Pytest case 验证三档增量 + 放行不增量。
+- **PG 测试隔离 baseline 修复**(`f000899`):
+  - `backend/tests/conftest.py` `db_session` fixture 从 transaction.rollback 改为 `TRUNCATE TABLE ... RESTART IDENTITY CASCADE` per test;
+  - 原因:路由内部 `session.commit()` 会逃出外层事务,导致 `uq_script_name_version` IntegrityError / 484 offline hosts 累积 / 序列 ID 不重置 等假阳/假阴长期掩盖真问题;
+  - 同时去除 `client` fixture 中的 CSRF / RateLimit 中间件,统一在 dedicated 测试里挂载;
+  - 修复后 backend 全量 **523 passed / 2 skipped / 0 failed**(修复前 473 passed / 10 failed / 31 errors)。
+- **EOL 噪声治理**(`d5cc670`):
+  - 新增 `.gitattributes`:`* text=auto eol=lf` + `*.sh/*.yml/*.yaml eol=lf` + 二进制白名单;
+  - 起因:本周两次出现 IDE/插件自动修改 PlanEditPage.tsx 等文件 → 一次 diff 1173 行空行污染;
+  - 后续从源头消除 CRLF/LF 混入噪声,扫除诊断面盲点。
+- **部署清单**:
+  - 生产 DB 必须 `alembic upgrade head` 应用 `f1a2b3c4d5e6`,否则 logout/refresh 5xx;
+  - 生产环境变量必须满足 `AUTH_COOKIE_SECURE=1` / `AUTH_COOKIE_SAMESITE ∈ {lax, strict}` / `STP_CSRF_ENABLED ∈ {1, true, ...}`,否则启动期 `RuntimeError`;
+  - 新增 APScheduler job `revoked_token_cleanup`(出现在 `stability_apscheduler_job_*` 指标);
+  - 新指标族 `stability_csrf_rejected_total{reason}` 加入 `/metrics`。
+- **后续动作**:
+  - 2026-06-21 收紧 `refresh_token_missing_jti` grace 分支为 401(见 ADR-0024 §影响 §兼容窗口);
+  - AlertManager 规则待 ADR-0011 第二层落地。
+- 依赖:无新增第三方库(Prometheus / passlib / PyJWT / SQLAlchemy pg dialect 均已在依赖树中)
+
 ### 2026-05-08 — ADR-0021 C6 — 主机热更新二次确认 + 中止运行中 Job 一键复合
 - **新增前端组件** `frontend/src/components/host/HostHotUpdateConfirmDialog.tsx`:
   - 打开时按需 `GET /api/v1/hosts/{id}` 获取**权威** `active_jobs` 快照(列表端点不返回此字段);
@@ -798,4 +845,4 @@ class StepTrace(Base):
 
 ---
 
-*最后更新时间：2026-05-06 (ADR-0020 脚本目录与扫描机制文档收口)*
+*最后更新时间：2026-05-21 (ADR-0024 浏览器 Web 会话安全化 — Cookie / CSRF / Refresh 黑名单 / CSRF reason 指标)*

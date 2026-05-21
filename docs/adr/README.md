@@ -69,6 +69,7 @@
 | [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md) | 基础设施层框架引入（SAQ / APScheduler / python-socketio） | Accepted | P0 | M2 | 已实现 |
 | [ADR-0019](./ADR-0019-android-device-lease-and-capacity-scheduling.md) | Android Device Lease 与容量调度模型 | Accepted | P0 | M3 | 已实现（2026-05-04 Phase 1-6e 落地，TTL/grace 调优为持续运维项） |
 | [ADR-0020](./ADR-0020-plan-step-one-shot-migration.md) | Plan-Step 一次性切换与旧编排模型移除 | Accepted | P0 | M3 | 预扩展/重构 |
+| [ADR-0024](./ADR-0024-browser-session-security-hardening.md) | 浏览器 Web 会话安全化（HttpOnly Cookie + CSRF + refresh 黑名单 + 可观测） | Accepted | P0 | M3.2 | 已实现（2026-05-21，grace 至 2026-06-21） |
 
 ## Proposed 里程碑看板（2026 上半年）
 
