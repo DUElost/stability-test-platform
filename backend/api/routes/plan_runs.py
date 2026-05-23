@@ -344,6 +344,20 @@ def manual_retry_job(
             detail=f"job is in terminal status {job.status}; cannot retry",
         )
 
+    # Why: 同向 manual_action 已等待 Agent 消费时,重复点击不再二次写 audit / emit / counter。
+    #      合法语义:用户连点 N 次 retry,后端只该留 1 条审计 + 1 次 emit;EXIT_REQUESTED 切到
+    #      RETRY_NOW 是真正的意图变更,不在此处短路。
+    if job.manual_action == "RETRY_NOW":
+        return ok(JobManualActionOut(
+            job_id=job_id,
+            plan_run_id=run_id,
+            action="manual_retry",
+            status=job.status,
+            manual_action=job.manual_action,
+            next_retry_at=_iso(job.next_retry_at),
+            current_failure_streak=job.current_failure_streak or 0,
+        ))
+
     reason = (payload.reason if payload else None) or "manual_retry"
     now = datetime.now(timezone.utc)
 
@@ -414,6 +428,19 @@ def manual_exit_job(
             status_code=409,
             detail=f"job is in terminal status {job.status}; cannot exit",
         )
+
+    # Why: 与 manual_retry 对称 — 同向 EXIT_REQUESTED 已等待 Agent 消费时短路,避免连点
+    #      产生多条审计 + 多次 emit。RETRY_NOW 切 EXIT_REQUESTED 是真正的意图变更不短路。
+    if job.manual_action == "EXIT_REQUESTED":
+        return ok(JobManualActionOut(
+            job_id=job_id,
+            plan_run_id=run_id,
+            action="manual_exit",
+            status=job.status,
+            manual_action=job.manual_action,
+            next_retry_at=_iso(job.next_retry_at),
+            current_failure_streak=job.current_failure_streak or 0,
+        ))
 
     reason = (payload.reason if payload else None) or "manual_exit"
     now = datetime.now(timezone.utc)

@@ -344,3 +344,209 @@ class TestManualActionEmitsJobStatusInvalidation:
         assert room == f"plan_run:{pr.id}"
         assert data["payload"]["job_id"] == job.id
         assert data["payload"]["reason"] == "manual_exit_pending"
+
+
+# ---------------------------------------------------------------------------
+# Idempotency — 同向 manual_action 已等待 Agent 消费时端点短路,
+# 防御用户连点 N 次产生 N 条 audit / N 次 emit。
+# 切换不同 manual_action (RETRY_NOW ↔ EXIT_REQUESTED) 仍按真实意图处理。
+# ---------------------------------------------------------------------------
+
+
+class TestManualActionIdempotency:
+    def test_manual_retry_repeated_clicks_only_one_audit_and_emit(
+        self, client, auth_headers, db_session, manual_chain, monkeypatch,
+    ):
+        captured: list[tuple[str, dict]] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data))
+
+        from backend.realtime import socketio_server
+        monkeypatch.setattr(socketio_server, "schedule_emit", fake_schedule_emit)
+
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        job = _make_job(
+            db_session, pr.id, plan.id, manual_chain["device"].id, streak=4,
+        )
+
+        # 连点 3 次同向 retry
+        url = f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-retry"
+        responses = [
+            client.post(url, json={"reason": f"click_{i}"}, headers=auth_headers)
+            for i in range(3)
+        ]
+        for r in responses:
+            assert r.status_code == 200, r.text
+            assert r.json()["data"]["manual_action"] == "RETRY_NOW"
+
+        # 仅第一次产生 audit + emit;后两次短路
+        audits = db_session.execute(
+            select(AuditLog)
+            .where(AuditLog.action == "patrol_manual_retry")
+            .where(AuditLog.resource_id == str(job.id))
+        ).scalars().all()
+        assert len(audits) == 1, (
+            f"重复 retry 应只写 1 条 audit,实际 {len(audits)} 条"
+        )
+        # 第一条 reason 应是 click_0
+        assert audits[0].details["reason"] == "click_0"
+
+        # 同一 plan_run room 的 emit 也只发了一次
+        assert len(captured) == 1, (
+            f"重复 retry 应只 emit 1 次,实际 {len(captured)} 次"
+        )
+
+    def test_manual_exit_repeated_clicks_only_one_audit_and_emit(
+        self, client, auth_headers, db_session, manual_chain, monkeypatch,
+    ):
+        captured: list[tuple[str, dict]] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data))
+
+        from backend.realtime import socketio_server
+        monkeypatch.setattr(socketio_server, "schedule_emit", fake_schedule_emit)
+
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        job = _make_job(db_session, pr.id, plan.id, manual_chain["device"].id)
+
+        url = f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-exit"
+        for i in range(3):
+            r = client.post(url, json={"reason": f"click_{i}"}, headers=auth_headers)
+            assert r.status_code == 200, r.text
+            assert r.json()["data"]["manual_action"] == "EXIT_REQUESTED"
+
+        audits = db_session.execute(
+            select(AuditLog)
+            .where(AuditLog.action == "patrol_manual_exit")
+            .where(AuditLog.resource_id == str(job.id))
+        ).scalars().all()
+        assert len(audits) == 1
+        assert audits[0].details["reason"] == "click_0"
+        assert len(captured) == 1
+
+    def test_manual_retry_after_exit_requested_is_real_switch(
+        self, client, auth_headers, db_session, manual_chain, monkeypatch,
+    ):
+        """先 exit 后 retry 是合法意图变更,必须正常写 audit + emit,不被短路。"""
+        captured: list[tuple[str, dict]] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data))
+
+        from backend.realtime import socketio_server
+        monkeypatch.setattr(socketio_server, "schedule_emit", fake_schedule_emit)
+
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        job = _make_job(db_session, pr.id, plan.id, manual_chain["device"].id)
+
+        # 先 exit
+        r1 = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-exit",
+            headers=auth_headers,
+        )
+        assert r1.status_code == 200
+        assert r1.json()["data"]["manual_action"] == "EXIT_REQUESTED"
+
+        # 用户改变主意 → retry
+        r2 = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-retry",
+            json={"reason": "改主意了"},
+            headers=auth_headers,
+        )
+        assert r2.status_code == 200
+        assert r2.json()["data"]["manual_action"] == "RETRY_NOW"
+
+        # 两个 action 各 1 条 audit
+        exit_audits = db_session.execute(
+            select(AuditLog).where(AuditLog.action == "patrol_manual_exit")
+            .where(AuditLog.resource_id == str(job.id))
+        ).scalars().all()
+        retry_audits = db_session.execute(
+            select(AuditLog).where(AuditLog.action == "patrol_manual_retry")
+            .where(AuditLog.resource_id == str(job.id))
+        ).scalars().all()
+        assert len(exit_audits) == 1
+        assert len(retry_audits) == 1
+        # 两次 emit
+        assert len(captured) == 2
+
+        db_session.expire_all()
+        refreshed = db_session.get(JobInstance, job.id)
+        # 最终 manual_action 应是 RETRY_NOW (后到者覆盖)
+        assert refreshed.manual_action == "RETRY_NOW"
+
+    def test_manual_exit_after_retry_now_is_real_switch(
+        self, client, auth_headers, db_session, manual_chain, monkeypatch,
+    ):
+        """对称:先 retry 后 exit 也是合法切换。"""
+        captured: list[tuple[str, dict]] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data))
+
+        from backend.realtime import socketio_server
+        monkeypatch.setattr(socketio_server, "schedule_emit", fake_schedule_emit)
+
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        job = _make_job(db_session, pr.id, plan.id, manual_chain["device"].id)
+
+        r1 = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-retry",
+            headers=auth_headers,
+        )
+        assert r1.status_code == 200
+        assert r1.json()["data"]["manual_action"] == "RETRY_NOW"
+
+        r2 = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-exit",
+            headers=auth_headers,
+        )
+        assert r2.status_code == 200
+        assert r2.json()["data"]["manual_action"] == "EXIT_REQUESTED"
+
+        retry_audits = db_session.execute(
+            select(AuditLog).where(AuditLog.action == "patrol_manual_retry")
+            .where(AuditLog.resource_id == str(job.id))
+        ).scalars().all()
+        exit_audits = db_session.execute(
+            select(AuditLog).where(AuditLog.action == "patrol_manual_exit")
+            .where(AuditLog.resource_id == str(job.id))
+        ).scalars().all()
+        assert len(retry_audits) == 1
+        assert len(exit_audits) == 1
+        assert len(captured) == 2
+
+        db_session.expire_all()
+        refreshed = db_session.get(JobInstance, job.id)
+        assert refreshed.manual_action == "EXIT_REQUESTED"
+
+    def test_short_circuit_response_preserves_canonical_fields(
+        self, client, auth_headers, db_session, manual_chain,
+    ):
+        """短路返回必须从 DB 当前快照取真实值,不能用占位 0 / None 误导前端。"""
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        future = datetime.now(timezone.utc) + timedelta(minutes=10)
+        job = _make_job(
+            db_session, pr.id, plan.id, manual_chain["device"].id,
+            streak=7, next_retry_at=future,
+        )
+        # 直接置 manual_action = RETRY_NOW 模拟"前一次 retry 已设置且 Agent 还没消费"
+        job.manual_action = "RETRY_NOW"
+        db_session.commit()
+
+        resp = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-retry",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["manual_action"] == "RETRY_NOW"
+        assert data["current_failure_streak"] == 7    # 真实快照,非 0
+        assert data["status"] == JobStatus.RUNNING.value

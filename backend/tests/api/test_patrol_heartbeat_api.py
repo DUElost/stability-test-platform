@@ -326,6 +326,89 @@ class TestManualActionObservation:
         finally:
             _cleanup_patrol_chain(seed)
 
+    @pytest.mark.asyncio
+    async def test_manual_action_observed_does_not_clear_when_db_switched(self):
+        """TOCTOU race 防御:Agent 报 observed=RETRY_NOW,但 DB 已被用户切到
+        EXIT_REQUESTED;heartbeat 端点必须用 SQL CASE 条件清除 — DB 值不匹配
+        observed 时原样保留,防止用户新意图被静默吞掉。
+        """
+        seed = _seed_patrol_chain()
+        try:
+            # 模拟: Agent 看到的是 RETRY_NOW,但在 heartbeat 抵达前用户切到 EXIT_REQUESTED
+            db = SessionLocal()
+            try:
+                job = db.get(JobInstance, seed["job_id"])
+                job.manual_action = "EXIT_REQUESTED"
+                db.commit()
+            finally:
+                db.close()
+
+            resp = await _call_heartbeat(
+                seed["job_id"],
+                PatrolHeartbeatIn(
+                    fencing_token=seed["token"],
+                    cycle_index=1,
+                    manual_action_observed="RETRY_NOW",  # 旧意图
+                ),
+            )
+            # 返回的 manual_action 应是 EXIT_REQUESTED — 不被静默清除
+            assert resp.data.manual_action == "EXIT_REQUESTED"
+
+            db = SessionLocal()
+            try:
+                assert (
+                    db.get(JobInstance, seed["job_id"]).manual_action
+                    == "EXIT_REQUESTED"
+                )
+            finally:
+                db.close()
+        finally:
+            _cleanup_patrol_chain(seed)
+
+    @pytest.mark.asyncio
+    async def test_manual_action_observed_clears_only_matching_value(self):
+        """对称回归:observed=EXIT_REQUESTED + DB=EXIT_REQUESTED → 清除;
+        observed=EXIT_REQUESTED + DB=RETRY_NOW → 保留。"""
+        seed = _seed_patrol_chain()
+        try:
+            # 正常匹配清除
+            db = SessionLocal()
+            try:
+                db.get(JobInstance, seed["job_id"]).manual_action = "EXIT_REQUESTED"
+                db.commit()
+            finally:
+                db.close()
+
+            r1 = await _call_heartbeat(
+                seed["job_id"],
+                PatrolHeartbeatIn(
+                    fencing_token=seed["token"],
+                    cycle_index=1,
+                    manual_action_observed="EXIT_REQUESTED",
+                ),
+            )
+            assert r1.data.manual_action is None
+
+            # DB 切换到 RETRY_NOW,Agent 仍报旧的 EXIT_REQUESTED → 不清
+            db = SessionLocal()
+            try:
+                db.get(JobInstance, seed["job_id"]).manual_action = "RETRY_NOW"
+                db.commit()
+            finally:
+                db.close()
+
+            r2 = await _call_heartbeat(
+                seed["job_id"],
+                PatrolHeartbeatIn(
+                    fencing_token=seed["token"],
+                    cycle_index=2,
+                    manual_action_observed="EXIT_REQUESTED",
+                ),
+            )
+            assert r2.data.manual_action == "RETRY_NOW"
+        finally:
+            _cleanup_patrol_chain(seed)
+
 
 # ---------------------------------------------------------------------------
 # Error paths

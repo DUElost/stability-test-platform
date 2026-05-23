@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
@@ -1049,9 +1049,19 @@ async def patrol_heartbeat(
     if payload.current_step is not None:
         update_values["current_patrol_step"] = payload.current_step
 
-    # If Agent reports it consumed/observed a manual_action, clear it.
+    # If Agent reports it consumed/observed a manual_action, clear it —
+    # but ONLY when DB.manual_action still equals what Agent observed.
+    # Why: 否则用户在 Agent observed → heartbeat 抵达之间二次点击 / 切换 (RETRY_NOW↔EXIT_REQUESTED)
+    #      会被无条件清除静默吞掉,新意图永远不会被 Agent 看到。SQL CASE 让清除变成"DB 没改 → 清,
+    #      DB 已是新意图 → 原样保留",与 ADR-0022 D7 manual_action 单字段语义一致。
     if payload.manual_action_observed:
-        update_values["manual_action"] = None
+        update_values["manual_action"] = case(
+            (
+                JobInstance.manual_action == payload.manual_action_observed,
+                None,
+            ),
+            else_=JobInstance.manual_action,
+        )
 
     # ADR-0022 D10: 写侧 CAS — status='RUNNING' guard 防御「预校验通过、CAS 阶段
     # recycler patrol_stall pass 在 _require_valid_runtime_lease 通过后才 commit」
