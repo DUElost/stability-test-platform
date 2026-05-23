@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# stability-test-platform — pre-commit 污染拦截
+#
+# 用途:阻止 IDE/插件造成的"纯空行注入"或"CRLF/LF 混乱"污染入仓。
+# 历史上 frontend/src/pages/orchestration/PlanEditPage.tsx 三次被
+# 此类污染撞坏 diff,详见根目录 .gitattributes 注释与 README 的
+# "EOL 与污染防御" 章节。
+#
+# 启用方式(每个开发者执行一次):
+#   git config core.hooksPath .githooks
+# 紧急绕过(只在确认 diff 合规时):
+#   git commit --no-verify
+
+set -e
+
+THRESHOLD_RATIO=60      # 纯空行占新增行比例(%)
+THRESHOLD_MIN_LINES=30  # 新增行数阈值,小于此值不判
+failed=0
+warnings=0
+
+staged=$(git diff --cached --name-only --diff-filter=AM)
+[ -z "$staged" ] && exit 0
+
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+
+  # Markdown / 纯文本天然多空行,排除
+  case "$file" in
+    *.md|*.txt|*.rst) continue ;;
+  esac
+
+  # 二进制文件 git diff 输出极短,跳过
+  if git diff --cached --numstat -- "$file" | awk '{print $1}' | grep -q '^-$'; then
+    continue
+  fi
+
+  diff_text=$(git diff --cached --unified=0 -- "$file" || true)
+  [ -z "$diff_text" ] && continue
+
+  # 新增行 = 以 + 开头但不是 +++ 文件头
+  # 注意:不能用 '^\+[^+]' — 那会把"单独 +"(=纯空行污染信号)排除掉,
+  # 导致 inserted=0 / blanks 永远 ≥ inserted,本来要拦截的污染漏过。
+  inserted=$(printf '%s\n' "$diff_text" | grep -E '^\+' | grep -cvE '^\+\+\+' || true)
+  # 纯空行新增(只含空白字符,含单独的 "+" 行)
+  blanks=$(printf '%s\n' "$diff_text" | grep -cE '^\+[[:space:]]*$' || true)
+
+  [ "$inserted" -lt "$THRESHOLD_MIN_LINES" ] && continue
+  [ "$inserted" -eq 0 ] && continue
+
+  ratio=$(( blanks * 100 / inserted ))
+  if [ "$ratio" -ge "$THRESHOLD_RATIO" ]; then
+    echo "[BLOCK] $file"
+    echo "        $blanks/$inserted = ${ratio}% pure blank-line insertions"
+    echo "        Likely IDE/plugin pollution. Inspect: git diff --cached -- $file"
+    failed=1
+  elif [ "$ratio" -ge 40 ] && [ "$inserted" -ge 100 ]; then
+    echo "[WARN ] $file: ${ratio}% blank-line insertions (>=40% over 100 lines)"
+    warnings=$((warnings + 1))
+  fi
+
+  # 额外检测:CRLF 混入 LF 文件 → 注入差异源
+  if printf '%s\n' "$diff_text" | grep -qE $'\r$'; then
+    echo "[BLOCK] $file: CRLF byte found in staged diff (file should be LF-only)"
+    echo "        Run: tools/dev/normalize-eol.sh '$file'"
+    failed=1
+  fi
+done <<< "$staged"
+
+if [ "$failed" = "1" ]; then
+  echo
+  echo "Commit blocked by EOL / blank-line pollution guard."
+  echo "If this is intentional (rare):  git commit --no-verify"
+  exit 1
+fi
+
+if [ "$warnings" -gt 0 ]; then
+  echo
+  echo "Pre-commit warnings: $warnings file(s). Commit allowed but review recommended."
+fi
+
+exit 0

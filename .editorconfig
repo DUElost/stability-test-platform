@@ -1,0 +1,26 @@
+# stability-test-platform — 统一编辑器规约
+#
+# 之所以存在:工作目录历史上出现过 PlanEditPage.tsx 被 IDE/插件注入空行
+# 的污染(每个 \r\n 被错误解释为多个 line break),.gitattributes 只能
+# 控制 git 入库,无法约束工作目录。这一份是编辑器侧的最低约束,
+# VS Code / WebStorm / Cursor / Vim / Sublime 全识别。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{py,md}]
+indent_size = 4
+
+[*.{bat,cmd,ps1}]
+# Windows 原生脚本保留 CRLF,避免 cmd.exe 解释异常
+end_of_line = crlf
+
+[Makefile]
+indent_style = tab

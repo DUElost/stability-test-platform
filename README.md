@@ -579,6 +579,106 @@ Vite 默认支持热模块替换（HMR），修改组件后自动刷新。
 
 
 
+## 开发环境约定与 EOL 防御
+
+
+
+项目曾出现 IDE/插件向 `frontend/src/pages/orchestration/PlanEditPage.tsx` 注入大量纯空行的污染(单次 diff 1100+ 行),根因是工具把 `\r\n` 错误解释为多重 line break。当前仓库的防御分四层。
+
+
+
+### 一次性 setup(每个开发者克隆后执行)
+
+
+
+```bash
+
+# 启用项目级 git hooks(指向仓库内 .githooks/,签入版本管理)
+
+git config core.hooksPath .githooks
+
+```
+
+
+
+### 防御层级
+
+
+
+1. **`.gitattributes`** — `* text=auto eol=lf`,git 入库时统一为 LF。Windows 工作目录仍允许 CRLF。
+
+2. **`.editorconfig`** — VS Code / WebStorm / Cursor / Vim / Sublime 全识别;强制保存为 LF + 去 trailing whitespace + 末尾 newline。
+
+3. **`.vscode/settings.json`** — VS Code 项目级双保险;关闭 `formatOnSave` / `formatOnPaste` 防止误格式化器复发污染。
+
+4. **`.githooks/pre-commit`** — commit 阶段拦截:staged diff 中纯空行新增 ≥ 60%(总新增 ≥ 30 行)直接拒绝;CRLF 字节出现在 LF 文件的 staged diff 中也直接拒绝。
+
+
+
+### 清地雷脚本
+
+
+
+```bash
+
+# 干运行,列出工作目录中"应为 LF 但实际是 CRLF/mixed"的文件
+
+tools/dev/normalize-eol.sh
+
+
+
+# 实际规范化(stage 区,不 commit)
+
+tools/dev/normalize-eol.sh --apply
+
+
+
+# 单文件修复
+
+tools/dev/normalize-eol.sh frontend/src/pages/orchestration/PlanEditPage.tsx
+
+
+
+# CI 模式,检测到混合 EOL 退出非零
+
+tools/dev/normalize-eol.sh --check
+
+```
+
+
+
+### 复发时定位
+
+
+
+若 hook 启用后仍出现污染:
+
+
+
+1. `git checkout -- <file>` 丢弃污染,IDE 干净启动 `code --disable-extensions <file>` 保存,确认是否复发。
+
+2. 若复发 → 二分启用扩展定位元凶。优先怀疑:配错的 default formatter、Tailwind CSS IntelliSense、Auto Rename Tag、AI 补全(Copilot / Tabnine)。
+
+3. 若不复发 → 查 `package.json scripts` / CI 配置 / pre-push hook 是否有 lint/format 步骤异常。
+
+
+
+### 紧急绕过
+
+
+
+```bash
+
+git commit --no-verify   # 仅在确认 diff 合规、hook 误报时使用
+
+```
+
+
+
+---
+
+
+
 ## 生产部署
 
 

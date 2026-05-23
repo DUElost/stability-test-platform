@@ -1,0 +1,32 @@
+{
+  "//": "签入仓库的项目级 VS Code 设置。同时存在 .editorconfig 时 EditorConfig 扩展会接管,这里是双保险 + 关闭可能引发污染的 format-on-save 行为。",
+
+  "files.eol": "\n",
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": true,
+  "files.trimTrailingWhitespace": true,
+  "files.encoding": "utf8",
+
+  "editor.formatOnSave": false,
+  "editor.formatOnPaste": false,
+  "editor.formatOnType": false,
+
+  "[typescript]":      { "editor.defaultFormatter": null },
+  "[typescriptreact]": { "editor.defaultFormatter": null },
+  "[javascript]":      { "editor.defaultFormatter": null },
+  "[json]":            { "editor.defaultFormatter": null },
+
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.pytest_cache": true,
+    "**/node_modules": true
+  },
+
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.venv": true,
+    "**/venv": true,
+    "**/__pycache__": true
+  }
+}
