@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.pipeline_validator import validate_pipeline_def
-from backend.models.enums import JobStatus
-from backend.models.host import Device
+from backend.models.device_lease import DeviceLease
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus
+from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
@@ -36,6 +37,85 @@ from backend.services.plan_dispatcher_core import (
 logger = logging.getLogger(__name__)
 
 ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+
+
+def _validate_dispatch_devices_sync(
+    db: Session, device_ids: list[int]
+) -> None:
+    """Strict device availability check for dispatch.
+
+    Why: 此前 dispatcher 对不存在/OFFLINE/已被 ACTIVE lease 占用的设备只 WARNING 后
+         继续创建 host_id=None 或永远 PENDING 的 job,用户体感"派发成功但永不跑"。
+         严格全拒 + 结构化 detail,前端拿到每台设备的具体原因。
+
+    判定优先级(短路返回第一个不通过原因):
+      - not_found:device_id 不存在
+      - no_host:Device.host_id 为 NULL
+      - device_offline:Device.status == OFFLINE
+      - host_offline:Host.status == OFFLINE
+      - active_lease:存在 DeviceLease.status == ACTIVE 行(lease 是占用真值)
+
+    Raises:
+        PlanDispatchError(unavailable_devices=[{id, reason, ...}])
+    """
+    if not device_ids:
+        raise PlanDispatchError("device_ids must not be empty")
+
+    rows = db.execute(
+        select(
+            Device.id,
+            Device.host_id,
+            Device.status.label("device_status"),
+            Host.status.label("host_status"),
+        )
+        .select_from(Device)
+        .outerjoin(Host, Device.host_id == Host.id)
+        .where(Device.id.in_(device_ids))
+    ).all()
+    device_snapshot = {row.id: row for row in rows}
+
+    lease_rows = db.execute(
+        select(DeviceLease.device_id, DeviceLease.job_id)
+        .where(
+            DeviceLease.device_id.in_(device_ids),
+            DeviceLease.status == LeaseStatus.ACTIVE.value,
+        )
+    ).all()
+    active_lease_by_device = {row.device_id: row.job_id for row in lease_rows}
+
+    unavailable: list[dict] = []
+    for did in device_ids:
+        snap = device_snapshot.get(did)
+        if snap is None:
+            unavailable.append({"id": did, "reason": "not_found"})
+            continue
+        if snap.host_id is None:
+            unavailable.append({"id": did, "reason": "no_host"})
+            continue
+        if snap.device_status == DeviceStatus.OFFLINE.value:
+            unavailable.append({
+                "id": did, "reason": "device_offline",
+                "device_status": snap.device_status,
+            })
+            continue
+        if snap.host_status == HostStatus.OFFLINE.value:
+            unavailable.append({
+                "id": did, "reason": "host_offline",
+                "host_id": snap.host_id, "host_status": snap.host_status,
+            })
+            continue
+        if did in active_lease_by_device:
+            unavailable.append({
+                "id": did, "reason": "active_lease",
+                "lease_job_id": active_lease_by_device[did],
+            })
+            continue
+
+    if unavailable:
+        raise PlanDispatchError(
+            f"Dispatch rejected: {len(unavailable)} device(s) unavailable",
+            unavailable_devices=unavailable,
+        )
 
 
 def _fetch_script_metadata(
@@ -210,6 +290,10 @@ def prepare_plan_run(
     if plan is None:
         raise PlanDispatchError(f"Plan {plan_id} not found")
 
+    # #8: device 可用性快照校验 — 早返回避免创建落空 PlanRun。complete 阶段会再做一次
+    # TOCTOU 兜底,但用户期望的是 400,不是落 FAILED 的 PlanRun。
+    _validate_dispatch_devices_sync(db, device_ids)
+
     steps = db.execute(
         select(PlanStep)
         .where(PlanStep.plan_id == plan_id)
@@ -357,6 +441,37 @@ def complete_plan_run_dispatch(
             f"PlanRun {plan_run_id}: run_context.dispatch_device_ids is empty"
         )
 
+    # #8 TOCTOU 兜底:prepare→complete 之间设备可能下线/被占用。此时 PlanRun 行已存在
+    # 且前端正在观测,不能 raise;转 FAILED 终态 + 审计,与 ADR-0023 C1 同处理路径。
+    try:
+        _validate_dispatch_devices_sync(db, device_ids)
+    except PlanDispatchError as exc:
+        from backend.core.audit import record_audit
+        unavailable = exc.unavailable_devices or []
+        pr.status = "FAILED"
+        pr.ended_at = datetime.now(timezone.utc)
+        pr.result_summary = {
+            "dispatch_failed": True,
+            "unavailable_devices": unavailable,
+        }
+        flag_modified(pr, "result_summary")
+        record_audit(
+            db,
+            action="plan_dispatch_failed",
+            resource_type="plan_run",
+            resource_id=pr.id,
+            details={
+                "unavailable_devices": unavailable,
+                "reason": "devices_unavailable_at_dispatch",
+            },
+        )
+        db.commit()
+        logger.warning(
+            "plan_dispatch_failed_devices_unavailable plan_run=%d devices=%s",
+            plan_run_id, unavailable,
+        )
+        return
+
     device_rows = db.execute(
         select(Device.id, Device.host_id).where(Device.id.in_(device_ids))
     ).all()
@@ -364,6 +479,8 @@ def complete_plan_run_dispatch(
 
     orphan_devices = [did for did in device_ids if not device_host_map.get(did)]
     if orphan_devices:
+        # Why: 上面校验已覆盖 no_host;若仍走到这里说明并发 race(host_id 被改为 NULL),
+        # 留 WARN 作运维信号。
         logger.warning(
             "plan_dispatch_devices_without_host: device_ids=%s", orphan_devices
         )

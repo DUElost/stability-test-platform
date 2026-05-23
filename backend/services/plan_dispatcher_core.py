@@ -13,19 +13,31 @@ from backend.models.plan import Plan, PlanStep
 
 
 class PlanDispatchError(Exception):
-    """Unified dispatcher error with optional structured script metadata."""
+    """Unified dispatcher error with optional structured metadata."""
 
     def __init__(
-        self, message: str, *, missing_scripts: list[str] | None = None
+        self,
+        message: str,
+        *,
+        missing_scripts: list[str] | None = None,
+        unavailable_devices: list[dict] | None = None,
     ) -> None:
         super().__init__(message)
         self.missing_scripts = list(missing_scripts) if missing_scripts else None
+        self.unavailable_devices = (
+            list(unavailable_devices) if unavailable_devices else None
+        )
 
     def detail(self) -> dict | str:
         if self.missing_scripts:
             return {
                 "code": "INVALID_SCRIPT_REFS",
                 "missing": self.missing_scripts,
+            }
+        if self.unavailable_devices:
+            return {
+                "code": "DEVICES_UNAVAILABLE",
+                "unavailable_devices": self.unavailable_devices,
             }
         return str(self)
 
