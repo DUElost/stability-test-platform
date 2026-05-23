@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from backend.realtime.socketio_server import schedule_emit
 from typing import Optional
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -112,7 +112,14 @@ def abort_plan_run(
     Raises :class:`PlanRunAbortError` if the PlanRun is already in a
     terminal status.
     """
-    pr = db.get(PlanRun, plan_run_id)
+    # Why: abort 也会写 pr.status,与 aggregator 并发时若不持锁会出现
+    #      "aggregator 先 commit SUCCESS → abort 用 stale RUNNING 视图绕过
+    #      aggregation guard,把状态改回 FAILED" 的覆盖。锁与 aggregator 同列。
+    pr = db.execute(
+        select(PlanRun)
+        .where(PlanRun.id == plan_run_id)
+        .with_for_update()
+    ).scalar_one_or_none()
     if pr is None:
         raise PlanRunAbortError(f"PlanRun {plan_run_id} not found")
 

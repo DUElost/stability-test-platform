@@ -1,5 +1,6 @@
 """Synchronous plan-run aggregation for use in sync contexts (recycler thread)."""
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models.job import JobInstance
@@ -10,7 +11,12 @@ from backend.services.plan_chain_trigger import trigger_next_plan_sync
 
 def plan_aggregator_sync(job: JobInstance, db: Session) -> None:
     """Aggregate a PlanRun after a child JobInstance reaches terminal state."""
-    run = db.get(PlanRun, job.plan_run_id)
+    # Why: 与 async aggregator 走同一份锁契约,recycler 多线程或与 abort 并发都不能丢更新。
+    run = db.execute(
+        select(PlanRun)
+        .where(PlanRun.id == job.plan_run_id)
+        .with_for_update()
+    ).scalar_one_or_none()
     if run is None:
         return
 

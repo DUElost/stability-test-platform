@@ -23,7 +23,16 @@ class PlanAggregator:
         job: JobInstance, db: AsyncSession,
     ) -> tuple[bool, str | None]:
         """Returns ``(applied, new_status)`` — caller should push after commit."""
-        run = await db.get(PlanRun, job.plan_run_id)
+        # Why: 多个 Job 同帧终态会触发并发聚合;不持锁则两个写者各自基于自己的视图覆盖
+        #      最终状态。SELECT ... FOR UPDATE 串行 read-modify-write,配合 aggregation
+        #      侧的 _TERMINAL_PLAN_RUN_STATUSES 守卫保证幂等。
+        run = (
+            await db.execute(
+                select(PlanRun)
+                .where(PlanRun.id == job.plan_run_id)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if run is None:
             return False, None
 
