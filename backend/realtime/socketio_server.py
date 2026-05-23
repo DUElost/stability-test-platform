@@ -268,9 +268,13 @@ class DashboardNamespace(socketio.AsyncNamespace):
             else:
                 try:
                     from backend.core.security import decode_token
-                    payload = decode_token(token)
+                    # ADR-0024 P0: expected_type="access" 防止 refresh token 通过
+                    # cookie/auth 旁路冒充 access,绕过 logout 黑名单。
+                    payload = decode_token(token, expected_type="access")
                     if not payload:
                         raise socketio.exceptions.ConnectionRefusedError("Invalid token")
+                except socketio.exceptions.ConnectionRefusedError:
+                    raise
                 except Exception:
                     raise socketio.exceptions.ConnectionRefusedError("Invalid token")
 

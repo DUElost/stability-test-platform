@@ -16,6 +16,7 @@ from backend.core.security import (
     REFRESH_COOKIE_NAME,
     REFRESH_TOKEN_EXPIRE_DAYS,
     SECRET_KEY,
+    create_access_token,
     create_refresh_token,
     decode_token,
 )
@@ -132,3 +133,20 @@ def test_refresh_with_jti_after_logout_rejected_via_body(client, test_user):
     # 再次拿同一 refresh 换 access 必须 401
     retry = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
     assert retry.status_code == 401
+
+
+# ── ADR-0024 P0: /auth/refresh 必须拒绝 access token 冒充 refresh ──────────
+
+
+def test_refresh_endpoint_rejects_access_token_via_body(client, test_user):
+    """access token 不能用作 refresh,防止 type 混淆带来的旁路。"""
+    access = create_access_token({"sub": "testuser", "role": "user"})
+    response = client.post("/api/v1/auth/refresh", json={"refresh_token": access})
+    assert response.status_code == 401
+
+
+def test_refresh_endpoint_rejects_access_token_via_cookie(client, test_user):
+    access = create_access_token({"sub": "testuser", "role": "user"})
+    client.cookies.set(REFRESH_COOKIE_NAME, access)
+    response = client.post("/api/v1/auth/refresh")
+    assert response.status_code == 401

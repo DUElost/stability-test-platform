@@ -1,4 +1,4 @@
-from backend.core.security import ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME, create_access_token
+from backend.core.security import ACCESS_COOKIE_NAME, REFRESH_COOKIE_NAME, create_access_token, create_refresh_token
 
 
 ACCESS_COOKIE = ACCESS_COOKIE_NAME
@@ -91,3 +91,31 @@ def test_auth_me_still_accepts_bearer_header(client, test_user):
 
     assert response.status_code == 200
     assert response.json()["username"] == "testuser"
+
+
+# ── ADR-0024 P0: get_current_user 必须拒绝 refresh token 冒充 access ────────
+
+
+def test_get_current_user_rejects_refresh_token_via_access_cookie(client, test_user):
+    """ADR-0024 P0 回归:把 refresh 塞进 access cookie 不能认证。
+
+    这是 logout 后会话失效的核心:blacklist 只在 /auth/refresh 检查,如果
+    refresh 能当 access 用,leaked refresh 在 logout 后仍可访问全部 cookie
+    鉴权端点。
+    """
+    refresh = create_refresh_token({"sub": "testuser"})
+    client.cookies.set(ACCESS_COOKIE_NAME, refresh)
+
+    response = client.get("/api/v1/auth/me")
+    assert response.status_code == 401
+
+
+def test_get_current_user_rejects_refresh_token_via_bearer(client, test_user):
+    """ADR-0024 P0 回归:refresh 通过 Bearer 头也不能冒充 access。"""
+    refresh = create_refresh_token({"sub": "testuser"})
+
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {refresh}"},
+    )
+    assert response.status_code == 401

@@ -110,20 +110,31 @@ def create_refresh_token(data: dict) -> str:
     return encoded_jwt
 
 
-def decode_token(token: str) -> Optional[dict]:
+def decode_token(
+    token: str,
+    *,
+    expected_type: Optional[str] = None,
+) -> Optional[dict]:
     """Decode and validate a JWT token.
 
     Args:
         token: JWT token string
+        expected_type: When provided (e.g. "access" / "refresh"), payloads whose
+            type claim does not match are rejected. ADR-0024 P0 fix: without
+            this guard a refresh token could be replayed as an access token,
+            bypassing the logout blacklist (which is consulted only at the
+            /auth/refresh endpoint).
 
     Returns:
-        Decoded token payload or None if invalid
+        Decoded token payload or None if invalid / type mismatch.
     """
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
     except InvalidTokenError:
         return None
+    if expected_type is not None and payload.get("type") != expected_type:
+        return None
+    return payload
 
 
 def set_auth_cookies(response: Response, access_token: str, refresh_token: str) -> None:

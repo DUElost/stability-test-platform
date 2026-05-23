@@ -129,7 +129,9 @@ def get_current_user(
     if not token:
         return None
 
-    payload = decode_token(token)
+    # ADR-0024 P0: expected_type="access" 防止 refresh token 被当 access 重放
+    # → 绕过 logout 黑名单(blacklist 只在 /auth/refresh 端点检查)。
+    payload = decode_token(token, expected_type="access")
     if not payload:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -252,8 +254,8 @@ def refresh(
     if not refresh_token:
         return _refresh_unauthorized("Invalid refresh token")
 
-    payload_data = decode_token(refresh_token)
-    if not payload_data or payload_data.get("type") != "refresh":
+    payload_data = decode_token(refresh_token, expected_type="refresh")
+    if not payload_data:
         return _refresh_unauthorized("Invalid refresh token")
 
     jti = payload_data.get("jti")
@@ -294,8 +296,8 @@ def logout(
         refresh_token = request.cookies.get(REFRESH_COOKIE_NAME)
 
     if refresh_token:
-        decoded = decode_token(refresh_token)
-        if decoded and decoded.get("type") == "refresh":
+        decoded = decode_token(refresh_token, expected_type="refresh")
+        if decoded:
             jti = decoded.get("jti")
             exp_ts = decoded.get("exp")
             if jti and exp_ts:
