@@ -233,6 +233,7 @@ def test_snapshot_metrics_returns_atomic_view():
     uploader._failed_total = 2
     uploader._dead_letter_total = 1
     uploader._current_backoff = 12.5
+    uploader._pruned_total = 7
 
     snap = uploader.snapshot_metrics()
     assert snap == {
@@ -240,6 +241,7 @@ def test_snapshot_metrics_returns_atomic_view():
         "failed_total": 2,
         "dead_letter_total": 1,
         "current_backoff": 12.5,
+        "pruned_total": 7,
     }
 
 

@@ -33,6 +33,11 @@ class StepTraceUploader:
     _MAX_ATTEMPTS = 10
     # 网络/5xx 失败时进入指数退避,最长 5 分钟一次。
     _BACKOFF_MAX = 300.0
+    # #10: prune 调度 — 与 emitter / outbox_drainer 同套路防 SQLite 膨胀。
+    # interval=5s × 12 ticks ≈ 60s 一次 prune;keep_recent=2000 ≈ 长跑 Agent 几小时的 trace 量。
+    # 死信行不动(LocalDB.prune_acked_step_traces WHERE dead_letter = 0)。
+    _PRUNE_EVERY_N_TICKS = 12
+    _PRUNE_KEEP_RECENT = 2000
 
     def __init__(
         self,
@@ -50,10 +55,13 @@ class StepTraceUploader:
         self._last_id = 0
         # 审计 Agent #6: 当前轮次的退避时长;0 表示正常 interval。
         self._current_backoff = 0.0
+        # #10: prune 计数器
+        self._ticks_since_prune = 0
         # 监控指标(累计自进程启动)
         self._uploaded_total = 0
         self._failed_total = 0
         self._dead_letter_total = 0
+        self._pruned_total = 0
         self._metrics_lock = threading.Lock()
 
     # ── monitoring ─────────────────────────────────────────────────────
@@ -74,6 +82,10 @@ class StepTraceUploader:
     def current_backoff(self) -> float:
         return self._current_backoff
 
+    @property
+    def pruned_total(self) -> int:
+        return self._pruned_total
+
     def snapshot_metrics(self) -> Dict[str, Any]:
         """Read all counters atomically. Used by heartbeat stats."""
         with self._metrics_lock:
@@ -82,6 +94,7 @@ class StepTraceUploader:
                 "failed_total": self._failed_total,
                 "dead_letter_total": self._dead_letter_total,
                 "current_backoff": self._current_backoff,
+                "pruned_total": self._pruned_total,
             }
 
     def _bump_metric(self, key: str, delta: int = 1) -> None:
@@ -136,6 +149,27 @@ class StepTraceUploader:
             except Exception:
                 logger.exception("step_trace_upload_error")
                 self._advance_backoff()
+            # #10: prune 调度独立于上传成败 — 时间挂钩,不受退避/空批影响。
+            self._maybe_prune()
+
+    def _maybe_prune(self) -> None:
+        self._ticks_since_prune += 1
+        if self._ticks_since_prune < self._PRUNE_EVERY_N_TICKS:
+            return
+        self._ticks_since_prune = 0
+        try:
+            pruned = self._local_db.prune_acked_step_traces(
+                keep_recent=self._PRUNE_KEEP_RECENT,
+            )
+        except Exception:
+            logger.exception("step_trace_prune_failed")
+            return
+        if pruned:
+            self._bump_metric("_pruned_total", pruned)
+            logger.info(
+                "step_trace_pruned deleted=%d kept=%d",
+                pruned, self._PRUNE_KEEP_RECENT,
+            )
 
     def _advance_backoff(self) -> None:
         """指数退避:失败后下一次 wait 翻倍,封顶 ``_BACKOFF_MAX``。"""

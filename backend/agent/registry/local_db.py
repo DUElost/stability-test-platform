@@ -299,6 +299,24 @@ class LocalDB:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def prune_acked_step_traces(self, keep_recent: int = 2000) -> int:
+        """删除旧的 acked=1 且 dead_letter=0 条目,保留最近 keep_recent 条。
+
+        Why: 长跑 Agent 上 step_trace_cache 只增不删 → SQLite 文件膨胀 + 全表扫描劣化。
+             prune_acked_terminals / prune_acked_log_signals 已覆盖另两张表,这张漏了。
+        How to apply: 与上两者同套路,但死信行(dead_letter=1)即使 acked 也保留供审计。
+        """
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM step_trace_cache "
+                    "WHERE acked = 1 AND dead_letter = 0 "
+                    "AND id NOT IN (SELECT id FROM step_trace_cache "
+                    "WHERE acked = 1 AND dead_letter = 0 ORDER BY id DESC LIMIT ?)",
+                    (keep_recent,),
+                )
+                return cur.rowcount
+
     # ------------------------------------------------------------------
     # script_cache
     # ------------------------------------------------------------------
