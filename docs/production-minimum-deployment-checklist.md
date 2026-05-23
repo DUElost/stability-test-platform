@@ -216,3 +216,5 @@ sudo systemctl stop stability-test-agent
 - Agent 注册与 API Token 鉴权。
 - Nginx HTTPS（证书管理）。
 - 统一日志与监控告警（心跳超时、任务失败率、队列积压）。
+
+详见 [生产就绪 / 上线前全面评估报告（2026-05-23）](./production-readiness-assessment-2026-05-23.md)。
