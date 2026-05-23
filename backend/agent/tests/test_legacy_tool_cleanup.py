@@ -59,20 +59,18 @@ def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkey
     (aimonkey_dir / "MonkeyTest.py").write_text("# test fixture\n", encoding="utf-8")
     monkeypatch.setenv("AIMONKEY_RESOURCE_DIR", str(resource_root))
 
-    for version in ("v1.0.0", "v2.0.0"):
-        module = _load_monkey_launch(version)
-        assert module._resolve_aimonkey_dir({}) == aimonkey_dir
+    module = _load_monkey_launch("v1.0.0")
+    assert module._resolve_aimonkey_dir({}) == aimonkey_dir
 
 
 def test_monkey_launch_resolves_aimonkey_from_install_resource_root(tmp_path, monkeypatch):
     install_root = tmp_path / "stability-test-agent"
-    script_dir = install_root / "agent" / "scripts" / "monkey_launch" / "v2.0.0"
+    script_dir = install_root / "agent" / "scripts" / "monkey_launch" / "v1.0.0"
     script_path = script_dir / "monkey_launch.py"
     aimonkey_dir = install_root / "resources" / "aimonkey" / "AIMonkeyTest_20260317"
     aimonkey_dir.mkdir(parents=True)
     monkeypatch.delenv("AIMONKEY_RESOURCE_DIR", raising=False)
 
-    for version in ("v1.0.0", "v2.0.0"):
-        module = _load_monkey_launch(version)
-        monkeypatch.setattr(module, "__file__", str(script_path).replace("v2.0.0", version))
-        assert module._resolve_aimonkey_dir({}) == aimonkey_dir
+    module = _load_monkey_launch("v1.0.0")
+    monkeypatch.setattr(module, "__file__", str(script_path))
+    assert module._resolve_aimonkey_dir({}) == aimonkey_dir
