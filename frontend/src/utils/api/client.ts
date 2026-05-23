@@ -67,11 +67,17 @@ apiClient.interceptors.response.use(
         return Promise.reject(error);
       }
 
+      // 已经在 /login 时跳过 clearAppQueryCache + disconnect + redirect:
+      // 否则 useAuthSession 的 /auth/me 探活会在 queryClient.clear() 后立即重发,
+      // 再 401 → 再清缓存,造成永久 "校验登录状态中..." 死循环。pathname 已是 /login
+      // 时这一整组副作用本就无业务收益。
+      if (window.location.pathname === '/login') {
+        return Promise.reject(error);
+      }
+
       clearAppQueryCache();
       disconnectDashSocket();
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
-      }
+      window.location.href = '/login';
     }
 
     return Promise.reject(error);

@@ -4,12 +4,6 @@ import { clearAppQueryCache } from '@/components/QueryProvider';
 // 防抖：避免并发 refresh 导致重复请求 (axios interceptor + Socket.IO recovery 共用)
 let _refreshInFlight: Promise<boolean> | null = null;
 
-function redirectToLoginIfNeeded(): void {
-  if (window.location.pathname !== '/login') {
-    window.location.href = '/login';
-  }
-}
-
 /**
  * 浏览器端会话刷新入口。
  *
@@ -28,8 +22,14 @@ export async function refreshAccessToken(): Promise<boolean> {
       );
       return true;
     } catch {
-      clearAppQueryCache();
-      redirectToLoginIfNeeded();
+      // 已经在 /login 时跳过 clearAppQueryCache + redirect:
+      // queryClient.clear() 会重置仍挂载的 useAuthSession 观察者 → 立即重新 GET /auth/me
+      // → 再次 401 → 再次清缓存,形成 "校验登录状态中..." 无限刷新。pathname 已是 /login
+      // 时本就无需 redirect,这两个副作用纯粹是死循环触发器,必须一并跳过。
+      if (window.location.pathname !== '/login') {
+        clearAppQueryCache();
+        window.location.href = '/login';
+      }
       return false;
     } finally {
       _refreshInFlight = null;
