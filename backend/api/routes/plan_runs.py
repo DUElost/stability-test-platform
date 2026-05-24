@@ -1406,6 +1406,7 @@ class DeviceMatrixItem(BaseModel):
     log_signal_count: int = 0
     last_heartbeat_at: Optional[str] = None
     started_at: Optional[str] = None
+    created_at: Optional[str] = None
     ended_at: Optional[str] = None
     status_reason: Optional[str] = None   # ADR-0021: pending_timeout / agent never claimed / etc.
 
@@ -1516,6 +1517,7 @@ def get_plan_run_devices(
             log_signal_count=j.log_signal_count or 0,
             last_heartbeat_at=_iso(j.last_patrol_heartbeat_at),
             started_at=_iso(j.started_at),
+            created_at=_iso(j.created_at),
             ended_at=_iso(j.ended_at),
             status_reason=j.status_reason,
         ))

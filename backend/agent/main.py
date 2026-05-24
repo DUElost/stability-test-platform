@@ -477,6 +477,17 @@ def main() -> None:
         execute_actions=_execute_recovery_actions,
     )
 
+    from .patrol_recovery import build_patrol_job_not_running_handler
+
+    patrol_job_not_running_recovery = build_patrol_job_not_running_handler(
+        api_url=api_url,
+        host_id=host_id,
+        agent_instance_id=agent_instance_id,
+        boot_id=boot_id,
+        local_db=local_db,
+        execute_actions=_execute_recovery_actions,
+    )
+
     # Version compatibility guard: refuse to run if agent is below backend's min_version
     _check_agent_version(api_url, host_id, mount_points, host_info)
 
@@ -499,6 +510,7 @@ def main() -> None:
         lock_deregister=_deregister_active_job,
         device_id_register=_register_active_device,
         device_id_deregister=_deregister_active_device,
+        on_job_not_running_recovery=patrol_job_not_running_recovery,
     )
     # SIGTERM / SIGINT graceful shutdown
     _shutdown_event = threading.Event()

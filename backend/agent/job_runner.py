@@ -23,6 +23,7 @@ class JobRunnerState:
     lock_deregister: Callable[[int], None]
     device_id_register: Callable[[int], None]
     device_id_deregister: Callable[[int], None]
+    on_job_not_running_recovery: Optional[Callable[[int], None]] = None
 
     def is_aborted(self, job_id: int) -> bool:
         with self.active_jobs_lock:
@@ -158,6 +159,7 @@ def run_task_wrapper(
             local_db=local_db,
             is_aborted=lambda: state.is_aborted(job_id),
             fencing_token=fencing_token,
+            on_job_not_running_recovery=state.on_job_not_running_recovery,
         )
 
         watcher_summary = None

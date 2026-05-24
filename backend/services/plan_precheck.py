@@ -670,6 +670,11 @@ async def _drive_dispatch_gate(
                 }
                 flag_modified(pr, "run_context")
                 db.commit()
+                _emit_dispatch_gate_invalidation(
+                    plan_run_id,
+                    phase="failed",
+                    dispatch_status="failed",
+                )
         except Exception:
             logger.exception("precheck_failure_persist_error plan_run=%d", plan_run_id)
         raise

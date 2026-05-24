@@ -199,4 +199,40 @@ describe('DeviceMatrixCard', () => {
     const pill = screen.getByTestId('device-row-3009').querySelector('span[title]');
     expect(pill?.getAttribute('title')).toBe('lease_expired');
   });
+
+  it('shows pending claim SLA countdown in status tooltip', () => {
+    const createdAt = new Date(Date.now() - 30_000).toISOString();
+    const data: PlanRunDevicesPayload = {
+      ...fixture,
+      by_status: { all: 1, pending: 1 },
+      devices: [
+        {
+          device_id: 10,
+          device_serial: 'DEV-PEND',
+          device_model: 'Pixel 8',
+          host_id: 'host-101',
+          job_id: 3010,
+          job_status: 'PENDING',
+          ui_status: 'pending',
+          current_stage: 'pending',
+          current_step: null,
+          patrol_cycle_count: 0,
+          patrol_success_cycle_count: 0,
+          patrol_failed_cycle_count: 0,
+          current_failure_streak: 0,
+          next_retry_at: null,
+          manual_action: null,
+          log_signal_count: 0,
+          last_heartbeat_at: null,
+          started_at: null,
+          created_at: createdAt,
+          ended_at: null,
+        },
+      ],
+    };
+    render(<DeviceMatrixCard data={data} />);
+    const pill = screen.getByTestId('device-row-3010').querySelector('span[title]');
+    expect(pill?.getAttribute('title')).toMatch(/90s 内未认领/);
+    expect(pill?.getAttribute('title')).toMatch(/120s SLA/);
+  });
 });

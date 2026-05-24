@@ -23,6 +23,10 @@ import DeviceMinimap from '@/components/plan-run/DeviceMinimap';
 import DeviceMatrixCard from '@/components/plan-run/DeviceMatrixCard';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import WatcherSummaryCard from '@/components/plan-run/WatcherSummaryCard';
+import {
+  gateElapsedSeconds,
+  isGateStale,
+} from '@/components/plan-run/DispatchGateCard';
 
 const TERMINAL: ReadonlyArray<PlanRunStatus> = [
   'SUCCESS',
@@ -292,6 +296,12 @@ export default function PlanRunDetailPage() {
 
   const precheck = runQ.data?.run_context?.precheck ?? null;
   const dispatchState = runQ.data?.run_context?.dispatch_state ?? null;
+  const gateStale =
+    precheck &&
+    isGateStale(dispatchState, precheck, isTerminal);
+  const gateStaleElapsedSec = Math.floor(
+    gateElapsedSeconds(dispatchState) ?? 0,
+  );
 
   return (
     <div className="mx-auto max-w-[1480px] space-y-3 px-1 pb-12">
@@ -316,11 +326,39 @@ export default function PlanRunDetailPage() {
           planName={planName}
           isAborting={abortMut.isPending}
           onAbort={(reason) => abortMut.mutate(reason)}
-          onExportReport={() =>
-            toast.info('导出报告 — 功能开发中')
-          }
+          onExportReport={async () => {
+            try {
+              const summary = await api.planRuns.getSummary(id);
+              const blob = new Blob([JSON.stringify(summary, null, 2)], {
+                type: 'application/json',
+              });
+              const url = URL.createObjectURL(blob);
+              const anchor = document.createElement('a');
+              anchor.href = url;
+              anchor.download = `plan-run-${id}-summary.json`;
+              anchor.click();
+              URL.revokeObjectURL(url);
+              toast.success('PlanRun 摘要已导出');
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : String(err);
+              toast.error(`导出失败: ${msg}`);
+            }
+          }}
           summary={heroSummary}
         />
+      )}
+
+      {gateStale && (
+        <div
+          data-testid="dispatch-gate-stale-banner"
+          className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            派发门禁已运行 {gateStaleElapsedSec}s（超过 90s 阈值）。若长时间无 Job 出现，请检查
+            SAQ Worker / Redis 或等待 precheck reaper 补偿。
+          </span>
+        </div>
       )}
 
       {stuckJobs.length > 0 && (

@@ -567,6 +567,31 @@ class TestPrecheckSocketBroadcast:
         rooms = {item[3] for item in precheck_events}
         assert rooms == {f"plan_run:{pr.id}"}
 
+    def test_unexpected_exception_emits_precheck_update(self, db_session, gate_chain):
+        pr = _prepare_run(db_session, gate_chain)
+        captured: list[tuple] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data, namespace, room))
+
+        with patch(
+            "backend.realtime.socketio_server.schedule_emit",
+            side_effect=fake_schedule_emit,
+        ), patch(
+            "backend.services.plan_precheck._gather_verify",
+            side_effect=RuntimeError("boom"),
+        ):
+            with pytest.raises(RuntimeError, match="boom"):
+                asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        failed_events = [
+            item for item in captured if item[0] == "precheck_update"
+        ]
+        assert len(failed_events) >= 1
+        assert failed_events[-1][1]["payload"]["phase"] == "failed"
+        assert failed_events[-1][1]["payload"]["dispatch_status"] == "failed"
+        assert failed_events[-1][3] == f"plan_run:{pr.id}"
+
 
 # ---------------------------------------------------------------------------
 # CHAIN / SCHEDULE gate routing (P1 — no bypass)

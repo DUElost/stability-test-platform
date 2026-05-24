@@ -158,6 +158,56 @@ def test_reaper_reenqueues_missing_precheck_once(db_session):
     assert pr.run_context["dispatch_state"]["last_error"] == "precheck_job_missing_reenqueued"
 
 
+def test_reaper_enqueue_failure_does_not_bump_requeue_attempts(db_session):
+    """EnqueueSyncError must not silently drop — leave row for next reaper pass."""
+    from datetime import datetime, timezone
+
+    run_ctx = {
+        "dispatch_device_ids": [2429],
+        "dispatch_state": {
+            "enqueue_key": "precheck:137",
+            "requeue_attempts": 0,
+            "status": "queued",
+            "enqueued_at": "2026-05-10T07:00:00.000Z",
+            "started_at": None,
+            "completed_at": None,
+            "last_error": None,
+        },
+    }
+    pr = PlanRun(
+        plan_id=1,
+        status="RUNNING",
+        failure_threshold=0.05,
+        plan_snapshot={},
+        run_type="MANUAL",
+        run_context=run_ctx,
+        triggered_by="test",
+    )
+    db_session.add(pr)
+    db_session.flush()
+
+    from backend.tasks.saq_worker import EnqueueSyncError
+
+    with patch(
+        "backend.scheduler.precheck_reaper.get_saq_job_state_sync",
+        return_value=None,
+    ), patch(
+        "backend.scheduler.precheck_reaper._is_stale_iso",
+        return_value=True,
+    ), patch(
+        "backend.scheduler.precheck_reaper.enqueue_sync",
+        side_effect=EnqueueSyncError("SAQ not running"),
+    ):
+        summary = reconcile_stale_precheck_runs(db=db_session)
+
+    assert summary["reenqueued"] == 0
+    assert summary["skipped"] == 1
+
+    db_session.refresh(pr)
+    assert pr.run_context["dispatch_state"]["requeue_attempts"] == 0
+    assert "precheck_reenqueue_failed" in pr.run_context["dispatch_state"]["last_error"]
+
+
 def test_reaper_skips_planrun_with_jobs(db_session):
     """A RUNNING PlanRun that already has JobInstance rows is skipped."""
     from datetime import datetime, timezone

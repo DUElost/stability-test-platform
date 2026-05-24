@@ -151,18 +151,62 @@ export default function HostsPage() {
     }
   };
 
-  // Calculate device count per host
-  const deviceCountMap = useMemo(() => {
-    if (!devices) return new Map<number, number>();
-    const countMap = new Map<number, number>();
-    devices.forEach((device: any) => {
-      if (device.host_id) {
-        const current = countMap.get(device.host_id) || 0;
-        countMap.set(device.host_id, current + 1);
+  // Calculate device count + claim exclusion hints per host
+  const hostDeviceStats = useMemo(() => {
+    const stats = new Map<
+      string | number,
+      {
+        total: number;
+        adbExcluded: number;
+        leaseBusy: number;
+        claimable: number;
       }
+    >();
+    if (!devices) return stats;
+
+    const isAdbExcluded = (device: {
+      adb_connected?: boolean | null;
+      adb_state?: string | null;
+      status?: string;
+    }) =>
+      device.adb_connected === false ||
+      device.adb_state === 'offline' ||
+      device.adb_state === 'unknown' ||
+      device.status === 'OFFLINE';
+
+    devices.forEach((device: {
+      host_id?: string | number | null;
+      status?: string;
+      adb_connected?: boolean | null;
+      adb_state?: string | null;
+    }) => {
+      if (!device.host_id) return;
+      const cur = stats.get(device.host_id) ?? {
+        total: 0,
+        adbExcluded: 0,
+        leaseBusy: 0,
+        claimable: 0,
+      };
+      cur.total += 1;
+      if (isAdbExcluded(device)) {
+        cur.adbExcluded += 1;
+      } else if (device.status === 'BUSY') {
+        cur.leaseBusy += 1;
+      } else {
+        cur.claimable += 1;
+      }
+      stats.set(device.host_id, cur);
+    });
+    return stats;
+  }, [devices]);
+
+  const deviceCountMap = useMemo(() => {
+    const countMap = new Map<number | string, number>();
+    hostDeviceStats.forEach((v, hostId) => {
+      countMap.set(hostId, v.total);
     });
     return countMap;
-  }, [devices]);
+  }, [hostDeviceStats]);
 
   // Transform data for expandable table
   const tableData: HostTableData[] = useMemo(() => {
@@ -170,6 +214,18 @@ export default function HostsPage() {
     return hosts.map((host: any) => {
       const extra = host.extra || {};
       const diskInfo = extra.disk_usage || {};
+      const devStats = hostDeviceStats.get(host.id);
+      let claimHint: string | null = null;
+      if (devStats && devStats.total > 0) {
+        const parts = [`${devStats.claimable} 可认领`];
+        if (devStats.adbExcluded > 0) {
+          parts.push(`${devStats.adbExcluded} adb 离线排除`);
+        }
+        if (devStats.leaseBusy > 0) {
+          parts.push(`${devStats.leaseBusy} 租约占用`);
+        }
+        claimHint = parts.join(' · ');
+      }
 
       return {
         id: host.id,
@@ -196,6 +252,7 @@ export default function HostsPage() {
             }))
           : [],
         device_count: deviceCountMap.get(host.id) || 0,
+        claim_hint: claimHint,
         active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
         // ADR-0019 Phase 3c: structured capacity/health
         max_concurrent_jobs: host.max_concurrent_jobs,
@@ -204,7 +261,7 @@ export default function HostsPage() {
         health_reasons: host.health?.reasons,
       };
     });
-  }, [hosts, deviceCountMap]);
+  }, [hosts, deviceCountMap, hostDeviceStats]);
 
   if (isLoading) {
     return (

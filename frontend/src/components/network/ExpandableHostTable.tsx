@@ -39,6 +39,8 @@ export interface HostTableData {
   resources?: HostResources;
   mount_status?: MountStatus[];
   device_count?: number;
+  /** Tooltip: adb/lease exclusions from device list (frontend-derived). */
+  claim_hint?: string | null;
   active_tasks?: number;
   // ADR-0019 Phase 3c: structured capacity/health
   max_concurrent_jobs?: number;
@@ -288,10 +290,13 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                         )}
                       </TableCell>
                       <TableCell className="p-3 text-center">
-                        <span className={cn(
+                        <span
+                          className={cn(
                           'inline-flex items-center justify-center min-w-[32px] px-2 py-0.5 rounded-full text-xs font-medium',
                           (host.device_count || 0) > 0 ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'
-                        )}>
+                        )}
+                          title={host.claim_hint ?? undefined}
+                        >
                           {host.device_count || 0}
                         </span>
                       </TableCell>

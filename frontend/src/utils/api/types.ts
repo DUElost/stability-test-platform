@@ -883,6 +883,7 @@ export interface DeviceMatrixItem {
   log_signal_count: number;
   last_heartbeat_at?: string | null;
   started_at?: string | null;
+  created_at?: string | null;
   ended_at?: string | null;
   /** Failure reason e.g. "pending_timeout: agent never claimed job" */
   status_reason?: string | null;

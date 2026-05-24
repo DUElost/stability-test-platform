@@ -33,6 +33,7 @@ from backend.models.plan_run import PlanRun
 # Import sync SAQ helpers at module level so tests can patch them.
 # The underlying functions safely return None when the queue is not initialised.
 from backend.tasks.saq_worker import (
+    EnqueueSyncError,
     get_saq_job_state_sync,
     is_worker_alive_sync,
     enqueue_sync,
@@ -192,13 +193,28 @@ def reconcile_stale_precheck_runs(db: Session | None = None) -> dict[str, int]:
                     state.get("enqueued_at"), PRECHECK_QUEUE_STALE_SECONDS
                 )
             ):
-                enqueue_sync(
-                    "precheck_and_dispatch_task",
-                    key=state["enqueue_key"],
-                    timeout=600,
-                    retries=0,
-                    plan_run_id=pr.id,
-                )
+                try:
+                    enqueue_sync(
+                        "precheck_and_dispatch_task",
+                        key=state["enqueue_key"],
+                        timeout=600,
+                        retries=0,
+                        required=True,
+                        plan_run_id=pr.id,
+                    )
+                except EnqueueSyncError as exc:
+                    logger.warning(
+                        "precheck_reaper_reenqueue_failed plan_run=%d err=%s",
+                        pr.id,
+                        exc,
+                    )
+                    _patch_dispatch_state(
+                        pr,
+                        db,
+                        last_error=f"precheck_reenqueue_failed:{exc}",
+                    )
+                    summary["skipped"] += 1
+                    continue
                 _patch_dispatch_state(
                     pr,
                     db,

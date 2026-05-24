@@ -23,6 +23,7 @@ def execute_pipeline_run(
     local_db: Optional[Any] = None,
     is_aborted: Optional[Callable[[], bool]] = None,
     fencing_token: str = "",
+    on_job_not_running_recovery: Optional[Callable[[int], None]] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -32,7 +33,11 @@ def execute_pipeline_run(
 
     # ADR-0022: per-run heartbeat uploader for patrol stage aggregation.
     # Stateless on the Agent side; safe to instantiate per job.
-    patrol_heartbeat = PatrolHeartbeatUploader(api_url=api_url, agent_secret=agent_secret)
+    patrol_heartbeat = PatrolHeartbeatUploader(
+        api_url=api_url,
+        agent_secret=agent_secret,
+        on_job_not_running=on_job_not_running_recovery,
+    )
 
     engine = PipelineEngine(
         adb=adb,

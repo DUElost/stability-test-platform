@@ -94,11 +94,46 @@ function getReadyLabel(
   return '门禁通过';
 }
 
+const GATE_STALE_SECONDS = 90;
+
+export function gateElapsedSeconds(
+  dispatchState: Props['dispatchState'],
+  nowMs: number = Date.now(),
+): number | null {
+  if (!dispatchState) return null;
+  const ts = dispatchState.started_at ?? dispatchState.enqueued_at;
+  if (!ts) return null;
+  const startMs = new Date(ts).getTime();
+  if (Number.isNaN(startMs)) return null;
+  return (nowMs - startMs) / 1000;
+}
+
+export function isGateStale(
+  dispatchState: Props['dispatchState'],
+  precheck: PrecheckState,
+  isTerminal: boolean,
+  nowMs: number = Date.now(),
+): boolean {
+  if (isTerminal) return false;
+
+  const dispatchStatus = dispatchState?.status;
+  const precheckActive =
+    precheck.phase !== 'ready' && precheck.phase !== 'failed';
+  const dispatchActive =
+    dispatchStatus === 'queued' || dispatchStatus === 'running';
+
+  if (!precheckActive && !dispatchActive) return false;
+
+  const elapsed = gateElapsedSeconds(dispatchState, nowMs);
+  return elapsed !== null && elapsed > GATE_STALE_SECONDS;
+}
+
 export default function DispatchGateCard({
   precheck,
   dispatchState,
   isTerminal,
-}: Props) {
+  nowMs = Date.now(),
+}: Props & { nowMs?: number }) {
   // Don't render at all when:
   //   1) there is no precheck context (PlanRun pre-dates ADR-0021).
   if (!precheck) return null;
@@ -114,6 +149,8 @@ export default function DispatchGateCard({
     !isTerminal &&
     precheck.phase === 'ready' &&
     dispatchState?.status === 'completed';
+  const showStaleBanner = isGateStale(dispatchState, precheck, isTerminal, nowMs);
+  const staleElapsedSec = Math.floor(gateElapsedSeconds(dispatchState, nowMs) ?? 0);
 
   // Aggregate counts for the summary line
   const counts = useMemo(() => {
@@ -156,6 +193,19 @@ export default function DispatchGateCard({
           </span>
         )}
       </div>
+
+      {showStaleBanner && (
+        <div
+          data-testid="dispatch-gate-stale-banner"
+          className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900"
+        >
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            派发门禁已运行 {staleElapsedSec}s（超过 90s 阈值）。若长时间无 Job 出现，请检查
+            SAQ Worker / Redis 或等待 precheck reaper 补偿。
+          </span>
+        </div>
+      )}
 
       {(dispatchState || isCompactReady) && (
         <div className="border-b bg-gray-50/80 px-4 py-3" data-testid="dispatch-gate-summary">

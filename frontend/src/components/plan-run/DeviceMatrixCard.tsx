@@ -47,6 +47,9 @@ const STATUS_PILL: Record<DeviceUiStatus, { cls: string; Icon: React.ElementType
   pending: { cls: 'bg-gray-100 text-gray-700 ring-gray-300', Icon: PauseCircle, label: '等待' },
 };
 
+/** PENDING job never claimed — matches backend DISPATCHED_TIMEOUT_SECONDS (120s). */
+const DISPATCHED_CLAIM_TIMEOUT_SECONDS = 120;
+
 function fmtRelative(ts: string | null | undefined, now = Date.now()): string {
   if (!ts) return '—';
   const t = new Date(ts).getTime();
@@ -73,7 +76,16 @@ function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
     return 'Job 失联（UNKNOWN），grace 窗口内等待 recovery 或 reconciler 自动失败';
   }
   if (d.ui_status === 'pending') {
-    return '等待 Agent 认领；超时未认领将自动失败';
+    const baseTs = d.created_at ?? d.started_at;
+    if (baseTs) {
+      const deadline = new Date(baseTs).getTime() + DISPATCHED_CLAIM_TIMEOUT_SECONDS * 1000;
+      const remainingSec = Math.max(0, Math.ceil((deadline - now) / 1000));
+      if (remainingSec > 0) {
+        return `等待 Agent 认领；${remainingSec}s 内未认领将自动失败（120s SLA）`;
+      }
+      return '等待 Agent 认领；认领 SLA 已到期，recycler 将标记失败';
+    }
+    return '等待 Agent 认领；超时未认领将自动失败（120s SLA）';
   }
   if (d.ui_status === 'backoff' && d.next_retry_at) {
     return `退避中，${fmtRelative(d.next_retry_at, now)}重试`;
