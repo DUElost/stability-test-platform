@@ -73,6 +73,7 @@ from backend.models.enums import DeviceStatus, HostStatus, JobStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
+from backend.models.script import Script
 from backend.models.plan_migration_audit import PlanMigrationAudit
 from backend.models.plan_run import PlanRun
 from backend.core.security import create_access_token
@@ -290,6 +291,35 @@ def sample_busy_device(db_session, sample_host):
     db_session.add(device)
     db_session.commit()
     return device
+
+
+@pytest.fixture
+def gate_chain(db_session):
+    """Plan + Script + 2 Hosts/Devices for dispatch-gate tests."""
+    host_a = Host(id="h-A", hostname="agentA", status=HostStatus.ONLINE.value, ip="10.0.0.1")
+    host_b = Host(id="h-B", hostname="agentB", status=HostStatus.ONLINE.value, ip="10.0.0.2")
+    dev_a = Device(serial="dev-A", host_id="h-A", status="ONLINE")
+    dev_b = Device(serial="dev-B", host_id="h-B", status="ONLINE")
+    script = Script(
+        name="check_device", script_type="python", version="1.0.0",
+        nfs_path="/scripts/check_device/v1.0.0/check_device.py",
+        content_sha256="aabbcc11", default_params={"timeout": 30},
+    )
+    plan = Plan(name="precheck-plan", patrol_interval_seconds=60)
+    db_session.add_all([host_a, host_b, dev_a, dev_b, script, plan])
+    db_session.commit()
+    db_session.add(PlanStep(
+        plan_id=plan.id, step_key="init_check",
+        script_name="check_device", script_version="1.0.0",
+        stage="init", sort_order=0, timeout_seconds=30, retry=0,
+    ))
+    db_session.commit()
+    return {
+        "plan": plan,
+        "host_a": host_a, "host_b": host_b,
+        "device_a": dev_a, "device_b": dev_b,
+        "script": script,
+    }
 
 
 # ── Script fixtures ─────────────────────────────────────────────────────────

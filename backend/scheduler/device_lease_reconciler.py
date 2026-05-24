@@ -44,7 +44,7 @@ from backend.services.state_machine import InvalidTransitionError, JobStateMachi
 
 logger = logging.getLogger(__name__)
 
-_UNKNOWN_GRACE_SECONDS = int(os.getenv("UNKNOWN_GRACE_SECONDS", "300"))
+from backend.core.job_timeout_config import UNKNOWN_GRACE_SECONDS as _UNKNOWN_GRACE_SECONDS
 _ABORT_REAPER_GRACE_SECONDS = int(os.getenv("ABORT_REAPER_GRACE_SECONDS", "60"))
 
 # ── Phase 4b: terminal statuses for D5 cleanup.  Does NOT include UNKNOWN —

@@ -430,6 +430,34 @@ async def broadcast_plan_run_status(run_id: int, status: str) -> None:
     }, namespace="/dashboard", room=f"plan_run:{run_id}")
 
 
+async def broadcast_precheck_update(
+    run_id: int,
+    *,
+    phase: str | None = None,
+    dispatch_status: str | None = None,
+) -> None:
+    """ADR-0021 — notify PlanRun detail subscribers that dispatch gate state changed.
+
+    Frontend treats this as an invalidation hint for ``run_context.precheck``
+    and ``run_context.dispatch_state`` — payload carries only coarse progress
+    markers, not the full precheck matrix.
+    """
+    sio = get_sio()
+    await sio.emit(
+        "precheck_update",
+        {
+            "type": "PRECHECK_UPDATE",
+            "payload": {
+                "phase": phase,
+                "dispatch_status": dispatch_status,
+            },
+            "timestamp": _now_iso(),
+        },
+        namespace="/dashboard",
+        room=f"plan_run:{run_id}",
+    )
+
+
 async def broadcast_watcher_signal(
     run_id: int,
     *,

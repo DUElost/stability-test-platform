@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, AlertCircle } from 'lucide-react';
+import { ArrowLeft, AlertCircle, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
@@ -13,9 +13,11 @@ import type {
   DeviceUiStatus,
   EventSeverity,
   EventStage,
+  PlanRun,
   PlanRunStatus,
 } from '@/utils/api/types';
 import PlanRunHero, { type PlanRunHeroSummaryStats } from '@/components/plan-run/PlanRunHero';
+import PlanChainBreadcrumb from '@/components/plan-run/PlanChainBreadcrumb';
 import BusinessFlowTimeline from '@/components/plan-run/BusinessFlowTimeline';
 import DeviceMinimap from '@/components/plan-run/DeviceMinimap';
 import DeviceMatrixCard from '@/components/plan-run/DeviceMatrixCard';
@@ -29,8 +31,50 @@ const TERMINAL: ReadonlyArray<PlanRunStatus> = [
   'DEGRADED',
 ];
 
+const GATE_ACTIVE_REFETCH_MS = 3_000;
 const FAST_REFETCH_MS = 10_000;
 const SLOW_REFETCH_MS = 30_000;
+
+/** Patrol heartbeat stale threshold — matches backend _LIVE_PATROL_HEARTBEAT_WINDOW (180s). */
+const STALE_PATROL_HEARTBEAT_MS = 180_000;
+/** Init-stage RUNNING without patrol heartbeat — matches RUNNING_HEARTBEAT_TIMEOUT (900s). */
+const STALE_INIT_HEARTBEAT_MS = 900_000;
+
+function isDispatchGateActive(run: PlanRun | undefined): boolean {
+  if (!run || run.status !== 'RUNNING') return false;
+
+  const precheck = run.run_context?.precheck;
+  const dispatch = run.run_context?.dispatch_state;
+
+  if (!precheck) {
+    return dispatch?.status === 'queued' || dispatch?.status === 'running';
+  }
+
+  if (precheck.phase !== 'ready' && precheck.phase !== 'failed') {
+    return true;
+  }
+
+  if (precheck.phase === 'ready') {
+    const dispatchStatus = dispatch?.status;
+    return dispatchStatus !== 'completed' && dispatchStatus !== 'failed';
+  }
+
+  return false;
+}
+
+function isJobStuck(d: DeviceMatrixItem, now = Date.now()): boolean {
+  if (d.job_status !== 'RUNNING') return false;
+  if (d.last_heartbeat_at) {
+    const t = new Date(d.last_heartbeat_at).getTime();
+    if (!Number.isNaN(t) && now - t > STALE_PATROL_HEARTBEAT_MS) return true;
+  }
+  if (d.current_stage === 'patrol') return false;
+  if (d.started_at) {
+    const t = new Date(d.started_at).getTime();
+    if (!Number.isNaN(t) && now - t > STALE_INIT_HEARTBEAT_MS) return true;
+  }
+  return false;
+}
 
 export default function PlanRunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -53,11 +97,18 @@ export default function PlanRunDetailPage() {
     queryKey: ['plan-run', id],
     queryFn: () => api.planRuns.get(id),
     enabled: !!id,
-    refetchInterval: (data) =>
-      data && TERMINAL.includes(data.status) ? false : FAST_REFETCH_MS,
+    refetchInterval: (data) => {
+      if (data && TERMINAL.includes(data.status)) return false;
+      return isDispatchGateActive(data) ? GATE_ACTIVE_REFETCH_MS : FAST_REFETCH_MS;
+    },
   });
   const isTerminal = !!runQ.data && TERMINAL.includes(runQ.data.status);
-  const refetchInterval = isTerminal ? false : FAST_REFETCH_MS;
+  const gateActive = isDispatchGateActive(runQ.data);
+  const refetchInterval = isTerminal
+    ? false
+    : gateActive
+      ? GATE_ACTIVE_REFETCH_MS
+      : FAST_REFETCH_MS;
 
   const timelineQ = useQuery({
     queryKey: ['plan-run-timeline', id],
@@ -96,6 +147,33 @@ export default function PlanRunDetailPage() {
     refetchInterval: isTerminal ? false : SLOW_REFETCH_MS,
   });
 
+  const chainQ = useQuery({
+    queryKey: ['plan-run-chain', id],
+    queryFn: () => api.planRuns.getChain(id),
+    enabled: !!id,
+    refetchInterval: isTerminal ? false : refetchInterval,
+  });
+
+  const chainDispatchFailed = useMemo(() => {
+    const summary = runQ.data?.result_summary;
+    const fail = summary?.chain_dispatch_failed;
+    if (fail && typeof fail === 'object' && 'error' in fail) {
+      return fail;
+    }
+    return null;
+  }, [runQ.data?.result_summary]);
+
+  const showPlanChain =
+    chainDispatchFailed != null
+    || (chainQ.data?.nodes?.length ?? 0) > 1
+    || chainQ.isLoading;
+
+  const stuckJobs = useMemo(() => {
+    if (isTerminal || !devicesQ.data?.devices?.length) return [];
+    const now = Date.now();
+    return devicesQ.data.devices.filter((d) => isJobStuck(d, now));
+  }, [devicesQ.data, isTerminal]);
+
   // ── Derive hero summary stats ──
   const heroSummary = useMemo((): PlanRunHeroSummaryStats => {
     const devicesData = devicesQ.data;
@@ -118,7 +196,13 @@ export default function PlanRunDetailPage() {
         qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS) {
         qc.invalidateQueries({ queryKey: ['plan-run', id] });
+        qc.invalidateQueries({ queryKey: ['plan-run-chain', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
+        qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
+      } else if (msg.type === SOCKET_MESSAGE_TYPES.PRECHECK_UPDATE) {
+        qc.invalidateQueries({ queryKey: ['plan-run', id] });
+        qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
+        qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.WATCHER_SIGNAL) {
         qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
@@ -239,7 +323,37 @@ export default function PlanRunDetailPage() {
         />
       )}
 
-      {/* Device minimap (replaces Plan chain) */}
+      {stuckJobs.length > 0 && (
+        <div
+          data-testid="stuck-jobs-banner"
+          className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div className="min-w-0 space-y-1">
+            <p className="font-semibold">
+              {stuckJobs.length} 个 Job 心跳超时，可能已失联
+            </p>
+            <p className="text-[11px] text-amber-800/90">
+              后端 recycler 将把超时 Job 标记为 UNKNOWN；grace 窗口内 Agent 可通过 recovery 恢复。
+              设备：
+              {stuckJobs
+                .map((d) => d.device_serial || `#${d.device_id}`)
+                .join('、')}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {showPlanChain && (
+        <PlanChainBreadcrumb
+          chain={chainQ.data}
+          isLoading={chainQ.isLoading}
+          chainDispatchFailed={chainDispatchFailed}
+          onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
+        />
+      )}
+
+      {/* Device minimap */}
       <DeviceMinimap
         data={devicesQ.data}
         isLoading={devicesQ.isLoading}

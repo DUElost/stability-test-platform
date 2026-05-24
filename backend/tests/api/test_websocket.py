@@ -80,6 +80,28 @@ class TestBroadcastEnvelope:
         assert kwargs["room"] == "plan_run:10"
 
     @pytest.mark.asyncio
+    async def test_precheck_update_envelope(self):
+        from backend.realtime.socketio_server import broadcast_precheck_update
+
+        mock_sio = _make_mock_sio()
+        with patch("backend.realtime.socketio_server._sio", mock_sio):
+            await broadcast_precheck_update(
+                run_id=10,
+                phase="syncing",
+                dispatch_status="running",
+            )
+
+        mock_sio.emit.assert_called_once()
+        args, kwargs = mock_sio.emit.call_args
+        assert args[0] == "precheck_update"
+        msg = args[1]
+        assert msg["type"] == "PRECHECK_UPDATE"
+        assert msg["payload"]["phase"] == "syncing"
+        assert msg["payload"]["dispatch_status"] == "running"
+        assert "timestamp" in msg
+        assert kwargs["room"] == "plan_run:10"
+
+    @pytest.mark.asyncio
     async def test_run_update_envelope(self):
         from backend.realtime.socketio_server import broadcast_run_update
 

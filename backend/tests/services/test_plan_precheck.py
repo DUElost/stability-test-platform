@@ -15,41 +15,15 @@ from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
 from backend.services.plan_dispatcher_sync import prepare_plan_run
+from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_precheck import _drive_dispatch_gate
 from backend.tasks.saq_worker import EnqueueSyncError
 
 
 # ---------------------------------------------------------------------------
 # Fixtures: Plan + Script + Host + Device chain ready for dispatch
+# (gate_chain lives in backend/tests/conftest.py)
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def gate_chain(db_session):
-    host_a = Host(id="h-A", hostname="agentA", status=HostStatus.ONLINE.value, ip="10.0.0.1")
-    host_b = Host(id="h-B", hostname="agentB", status=HostStatus.ONLINE.value, ip="10.0.0.2")
-    dev_a = Device(serial="dev-A", host_id="h-A", status="ONLINE")
-    dev_b = Device(serial="dev-B", host_id="h-B", status="ONLINE")
-    script = Script(
-        name="check_device", script_type="python", version="1.0.0",
-        nfs_path="/scripts/check_device/v1.0.0/check_device.py",
-        content_sha256="aabbcc11", default_params={"timeout": 30},
-    )
-    plan = Plan(name="precheck-plan", patrol_interval_seconds=60)
-    db_session.add_all([host_a, host_b, dev_a, dev_b, script, plan])
-    db_session.commit()
-    db_session.add(PlanStep(
-        plan_id=plan.id, step_key="init_check",
-        script_name="check_device", script_version="1.0.0",
-        stage="init", sort_order=0, timeout_seconds=30, retry=0,
-    ))
-    db_session.commit()
-    return {
-        "plan": plan,
-        "host_a": host_a, "host_b": host_b,
-        "device_a": dev_a, "device_b": dev_b,
-        "script": script,
-    }
 
 
 def _ack_ok(host_id: str, expected_sha: str) -> dict:
@@ -521,3 +495,129 @@ class TestDispatchGateCoordinatesCompleteFailure:
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id
         ).count() == 0
+
+
+# ---------------------------------------------------------------------------
+# SocketIO invalidation hints (P0-2 precheck observability)
+# ---------------------------------------------------------------------------
+
+
+class TestPrecheckSocketBroadcast:
+    def test_persist_precheck_emits_invalidation(self, db_session, gate_chain):
+        from backend.services.plan_precheck import _persist_precheck
+
+        pr = _prepare_run(db_session, gate_chain)
+        captured: list[tuple] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data, namespace, room))
+
+        precheck = {
+            "phase": "verifying",
+            "started_at": "2026-05-07T10:00:00Z",
+            "completed_at": None,
+            "hosts": {},
+            "errors": [],
+        }
+
+        with patch(
+            "backend.realtime.socketio_server.schedule_emit",
+            side_effect=fake_schedule_emit,
+        ):
+            _persist_precheck(pr.id, precheck, db_session)
+
+        assert len(captured) == 1
+        event, data, namespace, room = captured[0]
+        assert event == "precheck_update"
+        assert data["type"] == "PRECHECK_UPDATE"
+        assert data["payload"]["phase"] == "verifying"
+        assert namespace == "/dashboard"
+        assert room == f"plan_run:{pr.id}"
+
+    def test_drive_dispatch_gate_emits_precheck_updates(self, db_session, gate_chain):
+        pr = _prepare_run(db_session, gate_chain)
+        captured: list[tuple] = []
+
+        def fake_schedule_emit(event, data, namespace="/dashboard", room=None):
+            captured.append((event, data, namespace, room))
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            return _ack_ok(host_id, "aabbcc11")
+
+        with patch(
+            "backend.realtime.socketio_server.schedule_emit",
+            side_effect=fake_schedule_emit,
+        ), patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        precheck_events = [
+            item for item in captured if item[0] == "precheck_update"
+        ]
+        assert len(precheck_events) >= 2
+        phases = {
+            item[1]["payload"].get("phase")
+            for item in precheck_events
+            if item[1]["payload"].get("phase")
+        }
+        assert "verifying" in phases
+        assert "ready" in phases
+        rooms = {item[3] for item in precheck_events}
+        assert rooms == {f"plan_run:{pr.id}"}
+
+
+# ---------------------------------------------------------------------------
+# CHAIN / SCHEDULE gate routing (P1 — no bypass)
+# ---------------------------------------------------------------------------
+
+
+class TestChainScheduleDispatchGate:
+    def test_dispatch_plan_sync_runs_precheck_gate(self, db_session, gate_chain):
+        from backend.services.plan_dispatcher_sync import dispatch_plan_sync
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            return _ack_ok(host_id, "aabbcc11")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ):
+            pr = dispatch_plan_sync(
+                plan_id=gate_chain["plan"].id,
+                device_ids=[gate_chain["device_a"].id],
+                triggered_by="chain-test",
+                db=db_session,
+                run_type="CHAIN",
+                run_context={"triggered_from_plan_run_id": 99},
+            )
+
+        assert pr.run_type == "CHAIN"
+        assert pr.run_context["precheck"]["phase"] == "ready"
+        assert pr.run_context["dispatch_state"]["status"] == "completed"
+        assert (
+            db_session.query(JobInstance)
+            .filter(JobInstance.plan_run_id == pr.id)
+            .count()
+            == 1
+        )
+
+    def test_dispatch_plan_sync_gate_failure_raises(self, db_session, gate_chain):
+        from backend.realtime.socketio_server import AgentNotConnectedError
+        from backend.services.plan_dispatcher_sync import dispatch_plan_sync
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            raise AgentNotConnectedError(host_id)
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ), pytest.raises(PlanDispatchError, match="dispatch gate failed"):
+            dispatch_plan_sync(
+                plan_id=gate_chain["plan"].id,
+                device_ids=[gate_chain["device_a"].id],
+                triggered_by="schedule-test",
+                db=db_session,
+                run_type="SCHEDULE",
+            )

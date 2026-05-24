@@ -37,13 +37,14 @@ interface Props {
 const STATUS_PILL: Record<DeviceUiStatus, { cls: string; Icon: React.ElementType; label: string }> = {
   running: { cls: 'bg-orange-100 text-orange-800', Icon: Loader2, label: '运行中' },
   completed: { cls: 'bg-green-100 text-green-800', Icon: CheckCircle2, label: '完成' },
+  unknown: { cls: 'bg-purple-100 text-purple-800', Icon: AlertTriangle, label: '失联' },
   failed: { cls: 'bg-red-100 text-red-800', Icon: XCircle, label: '失败' },
   risk: { cls: 'bg-amber-100 text-amber-800', Icon: AlertTriangle, label: '风险' },
   backoff: { cls: 'bg-purple-100 text-purple-800', Icon: Clock, label: '退避' },
   pending: { cls: 'bg-gray-100 text-gray-700', Icon: PauseCircle, label: '等待' },
 };
 
-const TERMINAL_DEVICE: ReadonlyArray<DeviceUiStatus> = ['completed', 'failed'];
+const TERMINAL_DEVICE: ReadonlyArray<DeviceUiStatus> = ['completed', 'failed', 'unknown'];
 
 export default function DeviceDetailDrawer({
   device,

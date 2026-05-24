@@ -30,7 +30,7 @@ from backend.services.state_machine import InvalidTransitionError, JobStateMachi
 logger = logging.getLogger(__name__)
 
 _HOST_HEARTBEAT_TIMEOUT = int(os.getenv("HOST_HEARTBEAT_TIMEOUT_SECONDS", "120"))
-_UNKNOWN_GRACE_SECONDS = int(os.getenv("UNKNOWN_GRACE_SECONDS", "300"))
+from backend.core.job_timeout_config import UNKNOWN_GRACE_SECONDS as _UNKNOWN_GRACE_SECONDS
 
 
 async def _check_host_heartbeat_timeouts(db) -> tuple[int, int]:

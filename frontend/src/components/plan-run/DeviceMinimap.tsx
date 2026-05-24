@@ -21,6 +21,7 @@ const STATUS_FILTERS: Array<{ key: DeviceUiStatus | 'all'; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'running', label: '运行' },
   { key: 'completed', label: '完成' },
+  { key: 'unknown', label: '失联' },
   { key: 'failed', label: '失败' },
   { key: 'risk', label: '风险' },
   { key: 'backoff', label: '退避' },
@@ -31,6 +32,7 @@ const MINIMAP_CELL_CLS: Record<DeviceUiStatus, string> = {
   completed: 'bg-green-400/90 hover:bg-green-500',
   running:
     'bg-orange-500 bg-[linear-gradient(45deg,rgba(255,255,255,.35)_25%,transparent_25%,transparent_50%,rgba(255,255,255,.35)_50%,rgba(255,255,255,.35)_75%,transparent_75%)] bg-[length:8px_8px] [animation:dev-stripe_1s_linear_infinite]',
+  unknown: 'bg-purple-500/90 hover:bg-purple-600',
   failed: 'bg-red-500/90 hover:bg-red-600',
   risk: 'bg-amber-400/90 hover:bg-amber-500',
   backoff: 'bg-purple-400/80 hover:bg-purple-500',
@@ -40,6 +42,7 @@ const MINIMAP_CELL_CLS: Record<DeviceUiStatus, string> = {
 const CELL_LABEL: Record<DeviceUiStatus, string> = {
   running: '运行中',
   completed: '完成',
+  unknown: '失联',
   failed: '失败',
   risk: '风险',
   backoff: '退避',

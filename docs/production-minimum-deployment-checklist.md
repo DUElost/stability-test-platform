@@ -119,6 +119,11 @@ cd /opt/stability-test-platform/frontend
 VITE_API_BASE_URL= npm run build
 ```
 
+构建后确认：`frontend/src/config/index.ts` 在非 localhost 且 `VITE_API_BASE_URL` 为空时，
+`dashboardSocketUrl()` 返回相对路径 `/dashboard`（浏览器连 `wss://<域名>/socket.io/...`）。
+Nginx 模板须同时反代 `/api/` 与 `/socket.io/`（见 `deploy/control-plane/nginx/stability-platform.conf`
+与 Docker 版 `deploy/nginx/frontend-docker.conf`）。
+
 生产后端 env 必配（ADR-0024 guard 会校验）：
 
 ```env
@@ -132,6 +137,17 @@ CORS_ORIGINS=https://<你的前端域名>
 STP_ENABLE_INPROCESS_SAQ=1
 REDIS_URL=redis://...
 ```
+
+Job / 租约超时（可选覆盖，默认见 `backend/core/job_timeout_config.py`）：
+
+| 环境变量 | 生产默认 | 说明 |
+|---------|---------|------|
+| `DISPATCHED_TIMEOUT_SECONDS` | 120 | PENDING Job 未被 Agent 认领 → FAILED |
+| `RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | 900 | RUNNING Job 心跳丢失 → UNKNOWN |
+| `UNKNOWN_GRACE_SECONDS` | 300 | UNKNOWN 宽限期后释放租约并 FAILED |
+
+兼容旧名：`RUN_DISPATCHED_TIMEOUT_SECONDS` / `RUN_HEARTBEAT_TIMEOUT_SECONDS` 仍有效。
+非 `production` 环境可通过上述变量单独调优，**不建议**在未评估前缩短生产默认值。
 
 启用站点：
 

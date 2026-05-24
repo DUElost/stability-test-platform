@@ -164,4 +164,39 @@ describe('DeviceMatrixCard', () => {
     // Inline truncated text should NOT be rendered (we moved reason to tooltip + drawer)
     expect(failedRow).not.toHaveTextContent('patrol_step_failed: monkey_launch');
   });
+
+  it('renders unknown status pill distinct from failed', () => {
+    const data: PlanRunDevicesPayload = {
+      ...fixture,
+      by_status: { all: 1, unknown: 1 },
+      devices: [
+        {
+          device_id: 9,
+          device_serial: 'DEV-UNKN',
+          device_model: 'Pixel 8',
+          host_id: 'host-101',
+          job_id: 3009,
+          job_status: 'UNKNOWN',
+          ui_status: 'unknown',
+          current_stage: 'unknown',
+          current_step: null,
+          patrol_cycle_count: 3,
+          patrol_success_cycle_count: 2,
+          patrol_failed_cycle_count: 1,
+          current_failure_streak: 0,
+          next_retry_at: null,
+          manual_action: null,
+          log_signal_count: 0,
+          last_heartbeat_at: null,
+          started_at: '2026-05-08T11:00:00Z',
+          ended_at: null,
+          status_reason: 'lease_expired',
+        },
+      ],
+    };
+    render(<DeviceMatrixCard data={data} />);
+    expect(screen.getByTestId('device-row-3009')).toHaveTextContent('失联');
+    const pill = screen.getByTestId('device-row-3009').querySelector('span[title]');
+    expect(pill?.getAttribute('title')).toBe('lease_expired');
+  });
 });

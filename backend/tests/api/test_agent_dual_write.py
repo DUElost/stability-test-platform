@@ -924,14 +924,20 @@ async def test_get_pending_jobs_still_works():
 @pytest.mark.asyncio(loop_scope="module")
 async def test_claim_jobs_skip_on_active_lease():
     """设备已有 ACTIVE lease 时 claim_jobs 跳过该设备上的 PENDING job (Phase 2c)."""
+    from unittest.mock import patch
+
+    from backend.core.metrics import claim_lease_failed_total
+
     seed = _seed_job(status=JobStatus.PENDING.value)
     _setup_lock_and_lease(seed)
     try:
-        async with AsyncSessionLocal() as async_db:
-            result = await claim_jobs(
-                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
-                db=async_db, _=None,
-            )
+        with patch.object(claim_lease_failed_total, "inc") as mock_inc:
+            async with AsyncSessionLocal() as async_db:
+                result = await claim_jobs(
+                    payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                    db=async_db, _=None,
+                )
+            mock_inc.assert_called_once()
         assert result.data == [], (
             "claim_jobs must skip jobs on devices with ACTIVE lease"
         )

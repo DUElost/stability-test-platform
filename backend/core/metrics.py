@@ -108,6 +108,16 @@ device_lease_conflicts = Counter(
     'Total number of device lease conflicts'
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+claim_lease_failed_total = Counter(
+    'stability_claim_lease_failed_total',
+    'Total claim attempts where acquire_lease returned None (device already leased)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+post_completion_enqueue_failed_total = Counter(
+    'stability_post_completion_enqueue_failed_total',
+    'Total post_completion_task SAQ enqueue failures on job terminal',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 device_lease_duration = Histogram(
     'stability_device_lease_duration_seconds',
     'Duration of device leases in seconds',
@@ -325,6 +335,11 @@ plan_run_pass_rate = Histogram(
     buckets=[0.0, 0.5, 0.8, 0.9, 0.95, 0.98, 0.99, 1.0]
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+plan_run_aggregation_failed_total = Counter(
+    'stability_plan_run_aggregation_failed_total',
+    'PlanRun aggregation failures swallowed by recycler',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ADR-0021 dispatch gate
 dispatch_gate_runs_total = Counter(
     'stability_dispatch_gate_runs_total',
@@ -485,6 +500,13 @@ def record_plan_run_terminal(status: str, pass_rate: Optional[float] = None):
     plan_run_terminal_total.labels(status=status).inc()
     if pass_rate is not None:
         plan_run_pass_rate.labels(status=status).observe(max(0.0, min(1.0, pass_rate)))
+
+
+def record_plan_run_aggregation_failed():
+    """Record recycler swallowing a PlanRun aggregation error."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    plan_run_aggregation_failed_total.inc()
 
 
 def record_dispatch_gate(outcome: str, duration_seconds: float):

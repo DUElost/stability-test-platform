@@ -30,6 +30,7 @@ const STATUS_DEF: Array<{ key: DeviceUiStatus | 'all'; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'running', label: '运行中' },
   { key: 'completed', label: '完成' },
+  { key: 'unknown', label: '失联' },
   { key: 'failed', label: '失败' },
   { key: 'risk', label: '风险' },
   { key: 'backoff', label: '退避' },
@@ -39,6 +40,7 @@ const STATUS_DEF: Array<{ key: DeviceUiStatus | 'all'; label: string }> = [
 const STATUS_PILL: Record<DeviceUiStatus, { cls: string; Icon: React.ElementType; label: string }> = {
   running: { cls: 'bg-orange-100 text-orange-800 ring-orange-300', Icon: Loader2, label: '运行' },
   completed: { cls: 'bg-green-100 text-green-800 ring-green-300', Icon: CheckCircle2, label: '完成' },
+  unknown: { cls: 'bg-purple-100 text-purple-800 ring-purple-300', Icon: AlertTriangle, label: '失联' },
   failed: { cls: 'bg-red-100 text-red-800 ring-red-300', Icon: XCircle, label: '失败' },
   risk: { cls: 'bg-amber-100 text-amber-800 ring-amber-300', Icon: AlertTriangle, label: '风险' },
   backoff: { cls: 'bg-purple-100 text-purple-800 ring-purple-300', Icon: Clock, label: '退避' },
@@ -59,6 +61,27 @@ function fmtRelative(ts: string | null | undefined, now = Date.now()): string {
   if (past < 60) return `${Math.round(past)}s 前`;
   if (past < 3600) return `${Math.round(past / 60)}m 前`;
   return `${Math.round(past / 3600)}h 前`;
+}
+
+function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
+  if (d.status_reason) return d.status_reason;
+  if (d.ui_status === 'unknown') {
+    const reason = (d.status_reason || '').toLowerCase();
+    if (reason.includes('lease_expired') || reason.includes('heartbeat')) {
+      return `${d.status_reason || 'Job 失联'} — grace 窗口内可 recovery 恢复，超时后自动失败`;
+    }
+    return 'Job 失联（UNKNOWN），grace 窗口内等待 recovery 或 reconciler 自动失败';
+  }
+  if (d.ui_status === 'pending') {
+    return '等待 Agent 认领；超时未认领将自动失败';
+  }
+  if (d.ui_status === 'backoff' && d.next_retry_at) {
+    return `退避中，${fmtRelative(d.next_retry_at, now)}重试`;
+  }
+  if (d.ui_status === 'running' && d.last_heartbeat_at) {
+    return `最近 patrol 心跳：${fmtRelative(d.last_heartbeat_at, now)}`;
+  }
+  return undefined;
 }
 
 export default function DeviceMatrixCard({
@@ -212,7 +235,7 @@ function DeviceTable({
                 <td className="px-2 py-2">
                   <span
                     className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${cfg.cls}`}
-                    title={d.status_reason || undefined}
+                    title={statusTooltip(d, now)}
                   >
                     <Icon
                       className={`h-3 w-3 ${

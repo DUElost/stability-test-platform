@@ -10,6 +10,7 @@ Dispatches a Plan execution:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -183,135 +184,22 @@ async def dispatch_plan(
     root_plan_run_id: int | None = None,
     chain_index: int | None = None,
 ) -> PlanRun:
-    plan = await db.get(Plan, plan_id)
-    if plan is None:
-        raise PlanDispatchError(f"Plan {plan_id} not found")
+    """Async wrapper — delegates to the sync gate-backed dispatch path (ADR-0021)."""
+    from backend.core.database import SessionLocal
+    from backend.services.plan_dispatcher_sync import dispatch_plan_sync
 
-    steps_result = await db.execute(
-        select(PlanStep)
-        .where(PlanStep.plan_id == plan_id)
-        .order_by(PlanStep.stage, PlanStep.sort_order)
-    )
-    steps = steps_result.scalars().all()
-    if not steps:
-        raise PlanDispatchError(f"Plan {plan_id} has no steps")
-
-    metadata = await _fetch_script_metadata(db, steps)
-    missing = _check_script_keys_complete(steps, metadata)
-    if missing:
-        # ADR-0023 C1:async dispatcher 为一次性事务(SCHEDULE / async CHAIN),
-        # 失败时尚未创建 PlanRun 行,直接 raise 由上游 except 捕获并 log。
-        raise PlanDispatchError(
-            f"Plan {plan_id}: scripts unavailable at dispatch: {', '.join(missing)}",
-            missing_scripts=missing,
-        )
-
-    # #8: device 可用性校验(同 sync prepare 入口),SCHEDULE/CHAIN 同样需要早拒。
-    await _validate_dispatch_devices(db, device_ids)
-
-    defaults = _script_defaults(metadata)
-    lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
-
-    # Validate generated lifecycle
-    is_valid, errors = validate_pipeline_def({"lifecycle": lifecycle})
-    if not is_valid:
-        raise PlanDispatchError(
-            f"Plan {plan_id} generated invalid lifecycle: {'; '.join(errors)}"
-        )
-
-    # Device → host mapping
-    device_rows = (await db.execute(
-        select(Device.id, Device.host_id).where(Device.id.in_(device_ids))
-    )).all()
-    device_host_map = {row.id: row.host_id for row in device_rows}
-
-    orphan_devices = [did for did in device_ids if not device_host_map.get(did)]
-    if orphan_devices:
-        # Why: 校验已覆盖 no_host;若仍走到这里说明并发 race。
-        logger.warning(
-            "plan_dispatch_devices_without_host: device_ids=%s", orphan_devices
-        )
-
-    # ── ResourcePool: allocate WiFi per device ──
-    # ADR-0020 §"特殊注入：wifi 资源池"：仅当 lifecycle 中存在 connect_wifi step
-    # 时才申请池配额，避免无谓的锁竞争。
-    wifi_allocations: dict[int, dict] = {}
-    if any(
-        "connect_wifi" in (step.get("action") or "")
-        for _, step in _iter_lifecycle_steps({"lifecycle": lifecycle})
-    ):
-        try:
-            assignments = await allocate_devices(db, device_ids, resource_type="wifi")
-            for device_id, (_pool, alloc_params) in assignments.items():
-                wifi_allocations[device_id] = alloc_params
-            logger.info(
-                "plan_dispatch_wifi_allocated: devices=%d", len(device_ids)
+    def _do_dispatch() -> PlanRun:
+        with SessionLocal() as sdb:
+            return dispatch_plan_sync(
+                plan_id=plan_id,
+                device_ids=device_ids,
+                triggered_by=triggered_by,
+                db=sdb,
+                run_type=run_type,
+                run_context=run_context,
+                parent_plan_run_id=parent_plan_run_id,
+                root_plan_run_id=root_plan_run_id,
+                chain_index=chain_index,
             )
-        except AllocationError as exc:
-            logger.warning("plan_dispatch_wifi_allocation_skipped: %s", exc)
 
-    effective_threshold = plan.failure_threshold
-    plan_snapshot = _build_plan_snapshot(plan, steps, metadata, effective_threshold)
-
-    pr = PlanRun(
-        plan_id=plan.id,
-        status="RUNNING",
-        failure_threshold=effective_threshold,
-        plan_snapshot=plan_snapshot,
-        run_type=run_type,
-        run_context=run_context,
-        triggered_by=triggered_by,
-        parent_plan_run_id=parent_plan_run_id,
-        root_plan_run_id=root_plan_run_id,
-        chain_index=chain_index or 0,
-        started_at=datetime.now(timezone.utc),
-    )
-    db.add(pr)
-    await db.flush()
-
-    now = datetime.now(timezone.utc)
-    job_device_pairs: dict[int, int] = {}
-
-    for device_id in device_ids:
-        wifi_params = wifi_allocations.get(device_id)
-        resolved_pipeline = {"lifecycle": deepcopy(lifecycle)}
-        if wifi_params:
-            resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
-
-        job = JobInstance(
-            plan_run_id=pr.id,
-            plan_id=plan.id,
-            device_id=device_id,
-            host_id=device_host_map.get(device_id),
-            status=JobStatus.PENDING.value,
-            pipeline_def=resolved_pipeline,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(job)
-        await db.flush()
-        job_device_pairs[job.id] = device_id
-
-    # Persist ResourceAllocation records
-    if wifi_allocations:
-        assignment_refs = {
-            did: (
-                (await db.execute(
-                    select(ResourcePool).where(
-                        ResourcePool.id == wifi_allocations[did]["pool_id"]
-                    )
-                )).scalar(),
-                wifi_allocations[did],
-            )
-            for did in wifi_allocations
-        }
-        await create_allocations(db, assignment_refs, job_device_pairs)
-
-    await db.commit()
-    await db.refresh(pr)
-
-    logger.info(
-        "dispatched_plan plan=%d plan_run=%d devices=%d jobs=%d type=%s",
-        plan_id, pr.id, len(device_ids), len(device_ids), run_type,
-    )
-    return pr
+    return await asyncio.to_thread(_do_dispatch)

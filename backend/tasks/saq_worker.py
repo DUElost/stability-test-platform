@@ -34,6 +34,7 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 
 SAQ_CONCURRENCY = int(os.getenv("SAQ_CONCURRENCY", "10"))
 SAQ_QUEUE_NAME = os.getenv("SAQ_QUEUE_NAME", "stp")
+SAQ_ENQUEUE_WAIT_TIMEOUT = float(os.getenv("SAQ_ENQUEUE_WAIT_TIMEOUT", "5.0"))
 
 
 def get_queue() -> Queue:
@@ -151,12 +152,11 @@ def enqueue_sync(
     When ``required=True`` (user-facing dispatch), raises
     :class:`EnqueueSyncError` so the caller can fail fast (HTTP 503).
 
-    Uses ``call_soon_threadsafe`` to schedule an async enqueue on the main
-    event loop.  Does NOT block for the result.
-
-    Note: ``run_coroutine_threadsafe`` + ``future.result()`` deadlocks when
-    the SAQ Worker is running on the same event loop (Worker holds internal
-    state that prevents ``Queue.enqueue`` from completing synchronously).
+    When ``required=False``, uses ``call_soon_threadsafe`` (fire-and-forget).
+    When ``required=True`` and called from a worker thread, blocks up to
+    ``SAQ_ENQUEUE_WAIT_TIMEOUT`` via ``run_coroutine_threadsafe`` so callers
+    can fail fast on Redis errors.  Calling ``required=True`` from the main
+    event loop raises :class:`EnqueueSyncError` (would deadlock).
     """
     if _queue is None or _loop is None:
         msg = f"SAQ not running — cannot enqueue {task_name}"
@@ -174,14 +174,38 @@ def enqueue_sync(
     )
 
     async def _do_enqueue():
-        try:
-            await _queue.enqueue(job)
-            logger.info("enqueue_async_ok task=%s key=%s", task_name, key)
-        except Exception:
-            logger.exception("enqueue_async_failed task=%s", task_name)
+        await _queue.enqueue(job)
+        logger.info("enqueue_async_ok task=%s key=%s", task_name, key)
 
     try:
-        _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue())
+        on_main_loop = False
+        try:
+            on_main_loop = asyncio.get_running_loop() is _loop
+        except RuntimeError:
+            pass
+
+        if required and not on_main_loop:
+            future = asyncio.run_coroutine_threadsafe(_do_enqueue(), _loop)
+            try:
+                future.result(timeout=SAQ_ENQUEUE_WAIT_TIMEOUT)
+            except Exception as exc:
+                msg = f"enqueue failed for {task_name}: {exc}"
+                logger.exception("enqueue_async_failed task=%s", task_name)
+                raise EnqueueSyncError(msg) from exc
+            return True
+
+        if required and on_main_loop:
+            raise EnqueueSyncError(
+                f"cannot synchronously enqueue {task_name} from the event loop"
+            )
+
+        async def _do_enqueue_best_effort():
+            try:
+                await _do_enqueue()
+            except Exception:
+                logger.exception("enqueue_async_failed task=%s", task_name)
+
+        _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue_best_effort())
         return True
     except RuntimeError:
         msg = f"event loop closed — cannot enqueue {task_name}"

@@ -24,6 +24,7 @@ from backend.models.plan_run import PlanRun
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     dispatch_plan_sync,
+    initial_dispatch_state,
     prepare_plan_run,
     preview_plan_dispatch_sync,
 )
@@ -522,15 +523,6 @@ def run_plan(
       3. Return the PlanRun row immediately.  The frontend can navigate to
          the PlanRun detail page and watch ``run_context.precheck`` evolve.
     """
-    initial_dispatch_state = {
-        "enqueue_key": None,
-        "requeue_attempts": 0,
-        "status": "queued",
-        "enqueued_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
-        "started_at": None,
-        "completed_at": None,
-        "last_error": None,
-    }
     try:
         pr = prepare_plan_run(
             plan_id=plan_id,
@@ -538,7 +530,7 @@ def run_plan(
             triggered_by=current_user.username if current_user else "api",
             db=db,
             run_type="MANUAL",
-            run_context={"dispatch_state": initial_dispatch_state},
+            run_context={"dispatch_state": initial_dispatch_state()},
         )
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=e.detail())
@@ -550,7 +542,7 @@ def run_plan(
             "precheck_and_dispatch_task",
             key=f"precheck:{pr.id}",
             timeout=600,
-            retries=0,
+            retries=1,
             required=True,
             plan_run_id=pr.id,
         )

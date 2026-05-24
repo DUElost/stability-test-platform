@@ -1,15 +1,16 @@
-import { Check, Loader2, PauseCircle, ChevronRight } from 'lucide-react';
+import { Check, Loader2, PauseCircle, ChevronRight, AlertTriangle } from 'lucide-react';
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import type { ChainNode, PlanChain } from '@/utils/api/types';
+import type { ChainDispatchFailed, ChainNode, PlanChain } from '@/utils/api/types';
 
 interface Props {
   chain: PlanChain | undefined;
   isLoading?: boolean;
+  chainDispatchFailed?: ChainDispatchFailed | null;
   onNavigateRun?: (planRunId: number) => void;
 }
 
@@ -121,6 +122,7 @@ function NodeChip({
 export default function PlanChainBreadcrumb({
   chain,
   isLoading = false,
+  chainDispatchFailed = null,
   onNavigateRun,
 }: Props) {
   if (isLoading) {
@@ -137,6 +139,26 @@ export default function PlanChainBreadcrumb({
     );
   }
   if (!chain || !chain.nodes.length) {
+    if (chainDispatchFailed) {
+      return (
+        <div
+          data-testid="chain-dispatch-failed-banner"
+          className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-800"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+          <div className="min-w-0 space-y-1">
+            <p className="font-semibold">下游 Plan 派发失败</p>
+            <p className="break-words text-red-700/90">
+              本 PlanRun 已成功完成，但链上下一段 Plan 未能启动。
+              {chainDispatchFailed.error ? ` 原因：${chainDispatchFailed.error}` : ''}
+            </p>
+            <p className="text-[11px] text-red-600/80">
+              请检查设备可用性与脚本预检后，从 Plan 列表手动触发下游 Plan。
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div
         data-testid="plan-chain-empty"
@@ -151,16 +173,36 @@ export default function PlanChainBreadcrumb({
   }
 
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap rounded-xl border bg-white px-3 py-2 shadow-sm">
-      <span className="mr-1 shrink-0 text-[10px] font-bold uppercase tracking-wider text-gray-400">
-        Plan 链
-      </span>
-      {chain.nodes.map((node, idx) => (
-        <span key={`${node.plan_id}-${node.chain_index}`} className="flex items-center gap-1.5">
-          {idx > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-gray-300" />}
-          <NodeChip node={node} onNavigate={onNavigateRun} />
+    <div className="space-y-2">
+      {chainDispatchFailed && (
+        <div
+          data-testid="chain-dispatch-failed-banner"
+          className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-800"
+        >
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+          <div className="min-w-0 space-y-1">
+            <p className="font-semibold">下游 Plan 派发失败</p>
+            <p className="break-words text-red-700/90">
+              本 PlanRun 已成功完成，但链上下一段 Plan 未能启动。
+              {chainDispatchFailed.error ? ` 原因：${chainDispatchFailed.error}` : ''}
+            </p>
+            <p className="text-[11px] text-red-600/80">
+              请检查设备可用性与脚本预检后，从 Plan 列表手动触发下游 Plan。
+            </p>
+          </div>
+        </div>
+      )}
+      <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap rounded-xl border bg-white px-3 py-2 shadow-sm">
+        <span className="mr-1 shrink-0 text-[10px] font-bold uppercase tracking-wider text-gray-400">
+          Plan 链
         </span>
-      ))}
+        {chain.nodes.map((node, idx) => (
+          <span key={`${node.plan_id}-${node.chain_index}`} className="flex items-center gap-1.5">
+            {idx > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-gray-300" />}
+            <NodeChip node={node} onNavigate={onNavigateRun} />
+          </span>
+        ))}
+      </div>
     </div>
   );
 }

@@ -663,7 +663,7 @@ export interface PlanRun {
   triggered_by?: string | null;
   started_at: string;
   ended_at?: string | null;
-  result_summary?: Record<string, unknown> | null;
+  result_summary?: PlanRunResultSummary | null;
   // ADR-0021 dispatch gate progress (PrecheckState typed below)
   run_context?: PlanRunContext | null;
   plan_snapshot?: PlanSnapshot | null;
@@ -757,6 +757,20 @@ export interface PlanRunContext {
 
 // ─── ADR-0021/0022 C5a₂ aggregation endpoints (PlanRunDetailPage) ────────────
 
+export interface ChainDispatchFailed {
+  at: string;
+  error: string;
+}
+
+export interface PlanRunResultSummary {
+  total?: number;
+  completed?: number;
+  failed?: number;
+  pass_rate?: number;
+  chain_dispatch_failed?: ChainDispatchFailed;
+  [key: string]: unknown;
+}
+
 export interface ChainNode {
   plan_id: number;
   plan_name?: string | null;
@@ -848,7 +862,7 @@ export interface PlanRunEventsPayload {
   };
 }
 
-export type DeviceUiStatus = 'completed' | 'running' | 'failed' | 'risk' | 'backoff' | 'pending';
+export type DeviceUiStatus = 'completed' | 'running' | 'failed' | 'unknown' | 'risk' | 'backoff' | 'pending';
 
 export interface DeviceMatrixItem {
   device_id: number;
@@ -858,7 +872,7 @@ export interface DeviceMatrixItem {
   job_id: number;
   job_status: JobStatus;
   ui_status: DeviceUiStatus;
-  current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending' | 'failed';
+  current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending' | 'failed' | 'unknown';
   current_step?: string | null;
   patrol_cycle_count: number;
   patrol_success_cycle_count: number;

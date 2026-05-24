@@ -310,6 +310,87 @@ class TestPrepareAndCompleteIntegration:
         assert jobs[0].device_id == dev.id
         assert pr.status == "RUNNING"
 
+    def test_complete_fails_when_device_loses_host_at_complete(
+        self, db_session, dispatch_fixture, monkeypatch,
+    ):
+        """Race: device host_id cleared after prepare → complete must FAILED, not warn-only."""
+        from backend.models.job import JobInstance
+        from unittest.mock import patch
+
+        dev = dispatch_fixture["device"]
+        pr = prepare_plan_run(
+            plan_id=dispatch_fixture["plan"].id,
+            device_ids=[dev.id],
+            triggered_by="pytest",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        # Simulate TOCTOU race: validate passed at prepare, host_id cleared before host map read.
+        dev.host_id = None
+        db_session.commit()
+        with patch(
+            "backend.services.plan_dispatcher_sync._validate_dispatch_devices_sync",
+            lambda _db, _ids: None,
+        ):
+            complete_plan_run_dispatch(pr.id, db=db_session)
+        db_session.refresh(pr)
+
+        assert pr.status == "FAILED"
+        assert pr.result_summary["dispatch_failed"] is True
+        assert pr.result_summary["reason"] == "devices_without_host"
+        assert dev.id in pr.result_summary["orphan_device_ids"]
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0
+
+    def test_complete_fails_when_wifi_pool_unavailable(
+        self, db_session, dispatch_fixture
+    ):
+        """connect_wifi plan must fail dispatch when no WiFi pool exists."""
+        from backend.models.job import JobInstance
+        from backend.models.plan_run import PlanRun
+
+        wifi_script = Script(
+            name="connect_wifi",
+            script_type="shell",
+            version="1.0.0",
+            nfs_path="/s/connect_wifi.sh",
+            content_sha256="wifi",
+            default_params={"ssid": "", "password": ""},
+        )
+        db_session.add(wifi_script)
+        db_session.add(
+            PlanStep(
+                plan_id=dispatch_fixture["plan"].id,
+                step_key="wifi_connect",
+                script_name="connect_wifi",
+                script_version="1.0.0",
+                stage="init",
+                sort_order=1,
+                timeout_seconds=60,
+                retry=0,
+            )
+        )
+        db_session.commit()
+
+        dev = dispatch_fixture["device"]
+        pr = prepare_plan_run(
+            plan_id=dispatch_fixture["plan"].id,
+            device_ids=[dev.id],
+            triggered_by="pytest",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        complete_plan_run_dispatch(pr.id, db=db_session)
+        db_session.refresh(pr)
+
+        assert pr.status == "FAILED"
+        assert pr.result_summary["dispatch_failed"] is True
+        assert pr.result_summary["reason"] == "wifi_allocation_failed"
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0
+
 
 # ── PlanDispatchError.detail 结构 ──────────────────────────────────────
 

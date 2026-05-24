@@ -76,4 +76,21 @@ describe('PlanChainBreadcrumb', () => {
     rerender(<PlanChainBreadcrumb chain={{ plan_run_id: 1, root_plan_run_id: 1, nodes: [] }} />);
     expect(screen.getByTestId('plan-chain-empty')).toBeInTheDocument();
   });
+
+  it('shows chain dispatch failure banner with error detail', () => {
+    render(
+      <PlanChainBreadcrumb
+        chain={fixture}
+        chainDispatchFailed={{
+          at: '2026-05-08T13:00:00Z',
+          error: 'devices unavailable',
+        }}
+      />,
+    );
+    const banner = screen.getByTestId('chain-dispatch-failed-banner');
+    expect(banner).toHaveTextContent('下游 Plan 派发失败');
+    expect(banner).toHaveTextContent('devices unavailable');
+    expect(banner).toHaveTextContent('手动触发');
+    expect(banner).not.toHaveTextContent('自动重试');
+  });
 });

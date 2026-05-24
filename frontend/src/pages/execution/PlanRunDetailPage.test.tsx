@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getEvents: vi.fn(),
   getDevices: vi.fn(),
   getWatcherSummary: vi.fn(),
+  getChain: vi.fn(),
   abort: vi.fn(),
   manualRetryJob: vi.fn(),
   manualExitJob: vi.fn(),
@@ -34,6 +35,7 @@ vi.mock('@/utils/api', () => ({
       getEvents: mocks.getEvents,
       getDevices: mocks.getDevices,
       getWatcherSummary: mocks.getWatcherSummary,
+      getChain: mocks.getChain,
       abort: mocks.abort,
       manualRetryJob: mocks.manualRetryJob,
       manualExitJob: mocks.manualExitJob,
@@ -247,6 +249,11 @@ beforeEach(() => {
       },
     ],
   });
+  mocks.getChain.mockResolvedValue({
+    plan_run_id: 12,
+    root_plan_run_id: 12,
+    nodes: [],
+  });
   mocks.getWatcherSummary.mockResolvedValue({
     plan_run_id: 12,
     window_minutes: 60,
@@ -389,6 +396,20 @@ describe('PlanRunDetailPage', () => {
     await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
     expect(mocks.getTimeline).toHaveBeenCalled();
     expect(mocks.getDevices).toHaveBeenCalled();
+
+    // Reset and push PRECHECK_UPDATE — should refetch run + timeline + events + devices.
+    mocks.getRun.mockClear();
+    mocks.getTimeline.mockClear();
+    mocks.getEvents.mockClear();
+    mocks.getDevices.mockClear();
+    mocks.socketCallback.current!({
+      type: 'PRECHECK_UPDATE',
+      payload: { phase: 'syncing', dispatch_status: 'running' },
+    });
+    await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
+    expect(mocks.getTimeline).toHaveBeenCalled();
+    expect(mocks.getEvents).toHaveBeenCalled();
+    expect(mocks.getDevices).toHaveBeenCalled();
   });
 
   it('hides the dispatch gate card when precheck is absent', async () => {
@@ -499,5 +520,101 @@ describe('PlanRunDetailPage', () => {
     expect(screen.getByTestId('precheck-row')).toBeInTheDocument();
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('同步中');
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-101');
+  });
+
+  it('shows chain dispatch failure banner when result_summary records failure', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'SUCCESS',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T13:00:00Z',
+      result_summary: {
+        total: 2,
+        completed: 2,
+        pass_rate: 1,
+        chain_dispatch_failed: {
+          at: '2026-05-08T13:00:01Z',
+          error: 'Plan 8: scripts unavailable at dispatch',
+        },
+      },
+      run_context: null,
+    });
+    mocks.getChain.mockResolvedValueOnce({
+      plan_run_id: 12,
+      root_plan_run_id: 12,
+      nodes: [
+        {
+          plan_id: 7,
+          plan_name: '24h 烧机',
+          plan_run_id: 12,
+          status: 'SUCCESS',
+          chain_index: 0,
+          failure_threshold: 0.05,
+          pass_rate: 1,
+          is_current: true,
+          is_blocked: false,
+        },
+        {
+          plan_id: 11,
+          plan_name: '后置回收',
+          plan_run_id: null,
+          status: 'pending',
+          chain_index: 1,
+          failure_threshold: 0.1,
+          is_current: false,
+          is_blocked: true,
+          block_reason: '下游 Plan 派发失败: Plan 8: scripts unavailable at dispatch',
+        },
+      ],
+    });
+
+    renderPage();
+
+    const banner = await screen.findByTestId('chain-dispatch-failed-banner');
+    expect(banner).toHaveTextContent('下游 Plan 派发失败');
+    expect(banner).toHaveTextContent('scripts unavailable');
+    expect(screen.getByTestId('chain-node-11')).toHaveTextContent('暂不触发');
+  });
+
+  it('shows stuck-jobs banner when RUNNING job patrol heartbeat is stale', async () => {
+    mocks.getDevices.mockResolvedValueOnce({
+      plan_run_id: 12,
+      total: 1,
+      by_status: { all: 1, running: 1 },
+      by_host: { 'host-101': 1 },
+      devices: [
+        {
+          device_id: 1,
+          device_serial: 'DEV-STALE',
+          device_model: 'Pixel 8',
+          host_id: 'host-101',
+          job_id: 3001,
+          job_status: 'RUNNING',
+          ui_status: 'running',
+          current_stage: 'patrol',
+          current_step: 'monkey_check',
+          patrol_cycle_count: 12,
+          patrol_success_cycle_count: 12,
+          patrol_failed_cycle_count: 0,
+          current_failure_streak: 0,
+          next_retry_at: null,
+          manual_action: null,
+          log_signal_count: 0,
+          last_heartbeat_at: new Date(Date.now() - 300_000).toISOString(),
+          started_at: new Date(Date.now() - 600_000).toISOString(),
+          ended_at: null,
+        },
+      ],
+    });
+
+    renderPage();
+
+    const banner = await screen.findByTestId('stuck-jobs-banner');
+    expect(banner).toHaveTextContent('1 个 Job 心跳超时');
+    expect(banner).toHaveTextContent('DEV-STALE');
   });
 });

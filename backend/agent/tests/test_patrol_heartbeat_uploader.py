@@ -159,10 +159,40 @@ class TestPatrolHeartbeatSend:
         assert body["manual_action_observed"] == "RETRY_NOW"
         assert result["manual_action"] == "EXIT_REQUESTED"
 
-    def test_409_returns_none(self, uploader):
-        """Lease invalid: best-effort returns None so patrol loop continues."""
+    def test_409_job_not_running_returns_sentinel_and_invokes_callback(self, uploader):
+        """JOB_NOT_RUNNING → sentinel dict + optional callback; patrol loop can stop."""
+        callback = MagicMock()
+        uploader._on_job_not_running = callback
+        with patch("backend.agent.patrol_heartbeat_uploader.requests.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=409,
+                text='{"detail":{"code":"JOB_NOT_RUNNING"}}',
+                json=lambda: {"detail": {"code": "JOB_NOT_RUNNING"}},
+            )
+            result = uploader.send(
+                job_id=42, fencing_token="tok", cycle_index=1,
+            )
+        assert result == {"_job_not_running": True}
+        callback.assert_called_once_with(42)
+
+    def test_409_other_returns_none(self, uploader):
+        """Non-JOB_NOT_RUNNING 409 (lease invalid) still returns None."""
+        with patch("backend.agent.patrol_heartbeat_uploader.requests.post") as mock_post:
+            mock_post.return_value = MagicMock(
+                status_code=409,
+                text="invalid lease",
+                json=lambda: {"detail": "invalid or expired fencing_token"},
+            )
+            result = uploader.send(
+                job_id=42, fencing_token="tok", cycle_index=1,
+            )
+        assert result is None
+
+    def test_409_returns_none_legacy(self, uploader):
+        """Lease invalid without parseable code: best-effort returns None."""
         with patch("backend.agent.patrol_heartbeat_uploader.requests.post") as mock_post:
             mock_post.return_value = MagicMock(status_code=409, text="invalid lease")
+            mock_post.return_value.json.side_effect = ValueError("bad json")
             result = uploader.send(
                 job_id=42, fencing_token="tok", cycle_index=1,
             )

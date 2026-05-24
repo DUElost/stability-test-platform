@@ -161,6 +161,7 @@ function _getDashSocket(): Socket {
     SOCKET_EVENT_NAMES.stepUpdate,
     SOCKET_EVENT_NAMES.jobStatus,
     SOCKET_EVENT_NAMES.planRunStatus,
+    SOCKET_EVENT_NAMES.precheckUpdate,
     SOCKET_EVENT_NAMES.runUpdate,
     SOCKET_EVENT_NAMES.taskUpdate,
     SOCKET_EVENT_NAMES.reportReady,
@@ -271,7 +272,12 @@ function parseWsUrl(url: string): SubscriptionConfig {
       room: `plan_run:${planRunMatch[1]}`,
       // ADR-0021 C5c: include watcher_signal so the frontend can invalidate
       // the WatcherSummary query as soon as the agent posts a log_signal.
-      events: [SOCKET_EVENT_NAMES.jobStatus, SOCKET_EVENT_NAMES.planRunStatus, SOCKET_EVENT_NAMES.watcherSignal],
+      events: [
+        SOCKET_EVENT_NAMES.jobStatus,
+        SOCKET_EVENT_NAMES.planRunStatus,
+        SOCKET_EVENT_NAMES.precheckUpdate,
+        SOCKET_EVENT_NAMES.watcherSignal,
+      ],
     };
   }
 

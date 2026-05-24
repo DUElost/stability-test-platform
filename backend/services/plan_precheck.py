@@ -166,6 +166,35 @@ def _expected_scripts_for_run(plan_run: PlanRun, db: Session) -> list[dict]:
     return matched
 
 
+def _emit_dispatch_gate_invalidation(
+    plan_run_id: int,
+    *,
+    phase: str | None = None,
+    dispatch_status: str | None = None,
+) -> None:
+    """Push a coarse invalidation hint to the plan_run SocketIO room."""
+    try:
+        from backend.realtime.socketio_server import schedule_emit
+    except Exception:
+        return
+    try:
+        schedule_emit(
+            "precheck_update",
+            {
+                "type": "PRECHECK_UPDATE",
+                "payload": {
+                    "phase": phase,
+                    "dispatch_status": dispatch_status,
+                },
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            namespace="/dashboard",
+            room=f"plan_run:{plan_run_id}",
+        )
+    except Exception:
+        logger.debug("emit_dispatch_gate_invalidation_failed", exc_info=True)
+
+
 def _persist_precheck(plan_run_id: int, precheck: dict, db: Session) -> None:
     pr = db.get(PlanRun, plan_run_id)
     if pr is None:
@@ -175,6 +204,7 @@ def _persist_precheck(plan_run_id: int, precheck: dict, db: Session) -> None:
     pr.run_context = run_ctx
     flag_modified(pr, "run_context")
     db.commit()
+    _emit_dispatch_gate_invalidation(plan_run_id, phase=precheck.get("phase"))
 
 
 async def _verify_one_host(
@@ -249,6 +279,15 @@ def _update_dispatch_state(pr: PlanRun, db: Session, **patch: object) -> None:
     pr.run_context = run_ctx
     flag_modified(pr, "run_context")
     db.commit()
+    dispatch_status = state.get("status")
+    if isinstance(dispatch_status, str):
+        precheck = run_ctx.get("precheck") or {}
+        phase = precheck.get("phase") if isinstance(precheck, dict) else None
+        _emit_dispatch_gate_invalidation(
+            pr.id,
+            phase=phase if isinstance(phase, str) else None,
+            dispatch_status=dispatch_status,
+        )
 
 
 # ── 轻量级定向脚本同步（仅推送 mismatched 文件，无需重启 Agent）──
@@ -684,6 +723,11 @@ def _mark_precheck_failed(
     run_ctx["dispatch_state"] = dispatch_state
 
     db.commit()
+    _emit_dispatch_gate_invalidation(
+        plan_run_id,
+        phase="failed",
+        dispatch_status="failed",
+    )
     logger.info("precheck_failed plan_run=%d error=%s", plan_run_id, error)
 
 

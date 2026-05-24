@@ -512,7 +512,8 @@ def manual_exit_job(
 #     4) PlanRun 自身 trigger 事件 + patrol heartbeat 周期摘要
 #   - devices 端点的 ui_status 派生规则:
 #       COMPLETED                            → completed
-#       FAILED / ABORTED / UNKNOWN           → failed
+#       FAILED / ABORTED                     → failed
+#       UNKNOWN                              → unknown (grace / recovery window)
 #       PENDING                              → pending
 #       RUNNING + manual_action=EXIT_REQ.    → backoff
 #       RUNNING + next_retry_at > now        → backoff
@@ -531,7 +532,7 @@ _MAX_WATCHER_WINDOW_MIN       = 1440  # 1 天
 _MAX_EVENTS_LIMIT             = 500
 _DEFAULT_EVENTS_LIMIT         = 100
 
-_FAILED_JOB_STATUSES   = {JobStatus.FAILED.value, JobStatus.ABORTED.value, JobStatus.UNKNOWN.value}
+_FAILED_JOB_STATUSES   = {JobStatus.FAILED.value, JobStatus.ABORTED.value}
 _TERMINAL_PR_STATUSES  = {
     PlanRunStatus.SUCCESS.value,
     PlanRunStatus.PARTIAL_SUCCESS.value,
@@ -664,7 +665,15 @@ def get_plan_run_chain(
                 blocked = False
                 reason = None
                 summary = tail.result_summary or {}
-                if tail.status == PlanRunStatus.RUNNING.value:
+                chain_fail = (
+                    summary.get("chain_dispatch_failed")
+                    if isinstance(summary, dict)
+                    else None
+                )
+                if isinstance(chain_fail, dict) and chain_fail.get("error"):
+                    blocked = True
+                    reason = f"下游 Plan 派发失败: {chain_fail['error']}"
+                elif tail.status == PlanRunStatus.RUNNING.value:
                     blocked = True
                     reason = "parent PlanRun 仍在运行,需等待终态"
                 elif tail.status not in (PlanRunStatus.SUCCESS.value, PlanRunStatus.PARTIAL_SUCCESS.value):
@@ -679,6 +688,9 @@ def get_plan_run_chain(
                         )
                     else:
                         reason = f"parent status={tail.status}; chain 不触发"
+                elif tail.status in (PlanRunStatus.SUCCESS.value, PlanRunStatus.PARTIAL_SUCCESS.value):
+                    blocked = True
+                    reason = "等待下游 Plan 自动派发"
 
                 nodes.append(ChainNodeOut(
                     plan_id=next_plan.id,
@@ -1410,6 +1422,8 @@ def _ui_status_for_job(j: JobInstance, now: datetime) -> str:
     s = j.status
     if s == JobStatus.COMPLETED.value:
         return "completed"
+    if s == JobStatus.UNKNOWN.value:
+        return "unknown"
     if s in _FAILED_JOB_STATUSES:
         return "failed"
     if s == JobStatus.PENDING.value:
@@ -1429,6 +1443,8 @@ def _current_stage_for_job(j: JobInstance) -> str:
     s = j.status
     if s == JobStatus.COMPLETED.value:
         return "done"
+    if s == JobStatus.UNKNOWN.value:
+        return "unknown"
     if s in _FAILED_JOB_STATUSES:
         return "failed"
     if s == JobStatus.PENDING.value:

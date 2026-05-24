@@ -1608,6 +1608,20 @@ class PipelineEngine:
 
                 if isinstance(ack, dict):
 
+                    if ack.get("_job_not_running"):
+
+                        logger.warning(
+
+                            "[Lifecycle] run=%d — patrol heartbeat rejected JOB_NOT_RUNNING, stopping patrol",
+
+                            self._run_id,
+
+                        )
+
+                        self._canceled = True
+
+                        return "abort", "job_not_running"
+
                     last_observed_action = ack.get("manual_action") or None
 
 

@@ -43,8 +43,10 @@ from backend.services.state_machine import JobStateMachine, InvalidTransitionErr
 
 logger = logging.getLogger(__name__)
 
-DISPATCHED_TIMEOUT_SECONDS = int(os.getenv("RUN_DISPATCHED_TIMEOUT_SECONDS", "120"))
-RUNNING_HEARTBEAT_TIMEOUT_SECONDS = int(os.getenv("RUN_HEARTBEAT_TIMEOUT_SECONDS", "900"))
+from backend.core.job_timeout_config import (
+    DISPATCHED_TIMEOUT_SECONDS,
+    RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
+)
 RECYCLER_BATCH_SIZE = int(os.getenv("RECYCLER_BATCH_SIZE", "200"))
 ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
 
@@ -265,6 +267,15 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
         from backend.services.aggregator_sync import plan_aggregator_sync
         plan_aggregator_sync(job, db)
     except Exception as e:
+        from backend.core.metrics import record_plan_run_aggregation_failed
+        record_plan_run_aggregation_failed()
+        record_audit(
+            db,
+            action="plan_run_aggregation_failed",
+            resource_type="plan_run",
+            resource_id=job.plan_run_id,
+            details={"job_id": job.id, "error": str(e)[:500]},
+        )
         logger.warning("recycler_aggregation_failed job=%d: %s", job.id, e)
 
     # Check if PlanRun became terminal after aggregation (B3)

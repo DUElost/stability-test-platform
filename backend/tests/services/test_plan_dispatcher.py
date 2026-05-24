@@ -1,5 +1,8 @@
 """Plan dispatcher unit tests — ADR-0020."""
 
+import asyncio
+from unittest.mock import patch
+
 import pytest
 
 from backend.models.enums import HostStatus
@@ -130,16 +133,42 @@ def _plan_fixture(db_session):
     return plan, device, host
 
 
+def _mock_gate_rpc(host_id: str, expected_sha: str = "abc"):
+    async def _fake_call(host_id, event, data, *, timeout=10.0):
+        return {
+            "host_id": host_id,
+            "agent_version": "test",
+            "results": [
+                {
+                    "name": "check_device",
+                    "version": "1.0.0",
+                    "expected_sha": expected_sha,
+                    "actual_sha": expected_sha,
+                    "exists": True,
+                    "ok": True,
+                    "error": None,
+                }
+            ],
+            "checked_at": "2026-05-07T10:00:00Z",
+        }
+
+    return _fake_call
+
+
 class TestDispatchPlan:
     def test_dispatch_creates_plan_run_and_jobs(self, db_session, _plan_fixture):
         plan, device, host = _plan_fixture
 
-        pr = dispatch_plan_sync(
-            plan_id=plan.id,
-            device_ids=[device.id],
-            triggered_by="test",
-            db=db_session,
-        )
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_mock_gate_rpc("h-disp"),
+        ):
+            pr = dispatch_plan_sync(
+                plan_id=plan.id,
+                device_ids=[device.id],
+                triggered_by="test",
+                db=db_session,
+            )
 
         assert pr.id is not None
         assert pr.plan_id == plan.id
@@ -155,6 +184,8 @@ class TestDispatchPlan:
         ]
         assert pr.plan_snapshot["steps"][0]["default_params"] == {"timeout": 30}
         assert "lifecycle" not in pr.plan_snapshot
+        assert pr.run_context["precheck"]["phase"] == "ready"
+        assert pr.run_context["dispatch_state"]["status"] == "completed"
 
         from backend.models.job import JobInstance
         jobs = db_session.query(JobInstance).filter(

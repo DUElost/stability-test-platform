@@ -20,7 +20,12 @@ from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
 from backend.core.database import get_async_db
-from backend.core.metrics import record_log_signal_ingested, record_patrol_heartbeat
+from backend.core.metrics import (
+    claim_lease_failed_total,
+    post_completion_enqueue_failed_total,
+    record_log_signal_ingested,
+    record_patrol_heartbeat,
+)
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
@@ -317,6 +322,7 @@ async def _claim_jobs_for_host(
                     job_id=job.id,
                 )
                 if lease is None:
+                    claim_lease_failed_total.inc()
                     raise _LockAcquireFailed()
                 fencing_token_map[job.id] = lease.fencing_token
 
@@ -858,7 +864,8 @@ async def complete_job(
                 )
             )
         except Exception as e:
-            logger.warning("post_completion enqueue failed for job %d: %s", job_id, e)
+            post_completion_enqueue_failed_total.inc()
+            logger.error("post_completion enqueue failed for job %d: %s", job_id, e)
 
     return ok({"job_id": job_id, "status": job.status})
 

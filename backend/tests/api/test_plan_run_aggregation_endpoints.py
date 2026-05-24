@@ -843,6 +843,31 @@ class TestDevicesEndpoint:
         completed = by_serial["dev-aa-01"]
         assert completed["status_reason"] is None
 
+    def test_devices_unknown_status_distinct_from_failed(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """UNKNOWN jobs map to ui_status=unknown, not failed."""
+        from backend.models.enums import JobStatus
+
+        j3 = chain_setup["job_failed"]
+        j3.status = JobStatus.UNKNOWN.value
+        j3.status_reason = "lease_expired"
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        by_serial = {d["device_serial"]: d for d in data["devices"]}
+        unknown = by_serial["dev-bb-01"]
+        assert unknown["ui_status"] == "unknown"
+        assert unknown["current_stage"] == "unknown"
+        assert unknown["status_reason"] == "lease_expired"
+        assert data["by_status"].get("unknown") == 1
+        assert data["by_status"].get("failed", 0) == 0
+
 
 # ---------------------------------------------------------------------------
 # /watcher-summary

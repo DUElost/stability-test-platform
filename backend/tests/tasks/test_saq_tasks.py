@@ -161,6 +161,32 @@ def test_enqueue_sync_required_raises_when_not_running():
         mod._loop = original_loop
 
 
+@pytest.mark.asyncio
+async def test_enqueue_sync_required_waits_and_raises_on_enqueue_failure():
+    """required=True must surface enqueue failures instead of returning 200."""
+    import backend.tasks.saq_worker as mod
+
+    mock_queue = MagicMock()
+    mock_queue.enqueue = AsyncMock(side_effect=ConnectionError("redis down"))
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    try:
+        mod._queue = mock_queue
+        mod._loop = asyncio.get_running_loop()
+
+        with pytest.raises(mod.EnqueueSyncError, match="enqueue failed"):
+            await asyncio.to_thread(
+                mod.enqueue_sync,
+                "precheck_and_dispatch_task",
+                required=True,
+                plan_run_id=1,
+            )
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
+
+
 # ---------------------------------------------------------------------------
 # get_queue guard
 # ---------------------------------------------------------------------------

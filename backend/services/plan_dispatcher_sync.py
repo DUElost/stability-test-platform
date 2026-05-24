@@ -5,6 +5,7 @@ Sync counterpart of ``plan_dispatcher.py`` for use with sync FastAPI endpoints.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -265,6 +266,26 @@ def preview_plan_dispatch_sync(
     return _build_preview(plan, lifecycle, device_ids)
 
 
+def initial_dispatch_state() -> dict:
+    """Seed ``run_context.dispatch_state`` for gate-backed dispatch paths."""
+    return {
+        "enqueue_key": None,
+        "requeue_attempts": 0,
+        "status": "queued",
+        "enqueued_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
+        "started_at": None,
+        "completed_at": None,
+        "last_error": None,
+    }
+
+
+def _run_dispatch_gate_sync(plan_run_id: int, db: Session) -> None:
+    """Run the ADR-0021 dispatch gate inline (CHAIN / SCHEDULE sync paths)."""
+    from backend.services.plan_precheck import _drive_dispatch_gate
+
+    asyncio.run(_drive_dispatch_gate(plan_run_id, db=db))
+
+
 def prepare_plan_run(
     plan_id: int,
     device_ids: list[int],
@@ -479,11 +500,33 @@ def complete_plan_run_dispatch(
 
     orphan_devices = [did for did in device_ids if not device_host_map.get(did)]
     if orphan_devices:
-        # Why: 上面校验已覆盖 no_host;若仍走到这里说明并发 race(host_id 被改为 NULL),
-        # 留 WARN 作运维信号。
-        logger.warning(
-            "plan_dispatch_devices_without_host: device_ids=%s", orphan_devices
+        # Why: prepare 阶段 _validate_dispatch_devices_sync 已覆盖 no_host;
+        # 若仍走到这里说明 complete 前并发 race(host_id 被改为 NULL) — 必须 FAILED 而非静默 WARN。
+        from backend.core.audit import record_audit
+        pr.status = "FAILED"
+        pr.ended_at = datetime.now(timezone.utc)
+        pr.result_summary = {
+            "dispatch_failed": True,
+            "reason": "devices_without_host",
+            "orphan_device_ids": orphan_devices,
+        }
+        flag_modified(pr, "result_summary")
+        record_audit(
+            db,
+            action="plan_dispatch_failed",
+            resource_type="plan_run",
+            resource_id=pr.id,
+            details={
+                "reason": "devices_without_host",
+                "orphan_device_ids": orphan_devices,
+            },
         )
+        db.commit()
+        logger.warning(
+            "plan_dispatch_failed_devices_without_host plan_run=%d device_ids=%s",
+            plan_run_id, orphan_devices,
+        )
+        return
 
     wifi_allocations: dict[int, dict] = {}
     if any(
@@ -496,7 +539,28 @@ def complete_plan_run_dispatch(
                 wifi_allocations[device_id] = alloc_params
             logger.info("plan_dispatch_wifi_allocated: devices=%d", len(device_ids))
         except AllocationError as exc:
-            logger.warning("plan_dispatch_wifi_allocation_skipped: %s", exc)
+            from backend.core.audit import record_audit
+            pr.status = "FAILED"
+            pr.ended_at = datetime.now(timezone.utc)
+            pr.result_summary = {
+                "dispatch_failed": True,
+                "reason": "wifi_allocation_failed",
+                "error": str(exc),
+            }
+            flag_modified(pr, "result_summary")
+            record_audit(
+                db,
+                action="plan_dispatch_failed",
+                resource_type="plan_run",
+                resource_id=pr.id,
+                details={"reason": "wifi_allocation_failed", "error": str(exc)},
+            )
+            db.commit()
+            logger.warning(
+                "plan_dispatch_wifi_allocation_failed plan_run=%d error=%s",
+                plan_run_id, exc,
+            )
+            return
 
     now = datetime.now(timezone.utc)
     job_device_pairs: dict[int, int] = {}
@@ -554,25 +618,39 @@ def dispatch_plan_sync(
     root_plan_run_id: int | None = None,
     chain_index: int | None = None,
 ) -> PlanRun:
-    """ADR-0020 — One-shot sync dispatch (PlanRun + Jobs in one transaction).
+    """ADR-0020/0021 — Sync dispatch via the dispatch gate (verify → sync → dispatch).
 
-    Used by SCHEDULE (cron) and CHAIN trigger paths which intentionally
-    skip the ADR-0021 dispatch gate.  MANUAL goes through
+    Used by SCHEDULE (cron) and CHAIN trigger paths.  Runs the gate inline so
+    callers observe a fully materialised PlanRun (or a raised
+    :class:`PlanDispatchError` on gate failure).  MANUAL goes through
     :func:`prepare_plan_run` + the SAQ ``precheck_and_dispatch`` task instead.
     """
+    merged_run_ctx = dict(run_context or {})
+    if not merged_run_ctx.get("dispatch_state"):
+        merged_run_ctx["dispatch_state"] = initial_dispatch_state()
+
     pr = prepare_plan_run(
         plan_id=plan_id,
         device_ids=device_ids,
         triggered_by=triggered_by,
         db=db,
         run_type=run_type,
-        run_context=run_context,
+        run_context=merged_run_ctx,
         parent_plan_run_id=parent_plan_run_id,
         root_plan_run_id=root_plan_run_id,
         chain_index=chain_index,
     )
-    complete_plan_run_dispatch(pr.id, db=db)
+    _run_dispatch_gate_sync(pr.id, db)
     db.refresh(pr)
+
+    if pr.status == "FAILED":
+        summary = pr.result_summary or {}
+        reason = summary.get("reason") or "dispatch_gate_failed"
+        raise PlanDispatchError(
+            f"PlanRun {pr.id}: dispatch gate failed: {reason}",
+            missing_scripts=summary.get("missing_scripts"),
+        )
+
     return pr
 
 

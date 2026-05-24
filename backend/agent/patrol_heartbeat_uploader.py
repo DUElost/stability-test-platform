@@ -16,13 +16,16 @@ Design choices:
 - **Best-effort retries**: a failed POST logs and returns None; the
   next cycle retries naturally.  We do **not** block the patrol loop
   on network flakiness.
+- **409 JOB_NOT_RUNNING**: backend CAS 已把 Job 推到非 RUNNING(典型 UNKNOWN);
+  返回 ``{"_job_not_running": True}`` 供 pipeline_engine 终止 patrol 循环,
+  并可选触发 ``on_job_not_running`` 回调(如 recovery/sync)。
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import requests
 
@@ -33,6 +36,21 @@ _DEFAULT_BACKOFF_BASE = 60.0
 _DEFAULT_BACKOFF_GROWTH = 2.0
 _DEFAULT_BACKOFF_MAX = 3600.0
 
+# Sentinel returned to pipeline_engine when backend rejects heartbeat because
+# the job is no longer RUNNING (recycler/reconciler race).
+JOB_NOT_RUNNING_SENTINEL: Dict[str, bool] = {"_job_not_running": True}
+
+
+def _extract_error_code(resp: requests.Response) -> Optional[str]:
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        return detail.get("code")
+    return None
+
 
 class PatrolHeartbeatUploader:
     """Lightweight per-call HTTP poster for patrol heartbeats.
@@ -41,11 +59,20 @@ class PatrolHeartbeatUploader:
     on different jobs.  Returned dict mirrors the server's
     ``PatrolHeartbeatOut`` schema: callers can read
     ``manual_action`` to short-circuit patrol or pre-empt sleep.
+
+    On ``409 JOB_NOT_RUNNING`` returns :data:`JOB_NOT_RUNNING_SENTINEL`
+    instead of ``None`` so the patrol loop can stop promptly.
     """
 
-    def __init__(self, api_url: str, agent_secret: str = "") -> None:
+    def __init__(
+        self,
+        api_url: str,
+        agent_secret: str = "",
+        on_job_not_running: Optional[Callable[[int], None]] = None,
+    ) -> None:
         self._api_url = api_url.rstrip("/")
         self._agent_secret = agent_secret
+        self._on_job_not_running = on_job_not_running
 
     def send(
         self,
@@ -61,10 +88,12 @@ class PatrolHeartbeatUploader:
         manual_action_observed: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Send one patrol heartbeat.  Returns the server's response dict
-        (containing ``manual_action`` etc.) or None on failure.
+        (containing ``manual_action`` etc.), ``JOB_NOT_RUNNING_SENTINEL``
+        when the job is no longer RUNNING, or None on transient failure.
 
-        Failure modes return None so the patrol loop continues; the next
-        cycle's GREATEST() update on the server reconciles missed counters.
+        Failure modes (except JOB_NOT_RUNNING) return None so the patrol loop
+        continues; the next cycle's GREATEST() update on the server reconciles
+        missed counters.
         """
         url = f"{self._api_url}/api/v1/agent/jobs/{job_id}/patrol-heartbeat"
         headers: Dict[str, str] = {}
@@ -100,8 +129,22 @@ class PatrolHeartbeatUploader:
             return None
 
         if resp.status_code == 409:
-            # Lease lost — Agent's LeaseRenewer / pipeline_engine will detect
-            # and abort the run via its own path.  We don't surface this here.
+            code = _extract_error_code(resp)
+            if code == "JOB_NOT_RUNNING":
+                logger.warning(
+                    "patrol_heartbeat_job_not_running job=%d cycle=%d",
+                    job_id, cycle_index,
+                )
+                if self._on_job_not_running is not None:
+                    try:
+                        self._on_job_not_running(job_id)
+                    except Exception:
+                        logger.exception(
+                            "patrol_heartbeat_on_job_not_running_failed job=%d",
+                            job_id,
+                        )
+                return dict(JOB_NOT_RUNNING_SENTINEL)
+            # Other 409 (invalid fencing_token) — lease lost; LeaseRenewer handles.
             logger.warning(
                 "patrol_heartbeat_lease_invalid job=%d cycle=%d status=409",
                 job_id, cycle_index,
