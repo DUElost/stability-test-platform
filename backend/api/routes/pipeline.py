@@ -5,8 +5,10 @@ import logging
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from backend.api.routes.auth import get_current_active_user, User
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,9 @@ def _load_template(path: Path) -> PipelineTemplateOut:
 
 
 @router.get("/templates", response_model=List[PipelineTemplateOut])
-def list_pipeline_templates():
+def list_pipeline_templates(
+    _current_user: User = Depends(get_current_active_user),
+):
     """List all built-in pipeline templates."""
     if not TEMPLATES_DIR.exists():
         return []
@@ -54,7 +58,10 @@ def list_pipeline_templates():
 
 
 @router.get("/templates/{name}", response_model=PipelineTemplateOut)
-def get_pipeline_template(name: str):
+def get_pipeline_template(
+    name: str,
+    _current_user: User = Depends(get_current_active_user),
+):
     """Get a specific pipeline template by name."""
     path = TEMPLATES_DIR / f"{name}.json"
     if not path.exists():

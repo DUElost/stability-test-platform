@@ -163,6 +163,7 @@ def list_plan_runs(
     plan_id: Optional[int] = None,
     status: Optional[PlanRunStatus] = Query(default=None),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     q = select(PlanRun).order_by(PlanRun.started_at.desc())
     if plan_id is not None:
@@ -174,7 +175,11 @@ def list_plan_runs(
 
 
 @router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunOut])
-def get_plan_run(run_id: int, db: Session = Depends(get_db)):
+def get_plan_run(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     pr = db.get(PlanRun, run_id)
     if pr is None:
         raise HTTPException(status_code=404, detail="plan run not found")
@@ -185,7 +190,11 @@ def get_plan_run(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/plan-runs/{run_id}/jobs", response_model=ApiResponse[list[JobInstanceOut]])
-def list_plan_run_jobs(run_id: int, db: Session = Depends(get_db)):
+def list_plan_run_jobs(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     jobs = db.execute(
         select(JobInstance).where(JobInstance.plan_run_id == run_id)
     ).scalars().all()
@@ -607,7 +616,11 @@ def _chain_node_from_run(pr: PlanRun, plan_name: Optional[str], is_current: bool
 
 
 @router.get("/plan-runs/{run_id}/chain", response_model=ApiResponse[PlanChainOut])
-def get_plan_run_chain(run_id: int, db: Session = Depends(get_db)):
+def get_plan_run_chain(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     """ADR-0020 §6: PlanRun chain 上下文 — 沿 parent_plan_run_id 回溯到 root,
     再沿 next_plan_id + next_plan_triggered 向前查找下一段。
 
@@ -763,7 +776,11 @@ def _stage_status_from_steps(
 
 
 @router.get("/plan-runs/{run_id}/timeline", response_model=ApiResponse[PlanRunTimelineOut])
-def get_plan_run_timeline(run_id: int, db: Session = Depends(get_db)):
+def get_plan_run_timeline(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     """ADR-0021/ADR-0022 C5a₂: 业务流时间线 — 按 stage 聚合 step_trace,
     输出三阶段的 succeeded/failed/running 计数与每个 step 的设备级进度。
 
@@ -1145,6 +1162,7 @@ def get_plan_run_events(
     limit: int = Query(_DEFAULT_EVENTS_LIMIT, ge=1, le=_MAX_EVENTS_LIMIT),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     """ADR-0021/ADR-0022 C5a₂: 业务流事件流 — 融合 trigger / 合成阶段进展 /
     step_trace 失败 / log_signal / audit_logs,统一封装为 EventOut。
@@ -1427,6 +1445,7 @@ def get_plan_run_devices(
     status: Optional[str] = Query(None, description="ui_status 过滤(可选)"),
     host_id: Optional[str] = Query(None, description="host_id 过滤(可选)"),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     """ADR-0021/ADR-0022 C5a₂: 设备执行矩阵 — 每台设备一行,
     包含 patrol 心跳聚合、退避状态、watcher 异常计数。
@@ -1538,6 +1557,7 @@ def get_plan_run_watcher_summary(
     run_id: int,
     window_minutes: int = Query(_DEFAULT_WATCHER_WINDOW_MIN, ge=1, le=_MAX_WATCHER_WINDOW_MIN),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     """ADR-0018 / ADR-0021 C5a₂: 最近 N 分钟内 watcher log_signal 按 category
     聚合,带 trend(对比上一相同长度窗口的差值)。
@@ -1654,6 +1674,7 @@ def get_plan_run_watcher_summary(
 def get_plan_run_summary(
     run_id: int,
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     pr = db.get(PlanRun, run_id)
     if pr is None:

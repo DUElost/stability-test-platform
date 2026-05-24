@@ -130,27 +130,40 @@ async def stop_saq_worker() -> None:
 # Sync bridge — for callers running in sync threads (e.g. recycler)
 # ---------------------------------------------------------------------------
 
+class EnqueueSyncError(RuntimeError):
+    """SAQ job could not be scheduled (worker down or event loop closed)."""
+
+
 def enqueue_sync(
     task_name: str,
     *,
     key: str | None = None,
     timeout: int = 60,
     retries: int = 3,
+    required: bool = False,
     **kwargs,
-) -> None:
-    """Enqueue a SAQ job from a synchronous context (fire-and-forget).
+) -> bool:
+    """Enqueue a SAQ job from a synchronous context.
+
+    Returns True when the enqueue was scheduled on the event loop.
+    When ``required=False`` (default, recycler/reaper compensating paths),
+    logs a warning and returns False on failure.
+    When ``required=True`` (user-facing dispatch), raises
+    :class:`EnqueueSyncError` so the caller can fail fast (HTTP 503).
 
     Uses ``call_soon_threadsafe`` to schedule an async enqueue on the main
-    event loop.  Does NOT block for the result — the recycler is a
-    compensating path and will retry on the next cycle if enqueue fails.
+    event loop.  Does NOT block for the result.
 
     Note: ``run_coroutine_threadsafe`` + ``future.result()`` deadlocks when
     the SAQ Worker is running on the same event loop (Worker holds internal
     state that prevents ``Queue.enqueue`` from completing synchronously).
     """
     if _queue is None or _loop is None:
+        msg = f"SAQ not running — cannot enqueue {task_name}"
         logger.warning("enqueue_sync called but SAQ not running — dropping %s", task_name)
-        return
+        if required:
+            raise EnqueueSyncError(msg)
+        return False
 
     job = Job(
         function=task_name,
@@ -169,8 +182,13 @@ def enqueue_sync(
 
     try:
         _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue())
+        return True
     except RuntimeError:
+        msg = f"event loop closed — cannot enqueue {task_name}"
         logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)
+        if required:
+            raise EnqueueSyncError(msg)
+        return False
 
 
 # ---------------------------------------------------------------------------

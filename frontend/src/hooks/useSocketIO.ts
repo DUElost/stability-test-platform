@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { API_BASE_URL } from '@/config';
+import { dashboardSocketUrl } from '@/config';
 import { refreshAccessToken } from '@/utils/auth';
 import { SOCKET_EVENT_NAMES } from '@/utils/socketEvents';
 
@@ -105,7 +105,7 @@ function _getDashSocket(): Socket {
     return _dashSocket;
   }
 
-  const socket = io(`${API_BASE_URL}/dashboard`, {
+  const socket = io(dashboardSocketUrl(), {
     path: '/socket.io',
     transports: ['websocket', 'polling'],
     autoConnect: true,

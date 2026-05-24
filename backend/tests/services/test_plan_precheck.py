@@ -16,6 +16,7 @@ from backend.models.plan_run import PlanRun
 from backend.models.script import Script
 from backend.services.plan_dispatcher_sync import prepare_plan_run
 from backend.services.plan_precheck import _drive_dispatch_gate
+from backend.tasks.saq_worker import EnqueueSyncError
 
 
 # ---------------------------------------------------------------------------
@@ -339,8 +340,33 @@ class TestRunPlanEndpointEnqueues:
         enq.assert_called_once()
         kwargs = enq.call_args.kwargs
         assert enq.call_args.args[0] == "precheck_and_dispatch_task"
+        assert enq.call_args.kwargs["required"] is True
         assert kwargs["plan_run_id"] == data["id"]
         assert kwargs["key"] == f"precheck:{data['id']}"
+
+    def test_run_plan_returns_503_when_enqueue_unavailable(
+        self, client, auth_headers, db_session, gate_chain,
+    ):
+        plan_id = gate_chain["plan"].id
+        device_ids = [gate_chain["device_a"].id]
+
+        with patch(
+            "backend.api.routes.plans.enqueue_sync",
+            side_effect=EnqueueSyncError("SAQ not running"),
+        ):
+            resp = client.post(
+                f"/api/v1/plans/{plan_id}/run",
+                json={"device_ids": device_ids},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 503, resp.text
+        detail = resp.json()["detail"]
+        assert detail["code"] == "DISPATCH_QUEUE_UNAVAILABLE"
+        plan_run_id = detail["plan_run_id"]
+        pr = db_session.get(PlanRun, plan_run_id)
+        assert pr.status == "FAILED"
+        assert pr.result_summary["reason"] == "dispatch_queue_unavailable"
 
 
 # ---------------------------------------------------------------------------

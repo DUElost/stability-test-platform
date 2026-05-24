@@ -111,7 +111,7 @@ def _create_minimal_plan(db_session) -> Plan:
 
 class TestPlanRunOutCarriesRunContext:
     def test_get_plan_run_returns_run_context_precheck(
-        self, client, db_session
+        self, client, auth_headers, db_session
     ):
         plan = _create_minimal_plan(db_session)
         precheck_payload = {
@@ -159,7 +159,7 @@ class TestPlanRunOutCarriesRunContext:
         db_session.commit()
         db_session.refresh(pr)
 
-        resp = client.get(f"/api/v1/plan-runs/{pr.id}")
+        resp = client.get(f"/api/v1/plan-runs/{pr.id}", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()["data"]
 
@@ -183,7 +183,7 @@ class TestPlanRunOutCarriesRunContext:
         validated = PrecheckSummary.model_validate(body["run_context"]["precheck"])
         assert validated.hosts["host-101"].scripts[0].name == "check_device"
 
-    def test_list_plan_runs_includes_run_context(self, client, db_session):
+    def test_list_plan_runs_includes_run_context(self, client, auth_headers, db_session):
         plan = _create_minimal_plan(db_session)
         pr = PlanRun(
             plan_id=plan.id,
@@ -206,14 +206,14 @@ class TestPlanRunOutCarriesRunContext:
         db_session.add(pr)
         db_session.commit()
 
-        resp = client.get(f"/api/v1/plan-runs?plan_id={plan.id}")
+        resp = client.get(f"/api/v1/plan-runs?plan_id={plan.id}", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         items = resp.json()["data"]
         assert len(items) == 1
         assert items[0]["run_context"]["precheck"]["phase"] == "verifying"
 
     def test_plan_run_without_run_context_serialises_to_null(
-        self, client, db_session
+        self, client, auth_headers, db_session
     ):
         plan = _create_minimal_plan(db_session)
         pr = PlanRun(
@@ -231,14 +231,14 @@ class TestPlanRunOutCarriesRunContext:
         db_session.commit()
         db_session.refresh(pr)
 
-        resp = client.get(f"/api/v1/plan-runs/{pr.id}")
+        resp = client.get(f"/api/v1/plan-runs/{pr.id}", headers=auth_headers)
         assert resp.status_code == 200, resp.text
         body = resp.json()["data"]
         assert body["run_context"] is None
         assert body["chain_index"] == 0
 
     def test_list_plan_runs_rejects_invalid_status_filter(
-        self, client, db_session
+        self, client, auth_headers, db_session
     ):
         plan = _create_minimal_plan(db_session)
         pr = PlanRun(
@@ -255,6 +255,6 @@ class TestPlanRunOutCarriesRunContext:
         db_session.add(pr)
         db_session.commit()
 
-        resp = client.get("/api/v1/plan-runs?status=PENDING")
+        resp = client.get("/api/v1/plan-runs?status=PENDING", headers=auth_headers)
 
         assert resp.status_code == 422, resp.text

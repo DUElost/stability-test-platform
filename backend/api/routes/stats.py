@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from backend.api.routes.auth import get_current_active_user, User
 from backend.core.database import get_db
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
@@ -69,6 +70,7 @@ class CompletionTrendResponse(BaseModel):
 def get_activity(
     hours: int = Query(24, ge=1, le=168),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     """Hourly task-run activity over the past N hours."""
     now = datetime.now(timezone.utc)
@@ -129,6 +131,7 @@ def get_device_metrics(
     device_id: int,
     hours: int = Query(24, ge=1, le=168),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     """Device metric history — DeviceMetricSnapshot table deprecated; returns empty."""
     return DeviceMetricsResponse(device_id=device_id, points=[], hours=hours)
@@ -177,7 +180,10 @@ class DashboardSummaryResponse(BaseModel):
 
 
 @router.get("/dashboard-summary", response_model=DashboardSummaryResponse)
-def get_dashboard_summary(db: Session = Depends(get_db)):
+def get_dashboard_summary(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     hosts = db.execute(text("""
         SELECT status, extra, ip
         FROM host
@@ -261,6 +267,7 @@ def get_dashboard_summary(db: Session = Depends(get_db)):
 def get_completion_trend(
     days: int = Query(7, ge=1, le=90),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     """Daily pass/fail counts over the past N days."""
     since = datetime.now(timezone.utc) - timedelta(days=days)

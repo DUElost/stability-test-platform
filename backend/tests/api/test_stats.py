@@ -7,8 +7,8 @@ from backend.models.host import Host, Device
 
 
 class TestDashboardSummary:
-    def test_dashboard_summary_empty(self, client):
-        response = client.get("/api/v1/stats/dashboard-summary")
+    def test_dashboard_summary_empty(self, client, auth_headers):
+        response = client.get("/api/v1/stats/dashboard-summary", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -40,7 +40,7 @@ class TestDashboardSummary:
         assert data["host_resources"] == []
 
     def test_dashboard_summary_aggregates_hosts_devices_and_alerts(
-        self, client, db_session, sample_host,
+        self, client, auth_headers, db_session, sample_host,
     ):
         sample_host.status = HostStatus.ONLINE.value
         sample_host.last_heartbeat = datetime.now(timezone.utc)
@@ -74,7 +74,7 @@ class TestDashboardSummary:
         db_session.add_all([device_idle, device_busy, device_offline])
         db_session.commit()
 
-        response = client.get("/api/v1/stats/dashboard-summary")
+        response = client.get("/api/v1/stats/dashboard-summary", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
@@ -90,7 +90,7 @@ class TestDashboardSummary:
         assert data["alerts"]["total"] == 4
         assert data["host_resources"][0]["ip"] == "172.21.15.100"
 
-    def test_null_battery_not_counted_as_low(self, client, db_session, sample_host):
+    def test_null_battery_not_counted_as_low(self, client, auth_headers, db_session, sample_host):
         """回归: NULL 电量不应被误算为低电量告警"""
         device_no_battery = Device(
             serial="DEV-NULL-BATT",
@@ -102,7 +102,7 @@ class TestDashboardSummary:
         db_session.add(device_no_battery)
         db_session.commit()
 
-        response = client.get("/api/v1/stats/dashboard-summary")
+        response = client.get("/api/v1/stats/dashboard-summary", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["devices"]["total"] == 1
@@ -112,28 +112,28 @@ class TestDashboardSummary:
 
 
 class TestActivityStats:
-    def test_activity_default(self, client):
-        response = client.get("/api/v1/stats/activity")
+    def test_activity_default(self, client, auth_headers):
+        response = client.get("/api/v1/stats/activity", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert "points" in data
         assert "hours" in data
 
-    def test_activity_custom_hours(self, client):
-        response = client.get("/api/v1/stats/activity", params={"hours": 48})
+    def test_activity_custom_hours(self, client, auth_headers):
+        response = client.get("/api/v1/stats/activity", params={"hours": 48}, headers=auth_headers)
         assert response.status_code == 200
         assert response.json()["hours"] == 48
 
 
 class TestCompletionTrend:
-    def test_completion_trend_default(self, client):
-        response = client.get("/api/v1/stats/completion-trend")
+    def test_completion_trend_default(self, client, auth_headers):
+        response = client.get("/api/v1/stats/completion-trend", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert "points" in data
         assert "days" in data
 
-    def test_completion_trend_custom_days(self, client):
-        response = client.get("/api/v1/stats/completion-trend", params={"days": 14})
+    def test_completion_trend_custom_days(self, client, auth_headers):
+        response = client.get("/api/v1/stats/completion-trend", params={"days": 14}, headers=auth_headers)
         assert response.status_code == 200
         assert response.json()["days"] == 14

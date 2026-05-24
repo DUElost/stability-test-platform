@@ -24,8 +24,8 @@
 - 当前版本后端会在应用启动时启动调度线程和回收线程（`backend/main.py`）。
 - 生产 MVP 必须使用单实例后端（`1` 个进程）运行，避免多进程重复调度。
 - 不允许 Agent 使用 `HOST_ID=0`；每台 Agent 必须唯一且固定。
-- 当前鉴权与权限控制未完善，MVP 默认部署在内网可信网络。
-- `frontend/src/pages/tasks/TaskDetails.tsx` 的日志 WebSocket 当前固定走 `ws://<host>:8000`，生产需确保客户端可访问 `8000` 端口，或先完成该处配置化改造。
+- 读 API 已要求登录（`get_current_active_user`）；`/metrics` 仍无鉴权，生产请用 Nginx IP 白名单限制。
+- 前端 SocketIO 生产构建须设 `VITE_API_BASE_URL=`（空），Nginx 须反代 `/socket.io/`（见 §3.6）。
 
 ## 3. 控制平面部署清单（主 Linux Host）
 
@@ -102,12 +102,35 @@ sudo systemctl start stability-backend
 sudo systemctl status stability-backend --no-pager
 ```
 
-### 3.6 Nginx（前端静态 + API/WS 反向代理）
+### 3.6 Nginx（前端静态 + API / SocketIO 反向代理）
 
 从模板生成 `/etc/nginx/sites-available/stability-platform`：
 
 ```bash
 sudo cp deploy/control-plane/nginx/stability-platform.conf /etc/nginx/sites-available/stability-platform
+```
+
+模板已包含 `/api/`、`/socket.io/`（WebSocket 升级）与 legacy `/ws/`。
+
+生产前端构建（同源，SocketIO 走 Nginx 443/80）：
+
+```bash
+cd /opt/stability-test-platform/frontend
+VITE_API_BASE_URL= npm run build
+```
+
+生产后端 env 必配（ADR-0024 guard 会校验）：
+
+```env
+ENV=production
+AUTH_COOKIE_SECURE=1
+AUTH_COOKIE_SAMESITE=lax
+STP_CSRF_ENABLED=1
+JWT_SECRET_KEY=<强随机>
+AGENT_SECRET=<非 placeholder>
+CORS_ORIGINS=https://<你的前端域名>
+STP_ENABLE_INPROCESS_SAQ=1
+REDIS_URL=redis://...
 ```
 
 启用站点：
@@ -155,7 +178,7 @@ LOG_LEVEL=INFO
 建议在控制平面执行以下查询后再填 Agent 配置：
 
 ```bash
-curl -s http://127.0.0.1:8000/api/v1/hosts
+curl -s -H "Authorization: Bearer <access_token>" http://127.0.0.1:8000/api/v1/hosts
 ```
 
 按目标主机 IP 找到对应 `id`，把该 `id` 写入 Agent 的 `HOST_ID`。

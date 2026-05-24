@@ -82,6 +82,7 @@ def list_schedules(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     """获取定时任务列表"""
     query = db.query(TaskSchedule).order_by(TaskSchedule.id.desc())
@@ -96,7 +97,11 @@ def list_schedules(
 
 
 @router.get("/{schedule_id}", response_model=TaskScheduleOut)
-def get_schedule(schedule_id: int, db: Session = Depends(get_db)):
+def get_schedule(
+    schedule_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     """获取定时任务详情"""
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
     if not sched:

@@ -28,7 +28,7 @@ class TestPlanCRUD:
         assert data["steps"][0]["step_key"] == "init_0"
         assert data["steps"][0]["enabled"] is True
 
-        get_resp = client.get(f"/api/v1/plans/{data['id']}")
+        get_resp = client.get(f"/api/v1/plans/{data['id']}", headers=auth_headers)
         assert get_resp.status_code == 200
         assert get_resp.json()["data"]["name"] == name
 
@@ -38,7 +38,7 @@ class TestPlanCRUD:
             "name": name, "steps": _minimal_steps(),
         }, headers=auth_headers)
 
-        resp = client.get("/api/v1/plans")
+        resp = client.get("/api/v1/plans", headers=auth_headers)
         assert resp.status_code == 200
         items = resp.json()["data"]
         assert any(p["name"] == name for p in items)

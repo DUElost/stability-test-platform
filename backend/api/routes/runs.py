@@ -98,7 +98,11 @@ def _artifact_download_target(storage_uri: str) -> dict[str, str]:
 
 
 @router.get("/runs/{run_id}/report", response_model=RunReportOut)
-def get_run_report(run_id: int, db: Session = Depends(get_db)):
+def get_run_report(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
@@ -106,7 +110,12 @@ def get_run_report(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/runs/{run_id}/report/export")
-def export_run_report(run_id: int, format: str = Query("markdown"), db: Session = Depends(get_db)):
+def export_run_report(
+    run_id: int,
+    format: str = Query("markdown"),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
@@ -123,7 +132,11 @@ def export_run_report(run_id: int, format: str = Query("markdown"), db: Session 
 
 
 @router.get("/runs/{run_id}/report/cached")
-def get_cached_run_report(run_id: int, db: Session = Depends(get_db)):
+def get_cached_run_report(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     """Return cached report if post-processed, otherwise compute live."""
     from backend.models.job import JobInstance
     job = db.get(JobInstance, run_id)
@@ -140,7 +153,11 @@ def get_cached_run_report(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/runs/{run_id}/jira-draft", response_model=JiraDraftOut)
-def create_run_jira_draft(run_id: int, db: Session = Depends(get_db)):
+def create_run_jira_draft(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     report = compose_run_report(db, run_id)
     if report is None:
         raise HTTPException(status_code=404, detail="run not found")
@@ -148,7 +165,11 @@ def create_run_jira_draft(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/runs/{run_id}/jira-draft/cached")
-def get_cached_jira_draft(run_id: int, db: Session = Depends(get_db)):
+def get_cached_jira_draft(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     """Return cached JIRA draft if post-processed, otherwise compute live."""
     from backend.models.job import JobInstance
     job = db.get(JobInstance, run_id)
@@ -166,7 +187,11 @@ def get_cached_jira_draft(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/runs/{run_id}/steps", response_model=List[RunStepOut])
-def list_run_steps(run_id: int, db: Session = Depends(get_db)):
+def list_run_steps(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     """Return step status for a JobInstance, mapped from StepTrace records."""
     from backend.models.job import JobInstance, StepTrace as _StepTrace
 
@@ -245,7 +270,12 @@ def list_run_steps(run_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/runs/{run_id}/steps/{step_id}", response_model=RunStepOut)
-def get_run_step(run_id: int, step_id: int, db: Session = Depends(get_db)):
+def get_run_step(
+    run_id: int,
+    step_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     """Get a single step detail from StepTrace."""
     from backend.models.job import StepTrace as _StepTrace
 

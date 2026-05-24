@@ -7,12 +7,13 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
 
+from backend.api.routes.auth import get_current_active_user, User
 from backend.core.database import get_db
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
@@ -118,6 +119,7 @@ def _parse_risk_level(log_summary: Optional[str]) -> str:
 def get_results_summary(
     limit: int = Query(20, ge=1, le=100, description="Number of recent runs"),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ) -> ResultsSummary:
     """Return aggregated test run statistics."""
 

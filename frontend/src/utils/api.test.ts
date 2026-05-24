@@ -140,6 +140,28 @@ describe('api module', () => {
       expect(axios.post).not.toHaveBeenCalled();
     });
 
+    it('does not clear cache or redirect when already on /login after terminal 401', async () => {
+      const error = {
+        response: { status: 401 },
+        config: { headers: {}, __retry: true, url: '/auth/me' },
+      };
+
+      Object.defineProperty(window, 'location', {
+        writable: true,
+        value: { pathname: '/login', href: '/login' },
+      });
+
+      try {
+        await responseRejected(error);
+      } catch {
+        // expected rejection
+      }
+
+      expect(mocks.clearAppQueryCache).not.toHaveBeenCalled();
+      expect(mocks.disconnectDashSocket).not.toHaveBeenCalled();
+      expect(window.location.href).toBe('/login');
+    });
+
     it('clears cached queries before redirecting after terminal 401', async () => {
       const error = {
         response: { status: 401 },

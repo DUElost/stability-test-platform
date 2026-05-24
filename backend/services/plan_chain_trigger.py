@@ -6,15 +6,21 @@ automatically dispatch the next Plan in the chain.
 Idempotency: atomically persists ``next_plan_triggered=true`` before dispatch.
 The ``uniq_plan_run_chain_child`` partial unique index provides a second
 layer of protection.
+
+On dispatch failure the trigger flag is rolled back so a later aggregator
+pass can retry, and ``result_summary.chain_dispatch_failed`` records the error.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
@@ -25,6 +31,53 @@ from backend.services.plan_dispatcher_sync import dispatch_plan_sync, PlanDispat
 logger = logging.getLogger(__name__)
 
 TRIGGERABLE_TERMINAL_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS"}
+
+
+def _record_chain_dispatch_failure(
+    plan_run: PlanRun,
+    error: Exception | str,
+) -> None:
+    """Rollback ``next_plan_triggered`` and persist failure metadata."""
+    plan_run.next_plan_triggered = False
+    summary: dict[str, Any] = dict(plan_run.result_summary or {})
+    summary["chain_dispatch_failed"] = {
+        "at": datetime.now(timezone.utc).isoformat(),
+        "error": str(error)[:500],
+    }
+    plan_run.result_summary = summary
+    flag_modified(plan_run, "result_summary")
+
+
+async def _rollback_chain_trigger_async(
+    db: AsyncSession,
+    plan_run_id: int,
+    error: Exception | str,
+) -> None:
+    pr = await db.get(PlanRun, plan_run_id)
+    if pr is None:
+        return
+    _record_chain_dispatch_failure(pr, error)
+    await db.commit()
+    logger.warning(
+        "plan_chain_trigger_rolled_back plan_run=%d error=%s",
+        plan_run_id, str(error)[:200],
+    )
+
+
+def _rollback_chain_trigger_sync(
+    db: Session,
+    plan_run_id: int,
+    error: Exception | str,
+) -> None:
+    pr = db.get(PlanRun, plan_run_id)
+    if pr is None:
+        return
+    _record_chain_dispatch_failure(pr, error)
+    db.commit()
+    logger.warning(
+        "plan_chain_trigger_sync_rolled_back plan_run=%d error=%s",
+        plan_run_id, str(error)[:200],
+    )
 
 
 async def trigger_next_plan(
@@ -84,6 +137,7 @@ async def trigger_next_plan(
         )
     except AsyncPlanDispatchError as exc:
         logger.error("plan_chain_dispatch_failed parent=%d err=%s", plan_run.id, exc)
+        await _rollback_chain_trigger_async(db, plan_run.id, exc)
         return None
 
     logger.info(
@@ -105,23 +159,6 @@ def trigger_next_plan_sync(
     if plan is None or plan.next_plan_id is None:
         return None
 
-    # (1) Atomically mark triggered + commit — prevents concurrent duplicate dispatch.
-    #     Uses UPDATE ... RETURNING instead of with_for_update() because
-    #     dispatch_plan_sync() commits internally and would release the lock
-    #     before next_plan_triggered is persisted.
-    result = db.execute(
-        update(PlanRun)
-        .where(PlanRun.id == plan_run.id)
-        .where(PlanRun.next_plan_triggered.is_(False))
-        .values(next_plan_triggered=True)
-        .returning(PlanRun.id)
-    )
-    locked_id = result.scalar()
-    db.commit()  # 释放锁；next_plan_triggered 已持久化
-    if locked_id is None:
-        # 另一个并发调用已经标记/触发
-        return None
-
     device_rows = db.execute(
         select(JobInstance.device_id).where(
             JobInstance.plan_run_id == plan_run.id
@@ -130,6 +167,19 @@ def trigger_next_plan_sync(
     device_ids = list({r.device_id for r in device_rows})
     if not device_ids:
         logger.warning("plan_chain_trigger_sync_no_devices plan_run=%d", plan_run.id)
+        return None
+
+    # (1) Atomically mark triggered + commit — prevents concurrent duplicate dispatch.
+    result = db.execute(
+        update(PlanRun)
+        .where(PlanRun.id == plan_run.id)
+        .where(PlanRun.next_plan_triggered.is_(False))
+        .values(next_plan_triggered=True)
+        .returning(PlanRun.id)
+    )
+    locked_id = result.scalar()
+    db.commit()
+    if locked_id is None:
         return None
 
     chain_index = (plan_run.chain_index or 0) + 1
@@ -147,6 +197,7 @@ def trigger_next_plan_sync(
         )
     except SyncPlanDispatchError as exc:
         logger.error("plan_chain_dispatch_sync_failed parent=%d err=%s", plan_run.id, exc)
+        _rollback_chain_trigger_sync(db, plan_run.id, exc)
         return None
 
     logger.info(

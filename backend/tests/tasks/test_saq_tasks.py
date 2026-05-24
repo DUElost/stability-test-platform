@@ -131,7 +131,7 @@ async def test_enqueue_sync_schedules_on_loop():
 
 
 def test_enqueue_sync_drops_when_not_running():
-    """enqueue_sync logs warning and drops when SAQ is not initialised."""
+    """enqueue_sync logs warning and returns False when SAQ is not initialised."""
     import backend.tasks.saq_worker as mod
 
     original_queue = mod._queue
@@ -139,8 +139,23 @@ def test_enqueue_sync_drops_when_not_running():
     try:
         mod._queue = None
         mod._loop = None
-        # Should not raise
-        mod.enqueue_sync("post_completion_task", job_id=1)
+        assert mod.enqueue_sync("post_completion_task", job_id=1) is False
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
+
+
+def test_enqueue_sync_required_raises_when_not_running():
+    """required=True surfaces EnqueueSyncError instead of silent drop."""
+    import backend.tasks.saq_worker as mod
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    try:
+        mod._queue = None
+        mod._loop = None
+        with pytest.raises(mod.EnqueueSyncError, match="SAQ not running"):
+            mod.enqueue_sync("precheck_and_dispatch_task", required=True, plan_run_id=1)
     finally:
         mod._queue = original_queue
         mod._loop = original_loop

@@ -13,7 +13,7 @@ from backend.models.plan_run import PlanRun
 class TestRunReportFromJobChain:
     """Validate /runs/{id}/report* can read new Job chain completion snapshot."""
 
-    def test_get_run_report_from_job_snapshot(self, client, db_session, sample_device, tmp_path):
+    def test_get_run_report_from_job_snapshot(self, client, auth_headers, db_session, sample_device, tmp_path):
         now = datetime.now(timezone.utc)
 
         plan = Plan(
@@ -98,7 +98,7 @@ class TestRunReportFromJobChain:
         db_session.add(snapshot)
         db_session.commit()
 
-        response = client.get(f"/api/v1/runs/{job_id}/report")
+        response = client.get(f"/api/v1/runs/{job_id}/report", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["run"]["id"] == job_id
@@ -108,7 +108,7 @@ class TestRunReportFromJobChain:
         assert data["risk_summary"]["risk_level"] == "HIGH"
         assert len(data["run"]["artifacts"]) == 1
 
-        cached_response = client.get(f"/api/v1/runs/{job_id}/report/cached")
+        cached_response = client.get(f"/api/v1/runs/{job_id}/report/cached", headers=auth_headers)
         assert cached_response.status_code == 200
         cached_data = cached_response.json()
         assert cached_data["run"]["id"] == job_id

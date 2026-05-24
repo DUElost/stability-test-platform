@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
@@ -26,7 +27,7 @@ from backend.services.plan_dispatcher_sync import (
     prepare_plan_run,
     preview_plan_dispatch_sync,
 )
-from backend.tasks.saq_worker import enqueue_sync
+from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
@@ -364,6 +365,7 @@ def list_plans(
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     plans = db.query(Plan).order_by(Plan.created_at.desc())\
         .offset(skip).limit(limit).all()
@@ -382,7 +384,11 @@ def list_plans(
 
 
 @router.get("/plans/{plan_id}", response_model=ApiResponse[PlanOut])
-def get_plan(plan_id: int, db: Session = Depends(get_db)):
+def get_plan(
+    plan_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     plan = db.get(Plan, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="plan not found")
@@ -486,6 +492,7 @@ def preview_plan_run(
     plan_id: int,
     payload: PlanRunTrigger,
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     try:
         preview = preview_plan_dispatch_sync(
@@ -538,13 +545,45 @@ def run_plan(
 
     assert pr.run_context["dispatch_state"]["enqueue_key"] == f"precheck:{pr.id}"
 
-    enqueue_sync(
-        "precheck_and_dispatch_task",
-        key=f"precheck:{pr.id}",
-        timeout=600,
-        retries=0,
-        plan_run_id=pr.id,
-    )
+    try:
+        enqueue_sync(
+            "precheck_and_dispatch_task",
+            key=f"precheck:{pr.id}",
+            timeout=600,
+            retries=0,
+            required=True,
+            plan_run_id=pr.id,
+        )
+    except EnqueueSyncError as exc:
+        now = datetime.now(timezone.utc)
+        pr.status = "FAILED"
+        pr.ended_at = now
+        run_ctx = dict(pr.run_context or {})
+        dispatch_state = dict(run_ctx.get("dispatch_state") or {})
+        dispatch_state["status"] = "failed"
+        dispatch_state["last_error"] = str(exc)
+        dispatch_state["completed_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        run_ctx["dispatch_state"] = dispatch_state
+        pr.run_context = run_ctx
+        pr.result_summary = {
+            "precheck_failed": True,
+            "reason": "dispatch_queue_unavailable",
+            "error": str(exc),
+        }
+        flag_modified(pr, "run_context")
+        db.commit()
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "DISPATCH_QUEUE_UNAVAILABLE",
+                "message": (
+                    "Dispatch queue is unavailable; plan run marked FAILED. "
+                    "Ensure Redis and in-process SAQ worker are running."
+                ),
+                "plan_run_id": pr.id,
+            },
+        ) from exc
+
     logger.info(
         "manual_dispatch_enqueued plan=%d plan_run=%d devices=%d by=%s",
         plan_id, pr.id, len(payload.device_ids),

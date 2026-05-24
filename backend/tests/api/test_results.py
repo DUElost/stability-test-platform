@@ -9,8 +9,8 @@ from backend.models.plan_run import PlanRun
 
 
 class TestResultsSummary:
-    def test_summary_empty(self, client):
-        response = client.get("/api/v1/results/summary")
+    def test_summary_empty(self, client, auth_headers):
+        response = client.get("/api/v1/results/summary", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert "runs_by_status" in data
@@ -19,15 +19,15 @@ class TestResultsSummary:
         assert "recent_runs" in data
         assert data["runs_by_status"]["total"] >= 0
 
-    def test_summary_with_limit(self, client):
-        response = client.get("/api/v1/results/summary", params={"limit": 5})
+    def test_summary_with_limit(self, client, auth_headers):
+        response = client.get("/api/v1/results/summary", params={"limit": 5}, headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert len(data["recent_runs"]) <= 5
 
-    def test_summary_aggregates_from_job_instance_chain(self, client, db_session, sample_device):
+    def test_summary_aggregates_from_job_instance_chain(self, client, auth_headers, db_session, sample_device):
         now = datetime.now(timezone.utc)
-        baseline = client.get("/api/v1/results/summary").json()
+        baseline = client.get("/api/v1/results/summary", headers=auth_headers).json()
         suffix = now.strftime("%Y%m%d%H%M%S%f")
         smoke_type = f"Smoke-{suffix}"
         stress_type = f"Stress-{suffix}"
@@ -141,7 +141,7 @@ class TestResultsSummary:
         ])
         db_session.commit()
 
-        response = client.get("/api/v1/results/summary", params={"limit": 3})
+        response = client.get("/api/v1/results/summary", params={"limit": 3}, headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
 
