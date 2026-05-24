@@ -1,0 +1,61 @@
+# Prometheus AlertManager rules for stability-test-platform.
+# Mount alongside prometheus.yml; adjust labels/severity for your on-call routing.
+
+groups:
+  - name: stability-platform-main-chain
+    rules:
+      - alert: StabilityPlanRunAggregationFailed
+        expr: increase(stability_plan_run_aggregation_failed_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: PlanRun terminal aggregation failed
+          description: >-
+            stability_plan_run_aggregation_failed_total increased in the last 15m.
+            Check backend logs for plan_run_aggregation errors.
+
+      - alert: StabilityPostCompletionEnqueueFailed
+        expr: increase(stability_post_completion_enqueue_failed_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: post_completion SAQ enqueue failures
+          description: >-
+            Jobs reached terminal state but post_completion_task enqueue failed.
+            Recycler may backfill; investigate Redis/SAQ worker health.
+
+      - alert: StabilityClaimLeaseFailedSpike
+        expr: rate(stability_claim_lease_failed_total[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Elevated device lease claim conflicts
+          description: >-
+            Agents are failing to acquire leases (device already leased).
+            May indicate stale leases or dispatch overlap.
+
+  - name: stability-platform-security
+    rules:
+      - alert: StabilityCsrfOriginRejected
+        expr: rate(stability_csrf_rejected_total{reason="origin_not_allowed"}[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: CSRF origin rejections spike
+          description: >-
+            Possible cross-origin attack or misconfigured frontend Origin.
+            Verify CORS allowlist matches deployed UI URL.
+
+      - alert: StabilityCsrfMissingOriginReferer
+        expr: rate(stability_csrf_rejected_total{reason="missing_origin_and_referer"}[5m]) > 50
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: CSRF missing Origin/Referer probes
+          description: >-
+            High rate of script/probe traffic without browser Origin headers.

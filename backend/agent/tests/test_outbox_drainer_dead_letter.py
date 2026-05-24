@@ -221,6 +221,7 @@ def test_snapshot_metrics_initial_state(db):
         "failed_total":      0,
         "dead_letter_total": 0,
         "pruned_total":      0,
+        "pending_backlog":   0,
     }
 
 

@@ -48,6 +48,20 @@ def _get_cookie_samesite() -> str:
     return cookie_samesite
 
 
+def is_public_register_allowed() -> bool:
+    """Whether ``POST /auth/register`` is permitted.
+
+    Blocked when ``ENV=production`` (unless ``STP_ALLOW_REGISTER=1``) or when
+    ``STP_ALLOW_REGISTER=0`` in any environment.
+    """
+    allow_raw = os.getenv("STP_ALLOW_REGISTER", "").strip().lower()
+    if allow_raw in {"0", "false", "no", "off"}:
+        return False
+    if allow_raw in {"1", "true", "yes", "on"}:
+        return True
+    return os.getenv("ENV", "").strip().lower() != "production"
+
+
 def validate_production_auth_cookie_settings() -> None:
     if os.getenv("ENV", "").strip().lower() != "production":
         return

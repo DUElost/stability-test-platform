@@ -45,7 +45,9 @@ logger = logging.getLogger(__name__)
 
 from backend.core.job_timeout_config import (
     DISPATCHED_TIMEOUT_SECONDS,
+    PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
+    running_heartbeat_timeout_seconds,
 )
 RECYCLER_BATCH_SIZE = int(os.getenv("RECYCLER_BATCH_SIZE", "200"))
 ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
@@ -531,7 +533,6 @@ def recycle_once() -> None:
     start_time = time.time()
     now = datetime.now(timezone.utc)
     pending_deadline = now - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
-    running_deadline = now - timedelta(seconds=RUNNING_HEARTBEAT_TIMEOUT_SECONDS)
 
     # 1) PENDING timeout — processed in batches to limit memory and
     #    avoid a single huge transaction.
@@ -563,13 +564,19 @@ def recycle_once() -> None:
             db.commit()
 
     # 2) RUNNING timeout → UNKNOWN (Phase 4c). Same batched approach.
+    #    Uses graded per-job timeout when pipeline has an active patrol phase.
+    min_running_timeout = min(
+        RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
+        PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
+    )
+    running_prefetch_deadline = now - timedelta(seconds=min_running_timeout)
     while True:
         with SessionLocal() as db:
             batch = (
                 db.query(JobInstance)
                 .filter(
                     JobInstance.status == JobStatus.RUNNING.value,
-                    JobInstance.updated_at < running_deadline,
+                    JobInstance.updated_at < running_prefetch_deadline,
                 )
                 .order_by(JobInstance.id)
                 .limit(RECYCLER_BATCH_SIZE)
@@ -578,6 +585,12 @@ def recycle_once() -> None:
             if not batch:
                 break
             for job in batch:
+                job_deadline = now - timedelta(
+                    seconds=running_heartbeat_timeout_seconds(job)
+                )
+                updated_at = _aware_dt(job.updated_at)
+                if updated_at is None or updated_at >= job_deadline:
+                    continue
                 try:
                     with db.begin_nested():
                         _mark_running_timeout(

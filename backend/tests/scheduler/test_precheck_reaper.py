@@ -152,6 +152,7 @@ def test_reaper_reenqueues_missing_precheck_once(db_session):
     assert len(enqueue_calls) == 1
     assert enqueue_calls[0]["plan_run_id"] == pr.id
     assert enqueue_calls[0]["key"] == "precheck:136"
+    assert enqueue_calls[0]["retries"] == 1
 
     db_session.refresh(pr)
     assert pr.run_context["dispatch_state"]["requeue_attempts"] == 1

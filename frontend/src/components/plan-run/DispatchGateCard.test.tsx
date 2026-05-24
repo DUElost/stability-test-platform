@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import DispatchGateCard, {
   gateElapsedSeconds,
   isGateStale,
@@ -77,5 +77,25 @@ describe('DispatchGateCard stale banner', () => {
         staleNow,
       ),
     ).toBe(true);
+  });
+
+  it('shows retry button when precheck failed', () => {
+    const onRetry = vi.fn();
+    render(
+      <DispatchGateCard
+        precheck={{ ...precheckFixture, phase: 'failed', errors: ['sync_failed'] }}
+        dispatchState={{
+          status: 'failed',
+          enqueued_at: '2026-05-08T11:00:00Z',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:01:00Z',
+          last_error: 'precheck:sync_failed',
+        }}
+        isTerminal={false}
+        onRetryDispatch={onRetry}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('dispatch-gate-retry-button'));
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 });

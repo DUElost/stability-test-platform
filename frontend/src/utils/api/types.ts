@@ -938,6 +938,12 @@ export interface PlanRunAbortResult {
   drained_running_count?: number;
 }
 
+export interface PlanRunDispatchRetryResult {
+  plan_run_id: number;
+  status: string;
+  dispatch_state?: PlanDispatchState;
+}
+
 // ─── ResourcePool ────────────────────────────────────────────────────────────────
 
 export interface ResourcePool {

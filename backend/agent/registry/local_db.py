@@ -463,6 +463,14 @@ class LocalDB:
             })
         return result
 
+    def count_pending_terminals(self) -> int:
+        """Count un-acked terminal outbox rows (backlog depth)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM job_terminal_outbox WHERE acked = 0"
+            ).fetchone()
+        return int(row["c"]) if row else 0
+
     def ack_terminal(self, job_id: int) -> None:
         with self._lock:
             with self._conn:
@@ -557,6 +565,15 @@ class LocalDB:
                 "attempts": row["attempts"],
             })
         return result
+
+    def count_pending_log_signals(self) -> int:
+        """Count un-acked, non-dead-letter log_signal outbox rows."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM log_signal_outbox "
+                "WHERE acked = 0 AND dead_letter = 0"
+            ).fetchone()
+        return int(row["c"]) if row else 0
 
     def ack_log_signal(self, row_id: int) -> None:
         with self._lock:

@@ -20,6 +20,7 @@ from backend.core.security import (
     create_refresh_token,
     decode_token,
     get_password_hash,
+    is_public_register_allowed,
     set_auth_cookies,
     verify_password,
 )
@@ -194,6 +195,11 @@ def require_admin(current_user: User = Depends(get_current_active_user)) -> User
 @router.post("/register", response_model=UserOut)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
     """Register a new user."""
+    if not is_public_register_allowed():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Public registration is disabled",
+        )
     existing = db.query(User).filter(User.username == payload.username).first()
     if existing:
         raise HTTPException(

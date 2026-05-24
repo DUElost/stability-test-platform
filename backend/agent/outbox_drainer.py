@@ -6,7 +6,7 @@
 import logging
 import os
 import threading
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import requests
 
@@ -25,6 +25,25 @@ class OutboxDrainThread:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._agent_secret = os.getenv("AGENT_SECRET", "")
+        self._metrics_lock = threading.Lock()
+        self._pending_backlog = 0
+        self._flushed_total = 0
+
+    def snapshot_metrics(self) -> Dict[str, Any]:
+        """Outbox backlog + flush counters for heartbeat / ops."""
+        with self._metrics_lock:
+            return {
+                "pending_backlog": self._pending_backlog,
+                "flushed_total": self._flushed_total,
+            }
+
+    def _set_pending_backlog(self, count: int) -> None:
+        with self._metrics_lock:
+            self._pending_backlog = count
+
+    def _bump_flushed(self, delta: int) -> None:
+        with self._metrics_lock:
+            self._flushed_total += delta
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -57,6 +76,8 @@ class OutboxDrainThread:
         return self._drain_once()
 
     def _drain_once(self) -> int:
+        if hasattr(self._local_db, "count_pending_terminals"):
+            self._set_pending_backlog(self._local_db.count_pending_terminals())
         pending = self._local_db.get_pending_terminals(limit=20)
         if not pending:
             self._local_db.prune_acked_terminals()
@@ -114,6 +135,10 @@ class OutboxDrainThread:
                 self._local_db.bump_terminal_attempt(job_id, str(e))
                 logger.warning("outbox_drain_retry job=%d error=%s", job_id, e)
 
+        if sent:
+            self._bump_flushed(sent)
+        if hasattr(self._local_db, "count_pending_terminals"):
+            self._set_pending_backlog(self._local_db.count_pending_terminals())
         self._local_db.prune_acked_terminals()
         return sent
 
