@@ -75,7 +75,7 @@ class TestPlanCRUD:
         assert delete.status_code == 200
         assert delete.json()["data"]["deleted"] == plan_id
 
-        get_resp = client.get(f"/api/v1/plans/{plan_id}")
+        get_resp = client.get(f"/api/v1/plans/{plan_id}", headers=auth_headers)
         assert get_resp.status_code == 404
 
     def test_update_plan_rejected_for_non_owner(self, client, auth_headers, sample_script):
