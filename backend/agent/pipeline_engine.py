@@ -20,6 +20,8 @@ import os
 
 import shutil
 
+import signal
+
 import subprocess
 
 import sys
@@ -42,6 +44,83 @@ logger = logging.getLogger(__name__)
 
 
 _MAX_STEP_OUTPUT_CHARS = 64 * 1024
+
+
+_IS_WINDOWS = sys.platform == "win32"
+
+# Windows 上 signal.SIGKILL 不存在;只在 POSIX 分支会访问到,但模块在 Windows 上
+# 也要能 import + 单测 monkeypatch。Fallback 到 SIGTERM 仅作占位,运行期不会走到。
+_SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+
+def _popen_isolation_kwargs() -> Dict[str, Any]:
+    """#3: 跨平台 process group 隔离 — 让超时 kill 能覆盖孙进程。
+
+    Why: 脚本(python/sh/bat) fork 出的 adb/monkey/uiautomator 等子进程,
+         若不在自己的进程组内,父进程被 SIGKILL 后会变孤儿继续占用 Android 设备
+         和 adb 端口,后续 patrol 步骤会因设备状态污染而连续失败。
+    How to apply: POSIX 用 start_new_session=True (等价 preexec_fn=os.setsid);
+                  Windows 用 CREATE_NEW_PROCESS_GROUP — 配合 taskkill /T 杀整树。
+    """
+    if _IS_WINDOWS:
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.0) -> None:
+    """#3: 跨平台 kill 进程树 — POSIX 走 killpg(SIGTERM → wait → SIGKILL),
+    Windows 走 taskkill /T /F。
+
+    Why: proc.kill() 只发 SIGKILL 给 pid;若我们靠 _popen_isolation_kwargs 起了
+         新进程组,必须用 killpg / taskkill /T 才能扫到组内所有孙进程。
+    How to apply: 已退出 proc 直接返回;ProcessLookupError 吞掉(race 状态正常);
+                  taskkill 失败兜底 proc.kill()。
+    """
+    if proc.poll() is not None:
+        return
+
+    if _IS_WINDOWS:
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except Exception:
+            logger.warning("taskkill_failed pid=%d falling back to proc.kill", proc.pid)
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        return
+
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    except Exception:
+        pgid = proc.pid
+
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        logger.exception("killpg_sigterm_failed pgid=%d", pgid)
+
+    try:
+        proc.wait(timeout=grace_seconds)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        os.killpg(pgid, _SIGKILL)
+    except ProcessLookupError:
+        return
+    except Exception:
+        logger.exception("killpg_sigkill_failed pgid=%d", pgid)
 
 
 
@@ -889,6 +968,8 @@ class PipelineEngine:
 
                 cwd=os.path.dirname(entry.nfs_path) or None,
 
+                **_popen_isolation_kwargs(),
+
             )
 
             try:
@@ -897,7 +978,7 @@ class PipelineEngine:
 
             except subprocess.TimeoutExpired:
 
-                proc.kill()
+                _terminate_process_tree(proc)
 
                 stdout, stderr = proc.communicate()
 
