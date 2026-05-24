@@ -72,6 +72,8 @@ class TestPlanChainTriggerRollback:
         assert refreshed.result_summary is not None
         assert "chain_dispatch_failed" in refreshed.result_summary
         assert "devices unavailable" in refreshed.result_summary["chain_dispatch_failed"]["error"]
+        # child 未创建 → 允许下次 aggregator 重试
+        assert refreshed.result_summary["chain_dispatch_failed"]["child_already_created"] is False
 
     def test_sync_unexpected_exception_also_rolls_back(
         self, db_session, sample_device, sample_host,
@@ -93,6 +95,48 @@ class TestPlanChainTriggerRollback:
         assert refreshed.next_plan_triggered is False, "未预期异常也必须 rollback flag"
         assert "chain_dispatch_failed" in refreshed.result_summary
         assert "SAQ enqueue failed" in refreshed.result_summary["chain_dispatch_failed"]["error"]
+
+    def test_rollback_preserves_flag_when_child_plan_run_already_exists(
+        self, db_session, sample_device, sample_host,
+    ):
+        """ADR-0021 dispatch gate: prepare_plan_run 已写 child PlanRun 后 gate 失败,
+        rollback 不能 reset parent.next_plan_triggered,否则下次 aggregator 重试会撞
+        ``uniq_plan_run_chain_child`` partial unique index 死循环。
+        """
+        pr = _seed_successful_parent_run(db_session, sample_device, sample_host)
+        # parent 的 next_plan 已经在 _seed 内创建,取出来手动 INSERT 一个 FAILED child
+        parent = db_session.get(Plan, pr.plan_id)
+        next_plan_id = parent.next_plan_id
+        existing_child = PlanRun(
+            plan_id=next_plan_id,
+            status="FAILED",
+            failure_threshold=0.1,
+            plan_snapshot={"plan_id": next_plan_id},
+            run_type="CHAIN",
+            triggered_by="test",
+            parent_plan_run_id=pr.id,
+            chain_index=1,
+            started_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc),
+            result_summary={"dispatch_failed": True, "reason": "wifi_allocation_failed"},
+        )
+        db_session.add(existing_child)
+        db_session.commit()
+
+        with patch(
+            "backend.services.plan_chain_trigger.dispatch_plan_sync",
+            side_effect=PlanDispatchError("dispatch gate failed"),
+        ):
+            result = trigger_next_plan_sync(pr, db_session)
+
+        assert result is None
+        db_session.expire_all()
+        refreshed = db_session.get(PlanRun, pr.id)
+        # 关键不变量:child 已存在 → flag 保持 True,防止下次 aggregator INSERT 撞 unique
+        assert refreshed.next_plan_triggered is True, (
+            "child PlanRun 已落库,parent flag 必须保持 True 防止重试撞 unique 索引"
+        )
+        assert refreshed.result_summary["chain_dispatch_failed"]["child_already_created"] is True
 
 
 # ── Async 路径 — Mock-based 验证 catch + rollback 决策分支 ───────────────

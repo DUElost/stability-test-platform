@@ -36,16 +36,28 @@ TRIGGERABLE_TERMINAL_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS"}
 def _record_chain_dispatch_failure(
     plan_run: PlanRun,
     error: Exception | str,
+    *,
+    child_already_created: bool,
 ) -> None:
-    """Rollback ``next_plan_triggered`` and persist failure metadata."""
-    plan_run.next_plan_triggered = False
+    """Persist failure metadata; only reset flag when child PlanRun wasn't created.
+
+    Why: ADR-0021 dispatch gate ``prepare_plan_run`` writes the child PlanRun
+    row BEFORE gate verification. If the gate then fails, the child row stays
+    (as FAILED, for audit). Resetting ``next_plan_triggered=False`` would let
+    the aggregator retry, but the retry's INSERT would collide with
+    ``uniq_plan_run_chain_child`` and loop forever. So when a child row exists
+    we only write the audit summary — the chain has, in fact, been triggered.
+    """
     summary: dict[str, Any] = dict(plan_run.result_summary or {})
     summary["chain_dispatch_failed"] = {
         "at": datetime.now(timezone.utc).isoformat(),
         "error": str(error)[:500],
+        "child_already_created": child_already_created,
     }
     plan_run.result_summary = summary
     flag_modified(plan_run, "result_summary")
+    if not child_already_created:
+        plan_run.next_plan_triggered = False
 
 
 async def _rollback_chain_trigger_async(
@@ -60,11 +72,22 @@ async def _rollback_chain_trigger_async(
         pr = await db.get(PlanRun, plan_run_id)
         if pr is None:
             return
-        _record_chain_dispatch_failure(pr, error)
+        plan = await db.get(Plan, pr.plan_id)
+        next_plan_id = plan.next_plan_id if plan is not None else None
+        child_exists = False
+        if next_plan_id is not None:
+            existing = (await db.execute(
+                select(PlanRun.id)
+                .where(PlanRun.parent_plan_run_id == plan_run_id)
+                .where(PlanRun.plan_id == next_plan_id)
+                .limit(1)
+            )).first()
+            child_exists = existing is not None
+        _record_chain_dispatch_failure(pr, error, child_already_created=child_exists)
         await db.commit()
         logger.warning(
-            "plan_chain_trigger_rolled_back plan_run=%d error=%s",
-            plan_run_id, str(error)[:200],
+            "plan_chain_trigger_rolled_back plan_run=%d child_exists=%s error=%s",
+            plan_run_id, child_exists, str(error)[:200],
         )
     except Exception:
         logger.exception(
@@ -82,11 +105,22 @@ def _rollback_chain_trigger_sync(
         pr = db.get(PlanRun, plan_run_id)
         if pr is None:
             return
-        _record_chain_dispatch_failure(pr, error)
+        plan = db.get(Plan, pr.plan_id)
+        next_plan_id = plan.next_plan_id if plan is not None else None
+        child_exists = False
+        if next_plan_id is not None:
+            existing = db.execute(
+                select(PlanRun.id)
+                .where(PlanRun.parent_plan_run_id == plan_run_id)
+                .where(PlanRun.plan_id == next_plan_id)
+                .limit(1)
+            ).first()
+            child_exists = existing is not None
+        _record_chain_dispatch_failure(pr, error, child_already_created=child_exists)
         db.commit()
         logger.warning(
-            "plan_chain_trigger_sync_rolled_back plan_run=%d error=%s",
-            plan_run_id, str(error)[:200],
+            "plan_chain_trigger_sync_rolled_back plan_run=%d child_exists=%s error=%s",
+            plan_run_id, child_exists, str(error)[:200],
         )
     except Exception:
         logger.exception(
