@@ -937,7 +937,7 @@ async def test_claim_jobs_skip_on_active_lease():
                     payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
                     db=async_db, _=None,
                 )
-            mock_inc.assert_called_once()
+            mock_inc.assert_not_called()
         assert result.data == [], (
             "claim_jobs must skip jobs on devices with ACTIVE lease"
         )

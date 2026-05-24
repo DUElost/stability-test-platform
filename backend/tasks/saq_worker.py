@@ -177,42 +177,49 @@ def enqueue_sync(
         await _queue.enqueue(job)
         logger.info("enqueue_async_ok task=%s key=%s", task_name, key)
 
+    on_main_loop = False
     try:
-        on_main_loop = False
+        on_main_loop = asyncio.get_running_loop() is _loop
+    except RuntimeError:
+        pass
+
+    if required and not on_main_loop:
         try:
-            on_main_loop = asyncio.get_running_loop() is _loop
-        except RuntimeError:
-            pass
-
-        if required and not on_main_loop:
             future = asyncio.run_coroutine_threadsafe(_do_enqueue(), _loop)
-            try:
-                future.result(timeout=SAQ_ENQUEUE_WAIT_TIMEOUT)
-            except Exception as exc:
-                msg = f"enqueue failed for {task_name}: {exc}"
-                logger.exception("enqueue_async_failed task=%s", task_name)
-                raise EnqueueSyncError(msg) from exc
-            return True
-
-        if required and on_main_loop:
-            raise EnqueueSyncError(
-                f"cannot synchronously enqueue {task_name} from the event loop"
-            )
-
-        async def _do_enqueue_best_effort():
-            try:
-                await _do_enqueue()
-            except Exception:
-                logger.exception("enqueue_async_failed task=%s", task_name)
-
-        _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue_best_effort())
+        except RuntimeError:
+            msg = f"event loop closed — cannot enqueue {task_name}"
+            logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)
+            if required:
+                raise EnqueueSyncError(msg)
+            return False
+        try:
+            future.result(timeout=SAQ_ENQUEUE_WAIT_TIMEOUT)
+        except Exception as exc:
+            msg = f"enqueue failed for {task_name}: {exc}"
+            logger.exception("enqueue_async_failed task=%s", task_name)
+            raise EnqueueSyncError(msg) from exc
         return True
+
+    if required and on_main_loop:
+        raise EnqueueSyncError(
+            f"cannot synchronously enqueue {task_name} from the event loop"
+        )
+
+    async def _do_enqueue_best_effort():
+        try:
+            await _do_enqueue()
+        except Exception:
+            logger.exception("enqueue_async_failed task=%s", task_name)
+
+    try:
+        _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue_best_effort())
     except RuntimeError:
         msg = f"event loop closed — cannot enqueue {task_name}"
         logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)
         if required:
             raise EnqueueSyncError(msg)
         return False
+    return True
 
 
 # ---------------------------------------------------------------------------

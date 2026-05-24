@@ -150,6 +150,7 @@ class TestJobCompleteAggregationPath:
         db_session.commit()
 
         plan_aggregator_sync(job, db_session)
+        db_session.commit()
         db_session.expire_all()
 
         refreshed = db_session.get(PlanRun, pr.id)
