@@ -152,14 +152,17 @@ class OutboxDrainer:
         - 后台 daemon 线程；stop() 发停止信号 + join(timeout)
         - tick_once() 暴露单次刷出接口，便于单元测试直接驱动
 
-    失败策略：
-        - 整批 POST 失败 → 逐条 bump_attempts，留给下一轮重试
+    失败策略（#9）:
+        - 整批 POST 失败 → 逐条 bump_attempts;到 _MAX_ATTEMPTS → mark_dead_letter
         - 不在此处做指数退避：靠 interval_seconds 节流已足够
-        - 超高 attempts 的条目以后可接入死信（当前阶段 YAGNI）
+        - 死信行不再被 get_pending 取出,避免挤占 batch 名额
+        - dead_letter_total 指标通过 snapshot_metrics 暴露给运维
     """
 
     _instance: Optional["OutboxDrainer"] = None
     _instance_lock = threading.Lock()
+    # #9: 持续失败超过此值的 log_signal 进入死信,不再阻塞 buffer。
+    _MAX_ATTEMPTS = 10
 
     def __init__(self) -> None:
         self._db = None
@@ -178,6 +181,12 @@ class OutboxDrainer:
         self._configured: bool = False
         # 可注入的 HTTP session（方便测试替换）
         self._session: Optional[requests.Session] = None
+        # #9: 监控指标(累计自进程启动)
+        self._flushed_total: int = 0
+        self._failed_total: int = 0
+        self._dead_letter_total: int = 0
+        self._pruned_total: int = 0
+        self._metrics_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # 单例 + 依赖注入
@@ -302,8 +311,18 @@ class OutboxDrainer:
             resp.raise_for_status()
         except Exception as exc:
             err = str(exc)[:500]
+            # #9: 整批失败 → 逐条 bump_attempts;到 _MAX_ATTEMPTS 转死信。
             for row in batch:
-                self._db.bump_log_signal_attempt(row["id"], err)
+                new_attempts = self._db.bump_log_signal_attempt(row["id"], err)
+                self._bump_metric("_failed_total", 1)
+                if new_attempts >= self._MAX_ATTEMPTS:
+                    self._db.mark_log_signal_dead_letter(row["id"], err)
+                    self._bump_metric("_dead_letter_total", 1)
+                    logger.warning(
+                        "log_signal_dead_letter row_id=%d job_id=%s seq_no=%s attempts=%d err=%s",
+                        row["id"], row.get("job_id"), row.get("seq_no"),
+                        new_attempts, err[:200],
+                    )
             logger.warning(
                 "outbox_drainer_post_failed count=%d err=%s",
                 len(batch), err,
@@ -313,6 +332,7 @@ class OutboxDrainer:
         # 成功：批量 ack（后端 ON CONFLICT DO NOTHING 已保证幂等）
         for row in batch:
             self._db.ack_log_signal(row["id"])
+        self._bump_metric("_flushed_total", len(batch))
         logger.debug(
             "outbox_drainer_flushed count=%d url=%s", len(batch), url,
         )
@@ -326,6 +346,7 @@ class OutboxDrainer:
                     keep_recent=self._prune_keep_recent,
                 )
                 if pruned:
+                    self._bump_metric("_pruned_total", pruned)
                     logger.info(
                         "outbox_drainer_pruned deleted=%d kept=%d",
                         pruned, self._prune_keep_recent,
@@ -335,3 +356,21 @@ class OutboxDrainer:
                 logger.exception("outbox_drainer_prune_failed")
 
         return len(batch)
+
+    # ------------------------------------------------------------------
+    # #9: 监控指标(供 heartbeat 拼装)
+    # ------------------------------------------------------------------
+
+    def _bump_metric(self, key: str, delta: int = 1) -> None:
+        with self._metrics_lock:
+            setattr(self, key, getattr(self, key) + delta)
+
+    def snapshot_metrics(self) -> Dict[str, Any]:
+        """快照所有计数器,供 heartbeat 上报。"""
+        with self._metrics_lock:
+            return {
+                "flushed_total":     self._flushed_total,
+                "failed_total":      self._failed_total,
+                "dead_letter_total": self._dead_letter_total,
+                "pruned_total":      self._pruned_total,
+            }

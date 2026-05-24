@@ -119,6 +119,7 @@ class LocalDB:
             );
         """)
         self._ensure_step_trace_schema()
+        self._ensure_log_signal_outbox_schema()
         self._backfill_step_trace_tokens()
         conn.commit()
         logger.info(f"LocalDB initialized: {db_path}")
@@ -169,6 +170,26 @@ class LocalDB:
         if "dead_letter" not in columns:
             self._conn.execute(
                 "ALTER TABLE step_trace_cache "
+                "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
+            )
+
+    def _ensure_log_signal_outbox_schema(self) -> None:
+        """log_signal_outbox 增列 dead_letter (#9):与 step_trace_cache 同套路。
+
+        Why: OutboxDrainer 整批 POST 失败时只 bump_attempts,旧条目永不下台,
+             长跑下 batch 名额被反复重试的死条目挤占,新 signal 推不出去。
+        How to apply: idempotent ALTER + DEFAULT 0,兼容已部署 Agent;
+             get_pending_log_signals 加 dead_letter=0 过滤,prune SQL 显式排除。
+        """
+        columns = {
+            row["name"]
+            for row in self._conn.execute(
+                "PRAGMA table_info(log_signal_outbox)"
+            ).fetchall()
+        }
+        if "dead_letter" not in columns:
+            self._conn.execute(
+                "ALTER TABLE log_signal_outbox "
                 "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
             )
 
@@ -515,11 +536,15 @@ class LocalDB:
                 return cur.lastrowid if cur.rowcount > 0 else None
 
     def get_pending_log_signals(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """取未 ack 的 log_signal；按 id 升序（≈ 入队时间）。"""
+        """取未 ack 且非死信的 log_signal;按 id 升序(≈ 入队时间)。
+
+        #9: dead_letter=1 行不再被取出,避免持续失败的旧条目挤占 batch 名额。
+        """
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, job_id, seq_no, envelope, attempts "
-                "FROM log_signal_outbox WHERE acked = 0 ORDER BY id ASC LIMIT ?",
+                "FROM log_signal_outbox WHERE acked = 0 AND dead_letter = 0 "
+                "ORDER BY id ASC LIMIT ?",
                 (limit,),
             ).fetchall()
         result: List[Dict[str, Any]] = []
@@ -541,7 +566,8 @@ class LocalDB:
                     (row_id,),
                 )
 
-    def bump_log_signal_attempt(self, row_id: int, error: str) -> None:
+    def bump_log_signal_attempt(self, row_id: int, error: str) -> int:
+        """累计 attempts 并返回新值。#9: 返回值便于上游判断是否到死信阈值。"""
         with self._lock:
             with self._conn:
                 self._conn.execute(
@@ -549,15 +575,56 @@ class LocalDB:
                     "last_error = ? WHERE id = ?",
                     (error[:500] if error else None, row_id),
                 )
+                row = self._conn.execute(
+                    "SELECT attempts FROM log_signal_outbox WHERE id = ?",
+                    (row_id,),
+                ).fetchone()
+        return int(row["attempts"]) if row else 0
+
+    def mark_log_signal_dead_letter(self, row_id: int, error: str) -> None:
+        """#9: 标记死信,从此 get_pending_log_signals 不再取出;保留供审计。"""
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE log_signal_outbox SET dead_letter = 1, "
+                    "last_error = ? WHERE id = ?",
+                    (error[:500] if error else None, row_id),
+                )
+
+    def get_log_signal_dead_letters(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """#9: 审计读取死信清单 — 仅供运维/告警面板,不参与重试。"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, job_id, seq_no, envelope, attempts, last_error "
+                "FROM log_signal_outbox WHERE dead_letter = 1 "
+                "ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            result.append({
+                "id":         row["id"],
+                "job_id":     row["job_id"],
+                "seq_no":     row["seq_no"],
+                "envelope":   json.loads(row["envelope"]),
+                "attempts":   row["attempts"],
+                "last_error": row["last_error"],
+            })
+        return result
 
     def prune_acked_log_signals(self, keep_recent: int = 1000) -> int:
-        """删除旧的 acked=1 条目，保留最近 keep_recent 条。"""
+        """删除旧的 acked=1 且 dead_letter=0 条目,保留最近 keep_recent 条。
+
+        #9: 显式排除 dead_letter=1 (虽然死信 acked=0 本身就不会被这条 SQL 命中,
+        但加显式条件提升可读性,与 prune_acked_step_traces 同口径)。
+        """
         with self._lock:
             with self._conn:
                 cur = self._conn.execute(
-                    "DELETE FROM log_signal_outbox WHERE acked = 1 "
+                    "DELETE FROM log_signal_outbox "
+                    "WHERE acked = 1 AND dead_letter = 0 "
                     "AND id NOT IN (SELECT id FROM log_signal_outbox "
-                    "WHERE acked = 1 ORDER BY id DESC LIMIT ?)",
+                    "WHERE acked = 1 AND dead_letter = 0 ORDER BY id DESC LIMIT ?)",
                     (keep_recent,),
                 )
                 return cur.rowcount
