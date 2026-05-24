@@ -53,15 +53,23 @@ async def _rollback_chain_trigger_async(
     plan_run_id: int,
     error: Exception | str,
 ) -> None:
-    pr = await db.get(PlanRun, plan_run_id)
-    if pr is None:
-        return
-    _record_chain_dispatch_failure(pr, error)
-    await db.commit()
-    logger.warning(
-        "plan_chain_trigger_rolled_back plan_run=%d error=%s",
-        plan_run_id, str(error)[:200],
-    )
+    """#4: rollback 自身 try/except — dispatch_plan 内部 commit 抛错时
+    session 可能处于残废态,二次抛会让上层 aggregator 跟着挂。
+    """
+    try:
+        pr = await db.get(PlanRun, plan_run_id)
+        if pr is None:
+            return
+        _record_chain_dispatch_failure(pr, error)
+        await db.commit()
+        logger.warning(
+            "plan_chain_trigger_rolled_back plan_run=%d error=%s",
+            plan_run_id, str(error)[:200],
+        )
+    except Exception:
+        logger.exception(
+            "plan_chain_trigger_rollback_failed plan_run=%d", plan_run_id,
+        )
 
 
 def _rollback_chain_trigger_sync(
@@ -69,15 +77,21 @@ def _rollback_chain_trigger_sync(
     plan_run_id: int,
     error: Exception | str,
 ) -> None:
-    pr = db.get(PlanRun, plan_run_id)
-    if pr is None:
-        return
-    _record_chain_dispatch_failure(pr, error)
-    db.commit()
-    logger.warning(
-        "plan_chain_trigger_sync_rolled_back plan_run=%d error=%s",
-        plan_run_id, str(error)[:200],
-    )
+    """#4: sync 同样防御 — 见 _rollback_chain_trigger_async 注释。"""
+    try:
+        pr = db.get(PlanRun, plan_run_id)
+        if pr is None:
+            return
+        _record_chain_dispatch_failure(pr, error)
+        db.commit()
+        logger.warning(
+            "plan_chain_trigger_sync_rolled_back plan_run=%d error=%s",
+            plan_run_id, str(error)[:200],
+        )
+    except Exception:
+        logger.exception(
+            "plan_chain_trigger_sync_rollback_failed plan_run=%d", plan_run_id,
+        )
 
 
 async def trigger_next_plan(
@@ -139,6 +153,15 @@ async def trigger_next_plan(
         logger.error("plan_chain_dispatch_failed parent=%d err=%s", plan_run.id, exc)
         await _rollback_chain_trigger_async(db, plan_run.id, exc)
         return None
+    except Exception as exc:
+        # #4: 非 PlanDispatchError 兜底 — 网络/DB/SAQ enqueue 等系统错误若不回滚,
+        # next_plan_triggered 留 True 会让后续 aggregator 重试因 CAS 失败而链断。
+        # swallow + return None 保 aggregator 主流程不挂,留给下次 aggregator 重试。
+        logger.exception(
+            "plan_chain_dispatch_unexpected_error parent=%d", plan_run.id,
+        )
+        await _rollback_chain_trigger_async(db, plan_run.id, exc)
+        return None
 
     logger.info(
         "plan_chain_triggered parent=%d child=%d chain_index=%d",
@@ -197,6 +220,13 @@ def trigger_next_plan_sync(
         )
     except SyncPlanDispatchError as exc:
         logger.error("plan_chain_dispatch_sync_failed parent=%d err=%s", plan_run.id, exc)
+        _rollback_chain_trigger_sync(db, plan_run.id, exc)
+        return None
+    except Exception as exc:
+        # #4: 同 async 路径 — 非 PlanDispatchError 系统错误也走 rollback。
+        logger.exception(
+            "plan_chain_dispatch_sync_unexpected_error parent=%d", plan_run.id,
+        )
         _rollback_chain_trigger_sync(db, plan_run.id, exc)
         return None
 
