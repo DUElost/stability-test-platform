@@ -7,6 +7,7 @@ import { useToast } from '@/components/ui/toast';
 import { api, type ScriptEntry } from '@/utils/api';
 import { Search, FileCode, Code2, Tag, RefreshCw, AlertCircle } from 'lucide-react';
 import ScriptVersionDialog from './ScriptVersionDialog';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 export default function ScriptManagementPage() {
   const queryClient = useQueryClient();
@@ -51,7 +52,7 @@ export default function ScriptManagementPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <PageContainer className="max-w-5xl">
       <ScriptVersionDialog
         open={showVersionDialog}
         script={versionTarget}
@@ -63,10 +64,7 @@ export default function ScriptManagementPage() {
         }}
       />
 
-      <div>
-        <h1 className="text-2xl font-semibold text-gray-900">脚本管理</h1>
-        <p className="text-gray-500 mt-1">管理脚本目录、默认参数与版本。修改默认参数需创建新版本。</p>
-      </div>
+      <PageHeader title="脚本管理" subtitle="管理脚本目录、默认参数与版本。修改默认参数需创建新版本。" />
 
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
@@ -163,6 +161,6 @@ export default function ScriptManagementPage() {
           })}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

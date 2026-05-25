@@ -1,12 +1,10 @@
 import { Settings, Database, Globe, Bell } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 export default function SettingsPage() {
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold text-gray-900 mb-1">系统设置</h2>
-        <p className="text-sm text-gray-400">管理平台全局配置</p>
-      </div>
+    <PageContainer>
+      <PageHeader title="系统设置" subtitle="管理平台全局配置" />
 
       <div className="grid gap-4 max-w-2xl">
         {/* 通用设置 */}
@@ -106,6 +104,6 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }

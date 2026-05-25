@@ -9,8 +9,7 @@
 
 export const planKeys = {
   /** Plan list queries — scoped by limit to avoid cache collision between
-   *  PlanListPage (limit=100), PlanExecutePage (limit=100), and
-   *  TaskList (limit=200 + refetchInterval).
+   *  PlanListPage (limit=100) and PlanExecutePage (limit=100).
    */
   list: (limit: number) => ['plans', { limit }] as const,
 

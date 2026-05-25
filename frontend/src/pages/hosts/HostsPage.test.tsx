@@ -64,17 +64,6 @@ vi.mock('./components/AddHostModal', () => ({
     isOpen ? <div data-testid="add-host-modal">Add Host Modal</div> : null,
 }));
 
-// Mock clean-card and clean-button
-vi.mock('../../components/ui/clean-card', () => ({
-  CleanCard: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-}));
-
-vi.mock('../../components/ui/clean-button', () => ({
-  CleanButton: ({ children, onClick, ...props }: any) => (
-    <button onClick={onClick} {...props}>{children}</button>
-  ),
-}));
-
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },

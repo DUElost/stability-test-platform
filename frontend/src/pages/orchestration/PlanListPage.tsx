@@ -38,6 +38,10 @@ import { Plus, Edit, Trash2, Search, FileText, Play } from 'lucide-react';
 
 
 
+import { PageContainer, PageHeader } from '@/components/layout';
+
+
+
 
 
 
@@ -202,23 +206,11 @@ export default function PlanListPage() {
 
 
 
-    <div className="space-y-6 max-w-5xl">
+    <PageContainer className="max-w-5xl">
 
 
 
-      <div>
-
-
-
-        <h1 className="text-2xl font-semibold text-gray-900">Plan 编排</h1>
-
-
-
-        <p className="text-gray-500 mt-1">基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链</p>
-
-
-
-      </div>
+      <PageHeader title="Plan 编排" subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链" />
 
 
 
@@ -594,7 +586,7 @@ export default function PlanListPage() {
 
 
 
-    </div>
+    </PageContainer>
 
 
 

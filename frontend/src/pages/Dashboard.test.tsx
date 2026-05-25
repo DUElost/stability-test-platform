@@ -70,6 +70,12 @@ vi.mock('@/mappers', () => ({
 
 vi.mock('../components/layout', () => ({
   PageContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  PageHeader: ({ title, subtitle }: { title: string; subtitle?: string }) => (
+    <div>
+      <h2>{title}</h2>
+      {subtitle && <p>{subtitle}</p>}
+    </div>
+  ),
 }));
 
 function createWrapper() {

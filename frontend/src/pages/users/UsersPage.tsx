@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Loader2, AlertCircle } from 'lucide-react';
-import { CleanCard } from '@/components/ui/clean-card';
-import { CleanButton } from '@/components/ui/clean-button';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { UserTable } from './components/UserTable';
 import { UserModal } from './components/UserModal';
 import { api, type User } from '@/utils/api';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 export default function UsersPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -119,26 +120,20 @@ export default function UsersPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">用户管理</h2>
-          <p className="text-sm text-gray-400">管理系统用户和权限</p>
-        </div>
+      <PageContainer>
+        <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
         <div className="flex items-center justify-center h-64">
           <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
   if (error) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">用户管理</h2>
-          <p className="text-sm text-gray-400">管理系统用户和权限</p>
-        </div>
-        <CleanCard className="p-6">
+      <PageContainer>
+        <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
+        <Card className="p-6">
           <div className="flex items-center gap-3 text-red-600">
             <AlertCircle className="w-5 h-5" />
             <div>
@@ -148,24 +143,23 @@ export default function UsersPage() {
               </p>
             </div>
           </div>
-        </CleanCard>
-      </div>
+        </Card>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">用户管理</h2>
-          <p className="text-sm text-gray-400">管理系统用户和权限</p>
-        </div>
-        <CleanButton variant="primary" onClick={() => setIsModalOpen(true)}>
-          <Plus className="w-4 h-4" />
-          添加用户
-        </CleanButton>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="用户管理"
+        subtitle="管理系统用户和权限"
+        action={
+          <Button onClick={() => setIsModalOpen(true)}>
+            <Plus className="w-4 h-4" />
+            添加用户
+          </Button>
+        }
+      />
 
       {/* User Table */}
       {users && users.length > 0 ? (
@@ -177,7 +171,7 @@ export default function UsersPage() {
           onToggleActive={handleToggleActive}
         />
       ) : (
-        <CleanCard className="p-12 text-center">
+        <Card className="p-12 text-center">
           <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-slate-50 flex items-center justify-center">
             <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
@@ -185,11 +179,11 @@ export default function UsersPage() {
           </div>
           <h3 className="text-lg font-medium text-gray-900 mb-2">暂无用户</h3>
           <p className="text-sm text-gray-400 mb-4">添加您的第一个用户以开始使用。</p>
-          <CleanButton variant="primary" onClick={() => setIsModalOpen(true)}>
+          <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />
             添加用户
-          </CleanButton>
-        </CleanCard>
+          </Button>
+        </Card>
       )}
 
       {/* Add User Modal */}
@@ -209,6 +203,6 @@ export default function UsersPage() {
         isSubmitting={updateMutation.isPending}
         editUser={editUser}
       />
-    </div>
+    </PageContainer>
   );
 }

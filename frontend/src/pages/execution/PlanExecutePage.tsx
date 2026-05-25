@@ -38,6 +38,10 @@ import { Play, Smartphone, AlertCircle, Eye } from 'lucide-react';
 
 
 
+import { PageContainer, PageHeader } from '@/components/layout';
+
+
+
 
 
 
@@ -730,7 +734,7 @@ export default function PlanExecutePage() {
 
 
 
-    <div className="space-y-6 max-w-3xl">
+    <PageContainer className="max-w-3xl">
 
 
 
@@ -738,23 +742,7 @@ export default function PlanExecutePage() {
 
 
 
-
-
-
-
-      <div>
-
-
-
-        <h1 className="text-2xl font-semibold text-gray-900">Plan 执行</h1>
-
-
-
-        <p className="text-gray-500 mt-1">选择已保存的 Plan 和目标设备，创建 PlanRun</p>
-
-
-
-      </div>
+      <PageHeader title="Plan 执行" subtitle="选择已保存的 Plan 和目标设备，创建 PlanRun" />
 
 
 
@@ -1046,7 +1034,7 @@ export default function PlanExecutePage() {
 
 
 
-    </div>
+    </PageContainer>
 
 
 

@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { Plus, Trash2, Wifi, WifiOff, Pencil, X } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 const FORM_INITIAL = {
   name: '',
@@ -103,21 +104,21 @@ export default function WifiPage() {
   const pending = createMutation.isLoading || updateMutation.isLoading;
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">WiFi 资源池</h1>
-          <p className="mt-1 text-sm text-gray-500">管理 WiFi 路由器池，平台按容量自动为设备分配接入点</p>
-        </div>
-        <Button
-          type="button"
-          onClick={() => { resetForm(); setShowCreate(true); }}
-          disabled={showCreate}
-        >
-          <Plus className="mr-2 h-4 w-4" />
-          新增 WiFi 池
-        </Button>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="WiFi 资源池"
+        subtitle="管理 WiFi 路由器池，平台按容量自动为设备分配接入点"
+        action={
+          <Button
+            type="button"
+            onClick={() => { resetForm(); setShowCreate(true); }}
+            disabled={showCreate}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            新增 WiFi 池
+          </Button>
+        }
+      />
 
       {(showCreate || editingId) && (
         <Card>
@@ -282,6 +283,6 @@ export default function WifiPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }

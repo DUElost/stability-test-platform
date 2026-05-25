@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, NotificationChannel, AlertRule } from '@/utils/api';
-import { CleanCard } from '@/components/ui/clean-card';
+import { Card } from '@/components/ui/card';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import {
@@ -13,6 +13,7 @@ import {
   ToggleLeft,
   ToggleRight,
 } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 type TabKey = 'channels' | 'rules';
 
@@ -183,11 +184,8 @@ export default function NotificationsPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold text-gray-900 mb-1">通知管理</h2>
-        <p className="text-sm text-gray-400">配置通知渠道和告警规则</p>
-      </div>
+    <PageContainer>
+      <PageHeader title="通知管理" subtitle="配置通知渠道和告警规则" />
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
@@ -206,9 +204,9 @@ export default function NotificationsPage() {
       </div>
 
       {loading ? (
-        <CleanCard className="p-8 text-center">
+        <Card className="p-8 text-center">
           <Loader2 className="w-8 h-8 mx-auto animate-spin text-gray-400" />
-        </CleanCard>
+        </Card>
       ) : tab === 'channels' ? (
         <div className="space-y-3">
           <div className="flex justify-end">
@@ -221,10 +219,10 @@ export default function NotificationsPage() {
           </div>
 
           {channels.length === 0 ? (
-            <CleanCard className="p-8 text-center text-gray-400">暂无通知渠道</CleanCard>
+            <Card className="p-8 text-center text-gray-400">暂无通知渠道</Card>
           ) : (
             channels.map((ch) => (
-              <CleanCard key={ch.id} className="px-5 py-4 flex items-center justify-between">
+              <Card key={ch.id} className="px-5 py-4 flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-2">
                     <Bell size={16} className="text-gray-500" />
@@ -253,7 +251,7 @@ export default function NotificationsPage() {
                     <Trash2 size={14} />
                   </button>
                 </div>
-              </CleanCard>
+              </Card>
             ))
           )}
         </div>
@@ -270,12 +268,12 @@ export default function NotificationsPage() {
           </div>
 
           {rules.length === 0 ? (
-            <CleanCard className="p-8 text-center text-gray-400">
+            <Card className="p-8 text-center text-gray-400">
               {channels.length === 0 ? '请先添加通知渠道' : '暂无告警规则'}
-            </CleanCard>
+            </Card>
           ) : (
             rules.map((rule) => (
-              <CleanCard key={rule.id} className="px-5 py-4 flex items-center justify-between">
+              <Card key={rule.id} className="px-5 py-4 flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-gray-900">{rule.name}</span>
@@ -298,7 +296,7 @@ export default function NotificationsPage() {
                     <Trash2 size={14} />
                   </button>
                 </div>
-              </CleanCard>
+              </Card>
             ))
           )}
         </div>
@@ -428,6 +426,6 @@ export default function NotificationsPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

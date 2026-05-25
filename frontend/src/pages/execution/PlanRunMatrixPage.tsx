@@ -10,6 +10,7 @@ import {
   ArrowLeft, RefreshCw, Play, CheckCircle, XCircle, AlertTriangle,
   Clock, Activity,
 } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 const TERMINAL_STATUSES = ['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'DEGRADED'];
 
@@ -78,26 +79,24 @@ export default function PlanRunMatrixPage() {
   }, {} as Record<string, number>) ?? {};
 
   return (
-    <div className="space-y-6 max-w-6xl">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => navigate('/execution/plan-runs')}>
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900">PlanRun #{id}</h1>
-            {run && (
-              <p className="text-sm text-gray-500">
-                Plan #{run.plan_id} &middot; {run.run_type} &middot;
-                <span className={runTerminal ? 'text-green-600' : 'text-blue-600'}> {run.status}</span>
-              </p>
-            )}
-          </div>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => { /* refresh handled by queryClient */ }}>
-          <RefreshCw className="w-4 h-4 mr-1" /> 刷新
+    <PageContainer className="max-w-6xl">
+      <div>
+        <Button variant="ghost" size="sm" onClick={() => navigate('/execution/plan-runs')} className="-ml-2 mb-2 text-xs text-gray-500">
+          <ArrowLeft className="w-3.5 h-3.5 mr-1" /> 返回执行列表
         </Button>
+        <PageHeader
+          title={`PlanRun #${id}`}
+          subtitle={
+            run
+              ? `Plan #${run.plan_id} · ${run.run_type} · ${run.status}`
+              : undefined
+          }
+          action={
+            <Button variant="outline" size="sm" onClick={() => { /* refresh handled by queryClient */ }}>
+              <RefreshCw className="w-4 h-4 mr-1" /> 刷新
+            </Button>
+          }
+        />
       </div>
 
       {/* Stats */}
@@ -189,6 +188,6 @@ export default function PlanRunMatrixPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

@@ -10,13 +10,11 @@ import RegisterPage from '../pages/auth/RegisterPage';
 
 // All other pages use React.lazy for route-level code splitting
 const Dashboard = lazy(() => import('../pages/Dashboard'));
-const TaskList = lazy(() => import('../pages/tasks/TaskList'));
 const TaskDetails = lazy(() => import('../pages/tasks/TaskDetails'));
 const RunReportPage = lazy(() => import('../pages/tasks/RunReportPage'));
 const HostsPage = lazy(() => import('../pages/hosts/HostsPage'));
 const DevicesPage = lazy(() => import('../pages/devices/DevicesPage'));
 const ResultsPage = lazy(() => import('../pages/results/ResultsPage'));
-const MapReducePage = lazy(() => import('../pages/mapreduce/MapReducePage'));
 const WifiPage = lazy(() => import('../pages/wifi/WifiPage'));
 const UsersPage = lazy(() => import('../pages/users/UsersPage'));
 const NotificationsPage = lazy(() => import('../pages/notifications/NotificationsPage'));
@@ -27,7 +25,6 @@ const AuditLogPage = lazy(() => import('../pages/audit/AuditLogPage'));
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage'));
 const IssueTrackerPage = lazy(() => import('../pages/issues/IssueTrackerPage'));
 const ResourcesPage = lazy(() => import('../pages/resources/ResourcesPage'));
-const TaskRunsPage = lazy(() => import('../pages/task-runs/TaskRunsPage'));
 // ADR-0020 Plan 层页面
 const PlanListPage = lazy(() => import('../pages/orchestration/PlanListPage'));
 const PlanEditPage = lazy(() => import('../pages/orchestration/PlanEditPage'));
@@ -78,7 +75,7 @@ export default function AppRouter() {
             <Route index element={<Dashboard />} />
 
             <Route path="tasks">
-              <Route index element={<TaskList />} />
+              <Route index element={<Navigate to="/orchestration/plans" replace />} />
               <Route path="new" element={<Navigate to="/execution/plan-execute" replace />} />
               <Route path=":taskId" element={<TaskDetails />} />
             </Route>
@@ -91,7 +88,6 @@ export default function AppRouter() {
             <Route path="devices" element={<DevicesPage />} />
             <Route path="wifi" element={<WifiPage />} />
             <Route path="results" element={<ResultsPage />} />
-            <Route path="mapreduce" element={<MapReducePage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="settings" element={<SettingsPage />} />
@@ -100,7 +96,6 @@ export default function AppRouter() {
             <Route path="audit" element={<AuditLogPage />} />
             <Route path="issue-tracker" element={<IssueTrackerPage />} />
             <Route path="resources" element={<ResourcesPage />} />
-            <Route path="task-runs" element={<TaskRunsPage />} />
 
             {/* ADR-0020 Plan 路由 */}
             <Route path="orchestration">

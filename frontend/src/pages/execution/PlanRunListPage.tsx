@@ -4,6 +4,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { api } from '@/utils/api';
 import { Play, Clock, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 const STATUS_CONFIG: Record<string, { color: string; icon: React.ElementType; label: string }> = {
   RUNNING: { color: 'bg-blue-100 text-blue-700', icon: Play, label: '运行中' },
@@ -23,11 +24,8 @@ export default function PlanRunListPage() {
   });
 
   return (
-    <div className="space-y-6 max-w-5xl">
-      <div>
-        <h1 className="text-2xl font-semibold text-gray-900">Plan 执行记录</h1>
-        <p className="text-gray-500 mt-1">查看所有 PlanRun 历史记录</p>
-      </div>
+    <PageContainer className="max-w-5xl">
+      <PageHeader title="Plan 执行记录" subtitle="查看所有 PlanRun 历史记录" />
 
       {isLoading ? (
         <div className="space-y-3"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
@@ -63,6 +61,6 @@ export default function PlanRunListPage() {
           })}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

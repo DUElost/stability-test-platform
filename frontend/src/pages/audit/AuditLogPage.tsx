@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '@/utils/api';
 import { Loader2, Shield } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 interface AuditLogEntry {
   id: number;
@@ -50,13 +51,8 @@ export default function AuditLogPage() {
   useEffect(() => { loadLogs(); }, [page, filters]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">操作日志</h2>
-          <p className="text-sm text-gray-400">查看系统操作审计记录（仅管理员）</p>
-        </div>
-      </div>
+    <PageContainer>
+      <PageHeader title="操作日志" subtitle="查看系统操作审计记录（仅管理员）" />
 
       {/* Filters */}
       <div className="flex gap-3 flex-wrap">
@@ -171,6 +167,6 @@ export default function AuditLogPage() {
           </div>
         </>
       )}
-    </div>
+    </PageContainer>
   );
 }

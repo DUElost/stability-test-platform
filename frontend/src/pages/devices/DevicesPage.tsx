@@ -6,8 +6,9 @@ import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { DeviceMetricsModal } from './components/DeviceMetricsModal';
 import { api } from '../../utils/api';
-import { CleanCard } from '../../components/ui/clean-card';
-import { CleanButton } from '../../components/ui/clean-button';
+import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 const deviceStatusMap: Record<string, DeviceStatus> = {
   'ONLINE': 'idle',
@@ -75,45 +76,38 @@ export default function DevicesPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">设备管理</h2>
-          <p className="text-sm text-gray-400">管理和监控测试设备</p>
-        </div>
+      <PageContainer>
+        <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <div className="flex items-center justify-center h-64">
           <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
   if (error) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">设备管理</h2>
-          <p className="text-sm text-gray-400">管理和监控测试设备</p>
-        </div>
+      <PageContainer>
+        <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <div className="p-4 bg-red-50 text-red-600 rounded-lg border border-red-100">
           加载设备失败，请检查后端服务连接。
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">设备管理</h2>
-          <p className="text-sm text-gray-400">管理和监控测试设备</p>
-        </div>
-        <CleanButton variant="primary" onClick={() => setIsModalOpen(true)}>
-          <Plus className="w-4 h-4" />
-          添加设备
-        </CleanButton>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="设备管理"
+        subtitle="管理和监控测试设备"
+        action={
+          <Button onClick={() => setIsModalOpen(true)}>
+            <Plus className="w-4 h-4" />
+            添加设备
+          </Button>
+        }
+      />
 
       {/* Device Table */}
       {formattedDevices.length > 0 ? (
@@ -127,14 +121,14 @@ export default function DevicesPage() {
           />
         </div>
       ) : (
-        <CleanCard className="p-12 text-center">
+        <Card className="p-12 text-center">
           <h3 className="text-lg font-medium text-gray-900 mb-2">暂无设备</h3>
           <p className="text-sm text-gray-400 mb-4">添加您的第一台设备以开始使用。</p>
-          <CleanButton variant="primary" onClick={() => setIsModalOpen(true)}>
+          <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />
             添加设备
-          </CleanButton>
-        </CleanCard>
+          </Button>
+        </Card>
       )}
 
       <AddDeviceModal
@@ -152,6 +146,6 @@ export default function DevicesPage() {
           deviceSerial={metricsDevice.serial}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }

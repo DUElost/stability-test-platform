@@ -1,7 +1,7 @@
-import { useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Wifi, Wrench, HardDrive, ChevronRight } from 'lucide-react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Card, CardContent } from '@/components/ui/card';
+import { Wifi, Code2, ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 interface ResourceCardProps {
   title: string;
@@ -33,102 +33,24 @@ function ResourceCard({ title, description, icon: Icon, to }: ResourceCardProps)
 }
 
 export default function ResourcesPage() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'wifi' | 'storage'>('overview');
-
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-gray-900">环境资源</h1>
-        <p className="text-gray-500 mt-1">管理 WiFi 配置、存储工具等环境资源</p>
+    <PageContainer>
+      <PageHeader title="环境资源" subtitle="管理测试所需的 WiFi 配置、脚本等环境资源" />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <ResourceCard
+          title="WiFi 资源池"
+          description="配置和管理设备 WiFi 连接池"
+          icon={Wifi}
+          to="/wifi"
+        />
+        <ResourceCard
+          title="脚本库"
+          description="查看与管理可调用的测试脚本"
+          icon={Code2}
+          to="/script-management"
+        />
       </div>
-
-      <div className="flex gap-2 border-b">
-        <button
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'overview'
-              ? 'border-blue-500 text-blue-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-          onClick={() => setActiveTab('overview')}
-        >
-          概览
-        </button>
-        <button
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'wifi'
-              ? 'border-blue-500 text-blue-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-          onClick={() => setActiveTab('wifi')}
-        >
-          WiFi 管理
-        </button>
-        <button
-          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === 'storage'
-              ? 'border-blue-500 text-blue-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700'
-          }`}
-          onClick={() => setActiveTab('storage')}
-        >
-          存储工具
-        </button>
-      </div>
-
-      {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <ResourceCard
-            title="WiFi 管理"
-            description="配置和管理设备 WiFi 连接"
-            icon={Wifi}
-            to="/wifi"
-          />
-          <ResourceCard
-            title="存储工具"
-            description="脚本执行与调度"
-            icon={HardDrive}
-            to="/scripts"
-          />
-        </div>
-      )}
-
-      {activeTab === 'wifi' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>WiFi 管理</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-center py-8 text-gray-500">
-              <Wifi className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-              <p>WiFi 管理功能</p>
-              <p className="text-sm mt-2">
-                <Link to="/wifi" className="text-blue-600 hover:underline">
-                  跳转到 WiFi 管理页面
-                </Link>
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {activeTab === 'storage' && (
-        <Card>
-          <CardHeader>
-            <CardTitle>存储工具</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="text-center py-8 text-gray-500">
-              <Wrench className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-              <p>脚本执行功能</p>
-              <p className="text-sm mt-2">
-                <Link to="/scripts" className="text-blue-600 hover:underline">
-                  跳转到脚本专项页面
-                </Link>
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+    </PageContainer>
   );
 }

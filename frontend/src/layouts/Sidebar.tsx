@@ -15,6 +15,10 @@ import {
   Shield,
   Rocket,
   Code2,
+  CalendarClock,
+  BellRing,
+  Users,
+  Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -29,28 +33,33 @@ interface NavGroup {
   items: NavItem[];
 }
 
-// 样板风格的导航配置
 const navGroups: NavGroup[] = [
   {
-    label: '监控总览',
+    label: '概览',
     items: [
       { path: '/', label: '仪表盘', icon: LayoutDashboard },
     ],
   },
   {
-    label: 'Plan 编排 (ADR-0020)',
+    label: '测试编排',
     items: [
       { path: '/orchestration/plans', label: 'Plan 管理', icon: FileBox },
-      { path: '/execution/plan-execute', label: 'Plan 执行', icon: Rocket },
-      { path: '/execution/plan-runs', label: 'Plan 记录', icon: ListTodo },
+      { path: '/execution/plan-execute', label: '触发执行', icon: Rocket },
+      { path: '/execution/plan-runs', label: '执行记录', icon: ListTodo },
     ],
   },
   {
-    label: '资源管理',
+    label: '测试资产',
+    items: [
+      { path: '/script-management', label: '脚本库', icon: Code2 },
+      { path: '/resources', label: '环境资源', icon: Folder },
+    ],
+  },
+  {
+    label: '主机与设备',
     items: [
       { path: '/hosts', label: '主机集群', icon: Server },
       { path: '/devices', label: '物理设备', icon: Smartphone },
-      { path: '/resources', label: '环境资源', icon: Folder },
     ],
   },
   {
@@ -61,11 +70,13 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: '系统管理',
+    label: '系统',
     items: [
-      { path: '/script-management', label: '脚本管理', icon: Code2 },
-      { path: '/schedules', label: '定时调度', icon: Rocket },
+      { path: '/schedules', label: '定时调度', icon: CalendarClock },
+      { path: '/notifications', label: '通知管理', icon: BellRing },
+      { path: '/users', label: '用户管理', icon: Users },
       { path: '/audit', label: '操作日志', icon: Shield },
+      { path: '/settings', label: '系统设置', icon: Settings },
     ],
   },
 ];
@@ -153,6 +164,7 @@ export default function Sidebar({
                     key={item.path}
                     to={item.path}
                     onClick={onNavigate}
+                    aria-label={collapsed ? item.label : undefined}
                     className={cn(
                       "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group",
                       isActive

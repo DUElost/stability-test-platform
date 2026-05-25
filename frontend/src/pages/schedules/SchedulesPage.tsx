@@ -4,6 +4,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
 import { Plus, Trash2, Edit2, Play, Loader2, Power } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 interface ScheduleForm {
   name: string;
@@ -155,33 +156,30 @@ export default function SchedulesPage() {
 
   if (loading) {
     return (
-      <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">定时任务</h2>
-          <p className="text-sm text-gray-400">管理 Cron 定时执行的 Plan</p>
-        </div>
+      <PageContainer>
+        <PageHeader title="定时任务" subtitle="管理 Cron 定时执行的 Plan" />
         <div className="flex items-center justify-center h-64">
           <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
         </div>
-      </div>
+      </PageContainer>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">定时任务</h2>
-          <p className="text-sm text-gray-400">管理 Cron 定时执行的 Plan</p>
-        </div>
-        <button
-          onClick={openCreate}
-          className="inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-medium transition-all text-sm"
-        >
-          <Plus className="w-4 h-4" />
-          新建定时任务
-        </button>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="定时任务"
+        subtitle="管理 Cron 定时执行的 Plan"
+        action={
+          <button
+            onClick={openCreate}
+            className="inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-medium transition-all text-sm"
+          >
+            <Plus className="w-4 h-4" />
+            新建定时任务
+          </button>
+        }
+      />
 
       {showForm && (
         <div className="bg-white rounded-xl border border-gray-200 p-6 max-w-lg">
@@ -313,6 +311,6 @@ export default function SchedulesPage() {
           </table>
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

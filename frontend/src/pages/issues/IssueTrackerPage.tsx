@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { api, type JiraDraft, type PlanRun } from '@/utils/api';
 import apiClient from '@/utils/api/client';
 import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 const PRIORITY_BADGE: Record<string, string> = {
   Critical: 'bg-red-100 text-red-700',
@@ -60,17 +61,17 @@ export default function IssueTrackerPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">问题追踪</h1>
-          <p className="text-gray-500 mt-1">查看任务生成的 JIRA 草稿</p>
-        </div>
-        <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
-          <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-          刷新
-        </Button>
-      </div>
+    <PageContainer>
+      <PageHeader
+        title="问题追踪"
+        subtitle="查看任务生成的 JIRA 草稿"
+        action={
+          <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
+            <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+            刷新
+          </Button>
+        }
+      />
 
       <Card>
         <CardHeader>
@@ -142,6 +143,6 @@ export default function IssueTrackerPage() {
           </ul>
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api } from '@/utils/api';
 import { KeyRound } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 export default function ChangePasswordPage() {
   const [oldPassword, setOldPassword] = useState('');
@@ -37,11 +38,8 @@ export default function ChangePasswordPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold text-gray-900 mb-1">修改密码</h2>
-        <p className="text-sm text-gray-400">更新您的账号登录密码</p>
-      </div>
+    <PageContainer>
+      <PageHeader title="修改密码" subtitle="更新您的账号登录密码" />
 
       <div className="bg-white rounded-xl border border-gray-200 p-6 max-w-lg">
         <div className="flex items-center gap-2 mb-4">
@@ -99,6 +97,6 @@ export default function ChangePasswordPage() {
           </button>
         </form>
       </div>
-    </div>
+    </PageContainer>
   );
 }

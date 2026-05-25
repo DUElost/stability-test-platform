@@ -14,10 +14,6 @@ interface PageHeaderProps {
   breadcrumbs?: BreadcrumbItem[];
 }
 
-/**
- * 页面头部组件
- * 统一标题、副标题、操作按钮和面包屑导航
- */
 export const PageHeader: React.FC<PageHeaderProps> = ({
   title,
   subtitle,
@@ -26,44 +22,42 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
 }) => {
   return (
     <div className="space-y-3">
-      {/* 面包屑导航 */}
       {breadcrumbs && breadcrumbs.length > 0 && (
-        <nav className="flex items-center text-sm text-slate-500">
+        <nav className="flex items-center text-sm text-gray-500">
           <Link
             to="/"
-            className="flex items-center hover:text-blue-600 transition-colors"
+            className="flex items-center hover:text-gray-900 transition-colors"
           >
             <Home size={14} className="mr-1" />
-            Home
+            首页
           </Link>
           {breadcrumbs.map((item, index) => (
             <React.Fragment key={index}>
-              <ChevronRight size={14} className="mx-2 text-slate-300" />
+              <ChevronRight size={14} className="mx-2 text-gray-300" />
               {item.path ? (
                 <Link
                   to={item.path}
-                  className="hover:text-blue-600 transition-colors"
+                  className="hover:text-gray-900 transition-colors"
                 >
                   {item.label}
                 </Link>
               ) : (
-                <span className="text-slate-700 font-medium">{item.label}</span>
+                <span className="text-gray-700 font-medium">{item.label}</span>
               )}
             </React.Fragment>
           ))}
         </nav>
       )}
 
-      {/* 标题栏 */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">{title}</h1>
+          <h2 className="text-2xl font-semibold text-gray-900 mb-1">{title}</h2>
           {subtitle && (
-            <p className="text-slate-500 mt-1">{subtitle}</p>
+            <p className="text-sm text-gray-400">{subtitle}</p>
           )}
         </div>
         {action && (
-          <div className="flex-shrink-0">{action}</div>
+          <div className="flex-shrink-0 flex items-center gap-2">{action}</div>
         )}
       </div>
     </div>

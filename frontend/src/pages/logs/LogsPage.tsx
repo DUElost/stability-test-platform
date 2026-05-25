@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, type RuntimeLogEntry, type Plan, type PlanRun } from '@/utils/api';
 import { useSocketIO as useWebSocket, type WebSocketMessage } from '@/hooks/useSocketIO';
 import {
-  FileSearch,
   RefreshCw,
   Download,
   Search,
@@ -13,7 +12,8 @@ import {
   Radio,
   ChevronsUp,
 } from 'lucide-react';
-import { CleanCard } from '@/components/ui/clean-card';
+import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/layout';
 import { formatLocalDateTime, parseIsoToDate } from '@/utils/time';
 
 interface DisplayLog extends RuntimeLogEntry {
@@ -437,38 +437,30 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   return (
     <div className={`${embedded ? 'min-h-[72vh]' : 'h-full'} flex flex-col`}>
       {!embedded && (
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-slate-100 p-2">
-              <FileSearch className="h-6 w-6 text-slate-700" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-semibold text-gray-900">日志总览</h1>
-              <p className="text-sm text-gray-500">
-                {isLiveMode ? (isConnected ? '实时连接中' : '实时未连接') : '历史聚合模式'}
-                {selectedRunId && ` | Job: #${selectedRunId}`}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                void loadTasks();
-                void loadRuns(selectedTaskId);
-                void handleRefreshLogs();
-              }}
-              className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              <RefreshCw className="h-4 w-4" />
-              刷新
-            </button>
-          </div>
+        <div className="mb-4">
+          <PageHeader
+            title="日志总览"
+            subtitle={`${isLiveMode ? (isConnected ? '实时连接中' : '实时未连接') : '历史聚合模式'}${selectedRunId ? ` | Job: #${selectedRunId}` : ''}`}
+            action={
+              <button
+                onClick={() => {
+                  void loadTasks();
+                  void loadRuns(selectedTaskId);
+                  void handleRefreshLogs();
+                }}
+                className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                <RefreshCw className="h-4 w-4" />
+                刷新
+              </button>
+            }
+          />
         </div>
       )}
 
       <div className="flex min-h-0 flex-1 gap-4">
         <div className="w-80 flex-shrink-0">
-          <CleanCard className="flex h-full flex-col overflow-hidden">
+          <Card className="flex h-full flex-col overflow-hidden">
             <div className="border-b border-gray-100 p-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-medium text-gray-900">任务视图</h3>
@@ -526,11 +518,11 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                 </div>
               )}
             </div>
-          </CleanCard>
+          </Card>
         </div>
 
         <div className="w-72 flex-shrink-0">
-          <CleanCard className="flex h-full flex-col overflow-hidden">
+          <Card className="flex h-full flex-col overflow-hidden">
             <div className="border-b border-gray-100 p-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-medium text-gray-900">执行节点</h3>
@@ -599,11 +591,11 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                 </div>
               )}
             </div>
-          </CleanCard>
+          </Card>
         </div>
 
         <div className="min-w-0 flex-1">
-          <CleanCard className="flex h-full flex-col overflow-hidden">
+          <Card className="flex h-full flex-col overflow-hidden">
             <div className="border-b border-gray-100 p-3">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <button
@@ -787,7 +779,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
               </span>
               <span>has_more: {hasMore ? 'yes' : 'no'}</span>
             </div>
-          </CleanCard>
+          </Card>
         </div>
       </div>
     </div>

@@ -1,10 +1,11 @@
 import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import { Menu, Bell, ChevronRight, FileText, Settings, LogOut, User, ChevronDown, Loader2, BellRing, Users, Shield, KeyRound } from 'lucide-react';
+import { Menu, ChevronRight, FileText, LogOut, User, ChevronDown, Loader2, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { disconnectDashSocket } from '@/hooks/useSocketIO';
+import { useAuthSession } from '@/hooks/useAuthSession';
 import { api } from '@/utils/api';
 
 /**
@@ -15,8 +16,9 @@ export default function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [showSystemMenu, setShowSystemMenu] = useState(false);
   const navigate = useNavigate();
+  const sessionQ = useAuthSession();
+  const currentUser = sessionQ.data;
 
   // 监听窗口大小变化
   useEffect(() => {
@@ -63,7 +65,7 @@ export default function AppShell() {
       {/* 移动端遮罩层 */}
       {isMobile && sidebarOpen && (
         <div
-          className="fixed inset-0 bg-gray-900/10 z-40 transition-opacity duration-300"
+          className="fixed inset-0 bg-gray-900/40 z-40 transition-opacity duration-300"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -102,7 +104,8 @@ export default function AppShell() {
       {!isMobile && sidebarCollapsed && (
         <button
           onClick={toggleSidebarCollapse}
-          className="fixed left-[72px] top-6 z-40 h-6 w-6 rounded-full border border-gray-200 bg-white shadow-sm hover:bg-gray-50 flex items-center justify-center transition-all duration-200"
+          aria-label="展开侧边栏"
+          className="fixed left-[60px] top-1/2 -translate-y-1/2 z-40 h-6 w-6 rounded-full border border-gray-200 bg-white shadow-sm hover:bg-gray-50 flex items-center justify-center transition-all duration-200"
         >
           <ChevronRight size={14} className="text-gray-500" />
         </button>
@@ -122,76 +125,25 @@ export default function AppShell() {
 
             <div className="flex-1" />
 
-            {/* Right side: Notifications & User Menu */}
+            {/* Right side: User Menu */}
             <div className="flex items-center gap-2">
-              {/* System Menu */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowSystemMenu(!showSystemMenu)}
-                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg"
-                  aria-label="系统管理"
-                >
-                  <Settings className="w-5 h-5" />
-                </button>
-
-                {/* System Menu Dropdown */}
-                {showSystemMenu && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-10"
-                      onClick={() => setShowSystemMenu(false)}
-                    />
-                    <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-100 py-1 z-20">
-                      <div className="px-4 py-2 text-xs font-medium text-gray-400 uppercase tracking-wider">
-                        系统管理
-                      </div>
-                      <button
-                        onClick={() => { navigate('/notifications'); setShowSystemMenu(false); }}
-                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
-                      >
-                        <BellRing className="w-4 h-4" />
-                        通知管理
-                      </button>
-                      <button
-                        onClick={() => { navigate('/users'); setShowSystemMenu(false); }}
-                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
-                      >
-                        <Users className="w-4 h-4" />
-                        用户管理
-                      </button>
-                      <button
-                        onClick={() => { navigate('/audit'); setShowSystemMenu(false); }}
-                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
-                      >
-                        <Shield className="w-4 h-4" />
-                        操作日志
-                      </button>
-                      <hr className="my-1 border-gray-100" />
-                      <button
-                        onClick={() => { navigate('/settings'); setShowSystemMenu(false); }}
-                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
-                      >
-                        <Settings className="w-4 h-4" />
-                        系统设置
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Notifications */}
-              <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg">
-                <Bell className="w-5 h-5" />
-              </button>
-
               {/* User Menu - Top Right Corner */}
               <div className="relative ml-2">
                 <button
                   onClick={() => setShowUserMenu(!showUserMenu)}
                   className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-gray-50 transition-colors"
+                  aria-label="用户菜单"
                 >
                   <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">
                     <User className="w-4 h-4 text-gray-500" />
+                  </div>
+                  <div className="hidden sm:flex flex-col items-start leading-tight">
+                    <span className="text-sm font-medium text-gray-900">
+                      {currentUser?.username ?? '...'}
+                    </span>
+                    {currentUser?.role && (
+                      <span className="text-xs text-gray-400">{currentUser.role}</span>
+                    )}
                   </div>
                   <ChevronDown className={cn(
                     "w-4 h-4 text-gray-400 transition-transform hidden sm:block",

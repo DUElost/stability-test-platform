@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 
 import { useQuery } from '@tanstack/react-query';
 
-import { PageContainer } from '../components/layout';
+import { PageContainer, PageHeader } from '../components/layout';
 
 import { useRealtimeDashboard } from '../hooks/useRealtimeDashboard';
 
@@ -19,8 +19,6 @@ import { Badge } from '@/components/ui/badge';
 import { Wifi, WifiOff, Clock, Server, Smartphone, AlertCircle, BarChart3, Zap } from 'lucide-react';
 
 import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart } from '@/components/charts';
-
-import { CleanCard } from '../components/ui/clean-card';
 
 import { useNavigate } from 'react-router-dom';
 
@@ -140,39 +138,29 @@ export default function Dashboard() {
 
       <PageContainer>
 
-        <div className="space-y-6">
+        <PageHeader title="仪表盘" subtitle="系统运行状态总览" />
 
-          <div>
+        <Card className="border-red-200 bg-red-50">
 
-            <h2 className="text-2xl font-semibold text-gray-900 mb-1">仪表盘</h2>
+          <CardContent className="p-6">
 
-            <p className="text-sm text-gray-400">系统运行状态总览</p>
+            <div className="flex items-center gap-3 text-red-600">
 
-          </div>
+              <AlertCircle size={24} />
 
-          <Card className="border-red-200 bg-red-50">
+              <div>
 
-            <CardContent className="p-6">
+                <h3 className="font-semibold">数据加载失败</h3>
 
-              <div className="flex items-center gap-3 text-red-600">
-
-                <AlertCircle size={24} />
-
-                <div>
-
-                  <h3 className="font-semibold">数据加载失败</h3>
-
-                  <p className="text-sm text-red-600/80">请检查后端服务连接。</p>
-
-                </div>
+                <p className="text-sm text-red-600/80">请检查后端服务连接。</p>
 
               </div>
 
-            </CardContent>
+            </div>
 
-          </Card>
+          </CardContent>
 
-        </div>
+        </Card>
 
       </PageContainer>
 
@@ -186,17 +174,9 @@ export default function Dashboard() {
 
     <PageContainer>
 
-      <div className="space-y-6">
+      {/* Page Header */}
 
-        {/* Page Header */}
-
-        <div>
-
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">仪表盘</h2>
-
-          <p className="text-sm text-gray-400">系统运行状态总览</p>
-
-        </div>
+      <PageHeader title="仪表盘" subtitle="系统运行状态总览" />
 
 
 
@@ -240,7 +220,7 @@ export default function Dashboard() {
 
           {/* 主机统计 */}
 
-          <CleanCard
+          <Card
 
             className="p-4 cursor-pointer hover:shadow-md transition-shadow"
 
@@ -284,13 +264,13 @@ export default function Dashboard() {
 
             </div>
 
-          </CleanCard>
+          </Card>
 
 
 
           {/* 设备统计 */}
 
-          <CleanCard
+          <Card
 
             className="p-4 cursor-pointer hover:shadow-md transition-shadow"
 
@@ -334,17 +314,17 @@ export default function Dashboard() {
 
             </div>
 
-          </CleanCard>
+          </Card>
 
 
 
           {/* 测试中 */}
 
-          <CleanCard
+          <Card
 
             className="p-4 cursor-pointer hover:shadow-md transition-shadow"
 
-            onClick={() => navigate('/tasks')}
+            onClick={() => navigate('/execution/plan-runs')}
 
           >
 
@@ -374,13 +354,13 @@ export default function Dashboard() {
 
             </div>
 
-          </CleanCard>
+          </Card>
 
 
 
           {/* 告警 */}
 
-          <CleanCard className="p-4">
+          <Card className="p-4">
 
             <div className="flex items-center justify-between">
 
@@ -412,7 +392,7 @@ export default function Dashboard() {
 
             </div>
 
-          </CleanCard>
+          </Card>
 
         </div>
 
@@ -422,7 +402,7 @@ export default function Dashboard() {
 
         {alertsCount > 0 && (
 
-          <CleanCard className="p-4">
+          <Card className="p-4">
 
             <div className="flex items-center gap-6">
 
@@ -476,7 +456,7 @@ export default function Dashboard() {
 
             </div>
 
-          </CleanCard>
+          </Card>
 
         )}
 
@@ -496,7 +476,7 @@ export default function Dashboard() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-            <CleanCard className="p-4">
+            <Card className="p-4">
 
               <h4 className="text-sm font-medium text-gray-700 mb-3">设备状态分布</h4>
 
@@ -510,11 +490,11 @@ export default function Dashboard() {
 
               )}
 
-            </CleanCard>
+            </Card>
 
 
 
-            <CleanCard className="p-4">
+            <Card className="p-4">
 
               <h4 className="text-sm font-medium text-gray-700 mb-3">主机资源负载</h4>
 
@@ -528,11 +508,11 @@ export default function Dashboard() {
 
               )}
 
-            </CleanCard>
+            </Card>
 
 
 
-            <CleanCard className="p-4">
+            <Card className="p-4">
 
               <h4 className="text-sm font-medium text-gray-700 mb-3">任务活动趋势 (24h)</h4>
 
@@ -546,11 +526,11 @@ export default function Dashboard() {
 
               )}
 
-            </CleanCard>
+            </Card>
 
 
 
-            <CleanCard className="p-4">
+            <Card className="p-4">
 
               <h4 className="text-sm font-medium text-gray-700 mb-3">完成趋势 (7d)</h4>
 
@@ -564,7 +544,7 @@ export default function Dashboard() {
 
               )}
 
-            </CleanCard>
+            </Card>
 
           </div>
 
@@ -574,7 +554,7 @@ export default function Dashboard() {
 
         {/* Online Rate */}
 
-        <CleanCard className="p-4">
+        <Card className="p-4">
 
           <div className="flex items-center justify-between">
 
@@ -594,9 +574,7 @@ export default function Dashboard() {
 
           </div>
 
-        </CleanCard>
-
-      </div>
+        </Card>
 
     </PageContainer>
 

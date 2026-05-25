@@ -13,6 +13,7 @@ import {
   Clock,
   ShieldAlert,
 } from 'lucide-react';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 const STATUS_BADGE: Record<string, string> = {
   FINISHED: 'bg-green-100 text-green-700',
@@ -64,12 +65,8 @@ export default function ResultsPage() {
   const stats = data?.runs_by_status;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h2 className="text-2xl font-semibold text-gray-900 mb-1">Test Results</h2>
-        <p className="text-sm text-gray-400">Overview of test run statistics and risk distribution</p>
-      </div>
+    <PageContainer>
+      <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -149,7 +146,7 @@ export default function ResultsPage() {
                     <tr
                       key={run.run_id}
                       className="border-b last:border-0 hover:bg-muted/50 cursor-pointer transition-colors"
-                      onClick={() => navigate(`/tasks`)}
+                      onClick={() => navigate(`/runs/${run.run_id}/report`)}
                     >
                       <td className="py-2 pr-4 font-mono text-xs">#{run.run_id}</td>
                       <td className="py-2 pr-4 truncate max-w-[180px]">{run.task_name}</td>
@@ -183,7 +180,7 @@ export default function ResultsPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </PageContainer>
   );
 }
 
