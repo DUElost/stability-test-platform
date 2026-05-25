@@ -1,772 +1,250 @@
-# Stability Test Platform - 启动指南
-
-
+# Stability Test Platform — 稳定性测试管理平台
 
 **版本**：1.0.0
+**最后更新**：2026-05-25
 
-**更新时间**：2026-01-21
+中心化 Android 设备稳定性测试管理平台：Windows/Linux 控制平面运行 FastAPI 后端与 React 前端，Linux Agent 集群通过 ADB 连接设备执行 Plan 编排任务，支持实时监控、日志采集与报告生成。
 
-
-
----
-
-
-
-## 项目目标愿景（请先阅读）
-
-
-
-- 项目目标：通过 Linux Host Agent 集群，无人值守运行大规模 Android Device 稳定性自动化测试。
-
-- 稳定性专项统一流程：设备连接检测 -> 前置准备 -> 资源填充 -> 开始运行测试 -> 日志检测 -> 风险问题检查 -> 日志回传导出 -> 结束测试 -> 测试后置。
-
-- 全流程自动化衔接：结果收取 -> 数据报告生成 -> JIRA 问题提交 -> 测试报告生成。
-
-- 详细说明：`docs/project-vision.md`
-
-
+详细架构与模块说明见 [`CLAUDE.md`](./CLAUDE.md)；AI/自动化开发约定见 [`AGENTS.md`](./AGENTS.md)。
 
 ---
 
+## 架构概览
 
+```
+┌─────────────────────────────────────────────────────────────┐
+│  控制平面（Windows 开发 / Linux 生产）                      │
+│  FastAPI :8000  ·  React :5173  ·  APScheduler  ·  SAQ     │
+│  PostgreSQL  ·  Redis（SAQ 队列）  ·  SocketIO 实时推送      │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ HTTP / SocketIO
+         ┌─────────────────┼─────────────────┐
+         ▼                 ▼                 ▼
+   ┌──────────┐     ┌──────────┐      ┌──────────┐
+   │ React    │     │ Agent 1  │  …   │ Agent N  │
+   │ Dashboard│     │ (Linux)  │      │ (Linux)  │
+   └──────────┘     └────┬─────┘      └────┬─────┘
+                         │ ADB             │ ADB
+                    Android 设备       Android 设备
+```
 
-## 架构决策记录（ADR）快速入口
-
-
-
-- ADR 总入口与维护规范：`docs/adr/README.md`
-
-- 已落地架构基线（先读）：`docs/adr/ADR-0001-control-plane-and-agent-architecture.md` ~ `docs/adr/ADR-0007-tool-template-workflow-extension-model.md`
-
-- 未来扩展/重构路线：`docs/adr/ADR-0008-schema-migration-governance-alembic-only.md` ~ `docs/adr/ADR-0012-post-completion-pipeline-jira-automation.md`
-
-- 推荐阅读顺序：先 `Accepted`，再 `Proposed`；变更代码前先检索对应 ADR。
-
-
+**核心概念**（ADR-0020）：`Plan` + `PlanStep` 编排 → `PlanRun` 执行 → 按设备扇出 `JobInstance`；脚本通过 `script:<name>` action 在 Agent 侧运行。
 
 ---
-
-
 
 ## 快速启动
 
+### 方式一：批处理脚本（Windows 推荐）
 
+```bash
+# 终端 1 — 后端（自动 alembic upgrade + 启动）
+cd stability-test-platform
+start-backend.bat          # http://localhost:8000
 
-### 方式一：Windows 批处理脚本（推荐）
+# 终端 2 — 前端
+start-frontend-windows.bat  # http://localhost:5173
+```
 
+首次启动若缺少 `backend/.env`，脚本会基于 `backend/.env.example` 生成本地模板。
 
-
-1. **启动后端服务**
-
-   ```bash
-
-   cd stability-test-platform
-
-   start-backend.bat
-
-   ```
-
-   服务将运行在 `http://localhost:8000`
-
-   首次启动若缺少 `backend/.env`，脚本会自动基于 `backend/.env.example` 生成一份本地模板。
-   如果改走 Docker Compose，请先执行 `python tools/prepare_env.py --template .env.server.example --target .env.server`。
-
-
-
-   > **实机验证注意**：`start-backend.bat` 默认即为安全模式，不会开启热重载。
-   > 只有在明确需要本地开发热重载时，才在当前终端执行：
-   > ```powershell
-   > $env:STP_BACKEND_RELOAD = "1"
-   > .\start-backend.bat
-   > ```
-   > 真实设备全链路验证不要设置该变量。
-
-
-2. **启动前端服务**（新开终端）
-
-   ```bash
-
-   cd stability-test-platform
-
-   start-frontend.bat
-
-   ```
-
-   服务将运行在 `http://localhost:5173`
-
-
-
-3. **访问平台**
-
-   - 打开浏览器访问：`http://localhost:5173`
-
-
+> **实机验证**：`start-backend.bat` 默认不开启热重载。仅本地开发时：
+> ```powershell
+> $env:STP_BACKEND_RELOAD = "1"
+> .\start-backend.bat
+> ```
 
 ### 方式二：手动启动
 
-
-
-#### 启动后端
-
-
+**后端**
 
 ```bash
-
-# 进入项目目录
-
 cd stability-test-platform
-
-
-
-# (可选) 创建并激活虚拟环境
-
-python -m venv venv
-
-# Windows:
-
-venv\Scripts\activate
-
-# Linux/Mac:
-
-# source venv/bin/activate
-
-
-
-# 安装依赖
-
-pip install fastapi uvicorn sqlalchemy pydantic paramiko asyncssh psutil requests aiohttp
-
-
-
-# 实机验证 / 默认安全模式（无热重载）
+pip install -r backend/requirements.txt
+cd backend && python -m alembic upgrade head && cd ..
 uvicorn backend.main:app --host 0.0.0.0 --port 8000
-
-# 日常开发（显式开启热重载）
-set STP_BACKEND_RELOAD=1
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+# 开发热重载：加 --reload
 ```
 
-
-
-#### 启动前端
-
-
+**前端**
 
 ```bash
-
-# 进入前端目录
-
-cd stability-test-platform/frontend
-
-
-
-# 安装依赖
-
+cd frontend
 npm install
-
-
-
-# 启动开发服务器
-
-npm run dev
-
+npm run dev                # http://localhost:5173
 ```
 
+**Agent（Linux / WSL）**
 
+```bash
+# 开发模式（从仓库根目录）
+export API_URL="http://<控制平面IP>:8000"
+export STP_SCRIPT_ROOT="<repo>/backend/agent/scripts"   # 后端扫描用
+python -m backend.agent.main
+
+# 生产模式：backend/agent/install_agent.sh → systemd stability-test-agent
+# WSL 联调须设 ANDROID_ADB_SERVER_PORT=5039，详见 CLAUDE.md
+```
 
 ---
-
-
-
-## 平台架构
-
-
-
-```
-
-┌─────────────────────────────────────────┐
-
-│          FastAPI 后端服务               │
-
-│  (端口 8000 - API + WebSocket)          │
-
-└──────────────────┬──────────────────────┘
-
-                   │
-
-    ┌──────────────┼──────────────┐
-
-    │              │              │
-
-┌───▼────┐   ┌────▼───┐   ┌─────▼────┐
-
-│ React  │   │ Host   │   │ Host     │
-
-│ 前端    │   │ Agent 1│   │ Agent N  │
-
-│ (5173)  │   │ (Linux)│   │ (Linux)  │
-
-└────────┘   └────────┘   └──────────┘
-
-```
-
-
-
----
-
-
 
 ## 环境要求
 
-
-
-### 后端
-
-- **Python**：3.10+（推荐 3.11）
-
-- **依赖包**：
-
-  - fastapi
-
-  - uvicorn
-
-  - sqlalchemy
-
-  - pydantic
-
-  - paramiko
-
-  - asyncssh
-
-  - psutil
-
-  - requests
-
-  - aiohttp
-
-
-
-### 前端
-
-- **Node.js**：20+
-
-- **npm**：10.0+
-
-
-
-### 可选（Linux Agent 主机）
-
-- **ADB**：Android Debug Bridge
-
-- **Python 3.10+**
-
-- **SSH 访问权限**
-
-
+| 组件 | 要求 |
+|------|------|
+| 后端 | Python 3.10+（推荐 3.11），PostgreSQL，Redis |
+| 前端 | Node.js 20+，npm 10+ |
+| Agent | Linux，Python 3.10+，ADB，SSH 访问 |
 
 ---
 
+## 关键环境变量
 
+### 控制平面（后端）
 
-## 配置说明
+| 变量 | 默认值 / 说明 |
+|------|--------------|
+| `DATABASE_URL` | PostgreSQL 连接串 |
+| `REDIS_URL` | `redis://localhost:6379/0` — SAQ 任务队列 |
+| `JWT_SECRET_KEY` | JWT 签名密钥（生产必改） |
+| `AGENT_SECRET` | Agent SocketIO 认证（生产必改，与 Agent 侧一致） |
+| `STP_SCRIPT_ROOT` | 脚本扫描根；**开发环境必须显式设为** `<repo>/backend/agent/scripts` |
+| `STP_NFS_ROOT` | NFS 存储根（脚本/日志/产物） |
+| `ENV` | `development` / `production` — 生产触发多项 guard |
+| `AUTH_COOKIE_SECURE` | 生产须 `1`（HTTPS Cookie） |
+| `AUTH_COOKIE_SAMESITE` | 生产须 `lax` 或 `strict` |
+| `STP_CSRF_ENABLED` | 浏览器 CSRF 校验（生产须开启） |
+| `CORS_ORIGINS` | 前端域名白名单 |
+| `STP_ALLOW_REGISTER` | 公开注册开关；**生产默认关闭**，显式设 `1` 才允许 |
+| `STP_METRICS_AUTH_REQUIRED` | 设 `1` 时 `/metrics` 须 Bearer token 或 `X-Agent-Secret` |
+| `STP_ENABLE_INPROCESS_SAQ` | 进程内 SAQ Worker（生产建议 `1`） |
+| `STP_WATCHER_ENABLED` | Agent 侧 Watcher 灰度开关（默认 `false`） |
 
+### Job / 租约超时（`backend/core/job_timeout_config.py`）
 
+| 变量 | 生产默认 | 说明 |
+|------|---------|------|
+| `DISPATCHED_TIMEOUT_SECONDS` | 120 | PENDING Job 未被认领 → FAILED |
+| `RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | 900 | RUNNING Job 心跳丢失 → UNKNOWN |
+| `PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | 900（dev 180） | patrol 阶段 RUNNING 独立超时窗口 |
+| `UNKNOWN_GRACE_SECONDS` | 300 | UNKNOWN 宽限期后释放租约并 FAILED |
 
-### 后端环境变量
+兼容旧名：`RUN_DISPATCHED_TIMEOUT_SECONDS` / `RUN_HEARTBEAT_TIMEOUT_SECONDS`。
 
+### Agent
 
+| 变量 | 说明 |
+|------|------|
+| `API_URL` | 控制平面地址 |
+| `HOST_ID` | 主机 ID（须与 DB `host.id` 对齐，不可为 `0`） |
+| `POLL_INTERVAL` | 轮询间隔（秒，默认 10） |
+| `ADB_PATH` | ADB 可执行路径 |
+| `ANDROID_ADB_SERVER_PORT` | WSL 联调须 `5039` |
 
-| 环境变量 | 默认值 | 说明 |
-
-|----------|--------|------|
-
-| `DATABASE_URL` | `postgresql://user:pass@localhost:5432/stability` | 数据库连接字符串 |
-
-| `API_URL` | `http://127.0.0.1:8000` | 后端 API 地址 |
-
-| `HOST_ID` | `0` | 主机 ID（Agent 使用） |
-
-| `MOUNT_POINTS` | 空 | 挂载点列表，逗号分隔 |
-
-| `POLL_INTERVAL` | `5` | Agent 轮询间隔（秒） |
-
-| `ADB_PATH` | `adb` | ADB 可执行文件路径 |
-
-
-
-### 前端代理配置
-
-
-
-前端已配置 API 代理：
-
-- `/api/*` → `http://localhost:8000/api/*`
-
-- `/ws/*` → `ws://localhost:8000/ws/*`
-
-
-
----
-
-
-
-## API 端点
-
-
-
-### 主机管理
-
-- `POST /api/v1/hosts` - 创建主机
-
-- `GET /api/v1/hosts` - 列出主机
-
-- `GET /api/v1/hosts/{host_id}` - 获取主机详情
-
-
-
-### 心跳
-
-- `POST /api/v1/heartbeat` - 接收 Agent 心跳
-
-
-
-### 任务管理
-
-- `GET /api/v1/task-templates` - 获取任务模板
-
-- `POST /api/v1/tasks` - 创建任务
-
-- `GET /api/v1/tasks/{task_id}` - 获取任务详情
-
-- `POST /api/v1/tasks/{task_id}/dispatch` - 分发任务
-
-
-
-### Agent 接口
-
-- `GET /api/v1/agent/runs/pending?host_id={id}` - 获取待执行任务
-
-- `POST /api/v1/agent/runs/{run_id}/heartbeat` - 更新任务状态
-
-- `POST /api/v1/agent/runs/{run_id}/complete` - 完成任务
-
-
+完整变量列表见 `backend/.env.example` 与 [`CLAUDE.md`](./CLAUDE.md)。
 
 ---
 
-
-
-## 配置新的 Host 主机（Linux Agent）
-
-
-
-### 部署步骤
-
-
-
-1. **复制 Agent 文件到 Host 主机**
-
-
-
-   将 `stability-test-platform\backend\agent` 中的文件转移至对应 Host 的 `/home/android/stability-agent` 文件夹中：
-
-   ```bash
-
-   # 使用 scp 或其他方式复制文件
-
-   scp -r stability-test-platform/backend/agent/* android@<host-ip>:/home/android/stability-agent/
-
-   ```
-
-
-
-2. **在 Linux Host 上执行安装脚本**
-
-   ```bash
-
-   cd /home/android/stability-agent
-
-
-
-   # 处理 Windows 换行符（如从 Windows 复制文件）
-
-   sed -i 's/\r$//' install_agent.sh
-
-
-
-   # 执行安装脚本
-
-   sudo ./install_agent.sh
-
-
-
-   # 重启服务
-
-   sudo systemctl restart stability-test-agent
-
-   ```
-
-
-
-3. **验证服务状态**
-
-   ```bash
-
-   sudo systemctl status stability-test-agent
-
-   ```
-
-
-
-### 手动启动方式（开发调试用）
-
-
+## 测试
 
 ```bash
+# 后端（需 TEST_DATABASE_URL 或 ALLOW_SQLITE_TESTS=1）
+pytest backend/tests/
 
-# 设置环境变量
+# Agent 单元测试
+pytest backend/agent/tests/
 
-export API_URL="http://<中心服务器IP>:8000"
+# 前端
+cd frontend && npx vitest run && npx tsc --noEmit
 
-export HOST_ID=1
-
-export MOUNT_POINTS="/mnt/central-storage"
-
-export ADB_PATH="/usr/bin/adb"
-
-
-
-# 启动 Agent
-
-cd /home/android/stability-agent
-
-python3 -m agent.main
-
-```
-
-
-
----
-
-
-
-## 验证安装
-
-
-
-### 1. 验证后端
-
-```bash
-
-curl http://localhost:8000/
-
-```
-
-应返回：
-
-```json
-
-{"message": "Stability Test Platform API", "version": "1.0.0"}
-
-```
-
-
-
-### 2. 验证前端
-
-访问 `http://localhost:5173`，应看到平台界面
-
-
-
-### 3. 测试 API
-
-```bash
-
-# 添加主机
-
-curl -X POST http://localhost:8000/api/v1/hosts \
-
-  -H "Content-Type: application/json" \
-
-  -d "{\"name\": \"test-host\", \"ip\": \"172.21.15.10\"}"
-
-```
-
-
-
-### 4. 本地一致性校验（建议每次改动后执行）
-
-
-
-```bash
-
-# 后端语法检查
-
+# 语法检查
 python -m compileall backend
-
-
-
-# 前端类型检查（Node.js 20+）
-
-cd frontend && npm run type-check
-
 ```
 
-
-
----
-
-
-
-## 故障排除
-
-
-
-### 后端无法启动
-
-- 检查 Python 版本：`python --version`（需要 3.10+）
-
-- 检查端口占用：`netstat -ano | findstr :8000`
-
-- 检查防火墙设置
-
-
-
-### 前端无法启动
-
-- 检查 Node.js 版本：`node --version`（需要 20+）
-
-- 删除 `node_modules` 重新安装：`rm -rf node_modules && npm install`
-
-- 检查代理配置
-
-
-
-### Agent 无法连接
-
-- 检查 `API_URL` 是否正确
-
-- 检查网络连通性：`curl http://<服务器IP>:8000/`
-
-- 检查防火墙规则
-
-
+CI 流程见 `.github/workflows/ci.yml`（compileall → pytest → tsc → build）。
 
 ---
 
+## 文档索引
 
-
-## 开发模式
-
-
-
-### 后端热重载
-
-默认启动脚本不会开启热重载，适合真实设备联调和稳定性验证。
-
-只有显式设置 `STP_BACKEND_RELOAD=1` 时，`start-backend.bat` / `start-backend-wsl.sh`
-
-才会以 `--reload` 启动开发模式。
-
-
-### 前端热更新
-
-Vite 默认支持热模块替换（HMR），修改组件后自动刷新。
-
-
+| 文档 | 说明 |
+|------|------|
+| [`CLAUDE.md`](./CLAUDE.md) | 项目全貌：模块职责、数据模型、脚本机制、FAQ |
+| [`AGENTS.md`](./AGENTS.md) | 开发命令与约定 |
+| [`docs/production-minimum-deployment-checklist.md`](./docs/production-minimum-deployment-checklist.md) | 生产最小部署清单 |
+| [`docs/preprod-drill-runbook.md`](./docs/preprod-drill-runbook.md) | 预发布逐条验收 |
+| [`docs/adr/README.md`](./docs/adr/README.md) | 架构决策记录（ADR）索引 |
+| [`docs/project-vision.md`](./docs/project-vision.md) | 项目目标愿景 |
+| [`backend/agent/DEPLOY.md`](./backend/agent/DEPLOY.md) | Agent 安装与热更新 |
 
 ---
 
+## 近期改进（主链路加固，至 f0ec89d）
 
+2026-05 主链路脆弱性专项收口，重点包括：
 
-## 开发环境约定与 EOL 防御
+- **派发门禁统一**：SCHEDULE/CHAIN 改走 sync dispatch gate；precheck 失败可手动 retry-dispatch；派发失败显式 FAILED + 审计
+- **PlanRun 聚合加固**：行锁 + terminal guard；链式触发 flag 回滚防撞；abort 留痕
+- **Job 超时集中化**：`job_timeout_config.py` 统一默认值；patrol 阶段 RUNNING 心跳超时可独立配置
+- **Agent 可靠性**：subprocess 进程组隔离；log_signal outbox 死信闭环 + backlog 指标；step_trace_cache 防 SQLite 膨胀
+- **生产就绪**：读 API 鉴权；SocketIO 同源；SAQ 503 降级；浏览器 HttpOnly Cookie + CSRF + refresh 黑名单（ADR-0024）
+- **安全门禁**：生产默认关闭公开注册（`STP_ALLOW_REGISTER`）；`/metrics` 可选 Bearer/Agent-Secret 鉴权
+- **可观测性**：dispatch gate / patrol / CSRF / outbox 等 Prometheus 指标；AlertManager 规则草案（`deploy/prometheus/alerts-stability-platform.yml`）
 
+完整变更记录见 [`CLAUDE.md`](./CLAUDE.md) Changelog 与各 ADR。
 
+---
 
-项目曾出现 IDE/插件向 `frontend/src/pages/orchestration/PlanEditPage.tsx` 注入大量纯空行的污染(单次 diff 1100+ 行),根因是工具把 `\r\n` 错误解释为多重 line break。当前仓库的防御分四层。
+## 生产就绪要点
 
+上线前请阅读 [`docs/production-minimum-deployment-checklist.md`](./docs/production-minimum-deployment-checklist.md)，核心检查项：
 
+1. **HTTPS**：Nginx 终止 TLS；`AUTH_COOKIE_SECURE=1`；`CORS_ORIGINS` 指向 HTTPS 域名
+2. **单实例后端**：避免多进程重复调度（APScheduler / SAQ 均在进程内）
+3. **数据库迁移**：`alembic upgrade head`（含 refresh token 黑名单等表）
+4. **Agent 配置**：每台唯一 `HOST_ID`；`AGENT_SECRET` 与后端一致
+5. **前端构建**：`VITE_API_BASE_URL=`（空）实现同源；Nginx 反代 `/api/` 与 `/socket.io/`
+6. **Metrics 鉴权**：生产建议 `STP_METRICS_AUTH_REQUIRED=1` 或 Nginx IP 白名单
+7. **冒烟验收**：控制平面健康 → Agent ONLINE → 创建 PlanRun → 任务完整流转至终态 → 设备锁释放
 
-### 一次性 setup(每个开发者克隆后执行)
+预发布逐条执行：[`docs/preprod-drill-runbook.md`](./docs/preprod-drill-runbook.md)
 
+---
 
+## 开发环境约定（EOL 防御）
+
+项目曾出现 IDE/插件 CRLF 污染（单次 diff 1100+ 空行）。当前四层防御：
+
+1. **`.gitattributes`** — 入库统一 LF
+2. **`.editorconfig`** — 编辑器强制 LF
+3. **`.vscode/settings.json`** — 关闭 formatOnSave 防误格式化
+4. **`.githooks/pre-commit`** — 拦截纯空行污染与 CRLF
+
+克隆后执行一次：
 
 ```bash
-
-# 启用项目级 git hooks(指向仓库内 .githooks/,签入版本管理)
-
 git config core.hooksPath .githooks
-
 ```
 
-
-
-### 防御层级
-
-
-
-1. **`.gitattributes`** — `* text=auto eol=lf`,git 入库时统一为 LF。Windows 工作目录仍允许 CRLF。
-
-2. **`.editorconfig`** — VS Code / WebStorm / Cursor / Vim / Sublime 全识别;强制保存为 LF + 去 trailing whitespace + 末尾 newline。
-
-3. **`.vscode/settings.json`** — VS Code 项目级双保险;关闭 `formatOnSave` / `formatOnPaste` 防止误格式化器复发污染。
-
-4. **`.githooks/pre-commit`** — commit 阶段拦截:staged diff 中纯空行新增 ≥ 60%(总新增 ≥ 30 行)直接拒绝;CRLF 字节出现在 LF 文件的 staged diff 中也直接拒绝。
-
-
-
-### 清地雷脚本
-
-
-
-```bash
-
-# 干运行,列出工作目录中"应为 LF 但实际是 CRLF/mixed"的文件
-
-tools/dev/normalize-eol.sh
-
-
-
-# 实际规范化(stage 区,不 commit)
-
-tools/dev/normalize-eol.sh --apply
-
-
-
-# 单文件修复
-
-tools/dev/normalize-eol.sh frontend/src/pages/orchestration/PlanEditPage.tsx
-
-
-
-# CI 模式,检测到混合 EOL 退出非零
-
-tools/dev/normalize-eol.sh --check
-
-```
-
-
-
-### 复发时定位
-
-
-
-若 hook 启用后仍出现污染:
-
-
-
-1. `git checkout -- <file>` 丢弃污染,IDE 干净启动 `code --disable-extensions <file>` 保存,确认是否复发。
-
-2. 若复发 → 二分启用扩展定位元凶。优先怀疑:配错的 default formatter、Tailwind CSS IntelliSense、Auto Rename Tag、AI 补全(Copilot / Tabnine)。
-
-3. 若不复发 → 查 `package.json scripts` / CI 配置 / pre-push hook 是否有 lint/format 步骤异常。
-
-
-
-### 紧急绕过
-
-
-
-```bash
-
-git commit --no-verify   # 仅在确认 diff 合规、hook 误报时使用
-
-```
-
-
+清地雷：`tools/dev/normalize-eol.sh`（加 `--apply` 修复，`--check` 用于 CI）。
 
 ---
-
-
-
-## 生产部署
-
-
-
-生产最小可用部署（主 Linux Host + 多 Linux Agent）请优先使用：
-
-
-
-- `docs/production-minimum-deployment-checklist.md`
-
-- `docs/preprod-drill-runbook.md`（预发布逐条执行）
-
-- 控制平面模板目录：`deploy/control-plane/systemd/`、`deploy/control-plane/nginx/`、`deploy/control-plane/env/`
-
-- Agent 安装目录：`backend/agent/`（使用 `install_agent.sh`）
-
-
-
-仅用于快速验证的最小命令如下：
-
-
-
-### 后端（单进程，避免重复调度）
-
-```bash
-
-uvicorn backend.main:app --host 0.0.0.0 --port 8000
-
-```
-
-
-
-### 前端（构建静态文件）
-
-```bash
-
-npm run build
-
-# 将 dist 目录部署到 Web 服务器
-
-```
-
-
-
----
-
-
 
 ## 常见问题
 
+**Q: 开发环境脚本扫描路径怎么设？**
+A: 后端启动前设 `STP_SCRIPT_ROOT=<repo>/backend/agent/scripts`，然后 `POST /api/v1/scripts/scan`。WSL 联调还需 `STP_SCRIPT_RUNTIME_ROOT=/opt/stability-test-agent/scripts`。
 
+**Q: Agent 心跳正常但拉不到任务？**
+A: 检查 `HOST_ID` 是否与 DB `host.id` 一致（不可为 `0`）。
 
-**Q: 如何修改数据库？**
+**Q: 如何热更新 Agent？**
+A: 前端「主机管理」页点击「热更新」，或 `tools/ansible/playbooks/update_agent.yml` 批量更新。
 
-A: 设置 `DATABASE_URL` 环境变量，支持 PostgreSQL/MySQL。
+**Q: 测试需要 PostgreSQL 吗？**
+A: 后端 pytest 默认需要；本地可设 `ALLOW_SQLITE_TESTS=1` 跳过。
 
-
-
-**Q: 如何配置 HTTPS？**
-
-A: 在 uvicorn/gunicorn 前添加反向代理（Nginx/Caddy）。
-
-
-
-**Q: Agent 支持多台设备吗？**
-
-A: 是的，一台主机可以连接多台 Android 设备，Agent 会并行执行任务。
-
-
+更多 FAQ 见 [`CLAUDE.md`](./CLAUDE.md)。
 
 ---
 
-
-
-## 联系与支持
-
-
-
-- **项目地址**：`D:\MoveData\Users\Rin\Desktop\Stability-Tools`
-
-- **文档**：`CLAUDE.md`
-
-- **问题反馈**：提交 Issue 到项目仓库
-
-
-
----
-
-
-
-*最后更新：2026-01-21*
+*维护者请参考 [`CLAUDE.md`](./CLAUDE.md) 保持文档同步。*
