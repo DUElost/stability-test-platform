@@ -59,7 +59,7 @@ def test_retry_dispatch_re_enqueues_gate(
     enqueue_calls = []
 
     with patch(
-        "backend.services.plan_precheck.enqueue_sync",
+        "backend.tasks.saq_worker.enqueue_sync",
         side_effect=lambda *args, **kwargs: enqueue_calls.append(kwargs),
     ), patch(
         "backend.services.plan_precheck.initialise_precheck_state",
