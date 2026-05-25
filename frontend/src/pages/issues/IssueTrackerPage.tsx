@@ -4,16 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { api, type JiraDraft, type PlanRun } from '@/utils/api';
 import apiClient from '@/utils/api/client';
 import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
-
-const PRIORITY_BADGE: Record<string, string> = {
-  Critical: 'bg-red-100 text-red-700',
-  Major: 'bg-orange-100 text-orange-700',
-  Minor: 'bg-blue-100 text-blue-700',
-};
 
 interface RunWithDraft {
   run: PlanRun;
@@ -104,9 +99,7 @@ export default function IssueTrackerPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-medium truncate">{draft?.summary}</span>
-                        <span className={`px-2 py-0.5 rounded-full text-xs ${PRIORITY_BADGE[priority]}`}>
-                          {priority}
-                        </span>
+                        <StatusBadge kind="priority" status={priority} size="sm" />
                       </div>
                       <div className="text-sm text-gray-500 mt-1">
                         {draft?.project_key}-{draft?.issue_type} | Plan #{run.plan_id ?? '-'} | Job #{run.id}

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { StatusBadge, resolveStatusEntry } from '@/components/ui/status-badge';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { ConnectivityBadge } from '../network/ConnectivityBadge';
 import { AlertTriangle, Activity, Server } from 'lucide-react';
@@ -19,15 +19,16 @@ export interface Device {
   host_id?: number | null;
 }
 
-const statusConfig = {
-  idle: { variant: 'success' as const, label: 'Idle', bgColor: 'bg-success/10' },
-  testing: { variant: 'default' as const, label: 'Testing', bgColor: 'bg-primary/10' },
-  offline: { variant: 'secondary' as const, label: 'Offline', bgColor: 'bg-muted' },
-  error: { variant: 'destructive' as const, label: 'Error', bgColor: 'bg-destructive/10' },
+const styleConfig: Record<Device['status'], { bgColor: string; borderClass: string }> = {
+  idle: { bgColor: 'bg-success/10', borderClass: 'border-l-success' },
+  testing: { bgColor: 'bg-primary/10', borderClass: 'border-l-primary' },
+  offline: { bgColor: 'bg-muted', borderClass: 'border-l-muted' },
+  error: { bgColor: 'bg-destructive/10', borderClass: 'border-l-destructive' },
 };
 
 export const DeviceCard: React.FC<{ device: Device; onClick?: (d: Device) => void }> = ({ device, onClick }) => {
-  const config = statusConfig[device.status];
+  const style = styleConfig[device.status];
+  const statusLabel = resolveStatusEntry('device-ui', device.status).label;
 
   const getNetworkStatus = (): 'online' | 'offline' | 'warning' => {
     if (device.network_latency === null || device.network_latency === undefined) {
@@ -53,12 +54,8 @@ export const DeviceCard: React.FC<{ device: Device; onClick?: (d: Device) => voi
         onKeyDown={handleKeyDown}
         role={onClick ? "button" : undefined}
         tabIndex={onClick ? 0 : undefined}
-        aria-label={`Device ${device.model} - ${config.label}`}
-        className={`cursor-pointer transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${config.bgColor} border-l-4 ${
-          device.status === 'idle' ? 'border-l-success' :
-          device.status === 'testing' ? 'border-l-primary' :
-          device.status === 'error' ? 'border-l-destructive' : 'border-l-muted'
-        }`}
+        aria-label={`Device ${device.model} - ${statusLabel}`}
+        className={`cursor-pointer transition-all duration-200 hover:shadow-md hover:-translate-y-0.5 ${style.bgColor} border-l-4 ${style.borderClass}`}
       >
         <CardHeader className="p-4 pb-2">
           <div className="flex justify-between items-start">
@@ -87,9 +84,7 @@ export const DeviceCard: React.FC<{ device: Device; onClick?: (d: Device) => voi
                 </div>
               )}
             </div>
-            <Badge variant={config.variant} className="text-[10px] uppercase flex-shrink-0">
-              {config.label}
-            </Badge>
+            <StatusBadge kind="device-ui" status={device.status} size="sm" className="flex-shrink-0" />
           </div>
         </CardHeader>
 

@@ -10,6 +10,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 export interface HostResources {
@@ -58,12 +59,6 @@ interface ExpandableHostTableProps {
   selectedIds?: Set<number>;
   onSelectionChange?: (ids: Set<number>) => void;
 }
-
-const statusConfig = {
-  ONLINE: { label: '在线', variant: 'success' as const, icon: CheckCircle2, bgColor: 'bg-emerald-50', textColor: 'text-emerald-600', borderColor: 'border-emerald-200' },
-  OFFLINE: { label: '离线', variant: 'secondary' as const, icon: AlertTriangle, bgColor: 'bg-gray-50', textColor: 'text-gray-500', borderColor: 'border-gray-200' },
-  DEGRADED: { label: '告警', variant: 'warning' as const, icon: AlertTriangle, bgColor: 'bg-amber-50', textColor: 'text-amber-600', borderColor: 'border-amber-200' },
-};
 
 function formatBytes(gb: number): string {
   if (gb >= 1024) return `${(gb / 1024).toFixed(1)} TB`;
@@ -213,8 +208,6 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
             <TableBody>
               {hosts.map((host) => {
                 const isExpanded = expandedRows.has(host.id);
-                const config = statusConfig[host.status];
-                const StatusIcon = config.icon;
 
                 return (
                   <>
@@ -253,13 +246,7 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                       </TableCell>
                       <TableCell className="p-3">
                         <div className="flex items-center gap-1.5">
-                          <span className={cn(
-                            'inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium',
-                            config.bgColor, config.textColor
-                          )}>
-                            <StatusIcon className="w-3 h-3" />
-                            {config.label}
-                          </span>
+                          <StatusBadge kind="host" status={host.status} size="sm" />
                           {host.health_status && host.health_status !== 'HEALTHY' && (
                             <span
                               className={cn(

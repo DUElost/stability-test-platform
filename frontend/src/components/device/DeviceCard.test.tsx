@@ -16,19 +16,19 @@ describe('DeviceCard', () => {
     render(<DeviceCard device={mockDevice} />);
     expect(screen.getByText('Pixel 6')).toBeInTheDocument();
     expect(screen.getByText('SN123456')).toBeInTheDocument();
-    expect(screen.getByText(/Idle/i)).toBeInTheDocument();
+    expect(screen.getByText('空闲')).toBeInTheDocument();
   });
 
   it('renders different statuses with correct labels', () => {
     const { rerender } = render(<DeviceCard device={{ ...mockDevice, status: 'testing', current_task: 'Monkey Test' }} />);
-    expect(screen.getByText(/Testing/i)).toBeInTheDocument();
+    expect(screen.getByText('测试中')).toBeInTheDocument();
     expect(screen.getByText('Monkey Test')).toBeInTheDocument();
 
     rerender(<DeviceCard device={{ ...mockDevice, status: 'error' }} />);
-    expect(screen.getByText(/Error/i)).toBeInTheDocument();
+    expect(screen.getByText('错误')).toBeInTheDocument();
 
     rerender(<DeviceCard device={{ ...mockDevice, status: 'offline' }} />);
-    expect(screen.getByText(/Offline/i)).toBeInTheDocument();
+    expect(screen.getByText('离线')).toBeInTheDocument();
   });
 
   it('shows low battery warning when level < 20%', () => {
@@ -103,7 +103,7 @@ describe('DeviceCard', () => {
     render(<DeviceCard device={mockDevice} onClick={handleClick} />);
 
     const card = screen.getByRole('button');
-    expect(card).toHaveAttribute('aria-label', 'Device Pixel 6 - Idle');
+    expect(card).toHaveAttribute('aria-label', 'Device Pixel 6 - 空闲');
     expect(card).toHaveAttribute('tabIndex', '0');
   });
 });

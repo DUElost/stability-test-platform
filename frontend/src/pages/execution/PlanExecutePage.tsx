@@ -22,6 +22,10 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 
 
+import { StatusBadge } from '@/components/ui/status-badge';
+
+
+
 import { useToast } from '@/components/ui/toast';
 
 
@@ -194,19 +198,7 @@ function DeviceRow({
 
 
 
-      <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-
-
-
-        device.status === 'ONLINE' ? 'bg-green-100 text-green-700' :
-
-
-
-        device.status === 'BUSY' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-500'
-
-
-
-      }`}>{device.status}</span>
+      <StatusBadge kind="device" status={device.status} size="sm" />
 
 
 

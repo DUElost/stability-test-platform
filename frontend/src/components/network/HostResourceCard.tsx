@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { StatusBadge } from '@/components/ui/status-badge';
 import {
   Tooltip,
   TooltipContent,
@@ -15,7 +16,6 @@ import {
   MemoryStick,
   Activity,
   Wifi,
-  WifiOff,
   AlertTriangle,
   CheckCircle2,
   Clock,
@@ -60,23 +60,14 @@ export interface HostResourceCardProps {
 
 const statusConfig = {
   ONLINE: {
-    label: 'Online',
-    variant: 'success' as const,
-    icon: CheckCircle2,
     bgColor: 'bg-success/10',
     borderColor: 'border-success/30',
   },
   OFFLINE: {
-    label: 'Offline',
-    variant: 'secondary' as const,
-    icon: WifiOff,
     bgColor: 'bg-muted',
     borderColor: 'border-muted',
   },
   DEGRADED: {
-    label: 'Degraded',
-    variant: 'warning' as const,
-    icon: AlertTriangle,
     bgColor: 'bg-warning/10',
     borderColor: 'border-warning/30',
   },
@@ -124,7 +115,6 @@ export function HostResourceCard({
   isDeploying,
 }: HostResourceCardProps) {
   const config = statusConfig[status];
-  const StatusIcon = config.icon;
 
   const isStale = useMemo(() => {
     if (!last_heartbeat) return true;
@@ -189,10 +179,7 @@ export function HostResourceCard({
               </div>
             </div>
             <div className="flex flex-col items-end gap-1">
-              <Badge variant={config.variant} className="flex items-center gap-1">
-                <StatusIcon className="h-3 w-3" />
-                {config.label}
-              </Badge>
+              <StatusBadge kind="host" status={status} size="sm" />
               {isStale && status === 'ONLINE' && (
                 <Badge variant="outline" className="text-xs text-warning">
                   Stale

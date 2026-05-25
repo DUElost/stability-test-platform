@@ -9,6 +9,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Progress } from '@/components/ui/progress';
+import { StatusBadge } from '@/components/ui/status-badge';
 import {
   ChevronDown,
   ChevronLeft,
@@ -46,13 +47,6 @@ interface ExpandableDeviceTableProps {
   devices: DeviceTableData[];
   onViewMetrics?: (device: DeviceTableData) => void;
 }
-
-const statusConfig = {
-  idle: { label: '空闲', variant: 'success' as const, icon: CheckCircle2, bgColor: 'bg-emerald-50', textColor: 'text-emerald-600' },
-  testing: { label: '测试中', variant: 'default' as const, icon: Zap, bgColor: 'bg-blue-50', textColor: 'text-blue-600' },
-  offline: { label: '离线', variant: 'secondary' as const, icon: WifiOff, bgColor: 'bg-gray-50', textColor: 'text-gray-500' },
-  error: { label: '错误', variant: 'destructive' as const, icon: AlertTriangle, bgColor: 'bg-red-50', textColor: 'text-red-600' },
-};
 
 export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDeviceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
@@ -217,8 +211,6 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           <TableBody>
             {paginatedDevices.map((device) => {
               const isExpanded = expandedRows.has(device.id);
-              const config = statusConfig[device.status];
-              const StatusIcon = config.icon;
 
               return (
                 <Fragment key={device.id}>
@@ -248,13 +240,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                       {device.build_display_id || '-'}
                     </TableCell>
                     <TableCell className="p-3">
-                      <span className={cn(
-                        'inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium',
-                        config.bgColor, config.textColor
-                      )}>
-                        <StatusIcon className="w-3 h-3" />
-                        {config.label}
-                      </span>
+                      <StatusBadge kind="device-ui" status={device.status} size="sm" />
                     </TableCell>
                     <TableCell className="p-3 text-gray-500 text-sm">
                       {device.host_name || '-'}

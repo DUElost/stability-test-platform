@@ -1,8 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  CheckCircle,
-  XCircle,
-  AlertTriangle,
   Clock,
   Activity,
   Loader2,
@@ -19,43 +16,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import type { PlanRun, PlanRunStatus } from '@/utils/api/types';
+import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
 
-const TERMINAL_STATUSES: ReadonlyArray<PlanRunStatus> = [
-  'SUCCESS',
-  'PARTIAL_SUCCESS',
-  'FAILED',
-  'DEGRADED',
-];
-
-const STATUS_PILL: Record<
-  PlanRunStatus,
-  { label: string; cls: string; Icon: React.ElementType }
-> = {
-  RUNNING: {
-    label: 'RUNNING',
-    cls: 'bg-orange-50 text-orange-700 border-orange-200',
-    Icon: Loader2,
-  },
-  SUCCESS: {
-    label: 'SUCCESS',
-    cls: 'bg-green-50 text-green-700 border-green-200',
-    Icon: CheckCircle,
-  },
-  PARTIAL_SUCCESS: {
-    label: 'PARTIAL',
-    cls: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-    Icon: AlertTriangle,
-  },
-  FAILED: {
-    label: 'FAILED',
-    cls: 'bg-red-50 text-red-700 border-red-200',
-    Icon: XCircle,
-  },
-  DEGRADED: {
-    label: 'DEGRADED',
-    cls: 'bg-purple-50 text-purple-700 border-purple-200',
-    Icon: AlertTriangle,
-  },
+const STATUS_CLS: Record<PlanRunStatus, string> = {
+  RUNNING: 'bg-orange-50 text-orange-700 border-orange-200',
+  SUCCESS: 'bg-green-50 text-green-700 border-green-200',
+  PARTIAL_SUCCESS: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  FAILED: 'bg-red-50 text-red-700 border-red-200',
+  DEGRADED: 'bg-purple-50 text-purple-700 border-purple-200',
 };
 
 const STAGE_LABEL: Record<string, string> = {
@@ -114,7 +82,7 @@ export default function PlanRunHero({
 
   // Tick once a second for live run-time on non-terminal runs.
   const [tick, setTick] = useState(0);
-  const isTerminal = !!run && TERMINAL_STATUSES.includes(run.status);
+  const isTerminal = !!run && isPlanRunTerminal(run.status);
   useEffect(() => {
     if (isTerminal || now) return;
     const id = window.setInterval(() => setTick((t) => t + 1), 1000);
@@ -131,7 +99,8 @@ export default function PlanRunHero({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, now, tick]);
 
-  const cfg = run ? STATUS_PILL[run.status] : null;
+  const pill = run ? PLAN_RUN_PILL[run.status] : null;
+  const pillCls = run ? STATUS_CLS[run.status] : '';
 
   const stageStr = summary?.currentStage
     ? (STAGE_LABEL[summary.currentStage] ?? summary.currentStage.toUpperCase())
@@ -160,10 +129,10 @@ export default function PlanRunHero({
 
           {/* Status line */}
           <div className="flex flex-wrap items-center gap-2">
-            {cfg && (
+            {pill && (
               <span
                 data-testid="plan-run-status-pill"
-                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${cfg.cls}`}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${pillCls}`}
               >
                 {run?.status === 'RUNNING' && (
                   <span className="relative flex h-2 w-2">
@@ -171,8 +140,8 @@ export default function PlanRunHero({
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-orange-500" />
                   </span>
                 )}
-                <cfg.Icon className={`h-3 w-3 ${run?.status === 'RUNNING' ? 'animate-spin' : ''}`} />
-                {cfg.label}
+                <pill.Icon className={`h-3 w-3 ${run?.status === 'RUNNING' ? 'animate-spin' : ''}`} />
+                {pill.label}
                 {runDuration && (
                   <span data-testid="plan-run-duration" className="ml-0.5 font-mono text-[10.5px] text-gray-500">
                     {runDuration}

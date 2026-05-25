@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { RiskDistributionChart } from '@/components/charts/RiskDistributionChart';
 import { TestTypePassFailChart } from '@/components/charts/TestTypePassFailChart';
 import { api, type ResultsSummary } from '@/utils/api';
@@ -11,7 +12,6 @@ import {
   PlayCircle,
   ListChecks,
   Clock,
-  ShieldAlert,
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 
@@ -22,13 +22,6 @@ const STATUS_BADGE: Record<string, string> = {
   DISPATCHED: 'bg-blue-100 text-blue-700',
   QUEUED: 'bg-gray-100 text-gray-600',
   CANCELED: 'bg-yellow-100 text-yellow-700',
-};
-
-const RISK_BADGE: Record<string, string> = {
-  HIGH: 'bg-red-100 text-red-700',
-  MEDIUM: 'bg-yellow-100 text-yellow-700',
-  LOW: 'bg-green-100 text-green-700',
-  UNKNOWN: 'bg-gray-100 text-gray-500',
 };
 
 function formatDuration(seconds: number | null): string {
@@ -161,10 +154,7 @@ export default function ResultsPage() {
                         </span>
                       </td>
                       <td className="py-2 pr-4">
-                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${RISK_BADGE[run.risk_level] ?? RISK_BADGE.UNKNOWN}`}>
-                          {run.risk_level === 'HIGH' && <ShieldAlert size={10} />}
-                          {run.risk_level}
-                        </span>
+                        <StatusBadge kind="risk" status={run.risk_level} size="sm" />
                       </td>
                       <td className="py-2 pr-4 text-xs text-muted-foreground">
                         {formatDuration(run.duration_seconds)}

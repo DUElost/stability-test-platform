@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle, XCircle, AlertTriangle, Clock, Activity, Loader2 } from 'lucide-react';
+import { Clock, Activity, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -12,43 +12,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import type { PlanRun, PlanRunStatus } from '@/utils/api/types';
+import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
 
-const TERMINAL_STATUSES: ReadonlyArray<PlanRunStatus> = [
-  'SUCCESS',
-  'PARTIAL_SUCCESS',
-  'FAILED',
-  'DEGRADED',
-];
-
-const STATUS_PILL: Record<
-  PlanRunStatus,
-  { label: string; cls: string; Icon: React.ElementType }
-> = {
-  RUNNING: {
-    label: 'RUNNING',
-    cls: 'bg-orange-100 text-orange-800 ring-orange-300',
-    Icon: Loader2,
-  },
-  SUCCESS: {
-    label: 'SUCCESS',
-    cls: 'bg-green-100 text-green-800 ring-green-300',
-    Icon: CheckCircle,
-  },
-  PARTIAL_SUCCESS: {
-    label: 'PARTIAL',
-    cls: 'bg-yellow-100 text-yellow-800 ring-yellow-300',
-    Icon: AlertTriangle,
-  },
-  FAILED: {
-    label: 'FAILED',
-    cls: 'bg-red-100 text-red-800 ring-red-300',
-    Icon: XCircle,
-  },
-  DEGRADED: {
-    label: 'DEGRADED',
-    cls: 'bg-purple-100 text-purple-800 ring-purple-300',
-    Icon: AlertTriangle,
-  },
+const STATUS_CLS: Record<PlanRunStatus, string> = {
+  RUNNING: 'bg-orange-100 text-orange-800 ring-orange-300',
+  SUCCESS: 'bg-green-100 text-green-800 ring-green-300',
+  PARTIAL_SUCCESS: 'bg-yellow-100 text-yellow-800 ring-yellow-300',
+  FAILED: 'bg-red-100 text-red-800 ring-red-300',
+  DEGRADED: 'bg-purple-100 text-purple-800 ring-purple-300',
 };
 
 function formatDuration(seconds: number): string {
@@ -84,7 +55,7 @@ export default function PlanRunTopbar({
 
   // Tick once a second to keep the run-time live for non-terminal runs.
   const [tick, setTick] = useState(0);
-  const isTerminal = !!run && TERMINAL_STATUSES.includes(run.status);
+  const isTerminal = !!run && isPlanRunTerminal(run.status);
   useEffect(() => {
     if (isTerminal || now) return;
     const id = window.setInterval(() => setTick((t) => t + 1), 1000);
@@ -100,7 +71,8 @@ export default function PlanRunTopbar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, now, tick]);
 
-  const cfg = run ? STATUS_PILL[run.status] : null;
+  const pill = run ? PLAN_RUN_PILL[run.status] : null;
+  const pillCls = run ? STATUS_CLS[run.status] : '';
 
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-gradient-to-b from-white to-gray-50 px-4 py-2.5 shadow-sm">
@@ -116,15 +88,15 @@ export default function PlanRunTopbar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        {cfg && (
+        {pill && (
           <span
             data-testid="plan-run-status-pill"
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold ring-1 ring-inset ${cfg.cls}`}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold ring-1 ring-inset ${pillCls}`}
           >
-            <cfg.Icon
+            <pill.Icon
               className={`h-3 w-3 ${run?.status === 'RUNNING' ? 'animate-spin' : ''}`}
             />
-            {cfg.label}
+            {pill.label}
             {runDuration && (
               <>
                 <span className="text-gray-400">·</span>
