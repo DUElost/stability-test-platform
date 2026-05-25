@@ -186,6 +186,7 @@ class OutboxDrainer:
         self._failed_total: int = 0
         self._dead_letter_total: int = 0
         self._pruned_total: int = 0
+        self._pending_backlog: int = 0
         self._metrics_lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -290,6 +291,9 @@ class OutboxDrainer:
         """单次批量刷出。返回本轮成功 ack 的条目数（0 表示空或失败）。"""
         if not self._configured or self._db is None:
             return 0
+        if hasattr(self._db, "count_pending_log_signals"):
+            with self._metrics_lock:
+                self._pending_backlog = self._db.count_pending_log_signals()
         batch = self._db.get_pending_log_signals(limit=self._batch_size)
         if not batch:
             return 0
@@ -339,6 +343,9 @@ class OutboxDrainer:
 
         # Prune 闭环：定期清理已 ack 的旧条目，防止 SQLite 无限增长
         self._ticks_since_prune += 1
+        if hasattr(self._db, "count_pending_log_signals"):
+            with self._metrics_lock:
+                self._pending_backlog = self._db.count_pending_log_signals()
         if self._ticks_since_prune >= self._prune_every_n_ticks:
             self._ticks_since_prune = 0
             try:
@@ -373,4 +380,5 @@ class OutboxDrainer:
                 "failed_total":      self._failed_total,
                 "dead_letter_total": self._dead_letter_total,
                 "pruned_total":      self._pruned_total,
+                "pending_backlog":   self._pending_backlog,
             }

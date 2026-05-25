@@ -13,6 +13,7 @@ import type {
   WatcherSummary,
   JobManualActionResult,
   PlanRunAbortResult,
+  PlanRunDispatchRetryResult,
   EventStage,
   EventSeverity,
   DeviceUiStatus,
@@ -75,6 +76,11 @@ export const planRuns = {
   abort: (runId: number, reason?: string) =>
     unwrapApiResponse<PlanRunAbortResult>(
       apiClient.post(`/plan-runs/${runId}/abort`, reason ? { reason } : {}),
+    ),
+
+  retryDispatch: (runId: number) =>
+    unwrapApiResponse<PlanRunDispatchRetryResult>(
+      apiClient.post(`/plan-runs/${runId}/retry-dispatch`, {}),
     ),
 
   manualRetryJob: (runId: number, jobId: number, reason?: string) =>

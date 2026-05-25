@@ -27,6 +27,9 @@ interface Props {
     | undefined;
   /** Whether the parent PlanRun is in a terminal status. */
   isTerminal: boolean;
+  /** Manual retry after precheck / sync failure. */
+  onRetryDispatch?: () => void;
+  isRetrying?: boolean;
 }
 
 const PHASE_LABEL: Record<PrecheckPhase, { label: string; cls: string; Icon: React.ElementType }> = {
@@ -132,6 +135,8 @@ export default function DispatchGateCard({
   precheck,
   dispatchState,
   isTerminal,
+  onRetryDispatch,
+  isRetrying = false,
   nowMs = Date.now(),
 }: Props & { nowMs?: number }) {
   // Don't render at all when:
@@ -151,6 +156,9 @@ export default function DispatchGateCard({
     dispatchState?.status === 'completed';
   const showStaleBanner = isGateStale(dispatchState, precheck, isTerminal, nowMs);
   const staleElapsedSec = Math.floor(gateElapsedSeconds(dispatchState, nowMs) ?? 0);
+  const canRetryDispatch =
+    !isRetrying &&
+    (precheck.phase === 'failed' || dispatchState?.status === 'failed');
 
   // Aggregate counts for the summary line
   const counts = useMemo(() => {
@@ -191,6 +199,17 @@ export default function DispatchGateCard({
             <AlertTriangle className="h-3.5 w-3.5" />
             {precheck.errors[precheck.errors.length - 1]}
           </span>
+        )}
+        {canRetryDispatch && onRetryDispatch && (
+          <button
+            type="button"
+            data-testid="dispatch-gate-retry-button"
+            onClick={onRetryDispatch}
+            className="ml-auto inline-flex items-center gap-1 rounded-md bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isRetrying ? 'animate-spin' : ''}`} />
+            重试派发
+          </button>
         )}
       </div>
 

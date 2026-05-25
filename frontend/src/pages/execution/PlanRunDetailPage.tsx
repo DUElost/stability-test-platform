@@ -27,6 +27,7 @@ import {
   gateElapsedSeconds,
   isGateStale,
 } from '@/components/plan-run/DispatchGateCard';
+import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
 
 const TERMINAL: ReadonlyArray<PlanRunStatus> = [
   'SUCCESS',
@@ -261,6 +262,20 @@ export default function PlanRunDetailPage() {
     },
   });
 
+  const retryDispatchMut = useMutation({
+    mutationFn: () => api.planRuns.retryDispatch(id),
+    onSuccess: () => {
+      toast.success('已重新入队派发门禁');
+      qc.invalidateQueries({ queryKey: ['plan-run', id] });
+      qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
+      qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`重试派发失败: ${msg}`);
+    },
+  });
+
   // ── Plan name ──
   const planName = useMemo(
     () => timelineQ.data?.plan_name ?? null,
@@ -359,6 +374,16 @@ export default function PlanRunDetailPage() {
             SAQ Worker / Redis 或等待 precheck reaper 补偿。
           </span>
         </div>
+      )}
+
+      {precheck && (
+        <DispatchGateCard
+          precheck={precheck}
+          dispatchState={dispatchState}
+          isTerminal={isTerminal}
+          onRetryDispatch={() => retryDispatchMut.mutate()}
+          isRetrying={retryDispatchMut.isPending}
+        />
       )}
 
       {stuckJobs.length > 0 && (

@@ -56,6 +56,7 @@ from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     complete_plan_run_dispatch,
+    initial_dispatch_state,
 )
 
 logger = logging.getLogger(__name__)
@@ -734,6 +735,113 @@ def _mark_precheck_failed(
         dispatch_status="failed",
     )
     logger.info("precheck_failed plan_run=%d error=%s", plan_run_id, error)
+
+
+class PlanRunDispatchRetryError(Exception):
+    """Raised when manual precheck/dispatch retry is not allowed."""
+
+
+def retry_plan_run_dispatch(
+    run_id: int,
+    db: Session,
+    *,
+    triggered_by: str,
+) -> dict:
+    """Reset a failed precheck PlanRun and re-enqueue the dispatch gate."""
+    from backend.models.job import JobInstance
+    from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
+
+    pr = db.get(PlanRun, run_id)
+    if pr is None:
+        raise PlanRunDispatchRetryError("plan run not found")
+
+    has_jobs = (
+        db.query(JobInstance.id)
+        .filter(JobInstance.plan_run_id == run_id)
+        .first()
+    )
+    if has_jobs:
+        raise PlanRunDispatchRetryError(
+            "plan run already has jobs; cannot retry dispatch"
+        )
+
+    run_ctx = dict(pr.run_context or {})
+    if not run_ctx.get("dispatch_device_ids"):
+        raise PlanRunDispatchRetryError("missing dispatch_device_ids")
+
+    summary = dict(pr.result_summary or {})
+    precheck = run_ctx.get("precheck") or {}
+    dispatch_state = run_ctx.get("dispatch_state") or {}
+    eligible = (
+        pr.status == "FAILED" and summary.get("precheck_failed")
+    ) or (
+        pr.status == "RUNNING"
+        and (
+            precheck.get("phase") == "failed"
+            or dispatch_state.get("status") == "failed"
+        )
+    )
+    if not eligible:
+        raise PlanRunDispatchRetryError(
+            f"plan run not eligible for dispatch retry (status={pr.status})"
+        )
+
+    pr.status = "RUNNING"
+    pr.ended_at = None
+    pr.result_summary = None
+
+    new_dispatch = initial_dispatch_state()
+    new_dispatch["enqueue_key"] = f"precheck:{run_id}"
+    run_ctx["dispatch_state"] = new_dispatch
+    pr.run_context = run_ctx
+    flag_modified(pr, "run_context")
+    db.commit()
+
+    initialise_precheck_state(run_id, db)
+
+    try:
+        enqueue_sync(
+            "precheck_and_dispatch_task",
+            key=f"precheck:{run_id}",
+            timeout=600,
+            retries=1,
+            required=True,
+            plan_run_id=run_id,
+        )
+    except EnqueueSyncError as exc:
+        now = datetime.now(timezone.utc)
+        pr = db.get(PlanRun, run_id)
+        if pr is not None:
+            pr.status = "FAILED"
+            pr.ended_at = now
+            run_ctx = dict(pr.run_context or {})
+            dispatch_state = dict(run_ctx.get("dispatch_state") or {})
+            dispatch_state["status"] = "failed"
+            dispatch_state["last_error"] = str(exc)
+            dispatch_state["completed_at"] = _utc_iso()
+            run_ctx["dispatch_state"] = dispatch_state
+            pr.run_context = run_ctx
+            pr.result_summary = {
+                "precheck_failed": True,
+                "reason": "dispatch_queue_unavailable",
+                "error": str(exc),
+            }
+            flag_modified(pr, "run_context")
+            db.commit()
+        raise PlanRunDispatchRetryError(
+            f"dispatch queue unavailable: {exc}"
+        ) from exc
+
+    logger.info(
+        "plan_run_dispatch_retry plan_run=%d triggered_by=%s",
+        run_id,
+        triggered_by,
+    )
+    return {
+        "plan_run_id": run_id,
+        "status": "RUNNING",
+        "dispatch_state": new_dispatch,
+    }
 
 
 # ── SAQ task entrypoint ────────────────────────────────────────────────────

@@ -38,6 +38,10 @@ from backend.services.plan_run_abort import (
     PlanRunAbortError,
     abort_plan_run,
 )
+from backend.services.plan_precheck import (
+    PlanRunDispatchRetryError,
+    retry_plan_run_dispatch,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
@@ -261,6 +265,32 @@ def abort_plan_run_endpoint(
         msg = str(exc)
         if "not found" in msg:
             raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=409, detail=msg)
+    return ok(summary)
+
+
+@router.post(
+    "/plan-runs/{run_id}/retry-dispatch",
+    response_model=ApiResponse[dict],
+)
+def retry_plan_run_dispatch_endpoint(
+    run_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Re-enqueue the dispatch gate after a precheck / sync failure."""
+    try:
+        summary = retry_plan_run_dispatch(
+            run_id,
+            db=db,
+            triggered_by=current_user.username if current_user else "api",
+        )
+    except PlanRunDispatchRetryError as exc:
+        msg = str(exc)
+        if "not found" in msg:
+            raise HTTPException(status_code=404, detail=msg)
+        if "queue unavailable" in msg:
+            raise HTTPException(status_code=503, detail=msg)
         raise HTTPException(status_code=409, detail=msg)
     return ok(summary)
 

@@ -198,7 +198,7 @@ def reconcile_stale_precheck_runs(db: Session | None = None) -> dict[str, int]:
                         "precheck_and_dispatch_task",
                         key=state["enqueue_key"],
                         timeout=600,
-                        retries=0,
+                        retries=1,
                         required=True,
                         plan_run_id=pr.id,
                     )
