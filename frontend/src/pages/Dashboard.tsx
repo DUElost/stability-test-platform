@@ -188,9 +188,9 @@ export default function Dashboard() {
 
             <Badge
 
-              variant={wsConnected ? 'default' : 'destructive'}
+              variant={wsConnected ? 'success' : 'destructive'}
 
-              className="gap-1.5 bg-emerald-50 text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+              className="gap-1.5"
 
             >
 
