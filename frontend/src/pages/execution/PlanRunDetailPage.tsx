@@ -343,17 +343,14 @@ export default function PlanRunDetailPage() {
           onAbort={(reason) => abortMut.mutate(reason)}
           onExportReport={async () => {
             try {
-              const summary = await api.planRuns.getSummary(id);
-              const blob = new Blob([JSON.stringify(summary, null, 2)], {
-                type: 'application/json',
-              });
+              const blob = await api.planRuns.exportReport(id, 'markdown');
               const url = URL.createObjectURL(blob);
               const anchor = document.createElement('a');
               anchor.href = url;
-              anchor.download = `plan-run-${id}-summary.json`;
+              anchor.download = `plan-run-${id}-report.md`;
               anchor.click();
               URL.revokeObjectURL(url);
-              toast.success('PlanRun 摘要已导出');
+              toast.success('PlanRun 报告已导出');
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
               toast.error(`导出失败: ${msg}`);

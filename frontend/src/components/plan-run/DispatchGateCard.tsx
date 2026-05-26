@@ -257,6 +257,9 @@ export default function DispatchGateCard({
                   {state.sync_attempts > 0 && (
                     <span className="text-xs text-gray-400">
                       sync ×{state.sync_attempts}
+                      {precheck.sync_max_attempts != null
+                        ? `/${precheck.sync_max_attempts}`
+                        : ''}
                     </span>
                   )}
                   {state.error && (

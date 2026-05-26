@@ -745,6 +745,8 @@ export interface PrecheckState {
   hosts: Record<string, PrecheckHostState>;
   final_result?: PrecheckFinalResult | null;
   errors: string[];
+  /** Backend env DISPATCH_SYNC_MAX_ATTEMPTS (ADR Phase B). */
+  sync_max_attempts?: number;
 }
 
 export interface PlanRunContext {

@@ -395,6 +395,10 @@ def main() -> None:
         agent_instance_id=agent_instance_id,
         boot_id=boot_id,
         agent_version=_agent_pkg_version,
+        get_outbox_counts=lambda: {
+            "terminal_outbox_pending": local_db.count_pending_terminals(),
+            "log_signal_outbox_pending": local_db.count_pending_log_signals(),
+        },
     )
     heartbeat_thread.start()
 

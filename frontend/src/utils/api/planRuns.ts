@@ -48,6 +48,14 @@ export const planRuns = {
   getSummary: (runId: number) =>
     unwrapApiResponse<PlanRunSummary>(apiClient.get(`/plan-runs/${runId}/summary`)),
 
+  exportReport: async (runId: number, format: 'markdown' | 'json' = 'markdown') => {
+    const response = await apiClient.get(`/plan-runs/${runId}/report/export`, {
+      params: { format },
+      responseType: 'blob',
+    });
+    return response.data as Blob;
+  },
+
   // ── ADR-0021/0022 C5a₂ aggregation endpoints ──
   getChain: (runId: number) =>
     unwrapApiResponse<PlanChain>(apiClient.get(`/plan-runs/${runId}/chain`)),

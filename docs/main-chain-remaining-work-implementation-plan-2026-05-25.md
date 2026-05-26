@@ -75,6 +75,8 @@
 
 聚焦：**派发/脚本一致性**、**瞬态错误恢复**、**导出与后端聚合**、**scheduler 链路与 UI 测试补全**。
 
+> **Phase B 签收进度（2026-05-26）**：T-B3 / T-B5 / T-B6 / T-B7 / T-B10 / T-B4 已签收；T-B1 / T-B2 / T-B8 / T-B9 **进行中**（见各任务卡片 blocker）。
+
 | 任务 ID | 对应 U | 标题 |
 |---------|--------|------|
 | T-B1 | U3 | Prepare 锁脚本版本 + complete 失败 SocketIO |
@@ -217,7 +219,8 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B1 / **U3** |
-| **依赖** | 无 |
+| **状态** | **进行中** |
+| **Blocker** | 需 ADR-0023 prepare 快照 sha256 字段设计与 `complete_plan_run_dispatch` 漂移检测 PR；本批次优先测试/导出/sync 重试 |
 | **改动面** | backend（`plan_dispatcher_sync.py`、`plan_precheck.py`、`aggregator`）、frontend（SocketIO invalidation） |
 | **步骤** | ① `prepare_plan_run` 时将 `plan_snapshot.scripts[]` 写入 `content_sha256` 快照（来自 Script 表） ② `complete_plan_run_dispatch` 校验 sha 仍 active；漂移则 FAILED + 明确 error ③ complete 写 FAILED 时 `schedule_emit` `plan_run_status` ④ 测试：prepare 后 deactivate script → complete 失败 + push ⑤ 测试：prepare 快照与 gate verify 一致 |
 | **验收标准** | 脚本失活窗口不再静默建 Job；UI 终态与 DB 同步（SocketIO） |
@@ -231,7 +234,8 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B2 / **U6** |
-| **依赖** | 无 |
+| **状态** | **进行中** |
+| **Blocker** | 需 `_gather_verify` 错误 taxonomy + SAQ 重试边界单测；与 T-B3 sync 重试正交，待专批 |
 | **改动面** | backend（`plan_precheck.py` `_gather_verify`） |
 | **步骤** | ① 定义 transient 集合：`TimeoutError`、`ConnectionError`、`verify_exception` 且非 agent_offline ② transient → host_state `transient_error` + 可选 SAQ 重试，不立即 `_mark_precheck_failed` ③ terminal：`agent_offline`、sha mismatch、脚本不存在 ④ metric：`stability_dispatch_gate_verify_total{result=transient\|terminal}` ⑤ 扩展 `test_plan_precheck.py` mock RPC 抛 Timeout |
 | **验收标准** | 单次网络抖动不整 Run FAILED；agent 真离线仍 FAILED |
@@ -245,12 +249,14 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B3 / **U7** |
+| **状态** | **已签收** |
 | **依赖** | T-B2（可选） |
 | **改动面** | backend（`plan_precheck.py`）、frontend（`DispatchGateCard`）、docs |
 | **步骤** | ① env `DISPATCH_SYNC_MAX_ATTEMPTS`（默认 1，生产可 2） ② 替换 hardcode `sync_attempts cap = 1` ③ 失败且 attempts 未耗尽 → 留在 syncing 而非立即 terminal ④ UI 已有「重试派发」按钮：补充 attempts 展示与 disabled 规则 ⑤ 测试：第二次 sync 成功路径 |
 | **验收标准** | env=2 时一次 sync 失败可恢复；=1 行为与现网一致 |
 | **工作量** | M |
 | **风险** | 低 |
+| **审查收口** | 2026-05-26：`DISPATCH_SYNC_MAX_ATTEMPTS` env（默认 1）；sync/reverify 循环重试；precheck `sync_max_attempts` 字段；`DispatchGateCard` sync ×n/m 展示；`test_second_sync_attempt_success_when_max_attempts_two` 通过。 |
 
 ---
 
@@ -259,12 +265,13 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B4 / **U8** |
-| **依赖** | 无 |
+| **状态** | **已签收** |
 | **改动面** | agent（`local_db.py`、`outbox_drainer.py`）、backend（`/agent/recovery/sync` 或 heartbeat extra）、`core/metrics.py` |
 | **步骤** | ① Agent heartbeat 上报 `terminal_outbox_pending` / `log_signal_outbox_pending`（已有 local_db count 方法） ② 后端 Counter/Gauge：`stability_agent_outbox_pending{host_id,type}` ③ 文档：超阈值排查（网络/API 503/409 循环） ④ 可选：Host 详情页展示 outbox depth |
 | **验收标准** | `/metrics` 可见 host 维度 outbox；Agent 单测 count 准确 |
 | **工作量** | M |
 | **风险** | 低 |
+| **审查收口** | 2026-05-26：Agent heartbeat extra 上报 `terminal_outbox_pending` / `log_signal_outbox_pending`；后端 Gauge `stability_agent_outbox_pending{host_id,type}`；`test_heartbeat_outbox_metric.py` 通过。Host 详情页展示仍 optional 未做。 |
 
 ---
 
@@ -273,12 +280,13 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B5 / **U10** |
-| **依赖** | 无 |
+| **状态** | **已签收** |
 | **改动面** | backend（新端点或复用聚合）、frontend（`PlanRunHero` / `PlanRunDetailPage`）、docs |
 | **步骤** | ① 设计 `GET /plan-runs/{id}/report/export?format=markdown|json`（聚合 summary + devices + timeline 摘要） ② 或 zip 多 Job report ③ 前端「导出报告」改调 API + 文件名带 plan/run id ④ 保留 JSON summary 快捷导出（可选） ⑤ Vitest：mock export 200 |
 | **验收标准** | 终态 PlanRun 可下载 markdown/json；大 Run 不 OOM（分页或限 Job 数） |
 | **工作量** | M |
 | **风险** | 低 |
+| **审查收口** | 2026-05-26：`GET /plan-runs/{id}/report/export?format=markdown|json`；`plan_run_export.py` 限 500 Job；前端改调 API；Vitest export + pytest `test_plan_run_export.py` 通过。 |
 
 ---
 
@@ -287,12 +295,13 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B6 / **U12** |
-| **依赖** | 无 |
+| **状态** | **已签收** |
 | **改动面** | frontend/tests、backend/tests |
 | **步骤** | ① backend 已有 agent_offline → FAILED ② Vitest：`DispatchGateCard` 展示 host 级 offline + errors ③ 集成：failed precheck fixture → GET plan-run → UI 断言 |
 | **验收标准** | CI 覆盖 offline 文案与 phase=failed |
 | **工作量** | S |
 | **风险** | 低 |
+| **审查收口** | 2026-05-26：`DispatchGateCard.test.tsx` + `PlanRunDetailPage.test.tsx` agent_offline / errors / phase=failed 断言通过。 |
 
 ---
 
@@ -301,12 +310,13 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B7 / **U13** |
-| **依赖** | T-A4（UI SLA 展示） |
+| **状态** | **已签收** |
 | **改动面** | backend/tests（recycler + mock emit） |
 | **步骤** | ① 集成测试：创建 PENDING Job → 推进时间 >120s → recycler → FAILED ② patch `schedule_emit` 断言 `job_status` ③ 断言 lease 释放 |
 | **验收标准** | 单测 + 集成在 CI 通过 |
 | **工作量** | S |
 | **风险** | 低 |
+| **审查收口** | 2026-05-26：`test_pending_timeout_socketio.py` 集成测试 — PENDING >120s → recycler FAILED + patch `schedule_emit` job_status；纳入 `main-chain-integration-smoke`。 |
 
 ---
 
@@ -315,7 +325,8 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B8 / **U14** |
-| **依赖** | T-A2 |
+| **状态** | **进行中** |
+| **Blocker** | 需 recycler + reconciler + aggregator 三阶段串联 fixture；本批次未排入 |
 | **改动面** | backend/tests（recycler + reconciler + aggregator） |
 | **步骤** | ① 构造 RUNNING → recycler UNKNOWN → reconciler grace → FAILED ② 断言 PlanRun 终态 DEGRADED/FAILED ③ 可选：PlanRunDetailPage stuck banner 集成 |
 | **验收标准** | 全链单测；PlanRun 不永久 RUNNING |
@@ -329,7 +340,8 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B9 / **U15** |
-| **依赖** | 无 |
+| **状态** | **进行中** |
+| **Blocker** | Agent mock patrol-heartbeat 恢复序列较重；API 层 manual_retry 已有，Agent 侧 E2E 待专批 |
 | **改动面** | backend/tests、agent/tests |
 | **步骤** | ① API 层 manual_retry 已有 ② 新增：mock Agent patrol-heartbeat 恢复序列 ③ recycler patrol_stall 后 manual_retry → RUNNING ④ 可选：Agent `JOB_NOT_RUNNING` → recovery sync（P1#6 可合并） |
 | **验收标准** | CI 覆盖 stall → retry → 心跳恢复 |
@@ -343,12 +355,13 @@
 | 字段 | 内容 |
 |------|------|
 | **ID / U** | T-B10 / **U16** |
-| **依赖** | P0 chain rollback（`test_plan_chain_trigger.py` 已有单元） |
+| **状态** | **已签收** |
 | **改动面** | backend/tests/integration |
 | **步骤** | ① 父 PlanRun SUCCESS → aggregator → 子 PlanRun 创建 + gate ② dispatch 失败 → `next_plan_triggered` 回滚 + `result_summary.chain_dispatch_failed` ③ CHAIN run_type 走 precheck（若 T-C 未做，至少 verify mock） ④ 纳入 integration-smoke 或 nightly |
 | **验收标准** | 两场景 CI 绿；与 P0#3 行为一致 |
 | **工作量** | M |
 | **风险** | 中 |
+| **审查收口** | 2026-05-26：`test_plan_chain_e2e.py` — 父 SUCCESS → 子 PlanRun + gate；dispatch 失败 → `next_plan_triggered` 回滚 + `chain_dispatch_failed`；纳入 `main-chain-integration-smoke`。 |
 
 ---
 

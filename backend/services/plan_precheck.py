@@ -11,7 +11,7 @@ Failure modes — all set ``PlanRun.status='FAILED'`` +
 ``result_summary.precheck_failed=True``:
 
 - agent offline (verify or re-verify)
-- sha mismatch after one resync attempt (sync_attempts cap = 1)
+- sha mismatch after ``DISPATCH_SYNC_MAX_ATTEMPTS`` resync attempts (default 1)
 - hot-update RPC error during sync
 - script entry missing on agent after sync
 
@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -64,7 +65,7 @@ logger = logging.getLogger(__name__)
 
 VERIFY_TIMEOUT_SECONDS = 10.0
 SYNC_SETTLE_SECONDS = 8.0
-MAX_SYNC_ATTEMPTS = 1
+DISPATCH_SYNC_MAX_ATTEMPTS = max(1, int(os.getenv("DISPATCH_SYNC_MAX_ATTEMPTS", "1")))
 
 
 def _utc_iso() -> str:
@@ -97,6 +98,7 @@ def _initial_precheck_state(host_ids: list[str]) -> dict:
         },
         "final_result": None,
         "errors": [],
+        "sync_max_attempts": DISPATCH_SYNC_MAX_ATTEMPTS,
     }
 
 
@@ -516,22 +518,23 @@ async def _drive_dispatch_gate(
             )
             return
 
-        # ── Phase 2: sync (only mismatched hosts, lightweight) ───────────
-        if out_of_sync_hosts:
+        # ── Phase 2+3: sync (with optional retry) + re-verify ────────────
+        hosts_to_sync = list(out_of_sync_hosts)
+        while hosts_to_sync:
             precheck["phase"] = "syncing"
             _persist_precheck(plan_run_id, precheck, db)
 
-            # Collect mismatched script entries per host
             sync_failures: list[tuple[str, str]] = []
-            for hid in out_of_sync_hosts:
+            for hid in hosts_to_sync:
                 host_state = precheck["hosts"][hid]
                 host_state["sync_attempts"] += 1
+                host_state["status"] = "syncing"
+                host_state["error"] = None
 
-                # Determine which scripts are mismatched for this host
                 scripts = host_state.get("scripts") or []
                 mismatched_names = {
                     s["name"] for s in scripts
-                    if not s.get("ok")  # sha_mismatch or not_exists
+                    if not s.get("ok")
                 }
                 mismatched_entries = [
                     es for es in expected_scripts
@@ -544,7 +547,6 @@ async def _drive_dispatch_gate(
                     host_state["error"] = "no_mismatched_entries"
                     continue
 
-                # Try lightweight push first
                 ok_sync, err_sync = await asyncio.to_thread(
                     _push_mismatched_scripts, hid, mismatched_entries, db
                 )
@@ -553,7 +555,6 @@ async def _drive_dispatch_gate(
                     host_state["status"] = "synced"
                     host_state["error"] = None
                 else:
-                    # Lightweight failed — fall back to full hot-update
                     logger.warning(
                         "lightweight_sync_failed host=%s error=%s — falling back to hot-update",
                         hid, err_sync,
@@ -573,19 +574,28 @@ async def _drive_dispatch_gate(
                 _persist_precheck(plan_run_id, precheck, db)
 
             if sync_failures:
+                retry_hosts = [
+                    h for h, _ in sync_failures
+                    if precheck["hosts"][h]["sync_attempts"] < DISPATCH_SYNC_MAX_ATTEMPTS
+                ]
+                if retry_hosts:
+                    logger.info(
+                        "precheck_sync_retry plan_run=%d hosts=%s",
+                        plan_run_id, retry_hosts,
+                    )
+                    hosts_to_sync = retry_hosts
+                    continue
                 msg = "; ".join(f"{h}:{e}" for h, e in sync_failures)
                 _mark_precheck_failed(
                     plan_run_id, precheck, db, error=f"sync_failed: {msg}",
                 )
                 return
 
-            # Brief settle for Agent file cache (no restart needed for lightweight)
             await asyncio.sleep(2.0)
 
-            # ── Phase 3: re-verify synced hosts ────────────────────────────
-            reverify_results = await _gather_verify(out_of_sync_hosts, expected_scripts)
+            reverify_results = await _gather_verify(hosts_to_sync, expected_scripts)
             still_bad: list[str] = []
-            for hid in out_of_sync_hosts:
+            for hid in hosts_to_sync:
                 ok, results, err = reverify_results[hid]
                 host_state = precheck["hosts"][hid]
                 host_state["scripts"] = results
@@ -600,11 +610,23 @@ async def _drive_dispatch_gate(
             _persist_precheck(plan_run_id, precheck, db)
 
             if still_bad:
+                retry_hosts = [
+                    h for h in still_bad
+                    if precheck["hosts"][h]["sync_attempts"] < DISPATCH_SYNC_MAX_ATTEMPTS
+                ]
+                if retry_hosts:
+                    logger.info(
+                        "precheck_reverify_retry plan_run=%d hosts=%s",
+                        plan_run_id, retry_hosts,
+                    )
+                    hosts_to_sync = retry_hosts
+                    continue
                 _mark_precheck_failed(
                     plan_run_id, precheck, db,
                     error=f"reverify_failed: {','.join(still_bad)}",
                 )
                 return
+            break
 
         # ── Phase 4: dispatch ─────────────────────────────────────────────
         precheck["phase"] = "ready"

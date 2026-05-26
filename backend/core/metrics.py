@@ -380,6 +380,13 @@ log_signal_total = Counter(
     ['category']  # AEE / VENDOR_AEE / ANR / TOMBSTONE / MOBILELOG
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# Agent local outbox backlog (heartbeat extra)
+agent_outbox_pending = Gauge(
+    'stability_agent_outbox_pending',
+    'Agent local outbox backlog depth reported via heartbeat',
+    ['host_id', 'type'],  # terminal | log_signal
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # ============================================================================
 # Build Info
 # ============================================================================
@@ -537,6 +544,16 @@ def record_log_signal_ingested(category: str):
     if not PROMETHEUS_AVAILABLE:
         return
     log_signal_total.labels(category=(category or "UNKNOWN").upper()).inc()
+
+
+def record_agent_outbox_pending(host_id: str, outbox_type: str, count: int):
+    """Update Agent outbox backlog gauge from heartbeat extra."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    agent_outbox_pending.labels(
+        host_id=str(host_id),
+        type=outbox_type,
+    ).set(max(0, int(count)))
 
 
 def get_metrics_response():

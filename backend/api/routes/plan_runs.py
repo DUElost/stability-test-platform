@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -46,6 +46,10 @@ from backend.services.plan_run_abort import (
 from backend.services.plan_precheck import (
     PlanRunDispatchRetryError,
     retry_plan_run_dispatch,
+)
+from backend.services.plan_run_export import (
+    build_plan_run_export,
+    plan_run_export_to_markdown,
 )
 
 logger = logging.getLogger(__name__)
@@ -1797,6 +1801,42 @@ def get_plan_run_watcher_summary(
         threshold=pr.failure_threshold,
         exceeded=abnormal_rate > pr.failure_threshold,
     ))
+
+
+@router.get("/plan-runs/{run_id}/report/export")
+def export_plan_run_report(
+    run_id: int,
+    format: str = Query("markdown"),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """Export PlanRun summary + devices + timeline (bounded to avoid OOM)."""
+    pr = db.get(PlanRun, run_id)
+    if pr is None:
+        raise HTTPException(status_code=404, detail="plan run not found")
+
+    data = build_plan_run_export(db, pr)
+    fmt = format.strip().lower()
+    if fmt == "json":
+        return JSONResponse(
+            content=data,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="plan-run-{run_id}-report.json"'
+                ),
+            },
+        )
+    if fmt != "markdown":
+        raise HTTPException(status_code=400, detail="format must be markdown or json")
+    markdown = plan_run_export_to_markdown(data)
+    return PlainTextResponse(
+        markdown,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="plan-run-{run_id}-report.md"'
+            ),
+        },
+    )
 
 
 @router.get("/plan-runs/{run_id}/summary", response_model=ApiResponse[dict])

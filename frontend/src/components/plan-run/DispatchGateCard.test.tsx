@@ -98,4 +98,50 @@ describe('DispatchGateCard stale banner', () => {
     fireEvent.click(screen.getByTestId('dispatch-gate-retry-button'));
     expect(onRetry).toHaveBeenCalledOnce();
   });
+
+  it('shows agent_offline host error and failed phase', () => {
+    render(
+      <DispatchGateCard
+        precheck={{
+          phase: 'failed',
+          started_at: '2026-05-08T11:00:00Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          final_result: 'failed',
+          errors: ['agent_offline: host-202'],
+          sync_max_attempts: 1,
+          hosts: {
+            'host-101': {
+              status: 'ok',
+              checked_at: '2026-05-08T11:00:10Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: null,
+            },
+            'host-202': {
+              status: 'failed',
+              checked_at: '2026-05-08T11:00:11Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'agent_offline',
+            },
+          },
+        }}
+        dispatchState={{
+          status: 'failed',
+          enqueued_at: '2026-05-08T11:00:00Z',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          last_error: 'precheck:agent_offline: host-202',
+        }}
+        isTerminal={true}
+      />,
+    );
+    expect(screen.getByTestId('dispatch-gate-card')).toBeInTheDocument();
+    expect(screen.getAllByText(/agent_offline: host-202/).length).toBeGreaterThan(0);
+    expect(screen.getByTestId('dispatch-gate-host-host-202')).toHaveTextContent(
+      'agent_offline',
+    );
+  });
 });

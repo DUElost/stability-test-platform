@@ -44,6 +44,8 @@ jobs:
         run: >-
           python -m pytest
           backend/tests/integration/test_main_chain_happy_path.py
+          backend/tests/integration/test_pending_timeout_socketio.py
+          backend/tests/integration/test_plan_chain_e2e.py
           backend/tests/test_seed_and_smoke.py
           -v
       - name: Run agent tests

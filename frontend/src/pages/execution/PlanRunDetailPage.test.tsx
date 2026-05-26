@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   abort: vi.fn(),
   manualRetryJob: vi.fn(),
   manualExitJob: vi.fn(),
+  exportReport: vi.fn(),
   socketCallback: { current: undefined as undefined | ((msg: any) => void) },
 }));
 
@@ -39,6 +40,7 @@ vi.mock('@/utils/api', () => ({
       abort: mocks.abort,
       manualRetryJob: mocks.manualRetryJob,
       manualExitJob: mocks.manualExitJob,
+      exportReport: mocks.exportReport,
     },
   },
 }));
@@ -616,5 +618,75 @@ describe('PlanRunDetailPage', () => {
     const banner = await screen.findByTestId('stuck-jobs-banner');
     expect(banner).toHaveTextContent('1 个 Job 心跳超时');
     expect(banner).toHaveTextContent('DEV-STALE');
+  });
+
+  it('renders agent_offline precheck failure in dispatch gate', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'FAILED',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T11:00:30Z',
+      run_context: {
+        precheck: {
+          phase: 'failed',
+          started_at: '2026-05-08T11:00:00Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          final_result: 'failed',
+          errors: ['agent_offline: host-202'],
+          sync_max_attempts: 1,
+          hosts: {
+            'host-202': {
+              status: 'failed',
+              checked_at: '2026-05-08T11:00:11Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'agent_offline',
+            },
+          },
+        },
+        dispatch_state: {
+          status: 'failed',
+          enqueued_at: '2026-05-08T11:00:00Z',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          last_error: 'precheck:agent_offline: host-202',
+        },
+      },
+    });
+    renderPage();
+    await waitFor(() => screen.getByTestId('dispatch-gate-card'));
+    expect(screen.getAllByText(/agent_offline: host-202/).length).toBeGreaterThan(0);
+    expect(screen.getByTestId('dispatch-gate-host-host-202')).toHaveTextContent(
+      'agent_offline',
+    );
+  });
+
+  it('exports report via backend API', async () => {
+    const blob = new Blob(['# PlanRun #12 Report'], { type: 'text/plain' });
+    mocks.exportReport.mockResolvedValueOnce(blob);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const createObjectURL = vi.fn(() => 'blob:mock');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL,
+    });
+
+    renderPage();
+    await waitFor(() => screen.getByText('导出报告'));
+    fireEvent.click(screen.getByText('导出报告'));
+
+    await waitFor(() => {
+      expect(mocks.exportReport).toHaveBeenCalledWith(12, 'markdown');
+    });
+    expect(createObjectURL).toHaveBeenCalledWith(blob);
+    clickSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 });

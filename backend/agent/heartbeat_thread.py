@@ -47,6 +47,7 @@ class HeartbeatThread:
         boot_id: str = "",
         # ADR-0020: agent version for preflight consistency check
         agent_version: str = "",
+        get_outbox_counts: Optional[Callable[[], Dict[str, int]]] = None,
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -63,6 +64,7 @@ class HeartbeatThread:
         self._agent_instance_id = agent_instance_id
         self._boot_id = boot_id
         self._agent_version = agent_version
+        self._get_outbox_counts = get_outbox_counts
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
@@ -141,6 +143,11 @@ class HeartbeatThread:
         from .system_monitor import collect_system_stats
 
         system_stats = collect_system_stats()
+        if self._get_outbox_counts:
+            try:
+                system_stats.update(self._get_outbox_counts())
+            except Exception as exc:
+                logger.debug("outbox_counts_failed: %s", exc)
         mount_status = check_mounts(self._mount_points)
 
         active_count = self._get_active_job_count() if self._get_active_job_count else 0

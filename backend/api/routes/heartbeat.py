@@ -13,6 +13,7 @@ from backend.core.database import get_db
 from backend.models.host import Host, Device
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import LeaseStatus, LeaseType
+from backend.core.metrics import record_agent_outbox_pending
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
 
@@ -212,6 +213,22 @@ def _process_heartbeat_with_db(
     if payload.agent_version:
         host_extra["agent_version"] = payload.agent_version
     host.extra = host_extra
+
+    extra = payload.extra or {}
+    if "terminal_outbox_pending" in extra:
+        try:
+            record_agent_outbox_pending(
+                host.id, "terminal", int(extra["terminal_outbox_pending"]),
+            )
+        except (TypeError, ValueError):
+            pass
+    if "log_signal_outbox_pending" in extra:
+        try:
+            record_agent_outbox_pending(
+                host.id, "log_signal", int(extra["log_signal_outbox_pending"]),
+            )
+        except (TypeError, ValueError):
+            pass
 
     # Process devices array
     devices_data = getattr(payload, "devices", None) or []

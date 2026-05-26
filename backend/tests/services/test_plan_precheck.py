@@ -149,6 +149,50 @@ class TestDispatchGate:
         ).count()
         assert jobs == 2
 
+    def test_second_sync_attempt_succeeds_when_max_attempts_two(
+        self, db_session, gate_chain, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "backend.services.plan_precheck.DISPATCH_SYNC_MAX_ATTEMPTS", 2,
+        )
+        pr = _prepare_run(db_session, gate_chain)
+        sync_calls = {"count": 0}
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            if host_id == "h-A":
+                return _ack_ok(host_id, "aabbcc11")
+            if sync_calls["count"] >= 2:
+                return _ack_ok(host_id, "aabbcc11")
+            return _ack_drift(host_id, "aabbcc11")
+
+        def _fake_sync(host_id, db):
+            sync_calls["count"] += 1
+            if sync_calls["count"] >= 2:
+                return (True, None)
+            return (False, "hot_update_failed")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ), patch(
+            "backend.services.plan_precheck._sync_host_via_hot_update",
+            side_effect=_fake_sync,
+        ), patch(
+            "backend.services.plan_precheck._push_mismatched_scripts",
+            return_value=(False, "push_failed"),
+        ), patch(
+            "backend.services.plan_precheck.SYNC_SETTLE_SECONDS", 0
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        precheck = pr_after.run_context["precheck"]
+        assert precheck["final_result"] == "ready"
+        assert precheck["hosts"]["h-B"]["sync_attempts"] == 2
+        assert sync_calls["count"] == 2
+        assert pr_after.status == "RUNNING"
+
     def test_agent_offline_terminal_failure(self, db_session, gate_chain):
         pr = _prepare_run(db_session, gate_chain)
 
