@@ -29,8 +29,13 @@ from backend.core.audit import record_audit
 from backend.core.database import get_db
 from backend.core.metrics import record_patrol_manual_action
 from backend.models.audit import AuditLog
-from backend.models.enums import JobStatus, PlanRunStatus
-from backend.models.host import Device
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, PlanRunStatus
+from backend.models.host import Device, Host
+from backend.models.device_lease import DeviceLease
+from backend.core.job_timeout_config import (
+    DISPATCHED_TIMEOUT_SECONDS,
+    UNKNOWN_GRACE_SECONDS,
+)
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
@@ -1439,6 +1444,10 @@ class DeviceMatrixItem(BaseModel):
     created_at: Optional[str] = None
     ended_at: Optional[str] = None
     status_reason: Optional[str] = None   # ADR-0021: pending_timeout / agent never claimed / etc.
+    grace_remaining_seconds: Optional[int] = None
+    pending_claim_remaining_seconds: Optional[int] = None
+    busy_reason: Optional[str] = None
+    busy_lease_job_id: Optional[int] = None
 
 
 class PlanRunDevicesOut(BaseModel):
@@ -1486,6 +1495,52 @@ def _current_stage_for_job(j: JobInstance) -> str:
     return "init"
 
 
+def _grace_remaining_seconds(j: JobInstance, now: datetime) -> Optional[int]:
+    if j.status != JobStatus.UNKNOWN.value:
+        return None
+    ended = _aware(j.ended_at)
+    if ended is None:
+        return None
+    remaining = (ended + timedelta(seconds=UNKNOWN_GRACE_SECONDS) - now).total_seconds()
+    return max(0, int(remaining))
+
+
+def _pending_claim_remaining_seconds(j: JobInstance, now: datetime) -> Optional[int]:
+    if j.status != JobStatus.PENDING.value:
+        return None
+    base = _aware(j.created_at) or _aware(j.started_at)
+    if base is None:
+        return None
+    remaining = (base + timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS) - now).total_seconds()
+    return max(0, int(remaining))
+
+
+def _adb_state_excluded(adb_state: str | None) -> bool:
+    """Match claim pre-filter: offline/unknown adb_state excludes the device."""
+    state = (adb_state or "device").lower()
+    return state in ("offline", "unknown")
+
+
+def _derive_busy_reason(
+    device: Device | None,
+    host_status: str | None,
+    lease_job_id: int | None,
+) -> tuple[Optional[str], Optional[int]]:
+    if device is None:
+        return None, None
+    if host_status == HostStatus.OFFLINE.value:
+        return "host_offline", lease_job_id
+    if _adb_state_excluded(device.adb_state):
+        return "adb_excluded", lease_job_id
+    if not device.adb_connected or device.status == DeviceStatus.OFFLINE.value:
+        return "device_offline", lease_job_id
+    if lease_job_id is not None:
+        return "active_lease", lease_job_id
+    if device.status == DeviceStatus.BUSY.value:
+        return "active_lease", None
+    return None, None
+
+
 @router.get("/plan-runs/{run_id}/devices", response_model=ApiResponse[PlanRunDevicesOut])
 def get_plan_run_devices(
     run_id: int,
@@ -1512,12 +1567,29 @@ def get_plan_run_devices(
 
     # device 元数据
     device_ids = list({j.device_id for j in jobs})
-    device_meta: dict[int, tuple[str, Optional[str]]] = {}
+    device_meta: dict[int, Device] = {}
+    host_status_by_id: dict[str, str] = {}
     if device_ids:
         rows = db.execute(
-            select(Device.id, Device.serial, Device.model).where(Device.id.in_(device_ids))
+            select(Device).where(Device.id.in_(device_ids))
+        ).scalars().all()
+        device_meta = {d.id: d for d in rows}
+        host_ids = list({d.host_id for d in rows if d.host_id})
+        if host_ids:
+            host_rows = db.execute(
+                select(Host.id, Host.status).where(Host.id.in_(host_ids))
+            ).all()
+            host_status_by_id = {r.id: r.status for r in host_rows}
+
+    active_lease_by_device: dict[int, int] = {}
+    if device_ids:
+        lease_rows = db.execute(
+            select(DeviceLease.device_id, DeviceLease.job_id).where(
+                DeviceLease.device_id.in_(device_ids),
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+            )
         ).all()
-        device_meta = {r.id: (r.serial, r.model) for r in rows}
+        active_lease_by_device = {r.device_id: r.job_id for r in lease_rows if r.job_id}
 
     now = datetime.now(timezone.utc)
     items: list[DeviceMatrixItem] = []
@@ -1527,7 +1599,12 @@ def get_plan_run_devices(
     for j in jobs:
         ui = _ui_status_for_job(j, now)
         cur_stage = _current_stage_for_job(j)
-        serial, model = device_meta.get(j.device_id, (None, None))
+        dev = device_meta.get(j.device_id)
+        serial = dev.serial if dev else None
+        model = dev.model if dev else None
+        host_st = host_status_by_id.get(j.host_id) if j.host_id else None
+        lease_job_id = active_lease_by_device.get(j.device_id)
+        busy_reason, busy_lease_job_id = _derive_busy_reason(dev, host_st, lease_job_id)
         items.append(DeviceMatrixItem(
             device_id=j.device_id,
             device_serial=serial,
@@ -1550,6 +1627,10 @@ def get_plan_run_devices(
             created_at=_iso(j.created_at),
             ended_at=_iso(j.ended_at),
             status_reason=j.status_reason,
+            grace_remaining_seconds=_grace_remaining_seconds(j, now),
+            pending_claim_remaining_seconds=_pending_claim_remaining_seconds(j, now),
+            busy_reason=busy_reason,
+            busy_lease_job_id=busy_lease_job_id,
         ))
         by_status["all"] += 1
         by_status[ui] = by_status.get(ui, 0) + 1

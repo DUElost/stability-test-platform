@@ -2,6 +2,8 @@
 
 from uuid import uuid4
 
+from backend.models.plan_run import PlanRun
+
 
 def _uniq(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
@@ -77,6 +79,31 @@ class TestPlanCRUD:
 
         get_resp = client.get(f"/api/v1/plans/{plan_id}", headers=auth_headers)
         assert get_resp.status_code == 404
+
+    def test_delete_plan_with_historical_runs_returns_409(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        name = _uniq("plan_hist")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        db_session.add(PlanRun(
+            plan_id=plan_id,
+            status="FAILED",
+            failure_threshold=0.05,
+            plan_snapshot={"name": name, "plan_id": plan_id},
+            run_type="MANUAL",
+        ))
+        db_session.commit()
+
+        delete = client.delete(f"/api/v1/plans/{plan_id}", headers=auth_headers)
+        assert delete.status_code == 409, delete.text
+        assert "execution record" in delete.json()["detail"]
+
+        get_resp = client.get(f"/api/v1/plans/{plan_id}", headers=auth_headers)
+        assert get_resp.status_code == 200
 
     def test_update_plan_rejected_for_non_owner(self, client, auth_headers, sample_script):
         # 审计 #8: plans.py update/delete 必须拒绝非 owner 非 admin。

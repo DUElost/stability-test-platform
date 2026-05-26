@@ -53,7 +53,12 @@ from backend.core.security import validate_production_auth_cookie_settings
 from backend.realtime.socketio_server import create_sio_server, capture_main_loop
 from backend.services.state_machine import InvalidTransitionError
 from backend.scheduler.app_scheduler import create_scheduler, register_schedules
-from backend.tasks.saq_worker import start_saq_worker, stop_saq_worker
+from backend.tasks.saq_worker import (
+    is_saq_ready,
+    start_saq_worker,
+    stop_saq_worker,
+    verify_redis_connectivity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +101,9 @@ async def lifespan(app: FastAPI):
         )
 
         # Redis — retained for SAQ broker (task queue)
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
         redis_client = await aioredis.from_url(
-            os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+            redis_url,
             encoding="utf-8",
             decode_responses=True,
         )
@@ -117,8 +123,28 @@ async def lifespan(app: FastAPI):
         # you want to run SAQ as a standalone worker process instead of
         # in-process (avoids orphan jobs on hot-reload).
         ENABLE_INPROCESS_SAQ = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
+        skip_infra = (
+            os.getenv("STP_SKIP_INFRA_CHECK", "0") == "1"
+            and os.getenv("ENV", "").strip().lower() != "production"
+        )
         if ENABLE_INPROCESS_SAQ:
-            await start_saq_worker()
+            if skip_infra:
+                logger.warning(
+                    "infra_check_skipped_by_env STP_SKIP_INFRA_CHECK=1 "
+                    "(Redis PING + in-process SAQ skipped)"
+                )
+            else:
+                try:
+                    await verify_redis_connectivity(redis_url)
+                    logger.info("redis_ping_ok url=%s", redis_url)
+                except RuntimeError as exc:
+                    logger.error("redis_unreachable — %s", exc)
+                    raise
+                try:
+                    await start_saq_worker()
+                except Exception as exc:
+                    logger.error("saq_worker_start_failed — %s", exc)
+                    raise RuntimeError(f"SAQ worker failed to start: {exc}") from exc
         else:
             logger.warning("saq_worker_disabled_by_env")
 
@@ -197,9 +223,14 @@ def root():
 
 @_fastapi_app.get("/health")
 async def health_check():
+    inprocess_saq = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
+    saq_ready: bool | None = is_saq_ready() if inprocess_saq else None
     try:
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        return {"data": {"status": "healthy"}, "error": None}
+        payload: dict = {"status": "healthy"}
+        if inprocess_saq:
+            payload["saq_ready"] = saq_ready
+        return {"data": payload, "error": None}
     except Exception:
         return JSONResponse(status_code=503, content={"data": None, "error": {"code": "DB_UNAVAILABLE", "message": "database disconnected"}})

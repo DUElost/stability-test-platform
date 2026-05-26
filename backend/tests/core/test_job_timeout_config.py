@@ -20,6 +20,7 @@ def test_production_defaults(monkeypatch):
 
     assert mod.DISPATCHED_TIMEOUT_SECONDS == 120
     assert mod.RUNNING_HEARTBEAT_TIMEOUT_SECONDS == 900
+    assert mod.PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS == 300
     assert mod.UNKNOWN_GRACE_SECONDS == 300
 
 

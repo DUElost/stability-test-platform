@@ -18,6 +18,7 @@ import os
 import time
 from typing import Optional
 
+import redis.asyncio as aioredis
 from saq import Job, Queue, Worker
 
 from backend.tasks.saq_tasks import SAQ_FUNCTIONS
@@ -35,6 +36,7 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 SAQ_CONCURRENCY = int(os.getenv("SAQ_CONCURRENCY", "10"))
 SAQ_QUEUE_NAME = os.getenv("SAQ_QUEUE_NAME", "stp")
 SAQ_ENQUEUE_WAIT_TIMEOUT = float(os.getenv("SAQ_ENQUEUE_WAIT_TIMEOUT", "5.0"))
+REDIS_PING_TIMEOUT = float(os.getenv("REDIS_PING_TIMEOUT", "3.0"))
 
 
 def get_queue() -> Queue:
@@ -59,6 +61,32 @@ async def _after_process(ctx: dict) -> None:
     start = ctx.pop(_SAQ_JOB_START_KEY, None)
     duration = time.monotonic() - start if start is not None else 0.0
     record_saq_task(task_name, status, duration)
+
+
+async def verify_redis_connectivity(
+    redis_url: str | None = None,
+    *,
+    timeout: float | None = None,
+) -> None:
+    """Ping Redis before SAQ worker startup. Raises RuntimeError on failure."""
+    url = redis_url or os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    ping_timeout = REDIS_PING_TIMEOUT if timeout is None else timeout
+    client = await aioredis.from_url(url, encoding="utf-8", decode_responses=True)
+    try:
+        await asyncio.wait_for(client.ping(), timeout=ping_timeout)
+    except Exception as exc:
+        raise RuntimeError(f"Redis unreachable at {url}: {exc}") from exc
+    finally:
+        await client.aclose()
+
+
+def is_saq_ready() -> bool:
+    """True when in-process SAQ queue is connected and worker task is alive."""
+    return (
+        _queue is not None
+        and _worker_task is not None
+        and not _worker_task.done()
+    )
 
 
 async def start_saq_worker() -> None:

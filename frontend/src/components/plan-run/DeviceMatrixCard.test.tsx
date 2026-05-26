@@ -197,7 +197,76 @@ describe('DeviceMatrixCard', () => {
     render(<DeviceMatrixCard data={data} />);
     expect(screen.getByTestId('device-row-3009')).toHaveTextContent('失联');
     const pill = screen.getByTestId('device-row-3009').querySelector('span[title]');
-    expect(pill?.getAttribute('title')).toBe('lease_expired');
+    expect(pill?.getAttribute('title')).toMatch(/lease_expired/);
+    expect(pill?.getAttribute('title')).toMatch(/grace/);
+  });
+
+  it('shows grace countdown in matrix wait column for unknown devices', () => {
+    const data: PlanRunDevicesPayload = {
+      ...fixture,
+      by_status: { all: 1, unknown: 1 },
+      devices: [
+        {
+          device_id: 9,
+          device_serial: 'DEV-UNKN',
+          device_model: 'Pixel 8',
+          host_id: 'host-101',
+          job_id: 3009,
+          job_status: 'UNKNOWN',
+          ui_status: 'unknown',
+          current_stage: 'unknown',
+          current_step: null,
+          patrol_cycle_count: 3,
+          patrol_success_cycle_count: 2,
+          patrol_failed_cycle_count: 1,
+          current_failure_streak: 0,
+          next_retry_at: null,
+          manual_action: null,
+          log_signal_count: 0,
+          last_heartbeat_at: null,
+          started_at: '2026-05-08T11:00:00Z',
+          ended_at: '2026-05-08T11:30:00Z',
+          status_reason: 'lease_expired',
+          grace_remaining_seconds: 180,
+        },
+      ],
+    };
+    render(<DeviceMatrixCard data={data} />);
+    expect(screen.getByTestId('device-wait-3009')).toHaveTextContent('grace 180s');
+  });
+
+  it('shows pending claim SLA in matrix wait column', () => {
+    const data: PlanRunDevicesPayload = {
+      ...fixture,
+      by_status: { all: 1, pending: 1 },
+      devices: [
+        {
+          device_id: 10,
+          device_serial: 'DEV-PEND',
+          device_model: 'Pixel 8',
+          host_id: 'host-101',
+          job_id: 3010,
+          job_status: 'PENDING',
+          ui_status: 'pending',
+          current_stage: 'pending',
+          current_step: null,
+          patrol_cycle_count: 0,
+          patrol_success_cycle_count: 0,
+          patrol_failed_cycle_count: 0,
+          current_failure_streak: 0,
+          next_retry_at: null,
+          manual_action: null,
+          log_signal_count: 0,
+          last_heartbeat_at: null,
+          started_at: null,
+          created_at: new Date(Date.now() - 30_000).toISOString(),
+          ended_at: null,
+          pending_claim_remaining_seconds: 90,
+        },
+      ],
+    };
+    render(<DeviceMatrixCard data={data} />);
+    expect(screen.getByTestId('device-wait-3010')).toHaveTextContent('认领 90s');
   });
 
   it('shows pending claim SLA countdown in status tooltip', () => {

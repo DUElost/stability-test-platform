@@ -32,6 +32,19 @@ const STATUS_DEF: Array<{ key: DeviceUiStatus | 'all'; label: string }> = [
 /** PENDING job never claimed — matches backend DISPATCHED_TIMEOUT_SECONDS (120s). */
 const DISPATCHED_CLAIM_TIMEOUT_SECONDS = 120;
 
+const BUSY_REASON_LABELS: Record<string, string> = {
+  active_lease: '设备租约占用',
+  device_offline: '设备离线',
+  host_offline: '主机离线',
+  adb_excluded: 'ADB 状态排除',
+};
+
+function fmtCountdown(seconds: number | null | undefined): string | null {
+  if (seconds == null) return null;
+  if (seconds <= 0) return '已到期';
+  return `${seconds}s`;
+}
+
 function fmtRelative(ts: string | null | undefined, now = Date.now()): string {
   if (!ts) return '—';
   const t = new Date(ts).getTime();
@@ -49,22 +62,32 @@ function fmtRelative(ts: string | null | undefined, now = Date.now()): string {
 }
 
 function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
-  if (d.status_reason) return d.status_reason;
   if (d.ui_status === 'unknown') {
+    const grace = d.grace_remaining_seconds;
+    if (grace != null && grace > 0) {
+      const prefix = d.status_reason || 'Job 失联';
+      return `${prefix} — grace 剩余 ${grace}s，超时后自动失败`;
+    }
     const reason = (d.status_reason || '').toLowerCase();
     if (reason.includes('lease_expired') || reason.includes('heartbeat')) {
       return `${d.status_reason || 'Job 失联'} — grace 窗口内可 recovery 恢复，超时后自动失败`;
     }
     return 'Job 失联（UNKNOWN），grace 窗口内等待 recovery 或 reconciler 自动失败';
   }
+  if (d.status_reason) return d.status_reason;
   if (d.ui_status === 'pending') {
-    const baseTs = d.created_at ?? d.started_at;
-    if (baseTs) {
-      const deadline = new Date(baseTs).getTime() + DISPATCHED_CLAIM_TIMEOUT_SECONDS * 1000;
-      const remainingSec = Math.max(0, Math.ceil((deadline - now) / 1000));
-      if (remainingSec > 0) {
-        return `等待 Agent 认领；${remainingSec}s 内未认领将自动失败（120s SLA）`;
-      }
+    const remaining =
+      d.pending_claim_remaining_seconds ??
+      (() => {
+        const baseTs = d.created_at ?? d.started_at;
+        if (!baseTs) return null;
+        const deadline = new Date(baseTs).getTime() + DISPATCHED_CLAIM_TIMEOUT_SECONDS * 1000;
+        return Math.max(0, Math.ceil((deadline - now) / 1000));
+      })();
+    if (remaining != null && remaining > 0) {
+      return `等待 Agent 认领；${remaining}s 内未认领将自动失败（120s SLA）`;
+    }
+    if (remaining === 0) {
       return '等待 Agent 认领；认领 SLA 已到期，recycler 将标记失败';
     }
     return '等待 Agent 认领；超时未认领将自动失败（120s SLA）';
@@ -195,6 +218,7 @@ function DeviceTable({
             <th className="px-3 py-2 text-left">Serial</th>
             <th className="px-2 py-2 text-left">Host</th>
             <th className="px-2 py-2 text-left">状态</th>
+            <th className="px-2 py-2 text-left">等待/占用</th>
             <th className="px-2 py-2 text-left">阶段</th>
             <th className="px-2 py-2 text-left">当前步骤</th>
             <th className="px-2 py-2 text-right">巡检周期</th>
@@ -211,6 +235,14 @@ function DeviceTable({
                 : d.current_failure_streak >= 1
                 ? 'text-amber-600'
                 : 'text-gray-400';
+            const waitLabel =
+              d.ui_status === 'unknown' && d.grace_remaining_seconds != null
+                ? `grace ${fmtCountdown(d.grace_remaining_seconds)}`
+                : d.ui_status === 'pending' && d.pending_claim_remaining_seconds != null
+                ? `认领 ${fmtCountdown(d.pending_claim_remaining_seconds)}`
+                : d.busy_reason
+                ? BUSY_REASON_LABELS[d.busy_reason] ?? d.busy_reason
+                : '—';
             return (
               <tr
                 key={d.job_id}
@@ -233,6 +265,12 @@ function DeviceTable({
                       spin={d.ui_status === 'running'}
                     />
                   </span>
+                </td>
+                <td
+                  className="px-2 py-2 text-[11px] text-gray-600"
+                  data-testid={`device-wait-${d.job_id}`}
+                >
+                  {waitLabel}
                 </td>
                 <td className="px-2 py-2 text-[11px] uppercase text-gray-600">
                   {d.current_stage}

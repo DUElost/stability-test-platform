@@ -142,6 +142,60 @@ curl -s "http://127.0.0.1:8000/api/v1/hosts"
 
 ## 4. E2E 闭环演练
 
+### 4.0 主链路 smoke 脚本（推荐，Plan/PlanRun 全路径）
+
+在**控制平面主机**（后端已启动、至少 1 台 Agent ONLINE、至少 1 台设备 ONLINE）执行：
+
+```bash
+cd "$CONTROL_DIR"
+source venv/bin/activate
+# 开发环境：可在仓库根目录 .env 中设置 STP_ADMIN_PASSWORD / STP_SMOKE_ORIGIN / STP_ADMIN_USER，
+# 脚本启动时会自动加载（不覆盖 shell 已 export 的变量）。生产/CI 仍建议显式 export。
+export STP_ADMIN_PASSWORD='<your-password>'
+# 可选：与 CORS 白名单一致（默认 http://localhost:5173）
+export STP_SMOKE_ORIGIN='http://localhost:5173'
+# 可选：默认 admin；若库里 admin 用户名不同须与此一致
+export STP_ADMIN_USER=admin
+
+# 开发库首次 smoke 或 401 Incorrect username or password 时（DEV ONLY）：
+# 按 .env 创建/重置 admin 密码（不打印密码）：
+python backend/scripts/reset_dev_admin_password.py
+# 等价 SQL（仅本地排障）：UPDATE users SET role='admin', is_active='Y' WHERE username='admin';
+# 密码须用 get_password_hash 写入，故优先用上面的脚本。
+
+python backend/scripts/seed_and_smoke.py \
+  --backend "http://127.0.0.1:8000" \
+  --timeout 600
+```
+
+**开发环境**可省略 `--device-id` 与 `--target-host-id`：脚本登录后会 `GET /api/v1/devices`，自动选用 **status=ONLINE** 且已关联 host 的设备，并将 `host_id` 同步用于热更新（若该 host 下无 ONLINE 设备，则尝试第一个 ONLINE host 下的设备）。预发布/生产仍建议显式传入，避免误选环境。
+
+显式指定设备示例（预发布/多机环境）：
+
+```bash
+python backend/scripts/seed_and_smoke.py \
+  --backend "http://127.0.0.1:8000" \
+  --target-host-id "<hosts.id>" \
+  --device-id <device.id> \
+  --timeout 600
+```
+
+常用变体：
+
+| 场景 | 命令 |
+|------|------|
+| 跳过 Agent 热更新（SSH 未配或仅验 API） | 加 `--no-hot-update` |
+| 只触发不等待终态 | 加 `--no-wait` |
+| 延长轮询 | `--timeout 900` |
+
+**同名 Plan 复跑**：脚本会先尝试 `DELETE` 旧 `smoke-plan-001`；若该 Plan 已有历史 PlanRun（开发库常见），后端返回 `409`，脚本自动 **PUT 更新步骤定义** 后继续触发，无需手工清库。
+
+**通过标准**（与 §5 一致）：脚本退出码 `0`；PlanRun 终态为 `SUCCESS`（或业务可接受的 `PARTIAL_SUCCESS`）；Job 为 `COMPLETED`；`step_traces` 含 init/patrol/teardown 步骤。
+
+**CI 说明**：GitHub Actions 默认跑 **集成级 smoke**（mock Agent RPC，无真实设备）；本脚本用于**预发布/上线前人工验收**，须在 checklist 勾选。
+
+---
+
 ### 4.1 UI 侧操作
 
 1. 打开 `http://<控制平面IP>/`
@@ -176,11 +230,28 @@ sudo journalctl -u stability-test-agent -f
 
 ## 5. 验收标准（全部满足才通过）
 
+- [ ] **主链路 smoke**：`seed_and_smoke.py` 已执行且退出码为 0（§4.0；或等价 UI 全路径手动验收并记录 plan_run_id）
+
 1. 任务状态完整流转：`PENDING -> QUEUED -> RUNNING -> COMPLETED|FAILED|CANCELED`
 2. `task.target_device_id == run.device_id`（目标设备不漂移）
 3. 任务终态后设备锁释放（设备可再次被分发）
 4. Dashboard 状态在 1-2 秒内有增量更新
 5. 无 `HOST_ID=0` Agent 在线
+
+---
+
+## 5.1 Job / 租约超时（分级 heartbeat）
+
+recycler 对 RUNNING Job 按阶段选用不同心跳丢失阈值（见 `backend/core/job_timeout_config.py`）：
+
+| 变量 | 生产默认 | 说明 |
+|------|---------|------|
+| `RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | 900 | init / teardown 等非 patrol 活跃阶段 |
+| `PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | 300（dev 180） | 已进入 patrol 周期（`patrol_cycle_count > 0` 或 patrol 心跳/步骤信号） |
+| `UNKNOWN_GRACE_SECONDS` | 300 | UNKNOWN 宽限期；UI `grace_remaining_seconds` 与此同步 |
+| `DISPATCHED_TIMEOUT_SECONDS` | 120 | PENDING 未被认领；UI `pending_claim_remaining_seconds` 与此同步 |
+
+**排查**：Agent 假 RUNNING 时，先看 Job 是否处于 patrol（PlanRun devices 矩阵 / Drawer 的 `current_stage`）；patrol 场景下约 300s 无 patrol 心跳会 → UNKNOWN，再经 grace 释放租约。调整 patrol 窗口时须评估 `plan.patrol_interval_seconds`，避免短于巡检间隔导致误杀。
 
 ---
 

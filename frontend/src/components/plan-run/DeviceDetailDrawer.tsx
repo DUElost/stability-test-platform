@@ -30,6 +30,18 @@ interface Props {
   isExitPending?: boolean;
 }
 
+const BUSY_REASON_LABELS: Record<string, string> = {
+  active_lease: '设备租约占用',
+  device_offline: '设备离线',
+  host_offline: '主机离线',
+  adb_excluded: 'ADB 状态排除',
+};
+
+function busyReasonLabel(reason: string | null | undefined): string {
+  if (!reason) return '—';
+  return BUSY_REASON_LABELS[reason] ?? reason;
+}
+
 const TERMINAL_DEVICE: ReadonlyArray<DeviceUiStatus> = ['completed', 'failed', 'unknown'];
 
 export default function DeviceDetailDrawer({
@@ -113,6 +125,23 @@ export default function DeviceDetailDrawer({
                       ? 'text-red-600 font-semibold'
                       : 'text-amber-700 font-semibold',
                   ] as [string, string, boolean, string]]
+                : []),
+              ...(device.grace_remaining_seconds != null
+                ? [['Grace 剩余', `${device.grace_remaining_seconds}s`, false] as [string, string, boolean]]
+                : []),
+              ...(device.pending_claim_remaining_seconds != null
+                ? [['认领 SLA 剩余', `${device.pending_claim_remaining_seconds}s`, false] as [string, string, boolean]]
+                : []),
+              ...(device.busy_reason
+                ? [[
+                    'BUSY 来源',
+                    busyReasonLabel(device.busy_reason),
+                    false,
+                    'text-amber-700 font-semibold',
+                  ] as [string, string, boolean, string]]
+                : []),
+              ...(device.busy_lease_job_id != null
+                ? [['占用 Job', `#${device.busy_lease_job_id}`, false] as [string, string, boolean]]
                 : []),
               ['巡检周期', `#${device.patrol_cycle_count}`, false],
               ['周期成功 / 失败', `${device.patrol_success_cycle_count} / ${device.patrol_failed_cycle_count}`, false],

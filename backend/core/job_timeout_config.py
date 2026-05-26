@@ -7,7 +7,7 @@ apply when ``ENV`` is set and not ``production`` (and ``TESTING!=1``).
 |----------|-------------------|------------------------|
 | ``DISPATCHED_TIMEOUT_SECONDS`` / ``RUN_DISPATCHED_TIMEOUT_SECONDS`` | 120 | 120 |
 | ``RUNNING_HEARTBEAT_TIMEOUT_SECONDS`` / ``RUN_HEARTBEAT_TIMEOUT_SECONDS`` | 900 | 900 |
-| ``PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS`` | 900 | 180 |
+| ``PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS`` | 300 | 180 |
 | ``UNKNOWN_GRACE_SECONDS`` | 300 | 300 |
 """
 
@@ -52,7 +52,7 @@ RUNNING_HEARTBEAT_TIMEOUT_SECONDS = _int_env(
 # RUNNING patrol-phase jobs (pipeline has patrol + patrol signal present)
 PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS = _int_env(
     "PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS",
-    production_default=900,
+    production_default=300,
     dev_default=180,
 )
 

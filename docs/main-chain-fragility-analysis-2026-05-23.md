@@ -56,7 +56,7 @@ sequenceDiagram
     SCH->>PG: reconciler (lease 过期 → UNKNOWN → grace 300s → FAILED)
 ```
 
-**CHAIN / SCHEDULE 旁路**：`dispatch_plan_sync` 跳过 precheck，直接 `prepare + complete_plan_run_dispatch`（`plan_dispatcher_sync.py:442-444`）。
+**CHAIN / SCHEDULE 路径**：`dispatch_plan_sync` 已 inline 走 dispatch gate（verify → sync → dispatch）；MANUAL 仍经 SAQ `precheck_and_dispatch`（`plan_dispatcher_sync.py:610-644`）。
 
 ---
 
@@ -67,7 +67,7 @@ sequenceDiagram
 | 现象 | 根因 | 严重度 | 现有缓解 | 建议加固 | 测试 |
 |------|------|--------|----------|----------|------|
 | Plan 保存成功但执行时报脚本不可用 | prepare 与 complete 之间存在脚本失活窗口；complete 内部写 FAILED 不 raise | 中 | ADR-0023 两阶段校验 + audit | **S**：prepare 时锁脚本版本或 complete 失败时显式 SocketIO 终态推送 | `test_plan_precheck.py::test_complete_failed_overrides_default_dispatch_state` ✅ |
-| WiFi 步骤静默缺参 | `AllocationError` 仅 `logger.warning` 跳过分配，Job 仍创建 | 中 | 运行时 connect_wifi 失败 | **M**：分配失败时 prepare/complete 拒绝或 Job 标记 FAILED | `test_plan_dispatcher.py` 部分 ✅，无 wifi 失败路径 |
+| WiFi 步骤静默缺参 | ~~`AllocationError` 仅 warning 跳过~~ → 分配失败时 PlanRun FAILED + audit | 中 | `plan_dispatcher_sync.py` hard fail | — | `test_plan_dispatcher.py` wifi 失败路径 ✅ |
 | Plan 链配置环/自引用 | `_validate_plan_dag` 422 拦截 | 低 | API 校验 | — | `test_plans_api.py::test_next_plan_self_reference_rejected` ✅ |
 
 ### 2.2 POST /plans/{id}/run → PlanRun 创建
@@ -92,19 +92,19 @@ sequenceDiagram
 
 | 现象 | 根因 | 严重度 | 现有缓解 | 建议加固 | 测试 |
 |------|------|--------|----------|----------|------|
-| Job 永久 PENDING 后变 FAILED | `DISPATCHED_TIMEOUT_SECONDS=120` recycler | 中 | recycler + SocketIO FAILED | **S**：UI 显示「等待 Agent 认领」倒计时 | `test_recycler.py` ✅ |
-| 设备 BUSY 无法接新 Job | 过期 grace 内 ACTIVE lease 仍占 claim 槽位（`agent_api.py:257-259`） | **高** | reconciler 300s grace 后释放 | **M**：UI 展示 UNKNOWN/grace 状态；缩短 grace（需评估 recovery） | `test_session_lease.py` 部分 ✅ |
-| claim 静默跳过 | `acquire_lease` 失败 `continue`，无 Job 级错误 | 中 | 同设备下次 poll 再试 | **S**：metric `claim_lease_failed_total` | `test_agent_routes.py` 部分 ✅ |
+| Job 永久 PENDING 后变 FAILED | `DISPATCHED_TIMEOUT_SECONDS=120` recycler | 中 | recycler + SocketIO FAILED | **S**：UI 可见「认领 SLA 剩余」（tooltip 已有；矩阵列/chip 仍缺） | `test_recycler.py` ✅ |
+| 设备 BUSY 无法接新 Job | 过期 grace 内 ACTIVE lease 仍占 claim 槽位（`agent_api.py:257-259`） | **高** | reconciler 300s grace 后释放 | **M**：UI 展示 `grace_remaining_seconds` / `busy_reason`（UNKNOWN tooltip 已有；秒级倒计时与 BUSY 来源仍缺） | `test_session_lease.py` 部分 ✅ |
+| claim 静默跳过 | `acquire_lease` 失败 `continue`，无 Job 级错误 | 中 | `stability_claim_lease_failed_total` 已计数 | **S**：Host 页「设备被 lease 阻塞」提示 | `test_agent_dual_write.py` metric ✅ / Host UI ❌ |
 | 设备 adb 过滤误伤 | claim 排除 `adb_connected=False` / OFFLINE（`agent_api.py:247-253`） | 中 | Agent 心跳更新 adb 字段 | **S**：Host 页展示「因 adb 被排除」 | ❌ 无专项 |
 | orphan device 仍建 Job | `device_host_map.get` 为 None 仅 warning（`plan_dispatcher_sync.py:365-369`） | 中 | Job host_id=null | **M**：prepare 阶段拒绝 orphan | `test_plan_dispatcher.py` ✅ warning 路径 |
-| CHAIN 跳过 precheck | `dispatch_plan_sync` 注释明确 skip gate（`plan_dispatcher_sync.py:442-444`） | **高** | 链触发依赖父 Run 已成功 | **M**：链式派发也走 gate 或至少 verify | ❌ 无 chain E2E |
+| ~~CHAIN 跳过 precheck~~ | `dispatch_plan_sync` 已 inline gate（CHAIN/SCHEDULE） | — | `test_main_chain_happy_path.py` gate 路径 | — | 集成 ✅ / Plan 链 E2E ❌ |
 
 ### 2.5 pipeline_engine (init / patrol / teardown)
 
 | 现象 | 根因 | 严重度 | 现有缓解 | 建议加固 | 测试 |
 |------|------|--------|----------|----------|------|
-| Agent 进程挂掉 Job 假 RUNNING | `RUNNING_HEARTBEAT_TIMEOUT_SECONDS=900` 才 → UNKNOWN | **高** | recycler → reconciler grace 300s | **M**：缩短 patrol 场景 timeout；UI 显示 last_patrol_heartbeat_at | `test_recycler.py` patrol_stall ✅ |
-| patrol heartbeat 409 后 Agent 不主动停 | 注释明确 agent 端仅 log（`agent_api.py:1003-1008`） | 中 | LeaseRenewer 409 → `_on_lease_lost` | **S**：patrol uploader 收到 JOB_NOT_RUNNING 触发 recovery | `test_patrol_heartbeat_api.py` ✅ backend only |
+| Agent 进程挂掉 Job 假 RUNNING | `RUNNING_HEARTBEAT_TIMEOUT_SECONDS=900` 才 → UNKNOWN | **高** | `job_timeout_config.py` 分级框架（生产 patrol 默认仍 900s） | **M**：确认生产 patrol 默认值 + grace 秒级 UI | `test_recycler.py` patrol_stall ✅ |
+| patrol heartbeat 409 后 Agent 不主动停 | ~~agent 端仅 log~~ → `patrol_recovery.py` 触发 recovery/sync | 中 | `JOB_NOT_RUNNING` sentinel + callback | — | `test_patrol_heartbeat_uploader.py` ✅ |
 | complete 依赖 outbox 重试 | Agent `OutboxDrainThread` 异步补发 | 中 | 幂等 complete + idempotent terminal | **S**：监控 outbox 积压 | `test_agent_dual_write.py` ✅ |
 | teardown 部分失败仍 COMPLETED | DEGRADED 计 success（`pipeline_engine.py:1750-1756`） | 低 | metadata.teardown_status | — | `test_pipeline_engine_patrol.py` 部分 ✅ |
 | Watcher 默认关闭 | `STP_WATCHER_ENABLED=false`（`agent/main.py:64`） | 低（主链可跑） | log-signals 可选 | P1 生产评估 | `test_job_session_e2e.py` ✅ mock |
@@ -122,7 +122,7 @@ sequenceDiagram
 | 现象 | 根因 | 严重度 | 现有缓解 | 建议加固 | 测试 |
 |------|------|--------|----------|----------|------|
 | PlanRun 永不终态 | 需 **全部** Job terminal（含 UNKNOWN）；任一 RUNNING 则卡住 | **高** | recycler + reconciler Eventually | **M**：PlanRun 级「卡住检测」banner（有 RUNNING/UNKNOWN 超时） | `test_plan_run_aggregation_shared.py` ✅ |
-| 聚合失败被吞 | recycler 中 `plan_aggregator_sync` except 仅 warning（`recycler.py:267-268`） | 中 | 下轮 Job 已终态可重试 | **S**：聚合失败写 audit + metric | 部分 ✅ |
+| 聚合失败被吞 | recycler except 仍 warning 但已写 audit + `stability_plan_run_aggregation_failed_total`（`recycler.py:268-281`）；`aggregator_sync.py` 本身无 metric | 中 | 下轮 Job 已终态可重试 | **S**：AlertManager 规则（metric 已有，告警仍缺） | metric+audit ✅ / 告警 ❌ |
 | Plan 链下一段未触发 | `next_plan_triggered=true` **先于** dispatch commit（`plan_chain_trigger.py:112-120`）；dispatch 失败仅 error log | **高** | 无自动回滚 | **M**：dispatch 失败回滚 triggered 或 SAQ 重试 | ❌ **无** chain trigger 测试 |
 | post_completion 丢失 | enqueue 失败 warning（`agent_api.py:860-861`） | 低 | 主链不依赖 post_completion | P2 | `test_saq_tasks.py` ✅ |
 
@@ -139,7 +139,7 @@ sequenceDiagram
 
 | 现象 | 根因 | 严重度 | 现有缓解 | 建议加固 | 测试 |
 |------|------|--------|----------|----------|------|
-| 设备 BUSY 泄漏最长 ~20min | RUNNING 900s → UNKNOWN + lease 保持 + grace 300s → FAILED | **高** | reconciler | **M**：UI「设备被占用」+ 剩余 grace 提示 | reconciler tests ✅ |
+| 设备 BUSY 泄漏最长 ~20min | RUNNING 900s → UNKNOWN + lease 保持 + grace 300s → FAILED | **高** | reconciler | **M**：UI「grace 剩余 Xs」+ `busy_reason`（UNKNOWN tooltip 已有） | reconciler tests ✅ |
 | 热更新 409 | 有 Job 时拒绝；C6 dialog abort 路径 | 中 | HostHotUpdateConfirmDialog | — | Vitest ✅ |
 | manual retry/exit | patrol 退避态 API | 中 | DeviceDetailDrawer | — | `test_manual_retry_exit_api.py` ✅ |
 | abort PlanRun | abort reaper grace 60s | 中 | PlanRunTopbar | — | `test_plan_run_abort_api.py` ✅ |
@@ -164,23 +164,26 @@ sequenceDiagram
    Nginx `/socket.io/` + 同源 `VITE_API_BASE_URL`；否则 Job/PlanRun 状态依赖 10s 轮询，操作 manual retry/abort 后体验「卡顿」。  
    与 `production-readiness-assessment` P0#1 重合，**属主链路而非纯运维**。
 
-5. **上线前强制执行一次真实 smoke**  
-   将 `backend/scripts/seed_and_smoke.py` 纳入预发布 checklist（真实 Agent + 设备），验证完整链路至 PlanRun 终态。  
-   CI 暂无自动化 E2E（`test_seed_and_smoke.py` 仅测 CLI 参数）。
+5. **上线前强制执行一次真实 smoke** — **已落地 2026-05-25**（代码/CI/部署文档）  
+   `seed_and_smoke.py` 已写入 `docs/preprod-drill-runbook.md` §4.0 与 `docs/production-minimum-deployment-checklist.md` §5.0。  
+   CI：`backend-test` → `main-chain-integration-smoke`（`test_main_chain_happy_path.py` + `test_seed_and_smoke.py`）；可选 `smoke-nightly` workflow（`workflow_dispatch` + 有密钥时真实设备 job）。真实设备 E2E **不**在默认 PR CI 跑，预发布须人工勾选 smoke。  
+   **注**：预发布真实设备 smoke 的**实际执行记录**（签字表/归档）无法仅凭仓库确认，须运维侧留存。
 
 ---
 
 ## 4. P1 主功能加固（短期）
 
-| # | 项 | 工作量 |
-|---|-----|--------|
-| 1 | 缩短或分级 RUNNING/recycler timeout（patrol 场景 vs 长任务） | M |
-| 2 | UI 展示 UNKNOWN / grace / PENDING 等待原因（devices 矩阵 + 设备 BUSY 来源） | M |
-| 3 | CHAIN/SCHEDULE 派发统一走 precheck 或 minimum verify | M |
-| 4 | WiFi 分配失败改为 hard fail，避免 init 阶段迷惑性失败 | S |
-| 5 | `plan_aggregator_sync` 失败 metric + 告警（防 PlanRun 悬挂） | S |
-| 6 | Agent patrol-heartbeat 消费 `JOB_NOT_RUNNING` → 触发 `/agent/recovery/sync` | S |
-| 7 | claim lease 失败计数 + Host 页「设备被 lease 阻塞」提示 | S |
+> **复查结论（2026-05-25 勘误）**：7 项中 **明确完成 3 项**（#3 CHAIN/SCHEDULE gate、#4 WiFi hard fail、#6 JOB_NOT_RUNNING→recovery）；**部分完成 3 项**（#1 timeout 分级框架、#2 UNKNOWN/PENDING tooltip、#7 claim_lease_failed metric）；**#5 聚合失败 metric** 已在 recycler 侧落地（`stability_plan_run_aggregation_failed_total` + audit），但无 `aggregator_sync` 命名 metric、AlertManager 告警仍缺。不宜表述为「约半数完成」，应写：**已有多项完成，另有多项仅部分完成**。
+
+| # | 项 | 工作量 | 复查状态 |
+|---|-----|--------|----------|
+| 1 | 缩短或分级 RUNNING/recycler timeout（patrol 场景 vs 长任务） | M | 部分 ✅ — `job_timeout_config.py` 框架已有；生产 patrol 默认仍 900s |
+| 2 | UI 展示 UNKNOWN / grace / PENDING 等待原因（devices 矩阵 + 设备 BUSY 来源） | M | 部分 ✅ — PENDING 120s SLA tooltip、UNKNOWN/grace 提示（`DeviceMatrixCard.tsx`）；缺 `grace_remaining_seconds` / `busy_reason` API 字段与可见倒计时 |
+| 3 | CHAIN/SCHEDULE 派发统一走 precheck 或 minimum verify | M | ✅ — `dispatch_plan_sync` inline gate |
+| 4 | WiFi 分配失败改为 hard fail，避免 init 阶段迷惑性失败 | S | ✅ — `AllocationError` → PlanRun FAILED + audit |
+| 5 | `plan_aggregator_sync` 失败 metric + 告警（防 PlanRun 悬挂） | S | 部分 ✅ — recycler 侧 `stability_plan_run_aggregation_failed_total` + audit；告警规则仍缺 |
+| 6 | Agent patrol-heartbeat 消费 `JOB_NOT_RUNNING` → 触发 `/agent/recovery/sync` | S | ✅ — `patrol_recovery.py` |
+| 7 | claim lease 失败计数 + Host 页「设备被 lease 阻塞」提示 | S | 部分 ✅ — `stability_claim_lease_failed_total`；Host 页提示仍缺 |
 
 ---
 
@@ -188,19 +191,19 @@ sequenceDiagram
 
 | 场景 | 类型 | 现状 |
 |------|------|------|
-| **Happy path**：Plan run → precheck mock 通过 → Job claim → complete → PlanRun SUCCESS | Backend integration | ❌ 无全链；`seed_and_smoke.py` 手动 |
+| **Happy path**：Plan run → precheck mock 通过 → Job claim → complete → PlanRun SUCCESS | Backend integration | ✅ `test_main_chain_happy_path.py`（gate + 聚合 + `/plans/run`）；Agent HTTP claim 见 `test_agent_dual_write.py`；真实设备见 `seed_and_smoke.py` |
 | **SAQ 不可用**：enqueue drop → API 应失败或 reaper 在 SLA 内恢复 | API + scheduler | 仅 drop 单测 |
 | **precheck agent_offline → FAILED** + UI precheck.errors 展示 | API + Vitest | backend ✅ / frontend 部分 |
 | **PENDING 120s timeout → FAILED** + lease 释放 + SocketIO | scheduler + PG | recycler ✅ |
 | **RUNNING → UNKNOWN → grace → FAILED** + PlanRun DEGRADED | scheduler 链 | reconciler ✅ / 无 PlanRun 级断言 |
 | **patrol_stall** + manual_retry → RUNNING 恢复 | API + agent mock | API ✅ / 无 agent 集成 |
-| **Plan 链**：父 SUCCESS → 子 PlanRun 创建；dispatch 失败 → triggered 回滚 | service | ❌ **完全缺失** |
+| **Plan 链**：父 SUCCESS → 子 PlanRun 创建；dispatch 失败 → triggered 回滚 | service | 单元 ✅ `test_plan_chain_trigger.py` / **全链路 E2E 仍缺**（T-B10） |
 | **complete 幂等**：重复 complete 不 409 循环 | API | ✅ `test_agent_routes.py` |
 | **PlanRunDetailPage**：SocketIO job_status / plan_run_status invalidation 范围 | Vitest | ✅ mock |
 | **生产同源 SocketIO**：E2E 连 Nginx 443 收 push | E2E | ❌ |
 | **pipeline init→patrol→teardown**（真实脚本 subprocess） | Agent | 单元 mock 为主 |
 
-**推荐最小 CI 增量**：PostgreSQL job 下 `pytest` 新增 `test_main_chain_happy_path.py`（mock `call_agent_rpc` + 内存 SAQ 或 inline gate），+  nightly `seed_and_smoke.py --timeout 600`。
+**推荐最小 CI 增量**：✅ 已实施 — `ci.yml` 的 `main-chain-integration-smoke` + `.github/workflows/smoke-nightly.yml`（集成 smoke 必跑；真实 `seed_and_smoke.py` 仅在有 `STP_ADMIN_PASSWORD` 等密钥时可选 job）。
 
 ---
 
@@ -237,4 +240,14 @@ sequenceDiagram
 
 ---
 
-*审查人：只读分析子任务 | 未修改业务代码*
+## 3. P0 完成注记
+
+| P0# | 状态 | 日期 |
+|-----|------|------|
+| #5 smoke + CI E2E | 已落地（代码/CI/文档） | 2026-05-25 |
+
+**复查总结（勘误后）**：P0 5 项的代码/CI/部署文档已全部落地；但预发布真实设备 smoke 的实际执行记录无法仅凭仓库确认。P1 与 §2 建议中，已有若干项完成，另有若干项仅部分完成；仍待收口的重点包括生产 patrol 默认值、grace/BUSY 显示、outbox 监控、生产 SocketIO 真实 E2E 和部分集成断言。
+
+---
+
+*审查人：只读分析子任务 | P0#5 smoke/CI 于 2026-05-25 落地 | 剩余工作实施计划见 [main-chain-remaining-work-implementation-plan-2026-05-25.md](./main-chain-remaining-work-implementation-plan-2026-05-25.md)*

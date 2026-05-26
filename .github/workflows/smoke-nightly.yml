@@ -1,14 +1,15 @@
-name: CI
+# Nightly / manual main-chain smoke.
+# - integration-smoke: mock Agent RPC (no real device) — same as CI main-chain step.
+# - real-device-smoke: optional; runs seed_and_smoke.py when repository secrets are set.
+name: smoke-nightly
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 jobs:
-  backend-test:
+  integration-smoke:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -36,45 +37,35 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r backend/requirements.txt
-      - name: Compile check
-        run: python -m compileall backend/ -q
-      - name: Run backend tests
-        run: python -m pytest backend/tests/ -v
       - name: Main-chain integration smoke
         run: >-
           python -m pytest
           backend/tests/integration/test_main_chain_happy_path.py
           backend/tests/test_seed_and_smoke.py
           -v
-      - name: Run agent tests
-        run: python -m pytest backend/agent/tests/ -v
 
-  frontend-check:
+  real-device-smoke:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && secrets.STP_ADMIN_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: "20"
+          python-version: "3.11"
       - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-      - name: TypeScript check
-        working-directory: frontend
-        run: npx tsc --noEmit
-      - name: Run vitest
-        working-directory: frontend
-        run: npx vitest run
-      - name: Build
-        working-directory: frontend
-        run: npm run build
-
-  docker-build:
-    runs-on: ubuntu-latest
-    needs: [backend-test, frontend-check]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Build backend image
-        run: docker build -f Dockerfile.backend -t stability-backend .
-      - name: Build frontend image
-        run: docker build -f Dockerfile.frontend -t stability-frontend .
+        run: pip install -r backend/requirements.txt
+      - name: Real-device seed_and_smoke
+        env:
+          STP_ADMIN_PASSWORD: ${{ secrets.STP_ADMIN_PASSWORD }}
+          STP_ADMIN_USER: ${{ vars.STP_ADMIN_USER }}
+          STP_SMOKE_BACKEND: ${{ vars.STP_SMOKE_BACKEND }}
+          STP_SMOKE_HOST_ID: ${{ vars.STP_SMOKE_HOST_ID }}
+          STP_SMOKE_DEVICE_ID: ${{ vars.STP_SMOKE_DEVICE_ID }}
+        run: |
+          python backend/scripts/seed_and_smoke.py \
+            --backend "${STP_SMOKE_BACKEND:-http://localhost:8000}" \
+            --username "${STP_ADMIN_USER:-admin}" \
+            --target-host-id "${STP_SMOKE_HOST_ID:-auto-fdaf1d55e319}" \
+            --device-id "${STP_SMOKE_DEVICE_ID:-2429}" \
+            --no-hot-update \
+            --timeout 600

@@ -1,4 +1,4 @@
-"""Main-chain happy-path smoke tests (prepare → precheck gate → dispatch)."""
+"""Main-chain happy-path smoke tests (prepare → precheck gate → dispatch → SUCCESS)."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ from backend.services.plan_dispatcher_sync import (
     prepare_plan_run,
 )
 from backend.services.plan_precheck import _drive_dispatch_gate
+
+pytestmark = pytest.mark.integration
 
 
 def _ack_ok(host_id: str, expected_sha: str) -> dict:
@@ -159,3 +161,46 @@ class TestJobCompleteAggregationPath:
         assert refreshed.result_summary is not None
         assert refreshed.result_summary["completed"] == 1
         assert refreshed.result_summary["total"] == 1
+
+
+class TestMainChainApiRunEndpoint:
+    """HTTP POST /plans/{id}/run + inline gate (sync DB); claim/complete via service layer above."""
+
+    def test_run_endpoint_inline_gate_materialises_pending_job(
+        self, client, auth_headers, db_session, gate_chain
+    ):
+        plan_id = gate_chain["plan"].id
+        device_ids = [gate_chain["device_a"].id]
+
+        async def _fake_call(host_id_arg, event, data, *, timeout=10.0):
+            return _ack_ok(host_id_arg, gate_chain["script"].content_sha256)
+
+        def _run_gate_inline(*_args, **kwargs):
+            plan_run_id = kwargs["plan_run_id"]
+            with patch(
+                "backend.services.plan_precheck.call_agent_rpc",
+                side_effect=_fake_call,
+            ):
+                asyncio.run(_drive_dispatch_gate(plan_run_id, db=db_session))
+
+        with patch(
+            "backend.api.routes.plans.enqueue_sync",
+            side_effect=_run_gate_inline,
+        ):
+            resp = client.post(
+                f"/api/v1/plans/{plan_id}/run",
+                json={"device_ids": device_ids},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200, resp.text
+        plan_run_id = resp.json()["data"]["id"]
+        db_session.expire_all()
+        jobs = (
+            db_session.query(JobInstance)
+            .filter(JobInstance.plan_run_id == plan_run_id)
+            .all()
+        )
+        assert len(jobs) == 1
+        assert jobs[0].status == JobStatus.PENDING.value
+        assert jobs[0].host_id == gate_chain["host_a"].id

@@ -868,6 +868,106 @@ class TestDevicesEndpoint:
         assert data["by_status"].get("unknown") == 1
         assert data["by_status"].get("failed", 0) == 0
 
+    def test_devices_grace_remaining_seconds(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        from backend.models.enums import JobStatus
+
+        j3 = chain_setup["job_failed"]
+        now = _now()
+        j3.status = JobStatus.UNKNOWN.value
+        j3.status_reason = "lease_expired"
+        j3.ended_at = now - timedelta(seconds=60)
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        unknown = next(d for d in resp.json()["data"]["devices"] if d["job_id"] == j3.id)
+        assert unknown["grace_remaining_seconds"] is not None
+        assert 230 <= unknown["grace_remaining_seconds"] <= 240
+
+    def test_devices_busy_reason_active_lease(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        from backend.models.device_lease import DeviceLease
+        from backend.models.enums import DeviceStatus, LeaseStatus, LeaseType
+
+        j2 = chain_setup["job_running"]
+        dev = chain_setup["device_running"]
+        now = _now()
+        dev.status = DeviceStatus.BUSY.value
+        dev.adb_connected = True
+        db_session.add(
+            DeviceLease(
+                device_id=dev.id,
+                job_id=j2.id,
+                host_id=j2.host_id,
+                lease_type=LeaseType.JOB.value,
+                status=LeaseStatus.ACTIVE.value,
+                fencing_token="t",
+                lease_generation=1,
+                agent_instance_id="agent-1",
+                acquired_at=now,
+                renewed_at=now,
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        row = next(d for d in resp.json()["data"]["devices"] if d["job_id"] == j2.id)
+        assert row["busy_reason"] == "active_lease"
+        assert row["busy_lease_job_id"] == j2.id
+
+    def test_devices_busy_reason_adb_excluded(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        from backend.models.enums import DeviceStatus
+
+        j2 = chain_setup["job_running"]
+        dev = chain_setup["device_running"]
+        dev.adb_connected = True
+        dev.adb_state = "offline"
+        dev.status = DeviceStatus.BUSY.value
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        row = next(d for d in resp.json()["data"]["devices"] if d["job_id"] == j2.id)
+        assert row["busy_reason"] == "adb_excluded"
+
+    def test_devices_pending_claim_remaining_seconds(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        from backend.models.enums import JobStatus
+
+        j1 = chain_setup["job_completed"]
+        created = _now() - timedelta(seconds=30)
+        j1.status = JobStatus.PENDING.value
+        j1.created_at = created
+        j1.started_at = None
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        pending = next(d for d in resp.json()["data"]["devices"] if d["job_id"] == j1.id)
+        assert pending["ui_status"] == "pending"
+        assert pending["pending_claim_remaining_seconds"] is not None
+        assert 85 <= pending["pending_claim_remaining_seconds"] <= 95
+
 
 # ---------------------------------------------------------------------------
 # /watcher-summary

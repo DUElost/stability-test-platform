@@ -887,6 +887,14 @@ export interface DeviceMatrixItem {
   ended_at?: string | null;
   /** Failure reason e.g. "pending_timeout: agent never claimed job" */
   status_reason?: string | null;
+  /** UNKNOWN reconciler grace window remaining (seconds). */
+  grace_remaining_seconds?: number | null;
+  /** PENDING claim SLA remaining (seconds). */
+  pending_claim_remaining_seconds?: number | null;
+  /** Why device is BUSY / blocked: active_lease | device_offline | host_offline */
+  busy_reason?: string | null;
+  /** Job ID holding the active lease when busy_reason=active_lease. */
+  busy_lease_job_id?: number | null;
 }
 
 export interface PlanRunDevicesPayload {

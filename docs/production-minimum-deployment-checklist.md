@@ -61,6 +61,8 @@ cd /opt/stability-test-platform
 
 ### 3.3 后端环境
 
+Redis 与 SAQ 为**硬依赖**：`STP_ENABLE_INPROCESS_SAQ=1`（默认）时，启动期会对 `REDIS_URL` 执行 PING，失败则进程退出；SAQ worker 启动失败同样导致 lifespan 失败。`/health` 在 in-process 模式下返回 `saq_ready`（worker 已启动且 Redis 可达）。开发/测试可通过 `TESTING=1`（pytest）或 **非 production** 下 `STP_SKIP_INFRA_CHECK=1` 跳过 Redis PING **与 in-process SAQ 启动**（纯 API 调试；`/health` 的 `saq_ready` 将为 `false`）。
+
 ```bash
 cd /opt/stability-test-platform
 python3 -m venv venv
@@ -144,7 +146,9 @@ Job / 租约超时（可选覆盖，默认见 `backend/core/job_timeout_config.p
 |---------|---------|------|
 | `DISPATCHED_TIMEOUT_SECONDS` | 120 | PENDING Job 未被 Agent 认领 → FAILED |
 | `RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | 900 | RUNNING Job 心跳丢失 → UNKNOWN |
+| `PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS` | 300 | patrol 阶段 RUNNING 心跳丢失 → UNKNOWN |
 | `UNKNOWN_GRACE_SECONDS` | 300 | UNKNOWN 宽限期后释放租约并 FAILED |
+| `REDIS_PING_TIMEOUT` | 3 | 启动期 Redis PING 超时（秒） |
 
 兼容旧名：`RUN_DISPATCHED_TIMEOUT_SECONDS` / `RUN_HEARTBEAT_TIMEOUT_SECONDS` 仍有效。
 非 `production` 环境可通过上述变量单独调优，**不建议**在未评估前缩短生产默认值。
@@ -210,6 +214,23 @@ sudo journalctl -u stability-test-agent -n 100 --no-pager
 ## 5. 上线前验收（最小闭环）
 
 按以下顺序验收，全部通过才允许上线：
+
+0. **主链路 smoke（Plan → PlanRun → Job 终态）** — 勾选后上线：
+
+- [ ] 已在预发布环境执行 `backend/scripts/seed_and_smoke.py`（见 `docs/preprod-drill-runbook.md` §4.0），或完成等价手动验收
+- [ ] 脚本/人工记录：`plan_run_id`、终态 `SUCCESS`（或已批准的 `PARTIAL_SUCCESS`）、关联 `device_id` / `host_id`
+- [ ] CI 集成级 smoke 已通过（`backend-test` job 内 `main-chain-integration-smoke`；不替代本项）
+
+```bash
+# 控制平面主机示例（操作者自行 export STP_ADMIN_PASSWORD；需真实 ONLINE 设备）
+export STP_ADMIN_PASSWORD='<your-password>'
+python backend/scripts/seed_and_smoke.py \
+  --backend http://127.0.0.1:8000 \
+  --target-host-id <hosts.id> \
+  --device-id <device.id> \
+  --no-hot-update \
+  --timeout 600
+```
 
 1. 控制平面健康检查：
 ```bash

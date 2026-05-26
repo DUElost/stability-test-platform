@@ -246,7 +246,7 @@ CORS_ORIGINS=https://<你的前端域名>
 | 进程模型 | 单 uvicorn（APScheduler + 内存 RateLimit 进程内） |
 | Gunicorn | ❌ 未配置；多 worker 会与调度器冲突 |
 | Nginx | HTTP only `:80`；缺 HTTPS、缺 `/socket.io/` |
-| Redis/SAQ | ✅ lifespan 启动 |
+| Redis/SAQ | ⚠️ SAQ worker lifespan 启动已 hard fail；缺显式 Redis PING 与 `saq_ready` 健康暴露 |
 | env 模板 | `.env.backend.example` 缺 ADR-0024 变量 |
 | 健康检查 | ✅ `/health`（含 DB ping） |
 

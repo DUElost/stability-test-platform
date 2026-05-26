@@ -11,7 +11,8 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -462,6 +463,46 @@ def update_plan(
     return ok(_plan_out(plan, steps))
 
 
+def _assert_plan_deletable(db: Session, plan_id: int) -> None:
+    """Reject delete when FK dependents would block commit (avoid 500 IntegrityError)."""
+    if db.query(PlanRun.id).filter(
+        PlanRun.plan_id == plan_id, PlanRun.status == "RUNNING"
+    ).first():
+        raise HTTPException(
+            status_code=409, detail="cannot delete plan with active runs"
+        )
+
+    run_count = db.query(func.count()).select_from(PlanRun).filter(
+        PlanRun.plan_id == plan_id
+    ).scalar()
+    if run_count:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"cannot delete plan with {run_count} execution record(s); "
+                "remove or archive plan runs first"
+            ),
+        )
+
+    from backend.models.schedule import TaskSchedule
+
+    sched_count = db.query(func.count()).select_from(TaskSchedule).filter(
+        TaskSchedule.plan_id == plan_id
+    ).scalar()
+    if sched_count:
+        raise HTTPException(
+            status_code=409,
+            detail="cannot delete plan referenced by task schedules",
+        )
+
+    chain_parent = db.query(Plan.id).filter(Plan.next_plan_id == plan_id).first()
+    if chain_parent:
+        raise HTTPException(
+            status_code=409,
+            detail=f"cannot delete plan referenced as next_plan by plan {chain_parent[0]}",
+        )
+
+
 @router.delete("/plans/{plan_id}", response_model=ApiResponse[dict])
 def delete_plan(
     plan_id: int,
@@ -472,17 +513,18 @@ def delete_plan(
     if plan is None:
         raise HTTPException(status_code=404, detail="plan not found")
     _require_plan_owner_or_admin(plan, current_user)
+    _assert_plan_deletable(db, plan_id)
 
-    active_run = db.query(PlanRun).filter(
-        PlanRun.plan_id == plan_id, PlanRun.status == "RUNNING"
-    ).first()
-    if active_run:
+    try:
+        db.delete(plan)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        logger.exception("plan delete blocked by FK for plan_id=%s", plan_id)
         raise HTTPException(
-            status_code=409, detail="cannot delete plan with active runs"
-        )
-
-    db.delete(plan)
-    db.commit()
+            status_code=409,
+            detail="cannot delete plan while related records still exist",
+        ) from None
     return ok({"deleted": plan_id})
 
 
