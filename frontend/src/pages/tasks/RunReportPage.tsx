@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { RunReport, JiraDraft } from '@/utils/api';
 import apiClient from '@/utils/api/client';
-import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
 import {
   ArrowLeft,
@@ -14,13 +14,6 @@ import {
   Loader2,
 } from 'lucide-react';
 import { format } from 'date-fns';
-
-const riskColors: Record<string, string> = {
-  HIGH: 'bg-red-500/10 text-red-600 border-red-500/20',
-  MEDIUM: 'bg-yellow-500/10 text-yellow-600 border-yellow-500/20',
-  LOW: 'bg-green-500/10 text-green-600 border-green-500/20',
-  UNKNOWN: 'bg-gray-500/10 text-gray-600 border-gray-500/20',
-};
 
 const severityIcons: Record<string, React.ReactNode> = {
   HIGH: <AlertTriangle className="w-4 h-4 text-red-500" />,
@@ -133,7 +126,7 @@ export default function RunReportPage() {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">状态</span>
-              <Badge variant="outline">{report.run.status}</Badge>
+              <StatusBadge kind="job" status={report.run.status} size="sm" />
             </div>
           </div>
         </div>
@@ -161,9 +154,7 @@ export default function RunReportPage() {
         <div className="rounded-lg border p-4 space-y-2">
           <h3 className="text-sm font-medium text-muted-foreground">风险摘要</h3>
           <div className="flex items-center gap-2 mb-2">
-            <Badge className={riskColors[riskLevel] || riskColors.UNKNOWN}>
-              {riskLevel}
-            </Badge>
+            <StatusBadge kind="risk" status={riskLevel} size="sm" />
           </div>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
@@ -212,9 +203,7 @@ export default function RunReportPage() {
                 {severityIcons[alert.severity] || severityIcons.LOW}
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-xs">
-                      {alert.severity}
-                    </Badge>
+                    <StatusBadge kind="risk" status={alert.severity} size="sm" />
                     <span className="font-medium">{alert.code}</span>
                   </div>
                   <p className="text-muted-foreground mt-1">{alert.message}</p>
@@ -245,7 +234,7 @@ export default function RunReportPage() {
               </div>
               <div>
                 <span className="text-muted-foreground">优先级: </span>
-                <Badge variant="outline">{jiraDraft.priority}</Badge>
+                <StatusBadge kind="priority" status={jiraDraft.priority} size="sm" />
               </div>
               <div>
                 <span className="text-muted-foreground">标签: </span>
