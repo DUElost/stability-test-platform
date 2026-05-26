@@ -1,15 +1,7 @@
 import { useMemo } from 'react';
-import {
-  Filter,
-  CheckCircle2,
-  XCircle,
-  Loader2,
-  Clock,
-  AlertTriangle,
-  PauseCircle,
-  Activity,
-} from 'lucide-react';
+import { Filter, Activity } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
+import { StatusBadge } from '@/components/ui/status-badge';
 import type {
   DeviceMatrixItem,
   DeviceUiStatus,
@@ -36,16 +28,6 @@ const STATUS_DEF: Array<{ key: DeviceUiStatus | 'all'; label: string }> = [
   { key: 'backoff', label: '退避' },
   { key: 'pending', label: '等待' },
 ];
-
-const STATUS_PILL: Record<DeviceUiStatus, { cls: string; Icon: React.ElementType; label: string }> = {
-  running: { cls: 'bg-orange-100 text-orange-800 ring-orange-300', Icon: Loader2, label: '运行' },
-  completed: { cls: 'bg-green-100 text-green-800 ring-green-300', Icon: CheckCircle2, label: '完成' },
-  unknown: { cls: 'bg-purple-100 text-purple-800 ring-purple-300', Icon: AlertTriangle, label: '失联' },
-  failed: { cls: 'bg-red-100 text-red-800 ring-red-300', Icon: XCircle, label: '失败' },
-  risk: { cls: 'bg-amber-100 text-amber-800 ring-amber-300', Icon: AlertTriangle, label: '风险' },
-  backoff: { cls: 'bg-purple-100 text-purple-800 ring-purple-300', Icon: Clock, label: '退避' },
-  pending: { cls: 'bg-gray-100 text-gray-700 ring-gray-300', Icon: PauseCircle, label: '等待' },
-};
 
 /** PENDING job never claimed — matches backend DISPATCHED_TIMEOUT_SECONDS (120s). */
 const DISPATCHED_CLAIM_TIMEOUT_SECONDS = 120;
@@ -223,8 +205,6 @@ function DeviceTable({
         </thead>
         <tbody>
           {devices.map((d) => {
-            const cfg = STATUS_PILL[d.ui_status];
-            const Icon = cfg.Icon;
             const failureClass =
               d.current_failure_streak >= 3
                 ? 'text-red-600 font-semibold'
@@ -245,16 +225,13 @@ function DeviceTable({
                   {d.host_id || '—'}
                 </td>
                 <td className="px-2 py-2">
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${cfg.cls}`}
-                    title={statusTooltip(d, now)}
-                  >
-                    <Icon
-                      className={`h-3 w-3 ${
-                        d.ui_status === 'running' ? 'animate-spin' : ''
-                      }`}
+                  <span title={statusTooltip(d, now)}>
+                    <StatusBadge
+                      kind="device-ui"
+                      status={d.ui_status}
+                      size="sm"
+                      spin={d.ui_status === 'running'}
                     />
-                    {cfg.label}
                   </span>
                 </td>
                 <td className="px-2 py-2 text-[11px] uppercase text-gray-600">

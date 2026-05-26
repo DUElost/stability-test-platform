@@ -1,17 +1,7 @@
 import { useMemo } from 'react';
-import {
-  CheckCircle2,
-  XCircle,
-  Loader2,
-  RefreshCw,
-  ShieldCheck,
-  AlertTriangle,
-} from 'lucide-react';
-import type {
-  PrecheckHostState,
-  PrecheckPhase,
-  PrecheckState,
-} from '@/utils/api/types';
+import { RefreshCw, AlertTriangle } from 'lucide-react';
+import { StatusBadge } from '@/components/ui/status-badge';
+import type { PrecheckState } from '@/utils/api/types';
 
 interface Props {
   precheck: PrecheckState | null | undefined;
@@ -32,44 +22,7 @@ interface Props {
   isRetrying?: boolean;
 }
 
-const PHASE_LABEL: Record<PrecheckPhase, { label: string; cls: string; Icon: React.ElementType }> = {
-  verifying: {
-    label: '校验脚本一致性',
-    cls: 'bg-blue-100 text-blue-800 ring-blue-300',
-    Icon: ShieldCheck,
-  },
-  syncing: {
-    label: '同步漂移主机',
-    cls: 'bg-amber-100 text-amber-800 ring-amber-300',
-    Icon: RefreshCw,
-  },
-  reverifying: {
-    label: '同步后再校验',
-    cls: 'bg-blue-100 text-blue-800 ring-blue-300',
-    Icon: ShieldCheck,
-  },
-  ready: {
-    label: '门禁通过',
-    cls: 'bg-green-100 text-green-800 ring-green-300',
-    Icon: CheckCircle2,
-  },
-  failed: {
-    label: '门禁失败',
-    cls: 'bg-red-100 text-red-800 ring-red-300',
-    Icon: XCircle,
-  },
-};
-
-const HOST_STATUS_BADGE: Record<
-  PrecheckHostState['status'],
-  { label: string; cls: string; Icon: React.ElementType }
-> = {
-  pending: { label: '待检查', cls: 'text-gray-500 bg-gray-100', Icon: Loader2 },
-  ok: { label: '一致', cls: 'text-green-700 bg-green-100', Icon: CheckCircle2 },
-  syncing: { label: '同步中', cls: 'text-amber-700 bg-amber-100', Icon: RefreshCw },
-  synced: { label: '已同步', cls: 'text-blue-700 bg-blue-100', Icon: CheckCircle2 },
-  failed: { label: '失败', cls: 'text-red-700 bg-red-100', Icon: XCircle },
-};
+const PHASE_SPIN: ReadonlyArray<string> = ['verifying', 'syncing', 'reverifying'];
 
 function shortSha(sha?: string | null): string {
   if (!sha) return '—';
@@ -81,20 +34,14 @@ function formatTimestamp(value?: string | null): string {
   return value.replace('T', ' ').replace('Z', ' UTC');
 }
 
-function getReadyLabel(
+function getReadySuffix(
   dispatchStatus?: string | null,
   isTerminal?: boolean,
-): string {
-  if (dispatchStatus === 'completed' || isTerminal) {
-    return '门禁通过 · 派发完成';
-  }
-  if (dispatchStatus === 'running') {
-    return '门禁通过 · 派发中';
-  }
-  if (dispatchStatus === 'queued') {
-    return '门禁通过 · 等待派发';
-  }
-  return '门禁通过';
+): string | null {
+  if (dispatchStatus === 'completed' || isTerminal) return '派发完成';
+  if (dispatchStatus === 'running') return '派发中';
+  if (dispatchStatus === 'queued') return '等待派发';
+  return null;
 }
 
 const GATE_STALE_SECONDS = 90;
@@ -143,11 +90,11 @@ export default function DispatchGateCard({
   //   1) there is no precheck context (PlanRun pre-dates ADR-0021).
   if (!precheck) return null;
 
-  const phaseCfg = PHASE_LABEL[precheck.phase];
-  const phaseLabel =
+  const readySuffix =
     precheck.phase === 'ready'
-      ? getReadyLabel(dispatchState?.status, isTerminal)
-      : phaseCfg.label;
+      ? getReadySuffix(dispatchState?.status, isTerminal)
+      : null;
+  const isPhaseSpinning = PHASE_SPIN.includes(precheck.phase);
   const hostEntries = Object.entries(precheck.hosts);
   const totalHosts = hostEntries.length;
   const isCompactReady =
@@ -174,18 +121,17 @@ export default function DispatchGateCard({
       className="rounded-xl border bg-white shadow-sm"
     >
       <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
-        <span
-          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset ${phaseCfg.cls}`}
-        >
-          <phaseCfg.Icon
-            className={`h-3.5 w-3.5 ${
-              precheck.phase === 'syncing' || precheck.phase === 'verifying' || precheck.phase === 'reverifying'
-                ? 'animate-spin'
-                : ''
-            }`}
+        <div className="inline-flex items-center gap-1.5">
+          <StatusBadge
+            kind="precheck-phase"
+            status={precheck.phase}
+            size="sm"
+            spin={isPhaseSpinning}
           />
-          {phaseLabel}
-        </span>
+          {readySuffix && (
+            <span className="text-xs font-semibold text-green-700">· {readySuffix}</span>
+          )}
+        </div>
         <span className="text-xs text-gray-500">
           派发门禁 · {totalHosts} 主机 · {counts.ok + counts.synced}/{totalHosts} 通过
           {counts.failed > 0 && (
@@ -285,7 +231,6 @@ export default function DispatchGateCard({
             </div>
           )}
           {hostEntries.map(([hostId, state]) => {
-            const badge = HOST_STATUS_BADGE[state.status];
             const totalScripts = state.scripts.length;
             const matchedScripts = state.scripts.filter((s) => s.ok).length;
             return (
@@ -298,16 +243,12 @@ export default function DispatchGateCard({
                   <span className="font-mono text-sm font-semibold text-gray-700">
                     {hostId}
                   </span>
-                  <span
-                    className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold ${badge.cls}`}
-                  >
-                    <badge.Icon
-                      className={`h-3 w-3 ${
-                        state.status === 'syncing' ? 'animate-spin' : ''
-                      }`}
-                    />
-                    {badge.label}
-                  </span>
+                  <StatusBadge
+                    kind="precheck-host"
+                    status={state.status}
+                    size="sm"
+                    spin={state.status === 'syncing'}
+                  />
                   {totalScripts > 0 && (
                     <span className="text-xs text-gray-500">
                       {matchedScripts}/{totalScripts} 脚本一致

@@ -5,13 +5,9 @@ import {
   LogOut,
   ExternalLink,
   Loader2,
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  Clock,
-  PauseCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { StatusBadge } from '@/components/ui/status-badge';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,16 +30,6 @@ interface Props {
   isExitPending?: boolean;
 }
 
-const STATUS_PILL: Record<DeviceUiStatus, { cls: string; Icon: React.ElementType; label: string }> = {
-  running: { cls: 'bg-orange-100 text-orange-800', Icon: Loader2, label: '运行中' },
-  completed: { cls: 'bg-green-100 text-green-800', Icon: CheckCircle2, label: '完成' },
-  unknown: { cls: 'bg-purple-100 text-purple-800', Icon: AlertTriangle, label: '失联' },
-  failed: { cls: 'bg-red-100 text-red-800', Icon: XCircle, label: '失败' },
-  risk: { cls: 'bg-amber-100 text-amber-800', Icon: AlertTriangle, label: '风险' },
-  backoff: { cls: 'bg-purple-100 text-purple-800', Icon: Clock, label: '退避' },
-  pending: { cls: 'bg-gray-100 text-gray-700', Icon: PauseCircle, label: '等待' },
-};
-
 const TERMINAL_DEVICE: ReadonlyArray<DeviceUiStatus> = ['completed', 'failed', 'unknown'];
 
 export default function DeviceDetailDrawer({
@@ -59,8 +45,6 @@ export default function DeviceDetailDrawer({
 
   if (!device) return null;
 
-  const cfg = STATUS_PILL[device.ui_status];
-  const Icon = cfg.Icon;
   const isTerminal = TERMINAL_DEVICE.includes(device.ui_status);
   const exitRequested = device.manual_action === 'EXIT_REQUESTED';
   const retryRequested = device.manual_action === 'RETRY_NOW';
@@ -103,10 +87,17 @@ export default function DeviceDetailDrawer({
         <div className="flex-1 overflow-y-auto px-4 py-3 text-sm">
           <div
             data-testid="device-drawer-status-pill"
-            className={`mb-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${cfg.cls}`}
+            className="mb-3 inline-flex items-center gap-1.5"
           >
-            <Icon className={`h-3 w-3 ${device.ui_status === 'running' ? 'animate-spin' : ''}`} />
-            {cfg.label} · {device.current_stage.toUpperCase()}
+            <StatusBadge
+              kind="device-ui"
+              status={device.ui_status}
+              size="sm"
+              spin={device.ui_status === 'running'}
+            />
+            <span className="text-xs font-semibold text-gray-600">
+              · {device.current_stage.toUpperCase()}
+            </span>
           </div>
 
           <KvList

@@ -44,6 +44,51 @@ describe("StatusBadge", () => {
     expect(screen.getByText("错误")).toBeInTheDocument();
   });
 
+  it("renders device-ui running with warning variant + 运行中 label", () => {
+    render(<StatusBadge kind="device-ui" status="running" />);
+    expect(screen.getByText("运行中")).toBeInTheDocument();
+  });
+
+  it("renders device-ui unknown with warning variant + 失联 label", () => {
+    render(<StatusBadge kind="device-ui" status="unknown" />);
+    expect(screen.getByText("失联")).toBeInTheDocument();
+  });
+
+  it("renders device-ui backoff with warning variant + 退避 label", () => {
+    render(<StatusBadge kind="device-ui" status="backoff" />);
+    expect(screen.getByText("退避")).toBeInTheDocument();
+  });
+
+  it("renders device-ui pending with secondary variant + 等待 label", () => {
+    render(<StatusBadge kind="device-ui" status="pending" />);
+    expect(screen.getByText("等待")).toBeInTheDocument();
+  });
+
+  it("renders precheck-phase verifying with info variant + 校验中 label", () => {
+    render(<StatusBadge kind="precheck-phase" status="verifying" />);
+    expect(screen.getByText("校验中")).toBeInTheDocument();
+  });
+
+  it("renders precheck-phase ready with success variant + 门禁通过 label", () => {
+    render(<StatusBadge kind="precheck-phase" status="ready" />);
+    expect(screen.getByText("门禁通过")).toBeInTheDocument();
+  });
+
+  it("renders precheck-phase failed with destructive variant + 门禁失败 label", () => {
+    render(<StatusBadge kind="precheck-phase" status="failed" />);
+    expect(screen.getByText("门禁失败")).toBeInTheDocument();
+  });
+
+  it("renders precheck-host ok with success variant + 一致 label", () => {
+    render(<StatusBadge kind="precheck-host" status="ok" />);
+    expect(screen.getByText("一致")).toBeInTheDocument();
+  });
+
+  it("renders precheck-host synced with info variant + 已同步 label", () => {
+    render(<StatusBadge kind="precheck-host" status="synced" />);
+    expect(screen.getByText("已同步")).toBeInTheDocument();
+  });
+
   it("falls back to 未知 for unknown status string", () => {
     render(<StatusBadge kind="device" status="MELTED" />);
     expect(screen.getByText("未知")).toBeInTheDocument();
@@ -64,6 +109,21 @@ describe("StatusBadge", () => {
       <StatusBadge kind="device" status="ONLINE" showIcon={false} />,
     );
     expect(container.querySelector("svg")).toBeNull();
+  });
+
+  it("applies animate-spin to icon when spin=true", () => {
+    const { container } = render(
+      <StatusBadge kind="device-ui" status="running" spin />,
+    );
+    const svg = container.querySelector("svg");
+    expect(svg).toBeTruthy();
+    expect(svg?.getAttribute("class") || "").toContain("animate-spin");
+  });
+
+  it("does not apply animate-spin by default", () => {
+    const { container } = render(<StatusBadge kind="device-ui" status="running" />);
+    const svg = container.querySelector("svg");
+    expect(svg?.getAttribute("class") || "").not.toContain("animate-spin");
   });
 
   it("resolveStatusEntry returns same entry as component output", () => {

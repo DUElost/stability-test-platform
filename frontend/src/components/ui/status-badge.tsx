@@ -9,6 +9,9 @@ import {
   Ban,
   HelpCircle,
   Zap,
+  ShieldCheck,
+  RefreshCw,
+  PauseCircle,
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -36,7 +39,9 @@ export type StatusBadgeKind =
   | "job"
   | "plan-run"
   | "risk"
-  | "priority";
+  | "priority"
+  | "precheck-phase"
+  | "precheck-host";
 
 const DEVICE: Record<string, StatusEntry> = {
   ONLINE: { label: "在线", variant: "success", Icon: CheckCircle2 },
@@ -49,6 +54,13 @@ const DEVICE_UI: Record<string, StatusEntry> = {
   TESTING: { label: "测试中", variant: "info", Icon: Zap },
   OFFLINE: { label: "离线", variant: "secondary", Icon: PowerOff },
   ERROR: { label: "错误", variant: "destructive", Icon: AlertTriangle },
+  RUNNING: { label: "运行中", variant: "warning", Icon: Loader2 },
+  COMPLETED: { label: "完成", variant: "success", Icon: CheckCircle2 },
+  FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
+  UNKNOWN: { label: "失联", variant: "warning", Icon: AlertTriangle },
+  RISK: { label: "风险", variant: "warning", Icon: AlertTriangle },
+  BACKOFF: { label: "退避", variant: "warning", Icon: Clock },
+  PENDING: { label: "等待", variant: "secondary", Icon: PauseCircle },
 };
 
 const HOST: Record<string, StatusEntry> = {
@@ -87,6 +99,22 @@ const PRIORITY: Record<string, StatusEntry> = {
   MINOR: { label: "Minor", variant: "info", Icon: CheckCircle2 },
 };
 
+const PRECHECK_PHASE: Record<string, StatusEntry> = {
+  VERIFYING: { label: "校验中", variant: "info", Icon: ShieldCheck },
+  SYNCING: { label: "同步中", variant: "warning", Icon: RefreshCw },
+  REVERIFYING: { label: "再校验", variant: "info", Icon: ShieldCheck },
+  READY: { label: "门禁通过", variant: "success", Icon: CheckCircle2 },
+  FAILED: { label: "门禁失败", variant: "destructive", Icon: XCircle },
+};
+
+const PRECHECK_HOST: Record<string, StatusEntry> = {
+  PENDING: { label: "待检查", variant: "secondary", Icon: Loader2 },
+  OK: { label: "一致", variant: "success", Icon: CheckCircle2 },
+  SYNCING: { label: "同步中", variant: "warning", Icon: RefreshCw },
+  SYNCED: { label: "已同步", variant: "info", Icon: CheckCircle2 },
+  FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
+};
+
 const REGISTRY: Record<StatusBadgeKind, Record<string, StatusEntry>> = {
   device: DEVICE,
   "device-ui": DEVICE_UI,
@@ -95,6 +123,8 @@ const REGISTRY: Record<StatusBadgeKind, Record<string, StatusEntry>> = {
   "plan-run": PLAN_RUN,
   risk: RISK,
   priority: PRIORITY,
+  "precheck-phase": PRECHECK_PHASE,
+  "precheck-host": PRECHECK_HOST,
 };
 
 const FALLBACK: StatusEntry = {
@@ -109,6 +139,8 @@ export interface StatusBadgeProps {
   showIcon?: boolean;
   size?: "sm" | "md";
   className?: string;
+  /** Add `animate-spin` to the icon. Use for in-progress loaders. */
+  spin?: boolean;
 }
 
 export function resolveStatusEntry(
@@ -127,6 +159,7 @@ export function StatusBadge({
   showIcon = true,
   size = "md",
   className,
+  spin = false,
 }: StatusBadgeProps) {
   const entry = resolveStatusEntry(kind, status);
   const iconSize = size === "sm" ? 10 : 12;
@@ -138,7 +171,13 @@ export function StatusBadge({
       data-status={status ?? "UNKNOWN"}
       data-kind={kind}
     >
-      {showIcon && <entry.Icon size={iconSize} aria-hidden />}
+      {showIcon && (
+        <entry.Icon
+          size={iconSize}
+          className={spin ? "animate-spin" : undefined}
+          aria-hidden
+        />
+      )}
       <span>{entry.label}</span>
     </Badge>
   );
