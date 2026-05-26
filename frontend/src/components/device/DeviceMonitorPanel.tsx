@@ -3,6 +3,7 @@ import { useSocketIO as useWebSocket } from '@/hooks/useSocketIO';
 import { DeviceCard, type Device } from './DeviceCard';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { StatusBadge } from '@/components/ui/status-badge';
 import { Input } from '@/components/ui/input';
 import {
   Select,
@@ -349,9 +350,7 @@ function DeviceListItem({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <h4 className="font-medium truncate">{device.model}</h4>
-          <Badge variant="outline" className="text-xs">
-            {device.status}
-          </Badge>
+          <StatusBadge kind="device-ui" status={device.status} size="sm" />
           {device.isStale && (
             <Badge variant="destructive" className="text-xs">
               Stale
