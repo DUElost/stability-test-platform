@@ -120,6 +120,19 @@ describe('HostHotUpdateConfirmDialog', () => {
     expect(screen.getByTestId('host-hot-update-confirm')).toBeDisabled();
   });
 
+  it('keeps confirm disabled when loading host detail fails', async () => {
+    mocks.getDetail.mockRejectedValueOnce(new Error('boom'));
+    const onConfirm = vi.fn();
+    renderDialog({ hostId: 'host-error', onConfirm });
+
+    expect(await screen.findByText('boom')).toBeInTheDocument();
+    const confirm = screen.getByTestId('host-hot-update-confirm');
+    expect(confirm).toBeDisabled();
+
+    fireEvent.click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
   it('cancels the dialog without firing onConfirm', async () => {
     mocks.getDetail.mockResolvedValueOnce({
       id: 'host-404',

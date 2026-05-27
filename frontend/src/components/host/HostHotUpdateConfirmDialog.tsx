@@ -142,6 +142,7 @@ export default function HostHotUpdateConfirmDialog({
   //   - active>0 + opted in        → enabled (abort_running_jobs=true)
   const confirmDisabled =
     detailQ.isLoading ||
+    detailQ.isError ||
     isHotUpdatePending ||
     allAbortPending ||
     (hasActive && !abortChecked);

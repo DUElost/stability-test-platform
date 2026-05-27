@@ -591,11 +591,12 @@ async def _drive_dispatch_gate(
                 )
                 return
 
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(SYNC_SETTLE_SECONDS)
 
-            reverify_results = await _gather_verify(hosts_to_sync, expected_scripts)
+            reverify_hosts = list(out_of_sync_hosts)
+            reverify_results = await _gather_verify(reverify_hosts, expected_scripts)
             still_bad: list[str] = []
-            for hid in hosts_to_sync:
+            for hid in reverify_hosts:
                 ok, results, err = reverify_results[hid]
                 host_state = precheck["hosts"][hid]
                 host_state["scripts"] = results

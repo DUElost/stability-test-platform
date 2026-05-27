@@ -193,6 +193,65 @@ class TestDispatchGate:
         assert sync_calls["count"] == 2
         assert pr_after.status == "RUNNING"
 
+    def test_partial_sync_retry_reverifies_all_initially_drifted_hosts(
+        self, db_session, gate_chain, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "backend.services.plan_precheck.DISPATCH_SYNC_MAX_ATTEMPTS", 2,
+        )
+        monkeypatch.setattr(
+            "backend.services.plan_precheck.SYNC_SETTLE_SECONDS", 0,
+        )
+        pr = _prepare_run(db_session, gate_chain)
+        verify_calls = {"h-A": 0, "h-B": 0}
+        hot_update_calls = {"h-B": 0}
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            verify_calls[host_id] += 1
+            if host_id == "h-A":
+                return _ack_drift(host_id, "aabbcc11")
+            if verify_calls[host_id] >= 2:
+                return _ack_ok(host_id, "aabbcc11")
+            return _ack_drift(host_id, "aabbcc11")
+
+        def _fake_push(host_id, entries, db):
+            if host_id == "h-A":
+                return (True, None)
+            return (False, "push_failed")
+
+        def _fake_hot_update(host_id, db):
+            hot_update_calls[host_id] = hot_update_calls.get(host_id, 0) + 1
+            if host_id == "h-B" and hot_update_calls[host_id] >= 2:
+                return (True, None)
+            return (False, "hot_update_failed")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ), patch(
+            "backend.services.plan_precheck._push_mismatched_scripts",
+            side_effect=_fake_push,
+        ), patch(
+            "backend.services.plan_precheck._sync_host_via_hot_update",
+            side_effect=_fake_hot_update,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        precheck = pr_after.run_context["precheck"]
+        assert pr_after.status == "FAILED"
+        assert precheck["final_result"] == "failed"
+        assert "reverify_failed" in pr_after.result_summary["reason"]
+        assert precheck["hosts"]["h-A"]["sync_attempts"] == 2
+        assert precheck["hosts"]["h-A"]["status"] == "failed"
+        assert precheck["hosts"]["h-B"]["sync_attempts"] == 2
+        assert precheck["hosts"]["h-B"]["status"] == "ok"
+        jobs = db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count()
+        assert jobs == 0
+
     def test_agent_offline_terminal_failure(self, db_session, gate_chain):
         pr = _prepare_run(db_session, gate_chain)
 
