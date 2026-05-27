@@ -14,10 +14,11 @@ class TestHealthSaqReady:
         monkeypatch.setattr(main_mod, "is_saq_ready", lambda: False)
 
         response = client.get("/health")
-        assert response.status_code in (200, 503)
+        assert response.status_code == 503
         data = response.json()
-        if response.status_code == 200:
-            assert data["data"]["saq_ready"] is False
+        assert data["data"]["status"] == "unhealthy"
+        assert data["data"]["saq_ready"] is False
+        assert data["error"]["code"] == "SAQ_UNAVAILABLE"
 
     def test_health_omits_saq_ready_when_inprocess_disabled(self, client, monkeypatch):
         monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "0")

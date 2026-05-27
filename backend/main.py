@@ -231,6 +231,18 @@ async def health_check():
         payload: dict = {"status": "healthy"}
         if inprocess_saq:
             payload["saq_ready"] = saq_ready
+            if not saq_ready:
+                payload["status"] = "unhealthy"
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "data": payload,
+                        "error": {
+                            "code": "SAQ_UNAVAILABLE",
+                            "message": "in-process SAQ worker is not running",
+                        },
+                    },
+                )
         return {"data": payload, "error": None}
     except Exception:
         return JSONResponse(status_code=503, content={"data": None, "error": {"code": "DB_UNAVAILABLE", "message": "database disconnected"}})
