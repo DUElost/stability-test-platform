@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from backend.api.schemas.host import HeartbeatIn
+import backend.api.routes.heartbeat as heartbeat_route
 from backend.api.routes.heartbeat import _process_heartbeat_with_db
 from backend.models.host import Host
 
@@ -42,3 +43,33 @@ def test_heartbeat_extra_records_outbox_metrics(db_session, monkeypatch):
 
     assert ("metric-host-1", "terminal", 3) in recorded
     assert ("metric-host-1", "log_signal", 7) in recorded
+
+
+def test_process_heartbeat_opens_and_closes_thread_local_session(monkeypatch):
+    class DummySession:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    session = DummySession()
+    seen = {}
+
+    def _session_local():
+        return session
+
+    def _process(payload, db):
+        seen["payload"] = payload
+        seen["db"] = db
+        return {"ok": True}, []
+
+    monkeypatch.setattr(heartbeat_route, "SessionLocal", _session_local)
+    monkeypatch.setattr(heartbeat_route, "_process_heartbeat_with_db", _process)
+
+    payload = HeartbeatIn(host_id="metric-host-2", status="ONLINE")
+    result, updates = heartbeat_route._process_heartbeat(payload)
+
+    assert result == {"ok": True}
+    assert updates == []
+    assert seen == {"payload": payload, "db": session}
+    assert session.closed is True

@@ -45,7 +45,9 @@ from backend.core.ssh_security import (
     create_ssh_client,
     resolve_host_ssh_credentials,
 )
+from backend.models.enums import JobStatus
 from backend.models.host import Device, Host
+from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
 from backend.realtime.socketio_server import (
@@ -66,6 +68,7 @@ logger = logging.getLogger(__name__)
 VERIFY_TIMEOUT_SECONDS = 10.0
 SYNC_SETTLE_SECONDS = 8.0
 DISPATCH_SYNC_MAX_ATTEMPTS = max(1, int(os.getenv("DISPATCH_SYNC_MAX_ATTEMPTS", "1")))
+_ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
 
 
 def _utc_iso() -> str:
@@ -269,6 +272,16 @@ def _sync_host_via_hot_update(host_id: str, db: Session) -> tuple[bool, Optional
     return True, None
 
 
+def _sync_host_via_hot_update_own_session(
+    host_id: str,
+) -> tuple[bool, Optional[str]]:
+    db = SessionLocal()
+    try:
+        return _sync_host_via_hot_update(host_id, db)
+    finally:
+        db.close()
+
+
 def _update_dispatch_state(pr: PlanRun, db: Session, **patch: object) -> None:
     """Persist incremental changes to ``run_context.dispatch_state``.
 
@@ -291,6 +304,27 @@ def _update_dispatch_state(pr: PlanRun, db: Session, **patch: object) -> None:
             phase=phase if isinstance(phase, str) else None,
             dispatch_status=dispatch_status,
         )
+
+
+def _plan_run_has_jobs(db: Session, plan_run_id: int) -> bool:
+    return (
+        db.query(JobInstance.id)
+        .filter(JobInstance.plan_run_id == plan_run_id)
+        .first()
+        is not None
+    )
+
+
+def _host_has_active_jobs(db: Session, host_id: str) -> bool:
+    return (
+        db.query(JobInstance.id)
+        .filter(
+            JobInstance.host_id == host_id,
+            JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+        )
+        .first()
+        is not None
+    )
 
 
 # ── 轻量级定向脚本同步（仅推送 mismatched 文件，无需重启 Agent）──
@@ -439,6 +473,17 @@ def _push_mismatched_scripts(
     return True, None
 
 
+def _push_mismatched_scripts_own_session(
+    host_id: str,
+    mismatched: list[dict],
+) -> tuple[bool, str | None]:
+    db = SessionLocal()
+    try:
+        return _push_mismatched_scripts(host_id, mismatched, db)
+    finally:
+        db.close()
+
+
 async def _drive_dispatch_gate(
     plan_run_id: int, *, db: Optional[Session] = None
 ) -> None:
@@ -462,6 +507,13 @@ async def _drive_dispatch_gate(
             logger.info(
                 "precheck_skip_non_running plan_run=%d status=%s",
                 plan_run_id, pr.status,
+            )
+            gate_outcome = "skipped"
+            return
+        if _plan_run_has_jobs(db, plan_run_id):
+            logger.info(
+                "precheck_skip_jobs_already_materialized plan_run=%d",
+                plan_run_id,
             )
             gate_outcome = "skipped"
             return
@@ -548,19 +600,34 @@ async def _drive_dispatch_gate(
                     continue
 
                 ok_sync, err_sync = await asyncio.to_thread(
-                    _push_mismatched_scripts, hid, mismatched_entries, db
+                    _push_mismatched_scripts_own_session, hid, mismatched_entries
                 )
                 if ok_sync:
                     host_state["synced_at"] = _utc_iso()
                     host_state["status"] = "synced"
                     host_state["error"] = None
                 else:
+                    if _host_has_active_jobs(db, hid):
+                        err = (
+                            "lightweight_sync_failed_and_hot_update_blocked_by_active_jobs: "
+                            f"{err_sync}"
+                        )
+                        logger.warning(
+                            "precheck_hot_update_blocked_active_jobs host=%s error=%s",
+                            hid, err_sync,
+                        )
+                        sync_failures.append((hid, err))
+                        host_state["status"] = "failed"
+                        host_state["error"] = err
+                        _persist_precheck(plan_run_id, precheck, db)
+                        continue
+
                     logger.warning(
                         "lightweight_sync_failed host=%s error=%s — falling back to hot-update",
                         hid, err_sync,
                     )
                     ok_hot, err_hot = await asyncio.to_thread(
-                        _sync_host_via_hot_update, hid, db
+                        _sync_host_via_hot_update_own_session, hid
                     )
                     if ok_hot:
                         host_state["synced_at"] = _utc_iso()
@@ -676,7 +743,11 @@ async def _drive_dispatch_gate(
         logger.exception("precheck_unexpected_failure plan_run=%d", plan_run_id)
         try:
             pr = db.get(PlanRun, plan_run_id)
-            if pr is not None and pr.status == "RUNNING":
+            if (
+                pr is not None
+                and pr.status == "RUNNING"
+                and not _plan_run_has_jobs(db, plan_run_id)
+            ):
                 run_ctx = dict(pr.run_context or {})
                 precheck = run_ctx.get("precheck") or _initial_precheck_state([])
                 precheck["phase"] = "failed"
@@ -724,14 +795,27 @@ async def _gather_verify(
 def _mark_precheck_failed(
     plan_run_id: int, precheck: dict, db: Session, *, error: str
 ) -> None:
+    pr = db.get(PlanRun, plan_run_id)
+    if pr is None:
+        return
+    if pr.status != "RUNNING":
+        logger.info(
+            "precheck_failure_skip_non_running plan_run=%d status=%s error=%s",
+            plan_run_id, pr.status, error,
+        )
+        return
+    if _plan_run_has_jobs(db, plan_run_id):
+        logger.warning(
+            "precheck_failure_skip_jobs_materialized plan_run=%d error=%s",
+            plan_run_id, error,
+        )
+        return
+
     precheck["phase"] = "failed"
     precheck["final_result"] = "failed"
     precheck["completed_at"] = _utc_iso()
     precheck.setdefault("errors", []).append(error)
 
-    pr = db.get(PlanRun, plan_run_id)
-    if pr is None:
-        return
     run_ctx = dict(pr.run_context or {})
     run_ctx["precheck"] = precheck
     pr.run_context = run_ctx

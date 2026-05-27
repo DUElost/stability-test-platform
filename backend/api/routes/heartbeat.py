@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from backend.core.database import get_db
+from backend.core.database import SessionLocal
 from backend.models.host import Host, Device
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import LeaseStatus, LeaseType
@@ -110,11 +110,10 @@ def _mark_missing_devices_offline(
 @router.post("/heartbeat")
 async def heartbeat(
     payload: HeartbeatIn,
-    db: Session = Depends(get_db),
     _: bool = Depends(verify_agent_secret),
 ):
     response, ws_device_updates = await asyncio.to_thread(
-        _process_heartbeat_with_db, payload, db
+        _process_heartbeat, payload
     )
 
     if ws_device_updates:
@@ -127,6 +126,14 @@ async def heartbeat(
             logger.warning(f"device_update_broadcast_failed: {exc}")
 
     return response
+
+
+def _process_heartbeat(payload: HeartbeatIn) -> tuple[dict, List[Dict[str, Any]]]:
+    db = SessionLocal()
+    try:
+        return _process_heartbeat_with_db(payload, db)
+    finally:
+        db.close()
 
 
 def _process_heartbeat_with_db(

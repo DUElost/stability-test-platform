@@ -16,7 +16,7 @@ from backend.models.plan_run import PlanRun
 from backend.models.script import Script
 from backend.services.plan_dispatcher_sync import prepare_plan_run
 from backend.services.plan_dispatcher_core import PlanDispatchError
-from backend.services.plan_precheck import _drive_dispatch_gate
+from backend.services.plan_precheck import _drive_dispatch_gate, _mark_precheck_failed
 from backend.tasks.saq_worker import EnqueueSyncError
 
 
@@ -263,6 +263,85 @@ class TestDispatchGate:
         assert precheck["final_result"] == "failed"
         assert precheck["hosts"]["h-A"]["error"] == "no_ssh_credentials"
         assert precheck["hosts"]["h-B"]["error"] == "no_ssh_credentials"
+
+    def test_sync_failure_does_not_hot_update_host_with_active_jobs(
+        self, db_session, gate_chain
+    ):
+        pr = _prepare_run(db_session, gate_chain)
+        other_run = PlanRun(
+            plan_id=gate_chain["plan"].id,
+            status="RUNNING",
+            failure_threshold=0.1,
+            plan_snapshot={"steps": []},
+            run_type="MANUAL",
+            run_context={},
+            triggered_by="other",
+        )
+        db_session.add(other_run)
+        db_session.flush()
+        db_session.add(
+            JobInstance(
+                plan_run_id=other_run.id,
+                plan_id=gate_chain["plan"].id,
+                device_id=gate_chain["device_b"].id,
+                host_id="h-B",
+                status=JobStatus.RUNNING.value,
+                pipeline_def={"lifecycle": {"init": []}},
+            )
+        )
+        db_session.commit()
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            if host_id == "h-A":
+                return _ack_ok(host_id, "aabbcc11")
+            return _ack_drift(host_id, "aabbcc11")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ), patch(
+            "backend.services.plan_precheck._push_mismatched_scripts",
+            return_value=(False, "cannot map nfs_path"),
+        ), patch(
+            "backend.services.plan_precheck._sync_host_via_hot_update",
+            return_value=(True, None),
+        ) as hot_update:
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        hot_update.assert_not_called()
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status == "FAILED"
+        assert "hot_update_blocked_by_active_jobs" in pr_after.result_summary["reason"]
+
+    def test_failed_precheck_cannot_overwrite_materialized_jobs(
+        self, db_session, gate_chain
+    ):
+        pr = _prepare_run(db_session, gate_chain)
+        db_session.add(
+            JobInstance(
+                plan_run_id=pr.id,
+                plan_id=gate_chain["plan"].id,
+                device_id=gate_chain["device_a"].id,
+                host_id="h-A",
+                status=JobStatus.RUNNING.value,
+                pipeline_def={"lifecycle": {"init": []}},
+            )
+        )
+        db_session.commit()
+
+        _mark_precheck_failed(
+            pr.id,
+            {"phase": "syncing", "hosts": {}, "errors": []},
+            db_session,
+            error="stale_gate_failed_after_dispatch",
+        )
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status == "RUNNING"
+        assert pr_after.ended_at is None
+        assert pr_after.result_summary is None
 
     def test_reverify_still_failing_marks_plan_run_failed(
         self, db_session, gate_chain
