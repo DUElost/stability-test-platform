@@ -42,6 +42,8 @@ def _seed_running_job(
     *,
     pipeline_def: dict | None = None,
     last_patrol_heartbeat_at: datetime | None = None,
+    next_retry_at: datetime | None = None,
+    current_failure_streak: int = 0,
 ) -> dict:
     suffix = uuid4().hex[:8]
     host_id = f"recycler-host-{suffix}"
@@ -107,6 +109,8 @@ def _seed_running_job(
             updated_at=updated_at,
             started_at=started_at,
             last_patrol_heartbeat_at=last_patrol_heartbeat_at,
+            next_retry_at=next_retry_at,
+            current_failure_streak=current_failure_streak,
         )
         db.add(job)
         db.flush()
@@ -535,6 +539,106 @@ def test_patrol_stall_keeps_fresh_heartbeat_running(engine, monkeypatch):
 
         after = recycler.recycler_timeouts.labels(timeout_type="patrol_stall")._value.get()
         assert after == before
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_patrol_timeout_does_not_preempt_long_interval(engine, monkeypatch):
+    """A legitimate 10-minute patrol interval must not hit the 300s RUNNING timeout."""
+    now = datetime.now(timezone.utc)
+    pipeline_def = {
+        "lifecycle": {
+            "init": [],
+            "patrol": {"interval_seconds": 600, "steps": [{"step_id": "s", "action": "script:x"}]},
+            "teardown": [],
+        }
+    }
+    heartbeat_at = now - timedelta(seconds=400)
+    seed = _seed_running_job(
+        started_at=heartbeat_at - timedelta(seconds=60),
+        updated_at=heartbeat_at,
+        pipeline_def=pipeline_def,
+        last_patrol_heartbeat_at=heartbeat_at,
+    )
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.RUNNING.value
+            assert job.status_reason != "running_timeout: no completion within window"
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_patrol_stall_waits_for_backoff_retry_window(engine, monkeypatch):
+    """Failure backoff is expected sleep, not a patrol stall."""
+    now = datetime.now(timezone.utc)
+    heartbeat_at = now - timedelta(seconds=400)
+    seed = _seed_running_job(
+        started_at=heartbeat_at - timedelta(seconds=60),
+        updated_at=heartbeat_at,
+        pipeline_def=PATROL_PIPELINE_DEF,
+        last_patrol_heartbeat_at=heartbeat_at,
+        next_retry_at=heartbeat_at + timedelta(seconds=480),
+        current_failure_streak=5,
+    )
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.RUNNING.value
+            assert job.status_reason is None
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_patrol_stall_detects_after_backoff_retry_window(engine, monkeypatch):
+    """After next_retry_at plus the normal stall window, patrol is genuinely stale."""
+    from backend.models.audit import AuditLog
+
+    now = datetime.now(timezone.utc)
+    heartbeat_at = now - timedelta(seconds=700)
+    seed = _seed_running_job(
+        started_at=heartbeat_at - timedelta(seconds=60),
+        updated_at=heartbeat_at,
+        pipeline_def=PATROL_PIPELINE_DEF,
+        last_patrol_heartbeat_at=heartbeat_at,
+        next_retry_at=heartbeat_at + timedelta(seconds=480),
+        current_failure_streak=5,
+    )
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.UNKNOWN.value
+            assert "patrol_stall" in (job.status_reason or "")
+            audit = (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "patrol_stall_detected",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .one()
+            )
+            assert audit.details["age_seconds"] >= 220
+        finally:
+            db.close()
     finally:
         _cleanup_seed(seed)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import importlib
 
 import pytest
@@ -21,6 +22,7 @@ def test_production_defaults(monkeypatch):
     assert mod.DISPATCHED_TIMEOUT_SECONDS == 120
     assert mod.RUNNING_HEARTBEAT_TIMEOUT_SECONDS == 900
     assert mod.PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS == 300
+    assert mod.PATROL_STALL_MULTIPLIER == 3
     assert mod.UNKNOWN_GRACE_SECONDS == 300
 
 
@@ -81,3 +83,41 @@ def test_running_heartbeat_timeout_grading(monkeypatch):
 
     assert mod.running_heartbeat_timeout_seconds(_Job()) == 900
     assert mod.running_heartbeat_timeout_seconds(_PatrolJob()) == mod.PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS
+
+
+def test_patrol_running_timeout_covers_long_interval(monkeypatch):
+    monkeypatch.delenv("PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("ENV", "production")
+
+    mod = importlib.import_module("backend.core.job_timeout_config")
+    importlib.reload(mod)
+
+    class _PatrolJob:
+        pipeline_def = {"lifecycle": {"patrol": {"interval_seconds": 600}}}
+        patrol_cycle_count = 1
+        last_patrol_heartbeat_at = object()
+        current_patrol_step = None
+        updated_at = datetime(2026, 5, 27, 3, 0, tzinfo=timezone.utc)
+        next_retry_at = None
+
+    assert mod.running_heartbeat_timeout_seconds(_PatrolJob()) == 1800
+
+
+def test_patrol_running_timeout_covers_backoff_retry_window(monkeypatch):
+    monkeypatch.delenv("PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setenv("ENV", "production")
+
+    mod = importlib.import_module("backend.core.job_timeout_config")
+    importlib.reload(mod)
+
+    base_time = datetime(2026, 5, 27, 3, 0, tzinfo=timezone.utc)
+
+    class _BackoffPatrolJob:
+        pipeline_def = {"lifecycle": {"patrol": {"interval_seconds": 60}}}
+        patrol_cycle_count = 4
+        last_patrol_heartbeat_at = object()
+        current_patrol_step = "monkey_check"
+        updated_at = base_time
+        next_retry_at = base_time + timedelta(seconds=480)
+
+    assert mod.running_heartbeat_timeout_seconds(_BackoffPatrolJob()) == 660

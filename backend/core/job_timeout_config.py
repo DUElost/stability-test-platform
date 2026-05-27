@@ -13,6 +13,7 @@ apply when ``ENV`` is set and not ``production`` (and ``TESTING!=1``).
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import os
 
 
@@ -56,6 +57,11 @@ PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS = _int_env(
     dev_default=180,
 )
 
+PATROL_STALL_MULTIPLIER = _int_env(
+    "PATROL_STALL_MULTIPLIER",
+    production_default=3,
+)
+
 # UNKNOWN job grace before lease release + FAILED
 UNKNOWN_GRACE_SECONDS = _int_env(
     "UNKNOWN_GRACE_SECONDS",
@@ -68,6 +74,26 @@ def has_patrol_lifecycle(pipeline_def: object) -> bool:
         return False
     patrol = (pipeline_def.get("lifecycle") or {}).get("patrol")
     return isinstance(patrol, dict)
+
+
+def _aware_dt(value: object) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _patrol_interval_seconds(pipeline_def: object) -> int | None:
+    if not isinstance(pipeline_def, dict):
+        return None
+    patrol = (pipeline_def.get("lifecycle") or {}).get("patrol")
+    if not isinstance(patrol, dict):
+        return None
+    interval = patrol.get("interval_seconds")
+    if isinstance(interval, int) and interval > 0:
+        return interval
+    return None
 
 
 def job_in_patrol_phase(
@@ -83,7 +109,11 @@ def job_in_patrol_phase(
     )
 
 
-def running_heartbeat_timeout_seconds(job: object) -> int:
+def running_heartbeat_timeout_seconds(
+    job: object,
+    *,
+    patrol_stall_multiplier: int | None = None,
+) -> int:
     """Graded RUNNING timeout: patrol-active jobs may use a separate window."""
     pipeline_def = getattr(job, "pipeline_def", None)
     if has_patrol_lifecycle(pipeline_def) and job_in_patrol_phase(
@@ -91,5 +121,16 @@ def running_heartbeat_timeout_seconds(job: object) -> int:
         last_patrol_heartbeat_at=getattr(job, "last_patrol_heartbeat_at", None),
         current_patrol_step=getattr(job, "current_patrol_step", None),
     ):
-        return PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS
+        interval = _patrol_interval_seconds(pipeline_def)
+        multiplier = patrol_stall_multiplier or PATROL_STALL_MULTIPLIER
+        timeout = PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS
+        if interval is not None:
+            timeout = max(timeout, interval * multiplier)
+
+        updated_at = _aware_dt(getattr(job, "updated_at", None))
+        next_retry_at = _aware_dt(getattr(job, "next_retry_at", None))
+        if interval is not None and updated_at is not None and next_retry_at is not None:
+            retry_delay = max(0, int((next_retry_at - updated_at).total_seconds()))
+            timeout = max(timeout, retry_delay + interval * multiplier)
+        return timeout
     return RUNNING_HEARTBEAT_TIMEOUT_SECONDS
