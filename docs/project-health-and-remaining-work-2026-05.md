@@ -185,13 +185,13 @@ flowchart LR
 
 **Epic 跟踪**：仓库已用 GitHub Issue 承载下列跨周工作（标签：`enhancement` / `documentation`；运维向可自建 `ops`）。细项仍以本文 §4 与 [实施计划](./main-chain-remaining-work-implementation-plan-2026-05-25.md) 为单一事实源，Issue 仅作指派与发布门禁留痕。
 
-| Epic 主题 | 对应 §4 ID |
-|-----------|------------|
-| 生产部署与验收 | P0-O1～O4、P0-O3 smoke |
-| 测试与 CI 加固 | T-B8/T-B9、smoke-nightly |
-| 可观测性部署 | P1-O1～O3、P1-O4 |
-| P1 体验与权限 | P1-C1、导出增强、env 模板 |
-| P2 技术债（可选） | P2-C1～C3、2026-06-21 grace |
+| Epic 主题 | GitHub Issue | 对应 §4 ID |
+|-----------|--------------|------------|
+| 生产部署与验收 | [#1](https://github.com/DUElost/stability-test-platform/issues/1) | P0-O1～O4、P0-O3 smoke |
+| 测试与 CI 加固 | [#2](https://github.com/DUElost/stability-test-platform/issues/2) | T-B8/T-B9、smoke-nightly |
+| 可观测性部署 | [#3](https://github.com/DUElost/stability-test-platform/issues/3) | P1-O1～O3、P1-O4 |
+| P1 体验与权限 | [#4](https://github.com/DUElost/stability-test-platform/issues/4) | P1-C1、导出增强、env 模板 |
+| P2 技术债（可选） | [#5](https://github.com/DUElost/stability-test-platform/issues/5) | P2-C1～C3、2026-06-21 grace |
 
 ---
 
