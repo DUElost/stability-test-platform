@@ -1,7 +1,7 @@
 # Stability Test Platform — 稳定性测试管理平台
 
 **版本**：1.0.0
-**最后更新**：2026-05-25
+**最后更新**：2026-05-27
 
 中心化 Android 设备稳定性测试管理平台：Windows/Linux 控制平面运行 FastAPI 后端与 React 前端，Linux Agent 集群通过 ADB 连接设备执行 Plan 编排任务，支持实时监控、日志采集与报告生成。
 

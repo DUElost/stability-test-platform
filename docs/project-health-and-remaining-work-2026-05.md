@@ -2,7 +2,7 @@
 
 > 生成日期：2026-05-27  
 > 整合来源：[`main-chain-fragility-analysis-2026-05-23.md`](./main-chain-fragility-analysis-2026-05-23.md)、[`production-readiness-assessment-2026-05-23.md`](./production-readiness-assessment-2026-05-23.md)、[`main-chain-remaining-work-implementation-plan-2026-05-25.md`](./main-chain-remaining-work-implementation-plan-2026-05-25.md)、[`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md)  
-> 代码基线：主链路加固提交系列 `262836e` → `332e179` → `f0ec89d` → `256bb6e`（README 对齐）
+> 代码基线：主链路代码状态以 `10678ed`（Phase A）→ `2fde526`（Phase B）为准；本文整合说明提交为 `333ce147`
 
 ---
 
@@ -19,7 +19,7 @@
 | `f0ec89d` | 安全与运行时：注册门控、`/metrics` 鉴权、patrol 超时分级 env、派发 sync 可配置重试、outbox 积压指标、AlertManager 规则草案 |
 | `256bb6e` | 文档：README 与 Plan/PlanRun 架构、ADR-0024、生产部署要点对齐 |
 
-**当前状态（2026-05-27）**：主链路 **P0 代码/CI/部署文档已落地**；后端全量 pytest 约 **718 passed**（PostgreSQL testcontainers）；前端 Vitest 与 `main-chain-integration-smoke` CI job 已纳入主链回归。**无法仅凭仓库确认** 的项：预发布真实设备 smoke 签字表、生产环境 Nginx/HTTPS 一次性核对、AlertManager 实际挂载。
+**当前状态（2026-05-27）**：主链路 **P0 代码/CI/部署文档已落地**；后端全量 pytest 约 **718 passed**（PostgreSQL testcontainers）；前端 Vitest 与 `backend-test` 下的 `Main-chain integration smoke` CI 步骤已纳入主链回归。**无法仅凭仓库确认** 的项：预发布真实设备 smoke 签字表、生产环境 Nginx/HTTPS 一次性核对、AlertManager 实际挂载。
 
 ---
 
@@ -32,7 +32,7 @@
 - **UI 可观测（P1）**：DispatchGateCard stale banner；devices 端点 `grace_remaining_seconds` / `busy_reason`；矩阵认领 SLA / grace 倒计时；PlanRun 级报告导出 API + 前端对接
 - **Agent 边缘**：subprocess 进程组隔离；patrol-heartbeat `JOB_NOT_RUNNING` → `patrol_recovery`；terminal/log_signal outbox 积压经 heartbeat 上报 + Prometheus Gauge；step_trace_cache 防膨胀
 - **安全（ADR-0024）**：HttpOnly Cookie + CSRF + refresh 黑名单；生产 Cookie guard；默认关闭公开注册（`STP_ALLOW_REGISTER`）；`/metrics` 可选 Bearer/Agent-Secret
-- **测试与 CI**：`test_main_chain_happy_path.py`、SAQ 503、PENDING timeout + SocketIO、Plan 链 E2E；`ci.yml` → `main-chain-integration-smoke`；可选 `smoke-nightly.yml`
+- **测试与 CI**：`test_main_chain_happy_path.py`、SAQ 503、PENDING timeout + SocketIO、Plan 链 E2E；`ci.yml` 的 `Main-chain integration smoke` 步骤；可选 `smoke-nightly.yml`
 - **可观测草案**：dispatch gate / precheck / patrol / CSRF / outbox 等指标；`deploy/prometheus/alerts-stability-platform.yml`（待运维部署生效）
 - **文档**：[`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) §5 smoke、[`preprod-drill-runbook.md`](./preprod-drill-runbook.md) §4.0、README 生产要点
 
@@ -151,7 +151,7 @@ flowchart LR
 
 | 优先级 | 动作 | 理由 |
 |--------|------|------|
-| **1** | **smoke + CI**：保持 `main-chain-integration-smoke` 绿；完成 T-A6/T-A7 人工签字；补 T-B8/T-B9 集成 | 唯一证明「真环境能跑通」的路径 |
+| **1** | **smoke + CI**：保持 `backend-test` 下的 `Main-chain integration smoke` 步骤常绿；完成 T-A6/T-A7 人工签字；补 T-B8/T-B9 集成 | 唯一证明「真环境能跑通」的路径 |
 | **2** | **AlertManager 部署**：挂载已有规则文件，验证 `stability_plan_run_aggregation_failed_total`、CSRF、dispatch 类告警 | metric 已埋点，缺运维闭环则故障仍靠人工刷库 |
 | **3** | **admin 路由门控**（P1-C1） | 内网多人协作时降低误配置与越权浏览 |
 | **4** | **导出增强**（批量 zip、PlanRun 级 PDF 等） | T-B5 已满足单 Run markdown/json；属体验增强非阻断 |
@@ -183,7 +183,7 @@ flowchart LR
 | 有专职运维/SRE 或需发布审批留痕 | **建议**仅为 **ops 类 P0/P1** 与 **进行中 code 任务（T-B1/B2/B8/B9）** 开少量 Issue（约 6–10 个），避免与已签收 T-A* / T-B3–B7 重复 |
 | 长期 P2 架构债 | 可合并为 1 个 epic + 子任务，或留在 ADR/文档直至立项 |
 
-**Epic 跟踪**：仓库已用 GitHub Issue 承载下列跨周工作（标签：`enhancement` / `documentation`；运维向可自建 `ops`）。细项仍以本文 §4 与 [实施计划](./main-chain-remaining-work-implementation-plan-2026-05-25.md) 为单一事实源，Issue 仅作指派与发布门禁留痕。
+**Epic 跟踪**：仓库当前已有 5 个 open GitHub issues 承载下列跨周工作；现用标签以 `enhancement`、`ops`、`tech-debt` 为主。细项仍以本文 §4 与 [实施计划](./main-chain-remaining-work-implementation-plan-2026-05-25.md) 为单一事实源，Issue 仅作指派与发布门禁留痕。
 
 | Epic 主题 | GitHub Issue | 对应 §4 ID |
 |-----------|--------------|------------|
