@@ -171,6 +171,7 @@ CI 流程见 `.github/workflows/ci.yml`（compileall → pytest → tsc → buil
 | [`CLAUDE.md`](./CLAUDE.md) | 项目全貌：模块职责、数据模型、脚本机制、FAQ |
 | [`AGENTS.md`](./AGENTS.md) | 开发命令与约定 |
 | [`docs/production-minimum-deployment-checklist.md`](./docs/production-minimum-deployment-checklist.md) | 生产最小部署清单 |
+| [`docs/project-health-and-remaining-work-2026-05.md`](./docs/project-health-and-remaining-work-2026-05.md) | 项目健康度与剩余工作（整合） |
 | [`docs/preprod-drill-runbook.md`](./docs/preprod-drill-runbook.md) | 预发布逐条验收 |
 | [`docs/adr/README.md`](./docs/adr/README.md) | 架构决策记录（ADR）索引 |
 | [`docs/project-vision.md`](./docs/project-vision.md) | 项目目标愿景 |
