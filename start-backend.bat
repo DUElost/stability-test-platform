@@ -33,9 +33,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Checking Redis preflight...
+python tools\run_with_backend_env.py --env-file backend\.env -- python tools\check_backend_redis.py --env-file backend\.env
+if errorlevel 1 (
+    echo ERROR: Redis preflight failed. Backend NOT started.
+    pause
+    exit /b 1
+)
+
 echo Running alembic migrations (upgrade head)...
 pushd "%~dp0backend"
-python -m alembic upgrade head
+python ..\tools\run_with_backend_env.py --env-file .env -- python -m alembic upgrade head
 set "MIGRATE_RC=%ERRORLEVEL%"
 popd
 if not "%MIGRATE_RC%"=="0" (
@@ -48,10 +56,10 @@ set "UVICORN_ARGS=backend.main:app --host 0.0.0.0 --port %BACKEND_PORT%"
 
 if /I "%STP_BACKEND_RELOAD%"=="1" (
     echo [WARN] Dev mode: auto-reload enabled. Do not use for real-device validation.
-    python -m uvicorn %UVICORN_ARGS% --reload
+    python tools\run_with_backend_env.py --env-file backend\.env -- python -m uvicorn %UVICORN_ARGS% --reload
 ) else (
     echo [SAFE] Real-device mode: starting backend without auto-reload.
-    python -m uvicorn %UVICORN_ARGS%
+    python tools\run_with_backend_env.py --env-file backend\.env -- python -m uvicorn %UVICORN_ARGS%
 )
 
 pause

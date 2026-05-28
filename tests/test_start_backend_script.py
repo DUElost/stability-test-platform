@@ -42,6 +42,23 @@ def test_start_backend_scripts_prepare_env_before_launch():
     assert 'python3 tools/ensure_backend_dev_secrets.py --env-file backend/.env' in wsl_script
 
 
+def test_start_backend_scripts_check_redis_before_migration():
+    script = (REPO_ROOT / "start-backend.bat").read_text(encoding="utf-8")
+    no_reload_script = (REPO_ROOT / "start-backend-no-reload.bat").read_text(encoding="utf-8")
+
+    launcher = 'python tools\\run_with_backend_env.py --env-file backend\\.env --'
+    preflight = launcher + ' python tools\\check_backend_redis.py --env-file backend\\.env'
+    migration = 'python ..\\tools\\run_with_backend_env.py --env-file .env -- python -m alembic upgrade head'
+    uvicorn = launcher + ' python -m uvicorn %UVICORN_ARGS%'
+
+    assert preflight in script
+    assert preflight in no_reload_script
+    assert script.index(preflight) < script.index(migration)
+    assert no_reload_script.index(preflight) < no_reload_script.index(migration)
+    assert uvicorn in script
+    assert uvicorn in no_reload_script
+
+
 def test_stop_backend_script_stops_windows_port_before_wsl():
     script = (REPO_ROOT / "stop-backend.bat").read_text(encoding="utf-8")
 
