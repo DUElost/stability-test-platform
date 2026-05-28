@@ -1,16 +1,11 @@
-import apiClient, { unwrapApiResponse } from './client';
+import apiClient from './client';
 import type { Host, PaginatedResponse } from './types';
 
 export const hosts = {
   list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<Host>>('/hosts', { params: { skip, limit } }),
   get: (id: number | string) => apiClient.get<Host>(`/hosts/${id}`),
-  /**
-   * ADR-0021 hot-update gate — fetch the live `active_jobs` snapshot for a host.
-   * Wraps `GET /hosts/{id}` and unwraps the ApiResponse envelope so callers
-   * receive the typed `Host` directly (with `active_jobs` populated).
-   */
   getDetail: (id: number | string) =>
-    unwrapApiResponse<Host>(apiClient.get(`/hosts/${id}`)),
+    apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
   create: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
     apiClient.post<Host>('/hosts', data),
   update: (id: number, data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
