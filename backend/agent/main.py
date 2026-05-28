@@ -345,6 +345,16 @@ def main() -> None:
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
+        # D2: AeeDbHistoryReconciler 启动期参数(读 env;是否真正启动按 capability + host 白名单门控)
+        logger.info(
+            "aee_reconciler_env enabled=%s interval_seconds=%s burst_interval_seconds=%s "
+            "burst_rounds=%s hosts=%s",
+            os.getenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "false"),
+            os.getenv("STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS", "180"),
+            os.getenv("STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS", "60"),
+            os.getenv("STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS", "5"),
+            os.getenv("STP_WATCHER_AEE_RECONCILE_HOSTS", "") or "(unset → 全 host 放行)",
+        )
     else:
         logger.info(
             "watcher_subsystem_disabled (STP_WATCHER_ENABLED=false STP_WATCHER_PLAN_DEFAULT=false)"

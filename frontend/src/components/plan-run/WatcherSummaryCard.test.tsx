@@ -118,6 +118,10 @@ describe('WatcherSummaryCard', () => {
       />,
     );
     expect(screen.getByText('该窗口内未检测到异常')).toBeInTheDocument();
+    // M0 T0-6 子项 4: 空态附带 Watcher 启用引导文案
+    expect(screen.getByTestId('watcher-disabled-hint')).toHaveTextContent(
+      'STP_WATCHER_PLAN_DEFAULT',
+    );
   });
 
   it('forwards window changes to parent', () => {

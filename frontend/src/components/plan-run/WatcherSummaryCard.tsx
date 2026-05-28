@@ -296,9 +296,15 @@ export default function WatcherSummaryCard({
             <Skeleton className="h-12 w-full" />
           </div>
         ) : cats.length === 0 ? (
-          <div className="py-10 text-center text-xs text-gray-400">
+          <div className="py-8 text-center text-xs text-gray-400">
             <Activity className="mx-auto mb-2 h-5 w-5 opacity-30" />
-            该窗口内未检测到异常
+            <div>该窗口内未检测到异常</div>
+            <div
+              data-testid="watcher-disabled-hint"
+              className="mt-1 text-[10px] text-gray-400/80"
+            >
+              AEE 监控由 Watcher 提供,如长期为空请确认 Agent STP_WATCHER_PLAN_DEFAULT
+            </div>
           </div>
         ) : (
           <div className="space-y-2 p-3">
