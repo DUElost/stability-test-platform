@@ -107,6 +107,7 @@ class DeviceLogWatcher:
         capability: WatcherCapability,
         probe_result: Optional[ProbeResult] = None,
         puller: Optional[LogPuller] = None,
+        aee_reconciler_active: bool = False,
     ) -> None:
         self._adb_path = str(adb_path)
         self._host_id = str(host_id)
@@ -116,6 +117,10 @@ class DeviceLogWatcher:
         self._capability = capability
         self._probe_result = probe_result
         self._puller = puller   # 5B1: immediate 路径富化，None = 直接 emit
+        # M0/PR #2: 当 AeeDbHistoryReconciler 由 JobSession 启动时,本 watcher 跳过
+        # AEE/VENDOR_AEE 的 emit(reconciler 通过 db_history 唯一 emit);
+        # 仍保留 LogPuller pull + ArtifactUploader,ANR/MOBILELOG 不受影响。
+        self._aee_reconciler_active = bool(aee_reconciler_active)
 
         # SignalEmitter：持久化 → outbox（OutboxDrainer 异步上送）
         self._emitter = SignalEmitter(
@@ -168,6 +173,21 @@ class DeviceLogWatcher:
     @property
     def capability(self) -> WatcherCapability:
         return self._capability
+
+    @property
+    def emitter(self) -> SignalEmitter:
+        """暴露内部 SignalEmitter,供 AeeDbHistoryReconciler 共享同一 seq_no 序列(M0/PR #2)."""
+        return self._emitter
+
+    @property
+    def aee_reconciler_active(self) -> bool:
+        return self._aee_reconciler_active
+
+    def _should_emit_inotifyd(self, event: WatcherEvent) -> bool:
+        """M0/PR #2: AEE/VENDOR_AEE 在 reconciler 接管期间不由 inotifyd 路径 emit。"""
+        if not self._aee_reconciler_active:
+            return True
+        return event.category not in ("AEE", "VENDOR_AEE")
 
     def attach_puller(self, puller: LogPuller) -> None:
         """由 LogWatcherManager 在 start() 之前注入 puller。
@@ -315,12 +335,15 @@ class DeviceLogWatcher:
     def _on_immediate(self, event: WatcherEvent) -> None:
         """AEE / VENDOR_AEE 类直通：若注入 puller 则走异步 pull + 富化；否则直接 emit。
 
-        5B1：关键分叉点。puller 成功/失败都会回调 _on_pull_done → _safe_emit，
-        保证 log_signal 最终落 outbox，不会因 pull 失败而丢信号。
+        5B1：关键分叉点。puller 成功/失败都会回调 _on_pull_done → _safe_emit,
+        保证 log_signal 最终落 outbox,不会因 pull 失败而丢信号。
+
+        M0/PR #2:开启 reconciler 后,AEE/VENDOR_AEE 由 reconciler 独占 emit;
+        本路径仅保留 puller 拉文件 + ArtifactUploader,不再直接 emit。
         """
         if self._puller is not None:
             self._puller.submit(event)
-        else:
+        elif self._should_emit_inotifyd(event):
             self._safe_emit(event)
 
     def _on_batch(self, events: List[WatcherEvent]) -> None:
@@ -342,8 +365,13 @@ class DeviceLogWatcher:
 
         5B2：pull 成功（artifact_uri 非空）且为 AEE/VENDOR_AEE → 额外异步提交到
         ArtifactUploader。uploader 是 fire-and-forget 单例，失败不影响主 emit 链路。
+
+        M0/PR #2:开启 reconciler 后,AEE/VENDOR_AEE 不再由本路径 emit log_signal
+        (由 AeeDbHistoryReconciler 通过 db_history diff 唯一 emit);
+        ArtifactUploader 仍照常上送。ANR/MOBILELOG 不会走 puller 路径,不受影响。
         """
-        self._safe_emit(event, enrichment=enrichment)
+        if self._should_emit_inotifyd(event):
+            self._safe_emit(event, enrichment=enrichment)
         self._maybe_submit_artifact(event, enrichment)
 
     def _maybe_submit_artifact(

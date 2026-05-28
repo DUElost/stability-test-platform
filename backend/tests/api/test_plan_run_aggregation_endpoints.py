@@ -1023,3 +1023,263 @@ class TestWatcherSummaryEndpoint:
             "/api/v1/plan-runs/999999/watcher-summary", headers=auth_headers,
         )
         assert resp.status_code == 404
+
+    # ------------------------------------------------------------------
+    # M0/PR #2: aee_breakdown JSONB 聚合
+    # ------------------------------------------------------------------
+
+    def test_watcher_summary_aee_breakdown_aggregates_by_package(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """reconciler signal 按 package_name 聚合;crash/vendor_crash/anr 三类互斥。
+
+        seed:
+          - 2× AEE+CRASH for "com.app.a"(不同 nfs_path → 2 crash)
+          - 1× VENDOR_AEE+CRASH for "com.vendor.b"
+          - 1× AEE 但 extra.event_type=ANR for "com.app.c" → 计 anr 不计 crash
+        预期:crash_total=2, vendor_crash=1, anr=2(fixture unknown ANR + com.app.c)
+        """
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+
+        db_session.add_all([
+            JobLogSignal(
+                id=20001,
+                job_id=j1.id, host_id="host-101",
+                device_serial=chain_setup["device_completed"].serial,
+                seq_no=100, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.A1",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "com.app.a",
+                    "aee_ts": "2026-05-28 10:00:00.000",
+                    "nfs_path": f"/mnt/nfs/jobs/{j1.id}/AEE/db.A1",
+                    "pull_source": "reconciler",
+                },
+            ),
+            JobLogSignal(
+                id=20002,
+                job_id=j1.id, host_id="host-101",
+                device_serial=chain_setup["device_completed"].serial,
+                seq_no=101, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.A2",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "com.app.a",
+                    "nfs_path": f"/mnt/nfs/jobs/{j1.id}/AEE/db.A2",
+                    "pull_source": "reconciler",
+                },
+            ),
+            JobLogSignal(
+                id=20003,
+                job_id=j2.id, host_id="host-101",
+                device_serial=chain_setup["device_running"].serial,
+                seq_no=20, category="VENDOR_AEE", source="reconciler",
+                path_on_device="/data/vendor/aee_exp/db.B1",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "com.vendor.b",
+                    "nfs_path": f"/mnt/nfs/jobs/{j2.id}/VENDOR_AEE/db.B1",
+                    "pull_source": "reconciler",
+                },
+            ),
+            JobLogSignal(
+                id=20004,
+                job_id=j2.id, host_id="host-101",
+                device_serial=chain_setup["device_running"].serial,
+                seq_no=21, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.C1",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "event_type": "ANR",   # AEE 桶里塞了 ANR → 计 anr 不计 crash
+                    "package_name": "com.app.c",
+                    "nfs_path": f"/mnt/nfs/jobs/{j2.id}/AEE/db.C1",
+                    "pull_source": "reconciler",
+                },
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        bd = resp.json()["data"]["aee_breakdown"]
+        assert bd is not None
+
+        assert bd["crash_count"] == 2
+        assert bd["vendor_crash_count"] == 1
+        # fixture legacy ANR(id=10002,unknown 桶,path_on_device 兜底)+ com.app.c
+        assert bd["anr_count"] == 2
+
+        assert set(bd["packages"]) == {
+            "com.app.a", "com.app.c", "com.vendor.b", "unknown",
+        }
+
+        # ORDER BY (crash+vendor+anr) DESC, pkg ASC:
+        #   com.app.a=2 → first;平局 1 的按字典序:com.app.c < com.vendor.b < unknown
+        pkg_order = [p["package_name"] for p in bd["by_package"]]
+        assert pkg_order == ["com.app.a", "com.app.c", "com.vendor.b", "unknown"]
+
+        a = next(p for p in bd["by_package"] if p["package_name"] == "com.app.a")
+        assert a == {
+            "package_name": "com.app.a",
+            "crash_count": 2,
+            "vendor_crash_count": 0,
+            "anr_count": 0,
+            "latest_detected_at": a["latest_detected_at"],   # 仅断言存在
+        }
+        c = next(p for p in bd["by_package"] if p["package_name"] == "com.app.c")
+        assert c["crash_count"] == 0 and c["vendor_crash_count"] == 0
+        assert c["anr_count"] == 1
+
+    def test_watcher_summary_packages_empty_name_falls_into_unknown(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """extra.package_name = "" 或缺失 → 归 unknown 桶,nfs_path 仍参与 DISTINCT。"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+
+        db_session.add_all([
+            JobLogSignal(
+                id=21001,
+                job_id=j1.id, host_id="host-101",
+                device_serial=chain_setup["device_completed"].serial,
+                seq_no=200, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.E1",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={"event_type": "CRASH", "package_name": "", "nfs_path": "/nfs/E1"},
+            ),
+            JobLogSignal(
+                id=21002,
+                job_id=j1.id, host_id="host-101",
+                device_serial=chain_setup["device_completed"].serial,
+                seq_no=201, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.E2",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={"event_type": "CRASH", "nfs_path": "/nfs/E2"},  # 缺 package_name
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        bd = resp.json()["data"]["aee_breakdown"]
+
+        # 两条新 signal + fixture legacy 全部归 unknown
+        assert bd["packages"] == ["unknown"]
+        assert len(bd["by_package"]) == 1
+        unknown = bd["by_package"][0]
+        assert unknown["package_name"] == "unknown"
+        # E1/E2 两个不同 nfs_path → crash_count=2;fixture AEE 因 nfs_path=NULL 不计
+        assert unknown["crash_count"] == 2
+        # fixture legacy ANR id=10002
+        assert unknown["anr_count"] == 1
+
+    def test_watcher_summary_dedup_crash_by_nfs_path(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """同一 nfs_path 在不同 job/seq_no 上出现两次 → DISTINCT 后只计 1 次。"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+
+        same_nfs = "/mnt/nfs/jobs/shared/AEE/db.duplicate"
+        db_session.add_all([
+            JobLogSignal(
+                id=22001,
+                job_id=j1.id, host_id="host-101",
+                device_serial=chain_setup["device_completed"].serial,
+                seq_no=300, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.duplicate",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "com.dup",
+                    "nfs_path": same_nfs,
+                },
+            ),
+            JobLogSignal(
+                id=22002,
+                job_id=j2.id, host_id="host-101",
+                device_serial=chain_setup["device_running"].serial,
+                seq_no=300, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.duplicate",
+                detected_at=_now() - timedelta(minutes=1),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "com.dup",
+                    "nfs_path": same_nfs,    # 同 nfs_path
+                },
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        bd = resp.json()["data"]["aee_breakdown"]
+
+        dup_row = next(p for p in bd["by_package"] if p["package_name"] == "com.dup")
+        # 两条 signal 同 nfs_path → DISTINCT 去重 → crash_count=1
+        assert dup_row["crash_count"] == 1
+        # 全局 crash_count(跨包累加):仅 com.dup 贡献 1
+        assert bd["crash_count"] == 1
+
+    def test_watcher_summary_legacy_anr_counted_via_path_on_device(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """legacy ANR signal(extra=NULL,inotifyd 路径)按 path_on_device 兜底计数,
+        与 reconciler 携带 extra 的 ANR 在同一 unknown 桶汇总。"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+
+        db_session.add(JobLogSignal(
+            id=23001,
+            job_id=j1.id, host_id="host-101",
+            device_serial=chain_setup["device_completed"].serial,
+            seq_no=400, category="ANR", source="inotifyd",
+            path_on_device="/data/anr/legacy_j1",
+            detected_at=_now() - timedelta(minutes=2),
+            # extra 故意留 NULL → 模拟 legacy inotifyd 路径
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        bd = resp.json()["data"]["aee_breakdown"]
+
+        # 两条 legacy ANR 都没有 extra → 都落 unknown 桶
+        assert bd["packages"] == ["unknown"]
+        # path_on_device DISTINCT:/data/anr/anr_001(fixture)+ /data/anr/legacy_j1 = 2
+        assert bd["anr_count"] == 2
+        unknown = bd["by_package"][0]
+        assert unknown["anr_count"] == 2
+
+    def test_watcher_summary_aee_breakdown_none_when_no_jobs(
+        self, client, auth_headers, chain_setup,
+    ):
+        """无关联 Job 的 PlanRun(parent_run)走早返回路径 → aee_breakdown 字段为 None。"""
+        parent_run = chain_setup["parent_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{parent_run.id}/watcher-summary",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        # parent_run 在 fixture 中没有 JobInstance → 早返回
+        assert data["total_devices"] == 0
+        assert data["aee_breakdown"] is None

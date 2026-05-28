@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import WatcherSummaryCard from './WatcherSummaryCard';
-import type { WatcherSummary } from '@/utils/api/types';
+import type { AeeBreakdown, WatcherSummary } from '@/utils/api/types';
 
 const fixture: WatcherSummary = {
   plan_run_id: 12,
@@ -40,6 +40,36 @@ const fixture: WatcherSummary = {
   abnormal_rate: 0.625,
   threshold: 0.05,
   exceeded: true,
+};
+
+const breakdownFixture: AeeBreakdown = {
+  crash_count: 3,            // AEE
+  vendor_crash_count: 1,     // VENDOR_AEE
+  anr_count: 2,
+  packages: ['com.app.a', 'com.vendor.b', 'unknown'],
+  by_package: [
+    {
+      package_name: 'com.app.a',
+      crash_count: 3,
+      vendor_crash_count: 0,
+      anr_count: 1,
+      latest_detected_at: '2026-05-08T12:25:00Z',
+    },
+    {
+      package_name: 'com.vendor.b',
+      crash_count: 0,
+      vendor_crash_count: 1,
+      anr_count: 0,
+      latest_detected_at: '2026-05-08T12:18:00Z',
+    },
+    {
+      package_name: 'unknown',
+      crash_count: 0,
+      vendor_crash_count: 0,
+      anr_count: 1,
+      latest_detected_at: '2026-05-08T12:20:00Z',
+    },
+  ],
 };
 
 describe('WatcherSummaryCard', () => {
@@ -101,5 +131,112 @@ describe('WatcherSummaryCard', () => {
     );
     fireEvent.click(screen.getByTestId('watcher-window-1440'));
     expect(onChange).toHaveBeenCalledWith(1440);
+  });
+
+  // ----------------------------------------------------------------------
+  // M0/PR #2: aee_breakdown 渲染
+  // ----------------------------------------------------------------------
+
+  it('renders top-bar Crash + ANR chips when aee_breakdown is present (crash = AEE + VENDOR_AEE)', () => {
+    render(
+      <WatcherSummaryCard
+        data={{ ...fixture, aee_breakdown: breakdownFixture }}
+      />,
+    );
+    const summary = screen.getByTestId('watcher-aee-summary');
+    expect(summary).toBeInTheDocument();
+    // crash chip = crash_count(3) + vendor_crash_count(1) = 4
+    const crashChip = screen.getByTestId('watcher-crash-chip');
+    expect(crashChip).toHaveTextContent('4 Crash');
+    // 同时有 AEE + Vendor 时挂 tooltip 拆分提示
+    expect(crashChip).toHaveAttribute('title', 'AEE 3 + Vendor 1');
+    // anr chip
+    expect(screen.getByTestId('watcher-anr-chip')).toHaveTextContent('2 ANR');
+  });
+
+  it('renders packages chip row with unknown bucket included', () => {
+    render(
+      <WatcherSummaryCard
+        data={{ ...fixture, aee_breakdown: breakdownFixture }}
+      />,
+    );
+    const row = screen.getByTestId('watcher-packages-row');
+    expect(row).toBeInTheDocument();
+    // 每个包都有自己的 chip,总数 = crash + vendor + anr
+    expect(screen.getByTestId('watcher-pkg-com.app.a')).toHaveTextContent(
+      'com.app.a',
+    );
+    expect(screen.getByTestId('watcher-pkg-com.app.a')).toHaveTextContent('(4)'); // 3+0+1
+    expect(screen.getByTestId('watcher-pkg-com.vendor.b')).toHaveTextContent('(1)');
+    expect(screen.getByTestId('watcher-pkg-unknown')).toHaveTextContent('unknown');
+    expect(screen.getByTestId('watcher-pkg-unknown')).toHaveTextContent('(1)');
+  });
+
+  it('category row carries Top 3 by_package title scoped to that category', () => {
+    // 给 AEE 加多个有 crash_count 的包,验证 Top 3 排序仅看 crash_count
+    const breakdownTop3: AeeBreakdown = {
+      crash_count: 6,
+      vendor_crash_count: 0,
+      anr_count: 0,
+      packages: ['com.a', 'com.b', 'com.c', 'com.d'],
+      by_package: [
+        { package_name: 'com.a', crash_count: 3, vendor_crash_count: 0, anr_count: 0 },
+        { package_name: 'com.b', crash_count: 2, vendor_crash_count: 0, anr_count: 0 },
+        { package_name: 'com.c', crash_count: 1, vendor_crash_count: 0, anr_count: 5 },
+        { package_name: 'com.d', crash_count: 0, vendor_crash_count: 0, anr_count: 9 },
+      ],
+    };
+    render(
+      <WatcherSummaryCard
+        data={{ ...fixture, aee_breakdown: breakdownTop3 }}
+      />,
+    );
+    const aeeRow = screen.getByTestId('watcher-cat-AEE');
+    // 仅按 crash_count 降序,排除 0,取 Top 3 → com.a / com.b / com.c
+    expect(aeeRow).toHaveAttribute(
+      'title',
+      'Top 3 应用: com.a (3), com.b (2), com.c (1)',
+    );
+    // ANR 行按 anr_count 排序 → com.d (9), com.c (5)
+    const anrRow = screen.getByTestId('watcher-cat-ANR');
+    expect(anrRow).toHaveAttribute(
+      'title',
+      'Top 3 应用: com.d (9), com.c (5)',
+    );
+    // TOMBSTONE 无映射字段 → 不挂 title
+    const tombRow = screen.getByTestId('watcher-cat-TOMBSTONE');
+    expect(tombRow).not.toHaveAttribute('title');
+  });
+
+  it('hides chips + packages row when aee_breakdown is null', () => {
+    render(
+      <WatcherSummaryCard
+        data={{ ...fixture, aee_breakdown: null }}
+      />,
+    );
+    expect(screen.queryByTestId('watcher-aee-summary')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('watcher-packages-row')).not.toBeInTheDocument();
+    // category 行不再附带 Top 3 title
+    expect(screen.getByTestId('watcher-cat-AEE')).not.toHaveAttribute('title');
+  });
+
+  it('omits AeeBreakdownChips when crash=0 and anr=0 (defensive)', () => {
+    render(
+      <WatcherSummaryCard
+        data={{
+          ...fixture,
+          aee_breakdown: {
+            crash_count: 0,
+            vendor_crash_count: 0,
+            anr_count: 0,
+            packages: [],
+            by_package: [],
+          },
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('watcher-aee-summary')).not.toBeInTheDocument();
+    // packages 为空也不渲染 row
+    expect(screen.queryByTestId('watcher-packages-row')).not.toBeInTheDocument();
   });
 });

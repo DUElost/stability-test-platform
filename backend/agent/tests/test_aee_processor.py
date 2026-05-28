@@ -1,0 +1,359 @@
+"""Tests for AEE db_history incremental processor (D1)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from backend.agent.aee.db_history import (
+    parse_db_history_line,
+    parse_vendor_db_history_line,
+    state_key,
+)
+from backend.agent.aee.folder_name import get_aee_log_folder_name
+from backend.agent.aee.processor import ProcessConfig, process_device_logs
+from backend.agent.aee.timestamp import format_timestamp_for_filename, parse_timestamp
+
+
+class _MemStore:
+    def __init__(self) -> None:
+        self._data: dict[str, str] = {}
+
+    def get_state(self, key: str, default: str = "") -> str:
+        return self._data.get(key, default)
+
+    def set_state(self, key: str, value: str) -> None:
+        self._data[key] = value
+
+
+class _FakeAdbPull:
+    def __init__(self, serial: str, history_by_path: dict[str, str]) -> None:
+        self.serial = serial
+        self.history_by_path = history_by_path
+        self.pulled: list[tuple[str, str]] = []
+
+    def shell(self, serial: str, cmd: str, timeout: int = 30):
+        if "getprop" in cmd:
+            props = {
+                "ro.product.name": "X6851-OP",
+                "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+                "ro.build.version.incremental": "0401",
+                "ro.build.version.release": "16",
+            }
+            for key, val in props.items():
+                if key in cmd:
+                    return type("R", (), {"stdout": val})()
+        if cmd.startswith("cat "):
+            remote = cmd[4:].replace("/db_history", "")
+            body = self.history_by_path.get(remote, "")
+            return type("R", (), {"stdout": body})()
+        return type("R", (), {"stdout": ""})()
+
+
+def test_parse_db_history_line():
+    line = "/data/aee_exp/db.01,CRASH,pkg,_,_,_,_,_,com.example.app,2026-05-27 10:15:22.123"
+    parsed = parse_db_history_line(line)
+    assert parsed is not None
+    assert parsed["db_path"] == "/data/aee_exp/db.01"
+    assert parsed["pkg_name"] == "com.example.app"
+    assert parsed["event_type"] == "CRASH"
+
+
+def test_parse_vendor_db_history_line_filters_invalid():
+    assert parse_vendor_db_history_line("androidboot.bootreason=xxx") is None
+    line = "/data/vendor/aee_exp/db.02,CRASH,pkg,_,_,_,_,_,vendor.app,2026-05-27 11:00:00"
+    parsed = parse_vendor_db_history_line(line)
+    assert parsed is not None
+    assert parsed["db_path"].startswith("/data/vendor/aee_exp/")
+
+
+def test_get_aee_log_folder_name():
+    def _getprop(name: str, timeout: int = 10) -> str:
+        return {
+            "ro.product.name": "X6851-OP",
+            "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+            "ro.build.version.incremental": "0401",
+            "ro.build.version.release": "16",
+        }.get(name, "")
+
+    name = get_aee_log_folder_name(getprop=_getprop, run_date_stamp="0527")
+    assert name is not None
+    assert "X6851-OP" in name
+    assert name.endswith("_0527_MonkeyAEEinfo")
+
+
+def test_process_device_logs_incremental(tmp_path, monkeypatch):
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.01,CRASH,pkg,_,_,_,_,_,com.app,2026-05-27 10:15:22.123"
+    history = line + "\n"
+
+    def shell_fn(cmd: str, timeout: int):
+        if "getprop" in cmd:
+            props = {
+                "ro.product.name": "X6851-OP",
+                "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+                "ro.build.version.incremental": "0401",
+                "ro.build.version.release": "16",
+            }
+            for key, val in props.items():
+                if key in cmd:
+                    return val
+        if "cat /data/aee_exp/db_history" in cmd:
+            return history
+        if "cat /data/vendor/aee_exp/db_history" in cmd:
+            return ""
+        return ""
+
+    pulled: list[str] = []
+
+    def pull_fn(remote: str, local: str, timeout: int) -> bool:
+        pulled.append(remote)
+        Path(local).mkdir(parents=True, exist_ok=True)
+        # T0.5-1 strict verify 要求至少含一个 .dbg 关键文件
+        (Path(local) / "main.dbg").write_text("ok", encoding="utf-8")
+        return True
+
+    from backend.agent.aee import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "make_adb_shell_fn", lambda serial, adb_path: lambda cmd, t: shell_fn(cmd, t))
+    monkeypatch.setattr(proc_mod, "make_adb_pull_fn", lambda serial, adb_path: pull_fn)
+    monkeypatch.setattr(proc_mod, "export_correlated_mobilelogs", lambda **kw: {"matched": 0, "pulled": 0})
+    monkeypatch.setattr(proc_mod, "export_bugreport_for_timestamp", lambda **kw: True)
+
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r1 = process_device_logs(serial="dev1", job_id=42, state_store=store, config=cfg)
+    assert r1.pulled == 1
+    assert len(pulled) == 1
+
+    r2 = process_device_logs(serial="dev1", job_id=42, state_store=store, config=cfg)
+    assert r2.pulled == 0
+    assert r2.skipped_known >= 0
+    assert len(pulled) == 1
+
+    key = state_key("dev1", "aee_exp")
+    saved = json.loads(store.get_state(key))
+    assert line in saved
+
+
+def test_format_timestamp_for_filename():
+    ts = "2026-05-27 10:15:22.456"
+    assert format_timestamp_for_filename(ts).startswith("2026_0527_101522_456")
+    assert parse_timestamp(ts) is not None
+
+
+def test_process_logs_strict_verify_rejects_dir_without_dbg(tmp_path, monkeypatch):
+    """T0.5-1 P0-#1: pull 后目录无 .dbg 文件 → strict verify 失败 → pull_verify_failed 错误。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.99,CRASH,pkg,_,_,_,_,_,com.bad,2026-05-27 10:15:22.123"
+
+    def shell_fn(cmd: str, timeout: int):
+        if "getprop" in cmd:
+            props = {
+                "ro.product.name": "X6851-OP",
+                "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+                "ro.build.version.incremental": "0401",
+                "ro.build.version.release": "16",
+            }
+            for key, val in props.items():
+                if key in cmd:
+                    return val
+        if "cat /data/aee_exp/db_history" in cmd:
+            return line + "\n"
+        if "cat /data/vendor/aee_exp/db_history" in cmd:
+            return ""
+        return ""
+
+    def pull_fn(remote: str, local: str, timeout: int) -> bool:
+        # 只写非 .dbg 文件 → strict verify 缺少关键文件
+        Path(local).mkdir(parents=True, exist_ok=True)
+        (Path(local) / "noise.txt").write_text("garbage", encoding="utf-8")
+        return True
+
+    from backend.agent.aee import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "make_adb_shell_fn", lambda serial, adb_path: lambda cmd, t: shell_fn(cmd, t))
+    monkeypatch.setattr(proc_mod, "make_adb_pull_fn", lambda serial, adb_path: pull_fn)
+    monkeypatch.setattr(proc_mod, "export_correlated_mobilelogs", lambda **kw: {"matched": 0, "pulled": 0})
+    monkeypatch.setattr(proc_mod, "export_bugreport_for_timestamp", lambda **kw: True)
+
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r = process_device_logs(serial="dev_strict", job_id=77, state_store=store, config=cfg)
+    assert r.pulled == 0
+    assert any(e.startswith("pull_verify_failed:") for e in r.errors), r.errors
+    # 失败目录应清理掉
+    nfs_root = tmp_path
+    for db_dir in nfs_root.rglob("*db.99*"):
+        assert not db_dir.exists() or not any(db_dir.iterdir()), "失败 pull 应清理目录"
+
+
+def test_process_logs_mobilelog_uses_correlated_subdir_default(tmp_path, monkeypatch):
+    """T0.5-2 D3: export_correlated_mobilelogs 默认写到 correlated_mobilelogs/ 子目录。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    monkeypatch.delenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", raising=False)
+    store = _MemStore()
+    line = "/data/aee_exp/db.01,CRASH,pkg,_,_,_,_,_,com.app,2026-05-27 10:15:22.123"
+
+    def shell_fn(cmd: str, timeout: int):
+        if "getprop" in cmd:
+            props = {
+                "ro.product.name": "X6851-OP",
+                "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+                "ro.build.version.incremental": "0401",
+                "ro.build.version.release": "16",
+            }
+            for key, val in props.items():
+                if key in cmd:
+                    return val
+        if "cat /data/aee_exp/db_history" in cmd:
+            return line + "\n"
+        if "cat /data/vendor/aee_exp/db_history" in cmd:
+            return ""
+        return ""
+
+    def pull_fn(remote: str, local: str, timeout: int) -> bool:
+        Path(local).mkdir(parents=True, exist_ok=True)
+        (Path(local) / "main.dbg").write_text("data", encoding="utf-8")
+        return True
+
+    captured: dict[str, Path] = {}
+
+    def fake_mobilelog(**kw):
+        captured["output_dir"] = kw["output_dir"]
+        # 模拟 mobilelog.py 默认行为:写到 correlated_mobilelogs/ 子目录
+        from backend.agent.aee.mobilelog import _resolve_mobilelog_subdir
+
+        target = kw["output_dir"] / _resolve_mobilelog_subdir()
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "main_log_dummy").write_text("x", encoding="utf-8")
+        return {"matched": 1, "pulled": 1}
+
+    from backend.agent.aee import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "make_adb_shell_fn", lambda serial, adb_path: lambda cmd, t: shell_fn(cmd, t))
+    monkeypatch.setattr(proc_mod, "make_adb_pull_fn", lambda serial, adb_path: pull_fn)
+    monkeypatch.setattr(proc_mod, "export_correlated_mobilelogs", fake_mobilelog)
+    monkeypatch.setattr(proc_mod, "export_bugreport_for_timestamp", lambda **kw: True)
+
+    cfg = ProcessConfig(export_mobilelog=True, export_bugreport=False)
+    r = process_device_logs(serial="dev_sd", job_id=88, state_store=store, config=cfg)
+    assert r.pulled == 1
+    assert "output_dir" in captured
+    landed = captured["output_dir"] / "correlated_mobilelogs"
+    assert landed.is_dir(), f"应写入 correlated_mobilelogs/,实际未创建: {captured['output_dir'].iterdir()}"
+
+
+def test_process_logs_mobilelog_subdir_stp_fallback(tmp_path, monkeypatch):
+    """T0.5-2 D3: STP_WATCHER_AEE_SUBDIR_LAYOUT=stp 时回退到旧 mobilelog/ 布局。"""
+    monkeypatch.setenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", "stp")
+    from backend.agent.aee.mobilelog import _resolve_mobilelog_subdir
+
+    assert _resolve_mobilelog_subdir() == "mobilelog"
+
+
+# ----------------------------------------------------------------------
+# M0/PR #2 — on_new_entry 回调
+# ----------------------------------------------------------------------
+
+
+def _setup_pdl_stubs(monkeypatch, history_line: str):
+    """共享桩:伪造 shell/pull/mobilelog/bugreport,使 process_device_logs 走通成功 pull 分支。"""
+
+    def shell_fn(cmd: str, timeout: int):
+        if "getprop" in cmd:
+            props = {
+                "ro.product.name": "X6851-OP",
+                "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+                "ro.build.version.incremental": "0401",
+                "ro.build.version.release": "16",
+            }
+            for key, val in props.items():
+                if key in cmd:
+                    return val
+        if "cat /data/aee_exp/db_history" in cmd:
+            return history_line + "\n"
+        if "cat /data/vendor/aee_exp/db_history" in cmd:
+            return ""
+        return ""
+
+    def pull_fn(remote: str, local: str, timeout: int) -> bool:
+        Path(local).mkdir(parents=True, exist_ok=True)
+        (Path(local) / "main.dbg").write_text("ok", encoding="utf-8")
+        return True
+
+    from backend.agent.aee import processor as proc_mod
+
+    monkeypatch.setattr(proc_mod, "make_adb_shell_fn", lambda serial, adb_path: lambda cmd, t: shell_fn(cmd, t))
+    monkeypatch.setattr(proc_mod, "make_adb_pull_fn", lambda serial, adb_path: pull_fn)
+    monkeypatch.setattr(proc_mod, "export_correlated_mobilelogs", lambda **kw: {"matched": 0, "pulled": 0})
+    monkeypatch.setattr(proc_mod, "export_bugreport_for_timestamp", lambda **kw: True)
+
+
+def test_process_device_logs_on_new_entry_called(tmp_path, monkeypatch):
+    """on_new_entry 回调:pull 成功时被调用一次,payload 字段完整;第二次同 line 不再触发。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.42,CRASH,pkg,_,_,_,_,_,com.example.app,2026-05-28 10:15:22.123"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    captured: list[dict] = []
+
+    def on_new(payload: dict) -> None:
+        captured.append(payload)
+
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r1 = process_device_logs(
+        serial="dev_cb", job_id=42,
+        state_store=store, config=cfg, on_new_entry=on_new,
+    )
+    assert r1.pulled == 1
+    assert len(captured) == 1
+    payload = captured[0]
+    assert payload["line"] == line
+    assert payload["aee_type"] == "aee_exp"
+    assert payload["parsed"]["db_path"] == "/data/aee_exp/db.42"
+    assert payload["parsed"]["pkg_name"] == "com.example.app"
+    assert payload["parsed"]["timestamp"] == "2026-05-28 10:15:22.123"
+    assert payload["parsed"]["event_type"] == "CRASH"
+    assert isinstance(payload["output_subdir"], Path)
+    assert payload["output_subdir"].is_dir()
+    # output_subdir 应位于 aee_type 子目录下
+    assert payload["output_subdir"].parent.name == "aee_exp"
+
+    # 第二次:line 已 processed → on_new_entry 不再触发
+    r2 = process_device_logs(
+        serial="dev_cb", job_id=42,
+        state_store=store, config=cfg, on_new_entry=on_new,
+    )
+    assert r2.pulled == 0
+    assert len(captured) == 1, "已处理的 line 不应再次触发回调"
+
+
+def test_process_device_logs_on_new_entry_exception_swallowed(tmp_path, monkeypatch):
+    """on_new_entry 抛异常时:主流程不崩,pulled 依旧 +1,line 被标记 processed。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.77,CRASH,pkg,_,_,_,_,_,com.boom.app,2026-05-28 10:15:22.123"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    call_count = {"n": 0}
+
+    def on_new_explode(payload: dict) -> None:
+        call_count["n"] += 1
+        raise RuntimeError("intentional callback failure")
+
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r = process_device_logs(
+        serial="dev_boom", job_id=77,
+        state_store=store, config=cfg, on_new_entry=on_new_explode,
+    )
+    # 回调抛错被吞 → 主流程继续:pulled 仍 +1、line 入 processed
+    assert r.pulled == 1
+    assert call_count["n"] == 1
+    assert line in r.new_timestamps or len(r.new_timestamps) == 1
+    key = state_key("dev_boom", "aee_exp")
+    saved = json.loads(store.get_state(key))
+    assert line in saved, "回调失败不应阻止 line 被标记为 processed"

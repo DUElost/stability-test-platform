@@ -1,13 +1,14 @@
 """LogPuller — 异步文件拉取 + envelope 富化。
 
-职责（KISS / 5B1）：
+职责（KISS / 5B1 + D1）：
     - AEE / VENDOR_AEE 事件触发异步 `adb pull`，把设备侧 crash 文件拉到 NFS
     - 计算 sha256 / size_bytes / first_lines，通过 on_pull_done 回调把 enrichment
       传回 DeviceLogWatcher，由后者最终 emit 到 outbox
+    - D1：可选 sonic_tinno 路径布局 + 成功 pull 后导出 bugreport
     - ANR / MOBILELOG **不走** puller（快路径仅写元数据，参考 batcher 批量 emit）
 
 边界（YAGNI）：
-    - 不做 bugreport 导出（阶段 5B2 的职责）
+    - 不做 aee_extract 解密（D1 范围外）
     - 不落 JobArtifact 表（5B2 由独立端点负责；当前 envelope.artifact_uri 仅记 NFS 路径）
     - 不做重试：单次 pull 失败即 emit 空 enrichment；事件不丢 outbox
     - 不做 LRU 清理：NFS 配额由运维层外部处理
@@ -71,6 +72,12 @@ OnPullDone = Callable[[WatcherEvent, Dict[str, Any]], None]
 # ----------------------------------------------------------------------
 
 _FILENAME_SAFE_RE = re.compile(r"[^A-Za-z0-9._-]")
+_CATEGORY_TO_SONIC_SUBDIR = {
+    "AEE": "aee_exp",
+    "VENDOR_AEE": "vendor_aee_exp",
+    "MOBILELOG": "mobilelog",
+    "ANR": "anr",
+}
 
 
 class LogPuller:
@@ -105,6 +112,9 @@ class LogPuller:
         max_file_mb: int = 500,
         first_lines_max_lines: int = 200,
         first_lines_max_bytes: int = 4096,
+        sonic_output_dir: Optional[str] = None,
+        bugreport_enabled: bool = True,
+        bugreport_timeout_seconds: int = 600,
     ) -> None:
         self._adb = adb
         self._nfs_base_dir = Path(nfs_base_dir)
@@ -118,6 +128,9 @@ class LogPuller:
         self._max_file_bytes = int(max_file_mb) * 1024 * 1024
         self._first_lines_max_lines = max(1, int(first_lines_max_lines))
         self._first_lines_max_bytes = max(256, int(first_lines_max_bytes))
+        self._sonic_output_dir = Path(sonic_output_dir) if sonic_output_dir else None
+        self._bugreport_enabled = bool(bugreport_enabled)
+        self._bugreport_timeout = int(bugreport_timeout_seconds)
         self._stop_evt = threading.Event()
         self._workers: List[threading.Thread] = []
         self._started = False
@@ -316,6 +329,12 @@ class LogPuller:
         first_lines = self._read_first_lines(local_path)
 
         self.stats.pulls_ok += 1
+        if (
+            self._bugreport_enabled
+            and self._sonic_output_dir is not None
+            and event.category in ("AEE", "VENDOR_AEE")
+        ):
+            self._maybe_export_bugreport(event)
         return {
             "artifact_uri": str(local_path),
             "sha256":       sha256,
@@ -328,7 +347,12 @@ class LogPuller:
     # ------------------------------------------------------------------
 
     def _compose_local_path(self, event: WatcherEvent) -> Path:
-        """组装 NFS 落盘路径：
+        """组装 NFS 落盘路径。
+
+        sonic 布局（D1）::
+            <sonic_output_dir>/<aee_exp|vendor_aee_exp>/<epoch_ms>_<safe_filename>
+
+        默认布局（5B1）::
             <nfs_base>/jobs/<job_id>/<category>/<epoch_ms>_<safe_filename>
         """
         ts = event.detected_at
@@ -337,12 +361,52 @@ class LogPuller:
         except Exception:
             epoch_ms = int(time.time() * 1000)
         safe_name = _FILENAME_SAFE_RE.sub("_", event.filename) or "unnamed"
+
+        if self._sonic_output_dir is not None:
+            subdir = _CATEGORY_TO_SONIC_SUBDIR.get(event.category, event.category.lower())
+            return self._sonic_output_dir / subdir / f"{epoch_ms}_{safe_name}"
+
         return (
             self._nfs_base_dir
             / "jobs" / str(self._job_id)
             / event.category
             / f"{epoch_ms}_{safe_name}"
         )
+
+    def _maybe_export_bugreport(self, event: WatcherEvent) -> None:
+        """Best-effort bugreport after AEE pull (aligned with monolithic exporter).
+
+        T0.5-3 P0-#3 修复:category -> bugreport.event_type 映射,
+        否则 cooldown 集合 {"ANR","CRASH"} 永远命中"非冷却 event_type"
+        早返回路径 -> bugreport 永远不导出。
+        """
+        try:
+            from ..aee.bugreport import export_bugreport_for_timestamp
+            from ..aee.timestamp import format_timestamp_for_filename
+
+            if event.category in ("AEE", "VENDOR_AEE"):
+                mapped_event_type = "CRASH"
+            elif event.category == "ANR":
+                mapped_event_type = "ANR"
+            else:
+                mapped_event_type = event.category
+
+            ts_label = format_timestamp_for_filename(
+                event.detected_at.isoformat() if hasattr(event.detected_at, "isoformat") else str(event.detected_at)
+            )
+            export_bugreport_for_timestamp(
+                serial=self._serial,
+                timestamp_str=ts_label,
+                output_dir=self._sonic_output_dir,
+                adb_path=getattr(self._adb, "adb_path", None) or "adb",
+                event_type=mapped_event_type,
+                timeout_seconds=self._bugreport_timeout,
+            )
+        except Exception:
+            logger.exception(
+                "log_puller_bugreport_failed serial=%s file=%s",
+                self._serial, event.filename,
+            )
 
     def _compute_sha256(self, path: Path) -> Optional[str]:
         try:

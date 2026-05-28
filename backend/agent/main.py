@@ -34,6 +34,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.registry.script_registry import ScriptRegistry
     from agent.step_trace_uploader import StepTraceUploader
     from agent.watcher import LogWatcherManager, OutboxDrainer
+    from agent.watcher.enable import watcher_subsystem_enabled
     from agent.socketio_client import AgentSocketIOClient
 else:
     from .adb_wrapper import AdbWrapper
@@ -50,6 +51,7 @@ else:
     from .registry.script_registry import ScriptRegistry
     from .step_trace_uploader import StepTraceUploader
     from .watcher import LogWatcherManager, OutboxDrainer
+    from .watcher.enable import watcher_subsystem_enabled
     from .socketio_client import AgentSocketIOClient
 
 logging.basicConfig(
@@ -58,10 +60,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Device Log Watcher feature flag —— 默认 false，保持与治理前行为 100% 一致。
-# 置 true 时：main() 会 configure LogWatcherManager；run_task_wrapper 用 JobSession
-# 包裹 pipeline 执行，并在 complete payload 中回传 watcher_summary。
+# Device Log Watcher feature flag —— 全局 STP_WATCHER_ENABLED 或 Plan 默认开启。
+# Plan 执行默认开启 watcher（STP_WATCHER_PLAN_DEFAULT=true）时，即使全局 env=false
+# 也会 configure 子系统，并在 claim Plan job 时启动 JobSession。
 STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "false").lower() == "true"
+STP_WATCHER_PLAN_DEFAULT = os.getenv("STP_WATCHER_PLAN_DEFAULT", "true").lower() == "true"
 
 # 全局活跃 Job 追踪（语义上存的就是 job_instance.id）
 # 命名约定：_active_job_ids / _active_jobs_lock
@@ -309,11 +312,14 @@ def main() -> None:
     script_registry = ScriptRegistry(local_db, api_url, agent_secret)
     script_registry.initialize()
 
-    # Device Log Watcher 子系统（feature flag 控制，默认关闭）
+    # Device Log Watcher 子系统（全局或 Plan 默认开启时 configure）
     log_signal_drainer: Optional[OutboxDrainer] = None
-    if STP_WATCHER_ENABLED:
-        # 5B1：LogPuller NFS 根目录（空串 = 禁用 puller，仅记元数据）
-        nfs_base_dir = os.getenv("STP_WATCHER_NFS_BASE_DIR", "")
+    if watcher_subsystem_enabled():
+        # 5B1 + D1：LogPuller NFS 根（空串 = 禁用 puller，仅记元数据）
+        nfs_base_dir = (
+            os.getenv("STP_WATCHER_NFS_BASE_DIR", "")
+            or os.getenv("STP_AEE_NFS_ROOT", "")
+        )
         LogWatcherManager.instance().configure(
             adb=adb,
             adb_path=adb_path,          # InotifydSource.Popen 需要 adb 二进制路径
@@ -340,7 +346,9 @@ def main() -> None:
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
     else:
-        logger.info("watcher_subsystem_disabled (STP_WATCHER_ENABLED=false)")
+        logger.info(
+            "watcher_subsystem_disabled (STP_WATCHER_ENABLED=false STP_WATCHER_PLAN_DEFAULT=false)"
+        )
 
     # Step trace local writer (Redis XADD removed in Phase 4; HTTP upload via StepTraceUploader)
     mq_producer = StepTraceWriter("", host_id, local_db=local_db)
@@ -509,7 +517,8 @@ def main() -> None:
         active_jobs_lock=_active_jobs_lock,
         active_job_ids=_active_job_ids,
         active_device_ids=_active_device_ids,
-        watcher_enabled=STP_WATCHER_ENABLED,
+        watcher_globally_enabled=STP_WATCHER_ENABLED,
+        watcher_plan_default=STP_WATCHER_PLAN_DEFAULT,
         lock_register=_register_active_job,
         lock_deregister=_deregister_active_job,
         device_id_register=_register_active_device,

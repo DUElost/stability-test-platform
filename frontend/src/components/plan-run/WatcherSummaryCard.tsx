@@ -7,7 +7,12 @@ import {
   Minus,
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
-import type { WatcherCategory, WatcherSummary } from '@/utils/api/types';
+import type {
+  AeeBreakdown,
+  PackageStat,
+  WatcherCategory,
+  WatcherSummary,
+} from '@/utils/api/types';
 
 interface Props {
   data: WatcherSummary | undefined;
@@ -40,6 +45,13 @@ const CATEGORY_TONE: Record<string, string> = {
   MOBILELOG: 'border-blue-300 bg-blue-50',
 };
 
+// 类别 → by_package 中用于排序 / Top3 展示的字段
+const CATEGORY_BREAKDOWN_FIELD: Record<string, keyof PackageStat> = {
+  AEE: 'crash_count',
+  VENDOR_AEE: 'vendor_crash_count',
+  ANR: 'anr_count',
+};
+
 function fmtTime(ts: string | null | undefined): string {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -47,12 +59,37 @@ function fmtTime(ts: string | null | undefined): string {
   return d.toLocaleTimeString('zh-CN', { hour12: false });
 }
 
-function CategoryRow({ cat }: { cat: WatcherCategory }) {
+function topPackagesTitle(
+  category: string,
+  by_package: PackageStat[] | undefined,
+): string {
+  if (!by_package || by_package.length === 0) return '';
+  const field = CATEGORY_BREAKDOWN_FIELD[category];
+  if (!field) return '';
+  const top = [...by_package]
+    .filter((p) => Number(p[field]) > 0)
+    .sort((a, b) => Number(b[field]) - Number(a[field]))
+    .slice(0, 3);
+  if (top.length === 0) return '';
+  return (
+    'Top 3 应用: ' +
+    top.map((p) => `${p.package_name} (${p[field]})`).join(', ')
+  );
+}
+
+function CategoryRow({
+  cat,
+  topTitle,
+}: {
+  cat: WatcherCategory;
+  topTitle: string;
+}) {
   const tone = CATEGORY_TONE[cat.category] ?? 'border-gray-300 bg-gray-50';
   const trend = cat.trend_change;
   return (
     <div
       data-testid={`watcher-cat-${cat.category}`}
+      title={topTitle || undefined}
       className={`grid grid-cols-[1fr_auto_auto] items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${tone}`}
     >
       <div className="min-w-0">
@@ -104,6 +141,76 @@ function CategoryRow({ cat }: { cat: WatcherCategory }) {
   );
 }
 
+function AeeBreakdownChips({ breakdown }: { breakdown: AeeBreakdown }) {
+  const crash = breakdown.crash_count + breakdown.vendor_crash_count;
+  const anr = breakdown.anr_count;
+  if (crash === 0 && anr === 0) return null;
+  return (
+    <span
+      data-testid="watcher-aee-summary"
+      className="ml-1 inline-flex items-center gap-1"
+    >
+      {crash > 0 && (
+        <span
+          data-testid="watcher-crash-chip"
+          className="rounded bg-red-100 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-red-700"
+          title={
+            breakdown.vendor_crash_count > 0
+              ? `AEE ${breakdown.crash_count} + Vendor ${breakdown.vendor_crash_count}`
+              : undefined
+          }
+        >
+          {crash} Crash
+        </span>
+      )}
+      {anr > 0 && (
+        <span
+          data-testid="watcher-anr-chip"
+          className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-amber-700"
+        >
+          {anr} ANR
+        </span>
+      )}
+    </span>
+  );
+}
+
+function PackagesChipRow({ breakdown }: { breakdown: AeeBreakdown }) {
+  if (!breakdown.by_package || breakdown.by_package.length === 0) return null;
+  return (
+    <div
+      data-testid="watcher-packages-row"
+      className="flex flex-wrap items-center gap-1 border-b bg-gray-50/60 px-3 py-2"
+    >
+      <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+        应用
+      </span>
+      {breakdown.by_package.map((p) => {
+        const total = p.crash_count + p.vendor_crash_count + p.anr_count;
+        return (
+          <span
+            key={p.package_name}
+            data-testid={`watcher-pkg-${p.package_name}`}
+            className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px]"
+            title={`crash ${p.crash_count} · vendor ${p.vendor_crash_count} · anr ${p.anr_count}`}
+          >
+            <span
+              className={
+                p.package_name === 'unknown'
+                  ? 'text-gray-500'
+                  : 'font-medium text-gray-800'
+              }
+            >
+              {p.package_name}
+            </span>
+            <span className="font-mono text-gray-500">({total})</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function WatcherSummaryCard({
   data,
   isLoading = false,
@@ -117,6 +224,9 @@ export default function WatcherSummaryCard({
   const threshold = data?.threshold ?? 0;
   const exceeded = data?.exceeded ?? false;
   const cats = data?.categories ?? [];
+  const breakdown = data?.aee_breakdown ?? null;
+  const showPackagesRow =
+    !!breakdown && breakdown.by_package && breakdown.by_package.length > 0;
 
   return (
     <section data-testid="watcher-summary" className="space-y-2">
@@ -130,6 +240,7 @@ export default function WatcherSummaryCard({
             窗口 {data.window_minutes} 分钟 · 共 {total} 条 · 影响 {affected}/{totalDevices} 台
           </span>
         )}
+        {breakdown && <AeeBreakdownChips breakdown={breakdown} />}
         <div className="ml-auto flex items-center gap-1 rounded-md border bg-white p-0.5 text-[11px]">
           {WINDOW_OPTIONS.map((opt) => (
             <button
@@ -175,6 +286,9 @@ export default function WatcherSummaryCard({
           </div>
         )}
 
+        {/* Packages chip row (M0/PR #2 — reconciler signal extra.package_name 聚合) */}
+        {showPackagesRow && <PackagesChipRow breakdown={breakdown!} />}
+
         {/* Body */}
         {isLoading && cats.length === 0 ? (
           <div className="space-y-2 p-3">
@@ -189,7 +303,11 @@ export default function WatcherSummaryCard({
         ) : (
           <div className="space-y-2 p-3">
             {cats.map((c) => (
-              <CategoryRow key={c.category} cat={c} />
+              <CategoryRow
+                key={c.category}
+                cat={c}
+                topTitle={topPackagesTitle(c.category, breakdown?.by_package)}
+              />
             ))}
           </div>
         )}

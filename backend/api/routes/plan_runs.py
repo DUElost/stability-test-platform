@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
@@ -1668,6 +1668,26 @@ class WatcherCategoryOut(BaseModel):
     latest_detected_at: Optional[str] = None
 
 
+# M0/PR #2: AEE 细分聚合(crash / vendor_crash / anr 互斥 + by_package)
+# 数据来源:JobLogSignal.extra (JSONB);仅当 source='reconciler' 的 signal
+# 携带完整 extra 字段(event_type/package_name/aee_ts/nfs_path/pull_source);
+# 旧 inotifyd 路径 signal 没有 extra,自动落入 unknown 桶。
+class PackageStatOut(BaseModel):
+    package_name: str                 # 空/缺失统一归 "unknown"
+    crash_count: int                  # category=AEE 且 event_type=CRASH(按 nfs_path 去重)
+    vendor_crash_count: int           # category=VENDOR_AEE 同条件
+    anr_count: int                    # category=ANR OR extra.event_type='ANR'
+    latest_detected_at: Optional[str] = None
+
+
+class AeeBreakdownOut(BaseModel):
+    crash_count: int                  # COUNT(DISTINCT extra->>'nfs_path') under AEE+CRASH
+    vendor_crash_count: int           # 同上,VENDOR_AEE+CRASH(与 crash_count 互斥)
+    anr_count: int                    # COUNT(DISTINCT extra->>'nfs_path') under ANR
+    packages: list[str]               # distinct package_name(已合并 unknown 桶)
+    by_package: list[PackageStatOut]  # 按 crash + vendor_crash + anr 总数降序
+
+
 class WatcherSummaryOut(BaseModel):
     plan_run_id: int
     window_minutes: int
@@ -1680,6 +1700,8 @@ class WatcherSummaryOut(BaseModel):
     abnormal_rate: float               # affected_device_count / total_devices
     threshold: float
     exceeded: bool
+    # M0/PR #2: AEE 细分(reconciler signal 才会填充);无关联 Job 时 None
+    aee_breakdown: Optional[AeeBreakdownOut] = None
 
 
 @router.get(
@@ -1788,6 +1810,13 @@ def get_plan_run_watcher_summary(
 
     abnormal_rate = (affected_total / total_dev) if total_dev else 0.0
 
+    # M0/PR #2: AEE 细分(crash / vendor_crash / anr 互斥 + by_package)
+    # PG-only(JSONB):未含 extra 的 legacy signal 自动落入 unknown package +
+    # NULL nfs_path,通过 path_on_device 兜底为 ANR 去重键。
+    aee_breakdown = _aggregate_aee_breakdown(
+        db, job_ids=job_ids, cur_start=cur_start, now=now,
+    )
+
     return ok(WatcherSummaryOut(
         plan_run_id=pr.id,
         window_minutes=window_minutes,
@@ -1800,7 +1829,94 @@ def get_plan_run_watcher_summary(
         abnormal_rate=round(abnormal_rate, 4),
         threshold=pr.failure_threshold,
         exceeded=abnormal_rate > pr.failure_threshold,
+        aee_breakdown=aee_breakdown,
     ))
+
+
+def _aggregate_aee_breakdown(
+    db: Session,
+    *,
+    job_ids: list[int],
+    cur_start: datetime,
+    now: datetime,
+) -> AeeBreakdownOut:
+    """按 package_name 聚合 AEE/VENDOR_AEE 崩溃与 ANR;reconciler signal 携带
+    extra.nfs_path 时按 nfs_path 去重(同目录视为同 crash),ANR 用 path_on_device
+    兜底以兼容旧 inotifyd 路径无 extra 的 signal。
+
+    返回零值 AeeBreakdownOut 而非 None — 调用方决定是否上抛 None(早返回路径)。
+    """
+    sql = text("""
+        SELECT
+            COALESCE(NULLIF(extra->>'package_name', ''), 'unknown') AS pkg,
+            COUNT(DISTINCT extra->>'nfs_path') FILTER (
+                WHERE category = 'AEE'
+                  AND COALESCE(extra->>'event_type', 'CRASH') = 'CRASH'
+            ) AS crash_count,
+            COUNT(DISTINCT extra->>'nfs_path') FILTER (
+                WHERE category = 'VENDOR_AEE'
+                  AND COALESCE(extra->>'event_type', 'CRASH') = 'CRASH'
+            ) AS vendor_crash_count,
+            COUNT(DISTINCT path_on_device) FILTER (
+                WHERE category = 'ANR'
+                   OR extra->>'event_type' = 'ANR'
+            ) AS anr_count,
+            MAX(detected_at) AS latest_detected_at
+        FROM job_log_signal
+        WHERE job_id = ANY(:job_ids)
+          AND detected_at >= :cur_start
+          AND detected_at <= :now
+          AND (
+              category IN ('AEE', 'VENDOR_AEE', 'ANR')
+              OR extra->>'event_type' = 'ANR'
+          )
+        GROUP BY pkg
+        ORDER BY (
+            COUNT(DISTINCT extra->>'nfs_path') FILTER (
+                WHERE category = 'AEE'
+                  AND COALESCE(extra->>'event_type', 'CRASH') = 'CRASH'
+            )
+            + COUNT(DISTINCT extra->>'nfs_path') FILTER (
+                WHERE category = 'VENDOR_AEE'
+                  AND COALESCE(extra->>'event_type', 'CRASH') = 'CRASH'
+            )
+            + COUNT(DISTINCT path_on_device) FILTER (
+                WHERE category = 'ANR'
+                   OR extra->>'event_type' = 'ANR'
+            )
+        ) DESC, pkg ASC
+    """)
+
+    rows = db.execute(
+        sql, {"job_ids": list(job_ids), "cur_start": cur_start, "now": now},
+    ).all()
+
+    by_package: list[PackageStatOut] = []
+    crash_total = 0
+    vendor_crash_total = 0
+    anr_total = 0
+    for pkg, crash, vendor_crash, anr, latest_ts in rows:
+        # 排除三类计数全 0 的行(理论上 WHERE 已过滤,防御性兜底)
+        if not (crash or vendor_crash or anr):
+            continue
+        by_package.append(PackageStatOut(
+            package_name=pkg,
+            crash_count=int(crash or 0),
+            vendor_crash_count=int(vendor_crash or 0),
+            anr_count=int(anr or 0),
+            latest_detected_at=_iso(latest_ts),
+        ))
+        crash_total += int(crash or 0)
+        vendor_crash_total += int(vendor_crash or 0)
+        anr_total += int(anr or 0)
+
+    return AeeBreakdownOut(
+        crash_count=crash_total,
+        vendor_crash_count=vendor_crash_total,
+        anr_count=anr_total,
+        packages=[p.package_name for p in by_package],
+        by_package=by_package,
+    )
 
 
 @router.get("/plan-runs/{run_id}/report/export")

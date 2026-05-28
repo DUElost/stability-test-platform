@@ -292,3 +292,122 @@ def test_start_without_source_does_not_raise_on_success(db):
     watcher.start()  # 不应抛
     assert watcher._started is True
     watcher.stop(drain=False, timeout=0.5)
+
+
+# ----------------------------------------------------------------------
+# M0/PR #2: AEE/VENDOR_AEE emit 旁路在 reconciler 接管时被关闭
+# ----------------------------------------------------------------------
+
+def _make_aee_event(filename: str = "db.0.0", category: str = "AEE") -> WatcherEvent:
+    from datetime import datetime, timezone
+    dir_path = "/data/aee_exp" if category == "AEE" else "/data/vendor/aee_exp"
+    return WatcherEvent(
+        category=category,
+        event_mask="n",
+        dir_path=dir_path,
+        filename=filename,
+        full_path=f"{dir_path}/{filename}",
+        detected_at=datetime(2026, 5, 28, 10, 0, 0, tzinfo=timezone.utc),
+    )
+
+
+def test_aee_emit_skipped_when_reconciler_active(db):
+    """aee_reconciler_active=True 时,_on_immediate 对 AEE 不再 emit(reconciler 唯一 emit)。"""
+    watcher = DeviceLogWatcher(
+        adb_path="adb", local_db=db,
+        host_id="HOST", serial="SR1", job_id=801,
+        policy=WatcherPolicy(),
+        capability=WatcherCapability.INOTIFYD_ROOT,
+        probe_result=_probe_all_root(),
+        aee_reconciler_active=True,
+    )
+    # 直接驱动 _on_immediate(模拟 batcher 回调),绕过 inotifyd Popen
+    watcher._on_immediate(_make_aee_event("db.0.0", "AEE"))
+    watcher._on_immediate(_make_aee_event("db.5", "VENDOR_AEE"))
+
+    rows = db.get_pending_log_signals()
+    assert rows == [], "reconciler 接管期间 AEE/VENDOR_AEE 不应由 inotifyd 路径 emit"
+
+
+def test_aee_emit_active_when_reconciler_inactive(db):
+    """aee_reconciler_active=False(默认) 时,_on_immediate 对 AEE 仍 emit(旧行为兜底)。"""
+    watcher = DeviceLogWatcher(
+        adb_path="adb", local_db=db,
+        host_id="HOST", serial="SR2", job_id=802,
+        policy=WatcherPolicy(),
+        capability=WatcherCapability.INOTIFYD_ROOT,
+        probe_result=_probe_all_root(),
+        # 默认 aee_reconciler_active=False
+    )
+    watcher._on_immediate(_make_aee_event("db.0.0", "AEE"))
+
+    rows = db.get_pending_log_signals()
+    assert len(rows) == 1
+    assert rows[0]["envelope"]["category"] == "AEE"
+    assert rows[0]["envelope"]["source"] == "inotifyd"
+
+
+def test_on_pull_done_skips_emit_for_aee_when_reconciler_active(db):
+    """_on_pull_done 路径:reconciler 接管时跳 _safe_emit,但 ArtifactUploader 仍可走。"""
+    watcher = DeviceLogWatcher(
+        adb_path="adb", local_db=db,
+        host_id="HOST", serial="SR3", job_id=803,
+        policy=WatcherPolicy(),
+        capability=WatcherCapability.INOTIFYD_ROOT,
+        probe_result=_probe_all_root(),
+        aee_reconciler_active=True,
+    )
+    enrichment = {
+        "artifact_uri": "/mnt/nfs/jobs/803/AEE/db.0.0",
+        "sha256":       "deadbeef",
+        "size_bytes":   1024,
+        "first_lines":  "header",
+    }
+    # 直接驱动 _on_pull_done(模拟 LogPuller 回调)
+    watcher._on_pull_done(_make_aee_event("db.0.0", "AEE"), enrichment)
+
+    rows = db.get_pending_log_signals()
+    assert rows == [], "reconciler 接管期间 _on_pull_done 不应 emit AEE log_signal"
+
+
+def test_aee_reconciler_active_does_not_affect_anr(db):
+    """开关只影响 AEE/VENDOR_AEE;ANR 仍由 inotifyd 路径正常 emit。"""
+    policy = WatcherPolicy(batch_interval_seconds=0.2, batch_max_events=10)
+    watcher = DeviceLogWatcher(
+        adb_path="adb", local_db=db,
+        host_id="HOST", serial="SR4", job_id=804,
+        policy=policy,
+        capability=WatcherCapability.INOTIFYD_ROOT,
+        probe_result=_probe_all_root(),
+        aee_reconciler_active=True,
+    )
+    from datetime import datetime, timezone
+    anr_event = WatcherEvent(
+        category="ANR",
+        event_mask="n",
+        dir_path="/data/anr",
+        filename="trace_x",
+        full_path="/data/anr/trace_x",
+        detected_at=datetime(2026, 5, 28, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    # ANR 走 _on_batch,直接驱动
+    watcher._on_batch([anr_event])
+
+    rows = db.get_pending_log_signals()
+    assert len(rows) == 1
+    assert rows[0]["envelope"]["category"] == "ANR"
+
+
+def test_emitter_property_exposes_signal_emitter(db):
+    """DeviceLogWatcher.emitter 暴露内部 SignalEmitter(供 reconciler 共享 seq_no)。"""
+    from backend.agent.watcher.emitter import SignalEmitter
+    watcher = DeviceLogWatcher(
+        adb_path="adb", local_db=db,
+        host_id="HOST", serial="SR5", job_id=805,
+        policy=WatcherPolicy(),
+        capability=WatcherCapability.POLLING,
+    )
+    assert isinstance(watcher.emitter, SignalEmitter)
+    assert watcher.emitter.job_id == 805
+    assert watcher.aee_reconciler_active is False
+

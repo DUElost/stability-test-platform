@@ -99,7 +99,7 @@ class LogSignalEnvelope(TypedDict, total=False):
     host_id:        str
     device_serial:  str
     category:       str    # ANR | AEE | VENDOR_AEE | MOBILELOG
-    source:         str    # inotifyd | polling
+    source:         str    # inotifyd | polling | reconciler
     path_on_device: str
     detected_at:    str    # ISO8601
 
@@ -167,6 +167,6 @@ def validate_log_signal(envelope: Dict[str, Any]) -> Dict[str, Any]:
         )
     if envelope["category"] not in {"ANR", "AEE", "VENDOR_AEE", "MOBILELOG"}:
         raise ContractViolation(f"log_signal.category unknown: {envelope['category']}")
-    if envelope["source"] not in {"inotifyd", "polling"}:
+    if envelope["source"] not in {"inotifyd", "polling", "reconciler"}:
         raise ContractViolation(f"log_signal.source unknown: {envelope['source']}")
     return envelope

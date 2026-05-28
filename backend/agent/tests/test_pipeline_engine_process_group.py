@@ -183,6 +183,8 @@ def test_run_script_action_timeout_uses_terminate_process_tree(monkeypatch, tmp_
     engine._script_registry = registry
     engine._adb_path = "adb"
     engine._nfs_root = "/nfs"
+    engine._shared = {}        # _run_script_action 透传 STP_SHARED_METRICS 需要
+    engine._local_db = None    # _run_script_action 注入 STP_AGENT_STATE_DB 时探测
 
     proc = MagicMock()
     # communicate 第一次抛超时,第二次返回 ("", "")

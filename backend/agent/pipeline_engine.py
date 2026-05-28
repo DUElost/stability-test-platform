@@ -946,7 +946,20 @@ class PipelineEngine:
 
             "STP_JOB_ID": str(ctx.job_id),
 
+            "STP_SHARED_METRICS": json.dumps(self._shared, ensure_ascii=False),
+
         })
+
+        if self._local_db is not None:
+            db_path = getattr(self._local_db, "_db_path", None)
+            if db_path:
+                env["STP_AGENT_STATE_DB"] = str(db_path)
+
+        try:
+            from .config import BASE_DIR
+            env["STP_AGENT_INSTALL_DIR"] = str(BASE_DIR)
+        except Exception:
+            pass
 
 
 

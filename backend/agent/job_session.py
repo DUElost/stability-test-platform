@@ -32,6 +32,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .watcher import LogWatcherManager, WatcherPolicy, OnUnavailableAction, WatcherStartError
@@ -60,6 +61,8 @@ class JobSessionSummary:
     log_signal_count: int = 0
     watcher_stats: Dict[str, int] = field(default_factory=dict)
     policy_snapshot: Dict[str, Any] = field(default_factory=dict)
+    # M0/PR #2: AeeDbHistoryReconciler 运行期统计(灰度开启时回填)
+    reconciler_stats: Dict[str, int] = field(default_factory=dict)
 
     def to_complete_payload(self) -> Dict[str, Any]:
         """以字符串形态嵌入 complete_job POST body（可 JSON 序列化）。"""
@@ -105,6 +108,7 @@ class JobSession:
         self._policy: WatcherPolicy = WatcherPolicy.from_job(self._payload)
         self._manager = LogWatcherManager.instance()
         self._handle = None
+        self._reconciler = None     # M0/PR #2: 灰度开启时由 __enter__ 启动
         self._locks_released = False
         self._summary = JobSessionSummary(
             job_id=self._job_id,
@@ -148,6 +152,9 @@ class JobSession:
                 reason_code="watcher_start_unexpected",
             ) from exc
 
+        # 3. M0/PR #2: 灰度开启 AeeDbHistoryReconciler(失败仅记 WARN,不阻 Job)
+        self._maybe_start_aee_reconciler()
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
@@ -156,10 +163,23 @@ class JobSession:
         Phase 1: 同步给 watcher 一个短 timeout 收尾（不阻塞锁释放）
         Phase 2: 必定执行的锁释放（即使 Phase 1 抛异常）
         Phase 3: 隐式 —— outbox 未发送条目由 Agent 进程级 OutboxDrainer 异步补发
+
+        M0/PR #2: Phase 1 之前先停 reconciler — 避免后台线程在锁释放后继续 adb shell。
         """
         drain_timeout = self._policy.exit_drain_timeout_seconds
 
-        # ---- Phase 1: watcher 同步收尾 ----
+        # ---- Phase 1a: 停 AeeDbHistoryReconciler(若启动) ----
+        if self._reconciler is not None:
+            try:
+                stats = self._reconciler.stop(timeout=min(drain_timeout, 3.0))
+                self._summary.reconciler_stats = dict(stats.to_dict())
+            except Exception:
+                logger.exception(
+                    "aee_reconciler_stop_failed_in_phase1 job_id=%d", self._job_id,
+                )
+            self._reconciler = None
+
+        # ---- Phase 1b: watcher 同步收尾 ----
         try:
             if self._handle is not None:
                 stopped = self._manager.stop(
@@ -215,6 +235,63 @@ class JobSession:
     # ------------------------------------------------------------------
     # 私有
     # ------------------------------------------------------------------
+
+    def _maybe_start_aee_reconciler(self) -> None:
+        """M0/PR #2: 灰度判定 → 启动 AeeDbHistoryReconciler。
+
+        启动条件(全部满足):
+          1. STP_WATCHER_AEE_RECONCILE_ENABLED 真值 + 命中 host 白名单(若设置)
+          2. WatcherHandle.impl 存在(DeviceLogWatcher 已 active,非 skipped/degraded)
+          3. WatcherHandle.capability 不是 skipped/unavailable
+
+        失败一律仅 WARN — 不阻 Job;reconciler 无法启动时 AEE/VENDOR_AEE
+        会回到 watcher 直接 emit(self._handle.impl._aee_reconciler_active 也会为 False)。
+        """
+        # 导入放在方法内,避免主模块加载阶段的循环依赖
+        try:
+            from .aee.reconciler import AeeDbHistoryReconciler, is_reconciler_enabled
+        except Exception:
+            logger.exception("aee_reconciler_import_failed job_id=%d", self._job_id)
+            return
+
+        if not is_reconciler_enabled(self._host_id):
+            return
+        if self._handle is None or self._handle.impl is None:
+            logger.info(
+                "aee_reconciler_skipped_no_active_watcher job_id=%d cap=%s",
+                self._job_id,
+                self._handle.capability if self._handle else "<none>",
+            )
+            return
+        if self._handle.capability in ("skipped", "unavailable"):
+            logger.info(
+                "aee_reconciler_skipped_capability job_id=%d cap=%s",
+                self._job_id, self._handle.capability,
+            )
+            return
+
+        try:
+            nfs_base_dir = self._manager.get_dep("nfs_base_dir") or None
+            self._reconciler = AeeDbHistoryReconciler(
+                signal_emitter=self._handle.impl.emitter,
+                state_store=self._manager.get_dep("local_db"),
+                serial=self._serial,
+                job_id=self._job_id,
+                host_id=self._host_id,
+                adb_path=self._manager.get_dep("adb_path") or "adb",
+                nfs_root=Path(nfs_base_dir) if nfs_base_dir else None,
+            )
+            self._reconciler.start()
+            logger.info(
+                "aee_reconciler_active job_id=%d serial=%s host=%s",
+                self._job_id, self._serial, self._host_id,
+            )
+        except Exception:
+            logger.exception(
+                "aee_reconciler_start_failed job_id=%d serial=%s — skipping (Job 继续)",
+                self._job_id, self._serial,
+            )
+            self._reconciler = None
 
     def _handle_start_failure(self, exc: WatcherStartError) -> None:
         """按 policy.on_unavailable 决策 Job 走向。"""

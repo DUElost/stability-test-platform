@@ -147,7 +147,34 @@ def test_submit_success_enriches_envelope(tmp_path):
     assert p.stats.pulls_failed == 0
 
 
-def test_filename_unsafe_chars_sanitized(tmp_path):
+def test_sonic_layout_path(tmp_path):
+    """D1: sonic_output_dir 时使用 aee_exp 子目录而非 jobs/<id>/AEE。"""
+    body = b"crash-data"
+    adb = _FakeAdb(content_by_remote={"/data/aee_exp/db.0.0": body})
+    coll = _Collector()
+    sonic_dir = tmp_path / "sonic" / "X6851_MonkeyAEEinfo" / "SERIAL1"
+    p = LogPuller(
+        adb=adb,
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=99,
+        host_id="H",
+        serial="S",
+        on_pull_done=coll,
+        sonic_output_dir=str(sonic_dir),
+        bugreport_enabled=False,
+    )
+    p.start()
+    try:
+        p.submit(_evt(filename="db.0.0"))
+        coll.wait_for(1, timeout=1.5)
+    finally:
+        p.stop(drain=True, timeout=1.0)
+
+    local = Path(coll.calls[0][1]["artifact_uri"])
+    assert local.parent.parent == sonic_dir
+    assert local.parent.name == "aee_exp"
+
+
     """event.filename 含 / 或空格时，本地路径被规范化。"""
     adb = _FakeAdb(content_by_remote={"/data/aee_exp/weird name@$.log": b"x"})
     coll = _Collector()
@@ -444,3 +471,126 @@ def test_first_lines_truncated_by_bytes_and_lines(tmp_path):
     assert len(lines) <= 5
     # 整体 first_lines 长度远小于原始
     assert len(fl) < len(body)
+
+
+# ----------------------------------------------------------------------
+# T0.5-3: bugreport event_type 映射 (P0-#3 修复)
+# ----------------------------------------------------------------------
+
+def test_aee_pull_triggers_bugreport_with_mapped_crash_event_type(tmp_path, monkeypatch):
+    """T0.5-3 P0-#3: AEE category 必须映射成 event_type='CRASH',否则 cooldown 早返回 → bugreport 永不导出。"""
+    body = b"crash-body"
+    adb = _FakeAdb(content_by_remote={"/data/aee_exp/db.0.0": body})
+    coll = _Collector()
+    sonic_dir = tmp_path / "sonic" / "X_MonkeyAEEinfo" / "S1"
+    sonic_dir.mkdir(parents=True, exist_ok=True)
+
+    captured: dict = {}
+
+    def fake_export(**kw):
+        captured.update(kw)
+        return True
+
+    import backend.agent.watcher.puller as puller_mod
+    # _maybe_export_bugreport 内部 lazy import,需 patch aee.bugreport 模块对象
+    from backend.agent.aee import bugreport as bugreport_mod
+    monkeypatch.setattr(bugreport_mod, "export_bugreport_for_timestamp", fake_export)
+
+    p = LogPuller(
+        adb=adb,
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=1,
+        host_id="H",
+        serial="S",
+        on_pull_done=coll,
+        sonic_output_dir=str(sonic_dir),
+        bugreport_enabled=True,
+    )
+    p.start()
+    try:
+        p.submit(_evt(category="AEE", filename="db.0.0", dir_path="/data/aee_exp"))
+        assert coll.wait_for(1, timeout=2.0)
+    finally:
+        p.stop(drain=True, timeout=1.0)
+
+    assert captured, "bugreport export 必须被调用"
+    assert captured.get("event_type") == "CRASH", (
+        f"AEE category 必须映射成 event_type='CRASH',实际收到 {captured.get('event_type')!r}"
+    )
+    assert captured.get("serial") == "S"
+
+
+def test_vendor_aee_pull_triggers_bugreport_with_mapped_crash_event_type(tmp_path, monkeypatch):
+    """T0.5-3 P0-#3: VENDOR_AEE category 同样映射为 CRASH。"""
+    body = b"vendor-crash"
+    adb = _FakeAdb(content_by_remote={"/data/vendor/aee_exp/db.5": body})
+    coll = _Collector()
+    sonic_dir = tmp_path / "sonic" / "X_MonkeyAEEinfo" / "S2"
+    sonic_dir.mkdir(parents=True, exist_ok=True)
+
+    captured: dict = {}
+
+    def fake_export(**kw):
+        captured.update(kw)
+        return True
+
+    from backend.agent.aee import bugreport as bugreport_mod
+    monkeypatch.setattr(bugreport_mod, "export_bugreport_for_timestamp", fake_export)
+
+    p = LogPuller(
+        adb=adb,
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=2,
+        host_id="H",
+        serial="S2",
+        on_pull_done=coll,
+        sonic_output_dir=str(sonic_dir),
+        bugreport_enabled=True,
+    )
+    p.start()
+    try:
+        p.submit(_evt(category="VENDOR_AEE", filename="db.5", dir_path="/data/vendor/aee_exp"))
+        assert coll.wait_for(1, timeout=2.0)
+    finally:
+        p.stop(drain=True, timeout=1.0)
+
+    assert captured.get("event_type") == "CRASH"
+
+
+def test_anr_event_not_routed_to_bugreport_under_aee_guard(tmp_path, monkeypatch):
+    """T0.5-3 边界: 现行 guard `event.category in ("AEE", "VENDOR_AEE")` 只放行 AEE 系;
+    ANR 不会进入 _maybe_export_bugreport(由其他路径处理)。
+    """
+    body = b"anr-trace"
+    adb = _FakeAdb(content_by_remote={"/data/anr/trace_00": body})
+    coll = _Collector()
+    sonic_dir = tmp_path / "sonic" / "X_MonkeyAEEinfo" / "S3"
+    sonic_dir.mkdir(parents=True, exist_ok=True)
+
+    call_count = {"n": 0}
+
+    def fake_export(**kw):
+        call_count["n"] += 1
+        return True
+
+    from backend.agent.aee import bugreport as bugreport_mod
+    monkeypatch.setattr(bugreport_mod, "export_bugreport_for_timestamp", fake_export)
+
+    p = LogPuller(
+        adb=adb,
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=3,
+        host_id="H",
+        serial="S3",
+        on_pull_done=coll,
+        sonic_output_dir=str(sonic_dir),
+        bugreport_enabled=True,
+    )
+    p.start()
+    try:
+        p.submit(_evt(category="ANR", filename="trace_00", dir_path="/data/anr"))
+        assert coll.wait_for(1, timeout=2.0)
+    finally:
+        p.stop(drain=True, timeout=1.0)
+
+    assert call_count["n"] == 0, "ANR 不应进入 _maybe_export_bugreport(guard 只放 AEE/VENDOR_AEE)"

@@ -9,6 +9,7 @@ from .api_client import complete_job, update_job
 from .config import get_run_log_dir
 from .job_session import JobSession, JobStartupError
 from .pipeline_runner import execute_pipeline_run
+from .watcher.enable import job_wants_watcher
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,8 @@ class JobRunnerState:
     active_jobs_lock: Any
     active_job_ids: MutableSet[int]
     active_device_ids: MutableSet[int]
-    watcher_enabled: bool
+    watcher_globally_enabled: bool
+    watcher_plan_default: bool
     lock_register: Callable[[int, str, Optional[int]], None]  # ADR-0019 Phase 3a: (job_id, fencing_token, device_id)
     lock_deregister: Callable[[int], None]
     device_id_register: Callable[[int], None]
@@ -114,7 +116,11 @@ def run_task_wrapper(
         return
 
     session: Optional[JobSession] = None
-    if state.watcher_enabled:
+    if job_wants_watcher(
+        run,
+        globally_enabled=state.watcher_globally_enabled,
+        plan_default=state.watcher_plan_default,
+    ):
         try:
             session = JobSession(
                 job_payload=run,

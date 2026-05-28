@@ -916,6 +916,22 @@ export interface WatcherCategory {
   latest_detected_at?: string | null;
 }
 
+export interface PackageStat {
+  package_name: string;                  // 空 / 缺失统一归 "unknown"
+  crash_count: number;                   // AEE + COALESCE(extra.event_type,'CRASH')='CRASH',按 nfs_path 去重
+  vendor_crash_count: number;            // VENDOR_AEE 同条件
+  anr_count: number;                     // category=ANR OR extra.event_type='ANR',按 path_on_device 去重
+  latest_detected_at?: string | null;
+}
+
+export interface AeeBreakdown {
+  crash_count: number;                   // 跨包累加(与 vendor_crash 互斥)
+  vendor_crash_count: number;
+  anr_count: number;
+  packages: string[];                    // distinct package_name(已合并 unknown 桶)
+  by_package: PackageStat[];             // 按 crash + vendor_crash + anr 总数 DESC,平局 pkg ASC
+}
+
 export interface WatcherSummary {
   plan_run_id: number;
   window_minutes: number;
@@ -928,6 +944,8 @@ export interface WatcherSummary {
   abnormal_rate: number;                 // affected / total_devices
   threshold: number;
   exceeded: boolean;
+  // M0/PR #2: reconciler signal 附带 extra 才会填充;无关联 Job 走早返回 → null
+  aee_breakdown?: AeeBreakdown | null;
 }
 
 export interface JobManualActionResult {

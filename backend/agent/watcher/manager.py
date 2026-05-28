@@ -163,6 +163,13 @@ class LogWatcherManager:
     def is_configured(self) -> bool:
         return self._configured
 
+    def get_dep(self, key: str, default: Any = None) -> Any:
+        """对外暴露 configure() 注入的依赖(供 JobSession 启动 reconciler 时复用)。
+
+        不允许写;调用方只读。未注入返回 default。
+        """
+        return self._deps.get(key, default)
+
     # ------------------------------------------------------------------
     # 启停
     # ------------------------------------------------------------------
@@ -271,6 +278,13 @@ class LogWatcherManager:
 
         # Step 4: 创建真实 DeviceLogWatcher 并 start
         try:
+            # M0/PR #2: 若 reconciler 灰度开启且匹配 host 白名单 → 告知 watcher 跳过
+            # AEE/VENDOR_AEE emit(reconciler 唯一 emit 这两类)
+            try:
+                from ..aee.reconciler import is_reconciler_enabled
+                aee_reconciler_active = is_reconciler_enabled(host_id)
+            except Exception:
+                aee_reconciler_active = False
             watcher = self._watcher_factory(
                 adb_path=self._deps["adb_path"],
                 local_db=self._deps["local_db"],
@@ -280,10 +294,27 @@ class LogWatcherManager:
                 policy=policy,
                 capability=probe_result.capability,
                 probe_result=probe_result,
+                aee_reconciler_active=aee_reconciler_active,
             )
             # 5B1：若配置了 NFS 根目录，且实盘 inotifyd 能力可用，则注入 LogPuller
             # 为 AEE / VENDOR_AEE 事件异步拉 crash 文件并富化 envelope
             nfs_base_dir = str(self._deps.get("nfs_base_dir") or "")
+            sonic_output_dir = None
+            if nfs_base_dir:
+                try:
+                    from ..aee.paths import resolve_sonic_output_dir_for_job
+
+                    sonic_output_dir = resolve_sonic_output_dir_for_job(
+                        adb=self._deps["adb"],
+                        serial=serial,
+                        job_id=job_id,
+                        state_store=self._deps["local_db"],
+                    )
+                except Exception:
+                    logger.exception(
+                        "watcher_sonic_output_dir_failed serial=%s job=%d",
+                        serial, job_id,
+                    )
             if (
                 nfs_base_dir
                 and probe_result.capability in (
@@ -300,6 +331,8 @@ class LogWatcherManager:
                     serial=serial,
                     on_pull_done=watcher._on_pull_done,
                     max_file_mb=policy.pull_max_file_mb,
+                    sonic_output_dir=str(sonic_output_dir) if sonic_output_dir else None,
+                    bugreport_enabled=sonic_output_dir is not None,
                 )
                 watcher.attach_puller(puller)
             watcher.start()

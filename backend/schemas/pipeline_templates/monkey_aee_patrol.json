@@ -53,10 +53,32 @@
         {
           "step_id": "monkey_check",
           "action": "script:monkey_check",
-          "version": "1.0.0",
+          "version": "2.0.2",
           "timeout_seconds": 60,
           "retry": 0,
           "params": {}
+        },
+        {
+          "step_id": "scan_aee",
+          "action": "script:scan_aee",
+          "version": "1.0.0",
+          "timeout_seconds": 300,
+          "retry": 0,
+          "params": {
+            "filter_db_logs": false,
+            "export_mobilelog": false,
+            "export_bugreport": true
+          }
+        },
+        {
+          "step_id": "export_mobilelogs",
+          "action": "script:export_mobilelogs",
+          "version": "1.0.0",
+          "timeout_seconds": 300,
+          "retry": 0,
+          "params": {
+            "timestamps_from_step": "scan_aee"
+          }
         }
       ]
     },

@@ -93,6 +93,8 @@ class _StubWatcher:
     policy: Any = None
     capability: Any = None
     probe_result: Any = None
+    # M0/PR #2: manager.start 在创建 DeviceLogWatcher 时会透传该开关;stub 接住即可
+    aee_reconciler_active: bool = False
 
     def __post_init__(self):
         self.start_called = False

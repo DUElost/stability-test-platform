@@ -36,6 +36,7 @@ def get_local_artifact_roots() -> tuple[Path, ...]:
     for raw_root in (
         os.getenv("STP_NFS_ROOT", DEFAULT_STP_NFS_ROOT),
         os.getenv("STP_WATCHER_NFS_BASE_DIR", ""),
+        os.getenv("STP_AEE_NFS_ROOT", ""),
     ):
         raw_root = (raw_root or "").strip()
         if not raw_root:
