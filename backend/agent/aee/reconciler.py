@@ -292,6 +292,16 @@ class AeeDbHistoryReconciler:
         if new_count > 0:
             self.stats.ticks_with_new += 1
             self.stats.new_entries_total += new_count
+            # M1/T1-2: 双写灰度期对账日志 — 仅在本轮有新行时 INFO,避免 180s 节奏空轮刷屏;
+            # 包含累计 stats 快照,运维可滚动对比 reconciler emit 数与 patrol step_trace.metrics。
+            logger.info(
+                "aee_reconciler_round serial=%s job=%d new=%d "
+                "ticks_total=%d new_entries_total=%d signals_emitted=%d "
+                "signals_dropped=%d",
+                self._serial, self._job_id, new_count,
+                self.stats.ticks_total, self.stats.new_entries_total,
+                self.stats.signals_emitted, self.stats.signals_dropped,
+            )
         if result.errors:
             logger.debug(
                 "aee_reconciler_tick_errors serial=%s job=%d errors=%s",

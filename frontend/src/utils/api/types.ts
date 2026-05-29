@@ -946,6 +946,16 @@ export interface WatcherSummary {
   exceeded: boolean;
   // M0/PR #2: reconciler signal 附带 extra 才会填充;无关联 Job 走早返回 → null
   aee_breakdown?: AeeBreakdown | null;
+  // M1/T1-3a: 双写灰度状态。
+  //   legacy_patrol_in_snapshot=true  → plan_snapshot.lifecycle.patrol 含 scan_aee / export_mobilelogs(老路径仍在)
+  //   pull_sources                    → log_signal.extra.pull_source DISTINCT 列表(reconciler=新路径已生效)
+  // 组合解释(WatcherSummaryCard 渲染徽章):
+  //   legacy=true  + 含 reconciler  → 双写模式(灰度过渡期,正常)
+  //   legacy=true  + 空 / 不含       → Patrol-only(reconciler 未启用 / 未灰度到本 host)
+  //   legacy=false + 含 reconciler  → Reconciler 单通道(M3 收尾后稳态)
+  //   legacy=false + 空             → 无 watcher AEE 信号(无需徽章)
+  legacy_patrol_in_snapshot?: boolean;
+  pull_sources?: string[];
 }
 
 export interface JobManualActionResult {

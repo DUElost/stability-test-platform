@@ -243,4 +243,72 @@ describe('WatcherSummaryCard', () => {
     // packages 为空也不渲染 row
     expect(screen.queryByTestId('watcher-packages-row')).not.toBeInTheDocument();
   });
+
+  // ----------------------------------------------------------------------
+  // M1/T1-3b: 双写灰度状态徽章(legacy_patrol_in_snapshot × pull_sources)
+  // ----------------------------------------------------------------------
+
+  it('renders dual_write badge when legacy patrol coexists with reconciler signals', () => {
+    render(
+      <WatcherSummaryCard
+        data={{
+          ...fixture,
+          legacy_patrol_in_snapshot: true,
+          pull_sources: ['reconciler'],
+        }}
+      />,
+    );
+    const badge = screen.getByTestId('watcher-dual-write-badge');
+    expect(badge).toHaveAttribute('data-variant', 'dual_write');
+    expect(badge).toHaveTextContent('双写模式');
+    // Tooltip 必须提到两路并存的语义,运维一眼能理解
+    expect(badge.getAttribute('title') ?? '').toMatch(/老路径/);
+    expect(badge.getAttribute('title') ?? '').toMatch(/reconciler/);
+  });
+
+  it('renders patrol_only badge when legacy patrol present but no reconciler signal yet', () => {
+    render(
+      <WatcherSummaryCard
+        data={{
+          ...fixture,
+          legacy_patrol_in_snapshot: true,
+          pull_sources: [],
+        }}
+      />,
+    );
+    const badge = screen.getByTestId('watcher-dual-write-badge');
+    expect(badge).toHaveAttribute('data-variant', 'patrol_only');
+    expect(badge).toHaveTextContent('Patrol-only');
+    expect(badge.getAttribute('title') ?? '').toMatch(
+      /STP_WATCHER_AEE_RECONCILE_ENABLED/,
+    );
+  });
+
+  it('renders reconciler_only badge when patrol cleaned and reconciler is sole source', () => {
+    render(
+      <WatcherSummaryCard
+        data={{
+          ...fixture,
+          legacy_patrol_in_snapshot: false,
+          pull_sources: ['reconciler'],
+        }}
+      />,
+    );
+    const badge = screen.getByTestId('watcher-dual-write-badge');
+    expect(badge).toHaveAttribute('data-variant', 'reconciler_only');
+    expect(badge).toHaveTextContent('Reconciler 单通道');
+  });
+
+  it('omits dual-write badge when legacy is false and no pull_sources (no AEE signals at all)', () => {
+    render(
+      <WatcherSummaryCard
+        data={{
+          ...fixture,
+          legacy_patrol_in_snapshot: false,
+          pull_sources: [],
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('watcher-dual-write-badge')).not.toBeInTheDocument();
+  });
 });
