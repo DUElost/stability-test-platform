@@ -32,11 +32,13 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..watcher.contracts import ContractViolation
 from .processor import ProcessConfig, process_device_logs
@@ -127,6 +129,104 @@ def is_reconciler_enabled(host_id: Optional[str] = None) -> bool:
     return host_id in allow
 
 
+def _terminate_process(proc) -> None:
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=0.2)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=0.2)
+        except Exception:
+            pass
+    try:
+        proc.communicate(timeout=0.2)
+    except Exception:
+        pass
+
+
+def _make_interruptible_adb_shell_fn(
+    serial: str,
+    adb_path: str,
+    stop_event: threading.Event,
+) -> Callable[[str, int], Optional[str]]:
+    def _shell(cmd: str, timeout: int) -> Optional[str]:
+        if stop_event.is_set():
+            return None
+        try:
+            proc = subprocess.Popen(
+                [adb_path, "-s", serial, "shell", cmd],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError:
+            return None
+
+        deadline = time.monotonic() + max(float(timeout), 0.0)
+        while True:
+            if stop_event.is_set():
+                _terminate_process(proc)
+                return None
+            rc = proc.poll()
+            if rc is not None:
+                stdout, _ = proc.communicate(timeout=0.2)
+                if rc != 0:
+                    return None
+                return stdout or ""
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process(proc)
+                return None
+            stop_event.wait(min(0.1, remaining))
+
+    return _shell
+
+
+def _make_interruptible_adb_pull_fn(
+    serial: str,
+    adb_path: str,
+    stop_event: threading.Event,
+) -> Callable[[str, str, int], bool]:
+    def _pull(remote: str, local: str, timeout: int) -> bool:
+        if stop_event.is_set():
+            return False
+        local_path = Path(local)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            proc = subprocess.Popen(
+                [adb_path, "-s", serial, "pull", remote, local],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError:
+            return False
+
+        deadline = time.monotonic() + max(float(timeout), 0.0)
+        while True:
+            if stop_event.is_set():
+                _terminate_process(proc)
+                return False
+            rc = proc.poll()
+            if rc is not None:
+                proc.communicate(timeout=0.2)
+                return rc == 0 and local_path.exists()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _terminate_process(proc)
+                return False
+            stop_event.wait(min(0.1, remaining))
+
+    return _pull
+
+
 # ----------------------------------------------------------------------
 # AeeDbHistoryReconciler
 # ----------------------------------------------------------------------
@@ -208,6 +308,12 @@ class AeeDbHistoryReconciler:
         self.stats = ReconcilerStats()
         self._burst_remaining = 0
         self._state_lock = threading.Lock()
+        self._shell_fn = _make_interruptible_adb_shell_fn(
+            self._serial, self._adb_path, self._stop_evt,
+        )
+        self._pull_fn = _make_interruptible_adb_pull_fn(
+            self._serial, self._adb_path, self._stop_evt,
+        )
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -287,6 +393,9 @@ class AeeDbHistoryReconciler:
             config=self._cfg,
             nfs_root=self._nfs_root,
             on_new_entry=self._handle_new_entry,
+            shell_fn=self._shell_fn,
+            pull_fn=self._pull_fn,
+            stop_event=self._stop_evt,
         )
         new_count = int(result.pulled)
         if new_count > 0:

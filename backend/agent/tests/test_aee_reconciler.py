@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import threading
 import time
 from dataclasses import dataclass, field
@@ -448,6 +449,95 @@ def test_stop_before_start_returns_empty_stats():
     stats = rec.stop(timeout=0.5)
     assert isinstance(stats, ReconcilerStats)
     assert stats.ticks_total == 0
+
+
+def test_stop_joins_reconciler_thread_when_default_adb_shell_is_blocked(monkeypatch):
+    """stop() 必须让后台线程真正退出,不能在默认 adb shell 卡住时直接带着活线程返回。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+
+    def fake_pdl(*, shell_fn=None, **_):
+        assert shell_fn is not None
+        shell_fn("cat /data/aee_exp/db_history", 30)
+        return ProcessResult(pulled=0)
+
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        fake_pdl,
+    )
+
+    class _BlockingPopen:
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            deadline = time.time() + (timeout or 0)
+            while self.returncode is None and time.time() < deadline:
+                time.sleep(0.01)
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired(self.argv, timeout)
+            return self.returncode
+
+        def communicate(self, timeout=None):
+            if self.returncode is None:
+                if timeout is not None:
+                    time.sleep(min(float(timeout), 0.01))
+                    raise subprocess.TimeoutExpired(self.argv, timeout)
+                while self.returncode is None:
+                    time.sleep(0.01)
+            return ("", "")
+
+    fake_subprocess = type("FakeSubprocess", (), {})()
+    fake_subprocess.PIPE = object()
+    fake_subprocess._instances = []
+
+    def _fake_popen(argv, **kwargs):
+        proc = _BlockingPopen(argv, **kwargs)
+        fake_subprocess._instances.append(proc)
+        return proc
+
+    fake_subprocess.Popen = _fake_popen
+
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.subprocess", fake_subprocess, raising=False,
+    )
+
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter,
+        state_store=store,
+        serial="SX",
+        job_id=1203,
+        host_id="HOST",
+        baseline_interval_seconds=60.0,
+        burst_interval_seconds=60.0,
+    )
+    rec.start()
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if fake_subprocess._instances:
+            break
+        time.sleep(0.01)
+
+    rec.stop(timeout=0.5)
+
+    assert rec._thread is not None
+    assert rec._thread.is_alive() is False, "stop 返回时不应遗留存活的 reconciler 线程"
+    assert fake_subprocess._instances, "默认 adb shell 路径应创建可中断的子进程"
+    assert fake_subprocess._instances[0].terminated or fake_subprocess._instances[0].killed
 
 
 # ----------------------------------------------------------------------

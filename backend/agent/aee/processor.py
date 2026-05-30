@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -63,6 +64,9 @@ def process_device_logs(
     nfs_root: Optional[Path] = None,
     run_date_stamp: Optional[str] = None,
     on_new_entry: Optional[Callable[[Dict[str, Any]], None]] = None,
+    shell_fn: Optional[ShellFn] = None,
+    pull_fn: Optional[PullFn] = None,
+    stop_event: Optional[threading.Event] = None,
 ) -> ProcessResult:
     """Diff db_history, pull new AEE dirs, correlate mobilelog + bugreport.
 
@@ -79,8 +83,8 @@ def process_device_logs(
     """
     cfg = config or ProcessConfig()
     result = ProcessResult()
-    shell_fn = make_adb_shell_fn(serial, adb_path)
-    pull_fn = make_adb_pull_fn(serial, adb_path)
+    shell_fn = shell_fn or make_adb_shell_fn(serial, adb_path)
+    pull_fn = pull_fn or make_adb_pull_fn(serial, adb_path)
 
     stamp = run_date_stamp or get_or_create_run_date_stamp(state_store, job_id)
     folder_name = get_aee_log_folder_name(
@@ -101,8 +105,14 @@ def process_device_logs(
 
     whitelist = cfg.whitelist or set()
     pending_key_prefix = f"{cfg.state_key_prefix}:{serial}"
+    stop_requested = False
 
     for remote_aee_path in cfg.aee_paths:
+        if stop_event is not None and stop_event.is_set():
+            stop_requested = True
+            logger.info("process_device_logs_stop_requested_before_scan serial=%s job=%d", serial, job_id)
+            break
+
         remote_aee_path = remote_aee_path.rstrip("/")
         aee_type = "vendor_aee_exp" if "vendor" in remote_aee_path else "aee_exp"
         output_subdir = base_output_dir / aee_type
@@ -149,6 +159,14 @@ def process_device_logs(
 
         newly_processed: Set[str] = set()
         for line, task in list(pending_tasks.items()):
+            if stop_event is not None and stop_event.is_set():
+                stop_requested = True
+                logger.info(
+                    "process_device_logs_stop_requested_mid_tick serial=%s job=%d aee_type=%s",
+                    serial, job_id, aee_type,
+                )
+                break
+
             if line in processed_lines:
                 pending_tasks.pop(line, None)
                 continue
@@ -227,7 +245,7 @@ def process_device_logs(
                         serial, parsed.get("db_path"),
                     )
 
-            if cfg.export_mobilelog:
+            if cfg.export_mobilelog and not stop_requested:
                 export_correlated_mobilelogs(
                     aee_ts_str=parsed["timestamp"],
                     output_dir=base_output_dir,
@@ -236,7 +254,7 @@ def process_device_logs(
                     pull_fn=pull_fn,
                 )
 
-            if cfg.export_bugreport:
+            if cfg.export_bugreport and not stop_requested:
                 export_bugreport_for_timestamp(
                     serial=serial,
                     timestamp_str=parsed["timestamp"],
@@ -246,6 +264,7 @@ def process_device_logs(
                     cooldown_seconds=cfg.bugreport_cooldown_seconds,
                     cooldown_event_types=cfg.bugreport_cooldown_event_types,
                     timeout_seconds=cfg.bugreport_timeout_seconds,
+                    stop_event=stop_event,
                 )
 
         if newly_processed:
@@ -253,6 +272,8 @@ def process_device_logs(
             save_processed_lines(state_store, processed_key, processed_lines)
 
         _save_pending_tasks(state_store, pending_key, pending_tasks)
+        if stop_requested:
+            break
 
     return result
 
