@@ -304,6 +304,7 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 | GET | `/api/v1/plan-runs/{id}/events` | 事件流(trigger/step/log_signal/audit 多源融合,支持 stage/severity 过滤+分页) |
 | GET | `/api/v1/plan-runs/{id}/devices` | 设备总览矩阵(含 ui_status 派生 + by_status/by_host facet) |
 | GET | `/api/v1/plan-runs/{id}/watcher-summary` | Watcher 异常聚合(按 category + trend) |
+| GET | `/api/v1/plan-runs/{id}/aee-reconciliation` | M1 灰度对账(只读):AEE signal 按 pull_source 分桶 vs (可选)NFS .dbg 清单 |
 | POST | `/api/v1/plan-runs/{id}/abort` | 中止 PlanRun(ADR-0021 D7) |
 | POST | `/api/v1/plan-runs/{id}/jobs/{job_id}/manual-retry` | patrol 退避中手动立即重试(ADR-0022 D7) |
 | POST | `/api/v1/plan-runs/{id}/jobs/{job_id}/manual-exit` | patrol 退避中手动退出(跳 teardown) |
