@@ -311,6 +311,82 @@ async def test_complete_with_watcher_summary_persists_fields():
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_complete_bridges_reconciler_skip_unchanged_metric():
+    """M0/Task2: complete 终态时把 reconciler_stats.ticks_skipped_unchanged 一次性
+    桥接到中心 reconciler_skip_unchanged_total(amount=累计值,host 标签)。"""
+    from unittest.mock import patch
+
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    summary = {
+        "watcher_capability": "polling",
+        "log_signal_count": 0,
+        "watcher_stats": {},
+        "reconciler_stats": {
+            "ticks_total": 10,
+            "ticks_skipped_unchanged": 7,
+            "signals_emitted": 2,
+        },
+    }
+    token = _setup_watcher_lease(seed)
+    try:
+        with patch(
+            "backend.api.routes.agent_api.record_reconciler_skip_unchanged"
+        ) as mock_rec:
+            async with AsyncSessionLocal() as async_db:
+                result = await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "FINISHED", "exit_code": 0},
+                        watcher_summary=summary,
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+            assert result.error is None
+            # 一次性按整段 Job 累计值自增,host 标签来自 job.host_id
+            mock_rec.assert_called_once()
+            _, kwargs = mock_rec.call_args
+            assert kwargs.get("amount") == 7
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_complete_does_not_bridge_reconciler_metric_without_stats():
+    """reconciler_stats 缺省 / 无 skipped → 不调用桥接,避免噪声。"""
+    from unittest.mock import patch
+
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    summary = {
+        "watcher_capability": "stub",
+        "log_signal_count": 0,
+        "watcher_stats": {},
+        # 无 reconciler_stats(未灰度开启)
+    }
+    token = _setup_watcher_lease(seed)
+    try:
+        with patch(
+            "backend.api.routes.agent_api.record_reconciler_skip_unchanged"
+        ) as mock_rec:
+            async with AsyncSessionLocal() as async_db:
+                result = await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "FINISHED", "exit_code": 0},
+                        watcher_summary=summary,
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+            assert result.error is None
+            mock_rec.assert_not_called()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_without_watcher_summary_keeps_columns_null():
     """未启用 watcher 的旧 Agent 上报不带 summary → watcher_* 列保持 None。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)

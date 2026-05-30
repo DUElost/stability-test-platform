@@ -25,6 +25,7 @@ from backend.core.metrics import (
     post_completion_enqueue_failed_total,
     record_log_signal_ingested,
     record_patrol_heartbeat,
+    record_reconciler_skip_unchanged,
 )
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
@@ -831,6 +832,9 @@ async def complete_job(
         _apply_watcher_summary(job, payload.watcher_summary)
 
     if job.status in _TERMINAL and not already_terminal:
+        # M0/Task2: 仅在首次终态桥接 reconciler 计数,避免 outbox 重试重复计数。
+        if payload.watcher_summary:
+            _bridge_reconciler_metrics(job.host_id, payload.watcher_summary)
         await PlanAggregator.on_job_terminal(job, db)
         # Release device lease on terminal state (ADR-0019 Phase 2c: device_leases is source of truth)
         released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
@@ -1440,6 +1444,26 @@ def _apply_watcher_summary(job: JobInstance, summary: Dict[str, Any]) -> None:
     count = summary.get("log_signal_count")
     if isinstance(count, int) and count > (job.log_signal_count or 0):
         job.log_signal_count = count
+
+
+def _bridge_reconciler_metrics(host_id: Optional[str], summary: Dict[str, Any]) -> None:
+    """M0/Task2: 把 Agent 进程内的 reconciler 计数桥接到中心 /metrics。
+
+    Agent 没有独立的 Prometheus /metrics 暴露面,reconciler 的
+    `reconciler_skip_unchanged_total` 只在 Agent 进程的本地 registry 自增、永不被抓取。
+    为让 M4 监控盘可见,Agent 通过 complete 通道带出整个 Job 生命周期累计的
+    `reconciler_stats.ticks_skipped_unchanged`,后端在 Job *首次*进入终态时一次性
+    按该累计值自增中心计数器(每个 Job 仅贡献一次 → 计数器单调正确)。
+
+    `reconciler_burst_mode_active` 是运行期实时 gauge(Job 结束时恒为 0),无法通过
+    终态快照有意义地带出 → 仍仅 Agent 进程内,详见 §2.3 文档说明。
+    """
+    stats = summary.get("reconciler_stats")
+    if not isinstance(stats, dict):
+        return
+    skipped = stats.get("ticks_skipped_unchanged")
+    if isinstance(skipped, int) and skipped > 0:
+        record_reconciler_skip_unchanged(str(host_id or "unknown"), amount=skipped)
 
 
 # ── ADR-0019 Phase 3a: Recovery Sync ────────────────────────────────────────

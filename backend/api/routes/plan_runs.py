@@ -6,6 +6,7 @@ Provides PlanRun list/detail/jobs/summary endpoints.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -1702,6 +1703,11 @@ class WatcherSummaryOut(BaseModel):
     exceeded: bool
     # M0/PR #2: AEE 细分(reconciler signal 才会填充);无关联 Job 时 None
     aee_breakdown: Optional[AeeBreakdownOut] = None
+    # M0/C-6 (§2.4 #5): 该 PlanRun 下 Job 的 watcher 能力快照(取最"降级"的一档)。
+    #   来源:JobInstance.watcher_capability 列(由 Agent 在 complete/heartbeat 回填的
+    #   JobSession.summary.watcher_capability)。无可靠来源时为 None;
+    #   前端在 'unavailable' 时显示「reconciler 单通道模式」徽章(reconciler 为唯一通道)。
+    watcher_capability: Optional[str] = None
     # M1/T1-3a: 双写灰度态字段
     # legacy_patrol_in_snapshot — PlanRun.plan_snapshot.lifecycle.patrol 是否仍含
     #   scan_aee / export_mobilelogs(M2 关 patrol 后历史 PlanRun 仍能识别)
@@ -1752,6 +1758,7 @@ def get_plan_run_watcher_summary(
             categories=[], total=0, affected_device_count=0,
             total_devices=0, abnormal_rate=0.0,
             threshold=pr.failure_threshold, exceeded=False,
+            watcher_capability=None,
             legacy_patrol_in_snapshot=legacy_in_snapshot,
             pull_sources=[],
         ))
@@ -1831,6 +1838,7 @@ def get_plan_run_watcher_summary(
     pull_sources_list = _aggregate_pull_sources(
         db, job_ids=job_ids, cur_start=cur_start, now=now,
     )
+    watcher_capability = _aggregate_watcher_capability(db, job_ids=job_ids)
 
     return ok(WatcherSummaryOut(
         plan_run_id=pr.id,
@@ -1845,9 +1853,44 @@ def get_plan_run_watcher_summary(
         threshold=pr.failure_threshold,
         exceeded=abnormal_rate > pr.failure_threshold,
         aee_breakdown=aee_breakdown,
+        watcher_capability=watcher_capability,
         legacy_patrol_in_snapshot=legacy_in_snapshot,
         pull_sources=pull_sources_list,
     ))
+
+
+# M0/C-6: watcher_capability 降级严重度排序 — 取该 PlanRun 下 Job 中"最降级"的一档,
+# 使得只要有任一设备落到 reconciler 单通道(unavailable)即可在前端给出提示。
+# 数值越大越降级;未知能力按 0 处理(不触发降级徽章)。
+_CAPABILITY_SEVERITY: dict[str, int] = {
+    "unavailable":       40,   # 探测全失败 → reconciler 单通道(目标徽章场景)
+    "polling":           30,   # inotifyd 不可用,reconciler 承担拉+emit
+    "inotifyd_shell":    20,
+    "inotifyd_root":     10,
+    "inotifyd_realtime": 10,
+    "stub":               5,
+    "skipped":           -10,  # watcher 未启动(非降级,前端不徽章)
+}
+
+
+def _aggregate_watcher_capability(db: Session, *, job_ids: list[int]) -> Optional[str]:
+    """C-6 (§2.4 #5): 汇总该 PlanRun 下 Job 的 watcher 能力快照。
+
+    取 JobInstance.watcher_capability 列中"最降级"的一档(按 _CAPABILITY_SEVERITY);
+    全部为 NULL(Agent 未回填)时返回 None。该值仅用于前端提示,不参与聚合计数,
+    因此跨方言(PG / SQLite)均可工作。
+    """
+    if not job_ids:
+        return None
+    rows = db.execute(
+        select(JobInstance.watcher_capability)
+        .where(JobInstance.id.in_(job_ids))
+        .where(JobInstance.watcher_capability.isnot(None))
+    ).all()
+    caps = [str(r[0]) for r in rows if r[0]]
+    if not caps:
+        return None
+    return max(caps, key=lambda c: _CAPABILITY_SEVERITY.get(c, 0))
 
 
 def _detect_legacy_patrol_in_snapshot(plan_snapshot: Any) -> bool:
@@ -1990,148 +2033,3 @@ def _aggregate_aee_breakdown(
         by_package=by_package,
     )
 
-
-@router.get("/plan-runs/{run_id}/report/export")
-def export_plan_run_report(
-    run_id: int,
-    format: str = Query("markdown"),
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_active_user),
-):
-    """Export PlanRun summary + devices + timeline (bounded to avoid OOM)."""
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
-
-    data = build_plan_run_export(db, pr)
-    fmt = format.strip().lower()
-    if fmt == "json":
-        return JSONResponse(
-            content=data,
-            headers={
-                "Content-Disposition": (
-                    f'attachment; filename="plan-run-{run_id}-report.json"'
-                ),
-            },
-        )
-    if fmt != "markdown":
-        raise HTTPException(status_code=400, detail="format must be markdown or json")
-    markdown = plan_run_export_to_markdown(data)
-    return PlainTextResponse(
-        markdown,
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="plan-run-{run_id}-report.md"'
-            ),
-        },
-    )
-
-
-@router.get("/plan-runs/{run_id}/summary", response_model=ApiResponse[dict])
-def get_plan_run_summary(
-    run_id: int,
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_active_user),
-):
-    pr = db.get(PlanRun, run_id)
-    if pr is None:
-        raise HTTPException(status_code=404, detail="plan run not found")
-
-    jobs_result = db.execute(
-        select(
-            JobInstance.status,
-            func.count(JobInstance.id),
-        )
-        .where(JobInstance.plan_run_id == run_id)
-        .group_by(JobInstance.status)
-    )
-    status_counts = {row[0]: row[1] for row in jobs_result.all()}
-    total = sum(status_counts.values())
-    pass_rate = (
-        status_counts.get("COMPLETED", 0) / total if total > 0 else 0.0
-    )
-
-    return ok({
-        "plan_run_id": run_id,
-        "status": pr.status,
-        "total_jobs": total,
-        "status_counts": status_counts,
-        "pass_rate": round(pass_rate, 4),
-        "started_at": _iso(pr.started_at),
-        "ended_at": _iso(pr.ended_at),
-        "result_summary": pr.result_summary,
-    })
-
-
-# ── Artifacts ────────────────────────────────────────────────────────────
-
-@router.get(
-    "/plan-runs/{run_id}/jobs/{job_id}/artifacts",
-    response_model=ApiResponse[list],
-)
-def list_job_artifacts(
-    run_id: int,
-    job_id: int,
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_active_user),
-):
-    job = db.get(JobInstance, job_id)
-    if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
-
-    result = db.execute(
-        select(JobArtifact).where(JobArtifact.job_id == job_id)
-    )
-    artifacts = result.scalars().all()
-    return ok([
-        {
-            "id": a.id,
-            "job_id": a.job_id,
-            "filename": a.storage_uri.rsplit("/", 1)[-1] if a.storage_uri else None,
-            "artifact_type": a.artifact_type,
-            "size_bytes": a.size_bytes,
-            "checksum": a.checksum,
-            "created_at": _iso(a.created_at),
-        }
-        for a in artifacts
-    ])
-
-
-def _artifact_download_target(storage_uri: str) -> dict[str, str]:
-    parsed = urlparse(storage_uri)
-    scheme = parsed.scheme.lower()
-    if scheme in {"http", "https"}:
-        return {"kind": "redirect", "url": storage_uri}
-    try:
-        local_path = resolve_local_artifact_path(storage_uri, must_exist=True)
-    except ArtifactPathNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ArtifactPathError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"kind": "local", "path": str(local_path)}
-
-
-@router.get(
-    "/plan-runs/{run_id}/jobs/{job_id}/artifacts/{artifact_id}/download",
-)
-def download_job_artifact(
-    run_id: int,
-    job_id: int,
-    artifact_id: int,
-    db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_active_user),
-):
-    job = db.get(JobInstance, job_id)
-    if job is None or job.plan_run_id != run_id:
-        raise HTTPException(status_code=404, detail="job not found in this plan run")
-
-    artifact = db.get(JobArtifact, artifact_id)
-    if artifact is None or artifact.job_id != job_id:
-        raise HTTPException(status_code=404, detail="artifact not found for this job")
-
-    target = _artifact_download_target(artifact.storage_uri)
-    if target["kind"] == "redirect":
-        return RedirectResponse(url=target["url"], status_code=307)
-    local_path = Path(target["path"])
-    media_type = "application/gzip" if local_path.suffixes[-2:] == [".tar", ".gz"] else None
-    return FileResponse(path=str(local_path), filename=local_path.name, media_type=media_type)

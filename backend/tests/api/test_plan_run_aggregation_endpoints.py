@@ -1404,3 +1404,68 @@ class TestWatcherSummaryEndpoint:
         # fixture 中 10001/10002 无 extra,只有新加的 2 条带 pull_source=reconciler
         # → distinct 集合 = ["reconciler"]
         assert data["pull_sources"] == ["reconciler"]
+
+    # ----------------------------------------------------------------------
+    # M0/C-6 (§2.4 #5): watcher_capability 快照
+    # ----------------------------------------------------------------------
+
+    def test_watcher_summary_capability_none_when_jobs_have_no_snapshot(
+        self, client, auth_headers, chain_setup,
+    ):
+        """fixture 的 Job 都没回填 watcher_capability → 字段为 None。"""
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["watcher_capability"] is None
+
+    def test_watcher_summary_capability_picks_most_degraded(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """混合能力时取最降级的一档:unavailable 严重度高于 inotifyd_realtime。"""
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+        j1.watcher_capability = "inotifyd_realtime"
+        j2.watcher_capability = "unavailable"
+        db_session.add_all([j1, j2])
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["watcher_capability"] == "unavailable"
+
+    def test_watcher_summary_capability_normal_when_all_inotifyd(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """全部 inotifyd_realtime → 返回该值(前端不会显示降级徽章)。"""
+        for key in ("job_completed", "job_running", "job_failed"):
+            j = chain_setup[key]
+            j.watcher_capability = "inotifyd_realtime"
+            db_session.add(j)
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["watcher_capability"] == "inotifyd_realtime"
+
+    def test_watcher_summary_capability_none_for_run_without_jobs(
+        self, client, auth_headers, chain_setup,
+    ):
+        """无 Job 的 PlanRun(早返回路径)→ watcher_capability=None。"""
+        parent_run = chain_setup["parent_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{parent_run.id}/watcher-summary",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["watcher_capability"] is None

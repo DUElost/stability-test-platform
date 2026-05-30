@@ -380,6 +380,19 @@ log_signal_total = Counter(
     ['category']  # AEE / VENDOR_AEE / ANR / TOMBSTONE / MOBILELOG
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# AEE db_history reconciler (Watcher 收编 AEE — D2 hash-skip / burst)
+reconciler_skip_unchanged_total = Counter(
+    'stability_reconciler_skip_unchanged_total',
+    'Total AEE reconciler ticks skipped because db_history content hash was unchanged',
+    ['host_id']  # 按 host 控基数,不打 job_id/serial
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+reconciler_burst_mode_active = Gauge(
+    'stability_reconciler_burst_mode_active',
+    'Whether the AEE db_history reconciler is currently in burst mode (1) or baseline (0)',
+    ['host_id']
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # Agent local outbox backlog (heartbeat extra)
 agent_outbox_pending = Gauge(
     'stability_agent_outbox_pending',
@@ -544,6 +557,31 @@ def record_log_signal_ingested(category: str):
     if not PROMETHEUS_AVAILABLE:
         return
     log_signal_total.labels(category=(category or "UNKNOWN").upper()).inc()
+
+
+def record_reconciler_skip_unchanged(host_id: str, amount: int = 1):
+    """Record AEE reconciler ticks skipped due to unchanged db_history hash (D2).
+
+    amount 默认 1(Agent 进程内单次 tick 自增)。M0/Task2 桥接路径:后端在 Job 终态时
+    一次性按整个 Job 生命周期累计的 ticks_skipped_unchanged 自增,把 Agent 进程内的
+    本地计数搬到中心 /metrics(Agent 无独立 /metrics 暴露面)。
+    """
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        n = int(amount)
+    except (TypeError, ValueError):
+        return
+    if n <= 0:
+        return
+    reconciler_skip_unchanged_total.labels(host_id=str(host_id or "unknown")).inc(n)
+
+
+def set_reconciler_burst_mode_active(host_id: str, active: bool):
+    """Set AEE reconciler burst-mode gauge (1=burst / 0=baseline) for a host (D2)."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    reconciler_burst_mode_active.labels(host_id=str(host_id or "unknown")).set(1 if active else 0)
 
 
 def record_agent_outbox_pending(host_id: str, outbox_type: str, count: int):
