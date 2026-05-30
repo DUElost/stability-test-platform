@@ -2033,3 +2033,345 @@ def _aggregate_aee_breakdown(
         by_package=by_package,
     )
 
+
+# ── Endpoint 6: GET /plan-runs/{id}/aee-reconciliation (M1 / T1-4) ─────────
+# 只读灰度对账:把 reconciler / legacy_patrol / inotifyd 三路 emit 的 AEE 信号条数
+# 与(可选)NFS 侧 .dbg 文件清单对齐,供 M1 双写期人工对账 reconciler 漏报率。
+# 纯只读,不做任何破坏性操作。
+
+# pull_source → 标准化桶;非 AEE 路径(inotifyd 仅服务 ANR/MOBILELOG)在此端点
+# 仅作可见性参考,不参与 NFS .dbg 对账(后者只比 AEE/VENDOR_AEE)。
+_RECON_PULL_SOURCES = ("reconciler", "legacy_patrol", "inotifyd")
+
+
+class AeeReconBySerialOut(BaseModel):
+    device_serial: Optional[str] = None
+    reconciler: int = 0
+    legacy_patrol: int = 0
+    inotifyd: int = 0
+    other: int = 0
+    total: int = 0
+
+
+class AeeReconciliationOut(BaseModel):
+    plan_run_id: int
+    # signal 侧:AEE+VENDOR_AEE 按 pull_source 分桶,按 nfs_path(去重)/path_on_device 计数
+    reconciler_emitted: int
+    legacy_patrol_emitted: int
+    inotifyd_emitted: int
+    other_emitted: int
+    total_emitted: int
+    by_serial: list[AeeReconBySerialOut]
+    # NFS 侧:后端可访问 STP_AEE_NFS_ROOT 时扫 *.dbg 计数,否则 None
+    nfs_dbg_files: Optional[int] = None
+    nfs_root_scanned: Optional[str] = None
+    # NFS 上有 .dbg 但 reconciler signal 缺失的目录名(best-effort basename 级启发式)
+    missing_in_signal: list[str] = []
+    notes: list[str] = []
+
+
+def _aggregate_aee_recon_signals(
+    db: Session, *, job_ids: list[int],
+) -> tuple[dict[str, AeeReconBySerialOut], dict[str, int], set[str]]:
+    """按 (device_serial, pull_source) 聚合 AEE/VENDOR_AEE 信号条数(crash-dir 去重)。
+
+    去重键优先 extra.nfs_path(目录级=同一 crash 事件),缺失退回 path_on_device,
+    再退回 id(保证至少计数一次)。返回 (by_serial, totals, reconciler_nfs_dirs)。
+    reconciler_nfs_dirs = reconciler 信号 nfs_path 的 basename 集合,供 missing 对账。
+    PG-only(JSONB / ANY)。
+    """
+    by_serial: dict[str, AeeReconBySerialOut] = {}
+    totals: dict[str, int] = {k: 0 for k in (*_RECON_PULL_SOURCES, "other", "total")}
+    recon_dirs: set[str] = set()
+    if not job_ids:
+        return by_serial, totals, recon_dirs
+
+    rows = db.execute(
+        text("""
+            SELECT
+                device_serial,
+                COALESCE(NULLIF(extra->>'pull_source', ''), 'unknown') AS src,
+                COUNT(DISTINCT COALESCE(
+                    NULLIF(extra->>'nfs_path', ''), path_on_device, CAST(id AS text)
+                )) AS cnt
+            FROM job_log_signal
+            WHERE job_id = ANY(:job_ids)
+              AND category IN ('AEE', 'VENDOR_AEE')
+            GROUP BY device_serial, src
+        """),
+        {"job_ids": list(job_ids)},
+    ).all()
+
+    for serial, src, cnt in rows:
+        key = serial or "(unknown)"
+        agg = by_serial.setdefault(key, AeeReconBySerialOut(device_serial=serial))
+        n = int(cnt or 0)
+        bucket = src if src in _RECON_PULL_SOURCES else "other"
+        setattr(agg, bucket, getattr(agg, bucket) + n)
+        agg.total += n
+        totals[bucket] += n
+        totals["total"] += n
+
+    # reconciler 信号的 nfs_path basename,用于 NFS .dbg 对账(缺失检测)
+    dir_rows = db.execute(
+        text("""
+            SELECT DISTINCT extra->>'nfs_path' AS nfs_path
+            FROM job_log_signal
+            WHERE job_id = ANY(:job_ids)
+              AND category IN ('AEE', 'VENDOR_AEE')
+              AND extra->>'pull_source' = 'reconciler'
+              AND extra ? 'nfs_path'
+              AND NULLIF(extra->>'nfs_path', '') IS NOT NULL
+        """),
+        {"job_ids": list(job_ids)},
+    ).all()
+    for (nfs_path,) in dir_rows:
+        if nfs_path:
+            recon_dirs.add(Path(str(nfs_path)).name)
+
+    return by_serial, totals, recon_dirs
+
+
+def _scan_nfs_dbg_files(
+    nfs_root: Optional[str],
+) -> tuple[Optional[int], Optional[set[str]], list[str]]:
+    """扫 STP_AEE_NFS_ROOT 下 *.dbg 文件(M1 NFS 侧对账)。
+
+    后端通常不挂载 NFS → root 未配置 / 不可访问时返回 (None, None, notes),
+    notes 说明需 Agent 侧对账。返回 (file_count, dbg_parent_dir_names, notes)。
+    """
+    notes: list[str] = []
+    if not nfs_root:
+        notes.append(
+            "STP_AEE_NFS_ROOT 未配置;后端通常不挂载 NFS,NFS 侧 .dbg 对账需在 Agent 侧执行。"
+        )
+        return None, None, notes
+    root = Path(nfs_root)
+    if not root.is_dir():
+        notes.append(
+            f"STP_AEE_NFS_ROOT={nfs_root} 在后端不可访问;NFS 侧 .dbg 对账需 Agent 侧执行。"
+        )
+        return None, None, notes
+
+    cap = 200_000
+    count = 0
+    dirs: set[str] = set()
+    notes.append(f"NFS 扫描模式 *.dbg,根目录 {nfs_root}。")
+    try:
+        for f in root.rglob("*.dbg"):
+            count += 1
+            dirs.add(f.parent.name)
+            if count >= cap:
+                notes.append(f"NFS *.dbg 扫描达到上限 {cap},计数被截断。")
+                break
+    except OSError as exc:
+        notes.append(f"NFS 扫描出错: {exc}")
+        return None, None, notes
+    return count, dirs, notes
+
+
+@router.get(
+    "/plan-runs/{run_id}/aee-reconciliation",
+    response_model=ApiResponse[AeeReconciliationOut],
+)
+def get_plan_run_aee_reconciliation(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """M1/T1-4: 只读灰度对账端点。
+
+    比对该 PlanRun 下 AEE/VENDOR_AEE log_signal 按 pull_source 分桶的条数(crash-dir
+    去重),并在后端可访问 NFS 时附 *.dbg 文件计数与「NFS 有 / signal 缺」的目录差集,
+    供 M1 双写期评估 reconciler 漏报率(目标 < 5%)。纯只读。
+    """
+    pr = _require_plan_run(db, run_id)
+
+    job_ids = [
+        r.id for r in db.execute(
+            select(JobInstance.id).where(JobInstance.plan_run_id == run_id)
+        ).all()
+    ]
+
+    by_serial_map, totals, recon_dirs = _aggregate_aee_recon_signals(db, job_ids=job_ids)
+
+    nfs_count, nfs_dirs, notes = _scan_nfs_dbg_files(
+        (os.getenv("STP_AEE_NFS_ROOT") or "").strip() or None
+    )
+
+    missing_in_signal: list[str] = []
+    if nfs_dirs is not None:
+        missing_in_signal = sorted(nfs_dirs - recon_dirs)
+        if missing_in_signal:
+            notes.append(
+                "missing_in_signal 为 basename 级启发式(NFS 有 .dbg 父目录但无 "
+                "reconciler signal 携带同名 nfs_path);精确对账请结合 Agent 端日志。"
+            )
+
+    by_serial = sorted(
+        by_serial_map.values(),
+        key=lambda s: (-s.total, s.device_serial or ""),
+    )
+
+    if not job_ids:
+        notes.append("该 PlanRun 无关联 Job,signal 侧计数为空。")
+
+    return ok(AeeReconciliationOut(
+        plan_run_id=pr.id,
+        reconciler_emitted=totals["reconciler"],
+        legacy_patrol_emitted=totals["legacy_patrol"],
+        inotifyd_emitted=totals["inotifyd"],
+        other_emitted=totals["other"],
+        total_emitted=totals["total"],
+        by_serial=by_serial,
+        nfs_dbg_files=nfs_count,
+        nfs_root_scanned=(os.getenv("STP_AEE_NFS_ROOT") or "").strip() or None,
+        missing_in_signal=missing_in_signal,
+        notes=notes,
+    ))
+
+
+@router.get("/plan-runs/{run_id}/report/export")
+def export_plan_run_report(
+    run_id: int,
+    format: str = Query("markdown"),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """Export PlanRun summary + devices + timeline (bounded to avoid OOM)."""
+    pr = db.get(PlanRun, run_id)
+    if pr is None:
+        raise HTTPException(status_code=404, detail="plan run not found")
+
+    data = build_plan_run_export(db, pr)
+    fmt = format.strip().lower()
+    if fmt == "json":
+        return JSONResponse(
+            content=data,
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="plan-run-{run_id}-report.json"'
+                ),
+            },
+        )
+    if fmt != "markdown":
+        raise HTTPException(status_code=400, detail="format must be markdown or json")
+    markdown = plan_run_export_to_markdown(data)
+    return PlainTextResponse(
+        markdown,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="plan-run-{run_id}-report.md"'
+            ),
+        },
+    )
+
+
+@router.get("/plan-runs/{run_id}/summary", response_model=ApiResponse[dict])
+def get_plan_run_summary(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    pr = db.get(PlanRun, run_id)
+    if pr is None:
+        raise HTTPException(status_code=404, detail="plan run not found")
+
+    jobs_result = db.execute(
+        select(
+            JobInstance.status,
+            func.count(JobInstance.id),
+        )
+        .where(JobInstance.plan_run_id == run_id)
+        .group_by(JobInstance.status)
+    )
+    status_counts = {row[0]: row[1] for row in jobs_result.all()}
+    total = sum(status_counts.values())
+    pass_rate = (
+        status_counts.get("COMPLETED", 0) / total if total > 0 else 0.0
+    )
+
+    return ok({
+        "plan_run_id": run_id,
+        "status": pr.status,
+        "total_jobs": total,
+        "status_counts": status_counts,
+        "pass_rate": round(pass_rate, 4),
+        "started_at": _iso(pr.started_at),
+        "ended_at": _iso(pr.ended_at),
+        "result_summary": pr.result_summary,
+    })
+
+
+# ── Artifacts ────────────────────────────────────────────────────────────
+
+@router.get(
+    "/plan-runs/{run_id}/jobs/{job_id}/artifacts",
+    response_model=ApiResponse[list],
+)
+def list_job_artifacts(
+    run_id: int,
+    job_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    job = db.get(JobInstance, job_id)
+    if job is None or job.plan_run_id != run_id:
+        raise HTTPException(status_code=404, detail="job not found in this plan run")
+
+    result = db.execute(
+        select(JobArtifact).where(JobArtifact.job_id == job_id)
+    )
+    artifacts = result.scalars().all()
+    return ok([
+        {
+            "id": a.id,
+            "job_id": a.job_id,
+            "filename": a.storage_uri.rsplit("/", 1)[-1] if a.storage_uri else None,
+            "artifact_type": a.artifact_type,
+            "size_bytes": a.size_bytes,
+            "checksum": a.checksum,
+            "created_at": _iso(a.created_at),
+        }
+        for a in artifacts
+    ])
+
+
+def _artifact_download_target(storage_uri: str) -> dict[str, str]:
+    parsed = urlparse(storage_uri)
+    scheme = parsed.scheme.lower()
+    if scheme in {"http", "https"}:
+        return {"kind": "redirect", "url": storage_uri}
+    try:
+        local_path = resolve_local_artifact_path(storage_uri, must_exist=True)
+    except ArtifactPathNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ArtifactPathError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"kind": "local", "path": str(local_path)}
+
+
+@router.get(
+    "/plan-runs/{run_id}/jobs/{job_id}/artifacts/{artifact_id}/download",
+)
+def download_job_artifact(
+    run_id: int,
+    job_id: int,
+    artifact_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    job = db.get(JobInstance, job_id)
+    if job is None or job.plan_run_id != run_id:
+        raise HTTPException(status_code=404, detail="job not found in this plan run")
+
+    artifact = db.get(JobArtifact, artifact_id)
+    if artifact is None or artifact.job_id != job_id:
+        raise HTTPException(status_code=404, detail="artifact not found for this job")
+
+    target = _artifact_download_target(artifact.storage_uri)
+    if target["kind"] == "redirect":
+        return RedirectResponse(url=target["url"], status_code=307)
+    local_path = Path(target["path"])
+    media_type = "application/gzip" if local_path.suffixes[-2:] == [".tar", ".gz"] else None
+    return FileResponse(path=str(local_path), filename=local_path.name, media_type=media_type)

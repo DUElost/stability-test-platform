@@ -1469,3 +1469,155 @@ class TestWatcherSummaryEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["data"]["watcher_capability"] is None
+
+
+# ---------------------------------------------------------------------------
+# /aee-reconciliation (M1 / T1-4)
+# ---------------------------------------------------------------------------
+
+
+class TestAeeReconciliationEndpoint:
+    def test_reconciliation_groups_by_pull_source_and_serial(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """三路 pull_source(reconciler/legacy_patrol/inotifyd)分桶 + by_serial 聚合;
+        reconciler 按 nfs_path 去重(同目录算一次)。NFS 未配置 → nfs_dbg_files=None。"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+        s1 = chain_setup["device_completed"].serial
+        s2 = chain_setup["device_running"].serial
+
+        db_session.add_all([
+            # reconciler:2 不同 nfs_path → 2;另 1 条重复 nfs_path → 去重不增
+            JobLogSignal(
+                id=40001, job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=400, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.R1",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={"pull_source": "reconciler", "nfs_path": "/nfs/j1/AEE/db.R1"},
+            ),
+            JobLogSignal(
+                id=40002, job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=401, category="VENDOR_AEE", source="reconciler",
+                path_on_device="/data/vendor/aee_exp/db.R2",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={"pull_source": "reconciler", "nfs_path": "/nfs/j1/VENDOR_AEE/db.R2"},
+            ),
+            JobLogSignal(
+                id=40003, job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=402, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.R1.dup",
+                detected_at=_now() - timedelta(minutes=1),
+                extra={"pull_source": "reconciler", "nfs_path": "/nfs/j1/AEE/db.R1"},  # 同 nfs_path
+            ),
+            # legacy_patrol on serial 2
+            JobLogSignal(
+                id=40004, job_id=j2.id, host_id="host-101", device_serial=s2,
+                seq_no=410, category="AEE", source="legacy_patrol",
+                path_on_device="/data/aee_exp/db.L1",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={"pull_source": "legacy_patrol", "nfs_path": "/nfs/j2/AEE/db.L1"},
+            ),
+            # inotifyd-sourced AEE (理论上 M0 已关闭,但历史数据可能存在)
+            JobLogSignal(
+                id=40005, job_id=j2.id, host_id="host-101", device_serial=s2,
+                seq_no=411, category="AEE", source="inotifyd",
+                path_on_device="/data/aee_exp/db.I1",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={"pull_source": "inotifyd"},
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["plan_run_id"] == cur_run.id
+        # reconciler:db.R1 + db.R2 = 2(db.R1 重复 nfs_path 去重)
+        assert data["reconciler_emitted"] == 2
+        assert data["legacy_patrol_emitted"] == 1
+        assert data["inotifyd_emitted"] == 1
+        # chain_setup fixture 预置 2 条无 pull_source 的 legacy AEE 信号
+        #   (10001@s2 / 10003@s3)→ 落 "other" 桶。
+        assert data["other_emitted"] == 2
+        assert data["total_emitted"] == 6
+
+        s3 = chain_setup["device_failed"].serial
+        by_serial = {r["device_serial"]: r for r in data["by_serial"]}
+        assert by_serial[s1]["reconciler"] == 2
+        assert by_serial[s1]["total"] == 2
+        assert by_serial[s2]["legacy_patrol"] == 1
+        assert by_serial[s2]["inotifyd"] == 1
+        assert by_serial[s2]["other"] == 1   # fixture 10001@s2
+        assert by_serial[s2]["total"] == 3
+        assert by_serial[s3]["other"] == 1   # fixture 10003@s3
+        assert by_serial[s3]["total"] == 1
+
+        # 后端测试环境未配置 STP_AEE_NFS_ROOT → NFS 侧为 None + note
+        assert data["nfs_dbg_files"] is None
+        assert data["nfs_root_scanned"] is None
+        assert data["missing_in_signal"] == []
+        assert any("STP_AEE_NFS_ROOT" in n for n in data["notes"])
+
+    def test_reconciliation_ignores_non_aee_categories(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """ANR/MOBILELOG 不计入 AEE 对账(端点只比 AEE/VENDOR_AEE)。"""
+        cur_run = chain_setup["current_run"]
+        j2 = chain_setup["job_running"]
+        s2 = chain_setup["device_running"].serial
+        db_session.add_all([
+            JobLogSignal(
+                id=41001, job_id=j2.id, host_id="host-101", device_serial=s2,
+                seq_no=420, category="ANR", source="inotifyd",
+                path_on_device="/data/anr/trace_x",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={"pull_source": "inotifyd"},
+            ),
+            JobLogSignal(
+                id=41002, job_id=j2.id, host_id="host-101", device_serial=s2,
+                seq_no=421, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.OK",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={"pull_source": "reconciler", "nfs_path": "/nfs/j2/AEE/db.OK"},
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        # 仅 reconciler 的 AEE 计 1;ANR 不计入。
+        # fixture 预置 2 条 legacy AEE(无 pull_source)落 other → total = 1 + 2。
+        assert data["reconciler_emitted"] == 1
+        assert data["other_emitted"] == 2
+        assert data["total_emitted"] == 3
+
+    def test_reconciliation_empty_for_run_without_jobs(
+        self, client, auth_headers, chain_setup,
+    ):
+        """无 Job 的 PlanRun → 全 0 + note 提示。"""
+        parent_run = chain_setup["parent_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{parent_run.id}/aee-reconciliation",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["total_emitted"] == 0
+        assert data["by_serial"] == []
+        assert any("无关联 Job" in n for n in data["notes"])
+
+    def test_reconciliation_404_for_unknown_run(self, client, auth_headers):
+        resp = client.get(
+            "/api/v1/plan-runs/999999/aee-reconciliation", headers=auth_headers,
+        )
+        assert resp.status_code == 404
