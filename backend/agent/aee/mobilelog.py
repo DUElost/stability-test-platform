@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .paths import resolve_mobilelog_subdir
 from .timestamp import parse_mobilelog_filename_to_datetime, parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -25,11 +26,10 @@ DEFAULT_LOG_TYPES = {
 def _resolve_mobilelog_subdir() -> str:
     """D3/T0.5-2: 默认 correlated_mobilelogs/(对齐 monolith);
     env 逃生口 STP_WATCHER_AEE_SUBDIR_LAYOUT=stp 回退 mobilelog/。
+
+    实现复用 paths.resolve_mobilelog_subdir(单一事实源,与 bugreport 逃生口一致)。
     """
-    layout = (os.environ.get("STP_WATCHER_AEE_SUBDIR_LAYOUT", "correlated") or "").strip().lower()
-    if layout == "stp":
-        return "mobilelog"
-    return "correlated_mobilelogs"
+    return resolve_mobilelog_subdir()
 
 
 def export_correlated_mobilelogs(

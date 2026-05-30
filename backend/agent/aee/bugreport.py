@@ -10,7 +10,13 @@ import time
 from pathlib import Path
 from typing import Dict, Optional
 
+from .paths import resolve_bugreport_subdir
 from .timestamp import format_timestamp_for_filename
+
+logger = logging.getLogger(__name__)
+
+_cooldown_lock = threading.Lock()
+_last_export_ts: Dict[str, float] = {}
 
 
 def _is_bugreport_in_cooldown(
@@ -101,11 +107,6 @@ def _run_bugreport_interruptibly(
             raise subprocess.TimeoutExpired(argv, timeout_seconds)
         stop_event.wait(min(0.1, remaining))
 
-logger = logging.getLogger(__name__)
-
-_cooldown_lock = threading.Lock()
-_last_export_ts: Dict[str, float] = {}
-
 
 def export_bugreport_for_timestamp(
     *,
@@ -121,7 +122,11 @@ def export_bugreport_for_timestamp(
     temp_suffix: str = ".partial",
     stop_event: Optional[threading.Event] = None,
 ) -> bool:
-    """Export adb bugreport zip named `{formatted_ts}_bugreport.zip` under bugreport/."""
+    """Export adb bugreport zip named `{formatted_ts}_bugreport.zip`.
+
+    D3/C-2: 默认落盘 `correlated_bugreports/`(对齐 monolith BUGREPORT_EXPORT_DIRNAME);
+    env STP_WATCHER_AEE_SUBDIR_LAYOUT=stp 回退 `bugreport/`(与 mobilelog 共用逃生口)。
+    """
     if not enabled:
         return False
 
@@ -137,7 +142,7 @@ def export_bugreport_for_timestamp(
     ):
         return False
 
-    bugreport_dir = output_dir / "bugreport"
+    bugreport_dir = output_dir / resolve_bugreport_subdir()
     bugreport_dir.mkdir(parents=True, exist_ok=True)
 
     formatted_ts = format_timestamp_for_filename(timestamp_str)

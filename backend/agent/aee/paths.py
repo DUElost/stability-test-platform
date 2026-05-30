@@ -8,6 +8,29 @@ from pathlib import Path
 from typing import Any, Optional
 
 
+def _aee_subdir_layout() -> str:
+    """D3: 子目录布局开关。`correlated`(默认,对齐 monolith) / `stp`(逃生口,旧布局)。"""
+    return (os.environ.get("STP_WATCHER_AEE_SUBDIR_LAYOUT", "correlated") or "").strip().lower()
+
+
+def resolve_mobilelog_subdir() -> str:
+    """关联 mobilelog 落盘子目录名。
+
+    默认 `correlated_mobilelogs/`(对齐 monolith);env STP_WATCHER_AEE_SUBDIR_LAYOUT=stp
+    回退旧布局 `mobilelog/`。
+    """
+    return "mobilelog" if _aee_subdir_layout() == "stp" else "correlated_mobilelogs"
+
+
+def resolve_bugreport_subdir() -> str:
+    """bugreport 落盘子目录名。
+
+    默认 `correlated_bugreports/`(对齐 monolith BUGREPORT_EXPORT_DIRNAME);
+    env STP_WATCHER_AEE_SUBDIR_LAYOUT=stp 回退旧布局 `bugreport/`(与 mobilelog 同逃生口)。
+    """
+    return "bugreport" if _aee_subdir_layout() == "stp" else "correlated_bugreports"
+
+
 def get_aee_nfs_root() -> Path:
     """sonic_tinno root — priority: STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno."""
     for env_key in ("STP_AEE_NFS_ROOT", "STP_WATCHER_NFS_BASE_DIR"):
