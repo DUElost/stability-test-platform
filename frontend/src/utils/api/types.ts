@@ -946,6 +946,10 @@ export interface WatcherSummary {
   exceeded: boolean;
   // M0/PR #2: reconciler signal 附带 extra 才会填充;无关联 Job 走早返回 → null
   aee_breakdown?: AeeBreakdown | null;
+  // M0/C-6 (§2.4 #5): 该 PlanRun 下 Job 的 watcher 能力快照(后端取最"降级"的一档)。
+  //   'unavailable' → reconciler 单通道模式(WatcherSummaryCard 顶栏显示降级徽章);
+  //   其余值 / null → 不显示徽章。来源 JobInstance.watcher_capability。
+  watcher_capability?: string | null;
   // M1/T1-3a: 双写灰度状态。
   //   legacy_patrol_in_snapshot=true  → plan_snapshot.lifecycle.patrol 含 scan_aee / export_mobilelogs(老路径仍在)
   //   pull_sources                    → log_signal.extra.pull_source DISTINCT 列表(reconciler=新路径已生效)

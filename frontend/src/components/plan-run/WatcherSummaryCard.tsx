@@ -216,6 +216,27 @@ function DualWriteBadge({
   );
 }
 
+// M0/C-6 (§2.4 #5): watcher_capability=unavailable 时,inotifyd 与 polling 探测全部失败,
+//   AEE 仅由 reconciler 周期 db_history diff 单通道提供。给运维一个明确的降级提示徽章。
+//   其余 capability(inotifyd_*/polling/stub/skipped/null)不渲染。
+function CapabilityBadge({ capability }: { capability: string | null | undefined }) {
+  if (capability !== 'unavailable') return null;
+  return (
+    <span
+      data-testid="watcher-capability-badge"
+      data-capability="unavailable"
+      title={
+        'watcher_capability=unavailable:inotifyd / polling 探测全部失败,' +
+        'AEE 仅由 reconciler 周期 db_history diff 单通道提供(固定 60s 节奏)。' +
+        '实时性弱于 inotifyd,但仍可兜底拉取 + emit。'
+      }
+      className="ml-1 inline-flex items-center rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-orange-800"
+    >
+      reconciler 单通道模式
+    </span>
+  );
+}
+
 function AeeBreakdownChips({ breakdown }: { breakdown: AeeBreakdown }) {
   const crash = breakdown.crash_count + breakdown.vendor_crash_count;
   const anr = breakdown.anr_count;
@@ -316,6 +337,7 @@ export default function WatcherSummaryCard({
           </span>
         )}
         {breakdown && <AeeBreakdownChips breakdown={breakdown} />}
+        {data && <CapabilityBadge capability={data.watcher_capability} />}
         {data && (
           <DualWriteBadge
             legacyInSnapshot={data.legacy_patrol_in_snapshot}

@@ -311,4 +311,40 @@ describe('WatcherSummaryCard', () => {
     );
     expect(screen.queryByTestId('watcher-dual-write-badge')).not.toBeInTheDocument();
   });
+
+  // ----------------------------------------------------------------------
+  // M0/C-6 (§2.4 #5): watcher_capability 单通道降级徽章
+  // ----------------------------------------------------------------------
+
+  it('renders single-channel badge when watcher_capability is unavailable', () => {
+    render(
+      <WatcherSummaryCard
+        data={{ ...fixture, watcher_capability: 'unavailable' }}
+      />,
+    );
+    const badge = screen.getByTestId('watcher-capability-badge');
+    expect(badge).toHaveAttribute('data-capability', 'unavailable');
+    expect(badge).toHaveTextContent('reconciler 单通道模式');
+    expect(badge.getAttribute('title') ?? '').toMatch(/reconciler/);
+  });
+
+  it('does not render capability badge for normal capability (inotifyd_realtime)', () => {
+    render(
+      <WatcherSummaryCard
+        data={{ ...fixture, watcher_capability: 'inotifyd_realtime' }}
+      />,
+    );
+    expect(
+      screen.queryByTestId('watcher-capability-badge'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not render capability badge when watcher_capability is absent/null', () => {
+    render(
+      <WatcherSummaryCard data={{ ...fixture, watcher_capability: null }} />,
+    );
+    expect(
+      screen.queryByTestId('watcher-capability-badge'),
+    ).not.toBeInTheDocument();
+  });
 });
