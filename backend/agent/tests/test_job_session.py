@@ -314,8 +314,11 @@ def test_to_complete_payload_shape(lock_tracker, patch_manager):
     expected_keys = {
         "watcher_id", "watcher_started_at", "watcher_stopped_at",
         "watcher_capability", "log_signal_count", "watcher_stats",
+        "reconciler_stats",
     }
     assert set(payload.keys()) == expected_keys
+    # M0/Task2: reconciler_stats 默认空 dict(未灰度开启 reconciler 时)
+    assert payload["reconciler_stats"] == {}
 
     # 时间字段为 ISO8601 字符串
     assert isinstance(payload["watcher_started_at"], str)
@@ -323,6 +326,71 @@ def test_to_complete_payload_shape(lock_tracker, patch_manager):
     assert payload["watcher_capability"] == "stub"
     # JSON 序列化不崩（契约第 13 行要求）
     json.dumps(payload)
+
+
+def test_reconciler_start_failure_restores_direct_emit(lock_tracker, patch_manager, monkeypatch):
+    """C-3: reconciler.start() 抛异常 → 回滚 watcher 的 emit 抑制,AEE 仍能 emit。
+
+    场景:灰度开启 reconciler + watcher 已 active(capability ok) + reconciler.start 崩。
+    期望:_reconciler 置 None,且 watcher.impl.set_aee_reconciler_active(False) 被调用,
+    使 inotifyd 路径恢复直接 emit AEE/VENDOR_AEE(否则信号静默丢失)。
+    """
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
+    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
+
+    class _FakeImpl:
+        def __init__(self):
+            # 初始 active=True 模拟 manager.start 时按灰度开启把 emit 抑制打开
+            self._aee_reconciler_active = True
+            self.emitter = object()
+
+        def set_aee_reconciler_active(self, active: bool) -> None:
+            self._aee_reconciler_active = bool(active)
+
+    impl = _FakeImpl()
+
+    class _MgrWithDeps(_FakeManager):
+        def get_dep(self, key, default=None):
+            return {
+                "nfs_base_dir": "",
+                "local_db": object(),
+                "adb_path": "adb",
+            }.get(key, default)
+
+    fake = _MgrWithDeps(mode="ok", capability="inotifyd_root")
+    patch_manager(fake)
+
+    class _BoomReconciler:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("reconciler boom")
+
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.AeeDbHistoryReconciler", _BoomReconciler,
+    )
+
+    session = JobSession(
+        job_payload=_make_payload(),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    # __enter__ 时 handle.impl 仍是 None(FakeManager 返回 impl=None) → 首轮跳过;
+    # 注入真实 impl 后手动再驱动一次启动判定,逼出 reconciler.start 失败回滚路径。
+    session._handle.impl = impl
+    session._maybe_start_aee_reconciler()
+
+    assert session._reconciler is None, "reconciler.start 失败后应清空引用"
+    assert impl._aee_reconciler_active is False, (
+        "回滚后 watcher 必须恢复直接 emit(set_aee_reconciler_active(False))"
+    )
+
+    session.__exit__(None, None, None)
+    assert 101 not in lock_tracker.active_jobs
 
 
 def test_summary_to_payload_when_watcher_never_started(lock_tracker, patch_manager):

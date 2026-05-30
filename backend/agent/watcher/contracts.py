@@ -68,6 +68,11 @@ class WatcherSummaryPayload(TypedDict, total=False):
     watcher_capability: str              # inotifyd_root | inotifyd_shell | polling | unavailable | skipped | stub
     log_signal_count:   int
     watcher_stats:      Dict[str, int]   # { events_total, events_dropped, pulls_ok, ... }
+    # M0/Task2: AeeDbHistoryReconciler 运行期累计计数(灰度开启时非空)。
+    #   后端在 Job 终态把 ticks_skipped_unchanged 桥接到中心 reconciler_skip_unchanged_total。
+    #   { ticks_total, ticks_with_new, ticks_skipped_unchanged, new_entries_total,
+    #     signals_emitted, signals_dropped, tick_errors }
+    reconciler_stats:   Dict[str, int]
 
 
 class JobCompleteRequest(TypedDict, total=False):

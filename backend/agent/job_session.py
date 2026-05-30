@@ -73,6 +73,9 @@ class JobSessionSummary:
             "watcher_capability": self.watcher_capability,
             "log_signal_count":   self.log_signal_count,
             "watcher_stats":      self.watcher_stats,
+            # M0/Task2: Agent 无独立 /metrics 暴露面,reconciler 进程内计数(尤其
+            # ticks_skipped_unchanged)通过 complete 通道带出,由后端桥接到中心 /metrics。
+            "reconciler_stats":   self.reconciler_stats,
         }
 
 
@@ -292,6 +295,22 @@ class JobSession:
                 self._job_id, self._serial,
             )
             self._reconciler = None
+            # C-3: reconciler 启动失败时必须回滚 watcher 的 emit 抑制,否则
+            # AEE/VENDOR_AEE 既不由 reconciler emit、又被 watcher 关闭 →
+            # 崩溃信号静默丢失。恢复 inotifyd 直接 emit 兜底。
+            try:
+                if self._handle is not None and self._handle.impl is not None:
+                    self._handle.impl.set_aee_reconciler_active(False)
+                    logger.warning(
+                        "aee_reconciler_emit_rollback job_id=%d serial=%s — "
+                        "watcher 恢复 inotifyd 直接 emit AEE/VENDOR_AEE",
+                        self._job_id, self._serial,
+                    )
+            except Exception:
+                logger.exception(
+                    "aee_reconciler_emit_rollback_failed job_id=%d serial=%s",
+                    self._job_id, self._serial,
+                )
 
     def _handle_start_failure(self, exc: WatcherStartError) -> None:
         """按 policy.on_unavailable 决策 Job 走向。"""

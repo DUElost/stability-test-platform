@@ -8,8 +8,16 @@
       `category` 按 aee_type 映射,`source="reconciler"`,`extra` 携带
       `event_type / package_name / aee_ts / nfs_path / pull_source`
     - 双节奏:基线 180s;若上一轮有新条目则切到突发 60s × N 轮再回落
-    - 状态键命名空间 `aee:reconciler:{job_id}` 与 patrol `scan_aee:{serial}`
-      隔离,避免跨 Job 污染
+    - D2:每轮先 `cat db_history` 算 sha256,内容未变直接跳过本轮
+      `process_device_logs`(计入 reconciler_skip_unchanged_total);
+      内容变化视为有新行候选 → 触发 burst
+    - 状态键(C-1 锁定决策):与 patrol `scan_aee` **共用** `state_key_prefix="scan_aee"`,
+      经同一 `db_history.state_key` helper 生成完全一致的
+      `scan_aee:{serial}:{aee_type}:processed_entries` / `:pending_pull` 键,
+      M1 双写期真正共享去重状态;M3 patrol 退役后再迁移到 `watcher:aee:*` 命名空间。
+      去重维度=(serial, aee_type)(AEE 是设备级事件、db_history 设备累积),
+      与 patrol 一致;NFS 落盘目录本就与 prefix 无关(folder_name+serial),
+      故共用键不改变 emit 语义、不引入新的正确性风险。
 
 不在本类职责（YAGNI）：
     - 不做 inotifyd 事件接收(那是 DeviceLogWatcher 职责)
@@ -30,6 +38,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
@@ -46,6 +55,20 @@ from .timestamp import parse_timestamp
 
 logger = logging.getLogger(__name__)
 
+# D2 指标:reconciler hash 跳过 / burst gauge。Agent 进程不一定能 import backend.core
+# (prometheus 缺失或 core.__init__ 触发 DB),故 best-effort + no-op fallback。
+try:
+    from ...core.metrics import (
+        record_reconciler_skip_unchanged,
+        set_reconciler_burst_mode_active,
+    )
+except Exception:  # pragma: no cover - 仅在 agent 无法 import core 时走到
+    def record_reconciler_skip_unchanged(host_id: str) -> None:  # type: ignore
+        pass
+
+    def set_reconciler_burst_mode_active(host_id: str, active: bool) -> None:  # type: ignore
+        pass
+
 
 # ----------------------------------------------------------------------
 # Stats
@@ -57,6 +80,7 @@ class ReconcilerStats:
 
     ticks_total: int = 0
     ticks_with_new: int = 0
+    ticks_skipped_unchanged: int = 0   # D2: db_history hash 未变跳过本轮 process
     new_entries_total: int = 0
     signals_emitted: int = 0
     signals_dropped: int = 0       # contract violation / emit 异常
@@ -64,12 +88,13 @@ class ReconcilerStats:
 
     def to_dict(self) -> Dict[str, int]:
         return {
-            "ticks_total":       self.ticks_total,
-            "ticks_with_new":    self.ticks_with_new,
-            "new_entries_total": self.new_entries_total,
-            "signals_emitted":   self.signals_emitted,
-            "signals_dropped":   self.signals_dropped,
-            "tick_errors":       self.tick_errors,
+            "ticks_total":             self.ticks_total,
+            "ticks_with_new":          self.ticks_with_new,
+            "ticks_skipped_unchanged": self.ticks_skipped_unchanged,
+            "new_entries_total":       self.new_entries_total,
+            "signals_emitted":         self.signals_emitted,
+            "signals_dropped":         self.signals_dropped,
+            "tick_errors":             self.tick_errors,
         }
 
 
@@ -81,6 +106,11 @@ _AEE_TYPE_TO_CATEGORY = {
     "aee_exp":        "AEE",
     "vendor_aee_exp": "VENDOR_AEE",
 }
+
+# C-1 锁定决策:reconciler 与 patrol scan_aee 共用此 state_key_prefix,
+# 经 db_history.state_key 生成完全一致的去重键,M1 双写期共享 processed 状态。
+# (与 ProcessConfig.state_key_prefix 默认值一致;集中成常量便于 M3 迁移到 watcher:aee:*)
+SHARED_PATROL_STATE_PREFIX = "scan_aee"
 
 
 def _env_truthy(name: str, default: bool = False) -> bool:
@@ -268,6 +298,7 @@ class AeeDbHistoryReconciler:
         aee_paths: Optional[List[str]] = None,
         export_mobilelog: bool = True,
         export_bugreport: bool = True,
+        shell_fn: Optional[Callable[[str, int], Optional[str]]] = None,
     ) -> None:
         self._emitter = signal_emitter
         self._state_store = state_store
@@ -292,8 +323,11 @@ class AeeDbHistoryReconciler:
             if burst_rounds is not None
             else _env_int("STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS", 5)
         )
-        # state_key_prefix 按 Job 隔离;与 patrol scan_aee:{serial} 命名空间不冲突
-        self._state_prefix = f"aee:reconciler:{self._job_id}"
+        # C-1 锁定决策:与 patrol 共用 state_key_prefix="scan_aee" → 经同一
+        # db_history.state_key helper 生成 byte-identical 的
+        # scan_aee:{serial}:{aee_type}:processed_entries / :pending_pull 键,
+        # M1 双写期真正共享去重状态(M3 patrol 退役后迁移到 watcher:aee:* 命名空间)。
+        self._state_prefix = SHARED_PATROL_STATE_PREFIX
 
         self._cfg = ProcessConfig(
             aee_paths=aee_paths or ["/data/aee_exp", "/data/vendor/aee_exp"],
@@ -308,12 +342,17 @@ class AeeDbHistoryReconciler:
         self.stats = ReconcilerStats()
         self._burst_remaining = 0
         self._state_lock = threading.Lock()
-        self._shell_fn = _make_interruptible_adb_shell_fn(
+        # D2: 默认 adb 操作需要可中断,避免 stop() 返回后后台线程继续占设备。
+        self._shell_fn = shell_fn or _make_interruptible_adb_shell_fn(
             self._serial, self._adb_path, self._stop_evt,
         )
         self._pull_fn = _make_interruptible_adb_pull_fn(
             self._serial, self._adb_path, self._stop_evt,
         )
+        # D2: per-aee_type 的 db_history 内容 sha256 缓存(上轮值);用于"内容未变跳过"
+        self._db_history_hashes: Dict[str, str] = {}
+        # D2: 本轮是否存在"新行候选"(实际新增 pull 或 hash 变化) → 驱动 burst
+        self._last_had_new_candidate = False
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -341,7 +380,13 @@ class AeeDbHistoryReconciler:
         self._stop_evt.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=timeout)
+        if self._thread is not None and self._thread.is_alive():
+            logger.warning(
+                "aee_reconciler_stop_timeout serial=%s job=%d timeout=%.1fs",
+                self._serial, self._job_id, timeout,
+            )
         self._started = False
+        set_reconciler_burst_mode_active(self._host_id, False)
         logger.info(
             "aee_reconciler_stopped serial=%s job=%d stats=%s",
             self._serial, self._job_id, self.stats.to_dict(),
@@ -366,7 +411,7 @@ class AeeDbHistoryReconciler:
             first_run = False
 
             try:
-                new_count = self.tick_once()
+                self.tick_once()
             except Exception:
                 self.stats.tick_errors += 1
                 logger.exception(
@@ -376,15 +421,72 @@ class AeeDbHistoryReconciler:
                 continue
 
             with self._state_lock:
-                if new_count > 0:
-                    # 命中突发窗:重置剩余突发轮数
+                # D2: burst 由"新行候选"驱动(实际新增 pull 或 db_history hash 变化),
+                # 而非仅靠 process_device_logs 的 pulled 计数 — 这样即便某行已被 patrol
+                # 抢先 pull(本轮 pulled=0),hash 变化仍会触发 burst 加密探测;
+                # hash 未变跳过的轮次 _last_had_new_candidate=False,只递减、不重置 burst。
+                if self._last_had_new_candidate:
                     self._burst_remaining = self._burst_rounds
                 elif self._burst_remaining > 0:
                     self._burst_remaining -= 1
+                burst_active = self._burst_remaining > 0
+            set_reconciler_burst_mode_active(self._host_id, burst_active)
+
+    def _read_db_history_hashes(self) -> Dict[str, Optional[str]]:
+        """D2: per-aee_type `cat db_history` 内容 sha256。不可读返回 None。"""
+        hashes: Dict[str, Optional[str]] = {}
+        for remote in self._cfg.aee_paths:
+            remote = remote.rstrip("/")
+            aee_type = "vendor_aee_exp" if "vendor" in remote else "aee_exp"
+            content = self._shell_fn(f"cat {remote}/db_history", 30)
+            if content is None:
+                hashes[aee_type] = None
+            else:
+                hashes[aee_type] = hashlib.sha256(
+                    content.encode("utf-8", "replace")
+                ).hexdigest()
+        return hashes
+
+    def _db_history_changed(self) -> Optional[bool]:
+        """D2: 比较本轮与缓存的 db_history hash。
+
+        返回:
+            True  — 至少一个 aee_type 内容变化(或首轮无缓存) → 应跑 process
+            False — 全部可读且与上轮一致 → 可跳过本轮 process
+            None  — 存在不可读路径(adb 不可用/db_history 缺失) → 无法判定,保守跑 process
+        始终更新可读项的缓存,使下一轮比较有意义。
+        """
+        current = self._read_db_history_hashes()
+        if any(v is None for v in current.values()):
+            for k, v in current.items():
+                if v is not None:
+                    self._db_history_hashes[k] = v
+            return None
+        changed = (current != self._db_history_hashes)
+        self._db_history_hashes = dict(current)
+        return changed
 
     def tick_once(self) -> int:
-        """单轮 diff + emit。返回本轮新增条目数。"""
+        """单轮 diff + emit。返回本轮新增条目数。
+
+        D2:先比对 db_history 内容 hash;全部可读且未变则跳过 process_device_logs
+        (计 ticks_skipped_unchanged + reconciler_skip_unchanged_total),返回 0 且
+        不视为"新行候选"(不触发/重置 burst)。hash 变化或不可读则照常 process,
+        并把"hash 变化"也算作新行候选 → 即便本轮 pulled=0(已被 patrol 抢先 pull)
+        仍触发 burst。
+        """
         self.stats.ticks_total += 1
+
+        changed = self._db_history_changed()
+        if changed is False:
+            self.stats.ticks_skipped_unchanged += 1
+            self._last_had_new_candidate = False
+            record_reconciler_skip_unchanged(self._host_id)
+            logger.debug(
+                "aee_reconciler_skip_unchanged serial=%s job=%d", self._serial, self._job_id,
+            )
+            return 0
+
         result = process_device_logs(
             serial=self._serial,
             job_id=self._job_id,
@@ -416,6 +518,9 @@ class AeeDbHistoryReconciler:
                 "aee_reconciler_tick_errors serial=%s job=%d errors=%s",
                 self._serial, self._job_id, result.errors[:5],
             )
+        # D2: 新行候选 = 实际新增 pull 或 db_history hash 变化(changed is True)。
+        # changed is None(不可读)不算 hash 变化,仅按 new_count 判定。
+        self._last_had_new_candidate = (new_count > 0) or (changed is True)
         return new_count
 
     # ------------------------------------------------------------------

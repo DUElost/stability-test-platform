@@ -183,6 +183,15 @@ class DeviceLogWatcher:
     def aee_reconciler_active(self) -> bool:
         return self._aee_reconciler_active
 
+    def set_aee_reconciler_active(self, active: bool) -> None:
+        """M0/PR #2(C-3):公开切换 reconciler 接管标记。
+
+        JobSession 在 reconciler.start() 失败回滚时调用 set_aee_reconciler_active(False),
+        让本 watcher 恢复 inotifyd 直接 emit AEE/VENDOR_AEE — 否则 emit 被关闭且
+        reconciler 又没跑,崩溃信号会静默丢失。bool 赋值在 CPython 下原子,无需加锁。
+        """
+        self._aee_reconciler_active = bool(active)
+
     def _should_emit_inotifyd(self, event: WatcherEvent) -> bool:
         """M0/PR #2: AEE/VENDOR_AEE 在 reconciler 接管期间不由 inotifyd 路径 emit。"""
         if not self._aee_reconciler_active:

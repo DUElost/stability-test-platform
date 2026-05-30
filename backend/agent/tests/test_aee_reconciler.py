@@ -301,8 +301,15 @@ def test_emit_contract_violation_increments_dropped(monkeypatch):
 # 状态键命名空间
 # ----------------------------------------------------------------------
 
-def test_state_key_prefix_isolated_per_job():
-    """state_key_prefix 形如 aee:reconciler:{job_id};不同 job 不共享。"""
+def test_state_key_prefix_shared_with_patrol_scan_aee():
+    """C-1 锁定决策:reconciler 与 patrol scan_aee 共用 state_key_prefix='scan_aee'。
+
+    不同 job 共用同一 prefix → 去重维度为 (serial, aee_type),与 patrol 一致。
+    断言经 db_history.state_key helper 生成的键与 patrol 默认 ProcessConfig 完全一致。
+    """
+    from backend.agent.aee.db_history import state_key
+    from backend.agent.aee.processor import ProcessConfig
+
     rec_a = AeeDbHistoryReconciler(
         signal_emitter=_FakeEmitter(),
         state_store=_MemStore(),
@@ -317,10 +324,17 @@ def test_state_key_prefix_isolated_per_job():
         job_id=1002,
         host_id="HOST",
     )
-    assert rec_a._state_prefix == "aee:reconciler:1001"
-    assert rec_b._state_prefix == "aee:reconciler:1002"
-    assert rec_a._cfg.state_key_prefix == "aee:reconciler:1001"
-    assert rec_b._cfg.state_key_prefix == "aee:reconciler:1002"
+    assert rec_a._state_prefix == "scan_aee"
+    assert rec_b._state_prefix == "scan_aee"
+    assert rec_a._cfg.state_key_prefix == "scan_aee"
+    assert rec_b._cfg.state_key_prefix == "scan_aee"
+
+    # 与 patrol(ProcessConfig 默认)生成的 processed 键 byte-identical → 真正共享去重状态
+    patrol_default_prefix = ProcessConfig().state_key_prefix
+    assert rec_a._cfg.state_key_prefix == patrol_default_prefix
+    reconciler_key = state_key("SX", "aee_exp", prefix=rec_a._cfg.state_key_prefix)
+    patrol_key = state_key("SX", "aee_exp", prefix=patrol_default_prefix)
+    assert reconciler_key == patrol_key == "scan_aee:SX:aee_exp:processed_entries"
 
 
 # ----------------------------------------------------------------------
@@ -340,6 +354,7 @@ def test_dual_tempo_switches_to_burst_after_new_entry(monkeypatch):
         baseline_interval_seconds=180.0,
         burst_interval_seconds=60.0,
         burst_rounds=5,
+        shell_fn=lambda cmd, timeout: None,   # 不打真实 adb;None → 保守跑 process
     )
     # 模拟一个有新条目的 tick → _burst_remaining 应被设到 5
     monkeypatch.setattr(
@@ -397,6 +412,7 @@ def test_run_loop_uses_burst_interval_after_new_entry(monkeypatch):
         baseline_interval_seconds=10.0,
         burst_interval_seconds=0.05,    # 极短便于测试
         burst_rounds=3,
+        shell_fn=lambda cmd, timeout: None,   # 不打真实 adb;None → 保守跑 process
     )
     rec.start()
     try:
@@ -409,6 +425,137 @@ def test_run_loop_uses_burst_interval_after_new_entry(monkeypatch):
 
     assert rec.stats.ticks_total >= 2
     assert rec.stats.signals_emitted == 1   # 首轮的 1 条
+
+
+# ----------------------------------------------------------------------
+# D2: db_history hash 跳过 + burst 兼容
+# ----------------------------------------------------------------------
+
+def _shell_returning(content_holder: Dict[str, Any]):
+    """构造 shell_fn:对 `cat .../db_history` 返回 content_holder['v'],其余空串。"""
+    def _shell(cmd: str, timeout: int) -> Optional[str]:
+        if "db_history" in cmd:
+            return content_holder["v"]
+        return ""
+    return _shell
+
+
+def test_tick_skips_process_when_db_history_hash_unchanged(monkeypatch):
+    """D2: db_history 内容未变 → 跳过 process_device_logs,计 ticks_skipped_unchanged。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+    calls = {"pdl": 0}
+
+    def fake_pdl(*, on_new_entry=None, **_):
+        calls["pdl"] += 1
+        return ProcessResult(pulled=0)
+
+    monkeypatch.setattr("backend.agent.aee.reconciler.process_device_logs", fake_pdl)
+
+    holder = {"v": "db.0,CRASH,...\n"}
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter,
+        state_store=store,
+        serial="SX",
+        job_id=2001,
+        host_id="HOST",
+        shell_fn=_shell_returning(holder),
+    )
+
+    # 第一轮:cache 空 → hash 变化 → process 被调
+    rec.tick_once()
+    assert calls["pdl"] == 1
+    assert rec.stats.ticks_skipped_unchanged == 0
+
+    # 第二轮:内容一致 → 跳过 process
+    rec.tick_once()
+    assert calls["pdl"] == 1, "hash 未变时不应再调 process_device_logs"
+    assert rec.stats.ticks_skipped_unchanged == 1
+    assert rec._last_had_new_candidate is False
+
+
+def test_hash_unchanged_skip_does_not_reset_burst(monkeypatch):
+    """D2: hash 未变跳过的轮次只递减 burst,不重置(模拟 _run 状态机)。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        lambda *, on_new_entry=None, **_: ProcessResult(pulled=0),
+    )
+    holder = {"v": "same\n"}
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter, state_store=store, serial="SX",
+        job_id=2002, host_id="HOST", burst_rounds=5,
+        shell_fn=_shell_returning(holder),
+    )
+    rec.tick_once()                       # 首轮:hash 变化 → process
+    rec._burst_remaining = 3              # 假装处于 burst 中
+    rec.tick_once()                       # 第二轮:hash 未变 → 跳过
+    assert rec.stats.ticks_skipped_unchanged == 1
+    # 复制 _run 决策:跳过轮 _last_had_new_candidate=False → 递减
+    with rec._state_lock:
+        if rec._last_had_new_candidate:
+            rec._burst_remaining = rec._burst_rounds
+        elif rec._burst_remaining > 0:
+            rec._burst_remaining -= 1
+    assert rec._burst_remaining == 2, "未变跳过应递减而非重置到 5"
+
+
+def test_hash_change_triggers_burst_even_if_pulled_zero(monkeypatch):
+    """D2: hash 变化即视为新行候选,即便 process 本轮 pulled=0(已被 patrol 抢先 pull)也触发 burst。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        lambda *, on_new_entry=None, **_: ProcessResult(pulled=0),
+    )
+    holder = {"v": "v1\n"}
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter, state_store=store, serial="SX",
+        job_id=2003, host_id="HOST", burst_rounds=5,
+        shell_fn=_shell_returning(holder),
+    )
+    # 首轮:cache 空 → hash 变化 → process(pulled=0) → 仍是新行候选
+    n1 = rec.tick_once()
+    assert n1 == 0
+    assert rec._last_had_new_candidate is True
+
+    # 内容继续变化 → 仍触发 burst 候选
+    holder["v"] = "v1\nv2\n"
+    n2 = rec.tick_once()
+    assert n2 == 0
+    assert rec._last_had_new_candidate is True
+
+    # 复制 _run 决策 → burst 应被设满
+    with rec._state_lock:
+        if rec._last_had_new_candidate:
+            rec._burst_remaining = rec._burst_rounds
+    assert rec._burst_remaining == 5
+
+
+def test_unreadable_db_history_runs_process_conservatively(monkeypatch):
+    """D2: cat 返回 None(不可读)→ 无法判定 → 保守跑 process(不跳过)。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+    calls = {"pdl": 0}
+
+    def fake_pdl(*, on_new_entry=None, **_):
+        calls["pdl"] += 1
+        return ProcessResult(pulled=0)
+
+    monkeypatch.setattr("backend.agent.aee.reconciler.process_device_logs", fake_pdl)
+
+    def shell_none(cmd: str, timeout: int) -> Optional[str]:
+        return None  # adb 不可用
+
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter, state_store=store, serial="SX",
+        job_id=2004, host_id="HOST", shell_fn=shell_none,
+    )
+    rec.tick_once()
+    rec.tick_once()
+    assert calls["pdl"] == 2, "不可读时每轮都应保守跑 process"
+    assert rec.stats.ticks_skipped_unchanged == 0
 
 
 # ----------------------------------------------------------------------
@@ -430,6 +577,7 @@ def test_start_stop_idempotent(monkeypatch):
         host_id="HOST",
         baseline_interval_seconds=60.0,
         burst_interval_seconds=60.0,
+        shell_fn=lambda cmd, timeout: None,   # 不打真实 adb
     )
     rec.start()
     rec.start()    # 重复 start 不应抛
@@ -455,16 +603,14 @@ def test_stop_joins_reconciler_thread_when_default_adb_shell_is_blocked(monkeypa
     """stop() 必须让后台线程真正退出,不能在默认 adb shell 卡住时直接带着活线程返回。"""
     emitter = _FakeEmitter()
     store = _MemStore()
-
-    def fake_pdl(*, shell_fn=None, **_):
-        assert shell_fn is not None
-        shell_fn("cat /data/aee_exp/db_history", 30)
-        return ProcessResult(pulled=0)
-
     monkeypatch.setattr(
         "backend.agent.aee.reconciler.process_device_logs",
-        fake_pdl,
+        lambda *, on_new_entry=None, **_: ProcessResult(pulled=0),
     )
+
+    def slow_run(argv, **kwargs):
+        time.sleep(1.0)
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
 
     class _BlockingPopen:
         def __init__(self, argv, **kwargs):
@@ -503,6 +649,7 @@ def test_stop_joins_reconciler_thread_when_default_adb_shell_is_blocked(monkeypa
 
     fake_subprocess = type("FakeSubprocess", (), {})()
     fake_subprocess.PIPE = object()
+    fake_subprocess.TimeoutExpired = subprocess.TimeoutExpired
     fake_subprocess._instances = []
 
     def _fake_popen(argv, **kwargs):
@@ -512,6 +659,7 @@ def test_stop_joins_reconciler_thread_when_default_adb_shell_is_blocked(monkeypa
 
     fake_subprocess.Popen = _fake_popen
 
+    monkeypatch.setattr("backend.agent.aee.mobilelog.subprocess.run", slow_run)
     monkeypatch.setattr(
         "backend.agent.aee.reconciler.subprocess", fake_subprocess, raising=False,
     )
@@ -522,17 +670,16 @@ def test_stop_joins_reconciler_thread_when_default_adb_shell_is_blocked(monkeypa
         serial="SX",
         job_id=1203,
         host_id="HOST",
-        baseline_interval_seconds=60.0,
-        burst_interval_seconds=60.0,
     )
     rec.start()
     deadline = time.time() + 1.0
     while time.time() < deadline:
-        if fake_subprocess._instances:
+        instances = getattr(fake_subprocess, "_instances", [])
+        if instances:
             break
         time.sleep(0.01)
 
-    rec.stop(timeout=0.5)
+    rec.stop(timeout=0.2)
 
     assert rec._thread is not None
     assert rec._thread.is_alive() is False, "stop 返回时不应遗留存活的 reconciler 线程"
