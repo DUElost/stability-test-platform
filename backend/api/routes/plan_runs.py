@@ -24,6 +24,7 @@ from backend.api.routes.auth import get_current_active_user, User
 from backend.core.artifact_paths import (
     ArtifactPathError,
     ArtifactPathNotFoundError,
+    get_local_artifact_roots,
     resolve_local_artifact_path,
 )
 from backend.core.audit import record_audit
@@ -1706,7 +1707,8 @@ class WatcherSummaryOut(BaseModel):
     # M0/C-6 (§2.4 #5): 该 PlanRun 下 Job 的 watcher 能力快照(取最"降级"的一档)。
     #   来源:JobInstance.watcher_capability 列(由 Agent 在 complete/heartbeat 回填的
     #   JobSession.summary.watcher_capability)。无可靠来源时为 None;
-    #   前端在 'unavailable' 时显示「reconciler 单通道模式」徽章(reconciler 为唯一通道)。
+    #   前端在 'unavailable' 时显示「Watcher 不可用」徽章(watcher 未正常启动,
+    #   AEE reconciler 可能未运行,勿当作有 reconciler 兜底)。
     watcher_capability: Optional[str] = None
     # M1/T1-3a: 双写灰度态字段
     # legacy_patrol_in_snapshot — PlanRun.plan_snapshot.lifecycle.patrol 是否仍含
@@ -2062,7 +2064,7 @@ class AeeReconciliationOut(BaseModel):
     other_emitted: int
     total_emitted: int
     by_serial: list[AeeReconBySerialOut]
-    # NFS 侧:后端可访问 STP_AEE_NFS_ROOT 时扫 *.dbg 计数,否则 None
+    # NFS 侧:由本 Run 信号 extra.nfs_path 推导限定目录后扫 *.dbg 计数;无法限定时 None
     nfs_dbg_files: Optional[int] = None
     nfs_root_scanned: Optional[str] = None
     # NFS 上有 .dbg 但 reconciler signal 缺失的目录名(best-effort basename 级启发式)
@@ -2132,38 +2134,121 @@ def _aggregate_aee_recon_signals(
     return by_serial, totals, recon_dirs
 
 
-def _scan_nfs_dbg_files(
-    nfs_root: Optional[str],
-) -> tuple[Optional[int], Optional[set[str]], list[str]]:
-    """扫 STP_AEE_NFS_ROOT 下 *.dbg 文件(M1 NFS 侧对账)。
+_AEE_NFS_SUBDIRS = frozenset({"AEE", "VENDOR_AEE"})
 
-    后端通常不挂载 NFS → root 未配置 / 不可访问时返回 (None, None, notes),
-    notes 说明需 Agent 侧对账。返回 (file_count, dbg_parent_dir_names, notes)。
+
+def _aee_nfs_path_to_device_root(nfs_path: str) -> Optional[Path]:
+    """从 signal extra.nfs_path 反推设备级 NFS 目录 {folder}/{serial}/。"""
+    raw = (nfs_path or "").strip()
+    if not raw:
+        return None
+    parts = Path(raw).parts
+    for idx, part in enumerate(parts):
+        if part in _AEE_NFS_SUBDIRS:
+            if idx == 0:
+                return None
+            return Path(*parts[:idx])
+    p = Path(raw)
+    return p if p.is_dir() else p.parent
+
+
+def _path_within_artifact_roots(path: Path) -> bool:
+    resolved = path.resolve(strict=False)
+    return any(resolved.is_relative_to(root) for root in get_local_artifact_roots())
+
+
+def _derive_aee_nfs_scan_roots(
+    db: Session, *, job_ids: list[int],
+) -> list[Path]:
+    """从本 PlanRun 的 AEE/VENDOR_AEE 信号 extra.nfs_path 推导 NFS 扫描根(设备级)。
+
+    优先使用 nfs_path;若无则尝试 STP_AEE_NFS_ROOT 下 {folder}/{serial} 匹配。
+    所有根必须在 artifact_paths 白名单内。
+    """
+    roots: set[Path] = set()
+    if not job_ids:
+        return []
+
+    rows = db.execute(
+        text("""
+            SELECT DISTINCT extra->>'nfs_path' AS nfs_path
+            FROM job_log_signal
+            WHERE job_id = ANY(:job_ids)
+              AND category IN ('AEE', 'VENDOR_AEE')
+              AND extra ? 'nfs_path'
+              AND NULLIF(extra->>'nfs_path', '') IS NOT NULL
+        """),
+        {"job_ids": list(job_ids)},
+    ).all()
+    for (nfs_path,) in rows:
+        device_root = _aee_nfs_path_to_device_root(str(nfs_path))
+        if device_root is not None and _path_within_artifact_roots(device_root):
+            roots.add(device_root.resolve(strict=False))
+
+    if roots:
+        return sorted(roots)
+
+    nfs_root_str = (os.getenv("STP_AEE_NFS_ROOT") or "").strip()
+    if not nfs_root_str:
+        return []
+    nfs_root = Path(nfs_root_str)
+    if not nfs_root.is_dir():
+        return []
+
+    job_device_rows = db.execute(
+        select(JobInstance.id, Device.serial)
+        .join(Device, Device.id == JobInstance.device_id)
+        .where(JobInstance.id.in_(job_ids))
+    ).all()
+    for _job_id, serial in job_device_rows:
+        serial = (serial or "").strip()
+        if not serial:
+            continue
+        try:
+            for folder_dir in nfs_root.iterdir():
+                if not folder_dir.is_dir():
+                    continue
+                device_dir = (folder_dir / serial).resolve(strict=False)
+                if device_dir.is_dir() and _path_within_artifact_roots(device_dir):
+                    roots.add(device_dir)
+        except OSError:
+            continue
+    return sorted(roots)
+
+
+def _scan_nfs_dbg_files(
+    scan_roots: list[Path],
+) -> tuple[Optional[int], Optional[set[str]], list[str]]:
+    """在限定目录集合内扫 *.dbg 文件(M1 NFS 侧对账)。
+
+    不对 STP_AEE_NFS_ROOT 全根 rglob;scan_roots 为空时返回 (None, None, notes)。
+    返回 (file_count, dbg_parent_dir_names, notes)。
     """
     notes: list[str] = []
-    if not nfs_root:
+    if not scan_roots:
         notes.append(
-            "STP_AEE_NFS_ROOT 未配置;后端通常不挂载 NFS,NFS 侧 .dbg 对账需在 Agent 侧执行。"
-        )
-        return None, None, notes
-    root = Path(nfs_root)
-    if not root.is_dir():
-        notes.append(
-            f"STP_AEE_NFS_ROOT={nfs_root} 在后端不可访问;NFS 侧 .dbg 对账需 Agent 侧执行。"
+            "无法限定本 Run 的 NFS 范围,请用 signal 侧对账。"
         )
         return None, None, notes
 
     cap = 200_000
     count = 0
     dirs: set[str] = set()
-    notes.append(f"NFS 扫描模式 *.dbg,根目录 {nfs_root}。")
+    roots_summary = ", ".join(str(r) for r in scan_roots[:5])
+    if len(scan_roots) > 5:
+        roots_summary += f" …(+{len(scan_roots) - 5})"
+    notes.append(f"NFS 扫描模式 *.dbg,限定目录 {roots_summary}。")
     try:
-        for f in root.rglob("*.dbg"):
-            count += 1
-            dirs.add(f.parent.name)
-            if count >= cap:
-                notes.append(f"NFS *.dbg 扫描达到上限 {cap},计数被截断。")
-                break
+        for root in scan_roots:
+            if not root.is_dir():
+                notes.append(f"扫描根 {root} 不可访问,已跳过。")
+                continue
+            for f in root.rglob("*.dbg"):
+                count += 1
+                dirs.add(f.parent.name)
+                if count >= cap:
+                    notes.append(f"NFS *.dbg 扫描达到上限 {cap},计数被截断。")
+                    return count, dirs, notes
     except OSError as exc:
         notes.append(f"NFS 扫描出错: {exc}")
         return None, None, notes
@@ -2195,9 +2280,8 @@ def get_plan_run_aee_reconciliation(
 
     by_serial_map, totals, recon_dirs = _aggregate_aee_recon_signals(db, job_ids=job_ids)
 
-    nfs_count, nfs_dirs, notes = _scan_nfs_dbg_files(
-        (os.getenv("STP_AEE_NFS_ROOT") or "").strip() or None
-    )
+    scan_roots = _derive_aee_nfs_scan_roots(db, job_ids=job_ids)
+    nfs_count, nfs_dirs, notes = _scan_nfs_dbg_files(scan_roots)
 
     missing_in_signal: list[str] = []
     if nfs_dirs is not None:
@@ -2216,6 +2300,8 @@ def get_plan_run_aee_reconciliation(
     if not job_ids:
         notes.append("该 PlanRun 无关联 Job,signal 侧计数为空。")
 
+    nfs_root_scanned = ", ".join(str(r) for r in scan_roots) if scan_roots else None
+
     return ok(AeeReconciliationOut(
         plan_run_id=pr.id,
         reconciler_emitted=totals["reconciler"],
@@ -2225,7 +2311,7 @@ def get_plan_run_aee_reconciliation(
         total_emitted=totals["total"],
         by_serial=by_serial,
         nfs_dbg_files=nfs_count,
-        nfs_root_scanned=(os.getenv("STP_AEE_NFS_ROOT") or "").strip() or None,
+        nfs_root_scanned=nfs_root_scanned,
         missing_in_signal=missing_in_signal,
         notes=notes,
     ))

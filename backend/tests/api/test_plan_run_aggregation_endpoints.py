@@ -1558,11 +1558,11 @@ class TestAeeReconciliationEndpoint:
         assert by_serial[s3]["other"] == 1   # fixture 10003@s3
         assert by_serial[s3]["total"] == 1
 
-        # 后端测试环境未配置 STP_AEE_NFS_ROOT → NFS 侧为 None + note
+        # 无本 Run 可推导的 nfs_path / 设备目录 → NFS 侧为 None + note
         assert data["nfs_dbg_files"] is None
         assert data["nfs_root_scanned"] is None
         assert data["missing_in_signal"] == []
-        assert any("STP_AEE_NFS_ROOT" in n for n in data["notes"])
+        assert any("无法限定本 Run 的 NFS 范围" in n for n in data["notes"])
 
     def test_reconciliation_ignores_non_aee_categories(
         self, client, auth_headers, db_session, chain_setup,
@@ -1621,3 +1621,52 @@ class TestAeeReconciliationEndpoint:
             "/api/v1/plan-runs/999999/aee-reconciliation", headers=auth_headers,
         )
         assert resp.status_code == 404
+
+    def test_reconciliation_nfs_scoped_to_plan_run_signals(
+        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
+    ):
+        """NFS *.dbg 扫描限定在本 Run 信号 nfs_path 推导的设备目录,不扫全库。"""
+        nfs_root = tmp_path / "aee_nfs"
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        s1 = chain_setup["device_completed"].serial
+        s2 = chain_setup["device_running"].serial
+
+        run_a_dir = nfs_root / "RunA" / s1 / "AEE" / "crash_a"
+        run_a_dir.mkdir(parents=True)
+        (run_a_dir / "a1.dbg").write_text("a")
+        (run_a_dir / "a2.dbg").write_text("b")
+
+        run_b_dir = nfs_root / "RunB" / s2 / "AEE" / "crash_b"
+        run_b_dir.mkdir(parents=True)
+        for i in range(3):
+            (run_b_dir / f"b{i}.dbg").write_text("x")
+
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
+
+        db_session.add(
+            JobLogSignal(
+                id=42001, job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=500, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.A",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "pull_source": "reconciler",
+                    "nfs_path": str(run_a_dir),
+                },
+            ),
+        )
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["nfs_dbg_files"] == 2
+        assert "RunA" in (data["nfs_root_scanned"] or "")
+        assert "RunB" not in (data["nfs_root_scanned"] or "")
+        assert "crash_b" not in data["missing_in_signal"]
+        assert data["missing_in_signal"] == []

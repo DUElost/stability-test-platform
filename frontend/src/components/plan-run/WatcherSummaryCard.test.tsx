@@ -316,7 +316,7 @@ describe('WatcherSummaryCard', () => {
   // M0/C-6 (§2.4 #5): watcher_capability 单通道降级徽章
   // ----------------------------------------------------------------------
 
-  it('renders single-channel badge when watcher_capability is unavailable', () => {
+  it('renders unavailable badge when watcher_capability is unavailable', () => {
     render(
       <WatcherSummaryCard
         data={{ ...fixture, watcher_capability: 'unavailable' }}
@@ -324,8 +324,10 @@ describe('WatcherSummaryCard', () => {
     );
     const badge = screen.getByTestId('watcher-capability-badge');
     expect(badge).toHaveAttribute('data-capability', 'unavailable');
-    expect(badge).toHaveTextContent('reconciler 单通道模式');
-    expect(badge.getAttribute('title') ?? '').toMatch(/reconciler/);
+    expect(badge).toHaveTextContent('Watcher 不可用');
+    const title = badge.getAttribute('title') ?? '';
+    expect(title).toMatch(/Watcher 未正常启动/);
+    expect(title).not.toMatch(/单通道/);
   });
 
   it('does not render capability badge for normal capability (inotifyd_realtime)', () => {

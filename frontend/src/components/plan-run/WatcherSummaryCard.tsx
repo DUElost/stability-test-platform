@@ -216,9 +216,8 @@ function DualWriteBadge({
   );
 }
 
-// M0/C-6 (§2.4 #5): watcher_capability=unavailable 时,inotifyd 与 polling 探测全部失败,
-//   AEE 仅由 reconciler 周期 db_history diff 单通道提供。给运维一个明确的降级提示徽章。
-//   其余 capability(inotifyd_*/polling/stub/skipped/null)不渲染。
+// M0/C-6 (§2.4 #5): watcher_capability=unavailable 表示 watcher 未正常启动,
+//   AEE reconciler 可能也未运行;勿将 unavailable 误解为 reconciler 单通道兜底。
 function CapabilityBadge({ capability }: { capability: string | null | undefined }) {
   if (capability !== 'unavailable') return null;
   return (
@@ -226,13 +225,12 @@ function CapabilityBadge({ capability }: { capability: string | null | undefined
       data-testid="watcher-capability-badge"
       data-capability="unavailable"
       title={
-        'watcher_capability=unavailable:inotifyd / polling 探测全部失败,' +
-        'AEE 仅由 reconciler 周期 db_history diff 单通道提供(固定 60s 节奏)。' +
-        '实时性弱于 inotifyd,但仍可兜底拉取 + emit。'
+        'watcher_capability=unavailable:Watcher 未正常启动(inotifyd / polling 探测失败)。' +
+        'AEE reconciler 可能未运行,勿当作有 reconciler 兜底;请以 signal 侧数据为准。'
       }
       className="ml-1 inline-flex items-center rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-orange-800"
     >
-      reconciler 单通道模式
+      Watcher 不可用
     </span>
   );
 }
