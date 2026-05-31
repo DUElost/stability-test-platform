@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "commandWindows": "Set-Location \"frontend\"; npx tsc --noEmit",
+            "statusMessage": "TypeScript type check...",
+            "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "python -m compileall backend/ -q",
+            "commandWindows": "python -m compileall backend/ -q",
+            "statusMessage": "Python syntax check...",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd frontend && npx tsc --noEmit",
+            "commandWindows": "Set-Location \"frontend\"; npx tsc --noEmit",
+            "statusMessage": "TypeScript check before applying changes...",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
