@@ -1561,6 +1561,9 @@ class TestAeeReconciliationEndpoint:
         # 无本 Run 可推导的 nfs_path / 设备目录 → NFS 侧为 None + note
         assert data["nfs_dbg_files"] is None
         assert data["nfs_root_scanned"] is None
+        assert data["signal_nfs_paths_checked"] == 0
+        assert data["nfs_entries_verified"] == 0
+        assert data["missing_on_disk"] == []
         assert data["missing_in_signal"] == []
         assert any("无法限定本 Run 的 NFS 范围" in n for n in data["notes"])
 
@@ -1670,3 +1673,94 @@ class TestAeeReconciliationEndpoint:
         assert "RunB" not in (data["nfs_root_scanned"] or "")
         assert "crash_b" not in data["missing_in_signal"]
         assert data["missing_in_signal"] == []
+
+    def test_reconciliation_skips_outside_artifact_roots_in_scan_summary(
+        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
+    ):
+        """仅白名单内 nfs_path 计入 checked/scanned;白名单外路径不伪装成已扫描。"""
+        nfs_root = tmp_path / "aee_nfs"
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        s1 = chain_setup["device_completed"].serial
+
+        allowed_dir = nfs_root / "RunA" / s1 / "AEE" / "crash_ok"
+        allowed_dir.mkdir(parents=True)
+        (allowed_dir / "ok.dbg").write_text("ok")
+
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
+
+        db_session.add_all([
+            JobLogSignal(
+                id=43001, job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=510, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.OK",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "pull_source": "reconciler",
+                    "nfs_path": str(allowed_dir),
+                },
+            ),
+            JobLogSignal(
+                id=43002, job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=511, category="AEE", source="legacy_patrol",
+                path_on_device="/data/aee_exp/db.SKIP",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "pull_source": "legacy_patrol",
+                    "nfs_path": "/outside/root/crash_skip",
+                },
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["nfs_dbg_files"] == 1
+        assert data["signal_nfs_paths_checked"] == 1
+        assert data["nfs_entries_verified"] == 1
+        assert str(allowed_dir) in (data["nfs_root_scanned"] or "")
+        assert "/outside/root/crash_skip" not in (data["nfs_root_scanned"] or "")
+        assert any("白名单外 nfs_path" in n for n in data["notes"])
+
+    def test_reconciliation_missing_entry_keeps_crash_dir_label(
+        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
+    ):
+        """signal 指向缺失 crash 目录时，应标记该目录名，不回退到 AEE 父目录。"""
+        nfs_root = tmp_path / "aee_nfs"
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        s1 = chain_setup["device_completed"].serial
+
+        missing_dir = nfs_root / "RunA" / s1 / "AEE" / "crash_missing"
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
+
+        db_session.add(
+            JobLogSignal(
+                id=44001, job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=520, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.MISS",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "pull_source": "reconciler",
+                    "nfs_path": str(missing_dir),
+                },
+            ),
+        )
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["signal_nfs_paths_checked"] == 1
+        assert data["nfs_entries_verified"] == 0
+        assert data["missing_on_disk"] == ["crash_missing"]
+        assert "AEE" not in data["missing_on_disk"]

@@ -2064,10 +2064,14 @@ class AeeReconciliationOut(BaseModel):
     other_emitted: int
     total_emitted: int
     by_serial: list[AeeReconBySerialOut]
-    # NFS 侧:由本 Run 信号 extra.nfs_path 推导限定目录后扫 *.dbg 计数;无法限定时 None
+    # NFS 侧:仅校验本 Run signal 的 extra.nfs_path 条目目录(非设备级 rglob)
     nfs_dbg_files: Optional[int] = None
     nfs_root_scanned: Optional[str] = None
-    # NFS 上有 .dbg 但 reconciler signal 缺失的目录名(best-effort basename 级启发式)
+    signal_nfs_paths_checked: int = 0
+    nfs_entries_verified: int = 0
+    # signal 有 nfs_path 但目录不存在或条目下无 *.dbg
+    missing_on_disk: list[str] = []
+    # 已校验条目中有 .dbg 但 reconciler signal 未覆盖的 basename(启发式)
     missing_in_signal: list[str] = []
     notes: list[str] = []
 
@@ -2134,41 +2138,15 @@ def _aggregate_aee_recon_signals(
     return by_serial, totals, recon_dirs
 
 
-_AEE_NFS_SUBDIRS = frozenset({"AEE", "VENDOR_AEE"})
-
-
-def _aee_nfs_path_to_device_root(nfs_path: str) -> Optional[Path]:
-    """从 signal extra.nfs_path 反推设备级 NFS 目录 {folder}/{serial}/。"""
-    raw = (nfs_path or "").strip()
-    if not raw:
-        return None
-    parts = Path(raw).parts
-    for idx, part in enumerate(parts):
-        if part in _AEE_NFS_SUBDIRS:
-            if idx == 0:
-                return None
-            return Path(*parts[:idx])
-    p = Path(raw)
-    return p if p.is_dir() else p.parent
-
-
 def _path_within_artifact_roots(path: Path) -> bool:
     resolved = path.resolve(strict=False)
     return any(resolved.is_relative_to(root) for root in get_local_artifact_roots())
 
 
-def _derive_aee_nfs_scan_roots(
-    db: Session, *, job_ids: list[int],
-) -> list[Path]:
-    """从本 PlanRun 的 AEE/VENDOR_AEE 信号 extra.nfs_path 推导 NFS 扫描根(设备级)。
-
-    优先使用 nfs_path;若无则尝试 STP_AEE_NFS_ROOT 下 {folder}/{serial} 匹配。
-    所有根必须在 artifact_paths 白名单内。
-    """
-    roots: set[Path] = set()
+def _collect_aee_signal_nfs_paths(db: Session, *, job_ids: list[int]) -> list[str]:
+    """本 PlanRun 下 AEE/VENDOR_AEE 信号携带的去重 extra.nfs_path 列表。"""
     if not job_ids:
         return []
-
     rows = db.execute(
         text("""
             SELECT DISTINCT extra->>'nfs_path' AS nfs_path
@@ -2180,79 +2158,123 @@ def _derive_aee_nfs_scan_roots(
         """),
         {"job_ids": list(job_ids)},
     ).all()
-    for (nfs_path,) in rows:
-        device_root = _aee_nfs_path_to_device_root(str(nfs_path))
-        if device_root is not None and _path_within_artifact_roots(device_root):
-            roots.add(device_root.resolve(strict=False))
-
-    if roots:
-        return sorted(roots)
-
-    nfs_root_str = (os.getenv("STP_AEE_NFS_ROOT") or "").strip()
-    if not nfs_root_str:
-        return []
-    nfs_root = Path(nfs_root_str)
-    if not nfs_root.is_dir():
-        return []
-
-    job_device_rows = db.execute(
-        select(JobInstance.id, Device.serial)
-        .join(Device, Device.id == JobInstance.device_id)
-        .where(JobInstance.id.in_(job_ids))
-    ).all()
-    for _job_id, serial in job_device_rows:
-        serial = (serial or "").strip()
-        if not serial:
-            continue
-        try:
-            for folder_dir in nfs_root.iterdir():
-                if not folder_dir.is_dir():
-                    continue
-                device_dir = (folder_dir / serial).resolve(strict=False)
-                if device_dir.is_dir() and _path_within_artifact_roots(device_dir):
-                    roots.add(device_dir)
-        except OSError:
-            continue
-    return sorted(roots)
+    return [str(nfs_path) for (nfs_path,) in rows if nfs_path]
 
 
-def _scan_nfs_dbg_files(
-    scan_roots: list[Path],
-) -> tuple[Optional[int], Optional[set[str]], list[str]]:
-    """在限定目录集合内扫 *.dbg 文件(M1 NFS 侧对账)。
+def _aee_entry_dir_for_nfs_path(path: Path) -> Path:
+    """AEE signal.extra.nfs_path 的契约就是 crash 条目目录本身。"""
+    return path
 
-    不对 STP_AEE_NFS_ROOT 全根 rglob;scan_roots 为空时返回 (None, None, notes)。
-    返回 (file_count, dbg_parent_dir_names, notes)。
+
+def _count_dbg_in_entry_dir(entry_dir: Path) -> int:
+    """仅统计条目目录下直接的 *.dbg(不对设备目录 rglob)。"""
+    if not entry_dir.is_dir():
+        return 0
+    return sum(1 for f in entry_dir.glob("*.dbg") if f.is_file())
+
+
+def _verify_signal_nfs_paths(
+    nfs_paths: list[str],
+    recon_dirs: set[str],
+) -> tuple[
+    Optional[int],
+    Optional[set[str]],
+    list[str],
+    list[str],
+    int,
+    int,
+    list[str],
+    list[str],
+]:
+    """按 signal nfs_path 做存在性校验与条目级 *.dbg 计数。
+
+    返回 (nfs_dbg_files, dbg_entry_basenames, missing_in_signal, missing_on_disk,
+    paths_checked, entries_verified, notes, checked_paths)。
     """
     notes: list[str] = []
-    if not scan_roots:
+    if not nfs_paths:
         notes.append(
-            "无法限定本 Run 的 NFS 范围,请用 signal 侧对账。"
+            "NFS 对账以 signal 携带的 extra.nfs_path 为准;本 Run 无 nfs_path,"
+            "无法枚举未上报条目。"
         )
-        return None, None, notes
+        return None, None, [], [], 0, 0, notes, []
 
     cap = 200_000
-    count = 0
-    dirs: set[str] = set()
-    roots_summary = ", ".join(str(r) for r in scan_roots[:5])
-    if len(scan_roots) > 5:
-        roots_summary += f" …(+{len(scan_roots) - 5})"
-    notes.append(f"NFS 扫描模式 *.dbg,限定目录 {roots_summary}。")
+    total_dbg = 0
+    dbg_entries: set[str] = set()
+    missing_on_disk: list[str] = []
+    checked_paths: list[str] = []
+    paths_checked = 0
+    entries_verified = 0
+
     try:
-        for root in scan_roots:
-            if not root.is_dir():
-                notes.append(f"扫描根 {root} 不可访问,已跳过。")
+        for raw in nfs_paths:
+            entry = Path(raw.strip())
+            if not _path_within_artifact_roots(entry):
+                notes.append(f"跳过白名单外 nfs_path: {entry}")
                 continue
-            for f in root.rglob("*.dbg"):
-                count += 1
-                dirs.add(f.parent.name)
-                if count >= cap:
-                    notes.append(f"NFS *.dbg 扫描达到上限 {cap},计数被截断。")
-                    return count, dirs, notes
+
+            if paths_checked == 0:
+                notes.append(
+                    "NFS 对账仅校验本 Run signal 的 extra.nfs_path 条目目录(非设备级 rglob)。"
+                )
+                notes.append("无 nfs_path 的 signal 不计入 NFS 侧。")
+
+            resolved = entry.resolve(strict=False)
+            paths_checked += 1
+            entry_dir = _aee_entry_dir_for_nfs_path(resolved)
+            checked_paths.append(str(entry_dir))
+            label = entry_dir.name or str(entry_dir)
+
+            if not entry_dir.exists():
+                missing_on_disk.append(label)
+                continue
+
+            entries_verified += 1
+            dbg_count = _count_dbg_in_entry_dir(entry_dir)
+            if dbg_count == 0:
+                missing_on_disk.append(label)
+            else:
+                total_dbg += dbg_count
+                dbg_entries.add(label)
+
+            if total_dbg >= cap:
+                notes.append(f"NFS *.dbg 计数达到上限 {cap},已截断。")
+                break
     except OSError as exc:
-        notes.append(f"NFS 扫描出错: {exc}")
-        return None, None, notes
-    return count, dirs, notes
+        notes.append(f"NFS 校验出错: {exc}")
+        return (
+            None,
+            None,
+            [],
+            missing_on_disk,
+            paths_checked,
+            entries_verified,
+            notes,
+            checked_paths,
+        )
+
+    if paths_checked == 0:
+        notes.append("无法限定本 Run 的 NFS 范围(无位于 artifact 白名单内的 nfs_path),请用 signal 侧对账。")
+        return None, None, [], [], 0, 0, notes, []
+
+    missing_in_signal = sorted(dbg_entries - recon_dirs)
+    if missing_in_signal:
+        notes.append(
+            "missing_in_signal 为已校验条目中有 .dbg 但 reconciler signal 未覆盖的 "
+            "basename;无法发现 signal 未携带路径的磁盘条目。"
+        )
+
+    return (
+        total_dbg,
+        dbg_entries,
+        missing_in_signal,
+        sorted(set(missing_on_disk)),
+        paths_checked,
+        entries_verified,
+        notes,
+        checked_paths,
+    )
 
 
 @router.get(
@@ -2267,8 +2289,8 @@ def get_plan_run_aee_reconciliation(
     """M1/T1-4: 只读灰度对账端点。
 
     比对该 PlanRun 下 AEE/VENDOR_AEE log_signal 按 pull_source 分桶的条数(crash-dir
-    去重),并在后端可访问 NFS 时附 *.dbg 文件计数与「NFS 有 / signal 缺」的目录差集,
-    供 M1 双写期评估 reconciler 漏报率(目标 < 5%)。纯只读。
+    去重),并在后端可访问 NFS 时按 signal extra.nfs_path 校验条目目录内 *.dbg 计数,
+    供 M1 双写期评估 reconciler 漏报率(目标 < 5%)。纯只读;不以设备目录 rglob 为 ground truth。
     """
     pr = _require_plan_run(db, run_id)
 
@@ -2280,17 +2302,17 @@ def get_plan_run_aee_reconciliation(
 
     by_serial_map, totals, recon_dirs = _aggregate_aee_recon_signals(db, job_ids=job_ids)
 
-    scan_roots = _derive_aee_nfs_scan_roots(db, job_ids=job_ids)
-    nfs_count, nfs_dirs, notes = _scan_nfs_dbg_files(scan_roots)
-
-    missing_in_signal: list[str] = []
-    if nfs_dirs is not None:
-        missing_in_signal = sorted(nfs_dirs - recon_dirs)
-        if missing_in_signal:
-            notes.append(
-                "missing_in_signal 为 basename 级启发式(NFS 有 .dbg 父目录但无 "
-                "reconciler signal 携带同名 nfs_path);精确对账请结合 Agent 端日志。"
-            )
+    signal_nfs_paths = _collect_aee_signal_nfs_paths(db, job_ids=job_ids)
+    (
+        nfs_count,
+        _nfs_dbg_entries,
+        missing_in_signal,
+        missing_on_disk,
+        paths_checked,
+        entries_verified,
+        notes,
+        checked_paths,
+    ) = _verify_signal_nfs_paths(signal_nfs_paths, recon_dirs)
 
     by_serial = sorted(
         by_serial_map.values(),
@@ -2300,7 +2322,13 @@ def get_plan_run_aee_reconciliation(
     if not job_ids:
         notes.append("该 PlanRun 无关联 Job,signal 侧计数为空。")
 
-    nfs_root_scanned = ", ".join(str(r) for r in scan_roots) if scan_roots else None
+    if checked_paths:
+        scanned_summary = ", ".join(checked_paths[:5])
+        if len(checked_paths) > 5:
+            scanned_summary += f" …(+{len(checked_paths) - 5})"
+        nfs_root_scanned = scanned_summary
+    else:
+        nfs_root_scanned = None
 
     return ok(AeeReconciliationOut(
         plan_run_id=pr.id,
@@ -2312,6 +2340,9 @@ def get_plan_run_aee_reconciliation(
         by_serial=by_serial,
         nfs_dbg_files=nfs_count,
         nfs_root_scanned=nfs_root_scanned,
+        signal_nfs_paths_checked=paths_checked,
+        nfs_entries_verified=entries_verified,
+        missing_on_disk=missing_on_disk,
         missing_in_signal=missing_in_signal,
         notes=notes,
     ))
