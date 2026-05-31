@@ -1764,3 +1764,53 @@ class TestAeeReconciliationEndpoint:
         assert data["nfs_entries_verified"] == 0
         assert data["missing_on_disk"] == ["crash_missing"]
         assert "AEE" not in data["missing_on_disk"]
+
+    def test_reconciliation_same_device_folder_two_entries_only_run_signals(
+        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
+    ):
+        """同 {folder}/{serial} 下多 crash 条目(MMDD 共享布局);仅计本 Run signal 指向的条目。"""
+        nfs_root = tmp_path / "aee_nfs"
+        folder = "X6851-OP_16.3.0.022_SU_0530_MonkeyAEEinfo"
+        serial = chain_setup["device_completed"].serial
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+
+        base = nfs_root / folder / serial / "aee_exp"
+        entry_first = base / "20250530_103000_db.01"
+        entry_second = base / "20250530_140000_db.02"
+        entry_first.mkdir(parents=True)
+        entry_second.mkdir(parents=True)
+        (entry_first / "a1.dbg").write_text("a")
+        (entry_first / "a2.dbg").write_text("b")
+        (entry_second / "b1.dbg").write_text("c")
+
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
+
+        db_session.add(
+            JobLogSignal(
+                id=45001, job_id=j1.id, host_id="host-101", device_serial=serial,
+                seq_no=530, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.02",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "pull_source": "reconciler",
+                    "nfs_path": str(entry_second),
+                },
+            ),
+        )
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["nfs_dbg_files"] == 1
+        assert data["signal_nfs_paths_checked"] == 1
+        assert data["nfs_entries_verified"] == 1
+        scanned = data["nfs_root_scanned"] or ""
+        assert str(entry_second) in scanned
+        assert str(entry_first) not in scanned
+        assert data["missing_in_signal"] == []

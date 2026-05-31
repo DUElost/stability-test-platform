@@ -2167,10 +2167,10 @@ def _aee_entry_dir_for_nfs_path(path: Path) -> Path:
 
 
 def _count_dbg_in_entry_dir(entry_dir: Path) -> int:
-    """仅统计条目目录下直接的 *.dbg(不对设备目录 rglob)。"""
+    """仅统计本 crash 条目目录树内的 *.dbg(不对 {folder}/{serial} 级 rglob)。"""
     if not entry_dir.is_dir():
         return 0
-    return sum(1 for f in entry_dir.glob("*.dbg") if f.is_file())
+    return sum(1 for f in entry_dir.rglob("*.dbg") if f.is_file())
 
 
 def _verify_signal_nfs_paths(
