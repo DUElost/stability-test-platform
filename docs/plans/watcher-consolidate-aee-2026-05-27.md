@@ -561,10 +561,13 @@ class WatcherSummaryOut(BaseModel):
 
 | 优先级 | 动作 | 说明 |
 |--------|------|------|
-| **P0** | **修 10.36 ScriptRegistry 401** | `AGENT_SECRET` 与中心一致 + 热更新；禁止长期手改 `agent_state.db`。 |
+| ~~**P0**~~ | ~~**10.36 ScriptRegistry 401**~~ | ✅ **已关闭（2026-06-03）**：中心 `2d1d8a6` + 10.36 热更新后日志为 `ScriptRegistry loaded 25 scripts from server (version=56045d98de79)`，无 401 / SQLite 回退 WARNING（`agent_error.log` 00:12–00:14 三次初始化一致）。 |
 | **P2** | **T4-1 默认切换：积累覆盖率数据** | 在 2-3 台不同机型显式开启 Watcher+AEE reconciler，用 `stability_watcher_capability_total` 观察 1 周；≥90% 后改 `STP_WATCHER_ENABLED` / `RECONCILE_ENABLED` 默认 `true`。 |
 
+> **P0 认证范围说明**：`GET /categories`、`GET /{script_id}` 仍仅用户认证；Agent `ScriptRegistry` 只调 `GET /api/v1/scripts`，无影响。
+
 **已完成（2026-06-03）**：
+- ✅ **ScriptRegistry 401（中心 + 10.36）**：`2d1d8a6` + 10.36 热更新；`agent_error.log` 三次 `loaded 25 scripts from server (version=56045d98de79)`，无 SQLite 回退。
 - ✅ **真机验收**：PlanRun #24 从仓库模板 `monkey_aee_patrol.json` 新建 Plan，patrol 仅 `monkey_check`（4 周期），watcher-summary 29 signals（20 crash + 9 ANR），**零 scan_aee/export_mobilelogs**。Watcher-only 链路 E2E 验证通过。
 - ✅ T4-2 watcher_capability 指标（`stability_watcher_capability_total{capability}` Counter，pytest 覆盖）
 - ✅ T4-3 on_unavailable 策略（保持 DEGRADED）
@@ -597,6 +600,7 @@ class WatcherSummaryOut(BaseModel):
 | Patrol timeline | **#24** 4 周期，步骤仅 `monkey_check`（Watcher-only 模板生效） |
 | 历史 Run | **#18**：设备已有问题重新进入当前 run 总览；**#19**：watcher_capability=inotifyd_root（本 host 已验证）；**#6**：旧双写 Run，已 FAILED |
 | **结论** | ✅ Watcher-only 链路 E2E 通过（#24 权威验收）；#7 为 Plan #2 API 加速首跑，终态待确认 |
+| ScriptRegistry | ✅ **2026-06-03** `loaded 25 scripts from server`（`version=56045d98de79`）；无 401 / SQLite 回退 |
 
 ### 11.6 `/aee-reconciliation` 对账语义（当前实现）
 
@@ -604,4 +608,4 @@ class WatcherSummaryOut(BaseModel):
 - **仅**校验本 Run 的 AEE/VENDOR_AEE signal 的 `extra.nfs_path`（crash 条目目录）内 `*.dbg`。
 - `missing_in_signal`：已校验条目中有 .dbg 但 reconciler 未覆盖的 basename；**不能**发现「磁盘有、signal 未报」的条目。
 
-*进度更新：2026-06-03（含 Plan #2 / PlanRun #7 API 加速、run 24 E2E、M3 T3-4 deprecated、M4 T4-2/T4-3/T4-4 完成）*
+*进度更新：2026-06-03（含 run 24 E2E、M4 T4-2/3/4、**P0 ScriptRegistry 401 全链路关闭** — 10.36 日志 `25 scripts from server`）*

@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 # Device Log Watcher feature flag —— 全局 STP_WATCHER_ENABLED 或 Plan 默认开启。
 # Plan 执行默认开启 watcher（STP_WATCHER_PLAN_DEFAULT=true）时，即使全局 env=false
 # 也会 configure 子系统，并在 claim Plan job 时启动 JobSession。
-STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "false").lower() == "true"
+STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "true").lower() == "true"
 STP_WATCHER_PLAN_DEFAULT = os.getenv("STP_WATCHER_PLAN_DEFAULT", "true").lower() == "true"
 
 # 全局活跃 Job 追踪（语义上存的就是 job_instance.id）
@@ -357,7 +357,7 @@ def main() -> None:
         logger.info(
             "aee_reconciler_env enabled=%s interval_seconds=%s burst_interval_seconds=%s "
             "burst_rounds=%s hosts=%s",
-            os.getenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "false"),
+            os.getenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "true"),
             os.getenv("STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS", "180"),
             os.getenv("STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS", "60"),
             os.getenv("STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS", "5"),

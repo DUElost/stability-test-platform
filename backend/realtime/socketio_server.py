@@ -22,7 +22,6 @@ from typing import Any, Dict, Optional
 import socketio
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
-from backend.core.cors import get_cors_allowed_origins
 from backend.core.metrics import record_socketio_connection
 from backend.core.security import ACCESS_COOKIE_NAME, extract_cookie_token
 
@@ -60,8 +59,6 @@ def _now_iso() -> str:
 def create_sio_server() -> socketio.AsyncServer:
     """Create and configure the SocketIO AsyncServer singleton."""
     global _sio
-
-    origins = get_cors_allowed_origins()
 
     sio = socketio.AsyncServer(
         async_mode="asgi",
