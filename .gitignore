@@ -41,8 +41,9 @@ venv-wsl/
 /frontend/nul
 .github/prompts/
 .github/skills/
-# Codex CLI 本地状态文件（0 字节占位，无业务含义）
-.codex
+# Codex CLI 本地状态文件（忽略除 hooks.json 外的所有内容）
+.codex/*
+!.codex/hooks.json
 # Ansible / SSH 部署本地配置（敏感清单继续忽略，其余自动化文件纳入版本控制）
 tools/ansible/inventory.ini
 tools/ansible/*.retry
@@ -54,3 +55,6 @@ tools/ansible/*.retry
 # 临时调试脚本（含明文密码/连接串等敏感信息，禁止入库）
 .tmp-*.py
 .tmp-*.sh
+# 本地排障产物 / 外部参考脚本，不入库
+patches/
+MonkeyAEEinfo_260523.py

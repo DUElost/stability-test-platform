@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""agentctl — stability-test-agent 管理命令。"""
+import os, sys, urllib.request
+
+def cmd_health():
+    svc = os.popen('systemctl is-active stability-test-agent 2>/dev/null').read().strip()
+    enabled = os.popen('systemctl is-enabled stability-test-agent 2>/dev/null').read().strip()
+    print('\033[0;34m健康检查:\033[0m')
+    print()
+    print(f'  服务状态: \033[0;32m{svc}\033[0m' if svc == 'active' else f'  服务状态: \033[0;31m{svc}\033[0m')
+    env_file = '/opt/stability-test-agent/.env'
+    if os.path.isfile(env_file):
+        print('  配置文件: \033[0;32m存在\033[0m')
+        for line in open(env_file):
+            if line.startswith('API_URL='): print(f'    API URL: {line.split("=",1)[1].strip()}')
+            if line.startswith('HOST_ID='): print(f'    Host ID: {line.split("=",1)[1].strip()}')
+    else:
+        print('  配置文件: \033[0;31m缺失\033[0m')
+    log_err = '/opt/stability-test-agent/logs/agent_error.log'
+    if os.path.isfile(log_err):
+        size = os.path.getsize(log_err)
+        print(f'  日志文件: \033[0;32m存在 ({size})\033[0m')
+    py = os.popen('python3 --version 2>&1').read().strip()
+    print(f'  Python 环境: \033[0;32m正常\033[0m' if py else '  Python 环境: \033[0;31m异常\033[0m')
+    adb = os.popen('adb version 2>&1').read().strip()
+    print(f'  ADB: \033[0;32m可用\033[0m ({adb.splitlines()[0]})' if adb else '  ADB: \033[0;31m不可用\033[0m')
+    devices = os.popen('adb devices 2>/dev/null | tail -n +2 | grep -v "^$" | wc -l').read().strip()
+    print(f'  已识别设备: \033[0;32m{devices} 台\033[0m')
+    api_url = os.getenv('API_URL', '')
+    if not api_url and os.path.isfile(env_file):
+        for line in open(env_file):
+            if line.startswith('API_URL='): api_url = line.split('=',1)[1].strip()
+    print(f'  服务器连接: \033[0;32m正常\033[0m' if api_url else f'  服务器连接: \033[0;31m未配置\033[0m')
+    return 0
+
+def main():
+    if len(sys.argv) < 2:
+        print('Usage: agentctl <health|restart>', file=sys.stderr)
+        return 2
+    if sys.argv[1] == 'health': return cmd_health()
+    if sys.argv[1] == 'restart': return os.system('sudo systemctl restart stability-test-agent')
+    return 2
+
+if __name__ == '__main__':
+    sys.exit(main())

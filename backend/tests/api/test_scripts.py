@@ -2,9 +2,52 @@
 
 from uuid import uuid4
 
+from backend.models.plan import Plan, PlanStep
+from backend.models.script import Script
+
 
 def _uniq(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
+
+
+def _create_referenced_script(db_session, prefix: str) -> tuple[Script, Plan]:
+    name = _uniq(prefix)
+    script = Script(
+        name=name,
+        display_name=name,
+        category="legacy",
+        script_type="python",
+        version="1.0.0",
+        nfs_path=f"/nfs/scripts/{name}/1.0.0/{name}.py",
+        content_sha256="b" * 64,
+        param_schema={},
+        default_params={},
+        is_active=True,
+    )
+    db_session.add(script)
+    db_session.flush()
+
+    plan = Plan(
+        name=_uniq("legacy_plan"),
+        description="references legacy script",
+        failure_threshold=0.1,
+        created_by="test",
+    )
+    db_session.add(plan)
+    db_session.flush()
+
+    db_session.add(PlanStep(
+        plan_id=plan.id,
+        step_key="patrol.legacy_script",
+        script_name=script.name,
+        script_version=script.version,
+        stage="patrol",
+        sort_order=0,
+    ))
+    db_session.commit()
+    db_session.refresh(script)
+    db_session.refresh(plan)
+    return script, plan
 
 
 def test_script_crud_and_soft_delete(client, admin_headers, auth_headers):
@@ -156,3 +199,41 @@ def test_script_scan_missing_root_returns_structured_error(
     body = resp.json()
     assert body["detail"]["code"] == "SCRIPT_ROOT_NOT_FOUND"
     assert body["detail"]["message"]
+
+
+def test_update_rejects_deactivation_when_script_is_still_referenced(
+    client, admin_headers, db_session
+):
+    script, plan = _create_referenced_script(db_session, "scan_aee_ref")
+
+    resp = client.put(
+        f"/api/v1/scripts/{script.id}",
+        json={"is_active": False},
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "SCRIPT_STILL_REFERENCED"
+    assert detail["script"] == f"{script.name}:{script.version}"
+    assert detail["plan_ids"] == [plan.id]
+
+    db_session.refresh(script)
+    assert script.is_active is True
+
+
+def test_delete_rejects_deactivation_when_script_is_still_referenced(
+    client, admin_headers, db_session
+):
+    script, plan = _create_referenced_script(db_session, "mobilelogs_ref")
+
+    resp = client.delete(f"/api/v1/scripts/{script.id}", headers=admin_headers)
+
+    assert resp.status_code == 409, resp.text
+    detail = resp.json()["detail"]
+    assert detail["code"] == "SCRIPT_STILL_REFERENCED"
+    assert detail["script"] == f"{script.name}:{script.version}"
+    assert detail["plan_ids"] == [plan.id]
+
+    db_session.refresh(script)
+    assert script.is_active is True

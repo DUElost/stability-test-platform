@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import distinct
 from sqlalchemy.exc import IntegrityError
@@ -15,12 +17,15 @@ from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.error_helpers import raise_api_http_error
-from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.api.routes.auth import get_current_active_user, get_current_user, require_admin, User
+from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit
 from backend.core.database import get_db
+from backend.models.plan import PlanStep
 from backend.models.script import Script
 from backend.services.script_catalog import scan_script_root
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
 
 
@@ -99,6 +104,81 @@ def _script_out(script: Script) -> ScriptOut:
     )
 
 
+# ---------------------------------------------------------------------------
+# Agent auth bypass — 允许 Agent 通过 X-Agent-Secret 读取脚本目录,
+# 避免 ScriptRegistry 401 后退化到过期 SQLite 缓存。
+# ---------------------------------------------------------------------------
+
+def _try_verify_agent(
+    x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret"),
+) -> bool:
+    """若 X-Agent-Secret 头与 AGENT_SECRET 匹配则返回 True;未提供/未配置返回 False;不匹配抛 401。
+
+    调用方: ``_agent_or_user`` 在用户认证前优先尝试本函数,命中则跳过用户认证。
+    """
+    provided = (x_agent_secret or "").strip()
+    if not provided:
+        return False
+    try:
+        expected = require_agent_secret()
+    except AgentSecretNotConfiguredError:
+        return False
+    if not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="invalid agent secret")
+    return True
+
+
+def _require_auth(
+    x_agent_secret: Optional[str] = Header(None, alias="X-Agent-Secret"),
+    current_user: Optional[User] = Depends(get_current_user),
+) -> None:
+    """Agent 或用户任一认证通过即放行;两者都缺则 401。
+
+    - X-Agent-Secret 有效 → 直接放行(Agent 路径)
+    - X-Agent-Secret 无效/未提供 → 回退到 User Bearer/Cookie 认证
+    - 两者都缺 → 401
+    """
+    if _try_verify_agent(x_agent_secret):
+        return
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+def _referencing_plan_ids(db: Session, script: Script) -> list[int]:
+    rows = (
+        db.query(PlanStep.plan_id)
+        .filter(
+            PlanStep.script_name == script.name,
+            PlanStep.script_version == script.version,
+        )
+        .distinct()
+        .order_by(PlanStep.plan_id)
+        .all()
+    )
+    return [row.plan_id for row in rows]
+
+
+def _ensure_script_can_be_deactivated(db: Session, script: Script) -> None:
+    if not script.is_active:
+        return
+    plan_ids = _referencing_plan_ids(db, script)
+    if not plan_ids:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "SCRIPT_STILL_REFERENCED",
+            "message": "script is still referenced by plan steps; update those plans before deactivation",
+            "script": f"{script.name}:{script.version}",
+            "plan_ids": plan_ids,
+        },
+    )
+
+
 @router.get("/categories", response_model=ApiResponse[List[str]])
 def list_script_categories(
     db: Session = Depends(get_db),
@@ -145,7 +225,7 @@ def list_scripts(
     is_active: Optional[bool] = None,
     category: Optional[str] = None,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_active_user),
+    _auth: None = Depends(_require_auth),
 ):
     query = db.query(Script).order_by(Script.name, Script.version)
     if is_active is not None:
@@ -262,6 +342,9 @@ def update_script(
             status_code=422,
             detail="default_params cannot be changed on an existing version; create a new script version instead",
         )
+
+    if payload.is_active is False:
+        _ensure_script_can_be_deactivated(db, script)
 
     for field in (
         "name",
@@ -388,6 +471,7 @@ def deactivate_script(
     script = db.get(Script, script_id)
     if script is None:
         raise HTTPException(status_code=404, detail="script not found")
+    _ensure_script_can_be_deactivated(db, script)
     script.is_active = False
     script.updated_at = datetime.now(timezone.utc)
     record_audit(

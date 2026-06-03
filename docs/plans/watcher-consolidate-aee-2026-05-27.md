@@ -1,9 +1,10 @@
 # Watcher 收编 scan_aee / export_mobilelogs 方案
 
-> 日期：2026-05-27（v2 更新：2026-05-27）  
-> 状态：方案 v2（已锁定关键决策，未实施）  
-> 背景：D1 已落地 `backend/agent/aee/`、`scan_aee`/`export_mobilelogs` patrol 脚本、Watcher LogPuller sonic 路径、`POST /agent/log-signals`、`GET /plan-runs/{id}/watcher-summary`、前端 `WatcherSummaryCard`。  
-> 目标：将 AEE 增量拉取与 mobilelog 关联收进 Watcher 常驻链路，patrol 仅保留 `monkey_check`；平台端可聚合展示 Crash/ANR 数量与涉及应用。
+> 日期：2026-05-27（v2 更新：2026-05-27；进度更新：**2026-06-03**）  
+> 状态：方案 v2（**M0.5 + M0 已合入 main**；**M1 最小现场验证已完成（10.36）**；**M2：Plan / 仓库模板均已切为 Watcher-only**；**M3 全量完成（脚本退役 + key 迁移 + 文档 deprecated）**；**M4 进行中（T4-2/T4-3/T4-4 已完成；T4-1 延期至 capability 覆盖率 ≥90%）**）  
+> **scan_aee / export_mobilelogs 脚本已退役(deprecated)**：`is_active=false`，reconciler 使用 `watcher:aee:*` 命名空间。patrol 仅保留 `monkey_check`。新 Plan 不应再引用这两个脚本。  
+> 背景：D1 已落地 `backend/agent/aee/`、`scan_aee`/`export_mobilelogs` patrol 脚本（**已退役**）、Watcher LogPuller sonic 路径、`POST /agent/log-signals`、`GET /plan-runs/{id}/watcher-summary`、前端 `WatcherSummaryCard`。  
+> 目标：将 AEE 增量拉取与 mobilelog 关联收进 Watcher 常驻链路，patrol 仅保留 `monkey_check`；平台端可聚合展示 Crash/ANR 数量与涉及应用，并把设备已有问题纳入总览。
 
 ---
 
@@ -28,6 +29,7 @@
 | D2 | reconciler 节奏 | **180s 基线 / 60s burst（hash 跳过）** | 默认 180s 间隔；db_history 内容 hash 未变直接跳过；如某轮发现新行则下一轮进入 burst 模式持续 5 轮；burst 期间任一轮再次有新行则计数器重置 |
 | D3 | NFS 子目录命名 | **`correlated_mobilelogs/` / `correlated_bugreports/`** | 与 monolith 一致；既有线下数据/脚本可直接复用；逃生口：env `STP_WATCHER_AEE_SUBDIR_LAYOUT=stp` 同时把 mobilelog 回到 `mobilelog/`、bugreport 回到 `bugreport/`（bugreport 与 mobilelog 同类，M0.5/C-2 起默认 `correlated_bugreports/`，stp 逃生口可回退 `bugreport/`） |
 | D4 | D1 P0 吸收 | **M0 前置吸收（M0.5）** | M0 启动前必须完成 D1 P0-#1/#2/#3 修复 + 回归用例 |
+| D5 | 设备已有问题 | **导出并纳入总览** | 设备当前已存在的 AEE/ANR 也要导出，不能只看测试期新增；无需在总览层面对存量/增量做单独展示分流 |
 | — | M0.5 范围 | **代码勘误小迭代** | D1 P0 修复 + D1 高价值 P1；不引入新架构 |
 | — | state_store key | **M1 与 patrol 共用；M3 改 watcher 专属命名空间** | 共用键避免双写期对账漂移；patrol 退役后改名隔离 |
 
@@ -83,12 +85,22 @@ flowchart TB
 | Agent 重启恢复 | ScriptStateStore | outbox drainer + watcher_state（reconcile stub） | reconciler 状态与 db_history processed 共用 LocalDB（M1 期共用 patrol 键，M3 期迁移到 watcher 命名空间） |
 | capability 矩阵 | — | — | 见 §2.1 capability × reconciler 行为表 |
 
+### 1.2 补充约束：设备已有问题不能被总览视图吞没
+
+当前实现主落点是 `job_log_signal` / `JobArtifact`，天然偏向「与某次 Job 关联的异常」；这对测试期增量问题足够，但对“设备本身已有问题也要导出并进入总览”不够。
+
+因此本方案补充以下硬约束：
+
+1. 设备当前已存在于 `db_history` 的问题也要导出，不能只依赖测试期新出现的行。
+2. 存量导出不能直接复用 `scan_aee:{serial}:{aee_type}:processed_entries` 这把全局 processed key 作为“是否展示”的唯一依据；否则此前已处理过的设备历史问题会在后续测试中被静默吞掉。
+3. 最小落地采用「Job 启动首轮做 baseline snapshot」，把设备已有问题补拉出来并纳入当前总览；稳态再补设备级历史总账/查询入口。
+
 ### 1.3 关键代码锚点
 
 | 模块 | 路径 | 说明 |
 |------|------|------|
 | AEE 处理器 | `backend/agent/aee/processor.py` | `process_device_logs` — patrol 与 Watcher reconciler 共用 |
-| Watcher 管理 | `backend/agent/watcher/manager.py` | 启动 DeviceLogWatcher + LogPuller；`reconcile_on_startup` 仍为 stub |
+| Watcher 管理 | `backend/agent/watcher/manager.py` | 启动 DeviceLogWatcher + LogPuller；`reconcile_on_startup` 已接入（M4 T4-4：Agent 重启清理残留 active `watcher_state`） |
 | Puller | `backend/agent/watcher/puller.py` | AEE 单文件 pull + sonic 路径 + bugreport（M0 起 emit 职责剥离） |
 | 契约 | `backend/agent/watcher/contracts.py` | `LogSignalEnvelope`；`extra` 已预留 |
 | 入库 | `backend/api/routes/agent_api.py` | `ingest_log_signals` + `broadcast_watcher_signal` |
@@ -133,7 +145,7 @@ flowchart LR
 | `DeviceLogWatcher` | inotifyd → batcher → puller；**AEE/VENDOR_AEE 不再触发 emit** | 改造：AEE 类路径关闭 emit；ANR/MOBILELOG 保持原路径 |
 | `AeeDbHistoryReconciler` | 后台 daemon 线程，180s 基线 / 60s burst（hash 跳过）调用 `process_device_logs` 或薄封装；**AEE signal emit 唯一来源** | **新增** |
 | `PostAeeHook` | AEE 新事件统一后处理：mobilelog + bugreport + emit | **新增**（从 processor 与 Puller 抽共用） |
-| `DedupStore` | LocalDB key：**实现锁定为 patrol 同款** `scan_aee:{serial}:{aee_type}:processed_entries`（经 `db_history.state_key` helper 统一生成；prefix=`scan_aee`）；M1 期与 patrol ScriptStateStore 真正共用 key，M3 迁移到 `watcher:aee:*`。<br>⚠️ 早期草案写作 `aee:processed:{job_id}:{nfs_dir}`，但 patrol 去重维度是 (serial, aee_type) 而非 job_id；为真正共享去重状态(C-1)，实现统一采用 patrol 的 serial 维度键 | **新增**（共用 SQLite） |
+| `DedupStore` | M1/M2 LocalDB key：`scan_aee:{serial}:{aee_type}:processed_entries`（与 patrol ScriptStateStore 共用）；M3 已迁到 `watcher:aee:{serial}:{aee_type}:processed_entries`，首次 tick 自动合并旧 `scan_aee:*`，并提供离线迁移脚本。<br>⚠️ 早期草案写作 `aee:processed:{job_id}:{nfs_dir}`，但 patrol 去重维度是 (serial, aee_type) 而非 job_id；当前仍保持 serial 维度，只迁命名空间。 | **新增**（共用 SQLite） |
 | `LogPuller` | 维持 sonic 布局 + bugreport 钩子；AEE 类 pull-done 不再触发 emit，转为 reconciler 复用 | 改造：去除 AEE/VENDOR_AEE 的 `_emit_via_signal_emitter` 调用；保留 ANR/MOBILELOG |
 | patrol | 仅 `monkey_check` | **降级/删除** scan_aee、export_mobilelogs 步骤（M2） |
 
@@ -143,10 +155,10 @@ flowchart LR
 |--------------------|----------|----------------|------|
 | `inotifyd_realtime` | ✅ | 启用，180s 基线 / 60s burst（5 轮） | 默认目标态。inotifyd 负责低延迟拉文件，reconciler 兜底 + 唯一 emit |
 | `polling` | ❌ | 启用，180s 基线 / 60s burst（5 轮） | inotifyd 不可用（如 BusyBox 缺 inotifyd）；reconciler 承担拉+emit 全责 |
-| `unavailable` | ❌ | 启用，**固定 60s 单节奏**（不进入 burst 切换） | 探测过但全部失败；以 reconciler 为唯一通道；前端 watcher-summary 显示降级提示 |
+| `unavailable` | ❌ | **不启动**（§11.2 偏差 1） | 探测过但全部失败 → Watcher 未正常起来，`WatcherHandle.impl` 不可用，reconciler 依赖其 emitter 故无法独立工作；JobSession 把 `unavailable` 与 `skipped` 同等对待、不启动 reconciler；前端 watcher-summary 显示「Watcher 不可用」徽章 |
 | `skipped` | ❌ | **不启动** | watcher_policy.enabled=false 或非 Plan Job；保持空运行 |
 
-**gate 优先级（AND 关系）：** `STP_WATCHER_AEE_RECONCILE_ENABLED` 仅在「全局 Watcher 启用（`STP_WATCHER_ENABLED=true` 或 `STP_WATCHER_PLAN_DEFAULT=true` 满足 Plan Job 默认开启）」**且**「Job capability ≠ `skipped`」时实际生效；全局 Watcher 关闭时 capability 探测不会发生，reconciler 也不会启动。
+**gate 优先级（AND 关系）：** `STP_WATCHER_AEE_RECONCILE_ENABLED` 仅在「全局 Watcher 启用（`STP_WATCHER_ENABLED=true` 或 `STP_WATCHER_PLAN_DEFAULT=true` 满足 Plan Job 默认开启）」**且**「Job capability ∈ {`inotifyd_realtime`, `polling`}」**且**「`WatcherHandle.impl` 可用」时实际生效；`unavailable` / `skipped` 或全局 Watcher 关闭时 reconciler 不启动（§11.2 偏差 1）。
 
 **reconciler 节奏细节（D2 锁定）：**
 
@@ -155,13 +167,13 @@ flowchart LR
   - 内容未变：本轮直接跳过 pull/解析（计入 `reconciler_skip_unchanged_total` 指标）
   - 内容变化：进入 burst 模式，下 `STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS=5` 轮以 `STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS=60` 间隔运行；burst 期间任一轮再次有新行则计数器重置
   - 5 轮 burst 内无新增 → 回到 180s 基线
-- `unavailable` capability 固定 60s，忽略 burst 切换
+- `unavailable` / `skipped` capability：reconciler **不启动**（§11.2 偏差 1，由 JobSession gate 拦截）；上述基线 / burst 节奏仅适用于 `inotifyd_realtime` / `polling`
 
 **Reconciler 与 inotifyd 分工（v2 重写）：**
 
 - **inotifyd**：低延迟感知新文件 → 触发 LogPuller 拉文件落盘；**不参与 AEE log_signal emit**
 - **db_history reconciler**：唯一 AEE emit 来源；按 db_history 行解析 `event_type / package_name / aee_ts`，组装 `nfs_path` 后 emit；负责 mobilelog/bugreport 后处理
-- **去重**：以 patrol 同款 `scan_aee:{serial}:{aee_type}:processed_entries`（per (serial, aee_type)）为幂等状态；reconciler 与 patrol 共享 processed db_history 行集合，已处理行不再重复 pull/emit；inotifyd 拉到本轮 reconciler 还没处理的目录，下轮 reconciler 自然吸收
+- **去重**：M1/M2 使用 patrol 同款 `scan_aee:{serial}:{aee_type}:processed_entries`（per (serial, aee_type)）共享幂等状态；M3 后 reconciler 使用 `watcher:aee:{serial}:{aee_type}:processed_entries`，首次 tick 自动把旧 `scan_aee:*` 合并到新 key；inotifyd 拉到本轮 reconciler 还没处理的目录，下轮 reconciler 自然吸收
 
 **去掉 patrol 脚本的路径：**
 
@@ -298,7 +310,7 @@ class WatcherSummaryOut(BaseModel):
 2. **应用列表**：`packages.length > 0` 时渲染 chip 行：`com.foo (3)` · `com.bar (1)` · `unknown (1)`  
 3. **分类行**：现有 AEE / VENDOR_AEE / ANR 行保留；tooltip 展示 `by_package` Top 3  
 4. **空态**：Watcher 未启用 / 无信号时说明「AEE 监控由 Watcher 提供，请确认 Agent `STP_WATCHER_PLAN_DEFAULT`」  
-5. **capability 提示**：`watcher_capability=unavailable` 时顶栏显示「reconciler 单通道模式」徽章  
+5. **capability 提示**：`watcher_capability=unavailable` 时顶栏显示「Watcher 不可用」徽章（§11.2 偏差 1：unavailable 表示 Watcher 未正常启动、reconciler 也**不启动**，非 reconciler 单通道兜底）  
 6. **pull_source facet**（M1 双写 / M2 暖回滚保护）：可按 `reconciler` / `legacy_patrol` 过滤；M3 后默认隐藏  
 
 **`PlanRunDetailPage`：**
@@ -316,14 +328,16 @@ class WatcherSummaryOut(BaseModel):
 
 ## 3. 迁移阶段（v2 重写）
 
+> **进度（2026-06-03）**：M0.5 ✅ · M0 ✅ · M1 ✅（10.36 最小现场验证完成）· **M1→M2 加速** ✅（Plan #2 API + PlanRun #7）· M2 仓库模板 ✅ · M3 ✅（含 T3-4 文档 deprecated）· **M4 🟡 3/4**（T4-1 延期）— 详见 **§11.1**。
+
 | 阶段 | 目标 | 关键子任务 | 验收 | 回滚 |
 |------|------|------------|------|------|
 | **M0.5 D1 勘误** | D1 P0 修复 + 高价值 P1 落地（不引入新架构） | T0.5-1 `processor.py` 接入 `_verify_pulled_aee_log_strict` 替换 `_dir_has_content`<br>T0.5-2 `aee/mobilelog.py` 子目录改 `correlated_mobilelogs/`<br>T0.5-3 `watcher/puller.py` `_maybe_export_bugreport` event_type 映射（AEE/VENDOR_AEE→CRASH，ANR→ANR）<br>T0.5-4 模板 `monkey_aee_*.json` patrol step `version` 字符串统一<br>T0.5-5 回归 `test_aee_processor.py` + `test_puller.py` + `test_watcher_enable.py` + 新增「bugreport 必触发」用例 | D1 P0 全绿；现有 patrol 行为不退化 | 直接 revert 子任务 commit |
-| **M0 开发** | Reconciler + PostAeeHook + extra 完整字段 + watcher-summary 扩展 + UI | T0-1 `AeeDbHistoryReconciler` daemon + 180s/60s 双节奏 + capability gate<br>T0-2 `PostAeeHook` 抽出（mobilelog + bugreport + emit 三步合一）<br>T0-3 LogPuller 关闭 AEE/VENDOR_AEE 的 emit 旁路（保留 ANR/MOBILELOG）<br>T0-4 SignalEmitter `extra` 完整化（event_type / package_name / aee_ts / nfs_path / pull_source）<br>T0-5 backend `WatcherSummaryOut.aee_breakdown` + 聚合 SQL（互斥 + unknown 桶）+ 测试<br>T0-6 frontend `WatcherSummaryCard` Crash/ANR/packages chip + capability 徽章<br>T0-7 reconciler state 与 patrol ScriptStateStore 共用 key（实现锁定为 patrol 同款 `scan_aee:{serial}:{aee_type}:processed_entries`，经 `db_history.state_key` 统一生成；草案 `aee:processed:{job_id}:{nfs_dir}` 维度不符已订正） | Agent/Backend/Frontend 单测 + 集成测；同一 Job 重启 reconciler 不漏拉 | env `STP_WATCHER_AEE_RECONCILE_ENABLED=0` 关闭 reconciler |
+| **M0 开发** | Reconciler + PostAeeHook + extra 完整字段 + watcher-summary 扩展 + UI | T0-1 `AeeDbHistoryReconciler` daemon + 180s/60s 双节奏 + capability gate<br>T0-2 `PostAeeHook` 抽出（mobilelog + bugreport + emit 三步合一）<br>T0-3 LogPuller 关闭 AEE/VENDOR_AEE 的 emit 旁路（保留 ANR/MOBILELOG）<br>T0-4 SignalEmitter `extra` 完整化（event_type / package_name / aee_ts / nfs_path / pull_source）<br>T0-5 backend `WatcherSummaryOut.aee_breakdown` + 聚合 SQL（互斥 + unknown 桶）+ 测试<br>T0-6 frontend `WatcherSummaryCard` Crash/ANR/packages chip + capability 徽章<br>T0-7 reconciler state 与 patrol ScriptStateStore 共用 key（实现锁定为 patrol 同款 `scan_aee:{serial}:{aee_type}:processed_entries`，经 `db_history.state_key` 统一生成；草案 `aee:processed:{job_id}:{nfs_dir}` 维度不符已订正）<br>T0-8 Job 首轮 baseline snapshot：设备已有问题补拉并纳入当前总览 | Agent/Backend/Frontend 单测 + 集成测；同一 Job 重启 reconciler 不漏拉；设备已有问题不会被总览吞没 | env `STP_WATCHER_AEE_RECONCILE_ENABLED=0` 关闭 reconciler |
 | **M1 双写** | Watcher reconciler 上线；patrol 仍跑 scan_aee/export_mobilelogs；模板不改 | T1-1 灰度 host 列表 env 配置（`STP_WATCHER_AEE_RECONCILE_HOSTS`）<br>T1-2 双写对账日志（`pull_source=reconciler` vs `legacy_patrol` 条数 + 包名对比）<br>T1-3 watcher-summary UI 提示「双写模式」+ pull_source facet<br>T1-4 同一 Job 对比 NFS 目录与 signal 条数 | reconciler 漏报率 < 5%；metrics 对账日志连续 1 个完整 PlanRun 周期通过 | 灰度 host 列表清空回退 patrol-only |
 | **M2 关 patrol** | `monkey_aee_*.json` 删除 scan_aee、export_mobilelogs；新 Plan 默认无两步骤 | T2-1 模板更新 + version bump<br>T2-2 schema 增加 `legacy_patrol_aee` enum 标记历史 PlanRun<br>T2-3 watcher-summary `pull_source` facet 保留显示历史 PlanRun<br>T2-4 文档 ADR-0018 / ADR-0022 同步 | patrol 周期仅 monkey_check；PlanRun timeline 步骤减少；历史 signals 不受影响 | **暖回滚**：恢复模板 patrol 步骤 + 新 PlanRun 重新双写；历史 signals 不动 |
-| **M3 脚本退役** | DB `script.is_active=false`；state_store key 迁移 watcher 命名空间 | T3-1 `scan_aee` / `export_mobilelogs` script 标 `is_active=false`<br>T3-2 reconciler 改写 `scan_aee:{serial}:{aee_type}:processed_entries` → `watcher:aee:...`<br>T3-3 一次性迁移脚本:旧 key → 新 key<br>T3-4 文档标记 deprecated | 扫描无活跃 Plan 引用；state key 迁移完成无双写 | 暂留旧 key 容错读取 1 个版本周期 |
-| **M4 稳态** | `STP_WATCHER_ENABLED=true` 生产默认；`on_unavailable` 评估是否改 FAIL | T4-1 生产 host 全量切换<br>T4-2 watcher_capability 监控盘<br>T4-3 `on_unavailable` 策略评审（DEGRADED vs FAIL）<br>T4-4 `Manager.reconcile_on_startup` 接入 reconciler 首轮 catch-up | watcher_capability 覆盖率 ≥ 90%；reconciler 漏报告警可观察 | env `STP_WATCHER_ENABLED=false` 全局关闭 |
+| **M3 脚本退役** | DB `script.is_active=false`；state_store key 迁移 watcher 命名空间 | T3-1 `scan_aee` / `export_mobilelogs` script 标 `is_active=false`（**已完成，2026-06-02**；先清掉旧 `plan_id=3` 临时 Plan 的 patrol 引用，再经 API 停用）<br>T3-2 reconciler 改写 `scan_aee:{serial}:{aee_type}:processed_entries` → `watcher:aee:{serial}:{aee_type}:processed_entries`（**已完成**）<br>T3-3 一次性迁移脚本:旧 key → 新 key（**已完成**；`backend/scripts/migrate_watcher_aee_state_keys.py`，旧 key 保留）<br>T3-4 文档标记 deprecated（**已完成，2026-06-03**） | 扫描无活跃 Plan 引用；state key 迁移完成无双写 | 暂留旧 key 容错读取 1 个版本周期 |
+| **M4 稳态** | `STP_WATCHER_ENABLED=true` 生产默认；`on_unavailable` 评估是否改 FAIL（**3/4 完成，2026-06-03**） | T4-1 生产 host 全量切换（**延期：等覆盖率 ≥90% 数据**）<br>T4-2 watcher_capability 监控盘（**已完成，2026-06-03**）<br>T4-3 `on_unavailable` 策略评审（**已完成：保持 DEGRADED，2026-06-03**）<br>T4-4 `Manager.reconcile_on_startup` 接入（**已完成，2026-06-03**） | watcher_capability 覆盖率 ≥ 90%；reconciler 漏报告警可观察 | env `STP_WATCHER_ENABLED=false` 全局关闭 |
 
 **关键回滚语义：**
 
@@ -389,7 +403,7 @@ class WatcherSummaryOut(BaseModel):
 | `STP_WATCHER_PLAN_DEFAULT` | `true` | Plan Job 默认启用 Watcher（已存在） |
 | `STP_WATCHER_NFS_BASE_DIR` | 空 | 非空才启用 LogPuller；**必填**才能 pull + sonic |
 | `STP_AEE_NFS_ROOT` | 见 `aee/paths.py` | sonic_tinno 根；与 Watcher NFS 对齐；env 优先级 `STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno` |
-| `STP_WATCHER_AEE_RECONCILE_ENABLED` | `true` | **新增**：是否启用 db_history 周期 reconciler；与 `STP_WATCHER_ENABLED` / `watcher_policy.enabled` 是 AND 关系，仅在 capability ≠ skipped 时生效（详 §2.1 gate 优先级） |
+| `STP_WATCHER_AEE_RECONCILE_ENABLED` | `false`（M1 期）→ `true`（M4 稳态目标） | **新增**：是否启用 db_history 周期 reconciler；与 `STP_WATCHER_ENABLED` / `watcher_policy.enabled` 是 AND 关系，仅在 capability ∈ {`inotifyd_realtime`, `polling`} 时生效（`unavailable` / `skipped` 不启动，详 §2.1 gate 优先级）。**实现默认 `false`**（`reconciler.py:is_reconciler_enabled`），灰度期需显式开启；M4 稳态再评估改默认 `true`（§11.2 偏差 4） |
 | `STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS` | `180` | **新增**：reconciler 基线间隔（D2） |
 | `STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS` | `60` | **新增**：reconciler burst 间隔（D2） |
 | `STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS` | `5` | **新增**：burst 持续轮数（D2） |
@@ -416,7 +430,7 @@ class WatcherSummaryOut(BaseModel):
 |----|------|
 | **aee_extract** | 解密/解析 AEE db 内容不在本方案范围；与 D1 / Puller 注释一致 |
 | **PollingSource 完整实现** | **永久不实现**；reconciler 已覆盖 polling capability 的全部需求（拉文件 + 解析 + emit），无需独立 PollingSource。`watcher_capability=polling` 由 reconciler 直接服务 |
-| **`Manager.reconcile_on_startup`** | 仍为 stub；Agent 崩溃重启依赖 reconciler 首轮 catch-up，非本方案必须项但 M4 跟进 |
+| **`Manager.reconcile_on_startup`** | **已完成（M4 T4-4，2026-06-03）**：Agent 重启时清理残留 active `watcher_state`（`agent_restart_stale_cleanup`）；Job 级 catch-up 仍依赖 reconciler 首轮 tick |
 | **按 package 的 AlertManager 规则** | 依赖 ADR-0011 第二层 |
 | **logcat 实时采集** | 非 Watcher 职责（见 WatcherPolicy 注释） |
 | **inotifyd → AEE emit 旁路** | M0 起关闭；AEE emit 仅由 reconciler 负责。ANR/MOBILELOG 仍保留 inotifyd→emit 原路径 |
@@ -486,15 +500,108 @@ class WatcherSummaryOut(BaseModel):
 
 ### 10.4 M0 前置检查清单
 
-- [ ] M0.5 三项 P0 修复 + 回归用例全绿（含 `test_puller.py` bugreport 必触发用例）
-- [ ] D2 双节奏 env 三件套（`STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS` / `_BURST_INTERVAL_SECONDS` / `_BURST_ROUNDS`）已加入 `backend/agent/main.py` 启动期日志输出
-- [ ] D3 子目录 env 逃生口 `STP_WATCHER_AEE_SUBDIR_LAYOUT` 默认值已确认（`correlated`）；`aee/mobilelog.py` 读取该 env 切换布局
-- [x] reconciler state_store key 已与现有 patrol `ScriptStateStore` 对齐（M1 共用键）——实现锁定为 patrol 同款 `scan_aee:{serial}:{aee_type}:processed_entries`（经 `db_history.state_key` helper 统一生成，prefix=`scan_aee`）；草案 `aee:processed:{job_id}:{nfs_dir}` 因维度 (job_id vs serial) 不符无法真正共享，已订正为 serial 维度
-- [ ] M2 暖回滚语义在文档 §3 备注；前端 facet 按 `pull_source` 过滤的 UI 已纳入 M0 任务清单
-- [ ] PollingSource 永久不实现的结论已在 §6 标注
-- [ ] inotifyd 路径关闭 AEE/VENDOR_AEE emit 的实现（LogPuller 改造）已设计独立 commit + 双向回滚预案
+> **勾选权威**：以 §11.1 为准（2026-06-03 更新）。
+
+- [x] M0.5 三项 P0 修复 + 回归用例全绿（含 `test_puller.py` bugreport 必触发用例）
+- [x] D2 双节奏 env 三件套（`STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS` / `_BURST_INTERVAL_SECONDS` / `_BURST_ROUNDS`）已加入 `backend/agent/main.py` 启动期日志输出
+- [x] D3 子目录 env 逃生口 `STP_WATCHER_AEE_SUBDIR_LAYOUT` 默认值已确认（`correlated`）；`aee/mobilelog.py` / `bugreport.py` 读取该 env 切换布局
+- [x] reconciler state_store key：M1/M2 已与 patrol `ScriptStateStore` 对齐为 `scan_aee:{serial}:{aee_type}:processed_entries`；M3 已迁到 `watcher:aee:{serial}:{aee_type}:processed_entries`，并自动合并旧 key / 提供离线迁移脚本
+- [x] M2 暖回滚语义在文档 §3 备注；前端双写徽章已落地；**pull_source 交互 facet 筛选未做**（低优先级）
+- [x] PollingSource 永久不实现的结论已在 §6 标注
+- [x] inotifyd 路径关闭 AEE/VENDOR_AEE emit 的实现（`device_watcher.py` + reconciler 独占 emit）
 
 ---
 
 *文档版本：2026-05-27 v2*  
 *v1 → v2 主要变化：锁定 D1-D4 + M0.5 + state_store key 决策；§3 重写 6 阶段表（含 M0.5）；§2.1 加 capability×reconciler 行为矩阵与 inotifyd 硬约束；§2.2 pull_source 枚举修正（移除 db_history）；§2.3 `AeeBreakdownOut` 互斥归类 + unknown 桶 + `PackageStatOut`；§4.1 用例替换 dedup 为 inotifyd-not-emit + reconciler-sole-source + burst 模式；§5 env 加 `STP_WATCHER_AEE_*` 前缀；§6 PollingSource 永久不实现；新增 §10 D1 审核附录与 M0 前置检查清单。*
+
+---
+
+## 11. 实施进度核查（2026-06-03，§11.5 续更）
+
+> 核查方式：对照 commit 链 + 10.36 灰度现场 + API 操作记录。  
+> **代码链（main，节选）**：`61546d7(M0.5 D3)` → `e5d0865(M0 reconciler)` → `62c79d6`/`ae1af3a`(API/UI) → `5cc2ccd(M1 对账端点)` → `844c142`(NFS 范围+badge) → `3bc9a82`(对账按 signal nfs_path 条目) → `f9851d5`(同设备多 Run 回归测试) → `392c9dd`(reset_dev_admin 脚本)。  
+> **测试（历史实跑）**：Agent 侧 aee/watcher 相关 **69+ passed**；Backend 聚合/对账 **57+ passed**；`TestAeeReconciliationEndpoint` **8 passed**（含条目级 NFS 范围）。
+
+### 11.1 阶段完成情况（取代 §3 状态判断与 §10.4 勾选）
+
+| 阶段 | 状态 | 关键证据 |
+|------|------|----------|
+| **M0.5 D1 P0** | ✅ **完成** | P0-#1 `_verify_pulled_aee_log_strict`；P0-#2 `correlated_mobilelogs/`；P0-#3 puller bugreport event_type；`test_aee_processor` / `test_puller` / `test_aee_bugreport` |
+| **M0 Reconciler+API+UI** | ✅ **完成**（偏差见 §11.2，已文档化） | reconciler 独占 emit + 180/60 burst + hash skip；`aee_breakdown` + WatcherSummaryCard；`watcher_capability` 聚合；`schema_version=1`；C-3 启动失败回滚 emit；`extra` 含 `nfs_path`/`pull_source=reconciler` |
+| **M1 双写（正式）** | 🟡 **未做 formal 签字；以最小现场验证收口** | 现场已完成更关键的 Watcher-only 验证链路：**run 18** 证明设备已有问题会重新进入当前 run 总览；**run 19** 证明运行中 `watcher-summary.watcher_capability` 已为 `inotifyd_root`、`aee-reconciliation` note 已改为“远端 `nfs_path` 不可直访”。不再追加“连续 1 周期 formal 双写签字”。 |
+| **M1→M2 加速** | ✅ **已完成（API / 现场）** | **2026-05-30**：`apply_watcher_only_plan2.py` / API 将 **Plan #2** patrol 改为仅 `monkey_check`，触发 **PlanRun #7**（`device_id=62`）；创建时 **RUNNING**，**终态待用户确认**（本次文档更新未连上中心 API）。**2026-05-30 ~ 2026-06-02**：run 18 / 19 以 reconciler + `watcher-summary` / `aee-reconciliation` 验收；**2026-06-03**：run 24 仓库模板 E2E 通过。 |
+| **M2 模板收口** | ✅ **已完成（仓库工作区）** | `backend/schemas/pipeline_templates/monkey_aee_patrol.json` / `monkey_aee_lifecycle.json` 已删除 `scan_aee`、`export_mobilelogs`，patrol 仅保留 `monkey_check`，并完成模板 `version` bump。 |
+| **M3 脚本退役** | ✅ **全量完成** | **2026-06-02**：本地 DB `scan_aee:1.0.0` / `export_mobilelogs:1.0.0` 置 `is_active=false`。代码侧 reconciler 已改用 `watcher:aee:*`，首次 tick 自动合并旧 `scan_aee:*`。离线迁移脚本：`backend/scripts/migrate_watcher_aee_state_keys.py`。**2026-06-03**：T3-4 文档标记 deprecated（本文件 + CLAUDE.md 更新），新 Plan 不应再引用 scan_aee/export_mobilelogs。 |
+| **M4 稳态** | 🟡 **进行中（3/4 完成，T4-1 延期到覆盖率数据积累后）** | **T4-2 (2026-06-03)**：新增 `stability_watcher_capability_total{capability}` Counter + `record_watcher_capability()` + pytest。**T4-3 (2026-06-03)**：决策 `on_unavailable` **保持 DEGRADED**——覆盖率数据不足，不改 FAIL。**T4-4 (2026-06-03)**：`reconcile_on_startup` 清理残留 active watcher_state（`agent_restart_stale_cleanup`）+ 3 case pytest。**T4-1**：暂不切 `STP_WATCHER_ENABLED` / `RECONCILE_ENABLED` 默认 `true`——需先在 2-3 台不同机型积累 1 周 capability 覆盖率数据（`stability_watcher_capability_total`），≥90% 后再切。 |
+
+### 11.2 实现与计划的偏差（需决策）
+
+1. **capability=unavailable 行为反转（已落地代码，文档未同步）**
+   - 计划 §2.1 矩阵 / §2.4 #5：unavailable → reconciler 启用、固定 60s 单通道兜底。
+   - 实现 `job_session.py:269`：`capability in ("skipped","unavailable")` 一律**不启动** reconciler；844c142 已把前端 badge「reconciler 单通道模式」改为「Watcher 不可用」。
+   - 根因：reconciler 依赖 `WatcherHandle.impl.emitter`，unavailable 时 impl 不可用 → 原"单通道兜底"架构上不成立。属合理修正。
+   - **已修正（本次）**：§2.1 矩阵 unavailable 行 / 节奏细节 / gate 优先级 + §2.4 #5 均已改为「不启动」。澄清：`reconciler.py` 节奏纯由 env 驱动、**不感知 capability**，并不存在「unavailable 固定 60s」分支（那只是计划 §2.1 旧设想，从未落地）→ 无 dead path 需清理。
+
+2. **PostAeeHook 未抽象为独立组件（功能等价内联，无 bugreport 缺口 —— 原核查结论已订正）**
+   - 计划 T0-2：PostAeeHook 三步合一（mobilelog + bugreport + emit）。
+   - 实现：未抽出独立 `PostAeeHook`，而是**内联在 `process_device_logs`**——emit 经 `on_new_entry` 回调（processor.py:234，最低延迟优先）+ `export_correlated_mobilelogs`（L248）+ `export_bugreport_for_timestamp`（L257），三步齐全。
+   - **订正**：初版核查误判「reconciler 路径不导 bugreport / polling 缺口」。实际 `reconciler.tick_once` 走 `process_device_logs`，`ProcessConfig.export_bugreport` 默认 `True`、reconciler 以默认值构造（reconciler.py:300/335）→ **reconciler 路径（含 polling capability）已导 bugreport**；与 puller 路径靠 bugreport 模块级 cooldown + `final_path.exists()` 双重去重（bugreport.py:19/150）不会重复。**无需补代码**。
+   - 残留：仅「未抽成命名组件」属风格层面，不影响功能；如需可在 M3 重构时统一。
+
+3. **extra 缺 schema_version —— 已修复（本次）**
+   - 计划 §2.2：`extra.schema_version=1`（标必填）。
+   - 修复：`reconciler.py:_handle_new_entry` 的 extra 已补 `schema_version: 1`。`mobilelog_pulled` / `bugreport_exported`（§2.2「可选」）不填——emit 在 `on_new_entry` 回调触发，早于 mobilelog/bugreport 副作用（processor.py:231），此刻两者尚未发生；已在代码注释说明。
+
+4. **`STP_WATCHER_AEE_RECONCILE_ENABLED` 默认值不一致**
+   - 计划 §5：默认 `true`。实现 `reconciler.py:151`：默认 `False`。
+   - 属合理灰度保守默认（M1 期默认关、需显式开启），与 §2.1 gate「与 STP_WATCHER_ENABLED 默认 false 的 AND 关系」自洽。**已修正（本次）**：§5 默认列改为「`false`（M1 期）→ `true`（M4 稳态目标）」并注明实现默认 false。
+
+### 11.3 下一步行动（2026-06-03 当前）
+
+| 优先级 | 动作 | 说明 |
+|--------|------|------|
+| **P0** | **修 10.36 ScriptRegistry 401** | `AGENT_SECRET` 与中心一致 + 热更新；禁止长期手改 `agent_state.db`。 |
+| **P2** | **T4-1 默认切换：积累覆盖率数据** | 在 2-3 台不同机型显式开启 Watcher+AEE reconciler，用 `stability_watcher_capability_total` 观察 1 周；≥90% 后改 `STP_WATCHER_ENABLED` / `RECONCILE_ENABLED` 默认 `true`。 |
+
+**已完成（2026-06-03）**：
+- ✅ **真机验收**：PlanRun #24 从仓库模板 `monkey_aee_patrol.json` 新建 Plan，patrol 仅 `monkey_check`（4 周期），watcher-summary 29 signals（20 crash + 9 ANR），**零 scan_aee/export_mobilelogs**。Watcher-only 链路 E2E 验证通过。
+- ✅ T4-2 watcher_capability 指标（`stability_watcher_capability_total{capability}` Counter，pytest 覆盖）
+- ✅ T4-3 on_unavailable 策略（保持 DEGRADED）
+- ✅ T4-4 reconcile_on_startup（3 case pytest）
+- ✅ T3-4 文档标记 deprecated
+
+**已完成（不再重复做）**：M0.5/M0 代码合入；对账端点三轮收紧（设备目录 → **signal `nfs_path` 条目目录**，`3bc9a82`/`f9851d5`）；§2.1 unavailable / §5 默认 env 文档对齐。
+
+### 11.4 工作区与运维资产
+
+| 路径 | 说明 |
+|------|------|
+| `docs/plans/watcher-aee-m1-dual-write-runbook.md` | M1 操作手册（host 编号以实际为准；10.36 灰度） |
+| `backend/scripts/aee_dual_write_recon.py` | DB 只读对账（未跟踪时可入库） |
+| `backend/scripts/apply_watcher_only_plan2.py` | **2026-05-30** API 将 Plan #2 改为 Watcher-only 并触发 Run |
+| `backend/scripts/reset_dev_admin_password.py` | 已提交 `392c9dd` |
+| `patches/`、`MonkeyAEEinfo_260523.py` | 开发中间产物 / 参考脚本，**不应入库** |
+
+### 11.5 灰度现场快照（2026-06-03 更新）
+
+| 项 | 值 |
+|----|-----|
+| Host | `auto-fdaf1d55e319` / `172.21.10.36` |
+| 设备 | `device_id=63`，`serial=11914404BG102162` |
+| Plan 模板 | `monkey_aee_patrol.json` v2（Watcher-only），patrol 仅 `monkey_check` |
+| Plan（API 加速） | **Plan #2**（`aee-dual-write-10.36-*`）：**2026-05-30** 经 API 改为 Watcher-only（patrol 仅 `monkey_check`，`watcher_policy.enabled=true`） |
+| PlanRun | **#7**（Plan #2，`device_id=62`）：**2026-05-30** 创建时 **RUNNING**；**终态待用户确认**（未在本次核查中连上中心 API，勿臆造 SUCCESS/FAILED） |
+| PlanRun | **#24**：**2026-06-03 真机验收通过**；precheck 闸门 ready → SAQ 分发 → Agent 认领 → init→patrol 4 周期 `['monkey_check']` → **零 scan_aee/export_mobilelogs** |
+| watcher-summary | **#24** 60min 窗口 29 signals（20 crash + 9 ANR），12 个包名，baseline snapshot 正常 |
+| Patrol timeline | **#24** 4 周期，步骤仅 `monkey_check`（Watcher-only 模板生效） |
+| 历史 Run | **#18**：设备已有问题重新进入当前 run 总览；**#19**：watcher_capability=inotifyd_root（本 host 已验证）；**#6**：旧双写 Run，已 FAILED |
+| **结论** | ✅ Watcher-only 链路 E2E 通过（#24 权威验收）；#7 为 Plan #2 API 加速首跑，终态待确认 |
+
+### 11.6 `/aee-reconciliation` 对账语义（当前实现）
+
+- **不做**全 `STP_AEE_NFS_ROOT` rglob，**不做** `{folder}/{serial}` 设备日目录扫全量（避免同设备同日多 PlanRun 混计）。
+- **仅**校验本 Run 的 AEE/VENDOR_AEE signal 的 `extra.nfs_path`（crash 条目目录）内 `*.dbg`。
+- `missing_in_signal`：已校验条目中有 .dbg 但 reconciler 未覆盖的 basename；**不能**发现「磁盘有、signal 未报」的条目。
+
+*进度更新：2026-06-03（含 Plan #2 / PlanRun #7 API 加速、run 24 E2E、M3 T3-4 deprecated、M4 T4-2/T4-3/T4-4 完成）*
