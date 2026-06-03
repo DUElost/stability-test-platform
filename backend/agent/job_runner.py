@@ -166,6 +166,9 @@ def run_task_wrapper(
             is_aborted=lambda: state.is_aborted(job_id),
             fencing_token=fencing_token,
             on_job_not_running_recovery=state.on_job_not_running_recovery,
+            watcher_capability=(
+                session.summary.watcher_capability if session is not None else None
+            ),
         )
 
         watcher_summary = None

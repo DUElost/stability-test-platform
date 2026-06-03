@@ -24,6 +24,7 @@ def execute_pipeline_run(
     is_aborted: Optional[Callable[[], bool]] = None,
     fencing_token: str = "",
     on_job_not_running_recovery: Optional[Callable[[int], None]] = None,
+    watcher_capability: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -52,6 +53,7 @@ def execute_pipeline_run(
         is_aborted=is_aborted,
         fencing_token=fencing_token,
         patrol_heartbeat_uploader=patrol_heartbeat,
+        watcher_capability=watcher_capability,
     )
 
     result = engine.execute(pipeline_def)

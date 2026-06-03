@@ -393,6 +393,14 @@ reconciler_burst_mode_active = Gauge(
     ['host_id']
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+# Watcher capability 覆盖率（M4/T4-2 监控盘）：每个 Job 首次进入终态时按上报的
+# watcher_capability 自增一次 → 覆盖率 = (inotifyd_root+inotifyd_shell+polling) / 总计。
+watcher_capability_total = Counter(
+    'stability_watcher_capability_total',
+    'Total terminal jobs by reported watcher capability (once per job at first terminal)',
+    ['capability']  # inotifyd_root | inotifyd_shell | polling | unavailable | skipped | unknown
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 # Agent local outbox backlog (heartbeat extra)
 agent_outbox_pending = Gauge(
     'stability_agent_outbox_pending',
@@ -582,6 +590,19 @@ def set_reconciler_burst_mode_active(host_id: str, active: bool):
     if not PROMETHEUS_AVAILABLE:
         return
     reconciler_burst_mode_active.labels(host_id=str(host_id or "unknown")).set(1 if active else 0)
+
+
+def record_watcher_capability(capability: str):
+    """Record a terminal job's reported watcher capability (M4/T4-2 coverage board).
+
+    Called once per job at its first terminal transition (agent_api.complete_job,
+    under the `not already_terminal` guard) so the counter stays monotonic and
+    coverage = (inotifyd_root+inotifyd_shell+polling) / total.
+    """
+    if not PROMETHEUS_AVAILABLE:
+        return
+    cap = (capability or "unknown").strip() or "unknown"
+    watcher_capability_total.labels(capability=cap[:32]).inc()
 
 
 def record_agent_outbox_pending(host_id: str, outbox_type: str, count: int):

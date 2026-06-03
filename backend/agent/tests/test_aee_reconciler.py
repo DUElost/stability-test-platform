@@ -6,7 +6,7 @@
     - emit category 按 aee_type 映射(aee_exp → AEE / vendor_aee_exp → VENDOR_AEE)
     - emit source="reconciler",extra 含 event_type/package_name/aee_ts/nfs_path/pull_source
     - 双节奏: 有新条目切到突发 60s × N 轮 → 回落基线 180s
-    - 状态键前缀按 job_id 隔离
+    - M3 watcher:aee 状态键命名空间与 legacy scan_aee 迁移
     - 未知 aee_type 跳过
     - emit ContractViolation 增 signals_dropped 计数
     - start / stop 幂等
@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import threading
@@ -164,6 +165,7 @@ def test_tick_once_no_new_returns_zero(monkeypatch):
         serial="SX",
         job_id=901,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
     assert rec.tick_once() == 0
     assert rec.stats.ticks_total == 1
@@ -211,6 +213,7 @@ def test_tick_once_new_entries_emits_with_extra(monkeypatch):
         serial="SX",
         job_id=901,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
     assert rec.tick_once() == 2
     assert rec.stats.signals_emitted == 2
@@ -229,10 +232,114 @@ def test_tick_once_new_entries_emits_with_extra(monkeypatch):
     assert extra["aee_ts"] == "2026-05-28 10:00:00.000"
     assert Path(extra["nfs_path"]) == expected_aee_dir
     assert extra["pull_source"] == "reconciler"
+    # §2.2 schema_version=1(本次补:演进兼容标记)
+    assert extra["schema_version"] == 1
 
     vendor_call = emitter.calls[1]
     assert vendor_call["category"] == "VENDOR_AEE"
     assert vendor_call["extra"]["package_name"] == "vendor.app"
+    assert vendor_call["extra"]["schema_version"] == 1
+
+
+def test_first_tick_runs_baseline_snapshot_and_marks_runtime_processed(monkeypatch):
+    """首轮先导出设备存量问题,并并入共享 processed key 防止同 Job 重复。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+    calls: list[str] = []
+    payload = {
+        "line": "/data/aee_exp/db.20,CRASH,pkg,_,_,_,_,_,com.settings,2026-05-28 10:00:00.000",
+        "parsed": {
+            "db_path": "/data/aee_exp/db.20",
+            "pkg_name": "com.settings",
+            "timestamp": "2026-05-28 10:00:00.000",
+            "event_type": "CRASH",
+        },
+        "aee_type": "aee_exp",
+        "output_subdir": Path("/mnt/nfs/jobs/904/AEE/db.20"),
+    }
+
+    def fake_pdl(*, config, on_new_entry=None, **_):
+        calls.append(
+            f"{config.state_key_prefix}|ml={config.export_mobilelog}|br={config.export_bugreport}"
+        )
+        if config.state_key_prefix == "watcher_baseline:904":
+            if on_new_entry is not None:
+                on_new_entry(dict(payload))
+            return ProcessResult(pulled=1, new_timestamps=["2026-05-28 10:00:00.000"])
+        return ProcessResult(pulled=0)
+
+    monkeypatch.setattr("backend.agent.aee.reconciler.process_device_logs", fake_pdl)
+
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter,
+        state_store=store,
+        serial="SX",
+        job_id=904,
+        host_id="HOST",
+    )
+    assert rec.tick_once() == 1
+    assert calls[:2] == [
+        "watcher_baseline:904|ml=False|br=False",
+        "watcher:aee|ml=True|br=True",
+    ]
+    assert rec.stats.baseline_entries_total == 1
+    assert rec.stats.runtime_entries_total == 0
+    assert rec.stats.new_entries_total == 1
+    assert emitter.calls[0]["extra"]["aee_ts"] == "2026-05-28 10:00:00.000"
+    assert hasattr(emitter.calls[0]["detected_at"], "tzinfo")
+
+    processed_raw = store.get_state("watcher:aee:SX:aee_exp:processed_entries", "[]")
+    assert "db.20" in processed_raw
+
+
+def test_baseline_snapshot_is_chunked_across_ticks(monkeypatch):
+    """baseline 未扫完时应分轮继续,且 hash 未变也不能阻塞后续分片。"""
+    emitter = _FakeEmitter()
+    store = _MemStore()
+    calls: list[tuple[str, Optional[int]]] = []
+    baseline_results = [
+        ProcessResult(pulled=2, pending_remaining=3),
+        ProcessResult(pulled=2, pending_remaining=1),
+        ProcessResult(pulled=1, pending_remaining=0),
+    ]
+
+    def fake_pdl(*, config, **_):
+        calls.append((config.state_key_prefix, config.max_entries_per_run))
+        if config.state_key_prefix == "watcher_baseline:905":
+            return baseline_results.pop(0)
+        return ProcessResult(pulled=0)
+
+    monkeypatch.setattr("backend.agent.aee.reconciler.process_device_logs", fake_pdl)
+
+    holder = {"v": "db.0,CRASH,...\n"}
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter,
+        state_store=store,
+        serial="SX",
+        job_id=905,
+        host_id="HOST",
+        shell_fn=_shell_returning(holder),
+        baseline_chunk_size=2,
+    )
+
+    assert rec.tick_once() == 2
+    assert rec._baseline_snapshot_done is False
+    assert rec.stats.baseline_entries_total == 2
+
+    assert rec.tick_once() == 2
+    assert rec._baseline_snapshot_done is False
+    assert rec.stats.baseline_entries_total == 4
+
+    assert rec.tick_once() == 1
+    assert rec._baseline_snapshot_done is True
+    assert rec.stats.baseline_entries_total == 5
+    assert rec.stats.ticks_skipped_unchanged == 2
+    assert calls == [
+        ("watcher_baseline:905", 2),
+        ("watcher:aee", None),
+        ("watcher_baseline:905", 2),
+        ("watcher_baseline:905", 2),
+    ]
 
 
 def test_unknown_aee_type_skipped(monkeypatch):
@@ -259,6 +366,7 @@ def test_unknown_aee_type_skipped(monkeypatch):
         serial="SX",
         job_id=902,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
     rec.tick_once()
     assert emitter.calls == []
@@ -291,6 +399,7 @@ def test_emit_contract_violation_increments_dropped(monkeypatch):
         serial="SX",
         job_id=903,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
     rec.tick_once()
     assert rec.stats.signals_dropped == 1
@@ -301,12 +410,8 @@ def test_emit_contract_violation_increments_dropped(monkeypatch):
 # 状态键命名空间
 # ----------------------------------------------------------------------
 
-def test_state_key_prefix_shared_with_patrol_scan_aee():
-    """C-1 锁定决策:reconciler 与 patrol scan_aee 共用 state_key_prefix='scan_aee'。
-
-    不同 job 共用同一 prefix → 去重维度为 (serial, aee_type),与 patrol 一致。
-    断言经 db_history.state_key helper 生成的键与 patrol 默认 ProcessConfig 完全一致。
-    """
+def test_state_key_prefix_migrated_to_watcher_namespace():
+    """M3:reconciler 迁到 watcher:aee 命名空间,patrol 默认保持 scan_aee。"""
     from backend.agent.aee.db_history import state_key
     from backend.agent.aee.processor import ProcessConfig
 
@@ -316,6 +421,7 @@ def test_state_key_prefix_shared_with_patrol_scan_aee():
         serial="SX",
         job_id=1001,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
     rec_b = AeeDbHistoryReconciler(
         signal_emitter=_FakeEmitter(),
@@ -323,18 +429,88 @@ def test_state_key_prefix_shared_with_patrol_scan_aee():
         serial="SX",
         job_id=1002,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
-    assert rec_a._state_prefix == "scan_aee"
-    assert rec_b._state_prefix == "scan_aee"
-    assert rec_a._cfg.state_key_prefix == "scan_aee"
-    assert rec_b._cfg.state_key_prefix == "scan_aee"
+    assert rec_a._state_prefix == "watcher:aee"
+    assert rec_b._state_prefix == "watcher:aee"
+    assert rec_a._cfg.state_key_prefix == "watcher:aee"
+    assert rec_b._cfg.state_key_prefix == "watcher:aee"
 
-    # 与 patrol(ProcessConfig 默认)生成的 processed 键 byte-identical → 真正共享去重状态
     patrol_default_prefix = ProcessConfig().state_key_prefix
-    assert rec_a._cfg.state_key_prefix == patrol_default_prefix
+    assert patrol_default_prefix == "scan_aee"
     reconciler_key = state_key("SX", "aee_exp", prefix=rec_a._cfg.state_key_prefix)
     patrol_key = state_key("SX", "aee_exp", prefix=patrol_default_prefix)
-    assert reconciler_key == patrol_key == "scan_aee:SX:aee_exp:processed_entries"
+    assert reconciler_key == "watcher:aee:SX:aee_exp:processed_entries"
+    assert patrol_key == "scan_aee:SX:aee_exp:processed_entries"
+
+
+def test_reconciler_migrates_legacy_processed_entries_to_watcher_namespace(monkeypatch):
+    """首次 tick 将旧 scan_aee processed 集合并入 watcher:aee,避免运行期重复 emit。"""
+    store = _MemStore()
+    store.set_state(
+        "scan_aee:SX:aee_exp:processed_entries",
+        json.dumps(["legacy-line"]),
+    )
+    store.set_state(
+        "watcher:aee:SX:aee_exp:processed_entries",
+        json.dumps(["existing-watcher-line"]),
+    )
+
+    calls: list[str] = []
+
+    def fake_pdl(*, config, **_):
+        calls.append(config.state_key_prefix)
+        return ProcessResult(pulled=0)
+
+    monkeypatch.setattr("backend.agent.aee.reconciler.process_device_logs", fake_pdl)
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=_FakeEmitter(),
+        state_store=store,
+        serial="SX",
+        job_id=1003,
+        host_id="HOST",
+        shell_fn=lambda cmd, timeout: "db.0,CRASH,...\n",
+        baseline_snapshot_enabled=False,
+    )
+
+    assert rec.tick_once() == 0
+    assert calls == ["watcher:aee"]
+    migrated = json.loads(store.get_state("watcher:aee:SX:aee_exp:processed_entries", "[]"))
+    assert migrated == ["existing-watcher-line", "legacy-line"]
+
+
+def test_reconciler_migrates_legacy_pending_pull_to_watcher_namespace(monkeypatch):
+    """旧 pending_pull 未完成任务也要迁移,避免改名前正在重试的 AEE 条目丢失。"""
+    store = _MemStore()
+    store.set_state(
+        "scan_aee:SX:aee_exp:pending_pull",
+        json.dumps({"legacy-line": {"db_path": "/data/aee_exp/db.1"}}),
+    )
+    store.set_state(
+        "watcher:aee:SX:aee_exp:pending_pull",
+        json.dumps({"existing-line": {"db_path": "/data/aee_exp/db.2"}}),
+    )
+
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        lambda **_: ProcessResult(pulled=0),
+    )
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=_FakeEmitter(),
+        state_store=store,
+        serial="SX",
+        job_id=1004,
+        host_id="HOST",
+        shell_fn=lambda cmd, timeout: "db.0,CRASH,...\n",
+        baseline_snapshot_enabled=False,
+    )
+
+    assert rec.tick_once() == 0
+    migrated = json.loads(store.get_state("watcher:aee:SX:aee_exp:pending_pull", "{}"))
+    assert migrated == {
+        "existing-line": {"db_path": "/data/aee_exp/db.2"},
+        "legacy-line": {"db_path": "/data/aee_exp/db.1"},
+    }
 
 
 # ----------------------------------------------------------------------
@@ -355,6 +531,7 @@ def test_dual_tempo_switches_to_burst_after_new_entry(monkeypatch):
         burst_interval_seconds=60.0,
         burst_rounds=5,
         shell_fn=lambda cmd, timeout: None,   # 不打真实 adb;None → 保守跑 process
+        baseline_snapshot_enabled=False,
     )
     # 模拟一个有新条目的 tick → _burst_remaining 应被设到 5
     monkeypatch.setattr(
@@ -413,6 +590,7 @@ def test_run_loop_uses_burst_interval_after_new_entry(monkeypatch):
         burst_interval_seconds=0.05,    # 极短便于测试
         burst_rounds=3,
         shell_fn=lambda cmd, timeout: None,   # 不打真实 adb;None → 保守跑 process
+        baseline_snapshot_enabled=False,
     )
     rec.start()
     try:
@@ -460,6 +638,7 @@ def test_tick_skips_process_when_db_history_hash_unchanged(monkeypatch):
         job_id=2001,
         host_id="HOST",
         shell_fn=_shell_returning(holder),
+        baseline_snapshot_enabled=False,
     )
 
     # 第一轮:cache 空 → hash 变化 → process 被调
@@ -487,6 +666,7 @@ def test_hash_unchanged_skip_does_not_reset_burst(monkeypatch):
         signal_emitter=emitter, state_store=store, serial="SX",
         job_id=2002, host_id="HOST", burst_rounds=5,
         shell_fn=_shell_returning(holder),
+        baseline_snapshot_enabled=False,
     )
     rec.tick_once()                       # 首轮:hash 变化 → process
     rec._burst_remaining = 3              # 假装处于 burst 中
@@ -514,6 +694,7 @@ def test_hash_change_triggers_burst_even_if_pulled_zero(monkeypatch):
         signal_emitter=emitter, state_store=store, serial="SX",
         job_id=2003, host_id="HOST", burst_rounds=5,
         shell_fn=_shell_returning(holder),
+        baseline_snapshot_enabled=False,
     )
     # 首轮:cache 空 → hash 变化 → process(pulled=0) → 仍是新行候选
     n1 = rec.tick_once()
@@ -551,6 +732,7 @@ def test_unreadable_db_history_runs_process_conservatively(monkeypatch):
     rec = AeeDbHistoryReconciler(
         signal_emitter=emitter, state_store=store, serial="SX",
         job_id=2004, host_id="HOST", shell_fn=shell_none,
+        baseline_snapshot_enabled=False,
     )
     rec.tick_once()
     rec.tick_once()
@@ -578,6 +760,7 @@ def test_start_stop_idempotent(monkeypatch):
         baseline_interval_seconds=60.0,
         burst_interval_seconds=60.0,
         shell_fn=lambda cmd, timeout: None,   # 不打真实 adb
+        baseline_snapshot_enabled=False,
     )
     rec.start()
     rec.start()    # 重复 start 不应抛
@@ -593,6 +776,7 @@ def test_stop_before_start_returns_empty_stats():
         serial="SX",
         job_id=1202,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
     stats = rec.stop(timeout=0.5)
     assert isinstance(stats, ReconcilerStats)
@@ -670,6 +854,7 @@ def test_stop_joins_reconciler_thread_when_default_adb_shell_is_blocked(monkeypa
         serial="SX",
         job_id=1203,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
     rec.start()
     deadline = time.time() + 1.0
@@ -701,6 +886,7 @@ def test_env_overrides_intervals(monkeypatch):
         serial="SX",
         job_id=1301,
         host_id="HOST",
+        baseline_snapshot_enabled=False,
     )
     assert rec._baseline == 30.0
     assert rec._burst == 5.0

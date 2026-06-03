@@ -121,6 +121,18 @@ class _FailingWatcher(_StubWatcher):
         raise WatcherStartError("forced_start_failure", code="source_start_failed")
 
 
+class _PullerAwareWatcher(_StubWatcher):
+    def __post_init__(self):
+        super().__post_init__()
+        self.attached_puller = None
+
+    def attach_puller(self, puller):
+        self.attached_puller = puller
+
+    def _on_pull_done(self, event, enrichment):
+        return None
+
+
 def _watcher_factory_producing(cls):
     """返回一个工厂：接收 DeviceLogWatcher 的 kwargs，透传给 cls(**kwargs)。"""
     produced: List[Any] = []
@@ -217,6 +229,32 @@ def test_duplicate_serial_raises_already_running(db):
     with pytest.raises(WatcherStartError) as excinfo:
         mgr.start(host_id="H", serial="S1", job_id=2, log_dir="/tmp", policy=WatcherPolicy())
     assert excinfo.value.code == "already_running"
+
+
+def test_start_passes_policy_pull_timeout_to_puller(db):
+    mgr = LogWatcherManager.instance()
+    wf = _watcher_factory_producing(_PullerAwareWatcher)
+    mgr.configure(
+        adb=MagicMock(),
+        adb_path="adb",
+        local_db=db,
+        nfs_base_dir="/mnt/nfs/stability",
+        prober_factory=_stub_prober_factory({"SP": _probe_root()}),
+        watcher_factory=wf,
+    )
+
+    policy = WatcherPolicy(pull_timeout_seconds=123.0)
+    handle = mgr.start(
+        host_id="H1",
+        serial="SP",
+        job_id=201,
+        log_dir="/tmp/j",
+        policy=policy,
+    )
+
+    assert handle.impl is wf.produced[0]
+    assert wf.produced[0].attached_puller is not None
+    assert wf.produced[0].attached_puller._pull_timeout == 123.0
 
 
 # ----------------------------------------------------------------------
@@ -389,6 +427,55 @@ def test_stop_degraded_handle_without_impl(db):
     assert stopped is handle
     state = db.get_watcher_state(handle.watcher_id)
     assert state["state"] == "stopped"
+
+
+# ----------------------------------------------------------------------
+# reconcile_on_startup（M4/T4-4）
+# ----------------------------------------------------------------------
+
+def test_reconcile_on_startup_marks_stale_active_states_stopped(db):
+    """模拟上次进程崩溃残留的 active watcher_state → 重启后统一标 stopped。"""
+    mgr = LogWatcherManager.instance()
+    mgr.configure(adb=MagicMock(), adb_path="adb", local_db=db)
+    # 崩溃残留:两条 active(进程没机会优雅 stop)
+    db.upsert_watcher_state(
+        watcher_id="wch-stale-1", job_id=1, serial="S1",
+        host_id="H", state="active", capability="inotifyd_root",
+    )
+    db.upsert_watcher_state(
+        watcher_id="wch-stale-2", job_id=2, serial="S2",
+        host_id="H", state="active", capability="polling",
+    )
+    # 上次已优雅 stop 的记录 — 不应被改动
+    db.upsert_watcher_state(
+        watcher_id="wch-done", job_id=3, serial="S3",
+        host_id="H", state="stopped", capability="inotifyd_root",
+    )
+
+    cleaned = mgr.reconcile_on_startup()
+
+    assert cleaned == 2
+    for wid in ("wch-stale-1", "wch-stale-2"):
+        row = db.get_watcher_state(wid)
+        assert row["state"] == "stopped"
+        assert row["last_error"] == "agent_restart_stale_cleanup"
+        assert row["stopped_at"] is not None
+    # 既有 stopped 记录未被 cleanup 覆写
+    assert db.get_watcher_state("wch-done")["last_error"] != "agent_restart_stale_cleanup"
+    # 无残留
+    assert db.list_active_watcher_states() == []
+
+
+def test_reconcile_on_startup_noop_without_stale(db):
+    mgr = LogWatcherManager.instance()
+    mgr.configure(adb=MagicMock(), adb_path="adb", local_db=db)
+    assert mgr.reconcile_on_startup() == 0
+
+
+def test_reconcile_on_startup_safe_without_local_db():
+    """local_db 未注入(理论上不会发生)时返回 0 而非抛。"""
+    mgr = LogWatcherManager.instance()
+    assert mgr.reconcile_on_startup() == 0
 
 
 # ----------------------------------------------------------------------

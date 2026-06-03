@@ -11,10 +11,10 @@
     - D2:每轮先 `cat db_history` 算 sha256,内容未变直接跳过本轮
       `process_device_logs`(计入 reconciler_skip_unchanged_total);
       内容变化视为有新行候选 → 触发 burst
-    - 状态键(C-1 锁定决策):与 patrol `scan_aee` **共用** `state_key_prefix="scan_aee"`,
-      经同一 `db_history.state_key` helper 生成完全一致的
-      `scan_aee:{serial}:{aee_type}:processed_entries` / `:pending_pull` 键,
-      M1 双写期真正共享去重状态;M3 patrol 退役后再迁移到 `watcher:aee:*` 命名空间。
+    - 状态键(M3):reconciler 使用 `state_key_prefix="watcher:aee"`,
+      经同一 `db_history.state_key` helper 生成
+      `watcher:aee:{serial}:{aee_type}:processed_entries` / `:pending_pull` 键。
+      首次 tick 会把 M1/M2 遗留的 `scan_aee:*` 状态合并进新命名空间。
       去重维度=(serial, aee_type)(AEE 是设备级事件、db_history 设备累积),
       与 patrol 一致;NFS 落盘目录本就与 prefix 无关(folder_name+serial),
       故共用键不改变 emit 语义、不引入新的正确性风险。
@@ -44,13 +44,19 @@ import os
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from ..watcher.contracts import ContractViolation
+from .db_history import load_processed_lines, save_processed_lines, state_key
 from .processor import ProcessConfig, process_device_logs
+from .state_migration import (
+    LEGACY_PATROL_STATE_PREFIX,
+    WATCHER_AEE_STATE_PREFIX,
+    migrate_legacy_aee_state_store,
+)
 from .timestamp import parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -82,6 +88,8 @@ class ReconcilerStats:
     ticks_with_new: int = 0
     ticks_skipped_unchanged: int = 0   # D2: db_history hash 未变跳过本轮 process
     new_entries_total: int = 0
+    baseline_entries_total: int = 0
+    runtime_entries_total: int = 0
     signals_emitted: int = 0
     signals_dropped: int = 0       # contract violation / emit 异常
     tick_errors: int = 0
@@ -92,6 +100,8 @@ class ReconcilerStats:
             "ticks_with_new":          self.ticks_with_new,
             "ticks_skipped_unchanged": self.ticks_skipped_unchanged,
             "new_entries_total":       self.new_entries_total,
+            "baseline_entries_total":  self.baseline_entries_total,
+            "runtime_entries_total":   self.runtime_entries_total,
             "signals_emitted":         self.signals_emitted,
             "signals_dropped":         self.signals_dropped,
             "tick_errors":             self.tick_errors,
@@ -106,12 +116,6 @@ _AEE_TYPE_TO_CATEGORY = {
     "aee_exp":        "AEE",
     "vendor_aee_exp": "VENDOR_AEE",
 }
-
-# C-1 锁定决策:reconciler 与 patrol scan_aee 共用此 state_key_prefix,
-# 经 db_history.state_key 生成完全一致的去重键,M1 双写期共享 processed 状态。
-# (与 ProcessConfig.state_key_prefix 默认值一致;集中成常量便于 M3 迁移到 watcher:aee:*)
-SHARED_PATROL_STATE_PREFIX = "scan_aee"
-
 
 def _env_truthy(name: str, default: bool = False) -> bool:
     raw = (os.environ.get(name, "") or "").strip().lower()
@@ -299,6 +303,8 @@ class AeeDbHistoryReconciler:
         export_mobilelog: bool = True,
         export_bugreport: bool = True,
         shell_fn: Optional[Callable[[str, int], Optional[str]]] = None,
+        baseline_snapshot_enabled: bool = True,
+        baseline_chunk_size: Optional[int] = None,
     ) -> None:
         self._emitter = signal_emitter
         self._state_store = state_store
@@ -323,11 +329,13 @@ class AeeDbHistoryReconciler:
             if burst_rounds is not None
             else _env_int("STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS", 5)
         )
-        # C-1 锁定决策:与 patrol 共用 state_key_prefix="scan_aee" → 经同一
-        # db_history.state_key helper 生成 byte-identical 的
-        # scan_aee:{serial}:{aee_type}:processed_entries / :pending_pull 键,
-        # M1 双写期真正共享去重状态(M3 patrol 退役后迁移到 watcher:aee:* 命名空间)。
-        self._state_prefix = SHARED_PATROL_STATE_PREFIX
+        baseline_chunk = (
+            baseline_chunk_size
+            if baseline_chunk_size is not None
+            else _env_int("STP_WATCHER_AEE_BASELINE_CHUNK_SIZE", 5)
+        )
+        self._baseline_chunk_size = max(int(baseline_chunk), 1)
+        self._state_prefix = WATCHER_AEE_STATE_PREFIX
 
         self._cfg = ProcessConfig(
             aee_paths=aee_paths or ["/data/aee_exp", "/data/vendor/aee_exp"],
@@ -353,6 +361,10 @@ class AeeDbHistoryReconciler:
         self._db_history_hashes: Dict[str, str] = {}
         # D2: 本轮是否存在"新行候选"(实际新增 pull 或 hash 变化) → 驱动 burst
         self._last_had_new_candidate = False
+        # 设备当前已存在问题也要导出,并纳入当前 Job 的总览。
+        # baseline snapshot 只在每个 Job 首轮执行一次。
+        self._baseline_snapshot_done = not baseline_snapshot_enabled
+        self._state_migration_done = False
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -370,8 +382,9 @@ class AeeDbHistoryReconciler:
         self._thread.start()
         self._started = True
         logger.info(
-            "aee_reconciler_started serial=%s job=%d baseline=%.1fs burst=%.1fs rounds=%d",
+            "aee_reconciler_started serial=%s job=%d baseline=%.1fs burst=%.1fs rounds=%d baseline_chunk=%d",
             self._serial, self._job_id, self._baseline, self._burst, self._burst_rounds,
+            self._baseline_chunk_size,
         )
 
     def stop(self, timeout: float = 5.0) -> ReconcilerStats:
@@ -476,16 +489,21 @@ class AeeDbHistoryReconciler:
         仍触发 burst。
         """
         self.stats.ticks_total += 1
+        self._migrate_legacy_runtime_state_once()
+        baseline_new = 0
+        if not self._baseline_snapshot_done:
+            baseline_new, baseline_has_more = self._run_baseline_snapshot()
+            self._baseline_snapshot_done = not baseline_has_more
 
         changed = self._db_history_changed()
         if changed is False:
             self.stats.ticks_skipped_unchanged += 1
-            self._last_had_new_candidate = False
+            self._last_had_new_candidate = baseline_new > 0
             record_reconciler_skip_unchanged(self._host_id)
             logger.debug(
                 "aee_reconciler_skip_unchanged serial=%s job=%d", self._serial, self._job_id,
             )
-            return 0
+            return baseline_new
 
         result = process_device_logs(
             serial=self._serial,
@@ -499,7 +517,10 @@ class AeeDbHistoryReconciler:
             pull_fn=self._pull_fn,
             stop_event=self._stop_evt,
         )
-        new_count = int(result.pulled)
+        runtime_new = int(result.pulled)
+        if runtime_new > 0:
+            self.stats.runtime_entries_total += runtime_new
+        new_count = baseline_new + runtime_new
         if new_count > 0:
             self.stats.ticks_with_new += 1
             self.stats.new_entries_total += new_count
@@ -522,6 +543,102 @@ class AeeDbHistoryReconciler:
         # changed is None(不可读)不算 hash 变化,仅按 new_count 判定。
         self._last_had_new_candidate = (new_count > 0) or (changed is True)
         return new_count
+
+    def _run_baseline_snapshot(self) -> tuple[int, bool]:
+        """Job 首轮补拉设备当前已存在的问题,并按分片持续纳入当前总览。
+
+        关键约束:
+          - baseline 不复用 patrol/reconciler 的共享 processed key 做可见性判定,
+            否则设备历史问题会被静默吞掉
+          - baseline 成功导出后,把对应行并入共享 processed key,避免同一 Job
+            首轮 runtime diff 再次重复 pull/emit
+          - baseline backlog 需要分片,避免单轮一次性扫完整个设备历史问题
+        """
+        baseline_prefix = f"watcher_baseline:{self._job_id}"
+        baseline_cfg = replace(
+            self._cfg,
+            state_key_prefix=baseline_prefix,
+            export_mobilelog=False,
+            export_bugreport=False,
+            max_entries_per_run=self._baseline_chunk_size,
+        )
+        baseline_lines_by_type: Dict[str, Set[str]] = {
+            "aee_exp": set(),
+            "vendor_aee_exp": set(),
+        }
+
+        def _on_baseline_entry(payload: Dict[str, Any]) -> None:
+            scoped_payload = dict(payload)
+            scoped_payload["detected_at_override"] = datetime.now(timezone.utc)
+            aee_type = str(scoped_payload.get("aee_type") or "")
+            line = str(scoped_payload.get("line") or "")
+            if aee_type in baseline_lines_by_type and line:
+                baseline_lines_by_type[aee_type].add(line)
+            self._handle_new_entry(scoped_payload)
+
+        result = process_device_logs(
+            serial=self._serial,
+            job_id=self._job_id,
+            state_store=self._state_store,
+            adb_path=self._adb_path,
+            config=baseline_cfg,
+            nfs_root=self._nfs_root,
+            on_new_entry=_on_baseline_entry,
+            shell_fn=self._shell_fn,
+            pull_fn=self._pull_fn,
+            stop_event=self._stop_evt,
+        )
+        baseline_new = int(result.pulled)
+        baseline_has_more = int(result.pending_remaining) > 0
+        if baseline_new > 0:
+            self.stats.baseline_entries_total += baseline_new
+            self._merge_baseline_into_runtime_processed(baseline_lines_by_type)
+            logger.info(
+                "aee_reconciler_baseline_snapshot serial=%s job=%d baseline=%d pending_remaining=%d",
+                self._serial, self._job_id, baseline_new, int(result.pending_remaining),
+            )
+        if result.errors:
+            logger.debug(
+                "aee_reconciler_baseline_errors serial=%s job=%d errors=%s",
+                self._serial, self._job_id, result.errors[:5],
+            )
+        return baseline_new, baseline_has_more
+
+    def _merge_baseline_into_runtime_processed(
+        self,
+        baseline_lines_by_type: Dict[str, Set[str]],
+    ) -> None:
+        for aee_type, lines in baseline_lines_by_type.items():
+            if not lines:
+                continue
+            shared_key = state_key(self._serial, aee_type, prefix=self._state_prefix)
+            processed = load_processed_lines(self._state_store, shared_key)
+            processed.update(lines)
+            save_processed_lines(self._state_store, shared_key, processed)
+
+    def _migrate_legacy_runtime_state_once(self) -> None:
+        if self._state_migration_done or self._state_prefix == LEGACY_PATROL_STATE_PREFIX:
+            return
+        summary = migrate_legacy_aee_state_store(
+            self._state_store,
+            serial=self._serial,
+            aee_types=self._runtime_aee_types(),
+        )
+        if (
+            int(summary["processed_entries_migrated"]) > 0
+            or int(summary["pending_pull_migrated"]) > 0
+        ):
+            logger.info(
+                "aee_reconciler_state_namespace_migrated serial=%s job=%d summary=%s",
+                self._serial, self._job_id, summary,
+            )
+        self._state_migration_done = True
+
+    def _runtime_aee_types(self) -> Set[str]:
+        result: Set[str] = set()
+        for remote_aee_path in self._cfg.aee_paths:
+            result.add("vendor_aee_exp" if "vendor" in remote_aee_path else "aee_exp")
+        return result or {"aee_exp", "vendor_aee_exp"}
 
     # ------------------------------------------------------------------
     # 新条目回调 → emit log_signal
@@ -549,11 +666,18 @@ class AeeDbHistoryReconciler:
             event_type: str = str(parsed.get("event_type") or "") or "UNKNOWN"
             output_subdir = payload.get("output_subdir")
 
-            detected_at = parse_timestamp(aee_ts) or datetime.now(timezone.utc)
+            detected_at = payload.get("detected_at_override")
+            if not isinstance(detected_at, datetime):
+                detected_at = parse_timestamp(aee_ts) or datetime.now(timezone.utc)
             if detected_at.tzinfo is None:
                 detected_at = detected_at.replace(tzinfo=timezone.utc)
 
             extra: Dict[str, Any] = {
+                # §2.2 schema_version 1:演进兼容标记。mobilelog_pulled /
+                # bugreport_exported 不在此填 — emit 在 processor.on_new_entry
+                # 回调触发,早于 mobilelog/bugreport 副作用(processor.py:231),
+                # 此刻两者尚未发生,故按 §2.2「可选」留空。
+                "schema_version": 1,
                 "event_type":   event_type,
                 "package_name": pkg_name,
                 "aee_ts":       aee_ts,

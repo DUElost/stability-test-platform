@@ -140,6 +140,42 @@ def test_run_task_wrapper_heartbeat_and_complete_include_token(job_runner_state)
     )
 
 
+def test_run_task_wrapper_passes_session_watcher_capability(job_runner_state):
+    """启用 watcher 时，run_task_wrapper 应把当前 capability 传给 patrol heartbeat 链路。"""
+    run = {
+        "id": 199,
+        "device_id": 3,
+        "device_serial": "SN-199",
+        "fencing_token": "3:9",
+        "pipeline_def": {
+            "lifecycle": {
+                "init": [{"step_id": "x", "action": "script:noop", "version": "1.0.0", "timeout_seconds": 1}],
+                "patrol": {"interval_seconds": 60, "steps": []},
+                "teardown": [],
+            }
+        },
+    }
+    mock_adb = MagicMock()
+    session = MagicMock()
+    session.summary.watcher_capability = "inotifyd_root"
+    session.summary.to_complete_payload.return_value = {"watcher_capability": "inotifyd_root"}
+
+    with patch("backend.agent.job_runner.update_job"), \
+         patch("backend.agent.job_runner.complete_job"), \
+         patch("backend.agent.job_runner.execute_pipeline_run") as mock_exec, \
+         patch("backend.agent.job_runner._validate_pipeline_def", return_value=None), \
+         patch("backend.agent.job_runner.job_wants_watcher", return_value=True), \
+         patch("backend.agent.job_runner.JobSession", return_value=session):
+        mock_exec.return_value = {"status": "FINISHED", "exit_code": 0}
+
+        run_task_wrapper(
+            run, mock_adb, "http://x", "h1",
+            job_runner_state, None, None, None,
+        )
+
+    assert mock_exec.call_args.kwargs["watcher_capability"] == "inotifyd_root"
+
+
 # ── Test 18: LeaseRenewer skip when no token ───────────────────────────
 
 def test_lease_renewer_skips_extend_when_no_token(lease_renewer):

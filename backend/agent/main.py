@@ -345,6 +345,14 @@ def main() -> None:
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
+        # M4/T4-4: 清理上次进程残留的 active watcher_state(崩溃/重启脏记录)。
+        # 必须在 configure(注入 local_db)之后调用。
+        try:
+            stale_cleaned = LogWatcherManager.instance().reconcile_on_startup()
+            if stale_cleaned:
+                logger.info("watcher_reconcile_on_startup cleaned_stale=%d", stale_cleaned)
+        except Exception:
+            logger.exception("watcher_reconcile_on_startup failed")
         # D2: AeeDbHistoryReconciler 启动期参数(读 env;是否真正启动按 capability + host 白名单门控)
         logger.info(
             "aee_reconciler_env enabled=%s interval_seconds=%s burst_interval_seconds=%s "

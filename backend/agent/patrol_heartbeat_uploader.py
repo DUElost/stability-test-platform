@@ -85,6 +85,7 @@ class PatrolHeartbeatUploader:
         current_step: Optional[str] = None,
         current_failure_streak: int = 0,
         next_retry_at: Optional[datetime] = None,
+        watcher_capability: Optional[str] = None,
         manual_action_observed: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Send one patrol heartbeat.  Returns the server's response dict
@@ -111,6 +112,8 @@ class PatrolHeartbeatUploader:
             payload["current_step"] = current_step
         if next_retry_at is not None:
             payload["next_retry_at"] = next_retry_at.isoformat()
+        if watcher_capability:
+            payload["watcher_capability"] = watcher_capability
         if manual_action_observed:
             payload["manual_action_observed"] = manual_action_observed
 

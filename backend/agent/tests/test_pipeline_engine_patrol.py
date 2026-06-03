@@ -20,7 +20,7 @@ import pytest
 from backend.agent.pipeline_engine import PipelineEngine, StepResult
 
 
-def _make_engine_with_patrol_uploader(uploader_mock):
+def _make_engine_with_patrol_uploader(uploader_mock, *, watcher_capability=None):
     adb = MagicMock()
     mq = MagicMock()
     mq.connected = True
@@ -33,6 +33,7 @@ def _make_engine_with_patrol_uploader(uploader_mock):
         api_url=None,  # skip lease verify
         is_aborted=lambda: False,
         patrol_heartbeat_uploader=uploader_mock,
+        watcher_capability=watcher_capability,
     )
     # Bypass external-side-effect helpers
     engine._verify_device_lease = lambda: None
@@ -227,6 +228,29 @@ class TestHeartbeatInvocation:
         assert first_call["current_failure_streak"] == 1
         assert first_call["next_retry_at"] is not None
         assert first_call["current_step"] == "patrol_b"  # last failed step
+
+    @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
+    def test_heartbeat_includes_watcher_capability(self, mock_sleep):
+        uploader = MagicMock()
+        cycle_count = [0]
+
+        def ack(**kwargs):
+            cycle_count[0] += 1
+            if cycle_count[0] >= 1:
+                engine._canceled = True
+            return {"manual_action": None}
+
+        uploader.send.side_effect = ack
+        engine, _ = _make_engine_with_patrol_uploader(
+            uploader,
+            watcher_capability="inotifyd_root",
+        )
+        engine._execute_step = MagicMock(return_value=StepResult(success=True))
+
+        engine._execute_lifecycle(_patrol_pipeline(interval=0))
+
+        first_call = uploader.send.call_args_list[0].kwargs
+        assert first_call["watcher_capability"] == "inotifyd_root"
 
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
     def test_streak_grows_then_resets(self, mock_sleep):

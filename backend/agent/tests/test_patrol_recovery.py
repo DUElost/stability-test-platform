@@ -63,3 +63,29 @@ class TestPatrolJobNotRunningRecovery:
 
         UploaderCls.assert_called_once()
         assert UploaderCls.call_args.kwargs["on_job_not_running"] is callback
+
+    def test_pipeline_runner_passes_watcher_capability_to_engine(self):
+        from backend.agent.pipeline_runner import execute_pipeline_run
+
+        with patch("backend.agent.pipeline_runner.PatrolHeartbeatUploader"), patch(
+            "backend.agent.pipeline_runner.PipelineEngine"
+        ) as EngineCls:
+            engine = EngineCls.return_value
+            engine.execute.return_value = MagicMock(
+                success=True,
+                exit_code=0,
+                error_message=None,
+                artifact=None,
+                metadata={},
+            )
+            execute_pipeline_run(
+                {"lifecycle": {"init": [], "patrol": {"interval_seconds": 60, "steps": []}, "teardown": []}},
+                run_id=7,
+                device_serial="dev",
+                adb=MagicMock(),
+                api_url="http://test",
+                host_id="host-1",
+                watcher_capability="inotifyd_root",
+            )
+
+        assert EngineCls.call_args.kwargs["watcher_capability"] == "inotifyd_root"

@@ -387,6 +387,40 @@ async def test_complete_does_not_bridge_reconciler_metric_without_stats():
 
 
 @pytest.mark.asyncio(loop_scope="module")
+async def test_complete_records_watcher_capability_metric():
+    """M4/T4-2: complete 首次终态时按 watcher_capability 自增一次覆盖率计数器。"""
+    from unittest.mock import patch
+
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    summary = {
+        "watcher_capability": "inotifyd_root",
+        "log_signal_count": 0,
+        "watcher_stats": {},
+    }
+    token = _setup_watcher_lease(seed)
+    try:
+        with patch(
+            "backend.api.routes.agent_api.record_watcher_capability"
+        ) as mock_cap:
+            async with AsyncSessionLocal() as async_db:
+                result = await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "FINISHED", "exit_code": 0},
+                        watcher_summary=summary,
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+            assert result.error is None
+            # 覆盖率监控盘:capability 即 JobInstance.watcher_capability 回填值
+            mock_cap.assert_called_once_with("inotifyd_root")
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
 async def test_complete_without_watcher_summary_keeps_columns_null():
     """未启用 watcher 的旧 Agent 上报不带 summary → watcher_* 列保持 None。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)

@@ -150,6 +150,7 @@ class TestPatrolHeartbeatSend:
                 current_failure_streak=4,
                 next_retry_at=next_retry,
                 manual_action_observed="RETRY_NOW",
+                watcher_capability="inotifyd_root",
             )
 
         body = mock_post.call_args.kwargs["json"]
@@ -157,6 +158,7 @@ class TestPatrolHeartbeatSend:
         assert body["next_retry_at"] == next_retry.isoformat()
         assert body["current_failure_streak"] == 4
         assert body["manual_action_observed"] == "RETRY_NOW"
+        assert body["watcher_capability"] == "inotifyd_root"
         assert result["manual_action"] == "EXIT_REQUESTED"
 
     def test_409_job_not_running_returns_sentinel_and_invokes_callback(self, uploader):

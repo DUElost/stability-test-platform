@@ -26,6 +26,7 @@ from backend.core.metrics import (
     record_log_signal_ingested,
     record_patrol_heartbeat,
     record_reconciler_skip_unchanged,
+    record_watcher_capability,
 )
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
@@ -835,6 +836,9 @@ async def complete_job(
         # M0/Task2: 仅在首次终态桥接 reconciler 计数,避免 outbox 重试重复计数。
         if payload.watcher_summary:
             _bridge_reconciler_metrics(job.host_id, payload.watcher_summary)
+            # M4/T4-2: 终态时按 watcher_capability 自增一次(覆盖率监控盘);
+            # 与 reconciler 桥接同处 not-already_terminal 守卫内,每 Job 仅计一次。
+            record_watcher_capability(job.watcher_capability or "unknown")
         await PlanAggregator.on_job_terminal(job, db)
         # Release device lease on terminal state (ADR-0019 Phase 2c: device_leases is source of truth)
         released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
@@ -961,6 +965,7 @@ class PatrolHeartbeatIn(BaseModel):
       current_step: best-effort; UI uses it for the device matrix.
       current_failure_streak: Agent-computed value (server overwrites the column).
       next_retry_at: ISO8601 string; null when not in backoff.
+      watcher_capability: optional watcher capability live snapshot.
       manual_action_observed: optional echo-back: when Agent has consumed a
         RETRY_NOW or EXIT_REQUESTED, it sends the value here so the server can
         clear the column atomically.
@@ -973,6 +978,7 @@ class PatrolHeartbeatIn(BaseModel):
     current_step: Optional[str] = None
     current_failure_streak: int = 0
     next_retry_at: Optional[str] = None
+    watcher_capability: Optional[str] = None
     manual_action_observed: Optional[str] = None
 
 
@@ -1059,6 +1065,9 @@ async def patrol_heartbeat(
     }
     if payload.current_step is not None:
         update_values["current_patrol_step"] = payload.current_step
+    capability = (payload.watcher_capability or "").strip()
+    if capability:
+        update_values["watcher_capability"] = capability[:32]
 
     # If Agent reports it consumed/observed a manual_action, clear it —
     # but ONLY when DB.manual_action still equals what Agent observed.

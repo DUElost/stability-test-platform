@@ -49,8 +49,17 @@ class AdbWrapper:
     def push(self, serial: str, local_path: str, remote_path: str) -> subprocess.CompletedProcess:
         return self._run(["-s", serial, "push", local_path, remote_path])
 
-    def pull(self, serial: str, remote_path: str, local_path: str) -> subprocess.CompletedProcess:
-        return self._run(["-s", serial, "pull", remote_path, local_path])
+    def pull(
+        self,
+        serial: str,
+        remote_path: str,
+        local_path: str,
+        timeout: Optional[float] = None,
+    ) -> subprocess.CompletedProcess:
+        args = ["-s", serial, "pull", remote_path, local_path]
+        if timeout is None:
+            return self._run(args)
+        return self._run(args, timeout=timeout)
 
     def get_pid(self, serial: str, process_name: str) -> Optional[str]:
         result = self.shell(serial, ["ps"])

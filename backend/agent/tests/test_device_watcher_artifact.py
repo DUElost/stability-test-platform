@@ -147,6 +147,24 @@ def test_oversized_file_does_not_submit(mock_instance, db):
     uploader.submit.assert_not_called()
 
 
+@patch("backend.agent.artifact_uploader.ArtifactUploader.instance")
+def test_directory_artifact_does_not_submit(mock_instance, db, tmp_path):
+    uploader = MagicMock()
+    mock_instance.return_value = uploader
+
+    crash_dir = tmp_path / "aee-dir"
+    crash_dir.mkdir()
+    (crash_dir / "crash.dbg").write_bytes(b"x")
+
+    w = _watcher(db)
+    w._on_pull_done(
+        _event("AEE"),
+        {"artifact_uri": str(crash_dir), "sha256": None, "size_bytes": None},
+    )
+
+    uploader.submit.assert_not_called()
+
+
 # ----------------------------------------------------------------------
 # 4. ANR / MOBILELOG 类别 → 即便 artifact_uri 存在（不应出现，兜底）也不 submit
 # ----------------------------------------------------------------------

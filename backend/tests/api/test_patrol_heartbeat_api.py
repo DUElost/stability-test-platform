@@ -168,6 +168,7 @@ class TestPatrolHeartbeatHappyPath:
                     current_step="patrol.monkey_check",
                     current_failure_streak=0,
                     next_retry_at=None,
+                    watcher_capability="inotifyd_root",
                 ),
             )
             data = resp.data
@@ -185,6 +186,7 @@ class TestPatrolHeartbeatHappyPath:
                 assert refreshed.patrol_cycle_count == 1
                 assert refreshed.patrol_success_cycle_count == 1
                 assert refreshed.current_patrol_step == "patrol.monkey_check"
+                assert refreshed.watcher_capability == "inotifyd_root"
                 assert refreshed.last_patrol_heartbeat_at is not None
             finally:
                 db.close()

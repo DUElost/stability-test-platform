@@ -126,6 +126,18 @@ def test_simple_command_wrappers(adb: AdbWrapper, completed_process_factory, met
     mock_run.assert_called_once_with(expected_args)
 
 
+def test_pull_uses_explicit_timeout(adb: AdbWrapper, completed_process_factory):
+    cp = completed_process_factory(stdout="pulled")
+    with patch.object(adb, "_run", return_value=cp) as mock_run:
+        result = adb.pull("SERIAL-01", "/sdcard/Download/a.txt", "/tmp/a.txt", timeout=90.0)
+
+    assert result is cp
+    mock_run.assert_called_once_with(
+        ["-s", "SERIAL-01", "pull", "/sdcard/Download/a.txt", "/tmp/a.txt"],
+        timeout=90.0,
+    )
+
+
 def test_kill_process_calls_shell(adb: AdbWrapper, completed_process_factory):
     cp = completed_process_factory(stdout="")
     with patch.object(adb, "shell", return_value=cp) as mock_shell:

@@ -56,6 +56,8 @@ from backend.services.plan_run_export import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
+_IS_WINDOWS = os.name == "nt"
+_REMOTE_HOST_PATH_PREFIXES = ("/home/", "/root/", "/opt/", "/var/", "/tmp/", "/data/")
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -1902,9 +1904,34 @@ def _detect_legacy_patrol_in_snapshot(plan_snapshot: Any) -> bool:
     兼容两种 patrol 形态:
       - dict(`{"interval_seconds": 60, "steps": [...]}`,ADR-0020 标准)
       - list(早期 fallback 直存 steps)
+      - 顶层 {plan, steps}(当前 prepare_plan_run 快照形态)
     """
+    def _is_legacy_step(step: Any) -> bool:
+        if not isinstance(step, dict):
+            return False
+        legacy_actions = {"script:scan_aee", "script:export_mobilelogs"}
+        legacy_scripts = {"scan_aee", "export_mobilelogs"}
+        action = str(step.get("action") or "")
+        script_name = str(step.get("script_name") or "")
+        step_key = str(step.get("step_key") or "")
+        return (
+            action in legacy_actions
+            or script_name in legacy_scripts
+            or step_key in legacy_scripts
+        )
+
     if not isinstance(plan_snapshot, dict):
         return False
+
+    top_level_steps = plan_snapshot.get("steps")
+    if isinstance(top_level_steps, list):
+        patrol_steps = [
+            step for step in top_level_steps
+            if isinstance(step, dict) and str(step.get("stage") or "") == "patrol"
+        ]
+        if any(_is_legacy_step(step) for step in patrol_steps):
+            return True
+
     lifecycle = plan_snapshot.get("lifecycle")
     if not isinstance(lifecycle, dict):
         return False
@@ -1915,11 +1942,7 @@ def _detect_legacy_patrol_in_snapshot(plan_snapshot: Any) -> bool:
         steps = patrol.get("steps") or []
     else:
         return False
-    legacy_actions = {"script:scan_aee", "script:export_mobilelogs"}
-    return any(
-        isinstance(s, dict) and str(s.get("action") or "") in legacy_actions
-        for s in steps
-    )
+    return any(_is_legacy_step(step) for step in steps)
 
 
 def _aggregate_pull_sources(
@@ -1957,9 +1980,9 @@ def _aggregate_aee_breakdown(
     cur_start: datetime,
     now: datetime,
 ) -> AeeBreakdownOut:
-    """按 package_name 聚合 AEE/VENDOR_AEE 崩溃与 ANR;reconciler signal 携带
-    extra.nfs_path 时按 nfs_path 去重(同目录视为同 crash),ANR 用 path_on_device
-    兜底以兼容旧 inotifyd 路径无 extra 的 signal。
+    """按 package_name 聚合 AEE/VENDOR_AEE 崩溃与 ANR;reconciler signal
+    携带 extra.nfs_path 时按 nfs_path 去重(同目录视为同 crash),ANR 用
+    path_on_device 兜底以兼容旧 inotifyd 路径无 extra 的 signal。
 
     返回零值 AeeBreakdownOut 而非 None — 调用方决定是否上抛 None(早返回路径)。
     """
@@ -1968,11 +1991,11 @@ def _aggregate_aee_breakdown(
             COALESCE(NULLIF(extra->>'package_name', ''), 'unknown') AS pkg,
             COUNT(DISTINCT extra->>'nfs_path') FILTER (
                 WHERE category = 'AEE'
-                  AND COALESCE(extra->>'event_type', 'CRASH') = 'CRASH'
+                  AND COALESCE(NULLIF(extra->>'event_type', ''), 'CRASH') <> 'ANR'
             ) AS crash_count,
             COUNT(DISTINCT extra->>'nfs_path') FILTER (
                 WHERE category = 'VENDOR_AEE'
-                  AND COALESCE(extra->>'event_type', 'CRASH') = 'CRASH'
+                  AND COALESCE(NULLIF(extra->>'event_type', ''), 'CRASH') <> 'ANR'
             ) AS vendor_crash_count,
             COUNT(DISTINCT path_on_device) FILTER (
                 WHERE category = 'ANR'
@@ -1991,11 +2014,11 @@ def _aggregate_aee_breakdown(
         ORDER BY (
             COUNT(DISTINCT extra->>'nfs_path') FILTER (
                 WHERE category = 'AEE'
-                  AND COALESCE(extra->>'event_type', 'CRASH') = 'CRASH'
+                  AND COALESCE(NULLIF(extra->>'event_type', ''), 'CRASH') <> 'ANR'
             )
             + COUNT(DISTINCT extra->>'nfs_path') FILTER (
                 WHERE category = 'VENDOR_AEE'
-                  AND COALESCE(extra->>'event_type', 'CRASH') = 'CRASH'
+                  AND COALESCE(NULLIF(extra->>'event_type', ''), 'CRASH') <> 'ANR'
             )
             + COUNT(DISTINCT path_on_device) FILTER (
                 WHERE category = 'ANR'
@@ -2143,6 +2166,39 @@ def _path_within_artifact_roots(path: Path) -> bool:
     return any(resolved.is_relative_to(root) for root in get_local_artifact_roots())
 
 
+def _configured_artifact_root_strings() -> tuple[str, ...]:
+    roots: list[str] = []
+    for raw_root in (
+        os.getenv("STP_NFS_ROOT", ""),
+        os.getenv("STP_WATCHER_NFS_BASE_DIR", ""),
+        os.getenv("STP_AEE_NFS_ROOT", ""),
+    ):
+        raw_root = (raw_root or "").strip()
+        if not raw_root:
+            continue
+        normalized = raw_root.rstrip("/\\")
+        if normalized and normalized not in roots:
+            roots.append(normalized)
+    return tuple(roots)
+
+
+def _is_remote_linux_host_path(raw_path: str) -> bool:
+    raw = (raw_path or "").strip()
+    if not _IS_WINDOWS:
+        return False
+    if not raw.startswith("/") or raw.startswith("//"):
+        return False
+    if not raw.startswith(_REMOTE_HOST_PATH_PREFIXES):
+        return False
+
+    for configured_root in _configured_artifact_root_strings():
+        if not configured_root.startswith("/") or configured_root.startswith("//"):
+            continue
+        if raw == configured_root or raw.startswith(f"{configured_root}/"):
+            return False
+    return True
+
+
 def _collect_aee_signal_nfs_paths(db: Session, *, job_ids: list[int]) -> list[str]:
     """本 PlanRun 下 AEE/VENDOR_AEE 信号携带的去重 extra.nfs_path 列表。"""
     if not job_ids:
@@ -2206,11 +2262,20 @@ def _verify_signal_nfs_paths(
     checked_paths: list[str] = []
     paths_checked = 0
     entries_verified = 0
+    remote_unverifiable_count = 0
+    outside_root_count = 0
 
     try:
         for raw in nfs_paths:
-            entry = Path(raw.strip())
+            raw_path = raw.strip()
+            if _is_remote_linux_host_path(raw_path):
+                remote_unverifiable_count += 1
+                notes.append(f"跳过后端本机不可访问的远端 nfs_path: {raw_path}")
+                continue
+
+            entry = Path(raw_path)
             if not _path_within_artifact_roots(entry):
+                outside_root_count += 1
                 notes.append(f"跳过白名单外 nfs_path: {entry}")
                 continue
 
@@ -2255,7 +2320,15 @@ def _verify_signal_nfs_paths(
         )
 
     if paths_checked == 0:
-        notes.append("无法限定本 Run 的 NFS 范围(无位于 artifact 白名单内的 nfs_path),请用 signal 侧对账。")
+        if remote_unverifiable_count > 0 and outside_root_count == 0:
+            notes.append(
+                "本 Run 的 nfs_path 指向远端主机路径,后端本机不可直接访问;请用 signal 侧对账。"
+            )
+        else:
+            notes.append(
+                "无法限定本 Run 的 NFS 范围(无位于 artifact 白名单内且可由后端本机校验的 nfs_path),"
+                "请用 signal 侧对账。"
+            )
         return None, None, [], [], 0, 0, notes, []
 
     missing_in_signal = sorted(dbg_entries - recon_dirs)

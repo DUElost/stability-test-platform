@@ -60,6 +60,7 @@ class WatcherPolicy:
     batch_max_events: int = 20
     event_queue_maxsize: int = 1000          # per-device 队列上限
     pull_max_file_mb: int = 500              # 单文件上限（超过只记元数据）
+    pull_timeout_seconds: float = 300.0      # AEE pull 超时；与 processor 默认量级对齐
     nfs_quota_mb: int = 2048                 # 单 Job NFS 写入配额
 
     # --- 源策略 ---
@@ -149,6 +150,12 @@ def _load_default_from_env() -> Dict[str, Any]:
     if v := os.getenv("WATCHER_NFS_QUOTA_MB"):
         try:
             kwargs["nfs_quota_mb"] = int(v)
+        except ValueError:
+            pass
+
+    if v := os.getenv("WATCHER_PULL_TIMEOUT_SECONDS"):
+        try:
+            kwargs["pull_timeout_seconds"] = float(v)
         except ValueError:
             pass
 

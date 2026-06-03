@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .batcher  import DEFAULT_IMMEDIATE_CATEGORIES, BatcherStats, EventBatcher
@@ -402,6 +403,19 @@ class DeviceLogWatcher:
         }
         artifact_type = cat_to_type.get(event.category)
         if artifact_type is None:
+            return
+        try:
+            if Path(str(artifact_uri)).is_dir():
+                logger.debug(
+                    "device_log_watcher_artifact_skip_directory serial=%s job=%d uri=%s",
+                    self._serial, self._job_id, artifact_uri,
+                )
+                return
+        except OSError:
+            logger.warning(
+                "device_log_watcher_artifact_stat_failed serial=%s job=%d uri=%s",
+                self._serial, self._job_id, artifact_uri,
+            )
             return
         try:
             from ..artifact_uploader import ArtifactUploader

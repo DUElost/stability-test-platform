@@ -330,6 +330,7 @@ class LogWatcherManager:
                     host_id=host_id,
                     serial=serial,
                     on_pull_done=watcher._on_pull_done,
+                    pull_timeout_seconds=policy.pull_timeout_seconds,
                     max_file_mb=policy.pull_max_file_mb,
                     sonic_output_dir=str(sonic_output_dir) if sonic_output_dir else None,
                     bugreport_enabled=sonic_output_dir is not None,
@@ -435,13 +436,53 @@ class LogWatcherManager:
         with self._lock:
             return list(self._watchers.values())
 
-    def reconcile_on_startup(self, active_jobs: list[dict]) -> None:
-        """Agent 崩溃重启后调用：根据服务端 active_jobs 重建 watcher。
+    def reconcile_on_startup(self, active_jobs: Optional[list[dict]] = None) -> int:
+        """Agent 重启后清理上次进程残留的 active watcher_state（M4/T4-4）。
 
-        参数 active_jobs: [{job_id, device_serial, host_id, log_dir, watcher_policy}]
-        TODO 阶段 6 — 结合 watcher_state 表 + CATCHUP 机制实现。
+        新进程刚启动时内存登记表(self._watchers)必为空，故 LocalDB 中任何
+        state='active' 的 watcher_state 都是上次进程崩溃/重启遗留的脏记录 →
+        统一标记为 'stopped'(last_error='agent_restart_stale_cleanup')，避免脏
+        记录无限累积、污染 watcher_state 监控与重启诊断。返回清理的残留记录数。
+
+        边界说明：
+          - 完整的「按服务端 active_jobs 重新挂载 DeviceLogWatcher」留待阶段 6；
+            active_jobs 当前仅用于日志，为该扩展预留入参。
+          - AEE 增量在重启后由 AeeDbHistoryReconciler 的 baseline snapshot +
+            持久化 processed key 补齐（watcher-consolidate-aee 方案 §6），不依赖本方法。
         """
-        logger.info("reconcile_on_startup (stub) active_jobs=%d", len(active_jobs))
+        local_db = self._deps.get("local_db")
+        if local_db is None:
+            logger.info("reconcile_on_startup skipped: local_db not configured")
+            return 0
+        try:
+            stale = local_db.list_active_watcher_states()
+        except Exception:
+            logger.exception("reconcile_on_startup list_active_watcher_states failed")
+            return 0
+
+        now = datetime.now(timezone.utc)
+        cleaned = 0
+        for row in stale:
+            watcher_id = row.get("watcher_id")
+            if not watcher_id:
+                continue
+            try:
+                local_db.update_watcher_state(
+                    watcher_id,
+                    state="stopped",
+                    stopped_at=now,
+                    last_error="agent_restart_stale_cleanup",
+                )
+                cleaned += 1
+            except Exception:
+                logger.exception(
+                    "reconcile_on_startup cleanup_failed watcher_id=%s", watcher_id,
+                )
+        logger.info(
+            "reconcile_on_startup cleaned_stale=%d active_jobs=%d",
+            cleaned, len(active_jobs) if active_jobs else 0,
+        )
+        return cleaned
 
     # ------------------------------------------------------------------
     # 内部

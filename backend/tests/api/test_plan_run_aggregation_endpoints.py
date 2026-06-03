@@ -26,6 +26,7 @@ from typing import Optional
 import pytest
 
 from backend.models.audit import AuditLog
+from backend.api.routes import plan_runs as plan_run_routes
 from backend.models.enums import HostStatus, JobStatus, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, JobLogSignal, StepTrace
@@ -1184,6 +1185,41 @@ class TestWatcherSummaryEndpoint:
         # fixture legacy ANR id=10002
         assert unknown["anr_count"] == 1
 
+    def test_watcher_summary_aee_breakdown_treats_non_anr_event_type_as_crash(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """真实设备 db_history 里的 JAVA (JE) / SIGSEGV 应落 crash,不能被 crash_count 漏掉。"""
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+
+        db_session.add(JobLogSignal(
+            id=21011,
+            job_id=j1.id, host_id="host-101",
+            device_serial=chain_setup["device_completed"].serial,
+            seq_no=211, category="AEE", source="reconciler",
+            path_on_device="/data/aee_exp/db.LEGACY",
+            detected_at=_now() - timedelta(minutes=2),
+            extra={
+                "event_type": "JAVA (JE)",
+                "package_name": "com.legacy.crash",
+                "nfs_path": "/nfs/legacy-je",
+                "pull_source": "reconciler",
+            },
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        bd = resp.json()["data"]["aee_breakdown"]
+
+        assert bd["crash_count"] == 1
+        legacy = next(p for p in bd["by_package"] if p["package_name"] == "com.legacy.crash")
+        assert legacy["crash_count"] == 1
+        assert legacy["anr_count"] == 0
+
     def test_watcher_summary_dedup_crash_by_nfs_path(
         self, client, auth_headers, chain_setup, db_session,
     ):
@@ -1343,6 +1379,30 @@ class TestWatcherSummaryEndpoint:
         )
         assert resp2.status_code == 200
         assert resp2.json()["data"]["legacy_patrol_in_snapshot"] is False
+
+    def test_watcher_summary_legacy_patrol_true_when_scan_aee_in_snapshot_steps(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """当前真实 PlanRun 快照是 {plan, steps} 结构,也必须识别 legacy patrol。"""
+        cur_run = chain_setup["current_run"]
+        cur_run.plan_snapshot = {
+            "plan": {"id": cur_run.plan_id},
+            "steps": [
+                {"stage": "init", "script_name": "ensure_root", "step_key": "ensure_root"},
+                {"stage": "patrol", "script_name": "monkey_check", "step_key": "monkey_check"},
+                {"stage": "patrol", "script_name": "scan_aee", "step_key": "scan_aee"},
+                {"stage": "patrol", "script_name": "export_mobilelogs", "step_key": "export_mobilelogs"},
+            ],
+        }
+        db_session.add(cur_run)
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["legacy_patrol_in_snapshot"] is True
 
     def test_watcher_summary_legacy_patrol_false_when_patrol_is_list_without_legacy(
         self, client, auth_headers, db_session, chain_setup,
@@ -1726,6 +1786,44 @@ class TestAeeReconciliationEndpoint:
         assert str(allowed_dir) in (data["nfs_root_scanned"] or "")
         assert "/outside/root/crash_skip" not in (data["nfs_root_scanned"] or "")
         assert any("白名单外 nfs_path" in n for n in data["notes"])
+
+    def test_reconciliation_marks_remote_linux_nfs_path_as_unverifiable(
+        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
+    ):
+        """Windows 后端看到远端 Linux host 路径时，不应误报成白名单外。"""
+        nfs_root = tmp_path / "aee_nfs"
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        serial = chain_setup["device_completed"].serial
+
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
+        monkeypatch.setattr(plan_run_routes, "_IS_WINDOWS", True)
+
+        db_session.add(
+            JobLogSignal(
+                id=43501, job_id=j1.id, host_id="host-101", device_serial=serial,
+                seq_no=512, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.REMOTE",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "pull_source": "reconciler",
+                    "nfs_path": "/home/android/sonic_agent/logs/ftp_log/job-13/db.27.JE",
+                },
+            ),
+        )
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["signal_nfs_paths_checked"] == 0
+        assert data["nfs_entries_verified"] == 0
+        assert any("远端 nfs_path" in n for n in data["notes"])
+        assert not any("白名单外 nfs_path" in n for n in data["notes"])
 
     def test_reconciliation_missing_entry_keeps_crash_dir_label(
         self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,

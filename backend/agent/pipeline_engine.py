@@ -262,6 +262,8 @@ class PipelineEngine:
 
         patrol_heartbeat_uploader=None,  # ADR-0022
 
+        watcher_capability: Optional[str] = None,
+
     ):
 
         self._adb = adb
@@ -291,6 +293,8 @@ class PipelineEngine:
         self._fencing_token = fencing_token or ""  # ADR-0019 Phase 2b
 
         self._patrol_heartbeat = patrol_heartbeat_uploader  # ADR-0022
+
+        self._watcher_capability = watcher_capability or None
 
         self._shared: dict = {}
 
@@ -1615,6 +1619,8 @@ class PipelineEngine:
 
                     next_retry_at=next_retry_dt if had_failure else None,
 
+                    watcher_capability=self._watcher_capability,
+
                     manual_action_observed=last_observed_action,
 
                 )
@@ -1984,4 +1990,3 @@ class _MQStepLogger:
     def log(self, message: str, level: str = "INFO") -> None:
 
         self._write(message, level)
-

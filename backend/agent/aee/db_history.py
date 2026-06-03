@@ -6,6 +6,15 @@ import json
 from typing import Any, Dict, Optional, Set
 
 
+def _normalize_event_type(raw_event_type: str) -> str:
+    normalized = (raw_event_type or "").strip().upper()
+    if not normalized:
+        return ""
+    if "ANR" in normalized:
+        return "ANR"
+    return "CRASH"
+
+
 def parse_db_history_line(line_content: str) -> Optional[Dict[str, str]]:
     try:
         parts = line_content.split(",")
@@ -14,7 +23,7 @@ def parse_db_history_line(line_content: str) -> Optional[Dict[str, str]]:
         db_path = parts[0].strip()
         pkg_name = parts[8].strip()
         ts_str = parts[9].strip()
-        event_type = parts[1].strip().upper() if len(parts) > 1 else ""
+        event_type = _normalize_event_type(parts[1] if len(parts) > 1 else "")
         if not all([db_path, pkg_name, ts_str]):
             return None
         return {

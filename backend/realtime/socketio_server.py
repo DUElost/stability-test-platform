@@ -65,7 +65,7 @@ def create_sio_server() -> socketio.AsyncServer:
 
     sio = socketio.AsyncServer(
         async_mode="asgi",
-        cors_allowed_origins=origins,
+        cors_allowed_origins="*",
         logger=False,
         engineio_logger=False,
         ping_timeout=60,
