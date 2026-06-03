@@ -107,6 +107,26 @@ class _Collector:
         return False
 
 
+class _TimeoutAwareAdb:
+    """记录 LogPuller 传入的 adb pull timeout。"""
+
+    def __init__(self, body: bytes = b"timeout-aware\n") -> None:
+        self.body = body
+        self.pull_calls: List[Tuple[str, str, str, Optional[float]]] = []
+
+    def pull(
+        self,
+        serial: str,
+        remote: str,
+        local: str,
+        timeout: Optional[float] = None,
+    ):
+        self.pull_calls.append((serial, remote, local, timeout))
+        Path(local).parent.mkdir(parents=True, exist_ok=True)
+        Path(local).write_bytes(self.body)
+        return subprocess.CompletedProcess(args=["adb"], returncode=0, stdout="", stderr="")
+
+
 # ----------------------------------------------------------------------
 # 成功路径
 # ----------------------------------------------------------------------
@@ -175,6 +195,20 @@ def test_sonic_layout_path(tmp_path):
     assert local.parent.name == "aee_exp"
 
 
+def test_default_pull_timeout_matches_aee_processor_budget(tmp_path):
+    """Watcher AEE pull 默认超时应与 AEE processor 同量级，避免大 NE 文件在 30s 内被截断。"""
+    p = LogPuller(
+        adb=_FakeAdb(),
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=1,
+        host_id="H",
+        serial="S",
+        on_pull_done=_Collector(),
+    )
+
+    assert p._pull_timeout == 300.0
+
+
     """event.filename 含 / 或空格时，本地路径被规范化。"""
     adb = _FakeAdb(content_by_remote={"/data/aee_exp/weird name@$.log": b"x"})
     coll = _Collector()
@@ -225,6 +259,30 @@ def test_pull_returncode_failure_emits_empty_enrichment(tmp_path):
     assert p.stats.pulls_ok == 0
 
 
+def test_pull_timeout_is_forwarded_to_adb(tmp_path):
+    adb = _TimeoutAwareAdb()
+    coll = _Collector()
+    p = LogPuller(
+        adb=adb,
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=1,
+        host_id="H",
+        serial="S",
+        on_pull_done=coll,
+        pull_timeout_seconds=123.0,
+    )
+    p.start()
+    try:
+        p.submit(_evt(filename="timeout.log"))
+        assert coll.wait_for(1, timeout=2.0)
+    finally:
+        p.stop(drain=True, timeout=1.0)
+
+    assert adb.pull_calls == [
+        ("S", "/data/aee_exp/timeout.log", coll.calls[0][1]["artifact_uri"], 123.0)
+    ]
+
+
 def test_pull_raises_exception_emits_empty(tmp_path):
     adb = _FakeAdb(raise_remotes={"/data/aee_exp/boom.log"})
     coll = _Collector()
@@ -273,6 +331,41 @@ def test_oversized_file_emits_size_only(tmp_path):
     nfs_dir = tmp_path / "nfs" / "jobs" / "1" / "AEE"
     if nfs_dir.exists():
         assert list(nfs_dir.iterdir()) == []
+
+
+def test_directory_pull_skips_file_enrichment(tmp_path):
+    class _DirAdb:
+        def pull(self, serial, remote, local, timeout=None):
+            target = Path(local)
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "ZZ_INTERNAL").write_text("meta", encoding="utf-8")
+            (target / "crash.dbg").write_bytes(b"dir-crash")
+            return subprocess.CompletedProcess(args=["adb"], returncode=0, stdout="", stderr="")
+
+    coll = _Collector()
+    p = LogPuller(
+        adb=_DirAdb(),
+        nfs_base_dir=str(tmp_path / "nfs"),
+        job_id=1,
+        host_id="H",
+        serial="S",
+        on_pull_done=coll,
+        bugreport_enabled=False,
+    )
+    p.start()
+    try:
+        p.submit(_evt(filename="db.22.JE"))
+        assert coll.wait_for(1, timeout=2.0)
+    finally:
+        p.stop(drain=True, timeout=1.0)
+
+    _, enr = coll.calls[0]
+    assert enr["artifact_uri"] is not None
+    assert Path(enr["artifact_uri"]).is_dir()
+    assert enr["sha256"] is None
+    assert enr["first_lines"] is None
+    assert enr["size_bytes"] is None
+    assert p.stats.pulls_ok == 1
 
 
 # ----------------------------------------------------------------------

@@ -14,6 +14,7 @@ from backend.agent.aee.db_history import (
 )
 from backend.agent.aee.folder_name import get_aee_log_folder_name
 from backend.agent.aee.processor import ProcessConfig, process_device_logs
+from backend.agent.aee.paths import resolve_device_output_dir
 from backend.agent.aee.timestamp import format_timestamp_for_filename, parse_timestamp
 
 
@@ -59,6 +60,25 @@ def test_parse_db_history_line():
     assert parsed["db_path"] == "/data/aee_exp/db.01"
     assert parsed["pkg_name"] == "com.example.app"
     assert parsed["event_type"] == "CRASH"
+
+
+@pytest.mark.parametrize(
+    ("raw_event_type", "expected"),
+    [
+        ("Java (JE)", "CRASH"),
+        ("Native (NE)", "CRASH"),
+        ("SIGSEGV", "CRASH"),
+        ("ANR", "ANR"),
+    ],
+)
+def test_parse_db_history_line_normalizes_real_device_event_types(raw_event_type, expected):
+    line = (
+        f"/data/aee_exp/db.01,{raw_event_type},pkg,_,_,_,_,_,"
+        "com.example.app,2026-05-27 10:15:22.123"
+    )
+    parsed = parse_db_history_line(line)
+    assert parsed is not None
+    assert parsed["event_type"] == expected
 
 
 def test_parse_vendor_db_history_line_filters_invalid():
@@ -357,3 +377,112 @@ def test_process_device_logs_on_new_entry_exception_swallowed(tmp_path, monkeypa
     key = state_key("dev_boom", "aee_exp")
     saved = json.loads(store.get_state(key))
     assert line in saved, "回调失败不应阻止 line 被标记为 processed"
+
+
+def test_process_device_logs_prioritizes_newer_entries_when_backlog_exists(tmp_path, monkeypatch):
+    """backlog 存在时应优先处理更新的 db_history 条目,避免 fresh AEE 排到最后。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    lines = [
+        "/data/aee_exp/db.01,CRASH,pkg,_,_,_,_,_,com.old,2026-05-28 10:00:00.000",
+        "/data/aee_exp/db.02,CRASH,pkg,_,_,_,_,_,com.mid,2026-05-28 10:05:00.000",
+        "/data/aee_exp/db.03,CRASH,pkg,_,_,_,_,_,com.new,2026-05-28 10:10:00.000",
+    ]
+    _setup_pdl_stubs(monkeypatch, "\n".join(lines))
+
+    seen_paths: list[str] = []
+
+    def on_new(payload: dict) -> None:
+        seen_paths.append(payload["parsed"]["db_path"])
+
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r = process_device_logs(
+        serial="dev_fresh_first",
+        job_id=89,
+        state_store=store,
+        config=cfg,
+        on_new_entry=on_new,
+    )
+
+    assert r.pulled == 3
+    assert seen_paths == [
+        "/data/aee_exp/db.03",
+        "/data/aee_exp/db.02",
+        "/data/aee_exp/db.01",
+    ]
+
+
+def test_process_device_logs_emits_when_local_aee_dir_already_exists(tmp_path, monkeypatch):
+    """目录已落盘但当前 run 未 processed 时,仍应回调并纳入当前 run。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.55,CRASH,pkg,_,_,_,_,_,com.reuse.app,2026-06-01 19:20:00.123"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    folder_name = get_aee_log_folder_name(
+        getprop=lambda name, timeout=10: {
+            "ro.product.name": "X6851-OP",
+            "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+            "ro.build.version.incremental": "0401",
+            "ro.build.version.release": "16",
+        }.get(name, ""),
+        run_date_stamp="0601",
+    )
+    assert folder_name is not None
+    existing_dir = resolve_device_output_dir(
+        nfs_root=tmp_path,
+        folder_name=folder_name,
+        serial="dev_existing_dir",
+    ) / "aee_exp" / f"{format_timestamp_for_filename('2026-06-01 19:20:00.123')}_db.55"
+    existing_dir.mkdir(parents=True, exist_ok=True)
+    (existing_dir / "main.dbg").write_text("ok", encoding="utf-8")
+
+    captured: list[dict] = []
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r = process_device_logs(
+        serial="dev_existing_dir",
+        job_id=90,
+        state_store=store,
+        config=cfg,
+        run_date_stamp="0601",
+        on_new_entry=captured.append,
+    )
+
+    assert r.pulled == 1
+    assert captured and captured[0]["parsed"]["db_path"] == "/data/aee_exp/db.55"
+    saved = json.loads(store.get_state(state_key("dev_existing_dir", "aee_exp"), "[]"))
+    assert line in saved
+
+
+def test_process_device_logs_persists_processed_before_side_effects(tmp_path, monkeypatch):
+    """执行 mobilelog 副作用前,processed/pending 状态应已落盘。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.88,CRASH,pkg,_,_,_,_,_,com.persist.app,2026-05-28 10:15:22.123"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    from backend.agent.aee import processor as proc_mod
+
+    observed: dict[str, object] = {}
+
+    def fake_mobilelog(**kw):
+        observed["saved"] = json.loads(
+            store.get_state(state_key("dev_persist", "aee_exp"), "[]")
+        )
+        observed["pending"] = json.loads(
+            store.get_state("scan_aee:dev_persist:aee_exp:pending_pull", "{}")
+        )
+        return {"matched": 0, "pulled": 0}
+
+    monkeypatch.setattr(proc_mod, "export_correlated_mobilelogs", fake_mobilelog)
+
+    cfg = ProcessConfig(export_mobilelog=True, export_bugreport=False)
+    r = process_device_logs(
+        serial="dev_persist",
+        job_id=88,
+        state_store=store,
+        config=cfg,
+    )
+    assert r.pulled == 1
+    assert line in observed["saved"]
+    assert observed["pending"] == {}

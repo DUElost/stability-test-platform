@@ -20,7 +20,7 @@ from .db_history import (
 from .folder_name import get_aee_log_folder_name, make_getprop_from_shell
 from .mobilelog import export_correlated_mobilelogs, make_adb_pull_fn, make_adb_shell_fn
 from .paths import get_aee_nfs_root, get_or_create_run_date_stamp, resolve_device_output_dir
-from .timestamp import format_timestamp_for_filename
+from .timestamp import format_timestamp_for_filename, parse_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,7 @@ class ProcessConfig:
     state_key_prefix: str = "scan_aee"
     pull_timeout_seconds: int = 300
     pull_retry_limit: int = 10
+    max_entries_per_run: Optional[int] = None
 
 
 @dataclass
@@ -52,6 +53,7 @@ class ProcessResult:
     skipped_known: int = 0
     new_timestamps: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    pending_remaining: int = 0
 
 
 def process_device_logs(
@@ -85,6 +87,11 @@ def process_device_logs(
     result = ProcessResult()
     shell_fn = shell_fn or make_adb_shell_fn(serial, adb_path)
     pull_fn = pull_fn or make_adb_pull_fn(serial, adb_path)
+    remaining_budget = (
+        int(cfg.max_entries_per_run)
+        if cfg.max_entries_per_run is not None and int(cfg.max_entries_per_run) > 0
+        else None
+    )
 
     stamp = run_date_stamp or get_or_create_run_date_stamp(state_store, job_id)
     folder_name = get_aee_log_folder_name(
@@ -157,8 +164,64 @@ def process_device_logs(
         _write_text(output_subdir / "db_save_org.txt", history_content)
         _write_text(output_subdir / "db_save.txt", "\n".join(passed_filter_lines))
 
-        newly_processed: Set[str] = set()
-        for line, task in list(pending_tasks.items()):
+        def _finalize_processed_entry(
+            *,
+            line: str,
+            parsed: Dict[str, Any],
+            local_target_dir: Path,
+            export_side_effects: bool,
+        ) -> None:
+            pending_tasks.pop(line, None)
+            result.pulled += 1
+            result.new_timestamps.append(parsed["timestamp"])
+
+            if on_new_entry is not None:
+                try:
+                    on_new_entry({
+                        "line":          line,
+                        "parsed":        dict(parsed),
+                        "aee_type":      aee_type,
+                        "output_subdir": local_target_dir,
+                    })
+                except Exception:
+                    logger.exception(
+                        "aee_on_new_entry_callback_failed serial=%s db=%s",
+                        serial, parsed.get("db_path"),
+                    )
+
+            # Persist processed/pending state before best-effort side effects so
+            # slow or failing exports do not keep the whole tick in a half-finished
+            # state and block later db_history increments from being observed.
+            processed_lines.add(line)
+            save_processed_lines(state_store, processed_key, processed_lines)
+            _save_pending_tasks(state_store, pending_key, pending_tasks)
+
+            if not export_side_effects or stop_requested:
+                return
+
+            if cfg.export_mobilelog:
+                export_correlated_mobilelogs(
+                    aee_ts_str=parsed["timestamp"],
+                    output_dir=base_output_dir,
+                    remote_mobilelog_path=cfg.remote_mobilelog_path,
+                    shell_fn=shell_fn,
+                    pull_fn=pull_fn,
+                )
+
+            if cfg.export_bugreport:
+                export_bugreport_for_timestamp(
+                    serial=serial,
+                    timestamp_str=parsed["timestamp"],
+                    output_dir=base_output_dir,
+                    adb_path=adb_path,
+                    event_type=parsed.get("event_type"),
+                    cooldown_seconds=cfg.bugreport_cooldown_seconds,
+                    cooldown_event_types=cfg.bugreport_cooldown_event_types,
+                    timeout_seconds=cfg.bugreport_timeout_seconds,
+                    stop_event=stop_event,
+                )
+
+        for line, task in _iter_pending_tasks_newest_first(pending_tasks):
             if stop_event is not None and stop_event.is_set():
                 stop_requested = True
                 logger.info(
@@ -181,6 +244,11 @@ def process_device_logs(
                 result.errors.append(f"pull_retry_exceeded:{parsed['db_path']}")
                 continue
 
+            if remaining_budget is not None:
+                if remaining_budget <= 0:
+                    break
+                remaining_budget -= 1
+
             dirname = (
                 f"{format_timestamp_for_filename(parsed['timestamp'])}_"
                 f"{os.path.basename(parsed['db_path'])}"
@@ -194,9 +262,12 @@ def process_device_logs(
                     shell_fn=shell_fn,
                 )
                 if verify_ok:
-                    newly_processed.add(line)
-                    pending_tasks.pop(line, None)
-                    result.skipped_known += 1
+                    _finalize_processed_entry(
+                        line=line,
+                        parsed=parsed,
+                        local_target_dir=local_target_dir,
+                        export_side_effects=False,
+                    )
                     continue
                 logger.info(
                     "aee_pull_existing_dir_invalid serial=%s db=%s reason=%s",
@@ -223,55 +294,15 @@ def process_device_logs(
                 result.errors.append(f"pull_verify_failed:{parsed['db_path']}:{verify_msg}")
                 continue
 
-            newly_processed.add(line)
-            pending_tasks.pop(line, None)
-            result.pulled += 1
-            result.new_timestamps.append(parsed["timestamp"])
-
-            # M0/PR #2: notify reconciler/post-hook that a new entry landed.
-            # Raised here (before mobilelog/bugreport side effects) so the signal
-            # is emitted with minimum latency; side effects below are best-effort.
-            if on_new_entry is not None:
-                try:
-                    on_new_entry({
-                        "line":          line,
-                        "parsed":        dict(parsed),
-                        "aee_type":      aee_type,
-                        "output_subdir": local_target_dir,
-                    })
-                except Exception:
-                    logger.exception(
-                        "aee_on_new_entry_callback_failed serial=%s db=%s",
-                        serial, parsed.get("db_path"),
-                    )
-
-            if cfg.export_mobilelog and not stop_requested:
-                export_correlated_mobilelogs(
-                    aee_ts_str=parsed["timestamp"],
-                    output_dir=base_output_dir,
-                    remote_mobilelog_path=cfg.remote_mobilelog_path,
-                    shell_fn=shell_fn,
-                    pull_fn=pull_fn,
-                )
-
-            if cfg.export_bugreport and not stop_requested:
-                export_bugreport_for_timestamp(
-                    serial=serial,
-                    timestamp_str=parsed["timestamp"],
-                    output_dir=base_output_dir,
-                    adb_path=adb_path,
-                    event_type=parsed.get("event_type"),
-                    cooldown_seconds=cfg.bugreport_cooldown_seconds,
-                    cooldown_event_types=cfg.bugreport_cooldown_event_types,
-                    timeout_seconds=cfg.bugreport_timeout_seconds,
-                    stop_event=stop_event,
-                )
-
-        if newly_processed:
-            processed_lines.update(newly_processed)
-            save_processed_lines(state_store, processed_key, processed_lines)
+            _finalize_processed_entry(
+                line=line,
+                parsed=parsed,
+                local_target_dir=local_target_dir,
+                export_side_effects=True,
+            )
 
         _save_pending_tasks(state_store, pending_key, pending_tasks)
+        result.pending_remaining += len(pending_tasks)
         if stop_requested:
             break
 
@@ -283,6 +314,20 @@ def _dir_has_content(path: Path) -> bool:
         return path.is_dir() and any(path.iterdir())
     except OSError:
         return False
+
+
+def _iter_pending_tasks_newest_first(
+    pending_tasks: Dict[str, Dict[str, Any]],
+) -> List[Tuple[str, Dict[str, Any]]]:
+    # Prefer newer AEE rows so fresh runtime crashes are not starved by old backlog.
+    return sorted(
+        pending_tasks.items(),
+        key=lambda item: (
+            parse_timestamp(str(item[1].get("timestamp") or "")) is not None,
+            parse_timestamp(str(item[1].get("timestamp") or "")),
+        ),
+        reverse=True,
+    )
 
 
 def _cleanup_dir(path: Path) -> None:

@@ -108,7 +108,7 @@ class LogPuller:
         on_pull_done: OnPullDone,
         max_workers: int = 2,
         queue_maxsize: int = 256,
-        pull_timeout_seconds: float = 30.0,
+        pull_timeout_seconds: float = 300.0,
         max_file_mb: int = 500,
         first_lines_max_lines: int = 200,
         first_lines_max_bytes: int = 4096,
@@ -276,9 +276,20 @@ class LogPuller:
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            result = self._adb.pull(
-                self._serial, event.full_path, str(local_path),
-            )
+            try:
+                result = self._adb.pull(
+                    self._serial,
+                    event.full_path,
+                    str(local_path),
+                    timeout=self._pull_timeout,
+                )
+            except TypeError as exc:
+                # 兼容未接收 timeout 参数的旧测试替身 / 旧实现。
+                if "timeout" not in str(exc):
+                    raise
+                result = self._adb.pull(
+                    self._serial, event.full_path, str(local_path),
+                )
         except Exception:
             logger.exception(
                 "log_puller_adb_pull_exception serial=%s remote=%s",
@@ -307,6 +318,25 @@ class LogPuller:
         except OSError:
             self.stats.pulls_failed += 1
             return {}
+
+        if local_path.is_dir():
+            logger.info(
+                "log_puller_directory_artifact serial=%s remote=%s local=%s",
+                self._serial, event.full_path, local_path,
+            )
+            self.stats.pulls_ok += 1
+            if (
+                self._bugreport_enabled
+                and self._sonic_output_dir is not None
+                and event.category in ("AEE", "VENDOR_AEE")
+            ):
+                self._maybe_export_bugreport(event)
+            return {
+                "artifact_uri": str(local_path),
+                "sha256":       None,
+                "size_bytes":   None,
+                "first_lines":  None,
+            }
 
         if size_bytes > self._max_file_bytes:
             logger.warning(
