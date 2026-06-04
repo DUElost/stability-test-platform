@@ -591,7 +591,9 @@ async def _drive_dispatch_gate(
                 )
                 return
 
-            await asyncio.sleep(2.0)
+            precheck["phase"] = "reverifying"
+            _persist_precheck(plan_run_id, precheck, db)
+            await asyncio.sleep(SYNC_SETTLE_SECONDS)
 
             reverify_results = await _gather_verify(hosts_to_sync, expected_scripts)
             still_bad: list[str] = []

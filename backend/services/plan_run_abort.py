@@ -134,7 +134,7 @@ def abort_plan_run(
     # Detect "still in dispatch gate, no jobs yet".
     in_precheck = (
         precheck is not None
-        and precheck.get("phase") in ("verifying", "syncing")
+        and precheck.get("phase") in ("verifying", "syncing", "reverifying")
     )
 
     aborted_jobs: list[int] = []

@@ -16,7 +16,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-PrecheckPhase = Literal["verifying", "syncing", "ready", "failed"]
+PrecheckPhase = Literal["verifying", "syncing", "reverifying", "ready", "failed"]
 PrecheckHostStatus = Literal["pending", "ok", "syncing", "synced", "failed"]
 PrecheckFinalResult = Literal["ready", "failed", "aborted"]
 
