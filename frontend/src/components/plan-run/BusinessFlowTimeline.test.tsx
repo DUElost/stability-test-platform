@@ -174,4 +174,36 @@ describe('BusinessFlowTimeline', () => {
       '该过滤条件下暂无事件',
     );
   });
+
+  it('shows a truncation notice when events.total exceeds returned rows', () => {
+    render(
+      <BusinessFlowTimeline timeline={timeline} events={{ ...events, total: 150 }} />,
+    );
+    const notice = screen.getByTestId('event-truncation-notice');
+    expect(notice).toHaveTextContent('150');
+    expect(notice).toHaveTextContent('仅显示前 3 条');
+  });
+
+  it('hides the truncation notice when all events are shown', () => {
+    render(<BusinessFlowTimeline timeline={timeline} events={events} />);
+    expect(
+      screen.queryByTestId('event-truncation-notice'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('lifts the stage filter when a left-column stage card is clicked', () => {
+    const onStage = vi.fn();
+    render(
+      <BusinessFlowTimeline
+        timeline={timeline}
+        events={events}
+        onStageFilterChange={onStage}
+      />,
+    );
+    const patrolCard = screen
+      .getByTestId('stage-row-patrol')
+      .querySelector('button');
+    fireEvent.click(patrolCard!);
+    expect(onStage).toHaveBeenCalledWith('patrol');
+  });
 });
