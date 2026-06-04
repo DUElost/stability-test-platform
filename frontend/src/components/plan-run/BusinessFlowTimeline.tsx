@@ -483,7 +483,12 @@ export default function BusinessFlowTimeline({
                   stage={stage}
                   isCurrent={currentStage === stage.stage}
                   isActive={activeStage === stage.stage}
-                  onClick={() => setActiveStage(activeStage === stage.stage ? null : stage.stage)}
+                  onClick={() => {
+                    const next = activeStage === stage.stage ? null : stage.stage;
+                    setActiveStage(next);
+                    // Link the event stream to the chosen stage (collapse → all).
+                    onStageFilterChange?.(next ?? 'all');
+                  }}
                 />
               ))}
             </div>
@@ -500,7 +505,15 @@ export default function BusinessFlowTimeline({
                 key={f.key}
                 type="button"
                 data-testid={`event-filter-stage-${f.key}`}
-                onClick={() => onStageFilterChange?.(f.key)}
+                onClick={() => {
+                  onStageFilterChange?.(f.key);
+                  // Keep the left-column stepper in sync for stage keys it owns.
+                  setActiveStage(
+                    f.key === 'init' || f.key === 'patrol' || f.key === 'teardown'
+                      ? f.key
+                      : null,
+                  );
+                }}
                 className={`rounded-md px-2 py-0.5 text-xs transition ${stageFilter === f.key ? 'bg-blue-100 font-semibold text-blue-700' : 'text-gray-600 hover:bg-gray-100'}`}
               >
                 {f.label}
@@ -552,6 +565,14 @@ export default function BusinessFlowTimeline({
                 {eventList.map((e, idx) => (
                   <EventRow key={`${e.ts}-${e.category}-${idx}`} event={e} />
                 ))}
+                {(events?.total ?? 0) > eventList.length && (
+                  <div
+                    data-testid="event-truncation-notice"
+                    className="border-t border-gray-100 px-3 py-2 text-center text-[11px] text-gray-400"
+                  >
+                    仅显示前 {eventList.length} 条 · 当前筛选共 {events?.total} 条,请用上方过滤缩小范围
+                  </div>
+                )}
               </div>
             )}
           </div>
