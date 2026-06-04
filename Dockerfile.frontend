@@ -2,7 +2,14 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install
+# npm ci with retry for transient network errors (ECONNRESET)
+RUN for i in 1 2 3; do \
+      npm ci && exit 0; \
+      echo "npm ci attempt $i failed, retrying..."; \
+      sleep 10; \
+    done; \
+    echo "npm ci failed after 3 attempts"; \
+    exit 1
 COPY frontend/ .
 RUN npm run build
 
