@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, AlertCircle, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, AlertCircle, AlertTriangle, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
@@ -16,13 +16,14 @@ import type {
   PlanRun,
   PlanRunStatus,
 } from '@/utils/api/types';
-import PlanRunHero, { type PlanRunHeroSummaryStats } from '@/components/plan-run/PlanRunHero';
+import PlanRunHero from '@/components/plan-run/PlanRunHero';
 import PlanChainBreadcrumb from '@/components/plan-run/PlanChainBreadcrumb';
 import BusinessFlowTimeline from '@/components/plan-run/BusinessFlowTimeline';
 import DeviceOverview from '@/components/plan-run/DeviceOverview';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import WatcherSummaryCard from '@/components/plan-run/WatcherSummaryCard';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
+import PlanRunKpiBar from '@/components/plan-run/PlanRunKpiBar';
 
 const TERMINAL: ReadonlyArray<PlanRunStatus> = [
   'SUCCESS',
@@ -91,6 +92,7 @@ export default function PlanRunDetailPage() {
   const [deviceHostFilter, setDeviceHostFilter] = useState<string | 'all'>('all');
   const [watcherWindow, setWatcherWindow] = useState<number>(60);
   const [selectedDevice, setSelectedDevice] = useState<DeviceMatrixItem | null>(null);
+  const [diagOpen, setDiagOpen] = useState(false);
 
   // ── Plan run + derived terminal flag drive every other refetch interval ──
   const runQ = useQuery({
@@ -173,18 +175,6 @@ export default function PlanRunDetailPage() {
     const now = Date.now();
     return devicesQ.data.devices.filter((d) => isJobStuck(d, now));
   }, [devicesQ.data, isTerminal]);
-
-  // ── Derive hero summary stats ──
-  const heroSummary = useMemo((): PlanRunHeroSummaryStats => {
-    const devicesData = devicesQ.data;
-    const timelineData = timelineQ.data;
-    return {
-      hostCount: Object.keys(devicesData?.by_host ?? {}).length || undefined,
-      deviceCount: devicesData?.total,
-      currentStage: timelineData?.current_stage ?? null,
-      patrolCycle: timelineData?.stages?.find((s) => s.stage === 'patrol')?.patrol_cycle_index ?? null,
-    };
-  }, [devicesQ.data, timelineQ.data]);
 
   // ── SocketIO event-driven invalidation ──
   const onSocketMessage = useCallback(
@@ -306,6 +296,9 @@ export default function PlanRunDetailPage() {
 
   const precheck = runQ.data?.run_context?.precheck ?? null;
   const dispatchState = runQ.data?.run_context?.dispatch_state ?? null;
+  const gateFailed =
+    precheck?.phase === 'failed' || dispatchState?.status === 'failed';
+  const showDiag = diagOpen || gateFailed;
 
   return (
     <div className="mx-auto max-w-[1480px] space-y-3 px-1 pb-12">
@@ -345,19 +338,18 @@ export default function PlanRunDetailPage() {
               toast.error(`导出失败: ${msg}`);
             }
           }}
-          summary={heroSummary}
         />
       )}
 
-      {precheck && (
-        <DispatchGateCard
-          precheck={precheck}
-          dispatchState={dispatchState}
-          isTerminal={isTerminal}
-          onRetryDispatch={() => retryDispatchMut.mutate()}
-          isRetrying={retryDispatchMut.isPending}
-        />
-      )}
+      {/* KPI 态势条 */}
+      <PlanRunKpiBar
+        devices={devicesQ.data}
+        currentStage={timelineQ.data?.current_stage ?? null}
+        patrolCycle={
+          timelineQ.data?.stages?.find((s) => s.stage === 'patrol')
+            ?.patrol_cycle_index ?? null
+        }
+      />
 
       {stuckJobs.length > 0 && (
         <div
@@ -380,17 +372,7 @@ export default function PlanRunDetailPage() {
         </div>
       )}
 
-      {showPlanChain && (
-        <PlanChainBreadcrumb
-          chain={chainQ.data}
-          isLoading={chainQ.isLoading}
-          isError={chainQ.isError}
-          chainDispatchFailed={chainDispatchFailed}
-          onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
-        />
-      )}
-
-      {/* Unified device overview (grid + table) */}
+      {/* 设备总览(全宽; minimap 方块按数量自适应铺满,空间随设备数增加) */}
       <DeviceOverview
         data={devicesQ.data}
         isLoading={devicesQ.isLoading}
@@ -402,7 +384,26 @@ export default function PlanRunDetailPage() {
         onSelectDevice={setSelectedDevice}
       />
 
-      {/* Business flow timeline */}
+      {/* Watcher 异常聚合(全宽,始终在设备总览下方) */}
+      <WatcherSummaryCard
+        data={watcherQ.data}
+        isLoading={watcherQ.isLoading}
+        isError={watcherQ.isError}
+        windowMinutes={watcherWindow}
+        onWindowChange={setWatcherWindow}
+      />
+
+      {showPlanChain && (
+        <PlanChainBreadcrumb
+          chain={chainQ.data}
+          isLoading={chainQ.isLoading}
+          isError={chainQ.isError}
+          chainDispatchFailed={chainDispatchFailed}
+          onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
+        />
+      )}
+
+      {/* Business flow timeline (全宽) */}
       <BusinessFlowTimeline
         timeline={timelineQ.data}
         events={eventsQ.data}
@@ -416,14 +417,39 @@ export default function PlanRunDetailPage() {
         dispatchState={dispatchState}
       />
 
-      {/* Watcher anomaly summary */}
-      <WatcherSummaryCard
-        data={watcherQ.data}
-        isLoading={watcherQ.isLoading}
-        isError={watcherQ.isError}
-        windowMinutes={watcherWindow}
-        onWindowChange={setWatcherWindow}
-      />
+      {/* 派发门禁诊断(折叠; 失败默认展开; 折叠态保持 mount 以便审计/测试) */}
+      {precheck && (
+        <section data-testid="dispatch-gate-section" className="space-y-2">
+          <button
+            type="button"
+            data-testid="dispatch-gate-section-toggle"
+            onClick={() => setDiagOpen((v) => !v)}
+            className="mx-1 flex items-center gap-2 text-left"
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 text-gray-400 transition-transform ${
+                showDiag ? '' : '-rotate-90'
+              }`}
+            />
+            <span className="text-xs font-bold uppercase tracking-wider text-gray-700">
+              派发门禁诊断
+            </span>
+            <span className="text-xs text-gray-400">
+              {gateFailed ? '失败 · 已展开' : showDiag ? '点击收起' : '点击展开'}
+            </span>
+            {gateFailed && <span className="h-1.5 w-1.5 rounded-full bg-red-500" />}
+          </button>
+          <div className={showDiag ? '' : 'hidden'}>
+            <DispatchGateCard
+              precheck={precheck}
+              dispatchState={dispatchState}
+              isTerminal={isTerminal}
+              onRetryDispatch={() => retryDispatchMut.mutate()}
+              isRetrying={retryDispatchMut.isPending}
+            />
+          </div>
+        </section>
+      )}
 
       {/* Device detail drawer */}
       <DeviceDetailDrawer

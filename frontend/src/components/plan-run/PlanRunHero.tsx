@@ -26,12 +26,6 @@ const STATUS_CLS: Record<PlanRunStatus, string> = {
   DEGRADED: 'bg-purple-50 text-purple-700 border-purple-200',
 };
 
-const STAGE_LABEL: Record<string, string> = {
-  init: 'INIT',
-  patrol: 'PATROL',
-  teardown: 'TEARDOWN',
-};
-
 function formatDuration(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '—';
   const h = Math.floor(seconds / 3600);
@@ -42,20 +36,12 @@ function formatDuration(seconds: number): string {
   return `${s}s`;
 }
 
-export interface PlanRunHeroSummaryStats {
-  hostCount?: number;
-  deviceCount?: number;
-  currentStage?: string | null;
-  patrolCycle?: number | null;
-}
-
 interface Props {
   run: PlanRun | undefined;
   planName?: string | null;
   isAborting?: boolean;
   onAbort?: (reason: string) => void;
   onExportReport?: () => void;
-  summary?: PlanRunHeroSummaryStats;
   /** Override "now" for deterministic tests. */
   now?: Date;
 }
@@ -66,7 +52,6 @@ export default function PlanRunHero({
   isAborting = false,
   onAbort,
   onExportReport,
-  summary,
   now,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -93,13 +78,6 @@ export default function PlanRunHero({
 
   const pill = run ? PLAN_RUN_PILL[run.status] : null;
   const pillCls = run ? STATUS_CLS[run.status] : '';
-
-  const stageStr = summary?.currentStage
-    ? (STAGE_LABEL[summary.currentStage] ?? summary.currentStage.toUpperCase())
-    : null;
-  const cycleStr = summary?.patrolCycle != null && summary.patrolCycle >= 0
-    ? `周期 #${summary.patrolCycle}`
-    : null;
 
   return (
     <div className="overflow-hidden rounded-xl border bg-gradient-to-b from-white to-gray-50 shadow-sm">
@@ -136,25 +114,6 @@ export default function PlanRunHero({
                     {runDuration}
                   </span>
                 )}
-              </span>
-            )}
-
-            {/* Meta chips */}
-            {stageStr && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">
-                <span className="h-1.5 w-1.5 rounded-full bg-orange-400" />
-                {stageStr}
-                {cycleStr && <span className="text-gray-400">· {cycleStr}</span>}
-              </span>
-            )}
-            {summary?.hostCount != null && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">
-                {summary.hostCount} 台主机
-              </span>
-            )}
-            {summary?.deviceCount != null && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">
-                {summary.deviceCount} 台设备
               </span>
             )}
           </div>

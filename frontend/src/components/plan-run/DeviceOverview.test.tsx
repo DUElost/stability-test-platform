@@ -334,4 +334,31 @@ describe('DeviceOverview', () => {
       expect.objectContaining({ job_id: 3002 }),
     );
   });
+
+  it('respects controlled viewMode and emits onViewModeChange', () => {
+    const onViewModeChange = vi.fn();
+    const { rerender } = render(
+      <DeviceOverview
+        data={fixture}
+        viewMode="grid"
+        onViewModeChange={onViewModeChange}
+      />,
+    );
+    // controlled grid → minimap cells, no table rows
+    expect(screen.getByTestId('minimap-cell-3001')).toBeInTheDocument();
+    expect(screen.queryByTestId('device-row-3001')).not.toBeInTheDocument();
+    // clicking table-btn emits change but does NOT self-switch (controlled)
+    fireEvent.click(screen.getByTestId('device-overview-table-btn'));
+    expect(onViewModeChange).toHaveBeenCalledWith('table');
+    expect(screen.queryByTestId('device-row-3001')).not.toBeInTheDocument();
+    // parent flips the prop → table renders
+    rerender(
+      <DeviceOverview
+        data={fixture}
+        viewMode="table"
+        onViewModeChange={onViewModeChange}
+      />,
+    );
+    expect(screen.getByTestId('device-row-3001')).toBeInTheDocument();
+  });
 });

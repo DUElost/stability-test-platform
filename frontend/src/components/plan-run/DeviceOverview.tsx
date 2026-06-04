@@ -19,6 +19,9 @@ interface Props {
   onStatusFilterChange?: (s: DeviceUiStatus | 'all') => void;
   onHostFilterChange?: (h: string | 'all') => void;
   onSelectDevice?: (device: DeviceMatrixItem) => void;
+  /** Controlled view mode; falls back to internal state when omitted. */
+  viewMode?: 'grid' | 'table';
+  onViewModeChange?: (mode: 'grid' | 'table') => void;
 }
 
 // ── Grid cell color map ──────────────────────────────────────────────────
@@ -308,8 +311,18 @@ export default function DeviceOverview({
   onStatusFilterChange,
   onHostFilterChange,
   onSelectDevice,
+  viewMode: controlledViewMode,
+  onViewModeChange,
 }: Props) {
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
+  const [internalViewMode, setInternalViewMode] = useState<'grid' | 'table'>('grid');
+  const viewMode = controlledViewMode ?? internalViewMode;
+  const setViewMode = useCallback(
+    (mode: 'grid' | 'table') => {
+      if (onViewModeChange) onViewModeChange(mode);
+      else setInternalViewMode(mode);
+    },
+    [onViewModeChange],
+  );
   const [highlightJobId, setHighlightJobId] = useState<number | null>(null);
 
   const total = data?.total ?? 0;
@@ -328,7 +341,7 @@ export default function DeviceOverview({
       setHighlightJobId(d.job_id);
       onSelectDevice?.(d);
     },
-    [onSelectDevice],
+    [onSelectDevice, setViewMode],
   );
 
   // Clear highlight after 2s
