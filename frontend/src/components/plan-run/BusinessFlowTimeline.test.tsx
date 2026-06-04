@@ -206,4 +206,40 @@ describe('BusinessFlowTimeline', () => {
     fireEvent.click(patrolCard!);
     expect(onStage).toHaveBeenCalledWith('patrol');
   });
+
+  it('shows succeeded/total ratio for non-patrol stages', () => {
+    render(<BusinessFlowTimeline timeline={timeline} events={events} />);
+    // init: device_succeeded 8 / device_total 8 → "8/8"
+    expect(screen.getByTestId('stage-row-init')).toHaveTextContent('8/8');
+  });
+
+  it('labels patrol counts as cumulative across cycles', () => {
+    render(<BusinessFlowTimeline timeline={timeline} events={events} />);
+    // patrol counts are summed from step_trace over cycles, not a device count
+    expect(screen.getByTestId('stage-row-patrol')).toHaveTextContent('累计');
+  });
+
+  it('renders a stage start-time anchor when started_at is present', () => {
+    render(
+      <BusinessFlowTimeline
+        timeline={{
+          ...timeline,
+          stages: timeline.stages.map((s) =>
+            s.stage === 'init' ? { ...s, started_at: '2026-05-08T12:00:30Z' } : s,
+          ),
+        }}
+        events={events}
+      />,
+    );
+    expect(screen.getByTestId('stage-row-init')).toHaveTextContent('起');
+  });
+
+  it('expands a long event description on click', () => {
+    render(<BusinessFlowTimeline timeline={timeline} events={events} />);
+    const desc = screen.getByTestId('event-desc-2026-05-08T12:30:00Z-step');
+    expect(desc).toHaveClass('line-clamp-2');
+    fireEvent.click(desc);
+    expect(desc).toHaveClass('whitespace-pre-wrap');
+    expect(desc).not.toHaveClass('line-clamp-2');
+  });
 });
