@@ -19,14 +19,9 @@ import type {
 import PlanRunHero, { type PlanRunHeroSummaryStats } from '@/components/plan-run/PlanRunHero';
 import PlanChainBreadcrumb from '@/components/plan-run/PlanChainBreadcrumb';
 import BusinessFlowTimeline from '@/components/plan-run/BusinessFlowTimeline';
-import DeviceMinimap from '@/components/plan-run/DeviceMinimap';
-import DeviceMatrixCard from '@/components/plan-run/DeviceMatrixCard';
+import DeviceOverview from '@/components/plan-run/DeviceOverview';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import WatcherSummaryCard from '@/components/plan-run/WatcherSummaryCard';
-import {
-  gateElapsedSeconds,
-  isGateStale,
-} from '@/components/plan-run/DispatchGateCard';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
 
 const TERMINAL: ReadonlyArray<PlanRunStatus> = [
@@ -311,12 +306,6 @@ export default function PlanRunDetailPage() {
 
   const precheck = runQ.data?.run_context?.precheck ?? null;
   const dispatchState = runQ.data?.run_context?.dispatch_state ?? null;
-  const gateStale =
-    precheck &&
-    isGateStale(dispatchState, precheck, isTerminal);
-  const gateStaleElapsedSec = Math.floor(
-    gateElapsedSeconds(dispatchState) ?? 0,
-  );
 
   return (
     <div className="mx-auto max-w-[1480px] space-y-3 px-1 pb-12">
@@ -360,19 +349,6 @@ export default function PlanRunDetailPage() {
         />
       )}
 
-      {gateStale && (
-        <div
-          data-testid="dispatch-gate-stale-banner"
-          className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900"
-        >
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>
-            派发门禁已运行 {gateStaleElapsedSec}s（超过 90s 阈值）。若长时间无 Job 出现，请检查
-            SAQ Worker / Redis 或等待 precheck reaper 补偿。
-          </span>
-        </div>
-      )}
-
       {precheck && (
         <DispatchGateCard
           precheck={precheck}
@@ -393,7 +369,7 @@ export default function PlanRunDetailPage() {
             <p className="font-semibold">
               {stuckJobs.length} 个 Job 心跳超时，可能已失联
             </p>
-            <p className="text-[11px] text-amber-800/90">
+            <p className="text-xs text-amber-800/90">
               后端 recycler 将把超时 Job 标记为 UNKNOWN；grace 窗口内 Agent 可通过 recovery 恢复。
               设备：
               {stuckJobs
@@ -408,15 +384,17 @@ export default function PlanRunDetailPage() {
         <PlanChainBreadcrumb
           chain={chainQ.data}
           isLoading={chainQ.isLoading}
+          isError={chainQ.isError}
           chainDispatchFailed={chainDispatchFailed}
           onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
         />
       )}
 
-      {/* Device minimap */}
-      <DeviceMinimap
+      {/* Unified device overview (grid + table) */}
+      <DeviceOverview
         data={devicesQ.data}
         isLoading={devicesQ.isLoading}
+        isError={devicesQ.isError}
         statusFilter={deviceStatusFilter}
         hostFilter={deviceHostFilter}
         onStatusFilterChange={setDeviceStatusFilter}
@@ -433,25 +411,16 @@ export default function PlanRunDetailPage() {
         onStageFilterChange={setStageFilter}
         onSeverityFilterChange={setSeverityFilter}
         isLoading={timelineQ.isLoading || eventsQ.isLoading}
+        isError={timelineQ.isError || eventsQ.isError}
         precheck={precheck}
         dispatchState={dispatchState}
-      />
-
-      {/* Device table */}
-      <DeviceMatrixCard
-        data={devicesQ.data}
-        isLoading={devicesQ.isLoading}
-        statusFilter={deviceStatusFilter}
-        hostFilter={deviceHostFilter}
-        onStatusFilterChange={setDeviceStatusFilter}
-        onHostFilterChange={setDeviceHostFilter}
-        onSelectDevice={setSelectedDevice}
       />
 
       {/* Watcher anomaly summary */}
       <WatcherSummaryCard
         data={watcherQ.data}
         isLoading={watcherQ.isLoading}
+        isError={watcherQ.isError}
         windowMinutes={watcherWindow}
         onWindowChange={setWatcherWindow}
       />

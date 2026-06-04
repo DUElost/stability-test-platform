@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   X,
   RotateCw,
@@ -54,6 +54,19 @@ export default function DeviceDetailDrawer({
   isExitPending = false,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState<null | 'retry' | 'exit'>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+
+  // Close on Escape (unless a confirm dialog is open — let it handle Esc first),
+  // and move focus into the drawer when it opens for keyboard / screen-reader users.
+  useEffect(() => {
+    if (!device) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && confirmOpen === null) onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    drawerRef.current?.focus();
+    return () => document.removeEventListener('keydown', onKey);
+  }, [device, confirmOpen, onClose]);
 
   if (!device) return null;
 
@@ -72,8 +85,13 @@ export default function DeviceDetailDrawer({
 
       {/* Drawer */}
       <aside
+        ref={drawerRef}
         data-testid="device-drawer"
-        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col overflow-hidden border-l bg-white shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`设备 ${device.device_serial || `#${device.device_id}`} 详情`}
+        tabIndex={-1}
+        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col overflow-hidden border-l bg-white shadow-2xl focus:outline-none"
       >
         {/* Header */}
         <header className="flex items-center justify-between border-b px-4 py-3">
@@ -158,7 +176,7 @@ export default function DeviceDetailDrawer({
           {device.log_signal_count > 0 && (
             <div className="mt-4 rounded-lg border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               <div className="font-semibold">检测到 {device.log_signal_count} 条 Watcher 异常</div>
-              <p className="mt-0.5 text-[11px] text-amber-700">
+              <p className="mt-0.5 text-xs text-amber-700">
                 明细见上方"业务流时间线"事件流(stage = patrol, severity = 异常)
               </p>
             </div>
@@ -169,7 +187,7 @@ export default function DeviceDetailDrawer({
               <div className="font-semibold">
                 {retryRequested ? '已请求立即重试' : '已请求退出该设备'}
               </div>
-              <p className="mt-0.5 text-[11px] text-blue-700">
+              <p className="mt-0.5 text-xs text-blue-700">
                 Agent 将在下一次心跳处理(通常 10s 内)
               </p>
             </div>

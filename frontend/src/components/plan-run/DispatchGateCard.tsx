@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { RefreshCw, AlertTriangle } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
 import { StatusBadge } from '@/components/ui/status-badge';
 import type { PrecheckState } from '@/utils/api/types';
 
@@ -115,6 +115,33 @@ export default function DispatchGateCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [precheck]);
 
+  // ── Collapse logic: auto-hide per-host details when all pass ──────────
+  // isCompactReady: gate completely done → full compact (already implemented)
+  // allHealthy: every host ok/synced, no errors → eligible for auto-collapse
+  const allHealthy =
+    (precheck.phase === 'ready' || precheck.phase === 'failed') &&
+    counts.failed === 0 &&
+    !precheck.errors?.length &&
+    hostEntries.every(([, h]) => h.status === 'ok' || h.status === 'synced');
+
+  // Default: collapse when all healthy, expand when failures need attention.
+  // Re-sync whenever allHealthy flips (a recovered gate auto-collapses, a newly
+  // failed gate auto-expands); within a health state the user's toggle sticks.
+  const [expanded, setExpanded] = useState(!allHealthy);
+  useEffect(() => {
+    setExpanded(!allHealthy);
+  }, [allHealthy]);
+
+  // Count total scripts
+  const totalScriptCount = useMemo(
+    () => hostEntries.reduce((sum, [, h]) => sum + h.scripts.length, 0),
+    [hostEntries],
+  );
+  const allMatched = useMemo(
+    () => hostEntries.every(([, h]) => h.scripts.every((s) => s.ok)),
+    [hostEntries],
+  );
+
   return (
     <div
       data-testid="dispatch-gate-card"
@@ -140,6 +167,20 @@ export default function DispatchGateCard({
             </span>
           )}
         </span>
+        {allHealthy && !isCompactReady && (
+          <button
+            type="button"
+            data-testid="dispatch-gate-toggle"
+            onClick={() => setExpanded((v) => !v)}
+            className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+          >
+            {expanded ? (
+              <><ChevronUp className="h-3 w-3" />收起详情</>
+            ) : (
+              <><ChevronDown className="h-3 w-3" />展开详情</>
+            )}
+          </button>
+        )}
         {precheck.errors && precheck.errors.length > 0 && (
           <span className="ml-auto inline-flex items-center gap-1 text-xs text-red-600">
             <AlertTriangle className="h-3.5 w-3.5" />
@@ -223,75 +264,86 @@ export default function DispatchGateCard({
         </div>
       )}
 
+      {/* Per-host details: hidden when fully compact, collapsed when all-healthy, expanded on failure */}
       {!isCompactReady && (
         <div className="divide-y">
-          {hostEntries.length === 0 && (
+          {allHealthy && !expanded ? (
+            <div
+              data-testid="dispatch-gate-collapsed"
+              className="px-4 py-3 text-xs text-gray-500"
+            >
+              <span className="text-green-700 font-semibold">✓ {totalHosts} 台主机</span>
+              <span className="ml-2">· {totalScriptCount} 个脚本</span>
+              {allMatched && <span className="ml-2 text-green-600">全部匹配</span>}
+            </div>
+          ) : hostEntries.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-gray-400">
               未解析出主机
             </div>
-          )}
-          {hostEntries.map(([hostId, state]) => {
-            const totalScripts = state.scripts.length;
-            const matchedScripts = state.scripts.filter((s) => s.ok).length;
-            return (
-              <div
-                key={hostId}
-                data-testid={`dispatch-gate-host-${hostId}`}
-                className="px-4 py-3"
-              >
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className="font-mono text-sm font-semibold text-gray-700">
-                    {hostId}
-                  </span>
-                  <StatusBadge
-                    kind="precheck-host"
-                    status={state.status}
-                    size="sm"
-                    spin={state.status === 'syncing'}
-                  />
+          ) : (
+            hostEntries.map(([hostId, state]) => {
+              const totalScripts = state.scripts.length;
+              const matchedScripts = state.scripts.filter((s) => s.ok).length;
+              return (
+                <div
+                  key={hostId}
+                  data-testid={`dispatch-gate-host-${hostId}`}
+                  className="px-4 py-3"
+                >
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="font-mono text-sm font-semibold text-gray-700">
+                      {hostId}
+                    </span>
+                    <StatusBadge
+                      kind="precheck-host"
+                      status={state.status}
+                      size="sm"
+                      spin={state.status === 'syncing'}
+                    />
+                    {totalScripts > 0 && (
+                      <span className="text-xs text-gray-500">
+                        {matchedScripts}/{totalScripts} 脚本一致
+                      </span>
+                    )}
+                    {state.sync_attempts > 0 && (
+                      <span className="text-xs text-gray-400">
+                        sync ×{state.sync_attempts}
+                        {precheck.sync_max_attempts != null
+                          ? `/${precheck.sync_max_attempts}`
+                          : ''}
+                      </span>
+                    )}
+                    {state.error && (
+                      <span className="ml-auto text-xs text-red-600">
+                        {state.error}
+                      </span>
+                    )}
+                  </div>
+
                   {totalScripts > 0 && (
-                    <span className="text-xs text-gray-500">
-                      {matchedScripts}/{totalScripts} 脚本一致
-                    </span>
-                  )}
-                  {state.sync_attempts > 0 && (
-                    <span className="text-xs text-gray-400">
-                      sync ×{state.sync_attempts}
-                      {precheck.sync_max_attempts != null
-                        ? `/${precheck.sync_max_attempts}`
-                        : ''}
-                    </span>
-                  )}
-                  {state.error && (
-                    <span className="ml-auto text-xs text-red-600">
-                      {state.error}
-                    </span>
+                    <div className="mt-2 grid grid-cols-1 gap-1 text-xs sm:grid-cols-2 lg:grid-cols-3">
+                      {state.scripts.map((s, idx) => (
+                        <div
+                          key={`${s.name}-${s.version}-${idx}`}
+                          className={`flex items-center justify-between gap-2 rounded px-2 py-1 ${
+                            s.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'
+                          }`}
+                        >
+                          <span className="truncate font-mono">
+                            {s.name}@{s.version}
+                          </span>
+                          <span className="shrink-0 font-mono text-[11px] text-gray-500">
+                            {s.ok ? '✓ ' : '✗ '}
+                            {shortSha(s.actual_sha)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
-
-                {totalScripts > 0 && (
-                  <div className="mt-2 grid grid-cols-1 gap-1 text-[11px] sm:grid-cols-2 lg:grid-cols-3">
-                    {state.scripts.map((s, idx) => (
-                      <div
-                        key={`${s.name}-${s.version}-${idx}`}
-                        className={`flex items-center justify-between gap-2 rounded px-2 py-1 ${
-                          s.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'
-                        }`}
-                      >
-                        <span className="truncate font-mono">
-                          {s.name}@{s.version}
-                        </span>
-                        <span className="shrink-0 font-mono text-[10px] text-gray-500">
-                          {s.ok ? '✓ ' : '✗ '}
-                          {shortSha(s.actual_sha)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
       )}
     </div>

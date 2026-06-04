@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   AlertTriangle,
   Activity,
@@ -5,8 +6,11 @@ import {
   ArrowUp,
   ShieldAlert,
   Minus,
+  Info,
+  AlertCircle,
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
+import SectionHeader from './SectionHeader';
 import type {
   AeeBreakdown,
   PackageStat,
@@ -17,6 +21,7 @@ import type {
 interface Props {
   data: WatcherSummary | undefined;
   isLoading?: boolean;
+  isError?: boolean;
   /** Window minutes filter; lifted up so the parent can sync URL params. */
   windowMinutes?: number;
   onWindowChange?: (minutes: number) => void;
@@ -99,7 +104,7 @@ function CategoryRow({
             {CATEGORY_LABEL[cat.category] ?? '—'}
           </span>
         </div>
-        <div className="mt-0.5 text-[10.5px] text-gray-500">
+        <div className="mt-0.5 text-[11px] text-gray-500">
           影响 {cat.affected_device_count} 台设备
           {cat.latest_device_serial && (
             <>
@@ -116,11 +121,11 @@ function CategoryRow({
         <div className="font-mono text-lg font-bold tabular-nums text-gray-900">
           {cat.count}
         </div>
-        <div className="text-[10px] uppercase tracking-wider text-gray-400">条</div>
+        <div className="text-[11px] uppercase tracking-wider text-gray-400">条</div>
       </div>
       <div
         data-testid={`watcher-cat-${cat.category}-trend`}
-        className={`flex w-14 items-center justify-end gap-0.5 text-[11px] font-mono ${
+        className={`flex w-14 items-center justify-end gap-0.5 text-xs font-mono ${
           trend > 0
             ? 'text-red-600'
             : trend < 0
@@ -209,7 +214,7 @@ function DualWriteBadge({
       data-testid="watcher-dual-write-badge"
       data-variant={v.kind}
       title={v.title}
-      className={`ml-1 inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10.5px] font-semibold ${v.tone}`}
+      className={`ml-1 inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[11px] font-semibold ${v.tone}`}
     >
       {v.label}
     </span>
@@ -228,7 +233,7 @@ function CapabilityBadge({ capability }: { capability: string | null | undefined
         'watcher_capability=unavailable:Watcher 未正常启动(inotifyd / polling 探测失败)。' +
         'AEE reconciler 可能未运行,勿当作有 reconciler 兜底;请以 signal 侧数据为准。'
       }
-      className="ml-1 inline-flex items-center rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-orange-800"
+      className="ml-1 inline-flex items-center rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-orange-800"
     >
       Watcher 不可用
     </span>
@@ -247,7 +252,7 @@ function AeeBreakdownChips({ breakdown }: { breakdown: AeeBreakdown }) {
       {crash > 0 && (
         <span
           data-testid="watcher-crash-chip"
-          className="rounded bg-red-100 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-red-700"
+          className="rounded bg-red-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-red-700"
           title={
             breakdown.vendor_crash_count > 0
               ? `AEE ${breakdown.crash_count} + Vendor ${breakdown.vendor_crash_count}`
@@ -260,7 +265,7 @@ function AeeBreakdownChips({ breakdown }: { breakdown: AeeBreakdown }) {
       {anr > 0 && (
         <span
           data-testid="watcher-anr-chip"
-          className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold text-amber-700"
+          className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-700"
         >
           {anr} ANR
         </span>
@@ -276,7 +281,7 @@ function PackagesChipRow({ breakdown }: { breakdown: AeeBreakdown }) {
       data-testid="watcher-packages-row"
       className="flex flex-wrap items-center gap-1 border-b bg-gray-50/60 px-3 py-2"
     >
-      <span className="mr-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+      <span className="mr-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
         应用
       </span>
       {breakdown.by_package.map((p) => {
@@ -285,7 +290,7 @@ function PackagesChipRow({ breakdown }: { breakdown: AeeBreakdown }) {
           <span
             key={p.package_name}
             data-testid={`watcher-pkg-${p.package_name}`}
-            className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px]"
+            className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs"
             title={`crash ${p.crash_count} · vendor ${p.vendor_crash_count} · anr ${p.anr_count}`}
           >
             <span
@@ -308,6 +313,7 @@ function PackagesChipRow({ breakdown }: { breakdown: AeeBreakdown }) {
 export default function WatcherSummaryCard({
   data,
   isLoading = false,
+  isError = false,
   windowMinutes = 60,
   onWindowChange,
 }: Props) {
@@ -321,45 +327,59 @@ export default function WatcherSummaryCard({
   const breakdown = data?.aee_breakdown ?? null;
   const showPackagesRow =
     !!breakdown && breakdown.by_package && breakdown.by_package.length > 0;
+  const [showDetails, setShowDetails] = useState(false);
 
   return (
     <section data-testid="watcher-summary" className="space-y-2">
-      <div className="mx-1 flex items-center gap-2.5">
-        <span className="h-3 w-1 rounded-sm bg-gradient-to-b from-blue-600 to-blue-400" />
-        <span className="text-xs font-bold uppercase tracking-wider text-gray-700">
-          Watcher 异常聚合
-        </span>
-        {data && (
-          <span className="text-[11px] text-gray-500">
-            窗口 {data.window_minutes} 分钟 · 共 {total} 条 · 影响 {affected}/{totalDevices} 台
-          </span>
-        )}
+      <SectionHeader
+        title="Watcher 异常聚合"
+        meta={
+          data
+            ? `窗口 ${data.window_minutes} 分钟 · 共 ${total} 条 · 影响 ${affected}/${totalDevices} 台`
+            : undefined
+        }
+        extra={
+          <div className="flex items-center gap-1 rounded-md border bg-white p-0.5 text-xs">
+            {WINDOW_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                data-testid={`watcher-window-${opt.value}`}
+                onClick={() => onWindowChange?.(opt.value)}
+                className={`rounded px-2 py-0.5 ${
+                  windowMinutes === opt.value
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'text-gray-500 hover:bg-gray-100'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        }
+      >
         {breakdown && <AeeBreakdownChips breakdown={breakdown} />}
-        {data && <CapabilityBadge capability={data.watcher_capability} />}
-        {data && (
+        {showDetails && data && <CapabilityBadge capability={data.watcher_capability} />}
+        {showDetails && data && (
           <DualWriteBadge
             legacyInSnapshot={data.legacy_patrol_in_snapshot}
             pullSources={data.pull_sources}
           />
         )}
-        <div className="ml-auto flex items-center gap-1 rounded-md border bg-white p-0.5 text-[11px]">
-          {WINDOW_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              data-testid={`watcher-window-${opt.value}`}
-              onClick={() => onWindowChange?.(opt.value)}
-              className={`rounded px-2 py-0.5 ${
-                windowMinutes === opt.value
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'text-gray-500 hover:bg-gray-100'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
+        <button
+          type="button"
+          data-testid="watcher-details-toggle"
+          onClick={() => setShowDetails((v) => !v)}
+          title={showDetails ? '隐藏技术详情' : '显示技术详情'}
+          className={`ml-0.5 rounded p-0.5 transition ${
+            showDetails
+              ? 'bg-blue-100 text-blue-600'
+              : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600'
+          }`}
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </SectionHeader>
 
       <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
         {/* Threshold banner */}
@@ -391,7 +411,13 @@ export default function WatcherSummaryCard({
         {showPackagesRow && <PackagesChipRow breakdown={breakdown!} />}
 
         {/* Body */}
-        {isLoading && cats.length === 0 ? (
+        {isError ? (
+          <div className="flex flex-col items-center justify-center py-10 text-center">
+            <AlertCircle className="mb-2 h-6 w-6 text-red-400" />
+            <span className="text-xs font-semibold text-red-600">加载失败</span>
+            <span className="mt-1 text-[11px] text-red-400">请检查网络连接或稍后重试</span>
+          </div>
+        ) : isLoading && cats.length === 0 ? (
           <div className="space-y-2 p-3">
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
@@ -402,9 +428,9 @@ export default function WatcherSummaryCard({
             <div>该窗口内未检测到异常</div>
             <div
               data-testid="watcher-disabled-hint"
-              className="mt-1 text-[10px] text-gray-400/80"
+              className="mt-1 text-[11px] text-gray-400/80"
             >
-              AEE 监控由 Watcher 提供,如长期为空请确认 Agent STP_WATCHER_PLAN_DEFAULT
+              如长期为空，请确认 Agent 侧 Watcher 已启用
             </div>
           </div>
         ) : (
@@ -422,7 +448,7 @@ export default function WatcherSummaryCard({
         {/* Bottom progress bar */}
         {data && totalDevices > 0 && (
           <div className="border-t bg-gray-50 px-4 py-2">
-            <div className="mb-1 flex items-center justify-between text-[10.5px] text-gray-500">
+            <div className="mb-1 flex items-center justify-between text-[11px] text-gray-500">
               <span>设备异常率</span>
               <span className="font-mono">
                 {(rate * 100).toFixed(1)}% · 阈值 {(threshold * 100).toFixed(0)}%

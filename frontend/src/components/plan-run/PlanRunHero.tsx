@@ -42,19 +42,11 @@ function formatDuration(seconds: number): string {
   return `${s}s`;
 }
 
-function formatRelative(ts: string | null | undefined): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('zh-CN', { hour12: false });
-}
-
 export interface PlanRunHeroSummaryStats {
   hostCount?: number;
   deviceCount?: number;
   currentStage?: string | null;
   patrolCycle?: number | null;
-  lastSyncTime?: string | null;
 }
 
 interface Props {
@@ -108,9 +100,6 @@ export default function PlanRunHero({
   const cycleStr = summary?.patrolCycle != null && summary.patrolCycle >= 0
     ? `周期 #${summary.patrolCycle}`
     : null;
-  const syncStr = summary?.lastSyncTime
-    ? `同步 ${formatRelative(summary.lastSyncTime)}`
-    : null;
 
   return (
     <div className="overflow-hidden rounded-xl border bg-gradient-to-b from-white to-gray-50 shadow-sm">
@@ -119,7 +108,7 @@ export default function PlanRunHero({
         {/* Left: title + meta */}
         <div className="min-w-0">
           {/* Breadcrumb */}
-          <div className="mb-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-400">
+          <div className="mb-0.5 flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
             <span className="text-blue-600 font-semibold">
               {planName ? `Plan #${run?.plan_id ?? ''} · ${planName}` : `Plan #${run?.plan_id ?? '-'}`}
             </span>
@@ -132,7 +121,7 @@ export default function PlanRunHero({
             {pill && (
               <span
                 data-testid="plan-run-status-pill"
-                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold ${pillCls}`}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold ${pillCls}`}
               >
                 {run?.status === 'RUNNING' && (
                   <span className="relative flex h-2 w-2">
@@ -143,7 +132,7 @@ export default function PlanRunHero({
                 <pill.Icon className={`h-3 w-3 ${run?.status === 'RUNNING' ? 'animate-spin' : ''}`} />
                 {pill.label}
                 {runDuration && (
-                  <span data-testid="plan-run-duration" className="ml-0.5 font-mono text-[10.5px] text-gray-500">
+                  <span data-testid="plan-run-duration" className="ml-0.5 font-mono text-[11px] text-gray-500">
                     {runDuration}
                   </span>
                 )}
@@ -152,25 +141,19 @@ export default function PlanRunHero({
 
             {/* Meta chips */}
             {stageStr && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10.5px] font-semibold text-gray-600">
+              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">
                 <span className="h-1.5 w-1.5 rounded-full bg-orange-400" />
                 {stageStr}
                 {cycleStr && <span className="text-gray-400">· {cycleStr}</span>}
               </span>
             )}
-            {syncStr && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10.5px] font-semibold text-gray-600">
-                <Clock className="h-3 w-3 text-gray-400" />
-                {syncStr}
-              </span>
-            )}
             {summary?.hostCount != null && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10.5px] font-semibold text-gray-600">
+              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">
                 {summary.hostCount} 台主机
               </span>
             )}
             {summary?.deviceCount != null && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[10.5px] font-semibold text-gray-600">
+              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">
                 {summary.deviceCount} 台设备
               </span>
             )}
@@ -184,7 +167,7 @@ export default function PlanRunHero({
             size="sm"
             onClick={onExportReport}
             disabled={!run}
-            className="text-[11px] h-7"
+            className="text-xs h-7"
           >
             <Activity className="mr-1 h-3 w-3" />
             导出报告
@@ -198,7 +181,7 @@ export default function PlanRunHero({
                 data-testid="plan-run-abort-btn"
                 onClick={() => setConfirmOpen(true)}
                 disabled={!run || isAborting}
-                className="text-[11px] h-7"
+                className="text-xs h-7"
               >
                 {isAborting ? (
                   <>

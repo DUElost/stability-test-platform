@@ -1,4 +1,5 @@
-import { Check, Loader2, PauseCircle, ChevronRight, AlertTriangle } from 'lucide-react';
+import { Check, Loader2, PauseCircle, ChevronRight, AlertTriangle, AlertCircle } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
   Tooltip,
   TooltipContent,
@@ -10,6 +11,7 @@ import type { ChainDispatchFailed, ChainNode, PlanChain } from '@/utils/api/type
 interface Props {
   chain: PlanChain | undefined;
   isLoading?: boolean;
+  isError?: boolean;
   chainDispatchFailed?: ChainDispatchFailed | null;
   onNavigateRun?: (planRunId: number) => void;
 }
@@ -74,25 +76,25 @@ function NodeChip({
       }`}
     >
       <Icon className={`h-3 w-3 ${iconCls}`} />
-      <span className="font-mono text-[10px] text-gray-400">#{node.plan_id}</span>
+      <span className="font-mono text-[11px] text-gray-400">#{node.plan_id}</span>
       <span className="font-semibold">{node.plan_name || `Plan ${node.plan_id}`}</span>
       {tagText && (
         <span
-          className={`rounded px-1.5 py-px text-[9px] font-bold uppercase tracking-wide ${tagCls}`}
+          className={`rounded px-1.5 py-px text-[10px] font-bold uppercase tracking-wide ${tagCls}`}
         >
           {tagText}
         </span>
       )}
       {dur && (
-        <span className="text-[10.5px] font-normal text-gray-400">{dur}</span>
+        <span className="text-[11px] font-normal text-gray-400">{dur}</span>
       )}
       {passRate != null && (
-        <span className="text-[10.5px] font-normal text-gray-500">
+        <span className="text-[11px] font-normal text-gray-500">
           {passRate}% · 阈值 {Math.round(node.failure_threshold * 100)}%
         </span>
       )}
       {node.is_blocked && node.block_reason && (
-        <span className="text-[10.5px] font-medium text-red-600">
+        <span className="text-[11px] font-medium text-red-600">
           ✗ 暂不触发
         </span>
       )}
@@ -122,6 +124,7 @@ function NodeChip({
 export default function PlanChainBreadcrumb({
   chain,
   isLoading = false,
+  isError = false,
   chainDispatchFailed = null,
   onNavigateRun,
 }: Props) {
@@ -131,10 +134,21 @@ export default function PlanChainBreadcrumb({
         data-testid="plan-chain-loading"
         className="flex items-center gap-2 rounded-xl border bg-white px-3 py-2"
       >
-        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
           Plan 链
         </span>
-        <span className="text-xs text-gray-400">加载中…</span>
+        <Skeleton className="h-4 w-24" />
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div
+        data-testid="plan-chain-error"
+        className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2"
+      >
+        <AlertCircle className="h-3.5 w-3.5 text-red-400" />
+        <span className="text-xs text-red-600">Plan 链加载失败</span>
       </div>
     );
   }
@@ -152,7 +166,7 @@ export default function PlanChainBreadcrumb({
               本 PlanRun 已成功完成，但链上下一段 Plan 未能启动。
               {chainDispatchFailed.error ? ` 原因：${chainDispatchFailed.error}` : ''}
             </p>
-            <p className="text-[11px] text-red-600/80">
+            <p className="text-xs text-red-600/80">
               请检查设备可用性与脚本预检后，从 Plan 列表手动触发下游 Plan。
             </p>
           </div>
@@ -164,7 +178,7 @@ export default function PlanChainBreadcrumb({
         data-testid="plan-chain-empty"
         className="flex items-center gap-2 rounded-xl border bg-white px-3 py-2"
       >
-        <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">
           Plan 链
         </span>
         <span className="text-xs text-gray-400">无 chain 上下文</span>
@@ -186,14 +200,14 @@ export default function PlanChainBreadcrumb({
               本 PlanRun 已成功完成，但链上下一段 Plan 未能启动。
               {chainDispatchFailed.error ? ` 原因：${chainDispatchFailed.error}` : ''}
             </p>
-            <p className="text-[11px] text-red-600/80">
+            <p className="text-xs text-red-600/80">
               请检查设备可用性与脚本预检后，从 Plan 列表手动触发下游 Plan。
             </p>
           </div>
         </div>
       )}
       <div className="flex items-center gap-1.5 overflow-x-auto whitespace-nowrap rounded-xl border bg-white px-3 py-2 shadow-sm">
-        <span className="mr-1 shrink-0 text-[10px] font-bold uppercase tracking-wider text-gray-400">
+        <span className="mr-1 shrink-0 text-[11px] font-bold uppercase tracking-wider text-gray-400">
           Plan 链
         </span>
         {chain.nodes.map((node, idx) => (
