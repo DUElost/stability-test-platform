@@ -2,6 +2,29 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
+function manualChunks(id: string): string | undefined {
+  if (!id.includes('/node_modules/')) return undefined;
+
+  if (
+    id.includes('/node_modules/react/') ||
+    id.includes('/node_modules/react-dom/') ||
+    id.includes('/node_modules/react-router-dom/') ||
+    id.includes('/node_modules/react-router/')
+  ) {
+    return 'vendor-react';
+  }
+  if (id.includes('/node_modules/@tanstack/react-query/')) {
+    return 'vendor-query';
+  }
+  if (id.includes('/node_modules/lucide-react/')) {
+    return 'vendor-ui';
+  }
+  if (id.includes('/node_modules/@xterm/')) {
+    return 'vendor-xterm';
+  }
+  return undefined;
+}
+
 export default defineConfig(({ mode }) => {
   // 加载环境变量，mode 会有不同的前缀
   const env = loadEnv(mode, process.cwd(), '');
@@ -16,12 +39,7 @@ export default defineConfig(({ mode }) => {
     build: {
       rollupOptions: {
         output: {
-          manualChunks: {
-            'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-            'vendor-query': ['@tanstack/react-query'],
-            'vendor-ui': ['lucide-react'],
-            'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-search', '@xterm/addon-web-links'],
-          },
+          manualChunks,
         },
       },
     },

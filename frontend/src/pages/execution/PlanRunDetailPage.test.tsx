@@ -98,9 +98,10 @@ beforeEach(() => {
               {
                 name: 'monkey_check',
                 version: '1.0.0',
-                expected_sha256: 'abcdef0123',
-                actual_sha256: 'abcdef0123',
-                matched: true,
+                expected_sha: 'abcdef0123',
+                actual_sha: 'abcdef0123',
+                exists: true,
+                ok: true,
               },
             ],
             sync_attempts: 0,
@@ -114,9 +115,10 @@ beforeEach(() => {
               {
                 name: 'monkey_check',
                 version: '1.0.0',
-                expected_sha256: 'abcdef0123',
-                actual_sha256: 'deadbeef99',
-                matched: false,
+                expected_sha: 'abcdef0123',
+                actual_sha: 'deadbeef99',
+                exists: true,
+                ok: false,
               },
             ],
             sync_attempts: 1,
@@ -306,6 +308,7 @@ describe('PlanRunDetailPage', () => {
     );
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('健康预检');
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-202');
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('1/2');
     expect(screen.getByTestId('business-flow-timeline')).toBeInTheDocument();
     expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
     expect(await screen.findByTestId('watcher-summary')).toBeInTheDocument();
@@ -461,7 +464,7 @@ describe('PlanRunDetailPage', () => {
               error: null,
             },
           },
-          final_result: 'passed',
+          final_result: 'ready',
           errors: [],
         },
         dispatch_state: {
