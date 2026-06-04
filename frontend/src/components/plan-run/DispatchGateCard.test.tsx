@@ -145,3 +145,97 @@ describe('DispatchGateCard stale banner', () => {
     );
   });
 });
+
+describe('DispatchGateCard expanded auto-sync', () => {
+  // dispatch still running (not completed) keeps isCompactReady=false, so the
+  // collapse/expand region renders — the window where expanded sync is visible.
+  const runningDispatch = {
+    status: 'running',
+    enqueued_at: '2026-05-08T11:00:00Z',
+    started_at: '2026-05-08T11:00:05Z',
+    completed_at: null,
+    last_error: null,
+  };
+
+  // ready + every host ok + no errors → allHealthy true.
+  const readyHealthy: PrecheckState = {
+    ...precheckFixture,
+    phase: 'ready',
+    hosts: {
+      'host-101': {
+        status: 'ok',
+        checked_at: '2026-05-08T11:00:10Z',
+        synced_at: null,
+        scripts: [],
+        sync_attempts: 0,
+        error: null,
+      },
+    },
+  };
+
+  it('auto-collapses host details when gate transitions verifying → ready', () => {
+    const { rerender } = render(
+      <DispatchGateCard
+        precheck={precheckFixture}
+        dispatchState={runningDispatch}
+        isTerminal={false}
+      />,
+    );
+    // verifying → not healthy → default expanded: per-host detail visible
+    expect(screen.getByTestId('dispatch-gate-host-host-101')).toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch-gate-collapsed')).not.toBeInTheDocument();
+
+    rerender(
+      <DispatchGateCard
+        precheck={readyHealthy}
+        dispatchState={runningDispatch}
+        isTerminal={false}
+      />,
+    );
+    // allHealthy flips false → true → useEffect collapses automatically
+    expect(screen.getByTestId('dispatch-gate-collapsed')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('dispatch-gate-host-host-101'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('auto-expands host details when a healthy gate later fails', () => {
+    const { rerender } = render(
+      <DispatchGateCard
+        precheck={readyHealthy}
+        dispatchState={runningDispatch}
+        isTerminal={false}
+      />,
+    );
+    // ready + healthy → default collapsed
+    expect(screen.getByTestId('dispatch-gate-collapsed')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('dispatch-gate-host-host-101'),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <DispatchGateCard
+        precheck={{
+          ...readyHealthy,
+          phase: 'failed',
+          errors: ['sync_failed'],
+          hosts: {
+            'host-101': {
+              status: 'failed',
+              checked_at: '2026-05-08T11:00:10Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'sync_failed',
+            },
+          },
+        }}
+        dispatchState={runningDispatch}
+        isTerminal={false}
+      />,
+    );
+    // allHealthy flips true → false → useEffect expands automatically
+    expect(screen.getByTestId('dispatch-gate-host-host-101')).toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch-gate-collapsed')).not.toBeInTheDocument();
+  });
+});

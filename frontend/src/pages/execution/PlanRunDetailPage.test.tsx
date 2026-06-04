@@ -307,9 +307,10 @@ describe('PlanRunDetailPage', () => {
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('健康预检');
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-202');
     expect(screen.getByTestId('business-flow-timeline')).toBeInTheDocument();
-    expect(await screen.findByTestId('device-matrix')).toBeInTheDocument();
-    expect(await screen.findByTestId('device-minimap')).toBeInTheDocument();
+    expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
     expect(await screen.findByTestId('watcher-summary')).toBeInTheDocument();
+    // Switch to table view to verify row content
+    fireEvent.click(screen.getByTestId('device-overview-table-btn'));
     // BACKOFF row visible with red failure streak
     expect(await screen.findByTestId('device-row-3002')).toHaveTextContent('退避');
     // Threshold banner since exceeded=true
@@ -338,7 +339,8 @@ describe('PlanRunDetailPage', () => {
 
   it('opens the device drawer and triggers manual retry via confirm dialog', async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId('device-row-3002'));
+    // Click grid cell to open drawer (default grid view in DeviceOverview)
+    fireEvent.click(await screen.findByTestId('minimap-cell-3002'));
     expect(await screen.findByTestId('device-drawer')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('device-drawer-retry-btn'));
     fireEvent.click(await screen.findByTestId('device-drawer-confirm'));
@@ -347,14 +349,15 @@ describe('PlanRunDetailPage', () => {
 
   it('opens device report via the drawer', async () => {
     renderPage();
-    fireEvent.click(await screen.findByTestId('device-row-3001'));
+    // Click grid cell to open drawer (default grid view in DeviceOverview)
+    fireEvent.click(await screen.findByTestId('minimap-cell-3001'));
     fireEvent.click(await screen.findByTestId('device-drawer-open-report'));
     expect(mocks.navigate).toHaveBeenCalledWith('/runs/3001/report');
   });
 
   it('invalidates devices+timeline on JOB_STATUS push and watcher on WATCHER_SIGNAL', async () => {
     renderPage();
-    await waitFor(() => screen.getByTestId('device-matrix'));
+    await waitFor(() => screen.getByTestId('device-overview'));
     expect(typeof mocks.socketCallback.current).toBe('function');
 
     // Reset call counts to isolate post-mount invalidation behaviour.

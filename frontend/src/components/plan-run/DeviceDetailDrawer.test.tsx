@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import DeviceDetailDrawer from './DeviceDetailDrawer';
 import type { DeviceMatrixItem } from '@/utils/api/types';
@@ -118,5 +118,34 @@ describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
     expect(screen.getByText('ADB 状态排除')).toBeInTheDocument();
     expect(screen.getByText('占用 Job')).toBeInTheDocument();
     expect(screen.getByText('#4002')).toBeInTheDocument();
+  });
+});
+
+describe('DeviceDetailDrawer — a11y / 键盘', () => {
+  it('exposes dialog role + aria-modal', () => {
+    render(<DeviceDetailDrawer device={makeDevice()} {...handlers} />);
+    const drawer = screen.getByTestId('device-drawer');
+    expect(drawer).toHaveAttribute('role', 'dialog');
+    expect(drawer).toHaveAttribute('aria-modal', 'true');
+  });
+
+  it('closes on Escape', () => {
+    const onClose = vi.fn();
+    render(
+      <DeviceDetailDrawer device={makeDevice()} {...handlers} onClose={onClose} />,
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('does not close on Escape while a confirm dialog is open', () => {
+    const onClose = vi.fn();
+    render(
+      <DeviceDetailDrawer device={makeDevice()} {...handlers} onClose={onClose} />,
+    );
+    // open the retry confirm dialog → confirmOpen guards the drawer's Esc handler
+    fireEvent.click(screen.getByTestId('device-drawer-retry-btn'));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

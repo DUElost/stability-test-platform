@@ -120,7 +120,7 @@ describe('WatcherSummaryCard', () => {
     expect(screen.getByText('该窗口内未检测到异常')).toBeInTheDocument();
     // M0 T0-6 子项 4: 空态附带 Watcher 启用引导文案
     expect(screen.getByTestId('watcher-disabled-hint')).toHaveTextContent(
-      'STP_WATCHER_PLAN_DEFAULT',
+      'Watcher 已启用',
     );
   });
 
@@ -258,6 +258,7 @@ describe('WatcherSummaryCard', () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByTestId('watcher-details-toggle'));
     const badge = screen.getByTestId('watcher-dual-write-badge');
     expect(badge).toHaveAttribute('data-variant', 'dual_write');
     expect(badge).toHaveTextContent('双写模式');
@@ -276,6 +277,7 @@ describe('WatcherSummaryCard', () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByTestId('watcher-details-toggle'));
     const badge = screen.getByTestId('watcher-dual-write-badge');
     expect(badge).toHaveAttribute('data-variant', 'patrol_only');
     expect(badge).toHaveTextContent('Patrol-only');
@@ -294,6 +296,7 @@ describe('WatcherSummaryCard', () => {
         }}
       />,
     );
+    fireEvent.click(screen.getByTestId('watcher-details-toggle'));
     const badge = screen.getByTestId('watcher-dual-write-badge');
     expect(badge).toHaveAttribute('data-variant', 'reconciler_only');
     expect(badge).toHaveTextContent('Reconciler 单通道');
@@ -322,6 +325,7 @@ describe('WatcherSummaryCard', () => {
         data={{ ...fixture, watcher_capability: 'unavailable' }}
       />,
     );
+    fireEvent.click(screen.getByTestId('watcher-details-toggle'));
     const badge = screen.getByTestId('watcher-capability-badge');
     expect(badge).toHaveAttribute('data-capability', 'unavailable');
     expect(badge).toHaveTextContent('Watcher 不可用');
