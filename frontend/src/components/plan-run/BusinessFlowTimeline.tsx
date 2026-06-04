@@ -279,15 +279,38 @@ function StageRow({
           <ChevronDown className={`ml-auto h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform ${isActive ? 'rotate-180' : ''}`} />
         </div>
         <div className="flex flex-wrap gap-x-3 text-xs text-gray-500">
-          {stage.device_succeeded > 0 && <span><b className="font-semibold text-gray-800">{stage.device_succeeded}</b> 就绪</span>}
-          {stage.device_failed > 0 && <span className="text-red-600"><b className="font-semibold">{stage.device_failed}</b> 失败</span>}
-          {(stage.device_skipped ?? 0) > 0 && <span className="text-gray-400"><b className="font-semibold">{stage.device_skipped}</b> 跳过</span>}
+          {stage.stage === 'patrol' ? (
+            // patrol 是循环阶段:下列计数为累计各周期的 step 结果,非去重设备数
+            <>
+              {stage.device_succeeded > 0 && (
+                <span title="累计各巡检周期的成功 step 次数">
+                  <b className="font-semibold text-gray-800">{stage.device_succeeded}</b> 完成
+                  <span className="text-gray-400">(累计)</span>
+                </span>
+              )}
+              {stage.device_failed > 0 && (
+                <span className="text-red-600" title="累计各巡检周期的失败 step 次数">
+                  <b className="font-semibold">{stage.device_failed}</b> 失败
+                </span>
+              )}
+            </>
+          ) : (
+            <>
+              {stage.device_total > 0 && (
+                <span><b className="font-semibold text-gray-800">{stage.device_succeeded}/{stage.device_total}</b> 就绪</span>
+              )}
+              {stage.device_failed > 0 && <span className="text-red-600"><b className="font-semibold">{stage.device_failed}</b> 失败</span>}
+              {(stage.device_skipped ?? 0) > 0 && <span className="text-gray-400"><b className="font-semibold">{stage.device_skipped}</b> 跳过</span>}
+            </>
+          )}
           <span><b className="font-semibold text-gray-800">{stage.steps.length}</b> 步骤</span>
+          {stage.started_at && <span className="text-gray-400" title="阶段开始时刻">起 {fmtTs(stage.started_at)}</span>}
           {stage.duration_seconds != null && <span>{fmtDuration(stage.duration_seconds)}</span>}
         </div>
         {stage.stage === 'patrol' && stage.patrol_cycle_index != null && (
           <div className="text-[11px] text-gray-400">
             周期 <b className="font-semibold text-gray-600">#{stage.patrol_cycle_index}</b>
+            {stage.patrol_active_devices != null && <span> · {stage.patrol_active_devices} 台活跃</span>}
             {stage.patrol_interval_seconds && <span> · interval {stage.patrol_interval_seconds}s</span>}
           </div>
         )}
@@ -299,6 +322,7 @@ function StageRow({
 // ── Right column: events with timeline axis ──────────────────────────────
 
 function EventRow({ event }: { event: PlanRunEvent }) {
+  const [expanded, setExpanded] = useState(false);
   const sevCfg = SEVERITY_CLS[event.severity];
   return (
     <div data-testid={`event-row-${event.ts}-${event.category}`} className="grid grid-cols-[60px_16px_1fr_auto] items-start gap-2 border-b border-gray-50 px-3 py-2.5 text-xs last:border-b-0 hover:bg-gray-50/50">
@@ -309,7 +333,14 @@ function EventRow({ event }: { event: PlanRunEvent }) {
       <div className="min-w-0">
         <div className="truncate font-semibold text-gray-900">{event.title}</div>
         {event.description && (
-          <div className="mt-0.5 line-clamp-2 text-xs leading-snug text-gray-500">{event.description}</div>
+          <div
+            data-testid={`event-desc-${event.ts}-${event.category}`}
+            onClick={() => setExpanded((v) => !v)}
+            title={expanded ? '点击收起' : '点击展开'}
+            className={`mt-0.5 cursor-pointer text-xs leading-snug text-gray-500 hover:text-gray-700 ${expanded ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'}`}
+          >
+            {event.description}
+          </div>
         )}
         {(event.device_serial || event.job_id) && (
           <div className="mt-0.5 text-[11px] text-gray-400">
