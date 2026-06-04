@@ -48,10 +48,10 @@ const GATE_STALE_SECONDS = 90;
 
 export function gateElapsedSeconds(
   dispatchState: Props['dispatchState'],
+  precheck?: Pick<PrecheckState, 'started_at'> | null,
   nowMs: number = Date.now(),
 ): number | null {
-  if (!dispatchState) return null;
-  const ts = dispatchState.started_at ?? dispatchState.enqueued_at;
+  const ts = dispatchState?.started_at ?? dispatchState?.enqueued_at ?? precheck?.started_at;
   if (!ts) return null;
   const startMs = new Date(ts).getTime();
   if (Number.isNaN(startMs)) return null;
@@ -74,7 +74,7 @@ export function isGateStale(
 
   if (!precheckActive && !dispatchActive) return false;
 
-  const elapsed = gateElapsedSeconds(dispatchState, nowMs);
+  const elapsed = gateElapsedSeconds(dispatchState, precheck, nowMs);
   return elapsed !== null && elapsed > GATE_STALE_SECONDS;
 }
 
@@ -102,7 +102,7 @@ export default function DispatchGateCard({
     precheck.phase === 'ready' &&
     dispatchState?.status === 'completed';
   const showStaleBanner = isGateStale(dispatchState, precheck, isTerminal, nowMs);
-  const staleElapsedSec = Math.floor(gateElapsedSeconds(dispatchState, nowMs) ?? 0);
+  const staleElapsedSec = Math.floor(gateElapsedSeconds(dispatchState, precheck, nowMs) ?? 0);
   const canRetryDispatch =
     !isRetrying &&
     (precheck.phase === 'failed' || dispatchState?.status === 'failed');

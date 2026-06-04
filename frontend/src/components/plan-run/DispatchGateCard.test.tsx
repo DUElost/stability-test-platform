@@ -66,6 +66,7 @@ describe('DispatchGateCard stale banner', () => {
   it('isGateStale respects enqueued_at vs started_at', () => {
     const elapsed = gateElapsedSeconds(
       { started_at: '2026-05-08T11:00:00Z', enqueued_at: '2026-05-08T10:58:00Z' },
+      precheckFixture,
       staleNow,
     );
     expect(elapsed).toBe(120);
@@ -77,6 +78,21 @@ describe('DispatchGateCard stale banner', () => {
         staleNow,
       ),
     ).toBe(true);
+  });
+
+  it('falls back to precheck started_at before dispatch state is created', () => {
+    render(
+      <DispatchGateCard
+        precheck={precheckFixture}
+        dispatchState={null}
+        isTerminal={false}
+        nowMs={staleNow}
+      />,
+    );
+    expect(screen.getByTestId('dispatch-gate-stale-banner')).toHaveTextContent(
+      '派发门禁已运行 120s',
+    );
+    expect(isGateStale(null, precheckFixture, false, staleNow)).toBe(true);
   });
 
   it('shows retry button when precheck failed', () => {
