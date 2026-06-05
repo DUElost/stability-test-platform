@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>PlanRunDetailPage v2 — Tab 分页设计稿</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @keyframes ping-slow { 75%,100%{transform:scale(1.8);opacity:0} }
+  @keyframes dev-stripe { from{background-position:0 0} to{background-position:8px 0} }
+  @keyframes spin-slow  { to{transform:rotate(360deg)} }
+  @keyframes pulse-bg   { 0%,100%{background-color:rgba(254,215,170,0.2)} 50%{background-color:rgba(254,215,170,0.45)} }
+
+  .ping-ring::before{content:'';position:absolute;inset:0;border-radius:9999px;background:#f97316;opacity:.55;animation:ping-slow 1.5s cubic-bezier(0,0,.2,1) infinite}
+  .spin{animation:spin-slow 1.3s linear infinite}
+  .cell-run{background-color:#f97316;background-image:linear-gradient(45deg,rgba(255,255,255,.35) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.35) 50%,rgba(255,255,255,.35) 75%,transparent 75%);background-size:8px 8px;animation:dev-stripe 1s linear infinite}
+  .hero-pulse{animation:pulse-bg 3s ease-in-out infinite}
+
+  /* 滚动条 */
+  ::-webkit-scrollbar{width:4px;height:4px}
+  ::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:2px}
+
+  /* Tab 激活下划线 */
+  .tab-active{border-bottom:2px solid #3b82f6;color:#2563eb;font-weight:700}
+  .tab-inactive{border-bottom:2px solid transparent;color:#6b7280}
+  .tab-inactive:hover{color:#374151;border-color:#d1d5db}
+
+  /* Gauge 圆环 */
+  .gauge-ring{transform:rotate(-90deg)}
+</style>
+</head>
+<body class="bg-slate-100 text-gray-800 antialiased" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+
+<!-- ===== 顶部 App Shell ===== -->
+<nav class="fixed top-0 left-0 right-0 z-50 h-10 flex items-center gap-3 px-4 border-b border-gray-200 bg-white/95 backdrop-blur-sm shadow-sm">
+  <span class="text-sm font-bold text-blue-700 tracking-tight">STP</span>
+  <span class="text-gray-300 text-xs">|</span>
+  <span class="text-xs text-gray-400">执行管理</span>
+  <svg class="h-3 w-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  <span class="text-xs text-gray-500 hover:text-gray-700 cursor-pointer">执行列表</span>
+  <svg class="h-3 w-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+  <span class="text-xs font-semibold text-blue-600">PlanRun #25</span>
+  <div class="ml-auto flex items-center gap-3 text-xs text-gray-400">
+    <span class="flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full bg-green-400"></span>实时同步</span>
+    <span>admin</span>
+  </div>
+</nav>
+
+<!-- ===== 主体双栏 ===== -->
+<div class="flex pt-10" style="min-height:100vh">
+
+  <!-- ========== 左侧固定面板 ========== -->
+  <aside class="w-64 shrink-0 border-r border-gray-200 bg-white flex flex-col" style="position:sticky;top:40px;height:calc(100vh - 40px);overflow-y:auto">
+
+    <!-- 返回 -->
+    <div class="px-4 pt-3 pb-0">
+      <button class="flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-600 transition-colors">
+        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        返回执行列表
+      </button>
+    </div>
+
+    <!-- ── Hero 状态区 ── -->
+    <div class="hero-pulse m-3 rounded-xl border border-orange-200 p-3 space-y-2.5">
+      <!-- Plan 标识 -->
+      <div>
+        <div class="text-[10px] text-gray-400 mb-0.5">
+          <span class="font-semibold text-blue-600">Plan #7</span>
+          <span class="mx-1">·</span>
+          <span>Monkey 稳定性巡检</span>
+        </div>
+        <div class="text-[13px] font-bold text-gray-900">
+          PlanRun <span class="text-orange-600">#25</span>
+        </div>
+      </div>
+
+      <!-- 大状态 badge -->
+      <div class="flex items-center gap-2 rounded-lg border border-orange-200 bg-white px-2.5 py-2 shadow-sm">
+        <span class="relative flex h-2.5 w-2.5 shrink-0">
+          <span class="ping-ring absolute inset-0 rounded-full"></span>
+          <span class="relative h-2.5 w-2.5 rounded-full bg-orange-500"></span>
+        </span>
+        <svg class="h-3.5 w-3.5 text-orange-500 spin shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        <div>
+          <div class="text-xs font-bold text-orange-700">运行中</div>
+          <div class="font-mono text-[10px] text-orange-400">1h 23m 47s</div>
+        </div>
+      </div>
+
+      <!-- 元信息 -->
+      <div class="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
+        <span class="text-gray-400">触发方式</span><span class="font-medium text-gray-700">手动触发</span>
+        <span class="text-gray-400">操作人</span><span class="font-medium text-gray-700">admin</span>
+        <span class="text-gray-400">开始时间</span><span class="font-mono text-gray-700">06-04 19:59</span>
+        <span class="text-gray-400">失败阈值</span><span class="font-medium text-gray-700">20%</span>
+      </div>
+
+      <!-- 操作按钮 -->
+      <div class="flex gap-1.5">
+        <button class="flex-1 flex items-center justify-center gap-1 rounded-lg border border-gray-200 bg-white py-1.5 text-[10px] font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
+          <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+          导出报告
+        </button>
+        <button class="flex-1 flex items-center justify-center gap-1 rounded-lg border border-red-200 bg-red-50 py-1.5 text-[10px] font-semibold text-red-600 hover:bg-red-100 transition-colors">
+          <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          中止运行
+        </button>
+      </div>
+    </div>
+
+    <!-- ── KPI 宫格 ── -->
+    <div class="mx-3 mb-3 rounded-xl border border-gray-100 bg-gray-50 p-3">
+      <div class="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-2">当前态势</div>
+      <div class="grid grid-cols-2 gap-x-3 gap-y-3">
+        <div>
+          <div class="font-mono text-2xl font-bold text-gray-900 tabular-nums leading-none">48</div>
+          <div class="text-[9px] uppercase tracking-wider text-gray-400 mt-0.5">总设备</div>
+        </div>
+        <div>
+          <div class="font-mono text-2xl font-bold text-orange-500 tabular-nums leading-none">41</div>
+          <div class="text-[9px] uppercase tracking-wider text-gray-400 mt-0.5">运行中</div>
+        </div>
+        <div>
+          <div class="font-mono text-2xl font-bold text-red-500 tabular-nums leading-none">3</div>
+          <div class="text-[9px] uppercase tracking-wider text-gray-400 mt-0.5">失败</div>
+        </div>
+        <div>
+          <div class="font-mono text-2xl font-bold text-purple-500 tabular-nums leading-none">1</div>
+          <div class="text-[9px] uppercase tracking-wider text-gray-400 mt-0.5">失联</div>
+        </div>
+        <div class="col-span-2 pt-1 border-t border-gray-200">
+          <div class="flex items-center gap-1.5">
+            <span class="h-2 w-2 rounded-full bg-orange-400 animate-pulse"></span>
+            <span class="text-xs font-bold text-gray-700">PATROL</span>
+            <span class="font-mono text-[10px] text-orange-400">巡检周期 #14</span>
+          </div>
+          <div class="mt-1 flex items-center gap-1 text-[9px] text-gray-400">
+            <span>3 Host · 间隔 60s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 执行链 ── -->
+    <div class="mx-3 mb-3 rounded-xl border border-gray-100 bg-white p-3">
+      <div class="text-[9px] font-bold uppercase tracking-widest text-gray-400 mb-2.5">执行链</div>
+      <div class="space-y-0">
+        <div class="flex items-start gap-2">
+          <div class="flex flex-col items-center">
+            <div class="h-5 w-5 rounded-full border-2 border-green-400 bg-green-50 flex items-center justify-center shrink-0">
+              <svg class="h-2.5 w-2.5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+            </div>
+            <div class="w-px flex-1 bg-gray-200 my-1" style="min-height:16px"></div>
+          </div>
+          <div class="pt-0.5 text-[11px]">
+            <span class="font-semibold text-blue-500 hover:underline cursor-pointer">PlanRun #24</span>
+            <div class="text-[10px] text-gray-400">Flash 固件验证</div>
+          </div>
+        </div>
+        <div class="flex items-start gap-2">
+          <div class="flex flex-col items-center">
+            <div class="h-5 w-5 rounded-full border-2 border-orange-400 bg-orange-50 flex items-center justify-center shrink-0">
+              <svg class="h-2.5 w-2.5 text-orange-500 spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+            </div>
+            <div class="w-px flex-1 bg-gray-200 my-1" style="min-height:16px"></div>
+          </div>
+          <div class="pt-0.5 text-[11px]">
+            <span class="font-bold text-orange-600">PlanRun #25</span>
+            <span class="ml-1 text-[9px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-full font-semibold">当前</span>
+            <div class="text-[10px] text-gray-400">Monkey 稳定性巡检</div>
+          </div>
+        </div>
+        <div class="flex items-start gap-2 opacity-45">
+          <div class="h-5 w-5 rounded-full border-2 border-dashed border-gray-300 bg-white flex items-center justify-center shrink-0">
+            <svg class="h-2.5 w-2.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </div>
+          <div class="pt-0.5 text-[11px]">
+            <span class="font-semibold text-gray-500">报告生成与归档</span>
+            <div class="text-[10px] text-gray-400">完成后触发</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 派发门禁快照（折叠） ── -->
+    <div class="mx-3 mb-3">
+      <button class="w-full flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-[10px] text-gray-500 hover:bg-gray-100 transition-colors">
+        <span class="flex items-center gap-1.5">
+          <svg class="h-3 w-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+          派发门禁 · 已通过
+        </span>
+        <svg class="h-3 w-3 -rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+      </button>
+    </div>
+
+  </aside>
+
+  <!-- ========== 右侧主内容区 ========== -->
+  <main class="flex-1 flex flex-col bg-slate-50" style="min-height:calc(100vh - 40px)">
+
+    <!-- ── Tab 导航栏 ── -->
+    <div class="sticky top-10 z-40 bg-white border-b border-gray-200 px-6 flex items-center gap-0 shadow-sm" id="tab-bar">
+      <button onclick="switchTab('detail')" id="tab-detail"
+        class="tab-active px-4 py-3 text-xs transition-colors mr-1">
+        运行详情
+      </button>
+      <button onclick="switchTab('logs')" id="tab-logs"
+        class="tab-inactive px-4 py-3 text-xs transition-colors">
+        巡检日志
+        <span class="ml-1.5 rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-600">PATROL #14</span>
+      </button>
+      <div class="ml-auto flex items-center gap-2 py-2">
+        <span class="text-[10px] text-gray-400">最近更新 3s 前</span>
+        <div class="h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse"></div>
+      </div>
+    </div>
+
+    <!-- ========== Tab 1: 运行详情 ========== -->
+    <div id="panel-detail" class="flex-1 p-5 space-y-4">
+
+      <!-- 警告 Banner -->
+      <div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 shadow-sm">
+        <svg class="h-4 w-4 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+        <div class="text-xs">
+          <span class="font-semibold text-amber-900">1 个 Job 心跳超时</span>
+          <span class="text-amber-700 ml-1">— 设备 <code class="bg-amber-100 px-1 rounded text-[11px]">R5CT80B00GX</code> grace 剩余 <strong>120s</strong></span>
+        </div>
+      </div>
+
+      <!-- ── 设备总览 ── -->
+      <section>
+        <div class="mb-2 flex items-center gap-2">
+          <div class="h-4 w-1 rounded-full bg-blue-500"></div>
+          <span class="text-xs font-bold text-gray-800">设备总览</span>
+          <span class="text-[10px] text-gray-400">48 设备 · 3 Host</span>
+          <!-- 过滤条 -->
+          <div class="ml-4 flex flex-wrap items-center gap-1">
+            <button class="rounded-full border border-blue-300 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">全部 48</button>
+            <button class="rounded-full border border-orange-200 bg-white px-2 py-0.5 text-[10px] text-orange-600 hover:bg-orange-50">运行 41</button>
+            <button class="rounded-full border border-red-200 bg-white px-2 py-0.5 text-[10px] text-red-600 hover:bg-red-50">失败 3</button>
+            <button class="rounded-full border border-purple-200 bg-white px-2 py-0.5 text-[10px] text-purple-600 hover:bg-purple-50">失联 1</button>
+            <button class="rounded-full border border-amber-200 bg-white px-2 py-0.5 text-[10px] text-amber-600 hover:bg-amber-50">风险 2</button>
+          </div>
+          <div class="ml-auto">
+            <button class="text-[10px] text-blue-500 hover:underline">切换表格视图</button>
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+          <!-- Minimap -->
+          <div class="p-3">
+            <div class="grid gap-1" style="grid-template-columns:repeat(auto-fill,minmax(20px,1fr))">
+              <!-- 运行中 (橙色条纹) -->
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 hover:shadow-[0_0_0_2px_rgba(59,130,246,.4)] transition-transform" title="R5CT01 · 运行中"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <!-- 失败 (红) -->
+              <div class="bg-red-500 aspect-square rounded-sm cursor-pointer hover:scale-110 hover:bg-red-600 hover:shadow-[0_0_0_2px_rgba(239,68,68,.4)] transition-all" title="FAIL · 点击查看详情"></div>
+              <div class="bg-red-500 aspect-square rounded-sm cursor-pointer hover:scale-110 hover:bg-red-600 transition-all"></div>
+              <div class="bg-red-500 aspect-square rounded-sm cursor-pointer hover:scale-110 hover:bg-red-600 transition-all"></div>
+              <!-- 失联 (紫) -->
+              <div class="bg-purple-500 aspect-square rounded-sm cursor-pointer hover:scale-110 transition-all" title="失联"></div>
+              <!-- 风险 (琥珀) -->
+              <div class="bg-amber-400 aspect-square rounded-sm cursor-pointer hover:scale-110 transition-all" title="风险"></div>
+              <div class="bg-amber-400 aspect-square rounded-sm cursor-pointer hover:scale-110 transition-all"></div>
+              <!-- 等待 (灰) -->
+              <div class="bg-gray-300 aspect-square rounded-sm cursor-pointer hover:scale-110 transition-all" title="等待"></div>
+              <!-- 更多运行中 -->
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+              <div class="cell-run aspect-square rounded-sm cursor-pointer hover:scale-110 transition-transform"></div>
+            </div>
+          </div>
+          <!-- 图例 -->
+          <div class="flex flex-wrap items-center gap-3 border-t border-gray-100 bg-gray-50/70 px-3 py-1.5">
+            <div class="flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-sm cell-run"></span><span class="text-[10px] text-gray-500">运行中 41</span></div>
+            <div class="flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-sm bg-red-500"></span><span class="text-[10px] text-gray-500">失败 3</span></div>
+            <div class="flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-sm bg-purple-500"></span><span class="text-[10px] text-gray-500">失联 1</span></div>
+            <div class="flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-sm bg-amber-400"></span><span class="text-[10px] text-gray-500">风险 2</span></div>
+            <div class="flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-sm bg-gray-300"></span><span class="text-[10px] text-gray-500">等待 1</span></div>
+            <div class="flex items-center gap-1"><span class="inline-block h-2.5 w-2.5 rounded-sm bg-green-400"></span><span class="text-[10px] text-gray-500">完成 0</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 异常仪表盘 ── -->
+      <section>
+        <div class="mb-2 flex items-center gap-2">
+          <div class="h-4 w-1 rounded-full bg-red-500"></div>
+          <span class="text-xs font-bold text-gray-800">异常仪表盘</span>
+          <span class="text-[10px] text-gray-400">Watcher 聚合 · 1h 窗口</span>
+          <div class="ml-auto flex items-center gap-0.5 rounded-md border border-gray-200 bg-white p-0.5 shadow-sm">
+            <button class="rounded px-2 py-0.5 text-[10px] text-gray-400 hover:bg-gray-100">15m</button>
+            <button class="rounded bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700">1h</button>
+            <button class="rounded px-2 py-0.5 text-[10px] text-gray-400 hover:bg-gray-100">6h</button>
+            <button class="rounded px-2 py-0.5 text-[10px] text-gray-400 hover:bg-gray-100">24h</button>
+          </div>
+        </div>
+
+        <!-- 超阈值告警条 -->
+        <div class="mb-3 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs">
+          <svg class="h-3.5 w-3.5 text-red-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+          <span class="text-red-700">AEE 崩溃率 <strong>25%</strong> 超过告警阈值 <strong>10%</strong>，建议关注</span>
+        </div>
+
+        <!-- 三列仪表盘 Metric Cards -->
+        <div class="grid grid-cols-3 gap-3 mb-3">
+          <!-- 异常率 Gauge -->
+          <div class="rounded-xl border border-red-200 bg-white px-4 py-4 shadow-sm text-center">
+            <div class="relative inline-flex items-center justify-center">
+              <svg width="80" height="80" class="gauge-ring">
+                <circle cx="40" cy="40" r="30" fill="none" stroke="#f3f4f6" stroke-width="7"/>
+                <circle cx="40" cy="40" r="30" fill="none" stroke="#ef4444" stroke-width="7"
+                  stroke-dasharray="188.4" stroke-dashoffset="141.3" stroke-linecap="round"/>
+              </svg>
+              <div class="absolute inset-0 flex flex-col items-center justify-center">
+                <span class="font-mono text-lg font-bold text-red-600">25%</span>
+              </div>
+            </div>
+            <div class="text-[10px] font-semibold text-gray-600 mt-1">综合异常率</div>
+            <div class="text-[9px] text-red-400 mt-0.5">↑ 高于阈值 10%</div>
+          </div>
+
+          <!-- AEE 崩溃次数 -->
+          <div class="rounded-xl border border-amber-200 bg-white px-4 py-4 shadow-sm text-center">
+            <div class="font-mono text-3xl font-bold text-amber-600 tabular-nums">12</div>
+            <div class="text-[10px] font-semibold text-gray-600 mt-1">AEE 崩溃</div>
+            <div class="text-[9px] text-gray-400 mt-0.5">影响 5 台设备</div>
+            <div class="mt-2 flex items-center justify-center gap-1 text-[9px] text-amber-600">
+              <span class="text-amber-500">↑ 较上 1h +4</span>
+            </div>
+          </div>
+
+          <!-- 最差设备 -->
+          <div class="rounded-xl border border-orange-200 bg-white px-4 py-4 shadow-sm text-center">
+            <div class="font-mono text-sm font-bold text-orange-700 break-all">R5CT10</div>
+            <div class="text-[10px] font-semibold text-gray-600 mt-1">最多异常设备</div>
+            <div class="text-[9px] text-gray-400 mt-0.5">5 次 AEE · 连击 ×3</div>
+            <button class="mt-2 text-[9px] text-blue-500 hover:underline">查看详情 →</button>
+          </div>
+        </div>
+
+        <!-- 异常类型分布 -->
+        <div class="rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+          <div class="px-4 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold uppercase tracking-wider text-gray-500">异常类型分布</div>
+          <div class="divide-y divide-gray-50">
+            <!-- AEE -->
+            <div class="flex items-center gap-3 px-4 py-2.5">
+              <div class="w-20 text-[11px] font-semibold text-red-700 shrink-0">AEE 崩溃</div>
+              <div class="flex-1">
+                <div class="flex items-center gap-2">
+                  <div class="flex-1 h-1.5 rounded-full bg-gray-100">
+                    <div class="h-1.5 rounded-full bg-red-500" style="width:55%"></div>
+                  </div>
+                  <span class="font-mono text-[11px] font-bold text-red-700 w-6 text-right">12</span>
+                </div>
+              </div>
+              <div class="text-[10px] text-gray-400 w-16 text-right shrink-0">5 台 · ↑超阈值</div>
+            </div>
+            <!-- 内存告警 -->
+            <div class="flex items-center gap-3 px-4 py-2.5">
+              <div class="w-20 text-[11px] font-semibold text-slate-600 shrink-0">内存告警</div>
+              <div class="flex-1">
+                <div class="flex items-center gap-2">
+                  <div class="flex-1 h-1.5 rounded-full bg-gray-100">
+                    <div class="h-1.5 rounded-full bg-slate-400" style="width:32%"></div>
+                  </div>
+                  <span class="font-mono text-[11px] font-bold text-slate-700 w-6 text-right">7</span>
+                </div>
+              </div>
+              <div class="text-[10px] text-gray-400 w-16 text-right shrink-0">7 台</div>
+            </div>
+            <!-- VENDOR_AEE -->
+            <div class="flex items-center gap-3 px-4 py-2.5">
+              <div class="w-20 text-[11px] font-semibold text-amber-700 shrink-0">VENDOR_AEE</div>
+              <div class="flex-1">
+                <div class="flex items-center gap-2">
+                  <div class="flex-1 h-1.5 rounded-full bg-gray-100">
+                    <div class="h-1.5 rounded-full bg-amber-400" style="width:14%"></div>
+                  </div>
+                  <span class="font-mono text-[11px] font-bold text-amber-700 w-6 text-right">3</span>
+                </div>
+              </div>
+              <div class="text-[10px] text-gray-400 w-16 text-right shrink-0">2 台</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 业务流当前状态（精简版，去掉事件流） ── -->
+      <section>
+        <div class="mb-2 flex items-center gap-2">
+          <div class="h-4 w-1 rounded-full bg-green-500"></div>
+          <span class="text-xs font-bold text-gray-800">业务流状态</span>
+          <span class="text-[10px] text-gray-400">三阶段进度</span>
+        </div>
+
+        <div class="rounded-xl border border-gray-200 bg-white shadow-sm p-4">
+          <!-- 三阶段进度条 -->
+          <div class="flex items-center gap-0 mb-5">
+            <!-- INIT -->
+            <div class="flex-1 text-center">
+              <div class="flex justify-center mb-1">
+                <div class="h-8 w-8 rounded-full border-2 border-green-400 bg-green-50 flex items-center justify-center">
+                  <svg class="h-4 w-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                </div>
+              </div>
+              <div class="text-[10px] font-bold text-green-600 uppercase tracking-wider">INIT</div>
+              <div class="text-[9px] text-gray-400 mt-0.5">前置准备</div>
+              <div class="text-[9px] text-green-600 mt-0.5">45/48 成功</div>
+            </div>
+            <!-- 连接线 -->
+            <div class="flex-none w-8 h-px bg-gray-300 mb-5"></div>
+            <!-- PATROL -->
+            <div class="flex-1 text-center">
+              <div class="flex justify-center mb-1">
+                <div class="relative h-8 w-8 rounded-full border-2 border-orange-400 bg-orange-50 flex items-center justify-center">
+                  <svg class="h-4 w-4 text-orange-500 spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                </div>
+              </div>
+              <div class="text-[10px] font-bold text-orange-600 uppercase tracking-wider">PATROL</div>
+              <div class="text-[9px] text-gray-400 mt-0.5">巡检循环</div>
+              <div class="text-[9px] text-orange-600 mt-0.5">周期 #14 · 活跃 41 台</div>
+            </div>
+            <!-- 连接线 -->
+            <div class="flex-none w-8 h-px bg-gray-200 mb-5"></div>
+            <!-- TEARDOWN -->
+            <div class="flex-1 text-center opacity-40">
+              <div class="flex justify-center mb-1">
+                <div class="h-8 w-8 rounded-full border-2 border-dashed border-gray-300 bg-white flex items-center justify-center">
+                  <svg class="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-width="2"/></svg>
+                </div>
+              </div>
+              <div class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">TEARDOWN</div>
+              <div class="text-[9px] text-gray-400 mt-0.5">收尾清理</div>
+              <div class="text-[9px] text-gray-300 mt-0.5">等待</div>
+            </div>
+          </div>
+
+          <!-- PATROL 步骤详情（当前阶段展开） -->
+          <div class="rounded-lg border border-orange-100 bg-orange-50/50 p-3 space-y-2">
+            <div class="text-[10px] font-bold text-orange-600 uppercase tracking-wider mb-1.5">当前 PATROL 步骤</div>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="flex items-center justify-between rounded-md bg-white border border-orange-100 px-2.5 py-1.5">
+                <span class="text-[11px] text-gray-700">monkey_check</span>
+                <div class="flex items-center gap-1">
+                  <span class="h-1.5 w-1.5 rounded-full bg-orange-400 animate-pulse"></span>
+                  <span class="text-[10px] font-mono text-orange-600">41 运行中</span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between rounded-md bg-white border border-gray-100 px-2.5 py-1.5">
+                <span class="text-[11px] text-gray-500">巡检间隔</span>
+                <span class="font-mono text-[10px] text-gray-600">60s</span>
+              </div>
+            </div>
+            <!-- INIT 步骤摘要折叠 -->
+            <details class="group">
+              <summary class="flex cursor-pointer items-center gap-1 text-[10px] text-gray-400 hover:text-gray-600 mt-1 list-none">
+                <svg class="h-3 w-3 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                展开 INIT 步骤结果
+              </summary>
+              <div class="mt-2 space-y-1">
+                <div class="flex items-center justify-between text-[10px] px-1">
+                  <span class="text-gray-600">check_device</span><span class="text-green-600 font-semibold">48 ✓</span>
+                </div>
+                <div class="flex items-center justify-between text-[10px] px-1">
+                  <span class="text-gray-600">ensure_root</span><span class="text-green-600 font-semibold">48 ✓</span>
+                </div>
+                <div class="flex items-center justify-between text-[10px] px-1">
+                  <span class="text-gray-600">monkey_setup</span><span class="text-green-600 font-semibold">48 ✓</span>
+                </div>
+                <div class="flex items-center justify-between text-[10px] px-1">
+                  <span class="text-gray-600">monkey_resource_push</span><span class="text-green-600 font-semibold">48 ✓</span>
+                </div>
+                <div class="flex items-center justify-between text-[10px] px-1">
+                  <span class="text-gray-600">monkey_launch</span>
+                  <span><span class="text-green-600 font-semibold">45 ✓</span><span class="ml-1 text-red-500 font-semibold">3 ✗</span></span>
+                </div>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <div class="h-6"></div>
+    </div>
+
+    <!-- ========== Tab 2: 巡检日志 ========== -->
+    <div id="panel-logs" class="hidden flex-1 p-5">
+
+      <!-- 过滤/控制栏 -->
+      <div class="mb-4 flex flex-wrap items-center gap-2">
+        <!-- 周期选择 -->
+        <div class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm">
+          <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          <span class="text-[11px] text-gray-600 font-semibold">巡检周期</span>
+          <select class="bg-transparent text-[11px] text-blue-600 font-bold focus:outline-none">
+            <option>全部周期 (1–14)</option>
+            <option selected>周期 #14（当前）</option>
+            <option>周期 #13</option>
+            <option>周期 #12</option>
+          </select>
+        </div>
+        <!-- 设备过滤 -->
+        <div class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 shadow-sm">
+          <svg class="h-3.5 w-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2" stroke-width="2"/><line x1="12" y1="18" x2="12" y2="18" stroke-width="2" stroke-linecap="round"/></svg>
+          <span class="text-[11px] text-gray-600 font-semibold">设备</span>
+          <select class="bg-transparent text-[11px] text-gray-700 focus:outline-none">
+            <option>全部设备</option>
+            <option>R5CT10 (3 次异常)</option>
+            <option>R5CT22</option>
+          </select>
+        </div>
+        <!-- 级别过滤 -->
+        <div class="flex items-center gap-0.5 rounded-lg border border-gray-200 bg-white p-0.5 shadow-sm">
+          <button class="rounded px-2.5 py-1 text-[10px] bg-gray-100 text-gray-700 font-semibold">全部</button>
+          <button class="rounded px-2.5 py-1 text-[10px] text-red-600 hover:bg-red-50">异常</button>
+          <button class="rounded px-2.5 py-1 text-[10px] text-amber-600 hover:bg-amber-50">告警</button>
+          <button class="rounded px-2.5 py-1 text-[10px] text-blue-600 hover:bg-blue-50">信息</button>
+        </div>
+        <div class="ml-auto text-[10px] text-gray-400">共 83 条 · 第 1/5 页</div>
+      </div>
+
+      <!-- 巡检周期 #14 — 折叠卡片 -->
+      <div class="space-y-3">
+
+        <!-- 当前周期（展开） -->
+        <div class="rounded-xl border border-orange-200 bg-white shadow-sm overflow-hidden">
+          <!-- 周期 Header -->
+          <div class="flex items-center gap-3 px-4 py-3 bg-orange-50/60 border-b border-orange-100 cursor-pointer">
+            <div class="flex items-center gap-1.5">
+              <span class="h-2 w-2 rounded-full bg-orange-400 animate-pulse"></span>
+              <span class="text-xs font-bold text-orange-700">巡检周期 #14</span>
+              <span class="text-[10px] text-orange-400">进行中</span>
+            </div>
+            <span class="font-mono text-[10px] text-gray-400">21:14:00 — 进行中</span>
+            <div class="ml-auto flex items-center gap-2 text-[10px]">
+              <span class="text-red-500 font-semibold">1 异常</span>
+              <span class="text-amber-500">1 告警</span>
+              <svg class="h-3 w-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+          </div>
+          <!-- 日志条目 -->
+          <div class="divide-y divide-gray-50">
+            <div class="flex items-start gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors">
+              <span class="mt-0.5 h-1.5 w-1.5 rounded-full bg-red-500 shrink-0 mt-1.5"></span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-baseline gap-2 flex-wrap">
+                  <span class="font-mono text-[10px] text-gray-400 shrink-0">21:18:03</span>
+                  <span class="rounded bg-red-50 border border-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-700">AEE 崩溃</span>
+                  <span class="font-mono text-[10px] text-blue-600">R5CT10</span>
+                  <span class="text-[10px] text-gray-500">monkey_check 步骤检测到 AEE event — /data/aee/db.fatal</span>
+                </div>
+              </div>
+              <button class="shrink-0 text-[10px] text-blue-400 hover:underline">详情</button>
+            </div>
+            <div class="flex items-start gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors">
+              <span class="mt-0.5 h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0 mt-1.5"></span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-baseline gap-2 flex-wrap">
+                  <span class="font-mono text-[10px] text-gray-400 shrink-0">21:15:44</span>
+                  <span class="rounded bg-amber-50 border border-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">内存告警</span>
+                  <span class="font-mono text-[10px] text-blue-600">R5CT33</span>
+                  <span class="text-[10px] text-gray-500">可用内存低于 512MB，当前 348MB</span>
+                </div>
+              </div>
+              <button class="shrink-0 text-[10px] text-blue-400 hover:underline">详情</button>
+            </div>
+            <div class="flex items-start gap-3 px-4 py-2.5 hover:bg-gray-50 transition-colors">
+              <span class="mt-0.5 h-1.5 w-1.5 rounded-full bg-blue-400 shrink-0 mt-1.5"></span>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-baseline gap-2 flex-wrap">
+                  <span class="font-mono text-[10px] text-gray-400 shrink-0">21:14:00</span>
+                  <span class="rounded bg-blue-50 border border-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-600">周期启动</span>
+                  <span class="text-[10px] text-gray-500">41 台设备开始 monkey_check · 间隔 60s</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 周期 #13（折叠） -->
+        <details class="group">
+          <summary class="flex items-center gap-3 px-4 py-3 rounded-xl border border-gray-200 bg-white shadow-sm cursor-pointer list-none hover:border-gray-300 transition-colors">
+            <svg class="h-3 w-3 text-gray-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-xs font-semibold text-gray-700">巡检周期 #13</span>
+            <span class="h-1.5 w-1.5 rounded-full bg-green-400 ml-0.5"></span>
+            <span class="text-[10px] text-gray-400">完成</span>
+            <span class="font-mono text-[10px] text-gray-400">20:14:00 — 21:14:00</span>
+            <div class="ml-auto flex items-center gap-2 text-[10px]">
+              <span class="text-red-500 font-semibold">2 异常</span>
+              <span class="text-amber-500">3 告警</span>
+            </div>
+          </summary>
+          <div class="mt-1 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden divide-y divide-gray-50">
+            <div class="flex items-start gap-3 px-4 py-2.5 hover:bg-gray-50">
+              <span class="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0 mt-1.5"></span>
+              <div class="flex-1"><div class="flex items-baseline gap-2 flex-wrap">
+                <span class="font-mono text-[10px] text-gray-400">20:58:11</span>
+                <span class="rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700 font-semibold">AEE 崩溃</span>
+                <span class="font-mono text-[10px] text-blue-600">R5CT22</span>
+                <span class="text-[10px] text-gray-500">monkey_check 检测 VENDOR_AEE event</span>
+              </div></div>
+            </div>
+            <div class="flex items-start gap-3 px-4 py-2.5 hover:bg-gray-50">
+              <span class="h-1.5 w-1.5 rounded-full bg-red-500 shrink-0 mt-1.5"></span>
+              <div class="flex-1"><div class="flex items-baseline gap-2 flex-wrap">
+                <span class="font-mono text-[10px] text-gray-400">20:41:55</span>
+                <span class="rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700 font-semibold">AEE 崩溃</span>
+                <span class="font-mono text-[10px] text-blue-600">R5CT10</span>
+                <span class="text-[10px] text-gray-500">db.fatal 文件新增</span>
+              </div></div>
+            </div>
+            <div class="flex items-center gap-3 px-4 py-2 text-[10px] text-gray-400 bg-gray-50/60">
+              <span>+ 3 条告警、周期完成事件未全部展示</span>
+              <button class="ml-auto text-blue-500 hover:underline">加载全部 (8 条)</button>
+            </div>
+          </div>
+        </details>
+
+        <!-- 周期 #12（折叠） -->
+        <details class="group">
+          <summary class="flex items-center gap-3 px-4 py-3 rounded-xl border border-gray-200 bg-white shadow-sm cursor-pointer list-none hover:border-gray-300 transition-colors">
+            <svg class="h-3 w-3 text-gray-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-xs font-semibold text-gray-700">巡检周期 #12</span>
+            <span class="h-1.5 w-1.5 rounded-full bg-green-400 ml-0.5"></span>
+            <span class="text-[10px] text-gray-400">完成</span>
+            <span class="font-mono text-[10px] text-gray-400">19:14:00 — 20:14:00</span>
+            <div class="ml-auto flex items-center gap-2 text-[10px]">
+              <span class="text-gray-400">0 异常</span>
+              <span class="text-amber-500">1 告警</span>
+            </div>
+          </summary>
+        </details>
+
+        <!-- 分页 -->
+        <div class="flex items-center justify-between pt-2">
+          <span class="text-[10px] text-gray-400">周期 1–14，共 83 条事件</span>
+          <div class="flex items-center gap-1">
+            <button class="rounded border border-gray-200 bg-white px-2.5 py-1 text-[10px] text-gray-400 cursor-not-allowed">上一页</button>
+            <button class="rounded border border-blue-300 bg-blue-50 px-2.5 py-1 text-[10px] font-semibold text-blue-700">1</button>
+            <button class="rounded border border-gray-200 bg-white px-2.5 py-1 text-[10px] text-gray-500 hover:bg-gray-50">2</button>
+            <button class="rounded border border-gray-200 bg-white px-2.5 py-1 text-[10px] text-gray-500 hover:bg-gray-50">3</button>
+            <button class="rounded border border-gray-200 bg-white px-2.5 py-1 text-[10px] text-gray-500 hover:bg-gray-50">下一页</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ===== 标注浮层 ===== -->
+<div style="position:fixed;bottom:16px;right:16px;z-index:999;width:260px" class="rounded-xl border border-blue-200 bg-blue-50 shadow-xl p-3.5 text-[10px] text-blue-800 space-y-1.5">
+  <div class="font-bold text-blue-900 text-xs mb-2">v2 设计变更要点</div>
+  <div class="flex gap-1.5 items-start"><span class="text-blue-500 shrink-0 font-bold">①</span><span>运行详情 / 巡检日志 <b>Tab 切换</b>，状态与日志分离</span></div>
+  <div class="flex gap-1.5 items-start"><span class="text-blue-500 shrink-0 font-bold">②</span><span>异常仪表盘：Gauge 圆环 + Metric Cards + 类型分布条</span></div>
+  <div class="flex gap-1.5 items-start"><span class="text-blue-500 shrink-0 font-bold">③</span><span>业务流状态精简为三阶段步骤，去掉事件流</span></div>
+  <div class="flex gap-1.5 items-start"><span class="text-blue-500 shrink-0 font-bold">④</span><span>巡检日志按<b>周期折叠</b>，当前周期默认展开</span></div>
+  <div class="flex gap-1.5 items-start"><span class="text-blue-500 shrink-0 font-bold">⑤</span><span>日志支持周期 / 设备 / 级别<b>三维过滤 + 分页</b></span></div>
+  <div class="flex gap-1.5 items-start"><span class="text-blue-500 shrink-0 font-bold">⑥</span><span>左侧面板：派发门禁默认<b>折叠</b>（已通过时）</span></div>
+</div>
+
+<script>
+function switchTab(name) {
+  document.getElementById('panel-detail').classList.toggle('hidden', name !== 'detail');
+  document.getElementById('panel-detail').classList.toggle('flex-1', name === 'detail');
+  document.getElementById('panel-logs').classList.toggle('hidden', name !== 'logs');
+  document.getElementById('panel-logs').classList.toggle('flex-1', name === 'logs');
+  document.getElementById('tab-detail').className = name === 'detail'
+    ? 'tab-active px-4 py-3 text-xs transition-colors mr-1'
+    : 'tab-inactive px-4 py-3 text-xs transition-colors mr-1';
+  document.getElementById('tab-logs').className = name === 'logs'
+    ? 'tab-active px-4 py-3 text-xs transition-colors'
+    : 'tab-inactive px-4 py-3 text-xs transition-colors';
+}
+</script>
+</body>
+</html>

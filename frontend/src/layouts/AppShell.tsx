@@ -7,6 +7,7 @@ import { clearAppQueryCache } from '@/components/QueryProvider';
 import { disconnectDashSocket } from '@/hooks/useSocketIO';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { api } from '@/utils/api';
+import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 
 /**
  * 主应用布局 - 源自 web 样板设计风格
@@ -19,6 +20,7 @@ export default function AppShell() {
   const navigate = useNavigate();
   const sessionQ = useAuthSession();
   const currentUser = sessionQ.data;
+  const { headerSlot, fullBleed } = useHeaderSlot();
 
   // 监听窗口大小变化
   useEffect(() => {
@@ -123,7 +125,10 @@ export default function AppShell() {
               <Menu className="w-5 h-5" />
             </button>
 
-            <div className="flex-1" />
+            {/* 页面可通过 HeaderSlotContext 向此区域注入导航内容 */}
+            <div className="flex flex-1 items-center min-w-0">
+              {headerSlot}
+            </div>
 
             {/* Right side: User Menu */}
             <div className="flex items-center gap-2">
@@ -193,9 +198,9 @@ export default function AppShell() {
           </div>
         </header>
 
-        {/* 主内容区 */}
-        <main className="flex-1 overflow-x-hidden overflow-y-auto">
-          <div className="p-4 lg:p-8">
+        {/* 主内容区 — fullBleed 时去掉内边距并锁定 overflow，页面自管滚动 */}
+        {fullBleed ? (
+          <main className="flex-1 overflow-hidden">
             <Suspense fallback={
               <div className="flex items-center justify-center h-64">
                 <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
@@ -203,8 +208,20 @@ export default function AppShell() {
             }>
               <Outlet />
             </Suspense>
-          </div>
-        </main>
+          </main>
+        ) : (
+          <main className="flex-1 overflow-x-hidden overflow-y-auto">
+            <div className="p-4 lg:p-8">
+              <Suspense fallback={
+                <div className="flex items-center justify-center h-64">
+                  <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                </div>
+              }>
+                <Outlet />
+              </Suspense>
+            </div>
+          </main>
+        )}
       </div>
     </div>
   );

@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, AlertCircle, AlertTriangle, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { useSocketIO, type SocketIOMessage } from '@/hooks/useSocketIO';
@@ -17,9 +18,8 @@ import type {
 import PlanRunHero from '@/components/plan-run/PlanRunHero';
 import PlanRunKpiGrid from '@/components/plan-run/PlanRunKpiGrid';
 import AnomalyDashboard from '@/components/plan-run/AnomalyDashboard';
-import PlanChainBreadcrumb from '@/components/plan-run/PlanChainBreadcrumb';
+import PlanChainSidebar from '@/components/plan-run/PlanChainSidebar';
 import BusinessFlowStepper from '@/components/plan-run/BusinessFlowStepper';
-import PatrolLogPanel from '@/components/plan-run/PatrolLogPanel';
 import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import DeviceOverview from '@/components/plan-run/DeviceOverview';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
@@ -175,6 +175,7 @@ export default function PlanRunDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
+  const { setHeaderSlot, setFullBleed } = useHeaderSlot();
 
   const [deviceStatusFilter, setDeviceStatusFilter] = useState<
     DeviceUiStatus | 'all'
@@ -183,10 +184,28 @@ export default function PlanRunDetailPage() {
   const [watcherWindow, setWatcherWindow] = useState<number>(60);
   const [selectedDevice, setSelectedDevice] = useState<DeviceMatrixItem | null>(null);
   const [diagOpen, setDiagOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'details' | 'patrol-logs'>('details');
-  const [patrolSeverity, setPatrolSeverity] = useState('ALL');
-  const [patrolDevice, setPatrolDevice] = useState('');
-  const [patrolPage, setPatrolPage] = useState(1);
+
+  // ── 将 "返回 / PlanRun # / 概览 / 日志" 注入 AppShell 顶栏 ──
+  useEffect(() => {
+    setFullBleed(true);
+    setHeaderSlot(
+      <div className="flex items-center gap-3 min-w-0">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate('/execution/plan-runs')}
+          className="-ml-2 text-xs text-gray-500"
+        >
+          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回执行列表
+        </Button>
+        <PlanRunTabs runId={id} active="overview" />
+      </div>,
+    );
+    return () => {
+      setHeaderSlot(null);
+      setFullBleed(false);
+    };
+  }, [id, navigate, setHeaderSlot, setFullBleed]);
 
   // ── Plan run + derived terminal flag drive every other refetch interval ──
   const runQ = useQuery({
@@ -238,26 +257,14 @@ export default function PlanRunDetailPage() {
     refetchInterval: isTerminal ? false : refetchInterval,
   });
 
-  const eventsQ = useQuery({
-    queryKey: ['plan-run-events', id],
-    queryFn: () => api.planRuns.getEvents(id),
-    enabled: !!id,
-    refetchInterval: isTerminal ? false : SLOW_REFETCH_MS,
-  });
-
   const chainDispatchFailed = useMemo(() => {
     const summary = runQ.data?.result_summary;
     const fail = summary?.chain_dispatch_failed;
     if (fail && typeof fail === 'object' && 'error' in fail) {
-      return fail;
+      return fail as import('@/utils/api/types').ChainDispatchFailed;
     }
     return null;
   }, [runQ.data?.result_summary]);
-
-  const showPlanChain =
-    chainDispatchFailed != null
-    || (chainQ.data?.nodes?.length ?? 0) > 1
-    || chainQ.isLoading;
 
   const stuckJobs = useMemo(() => {
     if (isTerminal || !devicesQ.data?.devices?.length) return [];
@@ -272,7 +279,6 @@ export default function PlanRunDetailPage() {
       if (msg.type === SOCKET_MESSAGE_TYPES.JOB_STATUS) {
         qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
-        qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS) {
         qc.invalidateQueries({ queryKey: ['plan-run', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-chain', id] });
@@ -281,11 +287,9 @@ export default function PlanRunDetailPage() {
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PRECHECK_UPDATE) {
         qc.invalidateQueries({ queryKey: ['plan-run', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
-        qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.WATCHER_SIGNAL) {
         qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
-        qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
       }
     },
     [id, qc],
@@ -390,22 +394,7 @@ export default function PlanRunDetailPage() {
   const showDiag = diagOpen || gateFailed;
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-gray-50">
-      {/* Top navigation bar */}
-      <div className="shrink-0 border-b border-gray-200 bg-white px-4 py-2">
-        <div className="flex items-center gap-3">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate('/execution/plan-runs')}
-            className="-ml-2 text-xs text-gray-500"
-          >
-            <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回执行列表
-          </Button>
-          <PlanRunTabs runId={id} active="overview" />
-        </div>
-      </div>
-
+    <div className="flex h-full flex-col overflow-hidden bg-gray-50">
       {/* Main two-column layout */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* Left sidebar — fixed width, sticky */}
@@ -443,12 +432,12 @@ export default function PlanRunDetailPage() {
                 ?.patrol_cycle_index ?? null
             }
           />
-          <AnomalyDashboard
-            data={watcherQ.data}
-            isLoading={watcherQ.isLoading}
-            isError={watcherQ.isError}
-            windowMinutes={watcherWindow}
-            onWindowChange={setWatcherWindow}
+          <PlanChainSidebar
+            chain={chainQ.data}
+            isLoading={chainQ.isLoading}
+            isError={chainQ.isError}
+            chainDispatchFailed={chainDispatchFailed}
+            onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
           />
         </div>
 
@@ -476,94 +465,53 @@ export default function PlanRunDetailPage() {
             </div>
           )}
 
-          {/* Inline tab bar */}
-          <div className="flex shrink-0 border-b border-gray-200 bg-white px-4">
-            {(['details', 'patrol-logs'] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                data-testid={`tab-${tab}`}
-                onClick={() => setActiveTab(tab)}
-                className={`px-4 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                  activeTab === tab
-                    ? 'border-blue-600 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {tab === 'details' ? '运行详情' : '巡检日志'}
-              </button>
-            ))}
-          </div>
-
-          {/* Tab content */}
+          {/* 运行详情内容 */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {activeTab === 'details' && (
-              <>
-                {showPlanChain && (
-                  <PlanChainBreadcrumb
-                    chain={chainQ.data}
-                    isLoading={chainQ.isLoading}
-                    isError={chainQ.isError}
-                    chainDispatchFailed={chainDispatchFailed}
-                    onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
+            <BusinessFlowStepper
+              timeline={timelineQ.data}
+              isLoading={timelineQ.isLoading}
+              isError={timelineQ.isError}
+            />
+
+            <AnomalyDashboard
+              data={watcherQ.data}
+              isLoading={watcherQ.isLoading}
+              isError={watcherQ.isError}
+              windowMinutes={watcherWindow}
+              onWindowChange={setWatcherWindow}
+            />
+
+            {/* 派发门禁诊断(折叠; 失败默认展开) */}
+            {precheck && (
+              <section data-testid="dispatch-gate-section" className="space-y-2">
+                <PrecheckSummaryRow
+                  precheck={precheck}
+                  expanded={showDiag}
+                  onToggle={() => setDiagOpen((v) => !v)}
+                  gateFailed={gateFailed}
+                />
+                <div className={showDiag ? '' : 'hidden'}>
+                  <DispatchGateCard
+                    precheck={precheck}
+                    dispatchState={dispatchState}
+                    isTerminal={isTerminal}
+                    onRetryDispatch={() => retryDispatchMut.mutate()}
+                    isRetrying={retryDispatchMut.isPending}
                   />
-                )}
-
-                <BusinessFlowStepper
-                  timeline={timelineQ.data}
-                  isLoading={timelineQ.isLoading}
-                  isError={timelineQ.isError}
-                />
-
-                {/* 派发门禁诊断(折叠; 失败默认展开) */}
-                {precheck && (
-                  <section data-testid="dispatch-gate-section" className="space-y-2">
-                    {/* Compact precheck summary row — exposes testid for integration tests */}
-                    <PrecheckSummaryRow
-                      precheck={precheck}
-                      expanded={showDiag}
-                      onToggle={() => setDiagOpen((v) => !v)}
-                      gateFailed={gateFailed}
-                    />
-                    <div className={showDiag ? '' : 'hidden'}>
-                      <DispatchGateCard
-                        precheck={precheck}
-                        dispatchState={dispatchState}
-                        isTerminal={isTerminal}
-                        onRetryDispatch={() => retryDispatchMut.mutate()}
-                        isRetrying={retryDispatchMut.isPending}
-                      />
-                    </div>
-                  </section>
-                )}
-
-                <DeviceOverview
-                  data={devicesQ.data}
-                  isLoading={devicesQ.isLoading}
-                  isError={devicesQ.isError}
-                  statusFilter={deviceStatusFilter}
-                  hostFilter={deviceHostFilter}
-                  onStatusFilterChange={setDeviceStatusFilter}
-                  onHostFilterChange={setDeviceHostFilter}
-                  onSelectDevice={setSelectedDevice}
-                />
-              </>
+                </div>
+              </section>
             )}
 
-            {activeTab === 'patrol-logs' && (
-              <PatrolLogPanel
-                events={eventsQ.data}
-                timeline={timelineQ.data}
-                isLoading={eventsQ.isLoading}
-                isError={eventsQ.isError}
-                severityFilter={patrolSeverity}
-                deviceFilter={patrolDevice}
-                page={patrolPage}
-                onSeverityChange={setPatrolSeverity}
-                onDeviceChange={setPatrolDevice}
-                onPageChange={setPatrolPage}
-              />
-            )}
+            <DeviceOverview
+              data={devicesQ.data}
+              isLoading={devicesQ.isLoading}
+              isError={devicesQ.isError}
+              statusFilter={deviceStatusFilter}
+              hostFilter={deviceHostFilter}
+              onStatusFilterChange={setDeviceStatusFilter}
+              onHostFilterChange={setDeviceHostFilter}
+              onSelectDevice={setSelectedDevice}
+            />
           </div>
         </div>
       </div>

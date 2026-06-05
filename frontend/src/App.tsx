@@ -4,6 +4,7 @@ import { QueryProvider } from './components/QueryProvider';
 import { ToastProvider } from './components/ui/toast';
 import { ConfirmProvider } from './hooks/useConfirm';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { HeaderSlotProvider } from './contexts/HeaderSlotContext';
 
 const App: React.FC = () => {
   return (
@@ -11,7 +12,9 @@ const App: React.FC = () => {
       <QueryProvider>
         <ToastProvider>
           <ConfirmProvider>
-            <AppRouter />
+            <HeaderSlotProvider>
+              <AppRouter />
+            </HeaderSlotProvider>
           </ConfirmProvider>
         </ToastProvider>
       </QueryProvider>

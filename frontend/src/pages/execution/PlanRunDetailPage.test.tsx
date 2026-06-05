@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PlanRunDetailPage from './PlanRunDetailPage';
 import { ToastProvider } from '@/components/ui/toast';
+import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -74,18 +75,27 @@ vi.mock('@/components/plan-run/AnomalyDashboard', () => ({
   ),
 }));
 
+/** 模拟 AppShell 消费 HeaderSlotContext,把页面注入的顶栏内容渲染到 DOM。 */
+function HeaderSlotOutlet() {
+  const { headerSlot } = useHeaderSlot();
+  return <>{headerSlot}</>;
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
   return render(
-    <MemoryRouter>
-      <QueryClientProvider client={queryClient}>
-        <ToastProvider>
-          <PlanRunDetailPage />
-        </ToastProvider>
-      </QueryClientProvider>
-    </MemoryRouter>,
+    <HeaderSlotProvider>
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <ToastProvider>
+            <HeaderSlotOutlet />
+            <PlanRunDetailPage />
+          </ToastProvider>
+        </QueryClientProvider>
+      </MemoryRouter>
+    </HeaderSlotProvider>,
   );
 }
 
@@ -373,17 +383,11 @@ describe('PlanRunDetailPage', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/runs/3001/report');
   });
 
-  it('switches to patrol-logs tab and renders PatrolLogPanel', async () => {
+  it('renders device overview and business-flow stepper in the details view', async () => {
     renderPage();
-    await waitFor(() => screen.getByTestId('tab-details'));
-    // Default tab is "运行详情" — device overview is visible
+    // Overview content is always visible (no inner tab switching)
     expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
-    // Switch to patrol-logs tab
-    fireEvent.click(screen.getByTestId('tab-patrol-logs'));
-    // Device overview should no longer be visible
-    expect(screen.queryByTestId('device-overview')).not.toBeInTheDocument();
-    // PatrolLogPanel should now be visible
-    expect(await screen.findByTestId('patrol-log-panel')).toBeInTheDocument();
+    expect(await screen.findByTestId('business-flow-stepper')).toBeInTheDocument();
   });
 
   it('invalidates devices+timeline on JOB_STATUS push and watcher on WATCHER_SIGNAL', async () => {

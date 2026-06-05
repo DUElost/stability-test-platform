@@ -31,6 +31,7 @@ const PlanEditPage = lazy(() => import('../pages/orchestration/PlanEditPage'));
 const PlanExecutePage = lazy(() => import('../pages/execution/PlanExecutePage'));
 const PlanRunListPage = lazy(() => import('../pages/execution/PlanRunListPage'));
 const PlanRunDetailPage = lazy(() => import('../pages/execution/PlanRunDetailPage'));
+const PlanRunLogsPage = lazy(() => import('../pages/execution/PlanRunLogsPage'));
 // Legacy minimap-only matrix view kept as a secondary route until C5c lands the
 // integrated DeviceMatrix inside PlanRunDetailPage.
 const PlanRunMatrixPage = lazy(() => import('../pages/execution/PlanRunMatrixPage'));
@@ -106,6 +107,7 @@ export default function AppRouter() {
               <Route path="plan-execute" element={<PlanExecutePage />} />
               <Route path="plan-runs" element={<PlanRunListPage />} />
               <Route path="plan-runs/:runId" element={<PlanRunDetailPage />} />
+              <Route path="plan-runs/:runId/logs" element={<PlanRunLogsPage />} />
               <Route path="plan-runs/:runId/matrix" element={<PlanRunMatrixPage />} />
             </Route>
 
