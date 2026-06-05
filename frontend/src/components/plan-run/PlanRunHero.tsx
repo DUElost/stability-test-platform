@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Clock,
-  Activity,
-  Loader2,
-} from 'lucide-react';
+import { Download, X, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -18,12 +14,22 @@ import {
 import type { PlanRun, PlanRunStatus } from '@/utils/api/types';
 import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
 
-const STATUS_CLS: Record<PlanRunStatus, string> = {
-  RUNNING: 'bg-orange-50 text-orange-700 border-orange-200',
-  SUCCESS: 'bg-green-50 text-green-700 border-green-200',
-  PARTIAL_SUCCESS: 'bg-yellow-50 text-yellow-700 border-yellow-200',
-  FAILED: 'bg-red-50 text-red-700 border-red-200',
-  DEGRADED: 'bg-purple-50 text-purple-700 border-purple-200',
+// 状态 → 容器背景/边框
+const HERO_CLS: Record<PlanRunStatus, string> = {
+  RUNNING:        'border-orange-200 bg-gradient-to-br from-orange-50/80 to-white',
+  SUCCESS:        'border-green-200  bg-gradient-to-br from-green-50/60  to-white',
+  PARTIAL_SUCCESS:'border-yellow-200 bg-gradient-to-br from-yellow-50/60 to-white',
+  FAILED:         'border-red-200    bg-gradient-to-br from-red-50/60    to-white',
+  DEGRADED:       'border-purple-200 bg-gradient-to-br from-purple-50/60 to-white',
+};
+
+// 状态 → badge 样式
+const BADGE_CLS: Record<PlanRunStatus, string> = {
+  RUNNING:        'border-orange-300 bg-white text-orange-700',
+  SUCCESS:        'border-green-300  bg-white text-green-700',
+  PARTIAL_SUCCESS:'border-yellow-300 bg-white text-yellow-700',
+  FAILED:         'border-red-300    bg-white text-red-700',
+  DEGRADED:       'border-purple-300 bg-white text-purple-700',
 };
 
 function formatDuration(seconds: number): string {
@@ -56,10 +62,9 @@ export default function PlanRunHero({
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reason, setReason] = useState('');
-
-  // Tick once a second for live run-time on non-terminal runs.
   const [tick, setTick] = useState(0);
   const isTerminal = !!run && isPlanRunTerminal(run.status);
+
   useEffect(() => {
     if (isTerminal || now) return;
     const id = window.setInterval(() => setTick((t) => t + 1), 1000);
@@ -77,123 +82,146 @@ export default function PlanRunHero({
   }, [run, now, tick]);
 
   const pill = run ? PLAN_RUN_PILL[run.status] : null;
-  const pillCls = run ? STATUS_CLS[run.status] : '';
+  const heroCls  = run ? HERO_CLS[run.status]  : 'border-gray-200 bg-white';
+  const badgeCls = run ? BADGE_CLS[run.status] : '';
+  const isRunning = run?.status === 'RUNNING';
 
   return (
-    <div className="overflow-hidden rounded-xl border bg-gradient-to-b from-white to-gray-50 shadow-sm">
-      {/* Main hero row */}
-      <div className="grid grid-cols-[1fr_auto] items-start gap-3 px-4 py-3">
-        {/* Left: title + meta */}
-        <div className="min-w-0">
-          {/* Breadcrumb */}
-          <div className="mb-0.5 flex flex-wrap items-center gap-1.5 text-xs text-gray-400">
-            <span className="text-blue-600 font-semibold">
-              {planName ? `Plan #${run?.plan_id ?? ''} · ${planName}` : `Plan #${run?.plan_id ?? '-'}`}
-            </span>
-            <span>/</span>
-            <span className="font-semibold text-gray-800">PlanRun #{run?.id ?? '-'}</span>
-          </div>
-
-          {/* Status line */}
-          <div className="flex flex-wrap items-center gap-2">
-            {pill && (
-              <span
-                data-testid="plan-run-status-pill"
-                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-bold ${pillCls}`}
-              >
-                {run?.status === 'RUNNING' && (
-                  <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-orange-400 opacity-60" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-orange-500" />
-                  </span>
-                )}
-                <pill.Icon className={`h-3 w-3 ${run?.status === 'RUNNING' ? 'animate-spin' : ''}`} />
-                {pill.label}
-                {runDuration && (
-                  <span data-testid="plan-run-duration" className="ml-0.5 font-mono text-[11px] text-gray-500">
-                    {runDuration}
-                  </span>
-                )}
-              </span>
-            )}
-          </div>
+    <div className={`rounded-xl border shadow-sm overflow-hidden ${heroCls}`}>
+      <div className="px-4 pt-3 pb-1">
+        {/* Plan 标识 */}
+        <div className="text-[10px] text-gray-400 mb-0.5">
+          <span className="font-semibold text-blue-600">
+            {planName ? `Plan #${run?.plan_id} · ${planName}` : `Plan #${run?.plan_id ?? '—'}`}
+          </span>
         </div>
-
-        {/* Right: actions */}
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={onExportReport}
-            disabled={!run}
-            className="text-xs h-7"
-          >
-            <Activity className="mr-1 h-3 w-3" />
-            导出报告
-          </Button>
-
-          {!isTerminal && (
-            <>
-              <Button
-                variant="destructive"
-                size="sm"
-                data-testid="plan-run-abort-btn"
-                onClick={() => setConfirmOpen(true)}
-                disabled={!run || isAborting}
-                className="text-xs h-7"
-              >
-                {isAborting ? (
-                  <>
-                    <Loader2 className="mr-1 h-3 w-3 animate-spin" /> 中止中…
-                  </>
-                ) : (
-                  <>
-                    <Clock className="mr-1 h-3 w-3" /> 中止
-                  </>
-                )}
-              </Button>
-
-              <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>确认中止 PlanRun?</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      将释放运行中设备的租约,PENDING Job 标记为 ABORTED;
-                      Agent 上正在运行的 step 会异步收到中止信号(取决于 Agent 协作)。
-                      操作不可撤销。
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <div className="space-y-2">
-                    <label className="block text-sm font-medium text-gray-700">
-                      中止原因(可选)
-                    </label>
-                    <input
-                      type="text"
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      placeholder="例如:资源池整改"
-                      className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30"
-                    />
-                  </div>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel>取消</AlertDialogCancel>
-                    <AlertDialogAction
-                      data-testid="plan-run-abort-confirm"
-                      onClick={() => {
-                        setConfirmOpen(false);
-                        onAbort?.(reason.trim() || 'aborted_by_user');
-                      }}
-                      className="bg-red-600 text-white hover:bg-red-700"
-                    >
-                      确认中止
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </>
-          )}
+        <div className="text-sm font-bold text-gray-900">
+          PlanRun{' '}
+          <span className={isRunning ? 'text-orange-600' : 'text-gray-700'}>
+            #{run?.id ?? '—'}
+          </span>
         </div>
       </div>
+
+      {/* 大状态 badge */}
+      <div className="px-4 pb-3">
+        {pill && run && (
+          <div
+            data-testid="plan-run-status-pill"
+            className={`inline-flex items-center gap-2 rounded-xl border px-3.5 py-2 shadow-sm ${badgeCls}`}
+          >
+            {isRunning && (
+              <span className="relative flex h-2.5 w-2.5 shrink-0">
+                <span className="absolute inset-0 rounded-full bg-orange-400 opacity-60 animate-ping" />
+                <span className="relative h-2.5 w-2.5 rounded-full bg-orange-500" />
+              </span>
+            )}
+            <pill.Icon
+              className={`h-4 w-4 ${isRunning ? 'animate-spin' : ''}`}
+            />
+            <div>
+              <div className="text-sm font-bold">{pill.label}</div>
+              {runDuration && (
+                <div
+                  data-testid="plan-run-duration"
+                  className="font-mono text-[10px] opacity-70"
+                >
+                  {runDuration}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 2×2 meta 网格 */}
+      <div className="px-4 pb-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+        <span className="text-gray-400">触发方式</span>
+        <span className="font-medium text-gray-700">{run?.run_type ?? '—'}</span>
+        <span className="text-gray-400">操作人</span>
+        <span className="font-medium text-gray-700">{run?.triggered_by ?? '—'}</span>
+        <span className="text-gray-400">开始时间</span>
+        <span className="font-mono text-gray-700">
+          {run?.started_at
+            ? new Date(run.started_at).toLocaleString('zh-CN', {
+                month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit',
+              })
+            : '—'}
+        </span>
+        <span className="text-gray-400">失败阈值</span>
+        <span className="font-medium text-gray-700">
+          {run?.failure_threshold != null
+            ? `${Math.round(run.failure_threshold * 100)}%`
+            : '—'}
+        </span>
+      </div>
+
+      {/* 操作按钮行 */}
+      <div className="flex gap-1.5 px-4 pb-4">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onExportReport}
+          disabled={!run}
+          className="flex-1 text-[10px] h-7"
+        >
+          <Download className="mr-1 h-3 w-3" />
+          导出报告
+        </Button>
+
+        {!isTerminal && (
+          <Button
+            variant="destructive"
+            size="sm"
+            data-testid="plan-run-abort-btn"
+            onClick={() => setConfirmOpen(true)}
+            disabled={!run || isAborting}
+            className="flex-1 text-[10px] h-7"
+          >
+            {isAborting ? (
+              <><Loader2 className="mr-1 h-3 w-3 animate-spin" />中止中…</>
+            ) : (
+              <><X className="mr-1 h-3 w-3" />中止运行</>
+            )}
+          </Button>
+        )}
+      </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认中止 PlanRun?</AlertDialogTitle>
+            <AlertDialogDescription>
+              将释放运行中设备的租约，PENDING Job 标记为 ABORTED；Agent 上正在运行的 step
+              会异步收到中止信号。操作不可撤销。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">中止原因（可选）</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="例如：资源池整改"
+              className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30"
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="plan-run-abort-confirm"
+              onClick={() => {
+                setConfirmOpen(false);
+                onAbort?.(reason.trim() || 'aborted_by_user');
+              }}
+              className="bg-red-600 text-white hover:bg-red-700"
+            >
+              确认中止
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
