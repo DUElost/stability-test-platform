@@ -167,7 +167,7 @@ export default function PatrolLogPanel({
   const totalPages = totalCount != null ? Math.ceil(totalCount / pageSize) : null;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-testid="patrol-log-panel">
       <SectionHeader title="巡检日志" color="amber" />
 
       {/* 过滤行 */}

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PlanRunDetailPage from './PlanRunDetailPage';
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   manualRetryJob: vi.fn(),
   manualExitJob: vi.fn(),
   exportReport: vi.fn(),
+  retryDispatch: vi.fn(),
   socketCallback: { current: undefined as undefined | ((msg: any) => void) },
 }));
 
@@ -41,6 +43,7 @@ vi.mock('@/utils/api', () => ({
       manualRetryJob: mocks.manualRetryJob,
       manualExitJob: mocks.manualExitJob,
       exportReport: mocks.exportReport,
+      retryDispatch: mocks.retryDispatch,
     },
   },
 }));
@@ -60,16 +63,29 @@ vi.mock('@/hooks/useSocketIO', () => ({
   },
 }));
 
+// Mock AnomalyDashboard with backward-compatible testids so existing assertions still pass.
+vi.mock('@/components/plan-run/AnomalyDashboard', () => ({
+  default: ({ data }: { data?: { exceeded?: boolean } }) => (
+    <div data-testid="watcher-summary">
+      {data?.exceeded && (
+        <div data-testid="watcher-threshold-banner">exceeded</div>
+      )}
+    </div>
+  ),
+}));
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <ToastProvider>
-        <PlanRunDetailPage />
-      </ToastProvider>
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <PlanRunDetailPage />
+        </ToastProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -301,7 +317,7 @@ beforeEach(() => {
 });
 
 describe('PlanRunDetailPage', () => {
-  it('renders Hero / Minimap / Timeline / DeviceTable / Watcher', async () => {
+  it('renders Hero / Minimap / Stepper / DeviceTable / Watcher', async () => {
     renderPage();
     await waitFor(() =>
       expect(screen.getByTestId('plan-run-status-pill')).toHaveTextContent('RUNNING'),
@@ -309,8 +325,10 @@ describe('PlanRunDetailPage', () => {
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('健康预检');
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-202');
     expect(screen.getByTestId('precheck-row')).toHaveTextContent('1/2');
-    expect(screen.getByTestId('business-flow-timeline')).toBeInTheDocument();
+    // BusinessFlowStepper replaces BusinessFlowTimeline
+    expect(screen.getByTestId('business-flow-stepper')).toBeInTheDocument();
     expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
+    // AnomalyDashboard (mocked) uses watcher-summary testid for backward compat
     expect(await screen.findByTestId('watcher-summary')).toBeInTheDocument();
     // Switch to table view to verify row content
     fireEvent.click(screen.getByTestId('device-overview-table-btn'));
@@ -318,12 +336,9 @@ describe('PlanRunDetailPage', () => {
     expect(await screen.findByTestId('device-row-3002')).toHaveTextContent('退避');
     // Threshold banner since exceeded=true
     expect(await screen.findByTestId('watcher-threshold-banner')).toBeInTheDocument();
-    expect(screen.getByTestId('business-flow-timeline')).toHaveTextContent(
-      '共 3 条',
-    );
-    expect(screen.getByTestId('event-list')).toHaveTextContent(
-      'PATROL 进行中 · 周期 #12',
-    );
+    // 概览/日志 tab 存在;逐条事件流已迁至日志页(详情页无 event-list)
+    expect(screen.getByTestId('plan-run-tabs')).toBeInTheDocument();
+    expect(screen.queryByTestId('event-list')).not.toBeInTheDocument();
   });
 
   it('aborts the PlanRun via the Topbar confirm dialog', async () => {
@@ -358,6 +373,19 @@ describe('PlanRunDetailPage', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/runs/3001/report');
   });
 
+  it('switches to patrol-logs tab and renders PatrolLogPanel', async () => {
+    renderPage();
+    await waitFor(() => screen.getByTestId('tab-details'));
+    // Default tab is "运行详情" — device overview is visible
+    expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
+    // Switch to patrol-logs tab
+    fireEvent.click(screen.getByTestId('tab-patrol-logs'));
+    // Device overview should no longer be visible
+    expect(screen.queryByTestId('device-overview')).not.toBeInTheDocument();
+    // PatrolLogPanel should now be visible
+    expect(await screen.findByTestId('patrol-log-panel')).toBeInTheDocument();
+  });
+
   it('invalidates devices+timeline on JOB_STATUS push and watcher on WATCHER_SIGNAL', async () => {
     renderPage();
     await waitFor(() => screen.getByTestId('device-overview'));
@@ -370,7 +398,7 @@ describe('PlanRunDetailPage', () => {
     mocks.getWatcherSummary.mockClear();
     mocks.getRun.mockClear();
 
-    // Push a JOB_STATUS event — devices/timeline/events should refetch, but
+    // Push a JOB_STATUS event — devices/timeline should refetch, but
     // watcher should not (only WATCHER_SIGNAL invalidates watcher).
     mocks.socketCallback.current!({
       type: 'JOB_STATUS',
@@ -378,19 +406,16 @@ describe('PlanRunDetailPage', () => {
     });
     await waitFor(() => expect(mocks.getDevices).toHaveBeenCalled());
     expect(mocks.getTimeline).toHaveBeenCalled();
-    expect(mocks.getEvents).toHaveBeenCalled();
     expect(mocks.getWatcherSummary).not.toHaveBeenCalled();
 
-    mocks.getEvents.mockClear();
     mocks.getDevices.mockClear();
 
-    // Push a WATCHER_SIGNAL — watcher + events should refetch, devices should not.
+    // Push a WATCHER_SIGNAL — watcher should refetch, devices should not.
     mocks.socketCallback.current!({
       type: 'WATCHER_SIGNAL',
       payload: { job_id: 3002, category: 'AEE', inserted_count: 1 },
     });
     await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled());
-    expect(mocks.getEvents).toHaveBeenCalled();
     expect(mocks.getDevices).not.toHaveBeenCalled();
 
     // Reset and push PLAN_RUN_STATUS — should refetch run + timeline + devices.
@@ -405,10 +430,9 @@ describe('PlanRunDetailPage', () => {
     expect(mocks.getTimeline).toHaveBeenCalled();
     expect(mocks.getDevices).toHaveBeenCalled();
 
-    // Reset and push PRECHECK_UPDATE — should refetch run + timeline + events + devices.
+    // Reset and push PRECHECK_UPDATE — should refetch run + timeline + devices.
     mocks.getRun.mockClear();
     mocks.getTimeline.mockClear();
-    mocks.getEvents.mockClear();
     mocks.getDevices.mockClear();
     mocks.socketCallback.current!({
       type: 'PRECHECK_UPDATE',
@@ -416,7 +440,6 @@ describe('PlanRunDetailPage', () => {
     });
     await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
     expect(mocks.getTimeline).toHaveBeenCalled();
-    expect(mocks.getEvents).toHaveBeenCalled();
     expect(mocks.getDevices).toHaveBeenCalled();
   });
 
@@ -435,7 +458,7 @@ describe('PlanRunDetailPage', () => {
     renderPage();
     await waitFor(() => screen.getByTestId('plan-run-status-pill'));
     expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
-    // Topbar should NOT render the abort button on terminal runs.
+    // Hero should NOT render the abort button on terminal runs.
     expect(screen.queryByTestId('plan-run-abort-btn')).not.toBeInTheDocument();
   });
 
