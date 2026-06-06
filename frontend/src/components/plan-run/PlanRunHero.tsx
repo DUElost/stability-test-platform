@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, X, Loader2 } from 'lucide-react';
+import { Download, X, Loader2, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -47,7 +47,7 @@ interface Props {
   planName?: string | null;
   isAborting?: boolean;
   onAbort?: (reason: string) => void;
-  onExportReport?: () => void;
+  onExportReport?: (format: 'markdown' | 'json') => void;
   /** Override "now" for deterministic tests. */
   now?: Date;
 }
@@ -61,6 +61,7 @@ export default function PlanRunHero({
   now,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [tick, setTick] = useState(0);
   const isTerminal = !!run && isPlanRunTerminal(run.status);
@@ -90,7 +91,7 @@ export default function PlanRunHero({
     <div className={`rounded-xl border shadow-sm overflow-hidden ${heroCls}`}>
       <div className="px-4 pt-3 pb-1">
         {/* Plan 标识 */}
-        <div className="text-[10px] text-gray-400 mb-0.5">
+        <div className="text-[11px] text-gray-400 mb-0.5">
           <span className="font-semibold text-blue-600">
             {planName ? `Plan #${run?.plan_id} · ${planName}` : `Plan #${run?.plan_id ?? '—'}`}
           </span>
@@ -124,7 +125,7 @@ export default function PlanRunHero({
               {runDuration && (
                 <div
                   data-testid="plan-run-duration"
-                  className="font-mono text-[10px] opacity-70"
+                  className="font-mono text-[11px] opacity-70"
                 >
                   {runDuration}
                 </div>
@@ -135,7 +136,7 @@ export default function PlanRunHero({
       </div>
 
       {/* 2×2 meta 网格 */}
-      <div className="px-4 pb-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]">
+      <div className="px-4 pb-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
         <span className="text-gray-400">触发方式</span>
         <span className="font-medium text-gray-700">{run?.run_type ?? '—'}</span>
         <span className="text-gray-400">操作人</span>
@@ -159,16 +160,49 @@ export default function PlanRunHero({
 
       {/* 操作按钮行 */}
       <div className="flex gap-1.5 px-4 pb-4">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onExportReport}
-          disabled={!run}
-          className="flex-1 text-[10px] h-7"
-        >
-          <Download className="mr-1 h-3 w-3" />
-          导出报告
-        </Button>
+        <div className="relative flex-1">
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="plan-run-export-btn"
+            onClick={() => setExportOpen((v) => !v)}
+            disabled={!run}
+            className="w-full text-[11px] h-7"
+          >
+            <Download className="mr-1 h-3 w-3" />
+            导出报告
+            <ChevronDown className="ml-1 h-3 w-3" />
+          </Button>
+          {exportOpen && run && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
+              <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-md border bg-white shadow-lg">
+                <button
+                  type="button"
+                  data-testid="plan-run-export-md"
+                  onClick={() => {
+                    setExportOpen(false);
+                    onExportReport?.('markdown');
+                  }}
+                  className="block w-full px-3 py-1.5 text-left text-[11px] hover:bg-gray-50"
+                >
+                  Markdown (.md)
+                </button>
+                <button
+                  type="button"
+                  data-testid="plan-run-export-json"
+                  onClick={() => {
+                    setExportOpen(false);
+                    onExportReport?.('json');
+                  }}
+                  className="block w-full px-3 py-1.5 text-left text-[11px] hover:bg-gray-50"
+                >
+                  JSON (.json)
+                </button>
+              </div>
+            </>
+          )}
+        </div>
 
         {!isTerminal && (
           <Button
@@ -177,7 +211,7 @@ export default function PlanRunHero({
             data-testid="plan-run-abort-btn"
             onClick={() => setConfirmOpen(true)}
             disabled={!run || isAborting}
-            className="flex-1 text-[10px] h-7"
+            className="flex-1 text-[11px] h-7"
           >
             {isAborting ? (
               <><Loader2 className="mr-1 h-3 w-3 animate-spin" />中止中…</>

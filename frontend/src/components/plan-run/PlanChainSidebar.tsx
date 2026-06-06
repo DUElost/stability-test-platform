@@ -102,13 +102,13 @@ function ChainNodeRow({
         )}
 
         {node.is_current && (
-          <span className="ml-1 rounded-full bg-orange-100 px-1.5 py-0.5 text-[9px] font-semibold text-orange-600">
+          <span className="ml-1 rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-600">
             当前
           </span>
         )}
 
         {node.is_blocked && node.block_reason && (
-          <span className="ml-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] text-gray-500">
+          <span className="ml-1 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">
             暂不触发
           </span>
         )}

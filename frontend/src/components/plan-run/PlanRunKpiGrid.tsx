@@ -7,12 +7,13 @@ interface Props {
   patrolCycle?: number | null;
 }
 
-type Tone = 'orange' | 'red' | 'purple' | 'default';
+type Tone = 'orange' | 'red' | 'purple' | 'amber' | 'default';
 
 const TONE_CLS: Record<Tone, { value: string; label: string }> = {
   orange:  { value: 'text-orange-600 font-bold', label: 'text-orange-500' },
   red:     { value: 'text-red-600   font-bold', label: 'text-red-500' },
   purple:  { value: 'text-purple-600 font-bold', label: 'text-purple-500' },
+  amber:   { value: 'text-amber-600  font-bold', label: 'text-amber-500' },
   default: { value: 'text-gray-800  font-bold', label: 'text-gray-500' },
 };
 
@@ -34,7 +35,7 @@ function Cell({
       data-testid={testId}
     >
       <span className={`text-2xl leading-none ${cls.value}`}>{value}</span>
-      <span className={`mt-1 text-[10px] ${cls.label}`}>{label}</span>
+      <span className={`mt-1 text-[11px] ${cls.label}`}>{label}</span>
     </div>
   );
 }
@@ -62,7 +63,7 @@ export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: P
         <Cell value={running}   label="运行中"     tone="orange" testId="kpi-running"   />
         <Cell value={completed} label="已完成"     testId="kpi-completed" />
         <Cell value={failed}    label="失败"       tone={failed > 0 ? 'red' : 'default'}     testId="kpi-failed"    />
-        <Cell value={risk + backoff} label="风险/退避" tone={risk + backoff > 0 ? 'purple' : 'default'} testId="kpi-risk-backoff" />
+        <Cell value={risk + backoff} label="风险/退避" tone={risk + backoff > 0 ? 'amber' : 'default'} testId="kpi-risk-backoff" />
       </div>
     </div>
   );

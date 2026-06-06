@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, AlertCircle, AlertTriangle, ChevronDown } from 'lucide-react';
+import { ArrowLeft, AlertCircle, AlertTriangle, ChevronDown, RefreshCw, PanelLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -177,35 +177,40 @@ export default function PlanRunDetailPage() {
   const toast = useToast();
   const { setHeaderSlot, setFullBleed } = useHeaderSlot();
 
-  const [deviceStatusFilter, setDeviceStatusFilter] = useState<
-    DeviceUiStatus | 'all'
-  >('all');
-  const [deviceHostFilter, setDeviceHostFilter] = useState<string | 'all'>('all');
-  const [watcherWindow, setWatcherWindow] = useState<number>(60);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deviceStatusFilter = (searchParams.get('status') ?? 'all') as DeviceUiStatus | 'all';
+  const deviceHostFilter = searchParams.get('host') ?? 'all';
+  const watcherWindow = Number(searchParams.get('window')) || 60;
+
+  const updateParam = useCallback(
+    (key: string, value: string, isDefault: boolean) =>
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (isDefault) next.delete(key);
+          else next.set(key, value);
+          return next;
+        },
+        { replace: true },
+      ),
+    [setSearchParams],
+  );
+  const setDeviceStatusFilter = useCallback(
+    (s: DeviceUiStatus | 'all') => updateParam('status', s, s === 'all'),
+    [updateParam],
+  );
+  const setDeviceHostFilter = useCallback(
+    (h: string | 'all') => updateParam('host', h, h === 'all'),
+    [updateParam],
+  );
+  const setWatcherWindow = useCallback(
+    (w: number) => updateParam('window', String(w), w === 60),
+    [updateParam],
+  );
+
   const [selectedDevice, setSelectedDevice] = useState<DeviceMatrixItem | null>(null);
   const [diagOpen, setDiagOpen] = useState(false);
-
-  // ── 将 "返回 / PlanRun # / 概览 / 日志" 注入 AppShell 顶栏 ──
-  useEffect(() => {
-    setFullBleed(true);
-    setHeaderSlot(
-      <div className="flex items-center gap-3 min-w-0">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate('/execution/plan-runs')}
-          className="-ml-2 text-xs text-gray-500"
-        >
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回执行列表
-        </Button>
-        <PlanRunTabs runId={id} active="overview" />
-      </div>,
-    );
-    return () => {
-      setHeaderSlot(null);
-      setFullBleed(false);
-    };
-  }, [id, navigate, setHeaderSlot, setFullBleed]);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(false);
 
   // ── Plan run + derived terminal flag drive every other refetch interval ──
   const runQ = useQuery({
@@ -256,6 +261,86 @@ export default function PlanRunDetailPage() {
     enabled: !!id,
     refetchInterval: isTerminal ? false : refetchInterval,
   });
+
+  const isAnyFetching =
+    runQ.isFetching ||
+    timelineQ.isFetching ||
+    devicesQ.isFetching ||
+    watcherQ.isFetching ||
+    chainQ.isFetching;
+
+  const refreshAll = useCallback(() => {
+    (
+      [
+        'plan-run',
+        'plan-run-timeline',
+        'plan-run-devices',
+        'plan-run-watcher',
+        'plan-run-chain',
+      ] as const
+    ).forEach((k) => qc.invalidateQueries({ queryKey: [k, id] }));
+  }, [qc, id]);
+
+  // ── 将 "返回 / PlanRun # / tab / 最后更新 / 刷新" 注入 AppShell 顶栏 ──
+  useEffect(() => {
+    setFullBleed(true);
+    setHeaderSlot(
+      <div className="flex w-full items-center gap-3 min-w-0">
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="plan-run-left-panel-toggle"
+          onClick={() => setLeftPanelOpen((v) => !v)}
+          aria-label="切换状态面板"
+          className="-ml-1 px-1.5 text-gray-500 lg:hidden"
+        >
+          <PanelLeft className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate('/execution/plan-runs')}
+          className="-ml-2 text-xs text-gray-500"
+        >
+          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回执行列表
+        </Button>
+        <PlanRunTabs runId={id} active="overview" />
+        <div className="ml-auto flex items-center gap-2">
+          <span className="hidden text-[11px] text-gray-400 sm:inline">
+            最后更新{' '}
+            {runQ.dataUpdatedAt
+              ? new Date(runQ.dataUpdatedAt).toLocaleTimeString('zh-CN')
+              : '—'}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="plan-run-refresh-btn"
+            onClick={refreshAll}
+            disabled={isAnyFetching}
+            className="text-xs text-gray-500"
+          >
+            <RefreshCw
+              className={`mr-1 h-3.5 w-3.5 ${isAnyFetching ? 'animate-spin' : ''}`}
+            />
+            刷新
+          </Button>
+        </div>
+      </div>,
+    );
+    return () => {
+      setHeaderSlot(null);
+      setFullBleed(false);
+    };
+  }, [
+    id,
+    navigate,
+    setHeaderSlot,
+    setFullBleed,
+    runQ.dataUpdatedAt,
+    isAnyFetching,
+    refreshAll,
+  ]);
 
   const chainDispatchFailed = useMemo(() => {
     const summary = runQ.data?.result_summary;
@@ -397,8 +482,20 @@ export default function PlanRunDetailPage() {
     <div className="flex h-full flex-col overflow-hidden bg-gray-50">
       {/* Main two-column layout */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Left sidebar — fixed width, sticky */}
-        <div className="w-72 shrink-0 flex flex-col gap-4 overflow-y-auto border-r border-gray-100 bg-white p-4">
+        {/* 窄屏遮罩:点击关闭左栏抽屉 */}
+        {leftPanelOpen && (
+          <div
+            data-testid="left-panel-backdrop"
+            className="fixed inset-x-0 bottom-0 top-16 z-30 bg-black/30 lg:hidden"
+            onClick={() => setLeftPanelOpen(false)}
+          />
+        )}
+        {/* 左栏:宽屏固定双栏,窄屏左侧滑出抽屉 */}
+        <aside
+          className={`flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-gray-100 bg-white p-4 transition-transform fixed bottom-0 left-0 top-16 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none ${
+            leftPanelOpen ? 'translate-x-0' : '-translate-x-full'
+          } lg:translate-x-0`}
+        >
           {runQ.isLoading ? (
             <Skeleton className="h-36 w-full rounded-xl" />
           ) : (
@@ -407,13 +504,14 @@ export default function PlanRunDetailPage() {
               planName={planName}
               isAborting={abortMut.isPending}
               onAbort={(reason) => abortMut.mutate(reason)}
-              onExportReport={async () => {
+              onExportReport={async (format) => {
                 try {
-                  const blob = await api.planRuns.exportReport(id, 'markdown');
+                  const blob = await api.planRuns.exportReport(id, format);
+                  const ext = format === 'json' ? 'json' : 'md';
                   const url = URL.createObjectURL(blob);
                   const anchor = document.createElement('a');
                   anchor.href = url;
-                  anchor.download = `plan-run-${id}-report.md`;
+                  anchor.download = `plan-run-${id}-report.${ext}`;
                   anchor.click();
                   URL.revokeObjectURL(url);
                   toast.success('PlanRun 报告已导出');
@@ -439,7 +537,7 @@ export default function PlanRunDetailPage() {
             chainDispatchFailed={chainDispatchFailed}
             onNavigateRun={(planRunId) => navigate(`/execution/plan-runs/${planRunId}`)}
           />
-        </div>
+        </aside>
 
         {/* Right panel — tabbed content area */}
         <div className="flex flex-1 flex-col min-h-0 overflow-hidden">
@@ -467,10 +565,15 @@ export default function PlanRunDetailPage() {
 
           {/* 运行详情内容 */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            <BusinessFlowStepper
-              timeline={timelineQ.data}
-              isLoading={timelineQ.isLoading}
-              isError={timelineQ.isError}
+            <DeviceOverview
+              data={devicesQ.data}
+              isLoading={devicesQ.isLoading}
+              isError={devicesQ.isError}
+              statusFilter={deviceStatusFilter}
+              hostFilter={deviceHostFilter}
+              onStatusFilterChange={setDeviceStatusFilter}
+              onHostFilterChange={setDeviceHostFilter}
+              onSelectDevice={setSelectedDevice}
             />
 
             <AnomalyDashboard
@@ -479,6 +582,12 @@ export default function PlanRunDetailPage() {
               isError={watcherQ.isError}
               windowMinutes={watcherWindow}
               onWindowChange={setWatcherWindow}
+            />
+
+            <BusinessFlowStepper
+              timeline={timelineQ.data}
+              isLoading={timelineQ.isLoading}
+              isError={timelineQ.isError}
             />
 
             {/* 派发门禁诊断(折叠; 失败默认展开) */}
@@ -501,17 +610,6 @@ export default function PlanRunDetailPage() {
                 </div>
               </section>
             )}
-
-            <DeviceOverview
-              data={devicesQ.data}
-              isLoading={devicesQ.isLoading}
-              isError={devicesQ.isError}
-              statusFilter={deviceStatusFilter}
-              hostFilter={deviceHostFilter}
-              onStatusFilterChange={setDeviceStatusFilter}
-              onHostFilterChange={setDeviceHostFilter}
-              onSelectDevice={setSelectedDevice}
-            />
           </div>
         </div>
       </div>

@@ -9,6 +9,7 @@ import type {
   DeviceUiStatus,
   PlanRunDevicesPayload,
 } from '@/utils/api/types';
+import { DEVICE_UI_STATUS } from './deviceUiStatus';
 
 interface Props {
   data: PlanRunDevicesPayload | undefined;
@@ -26,26 +27,7 @@ interface Props {
 
 // ── Grid cell color map ──────────────────────────────────────────────────
 
-const MINIMAP_CELL_CLS: Record<DeviceUiStatus, string> = {
-  completed: 'bg-green-400/90 hover:bg-green-500',
-  running:
-    'bg-orange-500 bg-[linear-gradient(45deg,rgba(255,255,255,.35)_25%,transparent_25%,transparent_50%,rgba(255,255,255,.35)_50%,rgba(255,255,255,.35)_75%,transparent_75%)] bg-[length:8px_8px] [animation:dev-stripe_1s_linear_infinite]',
-  unknown: 'bg-purple-500/90 hover:bg-purple-600',
-  failed: 'bg-red-500/90 hover:bg-red-600',
-  risk: 'bg-amber-400/90 hover:bg-amber-500',
-  backoff: 'bg-purple-400/80 hover:bg-purple-500',
-  pending: 'bg-gray-300 hover:bg-gray-400',
-};
-
-const CELL_LABEL: Record<DeviceUiStatus, string> = {
-  running: '运行中',
-  completed: '完成',
-  unknown: '失联',
-  failed: '失败',
-  risk: '风险',
-  backoff: '退避',
-  pending: '等待',
-};
+// 设备 UI 状态色板(label / cellCls / tone)集中在 ./deviceUiStatus.ts
 
 // ── Table helpers ────────────────────────────────────────────────────────
 
@@ -135,7 +117,7 @@ function DeviceGrid({
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(24px, 1fr))' }}
       >
         {devices.map((d) => {
-          const label = `${d.device_serial || `Device #${d.device_id}`} — ${CELL_LABEL[d.ui_status]}`;
+          const label = `${d.device_serial || `Device #${d.device_id}`} — ${DEVICE_UI_STATUS[d.ui_status].label}`;
           return (
             <button
               key={d.job_id}
@@ -144,7 +126,7 @@ function DeviceGrid({
               onClick={() => onSelect?.(d)}
               aria-label={label}
               title={label}
-              className={`aspect-square rounded-sm border border-transparent transition-transform hover:scale-[1.12] hover:shadow-[0_0_0_2px_rgba(59,130,246,0.45)] hover:z-10 ${MINIMAP_CELL_CLS[d.ui_status]}`}
+              className={`aspect-square rounded-sm border border-transparent transition-transform hover:scale-[1.12] hover:shadow-[0_0_0_2px_rgba(59,130,246,0.45)] hover:z-10 ${DEVICE_UI_STATUS[d.ui_status].cellCls}`}
             />
           );
         })}
@@ -186,7 +168,7 @@ function DeviceTable({
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[12px]">
-        <thead className="bg-gray-50 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+        <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wider text-gray-500">
           <tr>
             <th className="px-3 py-2 text-left">Serial</th>
             <th className="px-2 py-2 text-left">Host</th>
@@ -323,7 +305,6 @@ export default function DeviceOverview({
     },
     [onViewModeChange],
   );
-  const [highlightJobId, setHighlightJobId] = useState<number | null>(null);
 
   const total = data?.total ?? 0;
   const devices = data?.devices ?? [];
@@ -337,19 +318,10 @@ export default function DeviceOverview({
 
   const handleGridSelect = useCallback(
     (d: DeviceMatrixItem) => {
-      setViewMode('table');
-      setHighlightJobId(d.job_id);
       onSelectDevice?.(d);
     },
-    [onSelectDevice, setViewMode],
+    [onSelectDevice],
   );
-
-  // Clear highlight after 2s
-  useEffect(() => {
-    if (highlightJobId == null) return;
-    const timer = setTimeout(() => setHighlightJobId(null), 2000);
-    return () => clearTimeout(timer);
-  }, [highlightJobId]);
 
   const meta = `${total} 设备 · ${hosts.length} Host`;
 
@@ -422,7 +394,6 @@ export default function DeviceOverview({
           <DeviceTable
             devices={devices}
             onSelect={onSelectDevice}
-            highlightJobId={highlightJobId}
           />
         )}
       </div>

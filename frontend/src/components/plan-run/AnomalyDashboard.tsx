@@ -76,7 +76,7 @@ export default function AnomalyDashboard({
               <button
                 key={w}
                 onClick={() => onWindowChange?.(w)}
-                className={`rounded px-1.5 py-0.5 text-[10px] ${
+                className={`rounded px-1.5 py-0.5 text-[11px] ${
                   windowMinutes === w
                     ? 'bg-blue-600 text-white'
                     : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
@@ -110,11 +110,11 @@ export default function AnomalyDashboard({
           <div className="flex items-center gap-3 rounded-lg border bg-white px-3 py-2 shadow-sm">
             <GaugeRing rate={abnormalRate} exceeded={exceeded} />
             <div>
-              <div className="text-[10px] text-gray-500">整体异常率</div>
+              <div className="text-[11px] text-gray-500">整体异常率</div>
               <div className="text-lg font-bold text-gray-800">
                 {Math.round(abnormalRate * 100)}%
               </div>
-              <div className="text-[10px] text-gray-400">
+              <div className="text-[11px] text-gray-400">
                 {totalCount === 0 ? '暂无异常事件' : `共 ${totalCount} 次异常`}
               </div>
             </div>
@@ -136,7 +136,7 @@ export default function AnomalyDashboard({
                       </div>
                     </div>
                     {cat.latest_device_serial && (
-                      <div className="mt-0.5 text-[10px] text-gray-400">
+                      <div className="mt-0.5 text-[11px] text-gray-400">
                         最近：{cat.latest_device_serial}
                       </div>
                     )}
@@ -153,7 +153,7 @@ export default function AnomalyDashboard({
           )}
 
           {categories.length === 0 && (
-            <div className="flex h-10 items-center justify-center text-[10px] text-gray-400">
+            <div className="flex h-10 items-center justify-center text-[11px] text-gray-400">
               当前时间窗内暂无异常事件
             </div>
           )}

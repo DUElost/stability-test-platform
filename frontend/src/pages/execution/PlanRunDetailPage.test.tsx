@@ -712,8 +712,9 @@ describe('PlanRunDetailPage', () => {
     });
 
     renderPage();
-    await waitFor(() => screen.getByText('导出报告'));
-    fireEvent.click(screen.getByText('导出报告'));
+    await waitFor(() => screen.getByTestId('plan-run-export-btn'));
+    fireEvent.click(screen.getByTestId('plan-run-export-btn'));
+    fireEvent.click(await screen.findByTestId('plan-run-export-md'));
 
     await waitFor(() => {
       expect(mocks.exportReport).toHaveBeenCalledWith(12, 'markdown');
