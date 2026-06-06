@@ -1,13 +1,15 @@
 import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import { Menu, ChevronRight, FileText, LogOut, User, ChevronDown, Loader2, KeyRound } from 'lucide-react';
+import { Menu, ChevronRight, FileText, LogOut, User, ChevronDown, Loader2, KeyRound, Wifi, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 import { clearAppQueryCache } from '@/components/QueryProvider';
-import { disconnectDashSocket } from '@/hooks/useSocketIO';
+import { useSocketIO, disconnectDashSocket } from '@/hooks/useSocketIO';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { api } from '@/utils/api';
 import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { WS_DASHBOARD_ENDPOINT } from '@/config';
 
 /**
  * 主应用布局 - 源自 web 样板设计风格
@@ -21,6 +23,7 @@ export default function AppShell() {
   const sessionQ = useAuthSession();
   const currentUser = sessionQ.data;
   const { headerSlot, fullBleed } = useHeaderSlot();
+  const { isConnected: dashConnected } = useSocketIO(WS_DASHBOARD_ENDPOINT);
 
   // 监听窗口大小变化
   useEffect(() => {
@@ -117,7 +120,7 @@ export default function AppShell() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Header - 样板风格 */}
         <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-sm border-b border-gray-100">
-          <div className="flex items-center justify-between h-16 px-4 lg:px-8">
+          <div className="flex items-center justify-between h-20 px-4 lg:px-8">
             <button
               onClick={toggleSidebar}
               className="lg:hidden p-2 text-gray-400 hover:text-gray-600"
@@ -132,6 +135,15 @@ export default function AppShell() {
 
             {/* Right side: User Menu */}
             <div className="flex items-center gap-2">
+              {/* 实时连接状态 — dashboard socket(全局),位于用户菜单左侧 */}
+              <Badge
+                variant={dashConnected ? 'success' : 'destructive'}
+                className="hidden gap-1.5 sm:inline-flex"
+                title={dashConnected ? '实时数据通道已连接' : '实时连接已断开'}
+              >
+                {dashConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
+                {dashConnected ? '实时连接' : '已断开'}
+              </Badge>
               {/* User Menu - Top Right Corner */}
               <div className="relative ml-2">
                 <button

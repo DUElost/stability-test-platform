@@ -486,13 +486,13 @@ export default function PlanRunDetailPage() {
         {leftPanelOpen && (
           <div
             data-testid="left-panel-backdrop"
-            className="fixed inset-x-0 bottom-0 top-16 z-30 bg-black/30 lg:hidden"
+            className="fixed inset-x-0 bottom-0 top-20 z-30 bg-black/30 lg:hidden"
             onClick={() => setLeftPanelOpen(false)}
           />
         )}
         {/* 左栏:宽屏固定双栏,窄屏左侧滑出抽屉 */}
         <aside
-          className={`flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-gray-100 bg-white p-4 transition-transform fixed bottom-0 left-0 top-16 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none ${
+          className={`flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-gray-100 bg-white p-4 transition-transform fixed bottom-0 left-0 top-20 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none ${
             leftPanelOpen ? 'translate-x-0' : '-translate-x-full'
           } lg:translate-x-0`}
         >

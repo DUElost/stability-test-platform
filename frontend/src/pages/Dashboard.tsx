@@ -14,9 +14,7 @@ import { Card, CardContent } from '@/components/ui/card';
 
 import { Skeleton } from '@/components/ui/skeleton';
 
-import { Badge } from '@/components/ui/badge';
-
-import { Wifi, WifiOff, Clock, Server, Smartphone, AlertCircle, BarChart3, Zap } from 'lucide-react';
+import { Wifi, Clock, Server, Smartphone, AlertCircle, BarChart3, Zap } from 'lucide-react';
 
 import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart } from '@/components/charts';
 
@@ -42,7 +40,7 @@ export default function Dashboard() {
 
 
 
-  const { isConnected: wsConnected, lastUpdateTime } = useRealtimeDashboard(WS_DASHBOARD_ENDPOINT);
+  const { lastUpdateTime } = useRealtimeDashboard(WS_DASHBOARD_ENDPOINT);
 
 
 
@@ -180,27 +178,9 @@ export default function Dashboard() {
 
 
 
-        {/* Connection Status Bar */}
+        {/* 数据更新时间 */}
 
-        <div className="flex justify-between items-center text-sm">
-
-          <div className="flex items-center gap-2">
-
-            <Badge
-
-              variant={wsConnected ? 'success' : 'destructive'}
-
-              className="gap-1.5"
-
-            >
-
-              {wsConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
-
-              {wsConnected ? '实时连接' : '已断开'}
-
-            </Badge>
-
-          </div>
+        <div className="flex justify-end items-center text-sm">
 
           <div className="flex items-center gap-2 text-gray-400">
 

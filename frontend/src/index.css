@@ -135,4 +135,28 @@
   .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     @apply bg-muted-foreground/50;
   }
+
+  /* 侧边栏滚动条:无操作时隐藏,hover 时以低透明度显示 */
+  .sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.25s ease;
+  }
+  .sidebar-scroll:hover {
+    scrollbar-color: rgba(100, 116, 139, 0.2) transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .sidebar-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 3px;
+    transition: background-color 0.25s ease;
+  }
+  .sidebar-scroll:hover::-webkit-scrollbar-thumb {
+    background-color: rgba(100, 116, 139, 0.2);
+  }
 }

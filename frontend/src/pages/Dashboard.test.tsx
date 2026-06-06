@@ -124,12 +124,6 @@ describe('Dashboard', () => {
     expect(screen.getByText('数据统计')).toBeInTheDocument();
   });
 
-  it('shows connection status badge', async () => {
-    const Dashboard = (await import('./Dashboard')).default;
-    render(<Dashboard />, { wrapper: createWrapper() });
-    expect(screen.getByText('已断开')).toBeInTheDocument();
-  });
-
   it('renders error state when data loading fails', async () => {
     const { api } = await import('../utils/api');
     (api.stats.dashboardSummary as any).mockRejectedValue(new Error('Network Error'));
@@ -137,18 +131,5 @@ describe('Dashboard', () => {
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
     expect(await screen.findByText('数据加载失败')).toBeInTheDocument();
-  });
-
-  it('shows connected status when ws is on', async () => {
-    const { useRealtimeDashboard } = await import('../hooks/useRealtimeDashboard');
-    (useRealtimeDashboard as any).mockReturnValue({
-      isConnected: true,
-      lastUpdateTime: new Date(),
-      lastMessage: null,
-    });
-
-    const Dashboard = (await import('./Dashboard')).default;
-    render(<Dashboard />, { wrapper: createWrapper() });
-    expect(await screen.findByText('实时连接')).toBeInTheDocument();
   });
 });

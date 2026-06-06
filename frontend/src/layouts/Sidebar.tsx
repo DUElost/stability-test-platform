@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -6,6 +7,7 @@ import {
   Server,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Zap,
   X,
   TestTube2,
@@ -100,6 +102,10 @@ export default function Sidebar({
   onCloseMobile
 }: SidebarProps) {
   const location = useLocation();
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
+  const toggleGroup = (label: string) =>
+    setCollapsedGroups((prev) => ({ ...prev, [label]: !prev[label] }));
 
   const NavItemContent = ({ item, isActive }: { item: NavItem; isActive: boolean }) => (
     <>
@@ -119,7 +125,7 @@ export default function Sidebar({
   return (
     <div className="flex flex-col h-full bg-white">
       {/* Logo */}
-      <div className="h-16 flex items-center px-5 border-b border-gray-100">
+      <div className="h-20 flex items-center px-5 border-b border-gray-100">
         <div className="flex items-center gap-3 overflow-hidden">
           <div className={cn(
             "flex items-center justify-center rounded-lg bg-gray-50 transition-all duration-300",
@@ -145,16 +151,30 @@ export default function Sidebar({
       </div>
 
       {/* Navigation Groups */}
-      <nav className="p-3 space-y-0.5 overflow-y-auto flex-1">
-        {navGroups.map((group) => (
-          <div key={group.label}>
+      <nav className="p-3 overflow-y-auto flex-1 sidebar-scroll">
+        {navGroups.map((group) => {
+          const isGroupCollapsed = !collapsed && !!collapsedGroups[group.label];
+          return (
+          <div key={group.label} className="pb-3 mb-3 border-b border-gray-100 last:mb-0 last:border-b-0 last:pb-0">
+            {!collapsed && (
+              <button
+                type="button"
+                onClick={() => toggleGroup(group.label)}
+                className="w-full flex items-center justify-between px-3 mb-2 text-xs font-medium text-gray-400 uppercase tracking-wider hover:text-gray-600 transition-colors"
+              >
+                <span>{group.label}</span>
+                <ChevronDown
+                  className={cn(
+                    "w-3.5 h-3.5 transition-transform duration-200",
+                    isGroupCollapsed ? "-rotate-90" : ""
+                  )}
+                />
+              </button>
+            )}
             <div className={cn(
-              "px-3 mb-2 text-xs font-medium text-gray-400 uppercase tracking-wider transition-all duration-200",
-              collapsed ? "opacity-0 h-0 overflow-hidden" : "opacity-100"
+              "space-y-1 overflow-hidden transition-all duration-200",
+              isGroupCollapsed ? "max-h-0 opacity-0" : "max-h-96 opacity-100"
             )}>
-              {group.label}
-            </div>
-            <div className="space-y-0.5">
               {group.items.map((item) => {
                 const isActive = location.pathname === item.path ||
                   (item.path !== '/' && location.pathname.startsWith(item.path));
@@ -188,7 +208,8 @@ export default function Sidebar({
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       {/* Collapse Toggle Button - Desktop only */}
