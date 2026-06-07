@@ -1461,29 +1461,52 @@ class DeviceMatrixItem(BaseModel):
 class PlanRunDevicesOut(BaseModel):
     plan_run_id: int
     total: int
-    by_status: dict                    # {all/completed/running/failed/risk/backoff/pending: int}
+    by_status: dict                    # {all/completed/running/failed/unknown/backoff/pending: int}
     by_host: dict                      # {host_id: int}
     devices: list[DeviceMatrixItem]
 
 
-def _ui_status_for_job(j: JobInstance, now: datetime) -> str:
+def _device_currently_disconnected(
+    device: Device | None,
+    host_status: str | None,
+) -> bool:
+    if device is None:
+        return False
+    if host_status == HostStatus.OFFLINE.value:
+        return True
+    if _adb_state_excluded(device.adb_state):
+        return True
+    if not device.adb_connected or device.status == DeviceStatus.OFFLINE.value:
+        return True
+    return False
+
+
+def _ui_status_for_job(
+    j: JobInstance,
+    now: datetime,
+    device: Device | None,
+    host_status: str | None,
+) -> str:
     s = j.status
     if s == JobStatus.COMPLETED.value:
         return "completed"
-    if s == JobStatus.UNKNOWN.value:
-        return "unknown"
     if s in _FAILED_JOB_STATUSES:
         return "failed"
     if s == JobStatus.PENDING.value:
         return "pending"
+
+    disconnected = _device_currently_disconnected(device, host_status)
+    if s == JobStatus.UNKNOWN.value:
+        return "unknown" if disconnected else "failed"
+
     # RUNNING 分支
+    if disconnected:
+        return "unknown"
     if (j.manual_action or "") == "EXIT_REQUESTED":
         return "backoff"
     nrt = _aware(j.next_retry_at)
     if nrt and nrt > now:
         return "backoff"
-    if (j.log_signal_count or 0) > 0:
-        return "risk"
     return "running"
 
 
@@ -1605,12 +1628,12 @@ def get_plan_run_devices(
     by_host: dict[str, int] = {}
 
     for j in jobs:
-        ui = _ui_status_for_job(j, now)
-        cur_stage = _current_stage_for_job(j)
         dev = device_meta.get(j.device_id)
         serial = dev.serial if dev else None
         model = dev.model if dev else None
         host_st = host_status_by_id.get(j.host_id) if j.host_id else None
+        ui = _ui_status_for_job(j, now, dev, host_st)
+        cur_stage = _current_stage_for_job(j)
         lease_job_id = active_lease_by_device.get(j.device_id)
         busy_reason, busy_lease_job_id = _derive_busy_reason(dev, host_st, lease_job_id)
         items.append(DeviceMatrixItem(

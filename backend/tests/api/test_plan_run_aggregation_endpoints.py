@@ -14,7 +14,7 @@ across two hosts so that:
   - chain returns parent + current + pending next (gated by Plan.next_plan_id)
   - timeline aggregates step_trace by stage and exposes patrol cycle counters
   - events fuses step_trace failures + log_signals + audit_logs + trigger
-  - devices derives ui_status correctly for completed/running/failed/risk/backoff
+  - devices derives ui_status correctly for completed/running/failed/unknown/backoff
   - watcher-summary buckets log_signals by category with trend vs prev window
 """
 
@@ -66,9 +66,18 @@ def chain_setup(db_session):
     db_session.add_all([host_a, host_b])
 
     # Devices: dev1@host-a (completed), dev2@host-a (running), dev3@host-b (failed)
-    dev1 = Device(serial="dev-aa-01", host_id="host-101", status="ONLINE")
-    dev2 = Device(serial="dev-aa-02", host_id="host-101", status="BUSY")
-    dev3 = Device(serial="dev-bb-01", host_id="host-102", status="OFFLINE")
+    dev1 = Device(
+        serial="dev-aa-01", host_id="host-101", status="ONLINE",
+        adb_connected=True, adb_state="device",
+    )
+    dev2 = Device(
+        serial="dev-aa-02", host_id="host-101", status="BUSY",
+        adb_connected=True, adb_state="device",
+    )
+    dev3 = Device(
+        serial="dev-bb-01", host_id="host-102", status="OFFLINE",
+        adb_connected=False, adb_state="offline",
+    )
     db_session.add_all([dev1, dev2, dev3])
 
     # Plans: parent (#41) → current (#42) → next (#43)
@@ -150,7 +159,7 @@ def chain_setup(db_session):
         ended_at=_now() - timedelta(seconds=30),
         patrol_cycle_count=14, patrol_success_cycle_count=14,
     )
-    j2 = JobInstance(  # Running, has 1 log_signal → ui_status = risk
+    j2 = JobInstance(  # Running, has 1 log_signal but should still remain running
         plan_run_id=cur_run.id, plan_id=plan_cur.id,
         device_id=dev2.id, host_id="host-101",
         status=JobStatus.RUNNING.value,
@@ -758,10 +767,10 @@ class TestDevicesEndpoint:
         # Status facets — count includes 'all'
         bs = data["by_status"]
         assert bs["all"] == 3
-        # j1=COMPLETED → completed; j2=RUNNING+log_signal_count>0 → risk;
+        # j1=COMPLETED → completed; j2=RUNNING+log_signal_count>0 → running;
         # j3=FAILED → failed
         assert bs.get("completed") == 1
-        assert bs.get("risk") == 1
+        assert bs.get("running") == 1
         assert bs.get("failed") == 1
         # Host facet
         bh = data["by_host"]
@@ -769,11 +778,11 @@ class TestDevicesEndpoint:
         assert bh.get("host-102") == 1
         # Per-device entries carry patrol heartbeat fields
         by_serial = {d["device_serial"]: d for d in data["devices"]}
-        risk = by_serial["dev-aa-02"]
-        assert risk["ui_status"] == "risk"
-        assert risk["patrol_cycle_count"] == 12
-        assert risk["log_signal_count"] == 1
-        assert risk["current_step"] == "patrol.monkey_launch"
+        running = by_serial["dev-aa-02"]
+        assert running["ui_status"] == "running"
+        assert running["patrol_cycle_count"] == 12
+        assert running["log_signal_count"] == 1
+        assert running["current_step"] == "patrol.monkey_launch"
 
     def test_devices_filter_by_status(
         self, client, auth_headers, chain_setup,
@@ -837,12 +846,60 @@ class TestDevicesEndpoint:
         failed = by_serial["dev-bb-01"]
         assert failed["ui_status"] == "failed"
         assert failed["status_reason"] == "patrol_step_failed: monkey_launch"
-        # j2 (RUNNING/risk) — fixture leaves status_reason unset
+        # j2 (RUNNING) — fixture leaves status_reason unset
         running = by_serial["dev-aa-02"]
         assert running["status_reason"] is None
         # j1 (COMPLETED) — likewise unset
         completed = by_serial["dev-aa-01"]
         assert completed["status_reason"] is None
+
+    def test_devices_running_job_with_offline_device_maps_to_unknown(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        from backend.models.enums import DeviceStatus
+
+        j2 = chain_setup["job_running"]
+        dev = chain_setup["device_running"]
+        dev.status = DeviceStatus.OFFLINE.value
+        dev.adb_connected = False
+        dev.adb_state = "offline"
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        by_serial = {d["device_serial"]: d for d in data["devices"]}
+        unknown = by_serial["dev-aa-02"]
+        assert unknown["ui_status"] == "unknown"
+        assert data["by_status"].get("unknown") == 1
+
+    def test_devices_unknown_job_with_online_device_maps_to_failed(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        from backend.models.enums import DeviceStatus, JobStatus
+
+        j3 = chain_setup["job_failed"]
+        dev = chain_setup["device_failed"]
+        j3.status = JobStatus.UNKNOWN.value
+        j3.status_reason = "lease_expired"
+        dev.status = DeviceStatus.ONLINE.value
+        dev.adb_connected = True
+        dev.adb_state = "device"
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        by_serial = {d["device_serial"]: d for d in data["devices"]}
+        failed = by_serial["dev-bb-01"]
+        assert failed["ui_status"] == "failed"
+        assert data["by_status"].get("failed") == 1
 
     def test_devices_unknown_status_distinct_from_failed(
         self, client, auth_headers, db_session, chain_setup,
