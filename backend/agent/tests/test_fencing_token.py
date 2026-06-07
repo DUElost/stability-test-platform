@@ -45,14 +45,29 @@ def job_runner_state():
     lock = threading.Lock()
     ids = set()
     device_ids = set()
+    active_tokens = {}
 
-    def register(jid: int, token: str = "", device_id: Optional[int] = None):
+    def register(
+        jid: int,
+        token: str = "",
+        device_id: Optional[int] = None,
+        device_serial: str = "",
+        local_worker_token: str = "",
+    ):
         with lock:
             ids.add(jid)
+            active_tokens[jid] = local_worker_token or token
+            if device_id is not None:
+                device_ids.add(device_id)
 
-    def deregister(jid: int):
+    def deregister(jid: int, token: str = "", local_worker_token: str = ""):
         with lock:
+            current = active_tokens.get(jid)
+            expected_token = local_worker_token or token
+            if current and expected_token and current != expected_token:
+                return
             ids.discard(jid)
+            active_tokens.pop(jid, None)
 
     def device_register(did: int):
         with lock:
@@ -66,6 +81,8 @@ def job_runner_state():
         active_jobs_lock=lock,
         active_job_ids=ids,
         active_device_ids=device_ids,
+        active_job_tokens=active_tokens,
+        running_worker_tokens={},
         watcher_globally_enabled=False,
         watcher_plan_default=False,
         lock_register=register,
@@ -97,6 +114,42 @@ def test_run_task_wrapper_missing_fencing_token_raises_key_error(job_runner_stat
             run, mock_adb, "http://x", "h1",
             job_runner_state, None, None, None,
         )
+
+
+def test_job_runner_state_replacement_token_marks_old_worker_aborted(job_runner_state):
+    """同一 job 被新 fencing_token 接管后，旧 worker 应视为已中止。"""
+    job_runner_state.lock_register(26, "63:6", 63, "SERIAL-63")
+
+    assert job_runner_state.try_mark_worker_started(26, "63:6") is True
+    assert job_runner_state.is_aborted(26, "63:6") is False
+
+    job_runner_state.lock_register(26, "63:7", 63, "SERIAL-63")
+
+    assert job_runner_state.is_aborted(26, "63:6") is True
+    assert job_runner_state.is_aborted(26, "63:7") is False
+    assert job_runner_state.try_mark_worker_started(26, "63:7") is True
+
+    job_runner_state.release(26, "63:6", 63)
+    assert 26 in job_runner_state.active_job_ids
+    assert job_runner_state.active_job_tokens[26] == "63:7"
+
+
+def test_job_runner_state_same_fencing_token_new_local_worker_replaces_old(job_runner_state):
+    """同 fencing_token 的恢复 worker 也必须能接管本地执行权。"""
+    job_runner_state.lock_register(26, "63:6", 63, "SERIAL-63", "worker-old")
+
+    assert job_runner_state.try_mark_worker_started(26, "worker-old") is True
+    assert job_runner_state.is_aborted(26, "worker-old") is False
+
+    job_runner_state.lock_register(26, "63:6", 63, "SERIAL-63", "worker-new")
+
+    assert job_runner_state.is_aborted(26, "worker-old") is True
+    assert job_runner_state.is_aborted(26, "worker-new") is False
+    assert job_runner_state.try_mark_worker_started(26, "worker-new") is True
+
+    job_runner_state.release(26, "63:6", 63, local_worker_token="worker-old")
+    assert 26 in job_runner_state.active_job_ids
+    assert job_runner_state.active_job_tokens[26] == "worker-new"
 
 
 # ── Test 17: run_task_wrapper heartbeat + complete 带 token ──────────────────
@@ -138,6 +191,40 @@ def test_run_task_wrapper_heartbeat_and_complete_include_token(job_runner_state)
     assert mock_complete.call_args.kwargs["fencing_token"] == "2:3", (
         "complete_job must receive fencing_token"
     )
+
+
+def test_run_task_wrapper_skips_complete_when_local_worker_superseded(job_runner_state):
+    """同 fencing_token 下旧 worker 被新本地 worker 接管后，不得再上报 /complete。"""
+    run = {
+        "id": 109,
+        "device_id": 2,
+        "device_serial": "SN-109",
+        "fencing_token": "2:9",
+        "local_worker_token": "worker-old",
+        "pipeline_def": {
+            "lifecycle": {
+                "init": [{"step_id": "x", "action": "script:noop", "version": "1.0.0", "timeout_seconds": 1}],
+                "teardown": [],
+            }
+        },
+    }
+    mock_adb = MagicMock()
+
+    def supersede_before_complete(*_args, **_kwargs):
+        job_runner_state.lock_register(109, "2:9", 2, "SN-109", "worker-new")
+        return {"status": "ABORTED", "exit_code": 1, "error_code": "JOB_ABORTED"}
+
+    with patch("backend.agent.job_runner.update_job"), \
+         patch("backend.agent.job_runner.complete_job") as mock_complete, \
+         patch("backend.agent.job_runner.execute_pipeline_run", side_effect=supersede_before_complete):
+        run_task_wrapper(
+            run, mock_adb, "http://x", "h1",
+            job_runner_state, None, None, None,
+        )
+
+    mock_complete.assert_not_called()
+    assert 109 in job_runner_state.active_job_ids
+    assert job_runner_state.active_job_tokens[109] == "worker-new"
 
 
 def test_run_task_wrapper_passes_session_watcher_capability(job_runner_state):

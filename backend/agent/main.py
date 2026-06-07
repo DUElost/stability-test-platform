@@ -4,8 +4,9 @@ import signal
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 # 自动加载 .env 文件（支持手动运行时读取配置）
 # 优先加载当前工作目录的 .env，不覆盖已有环境变量
@@ -70,8 +71,14 @@ STP_WATCHER_PLAN_DEFAULT = os.getenv("STP_WATCHER_PLAN_DEFAULT", "true").lower()
 # 命名约定：_active_job_ids / _active_jobs_lock
 _active_job_ids: Set[int] = set()
 _active_device_ids: Set[int] = set()  # per-device concurrency guard
+_active_job_tokens: Dict[int, str] = {}
 _active_jobs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
+
+
+def _make_local_worker_token(job_id: int, prefix: str) -> str:
+    """Create a per-submit worker ownership token scoped to this agent process."""
+    return f"{prefix}-{job_id}-{uuid.uuid4().hex[:12]}"
 
 
 # 全局活跃 Job 追踪辅助函数（仅 per-device guard）
@@ -92,13 +99,105 @@ def _cleanup_after_lease_lost(
     active_jobs_lock: Any,
     active_job_ids: Set[int],
     active_device_ids: Set[int],
+    active_job_tokens: Dict[int, str],
     local_db: Any,
 ) -> None:
     with active_jobs_lock:
         active_job_ids.discard(job_id)
+        active_job_tokens.pop(job_id, None)
         if device_id is not None:
             active_device_ids.discard(device_id)
-    local_db.delete_active_job(job_id)
+    # 保留本地 active_job 记录，等待设备重连或 agent 重启时走 recovery/sync 恢复。
+
+
+def _cleanup_after_job_exit(
+    *,
+    job_id: int,
+    fencing_token: str,
+    local_worker_token: str = "",
+    active_jobs_lock: Any,
+    active_job_ids: Set[int],
+    active_device_ids: Set[int],
+    active_job_tokens: Dict[int, str],
+    lease_renewer: Any,
+    local_db: Any,
+) -> None:
+    """Worker/JobSession 退出后的统一清理。
+
+    正常完成时删除本地 active_job；若该 job 已先因 lease_lost 从活跃集合移除，
+    则仅清 runtime 占位，保留本地记录等待 recovery/sync。
+    """
+    effective_worker_token = local_worker_token or fencing_token
+    device_id = lease_renewer.clear_fencing_token_if_current(
+        job_id,
+        fencing_token,
+        effective_worker_token,
+    )
+    with active_jobs_lock:
+        current_token = active_job_tokens.get(job_id, "")
+        job_was_active = job_id in active_job_ids and (
+            not effective_worker_token or current_token == effective_worker_token
+        )
+        if job_was_active:
+            active_job_ids.discard(job_id)
+            active_job_tokens.pop(job_id, None)
+            if device_id is not None:
+                active_device_ids.discard(device_id)
+    if job_was_active:
+        local_db.delete_active_job(job_id)
+
+
+def trigger_recovery_sync_on_device_reconnect(
+    *,
+    reconnected_serials: List[str],
+    local_db: Any,
+    api_url: str,
+    host_id: str,
+    agent_instance_id: str,
+    boot_id: str,
+    execute_actions: Any,
+) -> bool:
+    """Device reconnect hook: re-run recovery sync when local active jobs still exist."""
+    if not reconnected_serials:
+        return False
+
+    persisted_jobs = local_db.get_active_jobs()
+    if not persisted_jobs:
+        logger.info(
+            "recovery_skip_reconnect_no_local_jobs serials=%s",
+            ",".join(reconnected_serials),
+        )
+        return False
+
+    matched_jobs = [
+        job
+        for job in persisted_jobs
+        if job.get("device_serial") and job["device_serial"] in reconnected_serials
+    ]
+    if not matched_jobs:
+        logger.info(
+            "recovery_skip_reconnect_no_serial_match serials=%s active_jobs=%d",
+            ",".join(reconnected_serials),
+            len(persisted_jobs),
+        )
+        return False
+
+    logger.info(
+        "recovery_reconnect_triggered serials=%s matched_jobs=%d active_jobs=%d",
+        ",".join(reconnected_serials),
+        len(matched_jobs),
+        len(persisted_jobs),
+    )
+    run_recovery_sync_if_needed(
+        local_db=local_db,
+        api_url=api_url,
+        host_id=host_id,
+        agent_instance_id=agent_instance_id,
+        boot_id=boot_id,
+        execute_actions=execute_actions,
+        active_jobs=matched_jobs,
+    )
+    return True
 
 
 def execute_recovery_actions_impl(
@@ -108,18 +207,49 @@ def execute_recovery_actions_impl(
     local_db: Any,
     outbox_drain: Any,
     register_active_job: Any,
+    resume_job: Any = None,
 ) -> None:
     """ADR-0019 Phase 3a: execute recovery actions (module-level for testability)."""
     job_actions = resp.get("actions", [])
     outbox_actions = resp.get("outbox_actions", [])
+    resumed_job_ids: set[int] = set()
 
     for a in job_actions:
         jid = a["job_id"]
         action = a["action"]
         if action == "RESUME":
             token = a.get("fencing_token", "")
-            register_active_job(jid, token, a.get("device_id"))
-            logger.info("recovery_resume job=%d token=%s", jid, token[:8] if token else "")
+            persisted_job = active_jobs_by_id.get(jid) or {}
+            device_serial = (a.get("device_serial") or persisted_job.get("device_serial") or "").strip()
+            local_worker_token = _make_local_worker_token(jid, "resume")
+            register_active_job(
+                jid,
+                token,
+                a.get("device_id"),
+                device_serial,
+                local_worker_token,
+            )
+            resumed_job_ids.add(jid)
+            if resume_job is not None and isinstance(a.get("job_payload"), dict):
+                resumed_payload = dict(a["job_payload"])
+                resumed_payload["id"] = jid
+                if a.get("device_id") is not None:
+                    resumed_payload["device_id"] = a["device_id"]
+                if device_serial:
+                    resumed_payload["device_serial"] = device_serial
+                if token:
+                    resumed_payload["fencing_token"] = token
+                resumed_payload["local_worker_token"] = local_worker_token
+                try:
+                    resume_job(resumed_payload)
+                except Exception:
+                    logger.exception("recovery_resume_submit_failed job=%d", jid)
+            logger.info(
+                "recovery_resume job=%d token=%s worker=%s",
+                jid,
+                token[:8] if token else "",
+                local_worker_token,
+            )
         elif action == "CLEANUP":
             local_db.delete_active_job(jid)
             lease_renewer.clear_fencing_token(jid)
@@ -144,6 +274,9 @@ def execute_recovery_actions_impl(
         for a in outbox_actions:
             jid = a["job_id"]
             action = a["action"]
+            if jid in resumed_job_ids:
+                logger.info("recovery_outbox_skip_active_job_cleanup job=%d action=%s", jid, action)
+                continue
             if action == "UPLOAD_TERMINAL":
                 if jid not in pending_ids:
                     local_db.delete_active_job(jid)
@@ -206,10 +339,11 @@ def run_recovery_sync_if_needed(
     agent_instance_id: str,
     boot_id: str,
     execute_actions: Any,
+    active_jobs: Optional[List[dict]] = None,
 ) -> None:
     """ADR-0019 Phase 3a: check local persisted state and sync with Backend if needed."""
     try:
-        persisted_jobs = local_db.get_active_jobs()
+        persisted_jobs = active_jobs if active_jobs is not None else local_db.get_active_jobs()
         pending_outbox = local_db.get_pending_outbox()
         if persisted_jobs or pending_outbox:
             resp = sync_recovery(
@@ -402,6 +536,8 @@ def main() -> None:
         with _active_jobs_lock:
             return len(_active_device_ids)
 
+    _execute_recovery_actions = None
+
     # 启动心跳守护线程（独立于任务执行循环）
     heartbeat_thread = HeartbeatThread(
         api_url=api_url,
@@ -425,6 +561,19 @@ def main() -> None:
             "terminal_outbox_pending": local_db.count_pending_terminals(),
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),
         },
+        on_devices_reconnected=lambda serials: (
+            trigger_recovery_sync_on_device_reconnect(
+                reconnected_serials=serials,
+                local_db=local_db,
+                api_url=api_url,
+                host_id=host_id,
+                agent_instance_id=agent_instance_id,
+                boot_id=boot_id,
+                execute_actions=_execute_recovery_actions,
+            )
+            if _execute_recovery_actions is not None
+            else False
+        ),
     )
     heartbeat_thread.start()
 
@@ -437,6 +586,7 @@ def main() -> None:
                 active_jobs_lock=_active_jobs_lock,
                 active_job_ids=_active_job_ids,
                 active_device_ids=_active_device_ids,
+                active_job_tokens=_active_job_tokens,
                 local_db=local_db,
             )
         except Exception:
@@ -457,23 +607,45 @@ def main() -> None:
     lease_renewer.start()
 
     # ADR-0019 Phase 2b + Phase 3a/3b: 活跃 job 注册/注销闭包（捕获 lease_renewer + local_db）
-    def _register_active_job(jid: int, fencing_token: str = "", device_id: Optional[int] = None) -> None:
+    def _register_active_job(
+        jid: int,
+        fencing_token: str = "",
+        device_id: Optional[int] = None,
+        device_serial: str = "",
+        local_worker_token: str = "",
+    ) -> None:
+        effective_worker_token = local_worker_token or fencing_token
         with _active_jobs_lock:
             _active_job_ids.add(jid)
+            _active_job_tokens[jid] = effective_worker_token
             if device_id is not None:
                 _active_device_ids.add(device_id)  # Phase 3b: 注册时同步占位 device
         if fencing_token:
-            lease_renewer.set_fencing_token(jid, fencing_token, device_id)
+            lease_renewer.set_fencing_token(
+                jid,
+                fencing_token,
+                device_id,
+                effective_worker_token,
+            )
         if device_id is not None:
-            local_db.save_active_job(jid, device_id, fencing_token)
+            local_db.save_active_job(jid, device_id, fencing_token, device_serial)
 
-    def _deregister_active_job(jid: int) -> None:
-        device_id = lease_renewer.clear_fencing_token(jid)  # Phase 3b: 返回 device_id
-        with _active_jobs_lock:
-            _active_job_ids.discard(jid)
-            if device_id:
-                _active_device_ids.discard(device_id)
-        local_db.delete_active_job(jid)
+    def _deregister_active_job(
+        jid: int,
+        fencing_token: str = "",
+        local_worker_token: str = "",
+    ) -> None:
+        _cleanup_after_job_exit(
+            job_id=jid,
+            fencing_token=fencing_token,
+            local_worker_token=local_worker_token,
+            active_jobs_lock=_active_jobs_lock,
+            active_job_ids=_active_job_ids,
+            active_device_ids=_active_device_ids,
+            active_job_tokens=_active_job_tokens,
+            lease_renewer=lease_renewer,
+            local_db=local_db,
+        )
 
     # 必须在闭包定义之后注册，避免 _handle_control 中 _deregister_active_job 引用未绑定
     sio_client.set_control_handler(_handle_control)
@@ -482,8 +654,10 @@ def main() -> None:
     outbox_drain = OutboxDrainThread(api_url, local_db, interval=15.0)
     outbox_drain.start()
 
+    _resume_recovered_job = None
+
     # ── ADR-0019 Phase 3a: Recovery Sync ──
-    def _execute_recovery_actions(
+    def _execute_recovery_actions_impl_closure(
         resp: dict,
         active_jobs_by_id: dict,
     ) -> None:
@@ -495,17 +669,9 @@ def main() -> None:
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=_register_active_job,
+            resume_job=_resume_recovered_job,
         )
-
-    # Recovery sync execution
-    run_recovery_sync_if_needed(
-        local_db=local_db,
-        api_url=api_url,
-        host_id=host_id,
-        agent_instance_id=agent_instance_id,
-        boot_id=boot_id,
-        execute_actions=_execute_recovery_actions,
-    )
+    _execute_recovery_actions = _execute_recovery_actions_impl_closure
 
     from .patrol_recovery import build_patrol_job_not_running_handler
 
@@ -515,7 +681,7 @@ def main() -> None:
         agent_instance_id=agent_instance_id,
         boot_id=boot_id,
         local_db=local_db,
-        execute_actions=_execute_recovery_actions,
+        execute_actions=_execute_recovery_actions_impl_closure,
     )
 
     # Version compatibility guard: refuse to run if agent is below backend's min_version
@@ -535,6 +701,8 @@ def main() -> None:
         active_jobs_lock=_active_jobs_lock,
         active_job_ids=_active_job_ids,
         active_device_ids=_active_device_ids,
+        active_job_tokens=_active_job_tokens,
+        running_worker_tokens={},
         watcher_globally_enabled=STP_WATCHER_ENABLED,
         watcher_plan_default=STP_WATCHER_PLAN_DEFAULT,
         lock_register=_register_active_job,
@@ -542,6 +710,31 @@ def main() -> None:
         device_id_register=_register_active_device,
         device_id_deregister=_deregister_active_device,
         on_job_not_running_recovery=patrol_job_not_running_recovery,
+    )
+
+    def _resume_recovered_job_impl(job_payload: dict) -> None:
+        executor.submit(
+            run_task_wrapper,
+            job_payload,
+            adb,
+            api_url,
+            host_id,
+            job_runner_state,
+            mq_producer,
+            script_registry,
+            local_db,
+        )
+
+    _resume_recovered_job = _resume_recovered_job_impl
+
+    # Recovery sync execution
+    run_recovery_sync_if_needed(
+        local_db=local_db,
+        api_url=api_url,
+        host_id=host_id,
+        agent_instance_id=agent_instance_id,
+        boot_id=boot_id,
+        execute_actions=_execute_recovery_actions_impl_closure,
     )
     # SIGTERM / SIGINT graceful shutdown
     _shutdown_event = threading.Event()
@@ -581,7 +774,8 @@ def main() -> None:
                             host_id, active_count, available_slots,
                         )
 
-                    for job in jobs:
+                    for claimed_job in jobs:
+                        job = dict(claimed_job)
                         device_id = job.get("device_id")
 
                         with _active_jobs_lock:
@@ -594,8 +788,17 @@ def main() -> None:
                             if device_id:
                                 _active_device_ids.add(device_id)
 
+                        local_worker_token = _make_local_worker_token(job["id"], "claim")
+                        job["local_worker_token"] = local_worker_token
+
                         # ADR-0019 Phase 2b + 3a: 注册 job + fencing_token + 持久化 active_job
-                        _register_active_job(job["id"], job["fencing_token"], device_id)
+                        _register_active_job(
+                            job["id"],
+                            job["fencing_token"],
+                            device_id,
+                            job.get("device_serial", ""),
+                            local_worker_token,
+                        )
 
                         try:
                             executor.submit(
@@ -611,7 +814,11 @@ def main() -> None:
                             )
                         except Exception:
                             logger.exception("submit_failed job=%d device=%s", job["id"], device_id)
-                            _deregister_active_job(job["id"])
+                            _deregister_active_job(
+                                job["id"],
+                                job.get("fencing_token", ""),
+                                local_worker_token,
+                            )
                             with _active_jobs_lock:
                                 if device_id:
                                     _active_device_ids.discard(device_id)

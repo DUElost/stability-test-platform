@@ -42,6 +42,7 @@ class LeaseRenewer:
         self._post_retry_base_delay = float(os.getenv("AGENT_POST_RETRY_BASE_DELAY", "1"))
         self._renewal_interval = int(os.getenv("AGENT_LOCK_RENEWAL_INTERVAL", "60"))
         self._fencing_tokens: Dict[int, str] = {}  # ADR-0019 Phase 2b
+        self._local_worker_tokens: Dict[int, str] = {}
         self._device_ids: Dict[int, int] = {}      # Phase 3b: job_id → device_id
         self._agent_instance_id = agent_instance_id
         self._on_lease_lost = on_lease_lost
@@ -89,6 +90,7 @@ class LeaseRenewer:
                 for jid in orphan_tokens:
                     device_id = self._device_ids.pop(jid, None)
                     self._fencing_tokens.pop(jid, None)
+                    self._local_worker_tokens.pop(jid, None)
                     logger.warning("lease_renewer_orphan_token_purged", extra={
                         "agent_instance_id": self._agent_instance_id,
                         "job_id": jid,
@@ -111,14 +113,22 @@ class LeaseRenewer:
 
             self._stop_event.wait(self._renewal_interval)
 
-    def set_fencing_token(self, job_id: int, token: str, device_id: Optional[int] = None) -> None:
+    def set_fencing_token(
+        self,
+        job_id: int,
+        token: str,
+        device_id: Optional[int] = None,
+        local_worker_token: str = "",
+    ) -> None:
         """Store fencing_token and device_id for a job.
 
         ADR-0019 Phase 2b: token storage.
         Phase 3b: added device_id tracking.
         """
+        effective_worker_token = local_worker_token or token
         with self._jobs_lock:
             self._fencing_tokens[job_id] = token
+            self._local_worker_tokens[job_id] = effective_worker_token
             if device_id is not None:
                 self._device_ids[job_id] = device_id
             else:
@@ -132,6 +142,30 @@ class LeaseRenewer:
         """
         with self._jobs_lock:
             self._fencing_tokens.pop(job_id, None)
+            self._local_worker_tokens.pop(job_id, None)
+            return self._device_ids.pop(job_id, None)
+
+    def clear_fencing_token_if_current(
+        self,
+        job_id: int,
+        token: str,
+        local_worker_token: str = "",
+    ) -> Optional[int]:
+        """Remove token only when it still matches the current active token.
+
+        Empty token means unconditional clear for explicit local cleanup paths
+        such as control abort / submit failure before worker fully starts.
+        """
+        with self._jobs_lock:
+            current = self._fencing_tokens.get(job_id)
+            current_worker = self._local_worker_tokens.get(job_id, current or "")
+            expected_worker = local_worker_token or token
+            if token and current and current != token:
+                return None
+            if expected_worker and current_worker and current_worker != expected_worker:
+                return None
+            self._fencing_tokens.pop(job_id, None)
+            self._local_worker_tokens.pop(job_id, None)
             return self._device_ids.pop(job_id, None)
 
     def _extend_lock(self, job_id: int) -> None:
@@ -168,8 +202,20 @@ class LeaseRenewer:
                 if status in (409, 404):
                     # 409: token rejected; 404: job not found — lease definitively lost
                     with self._jobs_lock:
+                        current = self._fencing_tokens.get(job_id)
+                        if current and current != token:
+                            logger.info(
+                                "lease_lost_stale_token_ignored",
+                                extra={
+                                    "agent_instance_id": self._agent_instance_id,
+                                    "job_id": job_id,
+                                    "status_code": status,
+                                },
+                            )
+                            return
                         self._job_ids.discard(job_id)
                         self._fencing_tokens.pop(job_id, None)
+                        self._local_worker_tokens.pop(job_id, None)
                         device_id = self._device_ids.pop(job_id, None)
                     if self._on_lease_lost:
                         self._on_lease_lost(job_id, device_id)

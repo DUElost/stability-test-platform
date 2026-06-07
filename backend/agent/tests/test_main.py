@@ -153,6 +153,115 @@ class TestHeartbeatThread(unittest.TestCase):
         # Thread should be dead after stop()
         self.assertFalse(ht._thread.is_alive())
 
+    @patch("backend.agent.heartbeat_thread.send_heartbeat")
+    @patch("backend.agent.heartbeat_thread.device_discovery")
+    def test_device_reconnect_triggers_recovery_callback(self, mock_discovery, mock_send_hb):
+        """ADB state false -> true should invoke the reconnect callback once."""
+        mock_discovery.discover_devices.return_value = [{"serial": "ABC123", "adb_state": "device"}]
+        mock_discovery.collect_device_info.side_effect = [
+            {"adb_state": "offline", "adb_connected": False},
+            {"adb_state": "device", "adb_connected": True},
+        ]
+        reconnect_cb = MagicMock()
+
+        ht = HeartbeatThread(
+            api_url="http://127.0.0.1:8000",
+            host_id=1,
+            adb_path="adb",
+            mount_points=[],
+            host_info={"ip": "127.0.0.1"},
+            poll_interval=0.1,
+            sio_client=None,
+            on_devices_reconnected=reconnect_cb,
+        )
+
+        ht._tick()
+        reconnect_cb.assert_not_called()
+
+        ht._tick()
+        reconnect_cb.assert_called_once_with(["ABC123"])
+
+    @patch("backend.agent.heartbeat_thread.send_heartbeat")
+    @patch("backend.agent.heartbeat_thread.device_discovery")
+    def test_device_missing_then_reappearing_triggers_recovery_callback(self, mock_discovery, mock_send_hb):
+        """设备先从 adb discovery 消失，再重新出现时，也应触发重连回调。"""
+        mock_discovery.discover_devices.side_effect = [
+            [{"serial": "ABC123", "adb_state": "device"}],
+            [],
+            [{"serial": "ABC123", "adb_state": "device"}],
+        ]
+        mock_discovery.collect_device_info.side_effect = [
+            {"adb_state": "device", "adb_connected": True},
+            {"adb_state": "device", "adb_connected": True},
+        ]
+        reconnect_cb = MagicMock()
+
+        ht = HeartbeatThread(
+            api_url="http://127.0.0.1:8000",
+            host_id=1,
+            adb_path="adb",
+            mount_points=[],
+            host_info={"ip": "127.0.0.1"},
+            poll_interval=0.1,
+            sio_client=None,
+            on_devices_reconnected=reconnect_cb,
+        )
+
+        ht._tick()
+        reconnect_cb.assert_not_called()
+
+        ht._tick()
+        reconnect_cb.assert_not_called()
+
+        ht._tick()
+        reconnect_cb.assert_called_once_with(["ABC123"])
+
+    @patch("backend.agent.heartbeat_thread.send_heartbeat")
+    @patch("backend.agent.heartbeat_thread.device_discovery")
+    def test_device_reconnect_after_heartbeat_failure_retries_callback(self, mock_discovery, mock_send_hb):
+        """接回设备那一拍若心跳失败，下一拍仍应补触发恢复回调。"""
+        mock_discovery.discover_devices.side_effect = [
+            [{"serial": "ABC123", "adb_state": "device"}],
+            [],
+            [{"serial": "ABC123", "adb_state": "device"}],
+            [{"serial": "ABC123", "adb_state": "device"}],
+        ]
+        mock_discovery.collect_device_info.side_effect = [
+            {"adb_state": "device", "adb_connected": True},
+            {"adb_state": "device", "adb_connected": True},
+            {"adb_state": "device", "adb_connected": True},
+        ]
+        mock_send_hb.side_effect = [
+            {"ok": True},
+            {"ok": True},
+            None,
+            {"ok": True},
+        ]
+        reconnect_cb = MagicMock()
+
+        ht = HeartbeatThread(
+            api_url="http://127.0.0.1:8000",
+            host_id=1,
+            adb_path="adb",
+            mount_points=[],
+            host_info={"ip": "127.0.0.1"},
+            poll_interval=0.1,
+            sio_client=None,
+            on_devices_reconnected=reconnect_cb,
+        )
+
+        ht._tick()
+        reconnect_cb.assert_not_called()
+
+        ht._tick()
+        reconnect_cb.assert_not_called()
+
+        ht._tick()
+        reconnect_cb.assert_not_called()
+
+        ht._tick()
+        reconnect_cb.assert_called_once_with(["ABC123"])
+
 
 if __name__ == "__main__":
     unittest.main()

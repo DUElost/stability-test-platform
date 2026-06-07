@@ -114,12 +114,14 @@ class LocalDB:
             CREATE TABLE IF NOT EXISTS active_job_registry (
                 job_id        INTEGER PRIMARY KEY,
                 device_id     INTEGER NOT NULL,
+                device_serial TEXT,
                 fencing_token TEXT    NOT NULL DEFAULT '',
                 claimed_at    TEXT    NOT NULL
             );
         """)
         self._ensure_step_trace_schema()
         self._ensure_log_signal_outbox_schema()
+        self._ensure_active_job_registry_schema()
         self._backfill_step_trace_tokens()
         conn.commit()
         logger.info(f"LocalDB initialized: {db_path}")
@@ -191,6 +193,18 @@ class LocalDB:
             self._conn.execute(
                 "ALTER TABLE log_signal_outbox "
                 "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
+            )
+
+    def _ensure_active_job_registry_schema(self) -> None:
+        """兼容旧 agent 本地库：为 active_job_registry 补齐 device_serial。"""
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(active_job_registry)").fetchall()
+        }
+        if "device_serial" not in columns:
+            self._conn.execute(
+                "ALTER TABLE active_job_registry "
+                "ADD COLUMN device_serial TEXT"
             )
 
     def _backfill_step_trace_tokens(self) -> None:
@@ -752,14 +766,27 @@ class LocalDB:
     # active_job_registry — ADR-0019 Phase 3a: crash recovery persistence
     # ------------------------------------------------------------------
 
-    def save_active_job(self, job_id: int, device_id: int, fencing_token: str) -> None:
+    def save_active_job(
+        self,
+        job_id: int,
+        device_id: int,
+        fencing_token: str,
+        device_serial: str = "",
+    ) -> None:
         """Persist active job for crash recovery. Claim 时调用."""
         with self._lock:
             with self._conn:
                 self._conn.execute(
-                    "INSERT OR REPLACE INTO active_job_registry (job_id, device_id, fencing_token, claimed_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (job_id, device_id, fencing_token, datetime.now(timezone.utc).isoformat()),
+                    "INSERT OR REPLACE INTO active_job_registry "
+                    "(job_id, device_id, device_serial, fencing_token, claimed_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        job_id,
+                        device_id,
+                        device_serial,
+                        fencing_token,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
                 )
 
     def delete_active_job(self, job_id: int) -> None:
@@ -775,10 +802,18 @@ class LocalDB:
         """Return all persisted active jobs for recovery sync."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT job_id, device_id, fencing_token FROM active_job_registry "
+                "SELECT job_id, device_id, device_serial, fencing_token FROM active_job_registry "
                 "ORDER BY claimed_at ASC"
             ).fetchall()
-        return [{"job_id": r["job_id"], "device_id": r["device_id"], "fencing_token": r["fencing_token"]} for r in rows]
+        return [
+            {
+                "job_id": r["job_id"],
+                "device_id": r["device_id"],
+                "device_serial": r["device_serial"] or "",
+                "fencing_token": r["fencing_token"],
+            }
+            for r in rows
+        ]
 
     def get_pending_outbox(self) -> List[Dict[str, Any]]:
         """Return un-acked terminal outbox entries for recovery sync.

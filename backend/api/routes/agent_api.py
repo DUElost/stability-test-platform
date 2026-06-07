@@ -108,6 +108,34 @@ async def _enrich_job_metadata(
     return serial_map, watcher_policy_map
 
 
+async def _build_recovery_job_payload(
+    db: AsyncSession,
+    job: JobInstance,
+    *,
+    device_serial: str,
+    fencing_token: str,
+) -> Dict[str, Any]:
+    """Build the minimal claim-shaped payload required for Agent resume execution."""
+    watcher_policy = None
+    if job.plan_id is not None:
+        plan = await db.get(Plan, job.plan_id)
+        if plan is not None:
+            watcher_policy = plan.watcher_policy
+
+    return {
+        "id": job.id,
+        "plan_run_id": job.plan_run_id,
+        "plan_id": job.plan_id,
+        "device_id": job.device_id,
+        "device_serial": device_serial,
+        "host_id": job.host_id,
+        "status": job.status,
+        "pipeline_def": job.pipeline_def,
+        "watcher_policy": watcher_policy,
+        "fencing_token": fencing_token,
+    }
+
+
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class ClaimRequest(BaseModel):
@@ -175,6 +203,7 @@ class HeartbeatResponse(BaseModel):
 class _ActiveJobEntry(BaseModel):
     job_id: int
     device_id: int
+    device_serial: Optional[str] = None
     fencing_token: str = ""
 
 
@@ -196,6 +225,8 @@ class _RecoveryAction(BaseModel):
     device_id: Optional[int] = None
     action: str       # RESUME | CLEANUP | ABORT_LOCAL | UPLOAD_TERMINAL | NOOP
     fencing_token: str = ""
+    device_serial: str = ""
+    job_payload: Optional[Dict[str, Any]] = None
     event_type: str = ""
     reason: str = ""
 
@@ -1540,6 +1571,27 @@ async def recovery_sync(
                 ))
             continue
 
+        device = await db.get(Device, entry.device_id)
+        actual_serial = ((device.serial or "").strip() if device is not None else "")
+        reported_serial = (entry.device_serial or "").strip()
+        if reported_serial:
+            if actual_serial != reported_serial:
+                logger.warning(
+                    "recovery_sync_device_serial_mismatch host=%s job=%s device_id=%s reported=%s actual=%s",
+                    payload.host_id,
+                    entry.job_id,
+                    entry.device_id,
+                    reported_serial,
+                    actual_serial,
+                )
+                job_actions.append(_RecoveryAction(
+                    job_id=entry.job_id,
+                    device_id=entry.device_id,
+                    action="ABORT_LOCAL",
+                    reason="device_serial_mismatch",
+                ))
+                continue
+
         # D3: legacy lease adoption
         lease_agent_id = lease.agent_instance_id or ""
 
@@ -1581,9 +1633,17 @@ async def recovery_sync(
                     JobStateMachine.transition(job, JobStatus.RUNNING, "recovery_resume_unknown")
                 except InvalidTransitionError:
                     pass
+                job_payload = await _build_recovery_job_payload(
+                    db,
+                    job,
+                    device_serial=actual_serial,
+                    fencing_token=lease.fencing_token,
+                )
                 job_actions.append(_RecoveryAction(
                     job_id=entry.job_id, device_id=entry.device_id,
                     action="RESUME", fencing_token=lease.fencing_token,
+                    device_serial=actual_serial,
+                    job_payload=job_payload,
                     reason="recovery_resume_unknown",
                 ))
             else:
@@ -1614,9 +1674,19 @@ async def recovery_sync(
         else:
             reason = "same_instance"
 
+        job_payload = None
+        if job is not None:
+            job_payload = await _build_recovery_job_payload(
+                db,
+                job,
+                device_serial=actual_serial,
+                fencing_token=lease.fencing_token,
+            )
         job_actions.append(_RecoveryAction(
             job_id=entry.job_id, device_id=entry.device_id,
             action="RESUME", fencing_token=lease.fencing_token,
+            device_serial=actual_serial,
+            job_payload=job_payload,
             reason=reason,
         ))
 

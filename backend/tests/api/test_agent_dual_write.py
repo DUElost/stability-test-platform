@@ -772,6 +772,67 @@ def test_upload_step_traces_missing_token_raises_validation_error():
         )
 
 
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("stage", ["init", "patrol", "teardown"])
+async def test_upload_step_traces_failed_event_keeps_job_running(stage: str):
+    """普通 step_trace 失败只记时间线，不得提前把 job 收敛成终态。"""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lock_and_lease(seed)
+    try:
+        async with AsyncSessionLocal() as async_db:
+            result = await upload_step_traces(
+                traces=[
+                    StepTraceIn(
+                        job_id=seed["job_id"],
+                        step_id=f"{stage}-failed-step",
+                        stage=stage,
+                        event_type="FAILED",
+                        status="FAILED",
+                        error_message=f"{stage} replay failure",
+                        fencing_token=token,
+                    )
+                ],
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data["inserted"] == 1
+        assert result.data["total"] == 1
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.RUNNING.value
+            assert job.status_reason != "reconciled_from_replay"
+
+            trace = (
+                db.query(StepTrace)
+                .filter(
+                    StepTrace.job_id == seed["job_id"],
+                    StepTrace.step_id == f"{stage}-failed-step",
+                    StepTrace.event_type == "FAILED",
+                )
+                .first()
+            )
+            assert trace is not None
+            assert trace.stage == stage
+            assert trace.error_message == f"{stage} replay failure"
+        finally:
+            db.close()
+
+        async with AsyncSessionLocal() as async_db:
+            extend_result = await extend_job_lock(
+                job_id=seed["job_id"],
+                payload=_ExtendLockIn(fencing_token=token),
+                db=async_db,
+                _=None,
+            )
+        assert extend_result.error is None
+    finally:
+        _cleanup_seed(seed)
+
+
 # ── C6: session_watchdog release_lease ──────────────────────────────────────
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -1849,7 +1910,7 @@ async def test_recovery_sync_host_not_found_404():
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_recovery_sync_same_instance_resume():
-    """Lease 的 agent_instance_id == 请求的 instance_id → RESUME."""
+    """Lease 的 agent_instance_id == 请求的 instance_id → RESUME，并回传可恢复执行的完整 job_payload。"""
     suffix = uuid4().hex[:8]
     host_id = f"rec-host-{suffix}"
     instance_id = uuid4().hex
@@ -1859,6 +1920,7 @@ async def test_recovery_sync_same_instance_resume():
     # Create a job + device + ACTIVE lease via _seed_job + claim
     seed = _seed_job(status=JobStatus.RUNNING.value)
     try:
+        actual_serial = ""
         # Update the job's host_id to our recovery host
         db_sync = SessionLocal()
         try:
@@ -1867,6 +1929,7 @@ async def test_recovery_sync_same_instance_resume():
             device.host_id = host_id
             device.status = "BUSY"
             job.host_id = host_id
+            actual_serial = device.serial
             db_sync.commit()
 
             # Create an ACTIVE lease
@@ -1905,6 +1968,16 @@ async def test_recovery_sync_same_instance_resume():
         assert actions[0]["action"] == "RESUME"
         assert actions[0]["reason"] == "same_instance"
         assert actions[0]["fencing_token"] == f"{seed['device_id']}:1"
+        assert actions[0]["device_serial"] == actual_serial
+        assert actions[0]["job_payload"]["id"] == seed["job_id"]
+        assert actions[0]["job_payload"]["plan_run_id"] == seed["plan_run_id"]
+        assert actions[0]["job_payload"]["plan_id"] == seed["plan_id"]
+        assert actions[0]["job_payload"]["device_id"] == seed["device_id"]
+        assert actions[0]["job_payload"]["device_serial"] == actual_serial
+        assert actions[0]["job_payload"]["host_id"] == host_id
+        assert actions[0]["job_payload"]["status"] == JobStatus.RUNNING.value
+        assert actions[0]["job_payload"]["pipeline_def"] == PIPELINE_DEF
+        assert actions[0]["job_payload"]["fencing_token"] == f"{seed['device_id']}:1"
     finally:
         _cleanup_seed(seed)
         _cleanup_recovery_host(host_id)
@@ -2150,6 +2223,80 @@ async def test_recovery_sync_no_lease_abort_local():
     assert actions[0]["action"] == "ABORT_LOCAL"
     assert actions[0]["reason"] == "no_active_lease"
     _cleanup_recovery_host(host_id)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_sync_device_serial_mismatch_abort_local():
+    """上报的 device_serial 与原 job/device SN 不一致时，不允许恢复。"""
+    suffix = uuid4().hex[:8]
+    host_id = f"rec-serial-{suffix}"
+    instance_id = uuid4().hex
+    boot_id = uuid4().hex
+    _seed_recovery_host(host_id, boot_id=boot_id, instance_id=instance_id)
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    try:
+        db_sync = SessionLocal()
+        try:
+            job = db_sync.get(JobInstance, seed["job_id"])
+            device = db_sync.get(Device, seed["device_id"])
+            device.host_id = host_id
+            device.status = "BUSY"
+            job.host_id = host_id
+            db_sync.commit()
+
+            lease = DeviceLease(
+                device_id=seed["device_id"],
+                job_id=seed["job_id"],
+                host_id=host_id,
+                lease_type=LeaseType.JOB.value,
+                status=LeaseStatus.ACTIVE.value,
+                fencing_token=f"{seed['device_id']}:1",
+                agent_instance_id=instance_id,
+                lease_generation=1,
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=600),
+            )
+            db_sync.add(lease)
+            db_sync.commit()
+            actual_serial = device.serial
+        finally:
+            db_sync.close()
+
+        payload = _RecoverySyncIn(
+            host_id=host_id,
+            agent_instance_id=instance_id,
+            boot_id=boot_id,
+            active_jobs=[_ActiveJobEntry(
+                job_id=seed["job_id"],
+                device_id=seed["device_id"],
+                device_serial=f"{actual_serial}-WRONG",
+            )],
+        )
+
+        async with AsyncSessionLocal() as async_db:
+            result = await recovery_sync(payload, db=async_db, _=None)
+
+        assert result.error is None
+        actions = result.data["actions"]
+        assert len(actions) == 1
+        assert actions[0]["action"] == "ABORT_LOCAL"
+        assert actions[0]["reason"] == "device_serial_mismatch"
+
+        db_sync2 = SessionLocal()
+        try:
+            lease = (
+                db_sync2.query(DeviceLease)
+                .filter(DeviceLease.job_id == seed["job_id"])
+                .first()
+            )
+            job = db_sync2.get(JobInstance, seed["job_id"])
+            assert lease is not None and lease.status == LeaseStatus.ACTIVE.value
+            assert job.status == JobStatus.RUNNING.value
+        finally:
+            db_sync2.close()
+    finally:
+        _cleanup_seed(seed)
+        _cleanup_recovery_host(host_id)
 
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -2636,6 +2783,7 @@ async def test_recovery_sync_unknown_within_grace_resumes():
     seed = _seed_job(status=JobStatus.UNKNOWN.value)
     try:
         now = datetime.now(timezone.utc)
+        actual_serial = ""
         db = SessionLocal()
         try:
             job = db.get(JobInstance, seed["job_id"])
@@ -2646,6 +2794,7 @@ async def test_recovery_sync_unknown_within_grace_resumes():
             device = db.get(Device, seed["device_id"])
             device.host_id = host_id
             device.status = "BUSY"
+            actual_serial = device.serial
             db.commit()
 
             lease = DeviceLease(
@@ -2683,6 +2832,7 @@ async def test_recovery_sync_unknown_within_grace_resumes():
         assert len(actions) == 1
         assert actions[0]["action"] == "RESUME"
         assert actions[0]["reason"] == "recovery_resume_unknown"
+        assert actions[0]["device_serial"] == actual_serial
 
         db2 = SessionLocal()
         try:

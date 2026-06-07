@@ -48,6 +48,7 @@ class HeartbeatThread:
         # ADR-0020: agent version for preflight consistency check
         agent_version: str = "",
         get_outbox_counts: Optional[Callable[[], Dict[str, int]]] = None,
+        on_devices_reconnected: Optional[Callable[[List[str]], None]] = None,
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -65,9 +66,12 @@ class HeartbeatThread:
         self._boot_id = boot_id
         self._agent_version = agent_version
         self._get_outbox_counts = get_outbox_counts
+        self._on_devices_reconnected = on_devices_reconnected
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
+        self._last_adb_connected_by_serial: Dict[str, bool] = {}
+        self._pending_reconnected_serials: List[str] = []
         self._devices_lock = threading.Lock()
 
     @property
@@ -104,9 +108,12 @@ class HeartbeatThread:
     def _tick(self) -> None:
         """Single heartbeat cycle: discover → compute capacity/health → HTTP POST (authoritative) → WS push (display-only)."""
         devices_list = []
+        reconnected_serials: List[str] = []
+        discovered_serials: set[str] = set()
         try:
             discovered = device_discovery.discover_devices(self._adb_path)
             for dev in discovered:
+                discovered_serials.add(dev["serial"])
                 info = device_discovery.collect_device_info(
                     self._adb_path, dev["serial"]
                 )
@@ -122,15 +129,36 @@ class HeartbeatThread:
                     "build_display_id": info.get("build_display_id"),
                 }
                 devices_list.append(device_data)
+                previous_connected = self._last_adb_connected_by_serial.get(dev["serial"])
+                current_connected = bool(info.get("adb_connected", False))
+                if previous_connected is False and current_connected is True:
+                    reconnected_serials.append(dev["serial"])
+                self._last_adb_connected_by_serial[dev["serial"]] = current_connected
                 logger.info(
                     f"device_collected: {dev['serial']}, "
                     f"adb_connected={info.get('adb_connected')}, "
                     f"network_latency={info.get('network_latency')}, "
                     f"battery={info.get('battery_level')}, temp={info.get('temperature')}"
                 )
+
+            missing_serials = [
+                serial
+                for serial, was_connected in self._last_adb_connected_by_serial.items()
+                if was_connected is True and serial not in discovered_serials
+            ]
+            for serial in missing_serials:
+                self._last_adb_connected_by_serial[serial] = False
+                logger.info(
+                    "device_missing_from_discovery serial=%s marking_adb_connected_false",
+                    serial,
+                )
             logger.debug(f"discovered_{len(devices_list)}_devices")
         except Exception as e:
             logger.warning(f"device_discovery_failed: {e}")
+
+        for serial in reconnected_serials:
+            if serial not in self._pending_reconnected_serials:
+                self._pending_reconnected_serials.append(serial)
 
         with self._devices_lock:
             self._latest_devices = devices_list
@@ -189,6 +217,15 @@ class HeartbeatThread:
                 self._on_scripts_outdated()
             except Exception as exc:
                 logger.warning("script_catalog_refresh_failed: %s", exc)
+
+        if response and self._pending_reconnected_serials and self._on_devices_reconnected:
+            serials = list(self._pending_reconnected_serials)
+            try:
+                self._on_devices_reconnected(serials)
+            except Exception as exc:
+                logger.warning("device_reconnect_callback_failed: %s", exc)
+            else:
+                self._pending_reconnected_serials.clear()
 
         # WS push 复用同一份 stats（不再重复 collect_system_stats / check_mounts）
         if self._sio_client and self._sio_client.connected:

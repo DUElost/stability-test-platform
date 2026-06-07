@@ -72,6 +72,21 @@ def test_clear_fencing_token_second_call_returns_none():
     assert did is None
 
 
+def test_clear_fencing_token_if_current_requires_matching_local_worker_token():
+    r = _make_renewer()
+    r.set_fencing_token(1, "tok-1", device_id=10, local_worker_token="worker-new")
+
+    did = r.clear_fencing_token_if_current(1, "tok-1", "worker-old")
+    assert did is None
+    assert r._fencing_tokens[1] == "tok-1"
+    assert r._device_ids[1] == 10
+
+    did = r.clear_fencing_token_if_current(1, "tok-1", "worker-new")
+    assert did == 10
+    assert 1 not in r._fencing_tokens
+    assert 1 not in r._device_ids
+
+
 # ── Test 3+4: 409 triggers on_lease_lost callback + full cleanup ────────────
 
 def test_409_triggers_on_lease_lost_callback():

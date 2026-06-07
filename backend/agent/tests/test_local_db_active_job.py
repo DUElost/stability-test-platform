@@ -22,30 +22,32 @@ def db(tmp_path):
 class TestActiveJobRegistry:
     def test_save_and_get_active_jobs(self, db):
         """save → get round-trip 正常."""
-        db.save_active_job(1, 10, "token-1")
-        db.save_active_job(2, 20, "token-2")
+        db.save_active_job(1, 10, "token-1", "SERIAL-1")
+        db.save_active_job(2, 20, "token-2", "SERIAL-2")
 
         jobs = db.get_active_jobs()
         assert len(jobs) == 2
         assert jobs[0]["job_id"] in (1, 2)
         assert jobs[0]["device_id"] in (10, 20)
+        assert jobs[0]["device_serial"] in ("SERIAL-1", "SERIAL-2")
         assert jobs[0]["fencing_token"] in ("token-1", "token-2")
 
     def test_save_replace_updates(self, db):
         """同一 job_id 再次 save → 覆盖（INSERT OR REPLACE）."""
-        db.save_active_job(1, 10, "old-token")
-        db.save_active_job(1, 20, "new-token")
+        db.save_active_job(1, 10, "old-token", "SERIAL-OLD")
+        db.save_active_job(1, 20, "new-token", "SERIAL-NEW")
 
         jobs = db.get_active_jobs()
         assert len(jobs) == 1
         assert jobs[0]["job_id"] == 1
         assert jobs[0]["device_id"] == 20
+        assert jobs[0]["device_serial"] == "SERIAL-NEW"
         assert jobs[0]["fencing_token"] == "new-token"
 
     def test_delete_active_job(self, db):
         """delete 后 get 不再返回该 job."""
-        db.save_active_job(1, 10, "token-1")
-        db.save_active_job(2, 20, "token-2")
+        db.save_active_job(1, 10, "token-1", "SERIAL-1")
+        db.save_active_job(2, 20, "token-2", "SERIAL-2")
         db.delete_active_job(1)
 
         jobs = db.get_active_jobs()
@@ -63,7 +65,7 @@ class TestActiveJobRegistry:
         worker_conn = []
 
         def worker():
-            db.save_active_job(3, 30, "token-3")
+            db.save_active_job(3, 30, "token-3", "SERIAL-3")
             worker_conn.append(db._conn)
 
         t = threading.Thread(target=worker)
