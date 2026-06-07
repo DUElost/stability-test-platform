@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, X } from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip } from 'recharts';
 import type {
   AeeDashboardSection,
@@ -122,11 +122,39 @@ function buildPackageDistribution(breakdown: PackageSubtypeCount[]): SubtypeDist
     .sort((a, b) => b.count - a.count || subtypeLabel(a).localeCompare(subtypeLabel(b), 'zh-CN'));
 }
 
-function packageSubtypeSummary(row: PackageRanking): string {
-  return row.subtype_breakdown
-    .slice(0, 2)
-    .map((item) => `${item.subtype} ${item.count}`)
-    .join(' · ');
+function packageDominantColor(row: PackageRanking): string {
+  if (!row.subtype_breakdown || row.subtype_breakdown.length === 0) {
+    return SUBTYPE_COLORS['其他'];
+  }
+  const dominant = row.subtype_breakdown.reduce((a, b) =>
+    b.count > a.count ? b : a,
+  );
+  return SUBTYPE_COLORS[dominant.subtype] ?? SUBTYPE_COLORS['其他'];
+}
+
+function PackageSubtypeDots({ row, active }: { row: PackageRanking; active: boolean }) {
+  const items = row.subtype_breakdown.slice(0, 3);
+  if (items.length === 0) {
+    return <span className="text-xs text-slate-400">无细分类型数据</span>;
+  }
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      {items.map((item) => (
+        <span key={item.subtype} className="inline-flex items-center gap-1">
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ backgroundColor: SUBTYPE_COLORS[item.subtype] ?? SUBTYPE_COLORS['其他'] }}
+          />
+          <span className={`text-xs ${active ? 'text-slate-400' : 'text-slate-500'}`}>
+            {item.subtype} {item.count}
+          </span>
+        </span>
+      ))}
+      {row.subtype_breakdown.length > 3 && (
+        <span className="text-xs text-slate-400">+{row.subtype_breakdown.length - 3}</span>
+      )}
+    </div>
+  );
 }
 
 function SummaryCard({
@@ -143,6 +171,158 @@ function SummaryCard({
       <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">{label}</div>
       <div className={`mt-2 text-lg font-bold ${accent}`}>{value}</div>
     </div>
+  );
+}
+
+function PackageRankingDrawer({
+  open,
+  onClose,
+  rankings,
+  selectedPackageName,
+  onSelectPackage,
+}: {
+  open: boolean;
+  onClose: () => void;
+  rankings: PackageRanking[];
+  selectedPackageName: string | null;
+  onSelectPackage: (pkg: string | null) => void;
+}) {
+  const drawerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    drawerRef.current?.focus();
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        className="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm"
+      />
+      <aside
+        ref={drawerRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="包名榜完整列表"
+        tabIndex={-1}
+        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col overflow-hidden border-l bg-white shadow-2xl focus:outline-none"
+      >
+        <header className="flex items-center justify-between border-b px-4 py-3">
+          <div className="min-w-0">
+            <p className="truncate text-xs text-slate-500">当前范围</p>
+            <h2 className="truncate text-base font-semibold text-slate-900">
+              包名榜 · 全部 ({rankings.length})
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          <div className="space-y-2">
+            {rankings.map((row, index) => {
+              const active = selectedPackageName === row.package_name;
+              const isUnknown = row.package_name === 'unknown';
+              const dominantColor = isUnknown
+                ? '#94a3b8'
+                : packageDominantColor(row);
+              const rankCls =
+                index === 0
+                  ? 'text-amber-500 font-bold text-sm'
+                  : index === 1
+                    ? 'text-slate-500 font-bold text-sm'
+                    : index === 2
+                      ? 'text-amber-700 font-semibold'
+                      : 'text-slate-400';
+
+              return (
+                <button
+                  key={row.package_name}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => {
+                    onSelectPackage(
+                      row.package_name === selectedPackageName ? null : row.package_name,
+                    );
+                    onClose();
+                  }}
+                  className={`group flex w-full items-stretch rounded-xl border text-left transition-all duration-200 ${
+                    active
+                      ? 'border-slate-300 bg-slate-50 ring-1 ring-slate-300'
+                      : isUnknown
+                        ? 'border-dashed border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+                        : 'border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  <div
+                    className={`shrink-0 w-1 rounded-l-xl transition-all duration-200 ${
+                      active ? 'w-1.5' : 'group-hover:w-1.5'
+                    }`}
+                    style={{ backgroundColor: dominantColor }}
+                  />
+                  <div className="flex-1 min-w-0 px-3 py-2 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className={`font-mono tabular-nums ${rankCls}`}>
+                          #{index + 1}
+                        </span>
+                        <span
+                          className={`truncate text-sm ${
+                            isUnknown
+                              ? 'italic text-slate-400'
+                              : active
+                                ? 'font-semibold text-slate-900'
+                                : 'font-medium text-slate-700'
+                          }`}
+                        >
+                          {isUnknown ? '未知进程' : row.package_name}
+                        </span>
+                      </div>
+                      <div className="mt-1">
+                        <PackageSubtypeDots row={row} active={active} />
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div
+                        className={`text-lg font-bold transition-colors duration-200 ${
+                          active
+                            ? 'text-slate-900'
+                            : isUnknown
+                              ? 'text-slate-400'
+                              : 'text-slate-800'
+                        }`}
+                      >
+                        {row.total_count}
+                      </div>
+                      <div
+                        className={`text-[11px] ${
+                          active ? 'text-slate-500' : 'text-slate-400'
+                        }`}
+                      >
+                        {row.affected_device_count} 台设备
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -322,6 +502,7 @@ export default function AnomalyDashboard({
   onTimeScopeChange,
 }: Props) {
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
+  const [isPackageDrawerOpen, setPackageDrawerOpen] = useState(false);
 
   const supportsOriginSplit = data?.supports_origin_split ?? false;
   const currentRun = data?.current_run ?? EMPTY_SECTION;
@@ -342,9 +523,10 @@ export default function AnomalyDashboard({
   const preexistingTotal = preexistingDistribution.reduce((sum, item) => sum + item.count, 0);
 
   return (
-    <section
-      data-testid="watcher-summary"
-      className="space-y-4 rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] p-4 shadow-sm"
+    <>
+      <section
+        data-testid="watcher-summary"
+        className="space-y-4 rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] p-4 shadow-sm"
     >
       <SectionHeader
         title="异常仪表盘"
@@ -428,13 +610,29 @@ export default function AnomalyDashboard({
             </div>
 
             <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 text-sm font-semibold text-slate-900">
+              <div className="mb-1 text-sm font-semibold text-slate-900">
                 {`${primaryLabel} · 包名榜`}
+              </div>
+              <div className="mb-4 text-[11px] text-slate-400">
+                点击包名筛选饼图
               </div>
               {currentRun.package_ranking.length > 0 ? (
                 <div className="space-y-2">
                   {currentRun.package_ranking.slice(0, 5).map((row, index) => {
                     const active = selectedPackageRow?.package_name === row.package_name;
+                    const isUnknown = row.package_name === 'unknown';
+                    const dominantColor = isUnknown
+                      ? '#94a3b8'
+                      : packageDominantColor(row);
+                    const rankCls =
+                      index === 0
+                        ? 'text-amber-500 font-bold text-sm'
+                        : index === 1
+                          ? 'text-slate-500 font-bold text-sm'
+                          : index === 2
+                            ? 'text-amber-700 font-semibold'
+                            : 'text-slate-400';
+
                     return (
                       <button
                         key={row.package_name}
@@ -445,40 +643,76 @@ export default function AnomalyDashboard({
                             current === row.package_name ? null : row.package_name,
                           )
                         }
-                        className={`flex w-full items-start justify-between gap-3 rounded-2xl border px-3 py-2 text-left transition ${
+                        className={`group flex w-full items-stretch rounded-xl border text-left transition-all duration-200 ${
                           active
-                            ? 'border-slate-900 bg-slate-900 text-white'
-                            : 'border-slate-200 bg-slate-50 text-slate-800 hover:border-slate-300 hover:bg-white'
+                            ? 'border-slate-300 bg-slate-50 ring-1 ring-slate-300'
+                            : isUnknown
+                              ? 'border-dashed border-slate-200 bg-slate-50/50 hover:bg-slate-50'
+                              : 'border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300'
                         }`}
                       >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-semibold text-slate-400">
-                              #{index + 1}
-                            </span>
-                            <span className="truncate font-mono text-sm">{row.package_name}</span>
+                        <div
+                          className={`shrink-0 w-1 rounded-l-xl transition-all duration-200 ${
+                            active ? 'w-1.5' : 'group-hover:w-1.5'
+                          }`}
+                          style={{ backgroundColor: dominantColor }}
+                        />
+                        <div className="flex-1 min-w-0 px-3 py-2 flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={`font-mono tabular-nums ${rankCls}`}>
+                                #{index + 1}
+                              </span>
+                              <span
+                                className={`truncate text-sm ${
+                                  isUnknown
+                                    ? 'italic text-slate-400'
+                                    : active
+                                      ? 'font-semibold text-slate-900'
+                                      : 'font-medium text-slate-700'
+                                }`}
+                              >
+                                {isUnknown ? '未知进程' : row.package_name}
+                              </span>
+                            </div>
+                            <div className="mt-1">
+                              <PackageSubtypeDots row={row} active={active} />
+                            </div>
                           </div>
-                          <div
-                            className={`mt-1 text-xs ${
-                              active ? 'text-slate-200' : 'text-slate-500'
-                            }`}
-                          >
-                            {packageSubtypeSummary(row) || '无细分类型数据'}
-                          </div>
-                        </div>
-                        <div className="shrink-0 text-right">
-                          <div className="text-lg font-bold">{row.total_count}</div>
-                          <div
-                            className={`text-[11px] ${
-                              active ? 'text-slate-300' : 'text-slate-400'
-                            }`}
-                          >
-                            {row.affected_device_count} 台设备
+                          <div className="shrink-0 text-right transition-all duration-300">
+                            <div
+                              className={`text-lg font-bold transition-colors duration-200 ${
+                                active
+                                  ? 'text-slate-900'
+                                  : isUnknown
+                                    ? 'text-slate-400'
+                                    : 'text-slate-800'
+                              }`}
+                            >
+                              {row.total_count}
+                            </div>
+                            <div
+                              className={`text-[11px] ${
+                                active ? 'text-slate-500' : 'text-slate-400'
+                              }`}
+                            >
+                              {row.affected_device_count} 台设备
+                            </div>
                           </div>
                         </div>
                       </button>
                     );
                   })}
+
+                  {currentRun.package_ranking.length > 5 && (
+                    <button
+                      type="button"
+                      onClick={() => setPackageDrawerOpen(true)}
+                      className="w-full rounded-xl border border-dashed border-slate-300 py-2 text-xs font-medium text-slate-500 hover:border-slate-400 hover:text-slate-700 transition"
+                    >
+                      查看全部 ({currentRun.package_ranking.length})
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="flex h-32 items-center justify-center text-sm text-slate-400">
@@ -529,5 +763,14 @@ export default function AnomalyDashboard({
         </div>
       )}
     </section>
+
+      <PackageRankingDrawer
+        open={isPackageDrawerOpen}
+        onClose={() => setPackageDrawerOpen(false)}
+        rankings={currentRun.package_ranking}
+        selectedPackageName={selectedPackage}
+        onSelectPackage={setSelectedPackage}
+      />
+    </>
   );
 }
