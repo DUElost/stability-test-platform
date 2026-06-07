@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
+import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip } from 'recharts';
 import type {
   AeeDashboardSection,
   PackageRanking,
@@ -181,102 +181,134 @@ function DonutChart({
     );
   }
 
+  const renderActiveShape = (props: any) => {
+    const {
+      cx, cy, innerRadius, outerRadius,
+      startAngle, endAngle, fill,
+    } = props;
+    return (
+      <Sector
+        cx={cx}
+        cy={cy}
+        innerRadius={innerRadius}
+        outerRadius={outerRadius + 8}
+        startAngle={startAngle}
+        endAngle={endAngle}
+        fill={fill}
+        cornerRadius={3}
+      />
+    );
+  };
+
   return (
     <div
       data-testid={chartTestId}
       data-chart-type="recharts-donut"
       aria-label="异常细分类型占比饼图"
     >
-      <div className="flex items-center gap-4">
-        {/* Donut ring */}
-        <div className="relative shrink-0 w-[180px]">
-          <StableResponsiveContainer className="h-[180px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={48}
-                  outerRadius={76}
-                  startAngle={90}
-                  endAngle={-270}
-                  paddingAngle={chartData.length > 1 ? 2 : 0}
-                  dataKey="count"
-                  stroke="#f8fafc"
-                  strokeWidth={1}
-                  animationBegin={0}
-                  animationDuration={600}
-                  animationEasing="ease-out"
-                  isAnimationActive
-                  onMouseEnter={(_data, index) => setActiveIndex(index)}
-                  onMouseLeave={() => setActiveIndex(null)}
-                  label={false}
-                >
-                  {chartData.map((item) => (
-                    <Cell
-                      key={item.key}
-                      fill={item.color}
-                      style={{
-                        filter: 'drop-shadow(0 2px 4px rgba(15, 23, 42, 0.12))',
-                      }}
-                    />
-                  ))}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
-          </StableResponsiveContainer>
-          {/* Center total */}
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-            <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400">
-              异常总数
-            </div>
-            <div
-              data-center-total="true"
-              className={`mt-0.5 text-[22px] font-bold leading-none ${tone}`}
-            >
-              {total}
-            </div>
+      {/* Donut ring + center total */}
+      <div className="relative mx-auto w-full max-w-[320px]">
+        <StableResponsiveContainer className="h-[290px] min-h-[290px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Tooltip
+                wrapperStyle={{ outline: 'none', zIndex: 50 }}
+                content={({ active, payload }) => {
+                  if (!active || !payload || payload.length === 0) return null;
+                  const item = payload[0].payload as (typeof chartData)[number];
+                  return (
+                    <div className="rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
+                      <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                        <span
+                          className="h-2.5 w-2.5 rounded-full"
+                          style={{ backgroundColor: item.color }}
+                        />
+                        <span>{item.fullLabel}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {`${item.count} 次 · ${formatSharePercent(item.share)}%`}
+                      </div>
+                    </div>
+                  );
+                }}
+              />
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                innerRadius={55}
+                outerRadius={90}
+                startAngle={90}
+                endAngle={-270}
+                paddingAngle={chartData.length > 1 ? 2 : 0}
+                dataKey="count"
+                stroke="#f8fafc"
+                strokeWidth={1}
+                cornerRadius={3}
+                animationBegin={0}
+                animationDuration={600}
+                animationEasing="ease-out"
+                isAnimationActive
+                activeShape={renderActiveShape}
+                onMouseEnter={(_data, index) => setActiveIndex(index)}
+                onMouseLeave={() => setActiveIndex(null)}
+                label={false}
+              >
+                {chartData.map((item) => (
+                  <Cell
+                    key={item.key}
+                    fill={item.color}
+                    style={{
+                      filter: 'drop-shadow(0 2px 4px rgba(15, 23, 42, 0.12))',
+                    }}
+                  />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+        </StableResponsiveContainer>
+        {/* Center total */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+            异常总数
+          </div>
+          <div
+            data-center-total="true"
+            className={`mt-0.5 text-[26px] font-bold leading-none ${tone}`}
+          >
+            {total}
           </div>
         </div>
+      </div>
 
-        {/* Side legend */}
-        <div
-          data-testid={`${chartTestId}-legend`}
-          data-legend-position="side"
-          className="flex-1 min-w-0 space-y-1 max-h-[180px] overflow-y-auto"
-        >
-          {chartData.map((item, index) => {
-            const isActive = index === activeIndex;
-            return (
-              <div
-                key={`legend-${item.key}`}
-                className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition cursor-pointer ${
-                  isActive
-                    ? 'bg-slate-100 ring-1 ring-slate-200'
-                    : 'hover:bg-slate-50'
-                }`}
-                onMouseEnter={() => setActiveIndex(index)}
-                onMouseLeave={() => setActiveIndex(null)}
-              >
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: item.color }}
-                />
-                <span
-                  className={`font-medium truncate ${
-                    isActive ? 'text-slate-900' : 'text-slate-700'
-                  }`}
-                >
-                  {item.fullLabel}
-                </span>
-                <span className="ml-auto shrink-0 tabular-nums text-slate-400">
-                  {formatSharePercent(item.share)}%
-                </span>
-              </div>
-            );
-          })}
-        </div>
+      {/* Compact legend below */}
+      <div
+        data-testid={`${chartTestId}-legend`}
+        data-legend-position="below"
+        className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-1"
+      >
+        {chartData.map((item, index) => {
+          const isActive = index === activeIndex;
+          return (
+            <span
+              key={`legend-${item.key}`}
+              className={`inline-flex items-center gap-1 text-xs cursor-pointer transition rounded px-1.5 py-0.5 ${
+                isActive
+                  ? 'bg-slate-100 text-slate-900'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+              onMouseEnter={() => setActiveIndex(index)}
+              onMouseLeave={() => setActiveIndex(null)}
+            >
+              <span
+                className="h-2 w-2 shrink-0 rounded-full"
+                style={{ backgroundColor: item.color }}
+              />
+              <span className="font-medium">{item.fullLabel}</span>
+              <span className="tabular-nums">{formatSharePercent(item.share)}%</span>
+            </span>
+          );
+        })}
       </div>
     </div>
   );
