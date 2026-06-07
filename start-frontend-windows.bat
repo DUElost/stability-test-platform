@@ -1,6 +1,16 @@
 @echo off
+setlocal
 
 REM Windows Native Frontend Launcher for Stability Test Platform
+
+cd /d "%~dp0"
+
+call "%~dp0stop-frontend.bat"
+if errorlevel 1 (
+    echo ERROR: Failed to stop existing frontend processes.
+    pause
+    exit /b 1
+)
 
 cd /d "%~dp0\frontend"
 
