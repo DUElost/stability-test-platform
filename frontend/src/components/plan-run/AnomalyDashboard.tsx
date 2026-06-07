@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { Cell, Pie, PieChart, ResponsiveContainer } from 'recharts';
 import type {
   AeeDashboardSection,
   PackageRanking,
@@ -8,6 +9,7 @@ import type {
   WatcherSummary,
   WatcherTimeScope,
 } from '@/utils/api/types';
+import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
 import SectionHeader from './SectionHeader';
 
 interface Props {
@@ -46,24 +48,26 @@ const VENDOR_SUBTYPES = new Set([
 ]);
 
 const SUBTYPE_COLORS: Record<string, string> = {
-  ANR: '#ef4444',
-  JE: '#2563eb',
-  NE: '#f59e0b',
-  SWT: '#06b6d4',
-  'Fatal NE': '#ea580c',
-  'Fatal JE': '#7c3aed',
-  'Combo EE': '#0f766e',
-  'Kernel API Dump': '#475569',
-  'System API Dump': '#0ea5e9',
-  HWT: '#14b8a6',
-  HANG: '#64748b',
-  KE: '#334155',
-  'HW Reboot': '#84cc16',
-  'Modem EE': '#1d4ed8',
-  'OCP Reboot': '#9333ea',
-  'Vendor 其他': '#94a3b8',
-  其他: '#cbd5e1',
+  ANR: '#5b74c8',
+  JE: '#ffc94d',
+  NE: '#f26363',
+  SWT: '#67c7df',
+  'Fatal NE': '#f08a52',
+  'Fatal JE': '#8b68d6',
+  'Combo EE': '#4bb5a8',
+  'Kernel API Dump': '#7b879b',
+  'System API Dump': '#55a8f2',
+  HWT: '#8acb69',
+  HANG: '#94a3b8',
+  KE: '#6b7280',
+  'HW Reboot': '#a3cf5b',
+  'Modem EE': '#4d87da',
+  'OCP Reboot': '#b082ef',
+  'Vendor 其他': '#b7c1d4',
+  其他: '#d8dee8',
 };
+
+const DONUT_MAX_LABEL_CHARS = 18;
 
 function subtypeLabel(item: Pick<SubtypeDistribution, 'subtype' | 'group'>): string {
   if (item.subtype === '其他' && item.group === 'VENDOR_AEE') return 'Vendor 其他';
@@ -77,6 +81,12 @@ function subtypeColor(item: Pick<SubtypeDistribution, 'subtype' | 'group'>): str
 function formatCompactValue(value: string | null | undefined): string {
   if (!value) return '无';
   return value;
+}
+
+function formatSharePercent(share: number): string {
+  const value = share * 100;
+  const fixed = value.toFixed(1);
+  return fixed.replace(/\.?0+$/, '');
 }
 
 function inferSubtypeGroup(subtype: string): 'AEE' | 'VENDOR_AEE' {
@@ -120,6 +130,18 @@ function packageSubtypeSummary(row: PackageRanking): string {
     .join(' · ');
 }
 
+function truncateLabel(label: string, maxChars = DONUT_MAX_LABEL_CHARS) {
+  const chars = Array.from(label);
+  if (chars.length <= maxChars) {
+    return { text: label, truncated: false };
+  }
+
+  return {
+    text: `${chars.slice(0, Math.max(1, maxChars - 3)).join('')}...`,
+    truncated: true,
+  };
+}
+
 function SummaryCard({
   label,
   value,
@@ -141,63 +163,188 @@ function DonutChart({
   items,
   total,
   tone,
+  chartTestId,
 }: {
   items: SubtypeDistribution[];
   total: number;
   tone: string;
+  chartTestId: string;
 }) {
-  const radius = 34;
-  const circumference = 2 * Math.PI * radius;
-  let offset = 0;
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+
+  const chartData = useMemo(
+    () =>
+      items.map((item, index) => {
+        const label = subtypeLabel(item);
+        const truncated = truncateLabel(label);
+        return {
+          ...item,
+          color: subtypeColor(item),
+          displayLabel: truncated.text,
+          fullLabel: label,
+          isTruncated: truncated.truncated,
+          key: `${item.group}-${item.subtype}-${index}`,
+        };
+      }),
+    [items],
+  );
 
   return (
-    <div className="flex items-center gap-4">
-      <div className="relative h-28 w-28 shrink-0">
-        <svg viewBox="0 0 100 100" className="-rotate-90">
-          <circle cx="50" cy="50" r={radius} stroke="#e2e8f0" strokeWidth="12" fill="none" />
-          {items.map((item) => {
-            const dash = total > 0 ? (item.count / total) * circumference : 0;
-            const node = (
-              <circle
-                key={`${item.group}-${item.subtype}`}
-                cx="50"
-                cy="50"
-                r={radius}
-                fill="none"
-                stroke={subtypeColor(item)}
-                strokeWidth="12"
-                strokeLinecap="round"
-                strokeDasharray={`${dash} ${circumference}`}
-                strokeDashoffset={-offset}
-              />
-            );
-            offset += dash;
-            return node;
-          })}
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <div className={`text-xl font-bold ${tone}`}>{total}</div>
-          <div className="text-[11px] text-slate-400">事件</div>
+    <div
+      data-testid={chartTestId}
+      data-chart-type="recharts-donut"
+      aria-label="异常细分类型占比饼图"
+    >
+      {/* Chart + center total */}
+      <div className="relative mx-auto w-full max-w-[320px]">
+        <StableResponsiveContainer className="h-[290px] min-h-[290px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={chartData}
+                cx="50%"
+                cy="50%"
+                innerRadius={55}
+                outerRadius={90}
+                startAngle={90}
+                endAngle={-270}
+                paddingAngle={chartData.length > 1 ? 2 : 0}
+                dataKey="count"
+                stroke="#f8fafc"
+                strokeWidth={1}
+                animationBegin={0}
+                animationDuration={600}
+                animationEasing="ease-out"
+                isAnimationActive
+                onMouseEnter={(_data, index) => setActiveIndex(index)}
+                onMouseLeave={() => setActiveIndex(null)}
+                label={(labelProps: any) => {
+                  if (total <= 0) return null;
+                  const { cx, cy, midAngle, outerRadius, index, payload } = labelProps;
+                  const item = payload as (typeof chartData)[number];
+                  if (!item || item.count <= 0) return null;
+
+                  const isActive = index === activeIndex;
+                  const RADIAN = Math.PI / 180;
+                  const cos = Math.cos(-midAngle * RADIAN);
+                  const sin = Math.sin(-midAngle * RADIAN);
+                  const lineStartX = cx + (outerRadius + 1) * cos;
+                  const lineStartY = cy + (outerRadius + 1) * sin;
+                  const lineEndX = cx + (outerRadius + 16) * cos;
+                  const lineEndY = cy + (outerRadius + 16) * sin;
+                  const textX = cx + (outerRadius + 20) * cos;
+                  const textY = cy + (outerRadius + 20) * sin;
+                  const textAnchor = textX >= cx ? 'start' : 'end';
+                  const linePath = `M${lineStartX},${lineStartY}L${lineEndX},${lineEndY}`;
+                  const pct = formatSharePercent(item.share);
+
+                  return (
+                    <g
+                      key={`donut-label-${index}`}
+                      style={{ cursor: 'pointer' }}
+                      onMouseEnter={() => setActiveIndex(index)}
+                      onMouseLeave={() => setActiveIndex(null)}
+                    >
+                      <path
+                        d={linePath}
+                        stroke={isActive ? '#64748b' : '#cbd5e1'}
+                        strokeWidth={isActive ? 1.5 : 1}
+                        fill="none"
+                      />
+                      {/* transparent fat hit-area so hovering the leader line also selects */}
+                      <path
+                        d={linePath}
+                        stroke="transparent"
+                        strokeWidth={16}
+                        fill="none"
+                        style={{ pointerEvents: 'all' }}
+                      />
+                      {isActive ? (
+                        <>
+                          <text
+                            x={textX}
+                            y={textY - 7}
+                            fill="#1e293b"
+                            textAnchor={textAnchor}
+                            dominantBaseline="auto"
+                            fontSize={14}
+                            fontWeight={700}
+                          >
+                            {item.displayLabel}
+                          </text>
+                          <text
+                            x={textX}
+                            y={textY + 10}
+                            fill="#64748b"
+                            textAnchor={textAnchor}
+                            dominantBaseline="auto"
+                            fontSize={12.5}
+                            fontWeight={600}
+                          >
+                            {`${pct}%`}
+                          </text>
+                        </>
+                      ) : (
+                        <text
+                          x={textX}
+                          y={textY}
+                          fill="#94a3b8"
+                          textAnchor={textAnchor}
+                          dominantBaseline="central"
+                          fontSize={10}
+                          fontWeight={500}
+                        >
+                          {item.displayLabel}
+                        </text>
+                      )}
+                    </g>
+                  );
+                }}
+                labelLine={false}
+              >
+                {chartData.map((item) => (
+                  <Cell
+                    key={item.key}
+                    fill={item.color}
+                    style={{
+                      filter: 'drop-shadow(0 2px 4px rgba(15, 23, 42, 0.12))',
+                    }}
+                  />
+                ))}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+        </StableResponsiveContainer>
+        {/* Center total */}
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+          <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+            异常总数
+          </div>
+          <div data-center-total="true" className={`mt-0.5 text-[26px] font-bold leading-none ${tone}`}>
+            {total}
+          </div>
         </div>
       </div>
 
-      <div className="min-w-0 flex-1 space-y-2">
-        {items.length > 0 ? (
-          items.map((item) => (
-            <div
-              key={`${item.group}-${item.subtype}`}
-              className="flex items-center justify-between gap-3 text-sm"
-            >
-              <div className="flex min-w-0 items-center gap-2">
-                <span
-                  className="h-2.5 w-2.5 shrink-0 rounded-full"
-                  style={{ backgroundColor: subtypeColor(item) }}
-                />
-                <span className="truncate text-slate-700">{subtypeLabel(item)}</span>
-              </div>
-              <div className="shrink-0 font-mono text-xs text-slate-500">
-                {Math.round(item.share * 100)}%
-              </div>
+      {/* Legend — center below chart */}
+      <div
+        data-testid={`${chartTestId}-legend`}
+        data-legend-position="below"
+        className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1.5"
+      >
+        {chartData.length > 0 ? (
+          chartData.map((item) => (
+            <div key={`legend-${item.key}`} className="flex items-center gap-1.5 text-xs">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: item.color }}
+              />
+              <span className="font-medium text-slate-700">
+                {item.fullLabel}
+              </span>
+              <span className="tabular-nums text-slate-400">
+                {formatSharePercent(item.share)}%
+              </span>
             </div>
           ))
         ) : (
@@ -306,7 +453,12 @@ export default function AnomalyDashboard({
                 {`${primaryLabel} · 细分类型占比`}
               </div>
               {currentRun.total_events > 0 ? (
-                <DonutChart items={chartDistribution} total={chartTotal} tone="text-slate-900" />
+                <DonutChart
+                  items={chartDistribution}
+                  total={chartTotal}
+                  tone="text-slate-900"
+                  chartTestId="current-run-pie-chart"
+                />
               ) : (
                 <div className="flex h-32 items-center justify-center text-sm text-slate-400">
                   {supportsOriginSplit
@@ -386,6 +538,7 @@ export default function AnomalyDashboard({
                     items={preexistingDistribution}
                     total={preexistingTotal}
                     tone="text-slate-700"
+                    chartTestId="preexisting-pie-chart"
                   />
                   <div className="grid gap-3 sm:grid-cols-3">
                     <SummaryCard

@@ -1,7 +1,18 @@
+import type { ReactNode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import AnomalyDashboard from './AnomalyDashboard';
 import type { WatcherSummary } from '@/utils/api/types';
+
+vi.mock('@/components/charts/StableResponsiveContainer', () => ({
+  StableResponsiveContainer: ({
+    children,
+    className,
+  }: {
+    children: ReactNode;
+    className?: string;
+  }) => <div className={className}>{children}</div>,
+}));
 
 function makeSection(overrides: Record<string, unknown> = {}) {
   return {
@@ -89,6 +100,52 @@ describe('AnomalyDashboard', () => {
     expect(screen.queryByText(/超阈值/)).toBeNull();
   });
 
+  it('renders a Recharts donut chart with legend below and center total', () => {
+    const longSubtype = 'Kernel API Dump Very Long Tail Stability Exception Name';
+    render(
+      <AnomalyDashboard
+        {...({
+          data: makeData({
+            current_run: makeSection({
+              top_subtype: longSubtype,
+              subtype_distribution: [
+                { subtype: longSubtype, group: 'AEE', count: 2, share: 0.6667 },
+                { subtype: 'HWT', group: 'VENDOR_AEE', count: 1, share: 0.3333 },
+              ],
+              package_ranking: [
+                {
+                  package_name: 'com.runtime.camera',
+                  total_count: 2,
+                  affected_device_count: 1,
+                  latest_detected_at: '2026-06-06T00:10:00Z',
+                  subtype_breakdown: [{ subtype: longSubtype, count: 2 }],
+                },
+                {
+                  package_name: 'com.vendor.camera',
+                  total_count: 1,
+                  affected_device_count: 1,
+                  latest_detected_at: '2026-06-06T00:12:00Z',
+                  subtype_breakdown: [{ subtype: 'HWT', count: 1 }],
+                },
+              ],
+            }),
+          }),
+          timeScope: 'all',
+        } as any)}
+      />,
+    );
+    const pieChart = screen.getByTestId('current-run-pie-chart');
+    expect(pieChart.getAttribute('data-chart-type')).toBe('recharts-donut');
+    expect(screen.getByTestId('current-run-pie-chart-legend')).toHaveAttribute(
+      'data-legend-position',
+      'below',
+    );
+    // Legend shows both subtypes (truncation info on fullLabel is in legend text)
+    const legend = screen.getByTestId('current-run-pie-chart-legend');
+    expect(legend.textContent).toContain('HWT');
+    expect(pieChart.querySelector('[data-center-total="true"]')?.textContent).toBe('3');
+  });
+
   it('shows compatibility hint when origin split is unavailable', () => {
     render(
       <AnomalyDashboard
@@ -115,11 +172,11 @@ describe('AnomalyDashboard', () => {
     ).toBeTruthy();
   });
 
-  it('filters the donut legend when a package row is selected', () => {
+  it('filters the pie-chart legend when a package row is selected', () => {
     render(<AnomalyDashboard {...({ data: makeData(), timeScope: 'all' } as any)} />);
-    expect(screen.getByText('HWT')).toBeTruthy();
+    expect(screen.getAllByText('HWT').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: /com\.runtime\.camera/i }));
-    expect(screen.queryByText('HWT')).toBeNull();
+    expect(screen.queryAllByText('HWT')).toHaveLength(0);
     expect(screen.getAllByText('JE').length).toBeGreaterThan(0);
   });
 
