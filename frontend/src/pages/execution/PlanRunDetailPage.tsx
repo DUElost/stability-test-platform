@@ -14,6 +14,7 @@ import type {
   DeviceUiStatus,
   PlanRun,
   PlanRunStatus,
+  WatcherTimeScope,
 } from '@/utils/api/types';
 import PlanRunHero from '@/components/plan-run/PlanRunHero';
 import PlanRunKpiGrid from '@/components/plan-run/PlanRunKpiGrid';
@@ -42,6 +43,22 @@ const SLOW_REFETCH_MS = 30_000;
 const STALE_PATROL_HEARTBEAT_MS = 180_000;
 /** Init-stage RUNNING without patrol heartbeat — matches RUNNING_HEARTBEAT_TIMEOUT (900s). */
 const STALE_INIT_HEARTBEAT_MS = 900_000;
+const WATCHER_TIME_SCOPE_MAP: Record<string, WatcherTimeScope> = {
+  all: 'all',
+  '15m': '15m',
+  '1h': '1h',
+  '6h': '6h',
+  '24h': '24h',
+  '15': '15m',
+  '60': '1h',
+  '360': '6h',
+  '1440': '24h',
+};
+
+function normalizeWatcherTimeScope(value: string | null): WatcherTimeScope {
+  if (!value) return 'all';
+  return WATCHER_TIME_SCOPE_MAP[value] ?? 'all';
+}
 
 function isDispatchGateActive(run: PlanRun | undefined): boolean {
   if (!run || run.status !== 'RUNNING') return false;
@@ -180,7 +197,9 @@ export default function PlanRunDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const deviceStatusFilter = (searchParams.get('status') ?? 'all') as DeviceUiStatus | 'all';
   const deviceHostFilter = searchParams.get('host') ?? 'all';
-  const watcherWindow = Number(searchParams.get('window')) || 60;
+  const watcherTimeScope = normalizeWatcherTimeScope(
+    searchParams.get('scope') ?? searchParams.get('window'),
+  );
 
   const updateParam = useCallback(
     (key: string, value: string, isDefault: boolean) =>
@@ -203,8 +222,8 @@ export default function PlanRunDetailPage() {
     (h: string | 'all') => updateParam('host', h, h === 'all'),
     [updateParam],
   );
-  const setWatcherWindow = useCallback(
-    (w: number) => updateParam('window', String(w), w === 60),
+  const setWatcherTimeScope = useCallback(
+    (scope: WatcherTimeScope) => updateParam('scope', scope, scope === 'all'),
     [updateParam],
   );
 
@@ -249,8 +268,8 @@ export default function PlanRunDetailPage() {
   });
 
   const watcherQ = useQuery({
-    queryKey: ['plan-run-watcher', id, watcherWindow],
-    queryFn: () => api.planRuns.getWatcherSummary(id, watcherWindow),
+    queryKey: ['plan-run-watcher', id, watcherTimeScope],
+    queryFn: () => api.planRuns.getWatcherSummary(id, watcherTimeScope),
     enabled: !!id,
     refetchInterval: isTerminal ? false : SLOW_REFETCH_MS,
   });
@@ -580,8 +599,8 @@ export default function PlanRunDetailPage() {
               data={watcherQ.data}
               isLoading={watcherQ.isLoading}
               isError={watcherQ.isError}
-              windowMinutes={watcherWindow}
-              onWindowChange={setWatcherWindow}
+              timeScope={watcherTimeScope}
+              onTimeScopeChange={setWatcherTimeScope}
             />
 
             <BusinessFlowStepper

@@ -11,6 +11,7 @@ import type {
   PlanRunEventsPayload,
   PlanRunDevicesPayload,
   WatcherSummary,
+  WatcherTimeScope,
   JobManualActionResult,
   PlanRunAbortResult,
   PlanRunDispatchRetryResult,
@@ -73,10 +74,10 @@ export const planRuns = {
       apiClient.get(`/plan-runs/${runId}/devices`, { params: cleanParams(params) }),
     ),
 
-  getWatcherSummary: (runId: number, windowMinutes = 60) =>
+  getWatcherSummary: (runId: number, timeScope: WatcherTimeScope = 'all') =>
     unwrapApiResponse<WatcherSummary>(
       apiClient.get(`/plan-runs/${runId}/watcher-summary`, {
-        params: { window_minutes: windowMinutes },
+        params: { time_scope: timeScope },
       }),
     ),
 

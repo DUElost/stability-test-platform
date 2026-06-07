@@ -66,13 +66,7 @@ vi.mock('@/hooks/useSocketIO', () => ({
 
 // Mock AnomalyDashboard with backward-compatible testids so existing assertions still pass.
 vi.mock('@/components/plan-run/AnomalyDashboard', () => ({
-  default: ({ data }: { data?: { exceeded?: boolean } }) => (
-    <div data-testid="watcher-summary">
-      {data?.exceeded && (
-        <div data-testid="watcher-threshold-banner">exceeded</div>
-      )}
-    </div>
-  ),
+  default: () => <div data-testid="watcher-summary" />,
 }));
 
 /** 模拟 AppShell 消费 HeaderSlotContext,把页面注入的顶栏内容渲染到 DOM。 */
@@ -286,7 +280,8 @@ beforeEach(() => {
   });
   mocks.getWatcherSummary.mockResolvedValue({
     plan_run_id: 12,
-    window_minutes: 60,
+    time_scope: 'all',
+    window_minutes: null,
     window_start_at: '2026-05-08T11:30:00Z',
     window_end_at: '2026-05-08T12:30:00Z',
     categories: [
@@ -305,6 +300,31 @@ beforeEach(() => {
     abnormal_rate: 0.5,
     threshold: 0.05,
     exceeded: true,
+    supports_origin_split: true,
+    current_run: {
+      total_events: 2,
+      affected_device_count: 1,
+      top_package_name: 'com.runtime.camera',
+      top_subtype: 'JE',
+      subtype_distribution: [{ subtype: 'JE', group: 'AEE', count: 2, share: 1 }],
+      package_ranking: [
+        {
+          package_name: 'com.runtime.camera',
+          total_count: 2,
+          affected_device_count: 1,
+          latest_detected_at: '2026-05-08T12:25:00Z',
+          subtype_breakdown: [{ subtype: 'JE', count: 2 }],
+        },
+      ],
+    },
+    preexisting: {
+      total_events: 0,
+      affected_device_count: 0,
+      top_package_name: null,
+      top_subtype: null,
+      subtype_distribution: [],
+      package_ranking: [],
+    },
   });
   mocks.manualRetryJob.mockResolvedValue({
     job_id: 3002,
@@ -344,8 +364,6 @@ describe('PlanRunDetailPage', () => {
     fireEvent.click(screen.getByTestId('device-overview-table-btn'));
     // BACKOFF row visible with red failure streak
     expect(await screen.findByTestId('device-row-3002')).toHaveTextContent('退避');
-    // Threshold banner since exceeded=true
-    expect(await screen.findByTestId('watcher-threshold-banner')).toBeInTheDocument();
     // 概览/日志 tab 存在;逐条事件流已迁至日志页(详情页无 event-list)
     expect(screen.getByTestId('plan-run-tabs')).toBeInTheDocument();
     expect(screen.queryByTestId('event-list')).not.toBeInTheDocument();

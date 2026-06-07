@@ -932,9 +932,41 @@ export interface AeeBreakdown {
   by_package: PackageStat[];             // 按 crash + vendor_crash + anr 总数 DESC,平局 pkg ASC
 }
 
+export type WatcherTimeScope = 'all' | '15m' | '1h' | '6h' | '24h';
+
+export interface PackageSubtypeCount {
+  subtype: string;
+  count: number;
+}
+
+export interface SubtypeDistribution {
+  subtype: string;
+  group: 'AEE' | 'VENDOR_AEE' | string;
+  count: number;
+  share: number;
+}
+
+export interface PackageRanking {
+  package_name: string;
+  total_count: number;
+  affected_device_count: number;
+  latest_detected_at?: string | null;
+  subtype_breakdown: PackageSubtypeCount[];
+}
+
+export interface AeeDashboardSection {
+  total_events: number;
+  affected_device_count: number;
+  top_package_name?: string | null;
+  top_subtype?: string | null;
+  subtype_distribution: SubtypeDistribution[];
+  package_ranking: PackageRanking[];
+}
+
 export interface WatcherSummary {
   plan_run_id: number;
-  window_minutes: number;
+  window_minutes?: number | null;
+  time_scope?: WatcherTimeScope | string;
   window_start_at: string;
   window_end_at: string;
   categories: WatcherCategory[];
@@ -944,6 +976,9 @@ export interface WatcherSummary {
   abnormal_rate: number;                 // affected / total_devices
   threshold: number;
   exceeded: boolean;
+  supports_origin_split?: boolean;
+  current_run?: AeeDashboardSection;
+  preexisting?: AeeDashboardSection;
   // M0/PR #2: reconciler signal 附带 extra 才会填充;无关联 Job 走早返回 → null
   aee_breakdown?: AeeBreakdown | null;
   // M0/C-6 (§2.4 #5): 该 PlanRun 下 Job 的 watcher 能力快照(后端取最"降级"的一档)。
