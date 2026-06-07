@@ -1017,6 +1017,42 @@ class TestWatcherSummaryEndpoint:
         )
         assert resp.status_code == 422
 
+    def test_watcher_summary_time_scope_overrides_window_minutes(
+        self, client, auth_headers, chain_setup,
+    ):
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?time_scope=15m&window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["time_scope"] == "15m"
+        assert data["window_minutes"] == 15
+
+    def test_watcher_summary_time_scope_all_uses_run_lifetime_window(
+        self, client, auth_headers, chain_setup,
+    ):
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?time_scope=all",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["time_scope"] == "all"
+        assert data["window_minutes"] is None
+
+    def test_watcher_summary_time_scope_validation(
+        self, client, auth_headers, chain_setup,
+    ):
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?time_scope=bogus",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
     def test_watcher_summary_returns_404_for_unknown_run(
         self, client, auth_headers,
     ):

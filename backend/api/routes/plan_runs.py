@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import urlparse
 
 from datetime import datetime, timedelta, timezone
@@ -58,6 +58,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
 _IS_WINDOWS = os.name == "nt"
 _REMOTE_HOST_PATH_PREFIXES = ("/home/", "/root/", "/opt/", "/var/", "/tmp/", "/data/")
+_WATCHER_TIME_SCOPE_TO_MINUTES = {
+    "15m": 15,
+    "1h": 60,
+    "6h": 360,
+    "24h": 1440,
+}
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -125,6 +131,12 @@ def _iso(v) -> str | None:
     if v is None:
         return None
     return v.isoformat()
+
+
+def _ensure_utc(v: datetime) -> datetime:
+    if v.tzinfo is None:
+        return v.replace(tzinfo=timezone.utc)
+    return v.astimezone(timezone.utc)
 
 
 def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None) -> PlanRunOut:
@@ -1694,7 +1706,8 @@ class AeeBreakdownOut(BaseModel):
 
 class WatcherSummaryOut(BaseModel):
     plan_run_id: int
-    window_minutes: int
+    window_minutes: Optional[int] = None
+    time_scope: Optional[str] = None
     window_start_at: str
     window_end_at: str
     categories: list[WatcherCategoryOut]
@@ -1728,6 +1741,10 @@ class WatcherSummaryOut(BaseModel):
 def get_plan_run_watcher_summary(
     run_id: int,
     window_minutes: int = Query(_DEFAULT_WATCHER_WINDOW_MIN, ge=1, le=_MAX_WATCHER_WINDOW_MIN),
+    time_scope: Optional[Literal["all", "15m", "1h", "6h", "24h"]] = Query(
+        None,
+        description="UI time scope. Overrides window_minutes when provided.",
+    ),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -1739,6 +1756,13 @@ def get_plan_run_watcher_summary(
     """
     pr = _require_plan_run(db, run_id)
 
+    if time_scope == "all":
+        effective_window_minutes: Optional[int] = None
+    elif time_scope:
+        effective_window_minutes = _WATCHER_TIME_SCOPE_TO_MINUTES[time_scope]
+    else:
+        effective_window_minutes = window_minutes
+
     # M1/T1-3a: 双写灰度态 — 提前算出供早返回 / 主返回共用
     legacy_in_snapshot = _detect_legacy_patrol_in_snapshot(pr.plan_snapshot)
 
@@ -1749,14 +1773,21 @@ def get_plan_run_watcher_summary(
     total_dev = len({r.device_id for r in job_rows})
 
     now = datetime.now(timezone.utc)
-    window_delta = timedelta(minutes=window_minutes)
-    cur_start  = now - window_delta
+    if effective_window_minutes is None:
+        cur_start = _ensure_utc(pr.started_at) if pr.started_at else now
+        if cur_start > now:
+            cur_start = now
+        window_delta = max(now - cur_start, timedelta(seconds=1))
+    else:
+        window_delta = timedelta(minutes=effective_window_minutes)
+        cur_start = now - window_delta
     prev_start = now - 2 * window_delta
 
     if not job_ids:
         return ok(WatcherSummaryOut(
             plan_run_id=pr.id,
-            window_minutes=window_minutes,
+            window_minutes=effective_window_minutes,
+            time_scope=time_scope,
             window_start_at=_iso(cur_start) or "",
             window_end_at=_iso(now) or "",
             categories=[], total=0, affected_device_count=0,
@@ -1846,7 +1877,8 @@ def get_plan_run_watcher_summary(
 
     return ok(WatcherSummaryOut(
         plan_run_id=pr.id,
-        window_minutes=window_minutes,
+        window_minutes=effective_window_minutes,
+        time_scope=time_scope,
         window_start_at=_iso(cur_start) or "",
         window_end_at=_iso(now) or "",
         categories=categories_out,
