@@ -668,6 +668,7 @@ describe('PlanRunDetailPage', () => {
 
     const banner = await screen.findByTestId('stuck-jobs-banner');
     expect(banner).toHaveTextContent('1 个 Job 心跳超时');
+    expect(banner).toHaveTextContent('可能已断开');
     expect(banner).toHaveTextContent('DEV-STALE');
   });
 

@@ -131,6 +131,7 @@ describe('DeviceOverview', () => {
     // facet counts on filter buttons (filter bar is shared across both views)
     expect(screen.getByTestId('device-status-filter-running')).toHaveTextContent('2');
     expect(screen.getByTestId('device-status-filter-backoff')).toHaveTextContent('1');
+    expect(screen.queryByTestId('device-status-filter-risk')).not.toBeInTheDocument();
   });
 
   it('forwards filter changes to parent', () => {
@@ -216,10 +217,32 @@ describe('DeviceOverview', () => {
       ],
     };
     renderInTableView({ data });
-    expect(screen.getByTestId('device-row-3009')).toHaveTextContent('失联');
+    expect(screen.getByTestId('device-row-3009')).toHaveTextContent('已断开');
     const pill = screen.getByTestId('device-row-3009').querySelector('span[title]');
     expect(pill?.getAttribute('title')).toMatch(/lease_expired/);
     expect(pill?.getAttribute('title')).toMatch(/grace/);
+  });
+
+  it('keeps a running device as 运行中 even when anomaly count is non-zero', () => {
+    const data: PlanRunDevicesPayload = {
+      ...fixture,
+      by_status: { all: 1, running: 1 },
+      devices: [
+        {
+          ...fixture.devices[0],
+          device_id: 11,
+          device_serial: 'DEV-RUN-LOG',
+          job_id: 3011,
+          ui_status: 'running',
+          log_signal_count: 7,
+        },
+      ],
+    };
+    renderInTableView({ data });
+    const row = screen.getByTestId('device-row-3011');
+    expect(row).toHaveTextContent('运行中');
+    expect(row).toHaveTextContent('7');
+    expect(row).not.toHaveTextContent('风险');
   });
 
   it('shows grace countdown in wait column for unknown devices', () => {

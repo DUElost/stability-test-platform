@@ -569,7 +569,7 @@ export default function PlanRunDetailPage() {
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
               <div className="min-w-0 space-y-1">
                 <p className="font-semibold">
-                  {stuckJobs.length} 个 Job 心跳超时，可能已失联
+                  {stuckJobs.length} 个 Job 心跳超时，可能已断开
                 </p>
                 <p className="text-xs text-amber-800/90">
                   后端 recycler 将把超时 Job 标记为 UNKNOWN；grace 窗口内 Agent 可通过 recovery 恢复。

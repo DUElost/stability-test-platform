@@ -19,6 +19,7 @@ describe('PlanRunKpiBar', () => {
     expect(screen.getByTestId('kpi-total')).toHaveTextContent('48');
     expect(screen.getByTestId('kpi-running')).toHaveTextContent('40');
     expect(screen.getByTestId('kpi-failed')).toHaveTextContent('5');
+    expect(screen.getByTestId('kpi-unknown')).toHaveTextContent('已断开');
     expect(screen.getByTestId('kpi-unknown')).toHaveTextContent('2');
     expect(screen.getByTestId('kpi-hosts')).toHaveTextContent('2');
   });

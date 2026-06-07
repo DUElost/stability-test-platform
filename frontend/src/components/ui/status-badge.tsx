@@ -57,8 +57,7 @@ const DEVICE_UI: Record<string, StatusEntry> = {
   RUNNING: { label: "运行中", variant: "warning", Icon: Loader2 },
   COMPLETED: { label: "完成", variant: "success", Icon: CheckCircle2 },
   FAILED: { label: "失败", variant: "destructive", Icon: XCircle },
-  UNKNOWN: { label: "失联", variant: "warning", Icon: AlertTriangle },
-  RISK: { label: "风险", variant: "warning", Icon: AlertTriangle },
+  UNKNOWN: { label: "已断开", variant: "warning", Icon: AlertTriangle },
   BACKOFF: { label: "退避", variant: "warning", Icon: Clock },
   PENDING: { label: "等待", variant: "secondary", Icon: PauseCircle },
 };

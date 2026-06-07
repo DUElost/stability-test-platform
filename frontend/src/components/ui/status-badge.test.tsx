@@ -49,9 +49,9 @@ describe("StatusBadge", () => {
     expect(screen.getByText("运行中")).toBeInTheDocument();
   });
 
-  it("renders device-ui unknown with warning variant + 失联 label", () => {
+  it("renders device-ui unknown with warning variant + 已断开 label", () => {
     render(<StatusBadge kind="device-ui" status="unknown" />);
-    expect(screen.getByText("失联")).toBeInTheDocument();
+    expect(screen.getByText("已断开")).toBeInTheDocument();
   });
 
   it("renders device-ui backoff with warning variant + 退避 label", () => {

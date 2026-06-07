@@ -78,6 +78,16 @@ describe('DeviceDetailDrawer — status_reason 展示', () => {
 });
 
 describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
+  it('renders 已断开 status pill for unknown devices', () => {
+    render(
+      <DeviceDetailDrawer
+        device={makeDevice({ grace_remaining_seconds: 240, ui_status: 'unknown' })}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByTestId('device-drawer-status-pill')).toHaveTextContent('已断开');
+  });
+
   it('renders Grace 剩余 when grace_remaining_seconds is set', () => {
     render(
       <DeviceDetailDrawer

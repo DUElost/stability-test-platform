@@ -7,9 +7,8 @@ import type { DeviceUiStatus } from '@/utils/api/types';
  * - running  橙(进行中,带斜纹动画)
  * - completed 绿
  * - failed   红
- * - risk     琥珀(需关注)
  * - backoff  靛蓝(退避重试中)—— 独立色,与 unknown 的紫区分
- * - unknown  紫(失联)
+ * - unknown  紫(已断开)
  * - pending  灰(等待认领)
  */
 export type DeviceUiTone =
@@ -41,7 +40,7 @@ export const DEVICE_UI_STATUS: Record<DeviceUiStatus, DeviceUiStatusStyle> = {
     tone: 'orange',
   },
   unknown: {
-    label: '失联',
+    label: '已断开',
     cellCls: 'bg-purple-500/90 hover:bg-purple-600',
     tone: 'purple',
   },
@@ -49,11 +48,6 @@ export const DEVICE_UI_STATUS: Record<DeviceUiStatus, DeviceUiStatusStyle> = {
     label: '失败',
     cellCls: 'bg-red-500/90 hover:bg-red-600',
     tone: 'red',
-  },
-  risk: {
-    label: '风险',
-    cellCls: 'bg-amber-400/90 hover:bg-amber-500',
-    tone: 'amber',
   },
   backoff: {
     label: '退避',

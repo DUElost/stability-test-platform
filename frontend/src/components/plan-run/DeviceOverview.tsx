@@ -66,14 +66,14 @@ function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
   if (d.ui_status === 'unknown') {
     const grace = d.grace_remaining_seconds;
     if (grace != null && grace > 0) {
-      const prefix = d.status_reason || 'Job 失联';
+      const prefix = d.status_reason || 'Job 已断开';
       return `${prefix} — grace 剩余 ${grace}s，超时后自动失败`;
     }
     const reason = (d.status_reason || '').toLowerCase();
     if (reason.includes('lease_expired') || reason.includes('heartbeat')) {
-      return `${d.status_reason || 'Job 失联'} — grace 窗口内可 recovery 恢复，超时后自动失败`;
+      return `${d.status_reason || 'Job 已断开'} — grace 窗口内可 recovery 恢复，超时后自动失败`;
     }
-    return 'Job 失联（UNKNOWN），grace 窗口内等待 recovery 或 reconciler 自动失败';
+    return 'Job 已断开（UNKNOWN），grace 窗口内等待 recovery 或 reconciler 自动失败';
   }
   if (d.status_reason) return d.status_reason;
   if (d.ui_status === 'pending') {

@@ -864,7 +864,7 @@ export interface PlanRunEventsPayload {
   };
 }
 
-export type DeviceUiStatus = 'completed' | 'running' | 'failed' | 'unknown' | 'risk' | 'backoff' | 'pending';
+export type DeviceUiStatus = 'completed' | 'running' | 'failed' | 'unknown' | 'backoff' | 'pending';
 
 export interface DeviceMatrixItem {
   device_id: number;

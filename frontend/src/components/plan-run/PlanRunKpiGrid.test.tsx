@@ -13,12 +13,13 @@ const makeDevices = (summary: Record<string, number>): PlanRunDevicesPayload => 
 
 describe('PlanRunKpiGrid', () => {
   it('renders all 6 cells', () => {
-    render(<PlanRunKpiGrid devices={makeDevices({ total: 10, running: 3, completed: 5, failed: 2, risk: 0, backoff: 0 })} currentStage="patrol" patrolCycle={4} />);
+    render(<PlanRunKpiGrid devices={makeDevices({ total: 10, running: 3, completed: 5, failed: 2, unknown: 0, backoff: 0 })} currentStage="patrol" patrolCycle={4} />);
     expect(screen.getByTestId('kpi-total').textContent).toContain('10');
     expect(screen.getByTestId('kpi-running').textContent).toContain('3');
     expect(screen.getByTestId('kpi-completed').textContent).toContain('5');
     expect(screen.getByTestId('kpi-failed').textContent).toContain('2');
-    expect(screen.getByTestId('kpi-risk-backoff').textContent).toContain('0');
+    expect(screen.getByTestId('kpi-disconnected-backoff')).toHaveTextContent('已断开/退避');
+    expect(screen.getByTestId('kpi-disconnected-backoff').textContent).toContain('0');
   });
 
   it('shows patrol stage label in Chinese', () => {
@@ -37,7 +38,7 @@ describe('PlanRunKpiGrid', () => {
   });
 
   it('applies red tone to failed when > 0', () => {
-    render(<PlanRunKpiGrid devices={makeDevices({ total: 5, failed: 2, running: 0, completed: 3, risk: 0, backoff: 0 })} />);
+    render(<PlanRunKpiGrid devices={makeDevices({ total: 5, failed: 2, running: 0, completed: 3, unknown: 0, backoff: 0 })} />);
     const cell = screen.getByTestId('kpi-failed');
     expect(cell.querySelector('.text-red-600')).toBeTruthy();
   });

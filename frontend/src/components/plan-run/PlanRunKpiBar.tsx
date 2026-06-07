@@ -86,7 +86,7 @@ export default function PlanRunKpiBar({
         testId="kpi-failed"
       />
       <KpiStat
-        label="失联"
+        label="已断开"
         value={unknown}
         tone={unknown > 0 ? 'purple' : 'gray'}
         testId="kpi-unknown"

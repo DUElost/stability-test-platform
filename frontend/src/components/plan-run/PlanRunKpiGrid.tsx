@@ -46,8 +46,11 @@ export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: P
   const running    = byStatus.running              ?? 0;
   const completed  = byStatus.completed            ?? 0;
   const failed     = byStatus.failed               ?? 0;
-  const risk       = byStatus.risk                 ?? 0;
+  const unknown    = byStatus.unknown              ?? 0;
   const backoff    = byStatus.backoff              ?? 0;
+  const disconnectedAndBackoff = unknown + backoff;
+  const disconnectedTone: Tone =
+    unknown > 0 ? 'purple' : disconnectedAndBackoff > 0 ? 'amber' : 'default';
 
   const stageLabel =
     currentStage === 'init'     ? '初始化' :
@@ -63,7 +66,12 @@ export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: P
         <Cell value={running}   label="运行中"     tone="orange" testId="kpi-running"   />
         <Cell value={completed} label="已完成"     testId="kpi-completed" />
         <Cell value={failed}    label="失败"       tone={failed > 0 ? 'red' : 'default'}     testId="kpi-failed"    />
-        <Cell value={risk + backoff} label="风险/退避" tone={risk + backoff > 0 ? 'amber' : 'default'} testId="kpi-risk-backoff" />
+        <Cell
+          value={disconnectedAndBackoff}
+          label="已断开/退避"
+          tone={disconnectedTone}
+          testId="kpi-disconnected-backoff"
+        />
       </div>
     </div>
   );
