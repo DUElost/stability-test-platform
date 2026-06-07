@@ -67,7 +67,6 @@ const SUBTYPE_COLORS: Record<string, string> = {
   其他: '#d8dee8',
 };
 
-const DONUT_MAX_LABEL_CHARS = 18;
 
 function subtypeLabel(item: Pick<SubtypeDistribution, 'subtype' | 'group'>): string {
   if (item.subtype === '其他' && item.group === 'VENDOR_AEE') return 'Vendor 其他';
@@ -130,18 +129,6 @@ function packageSubtypeSummary(row: PackageRanking): string {
     .join(' · ');
 }
 
-function truncateLabel(label: string, maxChars = DONUT_MAX_LABEL_CHARS) {
-  const chars = Array.from(label);
-  if (chars.length <= maxChars) {
-    return { text: label, truncated: false };
-  }
-
-  return {
-    text: `${chars.slice(0, Math.max(1, maxChars - 3)).join('')}...`,
-    truncated: true,
-  };
-}
-
 function SummaryCard({
   label,
   value,
@@ -174,20 +161,25 @@ function DonutChart({
 
   const chartData = useMemo(
     () =>
-      items.map((item, index) => {
-        const label = subtypeLabel(item);
-        const truncated = truncateLabel(label);
-        return {
-          ...item,
-          color: subtypeColor(item),
-          displayLabel: truncated.text,
-          fullLabel: label,
-          isTruncated: truncated.truncated,
-          key: `${item.group}-${item.subtype}-${index}`,
-        };
-      }),
+      items.map((item, index) => ({
+        ...item,
+        color: subtypeColor(item),
+        fullLabel: subtypeLabel(item),
+        key: `${item.group}-${item.subtype}-${index}`,
+      })),
     [items],
   );
+
+  if (chartData.length === 0) {
+    return (
+      <div
+        data-testid={chartTestId}
+        className="flex h-32 items-center justify-center text-sm text-slate-400"
+      >
+        当前范围内暂无细分类型数据
+      </div>
+    );
+  }
 
   return (
     <div
@@ -195,161 +187,96 @@ function DonutChart({
       data-chart-type="recharts-donut"
       aria-label="异常细分类型占比饼图"
     >
-      {/* Chart + center total */}
-      <div className="relative mx-auto w-full max-w-[320px]">
-        <StableResponsiveContainer className="h-[290px] min-h-[290px] w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={chartData}
-                cx="50%"
-                cy="50%"
-                innerRadius={55}
-                outerRadius={90}
-                startAngle={90}
-                endAngle={-270}
-                paddingAngle={chartData.length > 1 ? 2 : 0}
-                dataKey="count"
-                stroke="#f8fafc"
-                strokeWidth={1}
-                animationBegin={0}
-                animationDuration={600}
-                animationEasing="ease-out"
-                isAnimationActive
-                onMouseEnter={(_data, index) => setActiveIndex(index)}
-                onMouseLeave={() => setActiveIndex(null)}
-                label={(labelProps: any) => {
-                  if (total <= 0) return null;
-                  const { cx, cy, midAngle, outerRadius, index, payload } = labelProps;
-                  const item = payload as (typeof chartData)[number];
-                  if (!item || item.count <= 0) return null;
-
-                  const isActive = index === activeIndex;
-                  const RADIAN = Math.PI / 180;
-                  const cos = Math.cos(-midAngle * RADIAN);
-                  const sin = Math.sin(-midAngle * RADIAN);
-                  const lineStartX = cx + (outerRadius + 1) * cos;
-                  const lineStartY = cy + (outerRadius + 1) * sin;
-                  const lineEndX = cx + (outerRadius + 16) * cos;
-                  const lineEndY = cy + (outerRadius + 16) * sin;
-                  const textX = cx + (outerRadius + 20) * cos;
-                  const textY = cy + (outerRadius + 20) * sin;
-                  const textAnchor = textX >= cx ? 'start' : 'end';
-                  const linePath = `M${lineStartX},${lineStartY}L${lineEndX},${lineEndY}`;
-                  const pct = formatSharePercent(item.share);
-
-                  return (
-                    <g
-                      key={`donut-label-${index}`}
-                      style={{ cursor: 'pointer' }}
-                      onMouseEnter={() => setActiveIndex(index)}
-                      onMouseLeave={() => setActiveIndex(null)}
-                    >
-                      <path
-                        d={linePath}
-                        stroke={isActive ? '#64748b' : '#cbd5e1'}
-                        strokeWidth={isActive ? 1.5 : 1}
-                        fill="none"
-                      />
-                      {/* transparent fat hit-area so hovering the leader line also selects */}
-                      <path
-                        d={linePath}
-                        stroke="transparent"
-                        strokeWidth={16}
-                        fill="none"
-                        style={{ pointerEvents: 'all' }}
-                      />
-                      {isActive ? (
-                        <>
-                          <text
-                            x={textX}
-                            y={textY - 7}
-                            fill="#1e293b"
-                            textAnchor={textAnchor}
-                            dominantBaseline="auto"
-                            fontSize={14}
-                            fontWeight={700}
-                          >
-                            {item.displayLabel}
-                          </text>
-                          <text
-                            x={textX}
-                            y={textY + 10}
-                            fill="#64748b"
-                            textAnchor={textAnchor}
-                            dominantBaseline="auto"
-                            fontSize={12.5}
-                            fontWeight={600}
-                          >
-                            {`${pct}%`}
-                          </text>
-                        </>
-                      ) : (
-                        <text
-                          x={textX}
-                          y={textY}
-                          fill="#94a3b8"
-                          textAnchor={textAnchor}
-                          dominantBaseline="central"
-                          fontSize={10}
-                          fontWeight={500}
-                        >
-                          {item.displayLabel}
-                        </text>
-                      )}
-                    </g>
-                  );
-                }}
-                labelLine={false}
-              >
-                {chartData.map((item) => (
-                  <Cell
-                    key={item.key}
-                    fill={item.color}
-                    style={{
-                      filter: 'drop-shadow(0 2px 4px rgba(15, 23, 42, 0.12))',
-                    }}
-                  />
-                ))}
-              </Pie>
-            </PieChart>
-          </ResponsiveContainer>
-        </StableResponsiveContainer>
-        {/* Center total */}
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
-            异常总数
-          </div>
-          <div data-center-total="true" className={`mt-0.5 text-[26px] font-bold leading-none ${tone}`}>
-            {total}
+      <div className="flex items-center gap-4">
+        {/* Donut ring */}
+        <div className="relative shrink-0 w-[180px]">
+          <StableResponsiveContainer className="h-[180px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={48}
+                  outerRadius={76}
+                  startAngle={90}
+                  endAngle={-270}
+                  paddingAngle={chartData.length > 1 ? 2 : 0}
+                  dataKey="count"
+                  stroke="#f8fafc"
+                  strokeWidth={1}
+                  animationBegin={0}
+                  animationDuration={600}
+                  animationEasing="ease-out"
+                  isAnimationActive
+                  onMouseEnter={(_data, index) => setActiveIndex(index)}
+                  onMouseLeave={() => setActiveIndex(null)}
+                  label={false}
+                >
+                  {chartData.map((item) => (
+                    <Cell
+                      key={item.key}
+                      fill={item.color}
+                      style={{
+                        filter: 'drop-shadow(0 2px 4px rgba(15, 23, 42, 0.12))',
+                      }}
+                    />
+                  ))}
+                </Pie>
+              </PieChart>
+            </ResponsiveContainer>
+          </StableResponsiveContainer>
+          {/* Center total */}
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-slate-400">
+              异常总数
+            </div>
+            <div
+              data-center-total="true"
+              className={`mt-0.5 text-[22px] font-bold leading-none ${tone}`}
+            >
+              {total}
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Legend — center below chart */}
-      <div
-        data-testid={`${chartTestId}-legend`}
-        data-legend-position="below"
-        className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-1.5"
-      >
-        {chartData.length > 0 ? (
-          chartData.map((item) => (
-            <div key={`legend-${item.key}`} className="flex items-center gap-1.5 text-xs">
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: item.color }}
-              />
-              <span className="font-medium text-slate-700">
-                {item.fullLabel}
-              </span>
-              <span className="tabular-nums text-slate-400">
-                {formatSharePercent(item.share)}%
-              </span>
-            </div>
-          ))
-        ) : (
-          <div className="text-sm text-slate-400">当前范围内暂无细分类型数据</div>
-        )}
+        {/* Side legend */}
+        <div
+          data-testid={`${chartTestId}-legend`}
+          data-legend-position="side"
+          className="flex-1 min-w-0 space-y-1 max-h-[180px] overflow-y-auto"
+        >
+          {chartData.map((item, index) => {
+            const isActive = index === activeIndex;
+            return (
+              <div
+                key={`legend-${item.key}`}
+                className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition cursor-pointer ${
+                  isActive
+                    ? 'bg-slate-100 ring-1 ring-slate-200'
+                    : 'hover:bg-slate-50'
+                }`}
+                onMouseEnter={() => setActiveIndex(index)}
+                onMouseLeave={() => setActiveIndex(null)}
+              >
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: item.color }}
+                />
+                <span
+                  className={`font-medium truncate ${
+                    isActive ? 'text-slate-900' : 'text-slate-700'
+                  }`}
+                >
+                  {item.fullLabel}
+                </span>
+                <span className="ml-auto shrink-0 tabular-nums text-slate-400">
+                  {formatSharePercent(item.share)}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

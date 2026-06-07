@@ -138,7 +138,7 @@ describe('AnomalyDashboard', () => {
     expect(pieChart.getAttribute('data-chart-type')).toBe('recharts-donut');
     expect(screen.getByTestId('current-run-pie-chart-legend')).toHaveAttribute(
       'data-legend-position',
-      'below',
+      'side',
     );
     // Legend shows both subtypes (truncation info on fullLabel is in legend text)
     const legend = screen.getByTestId('current-run-pie-chart-legend');
