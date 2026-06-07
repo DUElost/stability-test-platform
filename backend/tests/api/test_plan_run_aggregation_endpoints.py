@@ -21,6 +21,7 @@ across two hosts so that:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
 import pytest
@@ -1081,6 +1082,281 @@ class TestWatcherSummaryEndpoint:
             "/api/v1/plan-runs/999999/watcher-summary", headers=auth_headers,
         )
         assert resp.status_code == 404
+
+    def test_watcher_summary_time_scope_all_splits_current_and_preexisting(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
+        j2 = chain_setup["job_running"]
+        s1 = chain_setup["device_completed"].serial
+        s2 = chain_setup["device_running"].serial
+
+        db_session.query(JobLogSignal).delete()
+        db_session.add_all([
+            JobLogSignal(
+                id=19001,
+                job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=801, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.base.1",
+                detected_at=_now() - timedelta(minutes=2),
+                extra={
+                    "schema_version": 2,
+                    "event_type": "CRASH",
+                    "event_subtype": "JE",
+                    "raw_event_type": "Java (JE)",
+                    "package_name": "com.legacy.camera",
+                    "nfs_path": "/nfs/baseline/db.base.1",
+                    "pull_source": "reconciler",
+                    "entry_origin": "baseline",
+                },
+            ),
+            JobLogSignal(
+                id=19002,
+                job_id=j2.id, host_id="host-101", device_serial=s2,
+                seq_no=802, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.run.1",
+                detected_at=_now() - timedelta(minutes=1),
+                extra={
+                    "schema_version": 2,
+                    "event_type": "CRASH",
+                    "event_subtype": "JE",
+                    "raw_event_type": "Java (JE)",
+                    "package_name": "com.runtime.camera",
+                    "nfs_path": "/nfs/runtime/db.run.1",
+                    "pull_source": "reconciler",
+                    "entry_origin": "runtime",
+                },
+            ),
+            JobLogSignal(
+                id=19003,
+                job_id=j2.id, host_id="host-101", device_serial=s2,
+                seq_no=803, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.run.2",
+                detected_at=_now() - timedelta(seconds=40),
+                extra={
+                    "schema_version": 2,
+                    "event_type": "CRASH",
+                    "event_subtype": "JE",
+                    "raw_event_type": "Java (JE)",
+                    "package_name": "com.runtime.camera",
+                    "nfs_path": "/nfs/runtime/db.run.2",
+                    "pull_source": "reconciler",
+                    "entry_origin": "runtime",
+                },
+            ),
+            JobLogSignal(
+                id=19004,
+                job_id=j1.id, host_id="host-101", device_serial=s1,
+                seq_no=804, category="VENDOR_AEE", source="reconciler",
+                path_on_device="/data/vendor/aee_exp/db.vendor.1",
+                detected_at=_now() - timedelta(seconds=20),
+                extra={
+                    "schema_version": 2,
+                    "event_type": "CRASH",
+                    "event_subtype": "HWT",
+                    "raw_event_type": "HWT",
+                    "package_name": "com.vendor.camera",
+                    "nfs_path": "/nfs/runtime/db.vendor.1",
+                    "pull_source": "reconciler",
+                    "entry_origin": "runtime",
+                },
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?time_scope=all",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["time_scope"] == "all"
+        assert data["supports_origin_split"] is True
+
+        current_run = data["current_run"]
+        assert current_run["total_events"] == 3
+        assert current_run["affected_device_count"] == 2
+        assert current_run["top_package_name"] == "com.runtime.camera"
+        assert current_run["top_subtype"] == "JE"
+        assert current_run["package_ranking"][0]["package_name"] == "com.runtime.camera"
+        assert current_run["package_ranking"][0]["total_count"] == 2
+        assert current_run["package_ranking"][0]["subtype_breakdown"][0] == {
+            "subtype": "JE",
+            "count": 2,
+        }
+        subtype_dist = {
+            (row["group"], row["subtype"]): row["count"]
+            for row in current_run["subtype_distribution"]
+        }
+        assert subtype_dist[("AEE", "JE")] == 2
+        assert subtype_dist[("VENDOR_AEE", "HWT")] == 1
+
+        preexisting = data["preexisting"]
+        assert preexisting["total_events"] == 1
+        assert preexisting["affected_device_count"] == 1
+        assert preexisting["top_package_name"] == "com.legacy.camera"
+        assert preexisting["top_subtype"] == "JE"
+
+    def test_watcher_summary_time_scope_all_falls_back_when_origin_missing(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        cur_run = chain_setup["current_run"]
+        j2 = chain_setup["job_running"]
+        serial = chain_setup["device_running"].serial
+
+        db_session.query(JobLogSignal).delete()
+        db_session.add_all([
+            JobLogSignal(
+                id=19101,
+                job_id=j2.id, host_id="host-101", device_serial=serial,
+                seq_no=811, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.legacy.1",
+                detected_at=_now() - timedelta(minutes=1),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "com.legacy.unknown",
+                    "nfs_path": "/nfs/legacy/db.legacy.1",
+                    "pull_source": "reconciler",
+                },
+            ),
+            JobLogSignal(
+                id=19102,
+                job_id=j2.id, host_id="host-101", device_serial=serial,
+                seq_no=812, category="ANR", source="logcat",
+                path_on_device="/data/anr/anr.legacy.1",
+                detected_at=_now() - timedelta(seconds=20),
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?time_scope=all",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["supports_origin_split"] is False
+        assert data["current_run"]["total_events"] == 2
+        assert data["current_run"]["top_package_name"] == "com.legacy.unknown"
+        subtype_dist = {
+            (row["group"], row["subtype"]): row["count"]
+            for row in data["current_run"]["subtype_distribution"]
+        }
+        assert subtype_dist[("AEE", "ANR")] == 1
+        assert subtype_dist[("AEE", "其他")] == 1
+        assert data["preexisting"]["total_events"] == 0
+        assert data["preexisting"]["package_ranking"] == []
+
+    def test_watcher_summary_infers_subtype_from_path_suffix_for_legacy_signals(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        cur_run = chain_setup["current_run"]
+        j2 = chain_setup["job_running"]
+        serial = chain_setup["device_running"].serial
+
+        db_session.query(JobLogSignal).delete()
+        db_session.add_all([
+            JobLogSignal(
+                id=19111,
+                job_id=j2.id, host_id="host-101", device_serial=serial,
+                seq_no=821, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.00.JE",
+                detected_at=_now() - timedelta(seconds=55),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "com.legacy.je",
+                    "pull_source": "reconciler",
+                },
+            ),
+            JobLogSignal(
+                id=19112,
+                job_id=j2.id, host_id="host-101", device_serial=serial,
+                seq_no=822, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.01.NE",
+                detected_at=_now() - timedelta(seconds=30),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "com.legacy.ne",
+                    "pull_source": "reconciler",
+                },
+            ),
+        ])
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?time_scope=all",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        subtype_dist = {
+            (row["group"], row["subtype"]): row["count"]
+            for row in data["current_run"]["subtype_distribution"]
+        }
+        assert subtype_dist[("AEE", "JE")] == 1
+        assert subtype_dist[("AEE", "NE")] == 1
+        assert ("AEE", "其他") not in subtype_dist
+
+    def test_watcher_summary_infers_subtype_and_package_from_local_exp_main(
+        self, client, auth_headers, chain_setup, db_session, tmp_path, monkeypatch,
+    ):
+        cur_run = chain_setup["current_run"]
+        j2 = chain_setup["job_running"]
+        serial = chain_setup["device_running"].serial
+
+        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+        entry_dir = tmp_path / "job-legacy" / "aee_exp" / "2026_0607_120000_db.02"
+        entry_dir.mkdir(parents=True, exist_ok=True)
+        (entry_dir / "__exp_main.txt").write_text(
+            "\n".join([
+                "Build Info: 'foo'",
+                "Exception Class: Java (JE)",
+                "Current Executing Process:",
+                "com.android.systemui",
+                "Package: com.android.settings",
+            ]),
+            encoding="utf-8",
+        )
+
+        db_session.query(JobLogSignal).delete()
+        db_session.add(
+            JobLogSignal(
+                id=19113,
+                job_id=j2.id, host_id="host-101", device_serial=serial,
+                seq_no=823, category="AEE", source="reconciler",
+                path_on_device="/data/aee_exp/db.02",
+                artifact_uri=str(entry_dir / "main.dbg"),
+                detected_at=_now() - timedelta(seconds=25),
+                extra={
+                    "event_type": "CRASH",
+                    "package_name": "",
+                    "nfs_path": str(entry_dir),
+                    "pull_source": "reconciler",
+                },
+            )
+        )
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?time_scope=all",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+
+        assert data["current_run"]["top_subtype"] == "JE"
+        assert data["current_run"]["top_package_name"] == "com.android.settings"
+        ranking = data["current_run"]["package_ranking"]
+        assert ranking[0]["package_name"] == "com.android.settings"
+        subtype_dist = {
+            (row["group"], row["subtype"]): row["count"]
+            for row in data["current_run"]["subtype_distribution"]
+        }
+        assert subtype_dist[("AEE", "JE")] == 1
 
     # ------------------------------------------------------------------
     # M0/PR #2: aee_breakdown JSONB 聚合

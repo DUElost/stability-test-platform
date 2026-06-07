@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import defaultdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 from datetime import datetime, timedelta, timezone
@@ -26,6 +27,12 @@ from backend.core.artifact_paths import (
     ArtifactPathNotFoundError,
     get_local_artifact_roots,
     resolve_local_artifact_path,
+)
+from backend.core.aee_metadata import (
+    infer_aee_subtype_from_paths,
+    normalize_aee_subtype,
+    normalize_package_name,
+    parse_exp_main_summary,
 )
 from backend.core.audit import record_audit
 from backend.core.database import get_db
@@ -58,6 +65,30 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plan-runs"])
 _IS_WINDOWS = os.name == "nt"
 _REMOTE_HOST_PATH_PREFIXES = ("/home/", "/root/", "/opt/", "/var/", "/tmp/", "/data/")
+_WATCHER_TIME_SCOPE_TO_MINUTES: dict[str, int] = {
+    "15m": 15,
+    "1h": 60,
+    "6h": 360,
+    "24h": 1440,
+}
+_SUBTYPE_FIXED_ORDER = [
+    "ANR",
+    "JE",
+    "NE",
+    "SWT",
+    "Fatal NE",
+    "Fatal JE",
+    "Combo EE",
+    "Kernel API Dump",
+    "System API Dump",
+    "HWT",
+    "HANG",
+    "KE",
+    "HW Reboot",
+    "Modem EE",
+    "OCP Reboot",
+    "其他",
+]
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -1715,9 +1746,39 @@ class AeeBreakdownOut(BaseModel):
     by_package: list[PackageStatOut]  # 按 crash + vendor_crash + anr 总数降序
 
 
+class PackageSubtypeCountOut(BaseModel):
+    subtype: str
+    count: int
+
+
+class SubtypeDistributionOut(BaseModel):
+    subtype: str
+    group: str
+    count: int
+    share: float
+
+
+class PackageRankingOut(BaseModel):
+    package_name: str
+    total_count: int
+    affected_device_count: int
+    latest_detected_at: Optional[str] = None
+    subtype_breakdown: list[PackageSubtypeCountOut] = []
+
+
+class AeeDashboardSectionOut(BaseModel):
+    total_events: int = 0
+    affected_device_count: int = 0
+    top_package_name: Optional[str] = None
+    top_subtype: Optional[str] = None
+    subtype_distribution: list[SubtypeDistributionOut] = []
+    package_ranking: list[PackageRankingOut] = []
+
+
 class WatcherSummaryOut(BaseModel):
     plan_run_id: int
-    window_minutes: int
+    window_minutes: Optional[int] = None
+    time_scope: str = "all"
     window_start_at: str
     window_end_at: str
     categories: list[WatcherCategoryOut]
@@ -1727,6 +1788,9 @@ class WatcherSummaryOut(BaseModel):
     abnormal_rate: float               # affected_device_count / total_devices
     threshold: float
     exceeded: bool
+    supports_origin_split: bool = False
+    current_run: AeeDashboardSectionOut = AeeDashboardSectionOut()
+    preexisting: AeeDashboardSectionOut = AeeDashboardSectionOut()
     # M0/PR #2: AEE 细分(reconciler signal 才会填充);无关联 Job 时 None
     aee_breakdown: Optional[AeeBreakdownOut] = None
     # M0/C-6 (§2.4 #5): 该 PlanRun 下 Job 的 watcher 能力快照(取最"降级"的一档)。
@@ -1750,7 +1814,8 @@ class WatcherSummaryOut(BaseModel):
 )
 def get_plan_run_watcher_summary(
     run_id: int,
-    window_minutes: int = Query(_DEFAULT_WATCHER_WINDOW_MIN, ge=1, le=_MAX_WATCHER_WINDOW_MIN),
+    window_minutes: Optional[int] = Query(None, ge=1, le=_MAX_WATCHER_WINDOW_MIN),
+    time_scope: Optional[str] = Query(None, pattern="^(all|15m|1h|6h|24h)$"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -1772,19 +1837,28 @@ def get_plan_run_watcher_summary(
     total_dev = len({r.device_id for r in job_rows})
 
     now = datetime.now(timezone.utc)
-    window_delta = timedelta(minutes=window_minutes)
-    cur_start  = now - window_delta
-    prev_start = now - 2 * window_delta
+    resolved_scope, resolved_window_minutes, cur_start, window_end, prev_start = (
+        _resolve_watcher_summary_window(
+            pr,
+            now=now,
+            time_scope=time_scope,
+            window_minutes=window_minutes,
+        )
+    )
 
     if not job_ids:
         return ok(WatcherSummaryOut(
             plan_run_id=pr.id,
-            window_minutes=window_minutes,
+            window_minutes=resolved_window_minutes,
+            time_scope=resolved_scope,
             window_start_at=_iso(cur_start) or "",
-            window_end_at=_iso(now) or "",
+            window_end_at=_iso(window_end) or "",
             categories=[], total=0, affected_device_count=0,
             total_devices=0, abnormal_rate=0.0,
             threshold=pr.failure_threshold, exceeded=False,
+            supports_origin_split=False,
+            current_run=_empty_dashboard_section(),
+            preexisting=_empty_dashboard_section(),
             watcher_capability=None,
             legacy_patrol_in_snapshot=legacy_in_snapshot,
             pull_sources=[],
@@ -1801,7 +1875,7 @@ def get_plan_run_watcher_summary(
         .where(
             (JobLogSignal.job_id.in_(job_ids))
             & (JobLogSignal.detected_at >= cur_start)
-            & (JobLogSignal.detected_at <= now)
+            & (JobLogSignal.detected_at <= window_end)
         )
         .group_by(JobLogSignal.category)
     ).all()
@@ -1826,6 +1900,7 @@ def get_plan_run_watcher_summary(
             .where(
                 (JobLogSignal.job_id.in_(job_ids))
                 & (JobLogSignal.detected_at >= cur_start)
+                & (JobLogSignal.detected_at <= window_end)
             )
             .order_by(JobLogSignal.detected_at.desc())
         ).all()
@@ -1837,6 +1912,7 @@ def get_plan_run_watcher_summary(
         select(func.count(func.distinct(JobLogSignal.device_serial))).where(
             (JobLogSignal.job_id.in_(job_ids))
             & (JobLogSignal.detected_at >= cur_start)
+            & (JobLogSignal.detected_at <= window_end)
         )
     ).scalar() or 0
 
@@ -1856,22 +1932,30 @@ def get_plan_run_watcher_summary(
 
     abnormal_rate = (affected_total / total_dev) if total_dev else 0.0
 
+    supports_origin_split, current_run, preexisting = _aggregate_aee_dashboard_sections(
+        db,
+        job_ids=job_ids,
+        cur_start=cur_start,
+        window_end=window_end,
+    )
+
     # M0/PR #2: AEE 细分(crash / vendor_crash / anr 互斥 + by_package)
     # PG-only(JSONB):未含 extra 的 legacy signal 自动落入 unknown package +
     # NULL nfs_path,通过 path_on_device 兜底为 ANR 去重键。
     aee_breakdown = _aggregate_aee_breakdown(
-        db, job_ids=job_ids, cur_start=cur_start, now=now,
+        db, job_ids=job_ids, cur_start=cur_start, now=window_end,
     )
     pull_sources_list = _aggregate_pull_sources(
-        db, job_ids=job_ids, cur_start=cur_start, now=now,
+        db, job_ids=job_ids, cur_start=cur_start, now=window_end,
     )
     watcher_capability = _aggregate_watcher_capability(db, job_ids=job_ids)
 
     return ok(WatcherSummaryOut(
         plan_run_id=pr.id,
-        window_minutes=window_minutes,
+        window_minutes=resolved_window_minutes,
+        time_scope=resolved_scope,
         window_start_at=_iso(cur_start) or "",
-        window_end_at=_iso(now) or "",
+        window_end_at=_iso(window_end) or "",
         categories=categories_out,
         total=total,
         affected_device_count=affected_total,
@@ -1879,6 +1963,9 @@ def get_plan_run_watcher_summary(
         abnormal_rate=round(abnormal_rate, 4),
         threshold=pr.failure_threshold,
         exceeded=abnormal_rate > pr.failure_threshold,
+        supports_origin_split=supports_origin_split,
+        current_run=current_run,
+        preexisting=preexisting,
         aee_breakdown=aee_breakdown,
         watcher_capability=watcher_capability,
         legacy_patrol_in_snapshot=legacy_in_snapshot,
@@ -1994,6 +2081,359 @@ def _aggregate_pull_sources(
         {"job_ids": job_ids, "cur_start": cur_start, "now": now},
     ).all()
     return sorted({str(r[0]) for r in rows if r[0]})
+
+
+def _resolve_watcher_summary_window(
+    pr: PlanRun,
+    *,
+    now: datetime,
+    time_scope: Optional[str],
+    window_minutes: Optional[int],
+) -> tuple[str, Optional[int], datetime, datetime, datetime]:
+    window_end = pr.ended_at if pr.ended_at else now
+    if window_end.tzinfo is None:
+        window_end = window_end.replace(tzinfo=timezone.utc)
+    run_start = pr.started_at or window_end
+    if run_start.tzinfo is None:
+        run_start = run_start.replace(tzinfo=timezone.utc)
+
+    if time_scope:
+        if time_scope == "all":
+            cur_start = run_start
+            resolved_minutes = None
+        else:
+            resolved_minutes = _WATCHER_TIME_SCOPE_TO_MINUTES[time_scope]
+            cur_start = max(run_start, window_end - timedelta(minutes=resolved_minutes))
+        resolved_scope = time_scope
+    elif window_minutes is not None:
+        # Legacy window_minutes keeps the historical rolling-window semantics and
+        # may include signals emitted before this PlanRun started.
+        cur_start = window_end - timedelta(minutes=window_minutes)
+        resolved_minutes = window_minutes
+        resolved_scope = _window_minutes_to_scope_label(window_minutes)
+    else:
+        cur_start = run_start
+        resolved_minutes = None
+        resolved_scope = "all"
+
+    delta = max(window_end - cur_start, timedelta(minutes=1))
+    prev_start = cur_start - delta
+    return resolved_scope, resolved_minutes, cur_start, window_end, prev_start
+
+
+def _window_minutes_to_scope_label(window_minutes: int) -> str:
+    for scope, minutes in _WATCHER_TIME_SCOPE_TO_MINUTES.items():
+        if minutes == window_minutes:
+            return scope
+    return f"{window_minutes}m"
+
+
+def _empty_dashboard_section() -> AeeDashboardSectionOut:
+    return AeeDashboardSectionOut(
+        total_events=0,
+        affected_device_count=0,
+        top_package_name=None,
+        top_subtype=None,
+        subtype_distribution=[],
+        package_ranking=[],
+    )
+
+
+def _aggregate_aee_dashboard_sections(
+    db: Session,
+    *,
+    job_ids: list[int],
+    cur_start: datetime,
+    window_end: datetime,
+) -> tuple[bool, AeeDashboardSectionOut, AeeDashboardSectionOut]:
+    events = _load_deduped_aee_events(
+        db,
+        job_ids=job_ids,
+        cur_start=cur_start,
+        window_end=window_end,
+    )
+    supports_origin_split = all(
+        event["entry_origin"] in {"baseline", "runtime"} for event in events
+    )
+    if not supports_origin_split:
+        return (
+            False,
+            _build_dashboard_section(events),
+            _empty_dashboard_section(),
+        )
+    runtime_events = [event for event in events if event["entry_origin"] == "runtime"]
+    baseline_events = [event for event in events if event["entry_origin"] == "baseline"]
+    return (
+        True,
+        _build_dashboard_section(runtime_events),
+        _build_dashboard_section(baseline_events),
+    )
+
+
+def _load_deduped_aee_events(
+    db: Session,
+    *,
+    job_ids: list[int],
+    cur_start: datetime,
+    window_end: datetime,
+) -> list[dict[str, Any]]:
+    if not job_ids:
+        return []
+
+    rows = db.execute(
+        select(
+            JobLogSignal.id,
+            JobLogSignal.category,
+            JobLogSignal.device_serial,
+            JobLogSignal.path_on_device,
+            JobLogSignal.artifact_uri,
+            JobLogSignal.detected_at,
+            JobLogSignal.extra,
+        )
+        .where(JobLogSignal.job_id.in_(job_ids))
+        .where(JobLogSignal.detected_at >= cur_start)
+        .where(JobLogSignal.detected_at <= window_end)
+        .where(JobLogSignal.category.in_(["AEE", "VENDOR_AEE", "ANR"]))
+    ).all()
+
+    deduped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        extra = row.extra if isinstance(row.extra, dict) else {}
+        package_name = _infer_dashboard_package_name(
+            extra,
+            artifact_uri=row.artifact_uri,
+        )
+        group, subtype = _infer_dashboard_event_group_and_subtype(
+            row.category,
+            extra,
+            path_on_device=row.path_on_device,
+            artifact_uri=row.artifact_uri,
+        )
+        entry_origin = _normalize_entry_origin(extra.get("entry_origin"))
+        key = _aee_event_dedup_key(row.id, row.category, row.path_on_device, extra)
+        candidate = {
+            "key": key,
+            "group": group,
+            "subtype": subtype,
+            "package_name": package_name,
+            "device_serial": row.device_serial,
+            "detected_at": row.detected_at,
+            "entry_origin": entry_origin,
+        }
+        existing = deduped.get(key)
+        if existing is None or _prefer_deduped_event(candidate, existing):
+            deduped[key] = candidate
+    return list(deduped.values())
+
+
+def _prefer_deduped_event(candidate: dict[str, Any], existing: dict[str, Any]) -> bool:
+    if bool(candidate["entry_origin"]) != bool(existing["entry_origin"]):
+        return bool(candidate["entry_origin"])
+    if candidate["package_name"] != "unknown" and existing["package_name"] == "unknown":
+        return True
+    return candidate["detected_at"] > existing["detected_at"]
+
+
+def _normalize_entry_origin(value: Any) -> Optional[str]:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"baseline", "runtime"}:
+        return normalized
+    return None
+
+
+def _aee_event_dedup_key(
+    signal_id: int,
+    category: str,
+    path_on_device: str,
+    extra: dict[str, Any],
+) -> str:
+    nfs_path = str(extra.get("nfs_path") or "").strip()
+    if category in {"AEE", "VENDOR_AEE"} and nfs_path:
+        return f"nfs:{nfs_path}"
+    path = str(path_on_device or "").strip()
+    if path:
+        return f"path:{path}"
+    return f"id:{signal_id}"
+
+
+def _infer_dashboard_event_group_and_subtype(
+    category: str,
+    extra: dict[str, Any],
+    *,
+    path_on_device: str = "",
+    artifact_uri: Optional[str] = None,
+) -> tuple[str, str]:
+    event_subtype = str(extra.get("event_subtype") or "").strip()
+    if event_subtype:
+        subtype = event_subtype
+    else:
+        raw_event_type = str(extra.get("raw_event_type") or "").strip()
+        event_type = str(extra.get("event_type") or "").strip().upper()
+        subtype = _normalize_dashboard_subtype(
+            raw_event_type,
+            event_type,
+            category,
+            path_on_device=path_on_device,
+            artifact_uri=artifact_uri,
+            nfs_path=str(extra.get("nfs_path") or "").strip(),
+        )
+
+    if subtype == "ANR":
+        return "AEE", "ANR"
+    if category == "VENDOR_AEE":
+        return "VENDOR_AEE", subtype
+    return "AEE", subtype
+
+
+def _normalize_dashboard_subtype(
+    raw_event_type: str,
+    event_type: str,
+    category: str,
+    *,
+    path_on_device: str = "",
+    artifact_uri: Optional[str] = None,
+    nfs_path: str = "",
+) -> str:
+    normalized = normalize_aee_subtype(raw_event_type, event_type, category=category)
+    if normalized != "其他":
+        return normalized
+
+    entry_dir = _resolve_dashboard_local_aee_dir(nfs_path=nfs_path, artifact_uri=artifact_uri)
+    if entry_dir is not None:
+        exp_main_summary = parse_exp_main_summary(entry_dir)
+        exp_main_subtype = str(exp_main_summary.get("event_subtype") or "").strip()
+        if exp_main_subtype:
+            return exp_main_subtype
+
+    return infer_aee_subtype_from_paths(path_on_device, nfs_path, artifact_uri or "") or normalized
+
+
+def _infer_dashboard_package_name(
+    extra: dict[str, Any],
+    *,
+    artifact_uri: Optional[str] = None,
+) -> str:
+    package_name = normalize_package_name(str(extra.get("package_name") or ""))
+    if package_name:
+        return package_name
+
+    entry_dir = _resolve_dashboard_local_aee_dir(
+        nfs_path=str(extra.get("nfs_path") or "").strip(),
+        artifact_uri=artifact_uri,
+    )
+    if entry_dir is not None:
+        exp_main_summary = parse_exp_main_summary(entry_dir)
+        for key in ("package_name", "current_process"):
+            candidate = normalize_package_name(exp_main_summary.get(key, ""))
+            if candidate:
+                return candidate
+
+    return "unknown"
+
+
+def _resolve_dashboard_local_aee_dir(
+    *,
+    nfs_path: str = "",
+    artifact_uri: Optional[str] = None,
+) -> Optional[Path]:
+    for raw_path in (nfs_path, artifact_uri or ""):
+        candidate = (raw_path or "").strip()
+        if not candidate:
+            continue
+        try:
+            resolved = resolve_local_artifact_path(candidate, must_exist=False)
+        except ArtifactPathError:
+            continue
+        if resolved.exists():
+            return resolved if resolved.is_dir() else resolved.parent
+        if resolved.suffix:
+            return resolved.parent
+        return resolved
+    return None
+
+
+def _build_dashboard_section(events: list[dict[str, Any]]) -> AeeDashboardSectionOut:
+    if not events:
+        return _empty_dashboard_section()
+
+    subtype_counts: dict[tuple[str, str], int] = defaultdict(int)
+    package_stats: dict[str, dict[str, Any]] = {}
+    for event in events:
+        subtype_counts[(event["group"], event["subtype"])] += 1
+        pkg = package_stats.setdefault(
+            event["package_name"],
+            {
+                "total_count": 0,
+                "devices": set(),
+                "latest_detected_at": None,
+                "subtype_breakdown": defaultdict(int),
+            },
+        )
+        pkg["total_count"] += 1
+        pkg["devices"].add(event["device_serial"])
+        pkg["subtype_breakdown"][event["subtype"]] += 1
+        latest_ts = pkg["latest_detected_at"]
+        if latest_ts is None or event["detected_at"] > latest_ts:
+            pkg["latest_detected_at"] = event["detected_at"]
+
+    subtype_distribution = [
+        SubtypeDistributionOut(
+            subtype=subtype,
+            group=group,
+            count=count,
+            share=round(count / len(events), 4),
+        )
+        for (group, subtype), count in sorted(
+            subtype_counts.items(),
+            key=lambda item: (
+                -item[1],
+                _subtype_order_index(item[0][1]),
+                item[0][0],
+                item[0][1],
+            ),
+        )
+    ]
+
+    package_ranking = [
+        PackageRankingOut(
+            package_name=package_name,
+            total_count=stats["total_count"],
+            affected_device_count=len(stats["devices"]),
+            latest_detected_at=_iso(stats["latest_detected_at"]),
+            subtype_breakdown=[
+                PackageSubtypeCountOut(subtype=subtype, count=count)
+                for subtype, count in sorted(
+                    stats["subtype_breakdown"].items(),
+                    key=lambda item: (-item[1], _subtype_order_index(item[0]), item[0]),
+                )
+            ],
+        )
+        for package_name, stats in sorted(
+            package_stats.items(),
+            key=lambda item: (
+                -item[1]["total_count"],
+                item[0] == "unknown",
+                -(item[1]["latest_detected_at"] or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+                item[0],
+            ),
+        )
+    ]
+
+    return AeeDashboardSectionOut(
+        total_events=len(events),
+        affected_device_count=len({event["device_serial"] for event in events}),
+        top_package_name=package_ranking[0].package_name if package_ranking else None,
+        top_subtype=subtype_distribution[0].subtype if subtype_distribution else None,
+        subtype_distribution=subtype_distribution,
+        package_ranking=package_ranking,
+    )
+
+
+def _subtype_order_index(subtype: str) -> int:
+    try:
+        return _SUBTYPE_FIXED_ORDER.index(subtype)
+    except ValueError:
+        return len(_SUBTYPE_FIXED_ORDER)
 
 
 def _aggregate_aee_breakdown(
