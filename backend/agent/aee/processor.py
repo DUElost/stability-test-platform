@@ -10,6 +10,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from backend.core.aee_metadata import (
+    infer_aee_subtype_from_paths,
+    normalize_package_name,
+    parse_exp_main_summary,
+)
+
 from .bugreport import export_bugreport_for_timestamp
 from .db_history import (
     load_processed_lines,
@@ -76,7 +82,7 @@ def process_device_logs(
     new entry. Payload dict shape::
         {
             "line":          str  # original db_history line
-            "parsed":        Dict[str, str]  # db_path / pkg_name / timestamp / event_type
+            "parsed":        Dict[str, str]  # db_path / pkg_name / timestamp / event_type / raw_event_type / event_subtype
             "aee_type":      str  # "aee_exp" | "vendor_aee_exp"
             "output_subdir": Path  # NFS dir where AEE files were pulled to
         }
@@ -158,6 +164,8 @@ def process_device_logs(
                     "pkg_name": parsed["pkg_name"],
                     "timestamp": parsed["timestamp"],
                     "event_type": parsed.get("event_type", ""),
+                    "raw_event_type": parsed.get("raw_event_type", ""),
+                    "event_subtype": parsed.get("event_subtype", ""),
                     "retry_count": 0,
                 }
 
@@ -262,6 +270,7 @@ def process_device_logs(
                     shell_fn=shell_fn,
                 )
                 if verify_ok:
+                    parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
                     _finalize_processed_entry(
                         line=line,
                         parsed=parsed,
@@ -294,6 +303,7 @@ def process_device_logs(
                 result.errors.append(f"pull_verify_failed:{parsed['db_path']}:{verify_msg}")
                 continue
 
+            parsed = _enrich_parsed_with_local_aee_metadata(parsed, local_target_dir)
             _finalize_processed_entry(
                 line=line,
                 parsed=parsed,
@@ -338,6 +348,37 @@ def _cleanup_dir(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
     except Exception:
         pass
+
+
+def _enrich_parsed_with_local_aee_metadata(
+    parsed: Dict[str, Any],
+    local_target_dir: Path,
+) -> Dict[str, Any]:
+    enriched = dict(parsed)
+    exp_main_summary = parse_exp_main_summary(local_target_dir)
+
+    subtype = str(enriched.get("event_subtype") or "").strip()
+    if not subtype or subtype == "其他":
+        inferred_subtype = (
+            exp_main_summary.get("event_subtype")
+            or infer_aee_subtype_from_paths(
+                str(enriched.get("db_path") or ""),
+                str(local_target_dir),
+            )
+        )
+        if inferred_subtype:
+            enriched["event_subtype"] = inferred_subtype
+            enriched["event_type"] = "ANR" if inferred_subtype == "ANR" else "CRASH"
+
+    package_name = normalize_package_name(str(enriched.get("pkg_name") or ""))
+    if not package_name:
+        package_name = normalize_package_name(exp_main_summary.get("package_name", ""))
+    if not package_name:
+        package_name = normalize_package_name(exp_main_summary.get("current_process", ""))
+    if package_name:
+        enriched["pkg_name"] = package_name
+
+    return enriched
 
 
 def _verify_pulled_aee_log_strict(

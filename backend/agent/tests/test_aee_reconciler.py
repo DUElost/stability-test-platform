@@ -180,23 +180,27 @@ def test_tick_once_new_entries_emits_with_extra(monkeypatch):
     store = _MemStore()
     payloads = [
         {
-            "line": "/data/aee_exp/db.01,CRASH,pkg,_,_,_,_,_,com.example,2026-05-28 10:00:00.000",
+            "line": "/data/aee_exp/db.01,Java (JE),pkg,_,_,_,_,_,com.example,2026-05-28 10:00:00.000",
             "parsed": {
                 "db_path": "/data/aee_exp/db.01",
                 "pkg_name": "com.example",
                 "timestamp": "2026-05-28 10:00:00.000",
                 "event_type": "CRASH",
+                "raw_event_type": "Java (JE)",
+                "event_subtype": "JE",
             },
             "aee_type": "aee_exp",
             "output_subdir": Path("/mnt/nfs/jobs/901/AEE/db.01"),
         },
         {
-            "line": "/data/vendor/aee_exp/db.02,CRASH,pkg,_,_,_,_,_,vendor.app,2026-05-28 10:00:30.000",
+            "line": "/data/vendor/aee_exp/db.02,System API Dump,pkg,_,_,_,_,_,vendor.app,2026-05-28 10:00:30.000",
             "parsed": {
                 "db_path": "/data/vendor/aee_exp/db.02",
                 "pkg_name": "vendor.app",
                 "timestamp": "2026-05-28 10:00:30.000",
                 "event_type": "CRASH",
+                "raw_event_type": "System API Dump",
+                "event_subtype": "System API Dump",
             },
             "aee_type": "vendor_aee_exp",
             "output_subdir": Path("/mnt/nfs/jobs/901/VENDOR_AEE/db.02"),
@@ -228,17 +232,22 @@ def test_tick_once_new_entries_emits_with_extra(monkeypatch):
     assert Path(aee_call["artifact_uri"]) == expected_aee_dir
     extra = aee_call["extra"]
     assert extra["event_type"] == "CRASH"
+    assert extra["raw_event_type"] == "Java (JE)"
+    assert extra["event_subtype"] == "JE"
     assert extra["package_name"] == "com.example"
     assert extra["aee_ts"] == "2026-05-28 10:00:00.000"
     assert Path(extra["nfs_path"]) == expected_aee_dir
     assert extra["pull_source"] == "reconciler"
-    # §2.2 schema_version=1(本次补:演进兼容标记)
-    assert extra["schema_version"] == 1
+    assert extra["entry_origin"] == "runtime"
+    assert extra["schema_version"] == 2
 
     vendor_call = emitter.calls[1]
     assert vendor_call["category"] == "VENDOR_AEE"
     assert vendor_call["extra"]["package_name"] == "vendor.app"
-    assert vendor_call["extra"]["schema_version"] == 1
+    assert vendor_call["extra"]["raw_event_type"] == "System API Dump"
+    assert vendor_call["extra"]["event_subtype"] == "System API Dump"
+    assert vendor_call["extra"]["entry_origin"] == "runtime"
+    assert vendor_call["extra"]["schema_version"] == 2
 
 
 def test_first_tick_runs_baseline_snapshot_and_marks_runtime_processed(monkeypatch):
@@ -247,12 +256,14 @@ def test_first_tick_runs_baseline_snapshot_and_marks_runtime_processed(monkeypat
     store = _MemStore()
     calls: list[str] = []
     payload = {
-        "line": "/data/aee_exp/db.20,CRASH,pkg,_,_,_,_,_,com.settings,2026-05-28 10:00:00.000",
+        "line": "/data/aee_exp/db.20,Native (NE),pkg,_,_,_,_,_,com.settings,2026-05-28 10:00:00.000",
         "parsed": {
             "db_path": "/data/aee_exp/db.20",
             "pkg_name": "com.settings",
             "timestamp": "2026-05-28 10:00:00.000",
             "event_type": "CRASH",
+            "raw_event_type": "Native (NE)",
+            "event_subtype": "NE",
         },
         "aee_type": "aee_exp",
         "output_subdir": Path("/mnt/nfs/jobs/904/AEE/db.20"),
@@ -286,6 +297,10 @@ def test_first_tick_runs_baseline_snapshot_and_marks_runtime_processed(monkeypat
     assert rec.stats.runtime_entries_total == 0
     assert rec.stats.new_entries_total == 1
     assert emitter.calls[0]["extra"]["aee_ts"] == "2026-05-28 10:00:00.000"
+    assert emitter.calls[0]["extra"]["raw_event_type"] == "Native (NE)"
+    assert emitter.calls[0]["extra"]["event_subtype"] == "NE"
+    assert emitter.calls[0]["extra"]["entry_origin"] == "baseline"
+    assert emitter.calls[0]["extra"]["schema_version"] == 2
     assert hasattr(emitter.calls[0]["detected_at"], "tzinfo")
 
     processed_raw = store.get_state("watcher:aee:SX:aee_exp:processed_entries", "[]")

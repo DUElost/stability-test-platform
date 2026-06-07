@@ -63,22 +63,28 @@ def test_parse_db_history_line():
 
 
 @pytest.mark.parametrize(
-    ("raw_event_type", "expected"),
+    ("raw_event_type", "expected_event_type", "expected_subtype"),
     [
-        ("Java (JE)", "CRASH"),
-        ("Native (NE)", "CRASH"),
-        ("SIGSEGV", "CRASH"),
-        ("ANR", "ANR"),
+        ("Java (JE)", "CRASH", "JE"),
+        ("Native (NE)", "CRASH", "NE"),
+        ("SIGSEGV", "CRASH", "NE"),
+        ("ANR", "ANR", "ANR"),
     ],
 )
-def test_parse_db_history_line_normalizes_real_device_event_types(raw_event_type, expected):
+def test_parse_db_history_line_normalizes_real_device_event_types(
+    raw_event_type,
+    expected_event_type,
+    expected_subtype,
+):
     line = (
         f"/data/aee_exp/db.01,{raw_event_type},pkg,_,_,_,_,_,"
         "com.example.app,2026-05-27 10:15:22.123"
     )
     parsed = parse_db_history_line(line)
     assert parsed is not None
-    assert parsed["event_type"] == expected
+    assert parsed["raw_event_type"] == raw_event_type
+    assert parsed["event_type"] == expected_event_type
+    assert parsed["event_subtype"] == expected_subtype
 
 
 def test_parse_vendor_db_history_line_filters_invalid():
@@ -87,6 +93,18 @@ def test_parse_vendor_db_history_line_filters_invalid():
     parsed = parse_vendor_db_history_line(line)
     assert parsed is not None
     assert parsed["db_path"].startswith("/data/vendor/aee_exp/")
+
+
+def test_parse_vendor_db_history_line_preserves_vendor_subtype():
+    line = (
+        "/data/vendor/aee_exp/db.03,System API Dump,pkg,_,_,_,_,_,"
+        "vendor.app,2026-05-27 11:05:00"
+    )
+    parsed = parse_vendor_db_history_line(line)
+    assert parsed is not None
+    assert parsed["raw_event_type"] == "System API Dump"
+    assert parsed["event_type"] == "CRASH"
+    assert parsed["event_subtype"] == "System API Dump"
 
 
 def test_get_aee_log_folder_name():
@@ -316,7 +334,7 @@ def test_process_device_logs_on_new_entry_called(tmp_path, monkeypatch):
     """on_new_entry 回调:pull 成功时被调用一次,payload 字段完整;第二次同 line 不再触发。"""
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
     store = _MemStore()
-    line = "/data/aee_exp/db.42,CRASH,pkg,_,_,_,_,_,com.example.app,2026-05-28 10:15:22.123"
+    line = "/data/aee_exp/db.42,Java (JE),pkg,_,_,_,_,_,com.example.app,2026-05-28 10:15:22.123"
     _setup_pdl_stubs(monkeypatch, line)
 
     captured: list[dict] = []
@@ -338,6 +356,8 @@ def test_process_device_logs_on_new_entry_called(tmp_path, monkeypatch):
     assert payload["parsed"]["pkg_name"] == "com.example.app"
     assert payload["parsed"]["timestamp"] == "2026-05-28 10:15:22.123"
     assert payload["parsed"]["event_type"] == "CRASH"
+    assert payload["parsed"]["raw_event_type"] == "Java (JE)"
+    assert payload["parsed"]["event_subtype"] == "JE"
     assert isinstance(payload["output_subdir"], Path)
     assert payload["output_subdir"].is_dir()
     # output_subdir 应位于 aee_type 子目录下
@@ -452,6 +472,58 @@ def test_process_device_logs_emits_when_local_aee_dir_already_exists(tmp_path, m
     assert captured and captured[0]["parsed"]["db_path"] == "/data/aee_exp/db.55"
     saved = json.loads(store.get_state(state_key("dev_existing_dir", "aee_exp"), "[]"))
     assert line in saved
+
+
+def test_process_device_logs_enriches_from_local_exp_main(tmp_path, monkeypatch):
+    """本地 AEE 目录已有 __exp_main.txt 时,应回填 subtype 和 package。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.66,CRASH,pkg,_,_,_,_,_,unknown,2026-06-01 20:20:00.123"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    folder_name = get_aee_log_folder_name(
+        getprop=lambda name, timeout=10: {
+            "ro.product.name": "X6851-OP",
+            "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+            "ro.build.version.incremental": "0401",
+            "ro.build.version.release": "16",
+        }.get(name, ""),
+        run_date_stamp="0601",
+    )
+    assert folder_name is not None
+    existing_dir = resolve_device_output_dir(
+        nfs_root=tmp_path,
+        folder_name=folder_name,
+        serial="dev_existing_meta",
+    ) / "aee_exp" / f"{format_timestamp_for_filename('2026-06-01 20:20:00.123')}_db.66"
+    existing_dir.mkdir(parents=True, exist_ok=True)
+    (existing_dir / "main.dbg").write_text("ok", encoding="utf-8")
+    (existing_dir / "__exp_main.txt").write_text(
+        "\n".join([
+            "Build Info: 'foo'",
+            "Exception Class: Java (JE)",
+            "Current Executing Process:",
+            "com.android.systemui",
+            "Package: com.android.settings",
+        ]),
+        encoding="utf-8",
+    )
+
+    captured: list[dict] = []
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r = process_device_logs(
+        serial="dev_existing_meta",
+        job_id=91,
+        state_store=store,
+        config=cfg,
+        run_date_stamp="0601",
+        on_new_entry=captured.append,
+    )
+
+    assert r.pulled == 1
+    assert captured
+    assert captured[0]["parsed"]["event_subtype"] == "JE"
+    assert captured[0]["parsed"]["pkg_name"] == "com.android.settings"
 
 
 def test_process_device_logs_persists_processed_before_side_effects(tmp_path, monkeypatch):

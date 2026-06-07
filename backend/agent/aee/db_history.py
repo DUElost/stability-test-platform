@@ -5,14 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional, Set
 
-
-def _normalize_event_type(raw_event_type: str) -> str:
-    normalized = (raw_event_type or "").strip().upper()
-    if not normalized:
-        return ""
-    if "ANR" in normalized:
-        return "ANR"
-    return "CRASH"
+from backend.core.aee_metadata import normalize_aee_event_type, normalize_aee_subtype
 
 
 def parse_db_history_line(line_content: str) -> Optional[Dict[str, str]]:
@@ -23,7 +16,9 @@ def parse_db_history_line(line_content: str) -> Optional[Dict[str, str]]:
         db_path = parts[0].strip()
         pkg_name = parts[8].strip()
         ts_str = parts[9].strip()
-        event_type = _normalize_event_type(parts[1] if len(parts) > 1 else "")
+        raw_event_type = parts[1].strip() if len(parts) > 1 else ""
+        event_type = normalize_aee_event_type(raw_event_type)
+        event_subtype = normalize_aee_subtype(raw_event_type, event_type)
         if not all([db_path, pkg_name, ts_str]):
             return None
         return {
@@ -31,6 +26,8 @@ def parse_db_history_line(line_content: str) -> Optional[Dict[str, str]]:
             "pkg_name": pkg_name,
             "timestamp": ts_str,
             "event_type": event_type,
+            "raw_event_type": raw_event_type,
+            "event_subtype": event_subtype,
         }
     except Exception:
         return None

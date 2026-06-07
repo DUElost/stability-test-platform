@@ -505,6 +505,11 @@ class AeeDbHistoryReconciler:
             )
             return baseline_new
 
+        def _on_runtime_entry(payload: Dict[str, Any]) -> None:
+            scoped_payload = dict(payload)
+            scoped_payload["entry_origin"] = "runtime"
+            self._handle_new_entry(scoped_payload)
+
         result = process_device_logs(
             serial=self._serial,
             job_id=self._job_id,
@@ -512,7 +517,7 @@ class AeeDbHistoryReconciler:
             adb_path=self._adb_path,
             config=self._cfg,
             nfs_root=self._nfs_root,
-            on_new_entry=self._handle_new_entry,
+            on_new_entry=_on_runtime_entry,
             shell_fn=self._shell_fn,
             pull_fn=self._pull_fn,
             stop_event=self._stop_evt,
@@ -570,6 +575,7 @@ class AeeDbHistoryReconciler:
         def _on_baseline_entry(payload: Dict[str, Any]) -> None:
             scoped_payload = dict(payload)
             scoped_payload["detected_at_override"] = datetime.now(timezone.utc)
+            scoped_payload["entry_origin"] = "baseline"
             aee_type = str(scoped_payload.get("aee_type") or "")
             line = str(scoped_payload.get("line") or "")
             if aee_type in baseline_lines_by_type and line:
@@ -664,6 +670,9 @@ class AeeDbHistoryReconciler:
             aee_ts: str = str(parsed.get("timestamp") or "")
             pkg_name: str = str(parsed.get("pkg_name") or "") or "unknown"
             event_type: str = str(parsed.get("event_type") or "") or "UNKNOWN"
+            raw_event_type: str = str(parsed.get("raw_event_type") or "")
+            event_subtype: str = str(parsed.get("event_subtype") or "") or "其他"
+            entry_origin: str = str(payload.get("entry_origin") or "") or "runtime"
             output_subdir = payload.get("output_subdir")
 
             detected_at = payload.get("detected_at_override")
@@ -673,16 +682,19 @@ class AeeDbHistoryReconciler:
                 detected_at = detected_at.replace(tzinfo=timezone.utc)
 
             extra: Dict[str, Any] = {
-                # §2.2 schema_version 1:演进兼容标记。mobilelog_pulled /
+                # §2.2 schema_version 2:演进兼容标记。mobilelog_pulled /
                 # bugreport_exported 不在此填 — emit 在 processor.on_new_entry
                 # 回调触发,早于 mobilelog/bugreport 副作用(processor.py:231),
                 # 此刻两者尚未发生,故按 §2.2「可选」留空。
-                "schema_version": 1,
-                "event_type":   event_type,
+                "schema_version": 2,
+                "event_type": event_type,
+                "event_subtype": event_subtype,
+                "raw_event_type": raw_event_type,
                 "package_name": pkg_name,
-                "aee_ts":       aee_ts,
-                "nfs_path":     str(output_subdir) if output_subdir else None,
-                "pull_source":  "reconciler",
+                "aee_ts": aee_ts,
+                "nfs_path": str(output_subdir) if output_subdir else None,
+                "pull_source": "reconciler",
+                "entry_origin": entry_origin,
             }
 
             self._emitter.emit(
