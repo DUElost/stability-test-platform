@@ -84,6 +84,11 @@ def test_legacy_pipeline_cleanup_sql_helpers_are_removed():
         assert not path.exists(), f"legacy one-off SQL cleanup helper still present: {path}"
 
 
+def test_obsolete_sqlite_postgres_dual_write_verifier_is_removed():
+    path = REPO_ROOT / "tools" / "verify_dual_write.py"
+    assert not path.exists(), f"obsolete sqlite/postgres dual-write verifier still present: {path}"
+
+
 def test_m1_dual_write_runbook_and_recon_script_are_removed():
     legacy_paths = [
         REPO_ROOT / "backend" / "scripts" / "aee_dual_write_recon.py",
