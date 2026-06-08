@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "description": "Monkey AEE Stability test: run external legacy script via subprocess adapter",
+  "version": 2,
+  "description": "Monkey AEE stability test - full lifecycle (init -> Watcher-only patrol -> teardown)",
   "lifecycle": {
     "timeout_seconds": 604800,
     "init": [
@@ -53,7 +53,7 @@
         {
           "step_id": "monkey_check",
           "action": "script:monkey_check",
-          "version": "1.0.0",
+          "version": "2.0.2",
           "timeout_seconds": 60,
           "retry": 0,
           "params": {}

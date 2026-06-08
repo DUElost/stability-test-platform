@@ -41,3 +41,12 @@ def test_monkey_aee_templates_are_watcher_only_m2_variants():
         assert "script:export_mobilelogs" not in actions, (
             f"{name} must not keep legacy export_mobilelogs"
         )
+
+
+def test_monkey_aee_template_alias_tracks_watcher_only_lifecycle_template():
+    alias = json.loads((TEMPLATES_DIR / "monkey_aee.json").read_text(encoding="utf-8"))
+    lifecycle = json.loads((TEMPLATES_DIR / "monkey_aee_lifecycle.json").read_text(encoding="utf-8"))
+
+    assert "legacy" not in str(alias.get("description") or "").lower()
+    assert alias["version"] == lifecycle["version"]
+    assert alias["lifecycle"] == lifecycle["lifecycle"]
