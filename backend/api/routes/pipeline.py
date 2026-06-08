@@ -16,6 +16,13 @@ router = APIRouter(prefix="/api/v1/pipeline", tags=["pipeline"])
 
 # Path to pipeline template JSON files
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "schemas" / "pipeline_templates"
+NON_PUBLIC_TEMPLATE_NAMES = frozenset({
+    "aimonkey",
+    "monkey_aee",
+    "monkey_aee_init",
+    "monkey_aee_lifecycle",
+    "monkey_aee_teardown",
+})
 
 
 class PipelineTemplateOut(BaseModel):
@@ -41,6 +48,13 @@ def _load_template(path: Path) -> PipelineTemplateOut:
     )
 
 
+def _iter_template_paths(*, public_only: bool = False) -> list[Path]:
+    paths = sorted(TEMPLATES_DIR.glob("*.json"))
+    if not public_only:
+        return paths
+    return [path for path in paths if path.stem not in NON_PUBLIC_TEMPLATE_NAMES]
+
+
 @router.get("/templates", response_model=List[PipelineTemplateOut])
 def list_pipeline_templates(
     _current_user: User = Depends(get_current_active_user),
@@ -49,7 +63,7 @@ def list_pipeline_templates(
     if not TEMPLATES_DIR.exists():
         return []
     templates = []
-    for f in sorted(TEMPLATES_DIR.glob("*.json")):
+    for f in _iter_template_paths(public_only=True):
         try:
             templates.append(_load_template(f))
         except Exception:

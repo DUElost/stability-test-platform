@@ -1,6 +1,6 @@
 import json
 
-from backend.api.routes.pipeline import TEMPLATES_DIR, _load_template
+from backend.api.routes.pipeline import TEMPLATES_DIR, _iter_template_paths, _load_template
 from backend.core.pipeline_validator import validate_pipeline_def
 
 
@@ -50,3 +50,14 @@ def test_monkey_aee_template_alias_tracks_watcher_only_lifecycle_template():
     assert "legacy" not in str(alias.get("description") or "").lower()
     assert alias["version"] == lifecycle["version"]
     assert alias["lifecycle"] == lifecycle["lifecycle"]
+
+
+def test_public_pipeline_template_list_omits_internal_and_deprecated_aee_aliases():
+    public_names = [path.stem for path in _iter_template_paths(public_only=True)]
+
+    assert "monkey_aee_patrol" in public_names
+    assert "aimonkey" not in public_names
+    assert "monkey_aee" not in public_names
+    assert "monkey_aee_lifecycle" not in public_names
+    assert "monkey_aee_init" not in public_names
+    assert "monkey_aee_teardown" not in public_names

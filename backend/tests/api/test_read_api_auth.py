@@ -253,4 +253,13 @@ class TestReadApiAuthWithSeededData:
     def test_pipeline_templates_with_auth(self, client, auth_headers):
         resp = client.get("/api/v1/pipeline/templates", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        data = resp.json()
+        assert isinstance(data, list)
+
+        names = {item["name"] for item in data}
+        assert "monkey_aee_patrol" in names
+        assert "aimonkey" not in names
+        assert "monkey_aee" not in names
+        assert "monkey_aee_lifecycle" not in names
+        assert "monkey_aee_init" not in names
+        assert "monkey_aee_teardown" not in names
