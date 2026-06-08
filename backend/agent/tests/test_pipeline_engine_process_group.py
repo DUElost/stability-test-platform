@@ -37,8 +37,8 @@ def test_isolation_kwargs_posix(monkeypatch):
 
 def test_isolation_kwargs_windows(monkeypatch):
     monkeypatch.setattr(pipeline_engine, "_IS_WINDOWS", True)
-    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
-    kw = _popen_isolation_kwargs()
+    with patch("backend.agent.pipeline_engine.subprocess.CREATE_NEW_PROCESS_GROUP", 0x00000200, create=True):
+        kw = _popen_isolation_kwargs()
     assert "creationflags" in kw
     assert kw["creationflags"] == 0x00000200
 
