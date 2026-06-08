@@ -8,8 +8,12 @@ export const hosts = {
     apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
   create: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
     apiClient.post<Host>('/hosts', data),
-  update: (id: number, data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
+  update: (id: number | string, data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
     apiClient.put<Host>(`/hosts/${id}`, data),
+  updateWatcherAdminState: (
+    id: number | string,
+    data: { watcher_admin_active: boolean },
+  ) => apiClient.patch<Host>(`/hosts/${id}/watcher-admin-state`, data),
 };
 
 export const heartbeat = {
@@ -69,14 +73,14 @@ export const hotUpdate = {
 };
 
 export const deploy = {
-  trigger: (hostId: number, installPath: string = '/opt/stability-test-agent') =>
+  trigger: (hostId: number | string, installPath: string = '/opt/stability-test-agent') =>
     apiClient.post<{ id: number; host_id: number; status: string; started_at: string }>(
       `/deploy/hosts/${hostId}`,
       { install_path: installPath }
     ),
-  getHistory: (hostId: number, limit: number = 10) =>
+  getHistory: (hostId: number | string, limit: number = 10) =>
     apiClient.get<any[]>(`/deploy/hosts/${hostId}/history?limit=${limit}`),
-  getLatest: (hostId: number) => apiClient.get<any>(`/deploy/hosts/${hostId}/latest`),
-  batchDeploy: (hostIds: number[], installPath: string = '/opt/stability-test-agent') =>
+  getLatest: (hostId: number | string) => apiClient.get<any>(`/deploy/hosts/${hostId}/latest`),
+  batchDeploy: (hostIds: Array<number | string>, installPath: string = '/opt/stability-test-agent') =>
     apiClient.post<{ deployments: any[]; total: number }>('/deploy/batch', { host_ids: hostIds, install_path: installPath }),
 };

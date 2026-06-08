@@ -3,12 +3,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
+const mocks = vi.hoisted(() => ({
+  confirm: vi.fn().mockResolvedValue(true),
+}));
+
 // Mock api
 vi.mock('../../utils/api', () => ({
   api: {
     hosts: {
       list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
       create: vi.fn().mockResolvedValue({ data: {} }),
+      updateWatcherAdminState: vi.fn().mockResolvedValue({ data: {} }),
     },
     devices: {
       list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
@@ -40,18 +45,39 @@ vi.mock('../../components/ui/toast', () => ({
 
 // Mock confirm
 vi.mock('../../hooks/useConfirm', () => ({
-  useConfirm: () => vi.fn().mockResolvedValue(true),
+  useConfirm: () => mocks.confirm,
+}));
+
+vi.mock('../../hooks/useAuthSession', () => ({
+  useAuthSession: () => ({
+    data: { id: 1, username: 'admin', role: 'admin', is_active: 'Y', created_at: '', last_login: null },
+  }),
 }));
 
 // Mock ExpandableHostTable to simplify rendering
 vi.mock('../../components/network/ExpandableHostTable', () => ({
-  ExpandableHostTable: ({ hosts }: { hosts: any[] }) => (
+  ExpandableHostTable: ({
+    hosts,
+    onWatcherAdminStateChange,
+  }: {
+    hosts: any[];
+    onWatcherAdminStateChange?: (hostId: string | number, nextActive: boolean) => void;
+  }) => (
     <div data-testid="host-table">
       {hosts.map((h: any) => (
         <div key={h.id} data-testid={`host-row-${h.id}`}>
           <span>{h.name}</span>
           <span>{h.ip}</span>
           <span>{h.status}</span>
+          <span>{h.watcher_admin_active !== false ? '已激活' : '未激活'}</span>
+          {onWatcherAdminStateChange && (
+            <button
+              data-testid={`watcher-toggle-${h.id}`}
+              onClick={() => onWatcherAdminStateChange(h.id, !(h.watcher_admin_active !== false))}
+            >
+              toggle
+            </button>
+          )}
         </div>
       ))}
     </div>
@@ -158,12 +184,13 @@ describe('HostsPage', () => {
       data: {
         items: [
           {
-            id: 1,
+            id: 'host-1',
             name: 'Worker-01',
             ip: '172.21.15.10',
             status: 'ONLINE',
             extra: {},
             mount_status: {},
+            watcher_admin_active: true,
             capacity: { active_jobs: 2, effective_slots: 1, max_concurrent_jobs: 3 },
           },
         ],
@@ -176,5 +203,35 @@ describe('HostsPage', () => {
 
     await screen.findByText('Worker-01');
     expect(api.planRuns.list).not.toHaveBeenCalled();
+  });
+
+  it('deactivates watcher admin state after confirmation', async () => {
+    const { api } = await import('../../utils/api');
+    (api.hosts.list as any).mockResolvedValue({
+      data: {
+        items: [
+          {
+            id: 'host-1',
+            name: 'Worker-01',
+            ip: '172.21.15.10',
+            status: 'ONLINE',
+            extra: {},
+            mount_status: {},
+            watcher_admin_active: true,
+          },
+        ],
+        total: 1,
+      },
+    });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByText('Worker-01');
+    fireEvent.click(screen.getByTestId('watcher-toggle-host-1'));
+
+    expect(mocks.confirm).toHaveBeenCalledWith({
+      description: '将节点设为未激活后，只影响后续新派发任务；正在运行的任务不受影响。是否继续？',
+    });
   });
 });

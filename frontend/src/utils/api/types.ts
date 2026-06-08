@@ -12,12 +12,13 @@ export interface HostActiveJob {
 }
 
 export interface Host {
-  id: number;
+  id: string | number;
   name: string;
   ip: string;
   ssh_port: number;
   ssh_user: string | null;
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
+  watcher_admin_active?: boolean;
   last_heartbeat: string | null;
   extra: Record<string, any>;
   mount_status: Record<string, any>;
@@ -49,7 +50,7 @@ export interface Device {
   id: number;
   serial: string;
   model: string | null;
-  host_id: number | null;
+  host_id: string | number | null;
   status: 'ONLINE' | 'OFFLINE' | 'BUSY';
   last_seen: string | null;
   tags: string[];
@@ -738,6 +739,12 @@ export interface PrecheckHostState {
   error?: string | null;
 }
 
+export interface PrecheckGateFailure {
+  code: string;
+  message: string;
+  inactive_host_ids: string[];
+}
+
 export interface PrecheckState {
   phase: PrecheckPhase;
   started_at: string;
@@ -747,6 +754,7 @@ export interface PrecheckState {
   errors: string[];
   /** Backend env DISPATCH_SYNC_MAX_ATTEMPTS (ADR Phase B). */
   sync_max_attempts?: number;
+  gate_failure?: PrecheckGateFailure | null;
 }
 
 export interface PlanRunContext {

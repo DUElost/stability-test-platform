@@ -160,6 +160,47 @@ describe('DispatchGateCard stale banner', () => {
       'agent_offline',
     );
   });
+
+  it('shows mixed watcher failure detail with inactive host ids', () => {
+    render(
+      <DispatchGateCard
+        precheck={{
+          phase: 'failed',
+          started_at: '2026-05-08T11:00:00Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          final_result: 'failed',
+          errors: ['watch激活与不激活的节点不能同时在一个计划中'],
+          gate_failure: {
+            code: 'MIXED_WATCHER_ACTIVITY',
+            message: 'watch激活与不激活的节点不能同时在一个计划中',
+            inactive_host_ids: ['host-101', 'host-203'],
+          },
+          hosts: {
+            'host-101': {
+              status: 'failed',
+              checked_at: null,
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'watcher_inactive',
+            },
+          },
+        }}
+        dispatchState={{
+          status: 'failed',
+          enqueued_at: '2026-05-08T11:00:00Z',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          last_error: 'precheck:MIXED_WATCHER_ACTIVITY',
+        }}
+        isTerminal={true}
+      />,
+    );
+    expect(screen.getByText('watch激活与不激活的节点不能同时在一个计划中')).toBeInTheDocument();
+    expect(screen.getByTestId('dispatch-gate-mixed-watcher-detail')).toHaveTextContent(
+      '不激活节点ID：host-101, host-203',
+    );
+  });
 });
 
 describe('DispatchGateCard expanded auto-sync', () => {

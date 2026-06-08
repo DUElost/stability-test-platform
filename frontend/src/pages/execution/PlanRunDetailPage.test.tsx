@@ -718,6 +718,74 @@ describe('PlanRunDetailPage', () => {
     );
   });
 
+  it('surfaces mixed watcher failure in precheck summary row', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'FAILED',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T11:00:30Z',
+      run_context: {
+        precheck: {
+          phase: 'failed',
+          started_at: '2026-05-08T11:00:00Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          final_result: 'failed',
+          errors: ['watch激活与不激活的节点不能同时在一个计划中'],
+          sync_max_attempts: 1,
+          gate_failure: {
+            code: 'MIXED_WATCHER_ACTIVITY',
+            message: 'watch激活与不激活的节点不能同时在一个计划中',
+            inactive_host_ids: ['host-202', 'host-303'],
+          },
+          hosts: {
+            'host-101': {
+              status: 'pending',
+              checked_at: null,
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: null,
+            },
+            'host-202': {
+              status: 'failed',
+              checked_at: null,
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'watcher_inactive',
+            },
+            'host-303': {
+              status: 'failed',
+              checked_at: null,
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'watcher_inactive',
+            },
+          },
+        },
+        dispatch_state: {
+          status: 'failed',
+          enqueued_at: '2026-05-08T11:00:00Z',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          last_error: 'precheck:MIXED_WATCHER_ACTIVITY',
+        },
+      },
+    });
+
+    renderPage();
+
+    const row = await screen.findByTestId('precheck-row');
+    expect(row).toHaveTextContent('失败');
+    expect(row).toHaveTextContent('watch激活与不激活的节点不能同时在一个计划中');
+    expect(row).toHaveTextContent('不激活节点ID：host-202, host-303');
+  });
+
   it('exports report via backend API', async () => {
     const blob = new Blob(['# PlanRun #12 Report'], { type: 'text/plain' });
     mocks.exportReport.mockResolvedValueOnce(blob);

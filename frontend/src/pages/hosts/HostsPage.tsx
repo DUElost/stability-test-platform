@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Loader2, Rocket } from 'lucide-react';
 import { useToast } from '../../components/ui/toast';
 import { useConfirm } from '../../hooks/useConfirm';
+import { useAuthSession } from '../../hooks/useAuthSession';
 import { ExpandableHostTable, type HostTableData } from '../../components/network/ExpandableHostTable';
 import { AddHostModal } from './components/AddHostModal';
 import HostHotUpdateConfirmDialog from '../../components/host/HostHotUpdateConfirmDialog';
@@ -13,10 +14,12 @@ import { PageContainer, PageHeader } from '@/components/layout';
 
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedHostIds, setSelectedHostIds] = useState<Set<number>>(new Set());
+  const [selectedHostIds, setSelectedHostIds] = useState<Set<string | number>>(new Set());
   const queryClient = useQueryClient();
   const toast = useToast();
   const confirmDialog = useConfirm();
+  const sessionQ = useAuthSession();
+  const canManageWatcherAdminState = sessionQ.data?.role === 'admin';
 
   const { data: hosts, isLoading, error } = useQuery({
     queryKey: ['hosts'],
@@ -43,10 +46,13 @@ export default function HostsPage() {
     },
   });
 
-  const [deployingHostId, setDeployingHostId] = useState<number | null>(null);
+  const [deployingHostId, setDeployingHostId] = useState<string | number | null>(null);
+  const [watcherAdminUpdatingHostId, setWatcherAdminUpdatingHostId] = useState<
+    string | number | null
+  >(null);
 
   const deployMutation = useMutation({
-    mutationFn: (hostId: number) => api.deploy.trigger(hostId),
+    mutationFn: (hostId: string | number) => api.deploy.trigger(hostId),
     onSuccess: (_data, hostId) => {
       toast.success(`主机 ${hostId} 部署已启动`);
       setDeployingHostId(null);
@@ -57,7 +63,7 @@ export default function HostsPage() {
     },
   });
 
-  const handleDeploy = async (hostId: number) => {
+  const handleDeploy = async (hostId: string | number) => {
     const ok = await confirmDialog({ description: `确定要部署到主机 ${hostId} 吗？` });
     if (ok) {
       setDeployingHostId(hostId);
@@ -66,7 +72,7 @@ export default function HostsPage() {
   };
 
   const batchDeployMutation = useMutation({
-    mutationFn: (hostIds: number[]) => api.deploy.batchDeploy(hostIds),
+    mutationFn: (hostIds: Array<string | number>) => api.deploy.batchDeploy(hostIds),
     onSuccess: () => {
       toast.success(`已启动 ${selectedHostIds.size} 台主机的批量部署`);
       setSelectedHostIds(new Set());
@@ -84,6 +90,29 @@ export default function HostsPage() {
   const [pendingRetryAfter, setPendingRetryAfter] = useState<number | undefined>(
     undefined,
   );
+
+  const watcherAdminStateMutation = useMutation({
+    mutationFn: (vars: { hostId: string | number; watcher_admin_active: boolean }) =>
+      api.hosts.updateWatcherAdminState(vars.hostId, {
+        watcher_admin_active: vars.watcher_admin_active,
+      }),
+    onSuccess: (_data, vars) => {
+      toast.success(
+        vars.watcher_admin_active ? `主机 ${vars.hostId} 已设为已激活` : `主机 ${vars.hostId} 已设为未激活`,
+      );
+      setWatcherAdminUpdatingHostId(null);
+      queryClient.invalidateQueries({ queryKey: ['hosts'] });
+      queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
+    },
+    onError: (error: any, vars) => {
+      toast.error(
+        `更新 Watch 状态失败: ${
+          error?.response?.data?.detail || error?.message || `host ${vars.hostId}`
+        }`,
+      );
+      setWatcherAdminUpdatingHostId(null);
+    },
+  });
 
   const hotUpdateMutation = useMutation({
     mutationFn: (vars: { hostId: number | string; abortRunningJobs: boolean }) =>
@@ -150,6 +179,25 @@ export default function HostsPage() {
     if (ok) {
       batchDeployMutation.mutate(Array.from(selectedHostIds));
     }
+  };
+
+  const handleWatcherAdminStateChange = async (
+    hostId: string | number,
+    nextActive: boolean,
+  ) => {
+    if (!canManageWatcherAdminState) return;
+    if (!nextActive) {
+      const ok = await confirmDialog({
+        description:
+          '将节点设为未激活后，只影响后续新派发任务；正在运行的任务不受影响。是否继续？',
+      });
+      if (!ok) return;
+    }
+    setWatcherAdminUpdatingHostId(hostId);
+    watcherAdminStateMutation.mutate({
+      hostId,
+      watcher_admin_active: nextActive,
+    });
   };
 
   // Calculate device count + claim exclusion hints per host
@@ -233,6 +281,7 @@ export default function HostsPage() {
         name: host.name,
         ip: host.ip,
         status: host.status,
+        watcher_admin_active: host.watcher_admin_active !== false,
         last_heartbeat: host.last_heartbeat,
         resources: host.status === 'ONLINE' ? {
           cpu_load: extra.cpu_load || 0,
@@ -316,9 +365,14 @@ export default function HostsPage() {
         <ExpandableHostTable
           hosts={tableData}
           onDeploy={handleDeploy}
-          isDeploying={(hostId: number) => deployMutation.isPending && deployingHostId === hostId}
+          isDeploying={(hostId: string | number) => deployMutation.isPending && deployingHostId === hostId}
           onHotUpdate={handleHotUpdate}
-          isHotUpdating={(hostId: number) => hotUpdateMutation.isPending && hotUpdatingHostId === hostId}
+          isHotUpdating={(hostId: string | number) => hotUpdateMutation.isPending && hotUpdatingHostId === hostId}
+          onWatcherAdminStateChange={handleWatcherAdminStateChange}
+          isWatcherAdminStateUpdating={(hostId: string | number) =>
+            watcherAdminStateMutation.isPending && watcherAdminUpdatingHostId === hostId
+          }
+          canManageWatcherAdminState={canManageWatcherAdminState}
           selectedIds={selectedHostIds}
           onSelectionChange={setSelectedHostIds}
         />

@@ -32,10 +32,11 @@ export interface MountStatus {
 }
 
 export interface HostTableData {
-  id: number;
+  id: string | number;
   name: string;
   ip: string;
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
+  watcher_admin_active?: boolean;
   last_heartbeat?: string;
   resources?: HostResources;
   mount_status?: MountStatus[];
@@ -52,12 +53,15 @@ export interface HostTableData {
 
 interface ExpandableHostTableProps {
   hosts: HostTableData[];
-  onDeploy?: (hostId: number) => void;
-  isDeploying?: (hostId: number) => boolean;
-  onHotUpdate?: (hostId: number) => void;
-  isHotUpdating?: (hostId: number) => boolean;
-  selectedIds?: Set<number>;
-  onSelectionChange?: (ids: Set<number>) => void;
+  onDeploy?: (hostId: string | number) => void;
+  isDeploying?: (hostId: string | number) => boolean;
+  onHotUpdate?: (hostId: string | number) => void;
+  isHotUpdating?: (hostId: string | number) => boolean;
+  onWatcherAdminStateChange?: (hostId: string | number, nextActive: boolean) => void;
+  isWatcherAdminStateUpdating?: (hostId: string | number) => boolean;
+  canManageWatcherAdminState?: boolean;
+  selectedIds?: Set<string | number>;
+  onSelectionChange?: (ids: Set<string | number>) => void;
 }
 
 function formatBytes(gb: number): string {
@@ -95,11 +99,22 @@ function getProgressColor(percentage: number): string {
   return 'bg-emerald-500';
 }
 
-export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _isDeploying, onHotUpdate, isHotUpdating, selectedIds, onSelectionChange }: ExpandableHostTableProps) {
-  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+export function ExpandableHostTable({
+  hosts,
+  onDeploy: _onDeploy,
+  isDeploying: _isDeploying,
+  onHotUpdate,
+  isHotUpdating,
+  onWatcherAdminStateChange,
+  isWatcherAdminStateUpdating,
+  canManageWatcherAdminState = false,
+  selectedIds,
+  onSelectionChange,
+}: ExpandableHostTableProps) {
+  const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
   const selectable = !!onSelectionChange;
 
-  const toggleSelect = (id: number, e: React.MouseEvent) => {
+  const toggleSelect = (id: string | number, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!onSelectionChange || !selectedIds) return;
     const next = new Set(selectedIds);
@@ -116,7 +131,7 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
     }
   };
 
-  const toggleRow = (id: number) => {
+  const toggleRow = (id: string | number) => {
     const newExpanded = new Set(expandedRows);
     if (newExpanded.has(id)) {
       newExpanded.delete(id);
@@ -201,6 +216,7 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                 <TableHead className="font-medium">CPU</TableHead>
                 <TableHead className="font-medium">内存</TableHead>
                 <TableHead className="font-medium">磁盘</TableHead>
+                <TableHead className="font-medium text-center">Watch状态</TableHead>
                 <TableHead className="font-medium text-right">心跳</TableHead>
                 <TableHead className="font-medium text-right">操作</TableHead>
               </TableRow>
@@ -343,6 +359,36 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                           <span className="text-gray-300">-</span>
                         )}
                       </TableCell>
+                      <TableCell className="p-3 text-center">
+                        <div className="inline-flex items-center gap-2">
+                          <span
+                            className={cn(
+                              'rounded-full px-2 py-0.5 text-xs font-medium',
+                              host.watcher_admin_active !== false
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : 'bg-red-50 text-red-700'
+                            )}
+                          >
+                            {host.watcher_admin_active !== false ? '已激活' : '未激活'}
+                          </span>
+                          {onWatcherAdminStateChange && (
+                            <input
+                              type="checkbox"
+                              checked={host.watcher_admin_active !== false}
+                              disabled={
+                                !canManageWatcherAdminState ||
+                                !!isWatcherAdminStateUpdating?.(host.id)
+                              }
+                              data-testid={`watcher-admin-toggle-${host.id}`}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) =>
+                                onWatcherAdminStateChange(host.id, e.target.checked)
+                              }
+                              className="rounded border-gray-300 disabled:cursor-not-allowed"
+                            />
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell className="p-3 text-right text-xs text-gray-400">
                         {host.last_heartbeat
                           ? new Date(host.last_heartbeat).toLocaleTimeString()
@@ -369,7 +415,7 @@ export function ExpandableHostTable({ hosts, onDeploy: _onDeploy, isDeploying: _
                     {/* Expanded Details */}
                     {isExpanded && (
                       <TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
-                        <TableCell colSpan={selectable ? 13 : 12} className="p-4">
+                        <TableCell colSpan={selectable ? 14 : 13} className="p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             {/* CPU Details */}
                             <div className="bg-white rounded-lg border border-gray-100 p-3">

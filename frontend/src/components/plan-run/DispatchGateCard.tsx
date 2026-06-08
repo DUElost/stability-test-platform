@@ -106,6 +106,10 @@ export default function DispatchGateCard({
   const canRetryDispatch =
     !isRetrying &&
     (precheck.phase === 'failed' || dispatchState?.status === 'failed');
+  const mixedWatcherFailure =
+    precheck.gate_failure?.code === 'MIXED_WATCHER_ACTIVITY'
+      ? precheck.gate_failure
+      : null;
 
   // Aggregate counts for the summary line
   const counts = useMemo(() => {
@@ -210,6 +214,15 @@ export default function DispatchGateCard({
             派发门禁已运行 {staleElapsedSec}s（超过 90s 阈值）。若长时间无 Job 出现，请检查
             SAQ Worker / Redis 或等待 precheck reaper 补偿。
           </span>
+        </div>
+      )}
+
+      {mixedWatcherFailure && mixedWatcherFailure.inactive_host_ids.length > 0 && (
+        <div
+          data-testid="dispatch-gate-mixed-watcher-detail"
+          className="border-b border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700"
+        >
+          不激活节点ID：{mixedWatcherFailure.inactive_host_ids.join(', ')}
         </div>
       )}
 

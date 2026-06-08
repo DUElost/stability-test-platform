@@ -97,6 +97,10 @@ function PrecheckSummaryRow({
   const hosts = precheck.hosts ?? {};
   const hostEntries = Object.entries(hosts);
   const phase = precheck.phase;
+  const mixedWatcherFailure =
+    precheck.gate_failure?.code === 'MIXED_WATCHER_ACTIVITY'
+      ? precheck.gate_failure
+      : null;
 
   // Compute verified/total scripts across all hosts
   const { verified, total } = hostEntries.reduce(
@@ -166,6 +170,17 @@ function PrecheckSummaryRow({
           {hostEntries.map(([hid]) => (
             <span key={hid} className="font-mono">{hid}</span>
           ))}
+          {mixedWatcherFailure && (
+            <span className="basis-full text-red-600">
+              {mixedWatcherFailure.message}
+            </span>
+          )}
+          {mixedWatcherFailure &&
+            mixedWatcherFailure.inactive_host_ids.length > 0 && (
+              <span className="basis-full font-mono text-red-500">
+                不激活节点ID：{mixedWatcherFailure.inactive_host_ids.join(', ')}
+              </span>
+            )}
         </div>
       </div>
     </button>
