@@ -89,6 +89,11 @@ def test_obsolete_sqlite_postgres_dual_write_verifier_is_removed():
     assert not path.exists(), f"obsolete sqlite/postgres dual-write verifier still present: {path}"
 
 
+def test_legacy_postgres_bootstrap_optimize_sql_is_removed():
+    path = REPO_ROOT / "deploy" / "postgres" / "init" / "01-optimize.sql"
+    assert not path.exists(), f"legacy postgres bootstrap optimize sql still present: {path}"
+
+
 def test_m1_dual_write_runbook_and_recon_script_are_removed():
     legacy_paths = [
         REPO_ROOT / "backend" / "scripts" / "aee_dual_write_recon.py",
