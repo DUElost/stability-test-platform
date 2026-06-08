@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '@/utils/api';
 import { Loader2, Shield } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { Input } from '@/components/ui/input';
 
 interface AuditLogEntry {
   id: number;
@@ -59,7 +60,7 @@ export default function AuditLogPage() {
         <select
           value={filters.resource_type}
           onChange={(e) => { setFilters({ ...filters, resource_type: e.target.value }); setPage(0); }}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <option value="">全部资源</option>
           <option value="plan">Plan</option>
@@ -75,7 +76,7 @@ export default function AuditLogPage() {
         <select
           value={filters.action}
           onChange={(e) => { setFilters({ ...filters, action: e.target.value }); setPage(0); }}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         >
           <option value="">全部操作</option>
           <option value="create">创建</option>
@@ -85,17 +86,15 @@ export default function AuditLogPage() {
           <option value="start">启动</option>
           <option value="cancel">取消</option>
         </select>
-        <input
+        <Input
           type="datetime-local"
           value={filters.start_time}
           onChange={(e) => { setFilters({ ...filters, start_time: e.target.value }); setPage(0); }}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
         />
-        <input
+        <Input
           type="datetime-local"
           value={filters.end_time}
           onChange={(e) => { setFilters({ ...filters, end_time: e.target.value }); setPage(0); }}
-          className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
         />
       </div>
 

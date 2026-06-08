@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { ConfirmProvider } from '@/hooks/useConfirm';
 import PlanListPage from './PlanListPage';
 
 const mocks = vi.hoisted(() => ({
@@ -42,7 +43,9 @@ function renderPage() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <PlanListPage />
+      <ConfirmProvider>
+        <PlanListPage />
+      </ConfirmProvider>
     </QueryClientProvider>,
   );
 }

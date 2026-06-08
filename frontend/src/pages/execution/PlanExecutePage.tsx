@@ -15,6 +15,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 
 
@@ -242,23 +258,31 @@ function PreviewDialog({
 
 
 
-  if (!open || !preview) return null;
-
-
-
   return (
 
 
 
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+    <Dialog open={open && preview != null} onOpenChange={(o) => { if (!o) onClose(); }}>
 
 
 
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 p-6" onClick={e => e.stopPropagation()}>
+      <DialogContent>
 
 
 
-        <h2 className="text-lg font-semibold mb-4">确认执行</h2>
+        <DialogHeader>
+
+
+
+          <DialogTitle>确认执行</DialogTitle>
+
+
+
+          <DialogDescription>{preview?.plan_name}</DialogDescription>
+
+
+
+        </DialogHeader>
 
 
 
@@ -266,19 +290,15 @@ function PreviewDialog({
 
 
 
-          <div className="flex justify-between"><span className="text-gray-500">Plan</span><span className="font-medium">{preview.plan_name}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">设备数</span><span className="font-medium">{preview?.device_count ?? '—'}</span></div>
 
 
 
-          <div className="flex justify-between"><span className="text-gray-500">设备数</span><span className="font-medium">{preview.device_count}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Job 数</span><span className="font-medium">{preview?.job_count ?? '—'}</span></div>
 
 
 
-          <div className="flex justify-between"><span className="text-gray-500">Job 数</span><span className="font-medium">{preview.job_count}</span></div>
-
-
-
-          <div className="flex justify-between"><span className="text-gray-500">总步骤数</span><span className="font-medium">{preview.total_steps}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">总步骤数</span><span className="font-medium">{preview?.total_steps ?? '—'}</span></div>
 
 
 
@@ -286,7 +306,7 @@ function PreviewDialog({
 
 
 
-        <div className="flex justify-end gap-2 mt-6">
+        <DialogFooter>
 
 
 
@@ -298,15 +318,15 @@ function PreviewDialog({
 
 
 
-        </div>
+        </DialogFooter>
 
 
 
-      </div>
+      </DialogContent>
 
 
 
-    </div>
+    </Dialog>
 
 
 
@@ -762,23 +782,42 @@ export default function PlanExecutePage() {
 
 
 
-              <select value={selectedPlanId ?? ''} onChange={e => setSelectedPlanId(e.target.value ? Number(e.target.value) : null)}
+              <Select
+                value={selectedPlanId != null ? String(selectedPlanId) : ''}
+                onValueChange={(v) => setSelectedPlanId(v ? Number(v) : null)}
+              >
 
 
 
-                className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10 bg-white">
+                <SelectTrigger className="w-full">
 
 
 
-                <option value="">— 请选择 Plan —</option>
+                  <SelectValue placeholder="— 请选择 Plan —" />
 
 
 
-                {plans?.map(p => <option key={p.id} value={p.id}>{p.name}{p.steps?.length ? ` (${p.steps.length} 步骤)` : ''}</option>)}
+                </SelectTrigger>
 
 
 
-              </select>
+                <SelectContent>
+
+
+
+                  {plans?.map(p => (
+                    <SelectItem key={p.id} value={String(p.id)}>
+                      {p.name}{p.steps?.length ? ` (${p.steps.length} 步骤)` : ''}
+                    </SelectItem>
+                  ))}
+
+
+
+                </SelectContent>
+
+
+
+              </Select>
 
 
 
@@ -890,15 +929,13 @@ export default function PlanExecutePage() {
 
 
 
-                  <input type="text" placeholder="搜索设备 serial / model..." value={deviceFilter}
+                  <Input type="text" placeholder="搜索设备 serial / model..." value={deviceFilter}
 
 
 
                     onChange={e => setDeviceFilter(e.target.value)}
 
-
-
-                    className="flex-1 px-3 py-1.5 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-gray-900/10" />
+                  />
 
 
 

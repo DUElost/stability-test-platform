@@ -15,6 +15,7 @@ import { Card, CardContent } from '@/components/ui/card';
 
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 
 
@@ -27,6 +28,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/hooks/useConfirm';
 
 
 
@@ -55,6 +57,7 @@ export default function PlanListPage() {
 
 
   const toast = useToast();
+  const confirmDialog = useConfirm();
 
 
 
@@ -162,7 +165,11 @@ export default function PlanListPage() {
 
 
 
-    const ok = window.confirm(`确定删除 "${plan.name}"？此操作不可撤销。`);
+    const ok = await confirmDialog({
+      title: '删除 Plan',
+      description: `确定删除 "${plan.name}"？此操作不可撤销。`,
+      variant: 'destructive',
+    });
 
 
 
@@ -330,7 +337,7 @@ export default function PlanListPage() {
 
 
 
-          <input
+          <Input
 
 
 
@@ -342,7 +349,7 @@ export default function PlanListPage() {
 
 
 
-            className="w-full pl-9 pr-4 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            className="pl-9"
 
 
 

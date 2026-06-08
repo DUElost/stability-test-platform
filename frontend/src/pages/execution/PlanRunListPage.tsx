@@ -31,7 +31,10 @@ export default function PlanRunListPage() {
         <div className="space-y-2">
           {runs.map(run => (
             <Card key={run.id} className="hover:shadow-md transition-shadow cursor-pointer"
-              onClick={() => navigate(`/execution/plan-runs/${run.id}`)}>
+              onClick={() => navigate(`/execution/plan-runs/${run.id}`)}
+              tabIndex={0}
+              role="button"
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/execution/plan-runs/${run.id}`); } }}>
               <CardContent className="py-3 flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <span className="font-mono text-sm text-gray-500">#{run.id}</span>

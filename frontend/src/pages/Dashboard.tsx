@@ -205,6 +205,9 @@ export default function Dashboard() {
             className="p-4 cursor-pointer hover:shadow-md transition-shadow"
 
             onClick={() => navigate('/hosts')}
+            tabIndex={0}
+            role="button"
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/hosts'); } }}
 
           >
 
@@ -255,6 +258,9 @@ export default function Dashboard() {
             className="p-4 cursor-pointer hover:shadow-md transition-shadow"
 
             onClick={() => navigate('/devices')}
+            tabIndex={0}
+            role="button"
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/devices'); } }}
 
           >
 
@@ -305,6 +311,9 @@ export default function Dashboard() {
             className="p-4 cursor-pointer hover:shadow-md transition-shadow"
 
             onClick={() => navigate('/execution/plan-runs')}
+            tabIndex={0}
+            role="button"
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/execution/plan-runs'); } }}
 
           >
 
