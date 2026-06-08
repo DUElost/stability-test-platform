@@ -88,11 +88,7 @@ def list_schedules(
     query = db.query(TaskSchedule).order_by(TaskSchedule.id.desc())
     total = query.count()
     items = query.offset(skip).limit(limit).all()
-    result = [
-        TaskScheduleOut.model_validate(s) if hasattr(TaskScheduleOut, "model_validate")
-        else TaskScheduleOut.from_orm(s)
-        for s in items
-    ]
+    result = [TaskScheduleOut.model_validate(s) for s in items]
     return PaginatedResponse(items=result, total=total, skip=skip, limit=limit)
 
 

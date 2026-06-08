@@ -94,6 +94,8 @@ class PlanUpdate(BaseModel):
 
 
 class PlanStepOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     step_key: str
     script_name: str
@@ -104,11 +106,10 @@ class PlanStepOut(BaseModel):
     retry: int
     enabled: bool
 
-    class Config:
-        from_attributes = True
-
 
 class PlanOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     description: Optional[str] = None
@@ -122,9 +123,6 @@ class PlanOut(BaseModel):
     updated_at: datetime
     steps: List[PlanStepOut] = []
 
-    class Config:
-        from_attributes = True
-
 
 class PlanRunTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -133,6 +131,8 @@ class PlanRunTrigger(BaseModel):
 
 
 class PlanRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     plan_id: int
     status: str
@@ -149,9 +149,6 @@ class PlanRunOut(BaseModel):
     root_plan_run_id: Optional[int] = None
     chain_index: int = 0
     next_plan_triggered: bool = False
-
-    class Config:
-        from_attributes = True
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

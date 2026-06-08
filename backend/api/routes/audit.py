@@ -58,8 +58,5 @@ def list_audit_logs(
         db.rollback()
         return PaginatedResponse(items=[], total=0, skip=skip, limit=limit)
 
-    items = [
-        AuditLogOut.model_validate(r) if hasattr(AuditLogOut, "model_validate") else AuditLogOut.from_orm(r)
-        for r in rows
-    ]
+    items = [AuditLogOut.model_validate(r) for r in rows]
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)

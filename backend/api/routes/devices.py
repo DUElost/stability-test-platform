@@ -143,10 +143,7 @@ def list_devices(
             needs_commit = True
     if needs_commit:
         db.commit()
-    items = [
-        DeviceOut.model_validate(d) if hasattr(DeviceOut, "model_validate") else DeviceOut.from_orm(d)
-        for d in devices
-    ]
+    items = [DeviceOut.model_validate(d) for d in devices]
     # 兼容旧接口：未显式传分页参数时返回数组
     if "skip" not in request.query_params and "limit" not in request.query_params:
         return items

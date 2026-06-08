@@ -86,7 +86,7 @@ def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
 
     若提供 ``db``，会一并查询 host 上的活跃 Job 列表（ADR-0021 hot-update gate）。
     """
-    out = HostOut.model_validate(h) if hasattr(HostOut, "model_validate") else HostOut.from_orm(h)
+    out = HostOut.model_validate(h)
     extra = dict(h.extra or {})
     for key in ("ssh_password", "ssh_key_path", "password", "secret", "token", "private_key"):
         extra.pop(key, None)

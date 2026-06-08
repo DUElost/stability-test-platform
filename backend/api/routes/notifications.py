@@ -41,10 +41,7 @@ def list_channels(
     query = db.query(NotificationChannel).order_by(NotificationChannel.id)
     total = query.count()
     rows = query.offset(skip).limit(limit).all()
-    items = [
-        NotificationChannelOut.model_validate(r) if hasattr(NotificationChannelOut, "model_validate") else NotificationChannelOut.from_orm(r)
-        for r in rows
-    ]
+    items = [NotificationChannelOut.model_validate(r) for r in rows]
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 
@@ -179,7 +176,7 @@ def list_rules(
     rules = base.offset(skip).limit(limit).all()
     result = []
     for rule in rules:
-        out = AlertRuleOut.model_validate(rule) if hasattr(AlertRuleOut, "model_validate") else AlertRuleOut.from_orm(rule)
+        out = AlertRuleOut.model_validate(rule)
         if rule.channel:
             out.channel_name = rule.channel.name
         result.append(out)
@@ -220,7 +217,7 @@ def create_rule(
     )
     db.commit()
     db.refresh(rule)
-    out = AlertRuleOut.model_validate(rule) if hasattr(AlertRuleOut, "model_validate") else AlertRuleOut.from_orm(rule)
+    out = AlertRuleOut.model_validate(rule)
     out.channel_name = channel.name
     return out
 
@@ -262,7 +259,7 @@ def update_rule(
     )
     db.commit()
     db.refresh(rule)
-    out = AlertRuleOut.model_validate(rule) if hasattr(AlertRuleOut, "model_validate") else AlertRuleOut.from_orm(rule)
+    out = AlertRuleOut.model_validate(rule)
     if rule.channel:
         out.channel_name = rule.channel.name
     return out

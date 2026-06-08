@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, require_admin
@@ -29,15 +29,14 @@ class UserUpdate(BaseModel):
 
 
 class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     username: str
     role: str
     is_active: str
     created_at: datetime
     last_login: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
 
 
 class PasswordChange(BaseModel):
@@ -56,10 +55,7 @@ def list_users(
     query = db.query(UserModel).order_by(UserModel.id)
     total = query.count()
     users = query.offset(skip).limit(limit).all()
-    items = [
-        UserOut.model_validate(u) if hasattr(UserOut, "model_validate") else UserOut.from_orm(u)
-        for u in users
-    ]
+    items = [UserOut.model_validate(u) for u in users]
     return PaginatedResponse(items=items, total=total, skip=skip, limit=limit)
 
 

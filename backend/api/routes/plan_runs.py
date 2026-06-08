@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
@@ -94,6 +94,8 @@ _SUBTYPE_FIXED_ORDER = [
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class StepTraceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     job_id: int
     step_id: str
@@ -105,11 +107,10 @@ class StepTraceOut(BaseModel):
     original_ts: str
     created_at: str
 
-    class Config:
-        from_attributes = True
-
 
 class JobInstanceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     plan_run_id: Optional[int] = None
     plan_id: Optional[int] = None
@@ -123,11 +124,10 @@ class JobInstanceOut(BaseModel):
     created_at: Optional[str] = None
     step_traces: list[StepTraceOut] = []
 
-    class Config:
-        from_attributes = True
-
 
 class PlanRunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     plan_id: int
     status: str
@@ -145,9 +145,6 @@ class PlanRunOut(BaseModel):
     chain_index: int = 0
     next_plan_triggered: bool = False
     jobs: list[JobInstanceOut] = []
-
-    class Config:
-        from_attributes = True
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
