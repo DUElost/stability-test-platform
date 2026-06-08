@@ -27,8 +27,8 @@ def test_builtin_pipeline_templates_follow_current_validator():
         assert "lifecycle" in pipeline_def
 
 
-def test_monkey_aee_patrol_template_is_watcher_only_public_variant():
-    data = json.loads((TEMPLATES_DIR / "monkey_aee_patrol.json").read_text(encoding="utf-8"))
+def test_monkey_watcher_patrol_template_is_watcher_only_public_variant():
+    data = json.loads((TEMPLATES_DIR / "monkey_watcher_patrol.json").read_text(encoding="utf-8"))
     patrol_steps = data["lifecycle"]["patrol"]["steps"]
     step_ids = [str(step.get("step_id") or "") for step in patrol_steps]
     actions = [str(step.get("action") or "") for step in patrol_steps]
@@ -44,6 +44,7 @@ def test_legacy_aee_template_alias_files_removed_from_repo():
         "aimonkey.json",
         "aimonkey_launcher_lifecycle.json",
         "monkey_aee.json",
+        "monkey_aee_patrol.json",
         "monkey_aee_init.json",
         "monkey_aee_lifecycle.json",
         "monkey_aee_teardown.json",
