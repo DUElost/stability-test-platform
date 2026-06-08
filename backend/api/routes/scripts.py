@@ -20,6 +20,7 @@ from backend.api.error_helpers import raise_api_http_error
 from backend.api.routes.auth import get_current_active_user, get_current_user, require_admin, User
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.models.plan import PlanStep
 from backend.models.script import Script
@@ -27,7 +28,7 @@ from backend.services.script_catalog import scan_script_root
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
-_LEGACY_AEE_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
+_LEGACY_AEE_SCRIPT_NAMES = LEGACY_AEE_SCRIPT_NAMES
 
 
 class ScriptCreate(BaseModel):

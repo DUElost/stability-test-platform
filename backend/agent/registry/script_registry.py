@@ -11,10 +11,11 @@ from typing import Dict
 
 import requests
 
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from .local_db import LocalDB
 
 logger = logging.getLogger(__name__)
-_LEGACY_AEE_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
+_LEGACY_AEE_SCRIPT_NAMES = LEGACY_AEE_SCRIPT_NAMES
 
 
 @dataclass

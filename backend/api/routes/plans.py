@@ -18,6 +18,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
@@ -34,7 +35,7 @@ from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
 
-_LEGACY_AEE_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
+_LEGACY_AEE_SCRIPT_NAMES = LEGACY_AEE_SCRIPT_NAMES
 
 
 def _require_plan_owner_or_admin(plan: Plan, user: User) -> None:

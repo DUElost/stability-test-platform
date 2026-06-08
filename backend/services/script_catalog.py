@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.script import Script
 
 _SUPPORTED_SUFFIXES = {
@@ -18,7 +19,7 @@ _SUPPORTED_SUFFIXES = {
     ".bat": "bat",
     ".cmd": "bat",
 }
-_LEGACY_AEE_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
+_LEGACY_AEE_SCRIPT_NAMES = LEGACY_AEE_SCRIPT_NAMES
 
 
 @dataclass
