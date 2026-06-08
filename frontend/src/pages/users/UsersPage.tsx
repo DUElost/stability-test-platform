@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Loader2, AlertCircle } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useAuthSession } from '@/hooks/useAuthSession';
 import { UserTable } from './components/UserTable';
 import { UserModal } from './components/UserModal';
 import { api, type User } from '@/utils/api';
@@ -13,23 +14,10 @@ import { PageContainer, PageHeader } from '@/components/layout';
 export default function UsersPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editUser, setEditUser] = useState<User | null>(null);
-  const [currentUserId, setCurrentUserId] = useState<number>(0);
   const queryClient = useQueryClient();
   const toast = useToast();
   const confirmDialog = useConfirm();
-
-  // Get current user info
-  useEffect(() => {
-    const getCurrentUser = async () => {
-      try {
-        const res = await api.auth.me();
-        setCurrentUserId(res.data.id);
-      } catch (error) {
-        console.error('Failed to get current user:', error);
-      }
-    };
-    getCurrentUser();
-  }, []);
+  const { data: currentUser } = useAuthSession();
 
   // Fetch users list
   const { data: users, isLoading, error } = useQuery({
@@ -165,7 +153,7 @@ export default function UsersPage() {
       {users && users.length > 0 ? (
         <UserTable
           users={users}
-          currentUserId={currentUserId}
+          currentUserId={currentUser?.id ?? 0}
           onEdit={handleEdit}
           onDelete={handleDelete}
           onToggleActive={handleToggleActive}

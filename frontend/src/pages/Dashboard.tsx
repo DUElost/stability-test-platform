@@ -349,7 +349,12 @@ export default function Dashboard() {
 
           {/* 告警 */}
 
-          <Card className="p-4">
+          <Card className="p-4 cursor-pointer hover:shadow-md transition-shadow"
+            onClick={() => navigate('/notifications')}
+            tabIndex={0}
+            role="button"
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/notifications'); } }}
+          >
 
             <div className="flex items-center justify-between">
 
