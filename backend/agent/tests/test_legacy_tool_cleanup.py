@@ -75,6 +75,23 @@ def test_watcher_summary_api_tests_do_not_reference_legacy_patrol_scripts():
     assert "script_name\": \"export_mobilelogs\"" not in text
 
 
+def test_legacy_aee_script_names_use_single_shared_source():
+    from backend.agent.registry import script_registry
+    from backend.api.routes import plans, scripts
+    from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+    from backend.services import script_catalog
+
+    assert plans.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
+    assert scripts.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
+    assert script_catalog.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
+    assert script_registry.LEGACY_AEE_SCRIPT_NAMES is LEGACY_AEE_SCRIPT_NAMES
+
+    assert "_LEGACY_AEE_SCRIPT_NAMES" not in plans.__dict__
+    assert "_LEGACY_AEE_SCRIPT_NAMES" not in scripts.__dict__
+    assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_catalog.__dict__
+    assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_registry.__dict__
+
+
 def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkeypatch):
     resource_root = tmp_path / "resources" / "aimonkey"
     aimonkey_dir = resource_root / "AIMonkeyTest_20260317"
