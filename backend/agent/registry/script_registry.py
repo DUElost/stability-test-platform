@@ -14,6 +14,7 @@ import requests
 from .local_db import LocalDB
 
 logger = logging.getLogger(__name__)
+_LEGACY_AEE_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
 
 
 @dataclass
@@ -87,6 +88,8 @@ class ScriptRegistry:
                 version = item.get("version", "")
                 if not name or not version:
                     continue
+                if name in _LEGACY_AEE_SCRIPT_NAMES:
+                    continue
                 entry = ScriptEntry(
                     script_id=int(item.get("id", item.get("script_id", 0))),
                     name=name,
@@ -115,10 +118,16 @@ class ScriptRegistry:
         with self._lock:
             self._cache.clear()
             for key, item in cached.items():
+                name = item.get("name", "")
+                version = item.get("version", "")
+                if not name or not version:
+                    continue
+                if name in _LEGACY_AEE_SCRIPT_NAMES:
+                    continue
                 self._cache[key] = ScriptEntry(
                     script_id=int(item.get("script_id", 0)),
-                    name=item.get("name", ""),
-                    version=item.get("version", ""),
+                    name=name,
+                    version=version,
                     script_type=item.get("script_type", ""),
                     nfs_path=item.get("nfs_path", ""),
                     content_sha256=item.get("content_sha256", ""),
