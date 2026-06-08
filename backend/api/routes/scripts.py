@@ -27,6 +27,7 @@ from backend.services.script_catalog import scan_script_root
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
+_LEGACY_AEE_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
 
 
 class ScriptCreate(BaseModel):
@@ -101,6 +102,18 @@ def _script_out(script: Script) -> ScriptOut:
         description=script.description,
         created_at=script.created_at,
         updated_at=script.updated_at,
+    )
+
+
+def _raise_if_legacy_aee_script(name: str, version: str) -> None:
+    if name not in _LEGACY_AEE_SCRIPT_NAMES:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": [f"{name}:{version}"],
+        },
     )
 
 
@@ -242,6 +255,7 @@ def create_script(
     current_user: User = Depends(require_admin),
     request: Request = None,
 ):
+    _raise_if_legacy_aee_script(payload.name, payload.version)
     existing = (
         db.query(Script)
         .filter(Script.name == payload.name, Script.version == payload.version)
@@ -319,6 +333,7 @@ def update_script(
 
     next_name = payload.name if payload.name is not None else script.name
     next_version = payload.version if payload.version is not None else script.version
+    _raise_if_legacy_aee_script(next_name, next_version)
     if (next_name, next_version) != (script.name, script.version):
         existing = (
             db.query(Script)
@@ -400,6 +415,7 @@ def create_script_version(
     ``default_params`` is required — it defines the canonical defaults
     for this version and must not be changed after creation.
     """
+    _raise_if_legacy_aee_script(name, payload.version)
     existing = (
         db.query(Script)
         .filter(Script.name == name, Script.version == payload.version)

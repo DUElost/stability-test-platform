@@ -18,6 +18,7 @@ _SUPPORTED_SUFFIXES = {
     ".bat": "bat",
     ".cmd": "bat",
 }
+_LEGACY_AEE_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
 
 
 @dataclass
@@ -59,6 +60,8 @@ def _iter_script_entries(root: Path) -> Iterable[Tuple[str, str, str, Path, str]
     """
     for name_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         name = name_dir.name
+        if name in _LEGACY_AEE_SCRIPT_NAMES:
+            continue
         for version_dir in sorted(p for p in name_dir.iterdir() if p.is_dir()):
             raw_version = version_dir.name
             if not raw_version.startswith("v") or len(raw_version) <= 1:

@@ -2,6 +2,8 @@
 
 from uuid import uuid4
 
+from backend.models.script import Script
+
 
 def _uniq(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:8]}"
@@ -132,3 +134,34 @@ class TestScriptDefaultParamsAPI:
         match = [s for s in items if s["name"] == name]
         assert len(match) == 1
         assert match[0]["default_params"] == {"timeout": 30}
+
+    def test_version_create_rejects_legacy_aee_script_name(
+        self, client, admin_headers, db_session,
+    ):
+        db_session.add(Script(
+            name="scan_aee",
+            display_name="Legacy Scan AEE",
+            category="device",
+            script_type="python",
+            version="1.0.0",
+            nfs_path="/scripts/scan_aee/v1.0.0/scan_aee.py",
+            content_sha256="9" * 64,
+            param_schema={},
+            default_params={},
+            is_active=True,
+        ))
+        db_session.commit()
+
+        resp = client.post("/api/v1/scripts/scan_aee/versions", json={
+            "version": "2.0.0",
+            "nfs_path": "/scripts/scan_aee/v2.0.0/scan_aee.py",
+            "content_sha256": "8" * 64,
+            "param_schema": {},
+            "default_params": {"timeout": 60},
+        }, headers=admin_headers)
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["scan_aee:2.0.0"],
+        }

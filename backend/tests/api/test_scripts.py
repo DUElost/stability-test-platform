@@ -166,6 +166,30 @@ def test_script_scan_maps_source_root_to_agent_runtime_root(
     )
 
 
+def test_script_scan_ignores_legacy_aee_script_directories(
+    client, tmp_path, monkeypatch, admin_headers, auth_headers
+):
+    root = tmp_path / "scripts"
+    legacy_dir = root / "scan_aee" / "v1.0.0"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "scan_aee.py").write_text("print('legacy')\n", encoding="utf-8")
+
+    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
+
+    scan_resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
+
+    assert scan_resp.status_code == 200
+    data = scan_resp.json()["data"]
+    assert data["created"] == 0
+    assert data["skipped"] == 0
+    assert data["deactivated"] == 0
+    assert data["conflicts"] == []
+
+    list_resp = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
+    assert list_resp.status_code == 200
+    assert all(item["name"] != "scan_aee" for item in list_resp.json()["data"])
+
+
 def test_script_endpoints_require_auth_and_admin_for_writes(client, admin_headers, auth_headers):
     list_resp = client.get("/api/v1/scripts")
     assert list_resp.status_code == 401
@@ -185,6 +209,29 @@ def test_script_endpoints_require_auth_and_admin_for_writes(client, admin_header
         headers=auth_headers,
     )
     assert create_resp.status_code == 403
+
+
+def test_create_rejects_legacy_aee_script_name(client, admin_headers):
+    resp = client.post(
+        "/api/v1/scripts",
+        json={
+            "name": "scan_aee",
+            "display_name": "Legacy Scan AEE",
+            "category": "device",
+            "script_type": "python",
+            "version": "1.0.0",
+            "nfs_path": "/scripts/scan_aee/v1.0.0/scan_aee.py",
+            "content_sha256": "1" * 64,
+            "default_params": {},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert resp.json()["detail"] == {
+        "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+        "scripts": ["scan_aee:1.0.0"],
+    }
 
 
 def test_script_scan_missing_root_returns_structured_error(
