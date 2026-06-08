@@ -94,6 +94,23 @@ def test_legacy_postgres_bootstrap_optimize_sql_is_removed():
     assert not path.exists(), f"legacy postgres bootstrap optimize sql still present: {path}"
 
 
+def test_legacy_frontend_task_details_route_is_removed():
+    legacy_paths = [
+        REPO_ROOT / "frontend" / "src" / "pages" / "tasks" / "TaskDetails.tsx",
+        REPO_ROOT / "frontend" / "src" / "pages" / "tasks" / "TaskDetails.test.tsx",
+        REPO_ROOT / "frontend" / "src" / "pages" / "tasks" / "taskDetailsState.ts",
+    ]
+
+    for path in legacy_paths:
+        assert not path.exists(), f"legacy frontend task details artifact still present: {path}"
+
+    router_path = REPO_ROOT / "frontend" / "src" / "router" / "index.tsx"
+    router_text = router_path.read_text(encoding="utf-8")
+    assert "TaskDetails" not in router_text
+    assert 'path="tasks"' not in router_text
+    assert 'path=":taskId"' not in router_text
+
+
 def test_m1_dual_write_runbook_and_recon_script_are_removed():
     legacy_paths = [
         REPO_ROOT / "backend" / "scripts" / "aee_dual_write_recon.py",

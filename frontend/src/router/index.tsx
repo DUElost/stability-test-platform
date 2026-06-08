@@ -10,7 +10,6 @@ import RegisterPage from '../pages/auth/RegisterPage';
 
 // All other pages use React.lazy for route-level code splitting
 const Dashboard = lazy(() => import('../pages/Dashboard'));
-const TaskDetails = lazy(() => import('../pages/tasks/TaskDetails'));
 const RunReportPage = lazy(() => import('../pages/tasks/RunReportPage'));
 const HostsPage = lazy(() => import('../pages/hosts/HostsPage'));
 const DevicesPage = lazy(() => import('../pages/devices/DevicesPage'));
@@ -74,12 +73,6 @@ export default function AppRouter() {
         <Route element={<ProtectedRoute />}>
           <Route path="/" element={<AppShell />}>
             <Route index element={<Dashboard />} />
-
-            <Route path="tasks">
-              <Route index element={<Navigate to="/orchestration/plans" replace />} />
-              <Route path="new" element={<Navigate to="/execution/plan-execute" replace />} />
-              <Route path=":taskId" element={<TaskDetails />} />
-            </Route>
 
             <Route path="runs/:runId/report" element={<RunReportPage />} />
 
