@@ -46,7 +46,7 @@ class ProcessConfig:
     bugreport_cooldown_seconds: int = 300
     bugreport_cooldown_event_types: Optional[set[str]] = None
     bugreport_timeout_seconds: int = 600
-    state_key_prefix: str = "scan_aee"
+    state_key_prefix: str = "watcher:aee"
     pull_timeout_seconds: int = 300
     pull_retry_limit: int = 10
     max_entries_per_run: Optional[int] = None

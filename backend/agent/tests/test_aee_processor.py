@@ -542,7 +542,7 @@ def test_process_device_logs_persists_processed_before_side_effects(tmp_path, mo
             store.get_state(state_key("dev_persist", "aee_exp"), "[]")
         )
         observed["pending"] = json.loads(
-            store.get_state("scan_aee:dev_persist:aee_exp:pending_pull", "{}")
+            store.get_state("watcher:aee:dev_persist:aee_exp:pending_pull", "{}")
         )
         return {"matched": 0, "pulled": 0}
 

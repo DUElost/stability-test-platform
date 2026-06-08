@@ -162,7 +162,7 @@ class StepContext:
 
     shared: dict = field(default_factory=dict)
 
-    # LocalDB instance for cross-run persistent state (e.g., incremental scan_aee)
+    # LocalDB instance for cross-run persistent state (e.g., watcher AEE dedup state)
 
     local_db: Any = None
 

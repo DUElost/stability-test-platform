@@ -426,7 +426,7 @@ def test_emit_contract_violation_increments_dropped(monkeypatch):
 # ----------------------------------------------------------------------
 
 def test_state_key_prefix_migrated_to_watcher_namespace():
-    """M3:reconciler 迁到 watcher:aee 命名空间,patrol 默认保持 scan_aee。"""
+    """M3:watcher 主链与 processor 默认前缀都应落在 watcher:aee。"""
     from backend.agent.aee.db_history import state_key
     from backend.agent.aee.processor import ProcessConfig
 
@@ -451,12 +451,12 @@ def test_state_key_prefix_migrated_to_watcher_namespace():
     assert rec_a._cfg.state_key_prefix == "watcher:aee"
     assert rec_b._cfg.state_key_prefix == "watcher:aee"
 
-    patrol_default_prefix = ProcessConfig().state_key_prefix
-    assert patrol_default_prefix == "scan_aee"
+    default_prefix = ProcessConfig().state_key_prefix
+    assert default_prefix == "watcher:aee"
     reconciler_key = state_key("SX", "aee_exp", prefix=rec_a._cfg.state_key_prefix)
-    patrol_key = state_key("SX", "aee_exp", prefix=patrol_default_prefix)
+    default_key = state_key("SX", "aee_exp")
     assert reconciler_key == "watcher:aee:SX:aee_exp:processed_entries"
-    assert patrol_key == "scan_aee:SX:aee_exp:processed_entries"
+    assert default_key == "watcher:aee:SX:aee_exp:processed_entries"
 
 
 def test_reconciler_migrates_legacy_processed_entries_to_watcher_namespace(monkeypatch):

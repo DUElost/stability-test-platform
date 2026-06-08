@@ -48,7 +48,7 @@ def parse_effective_db_history_line(line_content: str, aee_type: str) -> Optiona
     return parse_db_history_line(line_content)
 
 
-def state_key(serial: str, aee_type: str, *, prefix: str = "scan_aee") -> str:
+def state_key(serial: str, aee_type: str, *, prefix: str = "watcher:aee") -> str:
     return f"{prefix}:{serial}:{aee_type}:processed_entries"
 
 
