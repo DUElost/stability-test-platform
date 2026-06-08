@@ -111,6 +111,11 @@ def test_legacy_frontend_task_details_route_is_removed():
     assert 'path=":taskId"' not in router_text
 
 
+def test_dual_track_phase_c_schema_validator_is_removed():
+    path = REPO_ROOT / "backend" / "tests" / "e2e" / "validate_phase_c_state.py"
+    assert not path.exists(), f"legacy dual-track schema validator still present: {path}"
+
+
 def test_m1_dual_write_runbook_and_recon_script_are_removed():
     legacy_paths = [
         REPO_ROOT / "backend" / "scripts" / "aee_dual_write_recon.py",
