@@ -15,7 +15,6 @@ from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from .local_db import LocalDB
 
 logger = logging.getLogger(__name__)
-_LEGACY_AEE_SCRIPT_NAMES = LEGACY_AEE_SCRIPT_NAMES
 
 
 @dataclass
@@ -89,7 +88,7 @@ class ScriptRegistry:
                 version = item.get("version", "")
                 if not name or not version:
                     continue
-                if name in _LEGACY_AEE_SCRIPT_NAMES:
+                if name in LEGACY_AEE_SCRIPT_NAMES:
                     continue
                 entry = ScriptEntry(
                     script_id=int(item.get("id", item.get("script_id", 0))),
@@ -123,7 +122,7 @@ class ScriptRegistry:
                 version = item.get("version", "")
                 if not name or not version:
                     continue
-                if name in _LEGACY_AEE_SCRIPT_NAMES:
+                if name in LEGACY_AEE_SCRIPT_NAMES:
                     continue
                 self._cache[key] = ScriptEntry(
                     script_id=int(item.get("script_id", 0)),

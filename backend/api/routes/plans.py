@@ -35,9 +35,6 @@ from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
 
-_LEGACY_AEE_SCRIPT_NAMES = LEGACY_AEE_SCRIPT_NAMES
-
-
 def _require_plan_owner_or_admin(plan: Plan, user: User) -> None:
     """Plan 写操作鉴权:admin 或 plan 的 created_by 才放行。
 
@@ -183,7 +180,7 @@ def _validate_no_legacy_aee_scripts(steps: list[PlanStepIn]) -> None:
     disabled = sorted({
         f"{step.script_name}:{step.script_version}"
         for step in steps
-        if step.script_name in _LEGACY_AEE_SCRIPT_NAMES
+        if step.script_name in LEGACY_AEE_SCRIPT_NAMES
     })
     if disabled:
         raise HTTPException(

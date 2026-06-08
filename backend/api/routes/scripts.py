@@ -28,7 +28,6 @@ from backend.services.script_catalog import scan_script_root
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
-_LEGACY_AEE_SCRIPT_NAMES = LEGACY_AEE_SCRIPT_NAMES
 
 
 class ScriptCreate(BaseModel):
@@ -107,7 +106,7 @@ def _script_out(script: Script) -> ScriptOut:
 
 
 def _raise_if_legacy_aee_script(name: str, version: str) -> None:
-    if name not in _LEGACY_AEE_SCRIPT_NAMES:
+    if name not in LEGACY_AEE_SCRIPT_NAMES:
         return
     raise HTTPException(
         status_code=422,
