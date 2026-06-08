@@ -54,9 +54,12 @@ from backend.realtime.socketio_server import (
     call_agent_rpc,
 )
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, _AGENT_SOURCE_DIR
+from backend.services.plan_dispatcher_core import (
+    extract_dispatch_host_watcher_admin_states as _extract_dispatch_host_watcher_admin_states,
+    snapshot_dispatch_host_watcher_admin_states as _snapshot_dispatch_host_watcher_admin_states,
+)
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
-    _snapshot_dispatch_host_watcher_admin_states,
     complete_plan_run_dispatch,
     initial_dispatch_state,
 )
@@ -231,11 +234,15 @@ def _resolve_host_watcher_admin_states_from_db(
 def _resolve_dispatch_host_watcher_admin_states(
     plan_run: PlanRun, host_ids: list[str], db: Session,
 ) -> dict[str, bool]:
-    run_ctx = plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
-    snapshot = run_ctx.get("dispatch_host_watcher_admin_states")
-    if isinstance(snapshot, dict) and snapshot:
+    # 优先消费 dispatch 时冻结的快照，避免管理员后续操作影响正在进行的 PlanRun。
+    # 注意：空 dict `{}` 被视为"无快照"并回退到 DB，这是合理的——若 prepare 时
+    # 确实没有设备（不应发生），或快照键缺失（legacy run），回读 DB 是安全的默认值。
+    snapshot = _extract_dispatch_host_watcher_admin_states(
+        plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
+    )
+    if snapshot:
         return {
-            host_id: True if snapshot.get(host_id) is None else bool(snapshot.get(host_id))
+            host_id: snapshot.get(host_id, True)
             for host_id in host_ids
         }
     return _resolve_host_watcher_admin_states_from_db(host_ids, db)

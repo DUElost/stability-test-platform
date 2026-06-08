@@ -33,42 +33,13 @@ from backend.services.plan_dispatcher_core import (
     inject_wifi_params as _inject_wifi_params,
     iter_lifecycle_steps as _iter_lifecycle_steps,
     script_defaults as _script_defaults,
+    snapshot_dispatch_host_watcher_admin_states,
 )
 
 logger = logging.getLogger(__name__)
 
 ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
 
-
-def _snapshot_dispatch_host_watcher_admin_states(
-    db: Session, device_ids: list[int],
-) -> dict[str, bool]:
-    """Freeze host watcher admin state for this dispatch attempt.
-
-    Why: admin 手工切换只应影响“后续新派发任务”。一旦 PlanRun 已 prepare，
-    后续 gate / claim / recovery 都必须消费同一份快照，而不是回读 Host 当前状态。
-    """
-    if not device_ids:
-        return {}
-
-    rows = db.execute(
-        select(Device.host_id, Host.watcher_admin_active)
-        .select_from(Device)
-        .outerjoin(Host, Device.host_id == Host.id)
-        .where(Device.id.in_(device_ids))
-    ).all()
-
-    state_map: dict[str, bool] = {}
-    for row in rows:
-        host_id = row.host_id
-        if not host_id:
-            continue
-        state_map[str(host_id)] = (
-            True
-            if row.watcher_admin_active is None
-            else bool(row.watcher_admin_active)
-        )
-    return {host_id: state_map[host_id] for host_id in sorted(state_map)}
 
 
 def _validate_dispatch_devices_sync(
@@ -380,7 +351,7 @@ def prepare_plan_run(
     # asserts this list is non-empty.  Keep this line exactly as it was.
     merged_run_ctx.setdefault("dispatch_device_ids", list(device_ids))
     merged_run_ctx["dispatch_host_watcher_admin_states"] = (
-        _snapshot_dispatch_host_watcher_admin_states(db, device_ids)
+        snapshot_dispatch_host_watcher_admin_states(db, device_ids)
     )
 
     pr = PlanRun(
