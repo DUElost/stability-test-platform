@@ -133,7 +133,7 @@ function getOrCreateTerminal(key: string): PoolEntry {
       white: '#f1f5f9',
     },
     fontSize: 12,
-    fontFamily: '"SF Mono", Monaco, "Cascadia Code", "Fira Code", monospace',
+    fontFamily: 'ui-monospace, SF Mono, Cascadia Code, Consolas, monospace',
     cursorBlink: false,
     cursorStyle: 'bar',
     disableStdin: true,
