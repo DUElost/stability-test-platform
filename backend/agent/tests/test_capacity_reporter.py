@@ -1,6 +1,6 @@
-"""ADR-0019 Phase 3c CapacityReporter 单元测试。
+"""ADR-0019 Phase 3c CapacityReporter tests.
 
-6 个测试，覆盖 HEALTHY/UNSCHEDULABLE 状态判定和 effective_slots 计算。
+max_concurrent_jobs removed — capacity is now gated by free device count and health only.
 """
 
 import pytest
@@ -18,11 +18,10 @@ def _healthy_mount_status():
     return {"/mnt/data": {"ok": True}}
 
 
-# ── Test 1: 全部正常 → HEALTHY, 满槽位 ─────────────────────────────────────────
+# ── Test 1: healthy, full slots ──────────────────────────────────────────────
 
 def test_all_healthy_full_slots():
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=2,
         active_device_count=1,
         online_healthy_devices=8,
@@ -35,16 +34,15 @@ def test_all_healthy_full_slots():
 
     assert health["status"] == "HEALTHY"
     assert health["reasons"] == []
-    assert cap["available_slots"] == 8   # 10 - 2
-    assert cap["effective_slots"] == 7   # min(8, 8-1=7, 10) = 7
+    assert cap["available_slots"] == 7   # 8 - 1 = 7 free device slots
+    assert cap["effective_slots"] == 7   # min(7, effectively-unlimited) = 7
 
 
-# ── Test 2: CPU 超高 → UNSCHEDULABLE ──────────────────────────────────────────
+# ── Test 2: CPU high → UNSCHEDULABLE ─────────────────────────────────────────
 
 def test_cpu_high_unschedulable():
     stats = {"cpu_load": 95, "ram_usage": 50, "disk_usage": {"usage_percent": 40}}
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=5,
@@ -57,12 +55,11 @@ def test_cpu_high_unschedulable():
     assert result["capacity"]["effective_slots"] == 0
 
 
-# ── Test 3: RAM 超高 → UNSCHEDULABLE ──────────────────────────────────────────
+# ── Test 3: RAM high → UNSCHEDULABLE ─────────────────────────────────────────
 
 def test_ram_high_unschedulable():
     stats = {"cpu_load": 20, "ram_usage": 97, "disk_usage": {"usage_percent": 40}}
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=5,
@@ -75,12 +72,11 @@ def test_ram_high_unschedulable():
     assert result["capacity"]["effective_slots"] == 0
 
 
-# ── Test 4: 磁盘超高 → UNSCHEDULABLE ──────────────────────────────────────────
+# ── Test 4: disk high → UNSCHEDULABLE ────────────────────────────────────────
 
 def test_disk_high_unschedulable():
     stats = {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": 97}}
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=5,
@@ -93,12 +89,11 @@ def test_disk_high_unschedulable():
     assert result["capacity"]["effective_slots"] == 0
 
 
-# ── Test 5: 挂载失败 → UNSCHEDULABLE ──────────────────────────────────────────
+# ── Test 5: mount failed → UNSCHEDULABLE ─────────────────────────────────────
 
 def test_mount_failed_unschedulable():
     mount = {"/mnt/data": {"ok": False}}
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=5,
@@ -110,12 +105,11 @@ def test_mount_failed_unschedulable():
     assert "mount_failed" in result["health"]["reasons"]
 
 
-# ── Test 6: 无健康设备 → device 约束 effective_slots ──────────────────────────
+# ── Test 6: no healthy devices → UNSCHEDULABLE ───────────────────────────────
 
 def test_device_limit_reduces_slots():
-    """online_healthy_devices=0 但有 total_devices=5 → adb 全死触发 health gate=0。"""
+    """online_healthy_devices=0 but total_devices=5 → adb all dead triggers health gate=0."""
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=0,
