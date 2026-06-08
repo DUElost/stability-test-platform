@@ -8,12 +8,9 @@ from backend.api.schemas.host import (
     HeartbeatIn,
 )
 from backend.api.schemas.device import DeviceCreate, DeviceOut, DeviceLiteOut
-from backend.api.schemas.task import (
-    TaskCreate, TaskOut, TaskDispatch,
-)
 from backend.api.schemas.run import (
     LogArtifactIn, LogArtifactOut,
-    RunOut, RunUpdate, RunCompleteIn, RunAgentOut,
+    TaskOut, RunOut, RunUpdate, RunCompleteIn, RunAgentOut,
     RunStepCreate, RunStepUpdate, RunStepOut,
     RiskAlertOut, RunReportOut, JiraDraftOut,
 )
@@ -50,9 +47,7 @@ __all__ = [
     "DeviceCreate",
     "DeviceOut",
     "DeviceLiteOut",
-    "TaskCreate",
     "TaskOut",
-    "TaskDispatch",
     "LogArtifactIn",
     "LogArtifactOut",
     "RunOut",

@@ -129,6 +129,20 @@ def test_run_report_page_no_longer_lives_under_legacy_tasks_directory():
     assert "../pages/tasks/RunReportPage" not in router_text
 
 
+def test_legacy_backend_task_schema_module_is_removed():
+    legacy_path = REPO_ROOT / "backend" / "api" / "schemas" / "task.py"
+    assert not legacy_path.exists(), f"legacy backend task schema module still present: {legacy_path}"
+
+    import backend.api as backend_api
+    from backend.api import schemas as api_schemas
+
+    assert "TaskCreate" not in backend_api.__dict__
+    assert "TaskDispatch" not in backend_api.__dict__
+    assert "TaskCreate" not in api_schemas.__dict__
+    assert "TaskDispatch" not in api_schemas.__dict__
+    assert "TaskOut" in api_schemas.__dict__
+
+
 def test_m1_dual_write_runbook_and_recon_script_are_removed():
     legacy_paths = [
         REPO_ROOT / "backend" / "scripts" / "aee_dual_write_recon.py",
