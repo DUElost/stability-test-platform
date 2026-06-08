@@ -62,6 +62,11 @@ def test_legacy_aee_script_directories_are_removed_from_agent_repo():
         assert not path.exists(), f"legacy watcher-pre-mainline script directory still present: {path}"
 
 
+def test_watcher_only_one_off_plan_script_is_removed():
+    path = REPO_ROOT / "backend" / "scripts" / "apply_watcher_only_plan2.py"
+    assert not path.exists(), f"legacy watcher rollout helper still present: {path}"
+
+
 def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkeypatch):
     resource_root = tmp_path / "resources" / "aimonkey"
     aimonkey_dir = resource_root / "AIMonkeyTest_20260317"
