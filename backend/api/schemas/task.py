@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from backend.api.schemas.base import ORMBaseModel, ConfigDict, _HAS_CONFIG_DICT
+from backend.api.schemas.base import ORMBaseModel
 
 
 class TaskCreate(BaseModel):

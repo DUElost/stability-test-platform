@@ -1,17 +1,13 @@
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from backend.api.schemas.base import ORMBaseModel, ConfigDict, _HAS_CONFIG_DICT
+from backend.api.schemas.base import ORMBaseModel
 
 
 class TaskScheduleCreate(BaseModel):
-    if _HAS_CONFIG_DICT:
-        model_config = ConfigDict(populate_by_name=True)
-    else:
-        class Config:
-            allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
     name: str
     cron_expression: str = Field(alias="cron_expr")
@@ -21,11 +17,7 @@ class TaskScheduleCreate(BaseModel):
 
 
 class TaskScheduleUpdate(BaseModel):
-    if _HAS_CONFIG_DICT:
-        model_config = ConfigDict(populate_by_name=True)
-    else:
-        class Config:
-            allow_population_by_field_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
     name: Optional[str] = None
     cron_expression: Optional[str] = Field(default=None, alias="cron_expr")
@@ -35,12 +27,7 @@ class TaskScheduleUpdate(BaseModel):
 
 
 class TaskScheduleOut(ORMBaseModel):
-    if _HAS_CONFIG_DICT:
-        model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-    else:
-        class Config:
-            orm_mode = True
-            allow_population_by_field_name = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: int
     name: str

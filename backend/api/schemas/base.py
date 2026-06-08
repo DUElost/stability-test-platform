@@ -1,15 +1,7 @@
 from datetime import datetime
 from typing import Any, List
 
-from pydantic import BaseModel
-
-try:
-    from pydantic import ConfigDict
-
-    _HAS_CONFIG_DICT = True
-except Exception:
-    ConfigDict = None
-    _HAS_CONFIG_DICT = False
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 
 def _isoformat_utc(v: datetime) -> str:
@@ -17,12 +9,13 @@ def _isoformat_utc(v: datetime) -> str:
 
 
 class ORMBaseModel(BaseModel):
-    if _HAS_CONFIG_DICT:
-        model_config = ConfigDict(from_attributes=True, json_encoders={datetime: _isoformat_utc})
-    else:
-        class Config:
-            orm_mode = True
-            json_encoders = {datetime: _isoformat_utc}
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_serializer("*", when_used="json", check_fields=False)
+    def _serialize_datetimes(self, value: Any) -> Any:
+        if isinstance(value, datetime):
+            return _isoformat_utc(value)
+        return value
 
 
 class PaginatedResponse(BaseModel):
