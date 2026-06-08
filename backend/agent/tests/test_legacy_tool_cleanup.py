@@ -77,6 +77,7 @@ def test_watcher_summary_api_tests_do_not_reference_legacy_patrol_scripts():
 
 def test_legacy_aee_script_names_use_single_shared_source():
     from backend.agent.registry import script_registry
+    from backend.agent.aee import state_migration
     from backend.api.routes import plans, scripts
     from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
     from backend.services import script_catalog
@@ -90,6 +91,7 @@ def test_legacy_aee_script_names_use_single_shared_source():
     assert "_LEGACY_AEE_SCRIPT_NAMES" not in scripts.__dict__
     assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_catalog.__dict__
     assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_registry.__dict__
+    assert not hasattr(state_migration, "migrate_legacy_aee_state_store")
 
 
 def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkeypatch):

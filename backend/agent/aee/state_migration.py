@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Optional
 
 LEGACY_PATROL_STATE_PREFIX = "scan_aee"
 WATCHER_AEE_STATE_PREFIX = "watcher:aee"
@@ -67,47 +67,6 @@ def migrate_legacy_aee_state_keys(db_path: str, *, dry_run: bool = False) -> Dic
     finally:
         conn.close()
     return summary
-
-
-def migrate_legacy_aee_state_store(
-    state_store: Any,
-    *,
-    serial: str,
-    aee_types: Iterable[str],
-    dry_run: bool = False,
-) -> Dict[str, Any]:
-    """Migrate one device's in-process state store view."""
-    summary: Dict[str, Any] = {
-        "dry_run": dry_run,
-        "processed_entries_migrated": 0,
-        "pending_pull_migrated": 0,
-        "skipped": 0,
-        "errors": [],
-    }
-    for aee_type in aee_types:
-        if aee_type not in _AEE_TYPES:
-            summary["skipped"] += 1
-            continue
-        for kind in sorted(_STATE_KINDS):
-            old_key = _state_key(LEGACY_PATROL_STATE_PREFIX, serial, aee_type, kind)
-            new_key = _state_key(WATCHER_AEE_STATE_PREFIX, serial, aee_type, kind)
-            old_value = state_store.get_state(old_key, _default_value(kind))
-            new_value = state_store.get_state(new_key, _default_value(kind))
-            merged = _merge_state_value(kind, old_value, new_value)
-            if merged is None:
-                summary["errors"].append({"key": old_key, "reason": "invalid_json"})
-                continue
-            if merged == new_value:
-                summary["skipped"] += 1
-                continue
-            if not dry_run:
-                state_store.set_state(new_key, merged)
-            if kind == "processed_entries":
-                summary["processed_entries_migrated"] += 1
-            else:
-                summary["pending_pull_migrated"] += 1
-    return summary
-
 
 def _parse_legacy_key(key: str) -> Optional[tuple[str, str, str]]:
     parts = key.split(":")
