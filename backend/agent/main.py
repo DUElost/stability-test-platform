@@ -23,6 +23,7 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
     from agent.api_client import complete_run, fetch_pending_jobs, sync_recovery
+    from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
     from agent.heartbeat_thread import HeartbeatThread
@@ -40,6 +41,7 @@ if __name__ == "__main__" and __package__ is None:
 else:
     from .adb_wrapper import AdbWrapper
     from .api_client import complete_run, fetch_pending_jobs, sync_recovery
+    from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
     from .heartbeat_thread import HeartbeatThread
@@ -79,6 +81,27 @@ _lock_renewal_stop_event = threading.Event()
 def _make_local_worker_token(job_id: int, prefix: str) -> str:
     """Create a per-submit worker ownership token scoped to this agent process."""
     return f"{prefix}-{job_id}-{uuid.uuid4().hex[:12]}"
+
+
+def _migrate_legacy_aee_state_on_startup(db_path: str) -> Dict[str, Any]:
+    """Promote legacy scan_aee state into watcher:aee namespace during agent startup."""
+    summary = migrate_legacy_aee_state_keys(db_path)
+    if (
+        int(summary["processed_entries_migrated"]) > 0
+        or int(summary["pending_pull_migrated"]) > 0
+    ):
+        logger.info(
+            "startup_aee_state_namespace_migrated db_path=%s summary=%s",
+            db_path,
+            summary,
+        )
+    if summary.get("errors"):
+        logger.warning(
+            "startup_aee_state_namespace_migration_errors db_path=%s errors=%s",
+            db_path,
+            summary["errors"],
+        )
+    return summary
 
 
 # 全局活跃 Job 追踪辅助函数（仅 per-device guard）
@@ -442,6 +465,7 @@ def main() -> None:
     local_db = LocalDB()
     db_path = str(BASE_DIR / "agent_state.db")
     local_db.initialize(db_path)
+    _migrate_legacy_aee_state_on_startup(db_path)
 
     script_registry = ScriptRegistry(local_db, api_url, agent_secret)
     script_registry.initialize()

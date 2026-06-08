@@ -2,6 +2,7 @@ import sys
 import threading
 import time
 import unittest
+import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
@@ -261,6 +262,55 @@ class TestHeartbeatThread(unittest.TestCase):
 
         ht._tick()
         reconnect_cb.assert_called_once_with(["ABC123"])
+
+
+class TestStartupAeeStateMigration(unittest.TestCase):
+    @staticmethod
+    def _init_agent_state(db_path: Path):
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE IF NOT EXISTS agent_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        return conn
+
+    def test_startup_migrates_legacy_aee_state_keys_before_jobs_run(self):
+        from backend.agent.main import _migrate_legacy_aee_state_on_startup
+
+        db_path = Path(self._testMethodName).with_suffix(".db")
+        if db_path.exists():
+            db_path.unlink()
+        conn = self._init_agent_state(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO agent_state(key, value) VALUES (?, ?)",
+                ("scan_aee:SX:aee_exp:processed_entries", '["legacy-line"]'),
+            )
+            conn.execute(
+                "INSERT INTO agent_state(key, value) VALUES (?, ?)",
+                ("scan_aee:SX:aee_exp:pending_pull", '{"legacy-line":{"db_path":"/data/aee_exp/db.1"}}'),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        summary = _migrate_legacy_aee_state_on_startup(str(db_path))
+
+        self.assertEqual(summary["processed_entries_migrated"], 1)
+        self.assertEqual(summary["pending_pull_migrated"], 1)
+        conn = sqlite3.connect(db_path)
+        try:
+            watcher_processed = conn.execute(
+                "SELECT value FROM agent_state WHERE key=?",
+                ("watcher:aee:SX:aee_exp:processed_entries",),
+            ).fetchone()
+            watcher_pending = conn.execute(
+                "SELECT value FROM agent_state WHERE key=?",
+                ("watcher:aee:SX:aee_exp:pending_pull",),
+            ).fetchone()
+            self.assertIsNotNone(watcher_processed)
+            self.assertIsNotNone(watcher_pending)
+        finally:
+            conn.close()
+            if db_path.exists():
+                db_path.unlink()
 
 
 if __name__ == "__main__":
