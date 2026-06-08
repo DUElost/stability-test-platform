@@ -67,6 +67,16 @@ def test_watcher_only_one_off_plan_script_is_removed():
     assert not path.exists(), f"legacy watcher rollout helper still present: {path}"
 
 
+def test_legacy_pipeline_cleanup_sql_helpers_are_removed():
+    legacy_sql = [
+        REPO_ROOT / "tools" / "sql" / "cleanup_legacy_pipeline_data.sql",
+        REPO_ROOT / "tools" / "sql" / "scan_legacy_action_prefix.sql",
+    ]
+
+    for path in legacy_sql:
+        assert not path.exists(), f"legacy one-off SQL cleanup helper still present: {path}"
+
+
 def test_watcher_summary_api_tests_do_not_reference_legacy_patrol_scripts():
     path = REPO_ROOT / "backend" / "tests" / "api" / "test_plan_run_aggregation_endpoints.py"
     text = path.read_text(encoding="utf-8")
