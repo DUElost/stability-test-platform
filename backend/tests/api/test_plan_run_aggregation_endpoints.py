@@ -1653,139 +1653,30 @@ class TestWatcherSummaryEndpoint:
         assert data["total_devices"] == 0
         assert data["aee_breakdown"] is None
 
-    # ----------------------------------------------------------------------
-    # M1/T1-3a: 双写灰度态字段 legacy_patrol_in_snapshot + pull_sources
-    # ----------------------------------------------------------------------
-
-    def test_watcher_summary_dual_write_fields_default_false_and_empty(
-        self, client, auth_headers, chain_setup,
-    ):
-        """fixture 默认 plan_snapshot 无 lifecycle.patrol;log_signal 无 extra.pull_source
-        → legacy_patrol_in_snapshot=False, pull_sources=[]。"""
-        cur_run = chain_setup["current_run"]
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["legacy_patrol_in_snapshot"] is False
-        assert data["pull_sources"] == []
-
-    def test_watcher_summary_legacy_patrol_true_when_scan_aee_in_patrol(
+    def test_watcher_summary_omits_legacy_patrol_transition_fields(
         self, client, auth_headers, db_session, chain_setup,
     ):
-        """plan_snapshot.lifecycle.patrol.steps 含 script:scan_aee → True。
-        同时验证早返回路径(无 Job 的 parent_run)也能正确返回 legacy 字段。"""
+        """Watcher 主链收口后,watcher-summary 不再暴露 legacy patrol 过渡语义。"""
         cur_run = chain_setup["current_run"]
-        cur_run.plan_snapshot = {
-            "plan": {"id": cur_run.plan_id},
-            "lifecycle": {
-                "init": [{"step_id": "ensure_root", "action": "script:ensure_root"}],
-                "patrol": {
-                    "interval_seconds": 60,
-                    "steps": [
-                        {"step_id": "monkey_check", "action": "script:monkey_check"},
-                        {"step_id": "scan_aee", "action": "script:scan_aee"},
-                        {"step_id": "export_mobilelogs", "action": "script:export_mobilelogs"},
-                    ],
-                },
-                "teardown": [],
-            },
-        }
-        db_session.add(cur_run)
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["legacy_patrol_in_snapshot"] is True
-
-        # 早返回路径:parent_run 无 lifecycle → False
-        parent_run = chain_setup["parent_run"]
-        resp2 = client.get(
-            f"/api/v1/plan-runs/{parent_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp2.status_code == 200
-        assert resp2.json()["data"]["legacy_patrol_in_snapshot"] is False
-
-    def test_watcher_summary_legacy_patrol_true_when_scan_aee_in_snapshot_steps(
-        self, client, auth_headers, db_session, chain_setup,
-    ):
-        """当前真实 PlanRun 快照是 {plan, steps} 结构,也必须识别 legacy patrol。"""
-        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
         cur_run.plan_snapshot = {
             "plan": {"id": cur_run.plan_id},
             "steps": [
                 {"stage": "init", "script_name": "ensure_root", "step_key": "ensure_root"},
-                {"stage": "patrol", "script_name": "monkey_check", "step_key": "monkey_check"},
                 {"stage": "patrol", "script_name": "scan_aee", "step_key": "scan_aee"},
-                {"stage": "patrol", "script_name": "export_mobilelogs", "step_key": "export_mobilelogs"},
+                {"stage": "teardown", "script_name": "export_mobilelogs", "step_key": "export_mobilelogs"},
             ],
         }
         db_session.add(cur_run)
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        assert resp.json()["data"]["legacy_patrol_in_snapshot"] is True
-
-    def test_watcher_summary_legacy_patrol_false_when_patrol_is_list_without_legacy(
-        self, client, auth_headers, db_session, chain_setup,
-    ):
-        """patrol 是 list 形态(早期 fallback)且不含 scan_aee → False。"""
-        cur_run = chain_setup["current_run"]
-        cur_run.plan_snapshot = {
-            "lifecycle": {
-                "patrol": [
-                    {"step_id": "monkey_check", "action": "script:monkey_check"},
-                ],
-            },
-        }
-        db_session.add(cur_run)
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        assert resp.json()["data"]["legacy_patrol_in_snapshot"] is False
-
-    def test_watcher_summary_pull_sources_collects_distinct_reconciler(
-        self, client, auth_headers, db_session, chain_setup,
-    ):
-        """log_signal.extra.pull_source distinct 入 pull_sources;旧无 extra signal 不计入。"""
-        cur_run = chain_setup["current_run"]
-        j1 = chain_setup["job_completed"]
-
-        db_session.add_all([
-            JobLogSignal(
-                id=30001,
-                job_id=j1.id, host_id="host-101",
-                device_serial=chain_setup["device_completed"].serial,
-                seq_no=300, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.PS1",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={"pull_source": "reconciler", "package_name": "com.x"},
-            ),
-            JobLogSignal(  # 第二条同 source — 验证 DISTINCT 去重
-                id=30002,
-                job_id=j1.id, host_id="host-101",
-                device_serial=chain_setup["device_completed"].serial,
-                seq_no=301, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.PS2",
-                detected_at=_now() - timedelta(minutes=1),
-                extra={"pull_source": "reconciler", "package_name": "com.y"},
-            ),
-        ])
+        db_session.add(JobLogSignal(
+            id=30001,
+            job_id=j1.id, host_id="host-101",
+            device_serial=chain_setup["device_completed"].serial,
+            seq_no=300, category="AEE", source="reconciler",
+            path_on_device="/data/aee_exp/db.PS1",
+            detected_at=_now() - timedelta(minutes=2),
+            extra={"pull_source": "reconciler", "package_name": "com.x"},
+        ))
         db_session.commit()
 
         resp = client.get(
@@ -1794,9 +1685,8 @@ class TestWatcherSummaryEndpoint:
         )
         assert resp.status_code == 200
         data = resp.json()["data"]
-        # fixture 中 10001/10002 无 extra,只有新加的 2 条带 pull_source=reconciler
-        # → distinct 集合 = ["reconciler"]
-        assert data["pull_sources"] == ["reconciler"]
+        assert "legacy_patrol_in_snapshot" not in data
+        assert "pull_sources" not in data
 
     # ----------------------------------------------------------------------
     # M0/C-6 (§2.4 #5): watcher_capability 快照

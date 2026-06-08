@@ -1796,13 +1796,6 @@ class WatcherSummaryOut(BaseModel):
     #   前端在 'unavailable' 时显示「Watcher 不可用」徽章(watcher 未正常启动,
     #   AEE reconciler 可能未运行,勿当作有 reconciler 兜底)。
     watcher_capability: Optional[str] = None
-    # M1/T1-3a: 双写灰度态字段
-    # legacy_patrol_in_snapshot — PlanRun.plan_snapshot.lifecycle.patrol 是否仍含
-    #   scan_aee / export_mobilelogs(M2 关 patrol 后历史 PlanRun 仍能识别)
-    # pull_sources — 当前窗口 log_signal.extra.pull_source 的 distinct 集合
-    #   (M1 期通常仅 'reconciler';空数组 = 无 reconciler emit)
-    legacy_patrol_in_snapshot: bool = False
-    pull_sources: list[str] = []
 
 
 @router.get(
@@ -1823,9 +1816,6 @@ def get_plan_run_watcher_summary(
     与 PlanRun.failure_threshold 比较给出 exceeded 标志。
     """
     pr = _require_plan_run(db, run_id)
-
-    # M1/T1-3a: 双写灰度态 — 提前算出供早返回 / 主返回共用
-    legacy_in_snapshot = _detect_legacy_patrol_in_snapshot(pr.plan_snapshot)
 
     job_rows = db.execute(
         select(JobInstance.id, JobInstance.device_id).where(JobInstance.plan_run_id == run_id)
@@ -1857,8 +1847,6 @@ def get_plan_run_watcher_summary(
             current_run=_empty_dashboard_section(),
             preexisting=_empty_dashboard_section(),
             watcher_capability=None,
-            legacy_patrol_in_snapshot=legacy_in_snapshot,
-            pull_sources=[],
         ))
 
     # 当前窗口聚合(按 category 分组)
@@ -1942,9 +1930,6 @@ def get_plan_run_watcher_summary(
     aee_breakdown = _aggregate_aee_breakdown(
         db, job_ids=job_ids, cur_start=cur_start, now=window_end,
     )
-    pull_sources_list = _aggregate_pull_sources(
-        db, job_ids=job_ids, cur_start=cur_start, now=window_end,
-    )
     watcher_capability = _aggregate_watcher_capability(db, job_ids=job_ids)
 
     return ok(WatcherSummaryOut(
@@ -1965,8 +1950,6 @@ def get_plan_run_watcher_summary(
         preexisting=preexisting,
         aee_breakdown=aee_breakdown,
         watcher_capability=watcher_capability,
-        legacy_patrol_in_snapshot=legacy_in_snapshot,
-        pull_sources=pull_sources_list,
     ))
 
 
@@ -2002,82 +1985,6 @@ def _aggregate_watcher_capability(db: Session, *, job_ids: list[int]) -> Optiona
     if not caps:
         return None
     return max(caps, key=lambda c: _CAPABILITY_SEVERITY.get(c, 0))
-
-
-def _detect_legacy_patrol_in_snapshot(plan_snapshot: Any) -> bool:
-    """M1/T1-3a: 检测 PlanRun.plan_snapshot.lifecycle.patrol 是否仍含
-    scan_aee / export_mobilelogs 步骤(双写模式标识)。
-
-    兼容两种 patrol 形态:
-      - dict(`{"interval_seconds": 60, "steps": [...]}`,ADR-0020 标准)
-      - list(早期 fallback 直存 steps)
-      - 顶层 {plan, steps}(当前 prepare_plan_run 快照形态)
-    """
-    def _is_legacy_step(step: Any) -> bool:
-        if not isinstance(step, dict):
-            return False
-        legacy_actions = {"script:scan_aee", "script:export_mobilelogs"}
-        legacy_scripts = {"scan_aee", "export_mobilelogs"}
-        action = str(step.get("action") or "")
-        script_name = str(step.get("script_name") or "")
-        step_key = str(step.get("step_key") or "")
-        return (
-            action in legacy_actions
-            or script_name in legacy_scripts
-            or step_key in legacy_scripts
-        )
-
-    if not isinstance(plan_snapshot, dict):
-        return False
-
-    top_level_steps = plan_snapshot.get("steps")
-    if isinstance(top_level_steps, list):
-        patrol_steps = [
-            step for step in top_level_steps
-            if isinstance(step, dict) and str(step.get("stage") or "") == "patrol"
-        ]
-        if any(_is_legacy_step(step) for step in patrol_steps):
-            return True
-
-    lifecycle = plan_snapshot.get("lifecycle")
-    if not isinstance(lifecycle, dict):
-        return False
-    patrol = lifecycle.get("patrol")
-    if isinstance(patrol, list):
-        steps = patrol
-    elif isinstance(patrol, dict):
-        steps = patrol.get("steps") or []
-    else:
-        return False
-    return any(_is_legacy_step(step) for step in steps)
-
-
-def _aggregate_pull_sources(
-    db: Session,
-    *,
-    job_ids: list[int],
-    cur_start: datetime,
-    now: datetime,
-) -> list[str]:
-    """M1/T1-3a: 收集当前窗口 log_signal.extra.pull_source 的 distinct 集合。
-
-    PG-only(JSONB):未含 extra 或 pull_source 的旧 signal 不计入;
-    返回有序去重列表,前端按其判定 reconciler-only / 双写 / patrol-only 徽章。
-    """
-    if not job_ids:
-        return []
-    rows = db.execute(
-        text("""
-            SELECT DISTINCT extra->>'pull_source' AS src
-            FROM job_log_signal
-            WHERE job_id = ANY(:job_ids)
-              AND detected_at >= :cur_start
-              AND detected_at <= :now
-              AND extra ? 'pull_source'
-        """),
-        {"job_ids": job_ids, "cur_start": cur_start, "now": now},
-    ).all()
-    return sorted({str(r[0]) for r in rows if r[0]})
 
 
 def _resolve_watcher_summary_window(
