@@ -1,11 +1,6 @@
 import json
 
-from backend.api.routes.pipeline import (
-    TEMPLATES_DIR,
-    _iter_template_paths,
-    _load_template,
-    _resolve_template_path,
-)
+from backend.api.routes.pipeline import TEMPLATES_DIR, _load_template
 from backend.core.pipeline_validator import validate_pipeline_def
 
 
@@ -32,46 +27,25 @@ def test_builtin_pipeline_templates_follow_current_validator():
         assert "lifecycle" in pipeline_def
 
 
-def test_monkey_aee_templates_are_watcher_only_m2_variants():
-    expected_names = ("monkey_aee_patrol.json", "monkey_aee_lifecycle.json")
-    for name in expected_names:
-        data = json.loads((TEMPLATES_DIR / name).read_text(encoding="utf-8"))
-        patrol_steps = data["lifecycle"]["patrol"]["steps"]
-        step_ids = [str(step.get("step_id") or "") for step in patrol_steps]
-        actions = [str(step.get("action") or "") for step in patrol_steps]
+def test_monkey_aee_patrol_template_is_watcher_only_public_variant():
+    data = json.loads((TEMPLATES_DIR / "monkey_aee_patrol.json").read_text(encoding="utf-8"))
+    patrol_steps = data["lifecycle"]["patrol"]["steps"]
+    step_ids = [str(step.get("step_id") or "") for step in patrol_steps]
+    actions = [str(step.get("action") or "") for step in patrol_steps]
 
-        assert data["version"] == 2, f"{name} should version-bump for M2 watcher-only rollout"
-        assert step_ids == ["monkey_check"], f"{name} patrol should only keep monkey_check"
-        assert "script:scan_aee" not in actions, f"{name} must not keep legacy scan_aee"
-        assert "script:export_mobilelogs" not in actions, (
-            f"{name} must not keep legacy export_mobilelogs"
-        )
+    assert data["version"] == 2
+    assert step_ids == ["monkey_check"]
+    assert "script:scan_aee" not in actions
+    assert "script:export_mobilelogs" not in actions
 
 
-def test_monkey_aee_template_alias_tracks_watcher_only_lifecycle_template():
-    alias = json.loads((TEMPLATES_DIR / "monkey_aee.json").read_text(encoding="utf-8"))
-    lifecycle = json.loads((TEMPLATES_DIR / "monkey_aee_lifecycle.json").read_text(encoding="utf-8"))
-
-    assert "legacy" not in str(alias.get("description") or "").lower()
-    assert alias["version"] == lifecycle["version"]
-    assert alias["lifecycle"] == lifecycle["lifecycle"]
-
-
-def test_public_pipeline_template_list_omits_internal_and_deprecated_aee_aliases():
-    public_names = [path.stem for path in _iter_template_paths(public_only=True)]
-
-    assert "monkey_aee_patrol" in public_names
-    assert "aimonkey" not in public_names
-    assert "monkey_aee" not in public_names
-    assert "monkey_aee_lifecycle" not in public_names
-    assert "monkey_aee_init" not in public_names
-    assert "monkey_aee_teardown" not in public_names
-
-
-def test_public_template_resolver_rejects_internal_and_deprecated_aee_aliases():
-    assert _resolve_template_path("monkey_aee_patrol", public_only=True) is not None
-    assert _resolve_template_path("aimonkey", public_only=True) is None
-    assert _resolve_template_path("monkey_aee", public_only=True) is None
-    assert _resolve_template_path("monkey_aee_lifecycle", public_only=True) is None
-    assert _resolve_template_path("monkey_aee_init", public_only=True) is None
-    assert _resolve_template_path("monkey_aee_teardown", public_only=True) is None
+def test_legacy_aee_template_alias_files_removed_from_repo():
+    removed = (
+        "aimonkey.json",
+        "monkey_aee.json",
+        "monkey_aee_init.json",
+        "monkey_aee_lifecycle.json",
+        "monkey_aee_teardown.json",
+    )
+    for name in removed:
+        assert not (TEMPLATES_DIR / name).exists(), f"{name} should be removed after watcher 收口"
