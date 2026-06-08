@@ -241,6 +241,17 @@ class TestPlanDispatchErrorDetail:
         exc = PlanDispatchError("plan not found")
         assert exc.detail() == "plan not found"
 
+    def test_detail_with_mixed_watcher_activity(self):
+        exc = PlanDispatchError(
+            "watch激活与不激活的节点不能同时在一个计划中",
+            mixed_watcher_inactive_host_ids=["host-101", "host-203"],
+        )
+        assert exc.detail() == {
+            "code": "MIXED_WATCHER_ACTIVITY",
+            "message": "watch激活与不激活的节点不能同时在一个计划中",
+            "inactive_host_ids": ["host-101", "host-203"],
+        }
+
 
 @pytest.fixture
 def _failfast_fixture(db_session):

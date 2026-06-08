@@ -81,6 +81,137 @@ def _prepare_run(db_session, gate_chain) -> PlanRun:
 
 
 class TestDispatchGate:
+    def test_mixed_watcher_admin_state_fails_before_script_verify(
+        self, db_session, gate_chain
+    ):
+        gate_chain["host_a"].watcher_admin_active = True
+        gate_chain["host_b"].watcher_admin_active = False
+        db_session.commit()
+        pr = _prepare_run(db_session, gate_chain)
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            pytest.fail("verify_scripts must not run when watcher admin state is mixed")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status == "FAILED"
+        assert pr_after.result_summary["precheck_failed"] is True
+        assert pr_after.result_summary["reason"] == (
+            "watch激活与不激活的节点不能同时在一个计划中"
+        )
+        precheck = pr_after.run_context["precheck"]
+        assert precheck["phase"] == "failed"
+        assert precheck["final_result"] == "failed"
+        assert precheck["errors"] == ["watch激活与不激活的节点不能同时在一个计划中"]
+        assert precheck["gate_failure"] == {
+            "code": "MIXED_WATCHER_ACTIVITY",
+            "message": "watch激活与不激活的节点不能同时在一个计划中",
+            "inactive_host_ids": ["h-B"],
+        }
+        assert precheck["hosts"]["h-B"]["status"] == "failed"
+        assert precheck["hosts"]["h-B"]["error"] == "watcher_inactive"
+        assert precheck["hosts"]["h-A"]["status"] == "pending"
+        assert pr_after.run_context["dispatch_state"]["last_error"] == (
+            "precheck:MIXED_WATCHER_ACTIVITY"
+        )
+
+        jobs = db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count()
+        assert jobs == 0
+
+    def test_all_inactive_watcher_admin_state_still_dispatches(
+        self, db_session, gate_chain
+    ):
+        gate_chain["host_a"].watcher_admin_active = False
+        gate_chain["host_b"].watcher_admin_active = False
+        db_session.commit()
+        pr = _prepare_run(db_session, gate_chain)
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            return _ack_ok(host_id, "aabbcc11")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status == "RUNNING"
+        assert pr_after.run_context["precheck"]["phase"] == "ready"
+        assert pr_after.run_context["dispatch_host_watcher_admin_states"] == {
+            "h-A": False,
+            "h-B": False,
+        }
+
+    def test_watcher_admin_state_changes_after_prepare_do_not_affect_current_run(
+        self, db_session, gate_chain
+    ):
+        pr = _prepare_run(db_session, gate_chain)
+
+        # 当前 PlanRun 已创建后再切 host watcher 状态，只应影响后续新派发任务。
+        gate_chain["host_b"].watcher_admin_active = False
+        db_session.commit()
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            return _ack_ok(host_id, "aabbcc11")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status == "RUNNING"
+        assert pr_after.run_context["precheck"]["phase"] == "ready"
+        assert pr_after.run_context["dispatch_host_watcher_admin_states"] == {
+            "h-A": True,
+            "h-B": True,
+        }
+
+    def test_mixed_watcher_snapshot_still_fails_even_if_host_changes_before_gate(
+        self, db_session, gate_chain
+    ):
+        gate_chain["host_a"].watcher_admin_active = True
+        gate_chain["host_b"].watcher_admin_active = False
+        db_session.commit()
+
+        pr = _prepare_run(db_session, gate_chain)
+
+        # 准备完成后再修正 host 状态，不应反向改变当前 PlanRun 的门禁结果。
+        gate_chain["host_b"].watcher_admin_active = True
+        db_session.commit()
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            pytest.fail("verify_scripts must not run when watcher admin snapshot is mixed")
+
+        with patch(
+            "backend.services.plan_precheck.call_agent_rpc",
+            side_effect=_fake_call,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        db_session.expire_all()
+        pr_after = db_session.get(PlanRun, pr.id)
+        assert pr_after.status == "FAILED"
+        assert pr_after.result_summary["reason"] == (
+            "watch激活与不激活的节点不能同时在一个计划中"
+        )
+        assert pr_after.run_context["dispatch_host_watcher_admin_states"] == {
+            "h-A": True,
+            "h-B": False,
+        }
+
     def test_no_drift_dispatches_jobs(self, db_session, gate_chain):
         pr = _prepare_run(db_session, gate_chain)
 
@@ -690,3 +821,26 @@ class TestChainScheduleDispatchGate:
                 db=db_session,
                 run_type="SCHEDULE",
             )
+
+    def test_dispatch_plan_sync_mixed_watcher_failure_raises_structured_detail(
+        self, db_session, gate_chain
+    ):
+        from backend.services.plan_dispatcher_sync import dispatch_plan_sync
+
+        gate_chain["host_a"].watcher_admin_active = True
+        gate_chain["host_b"].watcher_admin_active = False
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as excinfo:
+            dispatch_plan_sync(
+                plan_id=gate_chain["plan"].id,
+                device_ids=[gate_chain["device_a"].id, gate_chain["device_b"].id],
+                triggered_by="chain-test",
+                db=db_session,
+                run_type="CHAIN",
+            )
+
+        detail = excinfo.value.detail()
+        assert detail["code"] == "MIXED_WATCHER_ACTIVITY"
+        assert detail["inactive_host_ids"] == ["h-B"]
+        assert "watch激活与不激活的节点不能同时在一个计划中" in detail["message"]

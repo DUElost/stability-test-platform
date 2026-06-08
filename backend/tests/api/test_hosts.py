@@ -31,6 +31,7 @@ class TestCreateHost:
         assert data["ssh_port"] == 22
         assert data["ssh_user"] == "root"
         assert data["status"] == "OFFLINE"
+        assert data["watcher_admin_active"] is True
         assert "id" in data
 
     def test_create_host_duplicate_name(self, client, sample_host, admin_headers):
@@ -293,6 +294,7 @@ class TestHostFields:
         data = response.json()
         assert data["extra"] == {}
         assert data["mount_status"] == {}
+        assert data["watcher_admin_active"] is True
 
     def test_host_extra_redacts_sensitive_values(self, client, db_session, auth_headers):
         from backend.models.host import Host
@@ -314,3 +316,38 @@ class TestHostFields:
         assert response.status_code == 200
         data = response.json()
         assert data["extra"] == {"rack": "A1"}
+
+
+class TestWatcherAdminState:
+    def test_host_response_includes_watcher_admin_active(
+        self, client, sample_host, auth_headers
+    ):
+        response = client.get(f"/api/v1/hosts/{sample_host.id}", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()["watcher_admin_active"] is True
+
+    def test_patch_watcher_admin_state_success(
+        self, client, sample_host, admin_headers, db_session
+    ):
+        response = client.patch(
+            f"/api/v1/hosts/{sample_host.id}/watcher-admin-state",
+            json={"watcher_admin_active": False},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["id"] == sample_host.id
+        assert data["watcher_admin_active"] is False
+
+        db_session.refresh(sample_host)
+        assert sample_host.watcher_admin_active is False
+
+    def test_patch_watcher_admin_state_forbidden_for_non_admin(
+        self, client, sample_host, auth_headers
+    ):
+        response = client.patch(
+            f"/api/v1/hosts/{sample_host.id}/watcher-admin-state",
+            json={"watcher_admin_active": False},
+            headers=auth_headers,
+        )
+        assert response.status_code == 403

@@ -17,6 +17,10 @@ class HostCreate(BaseModel):
     ssh_known_hosts_path: Optional[str] = None
 
 
+class HostWatcherAdminStatePatch(BaseModel):
+    watcher_admin_active: bool
+
+
 class HostActiveJob(BaseModel):
     """ADR-0021: per-host snapshot of an active Job for the hot-update gate."""
     id: int
@@ -36,6 +40,7 @@ class HostOut(ORMBaseModel):
     ssh_user: Optional[str] = None
     ssh_auth_type: Optional[str] = None
     status: str
+    watcher_admin_active: bool = True
     last_heartbeat: Optional[datetime] = None
     extra: Dict[str, Any] = {}
     mount_status: Dict[str, Any] = {}

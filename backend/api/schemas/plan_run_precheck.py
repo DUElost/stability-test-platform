@@ -48,6 +48,16 @@ class PrecheckHostState(BaseModel):
     error: Optional[str] = None
 
 
+class PrecheckGateFailure(BaseModel):
+    """Structured dispatch-gate failure summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    message: str
+    inactive_host_ids: list[str] = Field(default_factory=list)
+
+
 class PrecheckSummary(BaseModel):
     """Top-level ``run_context.precheck`` payload.
 
@@ -64,6 +74,8 @@ class PrecheckSummary(BaseModel):
     hosts: dict[str, PrecheckHostState] = Field(default_factory=dict)
     final_result: Optional[PrecheckFinalResult] = None
     errors: list[str] = Field(default_factory=list)
+    sync_max_attempts: Optional[int] = None
+    gate_failure: Optional[PrecheckGateFailure] = None
 
 
 __all__ = [
@@ -72,5 +84,6 @@ __all__ = [
     "PrecheckFinalResult",
     "PrecheckScriptResult",
     "PrecheckHostState",
+    "PrecheckGateFailure",
     "PrecheckSummary",
 ]

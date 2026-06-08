@@ -1,6 +1,7 @@
 from backend.api.schemas.base import ORMBaseModel, PaginatedResponse, _isoformat_utc
 from backend.api.schemas.host import (
     HostCreate,
+    HostWatcherAdminStatePatch,
     HostOut,
     HostLiteOut,
     HostActiveJob,
@@ -32,6 +33,7 @@ from backend.api.schemas.plan_run_precheck import (
     PrecheckFinalResult,
     PrecheckScriptResult,
     PrecheckHostState,
+    PrecheckGateFailure,
     PrecheckSummary,
 )
 
@@ -40,6 +42,7 @@ __all__ = [
     "PaginatedResponse",
     "_isoformat_utc",
     "HostCreate",
+    "HostWatcherAdminStatePatch",
     "HostOut",
     "HostLiteOut",
     "HostActiveJob",
@@ -82,5 +85,6 @@ __all__ = [
     "PrecheckFinalResult",
     "PrecheckScriptResult",
     "PrecheckHostState",
+    "PrecheckGateFailure",
     "PrecheckSummary",
 ]

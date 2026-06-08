@@ -18,7 +18,13 @@ from backend.core.ssh_security import (
 from backend.models.enums import JobStatus
 from backend.models.host import Host
 from backend.models.job import JobInstance
-from backend.api.schemas import HostActiveJob, HostCreate, HostOut, PaginatedResponse
+from backend.api.schemas import (
+    HostActiveJob,
+    HostCreate,
+    HostOut,
+    HostWatcherAdminStatePatch,
+    PaginatedResponse,
+)
 from backend.api.routes.auth import get_current_active_user, require_admin, User
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds
 from backend.services.plan_run_abort import abort_jobs_for_host
@@ -244,6 +250,34 @@ def update_host(
         resource_type="host",
         resource_id=host.id,
         details={"name": host.name, "ip": host.ip},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.commit()
+    db.refresh(host)
+    return _host_to_out(host)
+
+
+@router.patch("/{host_id}/watcher-admin-state", response_model=HostOut)
+def update_host_watcher_admin_state(
+    host_id: str,
+    payload: HostWatcherAdminStatePatch,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    host.watcher_admin_active = payload.watcher_admin_active
+    record_audit(
+        db,
+        action="update_watcher_admin_state",
+        resource_type="host",
+        resource_id=host.id,
+        details={"watcher_admin_active": payload.watcher_admin_active},
         user_id=current_user.id,
         username=current_user.username,
         request=request,

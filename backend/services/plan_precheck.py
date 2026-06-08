@@ -56,6 +56,7 @@ from backend.realtime.socketio_server import (
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, _AGENT_SOURCE_DIR
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
+    _snapshot_dispatch_host_watcher_admin_states,
     complete_plan_run_dispatch,
     initial_dispatch_state,
 )
@@ -66,6 +67,8 @@ logger = logging.getLogger(__name__)
 VERIFY_TIMEOUT_SECONDS = 10.0
 SYNC_SETTLE_SECONDS = 8.0
 DISPATCH_SYNC_MAX_ATTEMPTS = max(1, int(os.getenv("DISPATCH_SYNC_MAX_ATTEMPTS", "1")))
+MIXED_WATCHER_ACTIVITY_CODE = "MIXED_WATCHER_ACTIVITY"
+MIXED_WATCHER_ACTIVITY_MESSAGE = "watch激活与不激活的节点不能同时在一个计划中"
 
 
 def _utc_iso() -> str:
@@ -208,6 +211,47 @@ def _persist_precheck(plan_run_id: int, precheck: dict, db: Session) -> None:
     flag_modified(pr, "run_context")
     db.commit()
     _emit_dispatch_gate_invalidation(plan_run_id, phase=precheck.get("phase"))
+
+
+def _resolve_host_watcher_admin_states_from_db(
+    host_ids: list[str], db: Session,
+) -> dict[str, bool]:
+    rows = db.execute(
+        select(Host.id, Host.watcher_admin_active).where(Host.id.in_(host_ids))
+    ).all()
+    state_map = {
+        row.id: True if row.watcher_admin_active is None else bool(row.watcher_admin_active)
+        for row in rows
+    }
+    for host_id in host_ids:
+        state_map.setdefault(host_id, True)
+    return state_map
+
+
+def _resolve_dispatch_host_watcher_admin_states(
+    plan_run: PlanRun, host_ids: list[str], db: Session,
+) -> dict[str, bool]:
+    run_ctx = plan_run.run_context if isinstance(plan_run.run_context, dict) else {}
+    snapshot = run_ctx.get("dispatch_host_watcher_admin_states")
+    if isinstance(snapshot, dict) and snapshot:
+        return {
+            host_id: True if snapshot.get(host_id) is None else bool(snapshot.get(host_id))
+            for host_id in host_ids
+        }
+    return _resolve_host_watcher_admin_states_from_db(host_ids, db)
+
+
+def _find_mixed_watcher_inactive_host_ids(
+    plan_run: PlanRun, host_ids: list[str], db: Session,
+) -> list[str]:
+    state_map = _resolve_dispatch_host_watcher_admin_states(plan_run, host_ids, db)
+    inactive_host_ids = sorted([
+        host_id for host_id, is_active in state_map.items() if not is_active
+    ])
+    active_host_ids = [host_id for host_id, is_active in state_map.items() if is_active]
+    if inactive_host_ids and active_host_ids:
+        return inactive_host_ids
+    return []
 
 
 async def _verify_one_host(
@@ -476,6 +520,24 @@ async def _drive_dispatch_gate(
 
         precheck = initialise_precheck_state(plan_run_id, db)
         host_ids = list(precheck["hosts"].keys())
+        inactive_host_ids = _find_mixed_watcher_inactive_host_ids(pr, host_ids, db)
+        if inactive_host_ids:
+            for host_id in inactive_host_ids:
+                host_state = precheck["hosts"].get(host_id)
+                if not host_state:
+                    continue
+                host_state["status"] = "failed"
+                host_state["error"] = "watcher_inactive"
+            _mark_precheck_failed(
+                plan_run_id,
+                precheck,
+                db,
+                error=MIXED_WATCHER_ACTIVITY_MESSAGE,
+                code=MIXED_WATCHER_ACTIVITY_CODE,
+                inactive_host_ids=inactive_host_ids,
+            )
+            return
+
         expected_scripts = _expected_scripts_for_run(pr, db)
 
         if not expected_scripts:
@@ -724,12 +786,24 @@ async def _gather_verify(
 
 
 def _mark_precheck_failed(
-    plan_run_id: int, precheck: dict, db: Session, *, error: str
+    plan_run_id: int,
+    precheck: dict,
+    db: Session,
+    *,
+    error: str,
+    code: str | None = None,
+    inactive_host_ids: list[str] | None = None,
 ) -> None:
     precheck["phase"] = "failed"
     precheck["final_result"] = "failed"
     precheck["completed_at"] = _utc_iso()
     precheck.setdefault("errors", []).append(error)
+    if code:
+        precheck["gate_failure"] = {
+            "code": code,
+            "message": error,
+            "inactive_host_ids": list(inactive_host_ids or []),
+        }
 
     pr = db.get(PlanRun, plan_run_id)
     if pr is None:
@@ -743,13 +817,19 @@ def _mark_precheck_failed(
         "precheck_failed": True,
         "reason": error,
     }
+    if code:
+        pr.result_summary["code"] = code
+    if inactive_host_ids:
+        pr.result_summary["inactive_host_ids"] = list(inactive_host_ids)
     flag_modified(pr, "run_context")
 
     # Keep dispatch_state in sync so the reaper won't double-process this run.
     dispatch_state = dict(run_ctx.get("dispatch_state") or {})
     dispatch_state["status"] = "failed"
     dispatch_state["completed_at"] = _utc_iso()
-    dispatch_state["last_error"] = f"precheck:{error}"
+    dispatch_state["last_error"] = (
+        f"precheck:{code}" if code else f"precheck:{error}"
+    )
     run_ctx["dispatch_state"] = dispatch_state
 
     db.commit()
@@ -817,6 +897,11 @@ def retry_plan_run_dispatch(
     new_dispatch = initial_dispatch_state()
     new_dispatch["enqueue_key"] = f"precheck:{run_id}"
     run_ctx["dispatch_state"] = new_dispatch
+    run_ctx["dispatch_host_watcher_admin_states"] = (
+        _snapshot_dispatch_host_watcher_admin_states(
+            db, list(run_ctx.get("dispatch_device_ids") or [])
+        )
+    )
     pr.run_context = run_ctx
     flag_modified(pr, "run_context")
     db.commit()

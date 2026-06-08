@@ -29,6 +29,7 @@ class Host(Base):
     last_heartbeat       = Column(DateTime(timezone=True))
     cpu_quota            = Column(Integer, nullable=False, default=2)
     status               = Column(String(32), nullable=False, default="OFFLINE")
+    watcher_admin_active = Column(Boolean, nullable=False, default=True)
     created_at           = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # 迁移补齐字段

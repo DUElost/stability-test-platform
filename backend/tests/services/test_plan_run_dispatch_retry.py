@@ -86,3 +86,30 @@ def test_retry_dispatch_re_enqueues_gate(
 def test_retry_dispatch_requires_auth(client, failed_precheck_run):
     resp = client.post(f"/api/v1/plan-runs/{failed_precheck_run.id}/retry-dispatch")
     assert resp.status_code == 401
+
+
+def test_retry_dispatch_refreshes_watcher_admin_snapshot_for_new_dispatch(
+    client, auth_headers, db_session, failed_precheck_run, sample_host, sample_device,
+):
+    failed_precheck_run.run_context["dispatch_device_ids"] = [sample_device.id]
+    flag_modified(failed_precheck_run, "run_context")
+    sample_host.watcher_admin_active = False
+    db_session.commit()
+
+    with patch(
+        "backend.tasks.saq_worker.enqueue_sync",
+        return_value=None,
+    ), patch(
+        "backend.services.plan_precheck.initialise_precheck_state",
+        return_value={"phase": "verifying", "hosts": {}, "errors": []},
+    ):
+        resp = client.post(
+            f"/api/v1/plan-runs/{failed_precheck_run.id}/retry-dispatch",
+            headers=auth_headers,
+        )
+
+    assert resp.status_code == 200
+    db_session.refresh(failed_precheck_run)
+    assert failed_precheck_run.run_context["dispatch_host_watcher_admin_states"] == {
+        sample_host.id: False,
+    }

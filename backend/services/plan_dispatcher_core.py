@@ -21,11 +21,17 @@ class PlanDispatchError(Exception):
         *,
         missing_scripts: list[str] | None = None,
         unavailable_devices: list[dict] | None = None,
+        mixed_watcher_inactive_host_ids: list[str] | None = None,
     ) -> None:
         super().__init__(message)
         self.missing_scripts = list(missing_scripts) if missing_scripts else None
         self.unavailable_devices = (
             list(unavailable_devices) if unavailable_devices else None
+        )
+        self.mixed_watcher_inactive_host_ids = (
+            list(mixed_watcher_inactive_host_ids)
+            if mixed_watcher_inactive_host_ids
+            else None
         )
 
     def detail(self) -> dict | str:
@@ -38,6 +44,12 @@ class PlanDispatchError(Exception):
             return {
                 "code": "DEVICES_UNAVAILABLE",
                 "unavailable_devices": self.unavailable_devices,
+            }
+        if self.mixed_watcher_inactive_host_ids:
+            return {
+                "code": "MIXED_WATCHER_ACTIVITY",
+                "message": str(self),
+                "inactive_host_ids": self.mixed_watcher_inactive_host_ids,
             }
         return str(self)
 
