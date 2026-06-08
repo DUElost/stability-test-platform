@@ -143,6 +143,25 @@ def test_legacy_backend_task_schema_module_is_removed():
     assert "TaskOut" in api_schemas.__dict__
 
 
+def test_legacy_tasks_socket_refresh_path_is_removed():
+    frontend_socket_events = (
+        REPO_ROOT / "frontend" / "src" / "utils" / "socketEvents.ts"
+    ).read_text(encoding="utf-8")
+    frontend_dashboard_hook = (
+        REPO_ROOT / "frontend" / "src" / "hooks" / "useRealtimeDashboard.ts"
+    ).read_text(encoding="utf-8")
+    backend_socket_server = (
+        REPO_ROOT / "backend" / "realtime" / "socketio_server.py"
+    ).read_text(encoding="utf-8")
+
+    assert "TASK_UPDATE" not in frontend_socket_events
+    assert "taskUpdate" not in frontend_socket_events
+    assert "TASK_UPDATE" not in frontend_dashboard_hook
+    assert "queryKey: ['tasks']" not in frontend_dashboard_hook
+    assert "broadcast_task_update" not in backend_socket_server
+    assert '"task_update"' not in backend_socket_server
+
+
 def test_m1_dual_write_runbook_and_recon_script_are_removed():
     legacy_paths = [
         REPO_ROOT / "backend" / "scripts" / "aee_dual_write_recon.py",

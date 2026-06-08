@@ -29,11 +29,6 @@ export interface RunStatusUpdate {
   error_code?: string;
 }
 
-export interface TaskStatusUpdate {
-  task_id: number;
-  status: string | null;
-}
-
 export interface ReportReadyEvent {
   run_id: number;
   task_id: number;
@@ -41,7 +36,7 @@ export interface ReportReadyEvent {
 
 interface WsMessage {
   type: SocketMessageType | 'HEARTBEAT';
-  payload: DeviceUpdate | RunStatusUpdate | TaskStatusUpdate | ReportReadyEvent | unknown;
+  payload: DeviceUpdate | RunStatusUpdate | ReportReadyEvent | unknown;
 }
 
 const INVALIDATE_THROTTLE_MS = 2000;
@@ -66,14 +61,9 @@ export function useRealtimeDashboard(wsUrl: string) {
         const now = Date.now();
         if (now - _lastInvalidateTime > INVALIDATE_THROTTLE_MS) {
           _lastInvalidateTime = now;
-          queryClient.invalidateQueries({ queryKey: ['tasks'] });
           queryClient.invalidateQueries({ queryKey: ['results'] });
           queryClient.invalidateQueries({ queryKey: ['results-summary'] });
         }
-        break;
-      }
-      case SOCKET_MESSAGE_TYPES.TASK_UPDATE: {
-        queryClient.invalidateQueries({ queryKey: ['tasks'] });
         break;
       }
       case SOCKET_MESSAGE_TYPES.REPORT_READY: {
@@ -83,7 +73,6 @@ export function useRealtimeDashboard(wsUrl: string) {
       }
       case SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS: {
         queryClient.invalidateQueries({ queryKey: ['plan-runs-list'] });
-        queryClient.invalidateQueries({ queryKey: ['tasks'] });
         break;
       }
       case SOCKET_MESSAGE_TYPES.DEPLOY_UPDATE: {

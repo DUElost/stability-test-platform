@@ -507,16 +507,6 @@ async def broadcast_run_update(
     }, namespace="/dashboard")
 
 
-async def broadcast_task_update(task_id: int, status: Optional[str] = None) -> None:
-    """Broadcast a TASK_UPDATE event to all dashboard subscribers."""
-    sio = get_sio()
-    await sio.emit("task_update", {
-        "type": "TASK_UPDATE",
-        "payload": {"task_id": task_id, "status": status},
-        "timestamp": _now_iso(),
-    }, namespace="/dashboard")
-
-
 async def broadcast_report_ready(run_id: int, task_id: int) -> None:
     """Broadcast a REPORT_READY event to all dashboard subscribers."""
     sio = get_sio()
