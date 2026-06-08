@@ -487,14 +487,14 @@ class TestTeardownBestEffort:
             {"step_id": "ensure_root", "action": "script:ensure_root", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "stop_monkey", "action": "script:stop_process", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "collect_bugreport", "action": "script:collect_bugreport", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
-            {"step_id": "scan_aee", "action": "script:scan_aee", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "adb_pull", "action": "script:adb_pull", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "log_scan", "action": "script:log_scan", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
         ]
 
         result = engine._execute_teardown_best_effort(teardown_def)
 
         # ALL steps should have executed despite stop_monkey failing
-        assert executed_steps == ["ensure_root", "stop_monkey", "collect_bugreport", "scan_aee", "log_scan"]
+        assert executed_steps == ["ensure_root", "stop_monkey", "collect_bugreport", "adb_pull", "log_scan"]
         assert result.metadata["teardown_status"] == "DEGRADED"
         assert result.success is True  # DEGRADED still counts as success
 
@@ -531,7 +531,7 @@ class TestTeardownBestEffort:
         engine._execute_step = mock_execute_step
 
         teardown_def = [
-            {"step_id": "exploding_step", "action": "script:scan_aee", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "exploding_step", "action": "script:adb_pull", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "after_explosion", "action": "script:log_scan", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "final_step", "action": "script:adb_pull", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
         ]
@@ -566,7 +566,14 @@ class TestTeardownBestEffort:
             step_id = step.get("step_id", "unknown")
             executed.append(step_id)
             # Simulate: ADB-dependent steps fail, host-only steps succeed
-            adb_steps = {"ensure_root", "stop_monkey", "collect_bugreport", "scan_aee", "export_mobilelogs", "adb_pull"}
+            adb_steps = {
+                "ensure_root",
+                "stop_monkey",
+                "collect_bugreport",
+                "pull_tombstones",
+                "pull_dropbox",
+                "adb_pull",
+            }
             if step_id in adb_steps:
                 return StepResult(success=False, error_message="adb: device offline")
             return StepResult(success=True)
@@ -577,9 +584,9 @@ class TestTeardownBestEffort:
             {"step_id": "ensure_root", "action": "script:ensure_root", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "stop_monkey", "action": "script:stop_process", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "collect_bugreport", "action": "script:collect_bugreport", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
-            {"step_id": "scan_aee", "action": "script:scan_aee", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
-            {"step_id": "export_mobilelogs", "action": "script:export_mobilelogs", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
-            {"step_id": "aee_extract", "action": "script:aee_extract", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "pull_tombstones", "action": "script:adb_pull", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "pull_dropbox", "action": "script:adb_pull", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
+            {"step_id": "artifact_index", "action": "script:log_scan", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "log_scan", "action": "script:log_scan", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
             {"step_id": "adb_pull", "action": "script:adb_pull", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
         ]
@@ -589,7 +596,7 @@ class TestTeardownBestEffort:
         # ALL 8 steps attempted despite device being offline
         assert len(executed) == 8
         assert result.metadata["teardown_status"] == "DEGRADED"
-        # ensure_root failed (ADB-dependent), aee_extract + log_scan succeeded (host-only)
+        # ensure_root failed (ADB-dependent), artifact_index + log_scan succeeded (host-only)
         assert result.success is True  # DEGRADED = at least one step succeeded
 
     @patch("backend.agent.pipeline_engine.time.sleep", return_value=None)
@@ -617,4 +624,3 @@ class TestTeardownBestEffort:
             engine._execute_lifecycle(pipeline_def)
 
         assert teardown_ran[0] is True
-

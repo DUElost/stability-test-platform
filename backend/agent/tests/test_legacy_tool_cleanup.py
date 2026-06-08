@@ -52,6 +52,16 @@ def test_removed_tool_catalog_terms_do_not_reappear_in_agent_sources():
             assert term not in text, f"{term!r} remains in {path}"
 
 
+def test_legacy_aee_script_directories_are_removed_from_agent_repo():
+    legacy_dirs = [
+        REPO_ROOT / "backend" / "agent" / "scripts" / "scan_aee",
+        REPO_ROOT / "backend" / "agent" / "scripts" / "export_mobilelogs",
+    ]
+
+    for path in legacy_dirs:
+        assert not path.exists(), f"legacy watcher-pre-mainline script directory still present: {path}"
+
+
 def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkeypatch):
     resource_root = tmp_path / "resources" / "aimonkey"
     aimonkey_dir = resource_root / "AIMonkeyTest_20260317"
