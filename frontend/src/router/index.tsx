@@ -10,7 +10,7 @@ import RegisterPage from '../pages/auth/RegisterPage';
 
 // All other pages use React.lazy for route-level code splitting
 const Dashboard = lazy(() => import('../pages/Dashboard'));
-const RunReportPage = lazy(() => import('../pages/tasks/RunReportPage'));
+const RunReportPage = lazy(() => import('../pages/runs/RunReportPage'));
 const HostsPage = lazy(() => import('../pages/hosts/HostsPage'));
 const DevicesPage = lazy(() => import('../pages/devices/DevicesPage'));
 const ResultsPage = lazy(() => import('../pages/results/ResultsPage'));

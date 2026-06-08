@@ -116,6 +116,19 @@ def test_dual_track_phase_c_schema_validator_is_removed():
     assert not path.exists(), f"legacy dual-track schema validator still present: {path}"
 
 
+def test_run_report_page_no_longer_lives_under_legacy_tasks_directory():
+    legacy_path = REPO_ROOT / "frontend" / "src" / "pages" / "tasks" / "RunReportPage.tsx"
+    assert not legacy_path.exists(), f"run report page still lives under legacy tasks directory: {legacy_path}"
+
+    current_path = REPO_ROOT / "frontend" / "src" / "pages" / "runs" / "RunReportPage.tsx"
+    assert current_path.exists(), f"run report page should live under runs directory: {current_path}"
+
+    router_path = REPO_ROOT / "frontend" / "src" / "router" / "index.tsx"
+    router_text = router_path.read_text(encoding="utf-8")
+    assert "../pages/runs/RunReportPage" in router_text
+    assert "../pages/tasks/RunReportPage" not in router_text
+
+
 def test_m1_dual_write_runbook_and_recon_script_are_removed():
     legacy_paths = [
         REPO_ROOT / "backend" / "scripts" / "aee_dual_write_recon.py",

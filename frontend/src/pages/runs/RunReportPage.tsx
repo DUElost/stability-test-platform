@@ -73,7 +73,6 @@ export default function RunReportPage() {
 
   return (
     <div className="space-y-6 p-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
@@ -110,9 +109,7 @@ export default function RunReportPage() {
         </div>
       </div>
 
-      {/* Info Grid */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Task Info */}
         <div className="rounded-lg border p-4 space-y-2">
           <h3 className="text-sm font-medium text-muted-foreground">任务信息</h3>
           <div className="space-y-1 text-sm">
@@ -131,7 +128,6 @@ export default function RunReportPage() {
           </div>
         </div>
 
-        {/* Host/Device Info */}
         <div className="rounded-lg border p-4 space-y-2">
           <h3 className="text-sm font-medium text-muted-foreground">执行环境</h3>
           <div className="space-y-1 text-sm">
@@ -150,7 +146,6 @@ export default function RunReportPage() {
           </div>
         </div>
 
-        {/* Risk Summary */}
         <div className="rounded-lg border p-4 space-y-2">
           <h3 className="text-sm font-medium text-muted-foreground">风险摘要</h3>
           <div className="flex items-center gap-2 mb-2">
@@ -173,7 +168,6 @@ export default function RunReportPage() {
         </div>
       </div>
 
-      {/* Summary Metrics */}
       {report.summary_metrics && Object.keys(report.summary_metrics).length > 0 && (
         <div className="rounded-lg border p-4 space-y-2">
           <h3 className="text-sm font-medium text-muted-foreground">汇总指标</h3>
@@ -188,7 +182,6 @@ export default function RunReportPage() {
         </div>
       )}
 
-      {/* Alerts */}
       <div className="rounded-lg border p-4 space-y-3">
         <h3 className="text-sm font-medium text-muted-foreground">
           告警列表 ({report.alerts?.length ?? 0})
@@ -216,7 +209,6 @@ export default function RunReportPage() {
         )}
       </div>
 
-      {/* JIRA Draft (collapsible) */}
       {jiraDraft && (
         <div className="rounded-lg border p-4 space-y-3">
           <button
