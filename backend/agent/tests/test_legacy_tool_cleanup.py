@@ -70,6 +70,9 @@ def test_watcher_only_one_off_plan_script_is_removed():
 def test_legacy_pipeline_cleanup_sql_helpers_are_removed():
     legacy_sql = [
         REPO_ROOT / "tools" / "sql" / "cleanup_legacy_pipeline_data.sql",
+        REPO_ROOT / "tools" / "sql" / "cleanup_pytest_fixture_residue.sql",
+        REPO_ROOT / "tools" / "sql" / "cleanup_script_sequence_history.sql",
+        REPO_ROOT / "tools" / "sql" / "fix_script_paths_after_flatten.sql",
         REPO_ROOT / "tools" / "sql" / "scan_legacy_action_prefix.sql",
     ]
 
