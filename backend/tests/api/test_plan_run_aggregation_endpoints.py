@@ -1661,8 +1661,8 @@ class TestWatcherSummaryEndpoint:
             "plan": {"id": cur_run.plan_id},
             "steps": [
                 {"stage": "init", "script_name": "ensure_root", "step_key": "ensure_root"},
-                {"stage": "patrol", "script_name": "scan_aee", "step_key": "scan_aee"},
-                {"stage": "teardown", "script_name": "export_mobilelogs", "step_key": "export_mobilelogs"},
+                {"stage": "patrol", "script_name": "monkey_check", "step_key": "monkey_check"},
+                {"stage": "teardown", "script_name": "monkey_teardown", "step_key": "monkey_teardown"},
             ],
         }
         db_session.add(cur_run)

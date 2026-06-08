@@ -67,6 +67,14 @@ def test_watcher_only_one_off_plan_script_is_removed():
     assert not path.exists(), f"legacy watcher rollout helper still present: {path}"
 
 
+def test_watcher_summary_api_tests_do_not_reference_legacy_patrol_scripts():
+    path = REPO_ROOT / "backend" / "tests" / "api" / "test_plan_run_aggregation_endpoints.py"
+    text = path.read_text(encoding="utf-8")
+
+    assert "script_name\": \"scan_aee\"" not in text
+    assert "script_name\": \"export_mobilelogs\"" not in text
+
+
 def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkeypatch):
     resource_root = tmp_path / "resources" / "aimonkey"
     aimonkey_dir = resource_root / "AIMonkeyTest_20260317"
