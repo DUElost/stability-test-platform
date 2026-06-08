@@ -42,6 +42,7 @@ def test_monkey_aee_patrol_template_is_watcher_only_public_variant():
 def test_legacy_aee_template_alias_files_removed_from_repo():
     removed = (
         "aimonkey.json",
+        "aimonkey_launcher_lifecycle.json",
         "monkey_aee.json",
         "monkey_aee_init.json",
         "monkey_aee_lifecycle.json",
