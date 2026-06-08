@@ -200,7 +200,7 @@ export default function AppShell() {
                           <NavLink
                             to="/users"
                             onClick={() => setShowUserMenu(false)}
-                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
                           >
                             <Users className="w-4 h-4" />
                             用户管理
@@ -208,7 +208,7 @@ export default function AppShell() {
                           <NavLink
                             to="/audit"
                             onClick={() => setShowUserMenu(false)}
-                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
                           >
                             <Shield className="w-4 h-4" />
                             操作日志
@@ -216,7 +216,7 @@ export default function AppShell() {
                           <NavLink
                             to="/settings"
                             onClick={() => setShowUserMenu(false)}
-                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
                           >
                             <Settings className="w-4 h-4" />
                             系统设置

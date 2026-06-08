@@ -224,7 +224,7 @@ def list_plan_runs(
         plan_rows = db.execute(
             select(Plan.id, Plan.name).where(Plan.id.in_(plan_ids))
         ).all()
-        plan_names = {row[0]: row[1] for row in plan_rows}
+        plan_names = {row.id: row.name for row in plan_rows}
     return ok([_plan_run_out(r, plan_name=plan_names.get(r.plan_id)) for r in runs])
 
 
@@ -240,7 +240,13 @@ def get_plan_run(
     jobs = db.execute(
         select(JobInstance).where(JobInstance.plan_run_id == run_id)
     ).scalars().all()
-    return ok(_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs]))
+    plan_name: str | None = None
+    if pr.plan_id is not None:
+        plan_row = db.execute(
+            select(Plan.name).where(Plan.id == pr.plan_id)
+        ).scalar_one_or_none()
+        plan_name = plan_row
+    return ok(_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs], plan_name=plan_name))
 
 
 @router.get("/plan-runs/{run_id}/jobs", response_model=ApiResponse[list[JobInstanceOut]])

@@ -60,7 +60,7 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ['Noto Sans SC Variable', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+        sans: ['Noto Sans SC Variable', 'system-ui', 'sans-serif'],
         mono: ['ui-monospace', 'SF Mono', 'Cascadia Code', 'Consolas', 'monospace'],
       },
     },

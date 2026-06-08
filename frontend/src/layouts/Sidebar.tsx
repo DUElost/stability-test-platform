@@ -66,6 +66,11 @@ const navGroups: NavGroup[] = [
     items: [
       { path: '/results', label: '测试结果', icon: TestTube2 },
       { path: '/issue-tracker', label: '问题追踪', icon: AlertCircle },
+    ],
+  },
+  {
+    label: '运营配置',
+    items: [
       { path: '/schedules', label: '定时调度', icon: CalendarClock },
       { path: '/notifications', label: '通知管理', icon: BellRing },
     ],

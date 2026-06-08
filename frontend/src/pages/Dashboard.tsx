@@ -18,7 +18,7 @@ import { Wifi, Clock, Server, Smartphone, AlertCircle, BarChart3, Zap } from 'lu
 
 import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart } from '@/components/charts';
 
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 
 
 
@@ -349,11 +349,11 @@ export default function Dashboard() {
 
           {/* 告警 */}
 
-          <Card className="p-4 cursor-pointer hover:shadow-md transition-shadow"
-            onClick={() => navigate('/notifications')}
-            tabIndex={0}
-            role="button"
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/notifications'); } }}
+          <Card className="p-0 overflow-hidden hover:shadow-md transition-shadow">
+          <Link
+            to="/notifications"
+            className="block p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-[inherit]"
+            aria-label="查看告警通知"
           >
 
             <div className="flex items-center justify-between">
@@ -386,6 +386,7 @@ export default function Dashboard() {
 
             </div>
 
+          </Link>
           </Card>
 
         </div>
