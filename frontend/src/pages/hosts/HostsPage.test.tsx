@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
@@ -191,7 +191,7 @@ describe('HostsPage', () => {
             extra: {},
             mount_status: {},
             watcher_admin_active: true,
-            capacity: { active_jobs: 2, effective_slots: 1, max_concurrent_jobs: 3 },
+            capacity: { active_jobs: 2 },
           },
         ],
         total: 1,
@@ -233,5 +233,11 @@ describe('HostsPage', () => {
     expect(mocks.confirm).toHaveBeenCalledWith({
       description: '将节点设为未激活后，只影响后续新派发任务；正在运行的任务不受影响。是否继续？',
     });
+
+    await waitFor(() =>
+      expect(api.hosts.updateWatcherAdminState).toHaveBeenCalledWith('host-1', {
+        watcher_admin_active: false,
+      }),
+    );
   });
 });

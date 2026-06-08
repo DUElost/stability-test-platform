@@ -304,9 +304,6 @@ export default function HostsPage() {
         device_count: deviceCountMap.get(host.id) || 0,
         claim_hint: claimHint,
         active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
-        // ADR-0019 Phase 3c: structured capacity/health
-        max_concurrent_jobs: host.max_concurrent_jobs,
-        effective_slots: host.capacity?.effective_slots,
         health_status: host.health?.status,
         health_reasons: host.health?.reasons,
       };

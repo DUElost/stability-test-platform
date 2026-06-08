@@ -551,7 +551,6 @@ def main() -> None:
             "script_catalog_version": script_registry.version,
         },
         on_scripts_outdated=script_registry.initialize,
-        max_concurrent_jobs=max_concurrent_tasks,
         get_active_job_count=_get_active_job_count,
         get_active_device_count=_get_active_device_count,
         agent_instance_id=agent_instance_id,

@@ -37,6 +37,10 @@ from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
 from backend.services.lease_manager import acquire_lease, extend_lease, release_lease
+from backend.services.plan_dispatcher_core import (
+    apply_dispatch_host_watcher_admin_state_to_policy,
+    extract_dispatch_host_watcher_admin_states,
+)
 from backend.services.reconciler import reconcile_step_traces
 from backend.services.state_machine import InvalidTransitionError, JobStateMachine
 
@@ -111,52 +115,24 @@ async def _enrich_job_metadata(
             select(PlanRun.id, PlanRun.run_context).where(PlanRun.id.in_(plan_run_ids))
         )
         watcher_admin_snapshot_by_run = {
-            row.id: _extract_dispatch_host_watcher_admin_states(row.run_context)
+            row.id: extract_dispatch_host_watcher_admin_states(row.run_context)
             for row in snapshot_rows.all()
         }
 
     watcher_policy_map = {
-        j.id: _apply_dispatch_host_watcher_admin_state_to_policy(
+        j.id: apply_dispatch_host_watcher_admin_state_to_policy(
             plan_policy.get(j.plan_id) if j.plan_id is not None else None,
             host_id=j.host_id,
-            dispatch_host_watcher_admin_states=watcher_admin_snapshot_by_run.get(
-                j.plan_run_id or -1
+            dispatch_host_watcher_admin_states=(
+                watcher_admin_snapshot_by_run.get(j.plan_run_id)
+                if j.plan_run_id is not None
+                else None
             ),
         )
         for j in jobs
     }
 
     return serial_map, watcher_policy_map
-
-
-def _extract_dispatch_host_watcher_admin_states(
-    run_context: Any,
-) -> Dict[str, bool]:
-    if not isinstance(run_context, dict):
-        return {}
-    snapshot = run_context.get("dispatch_host_watcher_admin_states")
-    if not isinstance(snapshot, dict):
-        return {}
-    return {
-        str(host_id): True if is_active is None else bool(is_active)
-        for host_id, is_active in snapshot.items()
-    }
-
-
-def _apply_dispatch_host_watcher_admin_state_to_policy(
-    watcher_policy: Optional[Dict[str, Any]],
-    *,
-    host_id: Optional[str],
-    dispatch_host_watcher_admin_states: Optional[Dict[str, bool]],
-) -> Optional[Dict[str, Any]]:
-    if not host_id or not dispatch_host_watcher_admin_states:
-        return watcher_policy
-    if dispatch_host_watcher_admin_states.get(str(host_id), True):
-        return watcher_policy
-
-    effective_policy = dict(watcher_policy or {})
-    effective_policy["enabled"] = False
-    return effective_policy
 
 
 async def _build_recovery_job_payload(
@@ -166,7 +142,13 @@ async def _build_recovery_job_payload(
     device_serial: str,
     fencing_token: str,
 ) -> Dict[str, Any]:
-    """Build the minimal claim-shaped payload required for Agent resume execution."""
+    """Build the minimal claim-shaped payload required for Agent resume execution.
+
+    NOTE: PlanRun is fetched individually here (not batched with other jobs).
+    Recovery is a single-job path in practice; if batch recovery is introduced later,
+    consider pre-loading PlanRun rows upstream and passing dispatch_host_watcher_admin_states
+    as a parameter to avoid N+1 queries.
+    """
     watcher_policy = None
     if job.plan_id is not None:
         plan = await db.get(Plan, job.plan_id)
@@ -177,9 +159,9 @@ async def _build_recovery_job_payload(
         plan_run = await db.get(PlanRun, job.plan_run_id)
         if plan_run is not None:
             dispatch_host_watcher_admin_states = (
-                _extract_dispatch_host_watcher_admin_states(plan_run.run_context)
+                extract_dispatch_host_watcher_admin_states(plan_run.run_context)
             )
-    watcher_policy = _apply_dispatch_host_watcher_admin_state_to_policy(
+    watcher_policy = apply_dispatch_host_watcher_admin_state_to_policy(
         watcher_policy,
         host_id=job.host_id,
         dispatch_host_watcher_admin_states=dispatch_host_watcher_admin_states,
@@ -328,19 +310,9 @@ async def _claim_jobs_for_host(
     if not host_row:
         return [], {}  # host not found, no lock acquired — safe early return
 
-    # 2. Count ALL ACTIVE JOB leases — Phase 4b blocking lease:
-    #    expired (grace-held) leases still occupy capacity slots.
-    active_job_count = (await db.execute(
-        select(func.count()).select_from(DeviceLease).where(
-            DeviceLease.host_id == host_id,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            DeviceLease.status == LeaseStatus.ACTIVE.value,
-        )
-    )).scalar_one()
-
-    # 3. Effective capacity — Agent's "capacity" is only a soft cap
-    effective_capacity = max(0, host_row.max_concurrent_jobs - active_job_count)
-    effective_capacity = min(effective_capacity, capacity)
+    # 2. Effective capacity — each device runs at most 1 Job;
+    #    Agent's "capacity" is the soft cap on concurrent jobs.
+    effective_capacity = capacity
 
     # 4. Get all device IDs for this host (Phase 3c: filter known-unhealthy devices)
     #    - INCLUDE: known-healthy OR never-reported (NULL adb fields → coalesce to safe default)
@@ -650,24 +622,14 @@ async def agent_heartbeat(
     Returns script_catalog_outdated flag + current backpressure setting.
     """
     host = await db.get(Host, payload.host_id)
-    # ADR-0019 Phase 1: capacity safe-read
-    capacity = payload.capacity or {}
-    max_jobs_from_capacity = capacity.get("max_concurrent_jobs")
     if host is None:
         host = Host(
             id=payload.host_id,
             hostname=payload.host_id,
             status=HostStatus.ONLINE.value,
             created_at=datetime.now(timezone.utc),
-            max_concurrent_jobs=(
-                max_jobs_from_capacity
-                if isinstance(max_jobs_from_capacity, int) and max_jobs_from_capacity > 0
-                else 2
-            ),
         )
         db.add(host)
-    elif isinstance(max_jobs_from_capacity, int) and max_jobs_from_capacity > 0:
-        host.max_concurrent_jobs = max_jobs_from_capacity
 
     scripts_outdated = (
         bool(payload.script_catalog_version)
@@ -698,7 +660,6 @@ async def agent_heartbeat(
         script_catalog_outdated=scripts_outdated,
         backpressure=BackpressureInfo(log_rate_limit=backpressure),
         capacity={
-            "max_concurrent_jobs": host.max_concurrent_jobs,
             "online_healthy_devices": online_healthy,
         },
         agent_min_version=backend_version,

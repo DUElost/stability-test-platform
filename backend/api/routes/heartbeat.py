@@ -182,12 +182,6 @@ def _process_heartbeat_with_db(
     if payload.script_catalog_version:
         host.script_catalog_version = payload.script_catalog_version
 
-    # ADR-0019 Phase 1: store agent-reported capacity
-    capacity = payload.capacity or {}
-    m = capacity.get("max_concurrent_jobs")
-    if isinstance(m, int) and m > 0:
-        host.max_concurrent_jobs = m
-
     # ADR-0019 Phase 3a: store agent identity on host
     if payload.boot_id:
         host.boot_id = payload.boot_id
@@ -379,8 +373,6 @@ def _process_heartbeat_with_db(
         "script_catalog_outdated": script_catalog_outdated,
         # ADR-0019 Phase 3c
         "capacity": {
-            "max_concurrent_jobs": host.max_concurrent_jobs,
             "online_healthy_devices": online_healthy_count,
-            "backend_available_slots": max(0, host.max_concurrent_jobs - active_job_lease_count),
         },
     }, ws_device_updates

@@ -37,8 +37,6 @@ class HeartbeatThread:
         sio_client=None,
         catalog_versions: Optional[Callable[[], Dict[str, str]]] = None,
         on_scripts_outdated: Optional[Callable[[], None]] = None,
-        # ADR-0019 Phase 1
-        max_concurrent_jobs: int = 2,
         get_active_job_count: Optional[Callable[[], int]] = None,
         # ADR-0019 Phase 3c
         get_active_device_count: Optional[Callable[[], int]] = None,
@@ -59,7 +57,6 @@ class HeartbeatThread:
         self._sio_client = sio_client
         self._catalog_versions = catalog_versions
         self._on_scripts_outdated = on_scripts_outdated
-        self._max_concurrent_jobs = max_concurrent_jobs
         self._get_active_job_count = get_active_job_count
         self._get_active_device_count = get_active_device_count
         self._agent_instance_id = agent_instance_id
@@ -188,7 +185,6 @@ class HeartbeatThread:
         total_devices = len(devices_list)
 
         cap_result = compute_capacity(
-            max_concurrent_jobs=self._max_concurrent_jobs,
             active_job_count=active_count,
             active_device_count=active_device_count,
             online_healthy_devices=online_healthy,

@@ -7,7 +7,6 @@ from typing import List
 
 
 def compute_capacity(
-    max_concurrent_jobs: int,
     active_job_count: int,
     active_device_count: int,
     online_healthy_devices: int,
@@ -18,23 +17,22 @@ def compute_capacity(
     """返回 {"capacity": {...}, "health": {...}}。
 
     total_devices — 本 host 上报的设备总数（含离线/不健康），用于判断 adb 全死。
+    有效槽位 = min(空闲设备数, 主机健康状态)，不再受 max_concurrent_jobs 限制。
     """
     health = _compute_health(system_stats, mount_status, online_healthy_devices, total_devices)
     health_limit = _compute_health_limit(
         system_stats, mount_status,
-        online_healthy_devices, total_devices, max_concurrent_jobs,
+        online_healthy_devices, total_devices,
     )
 
-    job_slots = max(0, max_concurrent_jobs - active_job_count)
     device_slots = max(0, online_healthy_devices - active_device_count)
-    effective_slots = min(job_slots, device_slots, health_limit)
+    effective_slots = min(device_slots, health_limit)
 
     capacity = {
-        "max_concurrent_jobs": max_concurrent_jobs,
         "active_jobs": active_job_count,
         "active_devices": active_device_count,
         "online_healthy_devices": online_healthy_devices,
-        "available_slots": job_slots,
+        "available_slots": device_slots,
         "effective_slots": effective_slots,
     }
 
@@ -46,9 +44,8 @@ def _compute_health_limit(
     mount_status: dict,
     online_healthy_devices: int,
     total_devices: int,
-    max_concurrent_jobs: int,
 ) -> int:
-    """二元 gate：返回 max_concurrent_jobs 或 0。
+    """二元 gate：主机健康时返回大值（不限制），不健康时返回 0。
 
     与 _compute_health 共享阈值常量，变更阈值时需同步修改两处。
     """
@@ -60,7 +57,7 @@ def _compute_health_limit(
 
     if cpu > 90 or ram > 95 or disk > 95 or not mount_ok or adb_all_dead:
         return 0
-    return max_concurrent_jobs
+    return 10_000  # effectively unlimited — real limit is free device count
 
 
 def _compute_health(

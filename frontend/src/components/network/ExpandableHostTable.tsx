@@ -44,9 +44,6 @@ export interface HostTableData {
   /** Tooltip: adb/lease exclusions from device list (frontend-derived). */
   claim_hint?: string | null;
   active_tasks?: number;
-  // ADR-0019 Phase 3c: structured capacity/health
-  max_concurrent_jobs?: number;
-  effective_slots?: number;
   health_status?: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
   health_reasons?: string[];
 }
@@ -210,13 +207,12 @@ export function ExpandableHostTable({
                 <TableHead className="font-medium">主机名称</TableHead>
                 <TableHead className="font-medium">IP地址</TableHead>
                 <TableHead className="font-medium">状态</TableHead>
-                <TableHead className="font-medium text-center">槽位</TableHead>
                 <TableHead className="font-medium text-center">设备数</TableHead>
                 <TableHead className="font-medium text-center">任务数</TableHead>
                 <TableHead className="font-medium">CPU</TableHead>
                 <TableHead className="font-medium">内存</TableHead>
                 <TableHead className="font-medium">磁盘</TableHead>
-                <TableHead className="font-medium text-center">Watch状态</TableHead>
+                <TableHead className="font-medium text-center whitespace-nowrap">Watch状态</TableHead>
                 <TableHead className="font-medium text-right">心跳</TableHead>
                 <TableHead className="font-medium text-right">操作</TableHead>
               </TableRow>
@@ -277,20 +273,6 @@ export function ExpandableHostTable({
                             </span>
                           )}
                         </div>
-                      </TableCell>
-                      <TableCell className="p-3 text-center">
-                        {host.max_concurrent_jobs != null ? (
-                          <span className="text-xs font-mono">
-                            <span className={cn(
-                              (host.effective_slots ?? 0) > 0 ? 'text-emerald-600' : 'text-gray-400'
-                            )}>
-                              {host.effective_slots ?? 0}
-                            </span>
-                            <span className="text-gray-300">/{host.max_concurrent_jobs}</span>
-                          </span>
-                        ) : (
-                          <span className="text-gray-300">-</span>
-                        )}
                       </TableCell>
                       <TableCell className="p-3 text-center">
                         <span
@@ -363,7 +345,7 @@ export function ExpandableHostTable({
                         <div className="inline-flex items-center gap-2">
                           <span
                             className={cn(
-                              'rounded-full px-2 py-0.5 text-xs font-medium',
+                              'rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
                               host.watcher_admin_active !== false
                                 ? 'bg-emerald-50 text-emerald-700'
                                 : 'bg-red-50 text-red-700'
@@ -372,20 +354,41 @@ export function ExpandableHostTable({
                             {host.watcher_admin_active !== false ? '已激活' : '未激活'}
                           </span>
                           {onWatcherAdminStateChange && (
-                            <input
-                              type="checkbox"
-                              checked={host.watcher_admin_active !== false}
+                            <button
+                              role="switch"
+                              aria-checked={host.watcher_admin_active !== false}
                               disabled={
                                 !canManageWatcherAdminState ||
                                 !!isWatcherAdminStateUpdating?.(host.id)
                               }
                               data-testid={`watcher-admin-toggle-${host.id}`}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) =>
-                                onWatcherAdminStateChange(host.id, e.target.checked)
-                              }
-                              className="rounded border-gray-300 disabled:cursor-not-allowed"
-                            />
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onWatcherAdminStateChange(
+                                  host.id,
+                                  !(host.watcher_admin_active !== false),
+                                );
+                              }}
+                              className={cn(
+                                'relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full',
+                                'border-2 border-transparent transition-colors',
+                                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                                'disabled:cursor-not-allowed disabled:opacity-50',
+                                host.watcher_admin_active !== false
+                                  ? 'bg-emerald-500'
+                                  : 'bg-gray-200',
+                              )}
+                            >
+                              <span
+                                className={cn(
+                                  'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm',
+                                  'ring-0 transition-transform',
+                                  host.watcher_admin_active !== false
+                                    ? 'translate-x-4'
+                                    : 'translate-x-0',
+                                )}
+                              />
+                            </button>
                           )}
                         </div>
                       </TableCell>
@@ -402,7 +405,7 @@ export function ExpandableHostTable({
                               onHotUpdate(host.id);
                             }}
                             disabled={isHotUpdating?.(host.id)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                           >
                             {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
                           </button>
@@ -415,7 +418,7 @@ export function ExpandableHostTable({
                     {/* Expanded Details */}
                     {isExpanded && (
                       <TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
-                        <TableCell colSpan={selectable ? 14 : 13} className="p-4">
+                        <TableCell colSpan={selectable ? 13 : 12} className="p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             {/* CPU Details */}
                             <div className="bg-white rounded-lg border border-gray-100 p-3">

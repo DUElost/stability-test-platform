@@ -93,7 +93,6 @@ def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
     out.extra = extra
     out.capacity = extra.get("capacity")
     out.health = extra.get("health")
-    out.max_concurrent_jobs = h.max_concurrent_jobs
 
     if db is not None:
         from backend.models.plan_run import PlanRun

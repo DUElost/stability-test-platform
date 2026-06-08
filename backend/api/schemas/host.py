@@ -47,7 +47,6 @@ class HostOut(ORMBaseModel):
     # ADR-0019 Phase 3c: 结构化 capacity/health
     capacity: Optional[Dict[str, Any]] = None
     health: Optional[Dict[str, Any]] = None
-    max_concurrent_jobs: Optional[int] = None
     # ADR-0021: hot-update guard — populated only on GET /hosts/{id}.
     active_job_count: int = 0
     active_jobs: List[HostActiveJob] = Field(default_factory=list)

@@ -22,15 +22,10 @@ export interface Host {
   last_heartbeat: string | null;
   extra: Record<string, any>;
   mount_status: Record<string, any>;
-  // ADR-0019 Phase 3c: structured capacity/health
-  max_concurrent_jobs?: number;
   capacity?: {
-    max_concurrent_jobs: number;
     active_jobs: number;
     active_devices: number;
     online_healthy_devices: number;
-    available_slots: number;
-    effective_slots: number;
   };
   health?: {
     status: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
