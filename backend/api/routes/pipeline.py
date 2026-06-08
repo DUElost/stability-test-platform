@@ -55,6 +55,15 @@ def _iter_template_paths(*, public_only: bool = False) -> list[Path]:
     return [path for path in paths if path.stem not in NON_PUBLIC_TEMPLATE_NAMES]
 
 
+def _resolve_template_path(name: str, *, public_only: bool = False) -> Path | None:
+    path = TEMPLATES_DIR / f"{name}.json"
+    if not path.exists():
+        return None
+    if public_only and path.stem in NON_PUBLIC_TEMPLATE_NAMES:
+        return None
+    return path
+
+
 @router.get("/templates", response_model=List[PipelineTemplateOut])
 def list_pipeline_templates(
     _current_user: User = Depends(get_current_active_user),
@@ -77,7 +86,7 @@ def get_pipeline_template(
     _current_user: User = Depends(get_current_active_user),
 ):
     """Get a specific pipeline template by name."""
-    path = TEMPLATES_DIR / f"{name}.json"
-    if not path.exists():
+    path = _resolve_template_path(name, public_only=True)
+    if path is None:
         raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
     return _load_template(path)

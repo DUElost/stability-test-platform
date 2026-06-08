@@ -263,3 +263,7 @@ class TestReadApiAuthWithSeededData:
         assert "monkey_aee_lifecycle" not in names
         assert "monkey_aee_init" not in names
         assert "monkey_aee_teardown" not in names
+
+    def test_hidden_pipeline_template_alias_returns_404(self, client, auth_headers):
+        resp = client.get("/api/v1/pipeline/templates/monkey_aee", headers=auth_headers)
+        assert resp.status_code == 404

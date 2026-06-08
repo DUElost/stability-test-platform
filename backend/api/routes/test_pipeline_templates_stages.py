@@ -1,6 +1,11 @@
 import json
 
-from backend.api.routes.pipeline import TEMPLATES_DIR, _iter_template_paths, _load_template
+from backend.api.routes.pipeline import (
+    TEMPLATES_DIR,
+    _iter_template_paths,
+    _load_template,
+    _resolve_template_path,
+)
 from backend.core.pipeline_validator import validate_pipeline_def
 
 
@@ -61,3 +66,12 @@ def test_public_pipeline_template_list_omits_internal_and_deprecated_aee_aliases
     assert "monkey_aee_lifecycle" not in public_names
     assert "monkey_aee_init" not in public_names
     assert "monkey_aee_teardown" not in public_names
+
+
+def test_public_template_resolver_rejects_internal_and_deprecated_aee_aliases():
+    assert _resolve_template_path("monkey_aee_patrol", public_only=True) is not None
+    assert _resolve_template_path("aimonkey", public_only=True) is None
+    assert _resolve_template_path("monkey_aee", public_only=True) is None
+    assert _resolve_template_path("monkey_aee_lifecycle", public_only=True) is None
+    assert _resolve_template_path("monkey_aee_init", public_only=True) is None
+    assert _resolve_template_path("monkey_aee_teardown", public_only=True) is None
