@@ -263,6 +263,47 @@ def test_run_task_wrapper_passes_session_watcher_capability(job_runner_state):
     assert mock_exec.call_args.kwargs["watcher_capability"] == "inotifyd_root"
 
 
+def test_run_task_wrapper_skips_watcher_when_policy_explicitly_disabled_even_if_global_on(
+    job_runner_state,
+):
+    """host 被 admin 标记 inactive 后，claim 下发 enabled=false 时，即使 Agent 全局 watcher 打开，
+    当前 job 也不得启动 JobSession。"""
+    job_runner_state.watcher_globally_enabled = True
+    job_runner_state.watcher_plan_default = True
+
+    run = {
+        "id": 299,
+        "plan_id": 8,
+        "device_id": 4,
+        "device_serial": "SN-299",
+        "fencing_token": "4:9",
+        "watcher_policy": {"enabled": False},
+        "pipeline_def": {
+            "lifecycle": {
+                "init": [{"step_id": "x", "action": "script:noop", "version": "1.0.0", "timeout_seconds": 1}],
+                "patrol": {"interval_seconds": 60, "steps": []},
+                "teardown": [],
+            }
+        },
+    }
+    mock_adb = MagicMock()
+
+    with patch("backend.agent.job_runner.update_job"), \
+         patch("backend.agent.job_runner.complete_job"), \
+         patch("backend.agent.job_runner.execute_pipeline_run") as mock_exec, \
+         patch("backend.agent.job_runner._validate_pipeline_def", return_value=None), \
+         patch("backend.agent.job_runner.JobSession") as mock_session:
+        mock_exec.return_value = {"status": "FINISHED", "exit_code": 0}
+
+        run_task_wrapper(
+            run, mock_adb, "http://x", "h1",
+            job_runner_state, None, None, None,
+        )
+
+    mock_session.assert_not_called()
+    assert mock_exec.call_args.kwargs["watcher_capability"] is None
+
+
 # ── Test 18: LeaseRenewer skip when no token ───────────────────────────
 
 def test_lease_renewer_skips_extend_when_no_token(lease_renewer):

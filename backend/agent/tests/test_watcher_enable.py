@@ -24,6 +24,15 @@ def test_job_wants_watcher_explicit_disabled():
     assert job_wants_watcher(run, globally_enabled=False, plan_default=True) is False
 
 
+def test_job_wants_watcher_explicit_disabled_overrides_global_enable():
+    run = {
+        "plan_id": 1,
+        "watcher_policy": {"enabled": False},
+        "pipeline_def": {"lifecycle": {}},
+    }
+    assert job_wants_watcher(run, globally_enabled=True, plan_default=True) is False
+
+
 def test_job_wants_watcher_non_plan():
     run = {"pipeline_def": {"stages": {}}}
     assert job_wants_watcher(run, globally_enabled=False, plan_default=True) is False

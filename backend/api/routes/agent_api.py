@@ -103,9 +103,60 @@ async def _enrich_job_metadata(
             select(Plan.id, Plan.watcher_policy).where(Plan.id.in_(plan_ids))
         )
         plan_policy = {row.id: row.watcher_policy for row in policy_rows.all()}
-    watcher_policy_map = {j.id: plan_policy.get(j.plan_id) for j in jobs if j.plan_id is not None}
+
+    plan_run_ids = {j.plan_run_id for j in jobs if j.plan_run_id is not None}
+    watcher_admin_snapshot_by_run: Dict[int, Dict[str, bool]] = {}
+    if plan_run_ids:
+        snapshot_rows = await db.execute(
+            select(PlanRun.id, PlanRun.run_context).where(PlanRun.id.in_(plan_run_ids))
+        )
+        watcher_admin_snapshot_by_run = {
+            row.id: _extract_dispatch_host_watcher_admin_states(row.run_context)
+            for row in snapshot_rows.all()
+        }
+
+    watcher_policy_map = {
+        j.id: _apply_dispatch_host_watcher_admin_state_to_policy(
+            plan_policy.get(j.plan_id) if j.plan_id is not None else None,
+            host_id=j.host_id,
+            dispatch_host_watcher_admin_states=watcher_admin_snapshot_by_run.get(
+                j.plan_run_id or -1
+            ),
+        )
+        for j in jobs
+    }
 
     return serial_map, watcher_policy_map
+
+
+def _extract_dispatch_host_watcher_admin_states(
+    run_context: Any,
+) -> Dict[str, bool]:
+    if not isinstance(run_context, dict):
+        return {}
+    snapshot = run_context.get("dispatch_host_watcher_admin_states")
+    if not isinstance(snapshot, dict):
+        return {}
+    return {
+        str(host_id): True if is_active is None else bool(is_active)
+        for host_id, is_active in snapshot.items()
+    }
+
+
+def _apply_dispatch_host_watcher_admin_state_to_policy(
+    watcher_policy: Optional[Dict[str, Any]],
+    *,
+    host_id: Optional[str],
+    dispatch_host_watcher_admin_states: Optional[Dict[str, bool]],
+) -> Optional[Dict[str, Any]]:
+    if not host_id or not dispatch_host_watcher_admin_states:
+        return watcher_policy
+    if dispatch_host_watcher_admin_states.get(str(host_id), True):
+        return watcher_policy
+
+    effective_policy = dict(watcher_policy or {})
+    effective_policy["enabled"] = False
+    return effective_policy
 
 
 async def _build_recovery_job_payload(
@@ -121,6 +172,18 @@ async def _build_recovery_job_payload(
         plan = await db.get(Plan, job.plan_id)
         if plan is not None:
             watcher_policy = plan.watcher_policy
+    dispatch_host_watcher_admin_states: Dict[str, bool] = {}
+    if job.plan_run_id is not None:
+        plan_run = await db.get(PlanRun, job.plan_run_id)
+        if plan_run is not None:
+            dispatch_host_watcher_admin_states = (
+                _extract_dispatch_host_watcher_admin_states(plan_run.run_context)
+            )
+    watcher_policy = _apply_dispatch_host_watcher_admin_state_to_policy(
+        watcher_policy,
+        host_id=job.host_id,
+        dispatch_host_watcher_admin_states=dispatch_host_watcher_admin_states,
+    )
 
     return {
         "id": job.id,

@@ -35,6 +35,7 @@ from backend.api.routes.agent_api import (
     LogSignalBatchIn,
     LogSignalIn,
     _RunCompleteIn,
+    _build_recovery_job_payload,
     claim_jobs,
     complete_job,
     ingest_log_signals,
@@ -72,6 +73,7 @@ def _seed_job_with_policy(
     *,
     job_status: str = JobStatus.PENDING.value,
     watcher_policy: dict | None = DEFAULT_WATCHER_POLICY,
+    run_context: dict | None = None,
 ) -> dict:
     """种子数据：1 host + 1 device + 1 workflow(+policy) + 1 task_template + 1 workflow_run + 1 job。"""
     suffix = uuid4().hex[:8]
@@ -112,6 +114,7 @@ def _seed_job_with_policy(
             plan_snapshot={"name": plan.name, "plan_id": plan.id},
             run_type="MANUAL",
             triggered_by="pytest",
+            run_context=run_context,
         )
         db.add(plan_run)
         db.flush()
@@ -258,6 +261,87 @@ async def test_claim_returns_null_watcher_policy_when_plan_has_none():
         item = result.data[0]
         assert item.device_serial == seed["device_serial"]
         assert item.watcher_policy is None
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_claim_overrides_watcher_policy_to_disabled_when_dispatch_snapshot_inactive():
+    """dispatch snapshot 标记 host inactive 时，claim 下发给 Agent 的 watcher_policy
+    必须显式带 enabled=false，且保留 Plan 既有 policy 其他字段。"""
+    seed = _seed_job_with_policy(
+        watcher_policy=DEFAULT_WATCHER_POLICY,
+        run_context={
+            "dispatch_host_watcher_admin_states": {},
+        },
+    )
+    try:
+        db = SessionLocal()
+        try:
+            plan_run = db.get(PlanRun, seed["plan_run_id"])
+            assert plan_run is not None
+            plan_run.run_context = {
+                "dispatch_host_watcher_admin_states": {
+                    seed["host_id"]: False,
+                },
+            }
+            db.commit()
+        finally:
+            db.close()
+
+        async with AsyncSessionLocal() as async_db:
+            result = await claim_jobs(
+                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert len(result.data) == 1
+        item = result.data[0]
+        assert item.watcher_policy is not None
+        assert item.watcher_policy["enabled"] is False
+        assert item.watcher_policy["on_unavailable"] == DEFAULT_WATCHER_POLICY["on_unavailable"]
+        assert item.watcher_policy["required_categories"] == DEFAULT_WATCHER_POLICY["required_categories"]
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_recovery_payload_overrides_watcher_policy_to_disabled_when_dispatch_snapshot_inactive():
+    """recovery/resume 必须沿用当次 dispatch snapshot，而不是回读 Host 当前状态。"""
+    seed = _seed_job_with_policy(
+        job_status=JobStatus.RUNNING.value,
+        watcher_policy=DEFAULT_WATCHER_POLICY,
+        run_context={
+            "dispatch_host_watcher_admin_states": {},
+        },
+    )
+    try:
+        db = SessionLocal()
+        try:
+            plan_run = db.get(PlanRun, seed["plan_run_id"])
+            assert plan_run is not None
+            plan_run.run_context = {
+                "dispatch_host_watcher_admin_states": {
+                    seed["host_id"]: False,
+                },
+            }
+            db.commit()
+        finally:
+            db.close()
+
+        async with AsyncSessionLocal() as async_db:
+            job = await async_db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            payload = await _build_recovery_job_payload(
+                async_db,
+                job,
+                device_serial=seed["device_serial"],
+                fencing_token="test-token",
+            )
+        assert payload["watcher_policy"] is not None
+        assert payload["watcher_policy"]["enabled"] is False
+        assert payload["watcher_policy"]["on_unavailable"] == DEFAULT_WATCHER_POLICY["on_unavailable"]
     finally:
         _cleanup_seed(seed)
 

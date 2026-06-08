@@ -20,13 +20,13 @@ def job_wants_watcher(
     plan_default: bool,
 ) -> bool:
     """Per-job watcher decision: global on, or Plan execution with default-on."""
+    watcher_policy = run.get("watcher_policy") or {}
+    if watcher_policy.get("enabled") is False:
+        return False
+
     if globally_enabled:
         return True
     if not plan_default:
-        return False
-
-    watcher_policy = run.get("watcher_policy") or {}
-    if watcher_policy.get("enabled") is False:
         return False
 
     pipeline_def = run.get("pipeline_def") or {}
