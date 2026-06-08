@@ -42,16 +42,12 @@ def run_post_completion(job_id: int, db: Session) -> bool:
             logger.warning("post_completion: compose_run_report returned None for job %d", job_id)
             return False
 
-        report_dict = report.model_dump(mode="json") if hasattr(report, "model_dump") else report.dict()
+        report_dict = report.model_dump(mode="json")
         job.report_json = report_dict
 
         try:
             jira_draft = build_jira_draft(report)
-            job.jira_draft_json = (
-                jira_draft.model_dump(mode="json")
-                if hasattr(jira_draft, "model_dump")
-                else jira_draft.dict()
-            )
+            job.jira_draft_json = jira_draft.model_dump(mode="json")
         except Exception:
             logger.exception("post_completion: jira draft generation failed for job %d", job_id)
 

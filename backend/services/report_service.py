@@ -69,9 +69,7 @@ REPORT_JIRA_TEMPLATE_JSON = os.getenv("RUN_REPORT_JIRA_TEMPLATE_JSON", "").strip
 # ---------------------------------------------------------------------------
 
 def _model_to_dict(payload: Any) -> Dict[str, Any]:
-    if hasattr(payload, "model_dump"):
-        return payload.model_dump()
-    return payload.dict()
+    return payload.model_dump()
 
 
 def _artifact_local_path(storage_uri: str) -> Optional[Path]:
@@ -291,12 +289,8 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
         risk_summary=risk_summary,
     )
 
-    if hasattr(HostLiteOut, "model_validate"):
-        host_out = HostLiteOut.model_validate(host) if host else None
-        device_out = DeviceLiteOut.model_validate(device) if device else None
-    else:
-        host_out = HostLiteOut.from_orm(host) if host else None
-        device_out = DeviceLiteOut.from_orm(device) if device else None
+    host_out = HostLiteOut.model_validate(host) if host else None
+    device_out = DeviceLiteOut.model_validate(device) if device else None
     return RunReportOut(
         generated_at=datetime.now(timezone.utc),
         run=run_out,
