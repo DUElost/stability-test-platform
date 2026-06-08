@@ -234,6 +234,86 @@ def test_create_rejects_legacy_aee_script_name(client, admin_headers):
     }
 
 
+def test_list_scripts_hides_legacy_aee_rows(
+    client, auth_headers, db_session,
+):
+    visible_name = _uniq("visible_script")
+    db_session.add_all([
+        Script(
+            name="scan_aee",
+            display_name="Legacy Scan AEE",
+            category="legacy-only",
+            script_type="python",
+            version="1.0.0",
+            nfs_path="/scripts/scan_aee/v1.0.0/scan_aee.py",
+            content_sha256="2" * 64,
+            param_schema={},
+            default_params={},
+            is_active=True,
+        ),
+        Script(
+            name=visible_name,
+            display_name="Visible Script",
+            category="device",
+            script_type="python",
+            version="1.0.0",
+            nfs_path=f"/scripts/{visible_name}/v1.0.0/{visible_name}.py",
+            content_sha256="3" * 64,
+            param_schema={},
+            default_params={},
+            is_active=True,
+        ),
+    ])
+    db_session.commit()
+
+    resp = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
+
+    assert resp.status_code == 200
+    names = {(item["name"], item["version"]) for item in resp.json()["data"]}
+    assert ("scan_aee", "1.0.0") not in names
+    assert (visible_name, "1.0.0") in names
+
+
+def test_list_script_categories_hides_legacy_aee_only_categories(
+    client, auth_headers, db_session,
+):
+    visible_name = _uniq("visible_category_script")
+    db_session.add_all([
+        Script(
+            name="export_mobilelogs",
+            display_name="Legacy Export Mobilelogs",
+            category="legacy-only",
+            script_type="python",
+            version="1.0.0",
+            nfs_path="/scripts/export_mobilelogs/v1.0.0/export_mobilelogs.py",
+            content_sha256="4" * 64,
+            param_schema={},
+            default_params={},
+            is_active=True,
+        ),
+        Script(
+            name=visible_name,
+            display_name="Visible Category Script",
+            category="device",
+            script_type="python",
+            version="1.0.0",
+            nfs_path=f"/scripts/{visible_name}/v1.0.0/{visible_name}.py",
+            content_sha256="5" * 64,
+            param_schema={},
+            default_params={},
+            is_active=True,
+        ),
+    ])
+    db_session.commit()
+
+    resp = client.get("/api/v1/scripts/categories", headers=auth_headers)
+
+    assert resp.status_code == 200
+    categories = resp.json()["data"]
+    assert "legacy-only" not in categories
+    assert "device" in categories
+
+
 def test_script_scan_missing_root_returns_structured_error(
     client, monkeypatch, admin_headers, tmp_path
 ):

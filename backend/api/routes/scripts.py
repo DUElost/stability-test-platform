@@ -199,7 +199,10 @@ def list_script_categories(
 ):
     rows = (
         db.query(distinct(Script.category))
-        .filter(Script.category.isnot(None))
+        .filter(
+            Script.category.isnot(None),
+            Script.name.notin_(tuple(LEGACY_AEE_SCRIPT_NAMES)),
+        )
         .order_by(Script.category)
         .all()
     )
@@ -240,7 +243,11 @@ def list_scripts(
     db: Session = Depends(get_db),
     _auth: None = Depends(_require_auth),
 ):
-    query = db.query(Script).order_by(Script.name, Script.version)
+    query = (
+        db.query(Script)
+        .filter(Script.name.notin_(tuple(LEGACY_AEE_SCRIPT_NAMES)))
+        .order_by(Script.name, Script.version)
+    )
     if is_active is not None:
         query = query.filter(Script.is_active.is_(is_active))
     if category is not None:
