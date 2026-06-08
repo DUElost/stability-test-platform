@@ -34,6 +34,8 @@ from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
 
+_LEGACY_AEE_SCRIPT_NAMES = frozenset({"scan_aee", "export_mobilelogs"})
+
 
 def _require_plan_owner_or_admin(plan: Plan, user: User) -> None:
     """Plan 写操作鉴权:admin 或 plan 的 created_by 才放行。
@@ -172,6 +174,23 @@ def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
         raise HTTPException(
             status_code=422,
             detail={"code": "INVALID_SCRIPT_REFS", "missing": formatted},
+        )
+
+
+def _validate_no_legacy_aee_scripts(steps: list[PlanStepIn]) -> None:
+    """Block new Plan definitions from introducing legacy AEE patrol scripts."""
+    disabled = sorted({
+        f"{step.script_name}:{step.script_version}"
+        for step in steps
+        if step.script_name in _LEGACY_AEE_SCRIPT_NAMES
+    })
+    if disabled:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+                "scripts": disabled,
+            },
         )
 
 
@@ -316,6 +335,7 @@ def create_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    _validate_no_legacy_aee_scripts(payload.steps)
     _validate_assembled_lifecycle(
         payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds
     )
@@ -431,6 +451,7 @@ def update_plan(
 
     # Step replacement
     if payload.steps is not None:
+        _validate_no_legacy_aee_scripts(payload.steps)
         _validate_script_refs(db, payload.steps)
         _validate_assembled_lifecycle(
             payload.steps,

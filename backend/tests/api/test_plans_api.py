@@ -17,6 +17,32 @@ def _minimal_steps() -> list[dict]:
     ]
 
 
+def _ensure_legacy_aee_scripts(db_session) -> None:
+    from backend.models.script import Script
+
+    scripts = [
+        ("scan_aee", "1.0.0"),
+        ("export_mobilelogs", "1.0.0"),
+    ]
+    for name, version in scripts:
+        existing = db_session.query(Script).filter(
+            Script.name == name, Script.version == version
+        ).first()
+        if existing:
+            continue
+        db_session.add(Script(
+            name=name,
+            script_type="python",
+            version=version,
+            nfs_path=f"/nfs/scripts/{name}/{version}",
+            content_sha256="1" * 64,
+            is_active=True,
+            default_params={},
+            param_schema={},
+        ))
+    db_session.commit()
+
+
 class TestPlanCRUD:
     def test_create_and_get_plan(self, client, auth_headers, sample_script):
         name = _uniq("plan")
@@ -192,6 +218,51 @@ class TestPlanCRUD:
         }
         resp = client.post("/api/v1/plans", json=payload, headers=auth_headers)
         assert resp.status_code == 422
+
+    def test_create_rejects_legacy_aee_scripts_for_new_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        payload = {
+            "name": _uniq("legacy_aee_create"),
+            "steps": _minimal_steps() + [
+                {"step_key": "scan", "script_name": "scan_aee",
+                 "script_version": "1.0.0", "stage": "patrol", "sort_order": 0,
+                 "timeout_seconds": 30},
+            ],
+        }
+
+        resp = client.post("/api/v1/plans", json=payload, headers=auth_headers)
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["scan_aee:1.0.0"],
+        }
+
+    def test_update_rejects_legacy_aee_scripts_for_existing_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        name = _uniq("legacy_aee_update")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        resp = client.put(f"/api/v1/plans/{plan_id}", json={
+            "steps": _minimal_steps() + [
+                {"step_key": "export", "script_name": "export_mobilelogs",
+                 "script_version": "1.0.0", "stage": "teardown", "sort_order": 0,
+                 "timeout_seconds": 30},
+            ],
+        }, headers=auth_headers)
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["export_mobilelogs:1.0.0"],
+        }
 
 
 class TestPlanDispatch:
