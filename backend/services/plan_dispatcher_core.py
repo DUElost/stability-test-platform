@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.host import Device, Host
 from backend.models.plan import Plan, PlanStep
 
@@ -26,6 +27,7 @@ class PlanDispatchError(Exception):
         missing_scripts: list[str] | None = None,
         unavailable_devices: list[dict] | None = None,
         mixed_watcher_inactive_host_ids: list[str] | None = None,
+        disabled_legacy_scripts: list[str] | None = None,
     ) -> None:
         super().__init__(message)
         self.missing_scripts = list(missing_scripts) if missing_scripts else None
@@ -37,8 +39,16 @@ class PlanDispatchError(Exception):
             if mixed_watcher_inactive_host_ids
             else None
         )
+        self.disabled_legacy_scripts = (
+            list(disabled_legacy_scripts) if disabled_legacy_scripts else None
+        )
 
     def detail(self) -> dict | str:
+        if self.disabled_legacy_scripts:
+            return {
+                "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+                "scripts": self.disabled_legacy_scripts,
+            }
         if self.missing_scripts:
             return {
                 "code": "INVALID_SCRIPT_REFS",
@@ -139,6 +149,18 @@ def check_script_keys_complete(
     have = set(metadata.keys())
     missing = sorted(required - have)
     return [f"{name}:{version}" for name, version in missing]
+
+
+def check_legacy_aee_script_refs(steps: list[PlanStep]) -> list[str]:
+    disabled = sorted(
+        {
+            f"{step.script_name}:{step.script_version}"
+            for step in steps
+            if step.enabled is not False
+            and step.script_name in LEGACY_AEE_SCRIPT_NAMES
+        }
+    )
+    return disabled
 
 
 def build_lifecycle_from_steps(

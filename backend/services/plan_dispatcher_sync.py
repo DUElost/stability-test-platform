@@ -29,6 +29,7 @@ from backend.services.plan_dispatcher_core import (
     build_lifecycle_from_steps as _build_lifecycle_from_steps,
     build_plan_snapshot as _build_plan_snapshot,
     build_preview as _build_preview,
+    check_legacy_aee_script_refs as _check_legacy_aee_script_refs,
     check_script_keys_complete as _check_script_keys_complete,
     inject_wifi_params as _inject_wifi_params,
     iter_lifecycle_steps as _iter_lifecycle_steps,
@@ -256,6 +257,13 @@ def preview_plan_dispatch_sync(
     if not steps:
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
 
+    disabled = _check_legacy_aee_script_refs(steps)
+    if disabled:
+        raise PlanDispatchError(
+            f"Plan {plan_id}: legacy AEE scripts disabled at preview: {', '.join(disabled)}",
+            disabled_legacy_scripts=disabled,
+        )
+
     metadata = _fetch_script_metadata(db, steps)
     missing = _check_script_keys_complete(steps, metadata)
     if missing:
@@ -324,6 +332,13 @@ def prepare_plan_run(
     ).scalars().all()
     if not steps:
         raise PlanDispatchError(f"Plan {plan_id} has no steps")
+
+    disabled = _check_legacy_aee_script_refs(steps)
+    if disabled:
+        raise PlanDispatchError(
+            f"Plan {plan_id}: legacy AEE scripts disabled at prepare: {', '.join(disabled)}",
+            disabled_legacy_scripts=disabled,
+        )
 
     metadata = _fetch_script_metadata(db, steps)
     missing = _check_script_keys_complete(steps, metadata)

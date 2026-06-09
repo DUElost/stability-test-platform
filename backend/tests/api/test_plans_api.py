@@ -349,3 +349,79 @@ class TestPlanDispatchFailFast:
         assert db_session.query(PlanRun).filter(
             PlanRun.plan_id == plan_id
         ).count() == 0
+
+    @staticmethod
+    def _insert_legacy_plan(db_session) -> int:
+        from backend.models.plan import Plan, PlanStep
+
+        plan = Plan(
+            name=_uniq("legacy_plan"),
+            description="legacy aee plan",
+            failure_threshold=0.05,
+            created_by="testuser",
+        )
+        db_session.add(plan)
+        db_session.flush()
+        db_session.add_all([
+            PlanStep(
+                plan_id=plan.id,
+                step_key="init_0",
+                script_name="check_device",
+                script_version="1.0.0",
+                stage="init",
+                sort_order=0,
+                timeout_seconds=30,
+                retry=0,
+                enabled=True,
+            ),
+            PlanStep(
+                plan_id=plan.id,
+                step_key="scan",
+                script_name="scan_aee",
+                script_version="1.0.0",
+                stage="patrol",
+                sort_order=0,
+                timeout_seconds=30,
+                retry=0,
+                enabled=True,
+            ),
+        ])
+        db_session.commit()
+        return plan.id
+
+    def test_preview_rejects_existing_legacy_aee_plan(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        plan_id = self._insert_legacy_plan(db_session)
+
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run/preview",
+            json={"device_ids": [sample_device.id]},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["scan_aee:1.0.0"],
+        }
+
+    def test_run_rejects_existing_legacy_aee_plan_without_plan_run(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        plan_id = self._insert_legacy_plan(db_session)
+
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id]},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["scan_aee:1.0.0"],
+        }
+        assert db_session.query(PlanRun).filter(PlanRun.plan_id == plan_id).count() == 0
