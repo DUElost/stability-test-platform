@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "description": "Monkey AEE stability test - Watcher-only patrol cycle (scheduled every 3-5 min)",
+  "description": "Monkey watcher patrol stability test (scheduled every 3-5 min)",
   "lifecycle": {
     "timeout_seconds": 604800,
     "init": [

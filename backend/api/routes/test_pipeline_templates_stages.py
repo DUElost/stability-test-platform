@@ -34,6 +34,7 @@ def test_monkey_watcher_patrol_template_is_watcher_only_public_variant():
     actions = [str(step.get("action") or "") for step in patrol_steps]
 
     assert data["version"] == 2
+    assert "AEE" not in data["description"]
     assert step_ids == ["monkey_check"]
     assert "script:scan_aee" not in actions
     assert "script:export_mobilelogs" not in actions
