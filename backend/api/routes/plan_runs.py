@@ -43,6 +43,7 @@ from backend.core.job_timeout_config import (
     DISPATCHED_TIMEOUT_SECONDS,
     UNKNOWN_GRACE_SECONDS,
 )
+from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
@@ -726,8 +727,9 @@ def get_plan_run_chain(
         tail = chain_runs[-1]
         tail_plan = db.get(Plan, tail.plan_id)
         if tail_plan and tail_plan.next_plan_id and not tail.next_plan_triggered:
+            hidden_plan_ids_set = hidden_legacy_plan_ids(db)
             next_plan = db.get(Plan, tail_plan.next_plan_id)
-            if next_plan is not None:
+            if next_plan is not None and next_plan.id not in hidden_plan_ids_set:
                 # 推断 block 原因
                 blocked = False
                 reason = None

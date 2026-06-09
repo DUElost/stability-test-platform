@@ -308,6 +308,34 @@ class TestChainEndpoint:
         resp = client.get("/api/v1/plan-runs/999999/chain", headers=auth_headers)
         assert resp.status_code == 404
 
+    def test_chain_omits_hidden_legacy_pending_next_plan(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        cur_run = chain_setup["current_run"]
+        hidden_next = chain_setup["plan_next"]
+        db_session.add(PlanStep(
+            plan_id=hidden_next.id,
+            step_key="scan",
+            script_name="scan_aee",
+            script_version="1.0.0",
+            stage="patrol",
+            sort_order=0,
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/chain", headers=auth_headers,
+        )
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        nodes = data["nodes"]
+        assert len(nodes) == 2, f"expected hidden legacy next node to be omitted, got {nodes}"
+        assert [node["plan_id"] for node in nodes] == [
+            chain_setup["plan_parent"].id,
+            chain_setup["plan_current"].id,
+        ]
+
 
 # ---------------------------------------------------------------------------
 # /timeline
