@@ -170,3 +170,84 @@ class TestResultsSummary:
         assert smoke_type in data["recent_runs"][0]["task_name"]
         assert data["recent_runs"][1]["run_id"] == jobs[2].id
         assert data["recent_runs"][1]["status"] == "CANCELED"
+
+    def test_summary_excludes_hidden_legacy_aee_plan_jobs(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        baseline = client.get("/api/v1/results/summary", headers=auth_headers).json()
+        now = datetime.now(timezone.utc)
+
+        hidden_plan = Plan(
+            name="Hidden Legacy Results Plan",
+            description="",
+            failure_threshold=0.05,
+        )
+        db_session.add(hidden_plan)
+        db_session.flush()
+        db_session.add_all([
+            PlanStep(
+                plan_id=hidden_plan.id,
+                step_key="init_0",
+                script_name="check_device",
+                script_version="1.0.0",
+                stage="init",
+                sort_order=0,
+            ),
+            PlanStep(
+                plan_id=hidden_plan.id,
+                step_key="scan",
+                script_name="scan_aee",
+                script_version="1.0.0",
+                stage="patrol",
+                sort_order=0,
+            ),
+        ])
+
+        hidden_plan_run = PlanRun(
+            plan_id=hidden_plan.id,
+            status="RUNNING",
+            failure_threshold=0.05,
+            plan_snapshot={"name": hidden_plan.name, "plan_id": hidden_plan.id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+        )
+        db_session.add(hidden_plan_run)
+        db_session.flush()
+
+        hidden_job = JobInstance(
+            plan_run_id=hidden_plan_run.id,
+            plan_id=hidden_plan.id,
+            device_id=sample_device.id,
+            host_id=sample_device.host_id,
+            status="COMPLETED",
+            status_reason=None,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            started_at=now - timedelta(minutes=4),
+            ended_at=now - timedelta(minutes=3),
+            created_at=now - timedelta(minutes=4),
+            updated_at=now - timedelta(minutes=3),
+        )
+        db_session.add(hidden_job)
+        db_session.flush()
+
+        db_session.add(StepTrace(
+            job_id=hidden_job.id,
+            step_id="__job__",
+            stage="post_process",
+            status="COMPLETED",
+            event_type="RUN_COMPLETE",
+            output=json.dumps({"update": {"log_summary": "risk=HIGH;restarts=9"}}),
+            error_message=None,
+            original_ts=now - timedelta(minutes=3),
+            created_at=now - timedelta(minutes=3),
+        ))
+        db_session.commit()
+
+        response = client.get("/api/v1/results/summary", params={"limit": 20}, headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["runs_by_status"] == baseline["runs_by_status"]
+        assert data["risk_distribution"] == baseline["risk_distribution"]
+        assert all(row["type"] != hidden_plan.name for row in data["test_type_stats"])
+        assert all(run["task_name"] != hidden_plan.name for run in data["recent_runs"])
