@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.database import get_db
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobInstance, StepTrace
-from backend.models.plan import Plan, PlanStep
+from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
@@ -114,16 +114,6 @@ def _parse_risk_level(log_summary: Optional[str]) -> str:
     return "UNKNOWN"
 
 
-def _hidden_legacy_plan_ids(db: Session) -> set[int]:
-    rows = (
-        db.query(PlanStep.plan_id)
-        .filter(PlanStep.script_name.in_(tuple(LEGACY_AEE_SCRIPT_NAMES)))
-        .distinct()
-        .all()
-    )
-    return {int(row[0]) for row in rows}
-
-
 # ---------- Endpoint ----------
 
 @router.get("/summary", response_model=ResultsSummary)
@@ -162,7 +152,7 @@ def get_results_summary(
         )
 
     try:
-        hidden_plan_ids = _hidden_legacy_plan_ids(db)
+        hidden_plan_ids = hidden_legacy_plan_ids(db)
 
         # --- runs_by_status (新链路：JobInstance) ---
         status_query = db.query(JobInstance.status, func.count(JobInstance.id))
