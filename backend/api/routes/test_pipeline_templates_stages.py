@@ -1,5 +1,9 @@
 import json
 
+import pytest
+from fastapi import HTTPException
+
+import backend.api.routes.pipeline as pipeline_routes
 from backend.api.routes.pipeline import TEMPLATES_DIR, _load_template
 from backend.core.pipeline_validator import validate_pipeline_def
 
@@ -52,3 +56,36 @@ def test_legacy_aee_template_alias_files_removed_from_repo():
     )
     for name in removed:
         assert not (TEMPLATES_DIR / name).exists(), f"{name} should be removed after watcher 收口"
+
+
+def test_list_pipeline_templates_filters_legacy_alias_files_even_if_reintroduced(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(pipeline_routes, "TEMPLATES_DIR", tmp_path)
+
+    (tmp_path / "monkey_watcher_patrol.json").write_text(
+        json.dumps({"description": "Watcher", "lifecycle": {"init": []}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "monkey_aee_patrol.json").write_text(
+        json.dumps({"description": "Legacy", "lifecycle": {"init": []}}),
+        encoding="utf-8",
+    )
+
+    templates = pipeline_routes.list_pipeline_templates()
+
+    assert [template.name for template in templates] == ["monkey_watcher_patrol"]
+
+
+def test_get_pipeline_template_rejects_legacy_alias_even_if_file_exists(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline_routes, "TEMPLATES_DIR", tmp_path)
+    (tmp_path / "monkey_aee_patrol.json").write_text(
+        json.dumps({"description": "Legacy", "lifecycle": {"init": []}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        pipeline_routes.get_pipeline_template("monkey_aee_patrol")
+
+    assert excinfo.value.status_code == 404
