@@ -90,6 +90,42 @@ def _make_job(
     return job
 
 
+def _make_hidden_legacy_plan(db_session) -> Plan:
+    plan = Plan(
+        name="hidden-legacy-abort-plan",
+        description="legacy aee plan kept only for compatibility",
+        failure_threshold=0.05,
+        created_by="testuser",
+    )
+    db_session.add(plan)
+    db_session.flush()
+    db_session.add_all([
+        PlanStep(
+            plan_id=plan.id,
+            step_key="init_0",
+            script_name="check_device",
+            script_version="1.0.0",
+            stage="init",
+            sort_order=0,
+            timeout_seconds=30,
+            retry=0,
+        ),
+        PlanStep(
+            plan_id=plan.id,
+            step_key="scan",
+            script_name="scan_aee",
+            script_version="1.0.0",
+            stage="patrol",
+            sort_order=1,
+            timeout_seconds=30,
+            retry=0,
+        ),
+    ])
+    db_session.commit()
+    db_session.refresh(plan)
+    return plan
+
+
 def _make_active_lease(db_session, device_id: int, host_id: str, job_id: int) -> DeviceLease:
     now = datetime.now(timezone.utc)
     lease = DeviceLease(
@@ -307,6 +343,28 @@ class TestHostActiveJobs:
         assert body["active_jobs"][0]["plan_run_id"] == pr.id
         assert body["active_jobs"][0]["status"] == JobStatus.RUNNING.value
 
+    def test_get_host_masks_hidden_legacy_plan_id_in_active_jobs(
+        self, client, db_session, abort_chain, auth_headers
+    ):
+        hidden_plan = _make_hidden_legacy_plan(db_session)
+        pr = _make_plan_run(db_session, hidden_plan.id)
+        running_job = _make_job(
+            db_session, pr.id, hidden_plan.id,
+            abort_chain["dev1"].id, "h-abort",
+            status=JobStatus.RUNNING.value,
+        )
+
+        resp = client.get("/api/v1/hosts/h-abort", headers=auth_headers)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["active_job_count"] == 1
+        assert len(body["active_jobs"]) == 1
+        assert body["active_jobs"][0]["id"] == running_job.id
+        assert body["active_jobs"][0]["plan_run_id"] == pr.id
+        assert body["active_jobs"][0]["plan_id"] is None
+        assert body["active_jobs"][0]["status"] == JobStatus.RUNNING.value
+
 
 # ---------------------------------------------------------------------------
 # POST /hosts/{id}/hot-update soft-lock
@@ -384,6 +442,29 @@ class TestHostHotUpdateSoftLock:
         body = resp.json()
         assert body["detail"]["code"] == "HOST_HAS_ACTIVE_JOBS"
         assert len(body["detail"]["active_jobs"]) == 1
+        mock_exec.assert_not_called()
+
+    def test_hot_update_masks_hidden_legacy_plan_id_in_active_job_summary(
+        self, client, admin_headers, db_session, abort_chain
+    ):
+        hidden_plan = _make_hidden_legacy_plan(db_session)
+        pr = _make_plan_run(db_session, hidden_plan.id)
+        _make_job(
+            db_session, pr.id, hidden_plan.id,
+            abort_chain["dev1"].id, "h-abort",
+            status=JobStatus.RUNNING.value,
+        )
+
+        with patch("backend.api.routes.hosts.execute_hot_update") as mock_exec:
+            resp = client.post(
+                "/api/v1/hosts/h-abort/hot-update", headers=admin_headers,
+            )
+
+        assert resp.status_code == 409, resp.text
+        body = resp.json()
+        assert body["detail"]["code"] == "HOST_HAS_ACTIVE_JOBS"
+        assert len(body["detail"]["active_jobs"]) == 1
+        assert body["detail"]["active_jobs"][0]["plan_id"] is None
         mock_exec.assert_not_called()
 
     def test_hot_update_with_abort_running_jobs_drains_and_proceeds(
