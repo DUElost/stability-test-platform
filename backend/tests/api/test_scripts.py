@@ -50,6 +50,56 @@ def _create_referenced_script(db_session, prefix: str) -> tuple[Script, Plan]:
     return script, plan
 
 
+def _create_hidden_legacy_referencing_plan(db_session, prefix: str) -> tuple[Script, Plan]:
+    name = _uniq(prefix)
+    script = Script(
+        name=name,
+        display_name=name,
+        category="device",
+        script_type="python",
+        version="1.0.0",
+        nfs_path=f"/nfs/scripts/{name}/1.0.0/{name}.py",
+        content_sha256="c" * 64,
+        param_schema={},
+        default_params={},
+        is_active=True,
+    )
+    db_session.add(script)
+    db_session.flush()
+
+    plan = Plan(
+        name=_uniq("hidden_legacy_plan"),
+        description="references visible script but stays hidden by legacy step",
+        failure_threshold=0.1,
+        created_by="test",
+    )
+    db_session.add(plan)
+    db_session.flush()
+
+    db_session.add_all([
+        PlanStep(
+            plan_id=plan.id,
+            step_key="patrol.visible_script",
+            script_name=script.name,
+            script_version=script.version,
+            stage="patrol",
+            sort_order=0,
+        ),
+        PlanStep(
+            plan_id=plan.id,
+            step_key="patrol.legacy_aee",
+            script_name="scan_aee",
+            script_version="1.0.0",
+            stage="patrol",
+            sort_order=1,
+        ),
+    ])
+    db_session.commit()
+    db_session.refresh(script)
+    db_session.refresh(plan)
+    return script, plan
+
+
 def test_script_crud_and_soft_delete(client, admin_headers, auth_headers):
     name = _uniq("push_bundle")
     payload = {
@@ -440,3 +490,38 @@ def test_delete_rejects_deactivation_when_script_is_still_referenced(
 
     db_session.refresh(script)
     assert script.is_active is True
+
+
+def test_update_allows_deactivation_when_only_hidden_legacy_plan_references_script(
+    client, admin_headers, db_session
+):
+    script, hidden_plan = _create_hidden_legacy_referencing_plan(db_session, "hidden_ref_update")
+
+    resp = client.put(
+        f"/api/v1/scripts/{script.id}",
+        json={"is_active": False},
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["id"] == script.id
+    assert resp.json()["data"]["is_active"] is False
+
+    db_session.refresh(script)
+    db_session.refresh(hidden_plan)
+    assert script.is_active is False
+
+
+def test_delete_allows_deactivation_when_only_hidden_legacy_plan_references_script(
+    client, admin_headers, db_session
+):
+    script, hidden_plan = _create_hidden_legacy_referencing_plan(db_session, "hidden_ref_delete")
+
+    resp = client.delete(f"/api/v1/scripts/{script.id}", headers=admin_headers)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"]["deactivated"] == script.id
+
+    db_session.refresh(script)
+    db_session.refresh(hidden_plan)
+    assert script.is_active is False
