@@ -3,6 +3,8 @@ import pytest
 from datetime import datetime, timezone
 
 from backend.models.plan import Plan
+from backend.models.plan import PlanStep
+from backend.models.schedule import TaskSchedule
 
 
 class TestListSchedules:
@@ -68,6 +70,56 @@ class TestToggleSchedule:
 
 
 class TestPlanSchedule:
+    @staticmethod
+    def _insert_legacy_plan(db_session) -> int:
+        plan = Plan(
+            name="legacy-sched-plan",
+            description="legacy aee schedule plan",
+            failure_threshold=0.05,
+        )
+        db_session.add(plan)
+        db_session.flush()
+        db_session.add_all([
+            PlanStep(
+                plan_id=plan.id,
+                step_key="init_0",
+                script_name="check_device",
+                script_version="1.0.0",
+                stage="init",
+                sort_order=0,
+                timeout_seconds=30,
+                retry=0,
+                enabled=True,
+            ),
+            PlanStep(
+                plan_id=plan.id,
+                step_key="scan",
+                script_name="scan_aee",
+                script_version="1.0.0",
+                stage="patrol",
+                sort_order=0,
+                timeout_seconds=30,
+                retry=0,
+                enabled=True,
+            ),
+        ])
+        db_session.commit()
+        return plan.id
+
+    @staticmethod
+    def _insert_legacy_plan_schedule(db_session, plan_id: int, device_id: int) -> int:
+        sched = TaskSchedule(
+            name="Hidden Legacy Schedule",
+            cron_expression="0 6 * * *",
+            plan_id=plan_id,
+            device_ids=[device_id],
+            enabled=True,
+        )
+        db_session.add(sched)
+        db_session.commit()
+        db_session.refresh(sched)
+        return int(sched.id)
+
     def test_create_plan_schedule(self, client, auth_headers, db_session, sample_device):
         plan = Plan(
             name="sched-plan",
@@ -92,6 +144,103 @@ class TestPlanSchedule:
         data = response.json()
         assert data["plan_id"] == plan.id
         assert data["device_ids"] == [sample_device.id]
+
+    def test_create_schedule_rejects_hidden_legacy_plan(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        legacy_plan_id = self._insert_legacy_plan(db_session)
+
+        response = client.post(
+            "/api/v1/schedules",
+            json={
+                "name": "Legacy Plan Daily",
+                "cron_expr": "0 3 * * *",
+                "plan_id": legacy_plan_id,
+                "device_ids": [sample_device.id],
+                "enabled": True,
+            },
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 400, response.text
+
+    def test_list_schedules_hides_existing_legacy_plan_schedule(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        legacy_plan_id = self._insert_legacy_plan(db_session)
+        schedule_id = self._insert_legacy_plan_schedule(
+            db_session, legacy_plan_id, sample_device.id
+        )
+
+        resp = client.get("/api/v1/schedules", headers=auth_headers)
+
+        assert resp.status_code == 200
+        ids = {item["id"] for item in resp.json()["items"]}
+        assert schedule_id not in ids
+
+    def test_get_schedule_hides_existing_legacy_plan_schedule(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        legacy_plan_id = self._insert_legacy_plan(db_session)
+        schedule_id = self._insert_legacy_plan_schedule(
+            db_session, legacy_plan_id, sample_device.id
+        )
+
+        resp = client.get(f"/api/v1/schedules/{schedule_id}", headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+
+    def test_update_schedule_hides_existing_legacy_plan_schedule(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        legacy_plan_id = self._insert_legacy_plan(db_session)
+        schedule_id = self._insert_legacy_plan_schedule(
+            db_session, legacy_plan_id, sample_device.id
+        )
+
+        resp = client.put(
+            f"/api/v1/schedules/{schedule_id}",
+            json={"name": "renamed"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 404, resp.text
+
+    def test_delete_schedule_hides_existing_legacy_plan_schedule(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        legacy_plan_id = self._insert_legacy_plan(db_session)
+        schedule_id = self._insert_legacy_plan_schedule(
+            db_session, legacy_plan_id, sample_device.id
+        )
+
+        resp = client.delete(f"/api/v1/schedules/{schedule_id}", headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+
+    def test_run_now_hides_existing_legacy_plan_schedule(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        legacy_plan_id = self._insert_legacy_plan(db_session)
+        schedule_id = self._insert_legacy_plan_schedule(
+            db_session, legacy_plan_id, sample_device.id
+        )
+
+        resp = client.post(f"/api/v1/schedules/{schedule_id}/run-now", headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+
+    def test_toggle_hides_existing_legacy_plan_schedule(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        legacy_plan_id = self._insert_legacy_plan(db_session)
+        schedule_id = self._insert_legacy_plan_schedule(
+            db_session, legacy_plan_id, sample_device.id
+        )
+
+        resp = client.post(f"/api/v1/schedules/{schedule_id}/toggle", headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
 
     def test_run_now_plan_schedule(self, client, auth_headers, db_session, sample_device, monkeypatch):
         plan = Plan(

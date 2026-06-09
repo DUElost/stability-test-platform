@@ -11,9 +11,10 @@ from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
 from backend.core.audit import record_audit
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.host import Device
 from backend.models.schedule import TaskSchedule, schedule_timestamp
-from backend.models.plan import Plan
+from backend.models.plan import Plan, PlanStep
 from backend.api.routes.auth import get_current_active_user, User
 from backend.api.schemas import (
     PaginatedResponse,
@@ -44,6 +45,37 @@ def _field_provided(model, field_name: str) -> bool:
     return field_name in getattr(model, "__fields_set__", set())
 
 
+def _plan_has_hidden_legacy_aee_steps(db: Session, plan_id: int) -> bool:
+    rows = (
+        db.query(PlanStep.script_name)
+        .filter(PlanStep.plan_id == plan_id)
+        .all()
+    )
+    return any(str(row[0]) in LEGACY_AEE_SCRIPT_NAMES for row in rows)
+
+
+def _raise_if_hidden_legacy_aee_plan_id(
+    db: Session,
+    plan_id: int,
+    *,
+    status_code: int,
+) -> None:
+    if _plan_has_hidden_legacy_aee_steps(db, plan_id):
+        if status_code == 400:
+            raise HTTPException(status_code=400, detail=f"Plan 不存在: {plan_id}")
+        raise HTTPException(status_code=status_code, detail="定时任务不存在")
+
+
+def _raise_if_hidden_legacy_aee_schedule(
+    db: Session,
+    sched: TaskSchedule | None,
+) -> TaskSchedule:
+    if not sched:
+        raise HTTPException(status_code=404, detail="定时任务不存在")
+    _raise_if_hidden_legacy_aee_plan_id(db, int(sched.plan_id), status_code=404)
+    return sched
+
+
 def _validate_plan_schedule(
     db: Session,
     plan_id: int,
@@ -52,6 +84,7 @@ def _validate_plan_schedule(
     plan = db.get(Plan, plan_id)
     if not plan:
         raise HTTPException(status_code=400, detail=f"Plan 不存在: {plan_id}")
+    _raise_if_hidden_legacy_aee_plan_id(db, plan_id, status_code=400)
     if not device_ids:
         raise HTTPException(status_code=400, detail="Plan 定时任务至少需要一个 device_id")
 
@@ -88,8 +121,12 @@ def list_schedules(
     query = db.query(TaskSchedule).order_by(TaskSchedule.id.desc())
     total = query.count()
     items = query.offset(skip).limit(limit).all()
-    result = [TaskScheduleOut.model_validate(s) for s in items]
-    return PaginatedResponse(items=result, total=total, skip=skip, limit=limit)
+    visible_items = [
+        s for s in items
+        if not _plan_has_hidden_legacy_aee_steps(db, int(s.plan_id))
+    ]
+    result = [TaskScheduleOut.model_validate(s) for s in visible_items]
+    return PaginatedResponse(items=result, total=len(result), skip=skip, limit=limit)
 
 
 @router.get("/{schedule_id}", response_model=TaskScheduleOut)
@@ -100,8 +137,7 @@ def get_schedule(
 ):
     """获取定时任务详情"""
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
-    if not sched:
-        raise HTTPException(status_code=404, detail="定时任务不存在")
+    sched = _raise_if_hidden_legacy_aee_schedule(db, sched)
     return sched
 
 
@@ -155,8 +191,7 @@ def update_schedule(
 ):
     """更新定时任务"""
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
-    if not sched:
-        raise HTTPException(status_code=404, detail="定时任务不存在")
+    sched = _raise_if_hidden_legacy_aee_schedule(db, sched)
 
     if data.cron_expression is not None:
         _validate_cron(data.cron_expression)
@@ -206,8 +241,7 @@ def delete_schedule(
 ):
     """删除定时任务"""
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
-    if not sched:
-        raise HTTPException(status_code=404, detail="定时任务不存在")
+    sched = _raise_if_hidden_legacy_aee_schedule(db, sched)
     sched_name = sched.name
     sched_cron = sched.cron_expression
     sched_enabled = sched.enabled
@@ -236,8 +270,7 @@ def toggle_schedule(
 ):
     """切换定时任务启用/禁用"""
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
-    if not sched:
-        raise HTTPException(status_code=404, detail="定时任务不存在")
+    sched = _raise_if_hidden_legacy_aee_schedule(db, sched)
 
     sched.enabled = not sched.enabled
     if sched.enabled:
@@ -258,8 +291,7 @@ def run_schedule_now(
 ):
     """立即执行定时任务（触发 PlanRun）。"""
     sched = db.query(TaskSchedule).filter_by(id=schedule_id).first()
-    if not sched:
-        raise HTTPException(status_code=404, detail="定时任务不存在")
+    sched = _raise_if_hidden_legacy_aee_schedule(db, sched)
 
     device_ids = [int(x) for x in (sched.device_ids or [])]
     _validate_plan_schedule(db, sched.plan_id, device_ids)
