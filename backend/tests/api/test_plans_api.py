@@ -128,6 +128,30 @@ class TestPlanCRUD:
 
         assert resp.status_code == 404, resp.text
 
+    def test_update_plan_hides_existing_legacy_aee_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.put(
+            f"/api/v1/plans/{legacy_plan_id}",
+            json={"name": "legacy_hidden"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 404, resp.text
+
+    def test_delete_plan_hides_existing_legacy_aee_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.delete(f"/api/v1/plans/{legacy_plan_id}", headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+
     def test_delete_plan_with_historical_runs_returns_409(
         self, client, auth_headers, sample_script, db_session,
     ):

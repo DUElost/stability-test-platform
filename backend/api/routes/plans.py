@@ -196,6 +196,13 @@ def _plan_steps_include_legacy_aee_scripts(steps: list[PlanStep]) -> bool:
     return any(step.script_name in LEGACY_AEE_SCRIPT_NAMES for step in steps)
 
 
+def _raise_if_hidden_legacy_aee_plan(plan: Plan | None, steps: list[PlanStep]) -> None:
+    if plan is None:
+        raise HTTPException(status_code=404, detail="plan not found")
+    if _plan_steps_include_legacy_aee_scripts(steps):
+        raise HTTPException(status_code=404, detail="plan not found")
+
+
 def _assemble_lifecycle_for_validation(
     steps: list[PlanStepIn],
     patrol_interval_seconds: int | None,
@@ -416,12 +423,9 @@ def get_plan(
     _current_user: User = Depends(get_current_active_user),
 ):
     plan = db.get(Plan, plan_id)
-    if plan is None:
-        raise HTTPException(status_code=404, detail="plan not found")
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
-    if _plan_steps_include_legacy_aee_scripts(steps):
-        raise HTTPException(status_code=404, detail="plan not found")
+    _raise_if_hidden_legacy_aee_plan(plan, steps)
     return ok(_plan_out(plan, steps))
 
 
@@ -433,8 +437,9 @@ def update_plan(
     current_user: User = Depends(get_current_active_user),
 ):
     plan = db.get(Plan, plan_id)
-    if plan is None:
-        raise HTTPException(status_code=404, detail="plan not found")
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    _raise_if_hidden_legacy_aee_plan(plan, steps)
     _require_plan_owner_or_admin(plan, current_user)
 
     if payload.name is not None:
@@ -537,8 +542,9 @@ def delete_plan(
     current_user: User = Depends(get_current_active_user),
 ):
     plan = db.get(Plan, plan_id)
-    if plan is None:
-        raise HTTPException(status_code=404, detail="plan not found")
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    _raise_if_hidden_legacy_aee_plan(plan, steps)
     _require_plan_owner_or_admin(plan, current_user)
     _assert_plan_deletable(db, plan_id)
 
