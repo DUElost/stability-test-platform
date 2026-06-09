@@ -71,6 +71,18 @@ class TestPlanCRUD:
         items = resp.json()["data"]
         assert any(p["name"] == name for p in items)
 
+    def test_list_plans_hides_existing_legacy_aee_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.get("/api/v1/plans", headers=auth_headers)
+
+        assert resp.status_code == 200
+        plan_ids = {item["id"] for item in resp.json()["data"]}
+        assert legacy_plan_id not in plan_ids
+
     def test_update_plan(self, client, auth_headers, sample_script):
         name = _uniq("plan")
         create = client.post("/api/v1/plans", json={
@@ -105,6 +117,16 @@ class TestPlanCRUD:
 
         get_resp = client.get(f"/api/v1/plans/{plan_id}", headers=auth_headers)
         assert get_resp.status_code == 404
+
+    def test_get_plan_hides_existing_legacy_aee_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.get(f"/api/v1/plans/{legacy_plan_id}", headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
 
     def test_delete_plan_with_historical_runs_returns_409(
         self, client, auth_headers, sample_script, db_session,

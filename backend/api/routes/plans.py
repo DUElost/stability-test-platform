@@ -192,6 +192,10 @@ def _validate_no_legacy_aee_scripts(steps: list[PlanStepIn]) -> None:
         )
 
 
+def _plan_steps_include_legacy_aee_scripts(steps: list[PlanStep]) -> bool:
+    return any(step.script_name in LEGACY_AEE_SCRIPT_NAMES for step in steps)
+
+
 def _assemble_lifecycle_for_validation(
     steps: list[PlanStepIn],
     patrol_interval_seconds: int | None,
@@ -397,7 +401,12 @@ def list_plans(
     for s in all_steps:
         steps_by_plan.setdefault(s.plan_id, []).append(s)
 
-    return ok([_plan_out(p, steps_by_plan.get(p.id, [])) for p in plans])
+    visible_plans = [
+        _plan_out(p, steps_by_plan.get(p.id, []))
+        for p in plans
+        if not _plan_steps_include_legacy_aee_scripts(steps_by_plan.get(p.id, []))
+    ]
+    return ok(visible_plans)
 
 
 @router.get("/plans/{plan_id}", response_model=ApiResponse[PlanOut])
@@ -411,6 +420,8 @@ def get_plan(
         raise HTTPException(status_code=404, detail="plan not found")
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    if _plan_steps_include_legacy_aee_scripts(steps):
+        raise HTTPException(status_code=404, detail="plan not found")
     return ok(_plan_out(plan, steps))
 
 

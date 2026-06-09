@@ -323,6 +323,8 @@ def get_script(
     script = db.get(Script, script_id)
     if script is None:
         raise HTTPException(status_code=404, detail="script not found")
+    if script.name in LEGACY_AEE_SCRIPT_NAMES:
+        raise HTTPException(status_code=404, detail="script not found")
     return ok(_script_out(script))
 
 

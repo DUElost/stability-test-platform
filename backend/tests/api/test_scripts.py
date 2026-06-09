@@ -274,6 +274,30 @@ def test_list_scripts_hides_legacy_aee_rows(
     assert (visible_name, "1.0.0") in names
 
 
+def test_get_script_hides_legacy_aee_row(
+    client, auth_headers, db_session,
+):
+    legacy = Script(
+        name="scan_aee",
+        display_name="Legacy Scan AEE",
+        category="legacy-only",
+        script_type="python",
+        version="1.0.0",
+        nfs_path="/scripts/scan_aee/v1.0.0/scan_aee.py",
+        content_sha256="2" * 64,
+        param_schema={},
+        default_params={},
+        is_active=True,
+    )
+    db_session.add(legacy)
+    db_session.commit()
+    db_session.refresh(legacy)
+
+    resp = client.get(f"/api/v1/scripts/{legacy.id}", headers=auth_headers)
+
+    assert resp.status_code == 404, resp.text
+
+
 def test_list_script_categories_hides_legacy_aee_only_categories(
     client, auth_headers, db_session,
 ):
