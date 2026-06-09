@@ -298,6 +298,58 @@ def test_get_script_hides_legacy_aee_row(
     assert resp.status_code == 404, resp.text
 
 
+def test_update_script_hides_legacy_aee_row(
+    client, admin_headers, db_session,
+):
+    legacy = Script(
+        name="scan_aee",
+        display_name="Legacy Scan AEE",
+        category="legacy-only",
+        script_type="python",
+        version="1.0.0",
+        nfs_path="/scripts/scan_aee/v1.0.0/scan_aee.py",
+        content_sha256="2" * 64,
+        param_schema={},
+        default_params={},
+        is_active=True,
+    )
+    db_session.add(legacy)
+    db_session.commit()
+    db_session.refresh(legacy)
+
+    resp = client.put(
+        f"/api/v1/scripts/{legacy.id}",
+        json={"display_name": "Renamed Legacy"},
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_delete_script_hides_legacy_aee_row(
+    client, admin_headers, db_session,
+):
+    legacy = Script(
+        name="export_mobilelogs",
+        display_name="Legacy Export Mobilelogs",
+        category="legacy-only",
+        script_type="python",
+        version="1.0.0",
+        nfs_path="/scripts/export_mobilelogs/v1.0.0/export_mobilelogs.py",
+        content_sha256="4" * 64,
+        param_schema={},
+        default_params={},
+        is_active=True,
+    )
+    db_session.add(legacy)
+    db_session.commit()
+    db_session.refresh(legacy)
+
+    resp = client.delete(f"/api/v1/scripts/{legacy.id}", headers=admin_headers)
+
+    assert resp.status_code == 404, resp.text
+
+
 def test_list_script_categories_hides_legacy_aee_only_categories(
     client, auth_headers, db_session,
 ):

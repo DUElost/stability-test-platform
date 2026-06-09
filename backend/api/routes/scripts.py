@@ -117,6 +117,13 @@ def _raise_if_legacy_aee_script(name: str, version: str) -> None:
     )
 
 
+def _raise_if_hidden_legacy_aee_script_row(script: Script | None) -> None:
+    if script is None:
+        raise HTTPException(status_code=404, detail="script not found")
+    if script.name in LEGACY_AEE_SCRIPT_NAMES:
+        raise HTTPException(status_code=404, detail="script not found")
+
+
 # ---------------------------------------------------------------------------
 # Agent auth bypass — 允许 Agent 通过 X-Agent-Secret 读取脚本目录,
 # 避免 ScriptRegistry 401 后退化到过期 SQLite 缓存。
@@ -321,10 +328,7 @@ def get_script(
     _current_user: User = Depends(get_current_active_user),
 ):
     script = db.get(Script, script_id)
-    if script is None:
-        raise HTTPException(status_code=404, detail="script not found")
-    if script.name in LEGACY_AEE_SCRIPT_NAMES:
-        raise HTTPException(status_code=404, detail="script not found")
+    _raise_if_hidden_legacy_aee_script_row(script)
     return ok(_script_out(script))
 
 
@@ -337,8 +341,7 @@ def update_script(
     request: Request = None,
 ):
     script = db.get(Script, script_id)
-    if script is None:
-        raise HTTPException(status_code=404, detail="script not found")
+    _raise_if_hidden_legacy_aee_script_row(script)
 
     next_name = payload.name if payload.name is not None else script.name
     next_version = payload.version if payload.version is not None else script.version
@@ -494,8 +497,7 @@ def deactivate_script(
     request: Request = None,
 ):
     script = db.get(Script, script_id)
-    if script is None:
-        raise HTTPException(status_code=404, detail="script not found")
+    _raise_if_hidden_legacy_aee_script_row(script)
     _ensure_script_can_be_deactivated(db, script)
     script.is_active = False
     script.updated_at = datetime.now(timezone.utc)
