@@ -178,6 +178,45 @@ class TestPlanSchedule:
         ids = {item["id"] for item in resp.json()["items"]}
         assert schedule_id not in ids
 
+    def test_list_schedules_total_counts_only_visible_items(
+        self, client, auth_headers, db_session, sample_device,
+    ):
+        visible_plan = Plan(
+            name="visible-sched-plan",
+            description="visible schedule plan",
+            failure_threshold=0.05,
+        )
+        db_session.add(visible_plan)
+        db_session.flush()
+
+        db_session.add_all([
+            TaskSchedule(
+                name="Visible Schedule A",
+                cron_expression="0 7 * * *",
+                plan_id=visible_plan.id,
+                device_ids=[sample_device.id],
+                enabled=True,
+            ),
+            TaskSchedule(
+                name="Visible Schedule B",
+                cron_expression="0 8 * * *",
+                plan_id=visible_plan.id,
+                device_ids=[sample_device.id],
+                enabled=True,
+            ),
+        ])
+
+        legacy_plan_id = self._insert_legacy_plan(db_session)
+        self._insert_legacy_plan_schedule(db_session, legacy_plan_id, sample_device.id)
+        db_session.commit()
+
+        resp = client.get("/api/v1/schedules?limit=1", headers=auth_headers)
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["items"]) == 1
+
     def test_get_schedule_hides_existing_legacy_plan_schedule(
         self, client, auth_headers, db_session, sample_device,
     ):

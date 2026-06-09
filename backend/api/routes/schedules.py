@@ -119,14 +119,15 @@ def list_schedules(
 ):
     """获取定时任务列表"""
     query = db.query(TaskSchedule).order_by(TaskSchedule.id.desc())
-    total = query.count()
-    items = query.offset(skip).limit(limit).all()
+    all_items = query.all()
     visible_items = [
-        s for s in items
+        s for s in all_items
         if not _plan_has_hidden_legacy_aee_steps(db, int(s.plan_id))
     ]
-    result = [TaskScheduleOut.model_validate(s) for s in visible_items]
-    return PaginatedResponse(items=result, total=len(result), skip=skip, limit=limit)
+    total = len(visible_items)
+    page_items = visible_items[skip:skip + limit]
+    result = [TaskScheduleOut.model_validate(s) for s in page_items]
+    return PaginatedResponse(items=result, total=total, skip=skip, limit=limit)
 
 
 @router.get("/{schedule_id}", response_model=TaskScheduleOut)
