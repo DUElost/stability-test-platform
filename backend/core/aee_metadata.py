@@ -118,14 +118,37 @@ def parse_exp_main_summary(entry_dir: Path) -> dict[str, str]:
         if not current_process and line == "Current Executing Process:":
             current_process = _read_following_process(lines, index + 1) or ""
 
+    exp_class = defect_class or exception_class
+
     subtype = _normalize_exp_main_class(defect_class, exception_type)
     if not subtype:
         subtype = _normalize_exp_main_class(exception_class, exception_type)
 
+    # ---- process / package fallback (aligned with ExpMain.analyse) ----
+
+    # 1. Kernel / HWT / HW Reboot 等系统级类型没有用户态 Process 行,用 exp_class 填充
+    if not current_process and exp_class in (
+        "Kernel (KE)", "HWT", "HANG_DETECT", "Kernel API Dump", "Hardware Reboot",
+    ):
+        current_process = exp_class
+    elif not current_process and exp_class == "External (EE)":
+        current_process = exception_type
+
+    # 2. Package → current_process 双向回退
     if not package_name and current_process:
         package_name = current_process
     if not current_process and package_name:
         current_process = package_name
+
+    # 3. 清理值: "android" → "android_framework"; 去掉 ":xxx" 后缀
+    if current_process == "android":
+        current_process = "android_framework"
+    if current_process and ":" in current_process:
+        current_process = current_process.split(":", 1)[0].strip()
+    if package_name == "android":
+        package_name = "android_framework"
+    if package_name and ":" in package_name:
+        package_name = package_name.split(":", 1)[0].strip()
 
     result: dict[str, str] = {}
     if subtype:
@@ -159,7 +182,6 @@ def normalize_package_name(value: str) -> Optional[str]:
 
 def _normalize_exp_main_class(value: str, exception_type: str = "") -> Optional[str]:
     normalized = (value or "").strip()
-    normalized_type = (exception_type or "").strip().upper()
     if not normalized:
         return None
     if normalized == "Native (NE)":
