@@ -60,7 +60,7 @@ export default function DevicesPage() {
       return {
         id: device.id,
         serial: device.serial,
-        model: device.model || 'Unknown Device',
+        model: device.model || '未知设备',
         status: deviceStatusMap[device.status] || 'offline',
         battery_level: device.battery_level ?? 0,
         temperature: device.temperature ?? 0,

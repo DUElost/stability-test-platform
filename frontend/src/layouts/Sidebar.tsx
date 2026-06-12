@@ -14,13 +14,10 @@ import {
   FileBox,
   Folder,
   AlertCircle,
-  Shield,
   Rocket,
   Code2,
   CalendarClock,
   BellRing,
-  Users,
-  Settings,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -72,13 +69,10 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: '系统',
+    label: '运营配置',
     items: [
       { path: '/schedules', label: '定时调度', icon: CalendarClock },
       { path: '/notifications', label: '通知管理', icon: BellRing },
-      { path: '/users', label: '用户管理', icon: Users },
-      { path: '/audit', label: '操作日志', icon: Shield },
-      { path: '/settings', label: '系统设置', icon: Settings },
     ],
   },
 ];

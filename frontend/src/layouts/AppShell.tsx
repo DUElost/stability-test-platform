@@ -1,7 +1,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useNavigate, NavLink } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import { Menu, ChevronRight, FileText, LogOut, User, ChevronDown, Loader2, KeyRound, Wifi, WifiOff } from 'lucide-react';
+import { Menu, ChevronRight, FileText, LogOut, User, ChevronDown, Loader2, KeyRound, Wifi, WifiOff, Users, Shield, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { clearAppQueryCache } from '@/components/QueryProvider';
@@ -194,6 +194,35 @@ export default function AppShell() {
                         <KeyRound className="w-4 h-4" />
                         修改密码
                       </NavLink>
+                      {currentUser?.role === 'admin' && (
+                        <>
+                          <hr className="my-1 border-gray-100" />
+                          <NavLink
+                            to="/users"
+                            onClick={() => setShowUserMenu(false)}
+                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
+                          >
+                            <Users className="w-4 h-4" />
+                            用户管理
+                          </NavLink>
+                          <NavLink
+                            to="/audit"
+                            onClick={() => setShowUserMenu(false)}
+                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
+                          >
+                            <Shield className="w-4 h-4" />
+                            操作日志
+                          </NavLink>
+                          <NavLink
+                            to="/settings"
+                            onClick={() => setShowUserMenu(false)}
+                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
+                          >
+                            <Settings className="w-4 h-4" />
+                            系统设置
+                          </NavLink>
+                        </>
+                      )}
                       <hr className="my-1 border-gray-100" />
                       <button
                         onClick={handleLogout}

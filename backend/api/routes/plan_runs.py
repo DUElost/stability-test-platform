@@ -141,6 +141,7 @@ class PlanRunOut(BaseModel):
     root_plan_run_id: Optional[int] = None
     chain_index: int = 0
     next_plan_triggered: bool = False
+    plan_name: Optional[str] = None
     jobs: list[JobInstanceOut] = []
 
 
@@ -152,7 +153,7 @@ def _iso(v) -> str | None:
     return v.isoformat()
 
 
-def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None) -> PlanRunOut:
+def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_name: str | None = None) -> PlanRunOut:
     return PlanRunOut(
         id=pr.id,
         plan_id=pr.plan_id,
@@ -169,6 +170,7 @@ def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None) -> Plan
         root_plan_run_id=pr.root_plan_run_id,
         chain_index=pr.chain_index or 0,
         next_plan_triggered=bool(pr.next_plan_triggered),
+        plan_name=plan_name,
         jobs=jobs or [],
     )
 
@@ -213,7 +215,14 @@ def list_plan_runs(
     if status is not None:
         q = q.where(PlanRun.status == status.value)
     runs = db.execute(q.offset(skip).limit(limit)).scalars().all()
-    return ok([_plan_run_out(r) for r in runs])
+    plan_ids = {r.plan_id for r in runs}
+    plan_names: dict[int, str] = {}
+    if plan_ids:
+        plan_rows = db.execute(
+            select(Plan.id, Plan.name).where(Plan.id.in_(plan_ids))
+        ).all()
+        plan_names = {row.id: row.name for row in plan_rows}
+    return ok([_plan_run_out(r, plan_name=plan_names.get(r.plan_id)) for r in runs])
 
 
 @router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunOut])
@@ -228,7 +237,13 @@ def get_plan_run(
     jobs = db.execute(
         select(JobInstance).where(JobInstance.plan_run_id == run_id)
     ).scalars().all()
-    return ok(_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs]))
+    plan_name: str | None = None
+    if pr.plan_id is not None:
+        plan_row = db.execute(
+            select(Plan.name).where(Plan.id == pr.plan_id)
+        ).scalar_one_or_none()
+        plan_name = plan_row
+    return ok(_plan_run_out(pr, jobs=[_job_out(j, []) for j in jobs], plan_name=plan_name))
 
 
 @router.get("/plan-runs/{run_id}/jobs", response_model=ApiResponse[list[JobInstanceOut]])

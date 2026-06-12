@@ -667,6 +667,7 @@ export interface PlanRun {
   root_plan_run_id?: number | null;
   chain_index?: number;
   next_plan_triggered?: boolean;
+  plan_name?: string | null;
 }
 
 export interface PlanRunCreate {

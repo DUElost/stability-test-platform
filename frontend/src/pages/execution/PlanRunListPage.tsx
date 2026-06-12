@@ -39,7 +39,9 @@ export default function PlanRunListPage() {
                 <div className="flex items-center gap-4">
                   <span className="font-mono text-sm text-gray-500">#{run.id}</span>
                   <StatusBadge kind="plan-run" status={run.status} size="sm" />
-                  <span className="text-sm text-gray-700">Plan #{run.plan_id}</span>
+                  <span className="text-sm text-gray-700">
+                    {run.plan_name || `Plan #${run.plan_id}`}
+                  </span>
                   <span className="text-xs text-gray-400">{run.run_type}</span>
                 </div>
                 <div className="flex items-center gap-4 text-xs text-gray-400">
