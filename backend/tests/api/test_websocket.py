@@ -118,21 +118,6 @@ class TestBroadcastEnvelope:
         assert "timestamp" in msg
 
     @pytest.mark.asyncio
-    async def test_task_update_envelope(self):
-        from backend.realtime.socketio_server import broadcast_task_update
-
-        mock_sio = _make_mock_sio()
-        with patch("backend.realtime.socketio_server._sio", mock_sio):
-            await broadcast_task_update(task_id=7, status="COMPLETED")
-
-        mock_sio.emit.assert_called_once()
-        args, kwargs = mock_sio.emit.call_args
-        msg = args[1]
-        assert msg["type"] == "TASK_UPDATE"
-        assert msg["payload"]["task_id"] == 7
-        assert "timestamp" in msg
-
-    @pytest.mark.asyncio
     async def test_report_ready_envelope(self):
         from backend.realtime.socketio_server import broadcast_report_ready
 

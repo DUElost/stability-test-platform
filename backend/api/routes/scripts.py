@@ -20,6 +20,7 @@ from backend.api.error_helpers import raise_api_http_error
 from backend.api.routes.auth import get_current_active_user, get_current_user, require_admin, User
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES, hidden_legacy_plan_ids
 from backend.core.database import get_db
 from backend.models.plan import PlanStep
 from backend.models.script import Script
@@ -104,6 +105,25 @@ def _script_out(script: Script) -> ScriptOut:
     )
 
 
+def _raise_if_legacy_aee_script(name: str, version: str) -> None:
+    if name not in LEGACY_AEE_SCRIPT_NAMES:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": [f"{name}:{version}"],
+        },
+    )
+
+
+def _raise_if_hidden_legacy_aee_script_row(script: Script | None) -> None:
+    if script is None:
+        raise HTTPException(status_code=404, detail="script not found")
+    if script.name in LEGACY_AEE_SCRIPT_NAMES:
+        raise HTTPException(status_code=404, detail="script not found")
+
+
 # ---------------------------------------------------------------------------
 # Agent auth bypass — 允许 Agent 通过 X-Agent-Secret 读取脚本目录,
 # 避免 ScriptRegistry 401 后退化到过期 SQLite 缓存。
@@ -149,7 +169,7 @@ def _require_auth(
 
 
 def _referencing_plan_ids(db: Session, script: Script) -> list[int]:
-    rows = (
+    query = (
         db.query(PlanStep.plan_id)
         .filter(
             PlanStep.script_name == script.name,
@@ -157,8 +177,11 @@ def _referencing_plan_ids(db: Session, script: Script) -> list[int]:
         )
         .distinct()
         .order_by(PlanStep.plan_id)
-        .all()
     )
+    hidden_plan_ids_set = hidden_legacy_plan_ids(db)
+    if hidden_plan_ids_set:
+        query = query.filter(PlanStep.plan_id.notin_(tuple(hidden_plan_ids_set)))
+    rows = query.all()
     return [row.plan_id for row in rows]
 
 
@@ -186,7 +209,10 @@ def list_script_categories(
 ):
     rows = (
         db.query(distinct(Script.category))
-        .filter(Script.category.isnot(None))
+        .filter(
+            Script.category.isnot(None),
+            Script.name.notin_(tuple(LEGACY_AEE_SCRIPT_NAMES)),
+        )
         .order_by(Script.category)
         .all()
     )
@@ -227,7 +253,11 @@ def list_scripts(
     db: Session = Depends(get_db),
     _auth: None = Depends(_require_auth),
 ):
-    query = db.query(Script).order_by(Script.name, Script.version)
+    query = (
+        db.query(Script)
+        .filter(Script.name.notin_(tuple(LEGACY_AEE_SCRIPT_NAMES)))
+        .order_by(Script.name, Script.version)
+    )
     if is_active is not None:
         query = query.filter(Script.is_active.is_(is_active))
     if category is not None:
@@ -242,6 +272,7 @@ def create_script(
     current_user: User = Depends(require_admin),
     request: Request = None,
 ):
+    _raise_if_legacy_aee_script(payload.name, payload.version)
     existing = (
         db.query(Script)
         .filter(Script.name == payload.name, Script.version == payload.version)
@@ -300,8 +331,7 @@ def get_script(
     _current_user: User = Depends(get_current_active_user),
 ):
     script = db.get(Script, script_id)
-    if script is None:
-        raise HTTPException(status_code=404, detail="script not found")
+    _raise_if_hidden_legacy_aee_script_row(script)
     return ok(_script_out(script))
 
 
@@ -314,11 +344,11 @@ def update_script(
     request: Request = None,
 ):
     script = db.get(Script, script_id)
-    if script is None:
-        raise HTTPException(status_code=404, detail="script not found")
+    _raise_if_hidden_legacy_aee_script_row(script)
 
     next_name = payload.name if payload.name is not None else script.name
     next_version = payload.version if payload.version is not None else script.version
+    _raise_if_legacy_aee_script(next_name, next_version)
     if (next_name, next_version) != (script.name, script.version):
         existing = (
             db.query(Script)
@@ -400,6 +430,7 @@ def create_script_version(
     ``default_params`` is required — it defines the canonical defaults
     for this version and must not be changed after creation.
     """
+    _raise_if_legacy_aee_script(name, payload.version)
     existing = (
         db.query(Script)
         .filter(Script.name == name, Script.version == payload.version)
@@ -469,8 +500,7 @@ def deactivate_script(
     request: Request = None,
 ):
     script = db.get(Script, script_id)
-    if script is None:
-        raise HTTPException(status_code=404, detail="script not found")
+    _raise_if_hidden_legacy_aee_script_row(script)
     _ensure_script_can_be_deactivated(db, script)
     script.is_active = False
     script.updated_at = datetime.now(timezone.utc)

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from backend.core.aee_metadata import (
+from .metadata import (
     infer_aee_subtype_from_paths,
     normalize_package_name,
     parse_exp_main_summary,
@@ -46,7 +46,7 @@ class ProcessConfig:
     bugreport_cooldown_seconds: int = 300
     bugreport_cooldown_event_types: Optional[set[str]] = None
     bugreport_timeout_seconds: int = 600
-    state_key_prefix: str = "scan_aee"
+    state_key_prefix: str = "watcher:aee"
     pull_timeout_seconds: int = 300
     pull_retry_limit: int = 10
     max_entries_per_run: Optional[int] = None

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.database import get_db
+from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
@@ -151,12 +152,13 @@ def get_results_summary(
         )
 
     try:
+        hidden_plan_ids = hidden_legacy_plan_ids(db)
+
         # --- runs_by_status (新链路：JobInstance) ---
-        status_counts = (
-            db.query(JobInstance.status, func.count(JobInstance.id))
-            .group_by(JobInstance.status)
-            .all()
-        )
+        status_query = db.query(JobInstance.status, func.count(JobInstance.id))
+        if hidden_plan_ids:
+            status_query = status_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
+        status_counts = status_query.group_by(JobInstance.status).all()
         runs_by_status = RunsByStatus()
         for raw_status, count in status_counts:
             normalized = _normalize_job_status(raw_status)
@@ -173,16 +175,14 @@ def get_results_summary(
                 runs_by_status.running += cnt
 
         # --- test_type_stats (按 Plan.name 聚合) ---
-        type_rows = (
-            db.query(
-                Plan.name,
-                JobInstance.status,
-                func.count(JobInstance.id),
-            )
-            .join(Plan, JobInstance.plan_id == Plan.id)
-            .group_by(Plan.name, JobInstance.status)
-            .all()
-        )
+        type_query = db.query(
+            Plan.name,
+            JobInstance.status,
+            func.count(JobInstance.id),
+        ).join(Plan, JobInstance.plan_id == Plan.id)
+        if hidden_plan_ids:
+            type_query = type_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
+        type_rows = type_query.group_by(Plan.name, JobInstance.status).all()
         type_agg: Dict[str, Dict[str, int]] = {}
         for template_name, raw_status, cnt in type_rows:
             stat_type = str(template_name or "UNKNOWN")
@@ -197,13 +197,14 @@ def get_results_summary(
         test_type_stats = [TestTypeStat(type=t, **counts) for t, counts in sorted(type_agg.items())]
 
         # --- recent_runs (ADR-0020: Plan-based) ---
-        recent_rows = (
+        recent_query = (
             db.query(JobInstance, Plan.name)
             .join(Plan, JobInstance.plan_id == Plan.id)
             .order_by(JobInstance.id.desc())
-            .limit(limit)
-            .all()
         )
+        if hidden_plan_ids:
+            recent_query = recent_query.filter(JobInstance.plan_id.notin_(tuple(hidden_plan_ids)))
+        recent_rows = recent_query.limit(limit).all()
         recent_job_ids = [job.id for job, _plan_name in recent_rows]
         snapshot_rows = []
         if recent_job_ids:
@@ -240,17 +241,27 @@ def get_results_summary(
             )
 
         # --- risk_distribution ---
-        total_jobs = int(db.query(func.count(JobInstance.id)).scalar() or 0)
+        total_jobs_query = db.query(func.count(JobInstance.id))
+        if hidden_plan_ids:
+            total_jobs_query = total_jobs_query.filter(
+                JobInstance.plan_id.notin_(tuple(hidden_plan_ids))
+            )
+        total_jobs = int(total_jobs_query.scalar() or 0)
         risk_counts = {"high": 0, "medium": 0, "low": 0, "unknown": 0}
         if total_jobs > 0:
-            all_snapshot_rows = (
+            snapshot_query = (
                 db.query(StepTrace.job_id, StepTrace.output)
+                .join(JobInstance, StepTrace.job_id == JobInstance.id)
                 .filter(
                     StepTrace.step_id == "__job__",
                     StepTrace.event_type == "RUN_COMPLETE",
                 )
-                .all()
             )
+            if hidden_plan_ids:
+                snapshot_query = snapshot_query.filter(
+                    JobInstance.plan_id.notin_(tuple(hidden_plan_ids))
+                )
+            all_snapshot_rows = snapshot_query.all()
             seen_jobs = set()
             for job_id, output in all_snapshot_rows:
                 if job_id in seen_jobs:

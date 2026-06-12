@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "description": "AIMonkey 20260317 node-local launcher lifecycle; JobSession watcher handles log monitoring and export.",
+  "version": 2,
+  "description": "Monkey watcher patrol stability test (scheduled every 3-5 min)",
   "lifecycle": {
     "timeout_seconds": 604800,
     "init": [
@@ -53,7 +53,7 @@
         {
           "step_id": "monkey_check",
           "action": "script:monkey_check",
-          "version": "1.0.0",
+          "version": "2.0.2",
           "timeout_seconds": 60,
           "retry": 0,
           "params": {}

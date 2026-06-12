@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from backend.api.schemas.base import ORMBaseModel
-from backend.api.schemas.task import TaskOut
 from backend.api.schemas.host import HostLiteOut
 from backend.api.schemas.device import DeviceLiteOut
 
@@ -15,6 +14,24 @@ class LogArtifactOut(ORMBaseModel):
     storage_uri: str
     size_bytes: Optional[int] = None
     checksum: Optional[str] = None
+    created_at: datetime
+
+
+class TaskOut(ORMBaseModel):
+    id: int
+    name: str
+    type: str
+    template_id: Optional[int] = None
+    tool_id: Optional[int] = None
+    params: Dict[str, Any] = {}
+    tool_snapshot: Optional[Dict[str, Any]] = None
+    target_device_id: Optional[int] = None
+    status: str
+    priority: int
+    group_id: Optional[str] = None
+    is_distributed: bool = False
+    runs_count: Optional[int] = None
+    pipeline_def: Optional[Dict[str, Any]] = None
     created_at: datetime
 
 

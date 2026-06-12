@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -51,6 +54,37 @@ class _FakeAdbPull:
             body = self.history_by_path.get(remote, "")
             return type("R", (), {"stdout": body})()
         return type("R", (), {"stdout": ""})()
+
+
+def test_aee_reconciler_imports_when_only_agent_package_is_deployed(tmp_path):
+    """Hot-update 只部署 backend/agent 时,AEE reconciler 仍必须能独立 import。"""
+    deployed_parent = Path(__file__).resolve().parents[2]
+    code = "\n".join([
+        "import importlib.abc",
+        "import sys",
+        "class _BlockBackendCoreAeeMetadata(importlib.abc.MetaPathFinder):",
+        "    def find_spec(self, fullname, path=None, target=None):",
+        "        if fullname == 'backend.core.aee_metadata':",
+        "            raise ModuleNotFoundError('blocked backend.core.aee_metadata')",
+        "        return None",
+        "sys.meta_path.insert(0, _BlockBackendCoreAeeMetadata())",
+        "import agent.aee.db_history",
+        "import agent.aee.processor",
+        "import agent.aee.reconciler",
+        "assert 'backend.core.aee_metadata' not in sys.modules",
+    ])
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(deployed_parent)
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_parse_db_history_line():
@@ -542,7 +576,7 @@ def test_process_device_logs_persists_processed_before_side_effects(tmp_path, mo
             store.get_state(state_key("dev_persist", "aee_exp"), "[]")
         )
         observed["pending"] = json.loads(
-            store.get_state("scan_aee:dev_persist:aee_exp:pending_pull", "{}")
+            store.get_state("watcher:aee:dev_persist:aee_exp:pending_pull", "{}")
         )
         return {"matched": 0, "pulled": 0}
 

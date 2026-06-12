@@ -17,6 +17,32 @@ def _minimal_steps() -> list[dict]:
     ]
 
 
+def _ensure_legacy_aee_scripts(db_session) -> None:
+    from backend.models.script import Script
+
+    scripts = [
+        ("scan_aee", "1.0.0"),
+        ("export_mobilelogs", "1.0.0"),
+    ]
+    for name, version in scripts:
+        existing = db_session.query(Script).filter(
+            Script.name == name, Script.version == version
+        ).first()
+        if existing:
+            continue
+        db_session.add(Script(
+            name=name,
+            script_type="python",
+            version=version,
+            nfs_path=f"/nfs/scripts/{name}/{version}",
+            content_sha256="1" * 64,
+            is_active=True,
+            default_params={},
+            param_schema={},
+        ))
+    db_session.commit()
+
+
 class TestPlanCRUD:
     def test_create_and_get_plan(self, client, auth_headers, sample_script):
         name = _uniq("plan")
@@ -44,6 +70,18 @@ class TestPlanCRUD:
         assert resp.status_code == 200
         items = resp.json()["data"]
         assert any(p["name"] == name for p in items)
+
+    def test_list_plans_hides_existing_legacy_aee_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.get("/api/v1/plans", headers=auth_headers)
+
+        assert resp.status_code == 200
+        plan_ids = {item["id"] for item in resp.json()["data"]}
+        assert legacy_plan_id not in plan_ids
 
     def test_update_plan(self, client, auth_headers, sample_script):
         name = _uniq("plan")
@@ -79,6 +117,40 @@ class TestPlanCRUD:
 
         get_resp = client.get(f"/api/v1/plans/{plan_id}", headers=auth_headers)
         assert get_resp.status_code == 404
+
+    def test_get_plan_hides_existing_legacy_aee_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.get(f"/api/v1/plans/{legacy_plan_id}", headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+
+    def test_update_plan_hides_existing_legacy_aee_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.put(
+            f"/api/v1/plans/{legacy_plan_id}",
+            json={"name": "legacy_hidden"},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 404, resp.text
+
+    def test_delete_plan_hides_existing_legacy_aee_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.delete(f"/api/v1/plans/{legacy_plan_id}", headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
 
     def test_delete_plan_with_historical_runs_returns_409(
         self, client, auth_headers, sample_script, db_session,
@@ -181,6 +253,39 @@ class TestPlanCRUD:
         }, headers=auth_headers)
         assert resp.status_code == 422
 
+    def test_create_rejects_hidden_legacy_next_plan_reference(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("next_hidden_create"),
+            "next_plan_id": legacy_plan_id,
+            "steps": _minimal_steps(),
+        }, headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == f"next_plan_id {legacy_plan_id} not found"
+
+    def test_update_rejects_hidden_legacy_next_plan_reference(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+        create = client.post("/api/v1/plans", json={
+            "name": _uniq("next_hidden_update"),
+            "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        resp = client.put(f"/api/v1/plans/{plan_id}", json={
+            "next_plan_id": legacy_plan_id,
+        }, headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == f"next_plan_id {legacy_plan_id} not found"
+
     def test_create_rejects_missing_script_reference(self, client, auth_headers):
         payload = {
             "name": _uniq("missing_script"),
@@ -192,6 +297,51 @@ class TestPlanCRUD:
         }
         resp = client.post("/api/v1/plans", json=payload, headers=auth_headers)
         assert resp.status_code == 422
+
+    def test_create_rejects_legacy_aee_scripts_for_new_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        payload = {
+            "name": _uniq("legacy_aee_create"),
+            "steps": _minimal_steps() + [
+                {"step_key": "scan", "script_name": "scan_aee",
+                 "script_version": "1.0.0", "stage": "patrol", "sort_order": 0,
+                 "timeout_seconds": 30},
+            ],
+        }
+
+        resp = client.post("/api/v1/plans", json=payload, headers=auth_headers)
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["scan_aee:1.0.0"],
+        }
+
+    def test_update_rejects_legacy_aee_scripts_for_existing_plan(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        name = _uniq("legacy_aee_update")
+        create = client.post("/api/v1/plans", json={
+            "name": name, "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        resp = client.put(f"/api/v1/plans/{plan_id}", json={
+            "steps": _minimal_steps() + [
+                {"step_key": "export", "script_name": "export_mobilelogs",
+                 "script_version": "1.0.0", "stage": "teardown", "sort_order": 0,
+                 "timeout_seconds": 30},
+            ],
+        }, headers=auth_headers)
+
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["export_mobilelogs:1.0.0"],
+        }
 
 
 class TestPlanDispatch:
@@ -278,3 +428,79 @@ class TestPlanDispatchFailFast:
         assert db_session.query(PlanRun).filter(
             PlanRun.plan_id == plan_id
         ).count() == 0
+
+    @staticmethod
+    def _insert_legacy_plan(db_session) -> int:
+        from backend.models.plan import Plan, PlanStep
+
+        plan = Plan(
+            name=_uniq("legacy_plan"),
+            description="legacy aee plan",
+            failure_threshold=0.05,
+            created_by="testuser",
+        )
+        db_session.add(plan)
+        db_session.flush()
+        db_session.add_all([
+            PlanStep(
+                plan_id=plan.id,
+                step_key="init_0",
+                script_name="check_device",
+                script_version="1.0.0",
+                stage="init",
+                sort_order=0,
+                timeout_seconds=30,
+                retry=0,
+                enabled=True,
+            ),
+            PlanStep(
+                plan_id=plan.id,
+                step_key="scan",
+                script_name="scan_aee",
+                script_version="1.0.0",
+                stage="patrol",
+                sort_order=0,
+                timeout_seconds=30,
+                retry=0,
+                enabled=True,
+            ),
+        ])
+        db_session.commit()
+        return plan.id
+
+    def test_preview_rejects_existing_legacy_aee_plan(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        plan_id = self._insert_legacy_plan(db_session)
+
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run/preview",
+            json={"device_ids": [sample_device.id]},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["scan_aee:1.0.0"],
+        }
+
+    def test_run_rejects_existing_legacy_aee_plan_without_plan_run(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        plan_id = self._insert_legacy_plan(db_session)
+
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id]},
+            headers=auth_headers,
+        )
+
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == {
+            "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+            "scripts": ["scan_aee:1.0.0"],
+        }
+        assert db_session.query(PlanRun).filter(PlanRun.plan_id == plan_id).count() == 0

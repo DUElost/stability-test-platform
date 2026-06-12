@@ -18,6 +18,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
@@ -33,7 +34,6 @@ from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
-
 
 def _require_plan_owner_or_admin(plan: Plan, user: User) -> None:
     """Plan 写操作鉴权:admin 或 plan 的 created_by 才放行。
@@ -175,6 +175,48 @@ def _validate_script_refs(db: Session, steps: list[PlanStepIn]) -> None:
         )
 
 
+def _validate_no_legacy_aee_scripts(steps: list[PlanStepIn]) -> None:
+    """Block new Plan definitions from introducing legacy AEE patrol scripts."""
+    disabled = sorted({
+        f"{step.script_name}:{step.script_version}"
+        for step in steps
+        if step.script_name in LEGACY_AEE_SCRIPT_NAMES
+    })
+    if disabled:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "LEGACY_AEE_SCRIPTS_DISABLED",
+                "scripts": disabled,
+            },
+        )
+
+
+def _plan_steps_include_legacy_aee_scripts(steps: list[PlanStep]) -> bool:
+    return any(step.script_name in LEGACY_AEE_SCRIPT_NAMES for step in steps)
+
+
+def _raise_if_hidden_legacy_aee_plan(plan: Plan | None, steps: list[PlanStep]) -> None:
+    if plan is None:
+        raise HTTPException(status_code=404, detail="plan not found")
+    if _plan_steps_include_legacy_aee_scripts(steps):
+        raise HTTPException(status_code=404, detail="plan not found")
+
+
+def _raise_if_hidden_next_plan(db: Session, plan: Plan | None, plan_id: int) -> None:
+    if plan is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"next_plan_id {plan_id} not found",
+        )
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id).all()
+    if _plan_steps_include_legacy_aee_scripts(steps):
+        raise HTTPException(
+            status_code=404,
+            detail=f"next_plan_id {plan_id} not found",
+        )
+
+
 def _assemble_lifecycle_for_validation(
     steps: list[PlanStepIn],
     patrol_interval_seconds: int | None,
@@ -277,9 +319,7 @@ def _validate_plan_dag(db: Session, plan_id: int | None,
         db.execute(text("SELECT pg_advisory_xact_lock(:pid)"), {"pid": int(lock_key)})
 
     target = db.get(Plan, next_plan_id)
-    if target is None:
-        raise HTTPException(status_code=404,
-                            detail=f"next_plan_id {next_plan_id} not found")
+    _raise_if_hidden_next_plan(db, target, next_plan_id)
 
     visited: set[int] = set()
     if plan_id is not None:
@@ -316,6 +356,7 @@ def create_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
+    _validate_no_legacy_aee_scripts(payload.steps)
     _validate_assembled_lifecycle(
         payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds
     )
@@ -379,7 +420,12 @@ def list_plans(
     for s in all_steps:
         steps_by_plan.setdefault(s.plan_id, []).append(s)
 
-    return ok([_plan_out(p, steps_by_plan.get(p.id, [])) for p in plans])
+    visible_plans = [
+        _plan_out(p, steps_by_plan.get(p.id, []))
+        for p in plans
+        if not _plan_steps_include_legacy_aee_scripts(steps_by_plan.get(p.id, []))
+    ]
+    return ok(visible_plans)
 
 
 @router.get("/plans/{plan_id}", response_model=ApiResponse[PlanOut])
@@ -389,10 +435,9 @@ def get_plan(
     _current_user: User = Depends(get_current_active_user),
 ):
     plan = db.get(Plan, plan_id)
-    if plan is None:
-        raise HTTPException(status_code=404, detail="plan not found")
     steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
         .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    _raise_if_hidden_legacy_aee_plan(plan, steps)
     return ok(_plan_out(plan, steps))
 
 
@@ -404,8 +449,9 @@ def update_plan(
     current_user: User = Depends(get_current_active_user),
 ):
     plan = db.get(Plan, plan_id)
-    if plan is None:
-        raise HTTPException(status_code=404, detail="plan not found")
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    _raise_if_hidden_legacy_aee_plan(plan, steps)
     _require_plan_owner_or_admin(plan, current_user)
 
     if payload.name is not None:
@@ -431,6 +477,7 @@ def update_plan(
 
     # Step replacement
     if payload.steps is not None:
+        _validate_no_legacy_aee_scripts(payload.steps)
         _validate_script_refs(db, payload.steps)
         _validate_assembled_lifecycle(
             payload.steps,
@@ -507,8 +554,9 @@ def delete_plan(
     current_user: User = Depends(get_current_active_user),
 ):
     plan = db.get(Plan, plan_id)
-    if plan is None:
-        raise HTTPException(status_code=404, detail="plan not found")
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id)\
+        .order_by(PlanStep.stage, PlanStep.sort_order).all()
+    _raise_if_hidden_legacy_aee_plan(plan, steps)
     _require_plan_owner_or_admin(plan, current_user)
     _assert_plan_deletable(db, plan_id)
 

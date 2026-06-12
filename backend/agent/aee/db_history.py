@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional, Set
 
-from backend.core.aee_metadata import normalize_aee_event_type, normalize_aee_subtype
+from .metadata import normalize_aee_event_type, normalize_aee_subtype
 
 
 def parse_db_history_line(line_content: str) -> Optional[Dict[str, str]]:
@@ -48,7 +48,7 @@ def parse_effective_db_history_line(line_content: str, aee_type: str) -> Optiona
     return parse_db_history_line(line_content)
 
 
-def state_key(serial: str, aee_type: str, *, prefix: str = "scan_aee") -> str:
+def state_key(serial: str, aee_type: str, *, prefix: str = "watcher:aee") -> str:
     return f"{prefix}:{serial}:{aee_type}:processed_entries"
 
 

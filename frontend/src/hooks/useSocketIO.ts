@@ -163,7 +163,6 @@ function _getDashSocket(): Socket {
     SOCKET_EVENT_NAMES.planRunStatus,
     SOCKET_EVENT_NAMES.precheckUpdate,
     SOCKET_EVENT_NAMES.runUpdate,
-    SOCKET_EVENT_NAMES.taskUpdate,
     SOCKET_EVENT_NAMES.reportReady,
     SOCKET_EVENT_NAMES.jobUpdate,
     // ADR-0021 C5c — watcher 异常增量推送 (broadcast room: plan_run:{id})
@@ -245,7 +244,6 @@ function parseWsUrl(url: string): SubscriptionConfig {
       events: [
         SOCKET_EVENT_NAMES.deviceUpdate,
         SOCKET_EVENT_NAMES.runUpdate,
-        SOCKET_EVENT_NAMES.taskUpdate,
         SOCKET_EVENT_NAMES.reportReady,
         SOCKET_EVENT_NAMES.jobUpdate,
         SOCKET_EVENT_NAMES.planRunStatus,
@@ -284,16 +282,15 @@ function parseWsUrl(url: string): SubscriptionConfig {
   // Fallback: global subscription
   return {
     room: null,
-    events: [
-      SOCKET_EVENT_NAMES.deviceUpdate,
-      SOCKET_EVENT_NAMES.stepLog,
-      SOCKET_EVENT_NAMES.stepUpdate,
-      SOCKET_EVENT_NAMES.jobStatus,
-      SOCKET_EVENT_NAMES.planRunStatus,
-      SOCKET_EVENT_NAMES.runUpdate,
-      SOCKET_EVENT_NAMES.taskUpdate,
-      SOCKET_EVENT_NAMES.reportReady,
-    ],
+      events: [
+        SOCKET_EVENT_NAMES.deviceUpdate,
+        SOCKET_EVENT_NAMES.stepLog,
+        SOCKET_EVENT_NAMES.stepUpdate,
+        SOCKET_EVENT_NAMES.jobStatus,
+        SOCKET_EVENT_NAMES.planRunStatus,
+        SOCKET_EVENT_NAMES.runUpdate,
+        SOCKET_EVENT_NAMES.reportReady,
+      ],
   };
 }
 

@@ -95,3 +95,74 @@ def test_script_registry_resolve_rejects_missing_version(local_db, monkeypatch):
 
     with pytest.raises(Exception, match="version mismatch|not found"):
         registry.resolve("push_bundle", "1.0.0")
+
+
+def test_script_registry_ignores_legacy_aee_scripts_from_server(local_db, monkeypatch):
+    payload = {
+        "data": [
+            {
+                "id": 101,
+                "name": "push_bundle",
+                "version": "2.0.0",
+                "script_type": "python",
+                "nfs_path": "/mnt/storage/test-platform/scripts/resource/push_bundle/v2.0.0/push_bundle.py",
+                "content_sha256": "b" * 64,
+            },
+            {
+                "id": 201,
+                "name": "scan_aee",
+                "version": "1.0.0",
+                "script_type": "python",
+                "nfs_path": "/mnt/storage/test-platform/scripts/scan_aee/v1.0.0/scan_aee.py",
+                "content_sha256": "c" * 64,
+            },
+        ]
+    }
+
+    monkeypatch.setattr(
+        "backend.agent.registry.script_registry.requests.get",
+        lambda *args, **kwargs: FakeResponse(payload),
+    )
+
+    registry = ScriptRegistry(local_db, "http://server")
+    registry.initialize()
+
+    assert registry.resolve("push_bundle", "2.0.0").name == "push_bundle"
+    with pytest.raises(Exception, match="not found"):
+        registry.resolve("scan_aee", "1.0.0")
+    assert "scan_aee::1.0.0" not in local_db.load_script_cache()
+
+
+def test_script_registry_ignores_legacy_aee_scripts_from_sqlite_fallback(
+    local_db, monkeypatch,
+):
+    local_db.save_script_cache({
+        "push_bundle::2.0.0": {
+            "script_id": 101,
+            "name": "push_bundle",
+            "version": "2.0.0",
+            "script_type": "python",
+            "nfs_path": "/cached/push_bundle.py",
+            "content_sha256": "b" * 64,
+        },
+        "scan_aee::1.0.0": {
+            "script_id": 201,
+            "name": "scan_aee",
+            "version": "1.0.0",
+            "script_type": "python",
+            "nfs_path": "/cached/scan_aee.py",
+            "content_sha256": "c" * 64,
+        },
+    })
+
+    def fake_get(url, headers=None, params=None, timeout=10):
+        raise RuntimeError("server unavailable")
+
+    monkeypatch.setattr("backend.agent.registry.script_registry.requests.get", fake_get)
+
+    registry = ScriptRegistry(local_db, "http://server")
+    registry.initialize()
+
+    assert registry.resolve("push_bundle", "2.0.0").nfs_path == "/cached/push_bundle.py"
+    with pytest.raises(Exception, match="not found"):
+        registry.resolve("scan_aee", "1.0.0")

@@ -21,13 +21,11 @@ across two hosts so that:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Optional
 
 import pytest
 
 from backend.models.audit import AuditLog
-from backend.api.routes import plan_runs as plan_run_routes
 from backend.models.enums import HostStatus, JobStatus, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, JobLogSignal, StepTrace
@@ -309,6 +307,34 @@ class TestChainEndpoint:
     def test_chain_returns_404_for_unknown_run(self, client, auth_headers):
         resp = client.get("/api/v1/plan-runs/999999/chain", headers=auth_headers)
         assert resp.status_code == 404
+
+    def test_chain_omits_hidden_legacy_pending_next_plan(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        cur_run = chain_setup["current_run"]
+        hidden_next = chain_setup["plan_next"]
+        db_session.add(PlanStep(
+            plan_id=hidden_next.id,
+            step_key="scan",
+            script_name="scan_aee",
+            script_version="1.0.0",
+            stage="patrol",
+            sort_order=0,
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/chain", headers=auth_headers,
+        )
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        nodes = data["nodes"]
+        assert len(nodes) == 2, f"expected hidden legacy next node to be omitted, got {nodes}"
+        assert [node["plan_id"] for node in nodes] == [
+            chain_setup["plan_parent"].id,
+            chain_setup["plan_current"].id,
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -1653,139 +1679,30 @@ class TestWatcherSummaryEndpoint:
         assert data["total_devices"] == 0
         assert data["aee_breakdown"] is None
 
-    # ----------------------------------------------------------------------
-    # M1/T1-3a: 双写灰度态字段 legacy_patrol_in_snapshot + pull_sources
-    # ----------------------------------------------------------------------
-
-    def test_watcher_summary_dual_write_fields_default_false_and_empty(
-        self, client, auth_headers, chain_setup,
-    ):
-        """fixture 默认 plan_snapshot 无 lifecycle.patrol;log_signal 无 extra.pull_source
-        → legacy_patrol_in_snapshot=False, pull_sources=[]。"""
-        cur_run = chain_setup["current_run"]
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["legacy_patrol_in_snapshot"] is False
-        assert data["pull_sources"] == []
-
-    def test_watcher_summary_legacy_patrol_true_when_scan_aee_in_patrol(
+    def test_watcher_summary_omits_legacy_patrol_transition_fields(
         self, client, auth_headers, db_session, chain_setup,
     ):
-        """plan_snapshot.lifecycle.patrol.steps 含 script:scan_aee → True。
-        同时验证早返回路径(无 Job 的 parent_run)也能正确返回 legacy 字段。"""
+        """Watcher 主链收口后,watcher-summary 不再暴露 legacy patrol 过渡语义。"""
         cur_run = chain_setup["current_run"]
-        cur_run.plan_snapshot = {
-            "plan": {"id": cur_run.plan_id},
-            "lifecycle": {
-                "init": [{"step_id": "ensure_root", "action": "script:ensure_root"}],
-                "patrol": {
-                    "interval_seconds": 60,
-                    "steps": [
-                        {"step_id": "monkey_check", "action": "script:monkey_check"},
-                        {"step_id": "scan_aee", "action": "script:scan_aee"},
-                        {"step_id": "export_mobilelogs", "action": "script:export_mobilelogs"},
-                    ],
-                },
-                "teardown": [],
-            },
-        }
-        db_session.add(cur_run)
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["legacy_patrol_in_snapshot"] is True
-
-        # 早返回路径:parent_run 无 lifecycle → False
-        parent_run = chain_setup["parent_run"]
-        resp2 = client.get(
-            f"/api/v1/plan-runs/{parent_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp2.status_code == 200
-        assert resp2.json()["data"]["legacy_patrol_in_snapshot"] is False
-
-    def test_watcher_summary_legacy_patrol_true_when_scan_aee_in_snapshot_steps(
-        self, client, auth_headers, db_session, chain_setup,
-    ):
-        """当前真实 PlanRun 快照是 {plan, steps} 结构,也必须识别 legacy patrol。"""
-        cur_run = chain_setup["current_run"]
+        j1 = chain_setup["job_completed"]
         cur_run.plan_snapshot = {
             "plan": {"id": cur_run.plan_id},
             "steps": [
                 {"stage": "init", "script_name": "ensure_root", "step_key": "ensure_root"},
                 {"stage": "patrol", "script_name": "monkey_check", "step_key": "monkey_check"},
-                {"stage": "patrol", "script_name": "scan_aee", "step_key": "scan_aee"},
-                {"stage": "patrol", "script_name": "export_mobilelogs", "step_key": "export_mobilelogs"},
+                {"stage": "teardown", "script_name": "monkey_teardown", "step_key": "monkey_teardown"},
             ],
         }
         db_session.add(cur_run)
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        assert resp.json()["data"]["legacy_patrol_in_snapshot"] is True
-
-    def test_watcher_summary_legacy_patrol_false_when_patrol_is_list_without_legacy(
-        self, client, auth_headers, db_session, chain_setup,
-    ):
-        """patrol 是 list 形态(早期 fallback)且不含 scan_aee → False。"""
-        cur_run = chain_setup["current_run"]
-        cur_run.plan_snapshot = {
-            "lifecycle": {
-                "patrol": [
-                    {"step_id": "monkey_check", "action": "script:monkey_check"},
-                ],
-            },
-        }
-        db_session.add(cur_run)
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        assert resp.json()["data"]["legacy_patrol_in_snapshot"] is False
-
-    def test_watcher_summary_pull_sources_collects_distinct_reconciler(
-        self, client, auth_headers, db_session, chain_setup,
-    ):
-        """log_signal.extra.pull_source distinct 入 pull_sources;旧无 extra signal 不计入。"""
-        cur_run = chain_setup["current_run"]
-        j1 = chain_setup["job_completed"]
-
-        db_session.add_all([
-            JobLogSignal(
-                id=30001,
-                job_id=j1.id, host_id="host-101",
-                device_serial=chain_setup["device_completed"].serial,
-                seq_no=300, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.PS1",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={"pull_source": "reconciler", "package_name": "com.x"},
-            ),
-            JobLogSignal(  # 第二条同 source — 验证 DISTINCT 去重
-                id=30002,
-                job_id=j1.id, host_id="host-101",
-                device_serial=chain_setup["device_completed"].serial,
-                seq_no=301, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.PS2",
-                detected_at=_now() - timedelta(minutes=1),
-                extra={"pull_source": "reconciler", "package_name": "com.y"},
-            ),
-        ])
+        db_session.add(JobLogSignal(
+            id=30001,
+            job_id=j1.id, host_id="host-101",
+            device_serial=chain_setup["device_completed"].serial,
+            seq_no=300, category="AEE", source="reconciler",
+            path_on_device="/data/aee_exp/db.PS1",
+            detected_at=_now() - timedelta(minutes=2),
+            extra={"pull_source": "reconciler", "package_name": "com.x"},
+        ))
         db_session.commit()
 
         resp = client.get(
@@ -1794,9 +1711,8 @@ class TestWatcherSummaryEndpoint:
         )
         assert resp.status_code == 200
         data = resp.json()["data"]
-        # fixture 中 10001/10002 无 extra,只有新加的 2 条带 pull_source=reconciler
-        # → distinct 集合 = ["reconciler"]
-        assert data["pull_sources"] == ["reconciler"]
+        assert "legacy_patrol_in_snapshot" not in data
+        assert "pull_sources" not in data
 
     # ----------------------------------------------------------------------
     # M0/C-6 (§2.4 #5): watcher_capability 快照
@@ -1864,384 +1780,19 @@ class TestWatcherSummaryEndpoint:
         assert resp.json()["data"]["watcher_capability"] is None
 
 
-# ---------------------------------------------------------------------------
-# /aee-reconciliation (M1 / T1-4)
-# ---------------------------------------------------------------------------
-
-
 class TestAeeReconciliationEndpoint:
-    def test_reconciliation_groups_by_pull_source_and_serial(
-        self, client, auth_headers, db_session, chain_setup,
-    ):
-        """三路 pull_source(reconciler/legacy_patrol/inotifyd)分桶 + by_serial 聚合;
-        reconciler 按 nfs_path 去重(同目录算一次)。NFS 未配置 → nfs_dbg_files=None。"""
-        cur_run = chain_setup["current_run"]
-        j1 = chain_setup["job_completed"]
-        j2 = chain_setup["job_running"]
-        s1 = chain_setup["device_completed"].serial
-        s2 = chain_setup["device_running"].serial
-
-        db_session.add_all([
-            # reconciler:2 不同 nfs_path → 2;另 1 条重复 nfs_path → 去重不增
-            JobLogSignal(
-                id=40001, job_id=j1.id, host_id="host-101", device_serial=s1,
-                seq_no=400, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.R1",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={"pull_source": "reconciler", "nfs_path": "/nfs/j1/AEE/db.R1"},
-            ),
-            JobLogSignal(
-                id=40002, job_id=j1.id, host_id="host-101", device_serial=s1,
-                seq_no=401, category="VENDOR_AEE", source="reconciler",
-                path_on_device="/data/vendor/aee_exp/db.R2",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={"pull_source": "reconciler", "nfs_path": "/nfs/j1/VENDOR_AEE/db.R2"},
-            ),
-            JobLogSignal(
-                id=40003, job_id=j1.id, host_id="host-101", device_serial=s1,
-                seq_no=402, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.R1.dup",
-                detected_at=_now() - timedelta(minutes=1),
-                extra={"pull_source": "reconciler", "nfs_path": "/nfs/j1/AEE/db.R1"},  # 同 nfs_path
-            ),
-            # legacy_patrol on serial 2
-            JobLogSignal(
-                id=40004, job_id=j2.id, host_id="host-101", device_serial=s2,
-                seq_no=410, category="AEE", source="legacy_patrol",
-                path_on_device="/data/aee_exp/db.L1",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={"pull_source": "legacy_patrol", "nfs_path": "/nfs/j2/AEE/db.L1"},
-            ),
-            # inotifyd-sourced AEE (理论上 M0 已关闭,但历史数据可能存在)
-            JobLogSignal(
-                id=40005, job_id=j2.id, host_id="host-101", device_serial=s2,
-                seq_no=411, category="AEE", source="inotifyd",
-                path_on_device="/data/aee_exp/db.I1",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={"pull_source": "inotifyd"},
-            ),
-        ])
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
-
-        assert data["plan_run_id"] == cur_run.id
-        # reconciler:db.R1 + db.R2 = 2(db.R1 重复 nfs_path 去重)
-        assert data["reconciler_emitted"] == 2
-        assert data["legacy_patrol_emitted"] == 1
-        assert data["inotifyd_emitted"] == 1
-        # chain_setup fixture 预置 2 条无 pull_source 的 legacy AEE 信号
-        #   (10001@s2 / 10003@s3)→ 落 "other" 桶。
-        assert data["other_emitted"] == 2
-        assert data["total_emitted"] == 6
-
-        s3 = chain_setup["device_failed"].serial
-        by_serial = {r["device_serial"]: r for r in data["by_serial"]}
-        assert by_serial[s1]["reconciler"] == 2
-        assert by_serial[s1]["total"] == 2
-        assert by_serial[s2]["legacy_patrol"] == 1
-        assert by_serial[s2]["inotifyd"] == 1
-        assert by_serial[s2]["other"] == 1   # fixture 10001@s2
-        assert by_serial[s2]["total"] == 3
-        assert by_serial[s3]["other"] == 1   # fixture 10003@s3
-        assert by_serial[s3]["total"] == 1
-
-        # 无本 Run 可推导的 nfs_path / 设备目录 → NFS 侧为 None + note
-        assert data["nfs_dbg_files"] is None
-        assert data["nfs_root_scanned"] is None
-        assert data["signal_nfs_paths_checked"] == 0
-        assert data["nfs_entries_verified"] == 0
-        assert data["missing_on_disk"] == []
-        assert data["missing_in_signal"] == []
-        assert any("无法限定本 Run 的 NFS 范围" in n for n in data["notes"])
-
-    def test_reconciliation_ignores_non_aee_categories(
-        self, client, auth_headers, db_session, chain_setup,
-    ):
-        """ANR/MOBILELOG 不计入 AEE 对账(端点只比 AEE/VENDOR_AEE)。"""
-        cur_run = chain_setup["current_run"]
-        j2 = chain_setup["job_running"]
-        s2 = chain_setup["device_running"].serial
-        db_session.add_all([
-            JobLogSignal(
-                id=41001, job_id=j2.id, host_id="host-101", device_serial=s2,
-                seq_no=420, category="ANR", source="inotifyd",
-                path_on_device="/data/anr/trace_x",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={"pull_source": "inotifyd"},
-            ),
-            JobLogSignal(
-                id=41002, job_id=j2.id, host_id="host-101", device_serial=s2,
-                seq_no=421, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.OK",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={"pull_source": "reconciler", "nfs_path": "/nfs/j2/AEE/db.OK"},
-            ),
-        ])
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        # 仅 reconciler 的 AEE 计 1;ANR 不计入。
-        # fixture 预置 2 条 legacy AEE(无 pull_source)落 other → total = 1 + 2。
-        assert data["reconciler_emitted"] == 1
-        assert data["other_emitted"] == 2
-        assert data["total_emitted"] == 3
-
-    def test_reconciliation_empty_for_run_without_jobs(
+    def test_reconciliation_endpoint_removed_for_existing_run(
         self, client, auth_headers, chain_setup,
     ):
-        """无 Job 的 PlanRun → 全 0 + note 提示。"""
-        parent_run = chain_setup["parent_run"]
+        cur_run = chain_setup["current_run"]
         resp = client.get(
-            f"/api/v1/plan-runs/{parent_run.id}/aee-reconciliation",
+            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
             headers=auth_headers,
         )
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["total_emitted"] == 0
-        assert data["by_serial"] == []
-        assert any("无关联 Job" in n for n in data["notes"])
+        assert resp.status_code == 404
 
-    def test_reconciliation_404_for_unknown_run(self, client, auth_headers):
+    def test_reconciliation_endpoint_removed_for_unknown_run(self, client, auth_headers):
         resp = client.get(
             "/api/v1/plan-runs/999999/aee-reconciliation", headers=auth_headers,
         )
         assert resp.status_code == 404
-
-    def test_reconciliation_nfs_scoped_to_plan_run_signals(
-        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
-    ):
-        """NFS *.dbg 扫描限定在本 Run 信号 nfs_path 推导的设备目录,不扫全库。"""
-        nfs_root = tmp_path / "aee_nfs"
-        cur_run = chain_setup["current_run"]
-        j1 = chain_setup["job_completed"]
-        s1 = chain_setup["device_completed"].serial
-        s2 = chain_setup["device_running"].serial
-
-        run_a_dir = nfs_root / "RunA" / s1 / "AEE" / "crash_a"
-        run_a_dir.mkdir(parents=True)
-        (run_a_dir / "a1.dbg").write_text("a")
-        (run_a_dir / "a2.dbg").write_text("b")
-
-        run_b_dir = nfs_root / "RunB" / s2 / "AEE" / "crash_b"
-        run_b_dir.mkdir(parents=True)
-        for i in range(3):
-            (run_b_dir / f"b{i}.dbg").write_text("x")
-
-        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
-
-        db_session.add(
-            JobLogSignal(
-                id=42001, job_id=j1.id, host_id="host-101", device_serial=s1,
-                seq_no=500, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.A",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={
-                    "pull_source": "reconciler",
-                    "nfs_path": str(run_a_dir),
-                },
-            ),
-        )
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
-
-        assert data["nfs_dbg_files"] == 2
-        assert "RunA" in (data["nfs_root_scanned"] or "")
-        assert "RunB" not in (data["nfs_root_scanned"] or "")
-        assert "crash_b" not in data["missing_in_signal"]
-        assert data["missing_in_signal"] == []
-
-    def test_reconciliation_skips_outside_artifact_roots_in_scan_summary(
-        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
-    ):
-        """仅白名单内 nfs_path 计入 checked/scanned;白名单外路径不伪装成已扫描。"""
-        nfs_root = tmp_path / "aee_nfs"
-        cur_run = chain_setup["current_run"]
-        j1 = chain_setup["job_completed"]
-        s1 = chain_setup["device_completed"].serial
-
-        allowed_dir = nfs_root / "RunA" / s1 / "AEE" / "crash_ok"
-        allowed_dir.mkdir(parents=True)
-        (allowed_dir / "ok.dbg").write_text("ok")
-
-        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
-
-        db_session.add_all([
-            JobLogSignal(
-                id=43001, job_id=j1.id, host_id="host-101", device_serial=s1,
-                seq_no=510, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.OK",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={
-                    "pull_source": "reconciler",
-                    "nfs_path": str(allowed_dir),
-                },
-            ),
-            JobLogSignal(
-                id=43002, job_id=j1.id, host_id="host-101", device_serial=s1,
-                seq_no=511, category="AEE", source="legacy_patrol",
-                path_on_device="/data/aee_exp/db.SKIP",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={
-                    "pull_source": "legacy_patrol",
-                    "nfs_path": "/outside/root/crash_skip",
-                },
-            ),
-        ])
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
-
-        assert data["nfs_dbg_files"] == 1
-        assert data["signal_nfs_paths_checked"] == 1
-        assert data["nfs_entries_verified"] == 1
-        assert str(allowed_dir) in (data["nfs_root_scanned"] or "")
-        assert "/outside/root/crash_skip" not in (data["nfs_root_scanned"] or "")
-        assert any("白名单外 nfs_path" in n for n in data["notes"])
-
-    def test_reconciliation_marks_remote_linux_nfs_path_as_unverifiable(
-        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
-    ):
-        """Windows 后端看到远端 Linux host 路径时，不应误报成白名单外。"""
-        nfs_root = tmp_path / "aee_nfs"
-        cur_run = chain_setup["current_run"]
-        j1 = chain_setup["job_completed"]
-        serial = chain_setup["device_completed"].serial
-
-        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
-        monkeypatch.setattr(plan_run_routes, "_IS_WINDOWS", True)
-
-        db_session.add(
-            JobLogSignal(
-                id=43501, job_id=j1.id, host_id="host-101", device_serial=serial,
-                seq_no=512, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.REMOTE",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={
-                    "pull_source": "reconciler",
-                    "nfs_path": "/home/android/sonic_agent/logs/ftp_log/job-13/db.27.JE",
-                },
-            ),
-        )
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
-
-        assert data["signal_nfs_paths_checked"] == 0
-        assert data["nfs_entries_verified"] == 0
-        assert any("远端 nfs_path" in n for n in data["notes"])
-        assert not any("白名单外 nfs_path" in n for n in data["notes"])
-
-    def test_reconciliation_missing_entry_keeps_crash_dir_label(
-        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
-    ):
-        """signal 指向缺失 crash 目录时，应标记该目录名，不回退到 AEE 父目录。"""
-        nfs_root = tmp_path / "aee_nfs"
-        cur_run = chain_setup["current_run"]
-        j1 = chain_setup["job_completed"]
-        s1 = chain_setup["device_completed"].serial
-
-        missing_dir = nfs_root / "RunA" / s1 / "AEE" / "crash_missing"
-        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
-
-        db_session.add(
-            JobLogSignal(
-                id=44001, job_id=j1.id, host_id="host-101", device_serial=s1,
-                seq_no=520, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.MISS",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={
-                    "pull_source": "reconciler",
-                    "nfs_path": str(missing_dir),
-                },
-            ),
-        )
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
-
-        assert data["signal_nfs_paths_checked"] == 1
-        assert data["nfs_entries_verified"] == 0
-        assert data["missing_on_disk"] == ["crash_missing"]
-        assert "AEE" not in data["missing_on_disk"]
-
-    def test_reconciliation_same_device_folder_two_entries_only_run_signals(
-        self, client, auth_headers, db_session, chain_setup, monkeypatch, tmp_path,
-    ):
-        """同 {folder}/{serial} 下多 crash 条目(MMDD 共享布局);仅计本 Run signal 指向的条目。"""
-        nfs_root = tmp_path / "aee_nfs"
-        folder = "X6851-OP_16.3.0.022_SU_0530_MonkeyAEEinfo"
-        serial = chain_setup["device_completed"].serial
-        cur_run = chain_setup["current_run"]
-        j1 = chain_setup["job_completed"]
-
-        base = nfs_root / folder / serial / "aee_exp"
-        entry_first = base / "20250530_103000_db.01"
-        entry_second = base / "20250530_140000_db.02"
-        entry_first.mkdir(parents=True)
-        entry_second.mkdir(parents=True)
-        (entry_first / "a1.dbg").write_text("a")
-        (entry_first / "a2.dbg").write_text("b")
-        (entry_second / "b1.dbg").write_text("c")
-
-        monkeypatch.setenv("STP_AEE_NFS_ROOT", str(nfs_root))
-
-        db_session.add(
-            JobLogSignal(
-                id=45001, job_id=j1.id, host_id="host-101", device_serial=serial,
-                seq_no=530, category="AEE", source="reconciler",
-                path_on_device="/data/aee_exp/db.02",
-                detected_at=_now() - timedelta(minutes=2),
-                extra={
-                    "pull_source": "reconciler",
-                    "nfs_path": str(entry_second),
-                },
-            ),
-        )
-        db_session.commit()
-
-        resp = client.get(
-            f"/api/v1/plan-runs/{cur_run.id}/aee-reconciliation",
-            headers=auth_headers,
-        )
-        assert resp.status_code == 200, resp.text
-        data = resp.json()["data"]
-
-        assert data["nfs_dbg_files"] == 1
-        assert data["signal_nfs_paths_checked"] == 1
-        assert data["nfs_entries_verified"] == 1
-        scanned = data["nfs_root_scanned"] or ""
-        assert str(entry_second) in scanned
-        assert str(entry_first) not in scanned
-        assert data["missing_in_signal"] == []

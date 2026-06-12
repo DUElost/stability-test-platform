@@ -1586,7 +1586,7 @@ async def test_per_device_first_does_not_waste_capacity():
     try:
         host = Host(
             id=host_id, hostname=f"h-{suffix}",
-            max_concurrent_jobs=3, status=HostStatus.ONLINE.value, created_at=now,
+            status=HostStatus.ONLINE.value, created_at=now,
         )
         dev_a = Device(serial=f"PA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"PB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
@@ -1662,8 +1662,8 @@ async def test_per_device_first_does_not_waste_capacity():
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_concurrent_claim_capacity_does_not_exceed():
-    """Host row lock serialization: max_concurrent_jobs=1, two concurrent claims
-    with capacity=1 each must each claim a different device."""
+    """Host row lock serialization: two concurrent claims with capacity=1
+    each must each claim a different device."""
     import asyncio
 
     suffix = uuid4().hex[:8]
@@ -1674,7 +1674,7 @@ async def test_concurrent_claim_capacity_does_not_exceed():
     try:
         host = Host(
             id=host_id, hostname=f"h-{suffix}",
-            max_concurrent_jobs=1, status=HostStatus.ONLINE.value, created_at=now,
+            status=HostStatus.ONLINE.value, created_at=now,
         )
         dev_a = Device(serial=f"CC1-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"CC2-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
@@ -1734,6 +1734,9 @@ async def test_concurrent_claim_capacity_does_not_exceed():
         assert total_claimed == 2, (
             f"Each concurrent claim with capacity=1 must claim a different device (2 total); got {total_claimed}"
         )
+        assert all(len(r) <= 1 for r in results), (
+            f"No single claim may exceed its capacity=1; got {[len(r) for r in results]}"
+        )
 
         db_verify = SessionLocal()
         try:
@@ -1748,6 +1751,10 @@ async def test_concurrent_claim_capacity_does_not_exceed():
             )
             assert len(active_leases) == 2, (
                 f"Must have exactly 2 ACTIVE JOB leases; got {len(active_leases)}"
+            )
+            lease_device_ids = {l.device_id for l in active_leases}
+            assert len(lease_device_ids) == 2, (
+                "Leases must be on distinct devices (no device double-lease)"
             )
         finally:
             db_verify.close()
@@ -2499,7 +2506,7 @@ async def test_heartbeat_stores_capacity_and_health():
         db.add(host)
         db.flush()
 
-        cap = {"available_slots": 5, "max_concurrent_jobs": 8,
+        cap = {"available_slots": 5,
                "active_jobs": 3, "online_healthy_devices": 6,
                "effective_slots": 4, "active_devices": 2}
         health = {"status": "HEALTHY", "reasons": [],
@@ -2518,8 +2525,8 @@ async def test_heartbeat_stores_capacity_and_health():
         assert host.extra.get("capacity") == cap, f"capacity not stored; got {host.extra.get('capacity')}"
         assert host.extra.get("health") == health, f"health not stored; got {host.extra.get('health')}"
 
-        # Heartbeat response also includes backend capacity view
-        assert response_data["capacity"]["online_healthy_devices"] == 0  # no devices in payload
+        # Heartbeat response capacity view (93b9935 后仅含 online_healthy_devices)
+        assert response_data["capacity"] == {"online_healthy_devices": 0}  # no devices in payload
     finally:
         db.rollback()
         db.query(Host).filter(Host.id == host_id).delete()
@@ -2537,7 +2544,7 @@ def test_hosts_api_returns_capacity_health():
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
-        cap = {"available_slots": 3, "max_concurrent_jobs": 5,
+        cap = {"available_slots": 3,
                "effective_slots": 2, "active_jobs": 2,
                "online_healthy_devices": 4, "active_devices": 1}
         health = {"status": "HEALTHY", "reasons": [],
@@ -2604,7 +2611,7 @@ async def test_claim_filters_unhealthy_devices():
         # Create shared host
         host = Host(
             id=host_id, hostname=f"cfilt-{suffix}",
-            status=HostStatus.ONLINE.value, max_concurrent_jobs=5,
+            status=HostStatus.ONLINE.value,
         )
         db_sync.add(host)
         db_sync.commit()

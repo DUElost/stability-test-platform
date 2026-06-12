@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.api.routes.auth import get_current_active_user, User
+from backend.core.legacy_aee import LEGACY_AEE_TEMPLATE_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,10 @@ def _load_template(path: Path) -> PipelineTemplateOut:
     )
 
 
+def _is_hidden_template_name(name: str) -> bool:
+    return name in LEGACY_AEE_TEMPLATE_NAMES
+
+
 @router.get("/templates", response_model=List[PipelineTemplateOut])
 def list_pipeline_templates(
     _current_user: User = Depends(get_current_active_user),
@@ -50,6 +55,8 @@ def list_pipeline_templates(
         return []
     templates = []
     for f in sorted(TEMPLATES_DIR.glob("*.json")):
+        if _is_hidden_template_name(f.stem):
+            continue
         try:
             templates.append(_load_template(f))
         except Exception:
@@ -63,6 +70,8 @@ def get_pipeline_template(
     _current_user: User = Depends(get_current_active_user),
 ):
     """Get a specific pipeline template by name."""
+    if _is_hidden_template_name(name):
+        raise HTTPException(status_code=404, detail=f"Template '{name}' not found")
     path = TEMPLATES_DIR / f"{name}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Template '{name}' not found")

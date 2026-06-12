@@ -10,11 +10,12 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.database import get_db
+from backend.core.legacy_aee import hidden_legacy_plan_ids
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
 logger = logging.getLogger(__name__)
@@ -76,27 +77,38 @@ def get_activity(
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=hours)
     dialect = db.bind.dialect.name if db.bind is not None else ""
+    hidden_plan_ids = hidden_legacy_plan_ids(db)
+    hidden_clause = ""
+    params = {"since": since}
+    if hidden_plan_ids:
+        hidden_clause = " AND plan_id NOT IN :hidden_plan_ids"
+        params["hidden_plan_ids"] = tuple(hidden_plan_ids)
 
     if dialect == "postgresql":
-        rows = db.execute(text("""
+        stmt = text("""
             SELECT
                 to_char(date_trunc('hour', started_at), 'YYYY-MM-DD"T"HH24:00:00') AS hour,
                 status,
                 COUNT(*) AS cnt
             FROM job_instance
             WHERE started_at >= :since AND started_at IS NOT NULL
+        """ + hidden_clause + """
             GROUP BY hour, status
-        """), {"since": since}).fetchall()
+        """)
     else:
-        rows = db.execute(text("""
+        stmt = text("""
             SELECT
                 strftime('%Y-%m-%dT%H:00:00', started_at) AS hour,
                 status,
                 COUNT(*) AS cnt
             FROM job_instance
             WHERE started_at >= :since AND started_at IS NOT NULL
+        """ + hidden_clause + """
             GROUP BY hour, status
-        """), {"since": since}).fetchall()
+        """)
+    if hidden_plan_ids:
+        stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
+    rows = db.execute(stmt, params).fetchall()
 
     buckets: dict = {}
     for row in rows:
@@ -272,8 +284,14 @@ def get_completion_trend(
     """Daily pass/fail counts over the past N days."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
     dialect = db.bind.dialect.name if db.bind is not None else ""
+    hidden_plan_ids = hidden_legacy_plan_ids(db)
+    hidden_clause = ""
+    params = {"since": since}
+    if hidden_plan_ids:
+        hidden_clause = " AND plan_id NOT IN :hidden_plan_ids"
+        params["hidden_plan_ids"] = tuple(hidden_plan_ids)
     if dialect == "postgresql":
-        rows = db.execute(text("""
+        stmt = text("""
             SELECT
                 to_char(date_trunc('day', ended_at), 'YYYY-MM-DD') AS day,
                 status,
@@ -282,10 +300,11 @@ def get_completion_trend(
             WHERE ended_at >= :since
               AND ended_at IS NOT NULL
               AND status IN ('COMPLETED', 'FAILED', 'ABORTED')
+        """ + hidden_clause + """
             GROUP BY day, status
-        """), {"since": since}).fetchall()
+        """)
     else:
-        rows = db.execute(text("""
+        stmt = text("""
             SELECT
                 strftime('%Y-%m-%d', ended_at) AS day,
                 status,
@@ -294,8 +313,12 @@ def get_completion_trend(
             WHERE ended_at >= :since
               AND ended_at IS NOT NULL
               AND status IN ('COMPLETED', 'FAILED', 'ABORTED')
+        """ + hidden_clause + """
             GROUP BY day, status
-        """), {"since": since}).fetchall()
+        """)
+    if hidden_plan_ids:
+        stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
+    rows = db.execute(stmt, params).fetchall()
 
     buckets: dict = {}
     for row in rows:

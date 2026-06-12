@@ -146,81 +146,6 @@ function CategoryRow({
   );
 }
 
-// M1/T1-3a: 双写灰度状态徽章。
-//   legacy_patrol_in_snapshot 由后端从 plan_snapshot.lifecycle.patrol 推断;
-//   pull_sources 由后端按 log_signal.extra->>'pull_source' DISTINCT 聚合(当前唯一可能值: 'reconciler')。
-// 4 种组合:
-//   legacy=true  + reconciler  → 双写模式(灰度过渡期,正常)
-//   legacy=true  + (空)       → Patrol-only(reconciler 未启用 / 未灰度到本 host)
-//   legacy=false + reconciler  → Reconciler 单通道(M3 收尾后稳态)
-//   legacy=false + (空)       → 不渲染徽章(无 AEE 信号 / 还在 M0 准备期)
-type DualWriteVariant =
-  | { kind: 'dual_write';   label: string; tone: string; title: string }
-  | { kind: 'patrol_only';  label: string; tone: string; title: string }
-  | { kind: 'reconciler_only'; label: string; tone: string; title: string }
-  | null;
-
-function deriveDualWriteBadge(
-  legacyInSnapshot: boolean | undefined,
-  pullSources: string[] | undefined,
-): DualWriteVariant {
-  const legacy = !!legacyInSnapshot;
-  const hasReconciler = !!pullSources && pullSources.includes('reconciler');
-  if (legacy && hasReconciler) {
-    return {
-      kind: 'dual_write',
-      label: '双写模式',
-      tone: 'border-amber-300 bg-amber-50 text-amber-800',
-      title:
-        'plan_snapshot.lifecycle.patrol 仍含 scan_aee/export_mobilelogs(老路径),' +
-        '同时窗口内已收到 reconciler 信号(新路径已生效)。' +
-        '灰度过渡期正常;M2 模板下架后该徽章会自动变为「Reconciler 单通道」。',
-    };
-  }
-  if (legacy && !hasReconciler) {
-    return {
-      kind: 'patrol_only',
-      label: 'Patrol-only',
-      tone: 'border-gray-300 bg-gray-50 text-gray-700',
-      title:
-        'plan_snapshot.lifecycle.patrol 含 scan_aee/export_mobilelogs,但窗口内未观察到 reconciler 信号。' +
-        '可能原因:STP_WATCHER_AEE_RECONCILE_ENABLED 未启用 / 当前 host 未灰度到 RECONCILE_HOSTS / 窗口内本就无 AEE。',
-    };
-  }
-  if (!legacy && hasReconciler) {
-    return {
-      kind: 'reconciler_only',
-      label: 'Reconciler 单通道',
-      tone: 'border-green-300 bg-green-50 text-green-800',
-      title:
-        'plan_snapshot.lifecycle.patrol 已不含 scan_aee/export_mobilelogs,' +
-        'AEE 完全由 watcher reconciler 提供。M3 收尾后的稳态。',
-    };
-  }
-  return null;
-}
-
-function DualWriteBadge({
-  legacyInSnapshot,
-  pullSources,
-}: {
-  legacyInSnapshot: boolean | undefined;
-  pullSources: string[] | undefined;
-}) {
-  const v = deriveDualWriteBadge(legacyInSnapshot, pullSources);
-  if (!v) return null;
-  return (
-    <span
-      data-testid="watcher-dual-write-badge"
-      data-variant={v.kind}
-      title={v.title}
-      className={`ml-1 inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[11px] font-semibold ${v.tone}`}
-    >
-      {v.label}
-    </span>
-  );
-}
-
 // M0/C-6 (§2.4 #5): watcher_capability=unavailable 表示 watcher 未正常启动,
 //   AEE reconciler 可能也未运行;勿将 unavailable 误解为 reconciler 单通道兜底。
 function CapabilityBadge({ capability }: { capability: string | null | undefined }) {
@@ -360,12 +285,6 @@ export default function WatcherSummaryCard({
       >
         {breakdown && <AeeBreakdownChips breakdown={breakdown} />}
         {showDetails && data && <CapabilityBadge capability={data.watcher_capability} />}
-        {showDetails && data && (
-          <DualWriteBadge
-            legacyInSnapshot={data.legacy_patrol_in_snapshot}
-            pullSources={data.pull_sources}
-          />
-        )}
         <button
           type="button"
           data-testid="watcher-details-toggle"

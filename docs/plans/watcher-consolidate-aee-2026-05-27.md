@@ -530,7 +530,7 @@ class WatcherSummaryOut(BaseModel):
 | **M0.5 D1 P0** | ✅ **完成** | P0-#1 `_verify_pulled_aee_log_strict`；P0-#2 `correlated_mobilelogs/`；P0-#3 puller bugreport event_type；`test_aee_processor` / `test_puller` / `test_aee_bugreport` |
 | **M0 Reconciler+API+UI** | ✅ **完成**（偏差见 §11.2，已文档化） | reconciler 独占 emit + 180/60 burst + hash skip；`aee_breakdown` + WatcherSummaryCard；`watcher_capability` 聚合；`schema_version=1`；C-3 启动失败回滚 emit；`extra` 含 `nfs_path`/`pull_source=reconciler` |
 | **M1 双写（正式）** | 🟡 **未做 formal 签字；以最小现场验证收口** | 现场已完成更关键的 Watcher-only 验证链路：**run 18** 证明设备已有问题会重新进入当前 run 总览；**run 19** 证明运行中 `watcher-summary.watcher_capability` 已为 `inotifyd_root`、`aee-reconciliation` note 已改为“远端 `nfs_path` 不可直访”。不再追加“连续 1 周期 formal 双写签字”。 |
-| **M1→M2 加速** | ✅ **已完成（API / 现场）** | **2026-05-30**：`apply_watcher_only_plan2.py` / API 将 **Plan #2** patrol 改为仅 `monkey_check`，触发 **PlanRun #7**（`device_id=62`）；创建时 **RUNNING**，**终态待用户确认**（本次文档更新未连上中心 API）。**2026-05-30 ~ 2026-06-02**：run 18 / 19 以 reconciler + `watcher-summary` / `aee-reconciliation` 验收；**2026-06-03**：run 24 仓库模板 E2E 通过。 |
+| **M1→M2 加速** | ✅ **已完成（API / 现场）** | **2026-05-30**：经一次性 API 操作将 **Plan #2** patrol 改为仅 `monkey_check`，触发 **PlanRun #7**（`device_id=62`）；创建时 **RUNNING**，**终态待用户确认**（本次文档更新未连上中心 API）。**2026-05-30 ~ 2026-06-02**：run 18 / 19 以 reconciler + `watcher-summary` / `aee-reconciliation` 验收；**2026-06-03**：run 24 仓库模板 E2E 通过。 |
 | **M2 模板收口** | ✅ **已完成（仓库工作区）** | `backend/schemas/pipeline_templates/monkey_aee_patrol.json` / `monkey_aee_lifecycle.json` 已删除 `scan_aee`、`export_mobilelogs`，patrol 仅保留 `monkey_check`，并完成模板 `version` bump。 |
 | **M3 脚本退役** | ✅ **全量完成** | **2026-06-02**：本地 DB `scan_aee:1.0.0` / `export_mobilelogs:1.0.0` 置 `is_active=false`。代码侧 reconciler 已改用 `watcher:aee:*`，首次 tick 自动合并旧 `scan_aee:*`。离线迁移脚本：`backend/scripts/migrate_watcher_aee_state_keys.py`。**2026-06-03**：T3-4 文档标记 deprecated（本文件 + CLAUDE.md 更新），新 Plan 不应再引用 scan_aee/export_mobilelogs。 |
 | **M4 稳态** | 🟡 **进行中（3/4 完成，T4-1 延期到覆盖率数据积累后）** | **T4-2 (2026-06-03)**：新增 `stability_watcher_capability_total{capability}` Counter + `record_watcher_capability()` + pytest。**T4-3 (2026-06-03)**：决策 `on_unavailable` **保持 DEGRADED**——覆盖率数据不足，不改 FAIL。**T4-4 (2026-06-03)**：`reconcile_on_startup` 清理残留 active watcher_state（`agent_restart_stale_cleanup`）+ 3 case pytest。**T4-1**：暂不切 `STP_WATCHER_ENABLED` / `RECONCILE_ENABLED` 默认 `true`——需先在 2-3 台不同机型积累 1 周 capability 覆盖率数据（`stability_watcher_capability_total`），≥90% 后再切。 |
@@ -580,9 +580,6 @@ class WatcherSummaryOut(BaseModel):
 
 | 路径 | 说明 |
 |------|------|
-| `docs/plans/watcher-aee-m1-dual-write-runbook.md` | M1 操作手册（host 编号以实际为准；10.36 灰度） |
-| `backend/scripts/aee_dual_write_recon.py` | DB 只读对账（未跟踪时可入库） |
-| `backend/scripts/apply_watcher_only_plan2.py` | **2026-05-30** API 将 Plan #2 改为 Watcher-only 并触发 Run |
 | `backend/scripts/reset_dev_admin_password.py` | 已提交 `392c9dd` |
 | `patches/`、`MonkeyAEEinfo_260523.py` | 开发中间产物 / 参考脚本，**不应入库** |
 

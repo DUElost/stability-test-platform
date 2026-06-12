@@ -426,7 +426,7 @@ def test_emit_contract_violation_increments_dropped(monkeypatch):
 # ----------------------------------------------------------------------
 
 def test_state_key_prefix_migrated_to_watcher_namespace():
-    """M3:reconciler 迁到 watcher:aee 命名空间,patrol 默认保持 scan_aee。"""
+    """M3:watcher 主链与 processor 默认前缀都应落在 watcher:aee。"""
     from backend.agent.aee.db_history import state_key
     from backend.agent.aee.processor import ProcessConfig
 
@@ -451,16 +451,16 @@ def test_state_key_prefix_migrated_to_watcher_namespace():
     assert rec_a._cfg.state_key_prefix == "watcher:aee"
     assert rec_b._cfg.state_key_prefix == "watcher:aee"
 
-    patrol_default_prefix = ProcessConfig().state_key_prefix
-    assert patrol_default_prefix == "scan_aee"
+    default_prefix = ProcessConfig().state_key_prefix
+    assert default_prefix == "watcher:aee"
     reconciler_key = state_key("SX", "aee_exp", prefix=rec_a._cfg.state_key_prefix)
-    patrol_key = state_key("SX", "aee_exp", prefix=patrol_default_prefix)
+    default_key = state_key("SX", "aee_exp")
     assert reconciler_key == "watcher:aee:SX:aee_exp:processed_entries"
-    assert patrol_key == "scan_aee:SX:aee_exp:processed_entries"
+    assert default_key == "watcher:aee:SX:aee_exp:processed_entries"
 
 
-def test_reconciler_migrates_legacy_processed_entries_to_watcher_namespace(monkeypatch):
-    """首次 tick 将旧 scan_aee processed 集合并入 watcher:aee,避免运行期重复 emit。"""
+def test_reconciler_no_longer_runtime_migrates_legacy_processed_entries(monkeypatch):
+    """legacy state 迁移前移到 agent 启动期后,reconciler 运行期不再改写旧键。"""
     store = _MemStore()
     store.set_state(
         "scan_aee:SX:aee_exp:processed_entries",
@@ -490,12 +490,14 @@ def test_reconciler_migrates_legacy_processed_entries_to_watcher_namespace(monke
 
     assert rec.tick_once() == 0
     assert calls == ["watcher:aee"]
-    migrated = json.loads(store.get_state("watcher:aee:SX:aee_exp:processed_entries", "[]"))
-    assert migrated == ["existing-watcher-line", "legacy-line"]
+    watcher_lines = json.loads(store.get_state("watcher:aee:SX:aee_exp:processed_entries", "[]"))
+    legacy_lines = json.loads(store.get_state("scan_aee:SX:aee_exp:processed_entries", "[]"))
+    assert watcher_lines == ["existing-watcher-line"]
+    assert legacy_lines == ["legacy-line"]
 
 
-def test_reconciler_migrates_legacy_pending_pull_to_watcher_namespace(monkeypatch):
-    """旧 pending_pull 未完成任务也要迁移,避免改名前正在重试的 AEE 条目丢失。"""
+def test_reconciler_no_longer_runtime_migrates_legacy_pending_pull(monkeypatch):
+    """pending_pull 迁移也应在启动期完成,运行期 reconciler 不再接管旧键。"""
     store = _MemStore()
     store.set_state(
         "scan_aee:SX:aee_exp:pending_pull",
@@ -521,11 +523,10 @@ def test_reconciler_migrates_legacy_pending_pull_to_watcher_namespace(monkeypatc
     )
 
     assert rec.tick_once() == 0
-    migrated = json.loads(store.get_state("watcher:aee:SX:aee_exp:pending_pull", "{}"))
-    assert migrated == {
-        "existing-line": {"db_path": "/data/aee_exp/db.2"},
-        "legacy-line": {"db_path": "/data/aee_exp/db.1"},
-    }
+    watcher_pending = json.loads(store.get_state("watcher:aee:SX:aee_exp:pending_pull", "{}"))
+    legacy_pending = json.loads(store.get_state("scan_aee:SX:aee_exp:pending_pull", "{}"))
+    assert watcher_pending == {"existing-line": {"db_path": "/data/aee_exp/db.2"}}
+    assert legacy_pending == {"legacy-line": {"db_path": "/data/aee_exp/db.1"}}
 
 
 # ----------------------------------------------------------------------

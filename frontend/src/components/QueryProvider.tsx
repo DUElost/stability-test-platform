@@ -16,7 +16,6 @@ const OPERATIONAL_QUERY_KEYS = [
   ['hosts'],
   ['devices'],
   ['devices-all'],
-  ['tasks'],
   ['runs'],
   ['results'],
   ['results-summary'],

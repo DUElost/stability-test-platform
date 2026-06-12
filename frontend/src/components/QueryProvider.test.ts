@@ -17,7 +17,7 @@ describe('createQueryClient', () => {
       queryKey: ['plans', { limit: 100 }],
       queryFn: async () => [],
     });
-    const tasks = queryClient.defaultQueryOptions({
+    const retiredTasksKey = queryClient.defaultQueryOptions({
       queryKey: ['tasks', 1],
       queryFn: async () => null,
     });
@@ -29,7 +29,7 @@ describe('createQueryClient', () => {
     expect(unknown.staleTime).toBe(5_000);
     expect(users.staleTime).toBe(5 * 60 * 1_000);
     expect(plans.staleTime).toBe(60 * 1_000);
-    expect(tasks.staleTime).toBe(15 * 1_000);
+    expect(retiredTasksKey.staleTime).toBe(5_000);
     expect(planRun.staleTime).toBe(0);
   });
 });

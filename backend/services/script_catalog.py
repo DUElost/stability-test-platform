@@ -10,6 +10,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.models.script import Script
 
 _SUPPORTED_SUFFIXES = {
@@ -18,8 +19,6 @@ _SUPPORTED_SUFFIXES = {
     ".bat": "bat",
     ".cmd": "bat",
 }
-
-
 @dataclass
 class ScriptScanResult:
     created: int = 0
@@ -59,6 +58,8 @@ def _iter_script_entries(root: Path) -> Iterable[Tuple[str, str, str, Path, str]
     """
     for name_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         name = name_dir.name
+        if name in LEGACY_AEE_SCRIPT_NAMES:
+            continue
         for version_dir in sorted(p for p in name_dir.iterdir() if p.is_dir()):
             raw_version = version_dir.name
             if not raw_version.startswith("v") or len(raw_version) <= 1:

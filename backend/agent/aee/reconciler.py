@@ -14,7 +14,7 @@
     - 状态键(M3):reconciler 使用 `state_key_prefix="watcher:aee"`,
       经同一 `db_history.state_key` helper 生成
       `watcher:aee:{serial}:{aee_type}:processed_entries` / `:pending_pull` 键。
-      首次 tick 会把 M1/M2 遗留的 `scan_aee:*` 状态合并进新命名空间。
+      M3 后 legacy `scan_aee:*` 状态在 agent 启动期一次性迁移,运行期不再改写旧键。
       去重维度=(serial, aee_type)(AEE 是设备级事件、db_history 设备累积),
       与 patrol 一致;NFS 落盘目录本就与 prefix 无关(folder_name+serial),
       故共用键不改变 emit 语义、不引入新的正确性风险。
@@ -52,11 +52,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from ..watcher.contracts import ContractViolation
 from .db_history import load_processed_lines, save_processed_lines, state_key
 from .processor import ProcessConfig, process_device_logs
-from .state_migration import (
-    LEGACY_PATROL_STATE_PREFIX,
-    WATCHER_AEE_STATE_PREFIX,
-    migrate_legacy_aee_state_store,
-)
+from .state_migration import WATCHER_AEE_STATE_PREFIX
 from .timestamp import parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -364,8 +360,6 @@ class AeeDbHistoryReconciler:
         # 设备当前已存在问题也要导出,并纳入当前 Job 的总览。
         # baseline snapshot 只在每个 Job 首轮执行一次。
         self._baseline_snapshot_done = not baseline_snapshot_enabled
-        self._state_migration_done = False
-
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
@@ -489,7 +483,6 @@ class AeeDbHistoryReconciler:
         仍触发 burst。
         """
         self.stats.ticks_total += 1
-        self._migrate_legacy_runtime_state_once()
         baseline_new = 0
         if not self._baseline_snapshot_done:
             baseline_new, baseline_has_more = self._run_baseline_snapshot()
@@ -621,24 +614,6 @@ class AeeDbHistoryReconciler:
             processed = load_processed_lines(self._state_store, shared_key)
             processed.update(lines)
             save_processed_lines(self._state_store, shared_key, processed)
-
-    def _migrate_legacy_runtime_state_once(self) -> None:
-        if self._state_migration_done or self._state_prefix == LEGACY_PATROL_STATE_PREFIX:
-            return
-        summary = migrate_legacy_aee_state_store(
-            self._state_store,
-            serial=self._serial,
-            aee_types=self._runtime_aee_types(),
-        )
-        if (
-            int(summary["processed_entries_migrated"]) > 0
-            or int(summary["pending_pull_migrated"]) > 0
-        ):
-            logger.info(
-                "aee_reconciler_state_namespace_migrated serial=%s job=%d summary=%s",
-                self._serial, self._job_id, summary,
-            )
-        self._state_migration_done = True
 
     def _runtime_aee_types(self) -> Set[str]:
         result: Set[str] = set()
