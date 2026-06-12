@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional, Set
 
-from backend.core.aee_metadata import normalize_aee_event_type, normalize_aee_subtype
+from .metadata import normalize_aee_event_type, normalize_aee_subtype
 
 
 def parse_db_history_line(line_content: str) -> Optional[Dict[str, str]]:

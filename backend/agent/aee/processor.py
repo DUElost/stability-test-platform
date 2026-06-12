@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from backend.core.aee_metadata import (
+from .metadata import (
     infer_aee_subtype_from_paths,
     normalize_package_name,
     parse_exp_main_summary,

@@ -11,7 +11,7 @@ from typing import Dict
 
 import requests
 
-from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
+from ..legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from .local_db import LocalDB
 
 logger = logging.getLogger(__name__)

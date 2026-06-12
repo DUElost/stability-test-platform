@@ -1,6 +1,8 @@
 """Regression checks for the script-only agent cleanup."""
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -202,6 +204,29 @@ def test_legacy_aee_script_names_use_single_shared_source():
     assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_catalog.__dict__
     assert "_LEGACY_AEE_SCRIPT_NAMES" not in script_registry.__dict__
     assert not hasattr(state_migration, "migrate_legacy_aee_state_store")
+
+
+def test_agent_runtime_imports_without_backend_package():
+    """Hot-update deploys backend/agent as package ``agent`` without backend.core."""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(REPO_ROOT / "backend")
+    code = "\n".join([
+        "import agent.main",
+        "import agent.registry.script_registry",
+        "import agent.aee.db_history",
+        "import agent.aee.processor",
+        "import agent.aee.reconciler",
+    ])
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(REPO_ROOT.parent),
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkeypatch):
