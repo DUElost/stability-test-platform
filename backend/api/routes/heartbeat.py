@@ -6,13 +6,13 @@ import uuid
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, or_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
 from backend.models.host import Host, Device
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import LeaseStatus, LeaseType
+from backend.models.enums import LeaseStatus
 from backend.core.metrics import record_agent_outbox_pending
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
@@ -353,18 +353,6 @@ def _process_heartbeat_with_db(
         )
 
     db.commit()
-
-    # ADR-0019 Phase 4b: count ALL ACTIVE JOB leases for backend capacity view.
-    # Grace-held (expired) leases still occupy capacity slots until Reconciler releases them.
-    active_job_lease_count = (
-        db.query(func.count())
-        .select_from(DeviceLease)
-        .filter(
-            DeviceLease.host_id == host.id,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            DeviceLease.status == LeaseStatus.ACTIVE.value,
-        )
-    ).scalar() or 0
 
     return {
         "ok": True,

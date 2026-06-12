@@ -293,7 +293,7 @@ async def _claim_jobs_for_host(
 
     Phase 2d hardening:
     - Host row FOR UPDATE serializes concurrent claims for the same host
-    - Capacity is authoritative (host.max_concurrent_jobs), Agent's "capacity" is a soft cap
+    - Capacity comes from the Agent's reported value; real cap is the free healthy device count (93b9935 removed the host slot limit)
     - Non-expired ACTIVE leases (JOB/Script/MAINTENANCE) pre-filter busy devices
     - row_number() per device picks the earliest PENDING job
     - FOR UPDATE OF JobInstance SKIP LOCKED prevents thundering herd
