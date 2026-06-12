@@ -22,7 +22,6 @@ def _healthy_mount_status():
 
 def test_all_healthy_full_slots():
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=2,
         active_device_count=1,
         online_healthy_devices=8,
@@ -35,8 +34,8 @@ def test_all_healthy_full_slots():
 
     assert health["status"] == "HEALTHY"
     assert health["reasons"] == []
-    assert cap["available_slots"] == 8   # 10 - 2
-    assert cap["effective_slots"] == 7   # min(8, 8-1=7, 10) = 7
+    assert cap["available_slots"] == 7   # online_healthy(8) - active_device(1)
+    assert cap["effective_slots"] == 7   # min(7, health_limit=10000)
 
 
 # ── Test 2: CPU 超高 → UNSCHEDULABLE ──────────────────────────────────────────
@@ -44,7 +43,6 @@ def test_all_healthy_full_slots():
 def test_cpu_high_unschedulable():
     stats = {"cpu_load": 95, "ram_usage": 50, "disk_usage": {"usage_percent": 40}}
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=5,
@@ -62,7 +60,6 @@ def test_cpu_high_unschedulable():
 def test_ram_high_unschedulable():
     stats = {"cpu_load": 20, "ram_usage": 97, "disk_usage": {"usage_percent": 40}}
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=5,
@@ -80,7 +77,6 @@ def test_ram_high_unschedulable():
 def test_disk_high_unschedulable():
     stats = {"cpu_load": 20, "ram_usage": 50, "disk_usage": {"usage_percent": 97}}
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=5,
@@ -98,7 +94,6 @@ def test_disk_high_unschedulable():
 def test_mount_failed_unschedulable():
     mount = {"/mnt/data": {"ok": False}}
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=5,
@@ -115,7 +110,6 @@ def test_mount_failed_unschedulable():
 def test_device_limit_reduces_slots():
     """online_healthy_devices=0 但有 total_devices=5 → adb 全死触发 health gate=0。"""
     result = compute_capacity(
-        max_concurrent_jobs=10,
         active_job_count=0,
         active_device_count=0,
         online_healthy_devices=0,
