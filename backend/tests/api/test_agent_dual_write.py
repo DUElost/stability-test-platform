@@ -1359,8 +1359,9 @@ async def test_active_lease_excludes_device(lease_type):
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_capacity_capped_by_max_concurrent_jobs():
-    """host.max_concurrent_jobs=2, 1 active JOB lease -> effective_capacity=1."""
+async def test_claim_not_capped_by_host_slot_limit():
+    """93b9935 移除 host 槽位上限后,claim 仅受 Agent capacity 与空闲设备数约束:
+    1 active lease + 2 空闲设备 + capacity=10 -> 2 个 Job 全部认领。"""
     suffix = uuid4().hex[:8]
     host_id = f"dwh-{suffix}"
     now = datetime.now(timezone.utc)
@@ -1369,7 +1370,7 @@ async def test_capacity_capped_by_max_concurrent_jobs():
     try:
         host = Host(
             id=host_id, hostname=f"h-{suffix}",
-            max_concurrent_jobs=2, status=HostStatus.ONLINE.value, created_at=now,
+            status=HostStatus.ONLINE.value, created_at=now,
         )
         dev_a = Device(serial=f"CA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"CB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
@@ -1430,8 +1431,8 @@ async def test_capacity_capped_by_max_concurrent_jobs():
             claimed, _ = await _claim_jobs_for_host(
                 async_db, host_id, capacity=10,
             )
-            assert len(claimed) == 1, (
-                f"Effective capacity must cap at 1; got {len(claimed)}"
+            assert len(claimed) == 2, (
+                f"Both free-device jobs must be claimed (no host slot cap); got {len(claimed)}"
             )
             active_leases = (await async_db.execute(
                 select(DeviceLease).where(
@@ -1440,8 +1441,8 @@ async def test_capacity_capped_by_max_concurrent_jobs():
                     DeviceLease.status == LeaseStatus.ACTIVE.value,
                 )
             )).scalars().all()
-            assert len(active_leases) == 2, (
-                "Should have 2 ACTIVE JOB leases (1 pre-existing + 1 claimed)"
+            assert len(active_leases) == 3, (
+                "Should have 3 ACTIVE JOB leases (1 pre-existing + 2 claimed)"
             )
     finally:
         _cleanup_custom(seed)
@@ -1449,7 +1450,7 @@ async def test_capacity_capped_by_max_concurrent_jobs():
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_zero_capacity_returns_empty_no_state_change():
-    """effective_capacity=0 -> empty list, job status unchanged, host lock released."""
+    """Agent capacity=0 -> empty list, job status unchanged, host lock released."""
     suffix = uuid4().hex[:8]
     host_id = f"dwh-{suffix}"
     now = datetime.now(timezone.utc)
@@ -1458,7 +1459,7 @@ async def test_zero_capacity_returns_empty_no_state_change():
     try:
         host = Host(
             id=host_id, hostname=f"h-{suffix}",
-            max_concurrent_jobs=1, status=HostStatus.ONLINE.value, created_at=now,
+            status=HostStatus.ONLINE.value, created_at=now,
         )
         dev_a = Device(serial=f"ZA-{suffix}", host_id=host_id, status="BUSY", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"ZB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
@@ -1509,7 +1510,7 @@ async def test_zero_capacity_returns_empty_no_state_change():
     try:
         async with AsyncSessionLocal() as async_db:
             claimed, _ = await _claim_jobs_for_host(
-                async_db, host_id, capacity=10,
+                async_db, host_id, capacity=0,
             )
             assert claimed == [], "Zero effective capacity must return empty list"
 
@@ -1662,8 +1663,8 @@ async def test_per_device_first_does_not_waste_capacity():
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_concurrent_claim_capacity_does_not_exceed():
-    """Host row lock serialization: max_concurrent_jobs=1, two concurrent claims
-    must produce exactly 1 successful claim."""
+    """Host row lock serialization: 两个并发 claim 各 capacity=1,
+    串行化后各认领 1 个不同设备的 Job,无设备双租约。"""
     import asyncio
 
     suffix = uuid4().hex[:8]
@@ -1674,7 +1675,7 @@ async def test_concurrent_claim_capacity_does_not_exceed():
     try:
         host = Host(
             id=host_id, hostname=f"h-{suffix}",
-            max_concurrent_jobs=1, status=HostStatus.ONLINE.value, created_at=now,
+            status=HostStatus.ONLINE.value, created_at=now,
         )
         dev_a = Device(serial=f"CC1-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"CC2-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
@@ -1731,8 +1732,11 @@ async def test_concurrent_claim_capacity_does_not_exceed():
         await asyncio.gather(*tasks)
 
         total_claimed = sum(len(r) for r in results)
-        assert total_claimed == 1, (
-            f"Exactly 1 claim must succeed; got {total_claimed}"
+        assert total_claimed == 2, (
+            f"Each concurrent claim (capacity=1) takes one distinct device; got {total_claimed}"
+        )
+        assert all(len(r) <= 1 for r in results), (
+            f"No single claim may exceed its capacity=1; got {[len(r) for r in results]}"
         )
 
         db_verify = SessionLocal()
@@ -1746,8 +1750,12 @@ async def test_concurrent_claim_capacity_does_not_exceed():
                 )
                 .all()
             )
-            assert len(active_leases) == 1, (
-                f"Must have exactly 1 ACTIVE JOB lease; got {len(active_leases)}"
+            assert len(active_leases) == 2, (
+                f"Must have exactly 2 ACTIVE JOB leases; got {len(active_leases)}"
+            )
+            lease_device_ids = {l.device_id for l in active_leases}
+            assert len(lease_device_ids) == 2, (
+                "Leases must be on distinct devices (no device double-lease)"
             )
         finally:
             db_verify.close()
@@ -2499,7 +2507,7 @@ async def test_heartbeat_stores_capacity_and_health():
         db.add(host)
         db.flush()
 
-        cap = {"available_slots": 5, "max_concurrent_jobs": 8,
+        cap = {"available_slots": 5,
                "active_jobs": 3, "online_healthy_devices": 6,
                "effective_slots": 4, "active_devices": 2}
         health = {"status": "HEALTHY", "reasons": [],
@@ -2518,10 +2526,8 @@ async def test_heartbeat_stores_capacity_and_health():
         assert host.extra.get("capacity") == cap, f"capacity not stored; got {host.extra.get('capacity')}"
         assert host.extra.get("health") == health, f"health not stored; got {host.extra.get('health')}"
 
-        # Heartbeat response also includes backend capacity view
-        assert response_data["capacity"]["max_concurrent_jobs"] == 8
-        assert response_data["capacity"]["online_healthy_devices"] == 0  # no devices in payload
-        assert "backend_available_slots" in response_data["capacity"]
+        # Heartbeat response capacity view (93b9935 后仅含 online_healthy_devices)
+        assert response_data["capacity"] == {"online_healthy_devices": 0}  # no devices in payload
     finally:
         db.rollback()
         db.query(Host).filter(Host.id == host_id).delete()
@@ -2530,7 +2536,7 @@ async def test_heartbeat_stores_capacity_and_health():
 
 
 def test_hosts_api_returns_capacity_health():
-    """_host_to_out() 从 host.extra 正确提取 capacity/health/max_concurrent_jobs."""
+    """_host_to_out() 从 host.extra 正确提取 capacity/health."""
     from backend.api.routes.hosts import _host_to_out
 
     suffix = uuid4().hex[:8]
@@ -2539,7 +2545,7 @@ def test_hosts_api_returns_capacity_health():
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
-        cap = {"available_slots": 3, "max_concurrent_jobs": 5,
+        cap = {"available_slots": 3,
                "effective_slots": 2, "active_jobs": 2,
                "online_healthy_devices": 4, "active_devices": 1}
         health = {"status": "HEALTHY", "reasons": [],
@@ -2551,7 +2557,6 @@ def test_hosts_api_returns_capacity_health():
             status=HostStatus.ONLINE.value, ip="10.0.0.3",
             ip_address="10.0.0.3", last_heartbeat=now,
             extra={"capacity": cap, "health": health},
-            max_concurrent_jobs=5,
         )
         db.add(host)
         db.commit()
@@ -2561,7 +2566,6 @@ def test_hosts_api_returns_capacity_health():
 
         assert host_out.capacity == cap, f"capacity mismatch: {host_out.capacity}"
         assert host_out.health == health, f"health mismatch: {host_out.health}"
-        assert host_out.max_concurrent_jobs == 5
     finally:
         db.rollback()
         db.query(Host).filter(Host.id == host_id).delete()
@@ -2664,9 +2668,6 @@ def test_hosts_api_backward_compat_no_capacity():
 
         assert host_out.capacity is None
         assert host_out.health is None
-        # max_concurrent_jobs defaults to 2 in DB; backward compat means
-        # it's still present but not overridden by extra
-        assert host_out.max_concurrent_jobs == 2
     finally:
         db.rollback()
         db.query(Host).filter(Host.id == host_id).delete()
