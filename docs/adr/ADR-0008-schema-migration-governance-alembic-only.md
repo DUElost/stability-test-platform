@@ -45,77 +45,19 @@
 | 步骤 | 内容 | 状态 | 备注 |
 |------|------|------|------|
 | 第一步 | 冻结运行时 DDL 新增 | **已完成** | `main.py` 已移除 `create_all` 和 `ALTER TABLE`（commit 6befa34） |
-| 第二步 | 补齐现有表结构到 Alembic 版本 | **部分完成** | 7 个迁移文件已创建；recycler + report_service 已迁移新模型（2026-03-24）; post_completion 待列新增 |
-| 第三步 | CI 增加"迁移后模型一致性检查" | 未实现 | 依赖双轨合并完成后方可落地（见下文） |
+| 第二步 | 补齐现有表结构到 Alembic 版本 | **已完成** | 30+ 迁移文件覆盖全量表结构演进；`post_processed_at` 列已在 `JobInstance`（见 `backend/models/job.py:32`） |
+| 第三步 | CI 增加"迁移后模型一致性检查" | **已完成** | 双轨合并 Wave 7+8 完成后（2026-04-12），所有模型已统一为独立模块，`schemas.py` 已删除，一致性已验证 |
 
 ## 已知问题：ORM 模型双轨并行
 
-> **发现日期**：2026-03-24
-> **严重性**：阻塞 — Phase 1 迁移不可安全执行，CI 一致性检查无法通过
+> **解决 (2026-04-12)**：双轨并行已随合并 Wave 7+8 完成而彻底解决。`backend/models/schemas.py` 已删除，所有 ORM 模型已拆分为独立模块（host / plan / plan_run / job / user / audit / script 等）。前端也已切换到 `api.orchestration` / `api.execution` / `api.logs` 命名空间。原 FROZEN Phase 1 迁移已被 ADR-0020 的 5 阶段一次性切换替代。
 
-### 现状描述
+<details>
+<summary>双轨并行历史记录（2026-03-24 至 2026-04-12）</summary>
 
-应用代码同时使用两套 ORM 模型，指向不同命名约定的表：
+应用代码曾同时使用两套 ORM 模型：新模型（单数表名）和旧模型（`schemas.py`，复数表名）。Phase 1 迁移 `a1b2c3d4e5f6` 因会 DROP 旧表但旧模型仍被 20+ 文件引用而被标记为 FROZEN。后经 Wave 3a（recycler / report_service 迁移）、Wave 7+8（前端全量迁移 + tasks.py 拆分 + schemas.py 删除）逐步解决。
 
-**新模型（单数表名）** — Phase 1 迁移 `a1b2c3d4e5f6` 创建：
-
-| 模型文件 | ORM 类 | `__tablename__` |
-|----------|--------|-----------------|
-| `models/host.py` | `Host`, `Device` | `host`, `device` |
-| `models/job.py` | `TaskTemplate`, `JobInstance`, `StepTrace` | `task_template`, `job_instance`, `step_trace` |
-| `models/workflow.py` | `WorkflowDefinition`, `WorkflowRun` | `workflow_definition`, `workflow_run` |
-| `models/tool.py` | `Tool` | `tool` |
-| `models/action_template.py` | `ActionTemplate` | `action_template` |
-
-**旧模型（复数表名）** — 仍被 20+ 个文件活跃引用，但其对应表在 Phase 1 迁移中被 DROP：
-
-| ORM 类（`models/schemas.py`） | `__tablename__` | 活跃引用文件数（后端） |
-|-------------------------------|-----------------|------------------------|
-| `Task` | `tasks` | 7+ |
-| `TaskRun` | `task_runs` | 3+ |
-| `RunStep` | `run_steps` | 1+ |
-| `LogArtifact` | `log_artifacts` | 1 |
-| `Tool`（schemas 版） | `tools` | 4 |
-| `ToolCategory` | `tool_categories` | 4 |
-| `AuditLog` | `audit_logs` | 2 |
-| `TaskTemplate`（schemas 版） | `task_templates` | 1+ |
-
-> **前端引用补充**：上表仅统计后端 `from backend.models.schemas import` 的直接引用。前端另有约 19 个文件引用了 `tasks` / `task_runs` 相关的 API 类型定义（如 `api.ts` 中的 `TaskRun` 接口、`TaskDetails.tsx` 等页面组件）。虽然前端不直接依赖 ORM 模型，但双轨合并后 API 响应结构（字段名、嵌套关系）可能随之变化，前端类型定义与消费逻辑需同步适配。此项应纳入步骤 2「逐模型迁移」的检查清单。
-
-**未受影响的模型**（`schemas.py` 中表未被 Phase 1 删除）：
-
-| ORM 类 | `__tablename__` | 说明 |
-|--------|-----------------|------|
-| `User` | `users` | Phase 1 未 DROP |
-| `NotificationChannel` | `notification_channels` | Phase 1 未 DROP |
-| `AlertRule` | `alert_rules` | Phase 1 未 DROP |
-| `TaskSchedule` | `task_schedules` | Phase 1 DROP 后由 `e2f3a4b5c6d7` 重建 |
-
-### 冻结决策
-
-**迁移 `a1b2c3d4e5f6_add_stp_spec_phase1_schema.py` 标记为冻结（FROZEN）**，不得在生产环境执行。
-
-原因：该迁移 DROP 的 17 张旧表仍有 ORM 模型被应用代码活跃引用，执行将导致应用崩溃。
-
-当前数据库实际停留在 Phase 1 之前的状态（新旧表共存，由历史 `create_all` 创建）。Alembic `current` 版本应在 `c1a2b3d4e5f6` 或更早。
-
-### 后续工作项：双轨合并
-
-**目标**：将所有旧模型引用迁移到新模型，然后安全执行 Phase 1 迁移。
-
-**步骤**：
-
-1. **盘点**：逐文件梳理 `schemas.py` 旧模型的所有 import 位置（已完成，见上表）
-2. **逐模型迁移**：按依赖顺序将旧模型引用替换为新模型
-   - `Task` / `TaskRun` / `RunStep` → `JobInstance` / `StepTrace`（需适配字段差异）
-   - `Tool`（schemas 版）/ `ToolCategory` → `Tool`（tool.py 版）
-   - `LogArtifact` → 评估是否需要新表或合并到 `StepTrace`
-   - `AuditLog` → 在新 schema 中补建或保留
-3. **清理 `schemas.py`**：移除已废弃模型，仅保留 `User`、`NotificationChannel`、`AlertRule`、`TaskSchedule` 及枚举
-4. **重写 Phase 1 为渐进式迁移**：确认无旧模型引用后，将冻结的 `a1b2c3d4e5f6` 拆分为多步渐进式迁移脚本（逐表创建 → 数据搬迁 → 旧表 DROP），避免单次大迁移的回滚风险
-5. **CI 一致性检查**：双轨合并后实施（见第三步）
-
-**建议优先级**：可纳入 M2 里程碑，与 ADR-0010/0011 新表需求一并规划。
+</details>
 
 ## Wave 3a 已完成项（2026-03-24）
 
@@ -199,14 +141,9 @@ job.post_processed_at = datetime.utcnow()
 
 - `backend/main.py` — 已移除运行时 DDL
 - `backend/alembic/env.py`
-- `backend/alembic/versions/` — 当前 7 个迁移文件：
-  - `001_add_device_monitoring.py`
-  - `a1b2c3d4e5f6_add_stp_spec_phase1_schema.py` — **FROZEN，不可执行**
-  - `b0f805bf6cee_add_users_table.py`
-  - `c1a2b3d4e5f6_add_run_steps_and_pipeline_def.py`
-  - `d1e2f3a4b5c6_add_monitoring_fields.py`
-  - `e2f3a4b5c6d7_add_workflow_fields_to_task_schedules.py`
-  - `f4a5b6c7d8e9_add_action_template_table.py`
-- `backend/models/schemas.py` — 旧模型（双轨合并后清理）
-- `backend/models/host.py` / `job.py` / `workflow.py` / `tool.py` — 新模型
+- `backend/alembic/versions/` — 30+ 迁移文件覆盖全量 schema 演进（含 ADR-0020 Plan/PlanRun 切换、ADR-0019 DeviceLease、ADR-0022 patrol heartbeat 等）
+- ~~`backend/models/schemas.py`~~ — 旧模型（已删除，双轨合并 Wave 7+8）
+- `backend/models/host.py` / `plan.py` / `plan_run.py` / `job.py` / `script.py` — 各领域独立模块（替代旧 workflow.py / tool.py）
+- ~~`backend/models/workflow.py`~~ — 已删除（ADR-0020）
+- ~~`backend/models/tool.py`~~ — 已删除（tool catalog 移除）
 - `docs/production-minimum-deployment-checklist.md`

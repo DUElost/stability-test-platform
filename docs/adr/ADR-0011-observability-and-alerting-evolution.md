@@ -46,8 +46,7 @@
   - 业务指标：task dispatch、device lock、task run、host/device、recycler、API 请求（共 18 项）
   - 框架指标：saq_tasks_total、saq_task_duration、saq_queue_depth、socketio_connections_active、apscheduler_job_runs_total、apscheduler_job_duration（共 6 项）
   - Grafana dashboard：`docs/grafana/stability-platform-dashboard.json`（7 分组、20 面板）
-- ⬜ 第二层（告警规则）：选定 MVP 告警阈值并落地默认规则。
-- ⬜ 第三层（运维闭环）：建立"部署后 30 分钟观测窗口"标准动作；结合回归数据持续调整阈值。
+- 后续以独立 ADR 方式重启告警规则与运维闭环规划（当前 ADR 仅锁定第一层指标基线）
 
 ## 关联实现/文档
 

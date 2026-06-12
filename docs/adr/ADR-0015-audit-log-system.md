@@ -26,7 +26,7 @@
 | user_id | Integer (FK) | 操作用户 ID |
 | username | String | 用户名（冗余存储） |
 | action | String | 操作类型（create/update/delete/start/cancel 等） |
-| resource_type | String | 资源类型（task/workflow/tool/notification 等） |
+| resource_type | String | 资源类型（host / device / script / script_catalog / notification_channel / notification_rule / schedule / resource_pool / action_template / job_instance / plan_run 等） |
 | resource_id | Integer | 资源 ID |
 | details | JSON | 操作详情 |
 | ip_address | String | 客户端 IP |
@@ -71,14 +71,23 @@
 - ✅ 审计日志 API（只读）
 - ✅ 前端 AuditLogPage
 - ⏳ 在关键业务操作点植入审计记录
+
+> ⚠️ **2026-06-12 审计覆盖现状**：当前 `record_audit` / `record_audit_async` 覆盖了 8 个路由模块（`hosts` / `devices` / `scripts` / `schedules` / `notifications` / `resource_pools` / `action_templates` / `plan_runs[abort]`），以及 3 个服务层调用点（`plan_dispatcher_sync` dispatch 失败 / wifi 分配 / recycler）。**尚未覆盖的写操作路由**：
+> - `plans.py`（5 个写端点：CRUD + run/preview）— Plan 是核心编排实体，无审计影响变更追溯
+> - `users.py`（5 个写端点：CRUD + toggle-active + change-password）— 用户管理无审计影响安全合规
+> - `auth.py`（5 个写端点：register / login / token / refresh / logout）— 认证事件无审计影响安全事件响应
+>
+> 其中 **`users.py` 和 `auth.py` 的缺失直接影响安全合规基线**，建议优先补齐。
+
 - ⏳ 审计日志归档策略
 
 ## 关联实现/文档
 
 ### 后端
-- `backend/models/schemas.py` - AuditLog 模型定义
+- `backend/models/audit.py` — AuditLog ORM 模型定义（原 `schemas.py` 已拆分为独立模块）
 - `backend/api/routes/audit.py` - 审计日志 API
-- `backend/api/schemas.py` - AuditLogOut Schema
+- `backend/api/schemas/audit.py` — AuditLogOut Schema（原 `schemas.py` 已拆分）
+- `backend/core/audit.py` — `record_audit` / `record_audit_async` 审计写入函数
 
 ### 前端
 - `frontend/src/pages/audit/AuditLogPage.tsx` - 审计日志页面

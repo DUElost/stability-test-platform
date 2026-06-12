@@ -1,5 +1,8 @@
 # ADR-0010: 部署能力作业化（异步、幂等、可回放）
-- 状态：Proposed
+
+> **归档 (2026-06-12)**：本 ADR 已被 [ADR-0020](./ADR-0020-plan-step-one-shot-migration.md) 取代。部署能力已统一到 Plan → PlanRun → JobInstance 编排执行体系中，无需独立的部署作业管线。原计划的 `deploy.py` / OpenSpec 文档不再创建。
+
+- 状态：~~Proposed~~ → 已归档（被 ADR-0020 取代）
 - 优先级：P1
 - 目标里程碑：M2
 - 日期：2026-02-18
