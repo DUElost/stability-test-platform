@@ -10,14 +10,9 @@
 
 平台早期引入了 `BaseTestCase`（`backend/agent/test_framework.py`）作为测试脚本的基础类，提供 stage 流程管理、HTTP 心跳上报、日志缓冲等能力。
 
-随着 Pipeline 执行引擎（ADR-0014）的落地，所有执行能力已由以下两类 Action 完整覆盖：
+随着 Pipeline 执行引擎（ADR-0014）的落地，所有执行能力已由 `script:<name>` Action 完整覆盖（通过 ScriptRegistry 解析脚本目录）。
 
-| Action 类型 | 前缀 | 适用场景 |
-|------------|------|---------|
-| 内置 Action | `builtin:<name>` | 设备操作、进程管理、日志采集等通用能力 |
-| Tool Action | `tool:<id>` | 注册的自定义 Pipeline Action 脚本 |
-
-> **注意**：`shell:<command>` 仅在 legacy phases 格式中残留，stages/lifecycle 格式**不支持**（详见 ADR-0014 决策）。新增 Action 必须使用 `builtin:` 或 `tool:` 前缀。
+> ⚠️ **2026-06-12 勘误**：原 Action 类型表列出 `builtin:<name>` 和 `tool:<id>` 两种——两者已于 2026-05-04 从引擎中删除（见 [ADR-0014](./ADR-0014-pipeline-execution-engine.md) 变更记录）。当前唯一合法 Action 类型为 `script:<name>`。
 
 `BaseTestCase` 体系存在以下根本性问题：
 
@@ -35,13 +30,15 @@
 1. **禁止新增**：禁止新建任何继承自 `BaseTestCase` 的类。
 2. **禁止桥接**：`PipelineEngine` 不得为 `BaseTestCase` 提供任何适配层（如 `_is_base_test_case()`、`_run_base_test_case()`）。bridging 代码一旦出现，须立即回滚。
 3. **强制迁移路径**：现有 `BaseTestCase` 脚本按以下路径迁移：
-   - **可通用化的能力** → 实现为 `builtin:` Action（位于 `backend/agent/actions/`）
-   - **不可通用化的专项逻辑** → 实现为 `tool:` Action（原生 Pipeline Action 类，`run(ctx: StepContext) -> StepResult` 接口）
-   - **参数差异** → 通过 `pipeline_def` 中的 `params` 字段传入，不在代码中 hardcode
-4. **文件保留但冻结**：`backend/agent/test_framework.py` 暂时保留（避免删除引发隐性依赖），但：
-   - 文件顶部已标注 `# DEPRECATED` 声明
-   - 不得向该文件添加任何新功能
-   - 不得在新代码中 `import` 该模块
+   - **可通用化的能力** → 实现为 `script:<name>` 脚本（位于 `backend/agent/scripts/<name>/v<version>/`）
+   - **不可通用化的专项逻辑** → 同上，`script:<name>` 是当前唯一合法 action 类型
+   - **参数差异** → 通过 `pipeline_def` 中的 `params` 字段传入（运行时注入 `STP_STEP_PARAMS` 环境变量），不在代码中 hardcode
+4. ~~**文件保留但冻结**~~：~~`backend/agent/test_framework.py` 暂时保留（避免删除引发隐性依赖），但：~~
+   - ~~文件顶部已标注 `# DEPRECATED` 声明~~
+   - ~~不得向该文件添加任何新功能~~
+   - ~~不得在新代码中 `import` 该模块~~
+
+> ⚠️ **2026-06-12 更新**：`backend/agent/test_framework.py` 已被彻底删除（比原"保留但冻结"决策更进一步）。后端和前端代码中均无任何 `BaseTestCase` 残留引用。方案 B（完全删除）已执行。
 
 ### Pipeline Action 规范接口
 
@@ -79,7 +76,7 @@ class MyAction:
 - **方案 B：完全删除 test_framework.py**
   - 优点：彻底消除误用可能
   - 缺点：可能存在尚未迁移的调用点，删除会导致运行时错误
-  - **决策：暂缓。文件保留但冻结，待存量迁移完成后执行删除。**
+  - **决策：已执行 ✅**（2026-05-04 前后随 builtin actions 全栈移除一并删除。后端零残留引用。）
 
 - **方案 C（当前决策）：冻结 + ADR 明确禁止 + 强制迁移路径**
   - 优点：平稳过渡，不影响当前在运行的任务；ADR 为 AI 和人类开发者提供明确约束
@@ -94,15 +91,16 @@ class MyAction:
 ## 落地与后续动作
 
 - ✅ 回滚 PipelineEngine 中的 BaseTestCase 桥接代码（`_is_base_test_case`、`_run_base_test_case`）
-- ✅ `test_framework.py` 文件顶部添加 DEPRECATED 声明
+- ✅ ~~`test_framework.py` 文件顶部添加 DEPRECATED 声明~~ → 已删除（比冻结更彻底）
 - ✅ 本 ADR 录入，明确废弃边界和迁移路径
-- ⏳ 审计存量使用：`grep -r "BaseTestCase" backend/ --include="*.py"`，逐一迁移
-- ⏳ 存量迁移完成后，删除 `backend/agent/test_framework.py`
+- ✅ 审计存量使用：`grep -r "BaseTestCase" backend/ --include="*.py"` → 零匹配
+- ✅ ~~存量迁移完成后，删除 `backend/agent/test_framework.py`~~ → 已删除
 
 ## 关联实现/文档
 
-- `backend/agent/test_framework.py` — 已冻结的废弃模块
+- ~~`backend/agent/test_framework.py`~~ — ~~已冻结的废弃模块~~ → 已删除（2026-05-04）
 - `backend/agent/pipeline_engine.py` — 当前唯一执行引擎
-- `backend/agent/actions/` — 内置 Action 库
+- ~~`backend/agent/actions/`~~ — ~~内置 Action 库~~ → 已删除（2026-05-04），由 `backend/agent/registry/script_registry.py` 替代
 - [`ADR-0014`](./ADR-0014-pipeline-execution-engine.md) — Pipeline 执行引擎架构（上层决策）
+- [`ADR-0020`](./ADR-0020-plan-step-one-shot-migration.md) — Plan-based 编排替代 Workflow+Tool 体系
 - [`openspec/changes/archive/2026-03-04-aee-script-migration-to-builtin-actions/proposal.md`](../../openspec/changes/archive/2026-03-04-aee-script-migration-to-builtin-actions/proposal.md) — AEE 脚本迁移方案（具体迁移案例）

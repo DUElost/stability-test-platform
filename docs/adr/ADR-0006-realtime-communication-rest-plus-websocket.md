@@ -49,12 +49,16 @@
 - `frontend/src/hooks/useSocketIO.ts` — socket.io-client hook（替代 useWebSocket）
 - `frontend/src/hooks/useRealtimeDashboard.ts` — Dashboard 实时数据 hook
 
-### Legacy（待 Wave 8 清理）
-- `backend/api/routes/websocket.py` — deprecated stub（ConnectionManager no-op）
-- `frontend/src/hooks/useWebSocket.ts` — 旧原生 WebSocket hook（生产页面已不引用）
-- `frontend/src/config/index.ts` — `WS_*` 常量（仅作 room 解析键）
+### Legacy（Wave 8 已完成清理，标注如下）
+- ~~`backend/api/routes/websocket.py`~~ — deprecated stub → **已删除**（2026-04-12 Wave 7+8）
+- ~~`frontend/src/hooks/useWebSocket.ts`~~ — 旧原生 WebSocket hook → **已删除**（2026-04-12 Wave 7+8）
+- `frontend/src/config/index.ts` — `WS_*` 常量（仅作 room 解析键，仍活跃）
+
+> ⚠️ **事件列表补充 (2026-06-12)**：原 ADR 仅列 `RUN_UPDATE`、`DEVICE_UPDATE`、`REPORT_READY` + 日志流 4 项。ADR-0018 迁移到 SocketIO 后，实际实现约 12 个事件。完整清单：
+> `run_update` / `task_update` / `device_update` / `report_ready` / `step_log` / `step_update` / `job_status` / `plan_run_status` / `precheck_update` / `watcher_signal` / `heartbeat` / `subscribe`。
+> 详见 `backend/realtime/socketio_server.py`。
 
 ### 其他关联
-- `backend/api/routes/tasks.py` — 兼容层（Wave 7 收敛目标）
+- ~~`backend/api/routes/tasks.py` — 兼容层~~ → **已删除**（Wave 7 收敛，拆分为 `runs.py` + `logs.py`）
 - `frontend/src/pages/tasks/TaskDetails.tsx`
 - `docs/module-responsibilities.md` — 模块职责定义（含 SocketIO 服务端日志持久化策略）

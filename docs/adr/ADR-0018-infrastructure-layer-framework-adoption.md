@@ -52,12 +52,14 @@
       │  │ Agent 1  │  │ Agent N  │  ...     │               │
       │  │ HTTP权威  │──│ HTTP权威  │──────────┼── FastAPI     │
       │  │ SocketIO  │──│ SocketIO  │─────────┼── SocketIO    │
-      │  │ Redis sub │  │ Redis sub│          │               │
+      │  │         │  │        │          │               │
       │  └──────────┘  └──────────┘          │               │
       └──────────────────────────────────────┘               │
                                                               │
       ┌── React 前端 ── SocketIO ─────────────────────────────┘
 ```
+
+> **架构图修正 (2026-06-12)**：Agent 框中 "Redis sub" 已抹除——Agent 不直接订阅 Redis。控制指令通过 SocketIO  namespace 推送或 HTTP polling。Redis 仅作为 SAQ broker（控制面侧），Agent 无 Redis 连接。
 
 ### 1. APScheduler 4.x 替代 cron_scheduler + recycler 定时触发
 
@@ -281,15 +283,15 @@ socket.io-client@^4.7.0
 
 ### 遗留清理项（2026-04-12 审计补充）
 
-以下残留代码在 Phase 6 验收时确认存在但未立即移除，已纳入双轨合并 Wave 7/8 追踪：
+> ⚠️ **2026-04-12 Wave 7+8 已完成清理**：以下残留代码在双轨合并 Wave 7+8（2026-04-12）中已全部移除。状态更新如下：
 
-| 残留项 | 位置 | 说明 | 清理计划 |
-|--------|------|------|----------|
-| `ConnectionManager` + WS stub 路由 | `backend/api/routes/websocket.py` | deprecated stub，仍挂载在 `main.py` | Wave 8-3 移除 |
-| `websocket_*` Prometheus 指标 | `backend/core/metrics.py` L189-209 | 与 `socketio_*` 指标并存，`record_websocket_connection` 无调用方 | Wave 7-4 移除 |
-| `useWebSocket.ts` + 测试 | `frontend/src/hooks/useWebSocket.ts` | 原生 WS hook，生产页面已不引用 | Wave 7-3 移除 |
-| `WS_*` 常量命名 | `frontend/src/config/index.ts` | `/ws/dashboard` 形式，仅作 room 解析键 | Wave 7-3 重命名或移除 |
-| `WebSocketMock` | `frontend/src/test/setup.ts` | 测试夹具 | Wave 7-3 同步清理 |
+| 残留项 | 位置 | 说明 | 原清理计划 | 实际状态 |
+|--------|------|------|------------|---------|
+| ~`ConnectionManager` + WS stub 路由~ | ~`backend/api/routes/websocket.py`~ | deprecated stub | Wave 8-3 移除 | ✅ 已删除 |
+| ~`websocket_*` Prometheus 指标~ | ~`backend/core/metrics.py` L189-209~ | 无调用方 | Wave 7-4 移除 | ✅ 已删除 |
+| ~`useWebSocket.ts` + 测试~ | ~`frontend/src/hooks/useWebSocket.ts`~ | 原生 WS hook | Wave 7-3 移除 | ✅ 已删除 |
+| `WS_*` 常量命名 | `frontend/src/config/index.ts` | `/ws/dashboard` 形式，仅作 room 解析键 | Wave 7-3 重命名或移除 | 仍活跃（作为 room 解析键） |
+| ~`WebSocketMock`~ | ~`frontend/src/test/setup.ts`~ | 测试夹具 | Wave 7-3 同步清理 | ✅ 已删除 |
 
 ## Watcher 子系统铺路（2026-04-17 起 · ADR-0018 延伸）
 
@@ -360,8 +362,6 @@ Watcher 默认**关闭**（`backend/agent/main.py:69` — `STP_WATCHER_ENABLED =
 ### 已删除
 - ~~`backend/mq/consumer.py`~~ — 已删除（由 SAQ + SocketIO 替代）
 - ~~`backend/tasks/heartbeat_monitor.py`~~ — 已删除（由 APScheduler session_watchdog 替代）
-
-### Legacy（待 Wave 7/8 清理）
-- `backend/api/routes/websocket.py` — deprecated stub（Wave 8-3）
-- `frontend/src/hooks/useWebSocket.ts` — 旧原生 WS hook（Wave 7-3）
-- `backend/core/metrics.py` 中 `websocket_*` 指标（Wave 7-4）
+- ~~`backend/api/routes/websocket.py`~~ — 已删除（Wave 8-3，2026-04-12）
+- ~~`frontend/src/hooks/useWebSocket.ts`~~ — 已删除（Wave 7-3，2026-04-12）
+- ~~`backend/core/metrics.py` 中 `websocket_*` 指标~~ — 已删除（Wave 7-4，2026-04-12）

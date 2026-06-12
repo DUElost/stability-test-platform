@@ -100,8 +100,13 @@
 - `frontend/src/config/index.ts` — 主配置入口
 - `frontend/src/utils/auth.ts` — token 管理
 
-### Legacy（待 Wave 8 清理）
-- `backend/api/routes/websocket.py` — deprecated WS stubs
-- `backend/tests/api/test_websocket.py` — WS 契约测试（回归保障）
-- `frontend/src/hooks/useWebSocket.ts` — 旧原生 WS hook
-- `frontend/vite.config.ts` — WS proxy 配置（SocketIO 亦需保留）
+### Legacy（Wave 8 已完成清理，标注如下）
+- ~~`backend/api/routes/websocket.py`~~ — deprecated WS stubs → **已删除**（2026-04-12 Wave 7+8）
+- `backend/tests/api/test_websocket.py` — 已重构为 SocketIO broadcast envelope 合约测试（非原 WS 契约测试）
+- ~~`frontend/src/hooks/useWebSocket.ts`~~ — 旧原生 WS hook → **已删除**（2026-04-12 Wave 7+8）
+- `frontend/vite.config.ts` — WS proxy 配置（SocketIO 亦需保留，仍活跃）
+
+> ⚠️ **鉴权补充 (2026-06-12)**：
+> - `/dashboard` namespace 鉴权新增 cookie fallback：`on_connect` 优先取 auth dict token，缺失时 fallback 到 `HTTP_COOKIE` 中 `stp_access_token`（ADR-0024 引入）
+> - JWT decode 强制 `expected_type="access"`，防止 refresh token 旁路（ADR-0024 引入）
+> - `/dashboard` 事件列表见 ADR-0006 事件补充节

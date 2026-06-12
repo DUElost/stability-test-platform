@@ -42,7 +42,7 @@
 ## 落地与后续动作
 
 - ~~第一步~~（✅ 已完成）：固化草稿字段规范与去重键模型（设备、版本、错误指纹）。
-- ~~第一步补充~~：实现 `post_completion.py` 后处理流水线与前端 IssueTrackerPage。
+- ~~第一步补充~~（✅ 已完成）：实现 `post_completion.py` 后处理流水线与前端 IssueTrackerPage。
 - 第二步：新增”建议提单/自动提单/仅草稿”三级策略。
 - 第三步：引入提单审计与失败重试队列。
 
@@ -51,14 +51,16 @@
 ### 后端
 - `backend/services/post_completion.py` - 任务完成后处理流水线
 - `backend/services/report_service.py` - 报告生成与 JIRA Draft 构建
-- `backend/api/routes/tasks.py` - `/runs/{run_id}/jira-draft/cached` API
+- ~~`backend/api/routes/tasks.py`~~ — ~~`/runs/{run_id}/jira-draft/cached` API~~ → 已迁移至 `backend/api/routes/runs.py`（双轨合并 Wave 7）
 
 ### 前端
 - `frontend/src/pages/issues/IssueTrackerPage.tsx` - 问题追踪页面
-- `frontend/src/pages/task-runs/TaskRunsPage.tsx` - 任务实例页面
+- ~~`frontend/src/pages/task-runs/TaskRunsPage.tsx`~~ — ~~任务实例页面~~ → 已迁移至 Plan 体系对应页面
 
 ### 数据库
-- `TaskRun.jira_draft_json` - JIRA 草稿缓存字段
-- `TaskRun.post_processed_at` - 后处理完成时间戳
+- `JobInstance.jira_draft_json` - JIRA 草稿缓存字段（原 `TaskRun.jira_draft_json`，随 ADR-0020 迁移）
+- `JobInstance.post_processed_at` - 后处理完成时间戳（原 `TaskRun.post_processed_at`，同上）
+
+> ⚠️ **2026-06-12 勘误**：原关联实现引用 `tasks.py` 和 `TaskRun` 模型——两者分别于双轨合并 Wave 7（拆分为 `runs.py` + `logs.py`）和 ADR-0020（`WorkflowRun` → `PlanRun` / `JobInstance`）中迁移/删除，此处同步更新。
 
 - `docs/project-vision.md`

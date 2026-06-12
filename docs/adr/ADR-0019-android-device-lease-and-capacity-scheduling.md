@@ -5,6 +5,7 @@
 - 目标里程碑：M3
 - 日期：2026-04-28
 - 实施完成：2026-05-04（Phase 1-6e 全部落地，旧 `device.lock_run_id` / `lock_expires_at` 字段与 `script_batch` / `script_run` 表已通过 migration `u9v0w1x2y3z4` / `v0w1x2y3z4a5` 移除）
+- 变更记录：2026-06-08（commit 93b9935）移除 `host.max_concurrent_jobs` 的业务逻辑——heartbeat 不再读写、API 响应不再暴露、claim 不再使用 `host_config_limit` 计算 capacity。DB 列保留为兼容（待后续 migration 清理）。详见下方 §3 和 §4 内联标注。
 - 决策者：平台研发组
 - 标签：调度, 设备锁, 容量, 租约, 恢复
 
@@ -86,20 +87,31 @@ Phase 1 migration 需新增 `device.lease_generation INTEGER NOT NULL DEFAULT 0`
 
 ### 3. 容量模型
 
+> ⚠️ **2026-06-08 变更 (commit 93b9935)**：`host_config_limit`（即 `host.max_concurrent_jobs`）已从 capacity 计算中移除。理由：每个设备最多跑 1 个 Job，host 级 slot cap 冗余——实际并发数完全由空闲设备数和 `device_leases` partial unique index 硬约束。当前 `effective_capacity = capacity`（Agent 心跳上报值），`_compute_health_limit` 改为二元门控（0 / 10000），最终 claim 限制由 `LIMIT :capacity` + free_device_ids 列表长度双重控制。
+
 Agent 的可用容量不再仅看 `MAX_CONCURRENT_TASKS`，而是多维计算：
 
 ```
 available_slots = min(
     online_healthy_devices,       # ADB 在线且健康检查通过
-    host_config_limit,            # Host.max_concurrent_jobs（可配置上限，替代原 cpu_quota 的并发含义）
-    cpu_health_limit,             # CPU 使用率 < 阈值
-    mem_health_limit,             # 内存使用率 < 阈值
-    disk_health_limit,            # 磁盘使用率 < 阈值
-    adb_health_limit,             # ADB server 响应正常
+    host_config_limit,            # ⚠️ 已移除（2026-06-08）：原 host.max_concurrent_jobs，现为冗余
+    cpu_health_limit,             # CPU 使用率 < 阈值 → ⚠️ 已简化为二元门控（0/10000）
+    mem_health_limit,             # 内存使用率 < 阈值 → ⚠️ 同上
+    disk_health_limit,            # 磁盘使用率 < 阈值 → ⚠️ 同上
+    adb_health_limit,             # ADB server 响应正常 → ⚠️ 同上
 ) - running_jobs
+
+# 当前实际公式（2026-06-08 起）：
+effective_capacity = capacity   # Agent 心跳上报值，不再与 host.max_concurrent_jobs 取 min
 ```
 
-Phase 1 在 `host` 表新增 `max_concurrent_jobs` 字段（integer, NOT NULL, DEFAULT 2），作为该 Host 的设备槽位上限。原 `cpu_quota` 字段不再用于并发控制，避免 CPU 配额与设备槽位语义混淆。
+Phase 1 在 `host` 表新增 `max_concurrent_jobs` 字段（integer, NOT NULL, DEFAULT 2），作为该 Host 的设备槽位上限。
+
+> ⚠️ `max_concurrent_jobs` 字段仍存在于 DB 列和 ORM 定义中（`backend/models/host.py:28`），但已无业务代码引用。claim 端点不读取此字段，heartbeat 不更新此字段，API 响应不暴露此字段。保留为兼容投影，待后续 Alembic migration 移除列。
+
+原 `cpu_quota` 字段不再用于并发控制，避免 CPU 配额与设备槽位语义混淆。
+
+> ⚠️ `max_concurrent_jobs` 与 `cpu_quota` 同理，均已不再用于并发控制。
 
 `available_slots` 是 Agent 侧的自检提示，也是控制面在 claim 端点入口的快速短路条件（`available_slots <= 0` 时直接返回空列表）。但 `available_slots` **不是硬上限**——并发 claim 请求可能同时看到可用槽位，最终实际 claim 数量以事务内 active lease / running job 计数为准：`INSERT INTO device_leases` 受 partial unique index 约束，同一 device 的第二个并发 INSERT 会失败，savepoint 回滚后该 job 回到 PENDING。
 
@@ -119,6 +131,8 @@ SELECT PENDING jobs
   ORDER BY id
   FOR UPDATE SKIP LOCKED
   LIMIT :capacity
+
+> ⚠️ **2026-06-08 变更**：`:capacity` 参数现在直接取 Agent 心跳上报的值（`heartbeat.capacity`），不再与 `host.max_concurrent_jobs` 取 min。实际 claim 数量由 `:capacity` LIMIT + `free_device_ids` 列表长度 + `device_leases` partial unique index 三重约束控制。
 → for each job: savepoint(
     transition RUNNING
     + INSERT INTO device_leases (ACTIVE, fencing_token)
@@ -231,7 +245,7 @@ Agent 启动流程变为：`discover devices → recovery sync → claim new job
 | Phase 3 | 续租时同时更新 `lease.expires_at` 和旧 `lock_expires_at` | extend_lock 同步更新两处 |
 | Phase 4 | 读路径逐步改为优先读 `device_leases`，旧字段仅 fallback | 按 host 灰度，无回归 |
 | Phase 5 | ScriptBatch 改用同一套 device lease | 旧脚本端点可废弃 |
-| Phase 6 | 旧字段保留为 UI/兼容投影，稳定后决定是否删除 | |
+| Phase 6 | ~~旧字段保留为 UI/兼容投影，稳定后决定是否删除~~ | ✅ 已通过 migration `u9v0w1x2y3z4` 移除 |
 
 ## 备选方案与权衡
 
@@ -303,7 +317,7 @@ Agent 启动流程变为：`discover devices → recovery sync → claim new job
 - `backend/tasks/session_watchdog.py` — 部分逻辑迁移到 Reconciler
 - `backend/agent/main.py` — `MAX_CONCURRENT_TASKS` → available_slots
 - `backend/agent/task_executor.py` — `LockRenewalManager` → `LeaseRenewer`
-- `backend/models/host.py` — Device 模型旧字段保留为兼容投影
+- `backend/models/host.py` — Device 模型旧字段保留为兼容投影；`host.max_concurrent_jobs` 同理已无业务效果（2026-06-08）
 - `backend/api/routes/agent_script_api.py` — Phase 5 移除
 - `backend/agent/script_batch_runner.py` — Phase 5 移除
 

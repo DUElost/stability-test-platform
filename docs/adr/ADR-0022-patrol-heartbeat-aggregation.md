@@ -1,12 +1,14 @@
 # ADR-0022 — Patrol 心跳化 + 失败退避 + 手动干预
 
-| Status     | Draft                                  |
-| ---------- | -------------------------------------- |
-| Date       | 2026-05-08                             |
-| Authors    | dai.lv                                 |
-| Reviewers  | (待评)                                 |
-| Successors | —                                      |
+| Status     | Accepted                                |
+| ---------- | --------------------------------------- |
+| Date       | 2026-05-08                              |
+| Authors    | dai.lv                                  |
+| Reviewers  | 平台研发组                              |
+| Successors | —                                       |
 | Related    | ADR-0020 (Plan), ADR-0021 (派发门禁)   |
+
+> **实施完成 (2026-06-12)**：D1-D8 全部决策项已落地。Alembic 迁移 `d7e8f9a0b1c2`（patrol 列）+ `e8f9a0b1c2d3`（聚合索引）已执行。后端 `PatrolHeartbeatUploader` + `compute_backoff_seconds()` + manual-retry/exit 端点 + PlanRun 聚合端点均已实现。前端 `DeviceDetailDrawer`（retry/exit 二次确认 + BACKOFF 状态色）+ SocketIO 推送均已集成。测试覆盖：`test_patrol_heartbeat_api.py` + `test_patrol_heartbeat_uploader.py` + `test_pipeline_engine_patrol.py` + `test_manual_retry_exit_api.py` + `test_plan_run_aggregation_endpoints.py`。
 
 ## 背景
 

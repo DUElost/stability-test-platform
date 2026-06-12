@@ -67,14 +67,18 @@ WebSocket heartbeat 仅用于 dashboard 实时推送：
 
 以下路径被定义为补偿路径，而非主路径。
 
-#### MQ consumer
+#### ~~MQ consumer~~（已删除）
 
-用于处理终态消息乱序或 HTTP 主路径未及时生效的场景。
+> ⚠️ **已删除 (ADR-0018)**：`backend/mq/consumer.py` 随 ADR-0018 落地已删除。终态消息补偿改由 SAQ Worker 中的 `post_completion_task` 异步执行（`backend/tasks/saq_tasks.py`）。原 MQ consumer 的职责边界原则仍然有效——补偿路径不得绕过状态机。
 
-规则：
+~~用于处理终态消息乱序或 HTTP 主路径未及时生效的场景。~~
 
-- 若 Job 已终态，则跳过 DB 写入，仅做必要广播
-- 仅当 consumer 自己实际完成了状态推进时，才触发 post-completion
+~~规则：~~
+
+- ~~若 Job 已终态，则跳过 DB 写入，仅做必要广播~~
+- ~~仅当 consumer 自己实际完成了状态推进时，才触发 post-completion~~
+
+当前补偿路径为 SAQ `post_completion_task`，适用同样规则。
 
 #### session_watchdog
 
@@ -152,8 +156,9 @@ Phase 0 收尾验证至少应覆盖：
 
 - `backend/agent/main.py`
 - `backend/api/routes/agent_api.py`
-- `backend/api/routes/websocket.py`
-- `backend/mq/consumer.py`
+- ~~`backend/api/routes/websocket.py`~~ — 已删除（Wave 8，见 ADR-0018）
+- ~~`backend/mq/consumer.py`~~ — 已删除（ADR-0018，由 SAQ worker 替代）
 - `backend/tasks/session_watchdog.py`
 - `backend/scheduler/recycler.py`
 - `backend/services/post_completion.py`
+- `backend/tasks/saq_tasks.py` — SAQ 异步任务（含 post_completion_task，替代 MQ consumer）

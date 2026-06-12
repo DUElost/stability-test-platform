@@ -553,24 +553,27 @@ Phase 5 的 `ALTER ... SET NOT NULL`、`DROP COLUMN`、`DROP TABLE` 必须包裹
 
 ## 落地与后续动作
 
-1. 更新 `docs/plan-block-step-migration.md`，删除策略 A/B 可选表述，固定为一次性切换。
-2. 编写 preflight SQL。
-3. 编写 Alembic migration，并在备份库上演练。
-4. 实现 Plan / PlanStep / PlanRun ORM 与 API。
-5. 改造 dispatcher、scheduler、results、report、post-completion。
-6. 替换前端编排和派发页面。
-7. 删除旧 ORM、旧 API、旧前端组件。
-8. 执行全量 grep 和 E2E 验证。
-9. 评估 Schedule 抖动短时间重复触发同一 Plan 的去重策略；`uniq_plan_run_chain_child` 只约束链式子 PlanRun，不约束 root PlanRun。
+1. ✅ 更新 `docs/plan-block-step-migration.md`，删除策略 A/B 可选表述，固定为一次性切换。
+2. ✅ 编写 preflight SQL。
+3. ✅ 编写 Alembic migration，并在备份库上演练。
+4. ✅ 实现 Plan / PlanStep / PlanRun ORM 与 API。
+5. ✅ 改造 dispatcher、scheduler、results、report、post-completion。
+6. ✅ 替换前端编排和派发页面。
+7. ✅ 删除旧 ORM、旧 API、旧前端组件。
+8. ✅ 执行全量 grep 和 E2E 验证。
+9. ⏳ 评估 Schedule 抖动短时间重复触发同一 Plan 的去重策略；`uniq_plan_run_chain_child` 只约束链式子 PlanRun，不约束 root PlanRun。
+
+> **实施状态 (2026-06-12)**：Phase 0-8 全部落地。Plan / PlanStep / PlanRun ORM + API 已替代旧 WorkflowDefinition / WorkflowRun / TaskTemplate 体系。关联实现中旧文件已全部删除，更新见下方。
 
 ## 关联实现/文档
 
 - `docs/plan-step-design-rationale.md`
 - `docs/plan-block-step-migration.md`
 - `docs/prototypes/workflow-editor-redesign-v3.html`
-- `backend/models/job.py`
-- `backend/models/workflow.py`
-- `backend/services/dispatcher.py`
-- `backend/api/routes/orchestration.py`
-- `frontend/src/pages/orchestration/WorkflowDefinitionEditPage.tsx`
-- `frontend/src/components/pipeline/StagesPipelineEditor.tsx`
+- `backend/models/plan.py` — Plan + PlanStep ORM（替代旧 workflow.py）
+- `backend/models/plan_run.py` — PlanRun ORM（替代旧 WorkflowRun）
+- ~~`backend/models/workflow.py`~~ — 已删除
+- ~~`backend/services/dispatcher.py`~~ — 已删除，替代为 `backend/services/plan_dispatcher.py` + `plan_dispatcher_core.py` + `plan_dispatcher_sync.py`
+- ~~`backend/api/routes/orchestration.py`~~ — 已删除，替代为 `backend/api/routes/plans.py` + `backend/api/routes/plan_runs.py`
+- ~~`frontend/src/pages/orchestration/WorkflowDefinitionEditPage.tsx`~~ — 已迁移至 `frontend/src/pages/orchestration/PlanEditPage.tsx`
+- ~~`frontend/src/components/pipeline/StagesPipelineEditor.tsx`~~ — 已重命名为 `PipelineEditor.tsx`（lifecycle 格式）
