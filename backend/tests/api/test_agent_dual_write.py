@@ -1359,9 +1359,8 @@ async def test_active_lease_excludes_device(lease_type):
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_claim_not_capped_by_host_slot_limit():
-    """93b9935 移除 host 槽位上限后,claim 仅受 Agent capacity 与空闲设备数约束:
-    1 active lease + 2 空闲设备 + capacity=10 -> 2 个 Job 全部认领。"""
+async def test_capacity_directly_limits_claim():
+    """Agent capacity=1 -> only 1 job claimed regardless of free devices."""
     suffix = uuid4().hex[:8]
     host_id = f"dwh-{suffix}"
     now = datetime.now(timezone.utc)
@@ -1429,10 +1428,10 @@ async def test_claim_not_capped_by_host_slot_limit():
     try:
         async with AsyncSessionLocal() as async_db:
             claimed, _ = await _claim_jobs_for_host(
-                async_db, host_id, capacity=10,
+                async_db, host_id, capacity=1,
             )
-            assert len(claimed) == 2, (
-                f"Both free-device jobs must be claimed (no host slot cap); got {len(claimed)}"
+            assert len(claimed) == 1, (
+                f"Agent capacity=1 must limit to 1 claimed; got {len(claimed)}"
             )
             active_leases = (await async_db.execute(
                 select(DeviceLease).where(
@@ -1441,8 +1440,8 @@ async def test_claim_not_capped_by_host_slot_limit():
                     DeviceLease.status == LeaseStatus.ACTIVE.value,
                 )
             )).scalars().all()
-            assert len(active_leases) == 3, (
-                "Should have 3 ACTIVE JOB leases (1 pre-existing + 2 claimed)"
+            assert len(active_leases) == 2, (
+                "Should have 2 ACTIVE JOB leases (1 pre-existing + 1 claimed)"
             )
     finally:
         _cleanup_custom(seed)
@@ -1450,7 +1449,7 @@ async def test_claim_not_capped_by_host_slot_limit():
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_zero_capacity_returns_empty_no_state_change():
-    """Agent capacity=0 -> empty list, job status unchanged, host lock released."""
+    """capacity=0 -> empty list, job status unchanged, host lock released."""
     suffix = uuid4().hex[:8]
     host_id = f"dwh-{suffix}"
     now = datetime.now(timezone.utc)
@@ -1512,7 +1511,7 @@ async def test_zero_capacity_returns_empty_no_state_change():
             claimed, _ = await _claim_jobs_for_host(
                 async_db, host_id, capacity=0,
             )
-            assert claimed == [], "Zero effective capacity must return empty list"
+            assert claimed == [], "capacity=0 must return empty list"
 
             job_b_ref = await async_db.get(JobInstance, job_b.id)
             assert job_b_ref.status == JobStatus.PENDING.value, (
@@ -1663,8 +1662,8 @@ async def test_per_device_first_does_not_waste_capacity():
 
 @pytest.mark.asyncio(loop_scope="module")
 async def test_concurrent_claim_capacity_does_not_exceed():
-    """Host row lock serialization: 两个并发 claim 各 capacity=1,
-    串行化后各认领 1 个不同设备的 Job,无设备双租约。"""
+    """Host row lock serialization: two concurrent claims with capacity=1
+    each must each claim a different device."""
     import asyncio
 
     suffix = uuid4().hex[:8]
@@ -1733,7 +1732,7 @@ async def test_concurrent_claim_capacity_does_not_exceed():
 
         total_claimed = sum(len(r) for r in results)
         assert total_claimed == 2, (
-            f"Each concurrent claim (capacity=1) takes one distinct device; got {total_claimed}"
+            f"Each concurrent claim with capacity=1 must claim a different device (2 total); got {total_claimed}"
         )
         assert all(len(r) <= 1 for r in results), (
             f"No single claim may exceed its capacity=1; got {[len(r) for r in results]}"
