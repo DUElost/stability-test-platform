@@ -253,6 +253,39 @@ class TestPlanCRUD:
         }, headers=auth_headers)
         assert resp.status_code == 422
 
+    def test_create_rejects_hidden_legacy_next_plan_reference(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("next_hidden_create"),
+            "next_plan_id": legacy_plan_id,
+            "steps": _minimal_steps(),
+        }, headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == f"next_plan_id {legacy_plan_id} not found"
+
+    def test_update_rejects_hidden_legacy_next_plan_reference(
+        self, client, auth_headers, sample_script, db_session,
+    ):
+        _ensure_legacy_aee_scripts(db_session)
+        legacy_plan_id = TestPlanDispatchFailFast._insert_legacy_plan(db_session)
+        create = client.post("/api/v1/plans", json={
+            "name": _uniq("next_hidden_update"),
+            "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        plan_id = create.json()["data"]["id"]
+
+        resp = client.put(f"/api/v1/plans/{plan_id}", json={
+            "next_plan_id": legacy_plan_id,
+        }, headers=auth_headers)
+
+        assert resp.status_code == 404, resp.text
+        assert resp.json()["detail"] == f"next_plan_id {legacy_plan_id} not found"
+
     def test_create_rejects_missing_script_reference(self, client, auth_headers):
         payload = {
             "name": _uniq("missing_script"),

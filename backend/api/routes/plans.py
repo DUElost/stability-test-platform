@@ -203,6 +203,20 @@ def _raise_if_hidden_legacy_aee_plan(plan: Plan | None, steps: list[PlanStep]) -
         raise HTTPException(status_code=404, detail="plan not found")
 
 
+def _raise_if_hidden_next_plan(db: Session, plan: Plan | None, plan_id: int) -> None:
+    if plan is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"next_plan_id {plan_id} not found",
+        )
+    steps = db.query(PlanStep).filter(PlanStep.plan_id == plan_id).all()
+    if _plan_steps_include_legacy_aee_scripts(steps):
+        raise HTTPException(
+            status_code=404,
+            detail=f"next_plan_id {plan_id} not found",
+        )
+
+
 def _assemble_lifecycle_for_validation(
     steps: list[PlanStepIn],
     patrol_interval_seconds: int | None,
@@ -305,9 +319,7 @@ def _validate_plan_dag(db: Session, plan_id: int | None,
         db.execute(text("SELECT pg_advisory_xact_lock(:pid)"), {"pid": int(lock_key)})
 
     target = db.get(Plan, next_plan_id)
-    if target is None:
-        raise HTTPException(status_code=404,
-                            detail=f"next_plan_id {next_plan_id} not found")
+    _raise_if_hidden_next_plan(db, target, next_plan_id)
 
     visited: set[int] = set()
     if plan_id is not None:
