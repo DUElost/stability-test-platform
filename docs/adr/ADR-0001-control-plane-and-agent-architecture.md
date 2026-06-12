@@ -38,13 +38,22 @@
 
 ## 落地与后续动作
 
-- 已落地：控制面 API、调度线程、Agent 心跳与拉取任务机制。
-- 后续：完善 Agent 注册与版本协商机制，避免协议漂移。
+- 已落地：控制面 API、~~调度线程~~（已由 APScheduler 替代）、Agent 心跳与拉取任务机制。
+- ~~后续：完善 Agent 注册与版本协商机制，避免协议漂移。~~ → ✅ 已实现：`backend/agent/host_registry.py` 支持 `HOST_ID=AUTO` 自动注册 + heartbeat 携带 `agent_version` 字段（见 [ADR-0004](./ADR-0004-heartbeat-driven-host-device-liveness.md)）
+
+> ⚠️ **实现路径偏差 (2026-06-12 勘误)**：
+> - 原文"调度线程"不适用——后台调度已由 APScheduler 4.x（`backend/scheduler/app_scheduler.py`）替代，见 [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md)
+> - Agent 不再通过 Redis Stream 拉取任务，改为 HTTP POST `/api/v1/agent/jobs/claim` + SocketIO `/agent` namespace
+> - 异步后台任务由 SAQ Worker（`backend/tasks/saq_worker.py`）替代自研线程池
+> - 实时推送由 python-socketio（`backend/realtime/socketio_server.py`）替代自研 WebSocket
 
 ## 关联实现/文档
 
 - `backend/main.py`
 - `backend/agent/main.py`
 - `backend/agent/heartbeat.py`
+- `backend/scheduler/app_scheduler.py` — APScheduler 4.x 统一调度器（ADR-0018 引入）
+- `backend/tasks/saq_worker.py` — SAQ Worker（ADR-0018 引入）
+- `backend/realtime/socketio_server.py` — python-socketio 服务端（ADR-0018 引入）
 - `docs/project-vision.md`
 - `docs/stability-platform-integrated.md`

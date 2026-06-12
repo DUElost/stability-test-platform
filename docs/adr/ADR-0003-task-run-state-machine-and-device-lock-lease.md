@@ -24,7 +24,10 @@ PENDING → RUNNING → COMPLETED
                             → COMPLETED  (Agent 补报)
                             → FAILED     (宽限期超时)
 
-PENDING_TOOL → PENDING  (工具就绪后回到待认领队列)
+~~PENDING_TOOL → PENDING  (工具就绪后回到待认领队列)~~  ← ⚠️ 已移除：PENDING_TOOL 从未落地，已在 JobStatus 枚举和 state_machine.py 中不存在
+```
+
+> ⚠️ **状态机勘误 (2026-06-12)**：`PENDING_TOOL` 状态从未在 `backend/models/enums.py` 的 JobStatus 枚举和 `backend/services/state_machine.py` 的 VALID_TRANSITIONS 中实现，画入图中属文档历史遗留。此外，代码允许 `PENDING → FAILED` 和 `PENDING → ABORTED`（recycler 超时回收直通），`UNKNOWN → COMPLETED`（Agent 补报）和 `UNKNOWN → RUNNING` 三条路径，此图未完整画出。
 ```
 
 Legacy TaskRun 状态转换（保留兼容）：
@@ -93,10 +96,11 @@ PipelineEngine 在两个层面验证锁：
 - ✅ Agent per-device 并发守卫 `_active_device_ids`
 - ✅ PipelineEngine 锁验证（启动前 + 步间 `is_aborted` 回调）
 - ✅ 状态机支持 `UNKNOWN → FAILED` 转换
-- ✅ 状态机支持 `PENDING_TOOL → PENDING` 转换（工具依赖就绪后重新排队）
+- ✅ 状态机支持 `PENDING_TOOL → PENDING` 转换（⚠️ 此项标记有误：PENDING_TOOL 从未落地）
 - ✅ heartbeat_monitor 与 session_watchdog 互斥运行
-- ⏳ 将 claim 端点的锁过滤下推到 SQL 层（避免 LIMIT 前置导致的饥饿）
-- ⏳ 统一 pipeline 锁丢失时的终态映射（ABORTED vs FAILED）
+- ✅ Claim 端点 SQL 层过滤（ADR-0019 落地，`FOR UPDATE SKIP LOCKED` + device_leases 过滤）
+- ✅ 统一 pipeline 锁丢失时的终态映射（ABORTED vs FAILED）— pipeline_engine 统一 exit block 已将所有锁丢失场景（lease 409 / is_aborted / is_lock_lost）映射为 `termination_reason="abort"` → `mq_status="ABORTED"`，不再有 FAILED 分支
+- ✅ 设备锁由 `device_leases` + fencing token 替代（见 ADR-0019）
 
 ## 关联实现/文档
 
@@ -107,7 +111,7 @@ PipelineEngine 在两个层面验证锁：
 - `backend/agent/main.py` — Agent 主循环与 per-device 守卫
 - `backend/agent/pipeline_engine.py` — Pipeline 锁验证
 - `backend/scheduler/recycler.py` — 回收器（Host 心跳超时与设备锁过期由 session_watchdog 独占处理，recycler 不包含这两类检查）
-- `backend/services/dispatcher.py` — Workflow 派发（不再预锁）
+- ~~`backend/services/dispatcher.py`~~ — ~~Workflow 派发（不再预锁）~~ → 已删除，由 `backend/services/plan_dispatcher*.py` 替代（见 ADR-0020）
 - [`openspec/specs/device-concurrency-guard/spec.md`](../../openspec/specs/device-concurrency-guard/spec.md) — 设备并发守卫规范
 - [`openspec/specs/session-lifecycle/spec.md`](../../openspec/specs/session-lifecycle/spec.md) — 会话生命周期规范
 - `backend/tests/services/test_device_lock.py` — 锁服务测试

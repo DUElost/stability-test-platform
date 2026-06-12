@@ -38,19 +38,19 @@ Legacy `heartbeat_monitor`（`backend/tasks/heartbeat_monitor.py`）仍保留用
   - 缺点：高成本、跨网段复杂、扩展性差。
 - 方案 B：当前方案（Agent 主动上报心跳）。
   - 优点：节点自治，扩展成本低，网络开销可控。
-  - 缺点：依赖 HOST_ID 配置正确，错配会出现"心跳正常但无任务"。
+  - ~~缺点：依赖 HOST_ID 配置正确，错配会出现"心跳正常但无任务"。~~ → 已解决：支持 `HOST_ID=AUTO` 自动注册，无需手工配置
 
 ## 影响
 
 - 正向影响：主机和设备状态可追踪、可回放，适合监控面板。
-- 代价：需要严格管理 Agent 配置一致性，尤其是 `HOST_ID` 对齐。
+- ~~代价：需要严格管理 Agent 配置一致性，尤其是 `HOST_ID` 对齐。~~ → 已缓解：`HOST_ID=AUTO` 免配置后仅剩环境变量指令一致性
 
 ## 落地与后续动作
 
 - ✅ 心跳接入、设备数据回传、离线判定与通知
 - ✅ 会话看门狗接管心跳超时检测，与 heartbeat_monitor 互斥
 - ✅ Host 超时联动 Job 状态转换（RUNNING → UNKNOWN → FAILED）
-- 后续：引入 Agent 注册握手，降低手工维护 `HOST_ID` 的操作风险
+- ~~后续：引入 Agent 注册握手，降低手工维护 `HOST_ID` 的操作风险~~ → ✅ 已实现：`HOST_ID=AUTO` 或 `AUTO_REGISTER_HOST=true` 触发自动注册（`backend/agent/host_registry.py`），后端通过 heartbeat `host_id=0` 哨兵值感知并分配 `auto-{uuid}` ID
 
 ## 关联实现/文档
 
