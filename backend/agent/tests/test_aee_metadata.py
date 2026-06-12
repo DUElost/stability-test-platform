@@ -1,7 +1,7 @@
 """Tests for parse_exp_main_summary process/package fallback (ExpMain.analyse 对齐).
 
-agent/aee/metadata.py 与 core/aee_metadata.py 是双副本(热更新隔离),
-参数化同时跑两份,兼作行为漂移守卫。
+agent/aee/metadata.py 是唯一事实源;core/aee_metadata.py 是薄 re-export。
+参数化同时跑两个入口,守卫 re-export 接线不被破坏。
 """
 
 from __future__ import annotations
@@ -15,6 +15,16 @@ import backend.core.aee_metadata as core_metadata
 @pytest.fixture(params=[agent_metadata, core_metadata], ids=["agent", "core"])
 def metadata_mod(request):
     return request.param
+
+
+def test_core_module_reexports_agent_functions():
+    assert core_metadata.parse_exp_main_summary is agent_metadata.parse_exp_main_summary
+    assert core_metadata.normalize_aee_subtype is agent_metadata.normalize_aee_subtype
+    assert core_metadata.normalize_package_name is agent_metadata.normalize_package_name
+    assert (
+        core_metadata.infer_aee_subtype_from_paths
+        is agent_metadata.infer_aee_subtype_from_paths
+    )
 
 
 def _write_exp_main(tmp_path, content: str) -> None:
