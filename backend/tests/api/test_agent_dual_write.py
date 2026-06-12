@@ -1587,7 +1587,7 @@ async def test_per_device_first_does_not_waste_capacity():
     try:
         host = Host(
             id=host_id, hostname=f"h-{suffix}",
-            max_concurrent_jobs=3, status=HostStatus.ONLINE.value, created_at=now,
+            status=HostStatus.ONLINE.value, created_at=now,
         )
         dev_a = Device(serial=f"PA-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
         dev_b = Device(serial=f"PB-{suffix}", host_id=host_id, status="ONLINE", tags=[], created_at=now, adb_connected=True, adb_state="device")
@@ -2612,7 +2612,7 @@ async def test_claim_filters_unhealthy_devices():
         # Create shared host
         host = Host(
             id=host_id, hostname=f"cfilt-{suffix}",
-            status=HostStatus.ONLINE.value, max_concurrent_jobs=5,
+            status=HostStatus.ONLINE.value,
         )
         db_sync.add(host)
         db_sync.commit()
