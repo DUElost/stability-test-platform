@@ -269,7 +269,28 @@ B4 的 `already_terminal` 分支无条件刷新 `ended_at` 会重置 UNKNOWN 的
 Phase 1 (1 周内)  →  B1 alembic/env.py 导入 + B4 UNKNOWN 移出 _TERMINAL + ended_at 刷新 guard
 Phase 2 (2-3 周)  →  B2 ForeignKey + B5 NULL guard + 密码策略 + /metrics 鉴权默认启用
 Phase 3 (4-6 周)  →  前端 admin 路由门控 + AlertManager 部署 + PG 备份自动化 + B3 seq_no 改进
-Phase 4 (长期)    →  水平扩展（Redis adapter + 外置调度器 + 分布式限流）+ Loki 集中日志 + Watcher CATCHUP
+```
+
+以上 Phase 1-3 已全部完成。原 Phase 4 经 ADR-0025 对齐后决策如下：
+
+| 原 Phase 4 项 | 决策 | 理由 |
+|--------------|------|------|
+| SocketIO Redis adapter | **推迟** | 单控制平面部署下无多实例需求，推迟不损失功能 |
+| APScheduler 外置 | **推迟** | 同上，多 worker 7 处全局状态冲突，当前 ROI 低 |
+| 分布式限流 | **推迟** | 单 worker 下内存限流有效 |
+| Loki 集中日志 | **不引入** | Agent 本地存储为主，每日汇总归档 NFS，Loki 不契合 |
+| SAQ 多进程适配 | **推迟** | 同水平扩展推迟 |
+| Prometheus 多进程指标 | **推迟** | 同水平扩展推迟 |
+| Watcher CATCHUP | **保留** | Agent 重启后恢复活跃 Watcher，核心闭环 |
+| Watcher enable.py 修复 | **保留** | 1 行改动统一默认值 |
+| 日志归档调度器 | **新增** | Agent 侧每日汇总去重 + 归档 NFS + 磁盘溢出 |
+
+**修订后 Phase 4 路径**（ADR-0025）：
+
+```
+Phase 4a (Sprint 1, 5-8 天) →  Watcher CATCHUP + enable.py 默认值统一
+Phase 4b (Sprint 2, 5-8 天) →  Agent 日志归档调度器（LogArchiver）+ 磁盘监控
+Phase 4c (Sprint 3, 2-3 天) →  控制平面拉取优化 + 前端归档状态展示
 ```
 
 ---
