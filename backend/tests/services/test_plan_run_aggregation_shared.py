@@ -135,7 +135,8 @@ def test_aggregation_pure_failed_below_threshold_still_partial():
 
 
 def test_aggregation_unknown_overrides_aborted():
-    """unknown 优先级最高 → DEGRADED."""
+    """UNKNOWN is no longer terminal — aggregation waits for reconciler to
+    convert UNKNOWN→FAILED.  PlanRun stays RUNNING until all jobs resolve."""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
@@ -146,11 +147,10 @@ def test_aggregation_unknown_overrides_aborted():
         _job(JobStatus.COMPLETED), _job(JobStatus.ABORTED),
         _job(JobStatus.UNKNOWN),
     ]
-    apply_plan_run_aggregation(run, jobs)
+    applied = apply_plan_run_aggregation(run, jobs)
 
-    assert run.status == PlanRunStatus.DEGRADED.value
-    assert run.result_summary["unknown"] == 1
-    assert run.result_summary["aborted"] == 1
+    assert applied is False
+    assert run.status == PlanRunStatus.RUNNING.value
 
 
 def test_aggregation_only_aborted_no_failed():
@@ -303,11 +303,9 @@ def test_aggregation_abort_requested_overrides_partial_success():
 
 
 def test_aggregation_abort_requested_yields_to_degraded():
-    """abort_requested + UNKNOWN 存在:DEGRADED 优先,abort override 不应触发。
-
-    Why: UNKNOWN 表示 job 状态未知需要人工介入,abort override 强制 FAILED
-         会掩盖这条调查信号。优先级 UNKNOWN > abort_requested。
-    """
+    """UNKNOWN no longer terminal → aggregation waits for reconciler to resolve
+    UNKNOWN→FAILED before evaluating abort_requested override.  PlanRun stays
+    RUNNING until all jobs reach true terminal state."""
     from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 
     run = SimpleNamespace(
@@ -322,11 +320,8 @@ def test_aggregation_abort_requested_yields_to_degraded():
 
     applied = apply_plan_run_aggregation(run, jobs)
 
-    assert applied is True
-    assert run.status == PlanRunStatus.DEGRADED.value
-    # marker 仍写入,前端可同时知道"abort 被请求过且 UNKNOWN 待调查"
-    assert run.result_summary["abort_requested"] is True
-    assert run.result_summary["unknown"] == 1
+    assert applied is False
+    assert run.status == PlanRunStatus.RUNNING.value
 
 
 def test_aggregation_abort_requested_marker_with_aborted_jobs():
