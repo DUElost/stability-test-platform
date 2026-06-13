@@ -7,7 +7,12 @@ from typing import Any
 from backend.core.metrics import record_plan_run_terminal
 from backend.models.enums import JobStatus, PlanRunStatus
 
-_TERMINAL = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED, JobStatus.UNKNOWN}
+_TERMINAL = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}
+# UNKNOWN is intentionally excluded: with the B4 fix (agent_api.py _TERMINAL no
+# longer contains UNKNOWN), an UNKNOWN job may still transition to COMPLETED/
+# FAILED via Agent completion.  PlanRun aggregation must wait until every job
+# reaches a truly final state; the reconciler will eventually convert UNKNOWN→
+# FAILED when the grace window expires.
 
 _TERMINAL_PLAN_RUN_STATUSES = {
     PlanRunStatus.SUCCESS.value,

@@ -52,8 +52,12 @@ _TERMINAL = {
     JobStatus.COMPLETED.value,
     JobStatus.FAILED.value,
     JobStatus.ABORTED.value,
-    JobStatus.UNKNOWN.value,
 }
+# NOTE: UNKNOWN is intentionally excluded — it is a transient recovery state,
+# not a terminal one.  Agent completion for an UNKNOWN job must be allowed to
+# transition via the normal state-machine path (UNKNOWN→COMPLETED/FAILED).
+# At L574 (heartbeat status-update) this also ensures UNKNOWN does not
+# trigger premature PlanRun aggregation.
 
 
 class _LockAcquireFailed(Exception):
@@ -880,7 +884,11 @@ async def complete_job(
             )
         )
 
-    job.ended_at = datetime.now(timezone.utc)
+    # Preserve original ended_at when the job was already terminal —
+    # overwriting it would reset the UNKNOWN→FAILED grace window that the
+    # reconciler computes from ended_at (see device_lease_reconciler.py).
+    if not already_terminal:
+        job.ended_at = datetime.now(timezone.utc)
 
     # Watcher 摘要回填（来自 Agent JobSession.summary.to_complete_payload）
     # 字段契约见 backend/agent/watcher/contracts.py WatcherSummaryPayload

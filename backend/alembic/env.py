@@ -37,6 +37,7 @@ def get_metadata():
     import backend.models.resource_pool        # noqa: F401
     import backend.models.schedule             # noqa: F401
     import backend.models.script               # noqa: F401
+    import backend.models.token_blacklist       # noqa: F401 — ADR-0024 revoked_refresh_token
     import backend.models.user                 # noqa: F401
     return Base.metadata
 
