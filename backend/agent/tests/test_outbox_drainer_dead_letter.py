@@ -125,23 +125,27 @@ def test_mark_dead_letter_excludes_from_pending(db, emitter):
 
 
 def test_prune_acked_log_signals_skips_dead_letter(db, emitter):
-    """死信即使被人为 acked 也不应被 prune (双保险:实际死信 acked=0,但断言显式行为)。"""
-    # 4 个普通 acked + 1 个 acked+dead_letter
+    """死信即使被人为 acked 也不应被 prune (双保险:实际死信 acked=0,但断言显式行为)。
+
+    B3 guard: 对每个 job_id 至少保留 MAX(id) 那一行,防止 prune 后 seq_no 回退。
+    因此 5 行中: row5(死信)跳过,row4(同 job_id 的 max-id 哨兵)保留,只有 row1-3 删除
+    → 期望 deleted == 3。
+    """
     for i in range(5):
         emitter.emit(category="ANR", source="inotifyd", path_on_device=f"/p{i}")
     rows = db.get_pending_log_signals()
     for r in rows:
         db.ack_log_signal(r["id"])
-    # 把最后一行同时标 dead_letter (人为构造边界条件)
     db.mark_log_signal_dead_letter(rows[-1]["id"], "perm")
 
     deleted = db.prune_acked_log_signals(keep_recent=0)
-    assert deleted == 4, "4 个普通 acked 全删,死信留下"
+    assert deleted == 3, "3 个非死信非哨兵 acked 全删"
 
     remaining = {row["id"] for row in db._conn.execute(
         "SELECT id FROM log_signal_outbox"
     ).fetchall()}
-    assert rows[-1]["id"] in remaining
+    assert rows[-1]["id"] in remaining  # 死信留下
+    assert rows[-2]["id"] in remaining  # 哨兵留下
 
 
 # ── OutboxDrainer 死信触发 ──────────────────────────────────────────────
