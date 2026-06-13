@@ -646,16 +646,24 @@ class LocalDB:
     def prune_acked_log_signals(self, keep_recent: int = 1000) -> int:
         """删除旧的 acked=1 且 dead_letter=0 条目,保留最近 keep_recent 条。
 
-        #9: 显式排除 dead_letter=1 (虽然死信 acked=0 本身就不会被这条 SQL 命中,
-        但加显式条件提升可读性,与 prune_acked_step_traces 同口径)。
+        Guards: 对每个 job_id 至少保留该 job 下 seq_no 最大的一行（无论是否
+        在 keep_recent 窗口内），防止 prune 后 MAX(seq_no) 回退导致重启丢信号
+        （见 B3：prune+重启叠加场景）。
         """
         with self._lock:
             with self._conn:
+                # Sub-select ids that are NOT the max-seq row for their job.
+                # Those can safely be pruned when they fall outside keep_recent.
                 cur = self._conn.execute(
                     "DELETE FROM log_signal_outbox "
                     "WHERE acked = 1 AND dead_letter = 0 "
                     "AND id NOT IN (SELECT id FROM log_signal_outbox "
-                    "WHERE acked = 1 AND dead_letter = 0 ORDER BY id DESC LIMIT ?)",
+                    "WHERE acked = 1 AND dead_letter = 0 ORDER BY id DESC LIMIT ?) "
+                    "AND id NOT IN ("
+                    "  SELECT MAX(id) FROM log_signal_outbox "
+                    "  WHERE acked = 1 AND dead_letter = 0 "
+                    "  GROUP BY job_id"
+                    ")",
                     (keep_recent,),
                 )
                 return cur.rowcount

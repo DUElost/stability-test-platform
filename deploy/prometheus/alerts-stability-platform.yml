@@ -59,3 +59,62 @@ groups:
           summary: CSRF missing Origin/Referer probes
           description: >-
             High rate of script/probe traffic without browser Origin headers.
+
+  - name: stability-platform-dispatch
+    rules:
+      - alert: StabilityDispatchGateFailed
+        expr: increase(stability_dispatch_gate_runs_total{status="failed"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Plan dispatch gate failure
+          description: >-
+            One or more Plan dispatch gates failed.  Check plan_precheck logs
+            and verify host/script readiness.
+
+      - alert: StabilityDispatchGateSlow
+        expr: histogram_quantile(0.95, rate(stability_dispatch_gate_duration_seconds_bucket[10m])) > 30
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: Dispatch gate P95 latency above 30s
+          description: >-
+            Plan dispatch gate is taking longer than expected.  May indicate
+            slow SSH/ADB verification or NFS latency.
+
+  - name: stability-platform-agent
+    rules:
+      - alert: StabilityPatrolStall
+        expr: increase(stability_patrol_failure_streak_observed[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Patrol failure streak observed
+          description: >-
+            A device patrol loop hit consecutive failures.  Agent should have
+            entered BACKOFF; check device health and script functionality.
+
+      - alert: StabilitySaqQueueDepth
+        expr: stability_saq_queue_depth > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: SAQ queue backlog exceeds 50
+          description: >-
+            Post-completion / notification tasks are piling up.  Check Redis
+            connectivity and SAQ worker concurrency.
+
+      - alert: StabilityHostHeartbeatTimeout
+        expr: increase(stability_apscheduler_job_runs_total{job="session_watchdog",status="error"}[15m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Session watchdog job errors
+          description: >-
+            The session_watchdog APScheduler job reported errors.  Hosts may
+            not be timed out correctly.  Check watchdog logs.

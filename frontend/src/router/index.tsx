@@ -52,6 +52,14 @@ function ProtectedRoute() {
   return sessionQ.isSuccess ? <Outlet /> : <Navigate to="/login" replace />;
 }
 
+// Admin-only route guard: admin 角色放行,非 admin 重定向首页
+function AdminRoute() {
+  const sessionQ = useAuthSession();
+  if (sessionQ.isLoading) return <AuthGateLoading />;
+  if (!sessionQ.isSuccess) return <Navigate to="/login" replace />;
+  return sessionQ.data?.role === 'admin' ? <Outlet /> : <Navigate to="/" replace />;
+}
+
 // 公开路由组件（已登录用户重定向到首页）
 function PublicRoute() {
   const sessionQ = useAuthSession();
@@ -82,14 +90,18 @@ export default function AppRouter() {
             <Route path="devices" element={<DevicesPage />} />
             <Route path="wifi" element={<WifiPage />} />
             <Route path="results" element={<ResultsPage />} />
-            <Route path="users" element={<UsersPage />} />
-            <Route path="notifications" element={<NotificationsPage />} />
-            <Route path="settings" element={<SettingsPage />} />
             <Route path="account/password" element={<ChangePasswordPage />} />
             <Route path="schedules" element={<SchedulesPage />} />
-            <Route path="audit" element={<AuditLogPage />} />
             <Route path="issue-tracker" element={<IssueTrackerPage />} />
             <Route path="resources" element={<ResourcesPage />} />
+
+            {/* Admin-only routes */}
+            <Route element={<AdminRoute />}>
+              <Route path="users" element={<UsersPage />} />
+              <Route path="notifications" element={<NotificationsPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="audit" element={<AuditLogPage />} />
+            </Route>
 
             {/* ADR-0020 Plan 路由 */}
             <Route path="orchestration">

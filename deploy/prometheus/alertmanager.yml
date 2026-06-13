@@ -1,0 +1,58 @@
+# AlertManager configuration for stability-test-platform.
+#
+# Deploy alongside Prometheus.  Customize receivers (webhook / email / DingTalk)
+# to match your on-call routing.
+#
+# Quick start:
+#   alertmanager --config.file=alertmanager.yml
+#
+# Environment variables (set in systemd unit or .env):
+#   ALERT_WEBHOOK_URL  — DingTalk/Feishu/Slack webhook for stability-platform alerts
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: "stability-platform-default"
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - match:
+        severity: critical
+      receiver: "stability-platform-critical"
+      repeat_interval: 1h
+    - match:
+        severity: warning
+      receiver: "stability-platform-default"
+      repeat_interval: 4h
+
+receivers:
+  - name: "stability-platform-default"
+    # Option 1: DingTalk webhook
+    # webhook_configs:
+    #   - url: "https://oapi.dingtalk.com/robot/send?access_token=YOUR_TOKEN"
+    # Option 2: Email
+    # email_configs:
+    #   - to: "oncall@example.com"
+    #     from: "alertmanager@example.com"
+    #     smarthost: "smtp.example.com:587"
+    # Option 3: Fallback — log to file
+    webhook_configs:
+      - url: "http://127.0.0.1:5001/alerts"
+        send_resolved: true
+
+  - name: "stability-platform-critical"
+    # Critical alerts — fill in your high-priority channel
+    webhook_configs:
+      - url: "http://127.0.0.1:5001/alerts"
+        send_resolved: true
+
+inhibit_rules:
+  # If a critical alert fires, suppress warning-level alerts with same name
+  - source_match:
+      severity: critical
+    target_match:
+      severity: warning
+    equal: ["alertname"]
