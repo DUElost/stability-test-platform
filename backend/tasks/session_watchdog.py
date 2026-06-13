@@ -79,6 +79,7 @@ async def _check_unknown_grace_period(db) -> int:
     stuck_jobs = (await db.execute(
         select(JobInstance).where(
             JobInstance.status == JobStatus.UNKNOWN.value,
+            JobInstance.ended_at.is_not(None),
             JobInstance.ended_at < grace_deadline,
         )
     )).scalars().all()

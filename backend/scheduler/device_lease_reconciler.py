@@ -182,6 +182,7 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
     stale = (await db.execute(
         select(JobInstance).where(
             JobInstance.status == JobStatus.UNKNOWN.value,
+            JobInstance.ended_at.is_not(None),
             JobInstance.ended_at < grace_deadline,
         )
     )).scalars().all()

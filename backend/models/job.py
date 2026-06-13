@@ -138,7 +138,7 @@ class JobLogSignal(Base):
 
     id             = Column(BigInteger, primary_key=True)
     job_id         = Column(Integer, ForeignKey("job_instance.id", ondelete="CASCADE"), nullable=False)
-    host_id        = Column(String(64), nullable=False)
+    host_id        = Column(String(64), ForeignKey("host.id", ondelete="CASCADE"), nullable=False)
     device_serial  = Column(String(128), nullable=False)
     seq_no         = Column(BigInteger, nullable=False)
     category       = Column(String(32), nullable=False)   # ANR | AEE | VENDOR_AEE | MOBILELOG
