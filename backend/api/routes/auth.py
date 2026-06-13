@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, Response, status
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
@@ -56,8 +56,8 @@ def verify_agent_secret(x_agent_secret: Optional[str] = Header(None)) -> bool:
 
 
 class UserCreate(BaseModel):
-    username: str
-    password: str
+    username: str = Field(min_length=2, max_length=64)
+    password: str = Field(min_length=8, max_length=128)
     # role is intentionally excluded to prevent privilege escalation
     # new users are always created with "user" role
 

@@ -153,9 +153,18 @@ PROTECTED_READ_ENDPOINTS: tuple[ReadEndpointCase, ...] = (
 
 
 class TestPublicMetricsEndpoints:
-    """Prometheus scrape endpoints intentionally stay unauthenticated."""
+    """Prometheus scrape endpoints require auth by default (STP_METRICS_AUTH_REQUIRED=1).
+    Auth can be explicitly disabled for internal networks via STP_METRICS_AUTH_REQUIRED=0."""
 
-    def test_metrics_exposition_public(self, client):
+    def test_metrics_requires_auth_by_default(self, client, monkeypatch):
+        """Default: /metrics returns 401 without credentials."""
+        monkeypatch.setenv("STP_METRICS_AUTH_REQUIRED", "1")
+        resp = client.get("/metrics")
+        assert resp.status_code == 401
+
+    def test_metrics_public_when_auth_disabled(self, client, monkeypatch):
+        """With STP_METRICS_AUTH_REQUIRED=0, /metrics is publicly accessible."""
+        monkeypatch.setenv("STP_METRICS_AUTH_REQUIRED", "0")
         resp = client.get("/metrics")
         assert resp.status_code == 200
 

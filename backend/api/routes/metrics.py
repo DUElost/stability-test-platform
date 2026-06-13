@@ -20,7 +20,7 @@ router = APIRouter()
 
 
 def _metrics_auth_required() -> bool:
-    return os.getenv("STP_METRICS_AUTH_REQUIRED", "0").strip().lower() in {
+    return os.getenv("STP_METRICS_AUTH_REQUIRED", "1").strip().lower() in {
         "1",
         "true",
         "yes",

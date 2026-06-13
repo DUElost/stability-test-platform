@@ -85,10 +85,11 @@ export default function RegisterPage() {
               <Input
                 id="password"
                 type="password"
-                placeholder="请输入密码"
+                placeholder="请输入密码（至少 8 位）"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                minLength={8}
               />
             </div>
 
@@ -103,6 +104,7 @@ export default function RegisterPage() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
+                minLength={8}
               />
             </div>
 

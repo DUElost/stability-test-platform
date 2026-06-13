@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from backend.api.routes.auth import get_current_active_user, require_admin
@@ -41,7 +41,7 @@ class UserOut(BaseModel):
 
 class PasswordChange(BaseModel):
     old_password: str
-    new_password: str
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 @router.get("", response_model=PaginatedResponse)
