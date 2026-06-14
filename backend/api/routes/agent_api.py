@@ -1696,6 +1696,18 @@ async def recovery_sync(
             ))
             continue
 
+        # Guard: job row missing → cannot RESUME. A RESUME without job_payload
+        # would leave the Agent with a zombie active_job that never re-enters
+        # JobSession (so the watcher never re-attaches). Release the lingering
+        # lease and tell the Agent to drop its local record instead.
+        if job is None:
+            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id, device_id=entry.device_id,
+                action="ABORT_LOCAL", reason="resume_job_row_missing",
+            ))
+            continue
+
         # Normal RESUME: legacy adoption / same_boot update
         if not lease_agent_id or lease_agent_id == payload.host_id:
             lease.agent_instance_id = payload.agent_instance_id
@@ -1706,14 +1718,12 @@ async def recovery_sync(
         else:
             reason = "same_instance"
 
-        job_payload = None
-        if job is not None:
-            job_payload = await _build_recovery_job_payload(
-                db,
-                job,
-                device_serial=actual_serial,
-                fencing_token=lease.fencing_token,
-            )
+        job_payload = await _build_recovery_job_payload(
+            db,
+            job,
+            device_serial=actual_serial,
+            fencing_token=lease.fencing_token,
+        )
         job_actions.append(_RecoveryAction(
             job_id=entry.job_id, device_id=entry.device_id,
             action="RESUME", fencing_token=lease.fencing_token,

@@ -605,3 +605,125 @@ def test_e2e_source_spawn_failure_rolls_back_puller_and_releases_lock(
         and t.name.startswith(("puller-", "batcher-flusher-", "inotifyd-reader-"))
     ]
     assert leftover == [], f"watcher.start 失败回滚后不应留下线程：{leftover}"
+
+
+# ----------------------------------------------------------------------
+# TC-8：重启续航（ADR-0025 D5）—— watcher 随 JobSession 重新进入而重挂
+# ----------------------------------------------------------------------
+
+def test_e2e_restart_resilience_watcher_reattaches_and_seq_no_monotonic(
+    db, nfs_dir, lock_tracker
+):
+    """ADR-0025 D5 核心续航保证：Agent 重启后，活跃 Job 经 recovery RESUME 重新进入
+    JobSession（与正常 claim 同一入口），watcher 自动重挂、崩溃信号续流且 seq_no
+    跨重启单调（不重号）。本用例用真实 manager + JobSession + LocalDB 复现该链路，
+    把「重启 → 重挂」固化为防回归保证。
+
+    模拟：
+      Round 1: JobSession(job=2001,serial=S) → AEE emit → 1 信号 → 正常 exit(watcher stopped)
+      restart: _reset_for_tests() 清进程内单例（内存登记表归零）→ 重新 configure →
+               reconcile_on_startup() 清残留 active state
+      Round 2: 同 serial/job 再次 JobSession.__enter__（= RESUME→run_task→__enter__）
+               → watcher 重挂且**无 already_running 冲突** → 再 emit
+               → seq_no = 上次 MAX+1（emitter 构造时从 LocalDB 恢复）→ 共 2 信号
+    """
+    serial = "SERIAL-E2E-RESTART"
+    job_id = 2001
+    device_id = 77
+
+    def _configure(content: bytes):
+        adb = _adb_with_root_probe(serial, dirs=["/data/anr", "/data/aee_exp"])
+        _install_pull_writer(adb, fixed_content=content)
+        LogWatcherManager.instance().configure(
+            adb=adb,
+            adb_path="adb",
+            local_db=db,
+            api_url="http://fake-backend:8000",
+            agent_secret="",
+            nfs_base_dir=str(nfs_dir),
+        )
+
+    # ── Round 1：首次执行 ──
+    _configure(b"AEE crash round-1\n")
+    with patch(
+        "backend.agent.watcher.sources.subprocess.Popen",
+        return_value=_FakePopen(["n\t/data/aee_exp\tdb.0.0\n"]),
+    ):
+        with JobSession(
+            job_payload=_make_payload(job_id=job_id, device_id=device_id, serial=serial),
+            host_id="host-e2e",
+            log_dir=str(nfs_dir / "jobs" / str(job_id)),
+            lock_register=lock_tracker.reg_job,
+            lock_deregister=lock_tracker.dereg_job,
+        ) as session:
+            assert session.summary.watcher_capability == "inotifyd_root"
+            assert len(_wait_pending(db, expected=1, timeout=3.0)) == 1
+
+    first = db.get_pending_log_signals()
+    assert len(first) == 1
+    first_seq = first[0]["seq_no"]
+    # 正常 exit 后无残留 active watcher_state
+    assert db.list_active_watcher_states() == []
+
+    # ── 模拟 Agent 重启：进程内单例归零 + 重新 configure + reconcile ──
+    LogWatcherManager._reset_for_tests()
+    _configure(b"AEE crash round-2\n")
+    # round 1 已 clean exit，无残留 active → reconcile 清理 0 条
+    assert LogWatcherManager.instance().reconcile_on_startup() == 0
+
+    # ── Round 2：RESUME 重新进入 JobSession（同 serial/job）──
+    with patch(
+        "backend.agent.watcher.sources.subprocess.Popen",
+        return_value=_FakePopen(["n\t/data/aee_exp\tdb.0.1\n"]),
+    ):
+        with JobSession(
+            job_payload=_make_payload(job_id=job_id, device_id=device_id, serial=serial),
+            host_id="host-e2e",
+            log_dir=str(nfs_dir / "jobs" / str(job_id)),
+            lock_register=lock_tracker.reg_job,
+            lock_deregister=lock_tracker.dereg_job,
+        ) as session:
+            # 关键：重挂成功，无 already_running 冲突（内存登记表已随重启归零）
+            assert session.summary.watcher_capability == "inotifyd_root"
+            assert len(_wait_pending(db, expected=2, timeout=3.0)) == 2
+
+    # seq_no 跨重启单调：第二条 > 第一条（emitter 构造时 next_log_signal_seq_no=MAX+1）
+    seqs = sorted(r["seq_no"] for r in db.get_pending_log_signals())
+    assert len(seqs) == 2
+    assert seqs[0] == first_seq
+    assert seqs[1] > seqs[0], f"seq_no 应跨重启单调递增（不重号）；实际 {seqs}"
+    # exit 后锁释放
+    assert job_id not in lock_tracker.active_jobs
+
+
+def test_e2e_reconcile_on_startup_cleans_residual_active_state(db, nfs_dir):
+    """重启后 reconcile_on_startup 把上次进程残留的 active watcher_state 标记 stopped，
+    且**不**重新挂载 watcher（重挂由 RESUME→JobSession 负责，见 TC-8）。"""
+    LogWatcherManager.instance().configure(
+        adb=_adb_with_root_probe("S-RESIDUAL", dirs=["/data/aee_exp"]),
+        adb_path="adb",
+        local_db=db,
+        api_url="http://fake-backend:8000",
+        agent_secret="",
+        nfs_base_dir=str(nfs_dir),
+    )
+    # 注入一条模拟「上次进程崩溃残留」的 active watcher_state
+    db.upsert_watcher_state(
+        watcher_id="wch-crashed-prev",
+        job_id=9999,
+        serial="S-RESIDUAL",
+        host_id="host-e2e",
+        state="active",
+        capability="inotifyd_root",
+        started_at=datetime.now(timezone.utc),
+    )
+    assert len(db.list_active_watcher_states()) == 1
+
+    cleaned = LogWatcherManager.instance().reconcile_on_startup(
+        active_jobs=[{"job_id": 9999, "serial": "S-RESIDUAL"}]
+    )
+
+    assert cleaned == 1
+    # 残留已清，且未重挂任何 watcher（内存登记表为空）
+    assert db.list_active_watcher_states() == []
+    assert LogWatcherManager.instance().list_active() == []

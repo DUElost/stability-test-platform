@@ -242,6 +242,17 @@ def execute_recovery_actions_impl(
         action = a["action"]
         if action == "RESUME":
             token = a.get("fencing_token", "")
+            # Defense-in-depth: a RESUME without a dict job_payload cannot re-enter
+            # JobSession, so the watcher would never re-attach and the job would
+            # become a zombie active record. Backend now guarantees RESUME carries
+            # a payload (job-row-missing → ABORT_LOCAL); skip registration if it
+            # somehow doesn't, and let the next recovery round reconcile.
+            if not isinstance(a.get("job_payload"), dict):
+                logger.warning(
+                    "recovery_resume_missing_payload job=%d — skipping register (backend will reconcile)",
+                    jid,
+                )
+                continue
             persisted_job = active_jobs_by_id.get(jid) or {}
             device_serial = (a.get("device_serial") or persisted_job.get("device_serial") or "").strip()
             local_worker_token = _make_local_worker_token(jid, "resume")
@@ -253,7 +264,7 @@ def execute_recovery_actions_impl(
                 local_worker_token,
             )
             resumed_job_ids.add(jid)
-            if resume_job is not None and isinstance(a.get("job_payload"), dict):
+            if resume_job is not None:
                 resumed_payload = dict(a["job_payload"])
                 resumed_payload["id"] = jid
                 if a.get("device_id") is not None:
@@ -263,6 +274,8 @@ def execute_recovery_actions_impl(
                 if token:
                     resumed_payload["fencing_token"] = token
                 resumed_payload["local_worker_token"] = local_worker_token
+                # T3: mark as recovery-resumed so the watcher re-attach is observable
+                resumed_payload["recovery_resumed"] = True
                 try:
                     resume_job(resumed_payload)
                 except Exception:
