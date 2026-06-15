@@ -27,7 +27,7 @@ pytestmark = pytest.mark.skipif(
 
 from fastapi import HTTPException
 
-from backend.api.routes.agent_api import ArtifactIn, ingest_artifact
+from backend.api.routes.agent_api import ArtifactIn, ingest_artifact, get_archive_status
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
 from backend.models.enums import JobStatus
 from backend.models.job import JobArtifact
@@ -355,3 +355,46 @@ async def test_ingest_artifact_accepts_all_whitelisted_types():
             db.close()
     finally:
         _cleanup_with_artifacts(seed)
+
+
+# ----------------------------------------------------------------------
+# archive-status 端点（ADR-0025 Sprint 2 / S2.4）
+# ----------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_archive_status_counts_run_log_bundles():
+    """注册 run_log_bundle artifact 后，archive-status 返回该 host 的归档计数 + 最近时间。"""
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            await ingest_artifact(
+                job_id=seed["job_id"],
+                payload=ArtifactIn(
+                    storage_uri=f"/mnt/nfs/archives/2026-06-15/{seed['job_id']}/{seed['job_id']}.tar.gz",
+                    artifact_type="run_log_bundle",
+                    size_bytes=123,
+                    checksum="abc123",
+                ),
+                db=async_db,
+                _=None,
+            )
+        async with AsyncSessionLocal() as async_db:
+            result = await get_archive_status(seed["host_id"], db=async_db, _user=None)
+        assert result.error is None
+        assert result.data["host_id"] == seed["host_id"]
+        assert result.data["archived_total"] == 1
+        assert result.data["last_archive_at"] is not None
+        # Agent 未上报心跳归档指标 → agent_metrics 为 None（端点降级返回后端权威计数）
+        assert result.data["agent_metrics"] is None
+    finally:
+        _cleanup_with_artifacts(seed)
+
+
+@pytest.mark.asyncio
+async def test_archive_status_unknown_host_404():
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as async_db:
+        with pytest.raises(HTTPException) as exc:
+            await get_archive_status("nonexistent-host-zzz", db=async_db, _user=None)
+    assert exc.value.status_code == 404
