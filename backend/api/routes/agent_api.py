@@ -32,6 +32,7 @@ from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
+from backend.api.routes.auth import get_current_active_user
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
@@ -1375,7 +1376,7 @@ async def _get_backpressure() -> Optional[int]:
 # 故意不放开 ANR / MOBILELOG：
 #   - ANR / MOBILELOG 在 JobLogSignal 里已经有 path_on_device / first_lines 元数据
 #   - 文件本身体量大、价值低，不值得入 JobArtifact 展示/下载通道
-_ARTIFACT_TYPE_WHITELIST: set[str] = {"aee_crash", "vendor_aee_crash", "bugreport"}
+_ARTIFACT_TYPE_WHITELIST: set[str] = {"aee_crash", "vendor_aee_crash", "bugreport", "run_log_bundle"}
 
 
 class ArtifactIn(BaseModel):
@@ -1765,4 +1766,47 @@ async def recovery_sync(
     return ok({
         "actions": [a.model_dump() for a in job_actions],
         "outbox_actions": [a.model_dump() for a in outbox_actions],
+    })
+
+
+@router.get("/{host_id}/archive-status")
+async def get_archive_status(
+    host_id: str,
+    db: AsyncSession = Depends(get_async_db),
+    _user=Depends(get_current_active_user),
+):
+    """ADR-0025 Sprint 2: 控制面查看某 host 的运行日志归档概览。
+
+    后端权威数据（run_log_bundle JobArtifact 计数 + 最近归档时间）+ Agent 经
+    心跳上报的实时归档指标（Host.extra['archive']，若 Agent 已上报则非空）。
+    用户态鉴权（dashboard 读），非 Agent 端点。
+    """
+    host = await db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    job_ids_subq = select(JobInstance.id).where(JobInstance.host_id == host_id)
+    archived_total = (await db.execute(
+        select(func.count(JobArtifact.id)).where(
+            JobArtifact.artifact_type == "run_log_bundle",
+            JobArtifact.job_id.in_(job_ids_subq),
+        )
+    )).scalar_one()
+    last_archive_at = (await db.execute(
+        select(func.max(JobArtifact.created_at)).where(
+            JobArtifact.artifact_type == "run_log_bundle",
+            JobArtifact.job_id.in_(job_ids_subq),
+        )
+    )).scalar_one()
+
+    extra = host.extra if isinstance(host.extra, dict) else {}
+    agent_metrics = extra.get("archive")
+
+    return ok({
+        "host_id": host_id,
+        "archived_total": int(archived_total or 0),
+        "last_archive_at": last_archive_at.isoformat() if last_archive_at else None,
+        # Agent 心跳上报的实时指标（pending_archive / local_disk_usage_pct /
+        # spilled_total / archive_failed），未上报时为 null
+        "agent_metrics": agent_metrics,
     })
