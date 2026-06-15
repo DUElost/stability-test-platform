@@ -2,8 +2,10 @@ import { useState } from 'react';
 import {
   AlertTriangle,
   Activity,
+  Archive,
   ArrowDown,
   ArrowUp,
+  Download,
   ShieldAlert,
   Minus,
   Info,
@@ -62,6 +64,13 @@ function fmtTime(ts: string | null | undefined): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function fmtSize(bytes: number | null | undefined): string {
+  if (bytes == null) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function topPackagesTitle(
@@ -388,6 +397,39 @@ export default function WatcherSummaryCard({
                 />
               )}
             </div>
+          </div>
+        )}
+
+        {/* ADR-0025 Sprint 3: 运行日志归档状态 + 下载入口 */}
+        {data?.archive && data.archive.total_jobs > 0 && (
+          <div className="border-t bg-gray-50 px-4 py-2" data-testid="watcher-archive-section">
+            <div className="mb-1 flex items-center justify-between text-[11px] text-gray-500">
+              <span className="flex items-center gap-1">
+                <Archive className="h-3 w-3" />
+                运行日志归档
+              </span>
+              <span className="font-mono" data-testid="archive-progress">
+                {data.archive.archived_jobs}/{data.archive.total_jobs} 已归档
+              </span>
+            </div>
+            {data.archive.bundles.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {data.archive.bundles.map((b) => (
+                  <a
+                    key={b.artifact_id}
+                    href={`/api/v1/plan-runs/${data.plan_run_id}/jobs/${b.job_id}/artifacts/${b.artifact_id}/download`}
+                    className="inline-flex items-center gap-1 rounded border border-gray-300 bg-white px-2 py-0.5 text-[11px] text-gray-600 hover:bg-gray-100"
+                    data-testid="archive-bundle-download"
+                  >
+                    <Download className="h-3 w-3" />
+                    Job #{b.job_id}
+                    {b.size_bytes != null && (
+                      <span className="text-gray-400">({fmtSize(b.size_bytes)})</span>
+                    )}
+                  </a>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
