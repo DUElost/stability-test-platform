@@ -160,22 +160,34 @@ Agent LogArchiver 把整包日志归档到 NFS archives/<date>/<job_id>/   (Spri
         │
         ▼
 控制平面（Windows）后处理（后续子阶段）：
-  PlanRun 终态 / 手动触发 → subprocess 调用 start_log_scan.py
+  [触发] PlanRun 终态自动 + PlanRun 详情页「重跑去重」手动按钮兜底
+        │
+  subprocess 调用 start_log_scan.py
     -d_abs <NFS archives 路径> -m 5 -p <place> -pipeline <plan_run_id> -uuid <run uuid> -end
-    → 产出 Result_*_org.xls
-    → -dedup_org Result_*_org.xls -side shanghai → 去重后 .xls
-  → 解析去重结果回填 PlanRun 报告 / 喂 stability_Jira-Automation 提单
+    → 产出 Result_*_org.xls → -dedup_org ... -side shanghai → 去重后 .xls
+        │
+  [回填] 去重 .xls 存为可下载 JobArtifact + PlanRun 详情页挂链
+        │
+  [人工审核闸口] 运维下载 .xls 人工复核 —— 不自动提单
+        │
+  平台「.xls 上传接口」← 上传经审核的 .xls → 喂 stability_Jira-Automation 提单
+        │
+  （远期）待人工审核标准沉淀为可量化逻辑后，再接 scan→dedup→提单 全自动
 ```
 
-### 5.4 集成需澄清项（留待子阶段开工前定）
+### 5.4 集成决策（2026-06-15 确认）
 
-- 触发点：PlanRun terminal 自动 vs 手动按钮 vs 定时批量
+**已定**：
+- **触发点**：PlanRun 终态自动触发 + PlanRun 详情页「重跑去重」手动按钮兜底
+- **回填形态**：去重 `.xls` 存为可下载 JobArtifact 并在 PlanRun 详情页挂链；**不自动提单**——设**人工审核闸口**：运维下载复核后，经平台「`.xls` 上传接口」喂 `stability_Jira-Automation` 提单。待人工审核标准沉淀为可量化代码逻辑后，再接 scan→dedup→提单全自动流程。
+
+**仍待定（子阶段开工前）**：
 - 调用形态：源码 subprocess vs 打包 exe（依赖隔离）
-- 解析回填：Excel → 结构化（复用工具的中间产物而非二次解析 Excel？需看 modules 是否可 import）
+- `.xls` 上传接口形态：新端点 + 前端上传组件 + 喂 `stability_Jira-Automation` 的调用契约
 - place/side 配置来源：Plan/Host 维度配置
 - 与现有 `runs.py` jira-draft 的关系：替换还是补充
 
-> 本 Sprint 不动该工具；仅保证归档产物（NFS 整包）是其可直接消费的输入。
+> 本 Sprint 不动该工具；仅保证归档产物（NFS 整包）是其可直接消费的输入。人工审核闸口是当前阶段的有意设计——全自动化是审核逻辑可量化后的远期目标。
 
 ### S2.7 — 清理 `_archive_logs` 的 file:// 死快照（已确认纳入）
 
@@ -219,7 +231,7 @@ Agent LogArchiver 把整包日志归档到 NFS archives/<date>/<job_id>/   (Spri
 
 **待用户/后续确认**：
 1. ~~是否清理 `_archive_logs` 的 file:// 本地快照~~ —— **已确认纳入**（§S2.7）
-2. 去重子阶段触发点与回填形态（§5.4）—— 待具体确认
+2. 去重子阶段触发点与回填形态（§5.4）—— **已确认**：终态自动+手动重跑；Excel 作产物 + 人工审核闸口 + 平台 .xls 上传接口喂 Jira-Automation（不自动提单）
 
 ---
 
