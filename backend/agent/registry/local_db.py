@@ -118,6 +118,14 @@ class LocalDB:
                 fencing_token TEXT    NOT NULL DEFAULT '',
                 claimed_at    TEXT    NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS job_archive (
+                job_id      INTEGER PRIMARY KEY,
+                nfs_uri     TEXT    NOT NULL,
+                sha256      TEXT,
+                size_bytes  INTEGER,
+                spilled     INTEGER NOT NULL DEFAULT 0,
+                archived_at TEXT    NOT NULL
+            );
         """)
         self._ensure_step_trace_schema()
         self._ensure_log_signal_outbox_schema()
@@ -769,6 +777,60 @@ class LocalDB:
                 "SELECT * FROM watcher_state WHERE state = 'active' ORDER BY started_at ASC"
             ).fetchall()
         return [dict(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # job_archive — ADR-0025 Sprint 2: LogArchiver 归档标记
+    # ------------------------------------------------------------------
+
+    def mark_job_archived(
+        self,
+        job_id: int,
+        *,
+        nfs_uri: str,
+        sha256: Optional[str] = None,
+        size_bytes: Optional[int] = None,
+        spilled: bool = False,
+    ) -> None:
+        """标记某 Job 的运行日志已归档到 NFS（LogArchiver prune 本地前调用）。"""
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO job_archive "
+                    "(job_id, nfs_uri, sha256, size_bytes, spilled, archived_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        int(job_id),
+                        nfs_uri,
+                        sha256,
+                        int(size_bytes) if size_bytes is not None else None,
+                        1 if spilled else 0,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+
+    def is_job_archived(self, job_id: int) -> bool:
+        """该 Job 是否已归档（幂等：避免重复归档同一 Job）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM job_archive WHERE job_id = ?", (int(job_id),)
+            ).fetchone()
+        return row is not None
+
+    def count_archived_jobs(self) -> int:
+        """已归档 Job 数（供 archive-status 端点 / 心跳指标）。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM job_archive"
+            ).fetchone()
+        return int(row["c"]) if row else 0
+
+    def count_spilled_jobs(self) -> int:
+        """因磁盘溢出而归档的 Job 数。"""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS c FROM job_archive WHERE spilled = 1"
+            ).fetchone()
+        return int(row["c"]) if row else 0
 
     # ------------------------------------------------------------------
     # active_job_registry — ADR-0019 Phase 3a: crash recovery persistence
