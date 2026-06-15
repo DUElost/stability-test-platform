@@ -28,7 +28,7 @@ import pytest
 from backend.models.audit import AuditLog
 from backend.models.enums import HostStatus, JobStatus, PlanRunStatus
 from backend.models.host import Device, Host
-from backend.models.job import JobInstance, JobLogSignal, StepTrace
+from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 
@@ -1108,6 +1108,41 @@ class TestWatcherSummaryEndpoint:
             "/api/v1/plan-runs/999999/watcher-summary", headers=auth_headers,
         )
         assert resp.status_code == 404
+
+    def test_watcher_summary_includes_run_log_archive(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """ADR-0025 Sprint 3: watcher-summary 聚合 run_log_bundle 归档状态 + 下载引用。"""
+        cur_run = chain_setup["current_run"]
+        job_ids = [
+            j.id for j in db_session.query(JobInstance)
+            .filter(JobInstance.plan_run_id == cur_run.id).all()
+        ]
+        assert job_ids, "chain_setup current_run 应有关联 Job"
+        # 为其中一个 Job 注册 run_log_bundle 归档产物
+        db_session.add(JobArtifact(
+            job_id=job_ids[0],
+            storage_uri=f"/mnt/nfs/archives/2026-06-15/{job_ids[0]}/{job_ids[0]}.tar.gz",
+            artifact_type="run_log_bundle",
+            size_bytes=2048,
+            checksum="deadbeef",
+        ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        archive = resp.json()["data"]["archive"]
+        assert archive is not None
+        assert archive["total_jobs"] == len(job_ids)
+        assert archive["archived_jobs"] == 1
+        assert len(archive["bundles"]) == 1
+        bundle = archive["bundles"][0]
+        assert bundle["job_id"] == job_ids[0]
+        assert bundle["size_bytes"] == 2048
+        assert bundle["artifact_id"] > 0
 
     def test_watcher_summary_time_scope_all_splits_current_and_preexisting(
         self, client, auth_headers, chain_setup, db_session,

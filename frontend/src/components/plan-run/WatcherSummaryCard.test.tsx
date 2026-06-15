@@ -288,4 +288,55 @@ describe('WatcherSummaryCard', () => {
       screen.queryByTestId('watcher-capability-badge'),
     ).not.toBeInTheDocument();
   });
+
+  // ADR-0025 Sprint 3: 运行日志归档状态展示
+  it('renders run-log archive section with progress and download links', () => {
+    render(
+      <WatcherSummaryCard
+        data={{
+          ...fixture,
+          archive: {
+            archived_jobs: 1,
+            total_jobs: 3,
+            bundles: [
+              {
+                job_id: 501,
+                artifact_id: 9001,
+                size_bytes: 2048,
+                created_at: '2026-06-15T10:00:00Z',
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(screen.getByTestId('watcher-archive-section')).toBeInTheDocument();
+    expect(screen.getByTestId('archive-progress')).toHaveTextContent('1/3');
+    const dl = screen.getByTestId('archive-bundle-download');
+    expect(dl).toHaveTextContent('Job #501');
+    expect(dl).toHaveAttribute(
+      'href',
+      '/api/v1/plan-runs/12/jobs/501/artifacts/9001/download',
+    );
+  });
+
+  it('does not render archive section when archive absent or no jobs', () => {
+    const { rerender } = render(
+      <WatcherSummaryCard data={{ ...fixture, archive: null }} />,
+    );
+    expect(
+      screen.queryByTestId('watcher-archive-section'),
+    ).not.toBeInTheDocument();
+    rerender(
+      <WatcherSummaryCard
+        data={{
+          ...fixture,
+          archive: { archived_jobs: 0, total_jobs: 0, bundles: [] },
+        }}
+      />,
+    );
+    expect(
+      screen.queryByTestId('watcher-archive-section'),
+    ).not.toBeInTheDocument();
+  });
 });
