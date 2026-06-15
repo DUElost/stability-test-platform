@@ -21,7 +21,7 @@ from backend.core.artifact_paths import (
     ArtifactPathError,
     coerce_local_artifact_path,
 )
-from backend.models.job import JobInstance, StepTrace
+from backend.models.job import JobArtifact, JobInstance, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.host import Device, Host
@@ -233,6 +233,39 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
                 "created_at": artifact_obj.created_at,
             }
         )
+
+    # ADR-0025 S2.7: file:// 完成快照已停发（控制面不可达）。改用 LogArchiver 注册的
+    # run_log_bundle JobArtifact —— 其 storage_uri 在 NFS 根下，控制面可下载，且可读取
+    # 做 risk-summary。归档是异步的：未归档窗口内无 bundle（risk-summary 暂空），归档后可用。
+    if not artifacts_virtual:
+        bundle = (
+            db.query(JobArtifact)
+            .filter(
+                JobArtifact.job_id == job.id,
+                JobArtifact.artifact_type == "run_log_bundle",
+            )
+            .order_by(JobArtifact.created_at.desc())
+            .first()
+        )
+        if bundle is not None:
+            artifact_obj = _VirtualArtifact(
+                run_id=job.id,
+                storage_uri=bundle.storage_uri,
+                size_bytes=bundle.size_bytes,
+                checksum=bundle.checksum,
+                created_at=bundle.created_at or job.ended_at or datetime.now(timezone.utc),
+            )
+            artifacts_virtual.append(artifact_obj)
+            artifacts_out.append(
+                {
+                    "id": artifact_obj.id,
+                    "run_id": artifact_obj.run_id,
+                    "storage_uri": artifact_obj.storage_uri,
+                    "size_bytes": artifact_obj.size_bytes,
+                    "checksum": artifact_obj.checksum,
+                    "created_at": artifact_obj.created_at,
+                }
+            )
 
     log_summary = update.get("log_summary")
     if not isinstance(log_summary, str):

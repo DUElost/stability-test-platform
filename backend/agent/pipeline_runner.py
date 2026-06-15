@@ -71,5 +71,9 @@ def execute_pipeline_run(
         "error_code": None,
         "error_message": result.error_message,
         "log_summary": None,
-        "artifact": result.artifact,
+        # ADR-0025 S2.7: 不再上报 _archive_logs 的 file:// 本地路径作为完成产物
+        # —— 该路径在控制面不可达（非 NFS 根，且在 Agent 本地盘）。本地 tar 仍由
+        # _archive_logs 生成，由 LogArchiver 搬运到 NFS 并注册为可达的 run_log_bundle
+        # JobArtifact；报告改读该 NFS 产物（report_service._compose_job_report）。
+        "artifact": None,
     }
