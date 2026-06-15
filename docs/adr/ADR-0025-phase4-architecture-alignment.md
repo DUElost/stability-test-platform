@@ -86,11 +86,11 @@
 ### D4: 新增 Agent 日志归档调度器（LogArchiver）
 
 职责：
-- 每日定时扫描 `BASE_DIR/logs/runs/` 下已完成 Job 的日志
-- 对同 Job 的重复 ANR/AEE 条目做去重（基于 sha256 + first_lines 比对）
-- 去重后的日志打包归档到 NFS（`{nfs_base_dir}/archives/{date}/{job_id}/`）
+- 周期扫描 `BASE_DIR/logs/runs/` 下已完成 Job 的日志（复用 pipeline 已生成的 `{log_dir}.tar.gz`）
+- 打包归档到 NFS（`{nfs_base_dir}/archives/{date}/{job_id}/`）+ 注册为 JobArtifact（控制面可下载）
 - 监控本地磁盘使用量，达阈值（如 80%）后主动溢出旧 Job 日志到 NFS
 - 归档后的日志可被控制平面通过 NFS 路径访问，支撑 JIRA 提单
+- **去重**（后续子阶段，先规划）：异常识别 + 相似度去重不在 Agent 侧实现，规划集成既有成熟工具 `stability_Start-Log-Scan`（MTK AEE/TNE 13 类异常识别 + 90% 相似度去重 + 离线 `-dedup_org`），定位**控制平面**（Windows 原生环境，对接 JIRA），见 Sprint 2 实现计划 §5
 
 ### D5: Watcher 无人值守续航 —— 加固既有 RESUME 重挂路径（非独立重挂）——【首次落地最高增益项，优先执行】
 
@@ -183,14 +183,18 @@ Agent 重启
 
 ### Sprint 2（5-8 天）：Agent 日志归档调度器
 
+> 详细实现计划见 `docs/adr-0025-sprint2-log-archiver-implementation-plan-2026-06-15.md`。
+> 勘察修正：pipeline 已在每 Job 终态 tar 运行日志到**本地** `{log_dir}.tar.gz`（`pipeline_engine.py:499`），但 URI 为 `file://` 本地路径、仅存 RUN_COMPLETE 快照、控制面读不到（`artifact_paths.py` 强制 NFS 根）。故 LogArchiver 复用该 tar，补齐「落 NFS + 注册 JobArtifact + 本地保留/溢出」。去重不在本 Sprint 实现，规划集成既有工具 `stability_Start-Log-Scan`（定位控制平面，见计划 §5）。
+
 | 步骤 | 文件 | 改动 |
 |------|------|------|
-| 1 | `backend/agent/log_archiver.py`（新建） | 每日扫描 + 去重 + 归档 NFS + 溢出逻辑 |
-| 2 | `backend/agent/local_disk_monitor.py`（新建） | 磁盘阈值监控 + 触发 LogArchiver |
-| 3 | `backend/agent/main.py` | 集成归档调度器 |
-| 4 | `backend/api/routes/agent_api.py` | `GET /agent/{host_id}/archive-status` |
-| 5 | `backend/agent/registry/local_db.py` | 归档标记字段 |
-| 6 | 测试 | 归档流程 + 溢出 + 端点 |
+| 1 | `backend/agent/log_archiver.py`（新建） | interval 扫描已完成 job 目录 + 复用/补打 tar + 归档 NFS + 注册 JobArtifact + prune 本地 |
+| 2 | `backend/agent/local_disk_monitor.py`（新建） | 本地盘阈值监控（按 BASE_DIR 盘）+ 超阈触发 LogArchiver 溢出最旧 job |
+| 3 | `backend/agent/main.py` | watcher 子系统块内 configure+start，shutdown 收尾 |
+| 4 | `backend/api/routes/agent_api.py` | `GET /agent/{host_id}/archive-status` + `_ARTIFACT_TYPE_WHITELIST` 加 `RUN_LOG_BUNDLE` |
+| 5 | `backend/agent/registry/local_db.py` | 归档标记（archived_at / nfs_uri / sha256 / spilled）幂等建表 |
+| 6 | 测试 | 归档/跳过活跃/复用tar/幂等/溢出/端点/白名单 |
+| 7（后续子阶段） | 控制平面 | 集成 `stability_Start-Log-Scan` 去重（CLI subprocess + 离线 `-dedup_org` → 喂 JIRA），先规划见计划 §5 |
 
 ### Sprint 3（2-3 天）：控制平面拉取优化
 
