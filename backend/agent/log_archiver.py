@@ -27,6 +27,7 @@ import os
 import shutil
 import tarfile
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -67,6 +68,10 @@ class LogArchiver:
         # 避免每次心跳都 _iter_job_dirs() 遍历目录 + 逐 job 查 SQLite。
         self._pending_archive_cached = 0
         self._metrics_lock = threading.Lock()
+        # per-job 归档在途集合：scan_once 线程与 spill_oldest 线程可能同时选中同一
+        # job_id，用它保证同一 job 同一时刻只有一个归档在跑（不同 job 仍可并发）。
+        self._inflight: set = set()
+        self._inflight_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # 单例
@@ -181,8 +186,8 @@ class LogArchiver:
             if not self._is_aged(job_dir, now, self._grace_seconds):
                 continue
             try:
-                self.archive_one(job_id, job_dir)
-                archived += 1
+                if self.archive_one(job_id, job_dir):
+                    archived += 1
             except Exception:
                 self._bump("_archive_failed")
                 logger.exception("log_archiver_archive_failed job_id=%d", job_id)
@@ -210,8 +215,8 @@ class LogArchiver:
         spilled = 0
         for _mtime, job_id, job_dir in candidates[: max(1, int(max_jobs))]:
             try:
-                self.archive_one(job_id, job_dir, spilled=True)
-                spilled += 1
+                if self.archive_one(job_id, job_dir, spilled=True):
+                    spilled += 1
             except Exception:
                 self._bump("_archive_failed")
                 logger.exception("log_archiver_spill_failed job_id=%d", job_id)
@@ -222,10 +227,43 @@ class LogArchiver:
     # 单 Job 归档
     # ------------------------------------------------------------------
 
-    def archive_one(self, job_id: int, job_dir: Path, *, spilled: bool = False) -> str:
+    def archive_one(self, job_id: int, job_dir: Path, *, spilled: bool = False) -> Optional[str]:
+        """归档单个 Job（per-job 在途互斥入口）。
+
+        scan_once 线程与 spill_oldest 线程可能同时选中同一 job：用在途集合 claim +
+        claim 下二次确认 is_job_archived，保证同一 job 既不被并发归档、也不被
+        顺序重复归档（他线程刚归档完即释放）。返回 storage_uri；在途冲突或已被
+        他线程归档 → 返回 None（安静跳过，不计失败）。任一步失败抛异常。
+        """
+        with self._claim_archive(job_id) as acquired:
+            if not acquired:
+                logger.debug("log_archiver_archive_skipped_inflight job_id=%d", job_id)
+                return None
+            # claim 下二次确认：另一线程可能刚归档完同一 job（顺序竞态），避免对
+            # 已 prune 的目录重打 tar 抛错并误计 archive_failed。
+            if self._db is not None and self._db.is_job_archived(job_id):
+                return None
+            return self._do_archive(job_id, job_dir, spilled=spilled)
+
+    @contextmanager
+    def _claim_archive(self, job_id: int):
+        """per-job 在途互斥：yield True=获得归档权；False=另一线程正在归档此 job。"""
+        with self._inflight_lock:
+            acquired = job_id not in self._inflight
+            if acquired:
+                self._inflight.add(job_id)
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                with self._inflight_lock:
+                    self._inflight.discard(job_id)
+
+    def _do_archive(self, job_id: int, job_dir: Path, *, spilled: bool = False) -> str:
         """归档单个 Job：打包/复用 tar → 复制 NFS → 同步注册 → 标记 → prune 本地。
 
         返回 NFS storage_uri。任一步失败抛异常（保留本地，下轮重试）。
+        由 archive_one 在持有 per-job claim 后调用。
         """
         # 1. 复用 pipeline 生成的 tar；不存在则补打
         local_tar = self._run_log_dir / f"{job_id}.tar.gz"
