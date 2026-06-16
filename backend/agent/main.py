@@ -26,7 +26,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
-    from agent.log_archiver import LogArchiver
+    from agent.log_archiver import LogArchiver, collect_archive_heartbeat_metrics
     from agent.local_disk_monitor import LocalDiskMonitor
     from agent.heartbeat_thread import HeartbeatThread
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
@@ -46,7 +46,7 @@ else:
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
-    from .log_archiver import LogArchiver
+    from .log_archiver import LogArchiver, collect_archive_heartbeat_metrics
     from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
@@ -623,6 +623,8 @@ def main() -> None:
             "terminal_outbox_pending": local_db.count_pending_terminals(),
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),
         },
+        # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（归档禁用时回调返回 None）
+        get_archive_metrics=collect_archive_heartbeat_metrics,
         on_devices_reconnected=lambda serials: (
             trigger_recovery_sync_on_device_reconnect(
                 reconnected_serials=serials,

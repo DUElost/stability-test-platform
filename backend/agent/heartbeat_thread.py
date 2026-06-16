@@ -46,6 +46,8 @@ class HeartbeatThread:
         # ADR-0020: agent version for preflight consistency check
         agent_version: str = "",
         get_outbox_counts: Optional[Callable[[], Dict[str, int]]] = None,
+        # ADR-0025 Sprint 2: 运行日志归档可观测指标（→ extra['archive']）
+        get_archive_metrics: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
         on_devices_reconnected: Optional[Callable[[List[str]], None]] = None,
     ):
         self._api_url = api_url
@@ -63,6 +65,7 @@ class HeartbeatThread:
         self._boot_id = boot_id
         self._agent_version = agent_version
         self._get_outbox_counts = get_outbox_counts
+        self._get_archive_metrics = get_archive_metrics
         self._on_devices_reconnected = on_devices_reconnected
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -173,6 +176,15 @@ class HeartbeatThread:
                 system_stats.update(self._get_outbox_counts())
             except Exception as exc:
                 logger.debug("outbox_counts_failed: %s", exc)
+        # ADR-0025 Sprint 2: 归档指标作为嵌套 archive 段（archive-status 端点读
+        # host.extra['archive']）；未配置时回调返回 None → 不写该段。
+        if self._get_archive_metrics:
+            try:
+                archive_metrics = self._get_archive_metrics()
+                if archive_metrics:
+                    system_stats["archive"] = archive_metrics
+            except Exception as exc:
+                logger.debug("archive_metrics_failed: %s", exc)
         mount_status = check_mounts(self._mount_points)
 
         active_count = self._get_active_job_count() if self._get_active_job_count else 0

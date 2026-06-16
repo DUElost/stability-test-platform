@@ -63,6 +63,9 @@ class LogArchiver:
         self._spilled_total = 0
         self._archive_failed = 0
         self._last_archive_at: Optional[str] = None
+        # 待归档数缓存：仅在低频 scan/spill 末尾刷新，供 20s 心跳 O(1) 读取，
+        # 避免每次心跳都 _iter_job_dirs() 遍历目录 + 逐 job 查 SQLite。
+        self._pending_archive_cached = 0
         self._metrics_lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -183,6 +186,7 @@ class LogArchiver:
             except Exception:
                 self._bump("_archive_failed")
                 logger.exception("log_archiver_archive_failed job_id=%d", job_id)
+        self._refresh_pending_cache()
         return archived
 
     def spill_oldest(self, *, max_jobs: int = 1) -> int:
@@ -211,6 +215,7 @@ class LogArchiver:
             except Exception:
                 self._bump("_archive_failed")
                 logger.exception("log_archiver_spill_failed job_id=%d", job_id)
+        self._refresh_pending_cache()
         return spilled
 
     # ------------------------------------------------------------------
@@ -393,6 +398,13 @@ class LogArchiver:
             pending += 1
         return pending
 
+    def _refresh_pending_cache(self) -> None:
+        """重算待归档数并写入缓存。仅在低频 scan_once / spill_oldest 末尾调用，
+        心跳走 snapshot_metrics 读缓存（O(1)），不触发目录遍历。"""
+        n = self.count_pending_archive()
+        with self._metrics_lock:
+            self._pending_archive_cached = n
+
     def snapshot_metrics(self) -> Dict[str, Any]:
         with self._metrics_lock:
             return {
@@ -400,8 +412,34 @@ class LogArchiver:
                 "spilled_total": self._spilled_total,
                 "archive_failed": self._archive_failed,
                 "last_archive_at": self._last_archive_at,
-                "pending_archive": self.count_pending_archive(),
+                # 读缓存（每 scan/spill 周期刷新）；避免 20s 心跳遍历 job 目录
+                "pending_archive": self._pending_archive_cached,
             }
 
 
-__all__ = ["LogArchiver", "ARTIFACT_TYPE_RUN_LOG_BUNDLE"]
+def collect_archive_heartbeat_metrics() -> Optional[Dict[str, Any]]:
+    """ADR-0025 Sprint 2: 汇总归档可观测指标供心跳上报（→ Host.extra['archive']）。
+
+    合并 LogArchiver（archived_total / spilled_total / archive_failed /
+    last_archive_at / pending_archive）与 LocalDiskMonitor（local_disk_usage_pct /
+    spill_cycles / spill_threshold_pct）两个单例的快照。归档子系统未配置
+    （nfs_base_dir 为空 / watcher 未启用）时返回 None → 心跳不含 archive 段，
+    archive-status 端点 agent_metrics 为 null。供 main.py 注入 HeartbeatThread。
+    """
+    archiver = LogArchiver.instance()
+    if not archiver.is_configured():
+        return None
+    metrics: Dict[str, Any] = dict(archiver.snapshot_metrics())
+    from .local_disk_monitor import LocalDiskMonitor
+
+    monitor = LocalDiskMonitor.instance()
+    if monitor.is_configured():
+        metrics.update(monitor.snapshot_metrics())
+    return metrics
+
+
+__all__ = [
+    "LogArchiver",
+    "ARTIFACT_TYPE_RUN_LOG_BUNDLE",
+    "collect_archive_heartbeat_metrics",
+]
