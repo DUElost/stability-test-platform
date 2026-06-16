@@ -181,11 +181,13 @@ Agent LogArchiver 把整包日志归档到 NFS archives/<date>/<job_id>/   (Spri
 - **触发点**：PlanRun 终态自动触发 + PlanRun 详情页「重跑去重」手动按钮兜底
 - **回填形态**：去重 `.xls` 存为可下载 JobArtifact 并在 PlanRun 详情页挂链；**不自动提单**——设**人工审核闸口**：运维下载复核后，经平台「`.xls` 上传接口」喂 `stability_Jira-Automation` 提单。待人工审核标准沉淀为可量化代码逻辑后，再接 scan→dedup→提单全自动流程。
 
-**仍待定（子阶段开工前）**：
-- 调用形态：源码 subprocess vs 打包 exe（依赖隔离）
-- `.xls` 上传接口形态：新端点 + 前端上传组件 + 喂 `stability_Jira-Automation` 的调用契约
-- place/side 配置来源：Plan/Host 维度配置
-- 与现有 `runs.py` jira-draft 的关系：替换还是补充
+**已定稿（2026-06-16，见 `docs/adr-0025-dedup-integration-design-2026-06-16.md`）**：
+- 调用形态：**subprocess + 工具自带解释器**（Py3.7/3.8 + xlwt/xlrd；非 import/非 exe，依赖隔离、工具零改动）
+- `.xls` 上传接口：4 端点（dedup/scan · dedup/status · dedup/jira-upload · dedup/jira-result）；上传经复核 .xls → stage1 `--add-main-excel` → stage2 批量建单（默认 `dry_run=true` 第二道闸口）
+- place/side 配置：**部署级 env**（STP_DEDUP_PLACE / STP_DEDUP_SCAN_TAG / STP_JIRA_VENDOR），不加 Host/Plan schema（单站点；升级路径已记录）
+- 与 `runs.py` jira-draft 关系：**共存互补**（jira-draft=report_json 轻量草稿；去重链=MTK 原始日志重型批量提单），不替换
+
+**待用户拍板的运营选择（默认值已给，不阻塞设计）**：首接厂商（transsion/tinno/moto）｜stage2 默认 dry_run=true｜终态自动触发范围（建议全局 env 开关默认开）
 
 > 本 Sprint 不动该工具；仅保证归档产物（NFS 整包）是其可直接消费的输入。人工审核闸口是当前阶段的有意设计——全自动化是审核逻辑可量化后的远期目标。
 
