@@ -122,7 +122,17 @@ shutdown 段（`main.py:853+` finally）加 `.stop(timeout=...)` 收尾，仿 `l
 
 - 复用 `/jobs/{job_id}/artifacts`（`agent_api.py:1402`）+ `ArtifactUploader`。
 - **需扩白名单**：`_ARTIFACT_TYPE_WHITELIST`（`agent_api.py` 附近）加 `RUN_LOG_BUNDLE`，否则 422 拒绝。
-- storage_uri 必须在 allowed root（`{nfs_base}/archives/...` 在 `STP_WATCHER_NFS_BASE_DIR` 下 → 通过 `resolve_local_artifact_path`）。
+- **storage_uri 校验（#14 修正，2026-06-16 真机定稿）**：`run_log_bundle` **仅登记地址展示**，
+  控制面不下载、不访问归档存储 → 注册时**跳过** `resolve_local_artifact_path` 本地根校验，
+  storage_uri 当作不透明地址原样存下（仅长度上限基础校验）。
+  - 起因：真机归档落 15.4 CIFS（Agent 侧 Linux 路径），后端在 Windows 上既无该挂载、
+    也不该代理下载；旧校验强制路径落后端 allowed root → 注册恒 `400 INVALID_ARTIFACT_PATH`
+    （issue #14）。
+  - 控制面 `download` 端点对 `run_log_bundle` 返 `409`（请按 storage_uri 自取）；
+    `watcher-summary.archive.bundles[].storage_uri` 透传给前端做**地址展示 + 复制路径**。
+  - 其余 type（`aee_crash` 等）维持本地根校验 + 后端下载不变。
+  - **部署前置约束**：归档主机须**持久挂载**归档共享（如 10.36 节点 fstab CIFS
+    `_netdev,nofail,x-systemd.automount`），保证 Agent↔归档存储稳定可写。
 
 ---
 

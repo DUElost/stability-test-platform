@@ -289,8 +289,11 @@ describe('WatcherSummaryCard', () => {
     ).not.toBeInTheDocument();
   });
 
-  // ADR-0025 Sprint 3: 运行日志归档状态展示
-  it('renders run-log archive section with progress and download links', () => {
+  // ADR-0025 Sprint 3 / #14: 运行日志归档状态展示（仅地址 + 复制路径，不下载）
+  it('renders run-log archive section with progress, address and copy-path', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+
     render(
       <WatcherSummaryCard
         data={{
@@ -304,6 +307,7 @@ describe('WatcherSummaryCard', () => {
                 artifact_id: 9001,
                 size_bytes: 2048,
                 created_at: '2026-06-15T10:00:00Z',
+                storage_uri: '/home/android/sonic_tinno/archives/2026-06-15/501/501.tar.gz',
               },
             ],
           },
@@ -312,11 +316,17 @@ describe('WatcherSummaryCard', () => {
     );
     expect(screen.getByTestId('watcher-archive-section')).toBeInTheDocument();
     expect(screen.getByTestId('archive-progress')).toHaveTextContent('1/3');
-    const dl = screen.getByTestId('archive-bundle-download');
-    expect(dl).toHaveTextContent('Job #501');
-    expect(dl).toHaveAttribute(
-      'href',
-      '/api/v1/plan-runs/12/jobs/501/artifacts/9001/download',
+    const row = screen.getByTestId('archive-bundle-row');
+    expect(row).toHaveTextContent('Job #501');
+    // 展示归档地址（不再是下载链接）
+    expect(screen.getByTestId('archive-bundle-uri')).toHaveTextContent(
+      '/home/android/sonic_tinno/archives/2026-06-15/501/501.tar.gz',
+    );
+    expect(screen.queryByTestId('archive-bundle-download')).not.toBeInTheDocument();
+    // 点击复制路径 → 写入剪贴板
+    fireEvent.click(screen.getByTestId('archive-bundle-copy'));
+    expect(writeText).toHaveBeenCalledWith(
+      '/home/android/sonic_tinno/archives/2026-06-15/501/501.tar.gz',
     );
   });
 

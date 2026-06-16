@@ -273,6 +273,69 @@ async def test_ingest_artifact_accepts_storage_uri_under_watcher_nfs_root(monkey
 
 
 # ----------------------------------------------------------------------
+# #14: run_log_bundle 仅登记地址 → 跳过本地根校验，非本地根路径也接受
+# ----------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ingest_run_log_bundle_skips_local_root_check():
+    """run_log_bundle 仅登记地址展示（控制面不下载）→ 注册不跑本地根校验。
+    用真机暴露的、不在后端任何 allowed root 下的归档路径注册，应 2xx。
+    回归 issue #14（此前被 400 INVALID_ARTIFACT_PATH 拒）。"""
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    uri = "/home/android/sonic_agent/logs/ftp_log/sonic_tinno/archives/2026-06-16/639/639.tar.gz"
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await ingest_artifact(
+                job_id=seed["job_id"],
+                payload=ArtifactIn(
+                    storage_uri=uri,
+                    artifact_type="run_log_bundle",
+                    size_bytes=650,
+                    checksum="b" * 64,
+                    source_category="run_log",
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data.created is True
+
+        db = SessionLocal()
+        try:
+            art = db.get(JobArtifact, result.data.artifact_id)
+            assert art is not None
+            assert art.artifact_type == "run_log_bundle"
+            assert art.storage_uri == uri  # 地址原样登记
+        finally:
+            db.close()
+    finally:
+        _cleanup_with_artifacts(seed)
+
+
+@pytest.mark.asyncio
+async def test_ingest_non_bundle_still_rejects_outside_root():
+    """对照组：非 run_log_bundle 类型用同一非本地根路径注册，仍 400（下载链路需后端可达）。"""
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as excinfo:
+                await ingest_artifact(
+                    job_id=seed["job_id"],
+                    payload=ArtifactIn(
+                        storage_uri="/home/android/sonic_tinno/archives/x/1/1.tar.gz",
+                        artifact_type="aee_crash",
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert excinfo.value.status_code == 400
+    finally:
+        _cleanup_with_artifacts(seed)
+
+
+# ----------------------------------------------------------------------
 # 5. size_bytes 负数
 # ----------------------------------------------------------------------
 

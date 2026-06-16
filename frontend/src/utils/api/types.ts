@@ -998,6 +998,8 @@ export interface WatcherArchiveBundle {
   artifact_id: number;
   size_bytes?: number | null;
   created_at?: string | null;
+  // #14: 归档地址（Agent 写归档存储的 storage_uri）。控制面仅展示 + 复制路径，不下载。
+  storage_uri?: string | null;
 }
 
 export interface WatcherArchive {
