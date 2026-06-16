@@ -278,7 +278,13 @@ class LogArchiver:
         nfs_dir = Path(self._nfs_base_dir) / "archives" / date / str(job_id)
         nfs_dir.mkdir(parents=True, exist_ok=True)
         nfs_tar = nfs_dir / f"{job_id}.tar.gz"
-        shutil.copy2(str(local_tar), str(nfs_tar))
+        # copyfile（仅数据）而非 copy2：copy2 末尾 copystat（chmod/utime）源元数据，
+        # 在 NFS/CIFS 挂载(root_squash/all_squash)上对他属文件会触发
+        # PermissionError [Errno 1] Operation not permitted → 归档恒失败、且反复
+        # 重试会拖住挂载，连带心跳 check_mounts() stat 同一挂载点而抖动。
+        # 归档自带 manifest.json 记 sha256/size，无需保留源文件元数据。
+        # （ADR-0025 真机验证 10.36 节点实测发现）
+        shutil.copyfile(str(local_tar), str(nfs_tar))
         if not nfs_tar.exists() or nfs_tar.stat().st_size != size_bytes:
             raise IOError(f"nfs copy verification failed: {nfs_tar}")
         self._write_manifest(nfs_dir / "manifest.json", job_id, sha256, size_bytes, spilled)

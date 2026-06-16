@@ -195,3 +195,29 @@ def test_spill_oldest_prefers_oldest(db, run_log_dir, nfs_dir):
     assert db.is_job_archived(7003) is False
     assert db.count_spilled_jobs() == 2
     assert (run_log_dir / "7003").exists()
+
+
+def test_archive_survives_nfs_copystat_eperm(db, run_log_dir, nfs_dir, monkeypatch):
+    """NFS 回归：归档不应调用 copystat（源元数据 chmod/utime）——在 NFS/CIFS
+    挂载上对他属文件会 PermissionError [Errno 1]。本用例把 shutil.copystat 打成
+    抛 EPERM：用 copy2 会归档失败，用 copyfile（仅数据）则不触发 → 归档成功。
+    复现 ADR-0025 真机 10.36 节点暴露的 log_archiver_archive_failed。
+    """
+    import shutil as _shutil
+
+    def _boom(*_a, **_k):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(_shutil, "copystat", _boom)
+
+    arch = _configure(db, run_log_dir, nfs_dir, session=_ok_session())
+    _make_job_dir(run_log_dir, 7777)
+
+    n = arch.scan_once()
+
+    assert n == 1, "copystat EPERM 不应让归档失败（应走 copyfile 不碰元数据）"
+    assert db.is_job_archived(7777) is True
+    assert arch.snapshot_metrics()["archive_failed"] == 0
+    tars = list(nfs_dir.glob("archives/*/7777/7777.tar.gz"))
+    assert len(tars) == 1
+
