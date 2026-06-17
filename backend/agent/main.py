@@ -26,6 +26,8 @@ if __name__ == "__main__" and __package__ is None:
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
+    from agent.log_archiver import LogArchiver, collect_archive_heartbeat_metrics
+    from agent.local_disk_monitor import LocalDiskMonitor
     from agent.heartbeat_thread import HeartbeatThread
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
     from agent.job_runner import JobRunnerState, run_task_wrapper
@@ -44,6 +46,8 @@ else:
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
+    from .log_archiver import LogArchiver, collect_archive_heartbeat_metrics
+    from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
     from .job_runner import JobRunnerState, run_task_wrapper
@@ -242,6 +246,17 @@ def execute_recovery_actions_impl(
         action = a["action"]
         if action == "RESUME":
             token = a.get("fencing_token", "")
+            # Defense-in-depth: a RESUME without a dict job_payload cannot re-enter
+            # JobSession, so the watcher would never re-attach and the job would
+            # become a zombie active record. Backend now guarantees RESUME carries
+            # a payload (job-row-missing → ABORT_LOCAL); skip registration if it
+            # somehow doesn't, and let the next recovery round reconcile.
+            if not isinstance(a.get("job_payload"), dict):
+                logger.warning(
+                    "recovery_resume_missing_payload job=%d — skipping register (backend will reconcile)",
+                    jid,
+                )
+                continue
             persisted_job = active_jobs_by_id.get(jid) or {}
             device_serial = (a.get("device_serial") or persisted_job.get("device_serial") or "").strip()
             local_worker_token = _make_local_worker_token(jid, "resume")
@@ -253,7 +268,7 @@ def execute_recovery_actions_impl(
                 local_worker_token,
             )
             resumed_job_ids.add(jid)
-            if resume_job is not None and isinstance(a.get("job_payload"), dict):
+            if resume_job is not None:
                 resumed_payload = dict(a["job_payload"])
                 resumed_payload["id"] = jid
                 if a.get("device_id") is not None:
@@ -263,6 +278,8 @@ def execute_recovery_actions_impl(
                 if token:
                     resumed_payload["fencing_token"] = token
                 resumed_payload["local_worker_token"] = local_worker_token
+                # T3: mark as recovery-resumed so the watcher re-attach is observable
+                resumed_payload["recovery_resumed"] = True
                 try:
                     resume_job(resumed_payload)
                 except Exception:
@@ -503,6 +520,28 @@ def main() -> None:
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
+        # ADR-0025 Sprint 2: 运行日志归档调度器 + 本地盘溢出监控（nfs_base_dir 为空时归档禁用）
+        if nfs_base_dir:
+            LogArchiver.instance().configure(
+                local_db=local_db,
+                host_id=host_id,
+                nfs_base_dir=nfs_base_dir,
+                run_log_dir=str(BASE_DIR / "logs" / "runs"),
+                api_url=api_url,
+                agent_secret=agent_secret,
+                interval_seconds=float(os.getenv("STP_LOG_ARCHIVE_INTERVAL_SECONDS", "3600")),
+                grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
+            ).start()
+            LocalDiskMonitor.instance().configure(
+                archiver=LogArchiver.instance(),
+                base_dir=str(BASE_DIR),
+                interval_seconds=float(os.getenv("STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS", "300")),
+                spill_threshold_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_THRESHOLD", "80")),
+                target_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_TARGET", "70")),
+            ).start()
+            logger.info("log_archiver=started local_disk_monitor=started nfs_base=%s", nfs_base_dir)
+        else:
+            logger.info("log_archiver_skipped nfs_base_dir_empty")
         # M4/T4-4: 清理上次进程残留的 active watcher_state(崩溃/重启脏记录)。
         # 必须在 configure(注入 local_db)之后调用。
         try:
@@ -584,6 +623,8 @@ def main() -> None:
             "terminal_outbox_pending": local_db.count_pending_terminals(),
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),
         },
+        # ADR-0025 Sprint 2: 上报归档指标到 extra['archive']（归档禁用时回调返回 None）
+        get_archive_metrics=collect_archive_heartbeat_metrics,
         on_devices_reconnected=lambda serials: (
             trigger_recovery_sync_on_device_reconnect(
                 reconnected_serials=serials,
@@ -883,6 +924,12 @@ def main() -> None:
                 ArtifactUploader.instance().stop(drain=True, timeout=5.0)
             except Exception:
                 logger.exception("shutdown_artifact_uploader_stop_failed")
+            # ADR-0025 Sprint 2: 停归档调度器 + 磁盘监控（未启动时为安全 no-op）
+            try:
+                LocalDiskMonitor.instance().stop(timeout=5.0)
+                LogArchiver.instance().stop(timeout=5.0)
+            except Exception:
+                logger.exception("shutdown_log_archiver_stop_failed")
         heartbeat_thread.stop()
         lease_renewer.stop()
         mq_producer.close()

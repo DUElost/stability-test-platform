@@ -1785,6 +1785,24 @@ class AeeDashboardSectionOut(BaseModel):
     package_ranking: list[PackageRankingOut] = []
 
 
+class WatcherArchiveBundleOut(BaseModel):
+    """单个已归档运行日志包（LogArchiver 注册的 run_log_bundle JobArtifact）。"""
+    job_id: int
+    artifact_id: int
+    size_bytes: Optional[int] = None
+    created_at: Optional[str] = None
+    # ADR-0025/#14: 归档地址（Agent 写归档存储的 storage_uri）。控制面仅登记展示 +
+    # 复制路径，不经后端下载（后端不访问归档存储）。
+    storage_uri: Optional[str] = None
+
+
+class WatcherArchiveOut(BaseModel):
+    """ADR-0025 Sprint 3: PlanRun 维度的运行日志归档状态（按需拉取聚合）。"""
+    archived_jobs: int          # 已归档运行日志的 job 数
+    total_jobs: int             # PlanRun 关联 job 总数
+    bundles: list[WatcherArchiveBundleOut] = []   # 可下载的 run_log_bundle 列表
+
+
 class WatcherSummaryOut(BaseModel):
     plan_run_id: int
     window_minutes: Optional[int] = None
@@ -1809,6 +1827,8 @@ class WatcherSummaryOut(BaseModel):
     #   前端在 'unavailable' 时显示「Watcher 不可用」徽章(watcher 未正常启动,
     #   AEE reconciler 可能未运行,勿当作有 reconciler 兜底)。
     watcher_capability: Optional[str] = None
+    # ADR-0025 Sprint 3: 运行日志归档状态（控制面按需拉取聚合）；无关联 Job 时 None
+    archive: Optional[WatcherArchiveOut] = None
 
 
 @router.get(
@@ -1963,6 +1983,7 @@ def get_plan_run_watcher_summary(
         preexisting=preexisting,
         aee_breakdown=aee_breakdown,
         watcher_capability=watcher_capability,
+        archive=_aggregate_run_log_archive(db, job_ids=job_ids, total_jobs=len(job_ids)),
     ))
 
 
@@ -1978,6 +1999,44 @@ _CAPABILITY_SEVERITY: dict[str, int] = {
     "stub":               5,
     "skipped":           -10,  # watcher 未启动(非降级,前端不徽章)
 }
+
+
+def _aggregate_run_log_archive(
+    db: Session, *, job_ids: list[int], total_jobs: int,
+) -> WatcherArchiveOut:
+    """ADR-0025 Sprint 3: 聚合该 PlanRun 下已归档的运行日志包（run_log_bundle
+    JobArtifact，由 Agent LogArchiver 写 NFS 后注册）。控制面按需拉取展示 + 下载。
+    """
+    if not job_ids:
+        return WatcherArchiveOut(archived_jobs=0, total_jobs=total_jobs, bundles=[])
+    rows = db.execute(
+        select(
+            JobArtifact.id,
+            JobArtifact.job_id,
+            JobArtifact.size_bytes,
+            JobArtifact.created_at,
+            JobArtifact.storage_uri,
+        )
+        .where(
+            (JobArtifact.artifact_type == "run_log_bundle")
+            & (JobArtifact.job_id.in_(job_ids))
+        )
+        .order_by(JobArtifact.created_at.desc())
+    ).all()
+    bundles = [
+        WatcherArchiveBundleOut(
+            job_id=r.job_id,
+            artifact_id=r.id,
+            size_bytes=r.size_bytes,
+            created_at=_iso(r.created_at),
+            storage_uri=r.storage_uri,
+        )
+        for r in rows
+    ]
+    archived_jobs = len({r.job_id for r in rows})
+    return WatcherArchiveOut(
+        archived_jobs=archived_jobs, total_jobs=total_jobs, bundles=bundles,
+    )
 
 
 def _aggregate_watcher_capability(db: Session, *, job_ids: list[int]) -> Optional[str]:
@@ -2576,6 +2635,18 @@ def download_job_artifact(
     artifact = db.get(JobArtifact, artifact_id)
     if artifact is None or artifact.job_id != job_id:
         raise HTTPException(status_code=404, detail="artifact not found for this job")
+
+    # run_log_bundle 仅登记地址，控制面不访问归档存储（见 issue #14）：不经后端下载，
+    # 由调用方按 storage_uri 自行取用（前端展示地址 + 复制路径）。其余 type 维持下载。
+    if artifact.artifact_type == "run_log_bundle":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "run_log_bundle is registered for address display only; "
+                "fetch it directly via its storage_uri (control plane does not "
+                "proxy archive storage)."
+            ),
+        )
 
     target = _artifact_download_target(artifact.storage_uri)
     if target["kind"] == "redirect":

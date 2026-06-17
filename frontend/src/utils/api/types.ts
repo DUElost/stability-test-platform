@@ -989,6 +989,23 @@ export interface WatcherSummary {
   //   'unavailable' → reconciler 单通道模式(WatcherSummaryCard 顶栏显示降级徽章);
   //   其余值 / null → 不显示徽章。来源 JobInstance.watcher_capability。
   watcher_capability?: string | null;
+  // ADR-0025 Sprint 3: 运行日志归档状态（控制面按需拉取聚合）；无关联 Job 时 null
+  archive?: WatcherArchive | null;
+}
+
+export interface WatcherArchiveBundle {
+  job_id: number;
+  artifact_id: number;
+  size_bytes?: number | null;
+  created_at?: string | null;
+  // #14: 归档地址（Agent 写归档存储的 storage_uri）。控制面仅展示 + 复制路径，不下载。
+  storage_uri?: string | null;
+}
+
+export interface WatcherArchive {
+  archived_jobs: number;
+  total_jobs: number;
+  bundles: WatcherArchiveBundle[];
 }
 
 export interface JobManualActionResult {

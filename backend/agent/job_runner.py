@@ -195,6 +195,14 @@ def run_task_wrapper(
                 device_id_deregister=None,
             )
             session.__enter__()
+            # T3: make watcher catchup observable — distinguish a recovery-driven
+            # re-attach (Agent restart → RESUME → JobSession) from a fresh claim.
+            if run.get("recovery_resumed"):
+                logger.info(
+                    "watcher_catchup_reattach job_id=%d serial=%s watcher_id=%s cap=%s",
+                    job_id, device_serial,
+                    session.summary.watcher_id, session.summary.watcher_capability,
+                )
         except JobStartupError as exc:
             logger.error(
                 "job_session_start_failed job_id=%d reason=%s: %s",

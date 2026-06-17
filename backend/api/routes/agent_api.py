@@ -32,6 +32,7 @@ from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
+from backend.api.routes.auth import get_current_active_user
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
@@ -1375,7 +1376,8 @@ async def _get_backpressure() -> Optional[int]:
 # 故意不放开 ANR / MOBILELOG：
 #   - ANR / MOBILELOG 在 JobLogSignal 里已经有 path_on_device / first_lines 元数据
 #   - 文件本身体量大、价值低，不值得入 JobArtifact 展示/下载通道
-_ARTIFACT_TYPE_WHITELIST: set[str] = {"aee_crash", "vendor_aee_crash", "bugreport"}
+_ARTIFACT_TYPE_RUN_LOG_BUNDLE = "run_log_bundle"
+_ARTIFACT_TYPE_WHITELIST: set[str] = {"aee_crash", "vendor_aee_crash", "bugreport", _ARTIFACT_TYPE_RUN_LOG_BUNDLE}
 
 
 class ArtifactIn(BaseModel):
@@ -1415,17 +1417,24 @@ async def ingest_artifact(
     """
     if not payload.storage_uri:
         raise HTTPException(status_code=400, detail="storage_uri is required")
-    try:
-        resolve_local_artifact_path(payload.storage_uri, must_exist=False)
-    except ArtifactPathError as exc:
-        raise_api_http_error(
-            status_code=400,
-            code="INVALID_ARTIFACT_PATH",
-            message=(
-                "artifact path is invalid or outside the allowed root "
-                f"(STP_NFS_ROOT/STP_WATCHER_NFS_BASE_DIR): {exc}"
-            ),
-        )
+    # run_log_bundle 仅登记地址展示（控制面不下载、不访问归档存储，见 issue #14）：
+    # 跳过本地根校验，storage_uri 当作不透明地址存下，仅做长度上限基础校验。
+    # 其余 type（aee_crash 等）后端仍可下载 → 维持本地根校验不变。
+    if payload.artifact_type == _ARTIFACT_TYPE_RUN_LOG_BUNDLE:
+        if len(payload.storage_uri) > 2048:
+            raise HTTPException(status_code=400, detail="storage_uri too long")
+    else:
+        try:
+            resolve_local_artifact_path(payload.storage_uri, must_exist=False)
+        except ArtifactPathError as exc:
+            raise_api_http_error(
+                status_code=400,
+                code="INVALID_ARTIFACT_PATH",
+                message=(
+                    "artifact path is invalid or outside the allowed root "
+                    f"(STP_NFS_ROOT/STP_WATCHER_NFS_BASE_DIR): {exc}"
+                ),
+            )
 
     if payload.artifact_type not in _ARTIFACT_TYPE_WHITELIST:
         raise HTTPException(
@@ -1696,6 +1705,18 @@ async def recovery_sync(
             ))
             continue
 
+        # Guard: job row missing → cannot RESUME. A RESUME without job_payload
+        # would leave the Agent with a zombie active_job that never re-enters
+        # JobSession (so the watcher never re-attaches). Release the lingering
+        # lease and tell the Agent to drop its local record instead.
+        if job is None:
+            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id, device_id=entry.device_id,
+                action="ABORT_LOCAL", reason="resume_job_row_missing",
+            ))
+            continue
+
         # Normal RESUME: legacy adoption / same_boot update
         if not lease_agent_id or lease_agent_id == payload.host_id:
             lease.agent_instance_id = payload.agent_instance_id
@@ -1706,14 +1727,12 @@ async def recovery_sync(
         else:
             reason = "same_instance"
 
-        job_payload = None
-        if job is not None:
-            job_payload = await _build_recovery_job_payload(
-                db,
-                job,
-                device_serial=actual_serial,
-                fencing_token=lease.fencing_token,
-            )
+        job_payload = await _build_recovery_job_payload(
+            db,
+            job,
+            device_serial=actual_serial,
+            fencing_token=lease.fencing_token,
+        )
         job_actions.append(_RecoveryAction(
             job_id=entry.job_id, device_id=entry.device_id,
             action="RESUME", fencing_token=lease.fencing_token,
@@ -1755,4 +1774,47 @@ async def recovery_sync(
     return ok({
         "actions": [a.model_dump() for a in job_actions],
         "outbox_actions": [a.model_dump() for a in outbox_actions],
+    })
+
+
+@router.get("/{host_id}/archive-status")
+async def get_archive_status(
+    host_id: str,
+    db: AsyncSession = Depends(get_async_db),
+    _user=Depends(get_current_active_user),
+):
+    """ADR-0025 Sprint 2: 控制面查看某 host 的运行日志归档概览。
+
+    后端权威数据（run_log_bundle JobArtifact 计数 + 最近归档时间）+ Agent 经
+    心跳上报的实时归档指标（Host.extra['archive']，若 Agent 已上报则非空）。
+    用户态鉴权（dashboard 读），非 Agent 端点。
+    """
+    host = await db.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    job_ids_subq = select(JobInstance.id).where(JobInstance.host_id == host_id)
+    archived_total = (await db.execute(
+        select(func.count(JobArtifact.id)).where(
+            JobArtifact.artifact_type == "run_log_bundle",
+            JobArtifact.job_id.in_(job_ids_subq),
+        )
+    )).scalar_one()
+    last_archive_at = (await db.execute(
+        select(func.max(JobArtifact.created_at)).where(
+            JobArtifact.artifact_type == "run_log_bundle",
+            JobArtifact.job_id.in_(job_ids_subq),
+        )
+    )).scalar_one()
+
+    extra = host.extra if isinstance(host.extra, dict) else {}
+    agent_metrics = extra.get("archive")
+
+    return ok({
+        "host_id": host_id,
+        "archived_total": int(archived_total or 0),
+        "last_archive_at": last_archive_at.isoformat() if last_archive_at else None,
+        # Agent 心跳上报的实时指标（pending_archive / local_disk_usage_pct /
+        # spilled_total / archive_failed），未上报时为 null
+        "agent_metrics": agent_metrics,
     })

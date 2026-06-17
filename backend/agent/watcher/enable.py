@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 def watcher_subsystem_enabled() -> bool:
     """Whether to configure LogWatcherManager / OutboxDrainer at agent startup."""
-    global_on = os.getenv("STP_WATCHER_ENABLED", "false").lower() == "true"
+    global_on = os.getenv("STP_WATCHER_ENABLED", "true").lower() == "true"
     plan_default = os.getenv("STP_WATCHER_PLAN_DEFAULT", "true").lower() == "true"
     return global_on or plan_default
 

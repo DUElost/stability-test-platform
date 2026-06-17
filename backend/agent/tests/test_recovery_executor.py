@@ -162,8 +162,10 @@ class TestRecoveryExecutor:
 
         resp = {
             "actions": [
-                {"job_id": 1, "device_id": 10, "action": "RESUME", "fencing_token": "tok-1"},
-                {"job_id": 2, "device_id": 20, "action": "RESUME", "fencing_token": "tok-2"},
+                {"job_id": 1, "device_id": 10, "action": "RESUME", "fencing_token": "tok-1",
+                 "job_payload": {"id": 1}},
+                {"job_id": 2, "device_id": 20, "action": "RESUME", "fencing_token": "tok-2",
+                 "job_payload": {"id": 2}},
             ],
             "outbox_actions": [],
         }
@@ -210,6 +212,7 @@ class TestRecoveryExecutor:
                     "action": "RESUME",
                     "fencing_token": "tok-21",
                     "device_serial": "121512542H004524",
+                    "job_payload": {"id": 21},
                 },
             ],
             "outbox_actions": [],
@@ -290,6 +293,40 @@ class TestRecoveryExecutor:
         assert resumed_payload["device_serial"] == "11914404BG102162"
         assert resumed_payload["fencing_token"] == "63:6"
         assert resumed_payload["local_worker_token"].startswith("resume-26-")
+        # T3: resumed payload carries the catchup marker so the watcher re-attach
+        # is observable downstream (job_runner logs watcher_catchup_reattach).
+        assert resumed_payload["recovery_resumed"] is True
+
+    def test_execute_resume_without_payload_skips_register_and_resume(self):
+        """RESUME 无 job_payload（契约违反 / 旧后端）→ 不登记 active、不触发执行，
+        避免产生永不恢复的僵尸 active_job（T2.2 防御）。"""
+        local_db = MagicMock()
+        lease_renewer = MagicMock()
+        outbox_drain = MagicMock()
+        register_active_job = MagicMock()
+        resume_job = MagicMock()
+
+        resp = {
+            "actions": [
+                {"job_id": 99, "device_id": 90, "action": "RESUME", "fencing_token": "90:1"},
+            ],
+            "outbox_actions": [],
+        }
+
+        execute_recovery_actions_impl(
+            resp=resp,
+            active_jobs_by_id={
+                99: {"job_id": 99, "device_id": 90, "device_serial": "S-99", "fencing_token": "90:1"},
+            },
+            lease_renewer=lease_renewer,
+            local_db=local_db,
+            outbox_drain=outbox_drain,
+            register_active_job=register_active_job,
+            resume_job=resume_job,
+        )
+
+        register_active_job.assert_not_called()
+        resume_job.assert_not_called()
 
     def test_execute_cleanup_clears_local_state(self):
         """CLEANUP action → delete_active_job + clear_fencing_token called."""
@@ -418,6 +455,7 @@ class TestRecoveryExecutor:
                     "action": "RESUME",
                     "fencing_token": "63:6",
                     "device_serial": "11914404BG102162",
+                    "job_payload": {"id": 26},
                 },
             ],
             "outbox_actions": [
