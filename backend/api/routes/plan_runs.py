@@ -614,6 +614,8 @@ _DEFAULT_WATCHER_WINDOW_MIN   = 60
 _MAX_WATCHER_WINDOW_MIN       = 1440  # 1 天
 _MAX_EVENTS_LIMIT             = 500
 _DEFAULT_EVENTS_LIMIT         = 100
+_DEFAULT_ARCHIVE_BUNDLES_LIMIT = 20
+_MAX_ARCHIVE_BUNDLES_LIMIT     = 100
 
 _FAILED_JOB_STATUSES   = {JobStatus.FAILED.value, JobStatus.ABORTED.value}
 _TERMINAL_PR_STATUSES  = {
@@ -1798,9 +1800,12 @@ class WatcherArchiveBundleOut(BaseModel):
 
 class WatcherArchiveOut(BaseModel):
     """ADR-0025 Sprint 3: PlanRun 维度的运行日志归档状态（按需拉取聚合）。"""
-    archived_jobs: int          # 已归档运行日志的 job 数
+    archived_jobs: int          # 已归档运行日志的 job 数（distinct job_id）
     total_jobs: int             # PlanRun 关联 job 总数
-    bundles: list[WatcherArchiveBundleOut] = []   # 可下载的 run_log_bundle 列表
+    bundles: list[WatcherArchiveBundleOut] = []   # 已归档 run_log_bundle（地址展示，不经控制面下载）
+    bundles_total: int = 0      # 归档产物总行数（分页用；通常等于 archived_jobs）
+    bundles_limit: int = _DEFAULT_ARCHIVE_BUNDLES_LIMIT
+    bundles_offset: int = 0
 
 
 class WatcherSummaryOut(BaseModel):
@@ -1839,6 +1844,10 @@ def get_plan_run_watcher_summary(
     run_id: int,
     window_minutes: Optional[int] = Query(None, ge=1, le=_MAX_WATCHER_WINDOW_MIN),
     time_scope: Optional[str] = Query(None, pattern="^(all|15m|1h|6h|24h)$"),
+    archive_limit: int = Query(
+        _DEFAULT_ARCHIVE_BUNDLES_LIMIT, ge=0, le=_MAX_ARCHIVE_BUNDLES_LIMIT,
+    ),
+    archive_offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -1983,7 +1992,13 @@ def get_plan_run_watcher_summary(
         preexisting=preexisting,
         aee_breakdown=aee_breakdown,
         watcher_capability=watcher_capability,
-        archive=_aggregate_run_log_archive(db, job_ids=job_ids, total_jobs=len(job_ids)),
+        archive=_aggregate_run_log_archive(
+            db,
+            job_ids=job_ids,
+            total_jobs=len(job_ids),
+            limit=archive_limit,
+            offset=archive_offset,
+        ),
     ))
 
 
@@ -2002,27 +2017,57 @@ _CAPABILITY_SEVERITY: dict[str, int] = {
 
 
 def _aggregate_run_log_archive(
-    db: Session, *, job_ids: list[int], total_jobs: int,
+    db: Session,
+    *,
+    job_ids: list[int],
+    total_jobs: int,
+    limit: int = _DEFAULT_ARCHIVE_BUNDLES_LIMIT,
+    offset: int = 0,
 ) -> WatcherArchiveOut:
     """ADR-0025 Sprint 3: 聚合该 PlanRun 下已归档的运行日志包（run_log_bundle
-    JobArtifact，由 Agent LogArchiver 写 NFS 后注册）。控制面按需拉取展示 + 下载。
+    JobArtifact，由 Agent LogArchiver 写 NFS 后注册）。控制面登记地址展示；
+    不经后端代理下载（ADR-0025 #14）。bundles 分页返回，计数类字段为全量。
     """
     if not job_ids:
-        return WatcherArchiveOut(archived_jobs=0, total_jobs=total_jobs, bundles=[])
-    rows = db.execute(
-        select(
-            JobArtifact.id,
-            JobArtifact.job_id,
-            JobArtifact.size_bytes,
-            JobArtifact.created_at,
-            JobArtifact.storage_uri,
+        return WatcherArchiveOut(
+            archived_jobs=0,
+            total_jobs=total_jobs,
+            bundles=[],
+            bundles_total=0,
+            bundles_limit=limit,
+            bundles_offset=offset,
         )
-        .where(
-            (JobArtifact.artifact_type == "run_log_bundle")
-            & (JobArtifact.job_id.in_(job_ids))
-        )
-        .order_by(JobArtifact.created_at.desc())
-    ).all()
+    base_filter = (
+        (JobArtifact.artifact_type == "run_log_bundle")
+        & (JobArtifact.job_id.in_(job_ids))
+    )
+    bundles_total = int(
+        db.execute(
+            select(func.count(JobArtifact.id)).where(base_filter)
+        ).scalar_one()
+        or 0
+    )
+    archived_jobs = int(
+        db.execute(
+            select(func.count(func.distinct(JobArtifact.job_id))).where(base_filter)
+        ).scalar_one()
+        or 0
+    )
+    rows = []
+    if limit > 0:
+        rows = db.execute(
+            select(
+                JobArtifact.id,
+                JobArtifact.job_id,
+                JobArtifact.size_bytes,
+                JobArtifact.created_at,
+                JobArtifact.storage_uri,
+            )
+            .where(base_filter)
+            .order_by(JobArtifact.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
     bundles = [
         WatcherArchiveBundleOut(
             job_id=r.job_id,
@@ -2033,9 +2078,13 @@ def _aggregate_run_log_archive(
         )
         for r in rows
     ]
-    archived_jobs = len({r.job_id for r in rows})
     return WatcherArchiveOut(
-        archived_jobs=archived_jobs, total_jobs=total_jobs, bundles=bundles,
+        archived_jobs=archived_jobs,
+        total_jobs=total_jobs,
+        bundles=bundles,
+        bundles_total=bundles_total,
+        bundles_limit=limit,
+        bundles_offset=offset,
     )
 
 

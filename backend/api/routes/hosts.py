@@ -556,3 +556,25 @@ def host_hot_update(
         "duration_ms": result.get("duration_ms"),
         "abort_summary": aborted_summary,
     }
+
+
+@router.get("/{host_id}/archive-status")
+def get_host_archive_status(
+    host_id: str,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0025 Sprint 2: 查看某 host 的运行日志归档概览（dashboard 读）。
+
+    后端权威数据（run_log_bundle JobArtifact 计数 + 最近归档时间）+ Agent 经
+    心跳上报的实时归档指标（Host.extra['archive']，若 Agent 已上报则非空）。
+    """
+    from backend.api.response import ok
+    from backend.services.archive_status import build_host_archive_status
+
+    try:
+        payload = build_host_archive_status(db, host_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="host not found") from None
+    return ok(payload)
+

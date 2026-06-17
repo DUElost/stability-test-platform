@@ -145,6 +145,7 @@ class LogArchiver:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_evt.clear()
+        self._refresh_pending_cache()
         self._thread = threading.Thread(
             target=self._run, name="log-archiver", daemon=True,
         )
@@ -466,8 +467,8 @@ def collect_archive_heartbeat_metrics() -> Optional[Dict[str, Any]]:
 
     合并 LogArchiver（archived_total / spilled_total / archive_failed /
     last_archive_at / pending_archive）与 LocalDiskMonitor（local_disk_usage_pct /
-    spill_cycles / spill_threshold_pct）两个单例的快照。归档子系统未配置
-    （nfs_base_dir 为空 / watcher 未启用）时返回 None → 心跳不含 archive 段，
+    spill_cycles / spill_threshold_pct）两个单例的快照。归档子系统未 configure
+    （nfs_base_dir 为空）时返回 None → 心跳不含 archive 段，
     archive-status 端点 agent_metrics 为 null。供 main.py 注入 HeartbeatThread。
     """
     archiver = LogArchiver.instance()

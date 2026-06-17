@@ -221,3 +221,16 @@ def test_archive_survives_nfs_copystat_eperm(db, run_log_dir, nfs_dir, monkeypat
     tars = list(nfs_dir.glob("archives/*/7777/7777.tar.gz"))
     assert len(tars) == 1
 
+
+def test_start_warms_pending_cache(db, run_log_dir, nfs_dir):
+    """start() 应同步刷新 pending_archive，避免重启后心跳长时间显示 0。"""
+    arch = _configure(db, run_log_dir, nfs_dir, grace=3600.0)
+    _make_job_dir(run_log_dir, 8080)
+
+    assert arch.snapshot_metrics()["pending_archive"] == 0
+    arch.start()
+    try:
+        assert arch.snapshot_metrics()["pending_archive"] == 1
+    finally:
+        arch.stop(timeout=0.5)
+

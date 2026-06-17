@@ -73,6 +73,47 @@ logger = logging.getLogger(__name__)
 STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "true").lower() == "true"
 STP_WATCHER_PLAN_DEFAULT = os.getenv("STP_WATCHER_PLAN_DEFAULT", "true").lower() == "true"
 
+
+def _resolve_log_archive_nfs_base() -> str:
+    """Agent 侧运行日志归档 NFS 根（与 Watcher 启用状态无关）。"""
+    return (
+        os.getenv("STP_LOG_ARCHIVE_NFS_BASE_DIR", "").strip()
+        or os.getenv("STP_WATCHER_NFS_BASE_DIR", "").strip()
+        or os.getenv("STP_AEE_NFS_ROOT", "").strip()
+    )
+
+
+def _start_log_archive_subsystem(
+    *,
+    local_db: LocalDB,
+    host_id: str,
+    nfs_base_dir: str,
+    api_url: str,
+    agent_secret: str,
+) -> None:
+    """ADR-0025 Sprint 2: 运行日志归档 + 本地盘溢出（磁盘治理，不依赖 Watcher）。"""
+    if not nfs_base_dir:
+        logger.info("log_archiver_skipped nfs_base_dir_empty")
+        return
+    LogArchiver.instance().configure(
+        local_db=local_db,
+        host_id=host_id,
+        nfs_base_dir=nfs_base_dir,
+        run_log_dir=str(BASE_DIR / "logs" / "runs"),
+        api_url=api_url,
+        agent_secret=agent_secret,
+        interval_seconds=float(os.getenv("STP_LOG_ARCHIVE_INTERVAL_SECONDS", "3600")),
+        grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
+    ).start()
+    LocalDiskMonitor.instance().configure(
+        archiver=LogArchiver.instance(),
+        base_dir=str(BASE_DIR),
+        interval_seconds=float(os.getenv("STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS", "300")),
+        spill_threshold_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_THRESHOLD", "80")),
+        target_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_TARGET", "70")),
+    ).start()
+    logger.info("log_archiver=started local_disk_monitor=started nfs_base=%s", nfs_base_dir)
+
 # 全局活跃 Job 追踪（语义上存的就是 job_instance.id）
 # 命名约定：_active_job_ids / _active_jobs_lock
 _active_job_ids: Set[int] = set()
@@ -487,6 +528,15 @@ def main() -> None:
     script_registry = ScriptRegistry(local_db, api_url, agent_secret)
     script_registry.initialize()
 
+    log_archive_nfs_base = _resolve_log_archive_nfs_base()
+    _start_log_archive_subsystem(
+        local_db=local_db,
+        host_id=host_id,
+        nfs_base_dir=log_archive_nfs_base,
+        api_url=api_url,
+        agent_secret=agent_secret,
+    )
+
     # Device Log Watcher 子系统（全局或 Plan 默认开启时 configure）
     log_signal_drainer: Optional[OutboxDrainer] = None
     if watcher_subsystem_enabled():
@@ -520,28 +570,6 @@ def main() -> None:
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
-        # ADR-0025 Sprint 2: 运行日志归档调度器 + 本地盘溢出监控（nfs_base_dir 为空时归档禁用）
-        if nfs_base_dir:
-            LogArchiver.instance().configure(
-                local_db=local_db,
-                host_id=host_id,
-                nfs_base_dir=nfs_base_dir,
-                run_log_dir=str(BASE_DIR / "logs" / "runs"),
-                api_url=api_url,
-                agent_secret=agent_secret,
-                interval_seconds=float(os.getenv("STP_LOG_ARCHIVE_INTERVAL_SECONDS", "3600")),
-                grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
-            ).start()
-            LocalDiskMonitor.instance().configure(
-                archiver=LogArchiver.instance(),
-                base_dir=str(BASE_DIR),
-                interval_seconds=float(os.getenv("STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS", "300")),
-                spill_threshold_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_THRESHOLD", "80")),
-                target_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_TARGET", "70")),
-            ).start()
-            logger.info("log_archiver=started local_disk_monitor=started nfs_base=%s", nfs_base_dir)
-        else:
-            logger.info("log_archiver_skipped nfs_base_dir_empty")
         # M4/T4-4: 清理上次进程残留的 active watcher_state(崩溃/重启脏记录)。
         # 必须在 configure(注入 local_db)之后调用。
         try:
@@ -924,12 +952,12 @@ def main() -> None:
                 ArtifactUploader.instance().stop(drain=True, timeout=5.0)
             except Exception:
                 logger.exception("shutdown_artifact_uploader_stop_failed")
-            # ADR-0025 Sprint 2: 停归档调度器 + 磁盘监控（未启动时为安全 no-op）
-            try:
-                LocalDiskMonitor.instance().stop(timeout=5.0)
-                LogArchiver.instance().stop(timeout=5.0)
-            except Exception:
-                logger.exception("shutdown_log_archiver_stop_failed")
+        # ADR-0025 Sprint 2: 停归档调度器 + 磁盘监控（与 watcher 解耦；未启动时为安全 no-op）
+        try:
+            LocalDiskMonitor.instance().stop(timeout=5.0)
+            LogArchiver.instance().stop(timeout=5.0)
+        except Exception:
+            logger.exception("shutdown_log_archiver_stop_failed")
         heartbeat_thread.stop()
         lease_renewer.stop()
         mq_producer.close()

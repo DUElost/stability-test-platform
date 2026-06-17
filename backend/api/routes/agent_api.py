@@ -1785,6 +1785,10 @@ async def get_archive_status(
 ):
     """ADR-0025 Sprint 2: 控制面查看某 host 的运行日志归档概览。
 
+    .. deprecated::
+        请改用 ``GET /api/v1/hosts/{host_id}/archive-status``（用户态鉴权，
+        路由语义更清晰）。本端点保留兼容，行为一致。
+
     后端权威数据（run_log_bundle JobArtifact 计数 + 最近归档时间）+ Agent 经
     心跳上报的实时归档指标（Host.extra['archive']，若 Agent 已上报则非空）。
     用户态鉴权（dashboard 读），非 Agent 端点。

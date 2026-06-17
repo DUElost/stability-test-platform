@@ -1006,6 +1006,9 @@ export interface WatcherArchive {
   archived_jobs: number;
   total_jobs: number;
   bundles: WatcherArchiveBundle[];
+  bundles_total?: number;
+  bundles_limit?: number;
+  bundles_offset?: number;
 }
 
 export interface JobManualActionResult {

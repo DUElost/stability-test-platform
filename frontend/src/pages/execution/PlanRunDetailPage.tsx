@@ -616,6 +616,7 @@ export default function PlanRunDetailPage() {
               isError={watcherQ.isError}
               timeScope={watcherTimeScope}
               onTimeScopeChange={setWatcherTimeScope}
+              runId={id}
             />
 
             <BusinessFlowStepper

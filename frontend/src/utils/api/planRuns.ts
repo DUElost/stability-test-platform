@@ -32,6 +32,11 @@ export interface ListPlanRunDevicesParams {
   host_id?: string | 'all';
 }
 
+export interface WatcherSummaryArchiveParams {
+  archive_limit?: number;
+  archive_offset?: number;
+}
+
 export const planRuns = {
   list: (skip = 0, limit = 50, planId?: number, status?: PlanRunStatus) => {
     const params: Record<string, string | number> = { skip, limit };
@@ -74,10 +79,14 @@ export const planRuns = {
       apiClient.get(`/plan-runs/${runId}/devices`, { params: cleanParams(params) }),
     ),
 
-  getWatcherSummary: (runId: number, timeScope: WatcherTimeScope = 'all') =>
+  getWatcherSummary: (
+    runId: number,
+    timeScope: WatcherTimeScope = 'all',
+    archiveParams?: WatcherSummaryArchiveParams,
+  ) =>
     unwrapApiResponse<WatcherSummary>(
       apiClient.get(`/plan-runs/${runId}/watcher-summary`, {
-        params: { time_scope: timeScope },
+        params: cleanParams({ time_scope: timeScope, ...archiveParams }),
       }),
     ),
 

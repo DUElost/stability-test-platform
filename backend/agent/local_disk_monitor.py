@@ -125,7 +125,13 @@ class LocalDiskMonitor:
         """检查一次水位；超阈则溢出最旧已完成 job 直至回落。返回本次溢出的 job 数。"""
         if not self._configured or self._archiver is None:
             return 0
-        usage_pct = self._current_usage_pct()
+        usage_pct = self._read_usage_pct()
+        if usage_pct is None:
+            logger.warning(
+                "local_disk_check_skipped_usage_unavailable base_dir=%s",
+                self._base_dir,
+            )
+            return 0
         with self._metrics_lock:
             self._last_usage_pct = usage_pct
         if usage_pct < self._threshold_pct:
@@ -144,13 +150,18 @@ class LocalDiskMonitor:
                 break
             if n <= 0:
                 # 无更多可溢出的已完成 job（剩余被活跃 job 占用）→ 仅告警，不死循环
+                still_high = self._read_usage_pct()
+                still_high_display = (
+                    f"{still_high:.1f}%" if still_high is not None else "unknown"
+                )
                 logger.warning(
-                    "local_disk_still_high_no_spill_candidate usage=%.1f%% "
-                    "(剩余空间被活跃 job 占用)", self._current_usage_pct(),
+                    "local_disk_still_high_no_spill_candidate usage=%s "
+                    "(剩余空间被活跃 job 占用)", still_high_display,
                 )
                 break
             spilled += n
-            if self._current_usage_pct() <= self._target_pct:
+            current = self._read_usage_pct()
+            if current is None or current <= self._target_pct:
                 break
         if spilled:
             with self._metrics_lock:
@@ -158,13 +169,24 @@ class LocalDiskMonitor:
             logger.info("local_disk_spill_done spilled_jobs=%d", spilled)
         return spilled
 
-    def _current_usage_pct(self) -> float:
+    def _read_usage_pct(self) -> Optional[float]:
+        """读取当前盘使用率；失败返回 None（调用方不得当作 0% 低水位）。"""
         try:
             info = self._disk_usage_fn(self._base_dir)
             return float(info.get("usage_percent", 0.0))
         except Exception:
             logger.exception("local_disk_usage_read_failed base_dir=%s", self._base_dir)
-            return 0.0
+            return None
+
+    def _current_usage_pct(self) -> float:
+        """兼容旧调用：读数失败时返回上次已知值（默认 0）。"""
+        usage = self._read_usage_pct()
+        if usage is not None:
+            with self._metrics_lock:
+                self._last_usage_pct = usage
+            return usage
+        with self._metrics_lock:
+            return self._last_usage_pct
 
     def snapshot_metrics(self) -> Dict[str, Any]:
         with self._metrics_lock:

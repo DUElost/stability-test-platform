@@ -28,7 +28,8 @@
 - **Frontend pages** are `React.lazy()` loaded via `frontend/src/router/index.tsx`.
 - **API client** modules in `frontend/src/utils/api/` (`planRuns.ts`, `hosts.ts`, `plans.ts`, etc.).
 - **ADR-0020**: replaced Workflow/TaskTemplate → Plan/PlanStep, WorkflowRun → PlanRun. No `plan.lifecycle` column — lifecycle is composed from `PlanStep` rows + `patrol_interval_seconds`/`timeout_seconds` at dispatch time.
-- **ADR-0018**: Watcher subsystem gated by `STP_WATCHER_ENABLED=false`.
+- **ADR-0018**: Watcher subsystem default-on via `STP_WATCHER_ENABLED=true` (or `STP_WATCHER_PLAN_DEFAULT=true`). Set both to `false` to disable entirely.
+- **ADR-0025**: Log archiver runs independently of Watcher; `STP_LOG_ARCHIVE_NFS_BASE_DIR` overrides NFS root for archives (falls back to watcher/AEE NFS env).
 - **Agent** runs on Linux hosts, connects Android devices via ADB. Two enrollment paths: `install_agent.sh` (systemd) or dev `python -m backend.agent.main`.
 
 ## Key conventions

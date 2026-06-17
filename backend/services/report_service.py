@@ -215,28 +215,32 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
     artifacts_virtual: List[_VirtualArtifact] = []
     artifacts_out = []
     if artifact_payload and artifact_payload.get("storage_uri"):
-        artifact_obj = _VirtualArtifact(
-            run_id=job.id,
-            storage_uri=str(artifact_payload.get("storage_uri")),
-            size_bytes=artifact_payload.get("size_bytes"),
-            checksum=artifact_payload.get("checksum"),
-            created_at=job.ended_at or datetime.now(timezone.utc),
-        )
-        artifacts_virtual.append(artifact_obj)
-        artifacts_out.append(
-            {
-                "id": artifact_obj.id,
-                "run_id": artifact_obj.run_id,
-                "storage_uri": artifact_obj.storage_uri,
-                "size_bytes": artifact_obj.size_bytes,
-                "checksum": artifact_obj.checksum,
-                "created_at": artifact_obj.created_at,
-            }
-        )
+        snapshot_uri = str(artifact_payload.get("storage_uri"))
+        # 遗留完成快照里的 file:// 在控制面不可达，仅展示元数据，不参与 risk 解析。
+        if not snapshot_uri.startswith("file://"):
+            artifact_obj = _VirtualArtifact(
+                run_id=job.id,
+                storage_uri=snapshot_uri,
+                size_bytes=artifact_payload.get("size_bytes"),
+                checksum=artifact_payload.get("checksum"),
+                created_at=job.ended_at or datetime.now(timezone.utc),
+            )
+            artifacts_virtual.append(artifact_obj)
+            artifacts_out.append(
+                {
+                    "id": artifact_obj.id,
+                    "run_id": artifact_obj.run_id,
+                    "storage_uri": artifact_obj.storage_uri,
+                    "size_bytes": artifact_obj.size_bytes,
+                    "checksum": artifact_obj.checksum,
+                    "created_at": artifact_obj.created_at,
+                }
+            )
 
-    # ADR-0025 S2.7: file:// 完成快照已停发（控制面不可达）。改用 LogArchiver 注册的
-    # run_log_bundle JobArtifact —— 其 storage_uri 在 NFS 根下，控制面可下载，且可读取
-    # 做 risk-summary。归档是异步的：未归档窗口内无 bundle（risk-summary 暂空），归档后可用。
+    # ADR-0025 S2.7 + #14: 新链路不再上报 file:// 完成快照；改读 LogArchiver 注册的
+    # run_log_bundle JobArtifact。控制面仅登记 storage_uri 展示，不经后端代理下载；
+    # risk_summary 仅在控制面本地能解析且文件存在时（STP_NFS_ROOT 挂载 Agent 归档路径）
+    # 才可从 tar 读出，否则静默为空。归档异步：未归档窗口内无 bundle。
     if not artifacts_virtual:
         bundle = (
             db.query(JobArtifact)
@@ -272,6 +276,18 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
         log_summary = None
 
     risk_summary = _load_risk_summary_from_artifacts(artifacts_virtual)
+    if risk_summary is None and artifacts_virtual:
+        for art in artifacts_virtual:
+            local_path = _artifact_local_path(art.storage_uri)
+            if local_path is None or not local_path.exists():
+                logger.debug(
+                    "risk_summary_unavailable job_id=%s storage_uri=%s "
+                    "(run_log_bundle: control plane does not proxy archive; "
+                    "need local NFS mount under STP_NFS_ROOT)",
+                    job.id,
+                    art.storage_uri,
+                )
+                break
     summary_metrics = parse_run_log_summary(log_summary)
     alerts = build_risk_alerts(risk_summary, summary_metrics)
 

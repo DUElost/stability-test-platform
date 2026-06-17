@@ -1147,6 +1147,53 @@ class TestWatcherSummaryEndpoint:
         assert bundle["storage_uri"] == (
             f"/mnt/nfs/archives/2026-06-15/{job_ids[0]}/{job_ids[0]}.tar.gz"
         )
+        assert archive["bundles_total"] == 1
+        assert archive["bundles_limit"] == 20
+        assert archive["bundles_offset"] == 0
+
+    def test_watcher_summary_archive_bundles_pagination(
+        self, client, auth_headers, chain_setup, db_session,
+    ):
+        """archive_limit / archive_offset 分页返回 bundles，计数类字段仍为全量。"""
+        cur_run = chain_setup["current_run"]
+        job_ids = [
+            j.id for j in db_session.query(JobInstance)
+            .filter(JobInstance.plan_run_id == cur_run.id).all()
+        ]
+        assert len(job_ids) >= 2, "需要至少 2 个 Job 测分页"
+        for i, jid in enumerate(job_ids[:3]):
+            db_session.add(JobArtifact(
+                job_id=jid,
+                storage_uri=f"/mnt/nfs/archives/2026-06-15/{jid}/{jid}.tar.gz",
+                artifact_type="run_log_bundle",
+                size_bytes=1000 + i,
+                checksum=f"hash{i}",
+            ))
+        db_session.commit()
+
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary"
+            f"?window_minutes=60&archive_limit=2&archive_offset=0",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        archive = resp.json()["data"]["archive"]
+        assert archive["archived_jobs"] == min(3, len(job_ids))
+        assert archive["bundles_total"] == min(3, len(job_ids))
+        assert len(archive["bundles"]) == 2
+        assert archive["bundles_limit"] == 2
+        assert archive["bundles_offset"] == 0
+
+        resp2 = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/watcher-summary"
+            f"?window_minutes=60&archive_limit=2&archive_offset=2",
+            headers=auth_headers,
+        )
+        assert resp2.status_code == 200, resp2.text
+        archive2 = resp2.json()["data"]["archive"]
+        assert archive2["archived_jobs"] == archive["archived_jobs"]
+        assert archive2["bundles_total"] == archive["bundles_total"]
+        assert len(archive2["bundles"]) == max(0, archive["bundles_total"] - 2)
 
     def test_download_run_log_bundle_returns_409(
         self, client, auth_headers, chain_setup, db_session,

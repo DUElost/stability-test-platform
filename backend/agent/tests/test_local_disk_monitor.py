@@ -90,3 +90,18 @@ def test_spill_continues_until_target():
 
     assert spilled == 2
     assert archiver.spill_oldest.call_count == 2
+
+
+def test_usage_read_failure_skips_spill():
+    """读盘失败不得当作 0% 低水位，本轮不触发溢出。"""
+    archiver = MagicMock()
+    mon, disk_fn = _configure(
+        archiver=archiver,
+        usage_side_effect=OSError("statvfs failed"),
+    )
+
+    spilled = mon.check_once()
+
+    assert spilled == 0
+    archiver.spill_oldest.assert_not_called()
+    assert mon.snapshot_metrics()["local_disk_usage_pct"] == 0.0

@@ -11,6 +11,7 @@ import type {
 } from '@/utils/api/types';
 import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
 import SectionHeader from './SectionHeader';
+import RunLogArchiveSection from './RunLogArchiveSection';
 
 interface Props {
   data?: WatcherSummary;
@@ -18,6 +19,8 @@ interface Props {
   isError?: boolean;
   timeScope?: WatcherTimeScope;
   onTimeScopeChange?: (scope: WatcherTimeScope) => void;
+  /** PlanRun ID — 归档列表「加载更多」分页 */
+  runId?: number;
 }
 
 const TIME_SCOPE_OPTIONS: Array<{ value: WatcherTimeScope; label: string }> = [
@@ -500,6 +503,7 @@ export default function AnomalyDashboard({
   isError = false,
   timeScope = 'all',
   onTimeScopeChange,
+  runId,
 }: Props) {
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [isPackageDrawerOpen, setPackageDrawerOpen] = useState(false);
@@ -761,6 +765,14 @@ export default function AnomalyDashboard({
             )}
           </div>
         </div>
+      )}
+
+      {!isLoading && !isError && data?.archive && (
+        <RunLogArchiveSection
+          archive={data.archive}
+          runId={runId}
+          timeScope={timeScope}
+        />
       )}
     </section>
 
