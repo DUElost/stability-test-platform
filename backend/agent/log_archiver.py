@@ -169,10 +169,16 @@ class LogArchiver:
                 logger.exception("log_archiver_scan_unhandled")
             self._stop_evt.wait(self._interval)
 
-    def scan_once(self) -> int:
-        """扫描并归档所有已完成且过 grace 的 Job 目录。返回本轮归档数。"""
+    def scan_once(self, *, grace_seconds: float | None = None) -> int:
+        """扫描并归档所有已完成且过 grace 的 Job 目录。返回本轮归档数。
+
+        grace_seconds=None 用配置默认(self._grace_seconds,默认 1800s);
+        grace_seconds=0 完全旁路 grace(手动立即归档,由 archive_now control 指令触发)。
+        无论 grace 何值,**仍严格跳过 active 集合中的 Job**(永不碰活跃)。
+        """
         if not self._configured or self._db is None or not self._nfs_base_dir:
             return 0
+        effective_grace = self._grace_seconds if grace_seconds is None else grace_seconds
         archived = 0
         now = self._now()
         active_ids = self._active_job_ids()
@@ -183,7 +189,7 @@ class LogArchiver:
                 # 已归档但本地残留（如上轮 prune 失败）→ 清理本地
                 self._prune_local(job_dir, job_id)
                 continue
-            if not self._is_aged(job_dir, now, self._grace_seconds):
+            if not self._is_aged(job_dir, now, effective_grace):
                 continue
             try:
                 if self.archive_one(job_id, job_dir):

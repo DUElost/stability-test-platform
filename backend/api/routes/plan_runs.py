@@ -322,6 +322,59 @@ def abort_plan_run_endpoint(
     return ok(summary)
 
 
+# ── ADR-0025 S2: 手动归档(立即触发已终态 Job 的运行日志归档) ─────────────────
+
+@router.post(
+    "/plan-runs/{run_id}/archive",
+    response_model=ApiResponse[dict],
+)
+async def archive_plan_run_logs_endpoint(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0025 S2: 手动触发该 PlanRun 涉及 host 的运行日志立即归档(grace=0)。
+
+    经 SocketIO control:archive_now 向各 ONLINE host 的 Agent 下发指令。
+    Agent 端 daemon 线程跑 scan_once(grace_seconds=0),仍严格跳过 active Job。
+    归档是异步的——返回「已触发」,bundle 落库有秒级延迟;前端应轮询/refetch。
+    """
+    from backend.realtime.socketio_server import emit_agent_control
+
+    pr = db.get(PlanRun, run_id)
+    if pr is None:
+        raise HTTPException(status_code=404, detail="plan run not found")
+
+    host_rows = (
+        db.query(JobInstance.host_id, Host.status)
+        .join(Host, Host.id == JobInstance.host_id)
+        .filter(JobInstance.plan_run_id == run_id)
+        .distinct()
+        .all()
+    )
+    if not host_rows:
+        raise HTTPException(status_code=400, detail="no jobs found for this plan run")
+
+    triggered: list[str] = []
+    skipped: list[dict] = []
+    for host_id, host_status in host_rows:
+        if host_status == "ONLINE":
+            await emit_agent_control(
+                host_id, "archive_now",
+                payload={"plan_run_id": run_id},
+            )
+            triggered.append(host_id)
+        else:
+            skipped.append({"host_id": host_id, "status": host_status})
+
+    return ok({
+        "plan_run_id": run_id,
+        "archived_now": True,
+        "triggered_hosts": triggered,
+        "skipped_offline": skipped,
+    })
+
+
 @router.post(
     "/plan-runs/{run_id}/retry-dispatch",
     response_model=ApiResponse[dict],

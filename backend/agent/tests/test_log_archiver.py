@@ -197,6 +197,29 @@ def test_spill_oldest_prefers_oldest(db, run_log_dir, nfs_dir):
     assert (run_log_dir / "7003").exists()
 
 
+def test_scan_once_grace_zero_archives_immediately(db, run_log_dir, nfs_dir):
+    """archive_now control: grace_seconds=0 旁路 aging, 归档刚建且 age=0 的 job 目录;
+    但仍跳过 active job。"""
+    arch = _configure(db, run_log_dir, nfs_dir, grace=3600.0)
+    # 刚建(age≈0) → 默认 grace=3600 应跳过
+    jd_t = _make_job_dir(run_log_dir, 9001)
+    assert not arch.scan_once()  # 默认 grace → 跳过
+    assert not db.is_job_archived(9001)
+
+    # grace_seconds=0 → 过 age 判定 → 归档成功
+    n = arch.scan_once(grace_seconds=0.0)
+    assert n == 1
+    assert db.is_job_archived(9001) is True
+
+    # active job 即使在 grace=0 下也不归档
+    db.save_active_job(9002, device_id=42, fencing_token="t")
+    _make_job_dir(run_log_dir, 9002)
+    n2 = arch.scan_once(grace_seconds=0.0)
+    assert n2 == 0
+    assert db.is_job_archived(9002) is False
+    assert (run_log_dir / "9002").exists()
+
+
 def test_archive_survives_nfs_copystat_eperm(db, run_log_dir, nfs_dir, monkeypatch):
     """NFS 回归：归档不应调用 copystat（源元数据 chmod/utime）——在 NFS/CIFS
     挂载上对他属文件会 PermissionError [Errno 1]。本用例把 shutil.copystat 打成

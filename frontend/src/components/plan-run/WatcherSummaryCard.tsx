@@ -29,6 +29,8 @@ interface Props {
   /** Window minutes filter; lifted up so the parent can sync URL params. */
   windowMinutes?: number;
   onWindowChange?: (minutes: number) => void;
+  // ADR-0025 S2: 手动立即归档(grace=0)按钮回调;由父组件 PlanRunDetailPage 注入
+  onArchiveNow?: () => Promise<void> | void;
 }
 
 const WINDOW_OPTIONS: Array<{ value: number; label: string }> = [
@@ -252,7 +254,9 @@ export default function WatcherSummaryCard({
   isError = false,
   windowMinutes = 60,
   onWindowChange,
+  onArchiveNow,
 }: Props) {
+  const [archiving, setArchiving] = useState(false);
   const total = data?.total ?? 0;
   const affected = data?.affected_device_count ?? 0;
   const totalDevices = data?.total_devices ?? 0;
@@ -413,6 +417,21 @@ export default function WatcherSummaryCard({
               <span className="font-mono" data-testid="archive-progress">
                 {data.archive.archived_jobs}/{data.archive.total_jobs} 已归档
               </span>
+              {onArchiveNow && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setArchiving(true);
+                    try { await onArchiveNow(); } finally { setArchiving(false); }
+                  }}
+                  disabled={archiving}
+                  className="inline-flex items-center gap-1 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                  data-testid="archive-now-button"
+                  title="立即归档已完成 Job 的运行日志(g=0)"
+                >
+                  {archiving ? '归档中...' : '立即归档'}
+                </button>
+              )}
             </div>
             {data.archive.bundles.length > 0 && (
               <div className="flex flex-col gap-1">
