@@ -1,11 +1,10 @@
 # ADR-0018: 基础设施层框架引入（SAQ / APScheduler / python-socketio）
-- 状态：Accepted
+- 状态：Accepted（2026-06-18 修订：Watcher 子系统补充日志类型契约 + 路径 B 默认开 + 存储结构改造）
 - 优先级：P0
 - 目标里程碑：M2
-- 日期：2026-04-08
-- 接受日期：2026-04-09
+- 日期：2026-04-08（2026-04-09 接受；2026-06-18 Watcher 子系统契约补充）
 - 决策者：平台研发组
-- 标签：基础设施, 调度, 消息队列, 实时推送, 框架替代
+- 标签：基础设施, 调度, 消息队列, 实时推送, 框架替代, Watcher
 
 ## 背景
 
@@ -310,19 +309,90 @@ socket.io-client@^4.7.0
 
 ### 收口契约（不变量）
 
-以下 3 条契约是 Watcher 子系统的**硬边界**，后续演进必须继续遵守：
+以下 4 条契约是 Watcher 子系统的**硬边界**，后续演进必须继续遵守：
 
-1. **`log_signal` 是异常事件权威流** — Agent outbox 持久化后 `POST /api/v1/agent/log-signals` 幂等上报，`(host_id, device_serial, job_id, category, seq_no)` 单调。任何 Watcher 路径（immediate / batch / puller 回调）最终都必须通过 `SignalEmitter.emit()` 落 outbox，**不允许**因为 pull 失败、artifact 入库失败、uploader 异常而丢信号。
-2. **`JobArtifact` 是独立的异步持久化面** — 产物入库走 `POST /api/v1/agent/jobs/{job_id}/artifacts`，与 `log_signal` 在数据库层**完全解耦**：`JobArtifact.storage_uri` 幂等键是 `(job_id, storage_uri)`；相同文件重复提交命中 `ON CONFLICT DO NOTHING`，不返回 409 也不覆写旧记录。白名单（`aee_crash` / `vendor_aee_crash` / …）在端点侧校验，越界类型返回 400。
+1. **`log_signal` 是异常事件权威流** — Agent outbox 持久化后 `POST /api/v1/agent/log-signals` 幂等上报，`(host_id, device_serial, job_id, category, seq_no)` 单调。任何 Watcher 路径（immediate / batch / puller 回调 / reconciler）最终都必须通过 `SignalEmitter.emit()` 落 outbox，**不允许**因为 pull 失败、artifact 入库失败、uploader 异常而丢信号。
+2. **`JobArtifact` 是独立的异步持久化面** — 产物入库走 `POST /api/v1/agent/jobs/{job_id}/artifacts`，与 `log_signal` 在数据库层**完全解耦**：`JobArtifact.storage_uri` 幂等键是 `(job_id, storage_uri)`；相同文件重复提交命中 `ON CONFLICT DO NOTHING`，不返回 409 也不覆写旧记录。白名单（`aee_crash` / `vendor_aee_crash` / `bugreport` / `run_log_bundle`）在端点侧校验，越界类型返回 400。
 3. **`ArtifactUploader` 是 fire-and-forget，不回压 watcher** — Agent 侧 `ArtifactUploader` 为进程级单例，内部持有有界队列 + daemon worker；`submit()` 非阻塞且吞所有异常。HTTP 失败走本地重试 + 退避；队列满丢弃时记 `submits_dropped` 计数，**不会**把压力传导回 `DeviceLogWatcher` 的 emit 主链路。
+4. **AEE 拉取走路径 B（Reconciler），日志按事件目录聚合**（2026-06-18 增补） — `STP_WATCHER_AEE_RECONCILE_ENABLED` 默认 `true`；crash 发生时拉取 AEE 整目录 + dblog + bugreport(300s 冷却) + 前后各 2 个 mobilelog(main+kernel)；mobilelog/bugreport 下沉到事件目录 `{ts}_{db_path}/` 内，非统一 `correlated_*` 混放。此契约是 ADR-0025 归档-3 分类提取的前提（按 db 路径定位关联日志）。
 
 ### 灰度路径（`STP_WATCHER_ENABLED`）
 
-Watcher 默认**关闭**（`backend/agent/main.py:69` — `STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "false").lower() == "true"`），未显式打开时 Agent 完全回退到 ADR-0018 Phase 1-6 路径：
+> 2026-06-18 修订：原 `STP_WATCHER_ENABLED` 默认 `false` 已在 ADR-0025 Sprint 1 改为 `true`（`enable.py:11`）。本节更新为当前状态。
 
-- 关闭态：Agent 不启动 `LogWatcherManager` / `LogPuller` / `ArtifactUploader`，不订阅 inotifyd；现有 Pipeline 执行、SocketIO 日志、Step 状态上报完全不受影响。
-- 灰度策略：先在单台试点 Agent 设置 `STP_WATCHER_ENABLED=true` + `STP_WATCHER_NFS_BASE=/mnt/nfs/...`，验证 claim/complete 正常 → AEE/VENDOR_AEE signal 产生 → NFS 富化 → JobArtifact 入库 → 停机/超时/DEGRADED 路径符合预期后再扩量。
-- 回滚：置回 `false` + systemctl restart 即可，无数据库残留（`log_signal` / `job_artifact` 表独立，不污染 `job_instance` 主线）。
+Watcher 默认**开启**（`backend/agent/watcher/enable.py:11` — `STP_WATCHER_ENABLED = os.getenv("STP_WATCHER_ENABLED", "true").lower() == "true"`，与 `main.py:69` 一致）。
+
+- 开启态：Agent 启动 `LogWatcherManager` / `LogPuller` / `ArtifactUploader`，订阅 inotifyd。
+- 回滚：置 `STP_WATCHER_ENABLED=false` + systemctl restart 即可，无数据库残留（`log_signal` / `job_artifact` 表独立，不污染 `job_instance` 主线）。
+
+### AEE 拉取双路径与日志类型契约（2026-06-18 增补）
+
+Watcher 子系统有**两条并行 AEE 拉取路径**，拉取范围不同：
+
+| 路径 | 入口 | 拉取范围 | 默认状态 |
+|------|------|---------|---------|
+| A. inotifyd LogPuller | `watcher/puller.py` | 单个 AEE 文件 + 可选 bugreport | 默认开 |
+| B. AeeDbHistoryReconciler | `aee/reconciler.py` → `aee/processor.py` | AEE 整目录 + dblog + mobilelog 时间窗(前后各2) + bugreport(300s 冷却) | **改为默认开**（原 `STP_WATCHER_AEE_RECONCILE_ENABLED=false`，2026-06-18 改为 `true`） |
+
+**路径 B 默认开的理由**：路径 A 只拉单个 AEE 文件，缺 dblog 和 mobilelog，无法支撑 crash 诊断（需 crash 前后日志上下文）。路径 B 已具备完整能力（对齐上一代工具 `MonkeyAEEinfo_260523.py` 的 `dblog + bugreport + 前后各2 mobilelog` 需求），但原设计为灰度默认关。ADR-0025 D3 修订明确路径 B 为默认路径。
+
+**日志类型契约**（路径 B，对齐上一代工具）：
+
+| 日志类型 | 设备路径 | 拉取方式 | 落盘位置 |
+|---------|---------|---------|---------|
+| AEE 整目录（dblog） | `/data/aee_exp` + `/data/vendor/aee_exp` | `adb pull` 整目录 | `{nfs_root}/{folder_name}/{serial}/aee_exp/{ts}_{db_path}/` |
+| db_history 转储 | `{aee_path}/db_history` | `adb shell cat` | 事件目录上级 `db_save_org.txt`（全量）+ `db_save.txt`（过滤后） |
+| bugreport | crash 时刻导出 | `adb bugreport` | 事件目录内 `bugreport/{ts}_bugreport.zip`（300s 冷却） |
+| mobilelog（main_log） | `/data/debuglogger/mobilelog/` | `adb pull` 时间窗前后各 2 个 | 事件目录内 `mobilelog/main_log.*` |
+| mobilelog（kernel_log） | 同上 | 同上 | 事件目录内 `mobilelog/kernel_log.*` |
+| mobilelog（sys_log） | 同上 | 同上 | 默认关（`mobilelog.py:22` `"enabled": False`） |
+
+### 日志存储结构改造（2026-06-18 增补）
+
+**原结构**（当前代码）：mobilelog/bugreport 按设备维度统一放在 `correlated_mobilelogs/`、`correlated_bugreports/`，与具体 AEE 事件无关联——无法知道哪个 mobilelog 对应哪个 crash。
+
+**改造后结构**：mobilelog/bugreport 下沉到每个 AEE 事件目录内，与该事件的 db_path/时间戳一一对应。
+
+当前结构：
+```
+{nfs_root}/{folder_name}/{serial}/
+  aee_exp/
+    db_save_org.txt
+    db_save.txt
+    {ts}_{db_path}/              ← 事件目录
+      __exp_main.txt
+      main.dbg
+  correlated_mobilelogs/         ← 所有事件混放
+  correlated_bugreports/         ← 所有事件混放
+```
+
+改造后结构：
+```
+{nfs_root}/{folder_name}/{serial}/
+  aee_exp/
+    db_save_org.txt
+    db_save.txt
+    {ts}_{db_path}/              ← 事件目录（唯一聚合点）
+      __exp_main.txt
+      main.dbg
+      mobilelog/                 ← 该事件关联的 mobilelog
+      bugreport/                 ← 该事件的 bugreport
+```
+
+**改造点**：
+- `processor.py:211` `export_correlated_mobilelogs(output_dir=base_output_dir)` → `output_dir=local_target_dir`（事件目录）
+- `processor.py:219` `export_bugreport_for_timestamp(output_dir=base_output_dir)` → `output_dir=local_target_dir`
+- `mobilelog.py:51` `mobilelog_dir = output_dir / mobilelog/`（output_dir 已是事件目录）
+- `bugreport.py` 同理
+
+**改造理由**：归档-3 分类提取需按去重 Result_*.xls 的 db 路径定位到对应 mobilelog/bugreport，混放结构无法定位。
+
+**路径举例**：
+- folder_name = `X6851-OP_16.3.0.022_0527_MonkeyAEEinfo`（由 `ro.product.name` + `ro.build.display.id` + run_date 生成）
+- serial = `R32M30F12345`
+- db_path basename = `db.01`（`db.NN` 风格，非 `db_crashtime_...`）
+- 事件目录名 = `2026_0527_101522_123_db.01`（时间戳格式 `%Y_%m%d_%H%M%S_{ms3}` + db_path basename）
+- 完整路径 = `sonic_tinno/X6851-OP_16.3.0.022_0527_MonkeyAEEinfo/R32M30F12345/aee_exp/2026_0527_101522_123_db.01/mobilelog/main_log.2026_0527_101400`
 
 ## 关联实现
 
@@ -342,14 +412,22 @@ Watcher 默认**关闭**（`backend/agent/main.py:69` — `STP_WATCHER_ENABLED =
 - `frontend/src/hooks/useSocketIO.ts` — 迁移到 socket.io-client
 - `docs/grafana/stability-platform-dashboard.json` — Grafana dashboard 模板
 
-#### Watcher 子系统（2026-04-17 起）
+#### Watcher 子系统（2026-04-17 起；2026-06-18 契约补充）
 - `backend/agent/watcher/sources.py` — InotifydSource + ProbeResult + WatcherCapability
 - `backend/agent/watcher/batcher.py` — EventBatcher（immediate / batch 双路由）
 - `backend/agent/watcher/emitter.py` — SignalEmitter（seq_no 单调分配 + outbox 落库）
 - `backend/agent/watcher/device_watcher.py` — per-device 编排器
 - `backend/agent/watcher/manager.py` — LogWatcherManager + WatcherHandle
-- `backend/agent/watcher/puller.py` — per-device async adb pull → NFS + 富化
+- `backend/agent/watcher/puller.py` — 路径 A：per-device async adb pull → NFS + 富化（默认开，拉单个 AEE 文件 + 可选 bugreport）
 - `backend/agent/watcher/policy.py` / `contracts.py` / `exceptions.py`
+- `backend/agent/aee/reconciler.py` — 路径 B：AeeDbHistoryReconciler per-Job daemon（db_history diff → process_device_logs）；`STP_WATCHER_AEE_RECONCILE_ENABLED` 默认 `true`（2026-06-18 改）
+- `backend/agent/aee/processor.py` — 路径 B 核心：AEE 整目录 pull + dblog 转储 + mobilelog 时间窗 + bugreport；`output_dir` 改为 `local_target_dir`（事件目录，2026-06-18 待落地）
+- `backend/agent/aee/mobilelog.py` — mobilelog 时间窗拉取（前后各 2 个 main+kernel）；输出改到事件目录内（2026-06-18 待落地）
+- `backend/agent/aee/bugreport.py` — bugreport 导出（300s 冷却）；输出改到事件目录内（2026-06-18 待落地）
+- `backend/agent/aee/paths.py` — NFS 路径解析（`resolve_device_output_dir` / `get_aee_nfs_root` / subdir 布局）
+- `backend/agent/aee/folder_name.py` — folder_name 生成（`ro.product.name` + `ro.build.display.id` + run_date）
+- `backend/agent/aee/db_history.py` — db_history 解析（`db.NN` 风格）+ 增量状态管理
+- `backend/agent/aee/timestamp.py` — 时间戳格式化（`%Y_%m%d_%H%M%S_{ms3}`）
 - `backend/agent/job_session.py` — Job lifecycle 绑定 watcher start/stop
 - `backend/agent/artifact_uploader.py` — ArtifactUploader 进程级单例（fire-and-forget）
 - `backend/agent/registry/local_db.py` — `log_signal_outbox` / `watcher_state` 表 + drain API
@@ -365,3 +443,9 @@ Watcher 默认**关闭**（`backend/agent/main.py:69` — `STP_WATCHER_ENABLED =
 - ~~`backend/api/routes/websocket.py`~~ — 已删除（Wave 8-3，2026-04-12）
 - ~~`frontend/src/hooks/useWebSocket.ts`~~ — 已删除（Wave 7-3，2026-04-12）
 - ~~`backend/core/metrics.py` 中 `websocket_*` 指标~~ — 已删除（Wave 7-4，2026-04-12）
+
+## 关联 ADR
+
+- **ADR-0025**（2026-06-18 修订）：D3 表拉取行改为「路径 B 默认开」+ D4 归档三阶段重定义。本 ADR 的 Watcher 日志类型契约（第 4 条）+ 存储结构改造是 ADR-0025 归档-1 搬运 + 归档-3 分类提取的前提。
+- **ADR-0025 Sprint 2**：路径 B 默认开（`reconciler.py:151`）+ 存储结构改造（`processor.py` / `mobilelog.py` / `bugreport.py` 输出路径下沉到事件目录）的具体实现计划。
+- 上一代工具参考：`MonkeyAEEinfo_260523.py`（`device_paths` / `bugreport` / `mobilelog_filter` 配置项 + CIFS 挂载 `//172.21.15.4/jxtinno/sonic_tinno`）。
