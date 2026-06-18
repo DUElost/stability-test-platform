@@ -25,8 +25,6 @@ import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import DeviceOverview from '@/components/plan-run/DeviceOverview';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
-import WatcherSummaryCard from '@/components/plan-run/WatcherSummaryCard';
-import JiraSubmitPanel from '@/components/plan-run/JiraSubmitPanel';
 
 import type { PrecheckState } from '@/utils/api/types';
 
@@ -475,25 +473,6 @@ export default function PlanRunDetailPage() {
     },
   });
 
-  // ADR-0025 S2: 手动归档——触发 Agent 立即扫描已完成 Job(grace=0),异步完成
-  const archiveNowMut = useMutation({
-    mutationFn: async () => {
-      const r = await api.planRuns.archiveNow(id);
-      return r.data;
-    },
-    onSuccess: () => {
-      toast.success('已请求立即归档; bundle 落库有数秒延迟,稍后刷新');
-      // 归档异步: 延迟 6s+12s 各 refetch 一次,覆盖 Agent 扫描+注册窗口
-      [6000, 12000].forEach((ms) => setTimeout(() => {
-        qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
-      }, ms));
-    },
-    onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`请求归档失败: ${msg}`);
-    },
-  });
-
   // ── Plan name ──
   const planName = useMemo(
     () => timelineQ.data?.plan_name ?? null,
@@ -639,13 +618,6 @@ export default function PlanRunDetailPage() {
               onTimeScopeChange={setWatcherTimeScope}
             />
 
-            {/* ADR-0025 S2/S3: 运行日志归档卡片(展示 + 复制路径 + 立即归档按钮) */}
-            <WatcherSummaryCard
-              data={watcherQ.data}
-              isLoading={watcherQ.isFetching}
-              onArchiveNow={() => archiveNowMut.mutateAsync()}
-            />
-
             <BusinessFlowStepper
               timeline={timelineQ.data}
               isLoading={timelineQ.isLoading}
@@ -674,11 +646,6 @@ export default function PlanRunDetailPage() {
             )}
           </div>
         </div>
-      </div>
-
-      {/* ADR-0025 §10: 去重→Jira 提单面板（一键执行 + web 实时控制台） */}
-      <div className="mx-auto mt-4 w-full max-w-[1400px] px-4">
-        <JiraSubmitPanel runId={id} />
       </div>
 
       {/* Device detail drawer (floating overlay) */}
