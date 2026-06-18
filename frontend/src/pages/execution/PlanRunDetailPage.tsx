@@ -25,6 +25,7 @@ import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import DeviceOverview from '@/components/plan-run/DeviceOverview';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
+import ArchiveStatusCard from '@/components/plan-run/ArchiveStatusCard';
 
 import type { PrecheckState } from '@/utils/api/types';
 
@@ -473,6 +474,18 @@ export default function PlanRunDetailPage() {
     },
   });
 
+  const archiveNowMut = useMutation({
+    mutationFn: () => api.planRuns.archiveNow(id),
+    onSuccess: () => {
+      toast.success('已触发立即归档,归档完成有秒级延迟');
+      qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`归档触发失败: ${msg}`);
+    },
+  });
+
   // ── Plan name ──
   const planName = useMemo(
     () => timelineQ.data?.plan_name ?? null,
@@ -618,6 +631,13 @@ export default function PlanRunDetailPage() {
               onTimeScopeChange={setWatcherTimeScope}
             />
 
+            {/* ADR-0025 Sprint 3: 运行日志归档状态 + 立即归档 */}
+            <ArchiveStatusCard
+              archive={watcherQ.data?.archive}
+              onArchiveNow={() => archiveNowMut.mutateAsync()}
+              isLoading={watcherQ.isFetching}
+            />
+
             <BusinessFlowStepper
               timeline={timelineQ.data}
               isLoading={timelineQ.isLoading}
@@ -651,6 +671,7 @@ export default function PlanRunDetailPage() {
       {/* Device detail drawer (floating overlay) */}
       <DeviceDetailDrawer
         device={selectedDevice}
+        runId={id}
         onClose={() => setSelectedDevice(null)}
         onManualRetry={(jobId) => retryMut.mutate(jobId)}
         onManualExit={(jobId) => exitMut.mutate(jobId)}
