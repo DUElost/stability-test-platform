@@ -346,6 +346,9 @@ async def _claim_jobs_for_host(
         busy_device_ids = {row[0] for row in busy_rows.all()}
         free_device_ids = [did for did in all_device_ids if did not in busy_device_ids]
 
+    # Guard: capacity cannot exceed available free devices (one job per device).
+    effective_capacity = min(effective_capacity, len(free_device_ids))
+
     # 6. Per-device first PENDING job + FOR UPDATE SKIP LOCKED
     pending_jobs: list[JobInstance] = []
     claimed: list[JobInstance] = []

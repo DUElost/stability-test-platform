@@ -5,7 +5,7 @@ Tests for run-oriented API routes after removing the legacy /tasks* compatibilit
 import json
 from datetime import datetime, timezone
 
-from backend.models.job import JobInstance, StepTrace
+from backend.models.job import JobArtifact, JobInstance, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 
@@ -96,6 +96,16 @@ class TestRunReportFromJobChain:
             created_at=now,
         )
         db_session.add(snapshot)
+        # ADR-0025 S2.7 + #14: 控制面报告 risk_summary 改读 JobArtifact(run_log_bundle)，
+        # 不再消费 StepTrace.output.artifact 里的 file:// 完成快照。
+        bundle = JobArtifact(
+            job_id=job.id,
+            artifact_type="run_log_bundle",
+            storage_uri=f"file://{risk_path}",
+            size_bytes=risk_path.stat().st_size,
+            checksum="pytest",
+        )
+        db_session.add(bundle)
         db_session.commit()
 
         response = client.get(f"/api/v1/runs/{job_id}/report", headers=auth_headers)
