@@ -77,10 +77,23 @@ export default function RunLogArchiveSection({
   const [extraBundles, setExtraBundles] = useState<WatcherArchiveBundle[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const resetKey = `${runId ?? ''}:${timeScope}:${archive.bundles_offset ?? 0}:${archive.bundles_limit ?? 20}:${archive.archived_jobs}`;
+  // 父级 refetch（Socket invalidate / react-query）会替换 archive.bundles 第一页；
+  // 用第一页 artifact_id 序列作签名，内容变化时清空「加载更多」累积，避免与陈旧分页叠加。
+  const parentPageSignature = useMemo(
+    () =>
+      [
+        archive.bundles_total ?? 0,
+        archive.archived_jobs,
+        archive.bundles_offset ?? 0,
+        archive.bundles_limit ?? 20,
+        ...archive.bundles.map((b) => b.artifact_id),
+      ].join(','),
+    [archive],
+  );
+
   useEffect(() => {
     setExtraBundles([]);
-  }, [resetKey]);
+  }, [runId, timeScope, parentPageSignature]);
 
   const allBundles = useMemo(
     () => [...archive.bundles, ...extraBundles],

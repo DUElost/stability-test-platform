@@ -73,4 +73,51 @@ describe('RunLogArchiveSection', () => {
     });
     expect(screen.getAllByTestId('archive-bundle-row')).toHaveLength(2);
   });
+
+  it('clears loaded extras when parent refetches first page', async () => {
+    getWatcherSummary.mockResolvedValue({
+      archive: {
+        ...makeArchive(),
+        bundles: [
+          {
+            job_id: 102,
+            artifact_id: 2,
+            size_bytes: 2048,
+            storage_uri: '/nfs/a/102.tar.gz',
+          },
+        ],
+        bundles_offset: 1,
+      },
+    });
+
+    const { rerender } = render(
+      <RunLogArchiveSection archive={makeArchive()} runId={42} timeScope="all" />,
+    );
+    fireEvent.click(screen.getByTestId('archive-load-more'));
+    await waitFor(() => {
+      expect(screen.getAllByTestId('archive-bundle-row')).toHaveLength(2);
+    });
+
+    rerender(
+      <RunLogArchiveSection
+        archive={makeArchive({
+          bundles: [
+            {
+              job_id: 103,
+              artifact_id: 3,
+              size_bytes: 4096,
+              storage_uri: '/nfs/a/103.tar.gz',
+            },
+          ],
+          archived_jobs: 3,
+          bundles_total: 3,
+        })}
+        runId={42}
+        timeScope="all"
+      />,
+    );
+
+    expect(screen.getAllByTestId('archive-bundle-row')).toHaveLength(1);
+    expect(screen.getByTestId('archive-bundle-row')).toHaveTextContent('Job #103');
+  });
 });
