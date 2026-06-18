@@ -124,8 +124,8 @@ def export_bugreport_for_timestamp(
 ) -> bool:
     """Export adb bugreport zip named `{formatted_ts}_bugreport.zip`.
 
-    D3/C-2: 默认落盘 `correlated_bugreports/`(对齐 monolith BUGREPORT_EXPORT_DIRNAME);
-    env STP_WATCHER_AEE_SUBDIR_LAYOUT=stp 回退 `bugreport/`(与 mobilelog 共用逃生口)。
+    ADR-0018 2026-06-18: output_dir 由调用方传入事件目录(local_target_dir),
+    bugreport 落在 output_dir/bugreport/(或 correlated_bugreports/,由 env 控制)。
     """
     if not enabled:
         return False

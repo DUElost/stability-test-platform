@@ -41,7 +41,11 @@ def export_correlated_mobilelogs(
     pull_fn: PullFn,
     log_types: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, int]:
-    """Pull mobilelog files around AEE timestamp into output_dir (mobilelog subdir)."""
+    """Pull mobilelog files around AEE timestamp into output_dir (mobilelog subdir).
+
+    ADR-0018 2026-06-18: output_dir 由调用方传入事件目录(local_target_dir),
+    mobilelog 落在 output_dir/mobilelog/(或 correlated_mobilelogs/,由 env 控制)。
+    """
     metrics = {"matched": 0, "pulled": 0, "files_selected": 0}
     aee_dt = parse_timestamp(aee_ts_str)
     if not aee_dt:

@@ -263,7 +263,7 @@ def test_process_logs_strict_verify_rejects_dir_without_dbg(tmp_path, monkeypatc
 
 
 def test_process_logs_mobilelog_uses_correlated_subdir_default(tmp_path, monkeypatch):
-    """T0.5-2 D3: export_correlated_mobilelogs 默认写到 correlated_mobilelogs/ 子目录。"""
+    """ADR-0018 2026-06-18: mobilelog 落在事件目录(local_target_dir)内的 correlated_mobilelogs/ 子目录。"""
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
     monkeypatch.delenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", raising=False)
     store = _MemStore()
@@ -314,8 +314,14 @@ def test_process_logs_mobilelog_uses_correlated_subdir_default(tmp_path, monkeyp
     r = process_device_logs(serial="dev_sd", job_id=88, state_store=store, config=cfg)
     assert r.pulled == 1
     assert "output_dir" in captured
+    # ADR-0018 2026-06-18: output_dir 应为事件目录(local_target_dir),非设备级 base_output_dir
+    # 事件目录名格式: {ts}_{db_path_basename},如 2026_0527_101522_123_db.01
+    assert captured["output_dir"].name.startswith("2026_"), \
+        f"output_dir 应为事件目录,实际: {captured['output_dir']}"
+    assert "db.01" in captured["output_dir"].name, \
+        f"事件目录应含 db_path basename,实际: {captured['output_dir'].name}"
     landed = captured["output_dir"] / "correlated_mobilelogs"
-    assert landed.is_dir(), f"应写入 correlated_mobilelogs/,实际未创建: {captured['output_dir'].iterdir()}"
+    assert landed.is_dir(), f"应写入事件目录内 correlated_mobilelogs/,实际: {captured['output_dir'].iterdir()}"
 
 
 def test_process_logs_mobilelog_subdir_stp_fallback(tmp_path, monkeypatch):
