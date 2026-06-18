@@ -167,6 +167,9 @@ function _getDashSocket(): Socket {
     SOCKET_EVENT_NAMES.jobUpdate,
     // ADR-0021 C5c — watcher 异常增量推送 (broadcast room: plan_run:{id})
     SOCKET_EVENT_NAMES.watcherSignal,
+    // ADR-0025 §9 RunConsole — 控制面命令实时日志 (room: console:{id})
+    SOCKET_EVENT_NAMES.consoleLog,
+    SOCKET_EVENT_NAMES.consoleStatus,
   ];
   for (const event of EVENTS) {
     socket.on(event, (data: any) => {
@@ -261,6 +264,15 @@ function parseWsUrl(url: string): SubscriptionConfig {
   const logsMatch = url.match(/\/ws\/logs\/(\d+)/);
   if (logsMatch) {
     return { room: `run:${logsMatch[1]}`, events: [SOCKET_EVENT_NAMES.stepLog, SOCKET_EVENT_NAMES.stepUpdate] };
+  }
+
+  // /ws/console/{id}  — ADR-0025 §9 RunConsole 实时日志
+  const consoleMatch = url.match(/\/ws\/console\/([\w-]+)/);
+  if (consoleMatch) {
+    return {
+      room: `console:${consoleMatch[1]}`,
+      events: [SOCKET_EVENT_NAMES.consoleLog, SOCKET_EVENT_NAMES.consoleStatus],
+    };
   }
 
   // /ws/plan-runs/{id}

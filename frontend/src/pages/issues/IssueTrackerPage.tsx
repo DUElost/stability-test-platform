@@ -9,6 +9,7 @@ import { api, type JiraDraft, type PlanRun } from '@/utils/api';
 import apiClient from '@/utils/api/client';
 import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
 
 interface RunWithDraft {
   run: PlanRun;
@@ -67,6 +68,9 @@ export default function IssueTrackerPage() {
           </Button>
         }
       />
+
+      {/* ADR-0025 §10: 去重→Jira 批量提单（上传 Result/Upload-List + 一键执行 + web 实时日志） */}
+      <JiraSubmitPanel />
 
       <Card>
         <CardHeader>

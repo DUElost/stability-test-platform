@@ -39,6 +39,7 @@ from backend.api.routes.resource_pools import router as resource_pools_router
 # ADR-0020: Plan-based orchestration
 from backend.api.routes.plans import router as plans_router
 from backend.api.routes.plan_runs import router as plan_runs_router
+from backend.api.routes.dedup import router as dedup_router
 from backend.core.agent_secret import (
     AgentSecretNotConfiguredError,
     is_agent_secret_configured,
@@ -111,6 +112,13 @@ async def lifespan(app: FastAPI):
         capture_main_loop()
         init_build_info(version="2.0.0", commit="unknown")
 
+        # ADR-0025 §9: RunConsole（控制面命令执行 + web 实时控制台）配置
+        from backend.services.run_console import RunConsole
+        RunConsole.instance().configure(
+            log_root=os.getenv("STP_RUN_CONSOLE_LOG_ROOT", "logs/console"),
+            encoding=os.getenv("STP_DEDUP_LOG_ENCODING", "utf-8"),
+        )
+
         # APScheduler replaces legacy daemon threads + asyncio background tasks
         scheduler = create_scheduler()
         await scheduler.__aenter__()
@@ -151,6 +159,12 @@ async def lifespan(app: FastAPI):
     yield
 
     if os.getenv("TESTING") != "1":
+        # ADR-0025 §9: RunConsole 收尾——cancel inflight subprocess 避免孤儿
+        from backend.services.run_console import RunConsole
+        try:
+            RunConsole.instance().shutdown()
+        except Exception:
+            logger.exception("run_console_shutdown_failed")
         await stop_saq_worker()
         if scheduler is not None:
             await scheduler.__aexit__(None, None, None)
@@ -214,6 +228,7 @@ _fastapi_app.include_router(resource_pools_router)
 # ADR-0020: Plan-based orchestration
 _fastapi_app.include_router(plans_router)
 _fastapi_app.include_router(plan_runs_router)
+_fastapi_app.include_router(dedup_router)
 
 
 @_fastapi_app.get("/")

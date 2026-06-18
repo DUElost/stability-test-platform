@@ -9,6 +9,8 @@ export const SOCKET_EVENT_NAMES = {
   reportReady: 'report_ready',
   jobUpdate: 'job_update',
   watcherSignal: 'watcher_signal',
+  consoleLog: 'console_log',
+  consoleStatus: 'console_status',
 } as const;
 
 export const SOCKET_MESSAGE_TYPES = {
