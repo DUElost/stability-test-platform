@@ -75,12 +75,16 @@ def nfs_dir(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def reset_singletons():
+def reset_singletons(monkeypatch):
     """每个用例前后强制重置 LogWatcherManager + OutboxDrainer 单例。
 
     关键：JobSession 直接通过 LogWatcherManager.instance() 拿单例，所以必须
     用单例机制本身的 _reset_for_tests 钩子，而不能 monkeypatch。
+
+    ADR-0018 修订后 reconciler 默认开启，但 e2e 不跑 reconciler 线程，
+    需显式关闭以免 watcher 跳过 AEE immediate emit。
     """
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "false")
     LogWatcherManager._reset_for_tests()
     OutboxDrainer._reset_for_tests()
     yield
