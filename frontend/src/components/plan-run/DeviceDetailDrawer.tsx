@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   X,
   RotateCw,
   LogOut,
   ExternalLink,
   Loader2,
+  FileWarning,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -18,10 +20,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { api } from '@/utils/api';
 import type { DeviceMatrixItem, DeviceUiStatus } from '@/utils/api/types';
 
 interface Props {
   device: DeviceMatrixItem | null;
+  runId: number;
   onClose: () => void;
   onManualRetry: (jobId: number) => void;
   onManualExit: (jobId: number) => void;
@@ -46,6 +50,7 @@ const TERMINAL_DEVICE: ReadonlyArray<DeviceUiStatus> = ['completed', 'failed', '
 
 export default function DeviceDetailDrawer({
   device,
+  runId,
   onClose,
   onManualRetry,
   onManualExit,
@@ -182,6 +187,11 @@ export default function DeviceDetailDrawer({
             </div>
           )}
 
+          {/* ADR-0025 Sprint 3: Crash 产物（AEE/bugreport 等 JobArtifact） */}
+          {device.job_id && (
+            <CrashArtifactsBlock runId={runId} jobId={device.job_id} />
+          )}
+
           {(retryRequested || exitRequested) && (
             <div className="mt-4 rounded-lg border-l-4 border-blue-400 bg-blue-50 px-3 py-2 text-xs text-blue-800">
               <div className="font-semibold">
@@ -291,5 +301,66 @@ function KvList({ rows }: { rows: Array<[string, string, boolean, string?]> }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+const CRASH_ARTIFACT_TYPES = ['aee_crash', 'vendor_aee_crash', 'bugreport'];
+const ARTIFACT_LABELS: Record<string, string> = {
+  aee_crash: 'AEE',
+  vendor_aee_crash: 'Vendor AEE',
+  bugreport: 'Bugreport',
+};
+
+function CrashArtifactsBlock({ runId, jobId }: { runId: number; jobId: number }) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['job-artifacts', runId, jobId],
+    queryFn: () => api.planRuns.listJobArtifacts(runId, jobId),
+    enabled: !!jobId,
+    staleTime: 30_000,
+  });
+
+  const crashArtifacts = (data || []).filter(
+    (a) => CRASH_ARTIFACT_TYPES.includes(a.artifact_type),
+  );
+
+  if (isLoading) {
+    return (
+      <div className="mt-4 flex items-center gap-1.5 text-xs text-gray-400">
+        <Loader2 className="h-3 w-3 animate-spin" /> 加载 Crash 产物...
+      </div>
+    );
+  }
+  if (isError || crashArtifacts.length === 0) return null;
+
+  return (
+    <div className="mt-4" data-testid="crash-artifacts-block">
+      <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-gray-700">
+        <FileWarning className="h-3.5 w-3.5 text-amber-500" />
+        Crash 产物（{crashArtifacts.length}）
+      </div>
+      <div className="space-y-1">
+        {crashArtifacts.map((a) => (
+          <div key={a.id} className="flex items-center gap-2 rounded border px-2 py-1 text-[11px]">
+            <span className="font-mono text-gray-500">
+              {ARTIFACT_LABELS[a.artifact_type] || a.artifact_type}
+            </span>
+            <a
+              href={`/api/v1/plan-runs/${runId}/jobs/${jobId}/artifacts/${a.id}/download`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 text-blue-600 hover:underline"
+              data-testid="crash-artifact-download"
+            >
+              <ExternalLink className="h-3 w-3" /> 下载
+            </a>
+            {a.filename && (
+              <span className="flex-1 truncate font-mono text-gray-400" title={a.filename}>
+                {a.filename}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }

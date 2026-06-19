@@ -25,6 +25,18 @@ import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import DeviceOverview from '@/components/plan-run/DeviceOverview';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
+import ArchiveStatusCard from '@/components/plan-run/ArchiveStatusCard';
+import DedupReportCard from '@/components/plan-run/DedupReportCard';
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from '@/components/ui/alert-dialog';
 
 import type { PrecheckState } from '@/utils/api/types';
 
@@ -264,6 +276,18 @@ export default function PlanRunDetailPage() {
       ? GATE_ACTIVE_REFETCH_MS
       : FAST_REFETCH_MS;
 
+  // ADR-0025 Sprint 4: PlanRun FAILED/DEGRADED 时提示「是否最终归档？」
+  const [finalArchiveOpen, setFinalArchiveOpen] = useState(false);
+  const finalArchivePromptedKey = `plan-run-${id}-final-archive-prompted`;
+  useEffect(() => {
+    if (!runQ.data) return;
+    const status = runQ.data.status;
+    if (status !== 'FAILED' && status !== 'DEGRADED') return;
+    if (sessionStorage.getItem(finalArchivePromptedKey)) return;
+    sessionStorage.setItem(finalArchivePromptedKey, '1');
+    setFinalArchiveOpen(true);
+  }, [runQ.data?.status, finalArchivePromptedKey]);
+
   const timelineQ = useQuery({
     queryKey: ['plan-run-timeline', id],
     queryFn: () => api.planRuns.getTimeline(id),
@@ -435,6 +459,19 @@ export default function PlanRunDetailPage() {
     },
   });
 
+  // ADR-0025 Sprint 4: 终态最终归档（场景 2/3 用户确认后触发 extract）
+  const finalArchiveMut = useMutation({
+    mutationFn: () => api.planRuns.triggerExtract(id),
+    onSuccess: (data) => {
+      toast.success(`已提取 ${data.extracted_count} 个事件目录到提单目录`);
+      qc.invalidateQueries({ queryKey: ['dedup-status', id] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`最终归档失败: ${msg}`);
+    },
+  });
+
   const retryMut = useMutation({
     mutationFn: (jobId: number) => api.planRuns.manualRetryJob(id, jobId),
     onSuccess: (data) => {
@@ -464,12 +501,23 @@ export default function PlanRunDetailPage() {
     onSuccess: () => {
       toast.success('已重新入队派发门禁');
       qc.invalidateQueries({ queryKey: ['plan-run', id] });
-      qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
-      qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
+      qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });      qc.invalidateQueries({ queryKey: ['plan-run-events', id] });
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(`重试派发失败: ${msg}`);
+    },
+  });
+
+  const archiveNowMut = useMutation({
+    mutationFn: () => api.planRuns.archiveNow(id),
+    onSuccess: () => {
+      toast.success('已触发立即归档,归档完成有秒级延迟');
+      qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`归档触发失败: ${msg}`);
     },
   });
 
@@ -611,12 +659,23 @@ export default function PlanRunDetailPage() {
             />
 
             <AnomalyDashboard
+              runId={id}
               data={watcherQ.data}
               isLoading={watcherQ.isLoading}
               isError={watcherQ.isError}
               timeScope={watcherTimeScope}
               onTimeScopeChange={setWatcherTimeScope}
             />
+
+            {/* ADR-0025 Sprint 3: 运行日志归档状态 + 立即归档 */}
+            <ArchiveStatusCard
+              archive={watcherQ.data?.archive}
+              onArchiveNow={() => archiveNowMut.mutateAsync()}
+              isLoading={watcherQ.isFetching}
+            />
+
+            {/* ADR-0025 Sprint 4: 去重报告（scan/merge/extract） */}
+            <DedupReportCard runId={id} />
 
             <BusinessFlowStepper
               timeline={timelineQ.data}
@@ -651,6 +710,7 @@ export default function PlanRunDetailPage() {
       {/* Device detail drawer (floating overlay) */}
       <DeviceDetailDrawer
         device={selectedDevice}
+        runId={id}
         onClose={() => setSelectedDevice(null)}
         onManualRetry={(jobId) => retryMut.mutate(jobId)}
         onManualExit={(jobId) => exitMut.mutate(jobId)}
@@ -658,6 +718,32 @@ export default function PlanRunDetailPage() {
         isRetryPending={retryMut.isPending}
         isExitPending={exitMut.isPending}
       />
+
+      {/* ADR-0025 Sprint 4: PlanRun FAILED/DEGRADED 时提示「是否最终归档？」 */}
+      <AlertDialog open={finalArchiveOpen} onOpenChange={setFinalArchiveOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>PlanRun 已结束 — 是否最终归档？</AlertDialogTitle>
+            <AlertDialogDescription>
+              测试已中止或失败。归档-2 scan + merge 已自动触发。
+              是否执行归档-3 分类提取（按去重结果从 15.4 取事件日志到提单目录）？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>暂不归档</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="final-archive-confirm"
+              disabled={finalArchiveMut.isPending}
+              onClick={() => {
+                setFinalArchiveOpen(false);
+                finalArchiveMut.mutate();
+              }}
+            >
+              {finalArchiveMut.isPending ? '提取中…' : '执行最终归档'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

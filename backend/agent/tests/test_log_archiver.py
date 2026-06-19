@@ -1,15 +1,15 @@
 """LogArchiver 单元测试（ADR-0025 Sprint 2 / S2.1）。
 
-覆盖：归档 happy path / 跳过活跃 job / 跳过未过 grace / 复用已有 tar /
-      幂等(已归档跳过) / 注册失败保留本地 / spill_oldest 最旧优先。
+覆盖：归档 happy path / 跳过活跃 job / 跳过未过 grace / 目录树直复制 /
+      幂等(已归档跳过) / 注册失败保留本地 / spill_oldest 最旧优先 /
+      活跃 Job cycle 快照 / copystat EPERM 容忍。
 
-仅 mock requests.Session（注册 POST）；LocalDB / 文件系统 / tar 均真实。
+仅 mock requests.Session（注册 POST）；LocalDB / 文件系统均真实。
 """
 
 from __future__ import annotations
 
 import os
-import tarfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -88,13 +88,16 @@ def test_archive_happy_path(db, run_log_dir, nfs_dir):
     n = arch.scan_once()
 
     assert n == 1
-    # 本地已 prune
-    assert not job_dir.exists()
-    assert not (run_log_dir / "1001.tar.gz").exists()
-    # NFS 有归档 tar + manifest
-    tars = list(nfs_dir.glob("archives/*/1001/1001.tar.gz"))
-    assert len(tars) == 1
-    assert (tars[0].parent / "manifest.json").exists()
+    # ADR-0025 2026-06-18: 归档与 prune 解耦 —— 复制成功后不立即 prune
+    # （本地达阈值才 prune，由 spill_oldest 触发）
+    assert job_dir.exists()  # 本地保留（解耦后不立即 prune）
+    # NFS 有归档目录树（非 tar）+ manifest
+    archived_dirs = list(nfs_dir.glob("archives/*/1001"))
+    assert len(archived_dirs) == 1
+    assert (archived_dirs[0] / "init_check.log").exists()  # 文件可独立访问
+    assert (archived_dirs[0] / "manifest.json").exists()
+    # 无 tar.gz 文件
+    assert not list(nfs_dir.glob("archives/*/1001/*.tar.gz"))
     # DB 标记
     assert db.is_job_archived(1001) is True
     assert db.count_archived_jobs() == 1
@@ -102,20 +105,25 @@ def test_archive_happy_path(db, run_log_dir, nfs_dir):
     call = sess.post.call_args
     assert call.args[0].endswith("/api/v1/agent/jobs/1001/artifacts")
     assert call.kwargs["json"]["artifact_type"] == ARTIFACT_TYPE_RUN_LOG_BUNDLE
-    assert call.kwargs["json"]["storage_uri"] == str(tars[0])
+    assert call.kwargs["json"]["storage_uri"] == str(archived_dirs[0])
     assert call.kwargs["headers"]["X-Agent-Secret"] == "sek"
 
 
 def test_skip_active_job(db, run_log_dir, nfs_dir):
+    """ADR-0025 2026-06-18: 活跃 Job 不再跳过，改为 cycle 快照（不 prune、不注册）。"""
     arch = _configure(db, run_log_dir, nfs_dir)
     _make_job_dir(run_log_dir, 2002)
-    db.save_active_job(2002, device_id=20, fencing_token="20:1")  # 活跃 → 不归档
+    db.save_active_job(2002, device_id=20, fencing_token="20:1")  # 活跃 → 快照
 
     n = arch.scan_once()
 
-    assert n == 0
-    assert (run_log_dir / "2002").exists()
-    assert db.is_job_archived(2002) is False
+    assert n == 0  # 快照不计入 archived 数
+    assert (run_log_dir / "2002").exists()  # 本地不 prune
+    assert db.is_job_archived(2002) is False  # 不注册 JobArtifact
+    # NFS 有快照目录
+    snapshots = list(nfs_dir.glob("snapshots/*/2002/cycle_0"))
+    assert len(snapshots) == 1
+    assert (snapshots[0] / "init_check.log").exists()
 
 
 def test_skip_not_aged(db, run_log_dir, nfs_dir):
@@ -130,23 +138,19 @@ def test_skip_not_aged(db, run_log_dir, nfs_dir):
 
 
 def test_reuse_existing_tar(db, run_log_dir, nfs_dir):
+    """ADR-0025 2026-06-18: 不再用 tar，改为目录树直复制。验证目录结构完整复制。"""
     arch = _configure(db, run_log_dir, nfs_dir)
     job_dir = _make_job_dir(run_log_dir, 4004)
-    # 预置 pipeline 已生成的 tar（内容标记，便于断言复用而非重打）
-    premade = run_log_dir / "4004.tar.gz"
-    with tarfile.open(str(premade), "w:gz") as tar:
-        marker = run_log_dir / "_marker.txt"
-        marker.write_text("PREMADE")
-        tar.add(str(marker), arcname="PREMADE_MARKER")
-    marker.unlink()
-    premade_bytes = premade.read_bytes()
+    # 在 job 目录内加子目录 + 多文件，验证目录树完整复制
+    (job_dir / "subdir").mkdir()
+    (job_dir / "subdir" / "nested.log").write_text("nested", encoding="utf-8")
 
     arch.scan_once()
 
-    nfs_tar = next(iter(nfs_dir.glob("archives/*/4004/4004.tar.gz")))
-    # 复用：NFS tar 字节与预置 tar 完全一致（未重新打包 job_dir）
-    assert nfs_tar.read_bytes() == premade_bytes
-    assert "PREMADE_MARKER" in tarfile.open(str(nfs_tar)).getnames()
+    archived = next(iter(nfs_dir.glob("archives/*/4004")))
+    assert (archived / "init_check.log").exists()
+    assert (archived / "subdir" / "nested.log").exists()
+    assert (archived / "subdir" / "nested.log").read_text() == "nested"
 
 
 def test_already_archived_is_idempotent(db, run_log_dir, nfs_dir):
@@ -197,10 +201,35 @@ def test_spill_oldest_prefers_oldest(db, run_log_dir, nfs_dir):
     assert (run_log_dir / "7003").exists()
 
 
+def test_scan_once_grace_zero_archives_immediately(db, run_log_dir, nfs_dir):
+    """archive_now control: grace_seconds=0 旁路 aging, 归档刚建且 age=0 的 job 目录;
+    但仍跳过 active job。"""
+    arch = _configure(db, run_log_dir, nfs_dir, grace=3600.0)
+    # 刚建(age≈0) → 默认 grace=3600 应跳过
+    jd_t = _make_job_dir(run_log_dir, 9001)
+    assert not arch.scan_once()  # 默认 grace → 跳过
+    assert not db.is_job_archived(9001)
+
+    # grace_seconds=0 → 过 age 判定 → 归档成功
+    n = arch.scan_once(grace_seconds=0.0)
+    assert n == 1
+    assert db.is_job_archived(9001) is True
+
+    # active job 即使在 grace=0 下也不归档，但做 cycle 快照
+    db.save_active_job(9002, device_id=42, fencing_token="t")
+    _make_job_dir(run_log_dir, 9002)
+    n2 = arch.scan_once(grace_seconds=0.0)
+    assert n2 == 0  # 快照不计入 archived
+    assert db.is_job_archived(9002) is False
+    assert (run_log_dir / "9002").exists()  # 本地不 prune
+    # NFS 有快照
+    assert len(list(nfs_dir.glob("snapshots/*/9002/cycle_0"))) == 1
+
+
 def test_archive_survives_nfs_copystat_eperm(db, run_log_dir, nfs_dir, monkeypatch):
     """NFS 回归：归档不应调用 copystat（源元数据 chmod/utime）——在 NFS/CIFS
     挂载上对他属文件会 PermissionError [Errno 1]。本用例把 shutil.copystat 打成
-    抛 EPERM：用 copy2 会归档失败，用 copyfile（仅数据）则不触发 → 归档成功。
+    抛 EPERM：copytree 用 copy_function=copyfile 不触发 copystat → 归档成功。
     复现 ADR-0025 真机 10.36 节点暴露的 log_archiver_archive_failed。
     """
     import shutil as _shutil
@@ -215,9 +244,10 @@ def test_archive_survives_nfs_copystat_eperm(db, run_log_dir, nfs_dir, monkeypat
 
     n = arch.scan_once()
 
-    assert n == 1, "copystat EPERM 不应让归档失败（应走 copyfile 不碰元数据）"
+    assert n == 1, "copystat EPERM 不应让归档失败（copytree 用 copyfile 不碰元数据）"
     assert db.is_job_archived(7777) is True
     assert arch.snapshot_metrics()["archive_failed"] == 0
-    tars = list(nfs_dir.glob("archives/*/7777/7777.tar.gz"))
-    assert len(tars) == 1
+    archived = list(nfs_dir.glob("archives/*/7777"))
+    assert len(archived) == 1
+    assert (archived[0] / "init_check.log").exists()
 

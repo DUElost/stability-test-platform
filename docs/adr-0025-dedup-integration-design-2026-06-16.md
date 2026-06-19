@@ -2,7 +2,7 @@
 
 > 日期：2026-06-16
 > 关联：[ADR-0025](./adr/ADR-0025-phase4-architecture-alignment.md) D4、[Sprint 2 实现计划](./adr-0025-sprint2-log-archiver-implementation-plan-2026-06-15.md) §5
-> 状态：**设计阶段冻结**（2026-06-16 用户决定「仅出设计」）——4 项落地形态已定稿。首接厂商：**Transsion + Tinno**（2026-06-16 细化）。架构细化为「薄 CLI 封装」模型，见 §7。本文档不触发实现代码。
+> 状态：**Accepted（实施中）** —— 4 项落地形态 2026-06-16 定稿；§5 三项运营选择 2026-06-18 追认建议默认值并立项开工（见 §5）。首接厂商：**Transsion + Tinno**（2026-06-16 细化）。架构细化为「薄 CLI 封装」模型，见 §7。
 > 外部工具：`F:\automation-toolkit\python-tools\stability_Start-Log-Scan`（扫描去重）、`stability_Jira-Automation`（按厂商批量建单）
 
 ---
@@ -129,23 +129,23 @@ STP_JIRA_VENDOR       transsion | tinno | moto
 
 ---
 
-## 4. 分阶段实施（确认后排期，待立项）
+## 4. 分阶段实施（2026-06-18 立项，按阶段推进）
 
-| 阶段 | 内容 | 依赖 |
-|------|------|------|
-| D-a | 扫描集成：dedup/scan + dedup/status 端点 + subprocess 调 start_log_scan(submit_jira=false) + Result_*.xls 存 JobArtifact + 终态自动/手动触发 | 工具解释器路径 env |
-| D-b | 提单集成：jira-upload + jira-result 端点 + subprocess 调厂商 stage1/2(dry_run 默认) | 选定厂商 + 凭据 env |
-| D-c | 前端：PlanRun 详情页去重报告区(扫描状态 + 下载 + 上传 + dry-run/结果) | D-a/D-b |
-| D-d | 测试 + 灰度：env 缺失降级 / dry-run / 单厂商端到端 | — |
+| 阶段 | 内容 | 依赖 | 状态（2026-06-18） |
+|------|------|------|------|
+| D-a | 扫描集成：dedup/scan + dedup/status 端点 + subprocess 调 start_log_scan(submit_jira=false) + Result_*.xls 存 JobArtifact + 终态自动/手动触发 | 工具解释器路径 env | **待补**（见 issue #20） |
+| D-b | 提单集成：jira-upload + jira-result 端点 + subprocess 调厂商 stage1/2(dry_run 默认) | 选定厂商 + 凭据 env | **已落地**（`backend/api/routes/dedup.py` + `RunConsole`，对应 §7 收敛后的 jira-run 端点） |
+| D-c | 前端：PlanRun 详情页去重报告区(扫描状态 + 下载 + 上传 + dry-run/结果) | D-a/D-b | **部分落地**（`JiraSubmitPanel` + `LiveConsole` 已实现提单面板；扫描状态/下载链待 D-a） |
+| D-d | 测试 + 灰度：env 缺失降级 / dry-run / 单厂商端到端 | — | **进行中**（纯函数/组件单测已落地；HTTP 集成测试待补，见 issue #24） |
 
 ---
 
-## 5. 风险与待用户拍板
+## 5. 风险与已拍板决定
 
-**待拍板（建议默认值已给）**：
-1. **首接厂商**：transsion / tinno / moto？（建议先接主用的一个）
-2. **stage2 默认**：`dry_run=true`（仅生成预览，运维再确认建单）—— 建议保持，符合人工闸口
-3. **扫描触发**：终态自动是否对所有 Plan 开，还是按 Plan 开关？（建议先全局 env 开关，默认开）
+**已拍板（2026-06-18 追认建议默认值，代码已按此落地）**：
+1. **首接厂商**：**transsion + tinno**（`dedup.py:30` `_VENDORS = {"transsion", "tinno"}`；moto 同构扩展，后续按需）
+2. **stage2 默认**：**`dry_run=true`**（`dedup.py:83` `dry_run: bool = Form(True)`；符合人工闸口第二道）
+3. **扫描触发**：**全局 env 开关默认开**（`STP_DEDUP_AUTO_SCAN`，D-a 落地时实现；当前 D-b 提单不涉及）
 
 **风险**：
 | 风险 | 缓解 |
@@ -160,7 +160,7 @@ STP_JIRA_VENDOR       transsion | tinno | moto
 
 ## 6. 对 Sprint 2 计划 §5.4 的收口
 
-§5.4 四项「仍待定」→ 本文档全部给出 recommended 决策：调用形态(subprocess+独立解释器)、上传接口契约(4 端点 + dry-run 闸口)、place/side(部署级 env)、与 jira-draft 关系(共存互补)。余「首接厂商 / stage2 默认 / 触发范围」3 个运营选择待用户拍板（默认值已给），不阻塞设计定稿。
+§5.4 四项「仍待定」→ 本文档全部给出 recommended 决策：调用形态(subprocess+独立解释器)、上传接口契约(4 端点 + dry-run 闸口)、place/side(部署级 env)、与 jira-draft 关系(共存互补)。「首接厂商 / stage2 默认 / 触发范围」3 个运营选择于 2026-06-18 追认建议默认值（见 §5），设计定稿闭环。
 
 ---
 
@@ -312,6 +312,6 @@ cancel/status/log(from_seq) 四通用操作；前端 <LiveConsole runId>(复用 
 - 前端：`<LiveConsole>`(复用 XTerminal) ~150 行 + 提单面板(上传+菜单+一键) ~180 行
 - 无架构级新增；难点收敛为 §8.3 三点（编码/节流/取消）+ Transsion cookie 注入
 
-> 设计基线至此收敛完毕。去重子阶段仍为**设计冻结**（不触发实现代码），立项即可照 §10 开工。
+> 设计基线至此收敛完毕。去重子阶段 2026-06-18 立项开工（状态：Accepted 实施中），D-b 已落地、D-a/D-c 待补、D-d 进行中，按 §4 推进。
 
 

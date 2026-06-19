@@ -25,6 +25,7 @@ def execute_pipeline_run(
     fencing_token: str = "",
     on_job_not_running_recovery: Optional[Callable[[int], None]] = None,
     watcher_capability: Optional[str] = None,
+    cycle_snapshot_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -54,6 +55,7 @@ def execute_pipeline_run(
         fencing_token=fencing_token,
         patrol_heartbeat_uploader=patrol_heartbeat,
         watcher_capability=watcher_capability,
+        cycle_snapshot_callback=cycle_snapshot_callback,
     )
 
     result = engine.execute(pipeline_def)

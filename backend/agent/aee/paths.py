@@ -32,7 +32,10 @@ def resolve_bugreport_subdir() -> str:
 
 
 def get_aee_nfs_root() -> Path:
-    """sonic_tinno root — priority: STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno."""
+    """sonic_tinno root — priority: STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno.
+
+    默认回退 15.4 中心日志服务器 CIFS 挂载点（对齐上一代工具 MonkeyAEEinfo_260523.py）。
+    """
     for env_key in ("STP_AEE_NFS_ROOT", "STP_WATCHER_NFS_BASE_DIR"):
         raw = (os.getenv(env_key) or "").strip()
         if raw:
@@ -40,7 +43,7 @@ def get_aee_nfs_root() -> Path:
     nfs_root = (os.getenv("STP_NFS_ROOT") or "").strip()
     if nfs_root:
         return Path(nfs_root) / "sonic_tinno"
-    return Path("/mnt/storage/test-platform/sonic_tinno")
+    return Path("/home/android/sonic_agent/logs/ftp_log/sonic_tinno")
 
 
 def resolve_device_output_dir(

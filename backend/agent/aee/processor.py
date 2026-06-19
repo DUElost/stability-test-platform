@@ -210,7 +210,7 @@ def process_device_logs(
             if cfg.export_mobilelog:
                 export_correlated_mobilelogs(
                     aee_ts_str=parsed["timestamp"],
-                    output_dir=base_output_dir,
+                    output_dir=local_target_dir,
                     remote_mobilelog_path=cfg.remote_mobilelog_path,
                     shell_fn=shell_fn,
                     pull_fn=pull_fn,
@@ -220,7 +220,7 @@ def process_device_logs(
                 export_bugreport_for_timestamp(
                     serial=serial,
                     timestamp_str=parsed["timestamp"],
-                    output_dir=base_output_dir,
+                    output_dir=local_target_dir,
                     adb_path=adb_path,
                     event_type=parsed.get("event_type"),
                     cooldown_seconds=cfg.bugreport_cooldown_seconds,

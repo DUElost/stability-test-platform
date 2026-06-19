@@ -25,6 +25,8 @@ from typing import Optional
 
 import pytest
 
+from sqlalchemy import select
+
 from backend.models.audit import AuditLog
 from backend.models.enums import HostStatus, JobStatus, PlanRunStatus
 from backend.models.host import Device, Host
@@ -1845,6 +1847,56 @@ class TestWatcherSummaryEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["data"]["watcher_capability"] is None
+
+    # ── ADR-0025 S2: 手动归档端点 ──────────────────────────────
+
+    def test_archive_now_triggers_online_host(
+        self, client, auth_headers, chain_setup, db_session, monkeypatch,
+    ):
+        """POST /plan-runs/{id}/archive -> 200, triggered_hosts 含该 run 的 ONLINE host。"""
+        import asyncio
+
+        cur_run = chain_setup["current_run"]
+        host_ids = {
+            row[0] for row in
+            db_session.execute(
+                select(JobInstance.host_id).where(
+                    JobInstance.plan_run_id == cur_run.id,
+                ),
+            ).fetchall()
+        }
+        assert host_ids, "chain_setup 应有关联 host"
+
+        # Mock emit 防止真 push 到离线 Agent 或没连的 SocketIO
+        called = []
+        async def _fake_emit(host_id, command, *, payload=None):
+            called.append((host_id, command, payload))
+
+        monkeypatch.setattr(
+            "backend.realtime.socketio_server.emit_agent_control",
+            _fake_emit,
+        )
+
+        resp = client.post(
+            f"/api/v1/plan-runs/{cur_run.id}/archive",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["plan_run_id"] == cur_run.id
+        assert len(data["triggered_hosts"]) >= 1
+        for h in data["triggered_hosts"]:
+            assert h in host_ids
+
+    def test_archive_now_404_for_nonexistent_run(
+        self, client, auth_headers,
+    ):
+        """不存在的 PlanRun -> 404。"""
+        resp = client.post(
+            "/api/v1/plan-runs/999999/archive",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 404
 
 
 class TestAeeReconciliationEndpoint:

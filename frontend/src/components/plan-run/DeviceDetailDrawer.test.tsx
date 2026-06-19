@@ -1,7 +1,26 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import DeviceDetailDrawer from './DeviceDetailDrawer';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { DeviceMatrixItem } from '@/utils/api/types';
+
+// Mock api.planRuns.listJobArtifacts（CrashArtifactsBlock 调用）
+vi.mock('@/utils/api', () => ({
+  api: {
+    planRuns: {
+      listJobArtifacts: vi.fn().mockResolvedValue([]),
+    },
+  },
+}));
+
+import DeviceDetailDrawer from './DeviceDetailDrawer';
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false, staleTime: 0 } },
+});
+const wrapper = ({ children }: { children: React.ReactNode }) => (
+  <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+);
+const render_ = (ui: React.ReactElement) => render(ui, { wrapper });
 
 function makeDevice(overrides: Partial<DeviceMatrixItem> = {}): DeviceMatrixItem {
   return {
@@ -34,11 +53,12 @@ const handlers = {
   onManualRetry: vi.fn(),
   onManualExit: vi.fn(),
   onOpenReport: vi.fn(),
+  runId: 1,
 };
 
 describe('DeviceDetailDrawer — status_reason 展示', () => {
   it('does NOT render 状态原因 row when status_reason is null', () => {
-    render(<DeviceDetailDrawer device={makeDevice()} {...handlers} />);
+    render_(<DeviceDetailDrawer device={makeDevice()} {...handlers} />);
     expect(screen.queryByText('状态原因')).toBeNull();
   });
 
@@ -49,7 +69,7 @@ describe('DeviceDetailDrawer — status_reason 展示', () => {
       current_stage: 'failed',
       status_reason: 'patrol_step_failed: monkey_launch',
     });
-    render(<DeviceDetailDrawer device={device} {...handlers} />);
+    render_(<DeviceDetailDrawer device={device} {...handlers} />);
     const label = screen.getByText('状态原因');
     expect(label).toBeInTheDocument();
     // label uses extraCls = text-red-600 font-semibold
@@ -67,7 +87,7 @@ describe('DeviceDetailDrawer — status_reason 展示', () => {
       current_stage: 'patrol',
       status_reason: 'awaiting_retry: backoff window',
     });
-    render(<DeviceDetailDrawer device={device} {...handlers} />);
+    render_(<DeviceDetailDrawer device={device} {...handlers} />);
     const label = screen.getByText('状态原因');
     expect(label).toBeInTheDocument();
     // non-failed → amber, not red
@@ -79,7 +99,7 @@ describe('DeviceDetailDrawer — status_reason 展示', () => {
 
 describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
   it('renders 已断开 status pill for unknown devices', () => {
-    render(
+    render_(
       <DeviceDetailDrawer
         device={makeDevice({ grace_remaining_seconds: 240, ui_status: 'unknown' })}
         {...handlers}
@@ -89,7 +109,7 @@ describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
   });
 
   it('renders Grace 剩余 when grace_remaining_seconds is set', () => {
-    render(
+    render_(
       <DeviceDetailDrawer
         device={makeDevice({ grace_remaining_seconds: 240, ui_status: 'unknown' })}
         {...handlers}
@@ -100,7 +120,7 @@ describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
   });
 
   it('renders 认领 SLA 剩余 when pending_claim_remaining_seconds is set', () => {
-    render(
+    render_(
       <DeviceDetailDrawer
         device={makeDevice({
           ui_status: 'pending',
@@ -115,7 +135,7 @@ describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
   });
 
   it('renders BUSY 来源 and 占用 Job when busy_reason is adb_excluded', () => {
-    render(
+    render_(
       <DeviceDetailDrawer
         device={makeDevice({
           busy_reason: 'adb_excluded',
@@ -133,7 +153,7 @@ describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
 
 describe('DeviceDetailDrawer — a11y / 键盘', () => {
   it('exposes dialog role + aria-modal', () => {
-    render(<DeviceDetailDrawer device={makeDevice()} {...handlers} />);
+    render_(<DeviceDetailDrawer device={makeDevice()} {...handlers} />);
     const drawer = screen.getByTestId('device-drawer');
     expect(drawer).toHaveAttribute('role', 'dialog');
     expect(drawer).toHaveAttribute('aria-modal', 'true');
@@ -141,7 +161,7 @@ describe('DeviceDetailDrawer — a11y / 键盘', () => {
 
   it('closes on Escape', () => {
     const onClose = vi.fn();
-    render(
+    render_(
       <DeviceDetailDrawer device={makeDevice()} {...handlers} onClose={onClose} />,
     );
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -150,7 +170,7 @@ describe('DeviceDetailDrawer — a11y / 键盘', () => {
 
   it('does not close on Escape while a confirm dialog is open', () => {
     const onClose = vi.fn();
-    render(
+    render_(
       <DeviceDetailDrawer device={makeDevice()} {...handlers} onClose={onClose} />,
     );
     // open the retry confirm dialog → confirmOpen guards the drawer's Esc handler

@@ -541,3 +541,17 @@ def schedule_emit(event: str, data: Dict[str, Any], namespace: str = "/dashboard
         return
     coro = sio.emit(event, data, namespace=namespace, room=room)
     asyncio.run_coroutine_threadsafe(coro, _main_loop)
+
+
+async def emit_agent_control(host_id: str, command: str, *, payload: Optional[Dict[str, Any]] = None) -> None:
+    """向指定 host 的 Agent 下发控制指令(经 SocketIO /agent control 事件)。
+
+    要求调用方在 async 上下文(后端端点/SAQ task)中执行——emit 直接 await 可达。
+    独立进程(如 sync 的 dispatch/recycler)请改用 asyncio 无关的 schedule_emit。
+    """
+    sio = get_sio()
+    await sio.emit("control", {
+        "command": command,
+        "payload": payload or {},
+    }, namespace="/agent", room=f"agent:{host_id}")
+    logger.info("emit_agent_control host_id=%s command=%s", host_id, command)

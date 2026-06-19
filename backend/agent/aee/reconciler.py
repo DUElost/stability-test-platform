@@ -29,7 +29,7 @@
     - tick_once() 暴露同步入口便于单元测试
 
 环境变量（与 §5 计划对齐）：
-    STP_WATCHER_AEE_RECONCILE_ENABLED          1/true 开启;默认 false
+    STP_WATCHER_AEE_RECONCILE_ENABLED          1/true 开启;默认 true(ADR-0018 2026-06-18 改)
     STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS 基线节奏,默认 180
     STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS 突发节奏,默认 60
     STP_WATCHER_AEE_RECONCILE_BURST_ROUNDS     突发轮数,默认 5
@@ -148,7 +148,7 @@ def is_reconciler_enabled(host_id: Optional[str] = None) -> bool:
     若 STP_WATCHER_AEE_RECONCILE_HOSTS 不为空,只放行命中其中的 host_id;
     否则按 STP_WATCHER_AEE_RECONCILE_ENABLED 判定。
     """
-    if not _env_truthy("STP_WATCHER_AEE_RECONCILE_ENABLED", default=False):
+    if not _env_truthy("STP_WATCHER_AEE_RECONCILE_ENABLED", default=True):
         return False
     hosts_raw = (os.environ.get("STP_WATCHER_AEE_RECONCILE_HOSTS", "") or "").strip()
     if not hosts_raw:

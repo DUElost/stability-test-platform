@@ -42,6 +42,7 @@ from backend.models.enums import JobStatus, LeaseStatus, LeaseType
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,6 @@ def abort_plan_run(
                     "reason": reason,
                     "empty_run": True,
                 }
-
     # In-precheck path: no jobs to release; we close the PlanRun directly.
     now_iso = datetime.now(timezone.utc).isoformat()
     if in_precheck:
@@ -223,6 +223,10 @@ def abort_plan_run(
         username=audit_username,
     )
     db.commit()
+
+    # ADR-0025 Sprint 4: abort 导致 PlanRun 终态时触发归档-2 scan + merge
+    if should_trigger_dedup(pr.status):
+        enqueue_dedup_terminal_sync(plan_run_id)
 
     # ── SocketIO push — align with _emit_job_status_invalidation pattern ──
     ts = datetime.now(timezone.utc).isoformat()

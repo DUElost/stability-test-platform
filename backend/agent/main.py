@@ -586,6 +586,18 @@ def main() -> None:
             if job_id:
                 _deregister_active_job(int(job_id))
                 logger.info("control_abort job_id=%s", job_id)
+        elif command == "archive_now":
+            # ADR-0025 S2: 手动立即归档(grace=0,仍跳过活跃 Job;daemon 线程跑,
+            # 避免拖住 SocketIO control 回调线程 —— 归档含 tar+CIFS+HTTP 注册)
+            arch = LogArchiver.instance()
+            if arch.is_configured():
+                threading.Thread(
+                    target=lambda: arch.scan_once(grace_seconds=0.0),
+                    name="archive-now", daemon=True,
+                ).start()
+                logger.info("control_archive_now triggered by backend — scanning with grace=0")
+            else:
+                logger.warning("control_archive_now_skipped: archiver not configured")
         else:
             logger.warning("unknown_control_command: %s", command)
 

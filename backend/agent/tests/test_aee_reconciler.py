@@ -123,10 +123,11 @@ def _stateful_pdl_factory(scripts: List[int]):
 # is_reconciler_enabled
 # ----------------------------------------------------------------------
 
-def test_is_reconciler_enabled_default_off(monkeypatch):
+def test_is_reconciler_enabled_default_on(monkeypatch):
+    """ADR-0018 2026-06-18: 默认开（default=True）。"""
     monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_ENABLED", raising=False)
     monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
-    assert is_reconciler_enabled("any") is False
+    assert is_reconciler_enabled("any") is True
 
 
 def test_is_reconciler_enabled_truthy(monkeypatch):
@@ -136,6 +137,13 @@ def test_is_reconciler_enabled_truthy(monkeypatch):
     monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "true")
     assert is_reconciler_enabled("any") is True
     monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "no")
+    assert is_reconciler_enabled("any") is False
+
+
+def test_is_reconciler_enabled_explicit_false(monkeypatch):
+    """显式关闭。"""
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "false")
+    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
     assert is_reconciler_enabled("any") is False
 
 

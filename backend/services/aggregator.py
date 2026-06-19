@@ -44,4 +44,8 @@ class PlanAggregator:
         applied = apply_plan_run_aggregation(run, jobs)
         if applied:
             await trigger_next_plan(run, db)
+            # ADR-0025 Sprint 4: PlanRun 终态统一触发归档-2 scan + merge
+            from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_async
+            if should_trigger_dedup(run.status):
+                await enqueue_dedup_terminal_async(run.id)
         return applied, run.status if applied else None

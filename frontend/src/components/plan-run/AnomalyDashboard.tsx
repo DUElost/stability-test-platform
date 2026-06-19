@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { AlertTriangle, X, ChevronRight } from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip } from 'recharts';
 import type {
   AeeDashboardSection,
+  CrashDetailEntry,
   PackageRanking,
   PackageSubtypeCount,
   SubtypeDistribution,
   WatcherSummary,
   WatcherTimeScope,
 } from '@/utils/api/types';
+import { api } from '@/utils/api';
 import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
 import SectionHeader from './SectionHeader';
 
 interface Props {
+  runId: number;
   data?: WatcherSummary;
   isLoading?: boolean;
   isError?: boolean;
@@ -495,6 +499,7 @@ function DonutChart({
 }
 
 export default function AnomalyDashboard({
+  runId,
   data,
   isLoading = false,
   isError = false,
@@ -503,6 +508,14 @@ export default function AnomalyDashboard({
 }: Props) {
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
   const [isPackageDrawerOpen, setPackageDrawerOpen] = useState(false);
+  const [crashDetailPackage, setCrashDetailPackage] = useState<string | null>(null);
+
+  const crashDetailsQ = useQuery({
+    queryKey: ['crash-details', runId, crashDetailPackage],
+    queryFn: () => api.planRuns.getCrashDetails(runId, crashDetailPackage || undefined),
+    enabled: !!crashDetailPackage,
+    staleTime: 30_000,
+  });
 
   const supportsOriginSplit = data?.supports_origin_split ?? false;
   const currentRun = data?.current_run ?? EMPTY_SECTION;
@@ -698,11 +711,34 @@ export default function AnomalyDashboard({
                             >
                               {row.affected_device_count} 台设备
                             </div>
+                            <button
+                              type="button"
+                              data-testid={`crash-detail-btn-${row.package_name}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCrashDetailPackage(
+                                  crashDetailPackage === row.package_name ? null : row.package_name,
+                                );
+                              }}
+                              className="mt-1 inline-flex items-center gap-0.5 text-[10px] font-medium text-sky-600 hover:text-sky-800"
+                            >
+                              查看 {row.total_count} 条详情
+                              <ChevronRight className="h-2.5 w-2.5" />
+                            </button>
                           </div>
                         </div>
                       </button>
                     );
                   })}
+
+                  {crashDetailPackage && (
+                    <CrashDetailPanel
+                      packageName={crashDetailPackage}
+                      details={crashDetailsQ.data}
+                      isLoading={crashDetailsQ.isLoading}
+                      onClose={() => setCrashDetailPackage(null)}
+                    />
+                  )}
 
                   {currentRun.package_ranking.length > 5 && (
                     <button
@@ -772,5 +808,55 @@ export default function AnomalyDashboard({
         onSelectPackage={setSelectedPackage}
       />
     </>
+  );
+}
+
+function CrashDetailPanel({
+  packageName,
+  details,
+  isLoading,
+  onClose,
+}: {
+  packageName: string;
+  details?: CrashDetailEntry[];
+  isLoading: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      data-testid="crash-detail-panel"
+      className="rounded-xl border border-sky-200 bg-sky-50/50 p-3"
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-xs font-semibold text-slate-700">
+          {packageName === 'unknown' ? '未知进程' : packageName} · Crash 详情
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      {isLoading ? (
+        <div className="py-3 text-center text-xs text-slate-400">加载中…</div>
+      ) : !details || details.length === 0 ? (
+        <div className="py-3 text-center text-xs text-slate-400">暂无详情数据</div>
+      ) : (
+        <div className="max-h-48 space-y-1 overflow-y-auto">
+          {details.map((d, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1 text-[11px]"
+            >
+              <span className="font-mono text-slate-500">{d.subtype}</span>
+              <span className="text-slate-400">{d.device_serial}</span>
+              <span className="text-slate-300">{d.detected_at}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

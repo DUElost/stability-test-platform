@@ -80,9 +80,41 @@ async def precheck_and_dispatch_task(ctx: dict, *, plan_run_id: int) -> None:
     await _impl(ctx, plan_run_id=plan_run_id)
 
 
+async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> None:
+    """ADR-0025 Sprint 4: 归档-2 各 agent 单独 scan（start_log_scan）。
+
+    前置：归档完成（check_archive_completed）。未完成 → 跳过（recycler 兜底）。
+    scan 完成后 on_complete 回调注册产物到 plan_run_artifact 表。
+    """
+    from backend.services.dedup_scan import run_scan_sync
+
+    logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
+    try:
+        await asyncio.to_thread(run_scan_sync, plan_run_id, is_final=is_final)
+    except Exception:
+        logger.exception("saq_scan_failed plan_run=%d", plan_run_id)
+        raise
+    logger.info("saq_scan_done plan_run=%d", plan_run_id)
+
+
+async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
+    """ADR-0025 Sprint 4: 归档-2 集中合并（-merge_files 各 agent _org.xls）。"""
+    from backend.services.dedup_scan import run_merge_sync
+
+    logger.info("saq_merge_start plan_run=%d", plan_run_id)
+    try:
+        await asyncio.to_thread(run_merge_sync, plan_run_id)
+    except Exception:
+        logger.exception("saq_merge_failed plan_run=%d", plan_run_id)
+        raise
+    logger.info("saq_merge_done plan_run=%d", plan_run_id)
+
+
 SAQ_FUNCTIONS = [
     post_completion_task,
     send_notification_task,
     publish_control_command,
     precheck_and_dispatch_task,
+    scan_task,
+    merge_task,
 ]

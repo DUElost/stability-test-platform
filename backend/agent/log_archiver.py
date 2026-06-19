@@ -1,31 +1,27 @@
 """LogArchiver — Agent 侧运行日志归档调度器（ADR-0025 Sprint 2 / D4）。
 
-职责：
-    - interval 后台线程周期扫描 `RUN_LOG_DIR/<job_id>/` 下**已完成**的 Job 日志目录
-    - 复用 pipeline 已生成的 `<job_id>.tar.gz`（不存在则补打）
-    - 同步复制到 NFS `{nfs_base}/archives/<date>/<job_id>/<job_id>.tar.gz` + manifest.json
-    - **同步**注册为 JobArtifact（artifact_type=run_log_bundle），确认成功后才 prune 本地
-    - 注册成功 + 标记 job_archive 后，删除本地 job 目录与本地 tar，约束本地盘
+职责（ADR-0025 2026-06-18 修订）：
+    - interval 后台线程周期扫描 `RUN_LOG_DIR/<job_id>/` 下 Job 日志目录
+    - 已完成 Job：目录树直复制到 NFS/15.4（非 tar）+ 注册 JobArtifact + 标记
+    - 活跃 Job（长跑）：patrol cycle 边界快照到 NFS snapshots/（不 prune、不注册）
+    - 归档与 prune 解耦：复制成功后不立即 prune，本地达阈值才 prune（15.4 已有副本）
+    - 监控本地磁盘使用量，达阈值后主动溢出旧 Job 日志（prune 已归档的）
 
 完成判定（关键正确性，见 ADR-0025 Sprint 2 计划 §4）：
     - job_id **不在** local_db.get_active_jobs()（Agent 权威活跃集合）
     - **且** 目录 mtime 早于 grace_seconds（覆盖 teardown 收尾 + outbox flush 窗口）
-    溢出（spill）场景放宽 grace（磁盘压力优先），但**永不**碰活跃 job。
+    活跃 Job 不走归档，走 cycle 快照（不 prune）。溢出场景仍不碰活跃 job。
 
 安全序（不丢数据）：
-    写 NFS（可验证）→ 同步注册成功 → mark_job_archived → 才 prune 本地
+    写 NFS/15.4（可验证）→ 同步注册成功 → mark_job_archived → prune 由阈值触发
     任一步失败：保留本地，下一轮重试。NFS 是耐久副本，注册元数据可重试。
-
-线程模型：仿 OutboxDrainer —— 进程级单例 + daemon interval 线程 + scan_once() 测试可直驱。
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import shutil
-import tarfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -169,21 +165,34 @@ class LogArchiver:
                 logger.exception("log_archiver_scan_unhandled")
             self._stop_evt.wait(self._interval)
 
-    def scan_once(self) -> int:
-        """扫描并归档所有已完成且过 grace 的 Job 目录。返回本轮归档数。"""
+    def scan_once(self, *, grace_seconds: float | None = None) -> int:
+        """扫描并归档所有已完成且过 grace 的 Job 目录；活跃 Job 做 cycle 快照。
+
+        ADR-0025 2026-06-18 修订：活跃 Job 不再跳过，改为调 snapshot_active_job
+        做目录树快照（不 prune）。已完成 Job 归档后不立即 prune（归档与 prune 解耦）。
+
+        grace_seconds=None 用配置默认(self._grace_seconds,默认 1800s);
+        grace_seconds=0 完全旁路 grace(手动立即归档,由 archive_now control 指令触发)。
+        """
         if not self._configured or self._db is None or not self._nfs_base_dir:
             return 0
+        effective_grace = self._grace_seconds if grace_seconds is None else grace_seconds
         archived = 0
         now = self._now()
         active_ids = self._active_job_ids()
         for job_dir, job_id in self._iter_job_dirs():
             if job_id in active_ids:
+                # 活跃 Job：cycle 快照（不 prune、不注册 JobArtifact）
+                try:
+                    self.snapshot_active_job(job_id, job_dir, cycle=0)
+                except Exception:
+                    logger.exception("log_archiver_snapshot_unhandled job_id=%d", job_id)
                 continue
             if self._db.is_job_archived(job_id):
                 # 已归档但本地残留（如上轮 prune 失败）→ 清理本地
                 self._prune_local(job_dir, job_id)
                 continue
-            if not self._is_aged(job_dir, now, self._grace_seconds):
+            if not self._is_aged(job_dir, now, effective_grace):
                 continue
             try:
                 if self.archive_one(job_id, job_dir):
@@ -216,6 +225,9 @@ class LogArchiver:
         for _mtime, job_id, job_dir in candidates[: max(1, int(max_jobs))]:
             try:
                 if self.archive_one(job_id, job_dir, spilled=True):
+                    # ADR-0025 2026-06-18: 归档与 prune 解耦，但 spill 的目的是释放本地空间
+                    # → spill 场景下归档成功后显式 prune
+                    self._prune_local(job_dir, job_id)
                     spilled += 1
             except Exception:
                 self._bump("_archive_failed")
@@ -259,47 +271,58 @@ class LogArchiver:
                 with self._inflight_lock:
                     self._inflight.discard(job_id)
 
-    def _do_archive(self, job_id: int, job_dir: Path, *, spilled: bool = False) -> str:
-        """归档单个 Job：打包/复用 tar → 复制 NFS → 同步注册 → 标记 → prune 本地。
+    @staticmethod
+    def _copytree_safe(src: str, dst: str) -> None:
+        """copytree 但对目录 copystat 失败安全忽略（NFS/CIFS EPERM）。
 
-        返回 NFS storage_uri。任一步失败抛异常（保留本地，下轮重试）。
+        shutil.copytree 即使 copy_function=copyfile，对目录自身仍调 copystat，
+        在 NFS/CIFS 挂载上会 PermissionError。改为手动遍历 + copyfile，
+        不碰任何元数据（与原 copyfile 策略一致）。
+        """
+        src_path = Path(src)
+        dst_path = Path(dst)
+        dst_path.mkdir(parents=True, exist_ok=True)
+        for entry in src_path.rglob("*"):
+            rel = entry.relative_to(src_path)
+            target = dst_path / rel
+            if entry.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif entry.is_file():
+                shutil.copyfile(str(entry), str(target))
+
+    def _do_archive(self, job_id: int, job_dir: Path, *, spilled: bool = False) -> str:
+        """归档单个 Job：目录树直复制到 NFS → 同步注册 → 标记（不立即 prune）。
+
+        ADR-0025 2026-06-18 修订：tar → 目录树直复制（_copytree_safe），
+        保持文件可独立访问/下载。归档与 prune 解耦——复制成功后不立即 prune，
+        由 spill_oldest / 本地盘阈值触发 prune（15.4 已有副本，prune 仅释放本地空间）。
+
+        返回 NFS storage_uri（目录路径）。任一步失败抛异常（保留本地，下轮重试）。
         由 archive_one 在持有 per-job claim 后调用。
         """
-        # 1. 复用 pipeline 生成的 tar；不存在则补打
-        local_tar = self._run_log_dir / f"{job_id}.tar.gz"
-        if not local_tar.exists():
-            self._make_tar(job_dir, local_tar)
-
-        # 2. sha256 + size
-        sha256, size_bytes = self._sha256_size(local_tar)
-
-        # 3. 复制到 NFS（路径在 nfs_base_dir 下 → 控制面 resolve_local_artifact_path 可解析）
+        # 1. 复制目录树到 NFS（_copytree_safe 避免 copystat EPERM）
         date = self._now().strftime("%Y-%m-%d")
         nfs_dir = Path(self._nfs_base_dir) / "archives" / date / str(job_id)
-        nfs_dir.mkdir(parents=True, exist_ok=True)
-        nfs_tar = nfs_dir / f"{job_id}.tar.gz"
-        # copyfile（仅数据）而非 copy2：copy2 末尾 copystat（chmod/utime）源元数据，
-        # 在 NFS/CIFS 挂载(root_squash/all_squash)上对他属文件会触发
-        # PermissionError [Errno 1] Operation not permitted → 归档恒失败、且反复
-        # 重试会拖住挂载，连带心跳 check_mounts() stat 同一挂载点而抖动。
-        # 归档自带 manifest.json 记 sha256/size，无需保留源文件元数据。
-        # （ADR-0025 真机验证 10.36 节点实测发现）
-        shutil.copyfile(str(local_tar), str(nfs_tar))
-        if not nfs_tar.exists() or nfs_tar.stat().st_size != size_bytes:
-            raise IOError(f"nfs copy verification failed: {nfs_tar}")
-        self._write_manifest(nfs_dir / "manifest.json", job_id, sha256, size_bytes, spilled)
-        storage_uri = str(nfs_tar)
+        if nfs_dir.exists():
+            shutil.rmtree(str(nfs_dir), ignore_errors=True)
+        self._copytree_safe(str(job_dir), str(nfs_dir))
+        if not nfs_dir.exists():
+            raise IOError(f"nfs copytree failed: {nfs_dir}")
 
-        # 4. 同步注册 JobArtifact —— 确认成功才 prune（不丢可下载性）
-        if not self._register_artifact(job_id, storage_uri, size_bytes, sha256):
+        # 2. 写 manifest（目录级，无单文件 sha256；统计目录大小）
+        size_bytes = self._dir_size(nfs_dir)
+        self._write_manifest(nfs_dir / "manifest.json", job_id, "", size_bytes, spilled)
+        storage_uri = str(nfs_dir)
+
+        # 3. 同步注册 JobArtifact —— 确认成功才标记（不丢可下载性）
+        if not self._register_artifact(job_id, storage_uri, size_bytes, ""):
             raise RuntimeError(f"artifact registration failed job_id={job_id}")
 
-        # 5. 标记 + prune 本地
+        # 4. 标记（不立即 prune —— ADR-0025 2026-06-18 归档与 prune 解耦）
         self._db.mark_job_archived(
-            job_id, nfs_uri=storage_uri, sha256=sha256,
+            job_id, nfs_uri=storage_uri, sha256="",
             size_bytes=size_bytes, spilled=spilled,
         )
-        self._prune_local(job_dir, job_id)
 
         self._bump("_archived_total")
         if spilled:
@@ -312,9 +335,42 @@ class LogArchiver:
         )
         return storage_uri
 
-    # ------------------------------------------------------------------
-    # 内部 helpers
-    # ------------------------------------------------------------------
+    def snapshot_active_job(self, job_id: int, job_dir: Path, *, cycle: int = 0) -> Optional[str]:
+        """活跃 Job cycle 边界快照（ADR-0025 2026-06-18 新增）。
+
+        在 patrol cycle 末尾（写入静默窗口）复制目录树到 NFS snapshots/，
+        **不 prune 本地**（Job 还在跑）、**不注册 JobArtifact**（避免表被快照刷爆）。
+        前置：cycle 边界触发时文件静态（step 函数已返回、子进程已收尾）。
+
+        返回 NFS storage_uri（快照目录路径）；失败返回 None。
+        """
+        if not self._configured or not self._nfs_base_dir:
+            return None
+        date = self._now().strftime("%Y-%m-%d")
+        snapshot_dir = Path(self._nfs_base_dir) / "snapshots" / date / str(job_id) / f"cycle_{cycle}"
+        if snapshot_dir.exists():
+            shutil.rmtree(str(snapshot_dir), ignore_errors=True)
+        try:
+            self._copytree_safe(str(job_dir), str(snapshot_dir))
+        except Exception:
+            logger.exception("log_archiver_snapshot_failed job_id=%d cycle=%d", job_id, cycle)
+            return None
+        # 兜底：copy 后 sleep 200ms 再 stat 对比 size，不一致标 partial
+        import time as _time
+        _time.sleep(0.2)
+        partial = False
+        try:
+            before = self._dir_size(snapshot_dir)
+            _time.sleep(0.1)
+            after = self._dir_size(snapshot_dir)
+            partial = before != after
+        except Exception:
+            partial = True
+        if partial:
+            (snapshot_dir / "PARTIAL").write_text("snapshot may be incomplete", encoding="utf-8")
+            logger.warning("log_archiver_snapshot_partial job_id=%d cycle=%d", job_id, cycle)
+        logger.info("log_archiver_snapshot job_id=%d cycle=%d uri=%s", job_id, cycle, str(snapshot_dir))
+        return str(snapshot_dir)
 
     def _iter_job_dirs(self):
         """yield (job_dir Path, job_id int)；只认目录名为整数的 job 目录。"""
@@ -345,20 +401,21 @@ class LogArchiver:
             return False
         return (now.timestamp() - mtime) >= grace_seconds
 
-    @staticmethod
-    def _make_tar(job_dir: Path, dest_tar: Path) -> None:
-        with tarfile.open(str(dest_tar), "w:gz") as tar:
-            tar.add(str(job_dir), arcname=job_dir.name)
+    def _prune_local(self, job_dir: Path, job_id: int) -> None:
+        """删除本地 job 目录（不再有 tar，ADR-0025 2026-06-18 改为目录树直复制）。"""
+        shutil.rmtree(str(job_dir), ignore_errors=True)
 
     @staticmethod
-    def _sha256_size(path: Path) -> tuple:
-        h = hashlib.sha256()
-        size = 0
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(65536), b""):
-                h.update(chunk)
-                size += len(chunk)
-        return h.hexdigest(), size
+    def _dir_size(path: Path) -> int:
+        """递归计算目录总大小（bytes）。"""
+        total = 0
+        for entry in path.rglob("*"):
+            if entry.is_file():
+                try:
+                    total += entry.stat().st_size
+                except OSError:
+                    pass
+        return total
 
     def _write_manifest(
         self, manifest_path: Path, job_id: int, sha256: str,
