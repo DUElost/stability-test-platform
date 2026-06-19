@@ -252,3 +252,73 @@ def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) ->
     if count:
         db.commit()
     return count
+
+
+# ── 终态触发 helpers（供 aggregator / aggregator_sync 调用）─────────────
+
+_DEDUP_AUTO_ENV = "STP_DEDUP_AUTO_SCAN"
+_PLAN_RUN_TERMINAL = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED"}
+
+
+def should_trigger_dedup(run_status: str) -> bool:
+    """是否应触发终态去重（env 开关 + PlanRun 终态）。"""
+    if os.getenv(_DEDUP_AUTO_ENV, "1") != "1":
+        return False
+    return run_status in _PLAN_RUN_TERMINAL
+
+
+async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
+    """异步 enqueue scan_task + merge_task（aggregator.py 调用）。"""
+    try:
+        from backend.tasks.saq_worker import get_queue
+        from saq import Job as SaqJob
+
+        queue = get_queue()
+        await queue.enqueue(
+            SaqJob(
+                function="scan_task",
+                kwargs={"plan_run_id": plan_run_id, "is_final": True},
+                key=f"scan:{plan_run_id}",
+                timeout=600,
+                retries=2,
+                retry_delay=10.0,
+                retry_backoff=True,
+            )
+        )
+        await queue.enqueue(
+            SaqJob(
+                function="merge_task",
+                kwargs={"plan_run_id": plan_run_id},
+                key=f"merge:{plan_run_id}",
+                timeout=300,
+                retries=2,
+                retry_delay=10.0,
+                retry_backoff=True,
+            )
+        )
+    except Exception as e:
+        logger.error("enqueue_dedup_terminal_async failed plan_run=%d: %s", plan_run_id, e)
+
+
+def enqueue_dedup_terminal_sync(plan_run_id: int) -> None:
+    """同步 enqueue scan_task + merge_task（aggregator_sync / abort 调用）。"""
+    try:
+        from backend.tasks.saq_worker import enqueue_sync
+
+        enqueue_sync(
+            "scan_task",
+            key=f"scan:{plan_run_id}",
+            timeout=600,
+            retries=2,
+            plan_run_id=plan_run_id,
+            is_final=True,
+        )
+        enqueue_sync(
+            "merge_task",
+            key=f"merge:{plan_run_id}",
+            timeout=300,
+            retries=2,
+            plan_run_id=plan_run_id,
+        )
+    except Exception as e:
+        logger.error("enqueue_dedup_terminal_sync failed plan_run=%d: %s", plan_run_id, e)
