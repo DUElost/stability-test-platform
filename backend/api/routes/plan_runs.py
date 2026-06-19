@@ -2112,6 +2112,68 @@ def _aggregate_watcher_capability(db: Session, *, job_ids: list[int]) -> Optiona
     return max(caps, key=lambda c: _CAPABILITY_SEVERITY.get(c, 0))
 
 
+# ── ADR-0025 Sprint 3: crash 详情端点（按事件目录组织）──────────────────────
+
+@router.get(
+    "/plan-runs/{run_id}/crash-details",
+    response_model=ApiResponse[list],
+)
+def get_plan_run_crash_details(
+    run_id: int,
+    package_name: Optional[str] = Query(None, description="按包名过滤"),
+    time_scope: Optional[str] = Query(None, pattern="^(all|15m|1h|6h|24h)$"),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """ADR-0025 Sprint 3 步骤 4: 按 package_name 返回 crash 事件详情列表。
+
+    复用 watcher-summary 的去重逻辑 (_load_deduped_aee_events)，
+    按 package_name 过滤后返回事件级详情（含 nfs_path / event_type / device_serial / job_id）。
+    """
+    pr = _require_plan_run(db, run_id)
+
+    job_rows = db.execute(
+        select(JobInstance.id).where(JobInstance.plan_run_id == run_id)
+    ).all()
+    job_ids = [r.id for r in job_rows]
+    if not job_ids:
+        return ok([])
+
+    now = datetime.now(timezone.utc)
+    resolved_scope, _resolved_minutes, cur_start, window_end, _prev_start = (
+        _resolve_watcher_summary_window(
+            pr,
+            now=now,
+            time_scope=time_scope,
+            window_minutes=None,
+        )
+    )
+
+    events = _load_deduped_aee_events(
+        db,
+        job_ids=job_ids,
+        cur_start=cur_start,
+        window_end=window_end,
+    )
+
+    result = []
+    for event in events:
+        pkg = event.get("package_name") or "unknown"
+        if package_name and pkg != package_name:
+            continue
+        result.append({
+            "package_name": pkg,
+            "subtype": event.get("subtype"),
+            "group": event.get("group"),
+            "device_serial": event.get("device_serial"),
+            "detected_at": _iso(event.get("detected_at")),
+            "entry_origin": event.get("entry_origin"),
+        })
+
+    result.sort(key=lambda e: e.get("detected_at") or "", reverse=True)
+    return ok(result)
+
+
 def _resolve_watcher_summary_window(
     pr: PlanRun,
     *,

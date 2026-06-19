@@ -659,6 +659,7 @@ export default function PlanRunDetailPage() {
             />
 
             <AnomalyDashboard
+              runId={id}
               data={watcherQ.data}
               isLoading={watcherQ.isLoading}
               isError={watcherQ.isError}

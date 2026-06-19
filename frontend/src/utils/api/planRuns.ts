@@ -18,6 +18,7 @@ import type {
   EventStage,
   EventSeverity,
   DeviceUiStatus,
+  CrashDetailEntry,
 } from './types';
 
 export interface ListPlanRunEventsParams {
@@ -119,6 +120,14 @@ export const planRuns = {
 
   artifactDownloadUrl: (runId: number, jobId: number, artifactId: number) =>
     `/api/v1/plan-runs/${runId}/jobs/${jobId}/artifacts/${artifactId}/download`,
+
+  // ADR-0025 Sprint 3: crash 详情端点
+  getCrashDetails: (runId: number, packageName?: string) =>
+    unwrapApiResponse<CrashDetailEntry[]>(
+      apiClient.get(`/plan-runs/${runId}/crash-details`, {
+        params: packageName ? { package_name: packageName } : undefined,
+      }),
+    ),
 
   // ADR-0025 Sprint 4: 归档-2/3 scan/merge/extract
   getDedupStatus: (runId: number) =>

@@ -958,6 +958,15 @@ export interface PackageRanking {
   subtype_breakdown: PackageSubtypeCount[];
 }
 
+export interface CrashDetailEntry {
+  package_name: string;
+  subtype: string;
+  group: string;
+  device_serial: string;
+  detected_at: string | null;
+  entry_origin?: string | null;
+}
+
 export interface AeeDashboardSection {
   total_events: number;
   affected_device_count: number;

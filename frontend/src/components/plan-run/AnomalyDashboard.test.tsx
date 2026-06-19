@@ -81,12 +81,12 @@ const makeData = (overrides: Record<string, unknown> = {}): WatcherSummary =>
 
 describe('AnomalyDashboard', () => {
   it('shows loading state', () => {
-    render(<AnomalyDashboard isLoading />);
+    render(<AnomalyDashboard runId={1} isLoading />);
     expect(screen.getByText('加载中…')).toBeTruthy();
   });
 
   it('shows error state', () => {
-    render(<AnomalyDashboard isError />);
+    render(<AnomalyDashboard runId={1} isError />);
     expect(screen.getByText('异常数据加载失败，请稍后重试')).toBeTruthy();
   });
 
