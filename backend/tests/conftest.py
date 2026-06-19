@@ -69,6 +69,7 @@ from backend.models import schedule as _schedule  # noqa: F401
 from backend.models import script as _script  # noqa: F401
 from backend.models import token_blacklist as _token_blacklist  # noqa: F401
 from backend.models import user as _user  # noqa: F401
+from backend.models.plan_run_artifact as _plan_run_artifact  # noqa: F401
 from backend.models.enums import DeviceStatus, HostStatus, JobStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance

@@ -939,6 +939,36 @@ async def complete_job(
             post_completion_enqueue_failed_total.inc()
             logger.error("post_completion enqueue failed for job %d: %s", job_id, e)
 
+        # ── ADR-0025 Sprint 4: PlanRun 终态自动触发归档-2 scan + merge ──
+        if run is not None and run.status in {
+            "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED",
+        } and os.getenv("STP_DEDUP_AUTO_SCAN", "1") == "1":
+            try:
+                await get_queue().enqueue(
+                    SaqJob(
+                        function="scan_task",
+                        kwargs={"plan_run_id": run.id, "is_final": True},
+                        key=f"scan:{run.id}",
+                        timeout=600,
+                        retries=2,
+                        retry_delay=10.0,
+                        retry_backoff=True,
+                    )
+                )
+                await get_queue().enqueue(
+                    SaqJob(
+                        function="merge_task",
+                        kwargs={"plan_run_id": run.id},
+                        key=f"merge:{run.id}",
+                        timeout=300,
+                        retries=2,
+                        retry_delay=10.0,
+                        retry_backoff=True,
+                    )
+                )
+            except Exception as e:
+                logger.error("scan/merge enqueue failed for plan_run %d: %s", run.id, e)
+
     return ok({"job_id": job_id, "status": job.status})
 
 

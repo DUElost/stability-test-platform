@@ -26,6 +26,7 @@ import DeviceOverview from '@/components/plan-run/DeviceOverview';
 import DeviceDetailDrawer from '@/components/plan-run/DeviceDetailDrawer';
 import DispatchGateCard from '@/components/plan-run/DispatchGateCard';
 import ArchiveStatusCard from '@/components/plan-run/ArchiveStatusCard';
+import DedupReportCard from '@/components/plan-run/DedupReportCard';
 
 import type { PrecheckState } from '@/utils/api/types';
 
@@ -637,6 +638,9 @@ export default function PlanRunDetailPage() {
               onArchiveNow={() => archiveNowMut.mutateAsync()}
               isLoading={watcherQ.isFetching}
             />
+
+            {/* ADR-0025 Sprint 4: 去重报告（scan/merge/extract） */}
+            <DedupReportCard runId={id} />
 
             <BusinessFlowStepper
               timeline={timelineQ.data}

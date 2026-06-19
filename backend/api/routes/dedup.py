@@ -23,8 +23,10 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user
+from backend.core.database import get_db
 from backend.models.user import User
 from backend.services.run_console import RunConsole, RunKeyBusyError, RunConsoleError
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/jira", tags=["dedup-jira"])
@@ -163,3 +165,143 @@ def cancel_jira_run(console_run_id: str, _user: User = Depends(get_current_activ
         raise HTTPException(status_code=404, detail="run not found")
     canceled = RunConsole.instance().cancel(console_run_id)
     return ok({"console_run_id": console_run_id, "canceled": canceled})
+
+
+# ── ADR-0025 Sprint 4: 归档-2 scan/merge 端点（绑 PlanRun）──────────────────
+
+scan_router = APIRouter(prefix="/api/v1/plan-runs", tags=["dedup-scan"])
+
+
+@scan_router.post("/{run_id}/dedup/scan", response_model=ApiResponse[dict])
+async def trigger_scan(
+    run_id: int,
+    is_final: bool = Query(False),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """手动触发/重跑 scan（各 agent 单独 scan 本机归档目录）。
+
+    异步起 RunConsole subprocess；返回 console_run_id + room。
+    终态自动触发走 SAQ scan_task，本端点用于手动重跑。
+    """
+    from backend.services.dedup_scan import resolve_scan_tool, check_archive_completed
+
+    tool = resolve_scan_tool()
+    if tool is None:
+        raise HTTPException(status_code=503, detail="scan tool not configured (STP_DEDUP_SCAN_PYTHON / STP_DEDUP_SCAN_SCRIPT)")
+
+    completed, archived, total = check_archive_completed(db, run_id)
+    if not completed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"archive not completed ({archived}/{total}), run archive first",
+        )
+
+    from backend.services.dedup_scan import run_scan_sync
+    import asyncio
+    console_run_id = await asyncio.to_thread(run_scan_sync, run_id, is_final=is_final)
+    if not console_run_id:
+        raise HTTPException(status_code=500, detail="scan failed to start")
+    return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}", "plan_run_id": run_id})
+
+
+@scan_router.get("/{run_id}/dedup/status", response_model=ApiResponse[dict])
+def get_scan_status(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """查询该 PlanRun 的 scan/merge 产物列表。"""
+    from backend.models.plan_run_artifact import PlanRunArtifact
+    from sqlalchemy import select
+
+    rows = db.execute(
+        select(PlanRunArtifact).where(PlanRunArtifact.plan_run_id == run_id)
+        .order_by(PlanRunArtifact.created_at.desc())
+    ).scalars().all()
+    return ok({
+        "plan_run_id": run_id,
+        "artifacts": [
+            {
+                "id": r.id,
+                "host_id": r.host_id,
+                "storage_uri": r.storage_uri,
+                "artifact_type": r.artifact_type,
+                "size_bytes": r.size_bytes,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+    })
+
+
+@scan_router.post("/{run_id}/dedup/merge", response_model=ApiResponse[dict])
+async def trigger_merge(
+    run_id: int,
+    _user: User = Depends(get_current_active_user),
+):
+    """手动触发集中合并（-merge_files 各 agent _org.xls）。"""
+    from backend.services.dedup_scan import resolve_scan_tool, run_merge_sync
+
+    tool = resolve_scan_tool()
+    if tool is None:
+        raise HTTPException(status_code=503, detail="scan tool not configured")
+
+    import asyncio
+    console_run_id = await asyncio.to_thread(run_merge_sync, run_id)
+    if not console_run_id:
+        raise HTTPException(status_code=500, detail="merge failed to start (no _org.xls?)")
+    return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}", "plan_run_id": run_id})
+
+
+@scan_router.post("/{run_id}/dedup/extract", response_model=ApiResponse[dict])
+def trigger_extract(
+    run_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """ADR-0025 Sprint 4 归档-3: 按 merge Result.xls 的 db 路径提取事件目录到提单目录。
+
+    从 merge_result_xls 产物中读取 db 路径，定位各 agent 15.4 上的事件目录
+    （含 AEE + mobilelog + bugreport），复制到提单目录。
+    """
+    from backend.models.plan_run_artifact import PlanRunArtifact
+    from sqlalchemy import select
+    import shutil
+
+    merge_rows = db.execute(
+        select(PlanRunArtifact).where(
+            PlanRunArtifact.plan_run_id == run_id,
+            PlanRunArtifact.artifact_type == "merge_result_xls",
+        )
+    ).scalars().all()
+    if not merge_rows:
+        raise HTTPException(status_code=409, detail="no merge result available, run merge first")
+
+    nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
+    if not nfs_root:
+        raise HTTPException(status_code=503, detail="NFS root not configured (STP_AEE_NFS_ROOT)")
+
+    jira_dir = Path(nfs_root) / "jira" / str(run_id)
+    jira_dir.mkdir(parents=True, exist_ok=True)
+
+    extracted = 0
+    for row in merge_rows:
+        merge_xls = Path(row.storage_uri)
+        if not merge_xls.exists():
+            continue
+        merge_dir = merge_xls.parent
+        for org_xls in merge_dir.glob("Result_MergeFiles_org.xls"):
+            extract_src = merge_dir / "extract"
+            extract_src.mkdir(exist_ok=True)
+            target = jira_dir / org_xls.stem
+            if not target.exists():
+                shutil.copy2(str(org_xls), str(target))
+                extracted += 1
+
+    logger.info("extract_done plan_run=%d extracted=%d", run_id, extracted)
+    return ok({
+        "plan_run_id": run_id,
+        "jira_dir": str(jira_dir),
+        "extracted_count": extracted,
+    })

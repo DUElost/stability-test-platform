@@ -27,7 +27,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,7 @@ class ConsoleRun:
     ended_at: Optional[str] = None
     seq: int = 0                        # 已 emit 的最后一行序号（单调）
     error: Optional[str] = None
+    on_complete: Optional[Callable[["ConsoleRun"], None]] = None
     _proc: Optional[subprocess.Popen] = None
     _log_path: Optional[Path] = None
     _thread: Optional[threading.Thread] = None
@@ -164,6 +165,7 @@ class RunConsole:
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
         label: str = "",
+        on_complete: Optional[Callable[["ConsoleRun"], None]] = None,
     ) -> str:
         """起一个受控 subprocess。返回 run_id。
 
@@ -189,6 +191,7 @@ class RunConsole:
             label=label or run_key,
             started_at=datetime.now(timezone.utc).isoformat(),
             _log_path=log_path,
+            on_complete=on_complete,
         )
         with self._lock:
             self._runs[run_id] = run
@@ -302,6 +305,11 @@ class RunConsole:
             "run_console_finished run_id=%s status=%s exit=%s seq=%d",
             run.run_id, status_snapshot["status"], returncode, status_snapshot["seq"],
         )
+        if run.on_complete is not None:
+            try:
+                run.on_complete(run)
+            except Exception:
+                logger.exception("run_console_on_complete_failed run_id=%s", run.run_id)
 
     def _release_key(self, run_key: str) -> None:
         with self._lock:

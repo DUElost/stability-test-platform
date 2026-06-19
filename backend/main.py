@@ -40,6 +40,7 @@ from backend.api.routes.resource_pools import router as resource_pools_router
 from backend.api.routes.plans import router as plans_router
 from backend.api.routes.plan_runs import router as plan_runs_router
 from backend.api.routes.dedup import router as dedup_router
+from backend.api.routes.dedup import scan_router as dedup_scan_router
 from backend.core.agent_secret import (
     AgentSecretNotConfiguredError,
     is_agent_secret_configured,
@@ -229,6 +230,7 @@ _fastapi_app.include_router(resource_pools_router)
 _fastapi_app.include_router(plans_router)
 _fastapi_app.include_router(plan_runs_router)
 _fastapi_app.include_router(dedup_router)
+_fastapi_app.include_router(dedup_scan_router)
 
 
 @_fastapi_app.get("/")

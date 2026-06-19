@@ -119,6 +119,27 @@ export const planRuns = {
 
   artifactDownloadUrl: (runId: number, jobId: number, artifactId: number) =>
     `/api/v1/plan-runs/${runId}/jobs/${jobId}/artifacts/${artifactId}/download`,
+
+  // ADR-0025 Sprint 4: 归档-2/3 scan/merge/extract
+  getDedupStatus: (runId: number) =>
+    unwrapApiResponse<{ plan_run_id: number; artifacts: unknown[] }>(
+      apiClient.get(`/plan-runs/${runId}/dedup/status`),
+    ),
+
+  triggerScan: (runId: number, isFinal: boolean = false) =>
+    unwrapApiResponse<{ console_run_id: string; room: string; plan_run_id: number }>(
+      apiClient.post(`/plan-runs/${runId}/dedup/scan`, null, { params: { is_final: isFinal } }),
+    ),
+
+  triggerMerge: (runId: number) =>
+    unwrapApiResponse<{ console_run_id: string; room: string; plan_run_id: number }>(
+      apiClient.post(`/plan-runs/${runId}/dedup/merge`, {}),
+    ),
+
+  triggerExtract: (runId: number) =>
+    unwrapApiResponse<{ plan_run_id: number; jira_dir: string; extracted_count: number }>(
+      apiClient.post(`/plan-runs/${runId}/dedup/extract`, {}),
+    ),
 };
 
 function cleanParams(p: object): Record<string, unknown> {
