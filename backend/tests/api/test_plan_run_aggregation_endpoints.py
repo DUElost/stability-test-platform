@@ -25,6 +25,8 @@ from typing import Optional
 
 import pytest
 
+from sqlalchemy import select
+
 from backend.models.audit import AuditLog
 from backend.models.enums import HostStatus, JobStatus, PlanRunStatus
 from backend.models.host import Device, Host

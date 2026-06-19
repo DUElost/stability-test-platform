@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AnomalyDashboard from './AnomalyDashboard';
 import type { WatcherSummary } from '@/utils/api/types';
 
@@ -13,6 +14,22 @@ vi.mock('@/components/charts/StableResponsiveContainer', () => ({
     className?: string;
   }) => <div className={className}>{children}</div>,
 }));
+
+vi.mock('@/utils/api', () => ({
+  api: {
+    planRuns: {
+      getCrashDetails: vi.fn().mockResolvedValue({ data: [], total: 0 }),
+    },
+  },
+}));
+
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: false, staleTime: 0 } },
+});
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+);
+const render_ = (ui: React.ReactElement) => render(ui, { wrapper });
 
 function makeSection(overrides: Record<string, unknown> = {}) {
   return {
@@ -81,17 +98,17 @@ const makeData = (overrides: Record<string, unknown> = {}): WatcherSummary =>
 
 describe('AnomalyDashboard', () => {
   it('shows loading state', () => {
-    render(<AnomalyDashboard runId={1} isLoading />);
+    render_(<AnomalyDashboard runId={1} isLoading />);
     expect(screen.getByText('加载中…')).toBeTruthy();
   });
 
   it('shows error state', () => {
-    render(<AnomalyDashboard runId={1} isError />);
+    render_(<AnomalyDashboard runId={1} isError />);
     expect(screen.getByText('异常数据加载失败，请稍后重试')).toBeTruthy();
   });
 
   it('renders the redesigned AEE dashboard without abnormal-rate messaging', () => {
-    render(<AnomalyDashboard {...({ data: makeData(), timeScope: 'all' } as any)} />);
+    render_(<AnomalyDashboard {...({ data: makeData(), timeScope: 'all' } as any)} />);
     expect(screen.getByText('本次新增 · 细分类型占比')).toBeTruthy();
     expect(screen.getByText('本次新增 · 包名榜')).toBeTruthy();
     expect(screen.getByText('运行前遗留')).toBeTruthy();
@@ -102,7 +119,7 @@ describe('AnomalyDashboard', () => {
 
   it('renders a Recharts donut chart with legend below and center total', () => {
     const longSubtype = 'Kernel API Dump Very Long Tail Stability Exception Name';
-    render(
+    render_(
       <AnomalyDashboard
         {...({
           data: makeData({
@@ -147,7 +164,7 @@ describe('AnomalyDashboard', () => {
   });
 
   it('shows compatibility hint when origin split is unavailable', () => {
-    render(
+    render_(
       <AnomalyDashboard
         {...({
           data: makeData({
@@ -173,7 +190,7 @@ describe('AnomalyDashboard', () => {
   });
 
   it('filters the pie-chart legend when a package row is selected', () => {
-    render(<AnomalyDashboard {...({ data: makeData(), timeScope: 'all' } as any)} />);
+    render_(<AnomalyDashboard {...({ data: makeData(), timeScope: 'all' } as any)} />);
     expect(screen.getAllByText('HWT').length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: /com\.runtime\.camera/i }));
     expect(screen.queryAllByText('HWT')).toHaveLength(0);
@@ -182,7 +199,7 @@ describe('AnomalyDashboard', () => {
 
   it('calls onTimeScopeChange when time-scope button is clicked', () => {
     const fn = vi.fn();
-    render(
+    render_(
       <AnomalyDashboard
         {...({
           data: makeData(),

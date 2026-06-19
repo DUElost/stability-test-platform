@@ -98,8 +98,8 @@ class TestArchivePlanRunLogsEndpoint:
     def test_mixed_hosts_online_and_offline(
         self, client, auth_headers, db_session, sample_plan_run, sample_plan, sample_device
     ):
-        online_host = Host(name="h-online", status=HostStatus.ONLINE.value)
-        offline_host = Host(name="h-offline", status=HostStatus.OFFLINE.value)
+        online_host = Host(id="h-online", hostname="h-online", name="h-online", status=HostStatus.ONLINE.value)
+        offline_host = Host(id="h-offline", hostname="h-offline", name="h-offline", status=HostStatus.OFFLINE.value)
         db_session.add_all([online_host, offline_host])
         db_session.commit()
 

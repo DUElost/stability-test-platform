@@ -238,9 +238,22 @@ def get_scan_status(
 @scan_router.post("/{run_id}/dedup/merge", response_model=ApiResponse[dict])
 async def trigger_merge(
     run_id: int,
+    db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
     """手动触发集中合并（-merge_files 各 agent _org.xls）。"""
+    from backend.models.plan_run_artifact import PlanRunArtifact
+    from sqlalchemy import select
+
+    scan_rows = db.execute(
+        select(PlanRunArtifact).where(
+            PlanRunArtifact.plan_run_id == run_id,
+            PlanRunArtifact.artifact_type == "scan_result_xls",
+        )
+    ).scalars().all()
+    if not scan_rows:
+        raise HTTPException(status_code=409, detail="no scan result available, run scan first")
+
     from backend.services.dedup_scan import resolve_scan_tool, run_merge_sync
 
     tool = resolve_scan_tool()

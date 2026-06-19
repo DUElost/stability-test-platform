@@ -19,6 +19,11 @@ const mocks = vi.hoisted(() => ({
   manualExitJob: vi.fn(),
   exportReport: vi.fn(),
   retryDispatch: vi.fn(),
+  getDedupStatus: vi.fn().mockResolvedValue({ plan_run_id: 12, artifacts: [] }),
+  listJobArtifacts: vi.fn().mockResolvedValue([]),
+  triggerExtract: vi.fn().mockResolvedValue({ plan_run_id: 12, extracted_count: 0 }),
+  triggerScan: vi.fn().mockResolvedValue({ console_run_id: 'fake', room: 'console:fake' }),
+  triggerMerge: vi.fn().mockResolvedValue({ console_run_id: 'fake', room: 'console:fake' }),
   socketCallback: { current: undefined as undefined | ((msg: any) => void) },
 }));
 
@@ -45,6 +50,11 @@ vi.mock('@/utils/api', () => ({
       manualExitJob: mocks.manualExitJob,
       exportReport: mocks.exportReport,
       retryDispatch: mocks.retryDispatch,
+      getDedupStatus: mocks.getDedupStatus,
+      listJobArtifacts: mocks.listJobArtifacts,
+      triggerExtract: mocks.triggerExtract,
+      triggerScan: mocks.triggerScan,
+      triggerMerge: mocks.triggerMerge,
     },
   },
 }));

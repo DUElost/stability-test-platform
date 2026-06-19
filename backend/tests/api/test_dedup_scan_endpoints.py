@@ -53,6 +53,7 @@ def mock_run_console(monkeypatch):
 def _set_scan_env(monkeypatch):
     monkeypatch.setenv("STP_DEDUP_SCAN_PYTHON", "/opt/fake/python")
     monkeypatch.setenv("STP_DEDUP_SCAN_SCRIPT", "/opt/fake/start_log_scan.py")
+    monkeypatch.setenv("STP_SCAN_ARCHIVES_DIR", "/tmp/fake_archives")
 
 
 class TestScanEndpoint:
@@ -76,6 +77,10 @@ class TestScanEndpoint:
         self, client, auth_headers, monkeypatch, sample_plan_run, mock_run_console
     ):
         _set_scan_env(monkeypatch)
+        monkeypatch.setattr(
+            "backend.services.dedup_scan.check_archive_completed",
+            lambda db, run_id: (True, 1, 1),
+        )
         resp = client.post(
             f"/api/v1/plan-runs/{sample_plan_run.id}/dedup/scan",
             headers=auth_headers,

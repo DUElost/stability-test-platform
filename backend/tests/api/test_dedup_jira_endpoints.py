@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.services.run_console import RunConsoleError, RunKeyBusyError
+from backend.services.run_console import RunConsole, RunConsoleError, RunKeyBusyError
 
 
 @pytest.fixture(autouse=True)
@@ -132,7 +132,7 @@ class TestStartJiraRun:
     def test_create_stage_success_with_dry_run_flag(
         self, client, auth_headers, monkeypatch, mock_run_console
     ):
-        _set_vendor_env(monkeypatch)
+        _set_vendor_env(monkeypatch, vendor="tinno")
         resp = client.post(
             "/api/v1/jira/runs",
             data={"vendor": "tinno", "stage": "create", "dry_run": "true"},
