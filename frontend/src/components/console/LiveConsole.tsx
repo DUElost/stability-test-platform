@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { XTerminal, type XTerminalHandle } from '@/components/log/XTerminal';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { dedup } from '@/utils/api/dedup';
+import { STATUS_BG_COLORS } from '@/design-system/colors';
 
 interface Props {
   consoleRunId: string;
@@ -17,10 +18,10 @@ interface Props {
 }
 
 const STATUS_TONE: Record<string, string> = {
-  RUNNING: 'bg-blue-100 text-blue-700',
-  SUCCESS: 'bg-green-100 text-green-700',
-  FAILED: 'bg-red-100 text-red-700',
-  CANCELED: 'bg-gray-200 text-gray-600',
+  RUNNING: STATUS_BG_COLORS.primary,
+  SUCCESS: STATUS_BG_COLORS.success,
+  FAILED: STATUS_BG_COLORS.error,
+  CANCELED: STATUS_BG_COLORS.muted,
 };
 
 export default function LiveConsole({ consoleRunId, height = '420px', onStatusChange }: Props) {

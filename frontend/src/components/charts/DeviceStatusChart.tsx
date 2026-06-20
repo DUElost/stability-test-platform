@@ -4,6 +4,7 @@ import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PieChart as PieChartIcon } from 'lucide-react';
+import { CHART_COLORS } from '@/design-system/colors';
 
 interface DeviceStatusData {
   name: string;
@@ -22,10 +23,10 @@ interface DeviceStatusChartProps {
 }
 
 const COLORS = {
-  idle: '#22c55e',    // green-500
-  testing: '#3b82f6', // blue-500
-  offline: '#6b7280', // gray-500
-  error: '#ef4444',   // red-500
+  idle: CHART_COLORS.success,
+  testing: CHART_COLORS.primary,
+  offline: CHART_COLORS.muted,
+  error: CHART_COLORS.error,
 };
 
 const LABELS = {

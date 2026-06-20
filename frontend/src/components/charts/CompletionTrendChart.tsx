@@ -4,6 +4,7 @@ import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TrendingUp } from 'lucide-react';
+import { CHART_COLORS } from '@/design-system/colors';
 
 export interface CompletionTrendPoint {
   date: string;
@@ -112,18 +113,18 @@ export function CompletionTrendChart({
               <Line
                 type="monotone"
                 dataKey="passed"
-                stroke="#22c55e"
+                stroke={CHART_COLORS.success}
                 strokeWidth={2}
-                dot={{ r: 3, fill: '#22c55e' }}
+                dot={{ r: 3, fill: CHART_COLORS.success }}
                 activeDot={{ r: 5 }}
                 animationDuration={800}
               />
               <Line
                 type="monotone"
                 dataKey="failed"
-                stroke="#ef4444"
+                stroke={CHART_COLORS.error}
                 strokeWidth={2}
-                dot={{ r: 3, fill: '#ef4444' }}
+                dot={{ r: 3, fill: CHART_COLORS.error }}
                 activeDot={{ r: 5 }}
                 animationDuration={800}
               />

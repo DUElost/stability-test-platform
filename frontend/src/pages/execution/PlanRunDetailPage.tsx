@@ -37,6 +37,7 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from '@/components/ui/alert-dialog';
+import { STATUS_TEXT_COLORS } from '@/design-system/colors';
 
 import type { PrecheckState } from '@/utils/api/types';
 
@@ -157,15 +158,15 @@ function PrecheckSummaryRow({
           <span
             className={`text-xs font-semibold ${
               phase === 'ready'
-                ? 'text-green-600'
+                ? STATUS_TEXT_COLORS.success
                 : phase === 'failed'
-                  ? 'text-red-600'
-                  : 'text-amber-600'
+                  ? STATUS_TEXT_COLORS.error
+                  : STATUS_TEXT_COLORS.warning
             }`}
           >
             {statusText}
           </span>
-          {gateFailed && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
+          {gateFailed && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />}
         </div>
         <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
           <span>
@@ -183,7 +184,7 @@ function PrecheckSummaryRow({
             <span key={hid} className="font-mono">{hid}</span>
           ))}
           {mixedWatcherFailure && (
-            <span className="basis-full text-red-600">
+            <span className={`basis-full ${STATUS_TEXT_COLORS.error}`}>
               {mixedWatcherFailure.message}
             </span>
           )}

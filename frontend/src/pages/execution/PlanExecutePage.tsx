@@ -60,6 +60,8 @@ import { Play, Smartphone, AlertCircle, Eye } from 'lucide-react';
 
 import { PageContainer, PageHeader } from '@/components/layout';
 
+import { STATUS_BG_COLORS } from '@/design-system/colors';
+
 
 
 
@@ -833,7 +835,7 @@ export default function PlanExecutePage() {
 
 
 
-              <div className="mt-2 flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">
+              <div className={`mt-2 flex items-center gap-2 text-sm ${STATUS_BG_COLORS.warning} px-3 py-2 rounded-lg`}>
 
 
 

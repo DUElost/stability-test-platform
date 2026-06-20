@@ -4,6 +4,7 @@ import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Activity } from 'lucide-react';
+import { CHART_COLORS } from '@/design-system/colors';
 
 export interface ActivityDataPoint {
   hour: string;
@@ -76,16 +77,16 @@ export function ActivityChart({
             <AreaChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
               <defs>
                 <linearGradient id="grad-started" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.05} />
+                  <stop offset="5%" stopColor={CHART_COLORS.primary} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={CHART_COLORS.primary} stopOpacity={0.05} />
                 </linearGradient>
                 <linearGradient id="grad-completed" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#22c55e" stopOpacity={0.05} />
+                  <stop offset="5%" stopColor={CHART_COLORS.success} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={CHART_COLORS.success} stopOpacity={0.05} />
                 </linearGradient>
                 <linearGradient id="grad-failed" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#ef4444" stopOpacity={0.05} />
+                  <stop offset="5%" stopColor={CHART_COLORS.error} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={CHART_COLORS.error} stopOpacity={0.05} />
                 </linearGradient>
               </defs>
               <XAxis
@@ -127,7 +128,7 @@ export function ActivityChart({
               <Area
                 type="monotone"
                 dataKey="started"
-                stroke="#3b82f6"
+                stroke={CHART_COLORS.primary}
                 strokeWidth={2}
                 fill="url(#grad-started)"
                 animationDuration={800}
@@ -135,7 +136,7 @@ export function ActivityChart({
               <Area
                 type="monotone"
                 dataKey="completed"
-                stroke="#22c55e"
+                stroke={CHART_COLORS.success}
                 strokeWidth={2}
                 fill="url(#grad-completed)"
                 animationDuration={800}
@@ -143,7 +144,7 @@ export function ActivityChart({
               <Area
                 type="monotone"
                 dataKey="failed"
-                stroke="#ef4444"
+                stroke={CHART_COLORS.error}
                 strokeWidth={2}
                 fill="url(#grad-failed)"
                 animationDuration={800}

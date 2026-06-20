@@ -38,6 +38,8 @@ import PlanCanvas from '@/components/pipeline/PlanCanvas';
 
 import PlanStepInspector from '@/components/pipeline/PlanStepInspector';
 
+import { STATUS_BG_COLORS } from '@/design-system/colors';
+
 
 
 const EMPTY_LIFECYCLE: PipelineDef = {
@@ -891,7 +893,7 @@ export default function PlanEditPage() {
 
             {isDirty ? (
 
-              <span className="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 border border-amber-200 text-amber-700">
+              <span className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_BG_COLORS.warning} border border-warning`}>
 
                 <AlertCircle className="w-3 h-3" /> 未保存
 
@@ -899,9 +901,9 @@ export default function PlanEditPage() {
 
             ) : (
 
-              <span className="ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 border border-emerald-200 text-emerald-700">
+              <span className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_BG_COLORS.success} border border-success`}>
 
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> 已保存
+                <span className="w-1.5 h-1.5 rounded-full bg-success" /> 已保存
 
               </span>
 

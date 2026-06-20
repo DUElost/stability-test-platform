@@ -325,7 +325,7 @@ export default function HostsPage() {
     return (
       <PageContainer>
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
-        <div className="p-4 bg-red-50 text-red-600 rounded-lg border border-red-100">
+        <div className="p-4 bg-destructive/10 text-destructive rounded-lg border border-destructive/20">
           加载主机失败，请检查后端服务连接。
         </div>
       </PageContainer>

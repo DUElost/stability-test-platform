@@ -20,6 +20,8 @@ import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendCha
 
 import { useNavigate, Link } from 'react-router-dom';
 
+import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
+
 
 
 export default function Dashboard() {
@@ -327,7 +329,7 @@ export default function Dashboard() {
 
                   {isLoading ? <Skeleton className="h-8 w-12" /> : (
 
-                    <span className="text-2xl font-bold text-blue-600">{stats.testing}</span>
+                    <span className={`text-2xl font-bold ${ENTITY_STATUS_COLORS.execution.running}`}>{stats.testing}</span>
 
                   )}
 
@@ -335,9 +337,9 @@ export default function Dashboard() {
 
               </div>
 
-              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
 
-                <Zap className="w-6 h-6 text-blue-600" />
+                <Zap className={`w-6 h-6 ${ENTITY_STATUS_COLORS.execution.running}`} />
 
               </div>
 
@@ -366,7 +368,7 @@ export default function Dashboard() {
 
                   {isLoading ? <Skeleton className="h-8 w-12" /> : (
 
-                    <span className={`text-2xl font-bold ${alertsCount > 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+                    <span className={`text-2xl font-bold ${alertsCount > 0 ? ENTITY_STATUS_COLORS.alert.high : ENTITY_STATUS_COLORS.alert.none}`}>
 
                       {alertsCount > 0 ? alertsCount : '无'}
 
@@ -378,9 +380,9 @@ export default function Dashboard() {
 
               </div>
 
-              <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${alertsCount > 0 ? 'bg-red-50' : 'bg-emerald-50'}`}>
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${alertsCount > 0 ? 'bg-destructive/10' : 'bg-success/10'}`}>
 
-                <AlertCircle className={`w-6 h-6 ${alertsCount > 0 ? 'text-red-600' : 'text-emerald-600'}`} />
+                <AlertCircle className={`w-6 h-6 ${alertsCount > 0 ? ENTITY_STATUS_COLORS.alert.high : ENTITY_STATUS_COLORS.alert.none}`} />
 
               </div>
 
@@ -403,7 +405,7 @@ export default function Dashboard() {
 
               <div className="flex items-center gap-2">
 
-                <AlertCircle className="w-5 h-5 text-red-500" />
+                <AlertCircle className={`w-5 h-5 ${ENTITY_STATUS_COLORS.alert.high}`} />
 
                 <span className="text-sm font-medium text-gray-700">告警详情</span>
 
@@ -413,9 +415,9 @@ export default function Dashboard() {
 
                 {alerts.error > 0 && (
 
-                  <span className="flex items-center gap-1 text-red-600">
+                  <span className={`flex items-center gap-1 ${ENTITY_STATUS_COLORS.alert.high}`}>
 
-                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                    <span className="w-2 h-2 rounded-full bg-destructive" />
 
                     错误: {alerts.error}
 
@@ -425,9 +427,9 @@ export default function Dashboard() {
 
                 {alerts.low_battery > 0 && (
 
-                  <span className="flex items-center gap-1 text-amber-600">
+                  <span className={`flex items-center gap-1 ${ENTITY_STATUS_COLORS.alert.medium}`}>
 
-                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                    <span className="w-2 h-2 rounded-full bg-warning" />
 
                     低电量: {alerts.low_battery}
 
@@ -437,9 +439,9 @@ export default function Dashboard() {
 
                 {alerts.high_temp > 0 && (
 
-                  <span className="flex items-center gap-1 text-orange-600">
+                  <span className={`flex items-center gap-1 ${ENTITY_STATUS_COLORS.alert.medium}`}>
 
-                    <span className="w-2 h-2 rounded-full bg-orange-500" />
+                    <span className="w-2 h-2 rounded-full bg-warning" />
 
                     高温: {alerts.high_temp}
 
@@ -561,7 +563,7 @@ export default function Dashboard() {
 
             </div>
 
-            <span className="text-xl font-bold text-emerald-600">
+            <span className={`text-xl font-bold ${ENTITY_STATUS_COLORS.host.online}`}>
 
               {isLoading ? <Skeleton className="h-7 w-16" /> : `${(hostStats.online_rate * 100).toFixed(1)}%`}
 

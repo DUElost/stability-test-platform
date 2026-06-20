@@ -1,10 +1,11 @@
 import React, { ReactNode } from 'react';
+import { STATUS_TEXT_COLORS } from '@/design-system/colors';
 
 export interface StatItem {
   label: string;
   value: string | number;
   suffix?: string;
-  color?: 'default' | 'green' | 'blue' | 'red' | 'amber' | 'slate';
+  color?: 'default' | 'success' | 'primary' | 'error' | 'warning' | 'muted';
   icon?: ReactNode;
 }
 
@@ -22,12 +23,12 @@ export const StatsGrid: React.FC<StatsGridProps> = ({
   columns = 4,
 }) => {
   const colorClasses: Record<string, { bg: string; text: string }> = {
-    default: { bg: 'bg-white', text: 'text-slate-900' },
-    green: { bg: 'bg-white', text: 'text-green-600' },
-    blue: { bg: 'bg-white', text: 'text-blue-600' },
-    red: { bg: 'bg-white', text: 'text-red-600' },
-    amber: { bg: 'bg-white', text: 'text-amber-500' },
-    slate: { bg: 'bg-white', text: 'text-slate-400' },
+    default: { bg: 'bg-white', text: STATUS_TEXT_COLORS.default },
+    success: { bg: 'bg-white', text: STATUS_TEXT_COLORS.success },
+    primary: { bg: 'bg-white', text: STATUS_TEXT_COLORS.primary },
+    error: { bg: 'bg-white', text: STATUS_TEXT_COLORS.error },
+    warning: { bg: 'bg-white', text: STATUS_TEXT_COLORS.warning },
+    muted: { bg: 'bg-white', text: STATUS_TEXT_COLORS.muted },
   };
 
   const gridCols = {

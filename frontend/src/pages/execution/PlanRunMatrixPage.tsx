@@ -11,15 +11,16 @@ import {
   Clock, Activity,
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { CHART_COLORS, STATUS_TEXT_COLORS } from '@/design-system/colors';
 
 const TERMINAL_STATUSES = ['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'DEGRADED'];
 
 const JOB_STATUS_COLORS: Record<string, string> = {
   PENDING: 'bg-gray-200 border-gray-300',
-  RUNNING: 'bg-blue-500 border-blue-600',
-  COMPLETED: 'bg-green-500 border-green-600',
-  FAILED: 'bg-red-500 border-red-600',
-  ABORTED: 'bg-yellow-500 border-yellow-600',
+  RUNNING: `bg-[${CHART_COLORS.primary}] border-[${CHART_COLORS.primary}]`,
+  COMPLETED: `bg-[${CHART_COLORS.success}] border-[${CHART_COLORS.success}]`,
+  FAILED: `bg-[${CHART_COLORS.error}] border-[${CHART_COLORS.error}]`,
+  ABORTED: `bg-[${CHART_COLORS.warning}] border-[${CHART_COLORS.warning}]`,
   UNKNOWN: 'bg-purple-500 border-purple-600',
 };
 
@@ -102,11 +103,11 @@ export default function PlanRunMatrixPage() {
       {/* Stats */}
       <div className="grid grid-cols-5 gap-3">
         {[
-          { label: '完成', key: 'COMPLETED', color: 'text-green-600', icon: CheckCircle },
-          { label: '失败', key: 'FAILED', color: 'text-red-600', icon: XCircle },
-          { label: '未知', key: 'UNKNOWN', color: 'text-purple-600', icon: AlertTriangle },
-          { label: '运行中', key: 'RUNNING', color: 'text-blue-600', icon: Play },
-          { label: '等待', key: 'PENDING', color: 'text-gray-500', icon: Clock },
+          { label: '完成', key: 'COMPLETED', color: STATUS_TEXT_COLORS.success, icon: CheckCircle },
+          { label: '失败', key: 'FAILED', color: STATUS_TEXT_COLORS.error, icon: XCircle },
+          { label: '未知', key: 'UNKNOWN', color: STATUS_TEXT_COLORS.warning, icon: AlertTriangle },
+          { label: '运行中', key: 'RUNNING', color: STATUS_TEXT_COLORS.primary, icon: Play },
+          { label: '等待', key: 'PENDING', color: STATUS_TEXT_COLORS.muted, icon: Clock },
         ].map(s => (
           <Card key={s.key}>
             <CardContent className="py-3 text-center">

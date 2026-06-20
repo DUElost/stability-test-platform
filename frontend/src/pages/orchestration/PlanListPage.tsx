@@ -42,6 +42,8 @@ import { Plus, Edit, Trash2, Search, FileText, Play } from 'lucide-react';
 
 import { PageContainer, PageHeader } from '@/components/layout';
 
+import { Badge } from '@/components/ui/badge';
+
 
 
 
@@ -477,7 +479,7 @@ export default function PlanListPage() {
 
 
 
-                      <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">链式</span>
+                      <Badge variant="info" className="text-xs px-1.5 py-0.5">链式</Badge>
 
 
 

@@ -4,6 +4,7 @@ import { StableResponsiveContainer } from './StableResponsiveContainer';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Server } from 'lucide-react';
+import { CHART_COLORS } from '@/design-system/colors';
 
 interface HostResourceData {
   name: string;
@@ -33,9 +34,9 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
   }, [hosts]);
 
   const getBarColor = (value: number) => {
-    if (value >= 80) return '#ef4444'; // red
-    if (value >= 60) return '#f59e0b'; // amber
-    return '#3b82f6'; // blue
+    if (value >= 80) return CHART_COLORS.error;
+    if (value >= 60) return CHART_COLORS.warning;
+    return CHART_COLORS.primary;
   };
 
   if (isLoading) {

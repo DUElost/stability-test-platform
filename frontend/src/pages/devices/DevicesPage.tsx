@@ -89,7 +89,7 @@ export default function DevicesPage() {
     return (
       <PageContainer>
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
-        <div className="p-4 bg-red-50 text-red-600 rounded-lg border border-red-100">
+        <div className="p-4 bg-destructive/10 text-destructive rounded-lg border border-destructive/20">
           加载设备失败，请检查后端服务连接。
         </div>
       </PageContainer>

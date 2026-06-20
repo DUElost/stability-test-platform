@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X, Server, Loader2 } from 'lucide-react';
+import { STATUS_TEXT_COLORS } from '@/design-system/colors';
 
 interface AddHostModalProps {
   isOpen: boolean;
@@ -67,7 +68,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
           <div className="flex items-center gap-2">
-            <Server className="text-blue-600" size={20} />
+            <Server className={STATUS_TEXT_COLORS.primary} size={20} />
             <h2 className="text-lg font-semibold text-slate-900">Add New Host</h2>
           </div>
           <button
@@ -84,7 +85,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
           {/* Name */}
           <div>
             <label htmlFor="host-name" className="block text-sm font-medium text-slate-700 mb-1">
-              Host Name <span className="text-red-500">*</span>
+              Host Name <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <input
               id="host-name"
@@ -97,13 +98,13 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
               }`}
               disabled={isSubmitting}
             />
-            {errors.name && <p className="mt-1 text-sm text-red-600">{errors.name}</p>}
+            {errors.name && <p className={`mt-1 text-sm ${STATUS_TEXT_COLORS.error}`}>{errors.name}</p>}
           </div>
 
           {/* IP Address */}
           <div>
             <label htmlFor="host-ip" className="block text-sm font-medium text-slate-700 mb-1">
-              IP Address <span className="text-red-500">*</span>
+              IP Address <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <input
               id="host-ip"
@@ -116,7 +117,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
               }`}
               disabled={isSubmitting}
             />
-            {errors.ip && <p className="mt-1 text-sm text-red-600">{errors.ip}</p>}
+            {errors.ip && <p className={`mt-1 text-sm ${STATUS_TEXT_COLORS.error}`}>{errors.ip}</p>}
           </div>
 
           {/* SSH Port */}
@@ -136,7 +137,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
               }`}
               disabled={isSubmitting}
             />
-            {errors.ssh_port && <p className="mt-1 text-sm text-red-600">{errors.ssh_port}</p>}
+            {errors.ssh_port && <p className={`mt-1 text-sm ${STATUS_TEXT_COLORS.error}`}>{errors.ssh_port}</p>}
           </div>
 
           {/* SSH User */}

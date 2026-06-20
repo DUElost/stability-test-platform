@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   Zap,
 } from 'lucide-react';
+import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
 
@@ -122,14 +123,14 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           onClick={() => setStatusFilter('idle')}
           className={cn(
             'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'idle' ? 'border-emerald-400 shadow-sm' : 'border-emerald-200'
+            statusFilter === 'idle' ? 'border-success shadow-sm' : 'border-success/20'
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center">
-            <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+          <div className="w-10 h-10 rounded-lg bg-success/10 flex items-center justify-center">
+            <CheckCircle2 className={`w-5 h-5 ${ENTITY_STATUS_COLORS.device.idle}`} />
           </div>
           <div>
-            <div className="text-xl font-semibold text-emerald-600">{stats.idle}</div>
+            <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.idle}`}>{stats.idle}</div>
             <div className="text-xs text-gray-500">空闲</div>
           </div>
         </button>
@@ -137,14 +138,14 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           onClick={() => setStatusFilter('testing')}
           className={cn(
             'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'testing' ? 'border-blue-400 shadow-sm' : 'border-blue-200'
+            statusFilter === 'testing' ? 'border-primary shadow-sm' : 'border-primary/20'
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
-            <Zap className="w-5 h-5 text-blue-600" />
+          <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+            <Zap className={`w-5 h-5 ${ENTITY_STATUS_COLORS.device.testing}`} />
           </div>
           <div>
-            <div className="text-xl font-semibold text-blue-600">{stats.testing}</div>
+            <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.testing}`}>{stats.testing}</div>
             <div className="text-xs text-gray-500">测试中</div>
           </div>
         </button>
@@ -167,14 +168,14 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           onClick={() => setStatusFilter('error')}
           className={cn(
             'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'error' ? 'border-red-400 shadow-sm' : 'border-red-200'
+            statusFilter === 'error' ? 'border-destructive shadow-sm' : 'border-destructive/20'
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-red-50 flex items-center justify-center">
-            <AlertTriangle className="w-5 h-5 text-red-600" />
+          <div className="w-10 h-10 rounded-lg bg-destructive/10 flex items-center justify-center">
+            <AlertTriangle className={`w-5 h-5 ${ENTITY_STATUS_COLORS.device.error}`} />
           </div>
           <div>
-            <div className="text-xl font-semibold text-red-600">{stats.error}</div>
+            <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.error}`}>{stats.error}</div>
             <div className="text-xs text-gray-500">错误</div>
           </div>
         </button>
