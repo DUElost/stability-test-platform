@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { api, type PlanJobInstance } from '@/utils/api';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import {
@@ -26,13 +27,32 @@ const JOB_STATUS_COLORS: Record<string, string> = {
 
 function JobBlock({ job, onClick }: { job: PlanJobInstance; onClick: () => void }) {
   const color = JOB_STATUS_COLORS[job.status] || 'bg-gray-300 border-gray-400';
+  const tooltipContent = (
+    <div className="space-y-1">
+      <p className="font-medium">Job #{job.id}</p>
+      <p>设备: {job.device_serial || `Device#${job.device_id}`}</p>
+      <p>状态: {job.status}</p>
+      {job.started_at && <p className="text-xs opacity-75">开始: {new Date(job.started_at).toLocaleString()}</p>}
+    </div>
+  );
+
   return (
-    <button onClick={onClick}
-      className={`w-full aspect-square rounded-lg border-2 flex flex-col items-center justify-center text-white text-xs font-medium transition-transform hover:scale-105 ${color}`}
-      title={`Job #${job.id} ${job.status} — ${job.device_serial || 'Device#' + job.device_id}`}>
-      <span>{job.device_serial?.slice(-4) || `D${job.device_id}`}</span>
-      <span className="text-[10px] opacity-75">{job.status}</span>
-    </button>
+    <TooltipProvider>
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <button
+            onClick={onClick}
+            className={`min-w-[40px] min-h-[40px] w-full aspect-square rounded-lg border-2 flex flex-col items-center justify-center text-white text-xs font-medium transition-transform hover:scale-105 ${color}`}
+          >
+            <span>{job.device_serial?.slice(-4) || `D${job.device_id}`}</span>
+            <span className="text-[10px] opacity-75">{job.status}</span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-xs">
+          {tooltipContent}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 

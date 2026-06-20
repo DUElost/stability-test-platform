@@ -476,7 +476,7 @@ export default function PlanListPage() {
 
 
 
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1 space-y-3">
 
 
 
@@ -508,7 +508,7 @@ export default function PlanListPage() {
 
 
 
-                    <p className="text-sm text-gray-500 mt-0.5 truncate">{plan.description}</p>
+                    <p className="text-sm text-gray-500 truncate">{plan.description}</p>
 
 
 
@@ -516,7 +516,7 @@ export default function PlanListPage() {
 
 
 
-                  <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-400">
+                  <div className="flex items-center gap-3 text-xs text-gray-400 pt-1">
 
 
 
