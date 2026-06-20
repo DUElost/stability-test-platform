@@ -423,15 +423,28 @@ export default function PlanListPage() {
 
 
 
-          <CardContent className="py-12 text-center text-gray-400">
+          <CardContent className="py-16 text-center">
 
 
 
-            <FileText className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+            <FileText className="w-16 h-16 mx-auto mb-4 text-gray-300" />
 
 
 
-            <p className="text-sm">{search ? '没有匹配的 Plan' : '暂无 Plan，点击"新建 Plan"开始'}</p>
+            {search ? (
+              <>
+                <p className="text-base font-medium text-gray-700 mb-2">没有匹配的 Plan</p>
+                <p className="text-sm text-gray-500">尝试使用其他关键词搜索</p>
+              </>
+            ) : (
+              <>
+                <p className="text-base font-medium text-gray-700 mb-2">还没有 Plan</p>
+                <p className="text-sm text-gray-500 mb-6">创建您的第一个测试计划</p>
+                <Button onClick={() => navigate('/orchestration/workflows/new')}>
+                  <Plus className="w-4 h-4 mr-2" /> 新建 Plan
+                </Button>
+              </>
+            )}
 
 
 

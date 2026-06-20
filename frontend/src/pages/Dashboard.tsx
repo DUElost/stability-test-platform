@@ -198,7 +198,7 @@ export default function Dashboard() {
 
         {/* Stats Grid */}
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
 
           {/* 主机统计 */}
 
@@ -294,9 +294,9 @@ export default function Dashboard() {
 
               </div>
 
-              <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center">
+              <div className="w-12 h-12 rounded-xl bg-success/10 flex items-center justify-center">
 
-                <Smartphone className="w-6 h-6 text-emerald-600" />
+                <Smartphone className={`w-6 h-6 ${ENTITY_STATUS_COLORS.device.idle}`} />
 
               </div>
 

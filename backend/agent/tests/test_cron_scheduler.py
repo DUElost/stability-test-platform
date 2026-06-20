@@ -280,6 +280,38 @@ class TestRunRetentionCleanup:
 
         db.commit.assert_called_once()
 
+    def test_deletes_job_artifacts_before_job_instances(self):
+        from backend.models.device_lease import DeviceLease
+        from backend.models.job import JobArtifact, JobInstance, StepTrace
+        from backend.models.plan_run import PlanRun
+        from backend.models.resource_pool import ResourceAllocation
+        from backend.scheduler.cron_scheduler import run_retention_cleanup
+
+        old_run = MagicMock(id=99, status="SUCCESS")
+        db = MagicMock()
+
+        queries = {
+            PlanRun: FakeQuery(items=[old_run]),
+            StepTrace: FakeQuery(),
+            DeviceLease: FakeQuery(),
+            ResourceAllocation: FakeQuery(),
+            JobArtifact: FakeQuery(),
+            JobInstance: FakeQuery(),
+        }
+
+        def query_side_effect(model):
+            return queries[model]
+
+        db.query.side_effect = query_side_effect
+
+        with patch("backend.scheduler.cron_scheduler.SessionLocal",
+                   return_value=self._patched_session(db)):
+            run_retention_cleanup()
+
+        queried_models = [call.args[0] for call in db.query.call_args_list]
+        assert JobArtifact in queried_models
+        assert queried_models.index(JobArtifact) < queried_models.index(JobInstance)
+
     def test_no_stale_runs_no_commit(self):
         from backend.scheduler.cron_scheduler import run_retention_cleanup
 

@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Zap,
+  Search,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 
@@ -123,7 +124,9 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           onClick={() => setStatusFilter('idle')}
           className={cn(
             'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'idle' ? 'border-success shadow-sm' : 'border-success/20'
+            statusFilter === 'idle'
+              ? 'border-success shadow-md bg-success/5'
+              : 'border-success/20 hover:border-success/40 hover:bg-success/5'
           )}
         >
           <div className="w-10 h-10 rounded-lg bg-success/10 flex items-center justify-center">
@@ -138,7 +141,9 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           onClick={() => setStatusFilter('testing')}
           className={cn(
             'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'testing' ? 'border-primary shadow-sm' : 'border-primary/20'
+            statusFilter === 'testing'
+              ? 'border-primary shadow-md bg-primary/5'
+              : 'border-primary/20 hover:border-primary/40 hover:bg-primary/5'
           )}
         >
           <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -168,7 +173,9 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           onClick={() => setStatusFilter('error')}
           className={cn(
             'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'error' ? 'border-destructive shadow-sm' : 'border-destructive/20'
+            statusFilter === 'error'
+              ? 'border-destructive shadow-md bg-destructive/5'
+              : 'border-destructive/20 hover:border-destructive/40 hover:bg-destructive/5'
           )}
         >
           <div className="w-10 h-10 rounded-lg bg-destructive/10 flex items-center justify-center">
@@ -182,7 +189,8 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
       </div>
 
       {/* Search */}
-      <div className="bg-white rounded-lg border border-gray-200 p-3">
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
         <input
           id="device-search"
           name="device-search"
@@ -191,7 +199,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           placeholder="搜索设备序列号/型号/主机..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full px-3 py-2 text-sm bg-gray-50 border-0 rounded-lg focus:outline-none focus:ring-1 focus:ring-gray-200"
+          className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
         />
       </div>
 

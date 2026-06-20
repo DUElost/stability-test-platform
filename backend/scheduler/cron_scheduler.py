@@ -215,7 +215,7 @@ def run_retention_cleanup() -> None:
     Runs as an independent APScheduler job (sync, runs in thread-pool).
     """
     from backend.models.plan_run import PlanRun
-    from backend.models.job import JobInstance, StepTrace
+    from backend.models.job import JobArtifact, JobInstance, StepTrace
     from backend.models.device_lease import DeviceLease
     from backend.models.resource_pool import ResourceAllocation
 
@@ -253,8 +253,11 @@ def run_retention_cleanup() -> None:
             db.query(ResourceAllocation).filter(
                 ResourceAllocation.job_instance_id.in_(stale_job_ids)
             ).delete(synchronize_session=False)
+            db.query(JobArtifact).filter(
+                JobArtifact.job_id.in_(stale_job_ids)
+            ).delete(synchronize_session=False)
 
-            # job_artifact / job_log_signal have ON DELETE CASCADE — DB handles them
+            # job_log_signal has ON DELETE CASCADE; job_artifact must be removed first.
             db.query(JobInstance).filter(
                 JobInstance.plan_run_id.in_(run_ids)
             ).delete(synchronize_session=False)
