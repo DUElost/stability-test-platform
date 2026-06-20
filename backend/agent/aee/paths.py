@@ -1,4 +1,4 @@
-"""NFS path resolution for AEE artifacts."""
+"""Path resolution for AEE artifacts."""
 
 from __future__ import annotations
 
@@ -32,9 +32,10 @@ def resolve_bugreport_subdir() -> str:
 
 
 def get_aee_nfs_root() -> Path:
-    """sonic_tinno root — priority: STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno.
+    """Agent 本地 HDD 路径（方案 C；env 未设置时默认 /mnt/hdd/aee_events）。
 
-    默认回退 15.4 中心日志服务器 CIFS 挂载点（对齐上一代工具 MonkeyAEEinfo_260523.py）。
+    priority: STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno
+    > /mnt/hdd/aee_events。
     """
     for env_key in ("STP_AEE_NFS_ROOT", "STP_WATCHER_NFS_BASE_DIR"):
         raw = (os.getenv(env_key) or "").strip()
@@ -43,17 +44,33 @@ def get_aee_nfs_root() -> Path:
     nfs_root = (os.getenv("STP_NFS_ROOT") or "").strip()
     if nfs_root:
         return Path(nfs_root) / "sonic_tinno"
-    return Path("/home/android/sonic_agent/logs/ftp_log/sonic_tinno")
+    return Path("/mnt/hdd/aee_events")
+
+
+def get_aee_local_root() -> Path:
+    """Agent 本地 HDD 根 — AEE 设备日志第一落点。
+
+    priority: STP_AEE_LOCAL_ROOT > STP_AEE_NFS_ROOT > STP_WATCHER_NFS_BASE_DIR > STP_NFS_ROOT/sonic_tinno
+    > /mnt/hdd/aee_events（方案 C 默认）。
+    """
+    for env_key in ("STP_AEE_LOCAL_ROOT", "STP_AEE_NFS_ROOT", "STP_WATCHER_NFS_BASE_DIR"):
+        raw = (os.getenv(env_key) or "").strip()
+        if raw:
+            return Path(raw)
+    nfs_root = (os.getenv("STP_NFS_ROOT") or "").strip()
+    if nfs_root:
+        return Path(nfs_root) / "sonic_tinno"
+    return Path("/mnt/hdd/aee_events")
 
 
 def resolve_device_output_dir(
     *,
-    nfs_root: Path,
+    local_root: Path,
     folder_name: str,
     serial: str,
 ) -> Path:
-    """{sonic_tinno}/{folder_name}/{serial}/"""
-    return nfs_root / folder_name / serial
+    """{local_root}/{folder_name}/{serial}/"""
+    return local_root / folder_name / serial
 
 
 def resolve_sonic_output_dir_for_job(
@@ -62,7 +79,7 @@ def resolve_sonic_output_dir_for_job(
     serial: str,
     job_id: int,
     state_store: Any,
-    nfs_root: Optional[Path] = None,
+    local_root: Optional[Path] = None,
 ) -> Optional[Path]:
     """Compute per-job sonic_tinno device dir for Watcher LogPuller."""
     from .folder_name import get_aee_log_folder_name, make_getprop_from_shell
@@ -81,8 +98,8 @@ def resolve_sonic_output_dir_for_job(
     )
     if not folder_name:
         return None
-    root = nfs_root or get_aee_nfs_root()
-    out = resolve_device_output_dir(nfs_root=root, folder_name=folder_name, serial=serial)
+    root = local_root or get_aee_local_root()
+    out = resolve_device_output_dir(local_root=root, folder_name=folder_name, serial=serial)
     out.mkdir(parents=True, exist_ok=True)
     return out
 
