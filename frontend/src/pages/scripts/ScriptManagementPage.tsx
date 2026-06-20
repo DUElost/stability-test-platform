@@ -3,12 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { api, type ScriptEntry } from '@/utils/api';
-import { Search, FileCode, Code2, Tag, RefreshCw, AlertCircle } from 'lucide-react';
+import { Search, FileCode, Code2, Tag, RefreshCw } from 'lucide-react';
 import ScriptVersionDialog from './ScriptVersionDialog';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
+import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 
 export default function ScriptManagementPage() {
   const queryClient = useQueryClient();
@@ -86,21 +88,23 @@ export default function ScriptManagementPage() {
       </div>
 
       {isLoading ? (
-        <div className="space-y-3"><Skeleton className="h-24 w-full" /><Skeleton className="h-24 w-full" /></div>
+        <LoadingGrid count={2} columns={1} component={CardSkeleton} />
       ) : isError ? (
-        <Card><CardContent className="py-12 text-center text-gray-400">
-          <AlertCircle className="w-10 h-10 mx-auto mb-3 text-red-300" />
-          <p className="text-sm text-red-600 font-medium">加载脚本列表失败</p>
-          <p className="text-xs text-gray-400 mt-1">{(error as Error)?.message || '请检查后端服务是否正常'}</p>
-          <Button variant="outline" size="sm" className="mt-3" onClick={() => queryClient.invalidateQueries({ queryKey: ['scripts-active'] })}>
-            <RefreshCw className="w-3.5 h-3.5 mr-1" />重试
-          </Button>
-        </CardContent></Card>
+        <ErrorState
+          title="加载脚本列表失败"
+          description={(error as Error)?.message || '请检查后端服务是否正常'}
+          onRetry={() => queryClient.invalidateQueries({ queryKey: ['scripts-active'] })}
+        />
       ) : filtered.length === 0 ? (
-        <Card><CardContent className="py-12 text-center text-gray-400">
-          <FileCode className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-          <p className="text-sm">{search ? '没有匹配的脚本' : '暂无脚本，请通过脚本目录扫描入库'}</p>
-        </CardContent></Card>
+        search ? (
+          <SearchEmptyState keyword={search} />
+        ) : (
+          <EmptyState
+            title="暂无脚本"
+            description="请通过脚本目录扫描入库"
+            icon={<FileCode className="w-16 h-16" />}
+          />
+        )
       ) : (
         <div className="space-y-3">
           {filtered.map(script => {

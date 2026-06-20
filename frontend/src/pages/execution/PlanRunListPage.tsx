@@ -1,11 +1,13 @@
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Card, CardContent } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
+import { CardContent } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/utils/api';
 import { Clock } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ClickableCard } from '@/components/ui/clickable-card';
 
 export default function PlanRunListPage() {
   const navigate = useNavigate();
@@ -21,20 +23,21 @@ export default function PlanRunListPage() {
       <PageHeader title="Plan 执行记录" subtitle="查看所有 PlanRun 历史记录" />
 
       {isLoading ? (
-        <div className="space-y-3"><Skeleton className="h-16 w-full" /><Skeleton className="h-16 w-full" /></div>
+        <LoadingGrid count={2} columns={1} component={CardSkeleton} />
       ) : !runs || runs.length === 0 ? (
-        <Card><CardContent className="py-12 text-center text-gray-400">
-          <Clock className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-          <p className="text-sm">暂无执行记录</p>
-        </CardContent></Card>
+        <EmptyState
+          title="暂无执行记录"
+          description="还没有 Plan 执行记录"
+          icon={<Clock className="w-16 h-16" />}
+        />
       ) : (
         <div className="space-y-2">
           {runs.map(run => (
-            <Card key={run.id} className="hover:shadow-md transition-shadow cursor-pointer"
+            <ClickableCard
+              key={run.id}
               onClick={() => navigate(`/execution/plan-runs/${run.id}`)}
-              tabIndex={0}
-              role="button"
-              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/execution/plan-runs/${run.id}`); } }}>
+              ariaLabel={`查看 Plan Run #${run.id}`}
+            >
               <CardContent className="py-3 flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <span className="font-mono text-sm text-gray-500">#{run.id}</span>
@@ -49,7 +52,7 @@ export default function PlanRunListPage() {
                   <span>{new Date(run.started_at).toLocaleString()}</span>
                 </div>
               </CardContent>
-            </Card>
+            </ClickableCard>
           ))}
         </div>
       )}
