@@ -131,7 +131,7 @@ export function ActivityChart({
                 stroke={CHART_COLORS.primary}
                 strokeWidth={2}
                 fill="url(#grad-started)"
-                animationDuration={800}
+                isAnimationActive={false}
               />
               <Area
                 type="monotone"
@@ -139,7 +139,7 @@ export function ActivityChart({
                 stroke={CHART_COLORS.success}
                 strokeWidth={2}
                 fill="url(#grad-completed)"
-                animationDuration={800}
+                isAnimationActive={false}
               />
               <Area
                 type="monotone"
@@ -147,7 +147,7 @@ export function ActivityChart({
                 stroke={CHART_COLORS.error}
                 strokeWidth={2}
                 fill="url(#grad-failed)"
-                animationDuration={800}
+                isAnimationActive={false}
               />
             </AreaChart>
           </ResponsiveContainer>

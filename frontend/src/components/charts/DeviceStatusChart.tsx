@@ -103,8 +103,7 @@ export function DeviceStatusChart({ data, isLoading }: DeviceStatusChartProps) {
                 outerRadius={70}
                 paddingAngle={2}
                 dataKey="value"
-                animationBegin={0}
-                animationDuration={800}
+                isAnimationActive={false}
               >
                 {chartData.map((entry, index) => (
                   <Cell

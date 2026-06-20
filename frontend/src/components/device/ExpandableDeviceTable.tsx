@@ -27,6 +27,7 @@ import {
   Search,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
 
@@ -57,6 +58,9 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 50;
 
+  // 防抖搜索，减少不必要的过滤计算
+  const debouncedSearch = useDebouncedValue(searchQuery, 300);
+
   const toggleRow = (id: number) => {
     const newExpanded = new Set(expandedRows);
     if (newExpanded.has(id)) {
@@ -70,8 +74,8 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
   const filteredDevices = useMemo(() => {
     return devices.filter(device => {
       if (statusFilter !== 'all' && device.status !== statusFilter) return false;
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
+      if (debouncedSearch) {
+        const query = debouncedSearch.toLowerCase();
         return (
           device.model?.toLowerCase().includes(query) ||
           device.serial.toLowerCase().includes(query) ||
@@ -80,12 +84,12 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
       }
       return true;
     });
-  }, [devices, statusFilter, searchQuery]);
+  }, [devices, statusFilter, debouncedSearch]);
 
   // Reset to page 1 when filter or search changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [statusFilter, searchQuery]);
+  }, [statusFilter, debouncedSearch]);
 
   const totalPages = Math.ceil(filteredDevices.length / pageSize);
   const paginatedDevices = filteredDevices.slice(

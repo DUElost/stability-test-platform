@@ -117,12 +117,12 @@ export function HostResourceChart({ hosts, isLoading }: HostResourceChartProps) 
                   return null;
                 }}
               />
-              <Bar dataKey="cpu" name="CPU" radius={[4, 4, 0, 0]} maxBarSize={30}>
+              <Bar dataKey="cpu" name="CPU" radius={[4, 4, 0, 0]} maxBarSize={30} isAnimationActive={false}>
                 {data.map((entry, index) => (
                   <Cell key={`cpu-${index}`} fill={getBarColor(entry.cpu)} />
                 ))}
               </Bar>
-              <Bar dataKey="ram" name="RAM" radius={[4, 4, 0, 0]} maxBarSize={30}>
+              <Bar dataKey="ram" name="RAM" radius={[4, 4, 0, 0]} maxBarSize={30} isAnimationActive={false}>
                 {data.map((entry, index) => (
                   <Cell key={`ram-${index}`} fill={getBarColor(entry.ram)} />
                 ))}

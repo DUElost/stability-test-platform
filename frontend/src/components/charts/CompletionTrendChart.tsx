@@ -117,7 +117,7 @@ export function CompletionTrendChart({
                 strokeWidth={2}
                 dot={{ r: 3, fill: CHART_COLORS.success }}
                 activeDot={{ r: 5 }}
-                animationDuration={800}
+                isAnimationActive={false}
               />
               <Line
                 type="monotone"
@@ -126,7 +126,7 @@ export function CompletionTrendChart({
                 strokeWidth={2}
                 dot={{ r: 3, fill: CHART_COLORS.error }}
                 activeDot={{ r: 5 }}
-                animationDuration={800}
+                isAnimationActive={false}
               />
             </LineChart>
           </ResponsiveContainer>
