@@ -1,9 +1,11 @@
 # ADR-0025 Sprint 2 实现计划：Agent 日志归档调度器（LogArchiver + 磁盘溢出 + 去重集成规划）
 
+> **SUPERSEDED** — 2026-06-20 ADR-0025 方案 C 修订后，LogArchiver「搬运运行日志到 15.4 + 快照」职责取消。本计划描述的 Option B（每日扫描 + 归档 NFS + 溢出）已不适用。替代方案见 [ADR-0025](./adr/ADR-0025-phase4-architecture-alignment.md) D4 归档-1（Agent 本地 scan + 按需上送）。
+>
 > 日期：2026-06-15
 > 关联：[ADR-0025](./adr/ADR-0025-phase4-architecture-alignment.md) D4、ADR-0018（Watcher/Puller/ArtifactUploader）、project-vision 第 7 步「日志回传导出」+ 原则 2「结果到报告/JIRA」
 > 预计：核心 5-8 天；去重集成为后续独立子阶段（先规划）
-> 方向：Option B（ADR D4 原样，每日扫描 + 归档 NFS + 溢出），去重集成既有工具 `stability_Start-Log-Scan`
+> ~~方向：Option B（ADR D4 厸样，每日扫描 + 归档 NFS + 溢出），去重集成既有工具 `stability_Start-Log-Scan`~~
 
 ---
 

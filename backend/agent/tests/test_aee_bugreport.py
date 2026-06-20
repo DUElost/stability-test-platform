@@ -62,12 +62,12 @@ def test_bugreport_subdir_shares_escape_hatch_with_mobilelog(monkeypatch):
     from backend.agent.aee.paths import resolve_bugreport_subdir, resolve_mobilelog_subdir
 
     monkeypatch.delenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", raising=False)
-    assert resolve_bugreport_subdir() == "correlated_bugreports"
-    assert resolve_mobilelog_subdir() == "correlated_mobilelogs"
-
-    monkeypatch.setenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", "stp")
     assert resolve_bugreport_subdir() == "bugreport"
     assert resolve_mobilelog_subdir() == "mobilelog"
+
+    monkeypatch.setenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", "correlated")
+    assert resolve_bugreport_subdir() == "correlated_bugreports"
+    assert resolve_mobilelog_subdir() == "correlated_mobilelogs"
 
 
 def test_bugreport_failed_attempt_does_not_poison_cooldown(tmp_path, monkeypatch):

@@ -421,9 +421,9 @@ Watcher 子系统有**两条并行 AEE 拉取路径**，拉取范围不同：
 - `backend/agent/watcher/puller.py` — 路径 A：per-device async adb pull → NFS + 富化（默认开，拉单个 AEE 文件 + 可选 bugreport）
 - `backend/agent/watcher/policy.py` / `contracts.py` / `exceptions.py`
 - `backend/agent/aee/reconciler.py` — 路径 B：AeeDbHistoryReconciler per-Job daemon（db_history diff → process_device_logs）；`STP_WATCHER_AEE_RECONCILE_ENABLED` 默认 `true`（2026-06-18 改）
-- `backend/agent/aee/processor.py` — 路径 B 核心：AEE 整目录 pull + dblog 转储 + mobilelog 时间窗 + bugreport；`output_dir` 改为 `local_target_dir`（事件目录，2026-06-18 待落地）
-- `backend/agent/aee/mobilelog.py` — mobilelog 时间窗拉取（前后各 2 个 main+kernel）；输出改到事件目录内（2026-06-18 待落地）
-- `backend/agent/aee/bugreport.py` — bugreport 导出（300s 冷却）；输出改到事件目录内（2026-06-18 待落地）
+- `backend/agent/aee/processor.py` — 路径 B 核心：AEE 整目录 pull + dblog 转储 + mobilelog 时间窗 + bugreport；`output_dir` 改为 `local_target_dir`（事件目录，Sprint 2 落地）
+- `backend/agent/aee/mobilelog.py` — mobilelog 时间窗拉取（前后各 2 个 main+kernel）；输出改到事件目录内（Sprint 2 落地）
+- `backend/agent/aee/bugreport.py` — bugreport 导出（300s 冷却）；输出改到事件目录内（Sprint 2 落地）
 - `backend/agent/aee/paths.py` — NFS 路径解析（`resolve_device_output_dir` / `get_aee_nfs_root` / subdir 布局）
 - `backend/agent/aee/folder_name.py` — folder_name 生成（`ro.product.name` + `ro.build.display.id` + run_date）
 - `backend/agent/aee/db_history.py` — db_history 解析（`db.NN` 风格）+ 增量状态管理

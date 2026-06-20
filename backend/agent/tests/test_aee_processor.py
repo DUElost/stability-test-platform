@@ -325,11 +325,14 @@ def test_process_logs_mobilelog_uses_correlated_subdir_default(tmp_path, monkeyp
 
 
 def test_process_logs_mobilelog_subdir_stp_fallback(tmp_path, monkeypatch):
-    """T0.5-2 D3: STP_WATCHER_AEE_SUBDIR_LAYOUT=stp 时回退到旧 mobilelog/ 布局。"""
-    monkeypatch.setenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", "stp")
+    """T0.5-2 D3: default (stp) 时 mobilelog/ 布局；correlated 逃生口回退旧布局。"""
+    monkeypatch.delenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", raising=False)
     from backend.agent.aee.mobilelog import _resolve_mobilelog_subdir
 
     assert _resolve_mobilelog_subdir() == "mobilelog"
+
+    monkeypatch.setenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", "correlated")
+    assert _resolve_mobilelog_subdir() == "correlated_mobilelogs"
 
 
 # ----------------------------------------------------------------------

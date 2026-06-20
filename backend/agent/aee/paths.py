@@ -9,26 +9,26 @@ from typing import Any, Optional
 
 
 def _aee_subdir_layout() -> str:
-    """D3: 子目录布局开关。`correlated`(默认,对齐 monolith) / `stp`(逃生口,旧布局)。"""
-    return (os.environ.get("STP_WATCHER_AEE_SUBDIR_LAYOUT", "correlated") or "").strip().lower()
+    """D3: 子目录布局开关。`stp`(默认,ADR-0025 事件目录聚合) / `correlated`(逃生口,对齐 monolith 旧布局)。"""
+    return (os.environ.get("STP_WATCHER_AEE_SUBDIR_LAYOUT", "stp") or "").strip().lower()
 
 
 def resolve_mobilelog_subdir() -> str:
     """关联 mobilelog 落盘子目录名。
 
-    默认 `correlated_mobilelogs/`(对齐 monolith);env STP_WATCHER_AEE_SUBDIR_LAYOUT=stp
-    回退旧布局 `mobilelog/`。
+    默认 `mobilelog/`(ADR-0025 D3 契约：按事件目录聚合);env STP_WATCHER_AEE_SUBDIR_LAYOUT=correlated
+    回退旧布局 `correlated_mobilelogs/`。
     """
-    return "mobilelog" if _aee_subdir_layout() == "stp" else "correlated_mobilelogs"
+    return "correlated_mobilelogs" if _aee_subdir_layout() == "correlated" else "mobilelog"
 
 
 def resolve_bugreport_subdir() -> str:
     """bugreport 落盘子目录名。
 
-    默认 `correlated_bugreports/`(对齐 monolith BUGREPORT_EXPORT_DIRNAME);
-    env STP_WATCHER_AEE_SUBDIR_LAYOUT=stp 回退旧布局 `bugreport/`(与 mobilelog 同逃生口)。
+    默认 `bugreport/`(ADR-0025 D3 契约：按事件目录聚合);env STP_WATCHER_AEE_SUBDIR_LAYOUT=correlated
+    回退旧布局 `correlated_bugreports/`。
     """
-    return "bugreport" if _aee_subdir_layout() == "stp" else "correlated_bugreports"
+    return "correlated_bugreports" if _aee_subdir_layout() == "correlated" else "bugreport"
 
 
 def get_aee_nfs_root() -> Path:

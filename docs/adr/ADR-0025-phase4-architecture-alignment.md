@@ -1,9 +1,9 @@
 # ADR-0025: Phase 4 架构对齐——单控制平面下 Agent 侧日志闭环与水平扩展推迟
 
-- 状态：Accepted（2026-06-18 修订：D2/D4 重写，归档语义重定义，Sprint 2/3 扩展）
+- 状态：Accepted（2026-06-20 修订：D2/D4 重写——运行日志不上送 15.4 + AEE 设备日志先落 Agent 本地 HDD + scan 下沉 Agent + 上送触发扩展为五场景）
 - 优先级：P2
 - 目标里程碑：M4 核心闭环（Sprint 1-3，共 12-19 天）；D6 运维收口为触发条件驱动，不计入 M4 排期
-- 日期：2026-06-13（2026-06-14 按「首次落地」视角重排优先级；2026-06-18 按长跑稳定性测试需求修订 D2/D4）
+- 日期：2026-06-13（2026-06-14 按「首次落地」视角重排优先级；2026-06-18 按长跑稳定性测试需求修订 D2/D4；2026-06-20 修订归档架构——运行日志不上送 15.4 + AEE 先落本地 HDD + scan 下沉 Agent + 五触发）
 - 决策者：平台研发组
 - 标签：架构, Watcher, 无人值守闭环, 日志归档, 去重, 水平扩展, 部署策略
 - 关联：ADR-0018 (Watcher), ADR-0011 (可观测)
@@ -16,17 +16,17 @@
 
 1. **部署形态**：同一局域网下一台控制平面（Windows 开发 / Linux 生产）+ 多 Agent 节点，只面向单 React Dashboard
 2. **多实例需求**：平台需先在实际项目中跑顺，成熟后再考虑多控制平面或多 worker
-3. **日志管理**：Loki 集中日志不契合——Agent 本地磁盘 1TB，15.4 中心日志服务器 14TB（CIFS 共享 `//172.21.15.4/jxtinno/sonic_tinno`）；日志在 Agent 侧存储，**过程中每小时汇总去重**（边跑边看）+ 终态最终归档到 15.4，支撑 JIRA 提单；本地达阈值后溢出
+3. **日志管理**：Loki 集中日志不契合——Agent 本地 SSD 256GB 存运行日志 + HDD 1TB 存设备日志，15.4 中心日志服务器 14TB（CIFS 共享 `//172.21.15.4/jxtinno/sonic_tinno`）仅存汇总报告与按需上送的事件；设备日志先落 Agent 本地 HDD，scan 在 Agent 本地执行，按需上送报告中 db 对应事件到 15.4；本地 HDD 达阈值后溢出上送
 4. **Watcher 定位**：应在 Agent 侧完成完整闭环（检测→拉取→分析→归档），控制平面只做定时拉取和聚合展示
 
 ### 长跑稳定性测试需求（2026-06-18 补充）
 
 平台核心场景是**数小时到数天的长跑稳定性测试**，价值在于「边跑边看」——过程中持续归档 + 增量去重 + 终态最终汇总。初版 D4 把归档定义为「Job 终态后一次性搬运」，长跑 Job 成为盲区。2026-06-18 修订明确：
 
-1. **归档重定义为三阶段**：搬运（目录树直复制，非 tar）+ 汇总去重（start_log_scan）+ 分类提取（按去重结果取日志存 15.4）
-2. **过程中持续归档**：活跃 Job 在 patrol cycle 边界做快照（不 prune），已完成 Job 归档后 prune
-3. **增量去重 + 终态合并**：每小时各 agent 单独 scan 产 `_org.xls`（保留历史）→ 终态集中 `-merge_files` 合并
-4. **15.4 中心日志服务器**：提单后开发访问的集中存储，非 Loki 式实时检索
+1. **归档重定义为三阶段**：Agent 本地 scan + 按需上送事件/报告 + 分类提取
+2. **过程中持续归档**：自动归档间隔 + 手动归档按钮（场景 4/5）
+3. **增量去重 + 终态合并**：Agent 本地 scan 产 `_org.xls` → 上送 15.4 → 终态控制平面 `-merge_files` 合并
+4. **15.4 中心日志服务器**：仅存汇总报告 + 报告中 db 对应事件 + 溢出事件；运行日志不上送
 5. **日志存储结构**：mobilelog/bugreport 按 AEE 事件目录聚合，非统一 `correlated_*` 混放
 
 ### 排序依据（2026-06-14 补充）：平台尚未在实际项目中运用
@@ -69,11 +69,24 @@
 - 当前 `log_writer.py`（后端写本地文件）+ Agent 写本地文件的模式对单控制平面已足够
 - 日志下载端点已通过 NFS 路径读取 Agent 落盘文件（`runs.py` / `plan_runs.py` 的 `FileResponse`）
 
-**15.4 中心日志归档服务器**（2026-06-18 增补）：
+**15.4 中心日志归档服务器**（2026-06-20 修订，从「全量归档」改为「按需上送」）：
+
 - **定位**：提单后开发访问的集中日志存储，非 Loki 式实时检索
-- **形态**：现有 CIFS 共享 `//172.21.15.4/jxtinno/sonic_tinno`（上一代工具已用），Agent/控制面通过挂载写入，开发通过同一共享只读访问
-- **存储内容**：归档-1 搬运的运行日志目录树 + 归档-3 分类提取的 crash 事件目录（按事件聚合 mobilelog/bugreport）
+- **形态**：现有 CIFS 共享 `//172.21.15.4/jxtinno/sonic_tinno`（上一代工具已用），Agent 通过本地 CIFS 挂载点写入，开发通过同一共享只读访问
+- **存储内容**（仅三类，不含运行日志）：
+  1. 各节点汇总报告（`Result_*_org.xls` / `Result_*_final.xls` / `Result_MergeFiles.xls`）
+  2. 汇总报告中 db 对应的事件目录（AEE 原始文件 + mobilelog/ + bugreport/）
+  3. 溢出事件目录（Agent HDD 超阈值时上送）
 - **不是新基础设施**：是现有 NFS/CIFS 模式的延伸，不引入额外服务
+
+**Agent 本地存储**（第一落点，15.4 非第一落点）：
+
+| 存储 | 用途 | 容量 | 路径 |
+|------|------|------|------|
+| SSD | 运行日志（init/patrol/teardown），唯一物理存储 | 256GB | `/home/android/sonic_agent/logs/runs/{job_id}/` |
+| HDD | AEE 设备日志（AEE + mobilelog + bugreport），第一落点 | 1TB | `/mnt/hdd/aee_events/{folder_name}/{serial}/` |
+
+**运行日志访问方式**：控制平面通过 Agent HTTP 下载端点按需获取（方案 A），不上送 15.4。Agent 离线时运行日志不可用——合理约束（Agent 挂了，日志自然不可达）。
 
 **替代方案**：Agent 侧实现日志归档调度器（LogArchiver，见 D4）
 
@@ -92,12 +105,12 @@
 | 检测 | ✅ inotifyd 实时监测 | 不变 | — |
 | 拉取 | ⚠️ 默认路径A只拉单文件 | 路径B默认开：AEE整目录+dblog+bugreport+前后各2 mobilelog | reconciler 默认开启 + 存储结构改造 |
 | 上送 | ✅ HTTP POST 元数据 → 后端 DB | 不变 | — |
-| 分析 | ❌ | 归档-2：控制平面 start_log_scan 汇总去重 | 归档-2（Sprint 2 扩展） |
-| 归档 | ❌ | 归档-1 搬运 + 归档-3 分类提取 → 15.4 | LogArchiver 改造 + 分类提取新功能 |
+| 分析 | ❌ | 归档-2：Agent 本地 start_log_scan 汇总去重 + 上送报告/事件 | 归档-2（Agent 本地 scan） |
+| 归档 | ❌ | 归档-1 Agent 本地 scan+按需上送 → 归档-3 控制平面分类提取 → 15.4 | LogArchiver 改造 + scan 下沉 + 分类提取 |
 | CATCHUP | ✅ RESUME 重挂已落地（Sprint 1） | 不变 | — |
 | 控制面拉取 | ⚠️ 仅 Agent 主动推送 | 后端可按需拉取归档状态 + 去重结果 | 新端点（Sprint 3） |
 
-**控制平面角色**：聚合展示 + 归档-2 汇总去重 + 归档-3 分类提取 + Jira 提单，不做日志实时存储
+**控制平面角色**：聚合展示 + merge 合并 + 归档-3 分类提取 + Jira 提单，不做日志实时存储。scan 在 Agent 侧执行，控制平面只合并+展示。
 
 **Watcher 日志类型契约**（2026-06-18 增补，对齐上一代工具 `MonkeyAEEinfo_260523.py`）：
 - **dblog**：`/data/aee_exp` + `/data/vendor/aee_exp` 的 AEE 整目录 + `db_history` 转储
@@ -110,64 +123,89 @@
 
 > 2026-06-18 重写：原 D4 把归档定义为「LogArchiver 搬运 tar 到 NFS」，不含汇总/去重/分类。按长跑稳定性测试需求，归档重定义为三阶段，覆盖过程中持续归档 + 增量去重 + 终态最终汇总 + 分类提取到 15.4 中心日志服务器。
 
-#### 归档-1：搬运（Agent 侧，每小时 + 终态）
+#### 归档-1：Agent 本地 scan + 按需上送（2026-06-20 修订，替代原「搬运运行日志到 15.4」）
 
-**职责**：把运行日志从 Agent 本地盘复制到 15.4 中心日志服务器，保持目录树结构（**非 tar**），支持单文件直接访问/下载。
+> 2026-06-20 重大修订：原归档-1 定义为「LogArchiver 搬运运行日志到 15.4 CIFS 挂载点」。经架构澄清，运行日志不需上送 15.4（见 D2 修订）；AEE 设备日志的第一落点从 15.4 CIFS 挂载点改为 Agent 本地 HDD；scan 从控制平面下沉到 Agent 本地执行。归档-1 重新定义为「Agent 本地完成 scan + 按需上送事件/报告到 15.4」，LogArchiver 的「搬运+快照」职责取消。
 
-**存储策略**：优先 Agent 本地存储，达阈值后转 15.4；归档与 prune 解耦。
+**核心变更**：
+- Watcher 拉取 AEE/mobilelog/bugreport → Agent 本地 HDD（非 15.4 CIFS 挂载点）
+- scan 工具在 Agent 本地 Linux 运行（`backend/agent/resources/start_log_scan/`），扫描本地 HDD
+- 15.4 只接收三件事：汇总报告 + 报告中 db 对应的事件目录 + 溢出事件目录
+- 运行日志留在 Agent SSD，控制平面通过 Agent HTTP 端点按需下载
 
-| 对象 | 触发 | 动作 | prune |
-|------|------|------|-------|
-| 已完成 Job | hourly interval + grace | 目录树直复制到 15.4 + 注册 JobArtifact | 复制成功后 prune 本地 |
-| 活跃 Job（长跑） | patrol cycle 边界 | 目录树快照复制到 15.4 `snapshots/`（不注册 JobArtifact） | **不 prune**（Job 还在跑） |
-| 本地盘超阈值 | LocalDiskMonitor | 对最旧已归档 Job 强制 prune 本地（15.4 已有副本） | prune 已归档 Job |
+**Agent 本地存储布局**：
 
-**搬运方式**：目录树直复制（`shutil.copytree` 或 `rsync -a`），**不用 tar**——经常需查看日志内容或下载单个文件，tar 解压不便。
-
-**cycle 边界快照完整性**（解决长跑 Job 盲区）：
-- 利用 patrol loop 每 cycle 末尾的天然写入静默窗口触发快照（`pipeline_engine.py:1670` sleep 前）
-- 此时该 cycle 所有 step 函数已返回、子进程已 communicate 收尾、进程树已 kill、下一 cycle 未开始 → 文件静态
-- 兜底：copy 后 sleep 200ms 再 stat 对比 size，不一致标 `partial=true`
-- 快照含历史所有 cycle 内容（整目录复制），但不会撕裂
-- `PipelineEngine` 加 `cycle_snapshot_callback` 注入点，Agent main.py 注入复制逻辑
-
-**15.4 路径约定**：
 ```
-{cifs_root}/{folder_name}/{serial}/              ← Watcher crash 文件（D3 路径B）
-  aee_exp/{ts}_{db_path}/                        ← AEE 事件目录
-    <AEE 原始文件>
-    mobilelog/                                   ← 该事件关联的 mobilelog（改造后）
-    bugreport/                                   ← 该事件的 bugreport（改造后）
-  vendor_aee_exp/（同上）
-
-{cifs_root}/archives/{plan_run_id}/{host_id}/{job_id}/   ← 归档-1 运行日志目录树
+SSD 256GB: /home/android/sonic_agent/logs/runs/{job_id}/
   init_<step>.log
   patrol_<step>.log
   teardown_<step>.log
-  ...（保持原目录结构，可直接浏览/下载单文件）
+  （运行日志唯一物理存储，SSD 超阈值时 prune 最旧终态 Job）
 
-{cifs_root}/snapshots/{date}/{job_id}/cycle_<N>/        ← 活跃 Job cycle 快照
+HDD 1TB: /mnt/hdd/aee_events/{folder_name}/{serial}/
+  aee_exp/{ts}_{db_path}/
+    __exp_main.txt / main.dbg
+    mobilelog/                        ← 该事件关联的 mobilelog
+    bugreport/                        ← 该事件的 bugreport
+  vendor_aee_exp/（同上）
+  （AEE 设备日志第一落点，HDD 超阈值时上送最旧事件到 15.4 后 prune）
 ```
 
-**关键改动**（vs 原 LogArchiver）：
-- 搬运方式：tar → 目录树直复制
-- 活跃 Job：不跳过 → cycle 边界快照（不 prune）
-- 存储目的地：NFS（泛指）→ 明确 15.4 CIFS 挂载点
-- 归档与 prune：复制成功即 prune → 解耦（本地达阈值才 prune）
-- 存储结构：mobilelog/bugreport 从 `correlated_*` 混放改为按事件目录聚合
+**15.4 路径约定**（{cifs_root} = CIFS 挂载点，Agent 写入 = 开发只读）：
 
-#### 归档-2：汇总去重（控制平面，每小时增量 + 终态最终）
+```
+{cifs_root}/
+  devices/{folder_name}/{serial}/      ← 从 Agent 上送的 AEE 事件目录
+    aee_exp/{ts}_{db_path}/
+      __exp_main.txt / main.dbg
+      mobilelog/
+      bugreport/
+    vendor_aee_exp/（同上）
 
-**职责**：用 `stability_Start-Log-Scan` 扫描 15.4 上的归档目录，产出 Result_*.xls 反映当前计划总体 db 报错情况。
+  dedup/{plan_run_id}/{host_id}/       ← 各节点 scan 产物
+    Result_*_20260618_1400.xls         ← 增量（保留历史）
+    Result_*_final.xls                 ← 终态
+  dedup/{plan_run_id}/merge/           ← 合并产物
+    Result_MergeFiles_org.xls
+    Result_MergeFiles.xls
+
+  jira/{plan_run_id}/{issue_key}/      ← 提单目录（归档-3）
+    {serial}/{ts}_{db_path}/
+      __exp_main.txt / mobilelog/ / bugreport/
+```
+
+**上送流程**：
+
+1. Agent 本地 scan → 产出 `Result_*_org.xls`
+2. 从 scan 结果识别 db 事件 → 对应事件目录从本地 HDD 上送 15.4 `devices/`
+3. scan 报告上送 15.4 `dedup/{plan_run_id}/{host_id}/`
+4. 控制平面 merge（读各 agent 报告）→ 产出 `Result_MergeFiles.xls` → 15.4 `dedup/{plan_run_id}/merge/`
+
+**HDD 溢出机制**：
+- Agent 本地 HDD 超阈值时，最旧事件目录上送 15.4 `devices/` 后 prune 本地
+- 类似原 LogArchiver 的 `LocalDiskMonitor` + `spill_oldest` 逻辑，但对象从「运行日志目录」改为「AEE 事件目录」，目的地不变（15.4）
+
+**关键改动**（vs 原归档-1）：
+- Watcher 路径 B 写入目标：15.4 CIFS 挂载点 → Agent 本地 HDD
+- LogArchiver「搬运运行日志+快照」：取消（运行日志不上送 15.4）
+- LocalDiskMonitor：监控 SSD 运行日志 prune + 监控 HDD 事件目录溢出上送
+- scan 执行位置：控制平面 → Agent 本地 Linux
+- 15.4 存储内容：运行日志目录树 + 事件目录 → 仅事件目录 + 报告
+
+#### 归档-2：Agent 本地 scan + 报告上送（2026-06-20 修订，从控制平面下沉到 Agent）
+
+**职责**：Agent 本地运行 `start_log_scan` 扫描本地 HDD 上的 AEE 事件目录，产出 `Result_*.xls`；上送报告和事件到 15.4。
 
 **两模式**：
 
 | 模式 | 触发 | CLI | 产物 | 保留 |
 |------|------|-----|------|------|
-| 周期增量 | 每小时 | `start_log_scan.py -m 1 -d <本agent归档> -p <place> -tag <config>`（不带 `-end`） | `Result_*_org.xls`（累计去重） | 保留每次历史（可回溯去重演变） |
+| 增量 | 自动归档间隔 / 手动归档 | `start_log_scan.py -m 5 -d <本地HDD> -p <place> -tag <config> -pipeline <plan_run_id>`（不带 `-end`） | `Result_*_org.xls`（累计去重） | 保留每次历史（可回溯去重演变） |
 | 终态最终 | PlanRun 终态 | 同上 + `-end`（合并所有增量） | `Result_*_org.xls` + `Result_*.xls`（最终去重） | 供人工审核 |
 
-**多 agent 合并**（`-merge_files`）：
+**scan 执行位置**：Agent 本地 Linux（`backend/agent/resources/start_log_scan/`）。工具核心模块（`modules/analyse/aee/`、`modules/mode/ScanAeePlatform.py`、`modules/common/Excel.py`）无 Windows 硬依赖（xlwt/xlrd 纯 Python），Linux 可运行。
+
+**多 agent 合并**（控制平面，`-merge_files`）：
 ```
 # 各 agent 单独 scan 产 _org.xls
 # 控制面集中合并
@@ -195,11 +233,11 @@ start_log_scan.py -merge_files agentA_org.xls agentB_org.xls -side shanghai -mer
 
 #### 归档-3：分类提取（控制平面，终态后/提单时）
 
-**职责**：从去重 `Result_MergeFiles.xls` 的 db 路径，定位到各 agent 15.4 上的事件目录（含 AEE + mobilelog + bugreport），集中复制到 15.4 中心日志服务器的提单目录。
+**职责**：从去重 `Result_MergeFiles.xls` 的 db 路径，定位到 15.4 上已上送的事件目录，复制到提单目录。
 
 **逻辑**：
 1. 读 `Result_MergeFiles.xls` 的 Path 列（`__exp_main.txt` 路径）
-2. 按 Path 定位到事件目录 `{cifs_root}/{folder_name}/{serial}/aee_exp/{ts}_{db_path}/`
+2. 按 Path 定位到 15.4 上已上送的事件目录 `{cifs_root}/devices/{folder_name}/{serial}/aee_exp/{ts}_{db_path}/`
 3. 复制该事件目录（含 AEE 原始文件 + mobilelog/ + bugreport/）到提单目录
 4. 开发通过 CIFS 只读访问提单目录
 
@@ -215,15 +253,19 @@ start_log_scan.py -merge_files agentA_org.xls agentB_org.xls -side shanghai -mer
 
 **前提**：归档-1 的存储结构必须按事件目录聚合（mobilelog/bugreport 下沉到事件目录内），否则分类提取无法按 db 路径定位关联日志。
 
-#### 终态触发三场景
+#### 上送触发五场景（2026-06-20 修订，从三场景扩展为五场景）
 
-| 场景 | 触发 | 归档动作 |
-|------|------|---------|
-| 测试结束时间到达 | PlanRun 终态 SUCCESS/PARTIAL_SUCCESS | 自动执行最终归档（归档-1 确保 + 归档-2 最终 + 归档-3） |
-| 手动停止测试 | 用户 abort → PlanRun FAILED | 前端提示「是否最终归档？」→ 用户确认后执行 |
-| 测试中断/失败 | PlanRun FAILED/DEGRADED | 前端提示「是否最终归档？」→ 用户确认后执行 |
+| # | 场景 | 触发方式 | 上送内容 |
+|---|------|---------|---------|
+| 1 | 测试结束时间到达 | PlanRun SUCCESS/PARTIAL_SUCCESS，自动 | scan 终态报告 + 报告中 db 对应事件目录 |
+| 2 | 手动停止测试 | 用户 abort → FAILED，前端确认后 | 同上 |
+| 3 | 测试中断/失败 | PlanRun FAILED/DEGRADED，前端确认后 | 同上 |
+| 4 | 测试过程中手动归档 | 测试详情页「手动归档」按钮 | scan 增量报告 + 报告中 db 对应事件目录 |
+| 5 | 自动归档间隔 | 计划开始时设置的间隔时间，周期触发 | scan 增量报告 + 报告中 db 对应事件目录 |
 
-场景 1 自动，场景 2/3 需用户确认（中断/失败时日志可能不完整，归档价值需用户判断）。
+**溢出上送**（独立于上述 5 个触发）：Agent HDD 超阈值时，最旧事件目录上送 15.4 后 prune 本地。
+
+场景 1 自动；场景 2/3 需用户确认（中断/失败时日志可能不完整，归档价值需用户判断）；场景 4/5 为过程中归档，支持「边跑边看」。
 
 ### D5: Watcher 无人值守续航 —— 加固既有 RESUME 重挂路径（非独立重挂）——【首次落地最高增益项，优先执行】
 
@@ -293,12 +335,13 @@ Agent 重启
 
 | 新增项 | 影响范围 |
 |--------|---------|
-| LogArchiver 改造（归档-1） | tar → 目录树直复制；活跃 Job cycle 快照；归档与 prune 解耦；存储结构改造（mobilelog/bugreport 按事件聚合） |
-| 归档-2 汇总去重 | 控制平面新功能：各 agent scan + merge_files 合并；RunConsole 复用；每小时增量 + 终态最终 |
-| 归档-3 分类提取 | 控制平面新功能：按 Result.xls 的 db 路径从 15.4 取事件目录复制到提单目录 |
-| 15.4 中心日志服务器 | 现有 CIFS 共享，非新基础设施；Agent/控制面通过挂载写入，开发只读访问 |
+| 归档-1 Agent 本地 scan + 按需上送 | LogArchiver「搬运+快照」取消；Watcher 路径 B 从 15.4 CIFS 改为本地 HDD；scan 下沉到 Agent 本地；15.4 只存报告+事件 |
+| 归档-2 Agent 本地 scan | Agent 本地运行 start_log_scan（Linux），产出 Result_*.xls 上送 15.4；控制平面只做 -merge_files 合并 |
+| 归档-3 分类提取 | 控制平面：按 Result.xls 的 db 路径从 15.4 `devices/` 取事件目录复制到提单目录 |
+| 15.4 中心日志服务器 | 现有 CIFS 共享，非新基础设施；仅存汇总报告 + 按需上送事件 + 溢出事件 |
+| 运行日志访问 | Agent HTTP 下载端点，控制平面按需从 Agent 拉取，不上送 15.4 |
 | Watcher 路径 B 默认开 | `STP_WATCHER_AEE_RECONCILE_ENABLED` 默认 true；mobilelog/bugreport 存储结构改造 |
-| 终态触发三场景 | PlanRun 终态链路 + 前端交互（自动 + 提示确认） |
+| 上送触发五场景 | PlanRun 终态链路 + 前端交互（自动 + 提示确认 + 手动归档 + 自动间隔） |
 | 详情页数据展示 | 新增归档状态区 + 去重报告区 + crash 详情下钻 |
 | Watcher 续航加固（已落地） | enable.py 1 行 + agent_api RESUME 降级 + main.py 打点 + 测试 |
 | 归档状态端点（已落地） | 后端只读端点，不影响现有 API |
@@ -320,21 +363,21 @@ Agent 重启
 | 4 | `backend/agent/tests/` | 端到端续航测试 | ✅ 已落地 |
 | 5 | 回归 | 既有 recovery + watcher 用例全过 | ✅ 已落地 |
 
-### Sprint 2（5-8 天）：归档-1 搬运改造 + Watcher 路径 B 默认开 + 存储结构改造
+### Sprint 2（5-8 天）：Watcher 路径 B 改本地 HDD + 存储结构改造 + LogArchiver 改造
 
-> 原 Sprint 2 已落地 LogArchiver（tar 模式）。2026-06-18 修订：改为目录树直复制 + 活跃 Job cycle 快照 + 存储结构改造 + 路径 B 默认开。
+> 2026-06-20 修订：原 Sprint 2「LogArchiver 搬运运行日志到 15.4」已取消。改为：Watcher 路径 B 写入目标从 15.4 CIFS 挂载点改为 Agent 本地 HDD；LogArchiver「搬运+快照」取消，只保留 SSD prune + HDD 溢出上送；上送逻辑新增。
 
 | 步骤 | 文件 | 改动 | 优先级 |
 |------|------|------|--------|
 | 1 | `backend/agent/aee/reconciler.py:151` | `STP_WATCHER_AEE_RECONCILE_ENABLED` 默认 `false` → `true` | 高 |
-| 2 | `backend/agent/aee/processor.py:211,219` | mobilelog/bugreport 的 `output_dir` 从 `base_output_dir` 改为 `local_target_dir`（事件目录） | 高 |
-| 3 | `backend/agent/aee/mobilelog.py:51` | `mobilelog_dir = output_dir / mobilelog/`（output_dir 已是事件目录） | 高 |
-| 4 | `backend/agent/aee/bugreport.py` | 同理改为 `output_dir / bugreport/` | 高 |
-| 5 | `backend/agent/log_archiver.py` | tar → 目录树直复制（`shutil.copytree`）；活跃 Job cycle 边界快照（不 prune）；归档与 prune 解耦 | 高 |
-| 6 | `backend/agent/pipeline_engine.py:1670` | 加 `cycle_snapshot_callback` 注入点（patrol cycle 末尾 sleep 前） | 高 |
-| 7 | `backend/agent/main.py` | 注入 cycle_snapshot_callback（复制到 15.4 `snapshots/`）；LogArchiver 配置改 15.4 CIFS 挂载点 | 高 |
-| 8 | `backend/agent/aee/paths.py:34-43` | `get_aee_nfs_root` 默认值改为 15.4 CIFS 挂载点 | 中 |
-| 9 | 测试 | 归档目录树直复制 + cycle 快照完整性 + 存储结构改造 + 路径 B 默认开 | 高 |
+| 2 | `backend/agent/aee/processor.py:211,219` | mobilelog/bugreport 的 `output_dir` 改为 `local_target_dir`（事件目录） | 高 |
+| 3 | `backend/agent/aee/paths.py` | `get_aee_nfs_root()` 默认值从 15.4 CIFS 挂载点改为本地 HDD 路径（`/mnt/hdd/aee_events` 或 env `STP_AEE_LOCAL_ROOT`） | 高 |
+| 4 | `backend/agent/aee/paths.py` | `resolve_device_output_dir` 输出路径指向本地 HDD | 高 |
+| 5 | `backend/agent/log_archiver.py` | 删除 `_do_archive`（搬运运行日志到 15.4）和 `snapshot_active_job`（快照）；保留 `_iter_job_dirs` + SSD prune 逻辑 | 高 |
+| 6 | `backend/agent/log_archiver.py` | 新增 HDD 溢出上送：监控 HDD 使用率，超阈值时最旧事件目录上送 15.4 `devices/` 后 prune | 高 |
+| 7 | `backend/agent/main.py` | 删除 cycle_snapshot_callback 注入；LogArchiver 配置移除 nfs_base_dir | 高 |
+| 8 | `backend/agent/main.py` | 新增 Agent HTTP 运行日志下载端点（方案 A） | 高 |
+| 9 | 测试 | Watcher 路径 B 写本地 HDD + SSD prune + HDD 溢出上送 + 运行日志 HTTP 下载 | 高 |
 
 ### Sprint 3（2-3 天）：控制平面展示扩展
 
@@ -348,23 +391,25 @@ Agent 重启
 | 4 | `backend/api/routes/plan_runs.py` | watcher-summary 补充按事件目录组织的 crash 详情端点 | 中 |
 | 5 | 测试 | 前端归档状态展示 + crash 详情下钻 | 中 |
 
-### Sprint 4（8-12 天）：归档-2 汇总去重 + 归档-3 分类提取 + 终态触发
+### Sprint 4（8-12 天）：Agent 本地 scan + 按需上送 + 归档-3 分类提取 + 五触发
 
-> 2026-06-18 新增。对应 #20 修订方案 + 长跑增量去重 + 分类提取。
+> 2026-06-20 修订：scan 从控制平面下沉到 Agent 本地；上送为新增核心逻辑；终态触发扩展为五场景。
 
 | 步骤 | 文件 | 改动 | 优先级 |
 |------|------|------|--------|
-| 1 | `backend/models/plan_run.py` | 新增 `plan_run_artifact` 表（FK plan_run，artifact_type=scan_result_xls） | 高 |
-| 2 | `backend/api/routes/dedup.py` | 新增 `POST /plan-runs/{run_id}/dedup/scan`（各 agent 单独 scan）+ `GET .../status` | 高 |
-| 3 | `backend/api/routes/dedup.py` | 新增 `POST /plan-runs/{run_id}/dedup/merge`（`-merge_files` 集中合并） | 高 |
-| 4 | `backend/services/run_console.py` | 新增 `on_complete` 回调钩子（scan/merge 完成后注册产物） | 高 |
-| 5 | `backend/tasks/saq_tasks.py` | 新增 `scan_task`（每小时增量）+ `merge_task`（终态合并）SAQ task | 高 |
-| 6 | `backend/services/aggregator.py:45` | PlanRun 终态触发：归档-1 确保 + scan_task + merge_task | 高 |
-| 7 | `backend/api/routes/plan_runs.py` | 终态触发三场景：结束自动 + 手动停提示 + 中断失败提示 | 高 |
-| 8 | `frontend/src/pages/execution/PlanRunDetailPage.tsx` | 去重报告区：各 agent scan 进度 + Result_*.xls 下载 + 历史版本 + merge 结果 | 高 |
-| 9 | 归档-3 | `POST /plan-runs/{run_id}/dedup/extract`：按 Result.xls db 路径从 15.4 取事件目录复制到提单目录 | 中 |
-| 10 | 前端终态提示 | abort/失败时提示「是否最终归档？」交互 | 中 |
-| 11 | 测试 | scan + merge + extract + 终态触发 + 增量历史 | 高 |
+| 1 | `backend/agent/resources/start_log_scan/` | 放置 scan 工具（从 `F:\automation-toolkit\python-tools\stability_Start-Log-Scan`）；确认 Linux 兼容 + 依赖 xlwt/xlrd | 高 |
+| 2 | `backend/agent/scan_runner.py`（新建） | Agent 本地 scan 执行器：调用 start_log_scan.py 扫描本地 HDD，产出 Result_*.xls | 高 |
+| 3 | `backend/agent/upload_manager.py`（新建） | 按需上送：scan 报告 → 15.4 `dedup/`；报告中 db 对应事件目录 → 15.4 `devices/` | 高 |
+| 4 | `backend/models/plan_run.py` | `plan_run_artifact` 表（FK plan_run，artifact_type=scan_result_xls / merge_result_xls） | 高 |
+| 5 | `backend/api/routes/dedup.py` | 保留 scan/status/merge/extract 端点（scan 改为触发 Agent 本地 scan + 等待上送结果） | 高 |
+| 6 | `backend/services/run_console.py` | 保留 `on_complete` 回调钩子 | 高 |
+| 7 | `backend/tasks/saq_tasks.py` | `scan_task`（Agent 本地执行）+ `upload_task`（上送报告/事件到 15.4）+ `merge_task`（控制平面合并） | 高 |
+| 8 | `backend/services/aggregator.py` | PlanRun 终态触发：scan_task + upload_task + merge_task | 高 |
+| 9 | `backend/api/routes/plan_runs.py` | 上送触发五场景：终态自动 + abort/失败确认 + 手动归档按钮 + 自动归档间隔 | 高 |
+| 10 | `frontend/src/pages/execution/PlanRunDetailPage.tsx` | 去重报告区 + 手动归档按钮 + 终态确认交互 | 高 |
+| 11 | `backend/models/plan.py` | Plan 表新增 `auto_archive_interval_seconds` 列（计划开始时设置自动归档间隔） | 中 |
+| 12 | 归档-3 | `POST /plan-runs/{run_id}/dedup/extract`：从 15.4 `devices/` 取事件目录复制到提单目录 | 中 |
+| 13 | 测试 | Agent 本地 scan + 上送报告/事件 + merge + extract + 五触发 | 高 |
 
 ### 运维收口阶段（1-2 天，D6）——触发条件：首个真实专项稳定无人值守跑通后
 
@@ -382,9 +427,9 @@ Agent 重启
 ## 验证
 
 1. **Sprint 1**（已落地）：Agent 重启后 Watcher 自动恢复 + 信号不丢失 + enable.py 默认值一致
-2. **Sprint 2**：归档后 15.4 有目录树（非 tar）+ 活跃 Job cycle 快照完整（partial=false）+ mobilelog/bugreport 在事件目录内 + 路径 B 默认开
+2. **Sprint 2**：Watcher 路径 B 写 Agent 本地 HDD + SSD prune 可释放空间 + HDD 溢出上送 15.4 + mobilelog/bugreport 在事件目录内 + 运行日志 HTTP 端点可下载
 3. **Sprint 3**：前端显示归档状态 + crash 详情可下钻 + 下载端点可访问 15.4 归档文件
-4. **Sprint 4**：各 agent scan 产 `_org.xls` + `-merge_files` 合并含设备 SN + 增量历史保留 + 终态触发三场景 + 归档-3 按 db 路径提取事件目录到提单目录
+4. **Sprint 4**：Agent 本地 scan 产 `_org.xls` + 上送报告/事件到 15.4 + `-merge_files` 合并含设备 SN + 增量历史保留 + 上送触发五场景 + 归档-3 按 db 路径从 15.4 `devices/` 提取事件目录到提单目录
 5. **全局回归**：`python -m pytest backend/tests/` + `npx vitest run` 全过
 6. **运维收口阶段（触发后）**：critical 告警可触达值班通道 + pg_backup 每日产物落地 + 恢复演练 RTO 记录 + Grafana 可见本平台指标
 
@@ -395,7 +440,7 @@ Agent 重启
 - 可观测路线：ADR-0011
 - 派发门禁：ADR-0021
 - 设备租赁：ADR-0019
-- 去重工具：`F:\automation-toolkit\python-tools\stability_Start-Log-Scan`（`-merge_files` 多 agent 合并）
+- 归档工具：`backend/agent/resources/start_log_scan/`（从 `F:\automation-toolkit\python-tools\stability_Start-Log-Scan` 放入，Agent 本地 Linux 运行）
 - 上一代工具：`MonkeyAEEinfo_260523.py`（日志类型 + CIFS 挂载 + mobilelog 时间窗参考）
 - Sprint 2 实现计划：`docs/adr-0025-sprint2-log-archiver-implementation-plan-2026-06-15.md`（原 tar 模式，已被 D4 修订覆盖）
 - dedup 设计：`docs/adr-0025-dedup-integration-design-2026-06-16.md`（D-b 已落地，D-a 归入 Sprint 4）
