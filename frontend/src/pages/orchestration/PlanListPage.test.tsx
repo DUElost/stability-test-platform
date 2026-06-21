@@ -61,7 +61,8 @@ describe('PlanListPage', () => {
     renderPage();
 
     await screen.findByText('Plan 编排');
-    fireEvent.click(screen.getByRole('button', { name: /新建 Plan/ }));
+    const newPlanButtons = screen.getAllByRole('button', { name: /新建 Plan/ });
+    fireEvent.click(newPlanButtons[0]);
 
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/new');
     await waitFor(() => expect(mocks.createPlan).not.toHaveBeenCalled());

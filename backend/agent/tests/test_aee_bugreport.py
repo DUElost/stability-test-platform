@@ -1,8 +1,8 @@
 """export_bugreport_for_timestamp 落盘子目录测试 (C-2 / D3)。
 
 覆盖：
-    - 默认布局 → bugreport 落盘到 `correlated_bugreports/`(对齐 monolith)
-    - 逃生口 STP_WATCHER_AEE_SUBDIR_LAYOUT=stp → 回退 `bugreport/`
+    - 默认布局（stp）→ bugreport 落盘到 `bugreport/`（ADR-0025 D3）
+    - 逃生口 STP_WATCHER_AEE_SUBDIR_LAYOUT=correlated → 回退 `correlated_bugreports/`（对齐 monolith）
     - 与 mobilelog 共用同一 paths.resolve_*_subdir 逃生口
 """
 
@@ -34,27 +34,27 @@ def _export(tmp_path) -> bool:
     )
 
 
-def test_bugreport_default_subdir_is_correlated_bugreports(tmp_path, monkeypatch):
+def test_bugreport_default_subdir_is_bugreport(tmp_path, monkeypatch):
     monkeypatch.delenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", raising=False)
     monkeypatch.setattr(br.subprocess, "run", _fake_run_writes_zip)
 
     assert _export(tmp_path) is True
 
     subdirs = [p.name for p in tmp_path.iterdir() if p.is_dir()]
-    assert subdirs == ["correlated_bugreports"], f"默认应落盘 correlated_bugreports/,实际 {subdirs}"
-    files = list((tmp_path / "correlated_bugreports").iterdir())
+    assert subdirs == ["bugreport"], f"默认应落盘 bugreport/,实际 {subdirs}"
+    files = list((tmp_path / "bugreport").iterdir())
     assert len(files) == 1
     assert files[0].name.endswith("_bugreport.zip")
 
 
-def test_bugreport_stp_layout_falls_back_to_bugreport(tmp_path, monkeypatch):
-    monkeypatch.setenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", "stp")
+def test_bugreport_correlated_layout_uses_correlated_bugreports(tmp_path, monkeypatch):
+    monkeypatch.setenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", "correlated")
     monkeypatch.setattr(br.subprocess, "run", _fake_run_writes_zip)
 
     assert _export(tmp_path) is True
 
     subdirs = [p.name for p in tmp_path.iterdir() if p.is_dir()]
-    assert subdirs == ["bugreport"], f"stp 逃生口应回退 bugreport/,实际 {subdirs}"
+    assert subdirs == ["correlated_bugreports"], f"correlated 逃生口应落盘 correlated_bugreports/,实际 {subdirs}"
 
 
 def test_bugreport_subdir_shares_escape_hatch_with_mobilelog(monkeypatch):

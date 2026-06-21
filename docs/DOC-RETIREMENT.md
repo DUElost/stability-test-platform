@@ -101,7 +101,7 @@
 | 路径 | 说明 |
 |------|------|
 | ~~根 `openspec/`~~ → `archive/openspec/` | 根目录仅留 [`openspec/README.md`](../openspec/README.md) 重定向 |
-| ~~`docs/prototypes/`~~、`~~docs/design/*.html`~~ → `archive/prototypes/` | UI 原型，非规范 |
+| ~~`docs/prototypes/`~~、~~`docs/design/*.html`~~ → `archive/prototypes/` | UI 原型，非规范 |
 | ~~`docs/archive/implementation-plan-adr0018*.md`~~ → `archive/assessments-adr0018/` | 仅考古 |
 
 **第三批已全部完成**；后续无计划中的文档退役批次。

@@ -103,4 +103,4 @@ class MyAction:
 - ~~`backend/agent/actions/`~~ — ~~内置 Action 库~~ → 已删除（2026-05-04），由 `backend/agent/registry/script_registry.py` 替代
 - [`ADR-0014`](./ADR-0014-pipeline-execution-engine.md) — Pipeline 执行引擎架构（上层决策）
 - [`ADR-0020`](./ADR-0020-plan-step-one-shot-migration.md) — Plan-based 编排替代 Workflow+Tool 体系
-- [`openspec/changes/archive/2026-03-04-aee-script-migration-to-builtin-actions/proposal.md`](../archive/openspec/changes/archive/2026-03-04-aee-script-migration-to-builtin-actions/proposal.md) — AEE 脚本迁移方案（**已归档**）
+- [`archive/openspec/changes/archive/2026-03-04-aee-script-migration-to-builtin-actions/proposal.md`](../archive/openspec/changes/archive/2026-03-04-aee-script-migration-to-builtin-actions/proposal.md) — AEE 脚本迁移方案（**已归档**）

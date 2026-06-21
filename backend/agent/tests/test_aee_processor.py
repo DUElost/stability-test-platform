@@ -262,8 +262,8 @@ def test_process_logs_strict_verify_rejects_dir_without_dbg(tmp_path, monkeypatc
         assert not db_dir.exists() or not any(db_dir.iterdir()), "失败 pull 应清理目录"
 
 
-def test_process_logs_mobilelog_uses_correlated_subdir_default(tmp_path, monkeypatch):
-    """ADR-0018 2026-06-18: mobilelog 落在事件目录(local_target_dir)内的 correlated_mobilelogs/ 子目录。"""
+def test_process_logs_mobilelog_uses_stp_subdir_default(tmp_path, monkeypatch):
+    """ADR-0025 D3: mobilelog 落在事件目录(local_target_dir)内的 mobilelog/ 子目录。"""
     monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
     monkeypatch.delenv("STP_WATCHER_AEE_SUBDIR_LAYOUT", raising=False)
     store = _MemStore()
@@ -295,7 +295,7 @@ def test_process_logs_mobilelog_uses_correlated_subdir_default(tmp_path, monkeyp
 
     def fake_mobilelog(**kw):
         captured["output_dir"] = kw["output_dir"]
-        # 模拟 mobilelog.py 默认行为:写到 correlated_mobilelogs/ 子目录
+        # 模拟 mobilelog.py 默认行为:写到 resolve_mobilelog_subdir() 子目录
         from backend.agent.aee.mobilelog import _resolve_mobilelog_subdir
 
         target = kw["output_dir"] / _resolve_mobilelog_subdir()
@@ -320,8 +320,11 @@ def test_process_logs_mobilelog_uses_correlated_subdir_default(tmp_path, monkeyp
         f"output_dir 应为事件目录,实际: {captured['output_dir']}"
     assert "db.01" in captured["output_dir"].name, \
         f"事件目录应含 db_path basename,实际: {captured['output_dir'].name}"
-    landed = captured["output_dir"] / "correlated_mobilelogs"
-    assert landed.is_dir(), f"应写入事件目录内 correlated_mobilelogs/,实际: {captured['output_dir'].iterdir()}"
+    from backend.agent.aee.mobilelog import _resolve_mobilelog_subdir
+
+    subdir = _resolve_mobilelog_subdir()
+    landed = captured["output_dir"] / subdir
+    assert landed.is_dir(), f"应写入事件目录内 {subdir}/,实际: {list(captured['output_dir'].iterdir())}"
 
 
 def test_process_logs_mobilelog_subdir_stp_fallback(tmp_path, monkeypatch):

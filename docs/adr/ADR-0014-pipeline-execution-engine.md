@@ -191,8 +191,8 @@ Pipeline Editor 中的步骤参数配置从原始 JSON textarea 升级为 schema
 - [`ADR-0016`](./ADR-0016-deprecate-base-test-case.md) - 废弃 BaseTestCase
 
 ### OpenSpec
-- [`openspec/specs/pipeline-engine/spec.md`](../archive/openspec/specs/pipeline-engine/spec.md) - Pipeline 引擎规范（**已归档**，含 deprecated 注）
-- [`openspec/changes/archive/2026-03-11-builtin-action-param-forms/`](../archive/openspec/changes/archive/2026-03-11-builtin-action-param-forms/) - 参数表单 Change（已归档）
+- [`archive/openspec/specs/pipeline-engine/spec.md`](../archive/openspec/specs/pipeline-engine/spec.md) - Pipeline 引擎规范（**已归档**，含 deprecated 注）
+- [`archive/openspec/changes/archive/2026-03-11-builtin-action-param-forms/`](../archive/openspec/changes/archive/2026-03-11-builtin-action-param-forms/) - 参数表单 Change（已归档）
 
 ---
 

@@ -52,4 +52,4 @@
 
 - ⏳ `backend/api/routes/deploy.py`（计划）
 - `backend/models/schemas.py`
-- ⏳ `docs/archive/openspec/changes/ssh-auto-deploy/`（计划，未实现；OpenSpec 已整体归档）
+- ⏳ SSH 自动部署 OpenSpec 变更（计划，未实现；OpenSpec 已整体归档，无归档稿）
