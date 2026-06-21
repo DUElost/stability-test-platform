@@ -23,6 +23,7 @@ if __name__ == "__main__" and __package__ is None:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
     from agent.api_client import complete_run, fetch_pending_jobs, sync_recovery
+    from agent.aee.paths import get_aee_local_root, get_aee_nfs_root
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
@@ -43,6 +44,7 @@ if __name__ == "__main__" and __package__ is None:
 else:
     from .adb_wrapper import AdbWrapper
     from .api_client import complete_run, fetch_pending_jobs, sync_recovery
+    from .aee.paths import get_aee_local_root, get_aee_nfs_root
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
@@ -520,28 +522,31 @@ def main() -> None:
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
-        # ADR-0025 Sprint 2: 运行日志归档调度器 + 本地盘溢出监控（nfs_base_dir 为空时归档禁用）
-        if nfs_base_dir:
-            LogArchiver.instance().configure(
-                local_db=local_db,
-                host_id=host_id,
-                nfs_base_dir=nfs_base_dir,
-                run_log_dir=str(BASE_DIR / "logs" / "runs"),
-                api_url=api_url,
-                agent_secret=agent_secret,
-                interval_seconds=float(os.getenv("STP_LOG_ARCHIVE_INTERVAL_SECONDS", "3600")),
-                grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
-            ).start()
+        # ADR-0025 方案 C Sprint 2: SSD 运行日志 prune + HDD 溢出上送
+        LogArchiver.instance().configure(
+            local_db=local_db,
+            run_log_dir=str(BASE_DIR / "logs" / "runs"),
+            interval_seconds=float(os.getenv("STP_LOG_ARCHIVE_INTERVAL_SECONDS", "3600")),
+            grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
+        ).start()
+        logger.info("log_archiver=started")
+        hdd_root = str(get_aee_local_root())
+        cifs_root = (
+            os.getenv("STP_AEE_CIFS_ROOT", "")
+            or os.getenv("STP_AEE_NFS_ROOT", "")
+            or os.getenv("STP_WATCHER_NFS_BASE_DIR", "")
+        )
+        if cifs_root:
             LocalDiskMonitor.instance().configure(
-                archiver=LogArchiver.instance(),
-                base_dir=str(BASE_DIR),
+                hdd_root=hdd_root,
+                cifs_root=cifs_root,
                 interval_seconds=float(os.getenv("STP_LOCAL_DISK_MONITOR_INTERVAL_SECONDS", "300")),
                 spill_threshold_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_THRESHOLD", "80")),
                 target_pct=float(os.getenv("STP_LOCAL_DISK_SPILL_TARGET", "70")),
             ).start()
-            logger.info("log_archiver=started local_disk_monitor=started nfs_base=%s", nfs_base_dir)
+            logger.info("hdd_spill_monitor=started hdd=%s cifs=%s", hdd_root, cifs_root)
         else:
-            logger.info("log_archiver_skipped nfs_base_dir_empty")
+            logger.info("hdd_spill_monitor_skipped cifs_root_empty")
         # M4/T4-4: 清理上次进程残留的 active watcher_state(崩溃/重启脏记录)。
         # 必须在 configure(注入 local_db)之后调用。
         try:

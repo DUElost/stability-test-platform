@@ -161,15 +161,18 @@ class LogArchiver:
 
 
 def collect_archive_heartbeat_metrics() -> Optional[Dict[str, Any]]:
-    """ADR-0025 方案 C: 归档心跳指标。LogArchiver 只做 SSD prune。
-
-    返回 LogArchiver pruned_total；若未配置返回 None。
-    HddSpillMonitor 指标由其自身注入心跳，此处不再聚合。
-    """
     archiver = LogArchiver.instance()
     if not archiver.is_configured():
         return None
-    return dict(archiver.snapshot_metrics())
+    metrics: Dict[str, Any] = dict(archiver.snapshot_metrics())
+    try:
+        from .local_disk_monitor import HddSpillMonitor
+        monitor = HddSpillMonitor.instance()
+        if monitor.is_configured():
+            metrics.update(monitor.snapshot_metrics())
+    except Exception:
+        pass
+    return metrics
 
 
 __all__ = [
