@@ -69,7 +69,11 @@
 | [ADR-0018](./ADR-0018-infrastructure-layer-framework-adoption.md) | 基础设施层框架引入（SAQ / APScheduler / python-socketio） | Accepted | P0 | M2 | 已实现 |
 | [ADR-0019](./ADR-0019-android-device-lease-and-capacity-scheduling.md) | Android Device Lease 与容量调度模型 | Accepted | P0 | M3 | 已实现（2026-05-04 Phase 1-6e 落地，TTL/grace 调优为持续运维项） |
 | [ADR-0020](./ADR-0020-plan-step-one-shot-migration.md) | Plan-Step 一次性切换与旧编排模型移除 | Accepted | P0 | M3 | 预扩展/重构 |
-| [ADR-0024](./ADR-0024-browser-session-security-hardening.md) | 浏览器 Web 会话安全化（HttpOnly Cookie + CSRF + refresh 黑名单 + 可观测） | Accepted | P0 | M3.2 | 已实现（2026-05-21，grace 至 2026-06-21） |
+| [ADR-0021](./ADR-0021-script-content-alignment-gate.md) | 派发门禁 / PlanRun 详情 / 脚本内容对齐 | Accepted | P0 | M3 | 已实现（C5a–C6） |
+| [ADR-0022](./ADR-0022-patrol-heartbeat-aggregation.md) | Patrol 周期心跳聚合与退避 | Accepted | P1 | M3 | 已实现 |
+| [ADR-0023](./ADR-0023-script-traceability.md) | 脚本溯源与 sha256 契约 | Accepted | P1 | M3 | 已实现 |
+| [ADR-0024](./ADR-0024-browser-session-security-hardening.md) | 浏览器 Web 会话安全化（HttpOnly Cookie + CSRF + refresh 黑名单 + 可观测） | Accepted | P0 | M3.2 | 已实现（2026-05-21） |
+| [ADR-0025](./ADR-0025-phase4-architecture-alignment.md) | Phase 4 架构对齐（方案 C：存储三级 + Agent 归档闭环） | Accepted | P2 | M4 | 实施中（Sprint 2–4，见 [DOC-MAP](../DOC-MAP.md)） |
 
 ## Proposed 里程碑看板（2026 上半年）
 
@@ -77,7 +81,8 @@
 |---|---|---|
 | M1 | 2026-03-15 | ADR-0008, ADR-0009 |
 | M2 | 2026-04-15 | ADR-0010, ADR-0011, ADR-0013, ADR-0014, ADR-0016, ADR-0018 |
-| M3 | 2026-05-15 | ADR-0012（第 2-3 层）, ADR-0019, ADR-0020 |
+| M3 | 2026-05-15 | ADR-0012（第 2-3 层）, ADR-0019, ADR-0020, ADR-0021–0023 |
+| M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
 
 ## 维护约定
 

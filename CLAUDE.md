@@ -6,6 +6,16 @@
 
 ## 变更记录 (Changelog)
 
+### 2026-06-21 — 项目文档体系补强 + ADR-0025 方案 C 摘要
+- **文档中心**：[`docs/README.md`](./docs/README.md)、[`docs/DOC-MAP.md`](./docs/DOC-MAP.md)、[`docs/DOC-RETIREMENT.md`](./docs/DOC-RETIREMENT.md)（待删/归档清单）。
+- **设计（与代码对齐）**：`docs/design/00`–`06` 系统总览、主链路、后端、前端、Agent、数据模型、实时/后台；方案 C 见 `design/2026-plan-c-storage-and-access.md`。
+- **PRD / 验收**：`docs/prd/00-platform-overview.md`、`docs/acceptance/00-platform-smoke.md`；方案 C 见 `prd/`、`acceptance/2026-plan-c-sprint2-3.md`。
+- **开发 / 运维**：`docs/development/`、`docs/operations/README.md`；`backend/agent/DEPLOY.md` 补方案 C env。
+- **openspec/**：已迁 `docs/archive/openspec/`（根目录仅 [`openspec/README.md`](openspec/README.md) 重定向）。
+- **文档退役第三批次**：`docs/prototypes/`、`docs/design/*.html` → `archive/prototypes/`；OpenSpec 实体迁入 `archive/openspec/`。
+- **本文件定位**：百科 + Changelog + 端点/模型详表；**模块设计以 `docs/design/` 为准**。
+- **方案 C 存储**：见下文 §方案 C 存储与归档；旧 `run_log_bundle`/15.4 运行日志描述在 Sprint 3 收口前可能仍出现在 §FAQ。
+
 ### 2026-05-21 — ADR-0024 — 浏览器 Web 会话安全化(Cookie + CSRF + Refresh 黑名单 + 可观测)
 - **背景**:登录会话此前是 `Authorization: Bearer` + localStorage,XSS 即 token 泄露;`POST /auth/logout` 服务端无感知,refresh token 30 天内任何副本仍可换 access;CSRF 完全靠浏览器默认 `SameSite` 兜底,无指标无告警。本周一次性收口:HttpOnly Cookie + CSRF 中间件 + refresh 黑名单 + 拒绝原因指标 + 生产 guard。详见 [ADR-0024](./docs/adr/ADR-0024-browser-session-security-hardening.md)。
 - **会话载体切换**(`f26eb43`):
@@ -202,6 +212,22 @@
 > 2. 安装前需 `sed -i 's/\r$//' install_agent.sh` 修复 Windows 换行符
 > 3. `API_URL` 使用 `http://127.0.0.1:8000`（安装脚本自动检测 WSL 并设置）
 > 4. 详细步骤参见 `backend/agent/DEPLOY.md`
+
+---
+
+## 方案 C 存储与归档（ADR-0025）
+
+> 2026-06-20 决策修订。完整说明见 [`docs/design/2026-plan-c-storage-and-access.md`](./docs/design/2026-plan-c-storage-and-access.md)。
+
+| 存储 | 用途 | 默认路径 / 访问 |
+|------|------|-----------------|
+| Agent SSD | 运行日志（唯一物理副本） | `logs/runs/{job_id}/`；HTTP `:8900/run-logs/{job_id}` |
+| Agent HDD | AEE + mobilelog + bugreport（第一落点） | `/mnt/hdd/aee_events`（`STP_AEE_LOCAL_ROOT`） |
+| 15.4 CIFS | 汇总 xls、按需事件、HDD 溢出 | `STP_AEE_CIFS_ROOT`；**不含**运行日志 |
+
+**已取消（勿在新 Plan 中依赖）**：运行日志 tar/目录树上送 15.4、`run_log_bundle` JobArtifact 注册、patrol cycle 快照 `snapshots/`。
+
+**实施状态**：Sprint 2 Agent 见 `sprint2/plan-c-hdd-logarchiver`（PR #31）；控制面/前端 Sprint 3、Agent scan Sprint 4 见 [GitHub #32](https://github.com/DUElost/stability-test-platform/issues/32)。
 
 ---
 

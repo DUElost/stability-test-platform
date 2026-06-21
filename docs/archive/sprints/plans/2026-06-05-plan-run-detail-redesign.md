@@ -2270,7 +2270,7 @@ cd frontend && npm run build 2>&1 | tail -10
 
 ## 设计参考
 
-静态设计稿：`docs/design/plan-run-detail-v2.html`（在线预览：`http://localhost:9900/plan-run-detail-v2.html`）
+静态设计稿：`docs/archive/prototypes/plan-run-detail-v2.html`（本地预览：在 `docs/archive/prototypes/` 下 `python -m http.server 9900`）
 
 关键视觉对照：
 - 左侧面板宽 256px，Hero 用 `bg-gradient-to-br from-{status-color}-50/80 to-white`

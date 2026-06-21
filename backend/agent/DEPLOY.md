@@ -416,6 +416,28 @@ done
 
 ---
 
+## 方案 C 存储与环境变量（ADR-0025）
+
+> 详述：[`docs/design/2026-plan-c-storage-and-access.md`](../../docs/design/2026-plan-c-storage-and-access.md)
+
+| 变量 | 默认值 / 说明 |
+|------|----------------|
+| `STP_AEE_LOCAL_ROOT` | AEE 设备日志 HDD 第一落点（默认 `/mnt/hdd/aee_events`） |
+| `STP_AEE_CIFS_ROOT` | 15.4 CIFS 挂载根（HDD 溢出上送、Sprint 4 按需上送） |
+| `STP_RUN_LOG_SERVER_PORT` | 运行日志 HTTP 端口（默认 `8900`） |
+| `STP_WATCHER_AEE_SUBDIR_LAYOUT` | 默认 `stp`（`mobilelog/`、`bugreport/`）；`correlated` 为旧布局 |
+
+**行为变更**：
+
+- 运行日志仅保留在 Agent SSD `logs/runs/{job_id}/`，经 HTTP 按需下载，**不上送** 15.4
+- 不再向控制面注册 `run_log_bundle` JobArtifact
+- LogArchiver 仅做 SSD prune（grace 后删除本地目录）
+- HDD 将满时 `HddSpillMonitor` 溢出最旧 AEE 事件目录到 15.4 `devices/`
+
+**网络**：若控制面或运维需拉取运行日志，须能访问 Agent 的 `STP_RUN_LOG_SERVER_PORT`（防火墙/安全组）。
+
+---
+
 ## 下一步
 
 部署完成后，可以：
@@ -427,5 +449,5 @@ done
 
 ---
 
-*文档版本: 1.3.0*
-*最后更新: 2026-03-23*
+*文档版本: 1.4.0*
+*最后更新: 2026-06-21*

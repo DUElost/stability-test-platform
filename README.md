@@ -1,7 +1,7 @@
 # Stability Test Platform — 稳定性测试管理平台
 
 **版本**：1.0.0
-**最后更新**：2026-05-27
+**最后更新**：2026-06-21
 
 中心化 Android 设备稳定性测试管理平台：Windows/Linux 控制平面运行 FastAPI 后端与 React 前端，Linux Agent 集群通过 ADB 连接设备执行 Plan 编排任务，支持实时监控、日志采集与报告生成。
 
@@ -118,6 +118,9 @@ python -m backend.agent.main
 | `STP_METRICS_AUTH_REQUIRED` | 设 `1` 时 `/metrics` 须 Bearer token 或 `X-Agent-Secret` |
 | `STP_ENABLE_INPROCESS_SAQ` | 进程内 SAQ Worker（生产建议 `1`） |
 | `STP_WATCHER_ENABLED` | Agent 侧 Watcher 灰度开关（默认 `false`） |
+| `STP_AEE_LOCAL_ROOT` | Agent HDD AEE 根（方案 C，默认 `/mnt/hdd/aee_events`） |
+| `STP_AEE_CIFS_ROOT` | Agent 上送 15.4 的 CIFS 挂载根（HDD spill / Sprint 4 upload） |
+| `STP_RUN_LOG_SERVER_PORT` | Agent 运行日志 HTTP 端口（默认 `8900`） |
 
 ### Job / 租约超时（`backend/core/job_timeout_config.py`）
 
@@ -139,8 +142,10 @@ python -m backend.agent.main
 | `POLL_INTERVAL` | 轮询间隔（秒，默认 10） |
 | `ADB_PATH` | ADB 可执行路径 |
 | `ANDROID_ADB_SERVER_PORT` | WSL 联调须 `5039` |
+| `STP_AEE_LOCAL_ROOT` | 方案 C：AEE 设备日志 HDD 根（默认 `/mnt/hdd/aee_events`） |
+| `STP_RUN_LOG_SERVER_PORT` | 运行日志 HTTP（默认 `8900`） |
 
-完整变量列表见 `backend/.env.example` 与 [`CLAUDE.md`](./CLAUDE.md)。
+完整变量列表见 `backend/.env.example`、[`CLAUDE.md`](./CLAUDE.md) 与 [`docs/design/2026-plan-c-storage-and-access.md`](./docs/design/2026-plan-c-storage-and-access.md)。
 
 ---
 
@@ -168,13 +173,20 @@ CI 流程见 `.github/workflows/ci.yml`（compileall → pytest → tsc → buil
 
 | 文档 | 说明 |
 |------|------|
-| [`CLAUDE.md`](./CLAUDE.md) | 项目全貌：模块职责、数据模型、脚本机制、FAQ |
+| **[`docs/README.md`](./docs/README.md)** | **文档中心（推荐入口）** |
+| [`docs/DOC-MAP.md`](./docs/DOC-MAP.md) | 文档分层、设计索引、阅读顺序 |
+| [`docs/DOC-RETIREMENT.md`](./docs/DOC-RETIREMENT.md) | 待归档/删除文档清单 |
+| [`docs/design/`](./docs/design/) | 技术设计（系统/后端/前端/Agent/数据模型） |
+| [`docs/prd/`](./docs/prd/) | 产品需求 |
+| [`docs/acceptance/`](./docs/acceptance/) | 验收矩阵 |
+| [`docs/development/`](./docs/development/) | 本地开发与测试 |
+| [`docs/operations/README.md`](./docs/operations/README.md) | 运维与部署索引 |
+| [`CLAUDE.md`](./CLAUDE.md) | 项目百科：端点表、数据模型、FAQ、Changelog |
 | [`AGENTS.md`](./AGENTS.md) | 开发命令与约定 |
-| [`docs/production-minimum-deployment-checklist.md`](./docs/production-minimum-deployment-checklist.md) | 生产最小部署清单 |
-| [`docs/project-health-and-remaining-work-2026-05.md`](./docs/project-health-and-remaining-work-2026-05.md) | 项目健康度与剩余工作（整合） |
-| [`docs/preprod-drill-runbook.md`](./docs/preprod-drill-runbook.md) | 预发布逐条验收 |
-| [`docs/adr/README.md`](./docs/adr/README.md) | 架构决策记录（ADR）索引 |
-| [`docs/project-vision.md`](./docs/project-vision.md) | 项目目标愿景 |
+| [`docs/adr/README.md`](./docs/adr/README.md) | 架构决策记录（ADR） |
+| [`docs/project-vision.md`](./docs/project-vision.md) | 项目愿景 |
+| [`docs/production-minimum-deployment-checklist.md`](./docs/production-minimum-deployment-checklist.md) | 生产最小部署 |
+| [`docs/preprod-drill-runbook.md`](./docs/preprod-drill-runbook.md) | 预发布验收 |
 | [`backend/agent/DEPLOY.md`](./backend/agent/DEPLOY.md) | Agent 安装与热更新 |
 
 ---
