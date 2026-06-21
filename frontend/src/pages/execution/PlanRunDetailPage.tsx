@@ -38,6 +38,7 @@ import {
   AlertDialogAction,
 } from '@/components/ui/alert-dialog';
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
+import { ErrorState } from '@/components/ui/error-state';
 
 import type { PrecheckState } from '@/utils/api/types';
 
@@ -547,10 +548,11 @@ export default function PlanRunDetailPage() {
         >
           <ArrowLeft className="mr-1 h-4 w-4" /> 返回列表
         </Button>
-        <div className="flex h-48 items-center justify-center rounded-lg border bg-red-50 text-sm text-red-700">
-          <AlertCircle className="mr-2 h-4 w-4" />
-          {(runQ.error as Error)?.message || '加载 PlanRun 失败'}
-        </div>
+        <ErrorState
+          title="加载 PlanRun 失败"
+          description={(runQ.error as Error)?.message || '请检查网络连接或稍后重试'}
+          onRetry={() => runQ.refetch()}
+        />
       </div>
     );
   }

@@ -62,6 +62,8 @@ import { PageContainer, PageHeader } from '@/components/layout';
 
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 
+import { EmptyState } from '@/components/ui/empty-state';
+
 
 
 
@@ -907,15 +909,11 @@ export default function PlanExecutePage() {
 
 
 
-              <div className="text-center py-6 text-gray-400">
-
-
-
-                <Smartphone className="w-8 h-8 mx-auto mb-2 text-gray-300" /><p className="text-sm">暂无设备</p>
-
-
-
-              </div>
+              <EmptyState
+                title="暂无设备"
+                description="请先添加测试设备"
+                icon={<Smartphone className="w-12 h-12" />}
+              />
 
 
 
