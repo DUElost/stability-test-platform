@@ -227,19 +227,6 @@ def run_task_wrapper(
             return
 
     try:
-        # ADR-0025 Sprint 2: cycle 边界快照 callback —— patrol cycle 末尾调
-        # LogArchiver.snapshot_active_job 复制目录树到 15.4（不 prune、不注册）
-        def _cycle_snapshot(cycle: int, log_dir: str) -> None:
-            from pathlib import Path
-            from .log_archiver import LogArchiver
-            arch = LogArchiver.instance()
-            if not arch.is_configured():
-                return
-            try:
-                arch.snapshot_active_job(job_id, Path(log_dir), cycle=cycle)
-            except Exception:
-                logger.exception("cycle_snapshot_callback_failed job_id=%d cycle=%d", job_id, cycle)
-
         result = execute_pipeline_run(
             pipeline_def,
             job_id,
@@ -256,7 +243,6 @@ def run_task_wrapper(
             watcher_capability=(
                 session.summary.watcher_capability if session is not None else None
             ),
-            cycle_snapshot_callback=_cycle_snapshot,
         )
 
         watcher_summary = None

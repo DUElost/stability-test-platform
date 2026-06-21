@@ -25,7 +25,6 @@ def execute_pipeline_run(
     fencing_token: str = "",
     on_job_not_running_recovery: Optional[Callable[[int], None]] = None,
     watcher_capability: Optional[str] = None,
-    cycle_snapshot_callback: Optional[Callable[[int, str], None]] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -55,7 +54,6 @@ def execute_pipeline_run(
         fencing_token=fencing_token,
         patrol_heartbeat_uploader=patrol_heartbeat,
         watcher_capability=watcher_capability,
-        cycle_snapshot_callback=cycle_snapshot_callback,
     )
 
     result = engine.execute(pipeline_def)
@@ -73,9 +71,7 @@ def execute_pipeline_run(
         "error_code": None,
         "error_message": result.error_message,
         "log_summary": None,
-        # ADR-0025 S2.7: 不再上报 _archive_logs 的 file:// 本地路径作为完成产物
-        # —— 该路径在控制面不可达（非 NFS 根，且在 Agent 本地盘）。本地 tar 仍由
-        # _archive_logs 生成，由 LogArchiver 搬运到 NFS 并注册为可达的 run_log_bundle
-        # JobArtifact；报告改读该 NFS 产物（report_service._compose_job_report）。
+        # ADR-0025 方案 C: 运行日志不再上送 15.4，Agent 本地保留。
+        # 控制平面通过 Agent HTTP 端点按需下载（run_log_server.py）。
         "artifact": None,
     }

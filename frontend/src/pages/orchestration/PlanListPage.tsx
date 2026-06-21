@@ -23,16 +23,15 @@ import { planKeys } from '@/utils/api/queryKeys';
 
 
 
-import { Skeleton } from '@/components/ui/skeleton';
-
-
-
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 
 
 
 import { api, type Plan } from '@/utils/api';
+
+import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
+import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 
 
 
@@ -395,23 +394,7 @@ export default function PlanListPage() {
 
 
 
-        <div className="space-y-3">
-
-
-
-          <Skeleton className="h-20 w-full" />
-
-
-
-          <Skeleton className="h-20 w-full" />
-
-
-
-          <Skeleton className="h-20 w-full" />
-
-
-
-        </div>
+        <LoadingGrid count={3} columns={1} component={CardSkeleton} />
 
 
 
@@ -419,40 +402,20 @@ export default function PlanListPage() {
 
 
 
-        <Card>
-
-
-
-          <CardContent className="py-16 text-center">
-
-
-
-            <FileText className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-
-
-
-            {search ? (
-              <>
-                <p className="text-base font-medium text-gray-700 mb-2">没有匹配的 Plan</p>
-                <p className="text-sm text-gray-500">尝试使用其他关键词搜索</p>
-              </>
-            ) : (
-              <>
-                <p className="text-base font-medium text-gray-700 mb-2">还没有 Plan</p>
-                <p className="text-sm text-gray-500 mb-6">创建您的第一个测试计划</p>
-                <Button onClick={() => navigate('/orchestration/workflows/new')}>
-                  <Plus className="w-4 h-4 mr-2" /> 新建 Plan
-                </Button>
-              </>
-            )}
-
-
-
-          </CardContent>
-
-
-
-        </Card>
+        search ? (
+          <SearchEmptyState keyword={search} />
+        ) : (
+          <EmptyState
+            title="还没有 Plan"
+            description="创建您的第一个测试计划"
+            icon={<FileText className="w-16 h-16" />}
+            action={
+              <Button onClick={() => navigate('/orchestration/workflows/new')}>
+                <Plus className="w-4 h-4 mr-2" /> 新建 Plan
+              </Button>
+            }
+          />
+        )
 
 
 

@@ -272,7 +272,7 @@ class AeeDbHistoryReconciler:
             job_id=123,
             host_id="HOST",
             adb_path="adb",
-            nfs_root=Path("/mnt/nfs/stability"),
+            local_root=Path("/mnt/nfs/stability"),
         )
         reconciler.start()
         ...
@@ -291,7 +291,7 @@ class AeeDbHistoryReconciler:
         job_id: int,
         host_id: str,
         adb_path: str = "adb",
-        nfs_root: Optional[Path] = None,
+        local_root: Optional[Path] = None,
         baseline_interval_seconds: Optional[float] = None,
         burst_interval_seconds: Optional[float] = None,
         burst_rounds: Optional[int] = None,
@@ -308,7 +308,7 @@ class AeeDbHistoryReconciler:
         self._job_id = int(job_id)
         self._host_id = str(host_id)
         self._adb_path = str(adb_path)
-        self._nfs_root = Path(nfs_root) if nfs_root else None
+        self._local_root = Path(local_root) if local_root else None
 
         self._baseline = (
             baseline_interval_seconds
@@ -509,7 +509,7 @@ class AeeDbHistoryReconciler:
             state_store=self._state_store,
             adb_path=self._adb_path,
             config=self._cfg,
-            nfs_root=self._nfs_root,
+            local_root=self._local_root,
             on_new_entry=_on_runtime_entry,
             shell_fn=self._shell_fn,
             pull_fn=self._pull_fn,
@@ -581,7 +581,7 @@ class AeeDbHistoryReconciler:
             state_store=self._state_store,
             adb_path=self._adb_path,
             config=baseline_cfg,
-            nfs_root=self._nfs_root,
+            local_root=self._local_root,
             on_new_entry=_on_baseline_entry,
             shell_fn=self._shell_fn,
             pull_fn=self._pull_fn,

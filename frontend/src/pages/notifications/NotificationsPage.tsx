@@ -7,13 +7,14 @@ import {
   Plus,
   Trash2,
   Edit2,
-  Loader2,
   Bell,
   Send,
   ToggleLeft,
   ToggleRight,
+  Loader2,
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { EmptyState } from '@/components/ui/empty-state';
 
 type TabKey = 'channels' | 'rules';
 
@@ -204,9 +205,10 @@ export default function NotificationsPage() {
       </div>
 
       {loading ? (
-        <Card className="p-8 text-center">
-          <Loader2 className="w-8 h-8 mx-auto animate-spin text-gray-400" />
-        </Card>
+        <div className="space-y-3">
+          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
+          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
+        </div>
       ) : tab === 'channels' ? (
         <div className="space-y-3">
           <div className="flex justify-end">
@@ -219,7 +221,11 @@ export default function NotificationsPage() {
           </div>
 
           {channels.length === 0 ? (
-            <Card className="p-8 text-center text-gray-400">暂无通知渠道</Card>
+            <EmptyState
+              title="暂无通知渠道"
+              description="添加通知渠道以接收告警"
+              icon={<Bell className="w-16 h-16" />}
+            />
           ) : (
             channels.map((ch) => (
               <Card key={ch.id} className="px-5 py-4 flex items-center justify-between">
@@ -268,9 +274,11 @@ export default function NotificationsPage() {
           </div>
 
           {rules.length === 0 ? (
-            <Card className="p-8 text-center text-gray-400">
-              {channels.length === 0 ? '请先添加通知渠道' : '暂无告警规则'}
-            </Card>
+            <EmptyState
+              title={channels.length === 0 ? '请先添加通知渠道' : '暂无告警规则'}
+              description={channels.length === 0 ? '需要先创建通知渠道才能设置规则' : '添加告警规则以触发通知'}
+              icon={<Bell className="w-16 h-16" />}
+            />
           ) : (
             rules.map((rule) => (
               <Card key={rule.id} className="px-5 py-4 flex items-center justify-between">

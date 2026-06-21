@@ -257,8 +257,8 @@ def test_process_logs_strict_verify_rejects_dir_without_dbg(tmp_path, monkeypatc
     assert r.pulled == 0
     assert any(e.startswith("pull_verify_failed:") for e in r.errors), r.errors
     # 失败目录应清理掉
-    nfs_root = tmp_path
-    for db_dir in nfs_root.rglob("*db.99*"):
+    local_root = tmp_path
+    for db_dir in local_root.rglob("*db.99*"):
         assert not db_dir.exists() or not any(db_dir.iterdir()), "失败 pull 应清理目录"
 
 
@@ -314,7 +314,7 @@ def test_process_logs_mobilelog_uses_stp_subdir_default(tmp_path, monkeypatch):
     r = process_device_logs(serial="dev_sd", job_id=88, state_store=store, config=cfg)
     assert r.pulled == 1
     assert "output_dir" in captured
-    # ADR-0018 2026-06-18: output_dir 应为事件目录(local_target_dir),非设备级 base_output_dir
+    # ADR-0025 方案 C: output_dir 应为事件目录(local_target_dir),非设备级 base_output_dir
     # 事件目录名格式: {ts}_{db_path_basename},如 2026_0527_101522_123_db.01
     assert captured["output_dir"].name.startswith("2026_"), \
         f"output_dir 应为事件目录,实际: {captured['output_dir']}"
@@ -496,7 +496,7 @@ def test_process_device_logs_emits_when_local_aee_dir_already_exists(tmp_path, m
     )
     assert folder_name is not None
     existing_dir = resolve_device_output_dir(
-        nfs_root=tmp_path,
+        local_root=tmp_path,
         folder_name=folder_name,
         serial="dev_existing_dir",
     ) / "aee_exp" / f"{format_timestamp_for_filename('2026-06-01 19:20:00.123')}_db.55"
@@ -538,7 +538,7 @@ def test_process_device_logs_enriches_from_local_exp_main(tmp_path, monkeypatch)
     )
     assert folder_name is not None
     existing_dir = resolve_device_output_dir(
-        nfs_root=tmp_path,
+        local_root=tmp_path,
         folder_name=folder_name,
         serial="dev_existing_meta",
     ) / "aee_exp" / f"{format_timestamp_for_filename('2026-06-01 20:20:00.123')}_db.66"
@@ -604,3 +604,14 @@ def test_process_device_logs_persists_processed_before_side_effects(tmp_path, mo
     assert r.pulled == 1
     assert line in observed["saved"]
     assert observed["pending"] == {}
+
+
+def test_get_aee_local_root_default_is_hdd(monkeypatch):
+    """方案 C: get_aee_local_root() 默认回退 Agent 本地 HDD 路径。"""
+    from backend.agent.aee.paths import get_aee_local_root
+
+    monkeypatch.delenv("STP_AEE_LOCAL_ROOT", raising=False)
+    monkeypatch.delenv("STP_AEE_NFS_ROOT", raising=False)
+    monkeypatch.delenv("STP_WATCHER_NFS_BASE_DIR", raising=False)
+    monkeypatch.delenv("STP_NFS_ROOT", raising=False)
+    assert get_aee_local_root() == Path("/mnt/hdd/aee_events")

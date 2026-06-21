@@ -3,8 +3,9 @@ import { api, type TaskSchedule, type TaskScheduleCreatePayload, type Plan } fro
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
-import { Plus, Trash2, Edit2, Play, Loader2, Power } from 'lucide-react';
+import { Plus, Trash2, Edit2, Play, Power, Clock } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { EmptyState } from '@/components/ui/empty-state';
 
 interface ScheduleForm {
   name: string;
@@ -158,8 +159,9 @@ export default function SchedulesPage() {
     return (
       <PageContainer>
         <PageHeader title="定时任务" subtitle="管理 Cron 定时执行的 Plan" />
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+        <div className="space-y-4">
+          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
+          <div className="h-64 bg-gray-100 animate-pulse rounded-lg" />
         </div>
       </PageContainer>
     );
@@ -254,10 +256,11 @@ export default function SchedulesPage() {
       )}
 
       {schedules.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-          <h3 className="text-lg font-medium text-gray-900 mb-2">暂无定时任务</h3>
-          <p className="text-sm text-gray-400">创建定时任务以自动执行 Plan</p>
-        </div>
+        <EmptyState
+          title="暂无定时任务"
+          description="创建定时任务以自动执行 Plan"
+          icon={<Clock className="w-16 h-16" />}
+        />
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <table className="w-full text-sm">

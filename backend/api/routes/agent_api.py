@@ -1376,8 +1376,7 @@ async def _get_backpressure() -> Optional[int]:
 # 故意不放开 ANR / MOBILELOG：
 #   - ANR / MOBILELOG 在 JobLogSignal 里已经有 path_on_device / first_lines 元数据
 #   - 文件本身体量大、价值低，不值得入 JobArtifact 展示/下载通道
-_ARTIFACT_TYPE_RUN_LOG_BUNDLE = "run_log_bundle"
-_ARTIFACT_TYPE_WHITELIST: set[str] = {"aee_crash", "vendor_aee_crash", "bugreport", _ARTIFACT_TYPE_RUN_LOG_BUNDLE}
+_ARTIFACT_TYPE_WHITELIST: set[str] = {"aee_crash", "vendor_aee_crash", "bugreport"}
 
 
 class ArtifactIn(BaseModel):
@@ -1417,24 +1416,17 @@ async def ingest_artifact(
     """
     if not payload.storage_uri:
         raise HTTPException(status_code=400, detail="storage_uri is required")
-    # run_log_bundle 仅登记地址展示（控制面不下载、不访问归档存储，见 issue #14）：
-    # 跳过本地根校验，storage_uri 当作不透明地址存下，仅做长度上限基础校验。
-    # 其余 type（aee_crash 等）后端仍可下载 → 维持本地根校验不变。
-    if payload.artifact_type == _ARTIFACT_TYPE_RUN_LOG_BUNDLE:
-        if len(payload.storage_uri) > 2048:
-            raise HTTPException(status_code=400, detail="storage_uri too long")
-    else:
-        try:
-            resolve_local_artifact_path(payload.storage_uri, must_exist=False)
-        except ArtifactPathError as exc:
-            raise_api_http_error(
-                status_code=400,
-                code="INVALID_ARTIFACT_PATH",
-                message=(
-                    "artifact path is invalid or outside the allowed root "
-                    f"(STP_NFS_ROOT/STP_WATCHER_NFS_BASE_DIR): {exc}"
-                ),
-            )
+    try:
+        resolve_local_artifact_path(payload.storage_uri, must_exist=False)
+    except ArtifactPathError as exc:
+        raise_api_http_error(
+            status_code=400,
+            code="INVALID_ARTIFACT_PATH",
+            message=(
+                "artifact path is invalid or outside the allowed root "
+                f"(STP_NFS_ROOT/STP_WATCHER_NFS_BASE_DIR): {exc}"
+            ),
+        )
 
     if payload.artifact_type not in _ARTIFACT_TYPE_WHITELIST:
         raise HTTPException(

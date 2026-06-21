@@ -273,66 +273,12 @@ async def test_ingest_artifact_accepts_storage_uri_under_watcher_nfs_root(monkey
 
 
 # ----------------------------------------------------------------------
-# #14: run_log_bundle 仅登记地址 → 跳过本地根校验，非本地根路径也接受
+# 方案 C: run_log_bundle 不再可注册（白名单已移除），以下测试已作废删除：
+# - test_ingest_run_log_bundle_skips_local_root_check（run_log_bundle 400）
+# - test_ingest_non_bundle_still_rejects_outside_root（对照已无意义）
+# - test_archive_status_counts_run_log_bundles（run_log_bundle 400 无法注册）
+# 控制 plane 读取端 archive-status / plan_runs 仍保留对历史 run_log_bundle 的查询。
 # ----------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_ingest_run_log_bundle_skips_local_root_check():
-    """run_log_bundle 仅登记地址展示（控制面不下载）→ 注册不跑本地根校验。
-    用真机暴露的、不在后端任何 allowed root 下的归档路径注册，应 2xx。
-    回归 issue #14（此前被 400 INVALID_ARTIFACT_PATH 拒）。"""
-    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
-    uri = "/home/android/sonic_agent/logs/ftp_log/sonic_tinno/archives/2026-06-16/639/639.tar.gz"
-    try:
-        await async_engine.dispose()
-        async with AsyncSessionLocal() as async_db:
-            result = await ingest_artifact(
-                job_id=seed["job_id"],
-                payload=ArtifactIn(
-                    storage_uri=uri,
-                    artifact_type="run_log_bundle",
-                    size_bytes=650,
-                    checksum="b" * 64,
-                    source_category="run_log",
-                ),
-                db=async_db,
-                _=None,
-            )
-        assert result.error is None
-        assert result.data.created is True
-
-        db = SessionLocal()
-        try:
-            art = db.get(JobArtifact, result.data.artifact_id)
-            assert art is not None
-            assert art.artifact_type == "run_log_bundle"
-            assert art.storage_uri == uri  # 地址原样登记
-        finally:
-            db.close()
-    finally:
-        _cleanup_with_artifacts(seed)
-
-
-@pytest.mark.asyncio
-async def test_ingest_non_bundle_still_rejects_outside_root():
-    """对照组：非 run_log_bundle 类型用同一非本地根路径注册，仍 400（下载链路需后端可达）。"""
-    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
-    try:
-        await async_engine.dispose()
-        async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as excinfo:
-                await ingest_artifact(
-                    job_id=seed["job_id"],
-                    payload=ArtifactIn(
-                        storage_uri="/home/android/sonic_tinno/archives/x/1/1.tar.gz",
-                        artifact_type="aee_crash",
-                    ),
-                    db=async_db,
-                    _=None,
-                )
-        assert excinfo.value.status_code == 400
-    finally:
-        _cleanup_with_artifacts(seed)
 
 
 # ----------------------------------------------------------------------
@@ -418,41 +364,6 @@ async def test_ingest_artifact_accepts_all_whitelisted_types():
             db.close()
     finally:
         _cleanup_with_artifacts(seed)
-
-
-# ----------------------------------------------------------------------
-# archive-status 端点（ADR-0025 Sprint 2 / S2.4）
-# ----------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_archive_status_counts_run_log_bundles():
-    """注册 run_log_bundle artifact 后，archive-status 返回该 host 的归档计数 + 最近时间。"""
-    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
-    try:
-        await async_engine.dispose()
-        async with AsyncSessionLocal() as async_db:
-            await ingest_artifact(
-                job_id=seed["job_id"],
-                payload=ArtifactIn(
-                    storage_uri=f"/mnt/nfs/archives/2026-06-15/{seed['job_id']}/{seed['job_id']}.tar.gz",
-                    artifact_type="run_log_bundle",
-                    size_bytes=123,
-                    checksum="abc123",
-                ),
-                db=async_db,
-                _=None,
-            )
-        async with AsyncSessionLocal() as async_db:
-            result = await get_archive_status(seed["host_id"], db=async_db, _user=None)
-        assert result.error is None
-        assert result.data["host_id"] == seed["host_id"]
-        assert result.data["archived_total"] == 1
-        assert result.data["last_archive_at"] is not None
-        # Agent 未上报心跳归档指标 → agent_metrics 为 None（端点降级返回后端权威计数）
-        assert result.data["agent_metrics"] is None
-    finally:
-        _cleanup_with_artifacts(seed)
-
 
 @pytest.mark.asyncio
 async def test_archive_status_unknown_host_404():

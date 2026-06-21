@@ -264,8 +264,6 @@ class PipelineEngine:
 
         watcher_capability: Optional[str] = None,
 
-        cycle_snapshot_callback: Optional[Callable[[int, str], None]] = None,  # ADR-0025 Sprint 2
-
     ):
 
         self._adb = adb
@@ -297,8 +295,6 @@ class PipelineEngine:
         self._patrol_heartbeat = patrol_heartbeat_uploader  # ADR-0022
 
         self._watcher_capability = watcher_capability or None
-
-        self._cycle_snapshot_callback = cycle_snapshot_callback  # ADR-0025 Sprint 2
 
         self._shared: dict = {}
 
@@ -1670,13 +1666,6 @@ class PipelineEngine:
             )
 
 
-
-            # ── ADR-0025 Sprint 2: cycle 边界快照（写入静默窗口，sleep 前）──
-            if self._cycle_snapshot_callback is not None and self._log_dir:
-                try:
-                    self._cycle_snapshot_callback(iteration, self._log_dir)
-                except Exception:
-                    logger.exception("[Lifecycle] run=%d — cycle_snapshot_callback failed", self._run_id)
 
             # ── Sleep until next cycle, breakable by abort/manual_action ──
 
