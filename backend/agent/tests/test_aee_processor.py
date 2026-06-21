@@ -257,8 +257,8 @@ def test_process_logs_strict_verify_rejects_dir_without_dbg(tmp_path, monkeypatc
     assert r.pulled == 0
     assert any(e.startswith("pull_verify_failed:") for e in r.errors), r.errors
     # 失败目录应清理掉
-    nfs_root = tmp_path
-    for db_dir in nfs_root.rglob("*db.99*"):
+    local_root = tmp_path
+    for db_dir in local_root.rglob("*db.99*"):
         assert not db_dir.exists() or not any(db_dir.iterdir()), "失败 pull 应清理目录"
 
 

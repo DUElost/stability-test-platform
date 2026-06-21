@@ -282,7 +282,7 @@ class JobSession:
                 job_id=self._job_id,
                 host_id=self._host_id,
                 adb_path=self._manager.get_dep("adb_path") or "adb",
-                nfs_root=Path(nfs_base_dir) if nfs_base_dir else None,
+                local_root=Path(nfs_base_dir) if nfs_base_dir else None,
             )
             self._reconciler.start()
             logger.info(

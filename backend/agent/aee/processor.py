@@ -25,7 +25,7 @@ from .db_history import (
 )
 from .folder_name import get_aee_log_folder_name, make_getprop_from_shell
 from .mobilelog import export_correlated_mobilelogs, make_adb_pull_fn, make_adb_shell_fn
-from .paths import get_aee_nfs_root, get_aee_local_root, get_or_create_run_date_stamp, resolve_device_output_dir
+from .paths import get_aee_local_root, get_or_create_run_date_stamp, resolve_device_output_dir
 from .timestamp import format_timestamp_for_filename, parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,6 @@ def process_device_logs(
     state_store: Any,
     adb_path: str = "adb",
     config: Optional[ProcessConfig] = None,
-    nfs_root: Optional[Path] = None,
     local_root: Optional[Path] = None,
     run_date_stamp: Optional[str] = None,
     on_new_entry: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -109,7 +108,7 @@ def process_device_logs(
         result.errors.append("failed_to_resolve_aee_folder_name")
         return result
 
-    root = local_root or nfs_root or get_aee_local_root()
+    root = local_root or get_aee_local_root()
     base_output_dir = resolve_device_output_dir(
         local_root=root,
         folder_name=folder_name,
