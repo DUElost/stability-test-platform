@@ -15,7 +15,19 @@
 | `plan` | 编排定义：`name`、`patrol_interval_seconds`、`timeout_seconds`、`next_plan_id`、`watcher_policy` |
 | `plan_step` | 步骤行：`script_name`、`script_version`、`stage`(init/patrol/teardown)、`sort_order`、`enabled` |
 
+**设计理由（摘要）**：自 Workflow→TaskTemplate→Pipeline 五层嵌套收敛为 **Plan→Step**（ADR-0020）。一个 Plan = 一个完整专项；`next_plan_id` 替代 Plan 内多 Block；`patrol_interval_seconds IS NULL` 表示无 patrol 阶段；步骤参数来自 Script `default_params`，不在 Plan 行存 params。
+
 **无** `plan.lifecycle` 列；派发时由 `plan_dispatcher_sync` 组装 `pipeline_def`。
+
+**历史迁移对照**（已归档详述 [`archive/migrations/plan-block-step-migration.md`](../archive/migrations/plan-block-step-migration.md)）：
+
+| 旧概念 | 新概念 |
+|--------|--------|
+| WorkflowDefinition | Plan |
+| TaskTemplate + pipeline_def JSON | PlanStep 行 |
+| WorkflowRun | PlanRun |
+| setup/teardown JSONB | plan_step stage=init/teardown |
+| patrol JSONB.interval | plan.patrol_interval_seconds |
 
 ### PlanRun
 
@@ -132,4 +144,5 @@ Device 1──* device_leases
 ## 9. 历史迁移
 
 - ADR-0020 一次性迁移：Workflow* → Plan*（见 `plan_migration_audit`）  
-- 旧表已删除；勿参考 `docs/archive/stp-spec-pre-adr0020/backend/DATABASE.md`
+- 旧表已删除；设计理由见 [`archive/migrations/plan-step-design-rationale.md`](../archive/migrations/plan-step-design-rationale.md)  
+- 勿参考 `docs/archive/stp-spec-pre-adr0020/backend/DATABASE.md`

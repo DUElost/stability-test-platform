@@ -4,7 +4,7 @@
 - **日期**：2026-06-21
 - **PRD**：[2026-plan-c-storage-and-archive.md](../prd/2026-plan-c-storage-and-archive.md)
 - **ADR**：[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md)、[ADR-0018](../adr/ADR-0018-infrastructure-layer-framework-adoption.md)
-- **实施计划**：[2026-06-20-sprint2-watcher-hdd-logarchiver.md](../superpowers/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md)
+- **历史实施计划（已归档）**：[2026-06-20-sprint2-watcher-hdd-logarchiver.md](../archive/sprints/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md)
 
 ---
 

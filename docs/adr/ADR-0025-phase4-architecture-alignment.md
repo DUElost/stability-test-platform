@@ -353,7 +353,7 @@ Agent 重启
 
 ### Sprint 1（3-5 天）：Watcher 无人值守续航——加固 RESUME 重挂路径 ——【已落地】
 
-> 详细实现计划见 `docs/adr-0025-watcher-catchup-implementation-plan-2026-06-14.md`。
+> 详细实现计划见 [`archive/sprints/adr-0025-watcher-catchup-implementation-plan-2026-06-14.md`](../archive/sprints/adr-0025-watcher-catchup-implementation-plan-2026-06-14.md)（已落地，已归档）。
 
 | 步骤 | 文件 | 改动 | 状态 |
 |------|------|------|------|
@@ -442,5 +442,5 @@ Agent 重启
 - 设备租赁：ADR-0019
 - 归档工具：`backend/agent/resources/start_log_scan/`（从 `F:\automation-toolkit\python-tools\stability_Start-Log-Scan` 放入，Agent 本地 Linux 运行）
 - 上一代工具：`MonkeyAEEinfo_260523.py`（日志类型 + CIFS 挂载 + mobilelog 时间窗参考）
-- Sprint 2 实现计划：`docs/superpowers/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md`（原 tar 计划已删除，见 `DOC-RETIREMENT.md`）
-- dedup 设计：`docs/adr-0025-dedup-integration-design-2026-06-16.md`（D-b 已落地，D-a 归入 Sprint 4）
+- Sprint 2 实施计划（已归档）：`docs/archive/sprints/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md` → 见 `design/2026-plan-c-storage-and-access.md`
+- dedup 设计（已归档）：`docs/archive/migrations/adr-0025-dedup-integration-design-2026-06-16.md` → 见 `design/01-execution-pipeline.md` §8

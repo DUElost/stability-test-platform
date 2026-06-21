@@ -1,7 +1,7 @@
 # ADR-0025 去重子阶段集成设计确认（4 项待定项定稿）
 
 > 日期：2026-06-16
-> 关联：[ADR-0025](./adr/ADR-0025-phase4-architecture-alignment.md) D4、[方案 C 设计](./design/2026-plan-c-storage-and-access.md)、[主链路设计](./design/01-execution-pipeline.md) §dedup
+> 关联：[ADR-0025](../adr/ADR-0025-phase4-architecture-alignment.md) D4、[方案 C 设计](../../design/2026-plan-c-storage-and-access.md)、[主链路设计](../../design/01-execution-pipeline.md) §dedup
 > 状态：**Accepted（实施中）** —— 4 项落地形态 2026-06-16 定稿；§5 三项运营选择 2026-06-18 追认建议默认值并立项开工（见 §5）。首接厂商：**Transsion + Tinno**（2026-06-16 细化）。架构细化为「薄 CLI 封装」模型，见 §7。
 > 外部工具：`F:\automation-toolkit\python-tools\stability_Start-Log-Scan`（扫描去重）、`stability_Jira-Automation`（按厂商批量建单）
 

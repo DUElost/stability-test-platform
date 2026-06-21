@@ -46,7 +46,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **开发** | [`development/`](./development/) | 本地环境、测试约定 |
 | **运维** | [`operations/`](./operations/) + runbook + `DEPLOY.md` | 部署、联调、监控 |
 | **百科** | [`CLAUDE.md`](../CLAUDE.md) | 端点表、数据模型详表、FAQ、Changelog |
-| **Sprint 快照** | [`superpowers/plans/`](./superpowers/plans/) | 一次性任务单（完工可退役） |
+| **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues（[#32](https://github.com/DUElost/stability-test-platform/issues/32) 等） | 进行中、审查结论 |
 
 ---
@@ -82,8 +82,8 @@ operations/README.md → production-minimum-deployment-checklist.md
 | 级别 | 位置 |
 |------|------|
 | **权威** | `docs/prd`、`docs/design`、`docs/acceptance`、`docs/development`、`docs/operations`、`docs/adr`（Accepted）、`CLAUDE.md`、`README.md` |
-| **任务快照** | `superpowers/plans/`、`adr-*-implementation-plan-*.md` |
-| **归档** | [`archive/`](./archive/)、[`archive/stp-spec-pre-adr0020/`](./archive/stp-spec-pre-adr0020/) |
+| **任务快照** | [`archive/sprints/`](./archive/sprints/) — 已归档 Sprint 计划 |
+| **归档** | [`archive/`](./archive/)（含 assessments、migrations、plans、stp-spec-pre-adr0020） |
 | **过时** | [`openspec/`](../openspec/) |
 | **待清理** | 见 [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md) |
 

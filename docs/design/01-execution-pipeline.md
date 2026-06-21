@@ -133,14 +133,37 @@ Job 执行期间 `JobSession` 绑定 `DeviceLogWatcher`：
 
 ## 8. 去重与 JIRA（ADR-0025）
 
-| 环节 | 绑定 | 端点 |
-|------|------|------|
-| scan | PlanRun | `POST/GET /plan-runs/{id}/dedup/scan` |
-| merge | PlanRun | dedup merge API |
-| extract | PlanRun 终态确认 | extract API |
-| jira 提单 | **解耦** | `/api/v1/jira/runs` |
+### 8.1 调用模型
 
-**方案 C 演进**：scan 下沉 Agent 本地 HDD（Sprint 4）；当前控制面 scan 仍可能假设 15.4 路径 — 见 [`2026-plan-c-storage-and-access.md`](./2026-plan-c-storage-and-access.md) §4.2。
+- **scan / merge / extract**：绑定 **PlanRun**；由 `RunConsole` 通过 **subprocess** 调用外部工具（Py3.7/3.8 解释器），**非 import** 进后端进程。
+- **jira 提单**：与 PlanRun **解耦** → `/api/v1/jira/runs`（运维上传复核后的 xls）。
+
+未配置工具 env 时，去重入口 disabled / 后端 409，不影响主链。
+
+### 8.2 端点
+
+| 环节 | 端点 |
+|------|------|
+| scan | `POST/GET /api/v1/plan-runs/{id}/dedup/scan`、`.../status` |
+| merge | dedup merge API |
+| extract | PlanRun 终态确认后 extract |
+| jira | `POST/GET /api/v1/jira/runs` |
+
+### 8.3 环境变量（控制面）
+
+| 变量 | 说明 |
+|------|------|
+| `STP_DEDUP_SCAN_PYTHON` | start_log_scan 解释器 |
+| `STP_DEDUP_SCAN_SCRIPT` | `start_log_scan.py` 路径 |
+| `STP_JIRA_TOOL_PYTHON` | Jira-Automation 解释器 |
+| `STP_JIRA_TOOL_DIR` | 厂商 Jira 工具目录 |
+| `STP_DEDUP_AUTO_SCAN` | 终态自动触发 scan |
+
+### 8.4 方案 C 演进
+
+scan 输入路径从「15.4 NFS archives」改为 **Agent 本地 HDD**（Sprint 4）；`check_archive_completed` 不得再依赖 `run_log_bundle`。见 [`2026-plan-c-storage-and-access.md`](./2026-plan-c-storage-and-access.md) §4.2。
+
+**历史详设（已归档）**：[`archive/migrations/adr-0025-dedup-integration-design-2026-06-16.md`](../archive/migrations/adr-0025-dedup-integration-design-2026-06-16.md)
 
 ---
 

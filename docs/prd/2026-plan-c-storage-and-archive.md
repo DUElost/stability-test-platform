@@ -126,5 +126,5 @@
 |------|------|
 | 技术设计 | [`design/2026-plan-c-storage-and-access.md`](../design/2026-plan-c-storage-and-access.md) |
 | 验收矩阵 | [`acceptance/2026-plan-c-sprint2-3.md`](../acceptance/2026-plan-c-sprint2-3.md) |
-| Sprint 2 实施计划 | [`superpowers/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md`](../superpowers/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md) |
+| Sprint 2 实施计划（已归档） | [`archive/sprints/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md`](../archive/sprints/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md) |
 | 文档地图 | [`DOC-MAP.md`](../DOC-MAP.md) |

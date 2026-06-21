@@ -553,7 +553,7 @@ Phase 5 的 `ALTER ... SET NOT NULL`、`DROP COLUMN`、`DROP TABLE` 必须包裹
 
 ## 落地与后续动作
 
-1. ✅ 更新 `docs/plan-block-step-migration.md`，删除策略 A/B 可选表述，固定为一次性切换。
+1. ✅ 更新 `docs/archive/migrations/plan-block-step-migration.md`（原 `plan-block-step-migration.md`），删除策略 A/B 可选表述，固定为一次性切换。
 2. ✅ 编写 preflight SQL。
 3. ✅ 编写 Alembic migration，并在备份库上演练。
 4. ✅ 实现 Plan / PlanStep / PlanRun ORM 与 API。
@@ -567,8 +567,8 @@ Phase 5 的 `ALTER ... SET NOT NULL`、`DROP COLUMN`、`DROP TABLE` 必须包裹
 
 ## 关联实现/文档
 
-- `docs/plan-step-design-rationale.md`
-- `docs/plan-block-step-migration.md`
+- `docs/archive/migrations/plan-step-design-rationale.md`
+- `docs/archive/migrations/plan-block-step-migration.md`
 - `docs/prototypes/workflow-editor-redesign-v3.html`
 - `backend/models/plan.py` — Plan + PlanStep ORM（替代旧 workflow.py）
 - `backend/models/plan_run.py` — PlanRun ORM（替代旧 WorkflowRun）
