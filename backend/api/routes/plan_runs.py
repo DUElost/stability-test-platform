@@ -2751,15 +2751,14 @@ def download_job_artifact(
     if artifact is None or artifact.job_id != job_id:
         raise HTTPException(status_code=404, detail="artifact not found for this job")
 
-    # run_log_bundle 仅登记地址，控制面不访问归档存储（见 issue #14）：不经后端下载，
-    # 由调用方按 storage_uri 自行取用（前端展示地址 + 复制路径）。其余 type 维持下载。
+    # 方案 C: run_log_bundle 运行日志不再上送 15.4，改为 Agent HTTP 端点下载。
+    # 已有历史注册数据仍返回 409（历史产物不再可代理下载）。
     if artifact.artifact_type == "run_log_bundle":
         raise HTTPException(
             status_code=409,
             detail=(
-                "run_log_bundle is registered for address display only; "
-                "fetch it directly via its storage_uri (control plane does not "
-                "proxy archive storage)."
+                "run_log_bundle: run logs are now served via Agent HTTP endpoint; "
+                "use the agent's run log server to download directly."
             ),
         )
 
