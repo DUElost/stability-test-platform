@@ -40,10 +40,9 @@ docs/
 ├── acceptance/               ← 验收矩阵
 ├── development/              ← 本地开发、测试
 ├── operations/               ← 部署、联调、运维索引
-├── archive/                  ← 历史文档（assessments / sprints / migrations / plans）
+├── archive/                  ← 历史文档（openspec / prototypes / assessments / sprints …）
 ├── superpowers/              ← 已归档占位（见 superpowers/README.md）
 ├── stp-spec/                 ← 文档入口指针（不新增 spec）
-├── prototypes/               ← UI 原型 HTML（非规范）
 └── grafana/                  ← Dashboard JSON
 ```
 
@@ -65,4 +64,4 @@ docs/
 1. **新功能**：PRD（或 Epic Issue）→ ADR（若有架构决策）→ `design/` → 测试 + `acceptance/`  
 2. **小改动**：更新相关 `design/` 节 + 测试；`CLAUDE.md` 仅摘要  
 3. **一次性计划**：完工后移 `docs/archive/sprints/plans/`，记入 `DOC-RETIREMENT.md`  
-4. **禁止**：在 `openspec/`、`docs/archive/` 上继续堆新规范（见 [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)）
+4. **禁止**：在根 `openspec/`（已迁 archive）、`docs/archive/` 上继续堆新规范（见 [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)）

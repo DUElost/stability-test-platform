@@ -83,9 +83,8 @@ operations/README.md → production-minimum-deployment-checklist.md
 |------|------|
 | **权威** | `docs/prd`、`docs/design`、`docs/acceptance`、`docs/development`、`docs/operations`、`docs/adr`（Accepted）、`CLAUDE.md`、`README.md` |
 | **任务快照** | [`archive/sprints/`](./archive/sprints/) — 已归档 Sprint 计划 |
-| **归档** | [`archive/`](./archive/)（含 assessments、migrations、plans、stp-spec-pre-adr0020） |
-| **过时** | [`openspec/`](../openspec/) |
-| **待清理** | 见 [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md) |
+| **归档** | [`archive/`](./archive/)（含 openspec、prototypes、assessments、sprints、migrations、plans、stp-spec-pre-adr0020） |
+| **重定向** | 根 [`openspec/README.md`](../openspec/README.md) → `archive/openspec/` |
 
 ---
 

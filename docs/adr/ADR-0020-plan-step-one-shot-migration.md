@@ -569,7 +569,7 @@ Phase 5 的 `ALTER ... SET NOT NULL`、`DROP COLUMN`、`DROP TABLE` 必须包裹
 
 - `docs/archive/migrations/plan-step-design-rationale.md`
 - `docs/archive/migrations/plan-block-step-migration.md`
-- `docs/prototypes/workflow-editor-redesign-v3.html`
+- `docs/archive/prototypes/workflow-editor-redesign-v3.html`（UI 原型，已归档）
 - `backend/models/plan.py` — Plan + PlanStep ORM（替代旧 workflow.py）
 - `backend/models/plan_run.py` — PlanRun ORM（替代旧 WorkflowRun）
 - ~~`backend/models/workflow.py`~~ — 已删除

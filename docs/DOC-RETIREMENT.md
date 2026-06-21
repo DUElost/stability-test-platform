@@ -1,6 +1,6 @@
 # 文档退役与归档清单
 
-> **最后更新**：2026-06-21（第二批次）  
+> **最后更新**：2026-06-21（第三批次）  
 > 目的：标记**已完成迁移**或**一次性**文档，便于后续删除或移入 `docs/archive/`，避免与权威文档双轨。
 
 **操作前**：确认内容已并入 `docs/design/`、`docs/acceptance/`、`CLAUDE.md` 摘要或 ADR。
@@ -71,11 +71,13 @@
 |------|------|
 | `docs/archive/stp-spec-pre-adr0020/` | Workflow/Tool 旧 spec |
 | `docs/archive/dual-track-merger-v3.revised.md` | 双轨合并记录 |
-| `docs/archive/implementation-plan-adr0018*.md` | ADR-0018 实施评估 |
+| ~~`docs/archive/implementation-plan-adr0018*.md`~~ | → `archive/assessments-adr0018/` |
 | `docs/archive/sprints/` | Sprint 任务快照 |
 | `docs/archive/migrations/` | Plan/dedup 设计快照 |
 | `docs/archive/plans/` | 专项计划（watcher-consolidate） |
-| `openspec/` | 见 [`openspec/README.md`](../openspec/README.md) |
+| `docs/archive/openspec/` | OpenSpec 历史 spec（根 `openspec/` 仅重定向 stub） |
+| `docs/archive/prototypes/` | UI 原型 HTML/PNG |
+| `docs/archive/assessments-adr0018/` | ADR-0018 实施评估 |
 
 ---
 
@@ -94,13 +96,15 @@
 
 ---
 
-## 7. 后续可选清理（第三批）
+## 7. OpenSpec / UI 原型 — 已移 archive（2026-06-21 批次三）
 
-| 项 | 说明 |
-|----|------|
-| `openspec/` 整体移 `archive/openspec/` | 已标 archived |
-| `docs/prototypes/`、`docs/design/*.html` | UI 原型，非规范 |
-| `docs/archive/implementation-plan-adr0018*.md` | 仅考古 |
+| 路径 | 说明 |
+|------|------|
+| ~~根 `openspec/`~~ → `archive/openspec/` | 根目录仅留 [`openspec/README.md`](../openspec/README.md) 重定向 |
+| ~~`docs/prototypes/`~~、`~~docs/design/*.html`~~ → `archive/prototypes/` | UI 原型，非规范 |
+| ~~`docs/archive/implementation-plan-adr0018*.md`~~ → `archive/assessments-adr0018/` | 仅考古 |
+
+**第三批已全部完成**；后续无计划中的文档退役批次。
 
 ---
 

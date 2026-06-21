@@ -11,7 +11,8 @@
 - **设计（与代码对齐）**：`docs/design/00`–`06` 系统总览、主链路、后端、前端、Agent、数据模型、实时/后台；方案 C 见 `design/2026-plan-c-storage-and-access.md`。
 - **PRD / 验收**：`docs/prd/00-platform-overview.md`、`docs/acceptance/00-platform-smoke.md`；方案 C 见 `prd/`、`acceptance/2026-plan-c-sprint2-3.md`。
 - **开发 / 运维**：`docs/development/`、`docs/operations/README.md`；`backend/agent/DEPLOY.md` 补方案 C env。
-- **openspec/**：标为 archived（`openspec/README.md`）。
+- **openspec/**：已迁 `docs/archive/openspec/`（根目录仅 [`openspec/README.md`](openspec/README.md) 重定向）。
+- **文档退役第三批次**：`docs/prototypes/`、`docs/design/*.html` → `archive/prototypes/`；OpenSpec 实体迁入 `archive/openspec/`。
 - **本文件定位**：百科 + Changelog + 端点/模型详表；**模块设计以 `docs/design/` 为准**。
 - **方案 C 存储**：见下文 §方案 C 存储与归档；旧 `run_log_bundle`/15.4 运行日志描述在 Sprint 3 收口前可能仍出现在 §FAQ。
 

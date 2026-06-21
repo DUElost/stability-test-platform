@@ -52,6 +52,4 @@
 
 - ⏳ `backend/api/routes/deploy.py`（计划）
 - `backend/models/schemas.py`
-- ⏳ `openspec/changes/ssh-auto-deploy/proposal.md`（计划）
-- ⏳ `openspec/changes/ssh-auto-deploy/spec.md`（计划）
-- ⏳ `openspec/changes/ssh-auto-deploy/tasks.md`（计划）
+- ⏳ `docs/archive/openspec/changes/ssh-auto-deploy/`（计划，未实现；OpenSpec 已整体归档）

@@ -112,8 +112,8 @@ PipelineEngine 在两个层面验证锁：
 - `backend/agent/pipeline_engine.py` — Pipeline 锁验证
 - `backend/scheduler/recycler.py` — 回收器（Host 心跳超时与设备锁过期由 session_watchdog 独占处理，recycler 不包含这两类检查）
 - ~~`backend/services/dispatcher.py`~~ — ~~Workflow 派发（不再预锁）~~ → 已删除，由 `backend/services/plan_dispatcher*.py` 替代（见 ADR-0020）
-- [`openspec/specs/device-concurrency-guard/spec.md`](../../openspec/specs/device-concurrency-guard/spec.md) — 设备并发守卫规范
-- [`openspec/specs/session-lifecycle/spec.md`](../../openspec/specs/session-lifecycle/spec.md) — 会话生命周期规范
+- [`openspec/specs/device-concurrency-guard/spec.md`](../archive/openspec/specs/device-concurrency-guard/spec.md) — 设备并发守卫规范（**已归档**，以 ADR 为准）
+- [`openspec/specs/session-lifecycle/spec.md`](../archive/openspec/specs/session-lifecycle/spec.md) — 会话生命周期规范（**已归档**）
 - `backend/tests/services/test_device_lock.py` — 锁服务测试
 - `backend/tests/tasks/test_session_watchdog.py` — 看门狗测试
 - `backend/tests/services/test_session_lease.py` — 会话租约集成测试
