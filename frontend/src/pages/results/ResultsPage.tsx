@@ -14,6 +14,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { EmptyState } from '@/components/ui/empty-state';
 
 const STATUS_BADGE: Record<string, string> = {
   FINISHED: 'bg-green-100 text-green-700',
@@ -117,8 +118,12 @@ export default function ResultsPage() {
               ))}
             </div>
           ) : !data?.recent_runs?.length ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              No test runs yet
+            <div className="py-8">
+              <EmptyState
+                title="暂无测试运行"
+                description="还没有执行过测试"
+                icon={<Clock className="w-12 h-12" />}
+              />
             </div>
           ) : (
             <div className="overflow-x-auto">

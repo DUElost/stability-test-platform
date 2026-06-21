@@ -10,6 +10,7 @@ import apiClient from '@/utils/api/client';
 import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
+import { EmptyState } from '@/components/ui/empty-state';
 
 interface RunWithDraft {
   run: PlanRun;
@@ -84,11 +85,11 @@ export default function IssueTrackerPage() {
               ))}
             </div>
           ) : runsData?.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              <FileText className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-              <p>暂无 JIRA 草稿</p>
-              <p className="text-sm mt-2">完成任务执行后会自动生成 JIRA 草稿</p>
-            </div>
+            <EmptyState
+              title="暂无 JIRA 草稿"
+              description="完成任务执行后会自动生成 JIRA 草稿"
+              icon={<FileText className="w-16 h-16" />}
+            />
           ) : (
             <div className="space-y-4">
               {runsData?.map(({ run, draft }) => {
