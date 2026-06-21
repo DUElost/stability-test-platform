@@ -131,7 +131,10 @@ class HddSpillMonitor:
             return 0
         usage_pct = self._current_usage_pct()
         with self._metrics_lock:
-            self._last_usage_pct = usage_pct
+            self._last_usage_pct = usage_pct if usage_pct is not None else 0.0
+        if usage_pct is None:
+            logger.warning("hdd_usage_unavailable — skipping spill check")
+            return 0
         if usage_pct < self._threshold_pct:
             return 0
         logger.warning(
@@ -142,13 +145,15 @@ class HddSpillMonitor:
         for _ in range(self._MAX_SPILL_PER_CYCLE):
             n = self._spill_oldest_event_dir()
             if n == 0:
+                post_usage = self._current_usage_pct()
                 logger.warning(
-                    "hdd_still_high_no_spill_candidate usage=%.1f%%",
-                    self._current_usage_pct(),
+                    "hdd_still_high_no_spill_candidate usage=%s",
+                    f"{post_usage:.1f}%" if post_usage is not None else "N/A",
                 )
                 break
             spilled += n
-            if self._current_usage_pct() <= self._target_pct:
+            post_usage = self._current_usage_pct()
+            if post_usage is None or post_usage <= self._target_pct:
                 break
         if spilled:
             with self._metrics_lock:
@@ -219,13 +224,13 @@ class HddSpillMonitor:
             elif entry.is_file():
                 shutil.copyfile(str(entry), str(target))
 
-    def _current_usage_pct(self) -> float:
+    def _current_usage_pct(self) -> Optional[float]:
         try:
             info = self._disk_usage_fn(self._hdd_root)
             return float(info.get("usage_percent", 0.0))
         except Exception:
             logger.exception("hdd_usage_read_failed root=%s", self._hdd_root)
-            return 0.0
+            return None
 
     def snapshot_metrics(self) -> Dict[str, Any]:
         with self._metrics_lock:

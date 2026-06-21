@@ -80,3 +80,21 @@ def test_no_event_dirs_just_warns(tmp_path):
     n = mon.check_once()
 
     assert n == 0
+
+
+def test_usage_read_failure_skips_spill(tmp_path):
+    cifs = tmp_path / "cifs"
+    cifs.mkdir()
+    disk_fn = MagicMock(side_effect=OSError("permission denied"))
+    mon = HddSpillMonitor.instance().configure(
+        hdd_root=str(tmp_path),
+        cifs_root=str(cifs),
+        spill_threshold_pct=80.0,
+        disk_usage_fn=disk_fn,
+    )
+
+    n = mon.check_once()
+
+    assert n == 0
+    metrics = mon.snapshot_metrics()
+    assert metrics["local_disk_usage_pct"] == 0.0

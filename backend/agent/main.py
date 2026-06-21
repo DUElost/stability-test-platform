@@ -596,8 +596,8 @@ def main() -> None:
                 _deregister_active_job(int(job_id))
                 logger.info("control_abort job_id=%s", job_id)
         elif command == "archive_now":
-            # ADR-0025 S2: 手动立即归档(grace=0,仍跳过活跃 Job;daemon 线程跑,
-            # 避免拖住 SocketIO control 回调线程 —— 归档含 tar+CIFS+HTTP 注册)
+            # 方案 C: 手动立即归档 = grace=0 SSD prune（跳过活跃 Job）；
+            # daemon 线程执行，避免拖住 SocketIO control 回调线程。
             arch = LogArchiver.instance()
             if arch.is_configured():
                 threading.Thread(
