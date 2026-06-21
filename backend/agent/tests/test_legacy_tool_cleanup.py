@@ -68,7 +68,7 @@ def test_watcher_only_one_off_plan_script_is_removed():
     path = REPO_ROOT / "backend" / "scripts" / "apply_watcher_only_plan2.py"
     assert not path.exists(), f"legacy watcher rollout helper still present: {path}"
 
-    consolidate_plan = REPO_ROOT / "docs" / "plans" / "watcher-consolidate-aee-2026-05-27.md"
+    consolidate_plan = REPO_ROOT / "docs" / "archive" / "plans" / "watcher-consolidate-aee-2026-05-27.md"
     text = consolidate_plan.read_text(encoding="utf-8")
     assert "apply_watcher_only_plan2.py" not in text
 
@@ -173,7 +173,7 @@ def test_m1_dual_write_runbook_and_recon_script_are_removed():
     for path in legacy_paths:
         assert not path.exists(), f"legacy watcher dual-write artifact still present: {path}"
 
-    consolidate_plan = REPO_ROOT / "docs" / "plans" / "watcher-consolidate-aee-2026-05-27.md"
+    consolidate_plan = REPO_ROOT / "docs" / "archive" / "plans" / "watcher-consolidate-aee-2026-05-27.md"
     text = consolidate_plan.read_text(encoding="utf-8")
     assert "watcher-aee-m1-dual-write-runbook.md" not in text
     assert "aee_dual_write_recon.py" not in text
