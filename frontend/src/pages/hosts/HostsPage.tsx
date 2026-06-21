@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Loader2, Rocket } from 'lucide-react';
+import { Plus, Rocket, Server } from 'lucide-react';
 import { useToast } from '../../components/ui/toast';
 import { useConfirm } from '../../hooks/useConfirm';
 import { useAuthSession } from '../../hooks/useAuthSession';
@@ -8,9 +8,11 @@ import { ExpandableHostTable, type HostTableData } from '../../components/networ
 import { AddHostModal } from './components/AddHostModal';
 import HostHotUpdateConfirmDialog from '../../components/host/HostHotUpdateConfirmDialog';
 import { api } from '../../utils/api';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
 
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -314,8 +316,9 @@ export default function HostsPage() {
     return (
       <PageContainer>
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+        <div className="space-y-4">
+          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
+          <div className="h-64 bg-gray-100 animate-pulse rounded-lg" />
         </div>
       </PageContainer>
     );
@@ -325,9 +328,36 @@ export default function HostsPage() {
     return (
       <PageContainer>
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
-        <div className="p-4 bg-destructive/10 text-destructive rounded-lg border border-destructive/20">
-          加载主机失败，请检查后端服务连接。
-        </div>
+        <ErrorState
+          title="加载主机失败"
+          description="请检查后端服务连接"
+          onRetry={() => queryClient.invalidateQueries({ queryKey: ['hosts'] })}
+        />
+      </PageContainer>
+    );
+  }
+
+  if (tableData.length === 0) {
+    return (
+      <PageContainer>
+        <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
+        <EmptyState
+          title="还没有主机"
+          description="添加您的第一台测试执行节点"
+          icon={<Server className="w-16 h-16" />}
+          action={
+            <Button onClick={() => setIsModalOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              添加主机
+            </Button>
+          }
+        />
+        <AddHostModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onSubmit={createMutation.mutate}
+          isSubmitting={createMutation.isPending}
+        />
       </PageContainer>
     );
   }

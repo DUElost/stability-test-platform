@@ -1,14 +1,16 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Loader2 } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { useToast } from '../../components/ui/toast';
 import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '../../components/device/ExpandableDeviceTable';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { DeviceMetricsModal } from './components/DeviceMetricsModal';
 import { api } from '../../utils/api';
-import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { ErrorState } from '@/components/ui/error-state';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Smartphone } from 'lucide-react';
 
 const deviceStatusMap: Record<string, DeviceStatus> = {
   'ONLINE': 'idle',
@@ -78,8 +80,9 @@ export default function DevicesPage() {
     return (
       <PageContainer>
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
-        <div className="flex items-center justify-center h-64">
-          <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+        <div className="space-y-4">
+          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
+          <div className="h-64 bg-gray-100 animate-pulse rounded-lg" />
         </div>
       </PageContainer>
     );
@@ -89,9 +92,36 @@ export default function DevicesPage() {
     return (
       <PageContainer>
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
-        <div className="p-4 bg-destructive/10 text-destructive rounded-lg border border-destructive/20">
-          加载设备失败，请检查后端服务连接。
-        </div>
+        <ErrorState
+          title="加载设备失败"
+          description="请检查后端服务连接"
+          onRetry={() => queryClient.invalidateQueries({ queryKey: ['devices'] })}
+        />
+      </PageContainer>
+    );
+  }
+
+  if (formattedDevices.length === 0) {
+    return (
+      <PageContainer>
+        <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
+        <EmptyState
+          title="还没有设备"
+          description="添加您的第一台测试设备"
+          icon={<Smartphone className="w-16 h-16" />}
+          action={
+            <Button onClick={() => setIsModalOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              添加设备
+            </Button>
+          }
+        />
+        <AddDeviceModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          onSubmit={createMutation.mutate}
+          isSubmitting={createMutation.isPending}
+        />
       </PageContainer>
     );
   }
@@ -110,26 +140,15 @@ export default function DevicesPage() {
       />
 
       {/* Device Table */}
-      {formattedDevices.length > 0 ? (
-        <div>
-          <div className="flex justify-end mb-2">
-            <span className="text-xs text-gray-400">点击设备行的指标按钮查看历史数据</span>
-          </div>
-          <ExpandableDeviceTable
-            devices={formattedDevices}
-            onViewMetrics={(device) => setMetricsDevice({ id: device.id, serial: device.serial })}
-          />
+      <div>
+        <div className="flex justify-end mb-2">
+          <span className="text-xs text-gray-400">点击设备行的指标按钮查看历史数据</span>
         </div>
-      ) : (
-        <Card className="p-12 text-center">
-          <h3 className="text-lg font-medium text-gray-900 mb-2">暂无设备</h3>
-          <p className="text-sm text-gray-400 mb-4">添加您的第一台设备以开始使用。</p>
-          <Button onClick={() => setIsModalOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加设备
-          </Button>
-        </Card>
-      )}
+        <ExpandableDeviceTable
+          devices={formattedDevices}
+          onViewMetrics={(device) => setMetricsDevice({ id: device.id, serial: device.serial })}
+        />
+      </div>
 
       <AddDeviceModal
         isOpen={isModalOpen}
