@@ -56,4 +56,4 @@
 - `backend/tasks/saq_worker.py` — SAQ Worker（ADR-0018 引入）
 - `backend/realtime/socketio_server.py` — python-socketio 服务端（ADR-0018 引入）
 - `docs/project-vision.md`
-- `docs/stability-platform-integrated.md`
+- `docs/design/00-system-overview.md`（原 `stability-platform-integrated.md` 已归档删除）

@@ -45,3 +45,11 @@
 ## CI pipeline (`.github/workflows/ci.yml`)
 
 Backend: `compileall backend/` → `pytest backend/tests/` (PostgreSQL service). Frontend: `tsc --noEmit` → `npm run build`. Docker build after both pass.
+
+## Documentation
+
+- **Entry**: [`docs/DOC-MAP.md`](docs/DOC-MAP.md) — PRD / ADR / design / acceptance layers.
+- **Hub**: [`docs/README.md`](docs/README.md) — full documentation center.
+- **Design**: [`docs/design/`](docs/design/) — system, backend, frontend, agent (aligned with code).
+- **Retirement**: [`docs/DOC-RETIREMENT.md`](docs/DOC-RETIREMENT.md) — docs slated for archive/delete.
+- **Plan C (ADR-0025)**: [`docs/prd/`](docs/prd/) + [`docs/design/`](docs/design/) + [`docs/acceptance/`](docs/acceptance/).

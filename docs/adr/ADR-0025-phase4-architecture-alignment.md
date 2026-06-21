@@ -442,5 +442,5 @@ Agent 重启
 - 设备租赁：ADR-0019
 - 归档工具：`backend/agent/resources/start_log_scan/`（从 `F:\automation-toolkit\python-tools\stability_Start-Log-Scan` 放入，Agent 本地 Linux 运行）
 - 上一代工具：`MonkeyAEEinfo_260523.py`（日志类型 + CIFS 挂载 + mobilelog 时间窗参考）
-- Sprint 2 实现计划：`docs/adr-0025-sprint2-log-archiver-implementation-plan-2026-06-15.md`（原 tar 模式，已被 D4 修订覆盖）
+- Sprint 2 实现计划：`docs/superpowers/plans/2026-06-20-sprint2-watcher-hdd-logarchiver.md`（原 tar 计划已删除，见 `DOC-RETIREMENT.md`）
 - dedup 设计：`docs/adr-0025-dedup-integration-design-2026-06-16.md`（D-b 已落地，D-a 归入 Sprint 4）
