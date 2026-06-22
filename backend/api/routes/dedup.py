@@ -290,10 +290,10 @@ def trigger_extract(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """ADR-0025 Sprint 4 归档-3: 按 merge Result.xls 的 db 路径提取事件目录到提单目录。
+    """ADR-0025 Sprint 4 归档-3: 从 15.4 `devices/{run_id}/` 提取事件目录到提单目录。
 
-    从 merge_result_xls 产物中读取 db 路径，定位各 agent 15.4 上的事件目录
-    （含 AEE + mobilelog + bugreport），复制到提单目录。
+    按 merge Result.xls 引用的事件目录定位 15.4 上的事件目录 → 复制到
+    `nfs_root/jira/{run_id}/` 供厂商 Jira 工具消费。
     """
     from backend.models.plan_run_artifact import PlanRunArtifact
     from sqlalchemy import select
@@ -312,22 +312,35 @@ def trigger_extract(
     if not nfs_root:
         raise HTTPException(status_code=503, detail="NFS root not configured (STP_AEE_NFS_ROOT)")
 
+    devices_dir = Path(nfs_root) / "devices" / str(run_id)
     jira_dir = Path(nfs_root) / "jira" / str(run_id)
     jira_dir.mkdir(parents=True, exist_ok=True)
 
     extracted = 0
+    if devices_dir.is_dir():
+        for event_dir in sorted(devices_dir.iterdir()):
+            if not event_dir.is_dir():
+                continue
+            dest = jira_dir / event_dir.name
+            if dest.exists():
+                continue
+            try:
+                shutil.copytree(str(event_dir), str(dest))
+                extracted += 1
+            except Exception:
+                logger.exception("extract_event_dir_failed dir=%s", event_dir)
+
     for row in merge_rows:
         merge_xls = Path(row.storage_uri)
         if not merge_xls.exists():
             continue
-        merge_dir = merge_xls.parent
-        for org_xls in merge_dir.glob("Result_MergeFiles_org.xls"):
-            extract_src = merge_dir / "extract"
-            extract_src.mkdir(exist_ok=True)
-            target = jira_dir / org_xls.stem
-            if not target.exists():
-                shutil.copy2(str(org_xls), str(target))
+        dest = jira_dir / merge_xls.name
+        if not dest.exists():
+            try:
+                shutil.copy2(str(merge_xls), str(dest))
                 extracted += 1
+            except Exception:
+                logger.exception("extract_merge_xls_failed path=%s", merge_xls)
 
     logger.info("extract_done plan_run=%d extracted=%d", run_id, extracted)
     return ok({

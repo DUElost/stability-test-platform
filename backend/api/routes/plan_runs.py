@@ -2064,25 +2064,72 @@ def _aggregate_run_log_archive(
         select(Host).where(Host.id.in_(host_ids))
     ).scalars().all()
 
-    merged = WatcherAgentOpsMetrics()
+    ops = WatcherAgentOpsMetrics()
     for host in hosts:
         extra = host.extra if isinstance(host.extra, dict) else {}
         archive = extra.get("archive")
         if not isinstance(archive, dict):
             continue
-        merged.pruned_total += int(archive.get("pruned_total") or 0)
-        merged.spill_cycles += int(archive.get("spill_cycles") or 0)
-        merged.spilled_total += int(archive.get("spilled_total") or 0)
+        ops.pruned_total += int(archive.get("pruned_total") or 0)
+        ops.spill_cycles += int(archive.get("spill_cycles") or 0)
+        ops.spilled_total += int(archive.get("spilled_total") or 0)
         host_pct = archive.get("local_disk_usage_pct")
         if host_pct is not None:
             try:
                 host_pct_float = float(host_pct)
-                if merged.local_disk_usage_pct is None or host_pct_float > merged.local_disk_usage_pct:
-                    merged.local_disk_usage_pct = host_pct_float
+                if ops.local_disk_usage_pct is None or host_pct_float > ops.local_disk_usage_pct:
+                    ops.local_disk_usage_pct = host_pct_float
             except (TypeError, ValueError):
                 pass
 
-    return WatcherArchiveOut(ops_metrics=merged)
+    scan_status: Optional[str] = None
+    scan_triggered_at: Optional[str] = None
+    if job_rows:
+        plan_run_id = job_rows[0].plan_run_id
+        from backend.models.plan_run_artifact import PlanRunArtifact
+        from sqlalchemy import func as sa_func
+
+        merge_count = db.execute(
+            select(sa_func.count(PlanRunArtifact.id)).where(
+                PlanRunArtifact.plan_run_id == plan_run_id,
+                PlanRunArtifact.artifact_type == "merge_result_xls",
+            )
+        ).scalar_one()
+        scan_count = db.execute(
+            select(sa_func.count(PlanRunArtifact.id)).where(
+                PlanRunArtifact.plan_run_id == plan_run_id,
+                PlanRunArtifact.artifact_type == "scan_result_xls",
+            )
+        ).scalar_one()
+
+        if merge_count > 0:
+            scan_status = "merged"
+            first = db.execute(
+                select(PlanRunArtifact.created_at).where(
+                    PlanRunArtifact.plan_run_id == plan_run_id,
+                    PlanRunArtifact.artifact_type == "merge_result_xls",
+                ).order_by(PlanRunArtifact.created_at.asc()).limit(1)
+            ).scalar_one_or_none()
+        elif scan_count > 0:
+            scan_status = "scanned"
+            first = db.execute(
+                select(PlanRunArtifact.created_at).where(
+                    PlanRunArtifact.plan_run_id == plan_run_id,
+                    PlanRunArtifact.artifact_type == "scan_result_xls",
+                ).order_by(PlanRunArtifact.created_at.asc()).limit(1)
+            ).scalar_one_or_none()
+        else:
+            scan_status = "pending"
+            first = None
+
+        if first is not None:
+            scan_triggered_at = first.isoformat() if hasattr(first, "isoformat") else str(first)
+
+    return WatcherArchiveOut(
+        ops_metrics=ops,
+        scan_status=scan_status,
+        scan_triggered_at=scan_triggered_at,
+    )
 
 
 def _aggregate_watcher_capability(db: Session, *, job_ids: list[int]) -> Optional[str]:
