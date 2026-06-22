@@ -39,6 +39,7 @@ class Plan(Base):
     failure_threshold = Column(Float, nullable=False, default=0.05)
     patrol_interval_seconds = Column(Integer, nullable=True)
     timeout_seconds   = Column(Integer, nullable=True)
+    auto_archive_interval_seconds = Column(Integer, nullable=True)
     next_plan_id      = Column(Integer, ForeignKey("plan.id"), nullable=True)
     watcher_policy    = Column(JSONB, nullable=True)
     created_by        = Column(String(128))
