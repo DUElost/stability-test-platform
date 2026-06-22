@@ -5,7 +5,7 @@ Tests for run-oriented API routes after removing the legacy /tasks* compatibilit
 import json
 from datetime import datetime, timezone
 
-from backend.models.job import JobInstance, StepTrace
+from backend.models.job import JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 
@@ -53,21 +53,24 @@ class TestRunReportFromJobChain:
         job_id = job.id
         plan_id = plan.id
 
-        risk_path = tmp_path / "risk_summary.json"
-        risk_path.write_text(
-            json.dumps(
-                {
-                    "risk_level": "HIGH",
-                    "counts": {
-                        "events_total": 3,
-                        "restart_count": 2,
-                        "aee_entries": 1,
-                        "by_type": {"ANR": 1, "CRASH": 1},
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
+        for i in range(10):
+            sig = JobLogSignal(
+                job_id=job.id,
+                host_id=str(sample_device.host_id),
+                device_serial=sample_device.serial,
+                seq_no=i,
+                category="ANR",
+                source="inotifyd",
+                path_on_device=f"/data/anr/traces_{i}.txt",
+                artifact_uri=None,
+                sha256=None,
+                size_bytes=None,
+                first_lines="ANR in com.example",
+                detected_at=now,
+                received_at=now,
+                extra={"event_subtype": "ANR", "nfs_path": f"/nfs/anr/traces_{i}", "schema_version": 2},
+            )
+            db_session.add(sig)
 
         snapshot = StepTrace(
             job_id=job.id,
@@ -83,11 +86,6 @@ class TestRunReportFromJobChain:
                         "error_code": None,
                         "error_message": None,
                         "log_summary": "risk=HIGH;restarts=2;events=3",
-                    },
-                    "artifact": {
-                        "storage_uri": f"file://{risk_path}",
-                        "size_bytes": risk_path.stat().st_size,
-                        "checksum": "pytest",
                     },
                 }
             ),
@@ -105,8 +103,8 @@ class TestRunReportFromJobChain:
         assert data["task"]["id"] == plan_id
         assert data["task"]["type"] == "PLAN"
         assert data["summary_metrics"]["restarts"] == 2
-        assert data["risk_summary"]["risk_level"] == "HIGH"
-        assert len(data["run"]["artifacts"]) == 1
+        assert data["risk_summary"]["risk_level"] == "A"
+        assert data["risk_summary"]["counts"]["by_type"]["ANR"] == 10
 
         cached_response = client.get(f"/api/v1/runs/{job_id}/report/cached", headers=auth_headers)
         assert cached_response.status_code == 200
