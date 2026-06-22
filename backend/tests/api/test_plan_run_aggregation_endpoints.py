@@ -1114,22 +1114,22 @@ class TestWatcherSummaryEndpoint:
     def test_watcher_summary_includes_run_log_archive(
         self, client, auth_headers, chain_setup, db_session,
     ):
-        """ADR-0025 Sprint 3: watcher-summary 聚合 run_log_bundle 归档状态 + 下载引用。"""
+        """ADR-0025 Sprint 3: watcher-summary archive 段展示 host 心跳运维指标。"""
         cur_run = chain_setup["current_run"]
-        job_ids = [
-            j.id for j in db_session.query(JobInstance)
-            .filter(JobInstance.plan_run_id == cur_run.id).all()
-        ]
-        assert job_ids, "chain_setup current_run 应有关联 Job"
-        # 为其中一个 Job 注册 run_log_bundle 归档产物
-        db_session.add(JobArtifact(
-            job_id=job_ids[0],
-            storage_uri=f"/mnt/nfs/archives/2026-06-15/{job_ids[0]}/{job_ids[0]}.tar.gz",
-            artifact_type="run_log_bundle",
-            size_bytes=2048,
-            checksum="deadbeef",
-        ))
-        db_session.commit()
+        host_id = chain_setup.get("host_id") or "host-101"
+        from backend.models.host import Host
+        host = db_session.get(Host, host_id)
+        if host:
+            host.extra = {
+                **(host.extra if isinstance(host.extra, dict) else {}),
+                "archive": {
+                    "pruned_total": 3,
+                    "local_disk_usage_pct": 65.5,
+                    "spill_cycles": 1,
+                    "spilled_total": 2,
+                },
+            }
+            db_session.commit()
 
         resp = client.get(
             f"/api/v1/plan-runs/{cur_run.id}/watcher-summary?window_minutes=60",
@@ -1138,17 +1138,12 @@ class TestWatcherSummaryEndpoint:
         assert resp.status_code == 200, resp.text
         archive = resp.json()["data"]["archive"]
         assert archive is not None
-        assert archive["total_jobs"] == len(job_ids)
-        assert archive["archived_jobs"] == 1
-        assert len(archive["bundles"]) == 1
-        bundle = archive["bundles"][0]
-        assert bundle["job_id"] == job_ids[0]
-        assert bundle["size_bytes"] == 2048
-        assert bundle["artifact_id"] > 0
-        # #14: 归档地址透传给前端（仅展示 + 复制路径，不经后端下载）
-        assert bundle["storage_uri"] == (
-            f"/mnt/nfs/archives/2026-06-15/{job_ids[0]}/{job_ids[0]}.tar.gz"
-        )
+        ops = archive.get("ops_metrics", {})
+        assert ops.get("pruned_total") == 3
+        assert ops.get("local_disk_usage_pct") == 65.5
+        assert ops.get("spill_cycles") == 1
+        assert ops.get("spilled_total") == 2
+        assert archive.get("scan_status") is None
 
     def test_download_run_log_bundle_returns_409(
         self, client, auth_headers, chain_setup, db_session,

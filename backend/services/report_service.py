@@ -9,19 +9,13 @@
 import json
 import logging
 import os
-import tarfile
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
-
-from backend.core.artifact_paths import (
-    ArtifactPathError,
-    coerce_local_artifact_path,
-)
-from backend.models.job import JobArtifact, JobInstance, StepTrace
+from sqlalchemy import text, select
+from backend.models.job import JobInstance, JobLogSignal, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.host import Device, Host
@@ -68,77 +62,98 @@ REPORT_JIRA_TEMPLATE_JSON = os.getenv("RUN_REPORT_JIRA_TEMPLATE_JSON", "").strip
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+_RISK_RATING_RULES: list[dict[str, Any]] = [
+    {"keyword": "swt",             "operator": ">=", "threshold": 1, "level": "S"},
+    {"keyword": "fatal ne",        "operator": ">=", "threshold": 1, "level": "S"},
+    {"keyword": "fatal je",        "operator": ">=", "threshold": 1, "level": "S"},
+    {"keyword": "hwt",             "operator": ">=", "threshold": 1, "level": "S"},
+    {"keyword": "kernel (ke)",     "operator": ">=", "threshold": 1, "level": "S"},
+    {"keyword": "hardware reboot", "operator": ">=", "threshold": 1, "level": "S"},
+    {"keyword": "hang",            "operator": ">=", "threshold": 1, "level": "S"},
+    {"keyword": "anr",             "operator": ">=", "threshold": 10, "level": "A"},
+    {"keyword": "anr",             "operator": ">=", "threshold": 1,  "level": "B"},
+    {"keyword": "java",            "operator": ">=", "threshold": 3,  "level": "A"},
+    {"keyword": "java",            "operator": ">=", "threshold": 1,  "level": "B"},
+    {"keyword": "je",              "operator": ">=", "threshold": 3,  "level": "A"},
+    {"keyword": "je",              "operator": ">=", "threshold": 1,  "level": "B"},
+    {"keyword": "native",          "operator": ">=", "threshold": 2,  "level": "A"},
+    {"keyword": "native",          "operator": ">=", "threshold": 1,  "level": "B"},
+    {"keyword": "ne",              "operator": ">=", "threshold": 2,  "level": "A"},
+    {"keyword": "ne",              "operator": ">=", "threshold": 1,  "level": "B"},
+    {"keyword": "kernel api dump", "operator": ">=", "threshold": 1,  "level": "B"},
+]
+
+_RISK_SEVERITY_ORDER = {"S": 3, "A": 2, "B": 1}
+_DEFAULT_RISK_LEVEL = "B"
+
+
+def _classify_subtype(subtype: str, count: int) -> str:
+    lowered = subtype.lower()
+    matched: dict[str, str] = {}
+    for rule in _RISK_RATING_RULES:
+        kw = rule["keyword"]
+        if kw in lowered and kw not in matched:
+            if count >= rule["threshold"]:
+                matched[kw] = rule["level"]
+    worst = _DEFAULT_RISK_LEVEL
+    for level in matched.values():
+        if _RISK_SEVERITY_ORDER.get(level, 0) > _RISK_SEVERITY_ORDER.get(worst, 0):
+            worst = level
+    return worst
+
+
+def aggregate_risk_summary_from_signals(
+    db: Session, job_ids: list[int]
+) -> Optional[Dict[str, Any]]:
+    if not job_ids:
+        return None
+
+    sql = text("""
+        SELECT
+            COALESCE(extra->>'event_subtype', category) AS subtype,
+            COUNT(DISTINCT extra->>'nfs_path') AS dedup_count,
+            COUNT(*) AS raw_count
+        FROM job_log_signal
+        WHERE job_id = ANY(:job_ids)
+          AND category IN ('AEE', 'VENDOR_AEE', 'ANR')
+        GROUP BY subtype
+    """)
+
+    rows = db.execute(sql, {"job_ids": list(job_ids)}).all()
+
+    if not rows:
+        return None
+
+    by_type: Dict[str, int] = {}
+    by_severity: Dict[str, int] = {"S": 0, "A": 0, "B": 0}
+    events_total = 0
+    aee_entries = 0
+    worst_level = _DEFAULT_RISK_LEVEL
+
+    for subtype, dedup_count, raw_count in rows:
+        count = int(dedup_count)
+        by_type[subtype] = count
+        events_total += count
+        if subtype.upper() in ("AEE", "VENDOR_AEE"):
+            aee_entries += count
+        level = _classify_subtype(subtype, count)
+        by_severity[level] = by_severity.get(level, 0) + 1
+        if _RISK_SEVERITY_ORDER.get(level, 0) > _RISK_SEVERITY_ORDER.get(worst_level, 0):
+            worst_level = level
+
+    return {
+        "risk_level": worst_level,
+        "counts": {
+            "by_type": by_type,
+            "by_severity": by_severity,
+            "events_total": events_total,
+            "aee_entries": aee_entries,
+        },
+    }
+
+
 def _model_to_dict(payload: Any) -> Dict[str, Any]:
     return payload.model_dump()
-
-
-def _artifact_local_path(storage_uri: str) -> Optional[Path]:
-    if storage_uri.startswith(("http://", "https://")):
-        return None
-    try:
-        return coerce_local_artifact_path(storage_uri)
-    except ArtifactPathError:
-        return None
-
-
-def _load_json_file(path: Path) -> Optional[Dict[str, Any]]:
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            payload = json.load(fh)
-        return payload if isinstance(payload, dict) else None
-    except Exception:
-        return None
-
-
-def _load_risk_summary_from_tar(path: Path) -> Optional[Dict[str, Any]]:
-    try:
-        with tarfile.open(path, "r:*") as tar:
-            for member in tar.getmembers():
-                if member.isfile() and member.name.endswith("risk_summary.json"):
-                    handle = tar.extractfile(member)
-                    if not handle:
-                        continue
-                    payload = json.loads(handle.read().decode("utf-8", errors="ignore"))
-                    return payload if isinstance(payload, dict) else None
-    except Exception:
-        logger.warning("risk_summary_from_tar_failed", extra={"path": str(path)})
-    return None
-
-
-def _load_risk_summary_from_artifacts(artifacts: list) -> Optional[Dict[str, Any]]:
-    if not artifacts:
-        return None
-    ordered = sorted(
-        artifacts,
-        key=lambda item: item.created_at or datetime.min,
-        reverse=True,
-    )
-    for artifact in ordered:
-        local_path = _artifact_local_path(artifact.storage_uri)
-        if local_path is None:
-            continue
-        if not local_path.exists():
-            continue
-
-        if local_path.suffix == ".json":
-            payload = _load_json_file(local_path)
-            if payload:
-                return payload
-            continue
-
-        if local_path.suffix == ".tgz" or local_path.suffixes[-2:] == [".tar", ".gz"]:
-            tar_summary = _load_risk_summary_from_tar(local_path)
-            if tar_summary:
-                return tar_summary
-            if local_path.suffix == ".tgz":
-                base_name = local_path.name[:-4]
-            else:
-                base_name = local_path.name[:-7]
-            sidecar = local_path.parent / base_name / "risk_summary.json"
-            payload = _load_json_file(sidecar)
-            if payload:
-                return payload
-    return None
 
 
 def _unique_str_list(values: List[Any]) -> List[str]:
@@ -163,25 +178,6 @@ def _safe_json_loads(raw: Any) -> Dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
     except Exception:
         return {}
-
-
-class _VirtualArtifact:
-    """兼容风险摘要解析与报告输出的轻量 Artifact 结构。"""
-
-    def __init__(
-        self,
-        run_id: int,
-        storage_uri: str,
-        size_bytes: Optional[int] = None,
-        checksum: Optional[str] = None,
-        created_at: Optional[datetime] = None,
-    ) -> None:
-        self.id = 0
-        self.run_id = run_id
-        self.storage_uri = storage_uri
-        self.size_bytes = size_bytes
-        self.checksum = checksum
-        self.created_at = created_at or datetime.now(timezone.utc)
 
 
 def _extract_job_completion_snapshot(db: Session, job_id: int) -> Dict[str, Any]:
@@ -212,66 +208,30 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
     update = snapshot.get("update") if isinstance(snapshot.get("update"), dict) else {}
     artifact_payload = snapshot.get("artifact") if isinstance(snapshot.get("artifact"), dict) else None
 
-    artifacts_virtual: List[_VirtualArtifact] = []
     artifacts_out = []
     if artifact_payload and artifact_payload.get("storage_uri"):
-        artifact_obj = _VirtualArtifact(
-            run_id=job.id,
-            storage_uri=str(artifact_payload.get("storage_uri")),
-            size_bytes=artifact_payload.get("size_bytes"),
-            checksum=artifact_payload.get("checksum"),
-            created_at=job.ended_at or datetime.now(timezone.utc),
-        )
-        artifacts_virtual.append(artifact_obj)
         artifacts_out.append(
             {
-                "id": artifact_obj.id,
-                "run_id": artifact_obj.run_id,
-                "storage_uri": artifact_obj.storage_uri,
-                "size_bytes": artifact_obj.size_bytes,
-                "checksum": artifact_obj.checksum,
-                "created_at": artifact_obj.created_at,
+                "id": 0,
+                "run_id": job.id,
+                "storage_uri": str(artifact_payload.get("storage_uri")),
+                "size_bytes": artifact_payload.get("size_bytes"),
+                "checksum": artifact_payload.get("checksum"),
+                "created_at": job.ended_at or datetime.now(timezone.utc),
             }
         )
-
-    # ADR-0025 S2.7: file:// 完成快照已停发（控制面不可达）。改用 LogArchiver 注册的
-    # run_log_bundle JobArtifact —— 其 storage_uri 在 NFS 根下，控制面可下载，且可读取
-    # 做 risk-summary。归档是异步的：未归档窗口内无 bundle（risk-summary 暂空），归档后可用。
-    if not artifacts_virtual:
-        bundle = (
-            db.query(JobArtifact)
-            .filter(
-                JobArtifact.job_id == job.id,
-                JobArtifact.artifact_type == "run_log_bundle",
-            )
-            .order_by(JobArtifact.created_at.desc())
-            .first()
-        )
-        if bundle is not None:
-            artifact_obj = _VirtualArtifact(
-                run_id=job.id,
-                storage_uri=bundle.storage_uri,
-                size_bytes=bundle.size_bytes,
-                checksum=bundle.checksum,
-                created_at=bundle.created_at or job.ended_at or datetime.now(timezone.utc),
-            )
-            artifacts_virtual.append(artifact_obj)
-            artifacts_out.append(
-                {
-                    "id": artifact_obj.id,
-                    "run_id": artifact_obj.run_id,
-                    "storage_uri": artifact_obj.storage_uri,
-                    "size_bytes": artifact_obj.size_bytes,
-                    "checksum": artifact_obj.checksum,
-                    "created_at": artifact_obj.created_at,
-                }
-            )
 
     log_summary = update.get("log_summary")
     if not isinstance(log_summary, str):
         log_summary = None
 
-    risk_summary = _load_risk_summary_from_artifacts(artifacts_virtual)
+    sibling_job_ids: list[int] = []
+    if job.plan_run_id:
+        sibling_rows = db.execute(
+            select(JobInstance.id).where(JobInstance.plan_run_id == job.plan_run_id)
+        ).all()
+        sibling_job_ids = [r[0] for r in sibling_rows]
+    risk_summary = aggregate_risk_summary_from_signals(db, sibling_job_ids) if sibling_job_ids else None
     summary_metrics = parse_run_log_summary(log_summary)
     alerts = build_risk_alerts(risk_summary, summary_metrics)
 
@@ -381,16 +341,26 @@ def build_risk_alerts(
 
     alerts: List[RiskAlertOut] = []
     risk_level = str(risk_summary.get("risk_level", "")).upper()
-    if risk_level == "HIGH":
+    if risk_level == "S":
+        alerts.append(
+            RiskAlertOut(
+                code="RISK_LEVEL_CRITICAL",
+                severity="HIGH",
+                message="Risk level is S (Critical)",
+                metric="risk_level",
+            )
+        )
+    elif risk_level == "A":
         alerts.append(
             RiskAlertOut(
                 code="RISK_LEVEL_HIGH",
                 severity="HIGH",
-                message="Risk level is HIGH",
+                message="Risk level is A (High)",
                 metric="risk_level",
             )
         )
 
+    by_severity = counts.get("by_severity") if isinstance(counts, dict) else None
     anr_count = int(by_type.get("ANR", 0) or 0)
     if anr_count >= REPORT_ALERT_ANR_THRESHOLD:
         alerts.append(
@@ -404,7 +374,10 @@ def build_risk_alerts(
             )
         )
 
-    crash_count = int(by_type.get("CRASH", 0) or 0)
+    crash_count = 0
+    if isinstance(by_severity, dict):
+        crash_count = int(by_severity.get("S", 0) or 0)
+    crash_count = max(crash_count, int(by_type.get("CRASH", 0) or 0))
     if crash_count >= REPORT_ALERT_CRASH_THRESHOLD:
         alerts.append(
             RiskAlertOut(

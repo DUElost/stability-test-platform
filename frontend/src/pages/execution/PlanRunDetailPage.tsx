@@ -511,18 +511,6 @@ export default function PlanRunDetailPage() {
     },
   });
 
-  const archiveNowMut = useMutation({
-    mutationFn: () => api.planRuns.archiveNow(id),
-    onSuccess: () => {
-      toast.success('已触发立即归档,归档完成有秒级延迟');
-      qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
-    },
-    onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      toast.error(`归档触发失败: ${msg}`);
-    },
-  });
-
   // ── Plan name ──
   const planName = useMemo(
     () => timelineQ.data?.plan_name ?? null,
@@ -672,9 +660,8 @@ export default function PlanRunDetailPage() {
 
             {/* ADR-0025 Sprint 3: 运行日志归档状态 + 立即归档 */}
             <ArchiveStatusCard
-              archive={watcherQ.data?.archive}
-              onArchiveNow={() => archiveNowMut.mutateAsync()}
-              isLoading={watcherQ.isFetching}
+              opsMetrics={watcherQ.data?.archive?.ops_metrics}
+              scanStatus={watcherQ.data?.archive?.scan_status}
             />
 
             {/* ADR-0025 Sprint 4: 去重报告（scan/merge/extract） */}

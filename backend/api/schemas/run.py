@@ -135,6 +135,18 @@ class RiskAlertOut(BaseModel):
     threshold: Optional[int] = None
 
 
+class RiskSummaryCounts(BaseModel):
+    by_type: Dict[str, int] = {}
+    by_severity: Dict[str, int] = {}
+    events_total: int = 0
+    aee_entries: int = 0
+
+
+class RunRiskSummaryOut(BaseModel):
+    risk_level: str = "B"
+    counts: RiskSummaryCounts = Field(default_factory=RiskSummaryCounts)
+
+
 class RunReportOut(ORMBaseModel):
     generated_at: datetime
     run: RunOut

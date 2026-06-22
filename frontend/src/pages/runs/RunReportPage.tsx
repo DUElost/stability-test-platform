@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { RunReport, JiraDraft } from '@/utils/api';
+import { RunReport, JiraDraft, RunRiskSummary } from '@/utils/api';
 import apiClient from '@/utils/api/client';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
@@ -67,9 +67,9 @@ export default function RunReportPage() {
     );
   }
 
-  const risk = report.risk_summary || {};
-  const riskLevel = (risk as any).risk_level || 'UNKNOWN';
-  const counts = (risk as any).counts || {};
+  const risk: RunRiskSummary = report.risk_summary || {};
+  const riskLevel = risk.risk_level || 'UNKNOWN';
+  const counts = risk.counts || {};
 
   return (
     <div className="space-y-6 p-6">
@@ -153,17 +153,33 @@ export default function RunReportPage() {
           </div>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">事件总数</span>
+              <span className="text-muted-foreground">事件总数(去重)</span>
               <span>{counts.events_total ?? 0}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">重启次数</span>
-              <span>{counts.restart_count ?? 0}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">AEE 条目</span>
               <span>{counts.aee_entries ?? 0}</span>
             </div>
+            {counts.by_severity && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">S/A/B 分布</span>
+                <span>
+                  <span className="text-red-600">{counts.by_severity.S ?? 0}</span>/
+                  <span className="text-orange-600">{counts.by_severity.A ?? 0}</span>/
+                  <span className="text-yellow-600">{counts.by_severity.B ?? 0}</span>
+                </span>
+              </div>
+            )}
+            {counts.by_type && Object.keys(counts.by_type).length > 0 && (
+              <div className="mt-2 space-y-0.5 text-xs">
+                {Object.entries(counts.by_type).map(([subtype, count]) => (
+                  <div key={subtype} className="flex justify-between">
+                    <span className="text-muted-foreground">{subtype}</span>
+                    <span className="font-mono">{count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

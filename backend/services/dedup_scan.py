@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.models.job import JobArtifact, JobInstance
+from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services.run_console import RunConsole, RunConsoleError
@@ -43,7 +43,11 @@ def get_scan_env_defaults() -> Dict[str, str]:
 
 
 def check_archive_completed(db: Session, plan_run_id: int) -> tuple[bool, int, int]:
-    """检查该 PlanRun 的归档是否完成。返回 (completed, archived_count, total_count)。"""
+    """检查该 PlanRun 的初筛选数据是否就绪（方案 C：存在 log_signal 即可 scan）。
+
+    返回 (completed, signal_job_count, total_count)。
+    scan 实际执行在 Sprint 4;Sprint 3 仅判断数据就绪。
+    """
     from sqlalchemy import func
 
     total = db.execute(
@@ -52,13 +56,12 @@ def check_archive_completed(db: Session, plan_run_id: int) -> tuple[bool, int, i
     if total == 0:
         return False, 0, 0
     job_ids_subq = select(JobInstance.id).where(JobInstance.plan_run_id == plan_run_id)
-    archived = db.execute(
-        select(func.count(JobArtifact.id.distinct())).where(
-            JobArtifact.artifact_type == "run_log_bundle",
-            JobArtifact.job_id.in_(job_ids_subq),
+    signal_job_count = db.execute(
+        select(func.count(func.distinct(JobLogSignal.job_id))).where(
+            JobLogSignal.job_id.in_(job_ids_subq),
         )
     ).scalar_one()
-    return archived >= total, int(archived or 0), int(total)
+    return signal_job_count >= total, int(signal_job_count or 0), int(total)
 
 
 def build_scan_argv(

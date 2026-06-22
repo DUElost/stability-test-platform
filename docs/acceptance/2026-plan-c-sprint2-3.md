@@ -41,12 +41,12 @@
 
 | ID | 场景 | 前置 | 期望结果 | 自动化 | 状态 |
 |----|------|------|----------|--------|------|
-| AC-S3-01 | watcher-summary 无空 bundle 误导 | PR #31 合入后 | archive 段反映新语义或隐藏 bundle | `test_plan_run_aggregation_endpoints.py` **需改写** | 未做 |
-| AC-S3-02 | 运行日志访问路径 | Job 终态 | 用户可经文档化方式拿到日志（代理或直链 Agent HTTP） | 新 API/E2E 测试 | 未做 |
-| AC-S3-03 | risk_summary 待就绪提示 | 有 log_signal，`risk_summary` null | 非全零空态；Banner（#16） | Vitest `RunReportPage` | 未做 |
-| AC-S3-04 | artifact_type 展示 | 报告页 artifacts | 含类型标签（#17） | report API 测试 | 未做 |
-| AC-S3-05 | 归档 pending/failed | 归档失败模拟 | UI 区分进行中 vs 失败（#18） | watcher-summary 测试 | 未做 |
-| AC-S3-06 | ArchiveStatusCard 语义 | 点击「立即归档」 | 文案与 SSD prune 一致，非「上传到 15.4」 | Vitest | 未做 |
+| AC-S3-01 | watcher-summary archive 新语义 | 心跳运维指标 | archive 段展示 ops_metrics（pruned/hdd%/spill）+ scan 占位 | `test_plan_run_aggregation_endpoints.py` | 本 PR |
+| AC-S3-02 | risk_summary 从 log_signal 聚合 | 有 log_signal | 按 event_subtype 聚合 + S/A/B 定级表规则 → risk_level + by_severity | `test_run_report.py` + `_classify_subtype` 单元验证 | 本 PR |
+| AC-S3-03 | risk_summary 非全零空态 | 有 log_signal | 初筛选数据驱动，不再从 tar 读取（原链路永不工作） | `report_service.aggregate_risk_summary_from_signals` | 本 PR |
+| AC-S3-04 | archive-status 新语义 | host 有 extra | 返回 agent_metrics/capacity/health/agent_version + scan 占位 | `agent_api.get_archive_status` | 本 PR |
+| AC-S3-05 | ArchiveStatusCard 运维展示 | 有 ops_metrics | 显示 HDD 使用率/SSD 清理/溢出指标，无 bundle 路径 | `WatcherSummaryCard.test.tsx` + `ArchiveStatusCard` | 本 PR |
+| AC-S3-06 | dedup scan archive 条件 | log_signal 存在 | check_archive_completed 按 JobLogSignal 去重计数，不依赖 run_log_bundle | `dedup_scan.check_archive_completed` | 本 PR |
 | AC-S3-07 | plan_runs 下载 run_log_bundle | GET artifact download | 409 + 方案 C 文案 | `test_download_run_log_bundle_returns_409` | PR #31 部分 |
 
 ---
@@ -58,7 +58,7 @@
 | AC-S4-01 | Agent 本地 scan 产出 xls | [#30](https://github.com/DUElost/stability-test-platform/issues/30) |
 | AC-S4-02 | 终态自动 scan + merge | `aggregator` + dedup 测试 |
 | AC-S4-03 | 五触发上送 | `plan_runs` + Plan `auto_archive_interval_seconds` |
-| AC-S4-04 | dedup 完成条件不依赖 run_log_bundle | `dedup_scan.check_archive_completed` 改写 |
+| AC-S4-04 | dedup 完成条件不依赖 run_log_bundle | Sprint 3 已改写 `check_archive_completed`（按 log_signal 去重） | `dedup_scan` |
 
 ---
 

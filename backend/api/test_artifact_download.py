@@ -1,10 +1,7 @@
 import sys
 import tempfile
-import tarfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -14,10 +11,8 @@ sys.path.insert(0, str(project_root))
 
 try:
     from backend.api.routes.runs import _artifact_download_target
-    from backend.services.report_service import _load_risk_summary_from_artifacts
 except ModuleNotFoundError:
     from api.routes.runs import _artifact_download_target
-    from services.report_service import _load_risk_summary_from_artifacts
 
 
 class TestArtifactDownloadTarget(unittest.TestCase):
@@ -52,49 +47,6 @@ class TestArtifactDownloadTarget(unittest.TestCase):
                 with self.assertRaises(HTTPException) as ctx:
                     _artifact_download_target(f"file://{artifact_path}")
                 self.assertEqual(ctx.exception.status_code, 400)
-
-    def test_load_risk_summary_from_tar_artifact(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            run_dir = Path(temp_dir) / "runs" / "91"
-            run_dir.mkdir(parents=True)
-            risk_path = run_dir / "risk_summary.json"
-            risk_path.write_text('{"risk_level":"HIGH","counts":{"events_total":2}}', encoding="utf-8")
-
-            archive_path = run_dir.parent / "91.tar.gz"
-            with tarfile.open(archive_path, "w:gz") as tar:
-                tar.add(run_dir, arcname=run_dir.name)
-
-            artifact = SimpleNamespace(
-                storage_uri=f"file://{archive_path}",
-                created_at=datetime.now(timezone.utc),
-            )
-            with patch.dict("os.environ", {"STP_NFS_ROOT": temp_dir}):
-                summary = _load_risk_summary_from_artifacts([artifact])
-                self.assertIsNotNone(summary)
-                assert summary is not None
-                self.assertEqual(summary.get("risk_level"), "HIGH")
-                self.assertEqual(summary.get("counts", {}).get("events_total"), 2)
-
-    def test_load_risk_summary_from_tar_artifact_outside_nfs_root(self):
-        with tempfile.TemporaryDirectory() as temp_dir, tempfile.TemporaryDirectory() as root_dir:
-            run_dir = Path(temp_dir) / "logs" / "runs" / "91"
-            run_dir.mkdir(parents=True)
-            risk_path = run_dir / "risk_summary.json"
-            risk_path.write_text('{"risk_level":"HIGH","counts":{"events_total":2}}', encoding="utf-8")
-
-            archive_path = run_dir.parent / "91.tar.gz"
-            with tarfile.open(archive_path, "w:gz") as tar:
-                tar.add(run_dir, arcname=run_dir.name)
-
-            artifact = SimpleNamespace(
-                storage_uri=f"file://{archive_path}",
-                created_at=datetime.now(timezone.utc),
-            )
-            with patch.dict("os.environ", {"STP_NFS_ROOT": root_dir}):
-                summary = _load_risk_summary_from_artifacts([artifact])
-                self.assertIsNotNone(summary)
-                assert summary is not None
-                self.assertEqual(summary.get("risk_level"), "HIGH")
 
 
 if __name__ == "__main__":

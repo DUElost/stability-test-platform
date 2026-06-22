@@ -277,7 +277,7 @@ async def test_ingest_artifact_accepts_storage_uri_under_watcher_nfs_root(monkey
 # - test_ingest_run_log_bundle_skips_local_root_check（run_log_bundle 400）
 # - test_ingest_non_bundle_still_rejects_outside_root（对照已无意义）
 # - test_archive_status_counts_run_log_bundles（run_log_bundle 400 无法注册）
-# 控制 plane 读取端 archive-status / plan_runs 仍保留对历史 run_log_bundle 的查询。
+# Sprint 3: archive-status / plan_runs 也不再查 run_log_bundle，改用 host.extra 心跳运维指标。
 # ----------------------------------------------------------------------
 
 

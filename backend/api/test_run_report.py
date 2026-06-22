@@ -52,7 +52,7 @@ class TestRunReportHelpers(unittest.TestCase):
                 error_message="high risk",
                 log_summary="monitor=runtime completed; risk=HIGH; events=3; restarts=2; aee_entries=1",
                 artifacts=[],
-                risk_summary={"risk_level": "HIGH", "counts": {"events_total": 3, "by_type": {"ANR": 1}}},
+                risk_summary={"risk_level": "S", "counts": {"by_type": {"ANR": 1}, "by_severity": {"S": 1, "A": 0, "B": 0}, "events_total": 1, "aee_entries": 0}},
             ),
             task=TaskOut(
                 id=11,
@@ -68,7 +68,7 @@ class TestRunReportHelpers(unittest.TestCase):
             host=None,
             device=None,
             summary_metrics={"restarts": 2, "events": 3},
-            risk_summary={"risk_level": "HIGH", "counts": {"events_total": 3, "by_type": {"ANR": 1}}},
+            risk_summary={"risk_level": "S", "counts": {"by_type": {"ANR": 1}, "by_severity": {"S": 1, "A": 0, "B": 0}, "events_total": 1, "aee_entries": 0}},
             alerts=[RiskAlertOut(code="ANR_DETECTED", severity="HIGH", message="ANR found")],
         )
 
@@ -88,23 +88,41 @@ class TestRunReportHelpers(unittest.TestCase):
         self.assertEqual(metrics.get("events"), 3)
         self.assertEqual(metrics.get("restarts"), 2)
 
-    def test_build_risk_alerts_with_high_risk(self):
+    def test_build_risk_alerts_with_s_level(self):
         risk_summary = {
-            "risk_level": "HIGH",
+            "risk_level": "S",
             "counts": {
-                "restart_count": 3,
+                "by_severity": {"S": 2, "A": 0, "B": 0},
                 "by_type": {
                     "ANR": 2,
-                    "CRASH": 1,
+                    "SWT": 1,
                 },
+                "events_total": 3,
+                "aee_entries": 1,
             },
         }
         alerts = _build_risk_alerts(risk_summary, {"restarts": 3})
         codes = {item.code for item in alerts}
+        self.assertIn("RISK_LEVEL_CRITICAL", codes)
+        self.assertIn("ANR_DETECTED", codes)
+        self.assertIn("RESTART_FREQUENT", codes)
+
+    def test_build_risk_alerts_with_a_level(self):
+        risk_summary = {
+            "risk_level": "A",
+            "counts": {
+                "by_severity": {"S": 0, "A": 2, "B": 0},
+                "by_type": {
+                    "ANR": 12,
+                },
+                "events_total": 12,
+                "aee_entries": 0,
+            },
+        }
+        alerts = _build_risk_alerts(risk_summary, {})
+        codes = {item.code for item in alerts}
         self.assertIn("RISK_LEVEL_HIGH", codes)
         self.assertIn("ANR_DETECTED", codes)
-        self.assertIn("CRASH_DETECTED", codes)
-        self.assertIn("RESTART_FREQUENT", codes)
 
     def test_build_jira_draft_from_report(self):
         report = self._sample_report()
@@ -133,7 +151,7 @@ class TestRunReportHelpers(unittest.TestCase):
             }
           },
           "risk_level": {
-            "HIGH": {
+            "S": {
               "assignee": "qa.owner",
               "labels": ["risk-high"]
             }

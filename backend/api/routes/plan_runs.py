@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
@@ -1838,22 +1838,16 @@ class AeeDashboardSectionOut(BaseModel):
     package_ranking: list[PackageRankingOut] = []
 
 
-class WatcherArchiveBundleOut(BaseModel):
-    """单个已归档运行日志包（LogArchiver 注册的 run_log_bundle JobArtifact）。"""
-    job_id: int
-    artifact_id: int
-    size_bytes: Optional[int] = None
-    created_at: Optional[str] = None
-    # ADR-0025/#14: 归档地址（Agent 写归档存储的 storage_uri）。控制面仅登记展示 +
-    # 复制路径，不经后端下载（后端不访问归档存储）。
-    storage_uri: Optional[str] = None
-
+class WatcherAgentOpsMetrics(BaseModel):
+    pruned_total: int = 0
+    local_disk_usage_pct: Optional[float] = None
+    spill_cycles: int = 0
+    spilled_total: int = 0
 
 class WatcherArchiveOut(BaseModel):
-    """ADR-0025 Sprint 3: PlanRun 维度的运行日志归档状态（按需拉取聚合）。"""
-    archived_jobs: int          # 已归档运行日志的 job 数
-    total_jobs: int             # PlanRun 关联 job 总数
-    bundles: list[WatcherArchiveBundleOut] = []   # 可下载的 run_log_bundle 列表
+    ops_metrics: WatcherAgentOpsMetrics = Field(default_factory=WatcherAgentOpsMetrics)
+    scan_status: Optional[str] = None
+    scan_triggered_at: Optional[str] = None
 
 
 class WatcherSummaryOut(BaseModel):
@@ -1904,7 +1898,7 @@ def get_plan_run_watcher_summary(
     pr = _require_plan_run(db, run_id)
 
     job_rows = db.execute(
-        select(JobInstance.id, JobInstance.device_id).where(JobInstance.plan_run_id == run_id)
+        select(JobInstance.id, JobInstance.device_id, JobInstance.host_id).where(JobInstance.plan_run_id == run_id)
     ).all()
     job_ids   = [r.id for r in job_rows]
     total_dev = len({r.device_id for r in job_rows})
@@ -1933,6 +1927,7 @@ def get_plan_run_watcher_summary(
             current_run=_empty_dashboard_section(),
             preexisting=_empty_dashboard_section(),
             watcher_capability=None,
+            archive=WatcherArchiveOut(),
         ))
 
     # 当前窗口聚合(按 category 分组)
@@ -2036,7 +2031,7 @@ def get_plan_run_watcher_summary(
         preexisting=preexisting,
         aee_breakdown=aee_breakdown,
         watcher_capability=watcher_capability,
-        archive=_aggregate_run_log_archive(db, job_ids=job_ids, total_jobs=len(job_ids)),
+        archive=_aggregate_run_log_archive(db, job_rows=job_rows, total_jobs=len(job_ids)),
     ))
 
 
@@ -2055,41 +2050,35 @@ _CAPABILITY_SEVERITY: dict[str, int] = {
 
 
 def _aggregate_run_log_archive(
-    db: Session, *, job_ids: list[int], total_jobs: int,
+    db: Session, *, job_rows: list, total_jobs: int,
 ) -> WatcherArchiveOut:
-    """ADR-0025 Sprint 3: 聚合该 PlanRun 下已归档的运行日志包（run_log_bundle
-    JobArtifact，由 Agent LogArchiver 写 NFS 后注册）。控制面按需拉取展示 + 下载。
-    """
-    if not job_ids:
-        return WatcherArchiveOut(archived_jobs=0, total_jobs=total_jobs, bundles=[])
-    rows = db.execute(
-        select(
-            JobArtifact.id,
-            JobArtifact.job_id,
-            JobArtifact.size_bytes,
-            JobArtifact.created_at,
-            JobArtifact.storage_uri,
-        )
-        .where(
-            (JobArtifact.artifact_type == "run_log_bundle")
-            & (JobArtifact.job_id.in_(job_ids))
-        )
-        .order_by(JobArtifact.created_at.desc())
-    ).all()
-    bundles = [
-        WatcherArchiveBundleOut(
-            job_id=r.job_id,
-            artifact_id=r.id,
-            size_bytes=r.size_bytes,
-            created_at=_iso(r.created_at),
-            storage_uri=r.storage_uri,
-        )
-        for r in rows
-    ]
-    archived_jobs = len({r.job_id for r in rows})
-    return WatcherArchiveOut(
-        archived_jobs=archived_jobs, total_jobs=total_jobs, bundles=bundles,
-    )
+    host_ids = {r.host_id for r in job_rows if r.host_id}
+    if not host_ids:
+        return WatcherArchiveOut()
+
+    hosts = db.execute(
+        select(Host).where(Host.id.in_(host_ids))
+    ).scalars().all()
+
+    merged = WatcherAgentOpsMetrics()
+    for host in hosts:
+        extra = host.extra if isinstance(host.extra, dict) else {}
+        archive = extra.get("archive")
+        if not isinstance(archive, dict):
+            continue
+        merged.pruned_total += int(archive.get("pruned_total") or 0)
+        merged.spill_cycles += int(archive.get("spill_cycles") or 0)
+        merged.spilled_total += int(archive.get("spilled_total") or 0)
+        host_pct = archive.get("local_disk_usage_pct")
+        if host_pct is not None:
+            try:
+                host_pct_float = float(host_pct)
+                if merged.local_disk_usage_pct is None or host_pct_float > merged.local_disk_usage_pct:
+                    merged.local_disk_usage_pct = host_pct_float
+            except (TypeError, ValueError):
+                pass
+
+    return WatcherArchiveOut(ops_metrics=merged)
 
 
 def _aggregate_watcher_capability(db: Session, *, job_ids: list[int]) -> Optional[str]:
