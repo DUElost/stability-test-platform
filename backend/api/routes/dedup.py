@@ -179,30 +179,47 @@ async def trigger_scan(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """手动触发/重跑 scan（各 agent 单独 scan 本机归档目录）。
+    """手动触发/重跑 scan：向各 ONLINE agent 下发 scan_now SocketIO 指令。
 
-    异步起 RunConsole subprocess；返回 console_run_id + room。
+    Agent 本地执行 start_log_scan -dedup_org → UploadManager 上送 _org.xls 到 NFS。
     终态自动触发走 SAQ scan_task，本端点用于手动重跑。
     """
-    from backend.services.dedup_scan import resolve_scan_tool, check_archive_completed
+    from backend.models.job import JobInstance
+    from backend.models.host import Host
+    from backend.models.plan_run import PlanRun
+    from backend.realtime.socketio_server import emit_agent_control
 
-    tool = resolve_scan_tool()
-    if tool is None:
-        raise HTTPException(status_code=503, detail="scan tool not configured (STP_DEDUP_SCAN_PYTHON / STP_DEDUP_SCAN_SCRIPT)")
+    pr = db.get(PlanRun, run_id)
+    if pr is None:
+        raise HTTPException(status_code=404, detail="plan run not found")
 
-    completed, archived, total = check_archive_completed(db, run_id)
-    if not completed:
-        raise HTTPException(
-            status_code=409,
-            detail=f"archive not completed ({archived}/{total}), run archive first",
-        )
+    host_rows = (
+        db.query(JobInstance.host_id, Host.status)
+        .join(Host, Host.id == JobInstance.host_id)
+        .filter(JobInstance.plan_run_id == run_id)
+        .distinct()
+        .all()
+    )
+    if not host_rows:
+        raise HTTPException(status_code=400, detail="no jobs found for this plan run")
 
-    from backend.services.dedup_scan import run_scan_sync
-    import asyncio
-    console_run_id = await asyncio.to_thread(run_scan_sync, run_id, is_final=is_final)
-    if not console_run_id:
-        raise HTTPException(status_code=500, detail="scan failed to start")
-    return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}", "plan_run_id": run_id})
+    triggered: list[str] = []
+    skipped: list[dict] = []
+    for host_id, host_status in host_rows:
+        if host_status == "ONLINE":
+            await emit_agent_control(
+                host_id, "scan_now",
+                payload={"plan_run_id": run_id, "is_final": is_final},
+            )
+            triggered.append(host_id)
+        else:
+            skipped.append({"host_id": host_id, "status": host_status})
+
+    return ok({
+        "plan_run_id": run_id,
+        "triggered_hosts": triggered,
+        "skipped_offline": skipped,
+    })
 
 
 @scan_router.get("/{run_id}/dedup/status", response_model=ApiResponse[dict])

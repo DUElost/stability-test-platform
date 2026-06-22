@@ -81,20 +81,136 @@ async def precheck_and_dispatch_task(ctx: dict, *, plan_run_id: int) -> None:
 
 
 async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> None:
-    """ADR-0025 Sprint 4: 归档-2 各 agent 单独 scan（start_log_scan）。
+    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now SocketIO 指令。
 
-    前置：归档完成（check_archive_completed）。未完成 → 跳过（recycler 兜底）。
-    scan 完成后 on_complete 回调注册产物到 plan_run_artifact 表。
+    Agent 本地执行 start_log_scan -dedup_org → 上送 _org.xls →
+    控制面 run_scan_sync 注册产物到 plan_run_artifact 表。
     """
-    from backend.services.dedup_scan import run_scan_sync
+    from backend.core.database import SessionLocal
+    from backend.models.job import JobInstance
+    from backend.models.host import Host
+    from backend.realtime.socketio_server import emit_agent_control
+    from sqlalchemy import select, distinct
 
     logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
+
+    db = SessionLocal()
     try:
-        await asyncio.to_thread(run_scan_sync, plan_run_id, is_final=is_final)
+        host_rows = db.execute(
+            select(distinct(JobInstance.host_id), Host.status)
+            .join(Host, Host.id == JobInstance.host_id)
+            .where(JobInstance.plan_run_id == plan_run_id)
+        ).all()
+
+        triggered: list[str] = []
+        skipped: list[str] = []
+        for host_id, host_status in host_rows:
+            if host_status == "ONLINE":
+                await emit_agent_control(
+                    host_id, "scan_now",
+                    payload={"plan_run_id": plan_run_id, "is_final": is_final},
+                )
+                triggered.append(host_id)
+            else:
+                skipped.append(host_id)
+
+        logger.info(
+            "saq_scan_dispatched plan_run=%d triggered=%d skipped=%d",
+            plan_run_id, len(triggered), len(skipped),
+        )
     except Exception:
         logger.exception("saq_scan_failed plan_run=%d", plan_run_id)
         raise
+    finally:
+        db.close()
+
     logger.info("saq_scan_done plan_run=%d", plan_run_id)
+
+
+async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
+    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 upload_events SocketIO 指令。
+
+    从 PlanRunArtifact 的 _org.xls 行和 JobLogSignal 提取事件目录名，
+    逐 host 下发 upload_events 让 Agent 上送事件目录到 15.4 CIFS。
+    """
+    from backend.core.database import SessionLocal
+    from backend.models.job import JobInstance, JobLogSignal
+    from backend.models.plan_run_artifact import PlanRunArtifact
+    from backend.models.host import Host
+    from backend.realtime.socketio_server import emit_agent_control
+    from sqlalchemy import select, distinct
+    from pathlib import Path
+
+    logger.info("saq_upload_start plan_run=%d", plan_run_id)
+
+    db = SessionLocal()
+    try:
+        scan_rows = db.execute(
+            select(PlanRunArtifact.host_id)
+            .where(
+                PlanRunArtifact.plan_run_id == plan_run_id,
+                PlanRunArtifact.artifact_type == "scan_result_xls",
+                PlanRunArtifact.storage_uri.contains("_org.xls"),
+            )
+        ).scalars().all()
+        hosts_with_scan = set(scan_rows)
+
+        host_rows = db.execute(
+            select(distinct(JobInstance.host_id), Host.status)
+            .join(Host, Host.id == JobInstance.host_id)
+            .where(JobInstance.plan_run_id == plan_run_id)
+        ).all()
+
+        job_ids_subq = select(JobInstance.id).where(
+            JobInstance.plan_run_id == plan_run_id
+        )
+
+        triggered: list[str] = []
+        skipped: list[str] = []
+        for host_id, host_status in host_rows:
+            if host_status != "ONLINE":
+                skipped.append(host_id)
+                continue
+            if host_id not in hosts_with_scan:
+                skipped.append(host_id)
+                continue
+
+            signals = db.execute(
+                select(JobLogSignal.path_on_device)
+                .where(
+                    JobLogSignal.job_id.in_(job_ids_subq),
+                    JobLogSignal.host_id == host_id,
+                    JobLogSignal.artifact_uri.isnot(None),
+                )
+            ).scalars().all()
+            event_dir_names = list({
+                Path(p).name for p in signals if p
+            })
+
+            if not event_dir_names:
+                logger.info("saq_upload_skip_no_events host=%s plan_run=%d", host_id, plan_run_id)
+                continue
+
+            await emit_agent_control(
+                host_id, "upload_events",
+                payload={
+                    "plan_run_id": plan_run_id,
+                    "event_dir_names": event_dir_names,
+                },
+            )
+            triggered.append(host_id)
+
+        logger.info(
+            "saq_upload_dispatched plan_run=%d triggered=%d skipped=%d",
+            plan_run_id, len(triggered), len(skipped),
+        )
+    except Exception:
+        logger.exception("saq_upload_failed plan_run=%d", plan_run_id)
+        raise
+    finally:
+        db.close()
+
+    logger.info("saq_upload_done plan_run=%d", plan_run_id)
 
 
 async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
@@ -116,5 +232,6 @@ SAQ_FUNCTIONS = [
     publish_control_command,
     precheck_and_dispatch_task,
     scan_task,
+    upload_task,
     merge_task,
 ]
