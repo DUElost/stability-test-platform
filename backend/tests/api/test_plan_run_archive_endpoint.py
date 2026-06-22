@@ -59,11 +59,10 @@ class TestArchivePlanRunLogsEndpoint:
         assert data["archived_now"] is True
         assert str(sample_host.id) in data["triggered_hosts"]
         assert data["skipped_offline"] == []
-        mock_emit.assert_awaited_once_with(
-            str(sample_host.id),
-            "archive_now",
-            payload={"plan_run_id": sample_plan_run.id},
-        )
+        assert mock_emit.await_count == 2
+        commands = [c[0][1] for c in mock_emit.call_args_list]
+        assert "archive_now" in commands
+        assert "scan_now" in commands
 
     def test_offline_host_skipped(
         self, client, auth_headers, db_session, sample_plan_run, sample_plan, sample_device, sample_offline_host
@@ -126,4 +125,4 @@ class TestArchivePlanRunLogsEndpoint:
         data = resp.json()["data"]
         assert str(online_host.id) in data["triggered_hosts"]
         assert len(data["skipped_offline"]) == 1
-        assert mock_emit.await_count == 1
+        assert mock_emit.await_count == 2

@@ -18,7 +18,19 @@ import threading
 from pathlib import Path
 from typing import List, Optional
 
-from backend.agent.aee.paths import get_aee_nfs_root
+try:
+    from backend.agent.aee.paths import get_aee_nfs_root
+except ImportError:
+    def get_aee_nfs_root() -> "Path":
+        import os as _os
+        for k in ("STP_AEE_NFS_ROOT", "STP_WATCHER_NFS_BASE_DIR"):
+            v = (_os.getenv(k) or "").strip()
+            if v:
+                return Path(v)
+        nfs = (_os.getenv("STP_NFS_ROOT") or "").strip()
+        if nfs:
+            return Path(nfs) / "sonic_tinno"
+        return Path("/mnt/hdd/aee_events")
 
 logger = logging.getLogger(__name__)
 
