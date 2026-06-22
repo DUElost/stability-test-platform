@@ -363,6 +363,10 @@ async def archive_plan_run_logs_endpoint(
                 host_id, "archive_now",
                 payload={"plan_run_id": run_id},
             )
+            await emit_agent_control(
+                host_id, "scan_now",
+                payload={"plan_run_id": run_id, "is_final": False},
+            )
             triggered.append(host_id)
         else:
             skipped.append({"host_id": host_id, "status": host_status})
