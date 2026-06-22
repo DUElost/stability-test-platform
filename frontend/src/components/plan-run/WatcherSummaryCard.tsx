@@ -5,8 +5,6 @@ import {
   Archive,
   ArrowDown,
   ArrowUp,
-  Copy,
-  Check,
   ShieldAlert,
   Minus,
   Info,
@@ -17,7 +15,6 @@ import SectionHeader from './SectionHeader';
 import type {
   AeeBreakdown,
   PackageStat,
-  WatcherArchiveBundle,
   WatcherCategory,
   WatcherSummary,
 } from '@/utils/api/types';
@@ -68,13 +65,6 @@ function fmtTime(ts: string | null | undefined): string {
   const d = new Date(ts);
   if (Number.isNaN(d.getTime())) return ts;
   return d.toLocaleTimeString('zh-CN', { hour12: false });
-}
-
-function fmtSize(bytes: number | null | undefined): string {
-  if (bytes == null) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function topPackagesTitle(
@@ -254,9 +244,7 @@ export default function WatcherSummaryCard({
   isError = false,
   windowMinutes = 60,
   onWindowChange,
-  onArchiveNow,
 }: Props) {
-  const [archiving, setArchiving] = useState(false);
   const total = data?.total ?? 0;
   const affected = data?.affected_device_count ?? 0;
   const totalDevices = data?.total_devices ?? 0;
@@ -406,92 +394,33 @@ export default function WatcherSummaryCard({
           </div>
         )}
 
-        {/* ADR-0025 Sprint 3: 运行日志归档状态 + 下载入口 */}
-        {data?.archive && data.archive.total_jobs > 0 && (
+        {/* ADR-0025 Sprint 3: 存储运维概览 + scan 占位 */}
+        {data?.archive && data.archive.ops_metrics && (
           <div className="border-t bg-gray-50 px-4 py-2" data-testid="watcher-archive-section">
             <div className="mb-1 flex items-center justify-between text-[11px] text-gray-500">
               <span className="flex items-center gap-1">
                 <Archive className="h-3 w-3" />
-                运行日志归档
+                存储运维
               </span>
-              <span className="font-mono" data-testid="archive-progress">
-                {data.archive.archived_jobs}/{data.archive.total_jobs} 已归档
+              <span className="font-mono text-gray-400" data-testid="hdd-usage">
+                HDD {data.archive.ops_metrics.local_disk_usage_pct != null
+                  ? `${Math.round(data.archive.ops_metrics.local_disk_usage_pct)}%`
+                  : '—'}
               </span>
-              {onArchiveNow && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setArchiving(true);
-                    try { await onArchiveNow(); } finally { setArchiving(false); }
-                  }}
-                  disabled={archiving}
-                  className="inline-flex items-center gap-1 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-[11px] text-gray-600 hover:bg-gray-100 disabled:opacity-50"
-                  data-testid="archive-now-button"
-                  title="立即归档已完成 Job 的运行日志(g=0)"
-                >
-                  {archiving ? '归档中...' : '立即归档'}
-                </button>
-              )}
             </div>
-            {data.archive.bundles.length > 0 && (
-              <div className="flex flex-col gap-1">
-                {data.archive.bundles.map((b) => (
-                  <ArchiveBundleRow key={b.artifact_id} bundle={b} />
-                ))}
+            <div className="grid grid-cols-3 gap-1 text-[10px] text-center text-gray-400">
+              <div>SSD清理 {data.archive.ops_metrics.pruned_total}</div>
+              <div>溢出 {data.archive.ops_metrics.spill_cycles}</div>
+              <div>上送 {data.archive.ops_metrics.spilled_total}</div>
+            </div>
+            {data.archive.scan_status && (
+              <div className="mt-1 text-[10px] text-gray-400">
+                Scan: {data.archive.scan_status}
               </div>
             )}
           </div>
         )}
       </div>
     </section>
-  );
-}
-
-/**
- * 单条归档运行日志行（#14）：仅展示 Job#/大小/归档地址 + 复制路径按钮。
- * 控制面不经后端下载归档（后端不访问归档存储），用户按 storage_uri 自行取用。
- */
-function ArchiveBundleRow({ bundle }: { bundle: WatcherArchiveBundle }) {
-  const [copied, setCopied] = useState(false);
-  const uri = bundle.storage_uri ?? '';
-
-  const onCopy = () => {
-    if (!uri) return;
-    void navigator.clipboard?.writeText(uri).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  };
-
-  return (
-    <div
-      className="flex items-center gap-1.5 text-[11px] text-gray-600"
-      data-testid="archive-bundle-row"
-    >
-      <Archive className="h-3 w-3 shrink-0 text-gray-400" />
-      <span className="shrink-0 font-mono">Job #{bundle.job_id}</span>
-      {bundle.size_bytes != null && (
-        <span className="shrink-0 text-gray-400">({fmtSize(bundle.size_bytes)})</span>
-      )}
-      <span
-        className="truncate font-mono text-gray-400"
-        title={uri}
-        data-testid="archive-bundle-uri"
-      >
-        {uri || '—'}
-      </span>
-      {uri && (
-        <button
-          type="button"
-          onClick={onCopy}
-          className="ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-gray-600 hover:bg-gray-100"
-          data-testid="archive-bundle-copy"
-          title="复制归档路径"
-        >
-          {copied ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
-          {copied ? '已复制' : '复制路径'}
-        </button>
-      )}
-    </div>
   );
 }

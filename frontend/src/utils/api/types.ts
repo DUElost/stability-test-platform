@@ -144,14 +144,13 @@ export interface LogArtifact {
 }
 
 export interface RunRiskSummary {
-  generated_at?: string;
-  risk_level?: 'LOW' | 'MEDIUM' | 'HIGH' | string;
-  monitor_summary?: string;
+  risk_level?: 'S' | 'A' | 'B' | string;
   counts?: {
     events_total?: number;
     aee_entries?: number;
     restart_count?: number;
     by_type?: Record<string, number>;
+    by_severity?: { S?: number; A?: number; B?: number };
   };
 }
 
@@ -1002,19 +1001,17 @@ export interface WatcherSummary {
   archive?: WatcherArchive | null;
 }
 
-export interface WatcherArchiveBundle {
-  job_id: number;
-  artifact_id: number;
-  size_bytes?: number | null;
-  created_at?: string | null;
-  // #14: 归档地址（Agent 写归档存储的 storage_uri）。控制面仅展示 + 复制路径，不下载。
-  storage_uri?: string | null;
+export interface WatcherAgentOpsMetrics {
+  pruned_total: number;
+  local_disk_usage_pct: number | null;
+  spill_cycles: number;
+  spilled_total: number;
 }
 
 export interface WatcherArchive {
-  archived_jobs: number;
-  total_jobs: number;
-  bundles: WatcherArchiveBundle[];
+  ops_metrics: WatcherAgentOpsMetrics;
+  scan_status?: string | null;
+  scan_triggered_at?: string | null;
 }
 
 export interface JobManualActionResult {

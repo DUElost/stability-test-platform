@@ -299,54 +299,40 @@ describe('WatcherSummaryCard', () => {
         data={{
           ...fixture,
           archive: {
-            archived_jobs: 1,
-            total_jobs: 3,
-            bundles: [
-              {
-                job_id: 501,
-                artifact_id: 9001,
-                size_bytes: 2048,
-                created_at: '2026-06-15T10:00:00Z',
-                storage_uri: '/home/android/sonic_tinno/archives/2026-06-15/501/501.tar.gz',
-              },
-            ],
+            ops_metrics: {
+              pruned_total: 5,
+              local_disk_usage_pct: 72.3,
+              spill_cycles: 1,
+              spilled_total: 3,
+            },
+            scan_status: null,
+            scan_triggered_at: null,
           },
         }}
       />,
     );
     expect(screen.getByTestId('watcher-archive-section')).toBeInTheDocument();
-    expect(screen.getByTestId('archive-progress')).toHaveTextContent('1/3');
-    const row = screen.getByTestId('archive-bundle-row');
-    expect(row).toHaveTextContent('Job #501');
-    // 展示归档地址（不再是下载链接）
-    expect(screen.getByTestId('archive-bundle-uri')).toHaveTextContent(
-      '/home/android/sonic_tinno/archives/2026-06-15/501/501.tar.gz',
-    );
-    expect(screen.queryByTestId('archive-bundle-download')).not.toBeInTheDocument();
-    // 点击复制路径 → 写入剪贴板
-    fireEvent.click(screen.getByTestId('archive-bundle-copy'));
-    expect(writeText).toHaveBeenCalledWith(
-      '/home/android/sonic_tinno/archives/2026-06-15/501/501.tar.gz',
-    );
+    expect(screen.getByTestId('hdd-usage')).toHaveTextContent('HDD 72%');
   });
 
-  it('does not render archive section when archive absent or no jobs', () => {
-    const { rerender } = render(
+  it('does not render archive section when archive absent', () => {
+    render(
       <WatcherSummaryCard data={{ ...fixture, archive: null }} />,
     );
     expect(
       screen.queryByTestId('watcher-archive-section'),
     ).not.toBeInTheDocument();
-    rerender(
+  });
+
+  it('renders archive section with zero-value ops_metrics', () => {
+    render(
       <WatcherSummaryCard
         data={{
           ...fixture,
-          archive: { archived_jobs: 0, total_jobs: 0, bundles: [] },
+          archive: { ops_metrics: { pruned_total: 0, local_disk_usage_pct: null, spill_cycles: 0, spilled_total: 0 }, scan_status: null, scan_triggered_at: null },
         }}
       />,
     );
-    expect(
-      screen.queryByTestId('watcher-archive-section'),
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId('watcher-archive-section')).toBeInTheDocument();
   });
 });

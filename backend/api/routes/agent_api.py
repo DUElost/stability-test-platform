@@ -1775,38 +1775,24 @@ async def get_archive_status(
     db: AsyncSession = Depends(get_async_db),
     _user=Depends(get_current_active_user),
 ):
-    """ADR-0025 Sprint 2: 控制面查看某 host 的运行日志归档概览。
+    """ADR-0025 Sprint 3: 控制面查看某 host 的存储运维概览。
 
-    后端权威数据（run_log_bundle JobArtifact 计数 + 最近归档时间）+ Agent 经
-    心跳上报的实时归档指标（Host.extra['archive']，若 Agent 已上报则非空）。
-    用户态鉴权（dashboard 读），非 Agent 端点。
+    数据源：Agent 心跳上报的运维指标（Host.extra['archive']）+
+    系统指标（Host.extra['capacity'] / Host.extra['health']）。
+    scan 状态占位（Sprint 4）。
     """
     host = await db.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
 
-    job_ids_subq = select(JobInstance.id).where(JobInstance.host_id == host_id)
-    archived_total = (await db.execute(
-        select(func.count(JobArtifact.id)).where(
-            JobArtifact.artifact_type == "run_log_bundle",
-            JobArtifact.job_id.in_(job_ids_subq),
-        )
-    )).scalar_one()
-    last_archive_at = (await db.execute(
-        select(func.max(JobArtifact.created_at)).where(
-            JobArtifact.artifact_type == "run_log_bundle",
-            JobArtifact.job_id.in_(job_ids_subq),
-        )
-    )).scalar_one()
-
     extra = host.extra if isinstance(host.extra, dict) else {}
-    agent_metrics = extra.get("archive")
 
     return ok({
         "host_id": host_id,
-        "archived_total": int(archived_total or 0),
-        "last_archive_at": last_archive_at.isoformat() if last_archive_at else None,
-        # Agent 心跳上报的实时指标（pending_archive / local_disk_usage_pct /
-        # spilled_total / archive_failed），未上报时为 null
-        "agent_metrics": agent_metrics,
+        "agent_metrics": extra.get("archive"),
+        "capacity": extra.get("capacity"),
+        "health": extra.get("health"),
+        "agent_version": extra.get("agent_version"),
+        "scan_status": None,
+        "scan_triggered_at": None,
     })
