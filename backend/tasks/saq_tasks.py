@@ -11,6 +11,9 @@ import asyncio
 
 logger = logging.getLogger(__name__)
 
+asyncio_sleep = asyncio.sleep
+asyncio_to_thread = asyncio.to_thread
+
 
 async def post_completion_task(ctx: dict, *, job_id: int) -> None:
     """Generate report + JIRA draft for a terminal JobInstance.
@@ -135,9 +138,9 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         registered = 0
         n_triggered = len(triggered)
         while elapsed < _SCAN_POLL_MAX_WAIT:
-            await asyncio.sleep(_SCAN_POLL_INTERVAL)
+            await asyncio_sleep(_SCAN_POLL_INTERVAL)
             elapsed += _SCAN_POLL_INTERVAL
-            n_new = await asyncio.to_thread(run_scan_sync, plan_run_id)
+            n_new = await asyncio_to_thread(run_scan_sync, plan_run_id)
             if n_new:
                 registered += int(n_new)
             if registered >= n_triggered:
@@ -148,7 +151,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             )
 
         if registered == 0:
-            await asyncio.to_thread(run_scan_sync, plan_run_id)
+            await asyncio_to_thread(run_scan_sync, plan_run_id)
 
         logger.info(
             "saq_scan_registered plan_run=%d artifacts=%d/%d waited=%ds",

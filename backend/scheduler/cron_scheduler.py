@@ -286,6 +286,11 @@ def auto_archive_sweep() -> None:
     SAQ queue keys distinguish final (``scan:{id}``) and incremental (``scan:{id}:inc``)
     scans. First sweep triggers is_final=True; subsequent sweeps trigger incremental
     is_final=False scans so that agents re-scan newly produced AEE events.
+
+    Rate-limited: incremental scans are only enqueued when
+    ``Plan.auto_archive_interval_seconds`` has elapsed since the last scan
+    artifact's ``created_at``. This prevents the 120s sweep from re-enqueuing
+    the same incremental scan every cycle.
     """
     from backend.models.plan import Plan
     from backend.models.plan_run import PlanRun
@@ -314,15 +319,28 @@ def auto_archive_sweep() -> None:
                 if now - run.ended_at < timedelta(seconds=interval):
                     continue
 
-                has_scan = db.execute(
+                scan_count = db.execute(
                     select(func.count()).select_from(PlanRunArtifact).where(
                         PlanRunArtifact.plan_run_id == run.id,
                         PlanRunArtifact.artifact_type == "scan_result_xls",
                     )
                 ).scalar_one()
+
+                is_final = scan_count == 0
+
+                if not is_final:
+                    last_scan_at = db.execute(
+                        select(func.max(PlanRunArtifact.created_at)).where(
+                            PlanRunArtifact.plan_run_id == run.id,
+                            PlanRunArtifact.artifact_type == "scan_result_xls",
+                        )
+                    ).scalar_one()
+                    if last_scan_at and now - last_scan_at < timedelta(seconds=interval):
+                        continue
+
                 enqueue_dedup_terminal_sync(
                     run.id,
-                    is_final=(has_scan == 0),
+                    is_final=is_final,
                 )
                 triggered += 1
 
