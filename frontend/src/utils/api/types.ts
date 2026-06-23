@@ -1014,6 +1014,9 @@ export interface WatcherArchive {
   ops_metrics: WatcherAgentOpsMetrics;
   scan_status?: DedupScanStatus;
   scan_triggered_at?: string | null;
+  archived_jobs?: number;
+  pending_jobs?: number;
+  failed_jobs?: number;
 }
 
 export interface JobManualActionResult {

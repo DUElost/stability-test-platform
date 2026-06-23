@@ -1853,6 +1853,9 @@ class WatcherArchiveOut(BaseModel):
     ops_metrics: WatcherAgentOpsMetrics = Field(default_factory=WatcherAgentOpsMetrics)
     scan_status: Optional[str] = None
     scan_triggered_at: Optional[str] = None
+    archived_jobs: int = 0
+    pending_jobs: int = 0
+    failed_jobs: int = 0
 
 
 class WatcherSummaryOut(BaseModel):
@@ -2085,9 +2088,35 @@ def _aggregate_run_log_archive(
 
     scan_status: Optional[str] = None
     scan_triggered_at: Optional[str] = None
+    archived_jobs = 0
+    pending_jobs = 0
+    failed_jobs = 0
+
+    _TERMINAL_JOB = {"COMPLETED", "SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED", "ABORTED"}
     if job_rows:
+        job_ids = [r.id for r in job_rows]
+        job_statuses = {r.id: r.status for r in job_rows}
+
         from backend.models.plan_run_artifact import PlanRunArtifact
+        from backend.models.job import JobLogSignal
         from sqlalchemy import func as sa_func
+
+        signal_job_ids = set(
+            row[0] for row in db.execute(
+                select(func.distinct(JobLogSignal.job_id)).where(
+                    JobLogSignal.job_id.in_(job_ids),
+                )
+            ).all()
+        )
+
+        for jid in job_ids:
+            status = job_statuses.get(jid, "")
+            if jid in signal_job_ids:
+                archived_jobs += 1
+            elif status in _TERMINAL_JOB:
+                failed_jobs += 1
+            else:
+                pending_jobs += 1
 
         merge_count = db.execute(
             select(sa_func.count(PlanRunArtifact.id)).where(
@@ -2129,6 +2158,9 @@ def _aggregate_run_log_archive(
         ops_metrics=ops,
         scan_status=scan_status,
         scan_triggered_at=scan_triggered_at,
+        archived_jobs=archived_jobs,
+        pending_jobs=pending_jobs,
+        failed_jobs=failed_jobs,
     )
 
 

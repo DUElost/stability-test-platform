@@ -93,10 +93,6 @@ export const planRuns = {
       apiClient.post(`/plan-runs/${runId}/retry-dispatch`, {}),
     ),
 
-  // ADR-0025 S2: 手动触发该 PlanRun 涉及 host 的运行日志立即归档(grace=0)
-  archiveNow: (runId: number) =>
-    apiClient.post(`/plan-runs/${runId}/archive`, {}),
-
   manualRetryJob: (runId: number, jobId: number, reason?: string) =>
     unwrapApiResponse<JobManualActionResult>(
       apiClient.post(
