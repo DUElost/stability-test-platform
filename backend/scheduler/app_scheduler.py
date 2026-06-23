@@ -41,6 +41,9 @@ REVOKED_TOKEN_CLEANUP_INTERVAL = int(
     os.getenv("REVOKED_TOKEN_CLEANUP_INTERVAL_SECONDS", str(24 * 3600))
 )
 
+# ADR-0025 Sprint 4: auto_archive_interval  poll interval
+AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120"))
+
 MISFIRE_GRACE = timedelta(seconds=60)
 
 
@@ -201,3 +204,14 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         "schedule_registered id=revoked_token_cleanup interval=%ds",
         REVOKED_TOKEN_CLEANUP_INTERVAL,
     )
+
+    from backend.scheduler.cron_scheduler import auto_archive_sweep
+
+    await scheduler.add_schedule(
+        _instrumented("auto_archive_sweep", auto_archive_sweep),
+        IntervalTrigger(seconds=AUTO_ARCHIVE_INTERVAL),
+        id="auto_archive_sweep",
+        misfire_grace_time=MISFIRE_GRACE,
+        conflict_policy=ConflictPolicy.replace,
+    )
+    logger.info("schedule_registered id=auto_archive_sweep interval=%ds", AUTO_ARCHIVE_INTERVAL)

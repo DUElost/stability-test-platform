@@ -9,14 +9,18 @@ import {
   Minus,
   Info,
   AlertCircle,
+  Search,
+  Merge,
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import SectionHeader from './SectionHeader';
+import { triggerDedupScan, triggerDedupMerge } from '@/utils/api/planRuns';
 import type {
   AeeBreakdown,
   PackageStat,
   WatcherCategory,
   WatcherSummary,
+  DedupScanStatus,
 } from '@/utils/api/types';
 
 interface Props {
@@ -28,6 +32,10 @@ interface Props {
   onWindowChange?: (minutes: number) => void;
   // ADR-0025 S2: 手动立即归档(grace=0)按钮回调;由父组件 PlanRunDetailPage 注入
   onArchiveNow?: () => Promise<void> | void;
+  /** PlanRun id, used for dedup scan/merge API calls. */
+  runId?: number;
+  /** Callback after scan/merge triggers, so parent can refresh data. */
+  onDedupAction?: () => void;
 }
 
 const WINDOW_OPTIONS: Array<{ value: number; label: string }> = [
@@ -238,12 +246,78 @@ function PackagesChipRow({ breakdown }: { breakdown: AeeBreakdown }) {
   );
 }
 
+function DedupScanStatusChip({ scanStatus }: { scanStatus: DedupScanStatus }) {
+  if (!scanStatus) return null;
+  const colorMap: Record<string, string> = {
+    pending: 'bg-gray-100 text-gray-600',
+    scanned: 'bg-blue-100 text-blue-700',
+    merged: 'bg-green-100 text-green-700',
+  };
+  const labelMap: Record<string, string> = { pending: '待扫描', scanned: '已扫描', merged: '已合并' };
+  return (
+    <span
+      data-testid="dedup-scan-status-chip"
+      className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold ${colorMap[scanStatus] ?? 'bg-gray-100 text-gray-600'}`}
+    >
+      {labelMap[scanStatus] ?? scanStatus}
+    </span>
+  );
+}
+
+function DedupActionButtons({
+  runId,
+  scanStatus,
+  onAction,
+}: {
+  runId: number;
+  scanStatus: DedupScanStatus;
+  onAction?: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const doScan = async () => {
+    setLoading(true);
+    try { await triggerDedupScan(runId); } finally { setLoading(false); onAction?.(); }
+  };
+  const doMerge = async () => {
+    setLoading(true);
+    try { await triggerDedupMerge(runId); } finally { setLoading(false); onAction?.(); }
+  };
+  return (
+    <span className="inline-flex items-center gap-1">
+      <button
+        type="button"
+        data-testid="dedup-scan-btn"
+        disabled={loading}
+        onClick={doScan}
+        title="运行去重扫描"
+        className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+      >
+        <Search className="mr-0.5 inline h-3 w-3" />扫描
+      </button>
+      {scanStatus === 'scanned' && (
+        <button
+          type="button"
+          data-testid="dedup-merge-btn"
+          disabled={loading}
+          onClick={doMerge}
+          title="合并去重结果"
+          className="rounded border border-green-200 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold text-green-700 hover:bg-green-100 disabled:opacity-50"
+        >
+          <Merge className="mr-0.5 inline h-3 w-3" />合并
+        </button>
+      )}
+    </span>
+  );
+}
+
 export default function WatcherSummaryCard({
   data,
   isLoading = false,
   isError = false,
   windowMinutes = 60,
   onWindowChange,
+  runId,
+  onDedupAction,
 }: Props) {
   const total = data?.total ?? 0;
   const affected = data?.affected_device_count ?? 0;
@@ -394,7 +468,7 @@ export default function WatcherSummaryCard({
           </div>
         )}
 
-        {/* ADR-0025 Sprint 3: 存储运维概览 + scan 占位 */}
+        {/* ADR-0025 Sprint 3: 存储运维概览 + dedup scan/merge */}
         {data?.archive && data.archive.ops_metrics && (
           <div className="border-t bg-gray-50 px-4 py-2" data-testid="watcher-archive-section">
             <div className="mb-1 flex items-center justify-between text-[11px] text-gray-500">
@@ -402,22 +476,27 @@ export default function WatcherSummaryCard({
                 <Archive className="h-3 w-3" />
                 存储运维
               </span>
-              <span className="font-mono text-gray-400" data-testid="hdd-usage">
-                HDD {data.archive.ops_metrics.local_disk_usage_pct != null
-                  ? `${Math.round(data.archive.ops_metrics.local_disk_usage_pct)}%`
-                  : '—'}
-              </span>
+              <div className="flex items-center gap-2">
+                <DedupScanStatusChip scanStatus={data.archive.scan_status ?? null} />
+                {runId != null && (
+                  <DedupActionButtons
+                    runId={runId}
+                    scanStatus={data.archive.scan_status ?? null}
+                    onAction={onDedupAction}
+                  />
+                )}
+                <span className="font-mono text-gray-400" data-testid="hdd-usage">
+                  HDD {data.archive.ops_metrics.local_disk_usage_pct != null
+                    ? `${Math.round(data.archive.ops_metrics.local_disk_usage_pct)}%`
+                    : '—'}
+                </span>
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-1 text-[10px] text-center text-gray-400">
               <div>SSD清理 {data.archive.ops_metrics.pruned_total}</div>
               <div>溢出 {data.archive.ops_metrics.spill_cycles}</div>
               <div>上送 {data.archive.ops_metrics.spilled_total}</div>
             </div>
-            {data.archive.scan_status && (
-              <div className="mt-1 text-[10px] text-gray-400">
-                Scan: {data.archive.scan_status}
-              </div>
-            )}
           </div>
         )}
       </div>

@@ -1143,7 +1143,7 @@ class TestWatcherSummaryEndpoint:
         assert ops.get("local_disk_usage_pct") == 65.5
         assert ops.get("spill_cycles") == 1
         assert ops.get("spilled_total") == 2
-        assert archive.get("scan_status") is None
+        assert archive.get("scan_status") in ("pending", None)
 
     def test_download_run_log_bundle_returns_409(
         self, client, auth_headers, chain_setup, db_session,

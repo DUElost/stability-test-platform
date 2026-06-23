@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models.job import JobInstance, JobLogSignal
-from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.services.run_console import RunConsole, RunConsoleError
 
@@ -64,34 +64,19 @@ def check_archive_completed(db: Session, plan_run_id: int) -> tuple[bool, int, i
     return signal_job_count >= total, int(signal_job_count or 0), int(total)
 
 
-def build_scan_argv(
-    plan_run_id: int, archives_dir: str, *, is_final: bool = False
-) -> List[str]:
-    """拼装 start_log_scan argv（不走 shell）。"""
-    tool = resolve_scan_tool()
-    if tool is None:
-        raise RunConsoleError("scan tool not configured")
-    defaults = get_scan_env_defaults()
-    argv = [
-        tool["python"], tool["script"],
-        "-m", "5",
-        "-d", archives_dir,
-        "-p", defaults["place"],
-        "-pipeline", str(plan_run_id),
-    ]
-    if defaults["tag"]:
-        argv += ["-tag", defaults["tag"]]
-    if is_final:
-        argv.append("-end")
-    return argv
+_HOST_PREFIX_RE = re.compile(r"^([A-Za-z0-9_-]+?)_")
 
 
-def _register_scan_artifacts(
-    db: Session, plan_run_id: int, host_id: Optional[str], scan_dir: Path
+def _register_scan_artifacts_from_nfs(
+    db: Session, plan_run_id: int, dedup_dir: Path
 ) -> int:
-    """扫 scan_dir 取 Result_*.xls → 写 plan_run_artifact。返回注册数。"""
+    """扫 dedup_dir 取 *_org.xls → 提取 host_id → 写 plan_run_artifact。
+
+    文件名约定: {host_id}_Result_*_org.xls (由 UploadManager.fill 放置)。
+    返回注册数。
+    """
     count = 0
-    for xls in sorted(scan_dir.glob("Result_*.xls")):
+    for xls in sorted(dedup_dir.glob("*_org.xls")):
         existing = db.execute(
             select(PlanRunArtifact).where(
                 PlanRunArtifact.plan_run_id == plan_run_id,
@@ -100,6 +85,9 @@ def _register_scan_artifacts(
         ).scalar_one_or_none()
         if existing:
             continue
+
+        m = _HOST_PREFIX_RE.match(xls.name)
+        host_id = m.group(1) if m else None
         size = xls.stat().st_size if xls.exists() else 0
         db.add(PlanRunArtifact(
             plan_run_id=plan_run_id,
@@ -115,57 +103,29 @@ def _register_scan_artifacts(
 
 
 def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
-    """同步执行 scan（在 SAQ task 的 to_thread 内调用）。
+    """扫描 15.4 CIFS dedup/{plan_run_id}/ 目录，注册已上送的 *_org.xls 产物。
 
-    前置：归档完成。返回 console_run_id。
+    Agent 已通过 scan_now → run_local_scan → UploadManager 上送文件到 NFS。
+    本函数仅做文件发现 + DB 注册，不再调 subprocess / RunConsole。
+    返回注册产物数（字符串化），空串表示无新产物。
     """
     from backend.core.database import SessionLocal
 
     db = SessionLocal()
     try:
-        completed, archived, total = check_archive_completed(db, plan_run_id)
-        if not completed:
-            logger.warning(
-                "scan_skip_archive_incomplete plan_run=%d archived=%d/%d",
-                plan_run_id, archived, total,
-            )
-            return ""
-        tool = resolve_scan_tool()
-        if tool is None:
-            logger.warning("scan_skip_tool_not_configured plan_run=%d", plan_run_id)
+        nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
+        if not nfs_root:
+            logger.warning("scan_skip_nfs_root_not_set plan_run=%d", plan_run_id)
             return ""
 
-        archives_dir = os.getenv("STP_SCAN_ARCHIVES_DIR", "").strip()
-        if not archives_dir:
-            logger.warning("scan_skip_archives_dir_not_set plan_run=%d", plan_run_id)
+        dedup_dir = Path(nfs_root) / "dedup" / str(plan_run_id)
+        if not dedup_dir.is_dir():
+            logger.warning("scan_skip_dedup_dir_missing plan_run=%d dir=%s", plan_run_id, dedup_dir)
             return ""
 
-        argv = build_scan_argv(plan_run_id, archives_dir, is_final=is_final)
-        host_id = os.getenv("STP_HOST_ID", "")
-
-        def _on_complete(run):
-            if run.status != "SUCCESS":
-                return
-            try:
-                inner_db = SessionLocal()
-                try:
-                    scan_dir = Path(archives_dir)
-                    n = _register_scan_artifacts(inner_db, plan_run_id, host_id, scan_dir)
-                    logger.info("scan_artifacts_registered plan_run=%d count=%d", plan_run_id, n)
-                finally:
-                    inner_db.close()
-            except Exception:
-                logger.exception("scan_register_artifacts_failed plan_run=%d", plan_run_id)
-
-        console_run_id = RunConsole.instance().start(
-            run_key=f"scan:{plan_run_id}",
-            cmd=argv,
-            cwd=str(Path(tool["script"]).parent),
-            label=f"scan-{'final' if is_final else 'cycle'}-plan_run_{plan_run_id}",
-            on_complete=_on_complete,
-        )
-        logger.info("scan_started plan_run=%d run_id=%s final=%s", plan_run_id, console_run_id, is_final)
-        return console_run_id
+        n = _register_scan_artifacts_from_nfs(db, plan_run_id, dedup_dir)
+        logger.info("scan_artifacts_registered plan_run=%d count=%d", plan_run_id, n)
+        return str(n) if n else ""
     finally:
         db.close()
 
@@ -271,7 +231,7 @@ def should_trigger_dedup(run_status: str) -> bool:
 
 
 async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
-    """异步 enqueue scan_task + merge_task（aggregator.py 调用）。"""
+    """异步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
     try:
         from backend.tasks.saq_worker import get_queue
         from saq import Job as SaqJob
@@ -282,18 +242,7 @@ async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
                 function="scan_task",
                 kwargs={"plan_run_id": plan_run_id, "is_final": True},
                 key=f"scan:{plan_run_id}",
-                timeout=600,
-                retries=2,
-                retry_delay=10.0,
-                retry_backoff=True,
-            )
-        )
-        await queue.enqueue(
-            SaqJob(
-                function="merge_task",
-                kwargs={"plan_run_id": plan_run_id},
-                key=f"merge:{plan_run_id}",
-                timeout=300,
+                timeout=900,
                 retries=2,
                 retry_delay=10.0,
                 retry_backoff=True,
@@ -304,24 +253,17 @@ async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
 
 
 def enqueue_dedup_terminal_sync(plan_run_id: int) -> None:
-    """同步 enqueue scan_task + merge_task（aggregator_sync / abort 调用）。"""
+    """同步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
     try:
         from backend.tasks.saq_worker import enqueue_sync
 
         enqueue_sync(
             "scan_task",
             key=f"scan:{plan_run_id}",
-            timeout=600,
+            timeout=900,
             retries=2,
             plan_run_id=plan_run_id,
             is_final=True,
-        )
-        enqueue_sync(
-            "merge_task",
-            key=f"merge:{plan_run_id}",
-            timeout=300,
-            retries=2,
-            plan_run_id=plan_run_id,
         )
     except Exception as e:
         logger.error("enqueue_dedup_terminal_sync failed plan_run=%d: %s", plan_run_id, e)

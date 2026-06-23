@@ -15,7 +15,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.schedule import TaskSchedule, schedule_timestamp
@@ -209,6 +209,9 @@ async def check_and_fire_schedules() -> None:
             logger.info("cron_scheduler_fired count=%d", len(schedules))
 
 
+AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120"))
+
+
 def run_retention_cleanup() -> None:
     """Delete completed PlanRuns older than PLAN_RUN_RETENTION_DAYS (ADR-0020).
 
@@ -268,4 +271,63 @@ def run_retention_cleanup() -> None:
             logger.info("retention_cleanup deleted runs=%d", len(stale_runs))
         except Exception:
             logger.warning("retention_cleanup failed", exc_info=True)
+            db.rollback()
+
+
+def auto_archive_sweep() -> None:
+    """Scan terminal PlanRuns whose Plan.auto_archive_interval_seconds has elapsed
+    and enqueue the scan→upload→merge pipeline.
+
+    ADR-0025 Sprint 4 five-trigger scenario 5: the Plan-run reaches terminal
+    status, the configured interval passes, and the scheduler automatically
+    triggers the dedup pipeline so that scan/merge can proceed without manual
+    intervention.
+
+    Idempotent: SAQ queue keys like ``scan:{plan_run_id}`` deduplicate;
+    additionally we skip PlanRuns that already have a ``scan_result_xls``
+    artifact (scan already done).
+    """
+    from backend.models.plan import Plan
+    from backend.models.plan_run import PlanRun
+    from backend.models.plan_run_artifact import PlanRunArtifact
+    from backend.services.dedup_scan import enqueue_dedup_terminal_sync
+
+    _TERMINAL = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED"}
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        try:
+            runs = (
+                db.query(PlanRun)
+                .join(Plan, Plan.id == PlanRun.plan_id)
+                .filter(
+                    PlanRun.status.in_(_TERMINAL),
+                    PlanRun.ended_at.isnot(None),
+                    Plan.auto_archive_interval_seconds.isnot(None),
+                )
+                .all()
+            )
+
+            triggered = 0
+            for run in runs:
+                interval = run.plan.auto_archive_interval_seconds
+                if now - run.ended_at < timedelta(seconds=interval):
+                    continue
+
+                has_scan = db.execute(
+                    select(func.count()).select_from(PlanRunArtifact).where(
+                        PlanRunArtifact.plan_run_id == run.id,
+                        PlanRunArtifact.artifact_type == "scan_result_xls",
+                    )
+                ).scalar_one()
+                if has_scan > 0:
+                    continue
+
+                enqueue_dedup_terminal_sync(run.id)
+                triggered += 1
+
+            if triggered:
+                logger.info("auto_archive_sweep triggered=%d", triggered)
+        except Exception:
+            logger.warning("auto_archive_sweep failed", exc_info=True)
             db.rollback()

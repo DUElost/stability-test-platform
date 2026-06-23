@@ -1008,9 +1008,11 @@ export interface WatcherAgentOpsMetrics {
   spilled_total: number;
 }
 
+export type DedupScanStatus = 'pending' | 'scanned' | 'merged' | null;
+
 export interface WatcherArchive {
   ops_metrics: WatcherAgentOpsMetrics;
-  scan_status?: string | null;
+  scan_status?: DedupScanStatus;
   scan_triggered_at?: string | null;
 }
 

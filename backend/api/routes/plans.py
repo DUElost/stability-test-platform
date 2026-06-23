@@ -74,6 +74,7 @@ class PlanCreate(BaseModel):
     failure_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
     patrol_interval_seconds: Optional[int] = Field(default=None, ge=1)
     timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    auto_archive_interval_seconds: Optional[int] = Field(default=None, ge=1)
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: List[PlanStepIn] = Field(default_factory=list)
@@ -88,6 +89,7 @@ class PlanUpdate(BaseModel):
     failure_threshold: Optional[float] = None
     patrol_interval_seconds: Optional[int] = Field(default=None, ge=1)
     timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    auto_archive_interval_seconds: Optional[int] = Field(default=None, ge=1)
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     steps: Optional[List[PlanStepIn]] = None
@@ -116,6 +118,7 @@ class PlanOut(BaseModel):
     failure_threshold: float
     patrol_interval_seconds: Optional[int] = None
     timeout_seconds: Optional[int] = None
+    auto_archive_interval_seconds: Optional[int] = None
     next_plan_id: Optional[int] = None
     watcher_policy: Optional[dict] = None
     created_by: Optional[str] = None
@@ -370,6 +373,7 @@ def create_plan(
         failure_threshold=payload.failure_threshold,
         patrol_interval_seconds=payload.patrol_interval_seconds,
         timeout_seconds=payload.timeout_seconds,
+        auto_archive_interval_seconds=payload.auto_archive_interval_seconds,
         next_plan_id=payload.next_plan_id,
         watcher_policy=payload.watcher_policy,
         created_by=current_user.username if current_user else None,
@@ -464,6 +468,8 @@ def update_plan(
         plan.patrol_interval_seconds = payload.patrol_interval_seconds
     if payload.timeout_seconds is not None:
         plan.timeout_seconds = payload.timeout_seconds
+    if payload.auto_archive_interval_seconds is not None:
+        plan.auto_archive_interval_seconds = payload.auto_archive_interval_seconds
     if payload.watcher_policy is not None:
         plan.watcher_policy = payload.watcher_policy
 

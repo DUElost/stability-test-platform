@@ -28,6 +28,8 @@ if __name__ == "__main__" and __package__ is None:
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
     from agent.log_archiver import LogArchiver, collect_archive_heartbeat_metrics
+    from agent.scan_runner import ScanRunner
+    from agent.upload_manager import UploadManager
     from agent.local_disk_monitor import LocalDiskMonitor
     from agent.heartbeat_thread import HeartbeatThread
     from agent.host_registry import auto_register_host, get_host_info, load_required_host_id
@@ -49,6 +51,8 @@ else:
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs
     from .log_archiver import LogArchiver, collect_archive_heartbeat_metrics
+    from .scan_runner import ScanRunner
+    from .upload_manager import UploadManager
     from .local_disk_monitor import LocalDiskMonitor
     from .heartbeat_thread import HeartbeatThread
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
@@ -530,6 +534,8 @@ def main() -> None:
             grace_seconds=float(os.getenv("STP_LOG_ARCHIVE_GRACE_SECONDS", "1800")),
         ).start()
         logger.info("log_archiver=started")
+        ScanRunner.instance().configure()
+        UploadManager.instance().configure()
         hdd_root = str(get_aee_local_root())
         cifs_root = (
             os.getenv("STP_AEE_CIFS_ROOT", "")
@@ -596,8 +602,6 @@ def main() -> None:
                 _deregister_active_job(int(job_id))
                 logger.info("control_abort job_id=%s", job_id)
         elif command == "archive_now":
-            # 方案 C: 手动立即归档 = grace=0 SSD prune（跳过活跃 Job）；
-            # daemon 线程执行，避免拖住 SocketIO control 回调线程。
             arch = LogArchiver.instance()
             if arch.is_configured():
                 threading.Thread(
@@ -607,6 +611,63 @@ def main() -> None:
                 logger.info("control_archive_now triggered by backend — scanning with grace=0")
             else:
                 logger.warning("control_archive_now_skipped: archiver not configured")
+        elif command == "scan_now":
+            plan_run_id = payload.get("plan_run_id")
+            is_final = bool(payload.get("is_final", False))
+            if not plan_run_id:
+                logger.warning("control_scan_now_missing_plan_run_id")
+                return
+            from backend.agent.scan_runner import ScanRunner
+            from backend.agent.upload_manager import UploadManager
+
+            def _scan_and_upload():
+                runner = ScanRunner.instance()
+                if not runner.is_configured():
+                    logger.warning("control_scan_now_skip_runner_not_configured")
+                    return
+                org_xls = runner.run_local_scan(
+                    plan_run_id=int(plan_run_id),
+                    host_id=host_id,
+                    is_final=is_final,
+                )
+                if not org_xls:
+                    logger.warning("control_scan_now_scan_failed plan_run=%d", plan_run_id)
+                    return
+                uploader = UploadManager.instance()
+                if not uploader.is_configured():
+                    logger.warning("control_scan_now_skip_uploader_not_configured")
+                    return
+                uploader.upload_scan_report(int(plan_run_id), host_id, org_xls)
+                logger.info("control_scan_now_done plan_run=%d host=%s", plan_run_id, host_id)
+
+            threading.Thread(
+                target=_scan_and_upload,
+                name="scan-now", daemon=True,
+            ).start()
+            logger.info("control_scan_now_triggered plan_run=%d final=%s", plan_run_id, is_final)
+        elif command == "upload_events":
+            plan_run_id = payload.get("plan_run_id")
+            event_dir_names = payload.get("event_dir_names", [])
+            if not plan_run_id:
+                logger.warning("control_upload_events_missing_plan_run_id")
+                return
+            from backend.agent.upload_manager import UploadManager
+            from backend.agent.aee.paths import get_aee_local_root
+
+            def _upload_events():
+                uploader = UploadManager.instance()
+                if not uploader.is_configured():
+                    logger.warning("control_upload_events_skip_not_configured")
+                    return
+                hdd_root = get_aee_local_root()
+                n = uploader.upload_event_dirs(int(plan_run_id), event_dir_names, str(hdd_root))
+                logger.info("control_upload_events_done plan_run=%d copied=%d", plan_run_id, n)
+
+            threading.Thread(
+                target=_upload_events,
+                name="upload-events", daemon=True,
+            ).start()
+            logger.info("control_upload_events_triggered plan_run=%d dirs=%d", plan_run_id, len(event_dir_names))
         else:
             logger.warning("unknown_control_command: %s", command)
 

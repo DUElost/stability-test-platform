@@ -179,30 +179,47 @@ async def trigger_scan(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """手动触发/重跑 scan（各 agent 单独 scan 本机归档目录）。
+    """手动触发/重跑 scan：向各 ONLINE agent 下发 scan_now SocketIO 指令。
 
-    异步起 RunConsole subprocess；返回 console_run_id + room。
+    Agent 本地执行 start_log_scan -dedup_org → UploadManager 上送 _org.xls 到 NFS。
     终态自动触发走 SAQ scan_task，本端点用于手动重跑。
     """
-    from backend.services.dedup_scan import resolve_scan_tool, check_archive_completed
+    from backend.models.job import JobInstance
+    from backend.models.host import Host
+    from backend.models.plan_run import PlanRun
+    from backend.realtime.socketio_server import emit_agent_control
 
-    tool = resolve_scan_tool()
-    if tool is None:
-        raise HTTPException(status_code=503, detail="scan tool not configured (STP_DEDUP_SCAN_PYTHON / STP_DEDUP_SCAN_SCRIPT)")
+    pr = db.get(PlanRun, run_id)
+    if pr is None:
+        raise HTTPException(status_code=404, detail="plan run not found")
 
-    completed, archived, total = check_archive_completed(db, run_id)
-    if not completed:
-        raise HTTPException(
-            status_code=409,
-            detail=f"archive not completed ({archived}/{total}), run archive first",
-        )
+    host_rows = (
+        db.query(JobInstance.host_id, Host.status)
+        .join(Host, Host.id == JobInstance.host_id)
+        .filter(JobInstance.plan_run_id == run_id)
+        .distinct()
+        .all()
+    )
+    if not host_rows:
+        raise HTTPException(status_code=400, detail="no jobs found for this plan run")
 
-    from backend.services.dedup_scan import run_scan_sync
-    import asyncio
-    console_run_id = await asyncio.to_thread(run_scan_sync, run_id, is_final=is_final)
-    if not console_run_id:
-        raise HTTPException(status_code=500, detail="scan failed to start")
-    return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}", "plan_run_id": run_id})
+    triggered: list[str] = []
+    skipped: list[dict] = []
+    for host_id, host_status in host_rows:
+        if host_status == "ONLINE":
+            await emit_agent_control(
+                host_id, "scan_now",
+                payload={"plan_run_id": run_id, "is_final": is_final},
+            )
+            triggered.append(host_id)
+        else:
+            skipped.append({"host_id": host_id, "status": host_status})
+
+    return ok({
+        "plan_run_id": run_id,
+        "triggered_hosts": triggered,
+        "skipped_offline": skipped,
+    })
 
 
 @scan_router.get("/{run_id}/dedup/status", response_model=ApiResponse[dict])
@@ -273,10 +290,10 @@ def trigger_extract(
     db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """ADR-0025 Sprint 4 归档-3: 按 merge Result.xls 的 db 路径提取事件目录到提单目录。
+    """ADR-0025 Sprint 4 归档-3: 从 15.4 `devices/{run_id}/` 提取事件目录到提单目录。
 
-    从 merge_result_xls 产物中读取 db 路径，定位各 agent 15.4 上的事件目录
-    （含 AEE + mobilelog + bugreport），复制到提单目录。
+    按 merge Result.xls 引用的事件目录定位 15.4 上的事件目录 → 复制到
+    `nfs_root/jira/{run_id}/` 供厂商 Jira 工具消费。
     """
     from backend.models.plan_run_artifact import PlanRunArtifact
     from sqlalchemy import select
@@ -295,22 +312,35 @@ def trigger_extract(
     if not nfs_root:
         raise HTTPException(status_code=503, detail="NFS root not configured (STP_AEE_NFS_ROOT)")
 
+    devices_dir = Path(nfs_root) / "devices" / str(run_id)
     jira_dir = Path(nfs_root) / "jira" / str(run_id)
     jira_dir.mkdir(parents=True, exist_ok=True)
 
     extracted = 0
+    if devices_dir.is_dir():
+        for event_dir in sorted(devices_dir.iterdir()):
+            if not event_dir.is_dir():
+                continue
+            dest = jira_dir / event_dir.name
+            if dest.exists():
+                continue
+            try:
+                shutil.copytree(str(event_dir), str(dest))
+                extracted += 1
+            except Exception:
+                logger.exception("extract_event_dir_failed dir=%s", event_dir)
+
     for row in merge_rows:
         merge_xls = Path(row.storage_uri)
         if not merge_xls.exists():
             continue
-        merge_dir = merge_xls.parent
-        for org_xls in merge_dir.glob("Result_MergeFiles_org.xls"):
-            extract_src = merge_dir / "extract"
-            extract_src.mkdir(exist_ok=True)
-            target = jira_dir / org_xls.stem
-            if not target.exists():
-                shutil.copy2(str(org_xls), str(target))
+        dest = jira_dir / merge_xls.name
+        if not dest.exists():
+            try:
+                shutil.copy2(str(merge_xls), str(dest))
                 extracted += 1
+            except Exception:
+                logger.exception("extract_merge_xls_failed path=%s", merge_xls)
 
     logger.info("extract_done plan_run=%d extracted=%d", run_id, extracted)
     return ok({
