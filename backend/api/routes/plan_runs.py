@@ -1906,7 +1906,7 @@ def get_plan_run_watcher_summary(
     pr = _require_plan_run(db, run_id)
 
     job_rows = db.execute(
-        select(JobInstance.id, JobInstance.device_id, JobInstance.host_id).where(JobInstance.plan_run_id == run_id)
+        select(JobInstance.id, JobInstance.device_id, JobInstance.host_id, JobInstance.status).where(JobInstance.plan_run_id == run_id)
     ).all()
     job_ids   = [r.id for r in job_rows]
     total_dev = len({r.device_id for r in job_rows})
