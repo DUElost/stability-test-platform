@@ -1762,6 +1762,78 @@ async def test_concurrent_claim_capacity_does_not_exceed():
         _cleanup_custom(seed)
 
 
+@pytest.mark.asyncio(loop_scope="module")
+async def test_overclaim_clamped_to_free_device_count():
+    """capacity=100 with 10 free devices → claim must not exceed 10 (#9)."""
+    suffix = uuid4().hex[:8]
+    host_id = f"oc-{suffix}"
+    now = datetime.now(timezone.utc)
+    N_DEVICES = 10
+
+    db = SessionLocal()
+    try:
+        host = Host(
+            id=host_id, hostname=f"oc-h-{suffix}",
+            status=HostStatus.ONLINE.value, created_at=now,
+        )
+        plan = Plan(
+            name=f"oc-plan-{suffix}", description="", failure_threshold=0.1,
+            created_by="pytest",
+        )
+        db.add_all([host, plan])
+        db.flush()
+
+        run = PlanRun(
+            plan_id=plan.id,
+            status="RUNNING",
+            failure_threshold=0.1,
+            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            run_type="MANUAL", triggered_by="pytest",
+        )
+        db.add(run)
+        db.flush()
+
+        devices = []
+        jobs = []
+        for i in range(N_DEVICES):
+            dev = Device(
+                serial=f"OC{i}-{suffix}", host_id=host_id, status="ONLINE",
+                tags=[], created_at=now, adb_connected=True, adb_state="device",
+            )
+            db.add(dev)
+            db.flush()
+            devices.append(dev)
+            job = JobInstance(
+                plan_run_id=run.id, plan_id=plan.id,
+                device_id=dev.id, host_id=host_id,
+                status=JobStatus.PENDING.value, pipeline_def=PIPELINE_DEF,
+                created_at=now + timedelta(seconds=i), updated_at=now,
+            )
+            db.add(job)
+            db.flush()
+            jobs.append(job)
+
+        db.commit()
+        seed = {"host_id": host_id, "plan_id": plan.id, "plan_run_id": run.id}
+        for d in devices:
+            seed[f"device_{d.id}"] = d.id
+        for j in jobs:
+            seed[f"job_{j.id}"] = j.id
+    finally:
+        db.close()
+
+    try:
+        async with AsyncSessionLocal() as db:
+            claimed, _ = await _claim_jobs_for_host(
+                db, host_id, capacity=100,
+            )
+            assert len(claimed) <= N_DEVICES, (
+                f"Claim with capacity=100 must not exceed {N_DEVICES} free devices; got {len(claimed)}"
+            )
+    finally:
+        _cleanup_custom(seed)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ADR-0019 Phase 3a: heartbeat stores agent identity
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, X, ChevronRight } from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip } from 'recharts';
@@ -192,6 +192,12 @@ function PackageRankingDrawer({
   onSelectPackage: (pkg: string | null) => void;
 }) {
   const drawerRef = useRef<HTMLElement>(null);
+  const [drawerPage, setDrawerPage] = useState(0);
+  const DRAWER_PAGE_SIZE = 20;
+
+  useEffect(() => {
+    if (open) setDrawerPage(0);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -237,18 +243,19 @@ function PackageRankingDrawer({
 
         <div className="flex-1 overflow-y-auto px-4 py-3">
           <div className="space-y-2">
-            {rankings.map((row, index) => {
+            {rankings.slice(drawerPage * DRAWER_PAGE_SIZE, (drawerPage + 1) * DRAWER_PAGE_SIZE).map((row, index) => {
+              const actualIndex = drawerPage * DRAWER_PAGE_SIZE + index;
               const active = selectedPackageName === row.package_name;
               const isUnknown = row.package_name === 'unknown';
               const dominantColor = isUnknown
                 ? '#94a3b8'
                 : packageDominantColor(row);
               const rankCls =
-                index === 0
+                actualIndex === 0
                   ? 'text-amber-500 font-bold text-sm'
-                  : index === 1
+                  : actualIndex === 1
                     ? 'text-slate-500 font-bold text-sm'
-                    : index === 2
+                    : actualIndex === 2
                       ? 'text-amber-700 font-semibold'
                       : 'text-slate-400';
 
@@ -324,13 +331,36 @@ function PackageRankingDrawer({
               );
             })}
           </div>
+          {rankings.length > DRAWER_PAGE_SIZE && (
+            <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-slate-500">
+              <button
+                type="button"
+                onClick={() => setDrawerPage((p) => Math.max(0, p - 1))}
+                disabled={drawerPage === 0}
+                className="rounded px-2 py-1 disabled:opacity-30 hover:bg-slate-100"
+              >
+                上一页
+              </button>
+              <span>
+                {drawerPage + 1}/{Math.ceil(rankings.length / DRAWER_PAGE_SIZE)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setDrawerPage((p) => Math.min(Math.ceil(rankings.length / DRAWER_PAGE_SIZE) - 1, p + 1))}
+                disabled={(drawerPage + 1) * DRAWER_PAGE_SIZE >= rankings.length}
+                className="rounded px-2 py-1 disabled:opacity-30 hover:bg-slate-100"
+              >
+                下一页
+              </button>
+            </div>
+          )}
         </div>
       </aside>
     </>
   );
 }
 
-function DonutChart({
+const DonutChart = memo(function DonutChart({
   items,
   total,
   tone,
@@ -496,7 +526,7 @@ function DonutChart({
       </div>
     </div>
   );
-}
+});
 
 export default function AnomalyDashboard({
   runId,

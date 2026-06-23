@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, AlertCircle, AlertTriangle, ChevronDown, RefreshCw, PanelLeft } from 'lucide-react';
@@ -417,6 +417,8 @@ export default function PlanRunDetailPage() {
     return devicesQ.data.devices.filter((d) => isJobStuck(d, now));
   }, [devicesQ.data, isTerminal]);
 
+  const watcherSignalTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ── SocketIO event-driven invalidation ──
   const onSocketMessage = useCallback(
     (msg: SocketIOMessage<unknown>) => {
@@ -434,7 +436,11 @@ export default function PlanRunDetailPage() {
         qc.invalidateQueries({ queryKey: ['plan-run-timeline', id] });
         qc.invalidateQueries({ queryKey: ['plan-run-devices', id] });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.WATCHER_SIGNAL) {
-        qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
+        if (watcherSignalTimer.current) clearTimeout(watcherSignalTimer.current);
+        watcherSignalTimer.current = setTimeout(() => {
+          qc.invalidateQueries({ queryKey: ['plan-run-watcher', id] });
+          watcherSignalTimer.current = null;
+        }, 2000);
       }
     },
     [id, qc],
