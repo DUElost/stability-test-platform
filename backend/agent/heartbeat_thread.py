@@ -73,12 +73,20 @@ class HeartbeatThread:
         self._last_adb_connected_by_serial: Dict[str, bool] = {}
         self._pending_reconnected_serials: List[str] = []
         self._devices_lock = threading.Lock()
+        self._effective_slots: int = 0
+        self._capacity_lock = threading.Lock()
 
     @property
     def latest_devices(self) -> List[Dict[str, Any]]:
         """Return the most recent device list (thread-safe)."""
         with self._devices_lock:
             return list(self._latest_devices)
+
+    @property
+    def effective_slots(self) -> int:
+        """Return the latest effective_slots from capacity computation (thread-safe)."""
+        with self._capacity_lock:
+            return self._effective_slots
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -204,6 +212,9 @@ class HeartbeatThread:
             system_stats=system_stats,
             mount_status=mount_status,
         )
+
+        with self._capacity_lock:
+            self._effective_slots = cap_result.get("capacity", {}).get("effective_slots", 0)
 
         response = send_heartbeat(
             self._api_url,

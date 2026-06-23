@@ -107,7 +107,7 @@ effective_capacity = capacity   # Agent 心跳上报值，不再与 host.max_con
 
 Phase 1 在 `host` 表新增 `max_concurrent_jobs` 字段（integer, NOT NULL, DEFAULT 2），作为该 Host 的设备槽位上限。
 
-> ⚠️ `max_concurrent_jobs` 字段仍存在于 DB 列和 ORM 定义中（`backend/models/host.py:28`），但已无业务代码引用。claim 端点不读取此字段，heartbeat 不更新此字段，API 响应不暴露此字段。保留为兼容投影，待后续 Alembic migration 移除列。
+> ~~`max_concurrent_jobs` 字段仍存在于 DB 列和 ORM 定义中（`backend/models/host.py:28`）~~ **已移除**（migration `q2r3s4t5u6v7`，2026-06-12）。ORM、API、前端均无引用。
 
 原 `cpu_quota` 字段不再用于并发控制，避免 CPU 配额与设备槽位语义混淆。
 
@@ -317,7 +317,7 @@ Agent 启动流程变为：`discover devices → recovery sync → claim new job
 - `backend/tasks/session_watchdog.py` — 部分逻辑迁移到 Reconciler
 - `backend/agent/main.py` — `MAX_CONCURRENT_TASKS` → available_slots
 - `backend/agent/task_executor.py` — `LockRenewalManager` → `LeaseRenewer`
-- `backend/models/host.py` — Device 模型旧字段保留为兼容投影；`host.max_concurrent_jobs` 同理已无业务效果（2026-06-08）
+- `backend/models/host.py` — `host.max_concurrent_jobs` 列已通过 migration `q2r3s4t5u6v7` 移除（2026-06-12），ORM 不再包含此字段
 - `backend/api/routes/agent_script_api.py` — Phase 5 移除
 - `backend/agent/script_batch_runner.py` — Phase 5 移除
 

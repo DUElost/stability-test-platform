@@ -317,6 +317,7 @@ async def _claim_jobs_for_host(
 
     # 2. Effective capacity — each device runs at most 1 Job;
     #    Agent's "capacity" is the soft cap on concurrent jobs.
+    #    Defensive clamp: never claim more than free device count.
     effective_capacity = capacity
 
     # 4. Get all device IDs for this host (Phase 3c: filter known-unhealthy devices)
@@ -345,6 +346,8 @@ async def _claim_jobs_for_host(
         )
         busy_device_ids = {row[0] for row in busy_rows.all()}
         free_device_ids = [did for did in all_device_ids if did not in busy_device_ids]
+
+    effective_capacity = min(effective_capacity, len(free_device_ids))
 
     # 6. Per-device first PENDING job + FOR UPDATE SKIP LOCKED
     pending_jobs: list[JobInstance] = []

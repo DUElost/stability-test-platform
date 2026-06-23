@@ -899,7 +899,9 @@ def main() -> None:
                 with _active_jobs_lock:
                     active_count = len(_active_job_ids)
 
-                available_slots = max(0, max_concurrent_tasks - active_count)
+                heartbeat_effective = heartbeat_thread.effective_slots
+                max_by_env = max(0, max_concurrent_tasks - active_count)
+                available_slots = min(max_by_env, heartbeat_effective)
 
                 logger.info("main_loop_tick active=%d slots=%d", active_count, available_slots)
 
