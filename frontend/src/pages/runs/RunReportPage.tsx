@@ -148,6 +148,11 @@ export default function RunReportPage() {
 
         <div className="rounded-lg border p-4 space-y-2">
           <h3 className="text-sm font-medium text-muted-foreground">风险摘要</h3>
+          {report.report_status === 'pending_archive' && (
+            <div className="mb-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+              归档进行中，风险摘要将在归档完成后可用
+            </div>
+          )}
           <div className="flex items-center gap-2 mb-2">
             <StatusBadge kind="risk" status={riskLevel} size="sm" />
           </div>

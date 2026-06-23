@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy import text, select
-from backend.models.job import JobInstance, JobLogSignal, StepTrace
+from sqlalchemy import text, select, func
+from backend.models.job import JobInstance, JobArtifact, JobLogSignal, StepTrace
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.models.host import Device, Host
@@ -209,15 +209,40 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
     artifact_payload = snapshot.get("artifact") if isinstance(snapshot.get("artifact"), dict) else None
 
     artifacts_out = []
+    snapshot_uris: set[str] = set()
     if artifact_payload and artifact_payload.get("storage_uri"):
+        storage_uri = str(artifact_payload.get("storage_uri"))
+        snapshot_uris.add(storage_uri)
+        db_artifact = db.execute(
+            select(JobArtifact.artifact_type).where(JobArtifact.storage_uri == storage_uri)
+        ).scalar_one_or_none()
         artifacts_out.append(
             {
                 "id": 0,
                 "run_id": job.id,
-                "storage_uri": str(artifact_payload.get("storage_uri")),
+                "storage_uri": storage_uri,
+                "artifact_type": db_artifact or artifact_payload.get("artifact_type") or "log",
                 "size_bytes": artifact_payload.get("size_bytes"),
                 "checksum": artifact_payload.get("checksum"),
                 "created_at": job.ended_at or datetime.now(timezone.utc),
+            }
+        )
+
+    db_artifacts = db.execute(
+        select(JobArtifact).where(JobArtifact.job_id == job.id)
+    ).scalars().all()
+    for a in db_artifacts:
+        if a.storage_uri in snapshot_uris:
+            continue
+        artifacts_out.append(
+            {
+                "id": a.id,
+                "run_id": job.id,
+                "storage_uri": a.storage_uri,
+                "artifact_type": a.artifact_type or "log",
+                "size_bytes": a.size_bytes,
+                "checksum": a.checksum,
+                "created_at": a.created_at,
             }
         )
 
@@ -232,6 +257,13 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
         ).all()
         sibling_job_ids = [r[0] for r in sibling_rows]
     risk_summary = aggregate_risk_summary_from_signals(db, sibling_job_ids) if sibling_job_ids else None
+    report_status: Optional[str] = None
+    if risk_summary is None and sibling_job_ids:
+        signal_count = db.execute(
+            select(func.count(JobLogSignal.id)).where(JobLogSignal.job_id.in_(sibling_job_ids))
+        ).scalar_one()
+        if signal_count > 0:
+            report_status = "pending_archive"
     summary_metrics = parse_run_log_summary(log_summary)
     alerts = build_risk_alerts(risk_summary, summary_metrics)
 
@@ -292,6 +324,7 @@ def _compose_job_report(db: Session, job: JobInstance) -> Optional[RunReportOut]
         device=device_out,
         summary_metrics=summary_metrics,
         risk_summary=risk_summary,
+        report_status=report_status,
         alerts=alerts,
     )
 
@@ -544,7 +577,7 @@ def build_jira_draft(report: RunReportOut) -> JiraDraftOut:
         else ["- No alerts generated"]
     )
     artifact_lines = (
-        [f"- {item.storage_uri}" for item in report.run.artifacts]
+        [f"- [{item.artifact_type}] {item.storage_uri}" for item in report.run.artifacts]
         if report.run.artifacts
         else ["- N/A"]
     )

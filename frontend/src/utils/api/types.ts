@@ -138,6 +138,7 @@ export interface LogArtifact {
   id: number;
   run_id: number;
   storage_uri: string;
+  artifact_type?: string | null;
   size_bytes: number | null;
   checksum: string | null;
   created_at: string;
@@ -182,6 +183,7 @@ export interface RunReport {
   } | null;
   summary_metrics: Record<string, any>;
   risk_summary: RunRiskSummary | null;
+  report_status?: string | null;
   alerts: RunRiskAlert[];
 }
 

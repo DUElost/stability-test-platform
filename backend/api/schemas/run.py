@@ -12,6 +12,7 @@ class LogArtifactOut(ORMBaseModel):
     id: int
     run_id: int
     storage_uri: str
+    artifact_type: Optional[str] = None
     size_bytes: Optional[int] = None
     checksum: Optional[str] = None
     created_at: datetime
@@ -155,6 +156,7 @@ class RunReportOut(ORMBaseModel):
     device: Optional[DeviceLiteOut] = None
     summary_metrics: Dict[str, Any] = Field(default_factory=dict)
     risk_summary: Optional[Dict[str, Any]] = None
+    report_status: Optional[str] = None
     alerts: List[RiskAlertOut] = Field(default_factory=list)
 
 
