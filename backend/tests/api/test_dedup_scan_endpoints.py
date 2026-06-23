@@ -53,7 +53,7 @@ class TestScanEndpoint:
             plan_id=sample_plan.id,
             device_id=sample_device.id,
             host_id=sample_host.id,
-            status=JobStatus.SUCCESS.value,
+            status=JobStatus.COMPLETED.value,
             pipeline_def={"lifecycle": {"init": [], "teardown": []}},
         )
         db_session.add(job)

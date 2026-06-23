@@ -125,6 +125,8 @@ class UploadManager:
     ) -> int:
         """Copy event directories → {nfs_root}/devices/{plan_run_id}/{dirname}/.
 
+        If event_dir_names is empty, auto-discover by globbing {source_root}
+        for timestamp-prefixed event directories (e.g. 2026-06-23_14-30-00_db.01).
         Skip if dest already exists. Returns count copied.
         """
         if not self._configured:
@@ -137,6 +139,30 @@ class UploadManager:
         count = 0
         base_src = Path(source_root)
         base_dst = Path(self._nfs_root) / "devices" / str(plan_run_id)
+
+        if not event_dir_names:
+            for event_dir in sorted(base_src.rglob("*_*")):
+                if not event_dir.is_dir():
+                    continue
+                if not event_dir.name[0].isdigit():
+                    continue
+                rel = event_dir.relative_to(base_src)
+                dst_dir = base_dst / rel
+                if dst_dir.exists():
+                    continue
+                try:
+                    self._copytree_safe(str(event_dir), str(dst_dir))
+                    count += 1
+                except Exception:
+                    logger.exception(
+                        "upload_event_dirs_auto_copy_failed plan_run=%d dir=%s",
+                        plan_run_id, event_dir,
+                    )
+            logger.info(
+                "upload_event_dirs_auto plan_run=%d copied=%d from=%s",
+                plan_run_id, count, source_root,
+            )
+            return count
 
         for dirname in event_dir_names:
             src_dir = base_src / dirname

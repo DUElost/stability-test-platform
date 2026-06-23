@@ -333,11 +333,12 @@ async def archive_plan_run_logs_endpoint(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """ADR-0025 S2: 手动触发该 PlanRun 涉及 host 的运行日志立即归档(grace=0)。
+    """ADR-0025 S2: 手动触发该 PlanRun 涉及 host 的运行日志立即归档(grace=0) + scan。
 
-    经 SocketIO control:archive_now 向各 ONLINE host 的 Agent 下发指令。
-    Agent 端 daemon 线程跑 scan_once(grace_seconds=0),仍严格跳过 active Job。
-    归档是异步的——返回「已触发」,bundle 落库有秒级延迟;前端应轮询/refetch。
+    经 SocketIO control 向各 ONLINE host 的 Agent 下发:
+      - archive_now: Agent 端 daemon 线程跑 scan_once(grace_seconds=0)，严格跳过 active Job。
+      - scan_now: Agent 端 daemon 线程跑 start_log_scan -dedup_org → UploadManager 上送 NFS。
+    归档和 scan 均为异步——返回「已触发」，前端应轮询/refetch。
     """
     from backend.realtime.socketio_server import emit_agent_control
 
@@ -2035,7 +2036,7 @@ def get_plan_run_watcher_summary(
         preexisting=preexisting,
         aee_breakdown=aee_breakdown,
         watcher_capability=watcher_capability,
-        archive=_aggregate_run_log_archive(db, job_rows=job_rows, total_jobs=len(job_ids)),
+        archive=_aggregate_run_log_archive(db, job_rows=job_rows, total_jobs=len(job_ids), plan_run_id=run_id),
     ))
 
 
@@ -2054,7 +2055,7 @@ _CAPABILITY_SEVERITY: dict[str, int] = {
 
 
 def _aggregate_run_log_archive(
-    db: Session, *, job_rows: list, total_jobs: int,
+    db: Session, *, job_rows: list, total_jobs: int, plan_run_id: int,
 ) -> WatcherArchiveOut:
     host_ids = {r.host_id for r in job_rows if r.host_id}
     if not host_ids:
@@ -2085,7 +2086,6 @@ def _aggregate_run_log_archive(
     scan_status: Optional[str] = None
     scan_triggered_at: Optional[str] = None
     if job_rows:
-        plan_run_id = job_rows[0].plan_run_id
         from backend.models.plan_run_artifact import PlanRunArtifact
         from sqlalchemy import func as sa_func
 

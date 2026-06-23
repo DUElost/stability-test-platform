@@ -64,7 +64,7 @@ def check_archive_completed(db: Session, plan_run_id: int) -> tuple[bool, int, i
     return signal_job_count >= total, int(signal_job_count or 0), int(total)
 
 
-_HOST_PREFIX_RE = re.compile(r"^(h-\w+?)_")
+_HOST_PREFIX_RE = re.compile(r"^([A-Za-z0-9_-]+?)_")
 
 
 def _register_scan_artifacts_from_nfs(
@@ -231,7 +231,7 @@ def should_trigger_dedup(run_status: str) -> bool:
 
 
 async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
-    """异步 enqueue scan_task → upload_task → merge_task（aggregator.py 调用）。"""
+    """异步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
     try:
         from backend.tasks.saq_worker import get_queue
         from saq import Job as SaqJob
@@ -242,29 +242,7 @@ async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
                 function="scan_task",
                 kwargs={"plan_run_id": plan_run_id, "is_final": True},
                 key=f"scan:{plan_run_id}",
-                timeout=600,
-                retries=2,
-                retry_delay=10.0,
-                retry_backoff=True,
-            )
-        )
-        await queue.enqueue(
-            SaqJob(
-                function="upload_task",
-                kwargs={"plan_run_id": plan_run_id},
-                key=f"upload:{plan_run_id}",
-                timeout=600,
-                retries=2,
-                retry_delay=10.0,
-                retry_backoff=True,
-            )
-        )
-        await queue.enqueue(
-            SaqJob(
-                function="merge_task",
-                kwargs={"plan_run_id": plan_run_id},
-                key=f"merge:{plan_run_id}",
-                timeout=300,
+                timeout=900,
                 retries=2,
                 retry_delay=10.0,
                 retry_backoff=True,
@@ -275,31 +253,17 @@ async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
 
 
 def enqueue_dedup_terminal_sync(plan_run_id: int) -> None:
-    """同步 enqueue scan_task → upload_task → merge_task（aggregator_sync / abort 调用）。"""
+    """同步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
     try:
         from backend.tasks.saq_worker import enqueue_sync
 
         enqueue_sync(
             "scan_task",
             key=f"scan:{plan_run_id}",
-            timeout=600,
+            timeout=900,
             retries=2,
             plan_run_id=plan_run_id,
             is_final=True,
-        )
-        enqueue_sync(
-            "upload_task",
-            key=f"upload:{plan_run_id}",
-            timeout=600,
-            retries=2,
-            plan_run_id=plan_run_id,
-        )
-        enqueue_sync(
-            "merge_task",
-            key=f"merge:{plan_run_id}",
-            timeout=300,
-            retries=2,
-            plan_run_id=plan_run_id,
         )
     except Exception as e:
         logger.error("enqueue_dedup_terminal_sync failed plan_run=%d: %s", plan_run_id, e)

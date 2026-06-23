@@ -10,6 +10,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -105,6 +106,7 @@ class ScanRunner:
             )
             return None
 
+        scan_start = time.time()
         argv = self._build_argv(is_final=is_final)
         cwd = str(Path(self._scan_tool_script).parent)
         logger.info(
@@ -135,7 +137,12 @@ class ScanRunner:
             return None
 
         hdd = Path(self._hdd_root)
-        candidates = list(hdd.glob("**/Result_*_org.xls"))
+        all_candidates = list(hdd.glob("**/Result_*_org.xls"))
+        fresh = [
+            c for c in all_candidates
+            if c.stat().st_mtime >= scan_start - 1
+        ]
+        candidates = fresh or all_candidates
         if not candidates:
             logger.warning(
                 "scan_runner_no_org_xls plan_run=%d host=%s hdd_root=%s",
@@ -146,8 +153,8 @@ class ScanRunner:
         latest = max(candidates, key=lambda p: p.stat().st_mtime)
         org_xls = str(latest.resolve())
         logger.info(
-            "scan_runner_success plan_run=%d host=%s org_xls=%s",
-            plan_run_id, host_id, org_xls,
+            "scan_runner_success plan_run=%d host=%s org_xls=%s fresh=%d total=%d",
+            plan_run_id, host_id, org_xls, len(fresh), len(all_candidates),
         )
         return org_xls
 
