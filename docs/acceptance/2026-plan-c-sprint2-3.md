@@ -42,7 +42,7 @@
 | ID | 场景 | 前置 | 期望结果 | 自动化 | 状态 |
 |----|------|------|----------|--------|------|
 | AC-S3-01 | watcher-summary archive 新语义 | 心跳运维指标 | archive 段展示 ops_metrics（pruned/hdd%/spill）+ scan 占位 | `test_plan_run_aggregation_endpoints.py` | 本 PR |
-| AC-S3-02 | risk_summary 从 log_signal 聚合 | 有 log_signal | 按 event_subtype 聚合 + S/A/B 定级表规则 → risk_level + by_severity | `test_run_report.py` + `_classify_subtype` 单元验证 | 本 PR |
+| AC-S3-02 | risk_summary 从 log_signal 聚合 | ~~Won't fix~~ — 团队决定：控制面不代理 Agent `:8900`，运维直链 + `DEPLOY.md` | — | — | Won't fix |
 | AC-S3-03 | risk_summary 非全零空态 | 有 log_signal | 初筛选数据驱动，不再从 tar 读取（原链路永不工作） | `report_service.aggregate_risk_summary_from_signals` | 本 PR |
 | AC-S3-04 | archive-status 新语义 | host 有 extra | 返回 agent_metrics/capacity/health/agent_version + scan 占位 | `agent_api.get_archive_status` | 本 PR |
 | AC-S3-05 | ArchiveStatusCard 运维展示 | 有 ops_metrics | 显示 HDD 使用率/SSD 清理/溢出指标，无 bundle 路径 | `WatcherSummaryCard.test.tsx` + `ArchiveStatusCard` | 本 PR |
