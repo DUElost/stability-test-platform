@@ -230,18 +230,19 @@ def should_trigger_dedup(run_status: str) -> bool:
     return run_status in _PLAN_RUN_TERMINAL
 
 
-async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
+async def enqueue_dedup_terminal_async(plan_run_id: int, *, is_final: bool = True) -> None:
     """异步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
     try:
         from backend.tasks.saq_worker import get_queue
         from saq import Job as SaqJob
 
+        suffix = "" if is_final else ":inc"
         queue = get_queue()
         await queue.enqueue(
             SaqJob(
                 function="scan_task",
-                kwargs={"plan_run_id": plan_run_id, "is_final": True},
-                key=f"scan:{plan_run_id}",
+                kwargs={"plan_run_id": plan_run_id, "is_final": is_final},
+                key=f"scan:{plan_run_id}{suffix}",
                 timeout=900,
                 retries=2,
                 retry_delay=10.0,
@@ -252,18 +253,19 @@ async def enqueue_dedup_terminal_async(plan_run_id: int) -> None:
         logger.error("enqueue_dedup_terminal_async failed plan_run=%d: %s", plan_run_id, e)
 
 
-def enqueue_dedup_terminal_sync(plan_run_id: int) -> None:
+def enqueue_dedup_terminal_sync(plan_run_id: int, *, is_final: bool = True) -> None:
     """同步 enqueue scan_task（scan_task 完成后自行串行 enqueue upload + merge）。"""
     try:
         from backend.tasks.saq_worker import enqueue_sync
 
+        suffix = "" if is_final else ":inc"
         enqueue_sync(
             "scan_task",
-            key=f"scan:{plan_run_id}",
+            key=f"scan:{plan_run_id}{suffix}",
             timeout=900,
             retries=2,
             plan_run_id=plan_run_id,
-            is_final=True,
+            is_final=is_final,
         )
     except Exception as e:
         logger.error("enqueue_dedup_terminal_sync failed plan_run=%d: %s", plan_run_id, e)

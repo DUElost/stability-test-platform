@@ -320,10 +320,10 @@ def auto_archive_sweep() -> None:
                         PlanRunArtifact.artifact_type == "scan_result_xls",
                     )
                 ).scalar_one()
-                if has_scan > 0:
-                    continue
-
-                enqueue_dedup_terminal_sync(run.id)
+                enqueue_dedup_terminal_sync(
+                    run.id,
+                    is_final=(has_scan == 0),
+                )
                 triggered += 1
 
             if triggered:

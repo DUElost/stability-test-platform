@@ -97,3 +97,50 @@ Frontend ◄──SocketIO /dashboard──┘
 - `backend/tests/realtime/` — SocketIO  
 - `backend/tests/tasks/` — SAQ  
 - `backend/tests/scheduler/` — 调度回调
+
+---
+
+## 9. ADR-0025 终态 dedup 管道时序
+
+PlanRun 进入终态（SUCCESS / PARTIAL_SUCCESS / FAILED / DEGRADED）后，控制面自动或手动触发以下管道：
+
+```
+PlanRun 终态
+  └→ enqueue_dedup_terminal_sync → scan_task
+       ├→ emit scan_now → 各 ONLINE Agent
+       │    ├→ ScanRunner.run_local_scan → _org.xls on HDD
+       │    └→ UploadManager.upload_scan_report → NFS dedup/{run_id}/{host_id}_Result_*_org.xls
+       ├→ poll NFS dedup/{plan_run_id}/ (10s × 30 = 300s max)
+       │    等待 registered >= len(triggered_host_ids) 或超时
+       ├→ run_scan_sync → PlanRunArtifact(scan_result_xls) 注册 DB
+       ├→ enqueue upload_task
+       │    └→ emit upload_events → Agent upload_event_dirs → NFS devices/{run_id}/
+       └→ enqueue merge_task
+            └→ run_merge_sync → PlanRunArtifact(merge_result_xls) 注册 DB
+```
+
+### 时序依赖
+
+| 步骤 | 依赖 | 路径 | 说明 |
+|------|------|------|------|
+| scan_task | — | 入口 | 链式入口，内部串行 enqueue upload + merge |
+| upload_task | scan_task 完成 | `devices/{run_id}/` | 与 merge_task 可并行（读/写不同 NFS 子目录） |
+| merge_task | scan_task 完成 | `dedup/{run_id}/` | 读 scan 产物 _org.xls，产出 merge xls |
+| extract | merge_task 完成 | `devices/` → `jira/{run_id}/` | 需参考 merge xls 确认 db 路径 |
+
+- **多 host**：`scan_task` poll 等待所有 triggered host 的 artifact 或超时
+- **Agent 上送**：`upload_scan_report` 与 `upload_event_dirs` 由 Agent daemon thread 分别执行
+
+### 五触发场景
+
+| # | 场景 | is_final | 触发方式 | 说明 |
+|---|------|----------|---------|------|
+| 1 | 终态自动 | True | aggregator enqueue | PlanRun 终态自动触发 |
+| 2 | abort | True | 前端确认后 enqueue | 用户 abort → FAILED |
+| 3 | FAILED/DEGRADED | True | 前端确认后 enqueue | 中断/失败需用户确认 |
+| 4 | 手动归档 | True | POST /archive | 同时触发 archive_now + scan_now |
+| 5 | 自动归档间隔 | 首次 True / 增量 False | auto_archive_sweep 周期 | 已有 scan 时增量 re-scan |
+
+### Agent 端事件目录命名
+
+自动发现（`event_dir_names` 为空时）仅匹配 `YYYY-MM-DD_HH-MM-SS_*` 时间戳前缀的直接子目录，不递归、不匹配非时间戳目录。

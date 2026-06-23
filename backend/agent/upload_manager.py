@@ -13,6 +13,7 @@ ADR-0025 Sprint 4 Task 2: Agent 侧文件上送管理器。
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -33,6 +34,8 @@ except ImportError:
         return Path("/mnt/hdd/aee_events")
 
 logger = logging.getLogger(__name__)
+
+_EVENT_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_")
 
 
 class UploadManager:
@@ -141,13 +144,12 @@ class UploadManager:
         base_dst = Path(self._nfs_root) / "devices" / str(plan_run_id)
 
         if not event_dir_names:
-            for event_dir in sorted(base_src.rglob("*_*")):
+            for event_dir in sorted(base_src.iterdir()):
                 if not event_dir.is_dir():
                     continue
-                if not event_dir.name[0].isdigit():
+                if not _EVENT_DIR_RE.match(event_dir.name):
                     continue
-                rel = event_dir.relative_to(base_src)
-                dst_dir = base_dst / rel
+                dst_dir = base_dst / event_dir.name
                 if dst_dir.exists():
                     continue
                 try:

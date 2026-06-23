@@ -133,24 +133,26 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
         _SCAN_POLL_MAX_WAIT = 300
         elapsed = 0
         registered = 0
+        n_triggered = len(triggered)
         while elapsed < _SCAN_POLL_MAX_WAIT:
             await asyncio.sleep(_SCAN_POLL_INTERVAL)
             elapsed += _SCAN_POLL_INTERVAL
-            result = await asyncio.to_thread(run_scan_sync, plan_run_id)
-            if result:
-                registered += int(result)
+            n_new = await asyncio.to_thread(run_scan_sync, plan_run_id)
+            if n_new:
+                registered += int(n_new)
+            if registered >= n_triggered:
                 break
             logger.info(
-                "saq_scan_poll plan_run=%d elapsed=%ds no_artifacts_yet",
-                plan_run_id, elapsed,
+                "saq_scan_poll plan_run=%d elapsed=%ds registered=%d/%d",
+                plan_run_id, elapsed, registered, n_triggered,
             )
 
         if registered == 0:
             await asyncio.to_thread(run_scan_sync, plan_run_id)
 
         logger.info(
-            "saq_scan_registered plan_run=%d artifacts=%d waited=%ds",
-            plan_run_id, registered, elapsed,
+            "saq_scan_registered plan_run=%d artifacts=%d/%d waited=%ds",
+            plan_run_id, registered, n_triggered, elapsed,
         )
 
     from backend.tasks.saq_worker import get_queue

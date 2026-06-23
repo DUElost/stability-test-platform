@@ -132,3 +132,21 @@ def test_build_argv_without_end_flag():
     r = _make_runner()
     argv = r._build_argv(is_final=False)
     assert "-end" not in argv
+
+
+def test_run_local_scan_returns_none_when_no_fresh_xls(tmp_path):
+    r = _make_runner()
+    hdd = tmp_path / "hdd"
+    hdd.mkdir()
+    old_xls = hdd / "Result_shanghai_org.xls"
+    old_xls.write_text("old")
+    import os
+    old_time = os.stat(old_xls).st_mtime - 100
+    os.utime(str(old_xls), (old_time, old_time))
+    r._hdd_root = str(hdd)
+
+    with patch("backend.agent.scan_runner.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(returncode=0, stdout="done")
+        result = r.run_local_scan(1, "host-1")
+
+    assert result is None

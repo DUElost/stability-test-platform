@@ -174,3 +174,52 @@ def test_upload_scan_report_copies_subdirs(tmp_path):
     dest = Path(result)
     assert dest.name == "host-abc_Result_shanghai_org.xls"
     assert "dedup" in str(dest) and "99" in str(dest)
+
+
+def test_upload_event_dirs_auto_discover_ignores_non_timestamp(tmp_path):
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    m = _make_manager(str(nfs))
+
+    src_root = tmp_path / "events"
+    src_root.mkdir()
+    good = src_root / "2026-06-23_14-30-00_db.01"
+    good.mkdir()
+    (good / "main.dbg").write_text("ok")
+    bad_no_ts = src_root / "some_random_dir"
+    bad_no_ts.mkdir()
+    (bad_no_ts / "file.txt").write_text("bad")
+    bad_nested = src_root / "subdir"
+    bad_nested.mkdir()
+    bad_deep = bad_nested / "2026-06-23_15-00-00_db.02"
+    bad_deep.mkdir(parents=True, exist_ok=True)
+    (bad_deep / "nested.txt").write_text("nested")
+
+    count = m.upload_event_dirs(42, [], str(src_root))
+
+    assert count == 1
+    assert (nfs / "devices" / "42" / "2026-06-23_14-30-00_db.01" / "main.dbg").exists()
+    assert not (nfs / "devices" / "42" / "some_random_dir").exists()
+    assert not (nfs / "devices" / "42" / "2026-06-23_15-00-00_db.02").exists()
+
+
+def test_upload_event_dirs_auto_discover_skips_existing(tmp_path):
+    nfs = tmp_path / "nfs"
+    nfs.mkdir()
+    m = _make_manager(str(nfs))
+
+    src_root = tmp_path / "events"
+    src_root.mkdir()
+    event_dir = src_root / "2026-06-23_14-30-00_db.01"
+    event_dir.mkdir()
+    (event_dir / "main.dbg").write_text("ok")
+
+    dest = nfs / "devices" / "42" / "2026-06-23_14-30-00_db.01"
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "placeholder.txt").write_text("here")
+
+    count = m.upload_event_dirs(42, [], str(src_root))
+
+    assert count == 0
+    assert (dest / "placeholder.txt").read_text() == "here"
+    assert not (dest / "main.dbg").exists()

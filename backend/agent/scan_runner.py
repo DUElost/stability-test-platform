@@ -142,15 +142,14 @@ class ScanRunner:
             c for c in all_candidates
             if c.stat().st_mtime >= scan_start - 1
         ]
-        candidates = fresh or all_candidates
-        if not candidates:
+        if not fresh:
             logger.warning(
-                "scan_runner_no_org_xls plan_run=%d host=%s hdd_root=%s",
-                plan_run_id, host_id, self._hdd_root,
+                "scan_runner_no_fresh_org_xls plan_run=%d host=%s hdd_root=%s total_candidates=%d",
+                plan_run_id, host_id, self._hdd_root, len(all_candidates),
             )
             return None
 
-        latest = max(candidates, key=lambda p: p.stat().st_mtime)
+        latest = max(fresh, key=lambda p: p.stat().st_mtime)
         org_xls = str(latest.resolve())
         logger.info(
             "scan_runner_success plan_run=%d host=%s org_xls=%s fresh=%d total=%d",
