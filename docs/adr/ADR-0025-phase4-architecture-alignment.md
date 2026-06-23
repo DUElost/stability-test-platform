@@ -86,7 +86,7 @@
 | SSD | 运行日志（init/patrol/teardown），唯一物理存储 | 256GB | `/home/android/sonic_agent/logs/runs/{job_id}/` |
 | HDD | AEE 设备日志（AEE + mobilelog + bugreport），第一落点 | 1TB | `/mnt/hdd/aee_events/{folder_name}/{serial}/` |
 
-**运行日志访问方式**：控制平面通过 Agent HTTP 下载端点按需获取（方案 A），不上送 15.4。Agent 离线时运行日志不可用——合理约束（Agent 挂了，日志自然不可达）。
+**运行日志访问方式**（2026-06-17 修订）：执行中经 SocketIO 推送到控制面（`GET /api/v1/logs/query`、LiveConsole）；事后经 `POST /api/v1/agent/logs`（SSH 读 Agent 磁盘）。不上送 15.4。~~原 Agent HTTP `:8900`（`run_log_server`）已废弃移除。~~
 
 **替代方案**：Agent 侧实现日志归档调度器（LogArchiver，见 D4）
 
@@ -131,7 +131,7 @@
 - Watcher 拉取 AEE/mobilelog/bugreport → Agent 本地 HDD（非 15.4 CIFS 挂载点）
 - scan 工具在 Agent 本地 Linux 运行（`backend/agent/resources/start_log_scan/`），扫描本地 HDD
 - 15.4 只接收三件事：汇总报告 + 报告中 db 对应的事件目录 + 溢出事件目录
-- 运行日志留在 Agent SSD，控制平面通过 Agent HTTP 端点按需下载
+- 运行日志留在 Agent SSD；实时看控制面，事后 SSH 取证（见 D2 访问方式修订）
 
 **Agent 本地存储布局**：
 
@@ -339,7 +339,7 @@ Agent 重启
 | 归档-2 Agent 本地 scan | Agent 本地运行 start_log_scan（Linux），产出 Result_*.xls 上送 15.4；控制平面只做 -merge_files 合并 |
 | 归档-3 分类提取 | 控制平面：按 Result.xls 的 db 路径从 15.4 `devices/` 取事件目录复制到提单目录 |
 | 15.4 中心日志服务器 | 现有 CIFS 共享，非新基础设施；仅存汇总报告 + 按需上送事件 + 溢出事件 |
-| 运行日志访问 | Agent HTTP 下载端点，控制平面按需从 Agent 拉取，不上送 15.4 |
+| 运行日志访问 | 控制面实时（SocketIO + `/logs/query`）+ 事后 SSH（`/agent/logs`），不上送 15.4 |
 | Watcher 路径 B 默认开 | `STP_WATCHER_AEE_RECONCILE_ENABLED` 默认 true；mobilelog/bugreport 存储结构改造 |
 | 上送触发五场景 | PlanRun 终态链路 + 前端交互（自动 + 提示确认 + 手动归档 + 自动间隔） |
 | 详情页数据展示 | 新增归档状态区 + 去重报告区 + crash 详情下钻 |
@@ -376,7 +376,7 @@ Agent 重启
 | 5 | `backend/agent/log_archiver.py` | 删除 `_do_archive`（搬运运行日志到 15.4）和 `snapshot_active_job`（快照）；保留 `_iter_job_dirs` + SSD prune 逻辑 | 高 |
 | 6 | `backend/agent/log_archiver.py` | 新增 HDD 溢出上送：监控 HDD 使用率，超阈值时最旧事件目录上送 15.4 `devices/` 后 prune | 高 |
 | 7 | `backend/agent/main.py` | 删除 cycle_snapshot_callback 注入；LogArchiver 配置移除 nfs_base_dir | 高 |
-| 8 | `backend/agent/main.py` | 新增 Agent HTTP 运行日志下载端点（方案 A） | 高 |
+| 8 | `backend/agent/main.py` | ~~新增 Agent HTTP 运行日志下载端点（方案 A）~~ → **已废弃**（2026-06-17 移除 `run_log_server`） | 高 |
 | 9 | 测试 | Watcher 路径 B 写本地 HDD + SSD prune + HDD 溢出上送 + 运行日志 HTTP 下载 | 高 |
 
 ### Sprint 3（2-3 天）：控制平面展示扩展
@@ -427,7 +427,7 @@ Agent 重启
 ## 验证
 
 1. **Sprint 1**（已落地）：Agent 重启后 Watcher 自动恢复 + 信号不丢失 + enable.py 默认值一致
-2. **Sprint 2**：Watcher 路径 B 写 Agent 本地 HDD + SSD prune 可释放空间 + HDD 溢出上送 15.4 + mobilelog/bugreport 在事件目录内 + 运行日志 HTTP 端点可下载
+2. **Sprint 2**：Watcher 路径 B 写 Agent 本地 HDD + SSD prune 可释放空间 + HDD 溢出上送 15.4 + mobilelog/bugreport 在事件目录内 + 运行日志经控制面实时/SSH 可访问
 3. **Sprint 3**：前端显示归档状态 + crash 详情可下钻 + 下载端点可访问 15.4 归档文件
 4. **Sprint 4**：Agent 本地 scan 产 `_org.xls` + 上送报告/事件到 15.4 + `-merge_files` 合并含设备 SN + 增量历史保留 + 上送触发五场景 + 归档-3 按 db 路径从 15.4 `devices/` 提取事件目录到提单目录
 5. **全局回归**：`python -m pytest backend/tests/` + `npx vitest run` 全过

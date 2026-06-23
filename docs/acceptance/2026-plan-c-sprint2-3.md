@@ -21,9 +21,9 @@
 | AC-S2-05 | grace 未到期不 prune | grace>0，新目录 | 目录保留 | `test_log_archiver.py::test_skip_not_aged` | PR #31 |
 | AC-S2-06 | `archive_now` = grace=0 prune | SocketIO 触发 | 仅本地删除，无 tar/注册 | `test_log_archiver.py::test_scan_once_grace_zero_*` | PR #31 |
 | AC-S2-07 | HDD spill 最旧事件 | HDD 使用率超阈 | copytree 到 CIFS `devices/` 后本地 prune | `backend/agent/tests/test_local_disk_monitor.py` | PR #31 |
-| AC-S2-08 | run_log_server 列表 | job 目录存在 | `GET /run-logs/{id}` 200 + 文件列表 | `backend/agent/tests/test_run_log_server.py` | PR #31 |
-| AC-S2-09 | run_log_server 下载 | 合法文件名 | `GET /run-logs/{id}/{file}` 200 + body | `test_run_log_server.py` | PR #31 |
-| AC-S2-10 | path traversal 拒绝 | `../` 等 | 400/404 | `test_run_log_server.py` | PR #31 |
+| AC-S2-08 | ~~run_log_server 列表~~ | — | **已废弃**（2026-06-17 移除 `:8900`） | — | Superseded |
+| AC-S2-09 | ~~run_log_server 下载~~ | — | **已废弃** | — | Superseded |
+| AC-S2-10 | ~~path traversal 拒绝~~ | — | **已废弃** | — | Superseded |
 | AC-S2-11 | 无 cycle 快照 | patrol 周期 | 不调用 snapshot / 不写 snapshots/ | 代码审查 + pipeline 无 callback | PR #31 |
 | AC-S2-12 | 不注册 run_log_bundle | Agent 完成 Job | 无 `artifact_type=run_log_bundle` POST | `agent_api` 白名单已删；`test_agent_api_artifacts` 对照 | PR #31 |
 | AC-S2-13 | CI 全绿 | PR #31 | backend-test + frontend-check pass | `.github/workflows/ci.yml` | **待修** |
@@ -33,7 +33,7 @@
 | ID | 步骤 | 期望 | Runbook |
 |----|------|------|---------|
 | AC-S2-M1 | 真机 AEE crash 后查 HDD 路径 | 事件目录在 Agent `/mnt/hdd/aee_events/...` | 新建：联调记录 |
-| AC-S2-M2 | `curl Agent:8900/run-logs/{job_id}` | 返回 JSON 文件列表 | DEPLOY 网络节 |
+| AC-S2-M2 | 运行日志访问 | Job 执行中/后 | 控制面 `GET /logs/query` 或 `POST /agent/logs`（SSH）可读 | `logs.py` + LiveConsole |
 
 ---
 
@@ -42,7 +42,7 @@
 | ID | 场景 | 前置 | 期望结果 | 自动化 | 状态 |
 |----|------|------|----------|--------|------|
 | AC-S3-01 | watcher-summary archive 新语义 | 心跳运维指标 | archive 段展示 ops_metrics（pruned/hdd%/spill）+ scan 占位 | `test_plan_run_aggregation_endpoints.py` | 本 PR |
-| AC-S3-02 | risk_summary 从 log_signal 聚合 | ~~Won't fix~~ — 团队决定：控制面不代理 Agent `:8900`，运维直链 + `DEPLOY.md` | — | — | Won't fix |
+| AC-S3-02 | risk_summary 从 log_signal 聚合 | 已落地 — `aggregate_risk_summary_from_signals` | — | `report_service` | Done |
 | AC-S3-03 | risk_summary 非全零空态 | 有 log_signal | 初筛选数据驱动，不再从 tar 读取（原链路永不工作） | `report_service.aggregate_risk_summary_from_signals` | 本 PR |
 | AC-S3-04 | archive-status 新语义 | host 有 extra | 返回 agent_metrics/capacity/health/agent_version + scan 占位 | `agent_api.get_archive_status` | 本 PR |
 | AC-S3-05 | ArchiveStatusCard 运维展示 | 有 ops_metrics | 显示 HDD 使用率/SSD 清理/溢出指标，无 bundle 路径 | `WatcherSummaryCard.test.tsx` + `ArchiveStatusCard` | 本 PR |

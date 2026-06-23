@@ -120,7 +120,6 @@ python -m backend.agent.main
 | `STP_WATCHER_ENABLED` | Agent 侧 Watcher 灰度开关（默认 `false`） |
 | `STP_AEE_LOCAL_ROOT` | Agent HDD AEE 根（方案 C，默认 `/mnt/hdd/aee_events`） |
 | `STP_AEE_CIFS_ROOT` | Agent 上送 15.4 的 CIFS 挂载根（HDD spill / Sprint 4 upload） |
-| `STP_RUN_LOG_SERVER_PORT` | Agent 运行日志 HTTP 端口（默认 `8900`） |
 
 ### Job / 租约超时（`backend/core/job_timeout_config.py`）
 
@@ -143,7 +142,6 @@ python -m backend.agent.main
 | `ADB_PATH` | ADB 可执行路径 |
 | `ANDROID_ADB_SERVER_PORT` | WSL 联调须 `5039` |
 | `STP_AEE_LOCAL_ROOT` | 方案 C：AEE 设备日志 HDD 根（默认 `/mnt/hdd/aee_events`） |
-| `STP_RUN_LOG_SERVER_PORT` | 运行日志 HTTP（默认 `8900`） |
 
 完整变量列表见 `backend/.env.example`、[`CLAUDE.md`](./CLAUDE.md) 与 [`docs/design/2026-plan-c-storage-and-access.md`](./docs/design/2026-plan-c-storage-and-access.md)。
 

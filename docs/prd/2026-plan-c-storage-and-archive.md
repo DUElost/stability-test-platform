@@ -46,7 +46,7 @@
 
 ### 3.2 访问方式
 
-- **运行日志**：控制面经 **Agent HTTP** 按需下载（Agent 离线则不可用——可接受）。
+- **运行日志**：执行中经 SocketIO 推送到控制面（UI 实时控制台 / `GET /api/v1/logs/query`）；事后经 `POST /api/v1/agent/logs`（SSH）读取 Agent 磁盘。
 - **AEE 事件**：默认读 Agent HDD；溢出或按需上送后在 15.4 `devices/`。
 - **去重报告**：Agent 本地 scan → 上送 15.4 `dedup/` → 控制面 merge（Sprint 4）。
 
@@ -104,7 +104,7 @@
 | ID | 标准 | 验收文档 |
 |----|------|----------|
 | SC-1 | AEE 路径 B 写入 Agent HDD 默认根 | [acceptance Sprint 2](../acceptance/2026-plan-c-sprint2-3.md) |
-| SC-2 | 终态 Job 运行日志可通过 Agent HTTP 列出/下载 | 同上 |
+| SC-2 | 终态 Job 运行日志可通过控制面 `/logs/query` 或 SSH `/agent/logs` 获取 | [acceptance Sprint 2](../acceptance/2026-plan-c-sprint2-3.md) |
 | SC-3 | Agent 不再向控制面注册 `run_log_bundle` | 同上 |
 | SC-4 | HDD 超阈值时最旧事件目录出现在 15.4 `devices/` | 同上 |
 | SC-5 | 控制面 UI 不再依赖空的 bundle 列表误导用户 | 同上 Sprint 3 |
@@ -114,7 +114,7 @@
 
 ## 7. 非功能需求
 
-- **安全**：Agent HTTP 仅服务运行日志目录，路径遍历防护；生产网络需限制 `:8900` 访问源。
+- **安全**：SSH 日志路径受 `STP_SSH_LOG_ROOTS` 约束；生产须配置主机 SSH 凭据与 known_hosts。
 - **可观测**：保留/扩展 Agent heartbeat 归档指标；PlanRun 维度的 pending/failed（#18）。
 - **兼容**：`STP_WATCHER_AEE_SUBDIR_LAYOUT=correlated` 可回退旧子目录名。
 

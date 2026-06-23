@@ -140,5 +140,4 @@ frontend/src/
 ## 9. 方案 C 前端债（跟踪 #32）
 
 - `ArchiveStatusCard` 仍基于 `watcher-summary.archive` / `run_log_bundle`  
-- `RunReportPage` risk_summary 全零误导（#16）  
-- 运行日志下载未接 Agent HTTP `:8900`
+- `RunReportPage` risk_summary 全零误导（#16）— 已部分落地

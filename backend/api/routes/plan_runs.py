@@ -2823,14 +2823,15 @@ def download_job_artifact(
     if artifact is None or artifact.job_id != job_id:
         raise HTTPException(status_code=404, detail="artifact not found for this job")
 
-    # 方案 C: run_log_bundle 运行日志不再上送 15.4，改为 Agent HTTP 端点下载。
+    # 方案 C: run_log_bundle 运行日志不再上送 15.4。
     # 已有历史注册数据仍返回 409（历史产物不再可代理下载）。
     if artifact.artifact_type == "run_log_bundle":
         raise HTTPException(
             status_code=409,
             detail=(
-                "run_log_bundle: run logs are now served via Agent HTTP endpoint; "
-                "use the agent's run log server to download directly."
+                "run_log_bundle: run logs are no longer archived to NFS. "
+                "Use live console / GET /api/v1/logs/query during execution, "
+                "or POST /api/v1/agent/logs (SSH) for post-mortem files on the agent host."
             ),
         )
 
