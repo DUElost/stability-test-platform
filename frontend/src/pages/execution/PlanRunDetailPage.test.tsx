@@ -442,12 +442,13 @@ describe('PlanRunDetailPage', () => {
 
     mocks.getDevices.mockClear();
 
-    // Push a WATCHER_SIGNAL — watcher should refetch, devices should not.
+    // Push a WATCHER_SIGNAL — watcher should refetch (debounced 2s), devices should not.
     mocks.socketCallback.current!({
       type: 'WATCHER_SIGNAL',
       payload: { job_id: 3002, category: 'AEE', inserted_count: 1 },
     });
-    await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled());
+    // WATCHER_SIGNAL invalidation is debounced 2s; wait for it to fire.
+    await waitFor(() => expect(mocks.getWatcherSummary).toHaveBeenCalled(), { timeout: 4000 });
     expect(mocks.getDevices).not.toHaveBeenCalled();
 
     // Reset and push PLAN_RUN_STATUS — should refetch run + timeline + devices.
