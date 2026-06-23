@@ -283,9 +283,9 @@ def auto_archive_sweep() -> None:
     triggers the dedup pipeline so that scan/merge can proceed without manual
     intervention.
 
-    Idempotent: SAQ queue keys like ``scan:{plan_run_id}`` deduplicate;
-    additionally we skip PlanRuns that already have a ``scan_result_xls``
-    artifact (scan already done).
+    SAQ queue keys distinguish final (``scan:{id}``) and incremental (``scan:{id}:inc``)
+    scans. First sweep triggers is_final=True; subsequent sweeps trigger incremental
+    is_final=False scans so that agents re-scan newly produced AEE events.
     """
     from backend.models.plan import Plan
     from backend.models.plan_run import PlanRun

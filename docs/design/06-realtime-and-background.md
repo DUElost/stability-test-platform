@@ -136,8 +136,8 @@ PlanRun 终态
 | # | 场景 | is_final | 触发方式 | 说明 |
 |---|------|----------|---------|------|
 | 1 | 终态自动 | True | aggregator enqueue | PlanRun 终态自动触发 |
-| 2 | abort | True | 前端确认后 enqueue | 用户 abort → FAILED |
-| 3 | FAILED/DEGRADED | True | 前端确认后 enqueue | 中断/失败需用户确认 |
+| 2 | abort | True | 前端确认后 enqueue | 用户 abort → FAILED；scan/merge 自动，仅 extract 需确认 |
+| 3 | FAILED/DEGRADED | True | 前端确认后 enqueue | 中断/失败；scan/merge 自动，仅 extract 需确认 |
 | 4 | 手动归档 | True | POST /archive | 同时触发 archive_now + scan_now |
 | 5 | 自动归档间隔 | 首次 True / 增量 False | auto_archive_sweep 周期 | 已有 scan 时增量 re-scan |
 

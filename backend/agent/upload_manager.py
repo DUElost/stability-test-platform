@@ -128,8 +128,9 @@ class UploadManager:
     ) -> int:
         """Copy event directories → {nfs_root}/devices/{plan_run_id}/{dirname}/.
 
-        If event_dir_names is empty, auto-discover by globbing {source_root}
+        If event_dir_names is empty, auto-discover by iterating {source_root}
         for timestamp-prefixed event directories (e.g. 2026-06-23_14-30-00_db.01).
+        Only direct children matching YYYY-MM-DD_HH-MM-SS_* are selected.
         Skip if dest already exists. Returns count copied.
         """
         if not self._configured:
