@@ -39,12 +39,53 @@
 
 ## AEE crash detection chain (初筛选)
 
-1. Agent Watcher `inotifyd` detects AEE file on device → `SignalEmitter` → local SQLite outbox → `POST /agent/log-signals` → `job_log_signal` table
-2. Reconciler reads `db_history` CSV + pulls AEE directory to HDD → `parse_exp_main_summary` reads **`ZZ_INTERNAL`** first (CSV: parts[0]=exp_class, parts[7]=process), falls back to `__exp_main.txt`
-3. `log_signal.extra` carries `event_type`/`event_subtype`/`package_name`/`aee_ts`/`nfs_path`
-4. Frontend `watcher-summary` endpoint aggregates by category → `AnomalyDashboard` / `WatcherSummaryCard`
+两层互补，Reconciler 为主、inotifyd 为兜底：
 
-`count_dbg_process.py` (in scan tool directory) is a standalone stats tool that also reads `ZZ_INTERNAL` — not integrated into platform code, but the parsing logic is aligned.
+### Reconciler（主路径，默认开）
+
+每 60s 基线周期（`STP_WATCHER_AEE_RECONCILE_ENABLED=true`，默认开启）：
+1. `adb shell cat /data/aee_exp/db_history` + `/data/vendor/aee_exp/db_history` → sha256 对比判断是否变化
+2. 新行 → `adb pull` 整目录到 Agent HDD
+3. 读 **`ZZ_INTERNAL`** 优先解析（CSV：parts[0]=exp_class, parts[7]=cur_process）
+4. 读 `__exp_main.txt` fallback
+5. `SignalEmitter.emit(source="reconciler")` → `extra={event_type, event_subtype, package_name, aee_ts, nfs_path}`
+
+日志标记：`aee_reconciler_emit`（DEBUG 级，含 `pkg=` / `subtype=`）
+
+### inotifyd（兜底路径）
+
+Reconciler 启动失败时自动回退：
+1. `adb shell inotifyd - /data/aee_exp:nwx /data/vendor/aee_exp:nwx` 实时监听
+2. 文件创建/写入 → `SignalEmitter.emit(source="inotifyd")`
+3. 不读 ZZ_INTERNAL，`extra` 为 NULL（仅提供计数）
+
+日志标记：`device_log_watcher_emit_fallback`（INFO 级，表示兜底激活）
+回退标记：`aee_reconciler_emit_rollback`（WARNING 级，表示 Reconciler 启动失败）
+
+### 监测目录
+
+仅 `/data/aee_exp` + `/data/vendor/aee_exp`（MTK 平台 `/data/aee_exp` 包含 ANR 信息，`/data/anr` 不再监测）。
+
+### 数据流
+
+```
+ZZ_INTERNAL / __exp_main.txt → SignalEmitter → local SQLite outbox
+  → POST /agent/log-signals → job_log_signal 表 (extra JSONB)
+  → Frontend watcher-summary (按 category/package 聚合)
+  → AnomalyDashboard (双饼图 + 包名榜) / WatcherSummaryCard (异常率进度条)
+```
+
+### 风险评级
+
+`aggregate_risk_summary_from_signals` 从 `job_log_signal.extra->>'event_subtype'` 聚合，按 `_RISK_RATING_RULES` 定级 S/A/B：
+
+| 级别 | 触发条件 |
+|------|---------|
+| **S**（致命） | SWT / Fatal NE / Fatal JE / HWT / Kernel (KE) / HW Reboot / HANG — 任 1 次 |
+| **A**（高） | ANR ≥ 10 / JE ≥ 3 / NE ≥ 2 / Java ≥ 3 |
+| **B**（低） | 其余非零 |
+
+`count_dbg_process.py`（scan tool 目录下）独立统计工具，同样读 ZZ_INTERNAL，不与平台代码集成但解析逻辑对齐。
 
 ## Sprint 4 scan/upload/merge pipeline
 
