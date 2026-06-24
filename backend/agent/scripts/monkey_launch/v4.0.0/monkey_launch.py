@@ -24,7 +24,6 @@ STP_STEP_PARAMS:
     "run_mode": "trigger",
     "duration_seconds": 3600,
     "check_interval": 60,
-    "crash_check_enabled": true,
     "process_names": ["com.android.commands.monkey"],
     "watchdog_script": "MonkeyTest.sh"
 }
@@ -34,7 +33,6 @@ Output (stdout):
 """
 
 import importlib.util
-import json
 import os
 import subprocess
 import sys
@@ -45,7 +43,7 @@ from typing import Optional
 from _adb import adb_path, adb_shell, adb_shell_quiet, device_serial, output_result, params
 
 
-# ── monkey_check 内联逻辑（避免跨脚本依赖） ──
+# ── 进程存活检测（前台监控用） ──
 
 def _ps_grep(serial: str, pattern: str, timeout: int = 10) -> list[dict]:
     result = subprocess.run(
@@ -71,27 +69,6 @@ def _check_monkey_alive(serial: str, process_names: list[str]) -> dict:
             if not result["monkey_pid"] and "monkey" in name.lower():
                 result["monkey_pid"] = matches[0]["pid"]
     return result
-
-
-def _check_crash_indicators(serial: str) -> dict:
-    """Check for recent crash artifacts on device (tombstones, aee_exp, etc.)."""
-    indicators = {}
-    crash_dirs = [
-        "/data/aee_exp",
-        "/data/vendor/mtklog/aee_exp",
-        "/data/tombstones",
-    ]
-    for path in crash_dirs:
-        try:
-            out = adb_shell(f"ls {path} 2>/dev/null | wc -l", timeout=10)
-            count = int(out.strip()) if out.strip().isdigit() else 0
-            if count > 0:
-                indicators[path] = count
-        except Exception:
-            pass
-
-    # Check for anr traces — /data/aee_exp 已包含 ANR 信息，无需单独检查
-    return indicators
 
 
 # ── AIMonkeyTest 加载逻辑（同 v1.0.0） ──
@@ -164,11 +141,9 @@ def _monitor_loop(
     watchdog_pattern: str,
     duration_seconds: int,
     check_interval: int,
-    crash_check_enabled: bool,
 ) -> dict:
-    """Monitor monkey process until timeout or crash. Returns exit reason."""
+    """Monitor monkey process until timeout or exit. Returns exit reason."""
     deadline = time.time() + duration_seconds
-    last_crash_snapshot = {}
     restart_count = 0
     max_restarts = 3
 
@@ -218,23 +193,6 @@ def _monitor_loop(
             flush=True,
         )
 
-        # Crash indicator check
-        if crash_check_enabled:
-            indicators = _check_crash_indicators(serial)
-            new_crashes = {}
-            for path, count in indicators.items():
-                prev = last_crash_snapshot.get(path, 0)
-                if count > prev:
-                    new_crashes[path] = count - prev
-
-            if new_crashes:
-                print(
-                    f"[STP_MONITOR] New crash indicators: {json.dumps(new_crashes)}",
-                    flush=True,
-                )
-
-            last_crash_snapshot = indicators
-
         time.sleep(check_interval)
 
     return {"reason": "timeout", "restarts": restart_count}
@@ -283,7 +241,6 @@ def main():
             # ── Foreground monitoring mode ──
             duration = int(args.get("duration_seconds", 3600))
             check_interval = int(args.get("check_interval", 60))
-            crash_check = bool(args.get("crash_check_enabled", True))
             process_names = args.get("process_names", ["com.android.commands.monkey"])
             watchdog = args.get("watchdog_script", "MonkeyTest.sh")
 
@@ -314,7 +271,7 @@ def main():
             )
             monitor_result = _monitor_loop(
                 serial, process_names, watchdog,
-                duration, check_interval, crash_check,
+                duration, check_interval,
             )
 
             total_elapsed = round(time.time() - t0, 1)
