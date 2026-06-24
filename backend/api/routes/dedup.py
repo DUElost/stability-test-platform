@@ -222,6 +222,25 @@ async def trigger_scan(
     })
 
 
+@scan_router.post("/hosts/{host_id}/reload-config", response_model=ApiResponse[dict])
+async def reload_agent_config(
+    host_id: str,
+    _user: User = Depends(get_current_active_user),
+):
+    """远程触发 Agent 重新读取 env 并 reconfigure ScanRunner / UploadManager。
+
+    用于 Agent 启动后修改 .env 但不重启进程的场景（热更新配置）。
+    Agent 收到 reload_config 后调用 configure(force=True) 重读 STP_DEDUP_* / STP_AEE_*。
+    """
+    from backend.realtime.socketio_server import emit_agent_control
+
+    await emit_agent_control(
+        host_id, "reload_config",
+        payload={},
+    )
+    return ok({"host_id": host_id, "command": "reload_config", "status": "sent"})
+
+
 @scan_router.get("/{run_id}/dedup/status", response_model=ApiResponse[dict])
 def get_scan_status(
     run_id: int,

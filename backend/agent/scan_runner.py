@@ -65,8 +65,9 @@ class ScanRunner:
         scan_tool_script: str = "",
         hdd_root: str = "",
         side: str = "shanghai",
+        force: bool = False,
     ) -> None:
-        if self._configured:
+        if self._configured and not force:
             logger.warning("scan_runner_reconfigure_ignored")
             return
         self._scan_tool_python = scan_tool_python or os.getenv("STP_DEDUP_SCAN_PYTHON", "").strip()

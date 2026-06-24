@@ -223,3 +223,10 @@ def test_upload_event_dirs_auto_discover_skips_existing(tmp_path):
     assert count == 0
     assert (dest / "placeholder.txt").read_text() == "here"
     assert not (dest / "main.dbg").exists()
+
+
+def test_configure_force_overrides_existing(tmp_path):
+    m = _make_manager(str(tmp_path / "first"))
+    assert m._nfs_root == str(tmp_path / "first")
+    m.configure(nfs_root=str(tmp_path / "second"), force=True)
+    assert m._nfs_root == str(tmp_path / "second")

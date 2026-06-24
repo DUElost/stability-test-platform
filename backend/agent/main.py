@@ -668,6 +668,18 @@ def main() -> None:
                 name="upload-events", daemon=True,
             ).start()
             logger.info("control_upload_events_triggered plan_run=%d dirs=%d", plan_run_id, len(event_dir_names))
+        elif command == "reload_config":
+            from backend.agent.scan_runner import ScanRunner
+            from backend.agent.upload_manager import UploadManager
+
+            ScanRunner.instance().configure(force=True)
+            UploadManager.instance().configure(force=True)
+            runner_ok = ScanRunner.instance().is_configured()
+            uploader_ok = UploadManager.instance().is_configured()
+            logger.info(
+                "control_reload_config_done scan_runner=%s upload_manager=%s",
+                runner_ok, uploader_ok,
+            )
         else:
             logger.warning("unknown_control_command: %s", command)
 

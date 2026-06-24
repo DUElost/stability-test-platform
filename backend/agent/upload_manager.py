@@ -60,8 +60,8 @@ class UploadManager:
         with cls._instance_lock:
             cls._instance = None
 
-    def configure(self, *, nfs_root: str = "") -> None:
-        if self._configured:
+    def configure(self, *, nfs_root: str = "", force: bool = False) -> None:
+        if self._configured and not force:
             logger.warning("upload_manager_reconfigure_ignored")
             return
         resolved = nfs_root or str(get_aee_nfs_root())

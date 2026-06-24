@@ -150,3 +150,11 @@ def test_run_local_scan_returns_none_when_no_fresh_xls(tmp_path):
         result = r.run_local_scan(1, "host-1")
 
     assert result is None
+
+
+def test_configure_force_overrides_existing():
+    r = _make_runner()
+    assert r._scan_tool_python == "/usr/bin/python3"
+    r.configure(scan_tool_python="/new/python", scan_tool_script="/new/scan.py", force=True)
+    assert r._scan_tool_python == "/new/python"
+    assert r._scan_tool_script == "/new/scan.py"
