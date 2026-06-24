@@ -158,5 +158,59 @@ class ScanRunner:
         )
         return org_xls
 
+    def run_dedup_org(
+        self, org_xls_path: str, plan_run_id: int, host_id: str,
+    ) -> Optional[str]:
+        if not self._configured:
+            return None
+        argv = [
+            self._scan_tool_python,
+            self._scan_tool_script,
+            "-dedup_org", org_xls_path,
+            "-side", self._side,
+        ]
+        cwd = str(Path(self._scan_tool_script).parent)
+        logger.info(
+            "dedup_runner_start plan_run=%d host=%s argv=%s",
+            plan_run_id, host_id, argv,
+        )
+        try:
+            result = subprocess.run(
+                argv,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=self._SUBPROCESS_TIMEOUT,
+            )
+        except Exception as exc:
+            logger.exception(
+                "dedup_runner_exception plan_run=%d host=%s err=%s",
+                plan_run_id, host_id, exc,
+            )
+            return None
+
+        if result.returncode != 0:
+            logger.warning(
+                "dedup_runner_failed plan_run=%d host=%s rc=%d stderr=%s",
+                plan_run_id, host_id, result.returncode,
+                (result.stderr or "")[:500],
+            )
+            return None
+
+        output_path = (result.stdout or "").strip()
+        if output_path and Path(output_path).exists():
+            dedup_xls = str(Path(output_path).resolve())
+            logger.info(
+                "dedup_runner_success plan_run=%d host=%s dedup_xls=%s",
+                plan_run_id, host_id, dedup_xls,
+            )
+            return dedup_xls
+
+        logger.warning(
+            "dedup_runner_no_output plan_run=%d host=%s stdout=%s",
+            plan_run_id, host_id, (result.stdout or "")[:200],
+        )
+        return None
+
 
 __all__ = ["ScanRunner"]

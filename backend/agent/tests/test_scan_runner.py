@@ -162,3 +162,30 @@ def test_configure_force_overrides_existing():
     r.configure(scan_tool_python="/new/python", scan_tool_script="/new/scan.py", force=True)
     assert r._scan_tool_python == "/new/python"
     assert r._scan_tool_script == "/new/scan.py"
+
+
+def test_run_dedup_org_calls_dedup_org(tmp_path):
+    r = _make_runner()
+    org_xls = tmp_path / "Result_test_org.xls"
+    org_xls.write_text("fake")
+    dedup_xls = tmp_path / "Result_test_org_dedup_org_20260624_000000.xls"
+    dedup_xls.write_text("deduped")
+
+    with patch("backend.agent.scan_runner.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(returncode=0, stdout=str(dedup_xls))
+        result = r.run_dedup_org(str(org_xls), 42, "host-1")
+
+    assert result is not None
+    assert "dedup_org" in result
+    called_argv = mock_run.call_args[0][0]
+    assert "-dedup_org" in called_argv
+    assert str(org_xls) in called_argv
+    assert "-side" in called_argv
+
+
+def test_run_dedup_org_tool_failure():
+    r = _make_runner()
+    with patch("backend.agent.scan_runner.subprocess.run") as mock_run:
+        mock_run.return_value = _completed(returncode=1, stderr="error")
+        result = r.run_dedup_org("/fake/path.xls", 1, "host-1")
+    assert result is None

@@ -633,11 +633,14 @@ def main() -> None:
                 if not org_xls:
                     logger.warning("control_scan_now_scan_failed plan_run=%d", plan_run_id)
                     return
+                dedup_xls = runner.run_dedup_org(org_xls, int(plan_run_id), host_id)
                 uploader = UploadManager.instance()
                 if not uploader.is_configured():
                     logger.warning("control_scan_now_skip_uploader_not_configured")
                     return
                 uploader.upload_scan_report(int(plan_run_id), host_id, org_xls)
+                if dedup_xls:
+                    uploader.upload_scan_report(int(plan_run_id), host_id, dedup_xls)
                 logger.info("control_scan_now_done plan_run=%d host=%s", plan_run_id, host_id)
 
             threading.Thread(
