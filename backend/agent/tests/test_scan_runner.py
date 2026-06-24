@@ -66,7 +66,7 @@ def test_run_local_scan_calls_start_log_scan_with_m5(tmp_path):
     assert "Result_shanghai_org.xls" in result
     called_argv = mock_run.call_args[0][0]
     assert "-m" in called_argv
-    assert "5" in called_argv
+    assert "0" in called_argv
     assert "-d" in called_argv
     assert str(hdd) in called_argv
     assert "-side" in called_argv
