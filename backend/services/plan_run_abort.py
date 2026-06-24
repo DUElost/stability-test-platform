@@ -116,10 +116,12 @@ def abort_plan_run(
     # Why: abort 也会写 pr.status,与 aggregator 并发时若不持锁会出现
     #      "aggregator 先 commit SUCCESS → abort 用 stale RUNNING 视图绕过
     #      aggregation guard,把状态改回 FAILED" 的覆盖。锁与 aggregator 同列。
+    #      FOR NO KEY UPDATE 与 FK 触发的 FOR KEY SHARE 兼容,避免与 complete_job 的
+    #      job UPDATE autoflush 死锁(见 aggregator.py 详细注释)。
     pr = db.execute(
         select(PlanRun)
         .where(PlanRun.id == plan_run_id)
-        .with_for_update()
+        .with_for_update(key_share=True)
     ).scalar_one_or_none()
     if pr is None:
         raise PlanRunAbortError(f"PlanRun {plan_run_id} not found")

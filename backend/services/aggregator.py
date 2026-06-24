@@ -24,13 +24,20 @@ class PlanAggregator:
     ) -> tuple[bool, str | None]:
         """Returns ``(applied, new_status)`` — caller should push after commit."""
         # Why: 多个 Job 同帧终态会触发并发聚合;不持锁则两个写者各自基于自己的视图覆盖
-        #      最终状态。SELECT ... FOR UPDATE 串行 read-modify-write,配合 aggregation
+        #      最终状态。SELECT ... FOR NO KEY UPDATE 串行 read-modify-write,配合 aggregation
         #      侧的 _TERMINAL_PLAN_RUN_STATUSES 守卫保证幂等。
+        # Why (lock mode): 用 FOR NO KEY UPDATE 而非 FOR UPDATE —— complete_job 在本事务
+        #      里已 autoflush 了 UPDATE job_instance,FK plan_run_id→plan_run.id 会在
+        #      plan_run 行上自动加 FOR KEY SHARE。FOR UPDATE 与 FOR KEY SHARE 冲突,
+        #      两个并发 complete 同一 plan_run 的不同 job 会各持 KEY SHARE 互锁对方
+        #      的 FOR UPDATE → 死锁。FOR NO KEY UPDATE 与 FOR KEY SHARE 兼容,消除循环
+        #      等待;两个 FOR NO KEY UPDATE 仍互相冲突,串行化保证不变。aggregation 只
+        #      改 status/ended_at/result_summary(非 key 列),NO KEY UPDATE 保护等价。
         run = (
             await db.execute(
                 select(PlanRun)
                 .where(PlanRun.id == job.plan_run_id)
-                .with_for_update()
+                .with_for_update(key_share=True)
             )
         ).scalar_one_or_none()
         if run is None:
