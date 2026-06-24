@@ -50,7 +50,7 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subpr
     )
 
 
-def test_run_local_scan_calls_start_log_scan_with_dedup_org(tmp_path):
+def test_run_local_scan_calls_start_log_scan_with_m5(tmp_path):
     r = _make_runner()
     hdd = tmp_path / "hdd"
     hdd.mkdir()
@@ -65,7 +65,9 @@ def test_run_local_scan_calls_start_log_scan_with_dedup_org(tmp_path):
     assert result is not None
     assert "Result_shanghai_org.xls" in result
     called_argv = mock_run.call_args[0][0]
-    assert "-dedup_org" in called_argv
+    assert "-m" in called_argv
+    assert "5" in called_argv
+    assert "-d" in called_argv
     assert str(hdd) in called_argv
     assert "-side" in called_argv
 
@@ -124,7 +126,8 @@ def test_build_argv_includes_end_flag():
     r = _make_runner()
     argv = r._build_argv(is_final=True)
     assert argv[-1] == "-end"
-    assert "-dedup_org" in argv
+    assert "-m" in argv
+    assert "-d" in argv
     assert "-side" in argv
 
 
@@ -132,6 +135,7 @@ def test_build_argv_without_end_flag():
     r = _make_runner()
     argv = r._build_argv(is_final=False)
     assert "-end" not in argv
+    assert "-m" in argv
 
 
 def test_run_local_scan_returns_none_when_no_fresh_xls(tmp_path):

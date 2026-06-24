@@ -83,6 +83,65 @@ def infer_aee_subtype_from_paths(*paths: str) -> Optional[str]:
 
 
 def parse_exp_main_summary(entry_dir: Path) -> dict[str, str]:
+    zz_summary = _parse_zz_internal(entry_dir)
+    if zz_summary:
+        return zz_summary
+    return _parse_exp_main_txt(entry_dir)
+
+
+def _parse_zz_internal(entry_dir: Path) -> dict[str, str]:
+    zz_path = entry_dir / "ZZ_INTERNAL"
+    if not zz_path.is_file():
+        return {}
+
+    try:
+        content = zz_path.read_text(encoding="utf-8", errors="ignore").strip()
+    except OSError:
+        return {}
+
+    if not content:
+        return {}
+
+    parts = content.split(",")
+    exp_class = parts[0].strip() if parts else ""
+    cur_process = ""
+
+    if exp_class in ("Externel (EE)", "External (EE)"):
+        lower = content.lower()
+        if "scp" in lower:
+            cur_process = "scp"
+        elif "comb" in lower:
+            cur_process = "combo"
+        else:
+            cur_process = "modem"
+    elif exp_class == "System API Dump":
+        cur_process = "SYSTEM_API_DUMP"
+    elif len(parts) > 7:
+        cur_process = parts[7].strip()
+        if cur_process.startswith("KE at"):
+            cur_process = "PROCESS_KE"
+        if ":" in cur_process:
+            cur_process = cur_process.split(":")[0].strip()
+
+    if not cur_process:
+        cur_process = "PROCESS_UNKNOWN"
+    if not exp_class:
+        exp_class = "UNKNOWN"
+
+    subtype = _normalize_exp_main_class(exp_class, "")
+    if not subtype:
+        subtype = normalize_aee_subtype(exp_class, "CRASH")
+
+    result: dict[str, str] = {}
+    if subtype and subtype != "其他":
+        result["event_subtype"] = subtype
+    if cur_process and cur_process != "PROCESS_UNKNOWN":
+        result["package_name"] = cur_process
+        result["current_process"] = cur_process
+    return result
+
+
+def _parse_exp_main_txt(entry_dir: Path) -> dict[str, str]:
     exp_main_path = entry_dir / "__exp_main.txt"
     if not exp_main_path.is_file():
         return {}

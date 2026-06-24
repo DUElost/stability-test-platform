@@ -88,8 +88,8 @@ class ScanRunner:
         argv = [
             self._scan_tool_python,
             self._scan_tool_script,
-            "-dedup_org",
-            self._hdd_root,
+            "-m", "5",
+            "-d", self._hdd_root,
             "-side",
             self._side,
         ]
