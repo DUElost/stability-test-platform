@@ -76,7 +76,7 @@ def _register_scan_artifacts_from_nfs(
     返回注册数。
     """
     count = 0
-    for xls in sorted(set(dedup_dir.glob("*_org.xls") + dedup_dir.glob("*_org_*.xls"))):
+    for xls in sorted(set(list(dedup_dir.glob("*_org.xls")) + list(dedup_dir.glob("*_org_*.xls")))):
         existing = db.execute(
             select(PlanRunArtifact).where(
                 PlanRunArtifact.plan_run_id == plan_run_id,
