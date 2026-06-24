@@ -373,7 +373,7 @@ def test_on_pull_done_skips_emit_for_aee_when_reconciler_active(db):
 
 
 def test_aee_reconciler_active_does_not_affect_anr(db):
-    """开关只影响 AEE/VENDOR_AEE;ANR 仍由 inotifyd 路径正常 emit。"""
+    """reconciler 开关只抑制 inotifyd 路径的 AEE/VENDOR_AEE；其他 category 仍可 emit。"""
     policy = WatcherPolicy(batch_interval_seconds=0.2, batch_max_events=10)
     watcher = DeviceLogWatcher(
         adb_path="adb", local_db=db,
