@@ -368,17 +368,24 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 | GET | `/api/v1/pipeline/templates/{name}` | 获取指定 Pipeline 模板 |
 | GET | `/api/v1/jobs` | 全量 Job 分页列表（支持 plan_id/status 筛选） |
 
-### Agent API 端点
+### Agent API 端点（X-Agent-Secret 认证）
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
-| GET | `/api/v1/agent/jobs/pending` | 获取待执行任务 |
-| POST | `/api/v1/agent/jobs/{id}/heartbeat` | 更新任务状态 |
+| POST | `/api/v1/agent/heartbeat` | 主机级心跳上报 |
+| GET | `/api/v1/agent/jobs/pending` | ⚠ **已废弃**（Sunset 2026-11-01），新 Agent 请使用 `POST /jobs/claim` |
+| POST | `/api/v1/agent/jobs/claim` | 认领待执行任务 |
+| POST | `/api/v1/agent/jobs/{id}/status` | 更新任务状态 |
+| POST | `/api/v1/agent/jobs/{id}/heartbeat` | 任务级心跳 |
 | POST | `/api/v1/agent/jobs/{id}/complete` | 完成任务 |
 | POST | `/api/v1/agent/jobs/{id}/extend_lock` | 续期设备锁 |
-| POST | `/api/v1/agent/jobs/{job_id}/steps/{step_id}/status` | 更新步骤状态（HTTP fallback） |
-| POST | `/api/v1/agent/jobs/{job_id}/patrol-heartbeat` | patrol 周期聚合心跳（ADR-0022） |
+| POST | `/api/v1/agent/steps` | 批量 upsert StepTrace |
+| POST | `/api/v1/agent/jobs/{id}/steps/{step_id}/status` | 更新单个步骤状态（HTTP fallback） |
+| POST | `/api/v1/agent/jobs/{id}/patrol-heartbeat` | patrol 周期聚合心跳（ADR-0022） |
 | POST | `/api/v1/agent/log-signals` | watcher 异常事件批量上送（ADR-0018） |
+| POST | `/api/v1/agent/jobs/{id}/artifacts` | 上报 JobArtifact（ADR-0018） |
+| POST | `/api/v1/agent/recovery/sync` | crash recovery 同步（ADR-0019） |
+| GET | `/api/v1/agent/{host_id}/archive-status` | ADR-0025 归档状态查询 |
 
 ### SocketIO 端点
 
@@ -466,7 +473,7 @@ prometheus-client
 
 | 变量 | 当前值 / 默认值 | 说明 |
 |------|--------|------|
-| `DATABASE_URL` | `postgresql+psycopg://stability:stability@localhost:5432/stability` | 数据库连接（Windows 侧 PostgreSQL） |
+| `DATABASE_URL` | `postgresql+asyncpg://stability:stability@localhost:5432/stability` | 数据库连接（异步驱动；Windows 侧 `psycopg` 同步直连时去掉 `+asyncpg` 后缀） |
 | `API_URL` | `http://127.0.0.1:8000` | 后端 API 地址 |
 | `HOST_ID` | `auto` | 主机 ID（Agent 使用，`auto` 为自动注册） |
 | `ADB_PATH` | `adb` | ADB 可执行文件路径 |
@@ -777,8 +784,8 @@ class StepTrace(Base):
 ### Q: 开发环境常见易错项？
 
 **数据库连接**：
-- PostgreSQL 运行在 Windows 侧，`DATABASE_URL` 为 `postgresql+psycopg://stability:stability@localhost:5432/stability`
-- 使用 `psycopg`（v3 同步驱动）直连时去掉 `+psycopg` 后缀：`postgresql://stability:stability@localhost:5432/stability`
+- PostgreSQL 运行在 Windows 侧，`DATABASE_URL` 默认 `postgresql+asyncpg://stability:stability@localhost:5432/stability`（异步驱动）
+- 使用 `psycopg`（v3 同步驱动）直连时改为 `postgresql://stability:stability@localhost:5432/stability`（去掉驱动后缀）
 - 数据库表名为单数形式（`device` 非 `devices`，`host` 非 `hosts`）
 
 **WSL Agent ADB 连接**：
@@ -836,6 +843,7 @@ class StepTrace(Base):
 - `backend/api/routes/audit.py` - 审计日志（prefix `/api/v1/audit-logs`）
 - `backend/api/routes/notifications.py` - 通知规则
 - `backend/api/routes/resource_pools.py` - WiFi 资源池
+- `backend/api/routes/action_templates.py` - Action 模板
 - `backend/api/routes/dedup.py` - JIRA 去重 / PlanRun 去重扫描
 
 ### 基础设施层

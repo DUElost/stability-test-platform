@@ -445,6 +445,7 @@ class DeviceLogWatcher:
         enrichment 可选；若提供则透传 artifact_uri / sha256 / size_bytes / first_lines。
         """
         enrichment = enrichment or {}
+        is_aee = event.category in ("AEE", "VENDOR_AEE")
         try:
             self._emitter.emit(
                 category=event.category,
@@ -456,6 +457,11 @@ class DeviceLogWatcher:
                 size_bytes=enrichment.get("size_bytes"),
                 first_lines=enrichment.get("first_lines"),
             )
+            if is_aee and not self._aee_reconciler_active:
+                logger.info(
+                    "device_log_watcher_emit_fallback serial=%s job=%d cat=%s file=%s",
+                    self._serial, self._job_id, event.category, event.filename,
+                )
         except ContractViolation as exc:
             self._extra_dropped += 1
             logger.warning(

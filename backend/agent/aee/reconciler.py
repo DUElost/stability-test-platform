@@ -681,6 +681,12 @@ class AeeDbHistoryReconciler:
                 extra=extra,
             )
             self.stats.signals_emitted += 1
+            logger.debug(
+                "aee_reconciler_emit serial=%s job=%d cat=%s pkg=%s subtype=%s",
+                self._serial, self._job_id, category,
+                extra.get("package_name", "-"),
+                extra.get("event_subtype", "-"),
+            )
         except ContractViolation as exc:
             self.stats.signals_dropped += 1
             logger.warning(
