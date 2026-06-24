@@ -489,6 +489,66 @@ ls -la {nfs_root}/jira/{plan_run_id}/
 
 ---
 
+## 八、前置 Smoke 验证（2026-06-24）
+
+> Sprint 4 scan/upload/merge 管道验证前的基础 smoke，确认 Agent + 设备 + 调度主链可通。
+
+### 环境
+
+| 项 | 值 |
+|----|-----|
+| Host ID | `auto-fdaf1d55e319` |
+| Host IP | `172.21.10.36` |
+| Host 状态 | ONLINE |
+| 设备 1 | ID=99, serial=`11914404BG100577` |
+| 设备 2 | ID=63, serial=`11914404BG102162` |
+| 设备 3 | ID=62, serial=`121512542H004524` |
+| Plan | ID=5, name=`smoke-plan-001` |
+| PlanRun | ID=41 |
+| 操作人 | `_________` |
+| 验证日期 | 2026-06-24 |
+
+### 主链 smoke 结果
+
+| 项 | 值 | 结果 |
+|----|-----|------|
+| PlanRun 41 状态 | SUCCESS | ✅ PASS |
+| Job 57 | COMPLETED | ✅ PASS |
+| Job 58 | COMPLETED | ✅ PASS |
+| Job 59 | COMPLETED | ✅ PASS |
+| 设备最终状态 | 三台均 ONLINE, adb_state=device | ✅ PASS |
+| active lease | 0（全部释放） | ✅ PASS |
+
+### 异常记录
+
+| 项 | 说明 |
+|----|------|
+| Plan #7 误用 | 无 `timeout_seconds`，持续 patrol；已 abort → PlanRun 40 = FAILED/ABORTED，lease 经 reconciler 释放 |
+
+### Sprint 4 管道验证阻塞
+
+| 项 | 状态 | 说明 |
+|----|------|------|
+| `POST /plan-runs/41/dedup/scan?is_final=true` | ❌ 503 | `scan tool not configured` |
+| Agent .env | ❌ 缺失 | 仅有 `API_URL` / `HOST_ID` / `MAX_CONCURRENT_TASKS`，无 `STP_AEE_*` / `STP_DEDUP_*` |
+| `start_log_scan.py` | ❌ 未找到 | 候选脚本未匹配 `-dedup_org` / `-merge_files` 参数 |
+| `plan_run_artifact` (Run 41) | 0 行 | NFS `dedup/` / `devices/` 产物未生成 |
+| 自动化基线 (Python 3.11) | ✅ 29 passed | Sprint 4 相关单测通过 |
+
+### 解除阻塞待办
+
+1. 部署 `start_log_scan.py`（含 `-dedup_org` / `-merge_files` 参数支持）到 10.36 Agent
+2. 配置后端 env：
+   - `STP_AEE_NFS_ROOT` — NFS/CIFS 根目录
+   - `STP_DEDUP_SCAN_PYTHON` — scan tool Python 解释器路径
+   - `STP_DEDUP_SCAN_SCRIPT` — `start_log_scan.py` 路径
+3. 配置 Agent env：
+   - `STP_AEE_LOCAL_ROOT` — Agent HDD 根目录（如 `/mnt/hdd/aee_events`）
+4. 重启后端 + Agent
+5. 重新执行 §1–§7 真机验证
+
+---
+
 ## 签字
 
 | 项 | 值 |
