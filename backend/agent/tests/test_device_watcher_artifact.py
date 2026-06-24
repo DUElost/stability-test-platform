@@ -38,7 +38,7 @@ def db(tmp_path):
 def _probe_root() -> ProbeResult:
     return ProbeResult(
         capability=WatcherCapability.INOTIFYD_ROOT,
-        accessible_categories=["ANR", "AEE", "VENDOR_AEE"],
+        accessible_categories=["AEE", "VENDOR_AEE"],
         inaccessible_categories={},
         is_root=True,
         reasons=[],

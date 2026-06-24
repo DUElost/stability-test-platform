@@ -78,14 +78,14 @@ def test_probe_root_all_readable_returns_inotifyd_root():
     serial = "S1"
     adb.on(serial, "id", stdout="uid=0(root) gid=0(root)")
     adb.on(serial, "which inotifyd", stdout="/system/bin/inotifyd")
-    for path in ("/data/anr", "/data/aee_exp"):
+    for path in ("/data/aee_exp", "/data/vendor/aee_exp"):
         adb.on(serial, f"ls -d {path}", stdout=path)
 
-    policy = WatcherPolicy()  # 默认 required=["ANR","AEE"]
+    policy = WatcherPolicy()  # 默认 required=["AEE"]
     result = CapabilityProber(adb).probe(serial, policy)
 
     assert result.capability is WatcherCapability.INOTIFYD_ROOT
-    assert set(result.accessible_categories) == {"ANR", "AEE"}
+    assert set(result.accessible_categories) == {"AEE", "VENDOR_AEE"}
     assert result.inaccessible_categories == {}
     assert result.is_root is True
     assert result.is_usable is True
@@ -97,13 +97,13 @@ def test_probe_non_root_but_readable_returns_inotifyd_shell():
     serial = "S2"
     adb.on(serial, "id", stdout="uid=2000(shell) gid=2000(shell)")
     adb.on(serial, "which inotifyd", stdout="/system/bin/inotifyd")
-    adb.on(serial, "ls -d /data/anr", stdout="/data/anr")
     adb.on(serial, "ls -d /data/aee_exp", stdout="/data/aee_exp")
+    adb.on(serial, "ls -d /data/vendor/aee_exp", stdout="/data/vendor/aee_exp")
 
     result = CapabilityProber(adb).probe(serial, WatcherPolicy())
     assert result.capability is WatcherCapability.INOTIFYD_SHELL
     assert result.is_root is False
-    assert set(result.accessible_categories) == {"ANR", "AEE"}
+    assert set(result.accessible_categories) == {"AEE", "VENDOR_AEE"}
 
 
 def test_probe_inotifyd_missing_falls_back_to_polling():
@@ -111,8 +111,8 @@ def test_probe_inotifyd_missing_falls_back_to_polling():
     serial = "S3"
     adb.on(serial, "id", stdout="uid=0(root)")
     adb.on(serial, "which inotifyd", raise_exc=RuntimeError("not found"))
-    adb.on(serial, "ls -d /data/anr", stdout="/data/anr")
     adb.on(serial, "ls -d /data/aee_exp", stdout="/data/aee_exp")
+    adb.on(serial, "ls -d /data/vendor/aee_exp", stdout="/data/vendor/aee_exp")
 
     result = CapabilityProber(adb).probe(serial, WatcherPolicy())
     assert result.capability is WatcherCapability.POLLING
@@ -130,10 +130,10 @@ def test_probe_all_required_inaccessible_returns_unavailable():
     result = CapabilityProber(adb).probe(serial, WatcherPolicy())
     assert result.capability is WatcherCapability.UNAVAILABLE
     assert result.accessible_categories == []
-    assert set(result.inaccessible_categories.keys()) == {"ANR", "AEE"}
+    assert set(result.inaccessible_categories.keys()) == {"AEE", "VENDOR_AEE"}
     # ROOT_REQUIRED 分类非 root 时归因应为 requires_root
-    assert result.inaccessible_categories["ANR"] == "requires_root"
     assert result.inaccessible_categories["AEE"] == "requires_root"
+    assert result.inaccessible_categories["VENDOR_AEE"] == "requires_root"
     assert result.is_usable is False
 
 
@@ -143,13 +143,15 @@ def test_probe_partial_accessible_still_usable():
     serial = "S5"
     adb.on(serial, "id", stdout="uid=0(root)")
     adb.on(serial, "which inotifyd", stdout="/system/bin/inotifyd")
-    adb.on(serial, "ls -d /data/anr", stdout="/data/anr")
-    # AEE 不注册规则 → 不可读
-
-    result = CapabilityProber(adb).probe(serial, WatcherPolicy())
+    adb.on(serial, "ls -d /data/aee_exp", stdout="/data/aee_exp")
+    adb.on(serial, "ls -d /data/vendor/aee_exp", stdout="/data/vendor/aee_exp")
+    adb.on(serial, "ls -d /data/debuglogger/mobilelog", stdout="/data/debuglogger/mobilelog")
+    # Modify policy to require only AEE
+    policy = WatcherPolicy(required_categories=["AEE"])
+    result = CapabilityProber(adb).probe(serial, policy)
     assert result.capability is WatcherCapability.INOTIFYD_ROOT
-    assert "ANR" in result.accessible_categories
-    assert "AEE" in result.inaccessible_categories
+    assert "AEE" in result.accessible_categories
+    assert len(result.inaccessible_categories) == 0
 
 
 # ----------------------------------------------------------------------
@@ -157,18 +159,18 @@ def test_probe_partial_accessible_still_usable():
 # ----------------------------------------------------------------------
 
 def test_build_command_shape():
-    """命令形如 adb -s SERIAL shell 'inotifyd - /data/anr:nwx /data/aee_exp:nwx'。"""
+    """命令形如 adb -s SERIAL shell 'inotifyd - /data/aee_exp:nwx /data/vendor/aee_exp:nwx'。"""
     src = InotifydSource(
         adb_path="adb", serial="SX",
-        paths_by_category={"ANR": ["/data/anr"], "AEE": ["/data/aee_exp"]},
+        paths_by_category={"AEE": ["/data/aee_exp"], "VENDOR_AEE": ["/data/vendor/aee_exp"]},
         on_event=lambda e: None,
     )
     cmd = src._build_command()
     assert cmd[:4] == ["adb", "-s", "SX", "shell"]
     shell_arg = cmd[4]
     assert shell_arg.startswith("inotifyd -")
-    assert f"/data/anr:{DEFAULT_EVENT_MASK}" in shell_arg
     assert f"/data/aee_exp:{DEFAULT_EVENT_MASK}" in shell_arg
+    assert f"/data/vendor/aee_exp:{DEFAULT_EVENT_MASK}" in shell_arg
 
 
 @pytest.mark.parametrize("mask, expected", [
@@ -185,21 +187,21 @@ def test_normalize_mask(mask, expected):
 def test_parse_line_valid():
     src = InotifydSource(
         adb_path="adb", serial="SP",
-        paths_by_category={"ANR": ["/data/anr"]},
+        paths_by_category={"AEE": ["/data/aee_exp"]},
         on_event=lambda e: None,
     )
-    ev = src._parse_line("n\t/data/anr\ttrace_00.txt\n")
+    ev = src._parse_line("n\t/data/aee_exp\ttrace_00.txt\n")
     assert isinstance(ev, WatcherEvent)
-    assert ev.category == "ANR"
+    assert ev.category == "AEE"
     assert ev.event_mask == "n"
     assert ev.filename == "trace_00.txt"
-    assert ev.full_path == "/data/anr/trace_00.txt"
+    assert ev.full_path == "/data/aee_exp/trace_00.txt"
 
 
 def test_parse_line_invalid_returns_none():
     src = InotifydSource(
         adb_path="adb", serial="SP",
-        paths_by_category={"ANR": ["/data/anr"]},
+        paths_by_category={"AEE": ["/data/aee_exp"]},
         on_event=lambda e: None,
     )
     assert src._parse_line("") is None
@@ -273,8 +275,8 @@ def _drain_with_fake_popen(lines: List[str], *, on_event_wrap=None, paths=None, 
     src = InotifydSource(
         adb_path="adb", serial="SRC",
         paths_by_category=paths or {
-            "ANR": ["/data/anr"],
             "AEE": ["/data/aee_exp"],
+            "VENDOR_AEE": ["/data/vendor/aee_exp"],
         },
         on_event=on_event,
     )
@@ -302,14 +304,14 @@ def _drain_with_fake_popen(lines: List[str], *, on_event_wrap=None, paths=None, 
 def test_source_start_reads_events_and_invokes_callback():
     """Popen stdout 吐 3 条事件，callback 应收到 3 条 WatcherEvent。"""
     lines = [
-        "n\t/data/anr\ttrace_01.txt\n",
+        "n\t/data/aee_exp\ttrace_01.txt\n",
         "w\t/data/aee_exp\tdb.0.123\n",
-        "x\t/data/anr\tfiletransfer.txt\n",
+        "x\t/data/vendor/aee_exp\tfiletransfer.txt\n",
     ]
     events, src, fake = _drain_with_fake_popen(lines)
     assert len(events) == 3
     cats = [e.category for e in events]
-    assert cats == ["ANR", "AEE", "ANR"]
+    assert cats == ["AEE", "AEE", "VENDOR_AEE"]
     assert fake.terminated is True  # stop 发了 SIGTERM
 
 
@@ -317,7 +319,7 @@ def test_source_stop_idempotent_no_raise():
     """重复 stop 不抛。"""
     src = InotifydSource(
         adb_path="adb", serial="SX",
-        paths_by_category={"ANR": ["/data/anr"]},
+        paths_by_category={"AEE": ["/data/aee_exp"]},
         on_event=lambda e: None,
     )
     with patch("subprocess.Popen", return_value=_FakePopen([])):
@@ -336,12 +338,12 @@ def test_source_callback_exception_does_not_break_loop():
             raise RuntimeError("boom")
 
     lines = [
-        "n\t/data/anr\ta\n",
-        "n\t/data/anr\tb\n",
-        "n\t/data/anr\tc\n",
+        "n\t/data/aee_exp\ta\n",
+        "n\t/data/aee_exp\tb\n",
+        "n\t/data/aee_exp\tc\n",
     ]
     events, _, _ = _drain_with_fake_popen(
-        lines, on_event_wrap=flaky, paths={"ANR": ["/data/anr"]},
+        lines, on_event_wrap=flaky, paths={"AEE": ["/data/aee_exp"]},
     )
     # 第 1 条被 flaky 抛异常但仍被 put（flaky 在 put 前执行）—— 验证读循环未因第 1 次异常 break
     # 即后续 2 条应该也到
@@ -352,7 +354,7 @@ def test_source_spawn_failure_raises_runtime_error():
     """adb 二进制不存在 → Popen 抛 FileNotFoundError → 封装为 RuntimeError。"""
     src = InotifydSource(
         adb_path="adb-not-exist", serial="SX",
-        paths_by_category={"ANR": ["/data/anr"]},
+        paths_by_category={"AEE": ["/data/aee_exp"]},
         on_event=lambda e: None,
     )
     with patch("subprocess.Popen", side_effect=FileNotFoundError("no adb")):
@@ -363,7 +365,7 @@ def test_source_spawn_failure_raises_runtime_error():
 def test_source_is_running_reflects_state():
     src = InotifydSource(
         adb_path="adb", serial="SX",
-        paths_by_category={"ANR": ["/data/anr"]},
+        paths_by_category={"AEE": ["/data/aee_exp"]},
         on_event=lambda e: None,
     )
     assert src.is_running() is False

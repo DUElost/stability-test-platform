@@ -28,14 +28,13 @@ class OnUnavailableAction(str, Enum):
 
 # 日志分类 → 设备路径列表（Agent 侧默认）
 DEFAULT_PATHS: Dict[str, List[str]] = {
-    "ANR":        ["/data/anr"],
     "AEE":        ["/data/aee_exp"],
     "VENDOR_AEE": ["/data/vendor/aee_exp"],
     "MOBILELOG":  ["/data/debuglogger/mobilelog"],
 }
 
 # 需要 adb root 才能访问的分类（探测阶段使用）
-ROOT_REQUIRED_CATEGORIES: set[str] = {"ANR", "AEE", "VENDOR_AEE"}
+ROOT_REQUIRED_CATEGORIES: set[str] = {"AEE", "VENDOR_AEE"}
 
 
 @dataclass
@@ -44,11 +43,12 @@ class WatcherPolicy:
 
     # --- 能力与分类 ---
     # Watcher 职责边界（不要外扩）：手机侧"报错文件探测器"
-    # 采集对象限定在 4 个目录下新产生的 crash/trace 文件；
+    # 采集对象限定在 AEE / VENDOR_AEE / MOBILELOG 目录下新产生的 crash/trace 文件；
+    # MTK 平台 /data/aee_exp 包含 ANR 信息（dbg 生成时抓取 /data/anr），无需单独监测。
     # logcat / console 实时输出 不是 watcher 的职责。
     paths: Dict[str, List[str]] = field(default_factory=lambda: dict(DEFAULT_PATHS))
     required_categories: List[str] = field(
-        default_factory=lambda: ["ANR", "AEE"]  # 最低保证
+        default_factory=lambda: ["AEE", "VENDOR_AEE"]  # 最低保证
     )
     # 首发默认 DEGRADED：第一次上线时，能力探测失败不应导致 Job 直接 FAILED，
     # 而是标记 watcher_capability=unavailable 让 Job 继续执行，便于运维观测真实覆盖率。
@@ -93,8 +93,8 @@ class WatcherPolicy:
               "id": 123,
               "watcher_policy": {                  # 可选, 来自 Plan
                   "on_unavailable": "degraded",
-                  "required_categories": ["ANR"],
-                  "paths": {"ANR": ["/data/anr"]},
+                  "required_categories": ["AEE"],
+                  "paths": {"AEE": ["/data/aee_exp"]},
                   "nfs_quota_mb": 4096
               },
               ...

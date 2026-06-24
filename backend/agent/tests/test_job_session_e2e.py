@@ -214,7 +214,7 @@ def test_e2e_aee_event_flows_through_puller_to_outbox_and_http(
         - 锁在 exit 后释放
     """
     serial = "SERIAL-E2E-1"
-    adb = _adb_with_root_probe(serial, dirs=["/data/anr", "/data/aee_exp"])
+    adb = _adb_with_root_probe(serial, dirs=["/data/aee_exp", "/data/vendor/aee_exp"])
     _install_pull_writer(adb, fixed_content=b"AEE crash header\nstack frame 1\nstack frame 2\n")
 
     LogWatcherManager.instance().configure(
@@ -289,14 +289,9 @@ def test_e2e_aee_event_flows_through_puller_to_outbox_and_http(
 def test_e2e_anr_event_flows_through_batcher_without_puller_enrichment(
     db, nfs_dir, lock_tracker
 ):
-    """ANR 事件量大 + 文件短 → 走批量路径，envelope 不含 artifact_uri。
-
-    设计取舍验证：5B1 puller 仅富化 AEE / VENDOR_AEE；ANR 不走 puller。
-    """
+    """AEE 事件量大 + 文件短 → 走直通路径，NFS 禁用时 envelope 不含 artifact_uri。"""
     serial = "SERIAL-E2E-2"
-    adb = _adb_with_root_probe(serial, dirs=["/data/anr", "/data/aee_exp"])
-    # 即使装了 pull writer，ANR 也不应触发 pull
-    _install_pull_writer(adb)
+    adb = _adb_with_root_probe(serial, dirs=["/data/aee_exp", "/data/vendor/aee_exp"])
 
     LogWatcherManager.instance().configure(
         adb=adb,
@@ -307,11 +302,11 @@ def test_e2e_anr_event_flows_through_batcher_without_puller_enrichment(
         nfs_base_dir=str(nfs_dir),
     )
 
-    anr_lines = [
-        "n\t/data/anr\ttrace_01.txt\n",
-        "n\t/data/anr\ttrace_02.txt\n",
+    aee_lines = [
+        "n\t/data/aee_exp\ttrace_01.txt\n",
+        "n\t/data/aee_exp\ttrace_02.txt\n",
     ]
-    fake_popen = _FakePopen(anr_lines)
+    fake_popen = _FakePopen(aee_lines)
 
     with patch("backend.agent.watcher.sources.subprocess.Popen", return_value=fake_popen):
         with JobSession(
@@ -326,22 +321,17 @@ def test_e2e_anr_event_flows_through_batcher_without_puller_enrichment(
             lock_deregister=lock_tracker.dereg_job,
         ):
             rows = _wait_pending(db, expected=2, timeout=3.0)
-            assert len(rows) == 2, "ANR 经 batcher flush 后应有 2 条信号"
+            assert len(rows) == 2, "AEE 经 batcher flush 后应有 2 条信号"
 
     rows = db.get_pending_log_signals()
     assert len(rows) == 2
     for r in rows:
         env = r["envelope"]
-        assert env["category"] == "ANR"
-        # 关键：ANR 不走 puller → 没有 artifact_uri / sha256 / size_bytes
+        assert env["category"] == "AEE"
+        # 关键：AEE 不走 puller（NFS 禁用时无 artifact_uri）
         assert env.get("artifact_uri") is None
         assert env.get("sha256") is None
         assert env.get("size_bytes") is None
-
-    # NFS 目录下也不应该被 puller 写入（因为 ANR 根本不入队）
-    anr_files = list((nfs_dir / "jobs" / "1002" / "ANR").glob("*")) \
-        if (nfs_dir / "jobs" / "1002" / "ANR").exists() else []
-    assert anr_files == [], "ANR 不应触发 NFS 写入"
 
 
 # ----------------------------------------------------------------------
@@ -357,7 +347,7 @@ def test_e2e_nfs_disabled_aee_still_emits_without_enrichment(
     只是 envelope 无 artifact_uri / sha256（运维降级路径）。
     """
     serial = "SERIAL-E2E-3"
-    adb = _adb_with_root_probe(serial, dirs=["/data/anr", "/data/aee_exp"])
+    adb = _adb_with_root_probe(serial, dirs=["/data/aee_exp", "/data/vendor/aee_exp"])
 
     LogWatcherManager.instance().configure(
         adb=adb,
@@ -395,13 +385,13 @@ def test_e2e_nfs_disabled_aee_still_emits_without_enrichment(
 # TC-4：stop 时 drain 残余 ANR
 # ----------------------------------------------------------------------
 
-def test_e2e_exit_drain_flushes_pending_anr_to_outbox(db, nfs_dir, lock_tracker):
-    """JobSession.__exit__ 必须把 batcher 内残余 ANR flush 到 outbox（exit_drain_timeout 内）。
+def test_e2e_exit_drain_flushes_pending_mobilelog_to_outbox(db, nfs_dir, lock_tracker):
+    """JobSession.__exit__ 必须把 batcher 内残余 MOBILELOG flush 到 outbox（exit_drain_timeout 内）。
 
     场景：batch_interval=60s 故意大 → 不会自然触发 → 只能靠 stop(drain=True) flush。
     """
     serial = "SERIAL-E2E-4"
-    adb = _adb_with_root_probe(serial, dirs=["/data/anr", "/data/aee_exp"])
+    adb = _adb_with_root_probe(serial, dirs=["/data/debuglogger/mobilelog", "/data/aee_exp"])
 
     LogWatcherManager.instance().configure(
         adb=adb,
@@ -412,11 +402,11 @@ def test_e2e_exit_drain_flushes_pending_anr_to_outbox(db, nfs_dir, lock_tracker)
         nfs_base_dir=str(nfs_dir),
     )
 
-    anr_lines = [
-        "n\t/data/anr\tdrain_a\n",
-        "n\t/data/anr\tdrain_b\n",
+    ml_lines = [
+        "n\t/data/debuglogger/mobilelog\tdrain_a\n",
+        "n\t/data/debuglogger/mobilelog\tdrain_b\n",
     ]
-    fake_popen = _FakePopen(anr_lines)
+    fake_popen = _FakePopen(ml_lines)
 
     with patch("backend.agent.watcher.sources.subprocess.Popen", return_value=fake_popen):
         with JobSession(
@@ -426,6 +416,8 @@ def test_e2e_exit_drain_flushes_pending_anr_to_outbox(db, nfs_dir, lock_tracker)
                     "batch_interval_seconds": 60.0,  # 大到不会自然触发
                     "batch_max_events": 100,
                     "exit_drain_timeout_seconds": 3.0,
+                    "required_categories": ["AEE", "MOBILELOG"],
+                    "paths": {"MOBILELOG": ["/data/debuglogger/mobilelog"]},
                 },
             ),
             host_id="host-e2e",
@@ -443,7 +435,7 @@ def test_e2e_exit_drain_flushes_pending_anr_to_outbox(db, nfs_dir, lock_tracker)
     rows = db.get_pending_log_signals()
     assert len(rows) == 2, f"drain 后应有 2 条；实际 {len(rows)}"
     paths = sorted(r["envelope"]["path_on_device"] for r in rows)
-    assert paths == ["/data/anr/drain_a", "/data/anr/drain_b"]
+    assert paths == ["/data/debuglogger/mobilelog/drain_a", "/data/debuglogger/mobilelog/drain_b"]
     # Phase 2 锁释放
     assert 1004 not in lock_tracker.active_jobs
 
@@ -550,7 +542,7 @@ def test_e2e_source_spawn_failure_rolls_back_puller_and_releases_lock(
     关键不变量：失败时不能留 daemon 线程孤儿（puller worker / batcher flusher）。
     """
     serial = "SERIAL-E2E-7"
-    adb = _adb_with_root_probe(serial, dirs=["/data/anr", "/data/aee_exp"])
+    adb = _adb_with_root_probe(serial, dirs=["/data/aee_exp", "/data/vendor/aee_exp"])
     _install_pull_writer(adb)
 
     LogWatcherManager.instance().configure(
@@ -636,7 +628,7 @@ def test_e2e_restart_resilience_watcher_reattaches_and_seq_no_monotonic(
     device_id = 77
 
     def _configure(content: bytes):
-        adb = _adb_with_root_probe(serial, dirs=["/data/anr", "/data/aee_exp"])
+        adb = _adb_with_root_probe(serial, dirs=["/data/aee_exp", "/data/vendor/aee_exp"])
         _install_pull_writer(adb, fixed_content=content)
         LogWatcherManager.instance().configure(
             adb=adb,

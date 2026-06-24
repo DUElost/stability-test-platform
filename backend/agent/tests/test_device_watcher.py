@@ -49,20 +49,20 @@ def db(tmp_path):
 def _probe_all_root() -> ProbeResult:
     return ProbeResult(
         capability=WatcherCapability.INOTIFYD_ROOT,
-        accessible_categories=["ANR", "AEE"],
+        accessible_categories=["AEE", "VENDOR_AEE"],
         inaccessible_categories={},
         is_root=True,
         reasons=[],
     )
 
 
-def _probe_only_anr() -> ProbeResult:
+def _probe_only_aee() -> ProbeResult:
     return ProbeResult(
         capability=WatcherCapability.INOTIFYD_ROOT,
-        accessible_categories=["ANR"],
-        inaccessible_categories={"AEE": "not_readable"},
+        accessible_categories=["AEE"],
+        inaccessible_categories={"VENDOR_AEE": "not_readable"},
         is_root=True,
-        reasons=["AEE:not_readable"],
+        reasons=["VENDOR_AEE:not_readable"],
     )
 
 
@@ -70,8 +70,8 @@ def _probe_only_anr() -> ProbeResult:
 # 端到端：inotifyd → batcher → emitter → outbox
 # ----------------------------------------------------------------------
 
-def test_anr_events_flow_to_outbox_via_batch(db):
-    """ANR 走聚合：3 条不同文件 → flush → outbox 3 条。"""
+def test_aee_events_flow_to_outbox_via_batch(db):
+    """AEE 走直通 → 每条立即 emit。"""
     policy = WatcherPolicy(
         batch_interval_seconds=0.3,
         batch_max_events=10,
@@ -84,9 +84,9 @@ def test_anr_events_flow_to_outbox_via_batch(db):
         probe_result=_probe_all_root(),
     )
     lines = [
-        "n\t/data/anr\ttrace_a\n",
-        "n\t/data/anr\ttrace_b\n",
-        "n\t/data/anr\ttrace_c\n",
+        "n\t/data/aee_exp\ttrace_a\n",
+        "n\t/data/aee_exp\ttrace_b\n",
+        "n\t/data/aee_exp\ttrace_c\n",
     ]
     fake = _FakePopen(lines)
     with patch("subprocess.Popen", return_value=fake):
@@ -103,20 +103,20 @@ def test_anr_events_flow_to_outbox_via_batch(db):
     assert len(rows) == 3
     envelopes = [r["envelope"] for r in rows]
     cats = sorted(e["category"] for e in envelopes)
-    assert cats == ["ANR", "ANR", "ANR"]
+    assert cats == ["AEE", "AEE", "AEE"]
     paths = sorted(e["path_on_device"] for e in envelopes)
-    assert paths == ["/data/anr/trace_a", "/data/anr/trace_b", "/data/anr/trace_c"]
+    assert paths == ["/data/aee_exp/trace_a", "/data/aee_exp/trace_b", "/data/aee_exp/trace_c"]
     # source/sink 字段契约
     assert all(e["source"] == "inotifyd" for e in envelopes)
     assert all(e["host_id"] == "HOST" and e["device_serial"] == "SX" for e in envelopes)
     assert all(e["job_id"] == 701 for e in envelopes)
     # seq_no 单调
     assert sorted(e["seq_no"] for e in envelopes) == [1, 2, 3]
-    # stats
+    # stats — AEE 走直通 immediate 路径
     assert stats.events_total == 3
     assert stats.signals_emitted == 3
-    assert stats.batch_emits >= 1
-    assert stats.immediate_emits == 0
+    assert stats.immediate_emits == 3
+    assert stats.batch_emits == 0
 
 
 def test_aee_events_immediate_to_outbox(db):
@@ -170,25 +170,25 @@ def test_polling_capability_does_not_start_inotifyd(db):
 
 
 def test_probe_result_filters_subscribed_paths(db):
-    """probe 出 AEE 不可访问 → 订阅时仅 ANR 入 paths_by_category。"""
+    """probe 出 VENDOR_AEE 不可访问 → 订阅时仅 AEE 入 paths_by_category。"""
     watcher = DeviceLogWatcher(
         adb_path="adb", local_db=db,
         host_id="HOST", serial="SF", job_id=704,
         policy=WatcherPolicy(),
         capability=WatcherCapability.INOTIFYD_ROOT,
-        probe_result=_probe_only_anr(),
+        probe_result=_probe_only_aee(),
     )
     paths = watcher._build_subscribed_paths()
-    assert set(paths.keys()) == {"ANR"}
-    assert "AEE" not in paths
+    assert set(paths.keys()) == {"AEE"}
+    assert "VENDOR_AEE" not in paths
 
 
 # ----------------------------------------------------------------------
 # stop drain
 # ----------------------------------------------------------------------
 
-def test_stop_drain_flushes_pending_anr(db):
-    """ANR 事件还没到 batch_interval/max，stop(drain=True) 必须 flush。"""
+def test_stop_drain_flushes_pending_aee(db):
+    """AEE 事件还没到 batch_interval/max，stop(drain=True) 必须 flush。"""
     policy = WatcherPolicy(
         batch_interval_seconds=60.0,   # 故意大，避免周期触发
         batch_max_events=100,
@@ -200,7 +200,7 @@ def test_stop_drain_flushes_pending_anr(db):
         capability=WatcherCapability.INOTIFYD_ROOT,
         probe_result=_probe_all_root(),
     )
-    lines = ["n\t/data/anr\tlast_trace\n"]
+    lines = ["n\t/data/aee_exp\tlast_trace\n"]
     fake = _FakePopen(lines)
     with patch("subprocess.Popen", return_value=fake):
         watcher.start()
@@ -208,13 +208,15 @@ def test_stop_drain_flushes_pending_anr(db):
         deadline = time.time() + 1.0
         while time.time() < deadline and watcher.stats.events_total < 1:
             time.sleep(0.02)
-        # 此时应该还在 pending（未到 interval）
-        assert db.get_pending_log_signals() == []
+        # AEE 走 immediate，应已出库
+        deadline2 = time.time() + 1.0
+        while time.time() < deadline2 and len(db.get_pending_log_signals()) < 1:
+            time.sleep(0.02)
         watcher.stop(drain=True, timeout=1.0)
 
     rows = db.get_pending_log_signals()
-    assert len(rows) == 1, "drain=True 必须把残余 ANR 同步出库"
-    assert rows[0]["envelope"]["path_on_device"] == "/data/anr/last_trace"
+    assert len(rows) == 1, "drain 应把 AEE 事件同步出库"
+    assert rows[0]["envelope"]["path_on_device"] == "/data/aee_exp/last_trace"
 
 
 # ----------------------------------------------------------------------
@@ -232,9 +234,9 @@ def test_signals_count_matches_outbox(db):
         probe_result=_probe_all_root(),
     )
     lines = [
-        "n\t/data/aee_exp\tdb.a\n",     # immediate
-        "n\t/data/anr\ttrace_x\n",      # batched
-        "n\t/data/anr\ttrace_y\n",      # batched
+        "n\t/data/aee_exp\tdb.a\n",               # immediate
+        "n\t/data/vendor/aee_exp\ttrace_x\n",     # immediate
+        "n\t/data/vendor/aee_exp\ttrace_y\n",     # immediate
     ]
     fake = _FakePopen(lines)
     with patch("subprocess.Popen", return_value=fake):

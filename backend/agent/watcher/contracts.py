@@ -103,7 +103,7 @@ class LogSignalEnvelope(TypedDict, total=False):
     seq_no:         int
     host_id:        str
     device_serial:  str
-    category:       str    # ANR | AEE | VENDOR_AEE | MOBILELOG
+    category:       str    # AEE | VENDOR_AEE | MOBILELOG | ANR (ANR 仅 reconciler 路径，inotifyd 不监测 /data/anr)
     source:         str    # inotifyd | polling | reconciler
     path_on_device: str
     detected_at:    str    # ISO8601

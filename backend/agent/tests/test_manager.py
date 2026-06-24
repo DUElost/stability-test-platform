@@ -153,7 +153,7 @@ def _watcher_factory_producing(cls):
 def _probe_root() -> ProbeResult:
     return ProbeResult(
         capability=WatcherCapability.INOTIFYD_ROOT,
-        accessible_categories=["ANR", "AEE"],
+        accessible_categories=["AEE", "VENDOR_AEE"],
         inaccessible_categories={},
         is_root=True, reasons=[],
     )
@@ -163,8 +163,8 @@ def _probe_unavailable() -> ProbeResult:
     return ProbeResult(
         capability=WatcherCapability.UNAVAILABLE,
         accessible_categories=[],
-        inaccessible_categories={"ANR": "requires_root", "AEE": "requires_root"},
-        is_root=False, reasons=["adb_not_rooted", "ANR:requires_root"],
+        inaccessible_categories={"AEE": "requires_root", "VENDOR_AEE": "requires_root"},
+        is_root=False, reasons=["adb_not_rooted", "AEE:requires_root"],
     )
 
 

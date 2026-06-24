@@ -9,7 +9,7 @@
                        不做事件聚合、不做文件 pull、不做重连（交 DeviceLogWatcher 决策）。
 
 契约：
-    category 集合与 policy.DEFAULT_PATHS 一致（ANR / AEE / VENDOR_AEE / MOBILELOG）
+    category 集合与 policy.DEFAULT_PATHS 一致（AEE / VENDOR_AEE / MOBILELOG）
     event_mask: 'n' (IN_CREATE) / 'w' (IN_CLOSE_WRITE) / 'x' (IN_MOVED_TO) — 见 inotifyd 源码
     WatcherEvent.detected_at 始终 UTC 带时区
 
