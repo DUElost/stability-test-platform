@@ -37,7 +37,7 @@ class HddSpillMonitor:
         self._hdd_root: str = ""
         self._cifs_root: str = ""
         self._interval: float = 300.0
-        self._threshold_pct: float = 80.0
+        self._threshold_pct: float = 95.0
         self._target_pct: float = 70.0
         self._disk_usage_fn = None
         self._stop_evt = threading.Event()
@@ -72,7 +72,7 @@ class HddSpillMonitor:
         hdd_root: str,
         cifs_root: str,
         interval_seconds: float = 300.0,
-        spill_threshold_pct: float = 80.0,
+        spill_threshold_pct: float = 95.0,
         target_pct: float = 70.0,
         disk_usage_fn=None,
     ) -> "HddSpillMonitor":
