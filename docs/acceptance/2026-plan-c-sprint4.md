@@ -13,7 +13,7 @@
 
 | ID | 场景 | 前置 | 期望结果 | 自动化 | 状态 |
 |----|------|------|----------|--------|------|
-| AC-S4-01 | ScanRunner `-dedup_org` | scan tool 已部署 | subprocess 调用 `start_log_scan.py -dedup_org {hdd_root} -side {side}` | `backend/agent/tests/test_scan_runner.py` | PR #35 |
+| AC-S4-01 | ScanRunner `-m 0` (AEE_TNE) | scan tool 已部署 | subprocess 调用 `start_log_scan.py -m 0 -d {hdd_root} -side {side}` | `backend/agent/tests/test_scan_runner.py` | PR #35 |
 | AC-S4-02 | ScanRunner glob 取 fresh xls | 多个 `_org.xls` 存在 | 仅取 `mtime >= scan_start - 1` 的 fresh 文件；无 fresh 返回 None | `test_scan_runner.py::test_run_local_scan_returns_none_when_no_fresh_xls` | PR #35 + P1-5 |
 | AC-S4-03 | ScanRunner timeout | subprocess 超过 600s | `subprocess.TimeoutExpired` + log.warning | `test_scan_runner.py::test_run_local_scan_timeout` | PR #35 |
 | AC-S4-04 | ScanRunner configure 保护 | 已 configured 时再次调用 | log.warning + return，不重配 | `test_scan_runner.py::test_configure_rejected_if_already_configured` | PR #35 |

@@ -15,16 +15,17 @@
 
 | 项 | 值 |
 |----|-----|
-| 后端版本 | `git rev-parse HEAD` = _________ |
-| Agent 版本 | `git rev-parse HEAD` = _________ |
-| 后端地址 | `http://_________:8000` |
-| Agent Host ID | `_________` |
-| Agent IP | `_________` |
-| 设备序列号 | `_________` |
-| NFS/CIFS 挂载点 | `_________` |
-| scan tool 路径 | `STP_DEDUP_SCAN_SCRIPT=_________` |
+| 后端版本 | `git rev-parse HEAD` = `9692376` |
+| Agent 版本 | `git rev-parse HEAD` = `9692376` (via hot-update) |
+| 后端地址 | `http://172.21.10.25:8000` |
+| Agent Host ID | `auto-fdaf1d55e319` |
+| Agent IP | `172.21.10.36` |
+| 设备序列号 | `11914404BG100577`, `11914404BG102162`, `121512542H004524` |
+| NFS/CIFS 挂载点 | `Y:\sonic_tinno` (控制面) / `/home/android/sonic_agent/logs/ftp_log/sonic_tinno` (Agent) |
+| scan tool 路径 | `STP_DEDUP_SCAN_SCRIPT=stability_Start-Log-Scan_20260615/start_log_scan.py` |
 | 操作人 | `_________` |
-| 验证日期 | `_________` |
+| 验证日期 | 2026-06-24 |
+| 验证 PlanRun | 45 (SUCCESS, 3 设备, 5.5 分钟, 150 AEE 信号) |
 
 ### 环境变量确认
 
@@ -46,15 +47,17 @@ echo $STP_WATCHER_ENABLED     # Watcher 开关
 
 ## 一、Agent 本地 scan（ScanRunner）
 
-### AC-R-01：start_log_scan.py -dedup_org 执行
+### AC-R-01：start_log_scan.py -m 0 全量扫描 + -dedup_org 去重
 
 **前置**：scan tool 已部署；Agent 已 configure ScanRunner。
+
+**说明**：代码实际执行两阶段：① `-m 0 -d {hdd}` 全量扫描 ② `-dedup_org {org.xls}` 去重。文档模板中 AC-S4-01 已更新为 `-m 0`。
 
 **步骤**：
 1. 触发 scan（终态自动 或 `POST /api/v1/plan-runs/{id}/dedup/scan`）
 2. 查看 Agent 日志
 
-**期望**：Agent log 出现 `scan_runner_start plan_run=X host=Y final=True argv=[...]`，subprocess 退出码 0。
+**期望**：Agent log 出现 `scan_runner_start` 和 `dedup_runner_start`，两次 subprocess 退出码均为 0。
 
 **实际结果**：
 
@@ -72,12 +75,12 @@ echo $STP_WATCHER_ENABLED     # Watcher 开关
 
 ---
 
-### AC-R-02：_org.xls 产出到 HDD
+### AC-R-02：_org.xls + _dedup_org_*.xls 产出到 HDD
 
 **步骤**：
 1. scan 完成后，检查 HDD 目录
 
-**期望**：`{hdd_root}/**/Result_*_org.xls` 存在，mtime 为本次 scan 时间。
+**期望**：`{hdd_root}/Result_*_org.xls` 和 `{hdd_root}/Result_*_org_dedup_org_*.xls` 均存在。
 
 **实际结果**：
 
@@ -125,7 +128,7 @@ stat {org_xls_path}
 **步骤**：
 1. scan 成功后，检查 NFS 目录
 
-**期望**：`{nfs_root}/dedup/{plan_run_id}/{host_id}_Result_*_org.xls` 存在。
+**期望**：`{nfs_root}/dedup/{plan_run_id}/{host_id}_Result_*_org.xls` 和 `{host_id}_Result_*_org_dedup_org_*.xls` 均存在。
 
 **实际结果**：
 
@@ -525,27 +528,25 @@ ls -la {nfs_root}/jira/{plan_run_id}/
 |----|------|
 | Plan #7 误用 | 无 `timeout_seconds`，持续 patrol；已 abort → PlanRun 40 = FAILED/ABORTED，lease 经 reconciler 释放 |
 
-### Sprint 4 管道验证阻塞
+### Sprint 4 管道验证阻塞 — 已全部解除 ✅
 
 | 项 | 状态 | 说明 |
 |----|------|------|
-| `POST /plan-runs/41/dedup/scan?is_final=true` | ❌ 503 | `scan tool not configured` |
-| Agent .env | ❌ 缺失 | 仅有 `API_URL` / `HOST_ID` / `MAX_CONCURRENT_TASKS`，无 `STP_AEE_*` / `STP_DEDUP_*` |
-| `start_log_scan.py` | ❌ 未找到 | 候选脚本未匹配 `-dedup_org` / `-merge_files` 参数 |
-| `plan_run_artifact` (Run 41) | 0 行 | NFS `dedup/` / `devices/` 产物未生成 |
-| 自动化基线 (Python 3.11) | ✅ 29 passed | Sprint 4 相关单测通过 |
+| `POST /plan-runs/41/dedup/scan` | ✅ 已修复 | scan tool 配置完成 |
+| Agent .env | ✅ 已修复 | 追加 `STP_DEDUP_SCAN_PYTHON/SCRIPT`、`STP_AEE_LOCAL_ROOT`、`STP_AEE_NFS_ROOT` |
+| `start_log_scan.py` | ✅ 已确认 | 15.4 CIFS 上 `stability_Start-Log-Scan_20260615` 可用 |
+| `plan_run_artifact` (Run 45) | ✅ 6 artifacts | 3 scan + 3 dedup |
+| scan tool 依赖 | ✅ openpyxl, pymysql, xlrd, xlwt 已安装 |
+| Reconciler HDD 写入 | ✅ `job_session.py` 改 `get_aee_local_root()` |
+| scan 模式 | ✅ `-m 5` 改为 `-m 0` (AEE_TNE, 无需 DB) |
 
-### 解除阻塞待办
+### 新增能力（验证期间补充）
 
-1. 部署 `start_log_scan.py`（含 `-dedup_org` / `-merge_files` 参数支持）到 10.36 Agent
-2. 配置后端 env：
-   - `STP_AEE_NFS_ROOT` — NFS/CIFS 根目录
-   - `STP_DEDUP_SCAN_PYTHON` — scan tool Python 解释器路径
-   - `STP_DEDUP_SCAN_SCRIPT` — `start_log_scan.py` 路径
-3. 配置 Agent env：
-   - `STP_AEE_LOCAL_ROOT` — Agent HDD 根目录（如 `/mnt/hdd/aee_events`）
-4. 重启后端 + Agent
-5. 重新执行 §1–§7 真机验证
+| 项 | 说明 |
+|----|------|
+| scan → dedup 两阶段 | ScanRunner 新增 `run_dedup_org()`；`_scan_and_upload` 先 scan 再去重 |
+| reconfigure 热更新 | `POST /hosts/{id}/reload-config` → SocketIO → `configure(force=True)` |
+| HDD 溢出阈值 | 80% → 95%（仅接近满时才 spill 到 CIFS） |
 
 ---
 
