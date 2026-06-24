@@ -12,25 +12,20 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import type { PlanRun, PlanRunStatus } from '@/utils/api/types';
+import {
+  PLAN_RUN_HERO_BADGE,
+  PLAN_RUN_HERO_SURFACE,
+  type PlanRunHeroStatus,
+} from '@/design-system/colors';
+import { ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
 
-// 状态 → 容器背景/边框
-const HERO_CLS: Record<PlanRunStatus, string> = {
-  RUNNING:        'border-orange-200 bg-gradient-to-br from-orange-50/80 to-white',
-  SUCCESS:        'border-green-200  bg-gradient-to-br from-green-50/60  to-white',
-  PARTIAL_SUCCESS:'border-yellow-200 bg-gradient-to-br from-yellow-50/60 to-white',
-  FAILED:         'border-red-200    bg-gradient-to-br from-red-50/60    to-white',
-  DEGRADED:       'border-purple-200 bg-gradient-to-br from-purple-50/60 to-white',
-};
+// 状态 → 容器背景/边框（与 StatusBadge plan-run 语义对齐）
+const HERO_CLS: Record<PlanRunStatus, string> = PLAN_RUN_HERO_SURFACE;
 
 // 状态 → badge 样式
-const BADGE_CLS: Record<PlanRunStatus, string> = {
-  RUNNING:        'border-orange-300 bg-white text-orange-700',
-  SUCCESS:        'border-green-300  bg-white text-green-700',
-  PARTIAL_SUCCESS:'border-yellow-300 bg-white text-yellow-700',
-  FAILED:         'border-red-300    bg-white text-red-700',
-  DEGRADED:       'border-purple-300 bg-white text-purple-700',
-};
+const BADGE_CLS: Record<PlanRunStatus, string> = PLAN_RUN_HERO_BADGE;
 
 function formatDuration(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '—';
@@ -83,22 +78,21 @@ export default function PlanRunHero({
   }, [run, now, tick]);
 
   const pill = run ? PLAN_RUN_PILL[run.status] : null;
-  const heroCls  = run ? HERO_CLS[run.status]  : 'border-gray-200 bg-white';
-  const badgeCls = run ? BADGE_CLS[run.status] : '';
+  const heroCls = run ? HERO_CLS[run.status as PlanRunHeroStatus] : cn(SURFACE.elevated, 'border-border');
+  const badgeCls = run ? BADGE_CLS[run.status as PlanRunHeroStatus] : '';
   const isRunning = run?.status === 'RUNNING';
 
   return (
-    <div className={`rounded-xl border shadow-sm overflow-hidden ${heroCls}`}>
+    <div className={cn('rounded-xl border overflow-hidden', ELEVATION.sm, heroCls)}>
       <div className="px-4 pt-3 pb-1">
-        {/* Plan 标识 */}
-        <div className="text-[11px] text-gray-400 mb-0.5">
-          <span className="font-semibold text-blue-600">
+        <div className={cn('text-[11px] mb-0.5', TEXT.caption)}>
+          <span className="font-semibold text-primary">
             {planName ? `Plan #${run?.plan_id} · ${planName}` : `Plan #${run?.plan_id ?? '—'}`}
           </span>
         </div>
-        <div className="text-sm font-bold text-gray-900">
+        <div className={cn('text-sm font-bold', TEXT.heading)}>
           PlanRun{' '}
-          <span className={isRunning ? 'text-orange-600' : 'text-gray-700'}>
+          <span className={isRunning ? 'text-primary' : TEXT.heading}>
             #{run?.id ?? '—'}
           </span>
         </div>
@@ -113,8 +107,8 @@ export default function PlanRunHero({
           >
             {isRunning && (
               <span className="relative flex h-2.5 w-2.5 shrink-0">
-                <span className="absolute inset-0 rounded-full bg-orange-400 opacity-60 animate-ping" />
-                <span className="relative h-2.5 w-2.5 rounded-full bg-orange-500" />
+                <span className="absolute inset-0 rounded-full bg-primary/60 opacity-60 animate-ping" />
+                <span className="relative h-2.5 w-2.5 rounded-full bg-primary" />
               </span>
             )}
             <pill.Icon
@@ -136,13 +130,13 @@ export default function PlanRunHero({
       </div>
 
       {/* 2×2 meta 网格 */}
-      <div className="px-4 pb-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-        <span className="text-gray-400">触发方式</span>
-        <span className="font-medium text-gray-700">{run?.run_type ?? '—'}</span>
-        <span className="text-gray-400">操作人</span>
-        <span className="font-medium text-gray-700">{run?.triggered_by ?? '—'}</span>
-        <span className="text-gray-400">开始时间</span>
-        <span className="font-mono text-gray-700">
+      <div className={cn('px-4 pb-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]', TEXT.caption)}>
+        <span>触发方式</span>
+        <span className={cn('font-medium', TEXT.heading)}>{run?.run_type ?? '—'}</span>
+        <span>操作人</span>
+        <span className={cn('font-medium', TEXT.heading)}>{run?.triggered_by ?? '—'}</span>
+        <span>开始时间</span>
+        <span className={cn('font-mono', TEXT.heading)}>
           {run?.started_at
             ? new Date(run.started_at).toLocaleString('zh-CN', {
                 month: '2-digit', day: '2-digit',
@@ -150,8 +144,8 @@ export default function PlanRunHero({
               })
             : '—'}
         </span>
-        <span className="text-gray-400">失败阈值</span>
-        <span className="font-medium text-gray-700">
+        <span>失败阈值</span>
+        <span className={cn('font-medium', TEXT.heading)}>
           {run?.failure_threshold != null
             ? `${Math.round(run.failure_threshold * 100)}%`
             : '—'}
@@ -176,7 +170,7 @@ export default function PlanRunHero({
           {exportOpen && run && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
-              <div className="absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-md border bg-white shadow-lg">
+              <div className={cn('absolute left-0 right-0 top-full z-20 mt-1 overflow-hidden rounded-md border shadow-lg', SURFACE.elevated, ELEVATION.dropdown)}>
                 <button
                   type="button"
                   data-testid="plan-run-export-md"
@@ -184,7 +178,7 @@ export default function PlanRunHero({
                     setExportOpen(false);
                     onExportReport?.('markdown');
                   }}
-                  className="block w-full px-3 py-1.5 text-left text-[11px] hover:bg-gray-50"
+                  className={cn('block w-full px-3 py-1.5 text-left text-[11px]', INTERACTIVE.menuItem)}
                 >
                   Markdown (.md)
                 </button>
@@ -195,7 +189,7 @@ export default function PlanRunHero({
                     setExportOpen(false);
                     onExportReport?.('json');
                   }}
-                  className="block w-full px-3 py-1.5 text-left text-[11px] hover:bg-gray-50"
+                  className={cn('block w-full px-3 py-1.5 text-left text-[11px]', INTERACTIVE.menuItem)}
                 >
                   JSON (.json)
                 </button>
@@ -232,7 +226,7 @@ export default function PlanRunHero({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-700">中止原因（可选）</label>
+            <label className={cn('block text-sm font-medium', TEXT.heading)}>中止原因（可选）</label>
             <input
               type="text"
               value={reason}

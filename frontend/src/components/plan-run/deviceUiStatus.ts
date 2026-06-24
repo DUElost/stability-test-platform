@@ -3,21 +3,20 @@ import type { DeviceUiStatus } from '@/utils/api/types';
 /**
  * 设备 UI 状态的视觉单一事实源(minimap 方块 / 中文标签 / KPI 数字 tone)。
  *
- * 语义色板:
- * - running  橙(进行中,带斜纹动画)
- * - completed 绿
- * - failed   红
- * - backoff  靛蓝(退避重试中)—— 独立色,与 unknown 的紫区分
- * - unknown  紫(已断开)
- * - pending  灰(等待认领)
+ * 语义色板（与 index.css 变量对齐）:
+ * - running  warning（进行中,带斜纹动画）
+ * - completed success
+ * - failed   destructive
+ * - backoff  primary（退避重试中,与 unknown 区分）
+ * - unknown  info（已断开）
+ * - pending  muted（等待认领）
  */
 export type DeviceUiTone =
-  | 'orange'
-  | 'green'
-  | 'red'
-  | 'amber'
-  | 'indigo'
-  | 'purple'
+  | 'warning'
+  | 'success'
+  | 'destructive'
+  | 'primary'
+  | 'info'
   | 'default';
 
 export interface DeviceUiStatusStyle {
@@ -30,34 +29,33 @@ export interface DeviceUiStatusStyle {
 export const DEVICE_UI_STATUS: Record<DeviceUiStatus, DeviceUiStatusStyle> = {
   completed: {
     label: '完成',
-    cellCls: 'bg-green-400/90 hover:bg-green-500',
-    tone: 'green',
+    cellCls: 'bg-success/90 hover:bg-success',
+    tone: 'success',
   },
   running: {
     label: '运行中',
     cellCls:
-      'bg-orange-500 bg-[linear-gradient(45deg,rgba(255,255,255,.35)_25%,transparent_25%,transparent_50%,rgba(255,255,255,.35)_50%,rgba(255,255,255,.35)_75%,transparent_75%)] bg-[length:8px_8px] [animation:dev-stripe_1s_linear_infinite]',
-    tone: 'orange',
+      'bg-warning bg-[linear-gradient(45deg,rgba(255,255,255,.35)_25%,transparent_25%,transparent_50%,rgba(255,255,255,.35)_50%,rgba(255,255,255,.35)_75%,transparent_75%)] bg-[length:8px_8px] [animation:dev-stripe_1s_linear_infinite]',
+    tone: 'warning',
   },
   unknown: {
     label: '已断开',
-    cellCls: 'bg-purple-500/90 hover:bg-purple-600',
-    tone: 'purple',
+    cellCls: 'bg-info/90 hover:bg-info',
+    tone: 'info',
   },
   failed: {
     label: '失败',
-    cellCls: 'bg-red-500/90 hover:bg-red-600',
-    tone: 'red',
+    cellCls: 'bg-destructive/90 hover:bg-destructive',
+    tone: 'destructive',
   },
   backoff: {
     label: '退避',
-    // 独立靛蓝色,脱离 unknown 的紫,解决 minimap 撞色
-    cellCls: 'bg-indigo-500/90 hover:bg-indigo-600',
-    tone: 'indigo',
+    cellCls: 'bg-primary/90 hover:bg-primary',
+    tone: 'primary',
   },
   pending: {
     label: '等待',
-    cellCls: 'bg-gray-300 hover:bg-gray-400',
+    cellCls: 'bg-muted-foreground/30 hover:bg-muted-foreground/40',
     tone: 'default',
   },
 };

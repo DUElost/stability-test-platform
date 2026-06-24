@@ -25,6 +25,7 @@ def execute_pipeline_run(
     fencing_token: str = "",
     on_job_not_running_recovery: Optional[Callable[[int], None]] = None,
     watcher_capability: Optional[str] = None,
+    patrol_cycle_checkpoint_store: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -54,7 +55,18 @@ def execute_pipeline_run(
         fencing_token=fencing_token,
         patrol_heartbeat_uploader=patrol_heartbeat,
         watcher_capability=watcher_capability,
+        patrol_cycle_checkpoint_store=patrol_cycle_checkpoint_store,
     )
+
+    if patrol_cycle_checkpoint_store is not None:
+        row = patrol_cycle_checkpoint_store.get_for_recovery(str(run_id))
+        if row is not None:
+            engine.set_patrol_cycle_resume(row.checkpoint)
+            logger.info(
+                "patrol_checkpoint_resume job_id=%s cycle=%s",
+                run_id,
+                row.checkpoint.get("cycle"),
+            )
 
     result = engine.execute(pipeline_def)
 

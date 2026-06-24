@@ -13,6 +13,19 @@ import type {
 } from '@/utils/api/types';
 import { api } from '@/utils/api';
 import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
+import {
+  ALERT_BANNER,
+  CHART_COLORS,
+  DASHBOARD_SUMMARY_CARD,
+  DRAWER,
+  INTERACTIVE,
+  KPI_TONE,
+  PACKAGE_ROW,
+  SEGMENTED_DARK,
+  TEXT,
+  packageRankClass,
+} from '@/design-system';
+import { cn } from '@/lib/utils';
 import SectionHeader from './SectionHeader';
 
 interface Props {
@@ -139,7 +152,7 @@ function packageDominantColor(row: PackageRanking): string {
 function PackageSubtypeDots({ row, active }: { row: PackageRanking; active: boolean }) {
   const items = row.subtype_breakdown.slice(0, 3);
   if (items.length === 0) {
-    return <span className="text-xs text-slate-400">无细分类型数据</span>;
+    return <span className={cn('text-xs', TEXT.subtitle)}>无细分类型数据</span>;
   }
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -149,13 +162,13 @@ function PackageSubtypeDots({ row, active }: { row: PackageRanking; active: bool
             className="h-2 w-2 shrink-0 rounded-full"
             style={{ backgroundColor: SUBTYPE_COLORS[item.subtype] ?? SUBTYPE_COLORS['其他'] }}
           />
-          <span className={`text-xs ${active ? 'text-slate-400' : 'text-slate-500'}`}>
+          <span className={cn('text-xs', active ? 'text-muted-foreground/70' : TEXT.subtitle)}>
             {item.subtype} {item.count}
           </span>
         </span>
       ))}
       {row.subtype_breakdown.length > 3 && (
-        <span className="text-xs text-slate-400">+{row.subtype_breakdown.length - 3}</span>
+        <span className={cn('text-xs', TEXT.subtitle)}>+{row.subtype_breakdown.length - 3}</span>
       )}
     </div>
   );
@@ -171,9 +184,9 @@ function SummaryCard({
   accent: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-      <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">{label}</div>
-      <div className={`mt-2 text-lg font-bold ${accent}`}>{value}</div>
+    <div className={DASHBOARD_SUMMARY_CARD.root}>
+      <div className={DASHBOARD_SUMMARY_CARD.label}>{label}</div>
+      <div className={cn('mt-2 text-lg font-bold', accent)}>{value}</div>
     </div>
   );
 }
@@ -213,30 +226,23 @@ function PackageRankingDrawer({
 
   return (
     <>
-      <div
-        onClick={onClose}
-        className="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm"
-      />
+      <div onClick={onClose} className={DRAWER.overlay} />
       <aside
         ref={drawerRef}
         role="dialog"
         aria-modal="true"
         aria-label="包名榜完整列表"
         tabIndex={-1}
-        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col overflow-hidden border-l bg-white shadow-2xl focus:outline-none"
+        className={DRAWER.panel}
       >
         <header className="flex items-center justify-between border-b px-4 py-3">
           <div className="min-w-0">
-            <p className="truncate text-xs text-slate-500">当前范围</p>
-            <h2 className="truncate text-base font-semibold text-slate-900">
+            <p className={cn('truncate text-xs', TEXT.subtitle)}>当前范围</p>
+            <h2 className={cn('truncate text-base font-semibold', TEXT.heading)}>
               包名榜 · 全部 ({rankings.length})
             </h2>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-          >
+          <button type="button" onClick={onClose} className={DRAWER.closeBtn}>
             <X className="h-4 w-4" />
           </button>
         </header>
@@ -248,16 +254,9 @@ function PackageRankingDrawer({
               const active = selectedPackageName === row.package_name;
               const isUnknown = row.package_name === 'unknown';
               const dominantColor = isUnknown
-                ? '#94a3b8'
+                ? CHART_COLORS.muted
                 : packageDominantColor(row);
-              const rankCls =
-                actualIndex === 0
-                  ? 'text-amber-500 font-bold text-sm'
-                  : actualIndex === 1
-                    ? 'text-slate-500 font-bold text-sm'
-                    : actualIndex === 2
-                      ? 'text-amber-700 font-semibold'
-                      : 'text-slate-400';
+              const rankCls = packageRankClass(actualIndex);
 
               return (
                 <button
@@ -270,13 +269,12 @@ function PackageRankingDrawer({
                     );
                     onClose();
                   }}
-                  className={`group flex w-full items-stretch rounded-xl border text-left transition-all duration-200 ${
-                    active
-                      ? 'border-slate-300 bg-slate-50 ring-1 ring-slate-300'
-                      : isUnknown
-                        ? 'border-dashed border-slate-200 bg-slate-50/50 hover:bg-slate-50'
-                        : 'border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300'
-                  }`}
+                  className={cn(
+                    'group flex w-full items-stretch rounded-xl border text-left transition-all duration-200',
+                    active ? PACKAGE_ROW.active
+                      : isUnknown ? PACKAGE_ROW.unknown
+                      : PACKAGE_ROW.default,
+                  )}
                 >
                   <div
                     className={`shrink-0 w-1 rounded-l-xl transition-all duration-200 ${
@@ -291,13 +289,14 @@ function PackageRankingDrawer({
                           #{index + 1}
                         </span>
                         <span
-                          className={`truncate text-sm ${
+                          className={cn(
+                            'truncate text-sm',
                             isUnknown
-                              ? 'italic text-slate-400'
+                              ? cn('italic', TEXT.subtitle)
                               : active
-                                ? 'font-semibold text-slate-900'
-                                : 'font-medium text-slate-700'
-                          }`}
+                                ? cn('font-semibold', TEXT.heading)
+                                : cn('font-medium', TEXT.body),
+                          )}
                         >
                           {isUnknown ? '未知进程' : row.package_name}
                         </span>
@@ -308,21 +307,16 @@ function PackageRankingDrawer({
                     </div>
                     <div className="shrink-0 text-right">
                       <div
-                        className={`text-lg font-bold transition-colors duration-200 ${
-                          active
-                            ? 'text-slate-900'
-                            : isUnknown
-                              ? 'text-slate-400'
-                              : 'text-slate-800'
-                        }`}
+                        className={cn(
+                          'text-lg font-bold transition-colors duration-200',
+                          active ? TEXT.heading
+                            : isUnknown ? TEXT.subtitle
+                            : TEXT.body,
+                        )}
                       >
                         {row.total_count}
                       </div>
-                      <div
-                        className={`text-[11px] ${
-                          active ? 'text-slate-500' : 'text-slate-400'
-                        }`}
-                      >
+                      <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
                         {row.affected_device_count} 台设备
                       </div>
                     </div>
@@ -332,12 +326,12 @@ function PackageRankingDrawer({
             })}
           </div>
           {rankings.length > DRAWER_PAGE_SIZE && (
-            <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-slate-500">
+            <div className={cn('flex items-center justify-between border-t px-4 py-2 text-xs', TEXT.subtitle)}>
               <button
                 type="button"
                 onClick={() => setDrawerPage((p) => Math.max(0, p - 1))}
                 disabled={drawerPage === 0}
-                className="rounded px-2 py-1 disabled:opacity-30 hover:bg-slate-100"
+                className={cn('rounded px-2 py-1 disabled:opacity-30', INTERACTIVE.hover)}
               >
                 上一页
               </button>
@@ -348,7 +342,7 @@ function PackageRankingDrawer({
                 type="button"
                 onClick={() => setDrawerPage((p) => Math.min(Math.ceil(rankings.length / DRAWER_PAGE_SIZE) - 1, p + 1))}
                 disabled={(drawerPage + 1) * DRAWER_PAGE_SIZE >= rankings.length}
-                className="rounded px-2 py-1 disabled:opacity-30 hover:bg-slate-100"
+                className={cn('rounded px-2 py-1 disabled:opacity-30', INTERACTIVE.hover)}
               >
                 下一页
               </button>
@@ -388,7 +382,7 @@ const DonutChart = memo(function DonutChart({
     return (
       <div
         data-testid={chartTestId}
-        className="flex h-32 items-center justify-center text-sm text-slate-400"
+        className={cn('flex h-32 items-center justify-center text-sm', TEXT.subtitle)}
       >
         当前范围内暂无细分类型数据
       </div>
@@ -431,15 +425,15 @@ const DonutChart = memo(function DonutChart({
                   if (!active || !payload || payload.length === 0) return null;
                   const item = payload[0].payload as (typeof chartData)[number];
                   return (
-                    <div className="rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-lg backdrop-blur">
-                      <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <div className="rounded-xl border bg-card/95 px-3 py-2 shadow-lg backdrop-blur">
+                      <div className={cn('flex items-center gap-2 text-sm font-semibold', TEXT.body)}>
                         <span
                           className="h-2.5 w-2.5 rounded-full"
                           style={{ backgroundColor: item.color }}
                         />
                         <span>{item.fullLabel}</span>
                       </div>
-                      <div className="mt-1 text-xs text-slate-500">
+                      <div className={cn('mt-1 text-xs', TEXT.subtitle)}>
                         {`${item.count} 次 · ${formatSharePercent(item.share)}%`}
                       </div>
                     </div>
@@ -456,7 +450,7 @@ const DonutChart = memo(function DonutChart({
                 endAngle={-270}
                 paddingAngle={chartData.length > 1 ? 2 : 0}
                 dataKey="count"
-                stroke="#f8fafc"
+                stroke="hsl(var(--card))"
                 strokeWidth={1}
                 cornerRadius={3}
                 animationBegin={0}
@@ -483,7 +477,7 @@ const DonutChart = memo(function DonutChart({
         </StableResponsiveContainer>
         {/* Center total */}
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <div className="text-[11px] uppercase tracking-[0.16em] text-slate-400">
+          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
             异常总数
           </div>
           <div
@@ -569,24 +563,20 @@ export default function AnomalyDashboard({
     <>
       <section
         data-testid="watcher-summary"
-        className="space-y-4 rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#f8fafc_0%,#ffffff_100%)] p-4 shadow-sm"
+        className="space-y-4 rounded-[28px] border bg-gradient-to-b from-muted/40 to-card p-4 shadow-sm"
     >
       <SectionHeader
         title="异常仪表盘"
         meta="聚焦 AEE / Vendor AEE 细分异常与高风险包名"
         color={currentRun.total_events > 0 ? 'amber' : 'green'}
         extra={
-          <div className="flex flex-wrap gap-1">
+          <div className={SEGMENTED_DARK.track}>
             {TIME_SCOPE_OPTIONS.map((option) => (
               <button
                 key={option.value}
                 type="button"
                 onClick={() => onTimeScopeChange?.(option.value)}
-                className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
-                  timeScope === option.value
-                    ? 'border-slate-900 bg-slate-900 text-white'
-                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-700'
-                }`}
+                className={timeScope === option.value ? SEGMENTED_DARK.itemActive : SEGMENTED_DARK.item}
               >
                 {option.label}
               </button>
@@ -596,7 +586,7 @@ export default function AnomalyDashboard({
       />
 
       {isLoading && (
-        <div className="flex h-28 items-center justify-center text-sm text-slate-400">加载中…</div>
+        <div className={cn('flex h-28 items-center justify-center text-sm', TEXT.subtitle)}>加载中…</div>
       )}
 
       {isError && (

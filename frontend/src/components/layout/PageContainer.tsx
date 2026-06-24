@@ -1,4 +1,6 @@
 import React from 'react';
+import { LAYOUT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 interface PageContainerProps {
   children: React.ReactNode;
@@ -6,15 +8,14 @@ interface PageContainerProps {
 }
 
 /**
- * 页面容器组件
- * 统一页面边距、最大宽度和间距
+ * 页面容器 — 统一间距与入场动画
  */
 export const PageContainer: React.FC<PageContainerProps> = ({
   children,
   className = '',
 }) => {
   return (
-    <div className={`space-y-6 ${className}`}>
+    <div className={cn(LAYOUT.pageGap, LAYOUT.pageEnter, className)}>
       {children}
     </div>
   );

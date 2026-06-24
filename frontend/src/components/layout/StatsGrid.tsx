@@ -1,5 +1,7 @@
 import React, { ReactNode } from 'react';
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
+import { BORDER, ELEVATION, SURFACE, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 export interface StatItem {
   label: string;
@@ -14,23 +16,19 @@ interface StatsGridProps {
   columns?: 2 | 3 | 4 | 5;
 }
 
+const VALUE_COLOR: Record<NonNullable<StatItem['color']>, string> = {
+  default: STATUS_TEXT_COLORS.default,
+  success: STATUS_TEXT_COLORS.success,
+  primary: STATUS_TEXT_COLORS.primary,
+  error: STATUS_TEXT_COLORS.error,
+  warning: STATUS_TEXT_COLORS.warning,
+  muted: STATUS_TEXT_COLORS.muted,
+};
+
 /**
  * 统计卡片网格组件
- * 统一的统计数字展示
  */
-export const StatsGrid: React.FC<StatsGridProps> = ({
-  stats,
-  columns = 4,
-}) => {
-  const colorClasses: Record<string, { bg: string; text: string }> = {
-    default: { bg: 'bg-white', text: STATUS_TEXT_COLORS.default },
-    success: { bg: 'bg-white', text: STATUS_TEXT_COLORS.success },
-    primary: { bg: 'bg-white', text: STATUS_TEXT_COLORS.primary },
-    error: { bg: 'bg-white', text: STATUS_TEXT_COLORS.error },
-    warning: { bg: 'bg-white', text: STATUS_TEXT_COLORS.warning },
-    muted: { bg: 'bg-white', text: STATUS_TEXT_COLORS.muted },
-  };
-
+export const StatsGrid: React.FC<StatsGridProps> = ({ stats, columns = 4 }) => {
   const gridCols = {
     2: 'grid-cols-2',
     3: 'grid-cols-2 sm:grid-cols-3',
@@ -39,28 +37,32 @@ export const StatsGrid: React.FC<StatsGridProps> = ({
   };
 
   return (
-    <div className={`grid ${gridCols[columns]} gap-4`}>
+    <div className={cn('grid gap-4', gridCols[columns])}>
       {stats.map((stat, index) => (
         <div
           key={index}
-          className={`${colorClasses[stat.color || 'default'].bg} p-4 rounded-lg shadow-sm border border-slate-200 hover:shadow-md transition-shadow`}
+          className={cn(
+            'p-4 rounded-lg transition-shadow hover:shadow-md',
+            SURFACE.elevated,
+            BORDER.default,
+            'border',
+            ELEVATION.sm,
+          )}
         >
           <div className="flex items-start justify-between">
             <div>
-              <h3 className="text-sm font-medium text-slate-500">{stat.label}</h3>
+              <h3 className={cn('text-sm font-medium', TEXT.subtitle)}>{stat.label}</h3>
               <div className="flex items-baseline gap-1 mt-1">
-                <p className={`text-2xl font-bold ${colorClasses[stat.color || 'default'].text}`}>
+                <p className={cn('text-2xl font-bold', VALUE_COLOR[stat.color || 'default'])}>
                   {stat.value}
                 </p>
                 {stat.suffix && (
-                  <span className="text-sm text-slate-400">{stat.suffix}</span>
+                  <span className={cn('text-sm', TEXT.caption)}>{stat.suffix}</span>
                 )}
               </div>
             </div>
             {stat.icon && (
-              <div className="text-slate-300">
-                {stat.icon}
-              </div>
+              <div className={TEXT.subtle}>{stat.icon}</div>
             )}
           </div>
         </div>

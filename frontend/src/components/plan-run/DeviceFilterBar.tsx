@@ -1,4 +1,6 @@
 import { Filter } from 'lucide-react';
+import { FILTER_CHIP, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 import type { DeviceUiStatus } from '@/utils/api/types';
 
 interface Props {
@@ -39,10 +41,10 @@ export default function DeviceFilterBar({
   const total = Object.values(byStatus).reduce((a, b) => a + b, 0);
 
   return (
-    <div className="flex flex-wrap items-center gap-1 border-b bg-white px-3 py-2">
-      <Filter className="mr-1 h-3 w-3 text-gray-400" />
+    <div className="flex flex-wrap items-center gap-1 border-b bg-card px-3 py-2">
+      <Filter className={cn('mr-1 h-3 w-3', TEXT.subtitle)} />
       {showStatusLabel && (
-        <span className="mr-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+        <span className={cn('mr-1 text-[11px] font-semibold uppercase tracking-wider', TEXT.subtitle)}>
           状态
         </span>
       )}
@@ -52,29 +54,28 @@ export default function DeviceFilterBar({
           type="button"
           data-testid={`${statusTestIdPrefix}-${d.key}`}
           onClick={() => onStatusFilterChange(d.key)}
-          className={`rounded-md px-2 py-0.5 text-xs transition ${
-            statusFilter === d.key
-              ? 'bg-blue-100 font-semibold text-blue-700'
-              : 'text-gray-600 hover:bg-gray-100'
-          }`}
+          className={cn(
+            'rounded-md px-2 py-0.5 text-xs transition',
+            statusFilter === d.key ? FILTER_CHIP.active : FILTER_CHIP.idle,
+          )}
         >
           {d.label}
-          <span className="ml-1 text-[11px] text-gray-400">
+          <span className={cn('ml-1', FILTER_CHIP.count)}>
             {byStatus[d.key] ?? 0}
           </span>
         </button>
       ))}
       {hosts.length > 0 && (
         <>
-          <span className="mx-2 h-3 w-px bg-gray-200" />
-          <span className="mr-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+          <span className={FILTER_CHIP.divider} />
+          <span className={cn('mr-1 text-[11px] font-semibold uppercase tracking-wider', TEXT.subtitle)}>
             Host
           </span>
           <select
             data-testid={hostTestIdPrefix}
             value={hostFilter}
             onChange={(e) => onHostFilterChange(e.target.value)}
-            className="rounded-md border px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            className="rounded-md border bg-card px-2 py-0.5 text-xs focus:outline-none focus:ring-2 focus:ring-primary/20"
           >
             <option value="all">全部 ({total})</option>
             {hosts.map((h) => (

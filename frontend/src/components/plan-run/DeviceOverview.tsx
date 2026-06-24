@@ -2,6 +2,8 @@ import { useMemo, useRef, useState, useEffect, useCallback } from 'react';
 import { Grid3X3, List, Activity, AlertCircle } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { PANEL, SEGMENTED, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 import DeviceFilterBar from './DeviceFilterBar';
 import SectionHeader from './SectionHeader';
 import type {
@@ -126,7 +128,7 @@ function DeviceGrid({
               onClick={() => onSelect?.(d)}
               aria-label={label}
               title={label}
-              className={`aspect-square rounded-sm border border-transparent transition-transform hover:scale-[1.12] hover:shadow-[0_0_0_2px_rgba(59,130,246,0.45)] hover:z-10 ${DEVICE_UI_STATUS[d.ui_status].cellCls}`}
+              className={`aspect-square rounded-sm border border-transparent transition-transform hover:scale-[1.12] hover:ring-2 hover:ring-primary/45 hover:z-10 ${DEVICE_UI_STATUS[d.ui_status].cellCls}`}
             />
           );
         })}
@@ -168,7 +170,7 @@ function DeviceTable({
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-[12px]">
-        <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wider text-gray-500">
+        <thead className={cn('bg-muted/50 text-xs font-semibold uppercase tracking-wider', TEXT.subtitle)}>
           <tr>
             <th className="px-3 py-2 text-left">Serial</th>
             <th className="px-2 py-2 text-left">Host</th>
@@ -186,10 +188,10 @@ function DeviceTable({
           {devices.map((d) => {
             const failureClass =
               d.current_failure_streak >= 3
-                ? 'text-red-600 font-semibold'
+                ? 'text-destructive font-semibold'
                 : d.current_failure_streak >= 1
-                ? 'text-amber-600'
-                : 'text-gray-400';
+                ? 'text-warning'
+                : 'text-muted-foreground/70';
             const waitLabel =
               d.ui_status === 'unknown' && d.grace_remaining_seconds != null
                 ? `grace ${fmtCountdown(d.grace_remaining_seconds)}`
@@ -214,14 +216,15 @@ function DeviceTable({
                 role="button"
                 tabIndex={0}
                 aria-label={`${d.device_serial || `Device #${d.device_id}`} 详情`}
-                className={`cursor-pointer border-t transition-colors hover:bg-blue-50/50 ${
-                  isHighlight ? 'bg-blue-100/70 ring-1 ring-blue-300' : ''
-                }`}
+                className={cn(
+                  'cursor-pointer border-t transition-colors hover:bg-primary/5',
+                  isHighlight && 'bg-primary/10 ring-1 ring-primary/30',
+                )}
               >
                 <td className="px-3 py-2 font-mono text-xs">
                   {d.device_serial || `Device #${d.device_id}`}
                 </td>
-                <td className="px-2 py-2 font-mono text-xs text-gray-500">
+                <td className={cn('px-2 py-2 font-mono text-xs', TEXT.subtitle)}>
                   {d.host_id || '—'}
                 </td>
                 <td className="px-2 py-2">
@@ -234,21 +237,18 @@ function DeviceTable({
                     />
                   </span>
                 </td>
-                <td
-                  className="px-2 py-2 text-xs text-gray-600"
-                  data-testid={`device-wait-${d.job_id}`}
-                >
+                <td className={cn('px-2 py-2 text-xs', TEXT.subtitle)} data-testid={`device-wait-${d.job_id}`}>
                   {waitLabel}
                 </td>
-                <td className="px-2 py-2 text-xs uppercase text-gray-600">
+                <td className={cn('px-2 py-2 text-xs uppercase', TEXT.subtitle)}>
                   {d.current_stage}
                 </td>
-                <td className="px-2 py-2 font-mono text-xs text-gray-700">
+                <td className={cn('px-2 py-2 font-mono text-xs', TEXT.body)}>
                   {d.current_step || '—'}
                 </td>
-                <td className="px-2 py-2 text-right font-mono text-xs text-gray-700">
+                <td className={cn('px-2 py-2 text-right font-mono text-xs', TEXT.body)}>
                   #{d.patrol_cycle_count}
-                  <span className="ml-1 text-[11px] text-gray-400">
+                  <span className="ml-1 text-[11px] text-muted-foreground/70">
                     ({d.patrol_success_cycle_count}✓ / {d.patrol_failed_cycle_count}✗)
                   </span>
                 </td>
@@ -257,7 +257,7 @@ function DeviceTable({
                     ? `× ${d.current_failure_streak}`
                     : '—'}
                 </td>
-                <td className="px-2 py-2 text-right text-xs text-gray-500">
+                <td className={cn('px-2 py-2 text-right text-xs', TEXT.subtitle)}>
                   {d.next_retry_at
                     ? fmtRelative(d.next_retry_at, now)
                     : d.manual_action === 'EXIT_REQUESTED'
@@ -266,9 +266,9 @@ function DeviceTable({
                     ? '已请求立即重试'
                     : '—'}
                 </td>
-                <td className="px-2 py-2 text-right text-xs text-gray-700">
+                <td className={cn('px-2 py-2 text-right text-xs', TEXT.body)}>
                   {d.log_signal_count > 0 ? (
-                    <span className="text-amber-700">⚠ {d.log_signal_count}</span>
+                    <span className="text-warning">⚠ {d.log_signal_count}</span>
                   ) : (
                     '—'
                   )}
@@ -326,16 +326,15 @@ export default function DeviceOverview({
   const meta = `${total} 设备 · ${hosts.length} Host`;
 
   const viewToggle = (
-    <div className="flex items-center gap-0.5 rounded-md border bg-white p-0.5 text-xs">
+    <div className={SEGMENTED.track}>
       <button
         type="button"
         data-testid="device-overview-grid-btn"
         onClick={() => setViewMode('grid')}
-        className={`inline-flex items-center gap-1 rounded px-2 py-0.5 transition ${
-          viewMode === 'grid'
-            ? 'bg-blue-100 text-blue-700'
-            : 'text-gray-500 hover:bg-gray-100'
-        }`}
+        className={cn(
+          'inline-flex items-center gap-1 rounded px-2 py-0.5 transition',
+          viewMode === 'grid' ? SEGMENTED.itemActive : SEGMENTED.item,
+        )}
         title="缩略图视图"
       >
         <Grid3X3 className="h-3 w-3" />
@@ -344,11 +343,10 @@ export default function DeviceOverview({
         type="button"
         data-testid="device-overview-table-btn"
         onClick={() => setViewMode('table')}
-        className={`inline-flex items-center gap-1 rounded px-2 py-0.5 transition ${
-          viewMode === 'table'
-            ? 'bg-blue-100 text-blue-700'
-            : 'text-gray-500 hover:bg-gray-100'
-        }`}
+        className={cn(
+          'inline-flex items-center gap-1 rounded px-2 py-0.5 transition',
+          viewMode === 'table' ? SEGMENTED.itemActive : SEGMENTED.item,
+        )}
         title="表格视图"
       >
         <List className="h-3 w-3" />
@@ -360,7 +358,7 @@ export default function DeviceOverview({
     <section data-testid="device-overview" className="space-y-2">
       <SectionHeader title="设备总览" meta={meta} extra={viewToggle} />
 
-      <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+      <div className={PANEL.root}>
         <DeviceFilterBar
           byStatus={byStatus}
           byHost={byHost}
@@ -373,9 +371,9 @@ export default function DeviceOverview({
         {/* Body */}
         {isError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
-            <AlertCircle className="mb-2 h-6 w-6 text-red-400" />
-            <span className="text-xs font-semibold text-red-600">加载失败</span>
-            <span className="mt-1 text-[11px] text-red-400">请检查网络连接或稍后重试</span>
+            <AlertCircle className="mb-2 h-6 w-6 text-destructive/60" />
+            <span className="text-xs font-semibold text-destructive">加载失败</span>
+            <span className="mt-1 text-[11px] text-destructive/70">请检查网络连接或稍后重试</span>
           </div>
         ) : isLoading && devices.length === 0 ? (
           <div className="space-y-2 p-3">
@@ -384,7 +382,7 @@ export default function DeviceOverview({
             <Skeleton className="h-8 w-full" />
           </div>
         ) : devices.length === 0 ? (
-          <div className="py-10 text-center text-xs text-gray-400">
+          <div className={cn('py-10 text-center text-xs', TEXT.subtitle)}>
             <Activity className="mx-auto mb-2 h-5 w-5 opacity-30" />
             该过滤条件下暂无设备
           </div>

@@ -15,6 +15,18 @@ import {
 import { Skeleton } from '@/components/ui/skeleton';
 import SectionHeader from './SectionHeader';
 import { triggerDedupScan, triggerDedupMerge } from '@/utils/api/planRuns';
+import {
+  ALERT_BANNER,
+  DEDUP_STATUS_CHIP,
+  PANEL,
+  SEGMENTED,
+  STATUS_CHIP,
+  TEXT,
+  TREND,
+  WATCHER_CATEGORY,
+  dedupActionBtnClass,
+} from '@/design-system';
+import { cn } from '@/lib/utils';
 import type {
   AeeBreakdown,
   PackageStat,
@@ -53,13 +65,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   MOBILELOG: 'mobile log 异常',
 };
 
-const CATEGORY_TONE: Record<string, string> = {
-  AEE: 'border-red-300 bg-red-50',
-  VENDOR_AEE: 'border-red-300 bg-red-50',
-  ANR: 'border-amber-300 bg-amber-50',
-  TOMBSTONE: 'border-purple-300 bg-purple-50',
-  MOBILELOG: 'border-blue-300 bg-blue-50',
-};
+const CATEGORY_TONE = WATCHER_CATEGORY;
 
 // 类别 → by_package 中用于排序 / Top3 展示的字段
 const CATEGORY_BREAKDOWN_FIELD: Record<string, keyof PackageStat> = {
@@ -100,49 +106,46 @@ function CategoryRow({
   cat: WatcherCategory;
   topTitle: string;
 }) {
-  const tone = CATEGORY_TONE[cat.category] ?? 'border-gray-300 bg-gray-50';
+  const tone = CATEGORY_TONE[cat.category as keyof typeof WATCHER_CATEGORY] ?? WATCHER_CATEGORY.default;
   const trend = cat.trend_change;
   return (
     <div
       data-testid={`watcher-cat-${cat.category}`}
       title={topTitle || undefined}
-      className={`grid grid-cols-[1fr_auto_auto] items-center gap-2 rounded-lg border-l-4 px-3 py-2 ${tone}`}
+      className={cn('grid grid-cols-[1fr_auto_auto] items-center gap-2 rounded-lg border-l-4 px-3 py-2', tone)}
     >
       <div className="min-w-0">
-        <div className="flex items-center gap-2 text-xs font-semibold text-gray-900">
+        <div className={cn('flex items-center gap-2 text-xs font-semibold', TEXT.heading)}>
           <span className="font-mono uppercase tracking-wider">{cat.category}</span>
-          <span className="font-normal text-gray-500">
+          <span className={cn('font-normal', TEXT.subtitle)}>
             {CATEGORY_LABEL[cat.category] ?? '—'}
           </span>
         </div>
-        <div className="mt-0.5 text-[11px] text-gray-500">
+        <div className={cn('mt-0.5 text-[11px]', TEXT.subtitle)}>
           影响 {cat.affected_device_count} 台设备
           {cat.latest_device_serial && (
             <>
               {' · 最近 '}
-              <span className="font-mono text-gray-700">
+              <span className={cn('font-mono', TEXT.body)}>
                 {cat.latest_device_serial}
               </span>{' '}
-              <span className="text-gray-400">{fmtTime(cat.latest_detected_at)}</span>
+              <span className="text-muted-foreground/70">{fmtTime(cat.latest_detected_at)}</span>
             </>
           )}
         </div>
       </div>
       <div className="text-right">
-        <div className="font-mono text-lg font-bold tabular-nums text-gray-900">
+        <div className={cn('font-mono text-lg font-bold tabular-nums', TEXT.heading)}>
           {cat.count}
         </div>
-        <div className="text-[11px] uppercase tracking-wider text-gray-400">条</div>
+        <div className="text-[11px] uppercase tracking-wider text-muted-foreground/70">条</div>
       </div>
       <div
         data-testid={`watcher-cat-${cat.category}-trend`}
-        className={`flex w-14 items-center justify-end gap-0.5 text-xs font-mono ${
-          trend > 0
-            ? 'text-red-600'
-            : trend < 0
-            ? 'text-green-600'
-            : 'text-gray-400'
-        }`}
+        className={cn(
+          'flex w-14 items-center justify-end gap-0.5 text-xs font-mono',
+          trend > 0 ? TREND.up : trend < 0 ? TREND.down : TREND.flat,
+        )}
       >
         {trend > 0 ? (
           <ArrowUp className="h-3 w-3" />
@@ -169,7 +172,11 @@ function CapabilityBadge({ capability }: { capability: string | null | undefined
         'watcher_capability=unavailable:Watcher 未正常启动(inotifyd / polling 探测失败)。' +
         'AEE reconciler 可能未运行,勿当作有 reconciler 兜底;请以 signal 侧数据为准。'
       }
-      className="ml-1 inline-flex items-center rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-orange-800"
+      className={cn(
+        'ml-1 inline-flex items-center rounded border border-warning/30 px-1.5 py-0.5',
+        'font-mono text-[11px] font-semibold',
+        STATUS_CHIP.warning,
+      )}
     >
       Watcher 不可用
     </span>
@@ -188,7 +195,7 @@ function AeeBreakdownChips({ breakdown }: { breakdown: AeeBreakdown }) {
       {crash > 0 && (
         <span
           data-testid="watcher-crash-chip"
-          className="rounded bg-red-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-red-700"
+          className={cn('rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold', STATUS_CHIP.destructive)}
           title={
             breakdown.vendor_crash_count > 0
               ? `AEE ${breakdown.crash_count} + Vendor ${breakdown.vendor_crash_count}`
@@ -201,7 +208,7 @@ function AeeBreakdownChips({ breakdown }: { breakdown: AeeBreakdown }) {
       {anr > 0 && (
         <span
           data-testid="watcher-anr-chip"
-          className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-700"
+          className={cn('rounded px-1.5 py-0.5 font-mono text-[11px] font-semibold', STATUS_CHIP.warning)}
         >
           {anr} ANR
         </span>
@@ -215,9 +222,9 @@ function PackagesChipRow({ breakdown }: { breakdown: AeeBreakdown }) {
   return (
     <div
       data-testid="watcher-packages-row"
-      className="flex flex-wrap items-center gap-1 border-b bg-gray-50/60 px-3 py-2"
+      className="flex flex-wrap items-center gap-1 border-b bg-muted/50 px-3 py-2"
     >
-      <span className="mr-1 text-[11px] font-semibold uppercase tracking-wider text-gray-500">
+      <span className={cn('mr-1 text-[11px] font-semibold uppercase tracking-wider', TEXT.subtitle)}>
         应用
       </span>
       {breakdown.by_package.map((p) => {
@@ -226,19 +233,19 @@ function PackagesChipRow({ breakdown }: { breakdown: AeeBreakdown }) {
           <span
             key={p.package_name}
             data-testid={`watcher-pkg-${p.package_name}`}
-            className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs"
+            className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-xs"
             title={`crash ${p.crash_count} · vendor ${p.vendor_crash_count} · anr ${p.anr_count}`}
           >
             <span
               className={
                 p.package_name === 'unknown'
-                  ? 'text-gray-500'
-                  : 'font-medium text-gray-800'
+                  ? TEXT.subtitle
+                  : cn('font-medium', TEXT.body)
               }
             >
               {p.package_name}
             </span>
-            <span className="font-mono text-gray-500">({total})</span>
+            <span className={cn('font-mono', TEXT.subtitle)}>({total})</span>
           </span>
         );
       })}
@@ -248,16 +255,14 @@ function PackagesChipRow({ breakdown }: { breakdown: AeeBreakdown }) {
 
 function DedupScanStatusChip({ scanStatus }: { scanStatus: DedupScanStatus }) {
   if (!scanStatus) return null;
-  const colorMap: Record<string, string> = {
-    pending: 'bg-gray-100 text-gray-600',
-    scanned: 'bg-blue-100 text-blue-700',
-    merged: 'bg-green-100 text-green-700',
-  };
   const labelMap: Record<string, string> = { pending: '待扫描', scanned: '已扫描', merged: '已合并' };
   return (
     <span
       data-testid="dedup-scan-status-chip"
-      className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold ${colorMap[scanStatus] ?? 'bg-gray-100 text-gray-600'}`}
+      className={cn(
+        'inline-flex items-center rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold',
+        DEDUP_STATUS_CHIP[scanStatus] ?? STATUS_CHIP.muted,
+      )}
     >
       {labelMap[scanStatus] ?? scanStatus}
     </span>
@@ -290,7 +295,7 @@ function DedupActionButtons({
         disabled={loading}
         onClick={doScan}
         title="运行去重扫描"
-        className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+        className={dedupActionBtnClass('primary')}
       >
         <Search className="mr-0.5 inline h-3 w-3" />扫描
       </button>
@@ -301,7 +306,7 @@ function DedupActionButtons({
           disabled={loading}
           onClick={doMerge}
           title="合并去重结果"
-          className="rounded border border-green-200 bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold text-green-700 hover:bg-green-100 disabled:opacity-50"
+          className={dedupActionBtnClass('success')}
         >
           <Merge className="mr-0.5 inline h-3 w-3" />合并
         </button>
@@ -341,18 +346,16 @@ export default function WatcherSummaryCard({
             : undefined
         }
         extra={
-          <div className="flex items-center gap-1 rounded-md border bg-white p-0.5 text-xs">
+          <div className={SEGMENTED.track}>
             {WINDOW_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
                 data-testid={`watcher-window-${opt.value}`}
                 onClick={() => onWindowChange?.(opt.value)}
-                className={`rounded px-2 py-0.5 ${
-                  windowMinutes === opt.value
-                    ? 'bg-blue-100 text-blue-700'
-                    : 'text-gray-500 hover:bg-gray-100'
-                }`}
+                className={cn(
+                  windowMinutes === opt.value ? SEGMENTED.itemActive : SEGMENTED.item,
+                )}
               >
                 {opt.label}
               </button>
@@ -367,26 +370,25 @@ export default function WatcherSummaryCard({
           data-testid="watcher-details-toggle"
           onClick={() => setShowDetails((v) => !v)}
           title={showDetails ? '隐藏技术详情' : '显示技术详情'}
-          className={`ml-0.5 rounded p-0.5 transition ${
-            showDetails
-              ? 'bg-blue-100 text-blue-600'
-              : 'text-gray-400 hover:bg-gray-100 hover:text-gray-600'
-          }`}
+          className={cn(
+            'ml-0.5 rounded p-0.5 transition',
+            showDetails ? SEGMENTED.toggleActive : cn(SEGMENTED.toggleIdle),
+          )}
         >
           <Info className="h-3.5 w-3.5" />
         </button>
       </SectionHeader>
 
-      <div className="overflow-hidden rounded-xl border bg-white shadow-sm">
+      <div className={PANEL.root}>
         {/* Threshold banner */}
         {data && exceeded && (
           <div
             data-testid="watcher-threshold-banner"
-            className="flex items-center gap-2 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-800"
+            className={cn('flex items-center gap-2 px-4 py-2 text-xs', ALERT_BANNER.destructive)}
           >
             <ShieldAlert className="h-4 w-4 shrink-0" />
             <span className="font-semibold">超过阈值 {(threshold * 100).toFixed(0)}%</span>
-            <span className="text-red-700">
+            <span>
               · 当前异常率 <b className="font-mono">{(rate * 100).toFixed(1)}%</b>
               ({affected}/{totalDevices})
             </span>
@@ -396,7 +398,7 @@ export default function WatcherSummaryCard({
         {data && !exceeded && total > 0 && (
           <div
             data-testid="watcher-warn-banner"
-            className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800"
+            className={cn('flex items-center gap-2 px-4 py-2 text-xs', ALERT_BANNER.warning)}
           >
             <AlertTriangle className="h-4 w-4 shrink-0" />
             <span>异常率 <b className="font-mono">{(rate * 100).toFixed(1)}%</b> · 阈值 {(threshold * 100).toFixed(0)}%</span>
@@ -409,9 +411,9 @@ export default function WatcherSummaryCard({
         {/* Body */}
         {isError ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
-            <AlertCircle className="mb-2 h-6 w-6 text-red-400" />
-            <span className="text-xs font-semibold text-red-600">加载失败</span>
-            <span className="mt-1 text-[11px] text-red-400">请检查网络连接或稍后重试</span>
+            <AlertCircle className="mb-2 h-6 w-6 text-destructive/60" />
+            <span className="text-xs font-semibold text-destructive">加载失败</span>
+            <span className="mt-1 text-[11px] text-destructive/70">请检查网络连接或稍后重试</span>
           </div>
         ) : isLoading && cats.length === 0 ? (
           <div className="space-y-2 p-3">
@@ -419,12 +421,12 @@ export default function WatcherSummaryCard({
             <Skeleton className="h-12 w-full" />
           </div>
         ) : cats.length === 0 ? (
-          <div className="py-8 text-center text-xs text-gray-400">
+          <div className={cn('py-8 text-center text-xs', TEXT.subtitle)}>
             <Activity className="mx-auto mb-2 h-5 w-5 opacity-30" />
             <div>该窗口内未检测到异常</div>
             <div
               data-testid="watcher-disabled-hint"
-              className="mt-1 text-[11px] text-gray-400/80"
+              className="mt-1 text-[11px] text-muted-foreground/70"
             >
               如长期为空，请确认 Agent 侧 Watcher 已启用
             </div>
@@ -443,24 +445,25 @@ export default function WatcherSummaryCard({
 
         {/* Bottom progress bar */}
         {data && totalDevices > 0 && (
-          <div className="border-t bg-gray-50 px-4 py-2">
-            <div className="mb-1 flex items-center justify-between text-[11px] text-gray-500">
+          <div className={PANEL.footer}>
+            <div className={cn('mb-1 flex items-center justify-between text-[11px]', TEXT.subtitle)}>
               <span>设备异常率</span>
               <span className="font-mono">
                 {(rate * 100).toFixed(1)}% · 阈值 {(threshold * 100).toFixed(0)}%
               </span>
             </div>
-            <div className="relative h-1.5 overflow-hidden rounded-full bg-gray-200">
+            <div className="relative h-1.5 overflow-hidden rounded-full bg-muted">
               <div
-                className={`h-full transition-all ${
-                  exceeded ? 'bg-red-500' : rate > 0 ? 'bg-amber-500' : 'bg-green-500'
-                }`}
+                className={cn(
+                  'h-full transition-all',
+                  exceeded ? 'bg-destructive' : rate > 0 ? 'bg-warning' : 'bg-success',
+                )}
                 style={{ width: `${Math.min(100, rate * 100)}%` }}
               />
               {threshold > 0 && (
                 <div
                   data-testid="watcher-threshold-marker"
-                  className="absolute top-0 h-full w-px bg-gray-700"
+                  className="absolute top-0 h-full w-px bg-foreground/60"
                   style={{ left: `${Math.min(100, threshold * 100)}%` }}
                 />
               )}
@@ -470,8 +473,8 @@ export default function WatcherSummaryCard({
 
         {/* ADR-0025 Sprint 3: 存储运维概览 + dedup scan/merge */}
         {data?.archive && data.archive.ops_metrics && (
-          <div className="border-t bg-gray-50 px-4 py-2" data-testid="watcher-archive-section">
-            <div className="mb-1 flex items-center justify-between text-[11px] text-gray-500">
+          <div className={PANEL.footer} data-testid="watcher-archive-section">
+            <div className={cn('mb-1 flex items-center justify-between text-[11px]', TEXT.subtitle)}>
               <span className="flex items-center gap-1">
                 <Archive className="h-3 w-3" />
                 存储运维
@@ -485,26 +488,26 @@ export default function WatcherSummaryCard({
                     onAction={onDedupAction}
                   />
                 )}
-                <span className="font-mono text-gray-400" data-testid="hdd-usage">
+                <span className="font-mono text-muted-foreground/70" data-testid="hdd-usage">
                   HDD {data.archive.ops_metrics.local_disk_usage_pct != null
                     ? `${Math.round(data.archive.ops_metrics.local_disk_usage_pct)}%`
                     : '—'}
                 </span>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-1 text-[10px] text-center text-gray-400">
+            <div className="grid grid-cols-3 gap-1 text-center text-[10px] text-muted-foreground/70">
               <div>SSD清理 {data.archive.ops_metrics.pruned_total}</div>
               <div>溢出 {data.archive.ops_metrics.spill_cycles}</div>
               <div>上送 {data.archive.ops_metrics.spilled_total}</div>
             </div>
             {(data.archive.archived_jobs || data.archive.pending_jobs || data.archive.failed_jobs) ? (
-              <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-500">
-                <span className="text-green-600">{data.archive.archived_jobs} 归档</span>
+              <div className={cn('mt-1 flex items-center gap-2 text-[10px]', TEXT.subtitle)}>
+                <span className="text-success">{data.archive.archived_jobs} 归档</span>
                 {data.archive.pending_jobs ? (
-                  <span className="text-gray-400">{data.archive.pending_jobs} 归档中</span>
+                  <span className="text-muted-foreground/70">{data.archive.pending_jobs} 归档中</span>
                 ) : null}
                 {data.archive.failed_jobs ? (
-                  <span className="text-amber-600">{data.archive.failed_jobs} 归档失败</span>
+                  <span className="text-warning">{data.archive.failed_jobs} 归档失败</span>
                 ) : null}
               </div>
             ) : null}

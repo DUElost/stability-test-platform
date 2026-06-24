@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AlertCircle } from 'lucide-react';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { api } from '@/utils/api';
+import { SURFACE } from '@/design-system/tokens';
+import { STATUS_BG_COLORS } from '@/design-system/colors';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -31,7 +33,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+    <div className={`min-h-screen flex items-center justify-center p-4 ${SURFACE.page}`}>
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">
@@ -44,7 +46,7 @@ export default function LoginPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <div className="flex items-center gap-2 p-3 text-sm text-red-600 bg-red-50 rounded-md">
+              <div className={`flex items-center gap-2 p-3 text-sm rounded-md ${STATUS_BG_COLORS.error}`}>
                 <AlertCircle className="w-4 h-4" />
                 {error}
               </div>

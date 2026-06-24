@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import { AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { TEXT } from '@/design-system/tokens';
 
 interface ErrorStateProps {
   title?: string;
@@ -13,13 +14,6 @@ interface ErrorStateProps {
 
 /**
  * 统一的错误状态组件
- *
- * @example
- * <ErrorState
- *   title="加载失败"
- *   description="请检查后端服务连接"
- *   onRetry={() => refetch()}
- * />
  */
 export function ErrorState({
   title = '出错了',
@@ -34,8 +28,8 @@ export function ErrorState({
         <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-destructive/10 flex items-center justify-center">
           {icon || <AlertCircle className="w-8 h-8 text-destructive" />}
         </div>
-        <h3 className="text-base font-medium text-gray-900 mb-2">{title}</h3>
-        <p className="text-sm text-gray-500 mb-6">{description}</p>
+        <h3 className={`text-base font-medium ${TEXT.heading} mb-2`}>{title}</h3>
+        <p className={`text-sm ${TEXT.subtitle} mb-6`}>{description}</p>
         {action || (onRetry && (
           <Button onClick={onRetry} variant="outline">
             <RefreshCw className="w-4 h-4 mr-2" />

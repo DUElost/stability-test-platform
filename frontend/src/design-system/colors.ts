@@ -148,3 +148,24 @@ export function getThresholdColor(
 export function getBooleanColor(success: boolean): string {
   return success ? STATUS_TEXT_COLORS.success : STATUS_TEXT_COLORS.error;
 }
+
+/**
+ * PlanRun Hero 区域 — 与 StatusBadge kind=plan-run 语义对齐
+ */
+export const PLAN_RUN_HERO_SURFACE = {
+  RUNNING: 'border-primary/25 bg-gradient-to-br from-primary/10 to-card',
+  SUCCESS: 'border-success/25 bg-gradient-to-br from-success/10 to-card',
+  PARTIAL_SUCCESS: 'border-warning/25 bg-gradient-to-br from-warning/10 to-card',
+  FAILED: 'border-destructive/25 bg-gradient-to-br from-destructive/10 to-card',
+  DEGRADED: 'border-warning/30 bg-gradient-to-br from-warning/15 to-card',
+} as const;
+
+export const PLAN_RUN_HERO_BADGE = {
+  RUNNING: 'border-primary/40 bg-card text-primary',
+  SUCCESS: 'border-success/40 bg-card text-success',
+  PARTIAL_SUCCESS: 'border-warning/40 bg-card text-warning',
+  FAILED: 'border-destructive/40 bg-card text-destructive',
+  DEGRADED: 'border-warning/50 bg-card text-warning',
+} as const;
+
+export type PlanRunHeroStatus = keyof typeof PLAN_RUN_HERO_SURFACE;

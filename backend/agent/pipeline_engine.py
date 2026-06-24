@@ -264,6 +264,8 @@ class PipelineEngine:
 
         watcher_capability: Optional[str] = None,
 
+        patrol_cycle_checkpoint_store=None,
+
     ):
 
         self._adb = adb
@@ -296,9 +298,111 @@ class PipelineEngine:
 
         self._watcher_capability = watcher_capability or None
 
+        self._patrol_cycle_checkpoint_store = patrol_cycle_checkpoint_store
+
+        self._patrol_cycle_checkpoint: Optional[dict] = None
+
+        self._patrol_cycle_resume: bool = False
+
         self._shared: dict = {}
 
         self._canceled = False
+
+
+
+    def set_patrol_cycle_resume(self, checkpoint: dict) -> None:
+
+        """Restore patrol loop from a persisted checkpoint (agent crash recovery)."""
+
+        self._patrol_cycle_checkpoint = checkpoint
+
+        self._patrol_cycle_resume = True
+
+
+
+    def clear_patrol_cycle_checkpoint(self) -> None:
+
+        self._patrol_cycle_checkpoint = None
+
+        self._patrol_cycle_resume = False
+
+        self._drop_patrol_cycle_checkpoint_row()
+
+
+
+    def _persist_patrol_cycle_checkpoint(self, payload: dict) -> None:
+
+        store = self._patrol_cycle_checkpoint_store
+
+        if store is None:
+
+            return
+
+        try:
+
+            store.save(str(self._run_id), payload)
+
+        except Exception as exc:
+
+            from .registry.patrol_checkpoint_store import (
+
+                PatrolCycleCheckpointStoreRecoverableError,
+
+            )
+
+            if isinstance(exc, PatrolCycleCheckpointStoreRecoverableError):
+
+                logger.warning(
+
+                    "patrol_checkpoint_save_failed job_id=%s: %s",
+
+                    self._run_id,
+
+                    exc,
+
+                )
+
+            else:
+
+                raise
+
+
+
+    def _drop_patrol_cycle_checkpoint_row(self) -> None:
+
+        store = self._patrol_cycle_checkpoint_store
+
+        if store is None:
+
+            return
+
+        try:
+
+            store.drop(str(self._run_id))
+
+        except Exception as exc:
+
+            from .registry.patrol_checkpoint_store import (
+
+                PatrolCycleCheckpointStoreRecoverableError,
+
+            )
+
+            if isinstance(exc, PatrolCycleCheckpointStoreRecoverableError):
+
+                logger.warning(
+
+                    "patrol_checkpoint_drop_failed job_id=%s: %s",
+
+                    self._run_id,
+
+                    exc,
+
+                )
+
+            else:
+
+                raise
 
 
 
@@ -1225,17 +1329,43 @@ class PipelineEngine:
 
 
 
+        patrol_resume: Optional[dict] = None
+
+        skip_init = False
+
+        if self._patrol_cycle_resume and self._patrol_cycle_checkpoint is not None:
+
+            patrol_resume = self._patrol_cycle_checkpoint
+
+            skip_init = True
+
+
+
         try:
 
             # ── Phase 1: Init ──
 
-            self._report_job_status_mq("INIT_RUNNING")
+            if skip_init:
 
-            logger.info("[Lifecycle] run=%d — executing init", self._run_id)
+                logger.info(
+
+                    "[Lifecycle] run=%d — skipping init (patrol checkpoint resume)",
+
+                    self._run_id,
+
+                )
+
+                init_result = StepResult(success=True, exit_code=0)
+
+            else:
+
+                self._report_job_status_mq("INIT_RUNNING")
+
+                logger.info("[Lifecycle] run=%d — executing init", self._run_id)
 
 
 
-            init_result = self._run_lifecycle_steps("init", init_def)
+                init_result = self._run_lifecycle_steps("init", init_def)
 
             if not init_result.success:
 
@@ -1272,6 +1402,8 @@ class PipelineEngine:
                 termination_reason, lifecycle_error = self._run_patrol_loop(
 
                     patrol_def, timeout_seconds, init_completed_at=time.time(),
+
+                    resume=patrol_resume,
 
                 )
 
@@ -1395,6 +1527,8 @@ class PipelineEngine:
 
         init_completed_at: float,
 
+        resume: Optional[dict] = None,
+
     ) -> Tuple[str, str]:
 
         """Execute the patrol stage with ADR-0022 semantics.
@@ -1471,6 +1605,36 @@ class PipelineEngine:
 
 
 
+        if resume:
+
+            iteration = int(resume.get("cycle", 0))
+
+            failure_streak = int(resume.get("failure_streak", 0))
+
+            last_observed_action = resume.get("last_observed_action")
+
+            logger.info(
+
+                "[Lifecycle] run=%d — resuming patrol from cycle=%d streak=%d",
+
+                self._run_id,
+
+                iteration,
+
+                failure_streak,
+
+            )
+
+
+
+        def _end_patrol(reason: str, err: str = "") -> Tuple[str, str]:
+
+            self._drop_patrol_cycle_checkpoint_row()
+
+            return reason, err
+
+
+
         self._report_job_status_mq("PATROL_RUNNING")
 
         termination_reason = "completed"
@@ -1487,7 +1651,7 @@ class PipelineEngine:
 
                 logger.info("[Lifecycle] run=%d — abort detected, ending patrol loop", self._run_id)
 
-                return "abort", ""
+                return _end_patrol("abort", "")
 
 
 
@@ -1495,7 +1659,7 @@ class PipelineEngine:
 
                 logger.info("[Lifecycle] run=%d — timeout reached (%ds), ending patrol loop", self._run_id, timeout_seconds)
 
-                return "timeout", ""
+                return _end_patrol("timeout", "")
 
 
 
@@ -1503,7 +1667,7 @@ class PipelineEngine:
 
                 logger.info("[Lifecycle] run=%d — manual EXIT_REQUESTED observed, ending patrol", self._run_id)
 
-                return "manual_exit", ""
+                return _end_patrol("manual_exit", "")
 
 
 
@@ -1517,7 +1681,7 @@ class PipelineEngine:
 
                     logger.error("[Lifecycle] run=%d — lease lost during patrol", self._run_id)
 
-                    return "abort", f"lease re-verification failed: {lock_err.error_message}"
+                    return _end_patrol("abort", f"lease re-verification failed: {lock_err.error_message}")
 
                 last_lease_verify = time.time()
 
@@ -1541,7 +1705,7 @@ class PipelineEngine:
 
             if self._is_lock_lost() or self._canceled:
 
-                return "abort", ""
+                return _end_patrol("abort", "")
 
 
 
@@ -1639,7 +1803,7 @@ class PipelineEngine:
 
                         self._canceled = True
 
-                        return "abort", "job_not_running"
+                        return _end_patrol("abort", "job_not_running")
 
                     last_observed_action = ack.get("manual_action") or None
 
@@ -1667,13 +1831,27 @@ class PipelineEngine:
 
 
 
+            self._persist_patrol_cycle_checkpoint({
+
+                "cycle": iteration,
+
+                "failure_streak": failure_streak,
+
+                "last_failed_step_id": last_failed_step,
+
+                "last_observed_action": last_observed_action,
+
+            })
+
+
+
             # ── Sleep until next cycle, breakable by abort/manual_action ──
 
             if last_observed_action == "EXIT_REQUESTED":
 
                 logger.info("[Lifecycle] run=%d — manual EXIT_REQUESTED observed post-cycle, ending patrol", self._run_id)
 
-                return "manual_exit", ""
+                return _end_patrol("manual_exit", "")
 
             if last_observed_action == "RETRY_NOW":
 
@@ -1699,13 +1877,13 @@ class PipelineEngine:
 
                 if self._is_lock_lost() or self._canceled:
 
-                    return "abort", ""
+                    return _end_patrol("abort", "")
 
                 if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
 
                     logger.info("[Lifecycle] run=%d — timeout reached during sleep", self._run_id)
 
-                    return "timeout", ""
+                    return _end_patrol("timeout", "")
 
 
 

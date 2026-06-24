@@ -8,6 +8,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ClickableCard } from '@/components/ui/clickable-card';
+import { TEXT } from '@/design-system/tokens';
 
 export default function PlanRunListPage() {
   const navigate = useNavigate();
@@ -40,14 +41,14 @@ export default function PlanRunListPage() {
             >
               <CardContent className="py-3 flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <span className="font-mono text-sm text-gray-500">#{run.id}</span>
+                  <span className={`font-mono text-sm ${TEXT.subtitle}`}>#{run.id}</span>
                   <StatusBadge kind="plan-run" status={run.status} size="sm" />
-                  <span className="text-sm text-gray-700">
+                  <span className={`text-sm ${TEXT.heading}`}>
                     {run.plan_name || `Plan #${run.plan_id}`}
                   </span>
-                  <span className="text-xs text-gray-400">{run.run_type}</span>
+                  <span className={`text-xs ${TEXT.caption}`}>{run.run_type}</span>
                 </div>
-                <div className="flex items-center gap-4 text-xs text-gray-400">
+                <div className={`flex items-center gap-4 text-xs ${TEXT.caption}`}>
                   {run.triggered_by && <span>{run.triggered_by}</span>}
                   <span>{new Date(run.started_at).toLocaleString()}</span>
                 </div>

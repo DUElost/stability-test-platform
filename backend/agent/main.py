@@ -38,6 +38,7 @@ if __name__ == "__main__" and __package__ is None:
     from agent.mq.producer import StepTraceWriter
     from agent.outbox_drainer import OutboxDrainThread
     from agent.registry.local_db import LocalDB
+    from agent.registry.patrol_checkpoint_store import PatrolCycleCheckpointStore
     from agent.registry.script_registry import ScriptRegistry
     from agent.step_trace_uploader import StepTraceUploader
     from agent.watcher import LogWatcherManager, OutboxDrainer
@@ -61,6 +62,7 @@ else:
     from .mq.producer import StepTraceWriter
     from .outbox_drainer import OutboxDrainThread
     from .registry.local_db import LocalDB
+    from .registry.patrol_checkpoint_store import PatrolCycleCheckpointStore
     from .registry.script_registry import ScriptRegistry
     from .step_trace_uploader import StepTraceUploader
     from .watcher import LogWatcherManager, OutboxDrainer
@@ -490,6 +492,9 @@ def main() -> None:
     local_db.initialize(db_path)
     _migrate_legacy_aee_state_on_startup(db_path)
 
+    patrol_checkpoint_store = PatrolCycleCheckpointStore(BASE_DIR / "patrol_checkpoint.db")
+    patrol_checkpoint_store.initialize()
+
     script_registry = ScriptRegistry(local_db, api_url, agent_secret)
     script_registry.initialize()
 
@@ -892,6 +897,7 @@ def main() -> None:
             mq_producer,
             script_registry,
             local_db,
+            patrol_checkpoint_store,
         )
 
     _resume_recovered_job = _resume_recovered_job_impl
@@ -982,6 +988,7 @@ def main() -> None:
                                 mq_producer,
                                 script_registry,
                                 local_db,
+                                patrol_checkpoint_store,
                             )
                         except Exception:
                             logger.exception("submit_failed job=%d device=%s", job["id"], device_id)

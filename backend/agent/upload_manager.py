@@ -35,7 +35,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-_EVENT_DIR_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_")
+_EVENT_DIR_RE = re.compile(r"^\d{4}[-_]\d{2}[-_]\d{2}[_T]")
 
 
 class UploadManager:
@@ -161,6 +161,10 @@ class UploadManager:
                         "upload_event_dirs_auto_copy_failed plan_run=%d dir=%s",
                         plan_run_id, event_dir,
                     )
+            if count == 0:
+                count += self._upload_nested_event_dirs(
+                    base_src, base_dst, plan_run_id,
+                )
             logger.info(
                 "upload_event_dirs_auto plan_run=%d copied=%d from=%s",
                 plan_run_id, count, source_root,
@@ -198,6 +202,38 @@ class UploadManager:
             "upload_event_dirs_done plan_run=%d copied=%d total=%d",
             plan_run_id, count, len(event_dir_names),
         )
+        return count
+
+    def _upload_nested_event_dirs(
+        self, base_src: Path, base_dst: Path, plan_run_id: int,
+    ) -> int:
+        """Walk subdirectories (depth ≤5) to find Reconciler event dirs (containing ZZ_INTERNAL)."""
+        count = 0
+        max_depth = 5
+        base_depth = len(base_src.parts)
+        for event_dir in sorted(base_src.rglob("*")):
+            if not event_dir.is_dir():
+                continue
+            if len(event_dir.parts) - base_depth > max_depth:
+                continue
+            if not (event_dir / "ZZ_INTERNAL").exists():
+                continue
+            dst_dir = base_dst / event_dir.name
+            if dst_dir.exists():
+                continue
+            try:
+                self._copytree_safe(str(event_dir), str(dst_dir))
+                count += 1
+            except Exception:
+                logger.exception(
+                    "upload_event_dirs_nested_copy_failed plan_run=%d dir=%s",
+                    plan_run_id, event_dir,
+                )
+        if count:
+            logger.info(
+                "upload_event_dirs_nested plan_run=%d copied=%d from=%s",
+                plan_run_id, count, base_src,
+            )
         return count
 
     @staticmethod

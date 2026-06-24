@@ -40,6 +40,6 @@ describe('PlanRunKpiGrid', () => {
   it('applies red tone to failed when > 0', () => {
     render(<PlanRunKpiGrid devices={makeDevices({ total: 5, failed: 2, running: 0, completed: 3, unknown: 0, backoff: 0 })} />);
     const cell = screen.getByTestId('kpi-failed');
-    expect(cell.querySelector('.text-red-600')).toBeTruthy();
+    expect(cell.querySelector('.text-destructive')).toBeTruthy();
   });
 });

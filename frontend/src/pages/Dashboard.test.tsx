@@ -130,6 +130,6 @@ describe('Dashboard', () => {
 
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
-    expect(await screen.findByText('数据加载失败')).toBeInTheDocument();
+    expect(await screen.findByText(/数据加载失败/)).toBeInTheDocument();
   });
 });

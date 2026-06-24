@@ -118,6 +118,7 @@ def run_task_wrapper(
     mq_producer: Optional[Any] = None,
     script_registry: Optional[Any] = None,
     local_db: Optional[Any] = None,
+    patrol_cycle_checkpoint_store: Optional[Any] = None,
 ) -> None:
     """Run a claimed job in a worker thread and report its terminal state."""
     job_id = run["id"]
@@ -243,6 +244,7 @@ def run_task_wrapper(
             watcher_capability=(
                 session.summary.watcher_capability if session is not None else None
             ),
+            patrol_cycle_checkpoint_store=patrol_cycle_checkpoint_store,
         )
 
         watcher_summary = None

@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { StatusBadge } from '@/components/ui/status-badge';
+import {
+  ALERT_BANNER,
+  ELEVATION,
+  INTERACTIVE,
+  SCRIPT_MATCH_ROW,
+  TEXT,
+} from '@/design-system';
+import { cn } from '@/lib/utils';
 import type { PrecheckState } from '@/utils/api/types';
 
 interface Props {
@@ -149,7 +158,7 @@ export default function DispatchGateCard({
   return (
     <div
       data-testid="dispatch-gate-card"
-      className="rounded-xl border bg-white shadow-sm"
+      className={cn('rounded-xl border bg-card', ELEVATION.sm)}
     >
       <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3">
         <div className="inline-flex items-center gap-1.5">
@@ -160,13 +169,13 @@ export default function DispatchGateCard({
             spin={isPhaseSpinning}
           />
           {readySuffix && (
-            <span className="text-xs font-semibold text-green-700">· {readySuffix}</span>
+            <span className="text-xs font-semibold text-success">· {readySuffix}</span>
           )}
         </div>
-        <span className="text-xs text-gray-500">
+        <span className={cn('text-xs', TEXT.subtitle)}>
           派发门禁 · {totalHosts} 主机 · {counts.ok + counts.synced}/{totalHosts} 通过
           {counts.failed > 0 && (
-            <span className="ml-2 font-semibold text-red-600">
+            <span className="ml-2 font-semibold text-destructive">
               失败 {counts.failed}
             </span>
           )}
@@ -176,7 +185,11 @@ export default function DispatchGateCard({
             type="button"
             data-testid="dispatch-gate-toggle"
             onClick={() => setExpanded((v) => !v)}
-            className="ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition"
+            className={cn(
+              'ml-auto inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs transition',
+              INTERACTIVE.iconButton,
+              INTERACTIVE.hover,
+            )}
           >
             {expanded ? (
               <><ChevronUp className="h-3 w-3" />收起详情</>
@@ -186,28 +199,31 @@ export default function DispatchGateCard({
           </button>
         )}
         {precheck.errors && precheck.errors.length > 0 && (
-          <span className="ml-auto inline-flex items-center gap-1 text-xs text-red-600">
+          <span className="ml-auto inline-flex items-center gap-1 text-xs text-destructive">
             <AlertTriangle className="h-3.5 w-3.5" />
             {precheck.errors[precheck.errors.length - 1]}
           </span>
         )}
         {canRetryDispatch && onRetryDispatch && (
-          <button
+          <Button
             type="button"
+            variant="destructive"
+            size="sm"
             data-testid="dispatch-gate-retry-button"
             onClick={onRetryDispatch}
-            className="ml-auto inline-flex items-center gap-1 rounded-md bg-red-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+            disabled={isRetrying}
+            className="ml-auto h-7 gap-1 px-2.5 text-xs"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isRetrying ? 'animate-spin' : ''}`} />
+            <RefreshCw className={cn('h-3.5 w-3.5', isRetrying && 'animate-spin')} />
             重试派发
-          </button>
+          </Button>
         )}
       </div>
 
       {showStaleBanner && (
         <div
           data-testid="dispatch-gate-stale-banner"
-          className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900"
+          className={cn('flex items-start gap-2 px-4 py-2.5 text-xs', ALERT_BANNER.warning)}
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
@@ -220,55 +236,54 @@ export default function DispatchGateCard({
       {mixedWatcherFailure && mixedWatcherFailure.inactive_host_ids.length > 0 && (
         <div
           data-testid="dispatch-gate-mixed-watcher-detail"
-          className="border-b border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700"
+          className={cn('px-4 py-2.5 text-xs', ALERT_BANNER.destructive)}
         >
           不激活节点ID：{mixedWatcherFailure.inactive_host_ids.join(', ')}
         </div>
       )}
 
       {(dispatchState || isCompactReady) && (
-        <div className="border-b bg-gray-50/80 px-4 py-3" data-testid="dispatch-gate-summary">
+        <div className={cn('border-b bg-muted/50 px-4 py-3')} data-testid="dispatch-gate-summary">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold text-gray-700">
+            <span className={cn('text-xs font-semibold', TEXT.body)}>
               派发摘要
             </span>
             {isCompactReady && (
-              <span className="text-xs text-green-700">
-                门禁通过，活跃 run 保留摘要态展示
-              </span>
+              <span className="text-xs text-success">门禁通过，活跃 run 保留摘要态展示</span>
             )}
           </div>
-          <div className="mt-2 grid grid-cols-1 gap-2 text-xs text-gray-600 sm:grid-cols-2 xl:grid-cols-5">
+          <div className={cn('mt-2 grid grid-cols-1 gap-2 text-xs sm:grid-cols-2 xl:grid-cols-5', TEXT.subtitle)}>
             <div>
-              <span className="text-gray-400">状态</span>
-              <div className="font-mono text-gray-800">
+              <span className="text-muted-foreground/70">状态</span>
+              <div className={cn('font-mono', TEXT.body)}>
                 {dispatchState?.status ?? '—'}
               </div>
             </div>
             <div>
-              <span className="text-gray-400">入队</span>
-              <div className="font-mono text-gray-800">
+              <span className="text-muted-foreground/70">入队</span>
+              <div className={cn('font-mono', TEXT.body)}>
                 {formatTimestamp(dispatchState?.enqueued_at)}
               </div>
             </div>
             <div>
-              <span className="text-gray-400">开始</span>
-              <div className="font-mono text-gray-800">
+              <span className="text-muted-foreground/70">开始</span>
+              <div className={cn('font-mono', TEXT.body)}>
                 {formatTimestamp(dispatchState?.started_at)}
               </div>
             </div>
             <div>
-              <span className="text-gray-400">完成</span>
-              <div className="font-mono text-gray-800">
+              <span className="text-muted-foreground/70">完成</span>
+              <div className={cn('font-mono', TEXT.body)}>
                 {formatTimestamp(dispatchState?.completed_at)}
               </div>
             </div>
             <div>
-              <span className="text-gray-400">最近错误</span>
+              <span className="text-muted-foreground/70">最近错误</span>
               <div
-                className={`break-all font-mono ${
-                  dispatchState?.last_error ? 'text-red-600' : 'text-gray-800'
-                }`}
+                className={cn(
+                  'break-all font-mono',
+                  dispatchState?.last_error ? 'text-destructive' : TEXT.body,
+                )}
               >
                 {dispatchState?.last_error ?? '—'}
               </div>
@@ -283,14 +298,14 @@ export default function DispatchGateCard({
           {allHealthy && !expanded ? (
             <div
               data-testid="dispatch-gate-collapsed"
-              className="px-4 py-3 text-xs text-gray-500"
+              className={cn('px-4 py-3 text-xs', TEXT.subtitle)}
             >
-              <span className="text-green-700 font-semibold">✓ {totalHosts} 台主机</span>
+              <span className="font-semibold text-success">✓ {totalHosts} 台主机</span>
               <span className="ml-2">· {totalScriptCount} 个脚本</span>
-              {allMatched && <span className="ml-2 text-green-600">全部匹配</span>}
+              {allMatched && <span className="ml-2 text-success">全部匹配</span>}
             </div>
           ) : hostEntries.length === 0 ? (
-            <div className="px-4 py-8 text-center text-xs text-gray-400">
+            <div className={cn('px-4 py-8 text-center text-xs', TEXT.subtitle)}>
               未解析出主机
             </div>
           ) : (
@@ -304,7 +319,7 @@ export default function DispatchGateCard({
                   className="px-4 py-3"
                 >
                   <div className="flex flex-wrap items-center gap-3">
-                    <span className="font-mono text-sm font-semibold text-gray-700">
+                    <span className={cn('font-mono text-sm font-semibold', TEXT.body)}>
                       {hostId}
                     </span>
                     <StatusBadge
@@ -314,12 +329,12 @@ export default function DispatchGateCard({
                       spin={state.status === 'syncing'}
                     />
                     {totalScripts > 0 && (
-                      <span className="text-xs text-gray-500">
+                      <span className={cn('text-xs', TEXT.subtitle)}>
                         {matchedScripts}/{totalScripts} 脚本一致
                       </span>
                     )}
                     {state.sync_attempts > 0 && (
-                      <span className="text-xs text-gray-400">
+                      <span className="text-xs text-muted-foreground/70">
                         sync ×{state.sync_attempts}
                         {precheck.sync_max_attempts != null
                           ? `/${precheck.sync_max_attempts}`
@@ -327,7 +342,7 @@ export default function DispatchGateCard({
                       </span>
                     )}
                     {state.error && (
-                      <span className="ml-auto text-xs text-red-600">
+                      <span className="ml-auto text-xs text-destructive">
                         {state.error}
                       </span>
                     )}
@@ -338,14 +353,15 @@ export default function DispatchGateCard({
                       {state.scripts.map((s, idx) => (
                         <div
                           key={`${s.name}-${s.version}-${idx}`}
-                          className={`flex items-center justify-between gap-2 rounded px-2 py-1 ${
-                            s.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-700'
-                          }`}
+                          className={cn(
+                            'flex items-center justify-between gap-2 rounded px-2 py-1',
+                            s.ok ? SCRIPT_MATCH_ROW.ok : SCRIPT_MATCH_ROW.fail,
+                          )}
                         >
                           <span className="truncate font-mono">
                             {s.name}@{s.version}
                           </span>
-                          <span className="shrink-0 font-mono text-[11px] text-gray-500">
+                          <span className={cn('shrink-0 font-mono text-[11px]', TEXT.subtitle)}>
                             {s.ok ? '✓ ' : '✗ '}
                             {shortSha(s.actual_sha)}
                           </span>

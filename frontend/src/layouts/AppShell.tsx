@@ -10,6 +10,7 @@ import { useAuthSession } from '@/hooks/useAuthSession';
 import { api } from '@/utils/api';
 import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { WS_DASHBOARD_ENDPOINT } from '@/config';
+import { BORDER, ELEVATION, INTERACTIVE, LAYOUT, SURFACE, TEXT } from '@/design-system/tokens';
 
 /**
  * 主应用布局 - 源自 web 样板设计风格
@@ -66,11 +67,11 @@ export default function AppShell() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className={cn('flex h-screen', SURFACE.page)}>
       {/* 移动端遮罩层 */}
       {isMobile && sidebarOpen && (
         <div
-          className="fixed inset-0 bg-gray-900/40 z-40 transition-opacity duration-300"
+          className={cn('fixed inset-0 z-40 transition-opacity duration-300', SURFACE.overlay)}
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -78,8 +79,10 @@ export default function AppShell() {
       {/* Sidebar - 桌面端 */}
       <aside
         className={cn(
-          "hidden lg:flex flex-col border-r border-gray-100 bg-white",
-          "transition-all duration-300"
+          'hidden lg:flex flex-col transition-all duration-300',
+          SURFACE.elevated,
+          BORDER.default,
+          'border-r',
         )}
         style={{ width: sidebarCollapsed ? 72 : 224 }}
       >
@@ -93,8 +96,10 @@ export default function AppShell() {
       {/* Sidebar - 移动端抽屉模式 */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-56 bg-white border-r border-gray-100 transform transition-transform duration-300 lg:hidden",
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+          'fixed inset-y-0 left-0 z-50 w-56 transform transition-transform duration-300 lg:hidden border-r',
+          SURFACE.elevated,
+          BORDER.default,
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
         <Sidebar
@@ -110,20 +115,26 @@ export default function AppShell() {
         <button
           onClick={toggleSidebarCollapse}
           aria-label="展开侧边栏"
-          className="fixed left-[60px] top-1/2 -translate-y-1/2 z-40 h-6 w-6 rounded-full border border-gray-200 bg-white shadow-sm hover:bg-gray-50 flex items-center justify-center transition-all duration-200"
+          className={cn(
+            'fixed left-[60px] top-1/2 -translate-y-1/2 z-40 h-6 w-6 rounded-full flex items-center justify-center transition-all duration-200',
+            SURFACE.elevated,
+            BORDER.default,
+            ELEVATION.sm,
+            INTERACTIVE.hover,
+          )}
         >
-          <ChevronRight size={14} className="text-gray-500" />
+          <ChevronRight size={14} className={TEXT.subtitle} />
         </button>
       )}
 
       {/* 主内容区 - 样板风格 */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Header - 样板风格 */}
-        <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-sm border-b border-gray-100">
+        <header className={cn('sticky top-0 z-30 border-b', SURFACE.header, BORDER.default)}>
           <div className="flex items-center justify-between h-20 px-4 lg:px-8">
             <button
               onClick={toggleSidebar}
-              className="lg:hidden p-2 text-gray-400 hover:text-gray-600"
+              className={cn('lg:hidden p-2', INTERACTIVE.iconButton)}
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -148,23 +159,24 @@ export default function AppShell() {
               <div className="relative ml-2">
                 <button
                   onClick={() => setShowUserMenu(!showUserMenu)}
-                  className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-gray-50 transition-colors"
+                  className={cn('flex items-center gap-2 p-1.5 rounded-lg transition-colors', INTERACTIVE.hover)}
                   aria-label="用户菜单"
                 >
-                  <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center">
-                    <User className="w-4 h-4 text-gray-500" />
+                  <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', SURFACE.subtle)}>
+                    <User className={cn('w-4 h-4', TEXT.subtitle)} />
                   </div>
                   <div className="hidden sm:flex flex-col items-start leading-tight">
-                    <span className="text-sm font-medium text-gray-900">
+                    <span className={cn('text-sm font-medium', TEXT.heading)}>
                       {currentUser?.username ?? '...'}
                     </span>
                     {currentUser?.role && (
-                      <span className="text-xs text-gray-400">{currentUser.role}</span>
+                      <span className={cn('text-xs', TEXT.caption)}>{currentUser.role}</span>
                     )}
                   </div>
                   <ChevronDown className={cn(
-                    "w-4 h-4 text-gray-400 transition-transform hidden sm:block",
-                    showUserMenu && "rotate-180"
+                    'w-4 h-4 transition-transform hidden sm:block',
+                    TEXT.caption,
+                    showUserMenu && 'rotate-180',
                   )} />
                 </button>
 
@@ -175,13 +187,13 @@ export default function AppShell() {
                       className="fixed inset-0 z-10"
                       onClick={() => setShowUserMenu(false)}
                     />
-                    <div className="absolute right-0 top-full mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-100 py-1 z-20">
+                    <div className={cn('absolute right-0 top-full mt-1 w-48 rounded-lg py-1 z-20', SURFACE.elevated, ELEVATION.dropdown)}>
                       <a
                         href="/docs"
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={() => setShowUserMenu(false)}
-                        className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                        className={cn('flex items-center gap-3 px-4 py-2 text-sm', INTERACTIVE.menuItem)}
                       >
                         <FileText className="w-4 h-4" />
                         文档
@@ -189,18 +201,18 @@ export default function AppShell() {
                       <NavLink
                         to="/account/password"
                         onClick={() => setShowUserMenu(false)}
-                        className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                        className={cn('flex items-center gap-3 px-4 py-2 text-sm', INTERACTIVE.menuItem)}
                       >
                         <KeyRound className="w-4 h-4" />
                         修改密码
                       </NavLink>
                       {currentUser?.role === 'admin' && (
                         <>
-                          <hr className="my-1 border-gray-100" />
+                          <hr className={cn('my-1', BORDER.default)} />
                           <NavLink
                             to="/users"
                             onClick={() => setShowUserMenu(false)}
-                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
+                            className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
                           >
                             <Users className="w-4 h-4" />
                             用户管理
@@ -208,7 +220,7 @@ export default function AppShell() {
                           <NavLink
                             to="/audit"
                             onClick={() => setShowUserMenu(false)}
-                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
+                            className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
                           >
                             <Shield className="w-4 h-4" />
                             操作日志
@@ -216,17 +228,17 @@ export default function AppShell() {
                           <NavLink
                             to="/settings"
                             onClick={() => setShowUserMenu(false)}
-                            className="flex items-center gap-3 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:bg-gray-50"
+                            className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
                           >
                             <Settings className="w-4 h-4" />
                             系统设置
                           </NavLink>
                         </>
                       )}
-                      <hr className="my-1 border-gray-100" />
+                      <hr className={cn('my-1', BORDER.default)} />
                       <button
                         onClick={handleLogout}
-                        className="w-full flex items-center gap-3 px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                        className={cn('w-full flex items-center gap-3 px-4 py-2 text-sm', INTERACTIVE.destructiveMenu)}
                       >
                         <LogOut className="w-4 h-4" />
                         退出登录
@@ -244,7 +256,7 @@ export default function AppShell() {
           <main className="flex-1 overflow-hidden">
             <Suspense fallback={
               <div className="flex items-center justify-center h-64">
-                <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.caption)} />
               </div>
             }>
               <Outlet />
@@ -252,10 +264,10 @@ export default function AppShell() {
           </main>
         ) : (
           <main className="flex-1 overflow-x-hidden overflow-y-auto">
-            <div className="p-4 lg:p-8">
+            <div className={LAYOUT.pagePadding}>
               <Suspense fallback={
                 <div className="flex items-center justify-center h-64">
-                  <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+                  <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.caption)} />
                 </div>
               }>
                 <Outlet />
