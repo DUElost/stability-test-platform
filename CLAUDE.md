@@ -221,7 +221,7 @@
 
 | 存储 | 用途 | 默认路径 / 访问 |
 |------|------|-----------------|
-| Agent SSD | 运行日志（唯一物理副本） | `logs/runs/{job_id}/`；HTTP `:8900/run-logs/{job_id}` |
+| Agent SSD | 运行日志（唯一物理副本） | `logs/runs/{job_id}/`；实时：SocketIO → 控制面 `GET /logs/query`；事后：SSH `POST /agent/logs` |
 | Agent HDD | AEE + mobilelog + bugreport（第一落点） | `/mnt/hdd/aee_events`（`STP_AEE_LOCAL_ROOT`） |
 | 15.4 CIFS | 汇总 xls、按需事件、HDD 溢出 | `STP_AEE_CIFS_ROOT`；**不含**运行日志 |
 

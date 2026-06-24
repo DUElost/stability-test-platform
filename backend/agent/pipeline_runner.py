@@ -72,6 +72,6 @@ def execute_pipeline_run(
         "error_message": result.error_message,
         "log_summary": None,
         # ADR-0025 方案 C: 运行日志不再上送 15.4，Agent 本地保留。
-        # 控制平面通过 Agent HTTP 端点按需下载（run_log_server.py）。
+        # 实时查看：SocketIO → 控制面 log_writer；事后取证：SSH POST /api/v1/agent/logs。
         "artifact": None,
     }

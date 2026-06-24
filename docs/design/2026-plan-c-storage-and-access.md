@@ -22,7 +22,6 @@ flowchart TB
     W["Watcher 路径 B"]
     LA["LogArchiver: SSD prune"]
     HS["HddSpillMonitor"]
-    HTTP["run_log_server :8900"]
   end
   subgraph CIFS["15.4 CIFS sonic_tinno"]
     DEDUP["dedup/ 汇总 xls"]
@@ -31,13 +30,15 @@ flowchart TB
   subgraph CP["控制平面"]
     API["FastAPI + PlanRun 聚合"]
     UI["React Dashboard"]
+    LW["log_writer + /logs/query"]
   end
 
   W --> AEE
   LA --> RL
   HS -->|"超阈 copytree"| DEV
-  HTTP --> RL
-  UI -->|"Sprint 3+"| HTTP
+  RL -->|"SocketIO step_log"| LW
+  UI --> LW
+  UI -->|"事后 SSH"| API
   API --> DEDUP
   AEE -.->|"Sprint 4 upload"| DEDUP
   AEE -.->|"Sprint 4 upload"| DEV
@@ -74,7 +75,10 @@ flowchart TB
 |----|-----|
 | 目录 | `{BASE_DIR}/logs/runs/{job_id}/`（`get_run_log_dir`） |
 | 生命周期 | Job 结束后经 **grace** 由 LogArchiver **prune**（删除目录），不上送 15.4 |
-| 访问 | `run_log_server` HTTP（见 §4） |
+| 实时访问 | Agent SocketIO `step_log` → 控制面 `log_writer` → `GET /api/v1/logs/query`、LiveConsole |
+| 事后访问 | 控制面 `POST /api/v1/agent/logs`（SSH 读 Agent 磁盘，路径须在 `STP_SSH_LOG_ROOTS` 下） |
+
+> **2026-06-17 废弃**：原 Agent HTTP `:8900`（`run_log_server`）已移除；产品未接入且与 SSH 通路重叠。
 
 ### 2.3 15.4 CIFS（上送目标）
 
@@ -100,18 +104,9 @@ flowchart TB
 - 超阈：按 mtime 找最旧**事件目录**（`__exp_main.txt` / `main.dbg` 启发式）→ `copytree` 到 `{cifs_root}/devices/{rel}` → 本地 prune。
 - **待加固**：读盘失败应返回 `None` 并跳过 spill（勿返回 `0.0`）。
 
-### 3.3 run_log_server
+### 3.3 启动耦合（已知债）
 
-| 端点 | 说明 |
-|------|------|
-| `GET /run-logs/{job_id}` | 文件列表 JSON |
-| `GET /run-logs/{job_id}/{filename}` | 文件下载 |
-| 端口 | `STP_RUN_LOG_SERVER_PORT`（默认 `8900`） |
-| 安全 | `resolve()` 防路径穿越；仅服务 `runs/{job_id}` 下文件 |
-
-### 3.4 启动耦合（已知债）
-
-LogArchiver、HddSpill、run_log_server 当前在 `watcher_subsystem_enabled()` 块内启动。`STP_WATCHER_ENABLED=0` 时三者均不启——待与 Watcher 解耦（#32 可选项）。
+LogArchiver、HddSpill 当前在 `watcher_subsystem_enabled()` 块内启动。`STP_WATCHER_ENABLED=0` 时二者均不启——待与 Watcher 解耦（#32 可选项）。
 
 ---
 
@@ -122,15 +117,15 @@ LogArchiver、HddSpill、run_log_server 当前在 `watcher_subsystem_enabled()` 
 | 模块 | 变更 |
 |------|------|
 | `agent_api.py` | 删除 `run_log_bundle` ingest 白名单 |
-| `plan_runs.py` | `run_log_bundle` 下载返回 409，指引 Agent HTTP |
+| `plan_runs.py` | `run_log_bundle` 下载返回 409，指引实时 `/logs/query` 或 SSH `/agent/logs` |
 
 ### 4.2 Sprint 3 待改（断层）
 
 | 模块 | 现状 | 目标 |
 |------|------|------|
-| `plan_runs._aggregate_run_log_archive` | 聚合 `run_log_bundle` JobArtifact | 废弃或改为 HTTP/SSD 状态 |
-| `ArchiveStatusCard` | 展示 bundle `storage_uri` | Agent HTTP 或 prune 语义 |
-| `report_service` | 从 tar `run_log_bundle` 读 `risk_summary` | SSD/HTTP 或 dedup 就绪态（#16） |
+| `plan_runs._aggregate_run_log_archive` | 聚合 `run_log_bundle` JobArtifact | 废弃或改为 prune 语义 |
+| `ArchiveStatusCard` | 展示 bundle `storage_uri` | 运维指标 + prune 语义 |
+| `report_service` | 从 tar `run_log_bundle` 读 `risk_summary` | log_signal 聚合（#16，已落地） |
 | `dedup_scan.check_archive_completed` | 查 `run_log_bundle` 齐套 | 新完成条件（Sprint 4） |
 | `agent_api` archive-status | 统计 bundle | 重新定义 |
 
@@ -147,12 +142,14 @@ LogArchiver、HddSpill、run_log_server 当前在 `watcher_subsystem_enabled()` 
 ```
 pipeline_engine 写 logs/runs/{job_id}/
         ↓
-run_log_server 只读暴露（控制面或运维直连 Agent IP:8900）
+SocketIO step_log → 控制面 log_writer（实时 UI / GET /logs/query）
+        ↓
+事后：POST /api/v1/agent/logs（SSH 读 Agent 磁盘）
         ↓
 LogArchiver 在 grace 后 prune 本地目录
 ```
 
-**不再**：tar → 15.4 → `POST .../artifacts` 注册 `run_log_bundle`。
+**不再**：tar → 15.4 → `POST .../artifacts` 注册 `run_log_bundle`；不再暴露 Agent `:8900`。
 
 ---
 
@@ -182,7 +179,7 @@ HDD 满：**HddSpillMonitor** 溢出最旧事件 → `15.4/devices/`。
 | Watcher 处理 | `backend/agent/aee/processor.py`、`reconciler.py` |
 | SSD prune | `backend/agent/log_archiver.py` |
 | HDD spill | `backend/agent/local_disk_monitor.py` |
-| 运行日志 HTTP | `backend/agent/run_log_server.py` |
+| 控制面运行日志持久化 | `backend/realtime/log_writer.py`、`backend/api/routes/logs.py` |
 | Agent 启动 | `backend/agent/main.py` |
 | 控制面 PlanRun | `backend/api/routes/plan_runs.py` |
 | 去重 | `backend/services/dedup_scan.py`、`backend/api/routes/dedup.py` |
@@ -200,3 +197,4 @@ HDD 满：**HddSpillMonitor** 溢出最旧事件 → `15.4/devices/`。
 | 日期 | 变更 |
 |------|------|
 | 2026-06-21 | 初版：Sprint 2 设计 + Sprint 3/4 断层清单 |
+| 2026-06-17 | 废弃 Agent `run_log_server`（`:8900`）；运行日志改为实时控制面 + 事后 SSH |

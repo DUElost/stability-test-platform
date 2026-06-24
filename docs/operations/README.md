@@ -75,9 +75,7 @@ Agent 新增 env（部署时写入 `/opt/stability-test-agent/.env`）：
 |------|------|
 | `STP_AEE_LOCAL_ROOT` | HDD AEE 根 |
 | `STP_AEE_CIFS_ROOT` | 15.4 CIFS 挂载 |
-| `STP_RUN_LOG_SERVER_PORT` | 运行日志 HTTP（默认 8900） |
 
-防火墙：控制面 → Agent `8900`（若 UI 代理运行日志）。  
 设计详述：[`design/2026-plan-c-storage-and-access.md`](../design/2026-plan-c-storage-and-access.md)
 
 ---

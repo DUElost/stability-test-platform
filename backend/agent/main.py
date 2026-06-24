@@ -553,10 +553,6 @@ def main() -> None:
             logger.info("hdd_spill_monitor=started hdd=%s cifs=%s", hdd_root, cifs_root)
         else:
             logger.info("hdd_spill_monitor_skipped cifs_root_empty")
-        # ADR-0025 方案 C 方案 A: 运行日志 HTTP 下载端点
-        from .run_log_server import start_run_log_server
-        run_log_port = int(os.getenv("STP_RUN_LOG_SERVER_PORT", "8900"))
-        start_run_log_server(str(BASE_DIR / "logs" / "runs"), port=run_log_port)
         # M4/T4-4: 清理上次进程残留的 active watcher_state(崩溃/重启脏记录)。
         # 必须在 configure(注入 local_db)之后调用。
         try:

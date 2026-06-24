@@ -1148,8 +1148,8 @@ class TestWatcherSummaryEndpoint:
     def test_download_run_log_bundle_returns_409(
         self, client, auth_headers, chain_setup, db_session,
     ):
-        """方案 C: run_log_bundle 运行日志不再上送 15.4，改 Agent HTTP 端点下载；
-        download 端点返 409 提示使用 Agent run log server。"""
+        """方案 C: run_log_bundle 运行日志不再上送 15.4；
+        download 端点返 409 指引控制面实时日志或 SSH 取证。"""
         cur_run = chain_setup["current_run"]
         job = (
             db_session.query(JobInstance)
@@ -1172,7 +1172,8 @@ class TestWatcherSummaryEndpoint:
             headers=auth_headers,
         )
         assert resp.status_code == 409, resp.text
-        assert "Agent HTTP" in resp.text
+        assert "logs/query" in resp.text
+        assert "agent/logs" in resp.text
 
     def test_watcher_summary_time_scope_all_splits_current_and_preexisting(
         self, client, auth_headers, chain_setup, db_session,

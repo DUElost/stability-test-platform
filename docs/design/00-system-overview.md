@@ -38,7 +38,6 @@
 | 前端 | 5173（dev）/ 80/443（prod） | Vite + React |
 | PostgreSQL | 5432 | 唯一生产库 |
 | Redis | 6379 | SAQ 任务队列 |
-| Agent HTTP（运行日志） | 8900 | 方案 C；见 [`2026-plan-c-storage-and-access.md`](./2026-plan-c-storage-and-access.md) |
 
 **网络**：局域网 `172.21.15.*`；中心存储 `172.21.15.4`（CIFS/NFS）。
 

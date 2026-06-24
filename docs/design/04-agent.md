@@ -40,7 +40,6 @@ backend/agent/
 ├── artifact_uploader.py
 ├── log_archiver.py         # SSD prune（方案 C）
 ├── local_disk_monitor.py   # HddSpillMonitor
-├── run_log_server.py       # 运行日志 HTTP :8900
 ├── registry/
 │   ├── local_db.py         # SQLite WAL
 │   └── script_registry.py
@@ -58,7 +57,7 @@ backend/agent/
 
 1. 读 env：`API_URL`、`HOST_ID`、`POLL_INTERVAL`  
 2. 初始化 LocalDB、ScriptRegistry  
-3. 可选启动：Watcher、`LogArchiver`、`HddSpillMonitor`、`run_log_server`（当前与 `STP_WATCHER_ENABLED` 耦合 — 已知债）  
+3. 可选启动：Watcher、`LogArchiver`、`HddSpillMonitor`（当前与 `STP_WATCHER_ENABLED` 耦合 — 已知债）  
 4. 线程池：`fetch_pending_jobs` → `JobRunner.run`  
 5. 心跳线程：主机指标、archive 指标、outbox 积压  
 
@@ -103,7 +102,8 @@ DeviceLogWatcher
 |--------|------|
 | `log_archiver` | grace 后 **prune** SSD `logs/runs/{job_id}/` |
 | `HddSpillMonitor` | HDD 超阈 → 最旧事件 copy 到 15.4 `devices/` |
-| `run_log_server` | HTTP 列出/下载运行日志 |
+| SocketIO `step_log` + 控制面 `log_writer` | 运行中实时日志（`GET /logs/query`、LiveConsole） |
+| 控制面 `POST /agent/logs` | 事后经 SSH 读取 Agent 磁盘日志 |
 
 **已移除**：tar 上送 15.4、`run_log_bundle` 注册、cycle 快照。
 
@@ -121,7 +121,6 @@ DeviceLogWatcher
 | `STP_WATCHER_ENABLED` | Watcher 总开关 |
 | `STP_AEE_LOCAL_ROOT` | HDD AEE 根（默认 `/mnt/hdd/aee_events`） |
 | `STP_AEE_CIFS_ROOT` | 上送 15.4 挂载点 |
-| `STP_RUN_LOG_SERVER_PORT` | 运行日志 HTTP（默认 8900） |
 | `ANDROID_ADB_SERVER_PORT` | WSL 联调：5039 |
 
 ---
