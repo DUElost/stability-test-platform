@@ -274,7 +274,8 @@ class JobSession:
             return
 
         try:
-            nfs_base_dir = self._manager.get_dep("nfs_base_dir") or None
+            from agent.aee.paths import get_aee_local_root
+            local_root = get_aee_local_root()
             self._reconciler = AeeDbHistoryReconciler(
                 signal_emitter=self._handle.impl.emitter,
                 state_store=self._manager.get_dep("local_db"),
@@ -282,7 +283,7 @@ class JobSession:
                 job_id=self._job_id,
                 host_id=self._host_id,
                 adb_path=self._manager.get_dep("adb_path") or "adb",
-                local_root=Path(nfs_base_dir) if nfs_base_dir else None,
+                local_root=local_root,
             )
             self._reconciler.start()
             logger.info(
