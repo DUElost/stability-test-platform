@@ -90,15 +90,7 @@ def _check_crash_indicators(serial: str) -> dict:
         except Exception:
             pass
 
-    # Check for anr traces
-    try:
-        out = adb_shell("ls /data/anr/ 2>/dev/null | wc -l", timeout=10)
-        anr_count = int(out.strip()) if out.strip().isdigit() else 0
-        if anr_count > 0:
-            indicators["/data/anr"] = anr_count
-    except Exception:
-        pass
-
+    # Check for anr traces — /data/aee_exp 已包含 ANR 信息，无需单独检查
     return indicators
 
 

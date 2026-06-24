@@ -2,9 +2,22 @@
 
 [根目录](../CLAUDE.md) > **stability-test-platform**
 
+> **关联文档**：[`AGENTS.md`](./AGENTS.md)（AI 辅助开发约定，含 SAQ 流水线链、AEE 检测流程、Pydantic v2 规则等运行时指南）；[`docs/README.md`](./docs/README.md)（文档中心入口）；[`docs/DOC-MAP.md`](./docs/DOC-MAP.md)（文档索引）
+
 ---
 
 ## 变更记录 (Changelog)
+
+### 变更记录补充
+
+> 以下 ADR 已实现但未在详细 Changelog 中单独列出：
+
+| ADR | 日期 | 摘要 |
+|-----|------|------|
+| ADR-0019 | 2026-04-28 | Android Device Lease + 容量调度模型：device_leases 表 + Reconciler 多节奏扫描 + Agent LeaseRenewer + recovery_sync + fencing_token |
+| ADR-0023 | 2026-05 | 脚本溯源与 sha256 契约：脚本扫描结果 created/skipped/conflicts/deactivated 的分类基础 |
+
+---
 
 ### 2026-06-21 — 项目文档体系补强 + ADR-0025 方案 C 摘要
 - **文档中心**：[`docs/README.md`](./docs/README.md)、[`docs/DOC-MAP.md`](./docs/DOC-MAP.md)、[`docs/DOC-RETIREMENT.md`](./docs/DOC-RETIREMENT.md)（待删/归档清单）。
@@ -159,7 +172,7 @@
 - **Stage 5B2 — JobArtifact 独立端点 + ArtifactUploader**：Alembic `n2h3i4j5k6l7` 增补 `source_category` / `source_path_on_device` + `UniqueConstraint(job_id, storage_uri)`；`POST /api/v1/agent/jobs/{job_id}/artifacts` whitelist + PG `ON CONFLICT DO NOTHING` 幂等；`backend/agent/artifact_uploader.py` 单例 fire-and-forget；`DeviceLogWatcher._maybe_submit_artifact` 仅 AEE/VENDOR_AEE 且 pull 成功时转发
 - **Stage 6 — JobSession E2E**：`test_job_session_e2e.py` 7 cases 仅 mock adb + HTTP；bugfix `LogWatcherManager._prober_factory` 改 lambda 兼容 keyword-only 签名
 - **3 个收口契约**：log_signal 是异常事件权威流 / JobArtifact 是独立异步持久化面 / ArtifactUploader 是 fire-and-forget 不回压 watcher
-- **灰度路径**：`STP_WATCHER_ENABLED` 默认 `false`（`backend/agent/main.py:69`），未开启时 Agent 完全回退 ADR-0018 Phase 1-6 路径
+- **灰度路径**：`STP_WATCHER_ENABLED` 默认 `true`（`backend/agent/main.py:79`），设为 `"false"` 时 Agent 完全回退 ADR-0018 Phase 1-6 路径
 - **验证**：5B2 新增 20 passed + 7 skipped；watcher 回归 126 passed + 14 skipped
 - 主线 commit：`f366b1b`，改动 37 文件 +9083/-88
 - 依赖：无新增
@@ -191,7 +204,7 @@
 
 ### Windows 主机（中心服务器）
 - **FastAPI 后端**：端口 8000，提供 REST API + python-socketio 实时推送
-- **APScheduler**：进程内定时调度（recycler / session_watchdog / cron / 数据清理）
+- **APScheduler**：进程内定时调度（9 个注册 job：recycler / session_watchdog / device_lease_reconciler / cron_check / retention_cleanup / saq_queue_depth_poll / precheck_reaper / revoked_token_cleanup / auto_archive_sweep；详见 `app_scheduler.py` `register_schedules`）
 - **SAQ Worker**：进程内异步任务队列（post-completion / 通知 / 控制指令）
 - **React 前端**：端口 5173，Web Dashboard 界面
 - **数据库**：PostgreSQL
@@ -227,7 +240,11 @@
 
 **已取消（勿在新 Plan 中依赖）**：运行日志 tar/目录树上送 15.4、`run_log_bundle` JobArtifact 注册、patrol cycle 快照 `snapshots/`。
 
-**实施状态**：Sprint 2 Agent 见 `sprint2/plan-c-hdd-logarchiver`（PR #31）；控制面/前端 Sprint 3、Agent scan Sprint 4 见 [GitHub #32](https://github.com/DUElost/stability-test-platform/issues/32)。
+**实施状态**：
+- Sprint 2（Agent HDD + LogArchiver）：PR #31 已合并（`run_log_server.py` / `log_archiver.py` / `local_disk_monitor.py`）
+- Sprint 3（控制面 + 前端）：PR #34 已合并（`/archive` 端点、归档状态卡片、pending_archive banner）
+- Sprint 4（Agent scan + upload）：PR #35 已合并（`scan_runner.py` / `upload_manager.py` / `auto_archive_sweep` 调度）
+- 剩余：ScanRunner 真机验证待 Sprint 5（smoke 测试显示 scan tool blocked）
 
 ---
 
@@ -330,7 +347,10 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 | GET | `/api/v1/plan-runs/{id}/events` | 事件流(trigger/step/log_signal/audit 多源融合,支持 stage/severity 过滤+分页) |
 | GET | `/api/v1/plan-runs/{id}/devices` | 设备总览矩阵(含 ui_status 派生 + by_status/by_host facet) |
 | GET | `/api/v1/plan-runs/{id}/watcher-summary` | Watcher 异常聚合(按 category + trend) |
-| GET | `/api/v1/plan-runs/{id}/aee-reconciliation` | M1 灰度对账(只读):AEE signal 按 pull_source 分桶 vs (可选)NFS .dbg 清单 |
+| GET | `/api/v1/plan-runs/{id}/crash-details` | ADR-0025: AEE crash 事件详情（按 package_name 聚合） |
+| GET | `/api/v1/plan-runs/{id}/report/export` | 导出 PlanRun 报告（markdown/json） |
+| POST | `/api/v1/plan-runs/{id}/archive` | ADR-0025 S2: 手动触发日志归档 |
+| POST | `/api/v1/plan-runs/{id}/retry-dispatch` | 重新触发派发门禁 |
 | POST | `/api/v1/plan-runs/{id}/abort` | 中止 PlanRun(ADR-0021 D7) |
 | POST | `/api/v1/plan-runs/{id}/jobs/{job_id}/manual-retry` | patrol 退避中手动立即重试(ADR-0022 D7) |
 | POST | `/api/v1/plan-runs/{id}/jobs/{job_id}/manual-exit` | patrol 退避中手动退出(跳 teardown) |
@@ -371,7 +391,7 @@ tail -f /opt/stability-test-agent/logs/agent_error.log
 
 ### Pipeline 定义格式（pipeline_def）
 
-引擎仅接受 `lifecycle` 顶层键；`stages` 与 `phases` 格式会被拒绝（`pipeline_engine.py` L158-179）。
+引擎仅接受 `lifecycle` 顶层键；`stages` 与 `phases` 格式会被拒绝（`pipeline_engine.py` `_validate_pipeline` 方法内）。
 
 ```json
 {
@@ -442,6 +462,8 @@ prometheus-client
 
 ### 环境变量
 
+> 仅列关键项，完整清单见各 `.env.example`（后端 `backend/.env.example`、Agent `backend/agent/.env.example`、前端 `frontend/.env.example`）。
+
 | 变量 | 当前值 / 默认值 | 说明 |
 |------|--------|------|
 | `DATABASE_URL` | `postgresql+psycopg://stability:stability@localhost:5432/stability` | 数据库连接（Windows 侧 PostgreSQL） |
@@ -456,7 +478,7 @@ prometheus-client
 | `STP_NFS_ROOT` | `/mnt/storage/test-platform` | NFS 挂载根（生产侧），脚本/日志/产物的根目录 |
 | `STP_SCRIPT_ROOT` | `${STP_NFS_ROOT}/scripts` | 脚本扫描根。**开发环境必须显式覆盖**为 `<repo>/backend/agent/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | （空） | Agent 实际访问脚本的 NFS 路径前缀；扫描机=运行机时留空，跨机时指向 Agent 上的 NFS 挂载点 |
-| `STP_WATCHER_ENABLED` | `false` | Agent 侧 Watcher 子系统灰度开关（ADR-0018） |
+| `STP_WATCHER_ENABLED` | `true` | Agent 侧 Watcher 子系统开关（ADR-0018，默认 `"true"` 开启；设 `"false"` 关闭） |
 
 ---
 
@@ -562,7 +584,7 @@ class JobInstance(Base):
     plan_id: int           # FK -> plan.id (NOT NULL)
     device_id: int         # FK -> device.id
     host_id: str           # FK -> host.id
-    status: str            # PENDING, RUNNING, COMPLETED, FAILED, ABORTED
+    status: str            # PENDING, RUNNING, COMPLETED, FAILED, ABORTED, UNKNOWN
     status_reason: Optional[str]
     pipeline_def: JSONB
     started_at: Optional[datetime]
@@ -616,7 +638,7 @@ class StepTrace(Base):
 仓库现有脚本（`backend/agent/scripts/`，category 固定 `device`）：
 `check_device` / `clean_env` / `connect_wifi` / `ensure_root` / `fill_storage` /
 `flash_firmware` / `install_apk` / `monkey_check` / `monkey_launch (v5.0.0 主推；v1.0.0 / v2.0.0 / v4.0.0 为历史保留)` /
-`monkey_resource_push (v1.0.0，配套 launch v5)` / `monkey_setup` / `monkey_teardown` / `push_resources`
+`monkey_resource_push (v1.0.0，配套 launch v5)` / `monkey_setup` / `monkey_teardown (v1.0.0)` / `push_resources` / `stop_aimonkey`
 
 > **monkey lifecycle 推荐链**（ADR-0020 init 一次性 + patrol 周期性契约）：
 > - init: `check_device` → `ensure_root` → `monkey_setup` → `monkey_resource_push v1.0.0` → `monkey_launch v5.0.0`
@@ -662,7 +684,7 @@ class StepTrace(Base):
 | `is_active` | `true` | 允许 | 自动 true | ✅ ScriptRegistry 仅同步 active |
 | `description` | null | 允许 | 可选 | ❌ 仅 UI |
 
-**ADR-0020 不变量**：已存在版本不允许改 `default_params`（`backend/api/routes/scripts.py:214-218` 422 拦截），必须 `POST /api/v1/scripts/{name}/versions` 新建版本。
+**ADR-0020 不变量**：已存在版本不允许改 `default_params`（`backend/api/routes/scripts.py` `create_script_version` 内 422 拦截），必须 `POST /api/v1/scripts/{name}/versions` 新建版本。
 **前端入口**（`frontend/src/pages/scripts/ScriptManagementPage.tsx`）：仅暴露 *搜索 / 查看参数 / 新建版本* 三个动作；通用 PUT 接口未通过 UI 暴露。
 
 ### 完整链路（文件 → DB → Plan → Agent 执行）
@@ -736,7 +758,7 @@ class StepTrace(Base):
 
 1. 在 `backend/agent/scripts/<name>/v<version>/` 下放置脚本（python/shell/bat），由 `script_catalog.py` 扫描注册
 2. 在 Pipeline 定义中通过 `action: "script:<name>"` 引用
-3. 更新前端 PipelineEditor 的步骤模板（如需）
+3. 更新前端 Plan 编辑器的步骤模板（PlanCanvas / PlanStepInspector，如需）
 
 ### Q: 脚本如何扫描入库？开发环境路径怎么设？
 
@@ -809,34 +831,63 @@ class StepTrace(Base):
 - `backend/api/routes/scripts.py` - Script 管理 API
 - `backend/api/routes/schedules.py` - 定时调度 API
 - `backend/api/routes/agent_api.py` - Agent 认领/上报
+- `backend/api/routes/auth.py` - 认证（register/login/token/refresh/logout/me）
+- `backend/api/routes/users.py` - 用户管理
+- `backend/api/routes/audit.py` - 审计日志（prefix `/api/v1/audit-logs`）
+- `backend/api/routes/notifications.py` - 通知规则
+- `backend/api/routes/resource_pools.py` - WiFi 资源池
+- `backend/api/routes/dedup.py` - JIRA 去重 / PlanRun 去重扫描
 
 ### 基础设施层
-- `backend/services/plan_dispatcher.py` - Plan 异步分发器
-- `backend/services/plan_dispatcher_sync.py` - Plan 同步分发器
-- `backend/services/aggregator.py` / `aggregator_sync.py` - PlanRun 终态聚合
-- `backend/scheduler/app_scheduler.py` - APScheduler 4.x 统一调度器
-- `backend/scheduler/recycler.py` - Recycler 纯函数（APScheduler job 回调）
-- `backend/scheduler/cron_scheduler.py` - Cron 调度纯函数（APScheduler job 回调）
-- `backend/tasks/saq_tasks.py` - SAQ 异步任务定义
-- `backend/tasks/saq_worker.py` - SAQ Worker 生命周期管理
-- `backend/realtime/socketio_server.py` - python-socketio 服务端（/agent + /dashboard）
-- `backend/realtime/log_writer.py` - 异步日志文件持久化
-- `backend/core/metrics.py` - Prometheus 指标定义与工具函数
+- `backend/services/plan_dispatcher.py` / `plan_dispatcher_sync.py` / `plan_dispatcher_core.py` — Plan 分发
+- `backend/services/plan_precheck.py` — 派发门禁（dispatch gate）
+- `backend/services/plan_run_aggregation.py` — PlanRun 终态聚合
+- `backend/services/plan_run_abort.py` — PlanRun 中止
+- `backend/services/plan_chain_trigger.py` — Plan 链触发
+- `backend/services/dedup_scan.py` — ADR-0025 去重扫描 + 事件上传
+- `backend/scheduler/app_scheduler.py` — APScheduler 4.x 统一调度器（注册 9 个 job：recycler / session_watchdog / device_lease_reconciler / cron_check / retention_cleanup / saq_queue_depth_poll / precheck_reaper / revoked_token_cleanup / auto_archive_sweep）
+- `backend/scheduler/recycler.py` — Recycler（APScheduler job 回调）
+- `backend/scheduler/cron_scheduler.py` — Cron + auto_archive_sweep（APScheduler job 回调）
+- `backend/scheduler/precheck_reaper.py` — 派发门禁超时回收
+- `backend/tasks/saq_tasks.py` — SAQ 异步任务定义
+- `backend/tasks/saq_worker.py` — SAQ Worker 生命周期管理
+- `backend/realtime/socketio_server.py` — python-socketio 服务端（/agent + /dashboard）
+- `backend/realtime/log_writer.py` — 异步日志文件持久化
+- `backend/core/metrics.py` — Prometheus 指标定义与工具函数
+- `backend/core/csrf.py` — CSRF Origin 中间件
+- `backend/core/security.py` — Cookie + JWT + jti
 
 ### Agent 模块
-- `backend/agent/main.py` - Agent 主程序（含 `STP_WATCHER_ENABLED` 灰度开关 L69）
+- `backend/agent/main.py` - Agent 主程序（含 `STP_WATCHER_ENABLED` 开关 L79）
 - `backend/agent/config.py` - 集中路径配置
-- `backend/agent/heartbeat.py` - 心跳发送
+- `backend/agent/identity.py` - Agent 身份管理
+- `backend/agent/api_client.py` - HTTP 客户端（与后端通信核心）
+- `backend/agent/host_registry.py` - 主机自动注册
+- `backend/agent/heartbeat.py` / `heartbeat_thread.py` - 心跳发送
 - `backend/agent/device_discovery.py` - 设备发现
-- `backend/agent/system_monitor.py` - 系统监控
-- `backend/agent/pipeline_engine.py` - Pipeline 执行引擎（StepContext.job_id 透传）
-- `backend/agent/ws_client.py` - SocketIO 客户端（socketio.Client 同步版）
-- `backend/agent/step_trace_uploader.py` - Step 状态 HTTP 批量上报
+- `backend/agent/system_monitor.py` - 系统资源监控
+- `backend/agent/capacity_reporter.py` - 主机容量上报
+- `backend/agent/pipeline_engine.py` - Pipeline 执行引擎
+- `backend/agent/pipeline_runner.py` - Pipeline 执行入口
+- `backend/agent/pipeline_validator.py` - Pipeline 校验
+- `backend/agent/socketio_client.py` - SocketIO 客户端（socketio.Client 同步版）
+- `backend/agent/job_runner.py` - Job 执行调度
 - `backend/agent/job_session.py` - Job lifecycle 绑定 Watcher start/stop
+- `backend/agent/step_trace_uploader.py` - Step 状态 HTTP 批量上报
 - `backend/agent/artifact_uploader.py` - ArtifactUploader 单例（fire-and-forget）
-- `backend/agent/watcher/` - Watcher 子系统（sources/batcher/emitter/manager/policy/puller/device_watcher）
+- `backend/agent/lease_renewer.py` - Device Lease 续期
+- `backend/agent/patrol_recovery.py` - Patrol 恢复逻辑
+- `backend/agent/outbox_drainer.py` - log_signal outbox 投递
+- `backend/agent/watcher/` - Watcher 子系统（sources/batcher/emitter/manager/policy/puller/device_watcher/enable/contracts/exceptions，均为 .py 扁平文件）
 - `backend/agent/registry/local_db.py` - Agent SQLite（含 `log_signal_outbox` / `watcher_state`）
 - `backend/agent/registry/script_registry.py` - ScriptRegistry（解析 `script:<name>` action）
+
+**ADR-0025 方案 C 新增**：
+- `backend/agent/scan_runner.py` — 本地 dedup_org 扫描（Sprint 4）
+- `backend/agent/upload_manager.py` — 扫描报告 + 事件目录上传（Sprint 4）
+- `backend/agent/run_log_server.py` — HTTP `:8900` 运行日志服务（Sprint 2）
+- `backend/agent/log_archiver.py` — 日志归档到 HDD（Sprint 2）
+- `backend/agent/local_disk_monitor.py` — Agent 本地磁盘监控
 
 ### 前端核心
 - `frontend/src/main.tsx` - 应用入口
@@ -845,11 +896,14 @@ class StepTrace(Base):
 
 ### 前端组件
 - `frontend/src/pages/Dashboard.tsx` - 仪表盘
-- `frontend/src/pages/tasks/TaskDetails.tsx` - 任务详情（Pipeline 步骤树 + xterm.js）
+- `frontend/src/pages/execution/PlanRunDetailPage.tsx` - PlanRun 详情页（设备总览/Watcher 聚合/事件流）
 - `frontend/src/components/device/DeviceCard.tsx` - 设备卡片
 - `frontend/src/components/network/ConnectivityBadge.tsx` - 连接状态
-- `frontend/src/components/pipeline/PipelineEditor.tsx` - Pipeline 可视化编辑器
+- `frontend/src/components/pipeline/PlanCanvas.tsx` - Pipeline 可视化编辑器（Plan 生命周期画布）
+- `frontend/src/components/pipeline/PlanStepInspector.tsx` - Plan 步骤检查器
+- `frontend/src/components/pipeline/PipelineExecutionTimeline.tsx` - Pipeline 执行时间线
 - `frontend/src/components/pipeline/PipelineStepTree.tsx` - Pipeline 步骤树（运行时视图）
+- `frontend/src/components/pipeline/PlanChainPanel.tsx` - Plan 链面板
 - `frontend/src/components/pipeline/pipelineTypes.ts` - Pipeline 类型定义
 - `frontend/src/components/log/XTerminal.tsx` - xterm.js 终端日志组件
 - `frontend/src/components/network/HostCard.tsx` - 主机卡片
@@ -872,4 +926,4 @@ class StepTrace(Base):
 
 ---
 
-*最后更新时间：2026-05-21 (ADR-0024 浏览器 Web 会话安全化 — Cookie / CSRF / Refresh 黑名单 / CSRF reason 指标)*
+*最后更新时间：2026-06-24（基于外部审查修正：STP_WATCHER_ENABLED 默认值 true、Job 状态机补全、过时行号删除、不存在的 PipelineEditor/aee-reconciliation 移除、缺失 ADR/模块/定时任务补全）*
