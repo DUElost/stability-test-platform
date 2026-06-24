@@ -393,6 +393,63 @@ def test_reconciler_start_failure_restores_direct_emit(lock_tracker, patch_manag
     assert 101 not in lock_tracker.active_jobs
 
 
+def test_reconciler_uses_get_aee_local_root(lock_tracker, patch_manager, monkeypatch, tmp_path):
+    """Reconciler local_root 来自 get_aee_local_root()，不使用 nfs_base_dir。"""
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
+    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
+
+    hdd = tmp_path / "hdd"
+    hdd.mkdir()
+    monkeypatch.setenv("STP_AEE_LOCAL_ROOT", str(hdd))
+
+    class _FakeImpl:
+        def __init__(self):
+            self._aee_reconciler_active = False
+            self.emitter = object()
+
+        def set_aee_reconciler_active(self, active: bool) -> None:
+            self._aee_reconciler_active = bool(active)
+
+    impl = _FakeImpl()
+    captured: dict = {}
+
+    class _CaptureReconciler:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def start(self):
+            pass
+
+    class _MgrWithDeps(_FakeManager):
+        def get_dep(self, key, default=None):
+            return {
+                "nfs_base_dir": "/mnt/cifs/should-not-use",
+                "local_db": object(),
+                "adb_path": "adb",
+            }.get(key, default)
+
+    patch_manager(_MgrWithDeps(mode="ok", capability="inotifyd_root"))
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.AeeDbHistoryReconciler", _CaptureReconciler,
+    )
+
+    session = JobSession(
+        job_payload=_make_payload(),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    session._handle.impl = impl
+    session._maybe_start_aee_reconciler()
+
+    assert session._reconciler is not None
+    assert captured.get("local_root") == hdd
+
+    session.__exit__(None, None, None)
+
+
 def test_summary_to_payload_when_watcher_never_started(lock_tracker, patch_manager):
     """DEGRADED 路径下 handle 为 None，to_complete_payload 仍可安全调用。"""
     patch_manager(_FakeManager(mode="fail_unavail"))
