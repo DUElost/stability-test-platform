@@ -414,7 +414,7 @@ export default function PlanListPage() {
             description="创建您的第一个测试计划"
             icon={<FileText className="w-16 h-16" />}
             action={
-              <Button onClick={() => navigate('/orchestration/workflows/new')}>
+              <Button onClick={() => navigate('/orchestration/plans/new')}>
                 <Plus className="w-4 h-4 mr-2" /> 新建 Plan
               </Button>
             }

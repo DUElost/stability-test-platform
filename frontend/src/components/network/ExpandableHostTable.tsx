@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -12,6 +12,10 @@ import {
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import {
+  resourceUsageBgClass,
+  resourceUsageTextClass,
+} from '@/design-system/tokens';
 
 export interface HostResources {
   cpu_load: number;
@@ -76,9 +80,11 @@ function formatDuration(seconds: number): string {
 }
 
 function getResourceColor(percentage: number): string {
-  if (percentage >= 90) return 'text-red-600';
-  if (percentage >= 70) return 'text-amber-500';
-  return 'text-emerald-500';
+  return resourceUsageTextClass(percentage);
+}
+
+function getProgressColor(percentage: number): string {
+  return resourceUsageBgClass(percentage);
 }
 
 const REASON_LABELS: Record<string, string> = {
@@ -88,13 +94,6 @@ const REASON_LABELS: Record<string, string> = {
   mount_failed: '挂载失败',
   adb_low_healthy_devices: '无健康设备',
 };
-
-
-function getProgressColor(percentage: number): string {
-  if (percentage >= 90) return 'bg-red-500';
-  if (percentage >= 70) return 'bg-amber-500';
-  return 'bg-emerald-500';
-}
 
 export function ExpandableHostTable({
   hosts,
@@ -150,56 +149,56 @@ export function ExpandableHostTable({
       <div className="space-y-4">
         {/* Summary Stats - 简洁版本 */}
         <div className="grid grid-cols-4 gap-3">
-          <div className="bg-white rounded-lg border border-gray-200 p-3 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
-              <Server className="w-5 h-5 text-gray-600" />
+          <div className="bg-card rounded-lg border border-border p-3 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
+              <Server className="w-5 h-5 text-muted-foreground" />
             </div>
             <div>
-              <div className="text-xl font-semibold text-gray-900">{stats.total}</div>
-              <div className="text-xs text-gray-500">主机总数</div>
+              <div className="text-xl font-semibold text-foreground">{stats.total}</div>
+              <div className="text-xs text-muted-foreground">主机总数</div>
             </div>
           </div>
-          <div className="bg-white rounded-lg border border-emerald-200 p-3 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center">
-              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+          <div className="bg-card rounded-lg border border-success/30 p-3 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-success/10 flex items-center justify-center">
+              <CheckCircle2 className="w-5 h-5 text-success" />
             </div>
             <div>
-              <div className="text-xl font-semibold text-emerald-600">{stats.online}</div>
-              <div className="text-xs text-gray-500">在线</div>
+              <div className="text-xl font-semibold text-success">{stats.online}</div>
+              <div className="text-xs text-muted-foreground">在线</div>
             </div>
           </div>
-          <div className="bg-white rounded-lg border border-amber-200 p-3 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
+          <div className="bg-card rounded-lg border border-warning/30 p-3 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-warning/10 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5 text-warning" />
             </div>
             <div>
-              <div className="text-xl font-semibold text-amber-600">{stats.degraded}</div>
-              <div className="text-xs text-gray-500">告警</div>
+              <div className="text-xl font-semibold text-warning">{stats.degraded}</div>
+              <div className="text-xs text-muted-foreground">告警</div>
             </div>
           </div>
-          <div className="bg-white rounded-lg border border-gray-200 p-3 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
-              <Activity className="w-5 h-5 text-gray-500" />
+          <div className="bg-card rounded-lg border border-border p-3 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
+              <Activity className="w-5 h-5 text-muted-foreground" />
             </div>
             <div>
-              <div className="text-xl font-semibold text-gray-600">{stats.offline}</div>
-              <div className="text-xs text-gray-500">离线</div>
+              <div className="text-xl font-semibold text-muted-foreground">{stats.offline}</div>
+              <div className="text-xs text-muted-foreground">离线</div>
             </div>
           </div>
         </div>
 
         {/* Table */}
-        <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
           <Table>
             <TableHeader>
-              <TableRow className="bg-gray-50 hover:bg-gray-50">
+              <TableRow className="bg-muted/50 hover:bg-muted/50">
                 {selectable && (
                   <TableHead className="w-10 p-3">
                     <input
                       type="checkbox"
                       checked={selectedIds ? selectedIds.size === hosts.length && hosts.length > 0 : false}
                       onChange={toggleAll}
-                      className="rounded border-gray-300"
+                      className="rounded border-border"
                     />
                   </TableHead>
                 )}
@@ -222,12 +221,12 @@ export function ExpandableHostTable({
                 const isExpanded = expandedRows.has(host.id);
 
                 return (
-                  <>
+                  <Fragment key={host.id}>
                     <TableRow
                       key={host.id}
                       className={cn(
-                        'cursor-pointer hover:bg-gray-50 transition-colors',
-                        isExpanded && 'bg-gray-50'
+                        'cursor-pointer hover:bg-muted/50 transition-colors',
+                        isExpanded && 'bg-muted/50'
                       )}
                       onClick={() => toggleRow(host.id)}
                     >
@@ -238,14 +237,14 @@ export function ExpandableHostTable({
                             checked={selectedIds?.has(host.id) ?? false}
                             onClick={(e) => toggleSelect(host.id, e)}
                             onChange={() => {}}
-                            className="rounded border-gray-300"
+                            className="rounded border-border"
                           />
                         </TableCell>
                       )}
                       <TableCell className="p-3">
                         <ChevronDown
                           className={cn(
-                            'w-4 h-4 text-gray-400 transition-transform',
+                            'w-4 h-4 text-muted-foreground transition-transform',
                             !isExpanded && '-rotate-90'
                           )}
                         />
@@ -253,7 +252,7 @@ export function ExpandableHostTable({
                       <TableCell className="p-3 font-medium text-foreground max-w-[200px] truncate" title={host.name ?? ''}>
                         {host.name}
                       </TableCell>
-                      <TableCell className="p-3 text-gray-500 font-mono text-sm">
+                      <TableCell className="p-3 text-muted-foreground font-mono text-sm">
                         {host.ip}
                       </TableCell>
                       <TableCell className="p-3">
@@ -264,8 +263,8 @@ export function ExpandableHostTable({
                               className={cn(
                                 'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help',
                                 host.health_status === 'UNSCHEDULABLE'
-                                  ? 'bg-red-50 text-red-600'
-                                  : 'bg-amber-50 text-amber-600'
+                                  ? 'bg-destructive/10 text-destructive'
+                                  : 'bg-warning/10 text-warning'
                               )}
                               title={host.health_reasons?.map(r => REASON_LABELS[r] || r).join(', ') || ''}
                             >
@@ -278,7 +277,7 @@ export function ExpandableHostTable({
                         <span
                           className={cn(
                           'inline-flex items-center justify-center min-w-[32px] px-2 py-0.5 rounded-full text-xs font-medium',
-                          (host.device_count || 0) > 0 ? 'bg-blue-50 text-blue-600' : 'bg-gray-50 text-gray-400'
+                          (host.device_count || 0) > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground'
                         )}
                           title={host.claim_hint ?? undefined}
                         >
@@ -288,7 +287,7 @@ export function ExpandableHostTable({
                       <TableCell className="p-3 text-center">
                         <span className={cn(
                           'inline-flex items-center justify-center min-w-[32px] px-2 py-0.5 rounded-full text-xs font-medium',
-                          (host.active_tasks || 0) > 0 ? 'bg-purple-50 text-purple-600' : 'bg-gray-50 text-gray-400'
+                          (host.active_tasks || 0) > 0 ? 'bg-info/10 text-info' : 'bg-muted/50 text-muted-foreground'
                         )}>
                           {host.active_tasks || 0}
                         </span>
@@ -306,7 +305,7 @@ export function ExpandableHostTable({
                             </span>
                           </div>
                         ) : (
-                          <span className="text-gray-300">-</span>
+                          <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
                       <TableCell className="p-3">
@@ -322,7 +321,7 @@ export function ExpandableHostTable({
                             </span>
                           </div>
                         ) : (
-                          <span className="text-gray-300">-</span>
+                          <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
                       <TableCell className="p-3">
@@ -338,7 +337,7 @@ export function ExpandableHostTable({
                             </span>
                           </div>
                         ) : (
-                          <span className="text-gray-300">-</span>
+                          <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
                       <TableCell className="p-3 text-center">
@@ -347,8 +346,8 @@ export function ExpandableHostTable({
                             className={cn(
                               'rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
                               host.watcher_admin_active !== false
-                                ? 'bg-emerald-50 text-emerald-700'
-                                : 'bg-red-50 text-red-700'
+                                ? 'bg-success/10 text-success'
+                                : 'bg-destructive/10 text-destructive'
                             )}
                           >
                             {host.watcher_admin_active !== false ? '已激活' : '未激活'}
@@ -375,13 +374,13 @@ export function ExpandableHostTable({
                                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                                 'disabled:cursor-not-allowed disabled:opacity-50',
                                 host.watcher_admin_active !== false
-                                  ? 'bg-emerald-500'
-                                  : 'bg-gray-200',
+                                  ? 'bg-success'
+                                  : 'bg-muted',
                               )}
                             >
                               <span
                                 className={cn(
-                                  'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow-sm',
+                                  'pointer-events-none inline-block h-4 w-4 rounded-full bg-card shadow-sm',
                                   'ring-0 transition-transform',
                                   host.watcher_admin_active !== false
                                     ? 'translate-x-4'
@@ -392,7 +391,7 @@ export function ExpandableHostTable({
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="p-3 text-right text-xs text-gray-400">
+                      <TableCell className="p-3 text-right text-xs text-muted-foreground">
                         {host.last_heartbeat
                           ? new Date(host.last_heartbeat).toLocaleTimeString()
                           : '-'}
@@ -405,114 +404,114 @@ export function ExpandableHostTable({
                               onHotUpdate(host.id);
                             }}
                             disabled={isHotUpdating?.(host.id)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                           >
                             {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
                           </button>
                         ) : (
-                          <span className="text-gray-300 text-xs">-</span>
+                          <span className="text-muted-foreground/40 text-xs">-</span>
                         )}
                       </TableCell>
                     </TableRow>
 
                     {/* Expanded Details */}
                     {isExpanded && (
-                      <TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
+                      <TableRow className="bg-muted/50/50 hover:bg-muted/50/50">
                         <TableCell colSpan={selectable ? 13 : 12} className="p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                             {/* CPU Details */}
-                            <div className="bg-white rounded-lg border border-gray-100 p-3">
+                            <div className="bg-card rounded-lg border border-border p-3">
                               <div className="flex items-center gap-2 mb-2">
-                                <Cpu className="w-4 h-4 text-gray-500" />
-                                <span className="text-sm font-medium text-gray-700">CPU</span>
+                                <Cpu className="w-4 h-4 text-muted-foreground" />
+                                <span className="text-sm font-medium text-foreground">CPU</span>
                               </div>
                               {host.resources ? (
                                 <div className="space-y-1">
                                   <div className="flex justify-between text-xs">
-                                    <span className="text-gray-500">负载</span>
+                                    <span className="text-muted-foreground">负载</span>
                                     <span className={cn('font-mono', getResourceColor(host.resources.cpu_load))}>
                                       {host.resources.cpu_load.toFixed(1)}%
                                     </span>
                                   </div>
                                   {host.resources.cpu_cores && (
                                     <div className="flex justify-between text-xs">
-                                      <span className="text-gray-500">核心数</span>
-                                      <span className="font-mono text-gray-700">{host.resources.cpu_cores}</span>
+                                      <span className="text-muted-foreground">核心数</span>
+                                      <span className="font-mono text-foreground">{host.resources.cpu_cores}</span>
                                     </div>
                                   )}
                                 </div>
                               ) : (
-                                <span className="text-xs text-gray-400">无数据</span>
+                                <span className="text-xs text-muted-foreground">无数据</span>
                               )}
                             </div>
 
                             {/* Memory Details */}
-                            <div className="bg-white rounded-lg border border-gray-100 p-3">
+                            <div className="bg-card rounded-lg border border-border p-3">
                               <div className="flex items-center gap-2 mb-2">
-                                <MemoryStick className="w-4 h-4 text-gray-500" />
-                                <span className="text-sm font-medium text-gray-700">内存</span>
+                                <MemoryStick className="w-4 h-4 text-muted-foreground" />
+                                <span className="text-sm font-medium text-foreground">内存</span>
                               </div>
                               {host.resources ? (
                                 <div className="space-y-1">
                                   <div className="flex justify-between text-xs">
-                                    <span className="text-gray-500">使用率</span>
+                                    <span className="text-muted-foreground">使用率</span>
                                     <span className={cn('font-mono', getResourceColor(host.resources.ram_usage))}>
                                       {host.resources.ram_usage.toFixed(1)}%
                                     </span>
                                   </div>
                                   {host.resources.ram_total_gb && (
                                     <div className="flex justify-between text-xs">
-                                      <span className="text-gray-500">总量</span>
-                                      <span className="font-mono text-gray-700">{formatBytes(host.resources.ram_total_gb)}</span>
+                                      <span className="text-muted-foreground">总量</span>
+                                      <span className="font-mono text-foreground">{formatBytes(host.resources.ram_total_gb)}</span>
                                     </div>
                                   )}
                                 </div>
                               ) : (
-                                <span className="text-xs text-gray-400">无数据</span>
+                                <span className="text-xs text-muted-foreground">无数据</span>
                               )}
                             </div>
 
                             {/* Disk Details */}
-                            <div className="bg-white rounded-lg border border-gray-100 p-3">
+                            <div className="bg-card rounded-lg border border-border p-3">
                               <div className="flex items-center gap-2 mb-2">
-                                <HardDrive className="w-4 h-4 text-gray-500" />
-                                <span className="text-sm font-medium text-gray-700">磁盘</span>
+                                <HardDrive className="w-4 h-4 text-muted-foreground" />
+                                <span className="text-sm font-medium text-foreground">磁盘</span>
                               </div>
                               {host.resources ? (
                                 <div className="space-y-1">
                                   <div className="flex justify-between text-xs">
-                                    <span className="text-gray-500">使用率</span>
+                                    <span className="text-muted-foreground">使用率</span>
                                     <span className={cn('font-mono', getResourceColor(host.resources.disk_usage))}>
                                       {host.resources.disk_usage.toFixed(1)}%
                                     </span>
                                   </div>
                                   {host.resources.disk_total_gb && (
                                     <div className="flex justify-between text-xs">
-                                      <span className="text-gray-500">总量</span>
-                                      <span className="font-mono text-gray-700">{formatBytes(host.resources.disk_total_gb)}</span>
+                                      <span className="text-muted-foreground">总量</span>
+                                      <span className="font-mono text-foreground">{formatBytes(host.resources.disk_total_gb)}</span>
                                     </div>
                                   )}
                                 </div>
                               ) : (
-                                <span className="text-xs text-gray-400">无数据</span>
+                                <span className="text-xs text-muted-foreground">无数据</span>
                               )}
                             </div>
 
                             {/* Other Info */}
-                            <div className="bg-white rounded-lg border border-gray-100 p-3">
+                            <div className="bg-card rounded-lg border border-border p-3">
                               <div className="flex items-center gap-2 mb-2">
-                                <Clock className="w-4 h-4 text-gray-500" />
-                                <span className="text-sm font-medium text-gray-700">其他</span>
+                                <Clock className="w-4 h-4 text-muted-foreground" />
+                                <span className="text-sm font-medium text-foreground">其他</span>
                               </div>
                               {host.resources ? (
                                 <div className="space-y-1">
                                   {host.resources.temperature !== undefined && (
                                     <div className="flex justify-between text-xs">
-                                      <span className="text-gray-500">温度</span>
+                                      <span className="text-muted-foreground">温度</span>
                                       <span className={cn(
                                         'font-mono',
-                                        host.resources.temperature > 80 ? 'text-red-600' :
-                                        host.resources.temperature > 60 ? 'text-amber-500' : 'text-gray-700'
+                                        host.resources.temperature > 80 ? 'text-destructive' :
+                                        host.resources.temperature > 60 ? 'text-warning' : 'text-foreground'
                                       )}>
                                         {host.resources.temperature.toFixed(1)}°C
                                       </span>
@@ -520,20 +519,20 @@ export function ExpandableHostTable({
                                   )}
                                   {host.resources.uptime_seconds !== undefined && (
                                     <div className="flex justify-between text-xs">
-                                      <span className="text-gray-500">运行时间</span>
-                                      <span className="font-mono text-gray-700">{formatDuration(host.resources.uptime_seconds)}</span>
+                                      <span className="text-muted-foreground">运行时间</span>
+                                      <span className="font-mono text-foreground">{formatDuration(host.resources.uptime_seconds)}</span>
                                     </div>
                                   )}
                                 </div>
                               ) : (
-                                <span className="text-xs text-gray-400">无数据</span>
+                                <span className="text-xs text-muted-foreground">无数据</span>
                               )}
                             </div>
                           </div>
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </Fragment>
                 );
               })}
             </TableBody>

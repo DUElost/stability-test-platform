@@ -520,6 +520,33 @@ export const PIPELINE_TIMELINE_TONE = {
   teardown: 'border-warning/30 bg-warning/5',
 } as const;
 
+/** 资源使用率着色（CPU/RAM/磁盘/电量等） */
+export const RESOURCE_USAGE = {
+  text: {
+    critical: 'text-destructive',
+    warning: 'text-warning',
+    ok: 'text-success',
+    muted: 'text-muted-foreground',
+  },
+  bg: {
+    critical: 'bg-destructive',
+    warning: 'bg-warning',
+    ok: 'bg-success',
+  },
+} as const;
+
+export function resourceUsageTextClass(percentage: number): string {
+  if (percentage >= 90) return RESOURCE_USAGE.text.critical;
+  if (percentage >= 70) return RESOURCE_USAGE.text.warning;
+  return RESOURCE_USAGE.text.ok;
+}
+
+export function resourceUsageBgClass(percentage: number): string {
+  if (percentage >= 90) return RESOURCE_USAGE.bg.critical;
+  if (percentage >= 70) return RESOURCE_USAGE.bg.warning;
+  return RESOURCE_USAGE.bg.ok;
+}
+
 /** 列表页骨架屏 */
 export const SKELETON_BLOCK = 'bg-muted animate-pulse rounded-lg';
 

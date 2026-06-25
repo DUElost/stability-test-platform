@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AlertCircle } from 'lucide-react';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { api } from '@/utils/api';
-import { SURFACE } from '@/design-system/tokens';
+import { SURFACE, TEXT } from '@/design-system/tokens';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 
 export default function LoginPage() {
@@ -90,7 +90,7 @@ export default function LoginPage() {
           </form>
 
           <div className="mt-4 text-center text-sm">
-            <p className="text-gray-500">
+            <p className={TEXT.subtitle}>
               还没有账号？
               <Link to="/register" className="text-primary hover:underline ml-1">
                 立即注册

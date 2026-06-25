@@ -27,6 +27,7 @@ import {
   Search,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
+import { FORM, resourceUsageBgClass, resourceUsageTextClass, TEXT } from '@/design-system/tokens';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
@@ -112,22 +113,22 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
         <button
           onClick={() => setStatusFilter('all')}
           className={cn(
-            'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'all' ? 'border-gray-400 shadow-sm' : 'border-gray-200'
+            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
+            statusFilter === 'all' ? 'border-muted-foreground shadow-sm' : 'border-border'
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
-            <Smartphone className="w-5 h-5 text-gray-600" />
+          <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
+            <Smartphone className="w-5 h-5 text-muted-foreground" />
           </div>
           <div>
-            <div className="text-xl font-semibold text-gray-900">{stats.total}</div>
-            <div className="text-xs text-gray-500">全部设备</div>
+            <div className="text-xl font-semibold text-foreground">{stats.total}</div>
+            <div className="text-xs text-muted-foreground">全部设备</div>
           </div>
         </button>
         <button
           onClick={() => setStatusFilter('idle')}
           className={cn(
-            'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
+            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
             statusFilter === 'idle'
               ? 'border-success shadow-md bg-success/5'
               : 'border-success/20 hover:border-success/40 hover:bg-success/5'
@@ -138,13 +139,13 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           </div>
           <div>
             <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.idle}`}>{stats.idle}</div>
-            <div className="text-xs text-gray-500">空闲</div>
+            <div className="text-xs text-muted-foreground">空闲</div>
           </div>
         </button>
         <button
           onClick={() => setStatusFilter('testing')}
           className={cn(
-            'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
+            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
             statusFilter === 'testing'
               ? 'border-primary shadow-md bg-primary/5'
               : 'border-primary/20 hover:border-primary/40 hover:bg-primary/5'
@@ -155,28 +156,28 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           </div>
           <div>
             <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.testing}`}>{stats.testing}</div>
-            <div className="text-xs text-gray-500">测试中</div>
+            <div className="text-xs text-muted-foreground">测试中</div>
           </div>
         </button>
         <button
           onClick={() => setStatusFilter('offline')}
           className={cn(
-            'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
-            statusFilter === 'offline' ? 'border-gray-400 shadow-sm' : 'border-gray-200'
+            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
+            statusFilter === 'offline' ? 'border-muted-foreground shadow-sm' : 'border-border'
           )}
         >
-          <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center">
-            <WifiOff className="w-5 h-5 text-gray-500" />
+          <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
+            <WifiOff className="w-5 h-5 text-muted-foreground" />
           </div>
           <div>
-            <div className="text-xl font-semibold text-gray-600">{stats.offline}</div>
-            <div className="text-xs text-gray-500">离线</div>
+            <div className="text-xl font-semibold text-muted-foreground">{stats.offline}</div>
+            <div className="text-xs text-muted-foreground">离线</div>
           </div>
         </button>
         <button
           onClick={() => setStatusFilter('error')}
           className={cn(
-            'bg-white rounded-lg border p-3 flex items-center gap-3 transition-all',
+            'bg-card rounded-lg border p-3 flex items-center gap-3 transition-all',
             statusFilter === 'error'
               ? 'border-destructive shadow-md bg-destructive/5'
               : 'border-destructive/20 hover:border-destructive/40 hover:bg-destructive/5'
@@ -187,14 +188,14 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           </div>
           <div>
             <div className={`text-xl font-semibold ${ENTITY_STATUS_COLORS.device.error}`}>{stats.error}</div>
-            <div className="text-xs text-gray-500">错误</div>
+            <div className="text-xs text-muted-foreground">错误</div>
           </div>
         </button>
       </div>
 
       {/* Search */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
+        <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none', TEXT.subtitle)} />
         <input
           id="device-search"
           name="device-search"
@@ -203,15 +204,15 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           placeholder="搜索设备序列号/型号/主机..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+          className={cn('w-full pl-9', FORM.inputSm)}
         />
       </div>
 
       {/* Table */}
-      <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+      <div className="bg-card rounded-xl border border-border overflow-hidden">
         <Table>
           <TableHeader>
-            <TableRow className="bg-gray-50 hover:bg-gray-50">
+            <TableRow className="bg-muted/50 hover:bg-muted/50">
               <TableHead className="w-10"></TableHead>
               <TableHead className="font-medium">序列号</TableHead>
               <TableHead className="font-medium">型号</TableHead>
@@ -230,35 +231,35 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                   <TableRow
                     key={device.id}
                     className={cn(
-                      'cursor-pointer hover:bg-gray-50 transition-colors',
-                      isExpanded && 'bg-gray-50'
+                      'cursor-pointer hover:bg-muted/50 transition-colors',
+                      isExpanded && 'bg-muted/50'
                     )}
                     onClick={() => toggleRow(device.id)}
                   >
                     <TableCell className="p-3">
                       <ChevronDown
                         className={cn(
-                          'w-4 h-4 text-gray-400 transition-transform',
+                          'w-4 h-4 text-muted-foreground transition-transform',
                           !isExpanded && '-rotate-90'
                         )}
                       />
                     </TableCell>
-                    <TableCell className="p-3 font-mono text-sm text-gray-700">
+                    <TableCell className="p-3 font-mono text-sm text-foreground">
                       {device.serial}
                     </TableCell>
                     <TableCell className="p-3 font-medium text-foreground max-w-[160px] truncate" title={device.model ?? ''}>
                       {device.model}
                     </TableCell>
-                    <TableCell className="p-3 text-xs text-gray-500 font-mono whitespace-nowrap">
+                    <TableCell className="p-3 text-xs text-muted-foreground font-mono whitespace-nowrap">
                       {device.build_display_id || '-'}
                     </TableCell>
                     <TableCell className="p-3">
                       <StatusBadge kind="device-ui" status={device.status} size="sm" />
                     </TableCell>
-                    <TableCell className="p-3 text-gray-500 text-sm">
+                    <TableCell className="p-3 text-muted-foreground text-sm">
                       {device.host_name || '-'}
                     </TableCell>
-                    <TableCell className="p-3 text-right text-xs text-gray-400">
+                    <TableCell className="p-3 text-right text-xs text-muted-foreground">
                       {device.last_seen
                         ? new Date(device.last_seen).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
                         : '-'}
@@ -267,44 +268,43 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
 
                   {/* Expanded Details */}
                   {isExpanded && (
-                    <TableRow className="bg-gray-50/50 hover:bg-gray-50/50">
+                    <TableRow className="bg-muted/50/50 hover:bg-muted/50/50">
                       <TableCell colSpan={7} className="p-4">
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                           {/* Device Info */}
-                          <div className="bg-white rounded-lg border border-gray-100 p-3">
+                          <div className="bg-card rounded-lg border border-border p-3">
                             <div className="flex items-center gap-2 mb-2">
-                              <Smartphone className="w-4 h-4 text-gray-500" />
-                              <span className="text-sm font-medium text-gray-700">设备信息</span>
+                              <Smartphone className="w-4 h-4 text-muted-foreground" />
+                              <span className="text-sm font-medium text-foreground">设备信息</span>
                             </div>
                             <div className="space-y-1 text-xs">
                               <div className="flex justify-between">
-                                <span className="text-gray-500">设备ID</span>
-                                <span className="font-mono text-gray-700">{device.id}</span>
+                                <span className="text-muted-foreground">设备ID</span>
+                                <span className="font-mono text-foreground">{device.id}</span>
                               </div>
                               <div className="flex justify-between">
-                                <span className="text-gray-500">序列号</span>
-                                <span className="font-mono text-gray-700">{device.serial}</span>
+                                <span className="text-muted-foreground">序列号</span>
+                                <span className="font-mono text-foreground">{device.serial}</span>
                               </div>
                               <div className="flex justify-between">
-                                <span className="text-gray-500">型号</span>
-                                <span className="text-gray-700">{device.model}</span>
+                                <span className="text-muted-foreground">型号</span>
+                                <span className="text-foreground">{device.model}</span>
                               </div>
                             </div>
                           </div>
 
                           {/* Battery */}
-                          <div className="bg-white rounded-lg border border-gray-100 p-3">
+                          <div className="bg-card rounded-lg border border-border p-3">
                             <div className="flex items-center gap-2 mb-2">
-                              <Battery className="w-4 h-4 text-gray-500" />
-                              <span className="text-sm font-medium text-gray-700">电量</span>
+                              <Battery className="w-4 h-4 text-muted-foreground" />
+                              <span className="text-sm font-medium text-foreground">电量</span>
                             </div>
                             <div className="space-y-2">
                               <div className="flex justify-between text-xs mb-1">
-                                <span className="text-gray-500">当前电量</span>
+                                <span className="text-muted-foreground">当前电量</span>
                                 <span className={cn(
                                   'font-mono font-medium',
-                                  (device.battery_level ?? 0) < 20 ? 'text-red-500' :
-                                  (device.battery_level ?? 0) < 50 ? 'text-amber-500' : 'text-emerald-600'
+                                  resourceUsageTextClass(100 - (device.battery_level ?? 0)),
                                 )}>
                                   {device.battery_level ?? 0}%
                                 </span>
@@ -312,63 +312,60 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                               <Progress
                                 value={device.battery_level ?? 0}
                                 className="h-2"
-                                indicatorClassName={cn(
-                                  (device.battery_level ?? 0) < 20 ? 'bg-red-500' :
-                                  (device.battery_level ?? 0) < 50 ? 'bg-amber-500' : 'bg-emerald-500'
-                                )}
+                                indicatorClassName={resourceUsageBgClass(100 - (device.battery_level ?? 0))}
                               />
                             </div>
                           </div>
 
                           {/* Temperature */}
-                          <div className="bg-white rounded-lg border border-gray-100 p-3">
+                          <div className="bg-card rounded-lg border border-border p-3">
                             <div className="flex items-center gap-2 mb-2">
-                              <Thermometer className="w-4 h-4 text-gray-500" />
-                              <span className="text-sm font-medium text-gray-700">温度</span>
+                              <Thermometer className="w-4 h-4 text-muted-foreground" />
+                              <span className="text-sm font-medium text-foreground">温度</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <span className={cn(
                                 'text-2xl font-semibold font-mono',
-                                (device.temperature ?? 0) > 45 ? 'text-red-500' :
-                                (device.temperature ?? 0) > 40 ? 'text-amber-500' : 'text-gray-700'
+                                (device.temperature ?? 0) > 45 ? 'text-destructive' :
+                                (device.temperature ?? 0) > 40 ? 'text-warning' : 'text-foreground'
                               )}>
                                 {device.temperature ?? '-'}
                               </span>
-                              {device.temperature != null && <span className="text-sm text-gray-400">°C</span>}
+                              {device.temperature != null && <span className="text-sm text-muted-foreground">°C</span>}
                             </div>
                           </div>
 
                           {/* Network */}
-                          <div className="bg-white rounded-lg border border-gray-100 p-3">
+                          <div className="bg-card rounded-lg border border-border p-3">
                             <div className="flex items-center gap-2 mb-2">
                               {device.network_latency != null ? (
-                                <Wifi className="w-4 h-4 text-emerald-500" />
+                                <Wifi className="w-4 h-4 text-success" />
                               ) : (
-                                <WifiOff className="w-4 h-4 text-gray-400" />
+                                <WifiOff className="w-4 h-4 text-muted-foreground" />
                               )}
-                              <span className="text-sm font-medium text-gray-700">网络延迟</span>
+                              <span className="text-sm font-medium text-foreground">网络延迟</span>
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-2xl font-semibold font-mono text-gray-700">
+                              <span className="text-2xl font-semibold font-mono text-foreground">
                                 {device.network_latency != null ? device.network_latency : '-'}
                               </span>
-                              {device.network_latency != null && <span className="text-sm text-gray-400">ms</span>}
+                              {device.network_latency != null && <span className="text-sm text-muted-foreground">ms</span>}
                             </div>
                           </div>
 
                           {/* Current Task & Actions */}
-                          <div className="bg-white rounded-lg border border-gray-100 p-3">
+                          <div className="bg-card rounded-lg border border-border p-3">
                             <div className="flex items-center gap-2 mb-2">
-                              <Clock className="w-4 h-4 text-gray-500" />
-                              <span className="text-sm font-medium text-gray-700">当前任务</span>
+                              <Clock className="w-4 h-4 text-muted-foreground" />
+                              <span className="text-sm font-medium text-foreground">当前任务</span>
                             </div>
-                            <div className="text-xs text-gray-500">
+                            <div className="text-xs text-muted-foreground">
                               {device.current_task || '无任务'}
                             </div>
                             {onViewMetrics && (
                               <button
                                 onClick={(e) => { e.stopPropagation(); onViewMetrics(device); }}
-                                className="mt-2 text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                                className="mt-2 text-xs text-primary hover:text-primary/80 flex items-center gap-1"
                               >
                                 <Activity className="w-3 h-3" />
                                 查看指标历史
@@ -387,8 +384,8 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
 
         {/* Pagination */}
         {filteredDevices.length > pageSize && (
-          <div className="p-3 border-t border-gray-100 flex items-center justify-between">
-            <div className="text-xs text-gray-400">
+          <div className="p-3 border-t border-border flex items-center justify-between">
+            <div className="text-xs text-muted-foreground">
               显示第 {(currentPage - 1) * pageSize + 1} - {Math.min(currentPage * pageSize, filteredDevices.length)} 条，
               共 {filteredDevices.length} 条设备
             </div>
@@ -396,26 +393,26 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
-                className="p-1.5 rounded-md border border-gray-200 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-md border border-border hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <ChevronLeft className="w-4 h-4 text-gray-600" />
+                <ChevronLeft className="w-4 h-4 text-muted-foreground" />
               </button>
-              <span className="text-xs text-gray-500">
+              <span className="text-xs text-muted-foreground">
                 {currentPage} / {totalPages}
               </span>
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
-                className="p-1.5 rounded-md border border-gray-200 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="p-1.5 rounded-md border border-border hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <ChevronRight className="w-4 h-4 text-gray-600" />
+                <ChevronRight className="w-4 h-4 text-muted-foreground" />
               </button>
             </div>
           </div>
         )}
 
         {filteredDevices.length === 0 && (
-          <div className="p-8 text-center text-gray-400">
+          <div className="p-8 text-center text-muted-foreground">
             未找到匹配条件的设备
           </div>
         )}

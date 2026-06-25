@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AlertCircle } from 'lucide-react';
 import { useToast } from '@/components/ui/toast';
 import axios from 'axios';
-import { SURFACE } from '@/design-system/tokens';
+import { SURFACE, TEXT } from '@/design-system/tokens';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 
 export default function RegisterPage() {
@@ -120,7 +120,7 @@ export default function RegisterPage() {
           </form>
 
           <div className="mt-4 text-center text-sm">
-            <span className="text-gray-500">已有账号？</span>
+            <span className={TEXT.subtitle}>已有账号？</span>
             <Link to="/login" className="text-primary hover:underline ml-1">
               立即登录
             </Link>
