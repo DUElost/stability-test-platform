@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 asyncio_sleep = asyncio.sleep
 asyncio_to_thread = asyncio.to_thread
 
+_UPLOAD_WAIT_INTERVAL = 5
+_UPLOAD_WAIT_MAX = 660  # upload_task timeout=600，留余量
+_TERMINAL_SAQ_STATUSES = frozenset({"complete", "failed", "aborted"})
+
 
 async def post_completion_task(ctx: dict, *, job_id: int) -> None:
     """Generate report + JIRA draft for a terminal JobInstance.
@@ -277,7 +281,7 @@ async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
 
 
 async def _enqueue_extract_task(plan_run_id: int) -> None:
-    """merge 成功后串行 enqueue extract_task（§9 时序：extract 依赖 merge）。"""
+    """enqueue extract_task（§9 时序：extract 依赖 upload + merge 均完成）。"""
     from backend.tasks.saq_worker import get_queue
     from saq import Job as SaqJob
 
@@ -293,7 +297,37 @@ async def _enqueue_extract_task(plan_run_id: int) -> None:
             retry_backoff=True,
         )
     )
-    logger.info("saq_merge_enqueued_extract plan_run=%d", plan_run_id)
+    logger.info("saq_enqueued_extract plan_run=%d", plan_run_id)
+
+
+async def _wait_for_upload_task(plan_run_id: int) -> bool:
+    """poll upload:{plan_run_id} SAQ job 直至终态；超时返回 False（仍允许 best-effort extract）。"""
+    from backend.tasks.saq_worker import get_saq_job_state_sync
+
+    key = f"upload:{plan_run_id}"
+    elapsed = 0
+    while elapsed < _UPLOAD_WAIT_MAX:
+        state = await asyncio_to_thread(get_saq_job_state_sync, key)
+        if state is not None:
+            status = state.get("status")
+            if status in _TERMINAL_SAQ_STATUSES:
+                logger.info(
+                    "saq_merge_upload_ready plan_run=%d upload_status=%s waited=%ds",
+                    plan_run_id, status, elapsed,
+                )
+                return True
+            logger.info(
+                "saq_merge_upload_wait plan_run=%d upload_status=%s elapsed=%ds",
+                plan_run_id, status, elapsed,
+            )
+        await asyncio_sleep(_UPLOAD_WAIT_INTERVAL)
+        elapsed += _UPLOAD_WAIT_INTERVAL
+
+    logger.warning(
+        "saq_merge_upload_wait_timeout plan_run=%d waited=%ds",
+        plan_run_id, elapsed,
+    )
+    return False
 
 
 async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
@@ -314,6 +348,8 @@ async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
             plan_run_id, result,
         )
         return
+
+    await _wait_for_upload_task(plan_run_id)
 
     try:
         await _enqueue_extract_task(plan_run_id)

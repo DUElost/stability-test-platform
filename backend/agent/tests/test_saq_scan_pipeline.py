@@ -111,16 +111,19 @@ async def test_scan_task_no_hosts_triggered_skips_poll():
 
 @pytest.mark.asyncio
 async def test_merge_task_enqueues_extract_on_success():
-    """merge_task should enqueue extract_task only after successful merge."""
+    """merge_task should wait for upload then enqueue extract_task."""
     from backend.tasks import saq_tasks
 
-    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")):
+    wait_upload = AsyncMock(return_value=True)
+    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
+         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
              patch("saq.Job") as mock_job_cls:
             await saq_tasks.merge_task({}, plan_run_id=42)
 
+    wait_upload.assert_awaited_once_with(42)
     mock_job_cls.assert_called_once()
     assert mock_job_cls.call_args.kwargs["function"] == "extract_task"
     assert mock_job_cls.call_args.kwargs["kwargs"] == {"plan_run_id": 42}
@@ -129,17 +132,60 @@ async def test_merge_task_enqueues_extract_on_success():
 
 @pytest.mark.asyncio
 async def test_merge_task_skips_extract_when_merge_skipped():
-    """merge_task should not enqueue extract when run_merge_sync returns empty."""
+    """merge_task should not wait for upload or enqueue extract when merge skipped."""
     from backend.tasks import saq_tasks
 
-    with patch("asyncio.to_thread", new=AsyncMock(return_value="")):
+    wait_upload = AsyncMock()
+    with patch("asyncio.to_thread", new=AsyncMock(return_value="")), \
+         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
              patch("saq.Job", MagicMock()):
             await saq_tasks.merge_task({}, plan_run_id=42)
 
+    wait_upload.assert_not_awaited()
     mock_queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_upload_task_polls_until_complete():
+    """_wait_for_upload_task returns True once upload SAQ job reaches terminal state."""
+    from backend.tasks import saq_tasks
+
+    states = [{"status": "active"}, {"status": "complete"}]
+    idx = 0
+
+    def fake_get_state(_key: str):
+        nonlocal idx
+        state = states[min(idx, len(states) - 1)]
+        idx += 1
+        return state
+
+    saq_tasks.asyncio_sleep = AsyncMock()
+    saq_tasks.asyncio_to_thread = AsyncMock(side_effect=lambda fn, *a: fake_get_state(a[0]))
+
+    result = await saq_tasks._wait_for_upload_task(42)
+
+    assert result is True
+    assert saq_tasks.asyncio_to_thread.await_count == 2
+    saq_tasks.asyncio_sleep.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_upload_task_timeout_still_returns_false():
+    """_wait_for_upload_task returns False on timeout (merge may still extract best-effort)."""
+    from backend.tasks import saq_tasks
+
+    saq_tasks.asyncio_sleep = AsyncMock()
+    saq_tasks.asyncio_to_thread = AsyncMock(return_value={"status": "active"})
+    saq_tasks._UPLOAD_WAIT_INTERVAL = 1
+    saq_tasks._UPLOAD_WAIT_MAX = 2
+
+    result = await saq_tasks._wait_for_upload_task(42)
+
+    assert result is False
+    assert saq_tasks.asyncio_to_thread.await_count >= 1
 
 
 @pytest.mark.asyncio
