@@ -12,6 +12,7 @@ Worker（替换 manager.py 的 stub capability="stub"）。
 不在本类职责（明确边界）：
     - 文件 pull / artifact 上传（阶段 5 LogPuller 负责，本期 emit 时 artifact_uri=None）
     - 网络 outbox 上送（OutboxDrainer 进程级单例处理）
+    - AEE db_history 初筛（AeeDbHistoryReconciler + aee/processor；见 job_session._maybe_start_aee_reconciler）
     - 重连：source 掉线由 DeviceLogWatcher 内部 watchdog 监控？—— 留待阶段 5 决策；
       当前阶段 source 死了即视为 watcher 不可用，由 Manager 阶段 5 决定如何处理
 

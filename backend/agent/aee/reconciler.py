@@ -28,6 +28,11 @@
     - 单后台 daemon 线程;stop() 通过 threading.Event 通知退出 + join(timeout)
     - tick_once() 暴露同步入口便于单元测试
 
+初筛选主路径（与 InotifydSource 兜底互补）：
+    - JobSession 在 Watcher 启动后并行挂载本 Reconciler;成功则共享同一 SignalEmitter。
+    - 监测目录仅 /data/aee_exp 与 /data/vendor/aee_exp（MTK 平台 ANR 含于 aee_exp,不监测 /data/anr）。
+    - AWS-203:adb pull / db_history 处理在 processor 链路;与 inotifyd 实时监听分离。
+
 环境变量（与 §5 计划对齐）：
     STP_WATCHER_AEE_RECONCILE_ENABLED          1/true 开启;默认 true(ADR-0018 2026-06-18 改)
     STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS 基线节奏,默认 180

@@ -18,6 +18,12 @@
     - 能力探测返回 `unavailable` 不抛异常；Job 生死由上层 policy.on_unavailable 决策
     - stop() 发 SIGTERM 本地 Popen；设备侧 inotifyd 进程 best-effort pkill（不阻塞调用方）
     - Windows 兼容：subprocess.Popen text=True + bufsize=1 行缓冲
+
+与 AeeDbHistoryReconciler 的关系（ADR-0018）：
+    - Reconciler 为主路径（db_history diff + adb pull + ZZ_INTERNAL）；inotifyd 为兜底。
+    - Reconciler 运行期间 DeviceLogWatcher 抑制 inotifyd 对 AEE/VENDOR_AEE 的 emit；
+      reconciler 启动失败时 JobSession 回滚，inotifyd 恢复 emit（日志 aee_reconciler_emit_rollback）。
+    - AWS-203：本模块仅实时 inotify 监听，不走 db_history / adb pull 链路。
 """
 
 from __future__ import annotations
