@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 ARTIFACT_TYPE_SCAN = "scan_result_xls"
 ARTIFACT_TYPE_MERGE = "merge_result_xls"
+
+# Windows CreateProcessW 命令行长度上限 32767；留余量避免边界触发。
+_WIN_CMDLINE_LIMIT = 31000
 
 
 def resolve_scan_tool() -> Optional[Dict[str, str]]:
@@ -159,26 +163,68 @@ def run_merge_sync(plan_run_id: int) -> str:
     finally:
         db.close()
 
-    argv = [tool["python"], tool["script"], "-merge_files"] + org_files
+    base_argv = [tool["python"], tool["script"], "-merge_files"]
     side = os.getenv("STP_DEDUP_SCAN_TAG", "shanghai")
     if "factory" in side.lower():
-        argv += ["-side", "factory"]
+        side_argv = ["-side", "factory"]
     else:
-        argv += ["-side", "shanghai"]
+        side_argv = ["-side", "shanghai"]
+
+    # 估算命令行总长（每个参数占 len + 1 空格/引号开销）
+    cmdline_len = sum(len(a) + 1 for a in base_argv + side_argv + org_files)
+    use_filelist = cmdline_len > _WIN_CMDLINE_LIMIT
 
     cwd = str(Path(tool["script"]).parent)
-    logger.info("merge_started plan_run=%d files=%d cwd=%s", plan_run_id, len(org_files), cwd)
 
     try:
-        proc = subprocess.run(
-            argv,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=300,
-        )
+        if use_filelist:
+            # 命令行超限 → 写临时文件列表，通过 helper 间接调用原始脚本
+            helper = Path(__file__).parent / "_merge_from_list.py"
+            listfile = Path(tempfile.mktemp(
+                suffix=".txt", prefix=f"merge_{plan_run_id}_",
+                dir=str(Path(tempfile.gettempdir())),
+            ))
+            listfile.write_text("\n".join(org_files), encoding="utf-8")
+            logger.info(
+                "merge_started plan_run=%d files=%d cwd=%s mode=filelist listfile=%s",
+                plan_run_id, len(org_files), cwd, listfile,
+            )
+            try:
+                proc = subprocess.run(
+                    [tool["python"], str(helper), str(tool["script"])],
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=300,
+                    env={
+                        **os.environ,
+                        "STP_MERGE_FILE_LIST": str(listfile),
+                        "STP_DEDUP_SCAN_SIDE": side,
+                    },
+                )
+            finally:
+                try:
+                    listfile.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        else:
+            # 少量文件，直接命令行传递（方便调试）
+            argv = base_argv + org_files + side_argv
+            logger.info(
+                "merge_started plan_run=%d files=%d cwd=%s mode=direct cmdline_len=%d",
+                plan_run_id, len(org_files), cwd, cmdline_len,
+            )
+            proc = subprocess.run(
+                argv,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=300,
+            )
     except subprocess.TimeoutExpired:
         logger.error("merge_timeout plan_run=%d timeout=300s", plan_run_id)
         raise
