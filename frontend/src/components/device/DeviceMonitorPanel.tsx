@@ -25,6 +25,7 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatTimeFromDate, formatTimeLabel } from '@/utils/format';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
 
@@ -279,7 +280,7 @@ export function DeviceMonitorPanel({
       {isStale && (
         <div className="flex items-center gap-2 p-3 bg-warning/10 border border-warning/20 rounded-lg text-warning text-sm">
           <AlertTriangle className="h-4 w-4" />
-          <span>数据已过期，上次更新: {lastUpdate.toLocaleTimeString()}</span>
+          <span>数据已过期，上次更新: {formatTimeFromDate(lastUpdate)}</span>
         </div>
       )}
 
@@ -317,7 +318,7 @@ export function DeviceMonitorPanel({
         <span>
           显示 {filteredDevices.length} / {devices.length} 台设备
         </span>
-        <span>上次更新: {lastUpdate.toLocaleTimeString()}</span>
+        <span>上次更新: {formatTimeFromDate(lastUpdate)}</span>
       </div>
     </div>
   );
@@ -390,7 +391,7 @@ function DeviceListItem({
 
         <div className="text-xs text-muted-foreground">
           {(device as any).last_seen
-            ? new Date((device as any).last_seen).toLocaleTimeString()
+            ? formatTimeLabel((device as { last_seen?: string }).last_seen ?? null)
             : 'Never'}
         </div>
       </div>

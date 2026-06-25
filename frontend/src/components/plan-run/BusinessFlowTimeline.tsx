@@ -24,6 +24,7 @@ import {
   TIMELINE_STEP_ROW,
 } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatTimeLabel } from '@/utils/format';
 import SectionHeader from './SectionHeader';
 import type {
   EventSeverity,
@@ -89,10 +90,7 @@ const STAGE_CHIP_LABEL: Record<EventStage, string> = {
 };
 
 function fmtTs(ts: string): string {
-  if (!ts) return '';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleTimeString('zh-CN', { hour12: false });
+  return formatTimeLabel(ts, '');
 }
 
 function fmtDuration(seconds: number | null | undefined): string {

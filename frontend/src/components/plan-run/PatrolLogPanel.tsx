@@ -8,6 +8,7 @@ import {
   TEXT,
 } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatTimeLabel } from '@/utils/format';
 import type { PlanRunEventsPayload, PlanRunTimeline, PlanRunEvent, TimelineStage } from '@/utils/api/types';
 import SectionHeader from './SectionHeader';
 
@@ -80,7 +81,7 @@ function EventRow({ ev }: { ev: PlanRunEvent }) {
         )}
         {ev.ts && (
           <div className="mt-0.5 font-mono text-[10px] opacity-50">
-            {new Date(ev.ts).toLocaleTimeString('zh-CN')}
+            {formatTimeLabel(ev.ts)}
           </div>
         )}
       </div>

@@ -120,3 +120,23 @@ export function formatIsoCompact(value?: string | null, empty = '—'): string {
   if (!value) return empty;
   return value.replace('T', ' ').replace('Z', ' UTC');
 }
+
+/** Time-only label from ISO string (24h); invalid input falls back to raw value. */
+export function formatTimeLabel(value?: string | null, empty = '—'): string {
+  if (!value) return empty;
+  const date = parseIsoToDate(value);
+  if (!date) return value;
+  return formatLocalTime(value);
+}
+
+/** Time-only from a Date instance (live refresh stamps). */
+export function formatTimeFromDate(value?: Date | null, empty = '—'): string {
+  if (!value || Number.isNaN(value.getTime())) return empty;
+  return formatLocalTime(value.toISOString());
+}
+
+/** Time-only from epoch milliseconds (e.g. React Query dataUpdatedAt). */
+export function formatTimeFromMs(ms?: number | null, empty = '—'): string {
+  if (ms == null || !Number.isFinite(ms)) return empty;
+  return formatTimeFromDate(new Date(ms), empty);
+}

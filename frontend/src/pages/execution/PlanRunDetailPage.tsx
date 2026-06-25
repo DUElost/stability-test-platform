@@ -40,6 +40,7 @@ import {
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
 import { ALERT_BANNER, STATUS_CHIP, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { formatTimeFromMs } from '@/utils/format';
 import { ErrorState } from '@/components/ui/error-state';
 
 import type { PrecheckState } from '@/utils/api/types';
@@ -371,9 +372,7 @@ export default function PlanRunDetailPage() {
         <div className="ml-auto flex items-center gap-2">
           <span className={cn('hidden text-[11px] sm:inline', TEXT.caption)}>
             最后更新{' '}
-            {runQ.dataUpdatedAt
-              ? new Date(runQ.dataUpdatedAt).toLocaleTimeString('zh-CN')
-              : '—'}
+            {runQ.dataUpdatedAt ? formatTimeFromMs(runQ.dataUpdatedAt) : '—'}
           </span>
           <Button
             variant="ghost"

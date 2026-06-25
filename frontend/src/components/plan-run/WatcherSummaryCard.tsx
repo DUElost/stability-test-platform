@@ -27,6 +27,7 @@ import {
   dedupActionBtnClass,
 } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatTimeLabel } from '@/utils/format';
 import type {
   AeeBreakdown,
   PackageStat,
@@ -75,10 +76,7 @@ const CATEGORY_BREAKDOWN_FIELD: Record<string, keyof PackageStat> = {
 };
 
 function fmtTime(ts: string | null | undefined): string {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleTimeString('zh-CN', { hour12: false });
+  return formatTimeLabel(ts ?? null);
 }
 
 function topPackagesTitle(

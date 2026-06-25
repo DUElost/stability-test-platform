@@ -17,6 +17,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { api } from '@/utils/api';
+import { formatTimeLabel } from '@/utils/format';
 import type { HostActiveJob } from '@/utils/api/types';
 
 interface Props {
@@ -35,10 +36,7 @@ interface Props {
 }
 
 function fmtTime(ts?: string | null): string {
-  if (!ts) return '—';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleTimeString('zh-CN', { hour12: false });
+  return formatTimeLabel(ts ?? null);
 }
 
 function ActiveJobRow({ job }: { job: HostActiveJob }) {

@@ -21,6 +21,7 @@ import { api } from '../utils/api';
 import { WS_DASHBOARD_ENDPOINT } from '../config';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { CHART_SECTION, STAT, TEXT } from '@/design-system/tokens';
+import { formatTimeFromDate } from '@/utils/format';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -106,7 +107,7 @@ export default function Dashboard() {
 
       <div className={`flex justify-end items-center text-sm ${TEXT.caption}`}>
         <Clock size={14} aria-hidden />
-        <span className="ml-2">更新于: {lastUpdateTime.toLocaleTimeString()}</span>
+        <span className="ml-2">更新于: {formatTimeFromDate(lastUpdateTime)}</span>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
