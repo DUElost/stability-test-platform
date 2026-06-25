@@ -83,21 +83,12 @@ async def precheck_and_dispatch_task(ctx: dict, *, plan_run_id: int) -> None:
     await _impl(ctx, plan_run_id=plan_run_id)
 
 
-async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> None:
-    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now → 轮询 NFS → 注册 DB → 串行 enqueue upload + merge。
-
-    1. emit scan_now to each ONLINE agent
-    2. poll NFS dedup/{plan_run_id}/ for *_org.xls files (max 300s)
-    3. call run_scan_sync to register artifacts in plan_run_artifact
-    4. enqueue upload_task and merge_task (sequential dependency)
-    """
+def _query_hosts_for_scan(plan_run_id: int) -> tuple[list[str], list[str]]:
+    """同步查询 scan_task 所需的 host 列表，由 asyncio.to_thread 调用。"""
     from backend.core.database import SessionLocal
     from backend.models.job import JobInstance
     from backend.models.host import Host
-    from backend.realtime.socketio_server import emit_agent_control
     from sqlalchemy import select, distinct
-
-    logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
 
     db = SessionLocal()
     try:
@@ -106,18 +97,38 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
             .join(Host, Host.id == JobInstance.host_id)
             .where(JobInstance.plan_run_id == plan_run_id)
         ).all()
+    finally:
+        db.close()
 
-        triggered: list[str] = []
-        skipped: list[str] = []
-        for host_id, host_status in host_rows:
-            if host_status == "ONLINE":
-                await emit_agent_control(
-                    host_id, "scan_now",
-                    payload={"plan_run_id": plan_run_id, "is_final": is_final},
-                )
-                triggered.append(host_id)
-            else:
-                skipped.append(host_id)
+    triggered: list[str] = []
+    skipped: list[str] = []
+    for host_id, host_status in host_rows:
+        if host_status == "ONLINE":
+            triggered.append(host_id)
+        else:
+            skipped.append(host_id)
+    return triggered, skipped
+
+
+async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> None:
+    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 scan_now → 轮询 NFS → 注册 DB → 串行 enqueue upload + merge。
+
+    1. emit scan_now to each ONLINE agent
+    2. poll NFS dedup/{plan_run_id}/ for *_org.xls files (max 300s)
+    3. call run_scan_sync to register artifacts in plan_run_artifact
+    4. enqueue upload_task and merge_task (sequential dependency)
+    """
+    from backend.realtime.socketio_server import emit_agent_control
+
+    logger.info("saq_scan_start plan_run=%d final=%s", plan_run_id, is_final)
+
+    try:
+        triggered, skipped = await asyncio.to_thread(_query_hosts_for_scan, plan_run_id)
+        for host_id in triggered:
+            await emit_agent_control(
+                host_id, "scan_now",
+                payload={"plan_run_id": plan_run_id, "is_final": is_final},
+            )
 
         logger.info(
             "saq_scan_dispatched plan_run=%d triggered=%d skipped=%d",
@@ -126,8 +137,6 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     except Exception:
         logger.exception("saq_scan_failed plan_run=%d", plan_run_id)
         raise
-    finally:
-        db.close()
 
     if triggered:
         from backend.services.dedup_scan import run_scan_sync
@@ -202,20 +211,18 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     logger.info("saq_scan_done plan_run=%d", plan_run_id)
 
 
-async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
-    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 upload_events SocketIO 指令。
+def _query_hosts_for_upload(plan_run_id: int) -> tuple[set[str], list[tuple[str, str]]]:
+    """同步查询 upload_task 所需的 host 列表，由 asyncio.to_thread 调用。
 
-    Agent 端收到后扫描本地 HDD 事件目录并上送到 15.4 CIFS devices/。
-    仅对已有 scan_result_xls 的 host 下发（有 scan 产物才有事件可上送）。
+    返回 (hosts_with_scan, host_rows)：
+      hosts_with_scan — 有 scan 产物的 host_id 集合
+      host_rows        — [(host_id, host_status), ...] 列表
     """
     from backend.core.database import SessionLocal
     from backend.models.job import JobInstance
     from backend.models.plan_run_artifact import PlanRunArtifact
     from backend.models.host import Host
-    from backend.realtime.socketio_server import emit_agent_control
     from sqlalchemy import select, distinct
-
-    logger.info("saq_upload_start plan_run=%d", plan_run_id)
 
     db = SessionLocal()
     try:
@@ -233,7 +240,26 @@ async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
             .join(Host, Host.id == JobInstance.host_id)
             .where(JobInstance.plan_run_id == plan_run_id)
         ).all()
+    finally:
+        db.close()
 
+    return hosts_with_scan, host_rows
+
+
+async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
+    """ADR-0025 Sprint 4: 归档-2 向各 ONLINE agent 下发 upload_events SocketIO 指令。
+
+    Agent 端收到后扫描本地 HDD 事件目录并上送到 15.4 CIFS devices/。
+    仅对已有 scan_result_xls 的 host 下发（有 scan 产物才有事件可上送）。
+    """
+    from backend.realtime.socketio_server import emit_agent_control
+
+    logger.info("saq_upload_start plan_run=%d", plan_run_id)
+
+    try:
+        hosts_with_scan, host_rows = await asyncio.to_thread(
+            _query_hosts_for_upload, plan_run_id,
+        )
         triggered: list[str] = []
         skipped: list[str] = []
         for host_id, host_status in host_rows:
@@ -257,8 +283,6 @@ async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
     except Exception:
         logger.exception("saq_upload_failed plan_run=%d", plan_run_id)
         raise
-    finally:
-        db.close()
 
     logger.info("saq_upload_done plan_run=%d", plan_run_id)
 
