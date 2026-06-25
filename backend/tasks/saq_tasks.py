@@ -276,8 +276,14 @@ async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
     logger.info("saq_merge_done plan_run=%d", plan_run_id)
 
 
-async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
-    """ADR-0025 Sprint 4 归档-3: copy devices/ + merge xls → jira/{plan_run_id}/"""
+def _run_extract_sync(plan_run_id: int) -> int:
+    """同步执行 extract（NFS 文件拷贝），由 asyncio.to_thread 调用。
+
+    返回值：
+      >= 0  提取的文件/目录数
+      -1    无 merge 产物（skip_no_merge，已自行 log）
+      -2    无 NFS 根路径（skip_no_nfs，已自行 log）
+    """
     import os
     import shutil
     from pathlib import Path
@@ -285,8 +291,6 @@ async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
     from backend.models.plan_run_artifact import PlanRunArtifact
     from sqlalchemy import select
     from backend.core.database import SessionLocal
-
-    logger.info("saq_extract_start plan_run=%d", plan_run_id)
 
     db = SessionLocal()
     try:
@@ -298,12 +302,12 @@ async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
         ).scalars().all()
         if not merge_rows:
             logger.warning("saq_extract_skip_no_merge plan_run=%d", plan_run_id)
-            return
+            return -1
 
         nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
         if not nfs_root:
             logger.warning("saq_extract_skip_no_nfs plan_run=%d", plan_run_id)
-            return
+            return -2
 
         devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)
         jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
@@ -336,8 +340,19 @@ async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
                     logger.exception("saq_extract_merge_xls_failed path=%s", merge_xls)
 
         logger.info("saq_extract_done plan_run=%d extracted=%d", plan_run_id, extracted)
+        return extracted
     finally:
         db.close()
+
+
+async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
+    """ADR-0025 Sprint 4 归档-3: copy devices/ + merge xls → jira/{plan_run_id}/
+
+    所有同步文件 IO（NFS 拷贝、DB 查询）通过 asyncio.to_thread 在线程池中执行，
+    不阻塞事件循环。NFS 挂载点超时/中断时事件循环保持响应。
+    """
+    logger.info("saq_extract_start plan_run=%d", plan_run_id)
+    await asyncio.to_thread(_run_extract_sync, plan_run_id)
 
 
 SAQ_FUNCTIONS = [
