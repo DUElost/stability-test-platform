@@ -291,15 +291,16 @@ function KvList({ rows }: { rows: Array<[string, string, boolean, string?]> }) {
   return (
     <dl className="divide-y rounded-lg border">
       {rows.map(([k, v, mono, extraCls]) => (
-        <div key={k} className="flex items-start justify-between px-3 py-1.5 text-xs">
+        <div key={k} className="flex items-center justify-between px-3 py-1.5 text-xs">
           <dt className={cn(TEXT.subtitle, extraCls || '')}>{k}</dt>
           <dd
             className={cn(
-              'max-w-[60%] text-right',
+              'max-w-[60%] text-right truncate',
               TEXT.body,
               mono && 'font-mono',
               extraCls || '',
             )}
+            title={v}
           >
             {v}
           </dd>

@@ -11,6 +11,7 @@ import {
   Database,
   Radio,
   ChevronsUp,
+  PanelRight,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -110,6 +111,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
   const [quickRange, setQuickRange] = useState<QuickRange>('1h');
 
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showJobPanel, setShowJobPanel] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(320);
   const [atBottom, setAtBottom] = useState(true);
@@ -473,7 +475,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
       )}
 
       <div className="flex min-h-0 flex-1 gap-4">
-        <div className="w-80 flex-shrink-0">
+        <div className="w-64 lg:w-80 flex-shrink-0">
           <Card className="flex h-full flex-col overflow-hidden">
             <div className={cn('p-3', LIST_ITEM.sectionBorder)}>
               <div className="flex items-center justify-between">
@@ -531,13 +533,22 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
           </Card>
         </div>
 
-        <div className="w-72 flex-shrink-0">
+        <div className={`${showJobPanel ? '' : 'hidden xl:block'} w-72 flex-shrink-0`}>
           <Card className="flex h-full flex-col overflow-hidden">
             <div className={cn('p-3', LIST_ITEM.sectionBorder)}>
               <div className="flex items-center justify-between">
                 <h3 className={cn('font-medium', TEXT.heading)}>执行节点</h3>
                 <span className={cn('text-xs', TEXT.subtitle)}>{jobs.length}</span>
               </div>
+              {/* xl 以下可手动关闭 */}
+              <button
+                type="button"
+                onClick={() => setShowJobPanel(false)}
+                className={cn('xl:hidden ml-auto p-1 rounded', TEXT.subtitle)}
+                aria-label="关闭面板"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
               <div className="mt-2">
                 <div className={cn('mb-1 flex items-center justify-between text-xs', TEXT.subtitle)}>
                   <span>整体进度</span>
@@ -606,6 +617,15 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
           <Card className="flex h-full flex-col overflow-hidden">
             <div className={cn('p-3', LIST_ITEM.sectionBorder)}>
               <div className="mb-2 flex flex-wrap items-center gap-2">
+                {/* xl 以下屏幕：切换执行节点面板 */}
+                <button
+                  type="button"
+                  onClick={() => setShowJobPanel((v) => !v)}
+                  className={cn(TOOL_BTN, 'xl:hidden', showJobPanel && SEGMENTED.itemActive)}
+                >
+                  <PanelRight className="h-3.5 w-3.5" />
+                  执行节点
+                </button>
                 <button
                   type="button"
                   onClick={() => void handleLoadOlder()}

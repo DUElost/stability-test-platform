@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { CHART_COLORS, STATUS_TEXT_COLORS } from '@/design-system/colors';
+import { TEXT } from '@/design-system/tokens';
 
 const TERMINAL_STATUSES = ['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'DEGRADED'];
 
@@ -121,7 +122,7 @@ export default function PlanRunMatrixPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
           { label: '完成', key: 'COMPLETED', color: STATUS_TEXT_COLORS.success, icon: CheckCircle },
           { label: '失败', key: 'FAILED', color: STATUS_TEXT_COLORS.error, icon: XCircle },
@@ -133,7 +134,7 @@ export default function PlanRunMatrixPage() {
             <CardContent className="py-3 text-center">
               <s.icon className={`w-4 h-4 mx-auto mb-1 ${s.color}`} />
               <p className="text-lg font-bold">{statusCounts[s.key] || 0}</p>
-              <p className="text-xs text-gray-500">{s.label}</p>
+              <p className={`text-xs ${TEXT.subtitle}`}>{s.label}</p>
             </CardContent>
           </Card>
         ))}

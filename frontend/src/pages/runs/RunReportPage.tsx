@@ -4,6 +4,7 @@ import { RunReport, JiraDraft, RunRiskSummary } from '@/utils/api';
 import apiClient from '@/utils/api/client';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
+import { PageContainer } from '@/components/layout';
 import {
   ArrowLeft,
   Download,
@@ -72,7 +73,7 @@ export default function RunReportPage() {
   const counts = risk.counts || {};
 
   return (
-    <div className="space-y-6 p-6">
+    <PageContainer>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
@@ -263,6 +264,6 @@ export default function RunReportPage() {
           )}
         </div>
       )}
-    </div>
+    </PageContainer>
   );
 }

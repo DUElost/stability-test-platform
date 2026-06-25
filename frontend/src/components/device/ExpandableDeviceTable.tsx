@@ -246,7 +246,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                     <TableCell className="p-3 font-mono text-sm text-gray-700">
                       {device.serial}
                     </TableCell>
-                    <TableCell className="p-3 font-medium text-gray-900">
+                    <TableCell className="p-3 font-medium text-foreground max-w-[160px] truncate" title={device.model ?? ''}>
                       {device.model}
                     </TableCell>
                     <TableCell className="p-3 text-xs text-gray-500 font-mono whitespace-nowrap">

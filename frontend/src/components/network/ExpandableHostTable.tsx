@@ -250,7 +250,7 @@ export function ExpandableHostTable({
                           )}
                         />
                       </TableCell>
-                      <TableCell className="p-3 font-medium text-gray-900">
+                      <TableCell className="p-3 font-medium text-foreground max-w-[200px] truncate" title={host.name ?? ''}>
                         {host.name}
                       </TableCell>
                       <TableCell className="p-3 text-gray-500 font-mono text-sm">
