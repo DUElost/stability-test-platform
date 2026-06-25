@@ -105,6 +105,71 @@ async def test_scan_task_no_hosts_triggered_skips_poll():
 
 
 # ---------------------------------------------------------------------------
+# merge_task → extract_task chain
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_merge_task_enqueues_extract_on_success():
+    """merge_task should enqueue extract_task only after successful merge."""
+    from backend.tasks import saq_tasks
+
+    with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job") as mock_job_cls:
+            await saq_tasks.merge_task({}, plan_run_id=42)
+
+    mock_job_cls.assert_called_once()
+    assert mock_job_cls.call_args.kwargs["function"] == "extract_task"
+    assert mock_job_cls.call_args.kwargs["kwargs"] == {"plan_run_id": 42}
+    mock_queue.enqueue.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_merge_task_skips_extract_when_merge_skipped():
+    """merge_task should not enqueue extract when run_merge_sync returns empty."""
+    from backend.tasks import saq_tasks
+
+    with patch("asyncio.to_thread", new=AsyncMock(return_value="")):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job", MagicMock()):
+            await saq_tasks.merge_task({}, plan_run_id=42)
+
+    mock_queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scan_task_enqueues_upload_and_merge_only():
+    """scan_task should not enqueue extract_task (chained from merge_task)."""
+    from backend.tasks import saq_tasks
+
+    mock_db = MagicMock()
+    mock_db.execute.return_value.all.return_value = [("host-1", "ONLINE")]
+    mock_db.close = MagicMock()
+
+    saq_tasks.asyncio_sleep = AsyncMock()
+    saq_tasks.asyncio_to_thread = AsyncMock(return_value="1")
+
+    with patch("backend.core.database.SessionLocal", return_value=mock_db), \
+         patch("backend.realtime.socketio_server.emit_agent_control", new=AsyncMock()), \
+         patch("backend.services.dedup_scan.run_scan_sync"):
+        mock_queue = MagicMock()
+        mock_queue.enqueue = AsyncMock()
+        with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
+             patch("saq.Job") as mock_job_cls:
+            await saq_tasks.scan_task({}, plan_run_id=42, is_final=True)
+
+    assert mock_job_cls.call_count == 2
+    functions = [c.kwargs["function"] for c in mock_job_cls.call_args_list]
+    assert functions == ["upload_task", "merge_task"]
+    assert "extract_task" not in functions
+
+
+# ---------------------------------------------------------------------------
 # P1-3: auto_archive_sweep rate-limiting + incremental
 # ---------------------------------------------------------------------------
 

@@ -116,7 +116,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     1. emit scan_now to each ONLINE agent
     2. poll NFS dedup/{plan_run_id}/ for *_org.xls files (max 300s)
     3. call run_scan_sync to register artifacts in plan_run_artifact
-    4. enqueue upload_task and merge_task (sequential dependency)
+    4. enqueue upload_task and merge_task (merge_task chains extract_task on success)
     """
     from backend.realtime.socketio_server import emit_agent_control
 
@@ -188,17 +188,6 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
                 function="merge_task",
                 kwargs={"plan_run_id": plan_run_id},
                 key=f"merge:{plan_run_id}",
-                timeout=300,
-                retries=2,
-                retry_delay=10.0,
-                retry_backoff=True,
-            )
-        )
-        await queue.enqueue(
-            SaqJob(
-                function="extract_task",
-                kwargs={"plan_run_id": plan_run_id},
-                key=f"extract:{plan_run_id}",
                 timeout=300,
                 retries=2,
                 retry_delay=10.0,
@@ -287,17 +276,52 @@ async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
     logger.info("saq_upload_done plan_run=%d", plan_run_id)
 
 
+async def _enqueue_extract_task(plan_run_id: int) -> None:
+    """merge 成功后串行 enqueue extract_task（§9 时序：extract 依赖 merge）。"""
+    from backend.tasks.saq_worker import get_queue
+    from saq import Job as SaqJob
+
+    queue = get_queue()
+    await queue.enqueue(
+        SaqJob(
+            function="extract_task",
+            kwargs={"plan_run_id": plan_run_id},
+            key=f"extract:{plan_run_id}",
+            timeout=300,
+            retries=2,
+            retry_delay=10.0,
+            retry_backoff=True,
+        )
+    )
+    logger.info("saq_merge_enqueued_extract plan_run=%d", plan_run_id)
+
+
 async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
     """ADR-0025 Sprint 4: 归档-2 集中合并（-merge_files 各 agent _org.xls）。"""
     from backend.services.dedup_scan import run_merge_sync
 
     logger.info("saq_merge_start plan_run=%d", plan_run_id)
     try:
-        await asyncio.to_thread(run_merge_sync, plan_run_id)
+        result = await asyncio.to_thread(run_merge_sync, plan_run_id)
     except Exception:
         logger.exception("saq_merge_failed plan_run=%d", plan_run_id)
         raise
     logger.info("saq_merge_done plan_run=%d", plan_run_id)
+
+    if result != "ok":
+        logger.info(
+            "saq_merge_skip_extract plan_run=%d result=%r",
+            plan_run_id, result,
+        )
+        return
+
+    try:
+        await _enqueue_extract_task(plan_run_id)
+    except Exception as e:
+        logger.error(
+            "saq_merge_enqueue_extract_failed plan_run=%d: %s",
+            plan_run_id, e,
+        )
 
 
 def _run_extract_sync(plan_run_id: int) -> int:
