@@ -3,6 +3,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recha
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ShieldAlert } from 'lucide-react';
+import { CHART_COLORS } from '@/design-system/colors';
 
 interface RiskData {
   name: string;
@@ -21,10 +22,10 @@ interface RiskDistributionChartProps {
 }
 
 const COLORS = {
-  high: '#ef4444',
-  medium: '#f59e0b',
-  low: '#22c55e',
-  unknown: '#6b7280',
+  high: CHART_COLORS.error,
+  medium: CHART_COLORS.warning,
+  low: CHART_COLORS.success,
+  unknown: CHART_COLORS.muted,
 };
 
 const LABELS = {

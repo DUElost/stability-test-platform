@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
 import { X, CheckCircle2, XCircle, Info } from 'lucide-react';
+import { TOAST } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 type ToastVariant = 'success' | 'error' | 'info';
@@ -24,10 +25,10 @@ export function useToast(): ToastContextValue {
   return ctx;
 }
 
-const variantConfig: Record<ToastVariant, { icon: React.ElementType; bg: string; border: string; text: string }> = {
-  success: { icon: CheckCircle2, bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-800' },
-  error: { icon: XCircle, bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-800' },
-  info: { icon: Info, bg: 'bg-blue-50', border: 'border-blue-200', text: 'text-blue-800' },
+const variantConfig: Record<ToastVariant, { icon: React.ElementType; style: string }> = {
+  success: { icon: CheckCircle2, style: TOAST.success },
+  error: { icon: XCircle, style: TOAST.error },
+  info: { icon: Info, style: TOAST.info },
 };
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
@@ -38,12 +39,12 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
     <div
       className={cn(
         'flex items-start gap-3 px-4 py-3 rounded-lg border shadow-lg max-w-sm animate-in slide-in-from-right-5 fade-in duration-200',
-        config.bg, config.border
+        config.style,
       )}
     >
-      <Icon className={cn('w-5 h-5 mt-0.5 shrink-0', config.text)} />
-      <p className={cn('text-sm flex-1', config.text)}>{toast.message}</p>
-      <button onClick={() => onDismiss(toast.id)} className="shrink-0 text-gray-400 hover:text-gray-600">
+      <Icon className="w-5 h-5 mt-0.5 shrink-0" />
+      <p className="text-sm flex-1">{toast.message}</p>
+      <button onClick={() => onDismiss(toast.id)} className={cn('shrink-0', TOAST.dismiss)}>
         <X className="w-4 h-4" />
       </button>
     </div>
@@ -73,7 +74,6 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      {/* Toast container - fixed bottom-right */}
       <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
         {toasts.map(t => (
           <ToastItem key={t.id} toast={t} onDismiss={dismiss} />

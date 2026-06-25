@@ -15,11 +15,14 @@ import {
   Loader2,
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
+import { ALERT_BANNER, RISK_RATING_TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 const severityIcons: Record<string, React.ReactNode> = {
-  HIGH: <AlertTriangle className="w-4 h-4 text-red-500" />,
-  MEDIUM: <Info className="w-4 h-4 text-yellow-500" />,
-  LOW: <CheckCircle2 className="w-4 h-4 text-green-500" />,
+  HIGH: <AlertTriangle className={cn('w-4 h-4', ENTITY_STATUS_COLORS.alert.high)} />,
+  MEDIUM: <Info className={cn('w-4 h-4', ENTITY_STATUS_COLORS.alert.medium)} />,
+  LOW: <CheckCircle2 className={cn('w-4 h-4', ENTITY_STATUS_COLORS.alert.low)} />,
 };
 
 export default function RunReportPage() {
@@ -150,7 +153,7 @@ export default function RunReportPage() {
         <div className="rounded-lg border p-4 space-y-2">
           <h3 className="text-sm font-medium text-muted-foreground">风险摘要</h3>
           {report.report_status === 'pending_archive' && (
-            <div className="mb-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700">
+            <div className={cn('mb-2 rounded-md border px-3 py-2 text-xs', ALERT_BANNER.warning)}>
               归档进行中，风险摘要将在归档完成后可用
             </div>
           )}
@@ -170,9 +173,9 @@ export default function RunReportPage() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">S/A/B 分布</span>
                 <span>
-                  <span className="text-red-600">{counts.by_severity.S ?? 0}</span>/
-                  <span className="text-orange-600">{counts.by_severity.A ?? 0}</span>/
-                  <span className="text-yellow-600">{counts.by_severity.B ?? 0}</span>
+                  <span className={RISK_RATING_TEXT.S}>{counts.by_severity.S ?? 0}</span>/
+                  <span className={RISK_RATING_TEXT.A}>{counts.by_severity.A ?? 0}</span>/
+                  <span className={RISK_RATING_TEXT.B}>{counts.by_severity.B ?? 0}</span>
                 </span>
               </div>
             )}

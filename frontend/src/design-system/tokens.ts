@@ -208,6 +208,31 @@ export const DEDUP_STATUS_CHIP: Record<string, string> = {
   merged: STATUS_CHIP.success,
 };
 
+/** Toast 通知变体 */
+export const TOAST = {
+  success: 'bg-success/10 border-success/25 text-success',
+  error: 'bg-destructive/10 border-destructive/25 text-destructive',
+  info: 'bg-info/10 border-info/25 text-info',
+  dismiss: 'text-muted-foreground hover:text-foreground',
+} as const;
+
+/** Results 页 Job 运行状态 Chip */
+export const RUN_RESULT_STATUS_CHIP: Record<string, string> = {
+  FINISHED: STATUS_CHIP.success,
+  FAILED: STATUS_CHIP.destructive,
+  RUNNING: STATUS_CHIP.primary,
+  DISPATCHED: STATUS_CHIP.primary,
+  QUEUED: STATUS_CHIP.muted,
+  CANCELED: STATUS_CHIP.warning,
+};
+
+/** AEE 风险等级 S/A/B 文字色 */
+export const RISK_RATING_TEXT = {
+  S: 'text-destructive',
+  A: 'text-warning',
+  B: 'text-warning/80',
+} as const;
+
 export const SCRIPT_MATCH_ROW = {
   ok: 'bg-success/10 text-success',
   fail: 'bg-destructive/10 text-destructive',

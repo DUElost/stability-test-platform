@@ -55,7 +55,7 @@ export function ActivityChart({
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="h-[200px] flex items-center justify-center text-sm text-gray-400">
+          <div className="h-[200px] flex items-center justify-center text-sm text-muted-foreground">
             暂无数据
           </div>
         </CardContent>

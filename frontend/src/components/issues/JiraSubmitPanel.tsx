@@ -1,13 +1,13 @@
 /**
  * JiraSubmitPanel — ADR-0025 §10 去重→Jira 提单面板（实用优先）。
- *
- * 文档上传 + 参数菜单(厂商/阶段/dry-run) + 一键执行 + Jenkins 式 web 实时日志(LiveConsole)。
- * 平台只 subprocess 调用成熟厂商工具(Transsion/Tinno)，不重造提单逻辑。
  */
 import { useState } from 'react';
 import { Play, Square, Upload } from 'lucide-react';
 import { dedup, type JiraVendor, type JiraStage } from '@/utils/api/dedup';
 import LiveConsole from '@/components/console/LiveConsole';
+import { Button } from '@/components/ui/button';
+import { ALERT_BANNER, FORM, PANEL, STATUS_CHIP, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 export default function JiraSubmitPanel() {
   const [vendor, setVendor] = useState<JiraVendor>('transsion');
@@ -51,11 +51,12 @@ export default function JiraSubmitPanel() {
   };
 
   return (
-    <section className="rounded-xl border border-gray-200 bg-white" data-testid="jira-submit-panel">
-      <div className="border-b px-4 py-2 text-sm font-semibold text-gray-800">Jira 提单（去重报告）</div>
+    <section className={cn(PANEL.root)} data-testid="jira-submit-panel">
+      <div className={cn('border-b px-4 py-2 text-sm font-semibold', TEXT.heading)}>
+        Jira 提单（去重报告）
+      </div>
 
       <div className="space-y-3 p-4">
-        {/* 参数菜单 */}
         <div className="flex flex-wrap items-center gap-3 text-xs">
           <label className="flex items-center gap-1">
             厂商
@@ -63,7 +64,7 @@ export default function JiraSubmitPanel() {
               data-testid="jira-vendor"
               value={vendor}
               onChange={(e) => setVendor(e.target.value as JiraVendor)}
-              className="rounded border border-gray-300 px-2 py-1"
+              className={FORM.selectSm}
               disabled={running}
             >
               <option value="transsion">Transsion</option>
@@ -76,7 +77,7 @@ export default function JiraSubmitPanel() {
               data-testid="jira-stage"
               value={stage}
               onChange={(e) => setStage(e.target.value as JiraStage)}
-              className="rounded border border-gray-300 px-2 py-1"
+              className={FORM.selectSm}
               disabled={running}
             >
               <option value="upload_list">生成上传模板</option>
@@ -95,7 +96,6 @@ export default function JiraSubmitPanel() {
           </label>
         </div>
 
-        {/* reporter（create 阶段建单负责人，可选） */}
         {stage === 'create' && (
           <input
             type="text"
@@ -104,14 +104,13 @@ export default function JiraSubmitPanel() {
             value={reporter}
             onChange={(e) => setReporter(e.target.value)}
             disabled={running}
-            className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+            className={cn(FORM.inputSm, 'w-full pl-3')}
           />
         )}
 
-        {/* 文档上传（两阶段均需）：upload_list=Result_*.xls；create=JIRA_Upload_List_*.xlsx */}
-        <label className="flex items-center gap-2 text-xs text-gray-600">
+        <label className={cn('flex items-center gap-2 text-xs', TEXT.body)}>
           <Upload className="h-4 w-4" />
-          <span className="text-gray-500">
+          <span className={TEXT.subtitle}>
             {stage === 'upload_list' ? '去重后 Result_*.xls' : 'JIRA_Upload_List_*.xlsx'}
           </span>
           <input
@@ -121,37 +120,38 @@ export default function JiraSubmitPanel() {
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             disabled={running}
           />
-          {file && <span className="text-gray-500">{file.name}</span>}
+          {file && <span className={TEXT.subtitle}>{file.name}</span>}
         </label>
 
-        {/* 一键执行 / 取消 */}
         <div className="flex items-center gap-2">
-          <button
+          <Button
             data-testid="jira-run-btn"
             onClick={onRun}
             disabled={running}
-            className="inline-flex items-center gap-1 rounded bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+            size="sm"
+            className="gap-1 text-xs h-8"
           >
             <Play className="h-3.5 w-3.5" /> 一键执行
-          </button>
+          </Button>
           {consoleRunId && status === 'RUNNING' && (
-            <button
+            <Button
               data-testid="jira-cancel-btn"
               onClick={onCancel}
-              className="inline-flex items-center gap-1 rounded border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100"
+              variant="outline"
+              size="sm"
+              className={cn('gap-1 text-xs h-8', STATUS_CHIP.destructive, 'border-destructive/25 hover:bg-destructive/15')}
             >
               <Square className="h-3.5 w-3.5" /> 取消
-            </button>
+            </Button>
           )}
         </div>
 
         {error && (
-          <div data-testid="jira-error" className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          <div data-testid="jira-error" className={cn('rounded border px-3 py-2 text-xs', ALERT_BANNER.destructive)}>
             {error}
           </div>
         )}
 
-        {/* Jenkins 式 web 实时日志 */}
         {consoleRunId && (
           <LiveConsole consoleRunId={consoleRunId} onStatusChange={setStatus} />
         )}

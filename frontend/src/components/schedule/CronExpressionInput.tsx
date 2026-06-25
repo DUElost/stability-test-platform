@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { cn } from '@/lib/utils';
+import { FORM, SEGMENTED, TEXT } from '@/design-system/tokens';
 
 interface CronExpressionInputProps {
   value: string;
@@ -47,23 +48,26 @@ export function CronExpressionInput({ value, onChange }: CronExpressionInputProp
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="0 2 * * *"
-          className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300"
+          className={cn(FORM.input, 'flex-1 font-mono rounded-lg')}
         />
         <button
           type="button"
           onClick={() => setShowPresets(!showPresets)}
-          className="px-3 py-2 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          className={cn(
+            'px-3 py-2 text-sm border border-border rounded-lg transition-colors',
+            SEGMENTED.toggleIdle,
+          )}
         >
           预设
         </button>
       </div>
 
       {value && (
-        <p className="text-xs text-gray-500">{description}</p>
+        <p className={cn('text-xs', TEXT.subtitle)}>{description}</p>
       )}
 
       {showPresets && (
-        <div className="grid grid-cols-2 gap-1.5 p-2 bg-gray-50 rounded-lg border border-gray-100">
+        <div className={cn('grid grid-cols-2 gap-1.5 p-2 rounded-lg border', SEGMENTED.track)}>
           {PRESETS.map((preset) => (
             <button
               key={preset.value}
@@ -73,12 +77,13 @@ export function CronExpressionInput({ value, onChange }: CronExpressionInputProp
                 setShowPresets(false);
               }}
               className={cn(
-                'text-left px-3 py-2 rounded-md text-sm hover:bg-white transition-colors',
-                value === preset.value && 'bg-white shadow-sm'
+                'text-left px-3 py-2 rounded-md text-sm transition-colors',
+                SEGMENTED.toggleIdle,
+                value === preset.value && cn('bg-card shadow-sm', SEGMENTED.toggleActive),
               )}
             >
-              <div className="font-medium text-gray-900">{preset.label}</div>
-              <div className="text-xs text-gray-500">{preset.description}</div>
+              <div className={cn('font-medium', TEXT.heading)}>{preset.label}</div>
+              <div className={cn('text-xs', TEXT.subtitle)}>{preset.description}</div>
             </button>
           ))}
         </div>

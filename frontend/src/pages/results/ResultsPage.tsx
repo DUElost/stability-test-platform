@@ -16,15 +16,8 @@ import {
 import { PageContainer, PageHeader } from '@/components/layout';
 import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
 import { EmptyState } from '@/components/ui/empty-state';
-
-const STATUS_BADGE: Record<string, string> = {
-  FINISHED: 'bg-green-100 text-green-700',
-  FAILED: 'bg-red-100 text-red-700',
-  RUNNING: 'bg-blue-100 text-blue-700',
-  DISPATCHED: 'bg-blue-100 text-blue-700',
-  QUEUED: 'bg-gray-100 text-gray-600',
-  CANCELED: 'bg-yellow-100 text-yellow-700',
-};
+import { KPI_TONE, RUN_RESULT_STATUS_CHIP, STATUS_CHIP } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 export default function ResultsPage() {
   const navigate = useNavigate();
@@ -49,25 +42,25 @@ export default function ResultsPage() {
         <StatCard
           label="Total Runs"
           value={stats?.total}
-          icon={<ListChecks size={18} className="text-gray-500" />}
+          icon={<ListChecks size={18} className={KPI_TONE.default.label} />}
           isLoading={isLoading}
         />
         <StatCard
           label="Finished"
           value={stats?.finished}
-          icon={<CheckCircle size={18} className="text-green-500" />}
+          icon={<CheckCircle size={18} className={KPI_TONE.success.value} />}
           isLoading={isLoading}
         />
         <StatCard
           label="Failed"
           value={stats?.failed}
-          icon={<XCircle size={18} className="text-red-500" />}
+          icon={<XCircle size={18} className={KPI_TONE.destructive.value} />}
           isLoading={isLoading}
         />
         <StatCard
           label="Running"
           value={stats?.running}
-          icon={<PlayCircle size={18} className="text-blue-500" />}
+          icon={<PlayCircle size={18} className={KPI_TONE.primary.value} />}
           isLoading={isLoading}
         />
       </div>
@@ -131,12 +124,12 @@ export default function ResultsPage() {
                       <td className="py-2 pr-4 font-mono text-xs">#{run.run_id}</td>
                       <td className="py-2 pr-4 truncate max-w-[180px]">{run.task_name}</td>
                       <td className="py-2 pr-4">
-                        <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                        <span className={cn('px-1.5 py-0.5 rounded text-xs font-medium', STATUS_CHIP.muted)}>
                           {run.task_type}
                         </span>
                       </td>
                       <td className="py-2 pr-4">
-                        <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${STATUS_BADGE[run.status] ?? 'bg-gray-100 text-gray-500'}`}>
+                        <span className={cn('px-1.5 py-0.5 rounded text-xs font-medium', RUN_RESULT_STATUS_CHIP[run.status] ?? STATUS_CHIP.muted)}>
                           {run.status}
                         </span>
                       </td>

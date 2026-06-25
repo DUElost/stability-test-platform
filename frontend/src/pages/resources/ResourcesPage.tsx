@@ -1,7 +1,10 @@
-import { Card, CardContent } from '@/components/ui/card';
+import React from 'react';
 import { Wifi, Code2, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { Card, CardContent } from '@/components/ui/card';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { SURFACE, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 interface ResourceCardProps {
   title: string;
@@ -19,14 +22,14 @@ function ResourceCard({ title, description, icon: Icon, to }: ResourceCardProps)
       onClick={() => navigate(to)}
     >
       <CardContent className="flex items-center gap-4 p-4">
-        <div className="flex items-center justify-center w-12 h-12 rounded-lg bg-gray-100">
-          <Icon className="w-6 h-6 text-gray-600" />
+        <div className={cn('flex items-center justify-center w-12 h-12 rounded-lg', SURFACE.subtle)}>
+          <Icon className={cn('w-6 h-6', TEXT.subtitle)} />
         </div>
         <div className="flex-1">
-          <h3 className="font-medium text-gray-900">{title}</h3>
-          <p className="text-sm text-gray-500">{description}</p>
+          <h3 className={cn('font-medium', TEXT.heading)}>{title}</h3>
+          <p className={cn('text-sm', TEXT.subtitle)}>{description}</p>
         </div>
-        <ChevronRight className="w-5 h-5 text-gray-400" />
+        <ChevronRight className={cn('w-5 h-5', TEXT.subtle)} />
       </CardContent>
     </Card>
   );
