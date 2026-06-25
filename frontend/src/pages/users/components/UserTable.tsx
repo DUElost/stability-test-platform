@@ -28,19 +28,19 @@ export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActi
         <TableHeader>
           <TableRow className="bg-muted">
             <TableHead className="w-16">ID</TableHead>
-            <TableHead>Username</TableHead>
-            <TableHead>Role</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Created</TableHead>
-            <TableHead>Last Login</TableHead>
-            <TableHead className="text-right w-48">Actions</TableHead>
+            <TableHead>用户名</TableHead>
+            <TableHead>角色</TableHead>
+            <TableHead>状态</TableHead>
+            <TableHead>创建时间</TableHead>
+            <TableHead>最近登录</TableHead>
+            <TableHead className="text-right w-48">操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {users.length === 0 ? (
             <TableRow>
               <TableCell colSpan={7} className={cn('text-center py-8', TEXT.subtitle)}>
-                No users found
+                暂无用户
               </TableCell>
             </TableRow>
           ) : (
@@ -50,12 +50,12 @@ export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActi
                 <TableCell className="font-medium">{user.username}</TableCell>
                 <TableCell>
                   <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
-                    {user.role === 'admin' ? 'Admin' : 'User'}
+                    {user.role === 'admin' ? '管理员' : '普通用户'}
                   </Badge>
                 </TableCell>
                 <TableCell>
                   <Badge variant={user.is_active === 'Y' ? 'success' : 'destructive'}>
-                    {user.is_active === 'Y' ? 'Active' : 'Disabled'}
+                    {user.is_active === 'Y' ? '启用' : '禁用'}
                   </Badge>
                 </TableCell>
                 <TableCell className={TEXT.subtitle}>{formatDateTimeFull(user.created_at)}</TableCell>
@@ -65,7 +65,8 @@ export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActi
                     <button
                       onClick={() => onEdit(user)}
                       className={cn('p-2 rounded transition-colors', INTERACTIVE.iconButton, 'hover:text-primary hover:bg-primary/10')}
-                      title="Edit user"
+                      title="编辑用户"
+                      aria-label="编辑用户"
                     >
                       <Pencil size={16} />
                     </button>
@@ -80,14 +81,16 @@ export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActi
                               ? 'hover:text-warning hover:bg-warning/10'
                               : 'hover:text-success hover:bg-success/10',
                           )}
-                          title={user.is_active === 'Y' ? 'Disable user' : 'Enable user'}
+                          title={user.is_active === 'Y' ? '禁用用户' : '启用用户'}
+                          aria-label={user.is_active === 'Y' ? '禁用用户' : '启用用户'}
                         >
                           {user.is_active === 'Y' ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
                         </button>
                         <button
                           onClick={() => onDelete(user.id)}
                           className={cn('p-2 rounded transition-colors', INTERACTIVE.iconButton, 'hover:text-destructive hover:bg-destructive/10')}
-                          title="Delete user"
+                          title="删除用户"
+                          aria-label="删除用户"
                         >
                           <Trash2 size={16} />
                         </button>

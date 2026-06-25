@@ -9,6 +9,7 @@ import { api, type JiraDraft, type PlanRun } from '@/utils/api';
 import apiClient from '@/utils/api/client';
 import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { InlineError } from '@/components/ui/error-state';
 import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
 import { EmptyState } from '@/components/ui/empty-state';
 import { INTERACTIVE, TEXT } from '@/design-system';
@@ -24,7 +25,7 @@ export default function IssueTrackerPage() {
   const navigate = useNavigate();
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const { data: runsData, isLoading, refetch } = useQuery({
+  const { data: runsData, isLoading, isError, refetch } = useQuery({
     queryKey: ['runs-with-jira-drafts'],
     queryFn: async () => {
       const runs = await api.planRuns.list(0, 50);
@@ -51,7 +52,7 @@ export default function IssueTrackerPage() {
   };
 
   return (
-    <PageContainer>
+    <PageContainer width="list">
       <PageHeader
         title="问题追踪"
         subtitle="查看任务生成的 JIRA 草稿"
@@ -62,6 +63,8 @@ export default function IssueTrackerPage() {
           </Button>
         }
       />
+
+      {isError && <InlineError message="JIRA 草稿列表加载失败，请检查后端服务连接。" />}
 
       {/* ADR-0025 §10: 去重→Jira 批量提单（上传 Result/Upload-List + 一键执行 + web 实时日志） */}
       <JiraSubmitPanel />

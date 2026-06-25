@@ -24,7 +24,7 @@ import {
   TIMELINE_STEP_ROW,
 } from '@/design-system';
 import { cn } from '@/lib/utils';
-import { formatTimeLabel } from '@/utils/format';
+import { formatTimeLabel, formatDurationSeconds } from '@/utils/format';
 import SectionHeader from './SectionHeader';
 import type {
   EventSeverity,
@@ -91,15 +91,6 @@ const STAGE_CHIP_LABEL: Record<EventStage, string> = {
 
 function fmtTs(ts: string): string {
   return formatTimeLabel(ts, '');
-}
-
-function fmtDuration(seconds: number | null | undefined): string {
-  if (!seconds || !isFinite(seconds) || seconds <= 0) return '';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  if (m === 0) return `${s}s`;
-  if (m < 60) return `${m}m ${s}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 // ── Left column: vertical stepper ───────────────────────────────────────
@@ -328,7 +319,9 @@ function StageRow({
           )}
           <span><b className={cn('font-semibold', TEXT.body)}>{stage.steps.length}</b> 步骤</span>
           {stage.started_at && <span className="text-muted-foreground/70" title="阶段开始时刻">起 {fmtTs(stage.started_at)}</span>}
-          {stage.duration_seconds != null && <span>{fmtDuration(stage.duration_seconds)}</span>}
+          {stage.duration_seconds != null && (
+            <span>{formatDurationSeconds(stage.duration_seconds, 'precise', '')}</span>
+          )}
         </div>
         {stage.stage === 'patrol' && stage.patrol_cycle_index != null && (
           <div className="text-[11px] text-muted-foreground/70">

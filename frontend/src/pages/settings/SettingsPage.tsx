@@ -7,10 +7,10 @@ const rowDivider = 'flex items-center justify-between py-3 border-b border-borde
 
 export default function SettingsPage() {
   return (
-    <PageContainer>
+    <PageContainer width="narrow">
       <PageHeader title="系统设置" subtitle="管理平台全局配置" />
 
-      <div className="grid gap-4 max-w-2xl">
+      <div className="grid gap-4">
         {/* 通用设置 */}
         <div className={cn(PANEL.root, 'p-6')}>
           <div className="flex items-center gap-2 mb-4">

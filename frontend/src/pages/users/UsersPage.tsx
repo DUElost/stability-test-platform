@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Loader2, AlertCircle } from 'lucide-react';
+import { Plus, Loader2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
@@ -10,6 +10,7 @@ import { UserTable } from './components/UserTable';
 import { UserModal } from './components/UserModal';
 import { api, type User } from '@/utils/api';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { InlineError } from '@/components/ui/error-state';
 import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
@@ -123,17 +124,13 @@ export default function UsersPage() {
     return (
       <PageContainer>
         <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
-        <Card className="p-6">
-          <div className={cn('flex items-center gap-3', TEXT.destructive)}>
-            <AlertCircle className="w-5 h-5" />
-            <div>
-              <p className="font-medium">Failed to load users</p>
-              <p className={cn('text-sm', TEXT.subtitle)}>
-                {error instanceof Error ? error.message : 'Please check if you have admin privileges'}
-              </p>
-            </div>
-          </div>
-        </Card>
+        <InlineError
+          message={
+            error instanceof Error
+              ? `加载用户失败：${error.message}`
+              : '加载用户失败，请确认已使用管理员账号登录'
+          }
+        />
       </PageContainer>
     );
   }
