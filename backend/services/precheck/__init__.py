@@ -6,7 +6,6 @@ import os
 from datetime import datetime, timezone
 
 from .notify import NotifyPayload, emit_dispatch_gate_invalidation
-from .state import initial_precheck_state, initialise_precheck_state
 
 VERIFY_TIMEOUT_SECONDS = 10.0
 SYNC_SETTLE_SECONDS = 8.0
@@ -33,7 +32,5 @@ __all__ = [
     "SYNC_SETTLE_SECONDS",
     "VERIFY_TIMEOUT_SECONDS",
     "emit_dispatch_gate_invalidation",
-    "initial_precheck_state",
-    "initialise_precheck_state",
     "utc_iso",
 ]

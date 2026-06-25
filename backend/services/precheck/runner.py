@@ -15,6 +15,8 @@ from backend.core.database import SessionLocal
 from backend.core.metrics import record_dispatch_gate
 from backend.models.plan_run import PlanRun
 from backend.services import precheck as precheck_config
+from backend.services.precheck import sync as precheck_sync
+from backend.services.precheck import verify as precheck_verify
 from backend.services.plan_dispatcher_core import (
     snapshot_dispatch_host_watcher_admin_states,
 )
@@ -39,8 +41,6 @@ from .state import (
     persist_precheck,
     update_dispatch_state,
 )
-from .sync import push_mismatched_scripts, sync_host_via_hot_update
-from .verify import gather_verify
 from .watcher import find_mixed_watcher_inactive_host_ids
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ async def drive_dispatch_gate(
 
         precheck["phase"] = "verifying"
         persist_precheck(plan_run_id, precheck, db)
-        verify_results = await gather_verify(host_ids, expected_scripts)
+        verify_results = await precheck_verify._gather_verify(host_ids, expected_scripts)
 
         out_of_sync_hosts: list[str] = []
         for hid in host_ids:
@@ -162,7 +162,7 @@ async def drive_dispatch_gate(
                     continue
 
                 ok_sync, err_sync = await asyncio.to_thread(
-                    push_mismatched_scripts, hid, mismatched_entries, db
+                    precheck_sync._push_mismatched_scripts, hid, mismatched_entries, db
                 )
                 if ok_sync:
                     host_state["synced_at"] = utc_iso()
@@ -174,7 +174,7 @@ async def drive_dispatch_gate(
                         hid, err_sync,
                     )
                     ok_hot, err_hot = await asyncio.to_thread(
-                        sync_host_via_hot_update, hid, db
+                        precheck_sync._sync_host_via_hot_update, hid, db
                     )
                     if ok_hot:
                         host_state["synced_at"] = utc_iso()
@@ -209,7 +209,9 @@ async def drive_dispatch_gate(
             persist_precheck(plan_run_id, precheck, db)
             await asyncio.sleep(precheck_config.SYNC_SETTLE_SECONDS)
 
-            reverify_results = await gather_verify(hosts_to_sync, expected_scripts)
+            reverify_results = await precheck_verify._gather_verify(
+                hosts_to_sync, expected_scripts,
+            )
             still_bad: list[str] = []
             for hid in hosts_to_sync:
                 ok, results, err = reverify_results[hid]

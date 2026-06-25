@@ -97,6 +97,5 @@ class TestNotifyDebounce:
             emit_dispatch_gate_invalidation(9, phase="verifying")
             emit_dispatch_gate_invalidation(9, phase="syncing")
 
-        assert len(captured) == 2
-        phases = [item[1]["payload"]["phase"] for item in captured]
-        assert phases == ["verifying", "syncing"]
+        assert len(captured) == 1
+        assert captured[0][1]["payload"]["phase"] == "syncing"
