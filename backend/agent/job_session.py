@@ -274,7 +274,7 @@ class JobSession:
             return
 
         try:
-            from agent.aee.paths import get_aee_local_root
+            from .aee.paths import get_aee_local_root
             local_root = get_aee_local_root()
             self._reconciler = AeeDbHistoryReconciler(
                 signal_emitter=self._handle.impl.emitter,

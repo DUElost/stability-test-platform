@@ -89,7 +89,7 @@ ZZ_INTERNAL / __exp_main.txt → SignalEmitter → local SQLite outbox
 
 ## Sprint 4 scan/upload/merge pipeline
 
-- **ScanRunner** (`backend/agent/scan_runner.py`): calls `start_log_scan.py -m 5 -d {hdd_root} -side {side} [-end]` — full scan mode (NOT `-dedup_org`). Produces `Result_*_org.xls` on HDD.
+- **ScanRunner** (`backend/agent/scan_runner.py`): calls `start_log_scan.py -m 0 -d {hdd_root} -side {side} [-end]` — AEE_TNE mode (scans HDD, no external DB deps; NOT `-dedup_org`). Produces `Result_*_org.xls` on HDD.
 - **UploadManager** (`backend/agent/upload_manager.py`): copies `_org.xls` → NFS `dedup/{run_id}/`, event dirs → NFS `devices/{run_id}/`. Auto-discovery uses `iterdir()` + `YYYY-MM-DD_HH-MM-SS_*` regex (depth=1, no recursion).
 - **Control-plane merge** (`dedup_scan.py:run_merge_sync`): calls `start_log_scan.py -merge_files {a.xls} {b.xls} -side shanghai` — runs on backend, reads from NFS `dedup/`.
 - **NFS path convention**: `{STP_AEE_NFS_ROOT}/dedup/{run_id}/` (scan reports) + `devices/{run_id}/` (event dirs) + `jira/{run_id}/` (extract output).

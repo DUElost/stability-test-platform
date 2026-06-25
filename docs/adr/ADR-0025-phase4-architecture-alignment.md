@@ -200,7 +200,7 @@ HDD 1TB: /mnt/hdd/aee_events/{folder_name}/{serial}/
 
 | 模式 | 触发 | CLI | 产物 | 保留 |
 |------|------|-----|------|------|
-| 增量 | 自动归档间隔 / 手动归档 | `start_log_scan.py -m 5 -d <本地HDD> -p <place> -tag <config> -pipeline <plan_run_id>`（不带 `-end`） | `Result_*_org.xls`（累计去重） | 保留每次历史（可回溯去重演变） |
+| 增量 | 自动归档间隔 / 手动归档 | `start_log_scan.py -m 0 -d <本地HDD> -side <profile> [-pipeline <plan_run_id>]`（不带 `-end`；mode 0=AEE_TNE，无外部 DB 依赖） | `Result_*_org.xls`（累计去重） | 保留每次历史（可回溯去重演变） |
 | 终态最终 | PlanRun 终态 | 同上 + `-end`（合并所有增量） | `Result_*_org.xls` + `Result_*.xls`（最终去重） | 供人工审核 |
 
 **scan 执行位置**：Agent 本地 Linux（`backend/agent/resources/start_log_scan/`）。工具核心模块（`modules/analyse/aee/`、`modules/mode/ScanAeePlatform.py`、`modules/common/Excel.py`）无 Windows 硬依赖（xlwt/xlrd 纯 Python），Linux 可运行。

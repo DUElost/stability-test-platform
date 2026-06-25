@@ -50,7 +50,7 @@ def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subpr
     )
 
 
-def test_run_local_scan_calls_start_log_scan_with_m5(tmp_path):
+def test_run_local_scan_calls_start_log_scan_with_aee_tne_mode(tmp_path):
     r = _make_runner()
     hdd = tmp_path / "hdd"
     hdd.mkdir()

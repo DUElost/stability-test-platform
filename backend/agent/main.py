@@ -618,12 +618,6 @@ def main() -> None:
             if not plan_run_id:
                 logger.warning("control_scan_now_missing_plan_run_id")
                 return
-            try:
-                from agent.scan_runner import ScanRunner
-                from agent.upload_manager import UploadManager
-            except ImportError:
-                from .scan_runner import ScanRunner
-                from .upload_manager import UploadManager
 
             def _scan_and_upload():
                 runner = ScanRunner.instance()
@@ -659,12 +653,6 @@ def main() -> None:
             if not plan_run_id:
                 logger.warning("control_upload_events_missing_plan_run_id")
                 return
-            try:
-                from agent.upload_manager import UploadManager
-                from agent.aee.paths import get_aee_local_root
-            except ImportError:
-                from .upload_manager import UploadManager
-                from .aee.paths import get_aee_local_root
 
             def _upload_events():
                 uploader = UploadManager.instance()
@@ -681,13 +669,6 @@ def main() -> None:
             ).start()
             logger.info("control_upload_events_triggered plan_run=%d dirs=%d", plan_run_id, len(event_dir_names))
         elif command == "reload_config":
-            try:
-                from agent.scan_runner import ScanRunner
-                from agent.upload_manager import UploadManager
-            except ImportError:
-                from .scan_runner import ScanRunner
-                from .upload_manager import UploadManager
-
             ScanRunner.instance().configure(force=True)
             UploadManager.instance().configure(force=True)
             runner_ok = ScanRunner.instance().is_configured()
