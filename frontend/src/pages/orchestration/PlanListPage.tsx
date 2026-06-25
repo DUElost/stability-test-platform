@@ -46,6 +46,7 @@ import { Badge } from '@/components/ui/badge';
 import { STAT, TEXT } from '@/design-system/tokens';
 
 import { cn } from '@/lib/utils';
+import { formatLocalDate } from '@/utils/format';
 
 
 
@@ -499,7 +500,7 @@ export default function PlanListPage() {
 
 
 
-                    <span>更新于 {new Date(plan.updated_at).toLocaleDateString()}</span>
+                    <span>更新于 {formatLocalDate(plan.updated_at)}</span>
 
 
 

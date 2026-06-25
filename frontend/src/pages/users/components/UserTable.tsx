@@ -9,8 +9,9 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import type { User } from '@/utils/api';
-import { INTERACTIVE, TEXT } from '@/design-system';
+import { INTERACTIVE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { formatDateTimeFull } from '@/utils/format';
 
 interface UserTableProps {
   users: User[];
@@ -21,17 +22,6 @@ interface UserTableProps {
 }
 
 export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActive }: UserTableProps) {
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
   return (
     <div className="rounded-md border border-border overflow-hidden">
       <Table>
@@ -68,8 +58,8 @@ export function UserTable({ users, currentUserId, onEdit, onDelete, onToggleActi
                     {user.is_active === 'Y' ? 'Active' : 'Disabled'}
                   </Badge>
                 </TableCell>
-                <TableCell className={TEXT.subtitle}>{formatDate(user.created_at)}</TableCell>
-                <TableCell className={TEXT.subtitle}>{formatDate(user.last_login)}</TableCell>
+                <TableCell className={TEXT.subtitle}>{formatDateTimeFull(user.created_at)}</TableCell>
+                <TableCell className={TEXT.subtitle}>{formatDateTimeFull(user.last_login)}</TableCell>
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-1">
                     <button

@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
-import { formatBytesFromGb, formatDurationSeconds } from '@/utils/format';
+import { formatBytesFromGb, formatDateTimeFull, formatDurationSeconds } from '@/utils/format';
 
 export interface HostResources {
   cpu_load: number;
@@ -412,7 +412,7 @@ export function HostResourceCard({
                 <Wifi className="h-3 w-3" />
                 <span>Last seen</span>
               </div>
-              <span>{new Date(last_heartbeat).toLocaleString()}</span>
+              <span>{formatDateTimeFull(last_heartbeat)}</span>
             </div>
           )}
         </CardContent>

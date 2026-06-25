@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend } fro
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { BarChart3 } from 'lucide-react';
+import { CHART_COLORS } from '@/design-system/colors';
 
 interface TestTypeStat {
   type: string;
@@ -116,7 +117,7 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
                 dataKey="finished"
                 name="Finished"
                 stackId="a"
-                fill="#22c55e"
+                fill={CHART_COLORS.success}
                 radius={[0, 0, 0, 0]}
                 maxBarSize={40}
               />
@@ -124,7 +125,7 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
                 dataKey="failed"
                 name="Failed"
                 stackId="a"
-                fill="#ef4444"
+                fill={CHART_COLORS.error}
                 radius={[4, 4, 0, 0]}
                 maxBarSize={40}
               />

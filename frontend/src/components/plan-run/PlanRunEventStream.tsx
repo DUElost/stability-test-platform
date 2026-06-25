@@ -10,6 +10,7 @@ import {
   TEXT,
 } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatDateTimeLocale } from '@/utils/format';
 import type {
   EventSeverity,
   EventStage,
@@ -53,9 +54,8 @@ const SEVERITY_FILTERS: Array<{ key: EventSeverity | 'all'; label: string }> = [
 
 function fmtTs(ts: string): string {
   if (!ts) return '';
-  const d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return ts;
-  return d.toLocaleString('zh-CN', { hour12: false });
+  const formatted = formatDateTimeLocale(ts, '');
+  return formatted || ts;
 }
 
 function EventRow({ event }: { event: PlanRunEvent }) {

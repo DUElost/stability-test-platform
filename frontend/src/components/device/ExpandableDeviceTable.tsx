@@ -28,6 +28,7 @@ import {
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { FORM, resourceUsageBgClass, resourceUsageTextClass, TEXT } from '@/design-system/tokens';
+import { formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
@@ -261,7 +262,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                     </TableCell>
                     <TableCell className="p-3 text-right text-xs text-muted-foreground">
                       {device.last_seen
-                        ? new Date(device.last_seen).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                        ? formatDateTimeFull(device.last_seen)
                         : '-'}
                     </TableCell>
                   </TableRow>

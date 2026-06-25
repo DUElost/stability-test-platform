@@ -19,7 +19,7 @@ import {
 } from '@/design-system/colors';
 import { ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
-import { formatDurationSeconds } from '@/utils/format';
+import { formatDateTimeShort, formatDurationSeconds } from '@/utils/format';
 import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
 
 // 状态 → 容器背景/边框（与 StatusBadge plan-run 语义对齐）
@@ -128,12 +128,7 @@ export default function PlanRunHero({
         <span className={cn('font-medium', TEXT.heading)}>{run?.triggered_by ?? '—'}</span>
         <span>开始时间</span>
         <span className={cn('font-mono', TEXT.heading)}>
-          {run?.started_at
-            ? new Date(run.started_at).toLocaleString('zh-CN', {
-                month: '2-digit', day: '2-digit',
-                hour: '2-digit', minute: '2-digit',
-              })
-            : '—'}
+          {formatDateTimeShort(run?.started_at)}
         </span>
         <span>失败阈值</span>
         <span className={cn('font-medium', TEXT.heading)}>

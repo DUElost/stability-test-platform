@@ -81,3 +81,42 @@ export function formatLocalDate(value?: string | null): string {
   if (!date) return '-';
   return date.toLocaleDateString('zh-CN');
 }
+
+const DATETIME_FULL: Intl.DateTimeFormatOptions = {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+};
+
+const DATETIME_SHORT: Intl.DateTimeFormatOptions = {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+};
+
+/** Full datetime with year and seconds (tables, audit logs). */
+export function formatDateTimeFull(value?: string | null): string {
+  return formatLocalDateTime(value, DATETIME_FULL);
+}
+
+/** Compact datetime without year (PlanRun hero, cards). */
+export function formatDateTimeShort(value?: string | null): string {
+  return formatLocalDateTime(value, DATETIME_SHORT);
+}
+
+/** Locale string with 24h clock (event streams). */
+export function formatDateTimeLocale(value?: string | null, empty = '-'): string {
+  const date = parseIsoToDate(value);
+  if (!date) return empty;
+  return date.toLocaleString('zh-CN', { hour12: false });
+}
+
+/** Raw ISO display for technical timestamps (dispatch gate). */
+export function formatIsoCompact(value?: string | null, empty = '—'): string {
+  if (!value) return empty;
+  return value.replace('T', ' ').replace('Z', ' UTC');
+}

@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatDateTimeFull } from '@/utils/format';
 
 interface AuditLogEntry {
   id: number;
@@ -128,7 +129,7 @@ export default function AuditLogPage() {
                 {logs.map((log) => (
                   <tr key={log.id} className="border-b border-border/50 hover:bg-muted/50">
                     <td className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
-                      {new Date(log.timestamp).toLocaleString()}
+                      {formatDateTimeFull(log.timestamp)}
                     </td>
                     <td className={cn('px-4 py-3', TEXT.body)}>{log.username || '-'}</td>
                     <td className="px-4 py-3">

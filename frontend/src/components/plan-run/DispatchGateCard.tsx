@@ -10,6 +10,7 @@ import {
   TEXT,
 } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatIsoCompact } from '@/utils/format';
 import type { PrecheckState } from '@/utils/api/types';
 
 interface Props {
@@ -36,11 +37,6 @@ const PHASE_SPIN: ReadonlyArray<string> = ['verifying', 'syncing', 'reverifying'
 function shortSha(sha?: string | null): string {
   if (!sha) return '—';
   return sha.length <= 8 ? sha : sha.slice(0, 8) + '…';
-}
-
-function formatTimestamp(value?: string | null): string {
-  if (!value) return '—';
-  return value.replace('T', ' ').replace('Z', ' UTC');
 }
 
 function getReadySuffix(
@@ -262,19 +258,19 @@ export default function DispatchGateCard({
             <div>
               <span className="text-muted-foreground/70">入队</span>
               <div className={cn('font-mono', TEXT.body)}>
-                {formatTimestamp(dispatchState?.enqueued_at)}
+                {formatIsoCompact(dispatchState?.enqueued_at)}
               </div>
             </div>
             <div>
               <span className="text-muted-foreground/70">开始</span>
               <div className={cn('font-mono', TEXT.body)}>
-                {formatTimestamp(dispatchState?.started_at)}
+                {formatIsoCompact(dispatchState?.started_at)}
               </div>
             </div>
             <div>
               <span className="text-muted-foreground/70">完成</span>
               <div className={cn('font-mono', TEXT.body)}>
-                {formatTimestamp(dispatchState?.completed_at)}
+                {formatIsoCompact(dispatchState?.completed_at)}
               </div>
             </div>
             <div>

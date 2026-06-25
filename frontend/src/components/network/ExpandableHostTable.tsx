@@ -16,7 +16,7 @@ import {
   resourceUsageBgClass,
   resourceUsageTextClass,
 } from '@/design-system/tokens';
-import { formatBytesFromGb, formatDurationSeconds } from '@/utils/format';
+import { formatBytesFromGb, formatDurationSeconds, formatLocalTime } from '@/utils/format';
 
 export interface HostResources {
   cpu_load: number;
@@ -380,7 +380,7 @@ export function ExpandableHostTable({
                       </TableCell>
                       <TableCell className="p-3 text-right text-xs text-muted-foreground">
                         {host.last_heartbeat
-                          ? new Date(host.last_heartbeat).toLocaleTimeString()
+                          ? formatLocalTime(host.last_heartbeat)
                           : '-'}
                       </TableCell>
                       <TableCell className="p-3 text-right">

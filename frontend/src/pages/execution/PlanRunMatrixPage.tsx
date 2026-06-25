@@ -22,6 +22,7 @@ import {
   jobStatusCellClass,
 } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { formatDateTimeFull } from '@/utils/format';
 
 const TERMINAL_STATUSES = ['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'DEGRADED'];
 
@@ -32,7 +33,7 @@ function JobBlock({ job, onClick }: { job: PlanJobInstance; onClick: () => void 
       <p className="font-medium">Job #{job.id}</p>
       <p>设备: {job.device_serial || `Device#${job.device_id}`}</p>
       <p>状态: {job.status}</p>
-      {job.started_at && <p className="text-xs opacity-75">开始: {new Date(job.started_at).toLocaleString()}</p>}
+      {job.started_at && <p className="text-xs opacity-75">开始: {formatDateTimeFull(job.started_at)}</p>}
     </div>
   );
 
@@ -211,8 +212,8 @@ export default function PlanRunMatrixPage() {
                   ['设备', selectedJob.device_serial || `Device #${selectedJob.device_id}`],
                   ['Host', selectedJob.host_id || '-'],
                   ...(selectedJob.status_reason ? [['原因', selectedJob.status_reason] as const] : []),
-                  ['开始', selectedJob.started_at ? new Date(selectedJob.started_at).toLocaleString() : '-'],
-                  ['结束', selectedJob.ended_at ? new Date(selectedJob.ended_at).toLocaleString() : '-'],
+                  ['开始', selectedJob.started_at ? formatDateTimeFull(selectedJob.started_at) : '-'],
+                  ['结束', selectedJob.ended_at ? formatDateTimeFull(selectedJob.ended_at) : '-'],
                 ].map(([label, value]) => (
                   <div key={label} className="flex justify-between gap-2">
                     <span className={TEXT.subtitle}>{label}</span>

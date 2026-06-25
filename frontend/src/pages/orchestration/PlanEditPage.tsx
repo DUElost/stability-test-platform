@@ -20,6 +20,8 @@ import {
 
   AlertDialogAction,
 
+  AlertDialogCancel,
+
   AlertDialogContent,
 
   AlertDialogDescription,
@@ -42,7 +44,7 @@ import PlanStepInspector from '@/components/pipeline/PlanStepInspector';
 
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 
-import { SURFACE, TEXT } from '@/design-system/tokens';
+import { SURFACE, TEXT, FORM } from '@/design-system/tokens';
 
 import { cn } from '@/lib/utils';
 
@@ -291,6 +293,10 @@ export default function PlanEditPage() {
   const [showJson, setShowJson] = useState(false);
 
   const [confirmLeave, setConfirmLeave] = useState<null | { type: 'switch' | 'execute'; targetPlanId?: number }>(null);
+
+  const [chainAppendDialog, setChainAppendDialog] = useState<'confirm-save' | 'name' | null>(null);
+
+  const [chainAppendName, setChainAppendName] = useState('');
 
 
 
@@ -665,35 +671,7 @@ export default function PlanEditPage() {
 
 
 
-  const handleAppendChainPlan = async () => {
-
-    if (planId == null) {
-
-      toast.info('保存当前 Plan 后再追加链尾');
-
-      return;
-
-    }
-
-    if (isDirty) {
-
-      const ok = window.confirm('当前 Plan 尚未保存，是否先保存再追加链尾？');
-
-      if (!ok) return;
-
-      const saved = await handleSave();
-
-      if (!saved) return;
-
-    }
-
-
-
-    const proposedName = window.prompt('新 Plan 名称', `${name || 'Plan'} - 后续`);
-
-    if (!proposedName?.trim()) return;
-
-
+  const createChainTailPlan = async (proposedName: string) => {
 
     try {
 
@@ -733,13 +711,11 @@ export default function PlanEditPage() {
 
 
 
-      // Find the actual chain tail (current chain ends where next_plan_id is null)
-
       const plansList = await api.plans.list(0, 200);
 
       const byId = new Map(plansList.map(p => [p.id, p]));
 
-      let cursor: Plan | undefined = byId.get(planId);
+      let cursor: Plan | undefined = byId.get(planId!);
 
       const seen = new Set<number>();
 
@@ -774,6 +750,60 @@ export default function PlanEditPage() {
       toast.error(err.message || '追加失败');
 
     }
+
+  };
+
+
+
+  const handleAppendChainPlan = () => {
+
+    if (planId == null) {
+
+      toast.info('保存当前 Plan 后再追加链尾');
+
+      return;
+
+    }
+
+    if (isDirty) {
+
+      setChainAppendDialog('confirm-save');
+
+      return;
+
+    }
+
+    setChainAppendName(`${name || 'Plan'} - 后续`);
+
+    setChainAppendDialog('name');
+
+  };
+
+
+
+  const onChainAppendSaveConfirm = async () => {
+
+    const saved = await handleSave();
+
+    if (!saved) return;
+
+    setChainAppendName(`${name || 'Plan'} - 后续`);
+
+    setChainAppendDialog('name');
+
+  };
+
+
+
+  const onChainAppendNameConfirm = async () => {
+
+    const trimmed = chainAppendName.trim();
+
+    if (!trimmed) return;
+
+    setChainAppendDialog(null);
+
+    await createChainTailPlan(trimmed);
 
   };
 
@@ -1132,6 +1162,98 @@ export default function PlanEditPage() {
             </Button>
 
             <AlertDialogAction onClick={confirmAndProceed}>保存并继续</AlertDialogAction>
+
+          </AlertDialogFooter>
+
+        </AlertDialogContent>
+
+      </AlertDialog>
+
+
+
+      {/* ── Chain append: save-before-confirm ─────────────────── */}
+
+      <AlertDialog
+        open={chainAppendDialog === 'confirm-save'}
+        onOpenChange={(open) => !open && setChainAppendDialog(null)}
+      >
+
+        <AlertDialogContent>
+
+          <AlertDialogHeader>
+
+            <AlertDialogTitle>先保存再追加链尾？</AlertDialogTitle>
+
+            <AlertDialogDescription>
+
+              当前 Plan 尚未保存，是否先保存再追加链尾？
+
+            </AlertDialogDescription>
+
+          </AlertDialogHeader>
+
+          <AlertDialogFooter>
+
+            <AlertDialogCancel>取消</AlertDialogCancel>
+
+            <AlertDialogAction onClick={() => void onChainAppendSaveConfirm()}>
+
+              保存并继续
+
+            </AlertDialogAction>
+
+          </AlertDialogFooter>
+
+        </AlertDialogContent>
+
+      </AlertDialog>
+
+
+
+      {/* ── Chain append: new Plan name ───────────────────────── */}
+
+      <AlertDialog
+        open={chainAppendDialog === 'name'}
+        onOpenChange={(open) => !open && setChainAppendDialog(null)}
+      >
+
+        <AlertDialogContent>
+
+          <AlertDialogHeader>
+
+            <AlertDialogTitle>新 Plan 名称</AlertDialogTitle>
+
+            <AlertDialogDescription>
+
+              为链尾新 Plan 输入名称。
+
+            </AlertDialogDescription>
+
+          </AlertDialogHeader>
+
+          <input
+            type="text"
+            value={chainAppendName}
+            onChange={(e) => setChainAppendName(e.target.value)}
+            className={cn(FORM.input, 'mt-1')}
+            autoFocus
+          />
+
+          <AlertDialogFooter>
+
+            <AlertDialogCancel>取消</AlertDialogCancel>
+
+            <AlertDialogAction
+              disabled={!chainAppendName.trim()}
+              onClick={(e) => {
+                e.preventDefault();
+                void onChainAppendNameConfirm();
+              }}
+            >
+
+              创建并追加
+
+            </AlertDialogAction>
 
           </AlertDialogFooter>
 

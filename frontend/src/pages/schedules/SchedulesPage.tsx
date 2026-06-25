@@ -9,6 +9,7 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
 import { INTERACTIVE, PANEL, SKELETON_BLOCK, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatDateTimeFull } from '@/utils/format';
 
 interface ScheduleForm {
   name: string;
@@ -287,7 +288,7 @@ export default function SchedulesPage() {
                     </span>
                   </td>
                   <td className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
-                    {s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '-'}
+                    {s.next_run_at ? formatDateTimeFull(s.next_run_at) : '-'}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
