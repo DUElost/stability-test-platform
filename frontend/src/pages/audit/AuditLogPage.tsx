@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { api } from '@/utils/api';
 import { Loader2, Shield } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { InlineError } from '@/components/ui/error-state';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
@@ -23,6 +24,7 @@ interface AuditLogEntry {
 export default function AuditLogPage() {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const pageSize = 50;
@@ -37,8 +39,9 @@ export default function AuditLogPage() {
   const loadLogs = async () => {
     if (filters.start_time && filters.end_time && filters.start_time > filters.end_time) return;
     setLoading(true);
+    setError(null);
     try {
-      const params: any = {};
+      const params: Record<string, string> = {};
       if (filters.resource_type) params.resource_type = filters.resource_type;
       if (filters.action) params.action = filters.action;
       if (filters.start_time) params.start_time = filters.start_time;
@@ -47,7 +50,9 @@ export default function AuditLogPage() {
       setLogs(res.data.items);
       setTotal(res.data.total);
     } catch {
-      // silently fail for non-admin users
+      setError('加载失败，请检查网络连接或管理员权限');
+      setLogs([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
@@ -102,11 +107,15 @@ export default function AuditLogPage() {
         />
       </div>
 
+      {error && !loading && (
+        <InlineError message={error} />
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center h-64">
           <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.subtitle)} />
         </div>
-      ) : logs.length === 0 ? (
+      ) : error ? null : logs.length === 0 ? (
         <div className={cn(PANEL.root, 'p-12 text-center')}>
           <Shield className={cn('w-12 h-12 mx-auto mb-3', TEXT.subtle)} />
           <h3 className={cn('text-lg font-medium mb-2', TEXT.heading)}>暂无审计记录</h3>

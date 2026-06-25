@@ -178,3 +178,31 @@ export const PLAN_RUN_STATUS_PILL: Record<PlanRunHeroStatus, string> = {
 } as const;
 
 export type PlanRunHeroStatus = keyof typeof PLAN_RUN_HERO_SURFACE;
+
+/**
+ * AEE / Vendor AEE 子类型饼图色板
+ * 与初筛选语义对齐；Recharts 需 hex/hsl 字面值，故保留固定色值。
+ */
+export const AEE_SUBTYPE_CHART_COLORS: Record<string, string> = {
+  ANR: '#5b74c8',
+  JE: '#ffc94d',
+  NE: '#f26363',
+  SWT: '#67c7df',
+  'Fatal NE': '#f08a52',
+  'Fatal JE': '#8b68d6',
+  'Combo EE': '#4bb5a8',
+  'Kernel API Dump': '#7b879b',
+  'System API Dump': '#55a8f2',
+  HWT: '#8acb69',
+  HANG: '#94a3b8',
+  KE: '#6b7280',
+  'HW Reboot': '#a3cf5b',
+  'Modem EE': '#4d87da',
+  'OCP Reboot': '#b082ef',
+  'Vendor 其他': '#b7c1d4',
+  其他: '#d8dee8',
+} as const;
+
+export function aeeSubtypeChartColor(subtype: string): string {
+  return AEE_SUBTYPE_CHART_COLORS[subtype] ?? AEE_SUBTYPE_CHART_COLORS['其他'];
+}

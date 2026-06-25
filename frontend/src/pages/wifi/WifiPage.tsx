@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { Plus, Trash2, Wifi, WifiOff, Pencil, X } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { InlineError } from '@/components/ui/error-state';
 import { FORM, INTERACTIVE, MODAL, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
@@ -28,7 +29,7 @@ export default function WifiPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState(FORM_INITIAL);
 
-  const { data: pools = [], isLoading } = useQuery({
+  const { data: pools = [], isLoading, isError } = useQuery({
     queryKey: ['resource-pools', 'loads'],
     queryFn: () => api.resourcePools.listLoads(),
     refetchInterval: 15000,
@@ -209,6 +210,11 @@ export default function WifiPage() {
           <CardTitle className="text-base">WiFi 池列表</CardTitle>
         </CardHeader>
         <CardContent>
+          {isError && (
+            <div className="mb-4">
+              <InlineError message="WiFi 资源池加载失败，请检查后端服务连接。" />
+            </div>
+          )}
           {isLoading ? (
             <div className="space-y-3">
               {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}

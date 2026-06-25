@@ -15,6 +15,7 @@ import { api } from '@/utils/api';
 import { StableResponsiveContainer } from '@/components/charts/StableResponsiveContainer';
 import {
   ALERT_BANNER,
+  aeeSubtypeChartColor,
   CHART_COLORS,
   DASHBOARD_SUMMARY_CARD,
   DRAWER,
@@ -64,34 +65,13 @@ const VENDOR_SUBTYPES = new Set([
   'OCP Reboot',
 ]);
 
-const SUBTYPE_COLORS: Record<string, string> = {
-  ANR: '#5b74c8',
-  JE: '#ffc94d',
-  NE: '#f26363',
-  SWT: '#67c7df',
-  'Fatal NE': '#f08a52',
-  'Fatal JE': '#8b68d6',
-  'Combo EE': '#4bb5a8',
-  'Kernel API Dump': '#7b879b',
-  'System API Dump': '#55a8f2',
-  HWT: '#8acb69',
-  HANG: '#94a3b8',
-  KE: '#6b7280',
-  'HW Reboot': '#a3cf5b',
-  'Modem EE': '#4d87da',
-  'OCP Reboot': '#b082ef',
-  'Vendor 其他': '#b7c1d4',
-  其他: '#d8dee8',
-};
-
-
 function subtypeLabel(item: Pick<SubtypeDistribution, 'subtype' | 'group'>): string {
   if (item.subtype === '其他' && item.group === 'VENDOR_AEE') return 'Vendor 其他';
   return item.subtype;
 }
 
 function subtypeColor(item: Pick<SubtypeDistribution, 'subtype' | 'group'>): string {
-  return SUBTYPE_COLORS[subtypeLabel(item)] ?? SUBTYPE_COLORS['其他'];
+  return aeeSubtypeChartColor(subtypeLabel(item));
 }
 
 function formatCompactValue(value: string | null | undefined): string {
@@ -141,12 +121,12 @@ function buildPackageDistribution(breakdown: PackageSubtypeCount[]): SubtypeDist
 
 function packageDominantColor(row: PackageRanking): string {
   if (!row.subtype_breakdown || row.subtype_breakdown.length === 0) {
-    return SUBTYPE_COLORS['其他'];
+    return aeeSubtypeChartColor('其他');
   }
   const dominant = row.subtype_breakdown.reduce((a, b) =>
     b.count > a.count ? b : a,
   );
-  return SUBTYPE_COLORS[dominant.subtype] ?? SUBTYPE_COLORS['其他'];
+  return aeeSubtypeChartColor(dominant.subtype);
 }
 
 function PackageSubtypeDots({ row, active }: { row: PackageRanking; active: boolean }) {
@@ -160,7 +140,7 @@ function PackageSubtypeDots({ row, active }: { row: PackageRanking; active: bool
         <span key={item.subtype} className="inline-flex items-center gap-1">
           <span
             className="h-2 w-2 shrink-0 rounded-full"
-            style={{ backgroundColor: SUBTYPE_COLORS[item.subtype] ?? SUBTYPE_COLORS['其他'] }}
+            style={{ backgroundColor: aeeSubtypeChartColor(item.subtype) }}
           />
           <span className={cn('text-xs', active ? 'text-muted-foreground/70' : TEXT.subtitle)}>
             {item.subtype} {item.count}
