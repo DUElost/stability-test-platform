@@ -132,12 +132,12 @@ export const planRuns = {
     ),
 
   triggerScan: (runId: number, isFinal: boolean = false) =>
-    unwrapApiResponse<{ console_run_id: string; room: string; plan_run_id: number }>(
+    unwrapApiResponse<{ plan_run_id: number; triggered_hosts: string[]; skipped_offline: unknown[] }>(
       apiClient.post(`/plan-runs/${runId}/dedup/scan`, null, { params: { is_final: isFinal } }),
     ),
 
   triggerMerge: (runId: number) =>
-    unwrapApiResponse<{ console_run_id: string; room: string; plan_run_id: number }>(
+    unwrapApiResponse<{ status: string; plan_run_id: number }>(
       apiClient.post(`/plan-runs/${runId}/dedup/merge`, {}),
     ),
 

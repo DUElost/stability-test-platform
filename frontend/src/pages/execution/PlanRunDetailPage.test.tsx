@@ -22,8 +22,8 @@ const mocks = vi.hoisted(() => ({
   getDedupStatus: vi.fn().mockResolvedValue({ plan_run_id: 12, artifacts: [] }),
   listJobArtifacts: vi.fn().mockResolvedValue([]),
   triggerExtract: vi.fn().mockResolvedValue({ plan_run_id: 12, extracted_count: 0 }),
-  triggerScan: vi.fn().mockResolvedValue({ console_run_id: 'fake', room: 'console:fake' }),
-  triggerMerge: vi.fn().mockResolvedValue({ console_run_id: 'fake', room: 'console:fake' }),
+  triggerScan: vi.fn().mockResolvedValue({ plan_run_id: 12, triggered_hosts: [], skipped_offline: [] }),
+  triggerMerge: vi.fn().mockResolvedValue({ status: 'ok', plan_run_id: 12 }),
   socketCallback: { current: undefined as undefined | ((msg: any) => void) },
 }));
 

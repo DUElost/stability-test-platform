@@ -297,10 +297,10 @@ async def trigger_merge(
         raise HTTPException(status_code=503, detail="scan tool not configured")
 
     import asyncio
-    console_run_id = await asyncio.to_thread(run_merge_sync, run_id)
-    if not console_run_id:
-        raise HTTPException(status_code=500, detail="merge failed to start (no _org.xls?)")
-    return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}", "plan_run_id": run_id})
+    result = await asyncio.to_thread(run_merge_sync, run_id)
+    if not result:
+        raise HTTPException(status_code=500, detail="merge failed (no _org.xls?)")
+    return ok({"status": "ok", "plan_run_id": run_id})
 
 
 @scan_router.post("/{run_id}/dedup/extract", response_model=ApiResponse[dict])

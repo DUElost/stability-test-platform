@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -17,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan_run_artifact import PlanRunArtifact
-from backend.services.run_console import RunConsole, RunConsoleError
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +133,9 @@ def run_scan_sync(plan_run_id: int, *, is_final: bool = False) -> str:
 def run_merge_sync(plan_run_id: int) -> str:
     """同步执行 merge（-merge_files 集中合并各 agent 的 _org.xls）。
 
-    返回 console_run_id。
+    阻塞等待子进程完成，返回 "ok" 或空串。
+    不再使用 RunConsole（fire-and-forget 模式导致 SAQ 重试撞 RunKeyBusyError），
+    改为 subprocess.run 同步等待，与 run_scan_sync 行为一致。
     """
     tool = resolve_scan_tool()
     if tool is None:
@@ -164,12 +166,38 @@ def run_merge_sync(plan_run_id: int) -> str:
     else:
         argv += ["-side", "shanghai"]
 
-    def _on_complete(run):
-        if run.status != "SUCCESS":
-            return
-        try:
-            merge_dir = Path(tool["script"]).parent / "merge_result"
-            latest = max(merge_dir.glob("*/"), key=lambda p: p.stat().st_mtime) if merge_dir.exists() else None
+    cwd = str(Path(tool["script"]).parent)
+    logger.info("merge_started plan_run=%d files=%d cwd=%s", plan_run_id, len(org_files), cwd)
+
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("merge_timeout plan_run=%d timeout=300s", plan_run_id)
+        raise
+    except Exception:
+        logger.exception("merge_spawn_failed plan_run=%d", plan_run_id)
+        raise
+
+    if proc.returncode != 0:
+        logger.error(
+            "merge_failed plan_run=%d exit=%d stderr=%s",
+            plan_run_id, proc.returncode, proc.stderr[:500] if proc.stderr else "",
+        )
+        raise RuntimeError(f"merge subprocess failed (exit={proc.returncode})")
+
+    # 子进程成功，注册产物
+    try:
+        merge_dir = Path(tool["script"]).parent / "merge_result"
+        if merge_dir.exists():
+            latest = max(merge_dir.glob("*/"), key=lambda p: p.stat().st_mtime)
             if latest:
                 inner_db = SessionLocal()
                 try:
@@ -177,18 +205,11 @@ def run_merge_sync(plan_run_id: int) -> str:
                     logger.info("merge_artifacts_registered plan_run=%d count=%d", plan_run_id, n)
                 finally:
                     inner_db.close()
-        except Exception:
-            logger.exception("merge_register_artifacts_failed plan_run=%d", plan_run_id)
+    except Exception:
+        logger.exception("merge_register_artifacts_failed plan_run=%d", plan_run_id)
 
-    console_run_id = RunConsole.instance().start(
-        run_key=f"merge:{plan_run_id}",
-        cmd=argv,
-        cwd=str(Path(tool["script"]).parent),
-        label=f"merge-plan_run_{plan_run_id}",
-        on_complete=_on_complete,
-    )
-    logger.info("merge_started plan_run=%d run_id=%s files=%d", plan_run_id, console_run_id, len(org_files))
-    return console_run_id
+    logger.info("merge_done plan_run=%d", plan_run_id)
+    return "ok"
 
 
 def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) -> int:
