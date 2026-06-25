@@ -18,61 +18,13 @@ from backend.services.plan_dispatcher_sync import prepare_plan_run
 from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_precheck import _drive_dispatch_gate
 from backend.tasks.saq_worker import EnqueueSyncError
+from backend.tests.services.precheck_helpers import (
+    ack_drift,
+    ack_ok,
+    prepare_two_host_run,
+)
 
-
-# ---------------------------------------------------------------------------
-# Fixtures: Plan + Script + Host + Device chain ready for dispatch
-# (gate_chain lives in backend/tests/conftest.py)
-# ---------------------------------------------------------------------------
-
-
-def _ack_ok(host_id: str, expected_sha: str) -> dict:
-    return {
-        "host_id": host_id,
-        "agent_version": "test",
-        "results": [
-            {
-                "name": "check_device",
-                "version": "1.0.0",
-                "expected_sha": expected_sha,
-                "actual_sha": expected_sha,
-                "exists": True,
-                "ok": True,
-                "error": None,
-            }
-        ],
-        "checked_at": "2026-05-07T10:00:00Z",
-    }
-
-
-def _ack_drift(host_id: str, expected_sha: str) -> dict:
-    return {
-        "host_id": host_id,
-        "agent_version": "test",
-        "results": [
-            {
-                "name": "check_device",
-                "version": "1.0.0",
-                "expected_sha": expected_sha,
-                "actual_sha": "deadbeef",
-                "exists": True,
-                "ok": False,
-                "error": None,
-            }
-        ],
-        "checked_at": "2026-05-07T10:00:00Z",
-    }
-
-
-def _prepare_run(db_session, gate_chain) -> PlanRun:
-    pr = prepare_plan_run(
-        plan_id=gate_chain["plan"].id,
-        device_ids=[gate_chain["device_a"].id, gate_chain["device_b"].id],
-        triggered_by="testuser",
-        db=db_session,
-        run_type="MANUAL",
-    )
-    return pr
+_prepare_run = prepare_two_host_run
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +45,7 @@ class TestDispatchGate:
             pytest.fail("verify_scripts must not run when watcher admin state is mixed")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -135,10 +87,10 @@ class TestDispatchGate:
         pr = _prepare_run(db_session, gate_chain)
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, "aabbcc11")
+            return ack_ok(host_id, "aabbcc11")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -162,10 +114,10 @@ class TestDispatchGate:
         db_session.commit()
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, "aabbcc11")
+            return ack_ok(host_id, "aabbcc11")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -196,7 +148,7 @@ class TestDispatchGate:
             pytest.fail("verify_scripts must not run when watcher admin snapshot is mixed")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -216,10 +168,10 @@ class TestDispatchGate:
         pr = _prepare_run(db_session, gate_chain)
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, "aabbcc11")
+            return ack_ok(host_id, "aabbcc11")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -249,20 +201,20 @@ class TestDispatchGate:
         async def _fake_call(host_id, event, data, *, timeout=10.0):
             verify_call["count"] += 1
             if host_id == "h-A":
-                return _ack_ok(host_id, "aabbcc11")
+                return ack_ok(host_id, "aabbcc11")
             # h-B drifts on first verify, aligns on re-verify
             if verify_call["count"] <= 2:
-                return _ack_drift(host_id, "aabbcc11")
-            return _ack_ok(host_id, "aabbcc11")
+                return ack_drift(host_id, "aabbcc11")
+            return ack_ok(host_id, "aabbcc11")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ), patch(
-            "backend.services.plan_precheck._sync_host_via_hot_update",
+            "backend.services.precheck.sync._sync_host_via_hot_update",
             return_value=(True, None),
         ), patch(
-            "backend.services.plan_precheck.SYNC_SETTLE_SECONDS", 0
+            "backend.services.precheck.SYNC_SETTLE_SECONDS", 0
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
 
@@ -284,17 +236,17 @@ class TestDispatchGate:
         self, db_session, gate_chain, monkeypatch,
     ):
         monkeypatch.setattr(
-            "backend.services.plan_precheck.DISPATCH_SYNC_MAX_ATTEMPTS", 2,
+            "backend.services.precheck.DISPATCH_SYNC_MAX_ATTEMPTS", 2,
         )
         pr = _prepare_run(db_session, gate_chain)
         sync_calls = {"count": 0}
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
             if host_id == "h-A":
-                return _ack_ok(host_id, "aabbcc11")
+                return ack_ok(host_id, "aabbcc11")
             if sync_calls["count"] >= 2:
-                return _ack_ok(host_id, "aabbcc11")
-            return _ack_drift(host_id, "aabbcc11")
+                return ack_ok(host_id, "aabbcc11")
+            return ack_drift(host_id, "aabbcc11")
 
         def _fake_sync(host_id, db):
             sync_calls["count"] += 1
@@ -303,16 +255,16 @@ class TestDispatchGate:
             return (False, "hot_update_failed")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ), patch(
-            "backend.services.plan_precheck._sync_host_via_hot_update",
+            "backend.services.precheck.sync._sync_host_via_hot_update",
             side_effect=_fake_sync,
         ), patch(
-            "backend.services.plan_precheck._push_mismatched_scripts",
+            "backend.services.precheck.sync._push_mismatched_scripts",
             return_value=(False, "push_failed"),
         ), patch(
-            "backend.services.plan_precheck.SYNC_SETTLE_SECONDS", 0
+            "backend.services.precheck.SYNC_SETTLE_SECONDS", 0
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
 
@@ -331,7 +283,7 @@ class TestDispatchGate:
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
             if host_id == "h-A":
-                return _ack_ok(host_id, "aabbcc11")
+                return ack_ok(host_id, "aabbcc11")
             raise AgentNotConnectedError(host_id)
 
         sync_called = {"count": 0}
@@ -341,10 +293,10 @@ class TestDispatchGate:
             return (True, None)
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ), patch(
-            "backend.services.plan_precheck._sync_host_via_hot_update",
+            "backend.services.precheck.sync._sync_host_via_hot_update",
             side_effect=_fake_sync,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -371,16 +323,16 @@ class TestDispatchGate:
         pr = _prepare_run(db_session, gate_chain)
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_drift(host_id, "aabbcc11")  # both drift
+            return ack_drift(host_id, "aabbcc11")  # both drift
 
         def _fake_sync_fail(host_id, db):
             return (False, "no_ssh_credentials")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ), patch(
-            "backend.services.plan_precheck._sync_host_via_hot_update",
+            "backend.services.precheck.sync._sync_host_via_hot_update",
             side_effect=_fake_sync_fail,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -402,16 +354,16 @@ class TestDispatchGate:
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
             # always returns drift — re-verify after sync still bad
-            return _ack_drift(host_id, "aabbcc11")
+            return ack_drift(host_id, "aabbcc11")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ), patch(
-            "backend.services.plan_precheck._sync_host_via_hot_update",
+            "backend.services.precheck.sync._sync_host_via_hot_update",
             return_value=(True, None),
         ), patch(
-            "backend.services.plan_precheck.SYNC_SETTLE_SECONDS", 0
+            "backend.services.precheck.SYNC_SETTLE_SECONDS", 0
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
 
@@ -431,7 +383,7 @@ class TestDispatchGate:
             pytest.fail("call_agent_rpc must not be invoked when status != RUNNING")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -444,7 +396,7 @@ class TestDispatchGate:
         db_session.commit()
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             new_callable=AsyncMock,
         ) as mock_call:
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -454,6 +406,59 @@ class TestDispatchGate:
         pr_after = db_session.get(PlanRun, pr.id)
         assert pr_after.status == "FAILED"
         assert "no_scripts_resolved" in pr_after.result_summary["reason"]
+
+
+class TestDispatchDeviceIdsToctou:
+    def test_gate_uses_dispatch_device_ids_snapshot_at_gate_time(
+        self, db_session, gate_chain
+    ):
+        pr = prepare_plan_run(
+            plan_id=gate_chain["plan"].id,
+            device_ids=[gate_chain["device_a"].id],
+            triggered_by="testuser",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        run_ctx = dict(pr.run_context or {})
+        run_ctx["dispatch_device_ids"] = [
+            gate_chain["device_a"].id,
+            gate_chain["device_b"].id,
+        ]
+        pr.run_context = run_ctx
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(pr, "run_context")
+        db_session.commit()
+
+        seen_hosts: list[str] = []
+
+        async def _fake_call(host_id, event, data, *, timeout=10.0):
+            seen_hosts.append(host_id)
+            return ack_ok(host_id, "aabbcc11")
+
+        with patch(
+            "backend.services.precheck.verify.call_agent_rpc",
+            side_effect=_fake_call,
+        ):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
+
+        assert sorted(seen_hosts) == ["h-A", "h-B"]
+
+    def test_gate_fails_when_device_loses_host_before_initialise(
+        self, db_session, gate_chain
+    ):
+        pr = prepare_plan_run(
+            plan_id=gate_chain["plan"].id,
+            device_ids=[gate_chain["device_a"].id],
+            triggered_by="testuser",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        gate_chain["device_a"].host_id = None
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError, match="no hosts resolved"):
+            asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
 
 
 # ---------------------------------------------------------------------------
@@ -577,10 +582,10 @@ class TestDispatchStatePersistence:
         db_session.commit()
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, "aabbcc11")
+            return ack_ok(host_id, "aabbcc11")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -626,7 +631,7 @@ class TestDispatchGateCoordinatesCompleteFailure:
         db_session.commit()
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, "aabbcc11")
+            return ack_ok(host_id, "aabbcc11")
 
         def _fake_complete(plan_run_id, db):
             # 模拟 ADR-0023 C1 阶段 2:complete 内部捕获 keys 缺失,
@@ -643,10 +648,10 @@ class TestDispatchGateCoordinatesCompleteFailure:
             db.commit()
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ), patch(
-            "backend.services.plan_precheck.complete_plan_run_dispatch",
+            "backend.services.precheck.runner.complete_plan_run_dispatch",
             side_effect=_fake_complete,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -679,7 +684,7 @@ class TestDispatchGateCoordinatesCompleteFailure:
 
 class TestPrecheckSocketBroadcast:
     def test_persist_precheck_emits_invalidation(self, db_session, gate_chain):
-        from backend.services.plan_precheck import _persist_precheck
+        from backend.services.precheck.state import _persist_precheck
 
         pr = _prepare_run(db_session, gate_chain)
         captured: list[tuple] = []
@@ -717,13 +722,13 @@ class TestPrecheckSocketBroadcast:
             captured.append((event, data, namespace, room))
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, "aabbcc11")
+            return ack_ok(host_id, "aabbcc11")
 
         with patch(
             "backend.realtime.socketio_server.schedule_emit",
             side_effect=fake_schedule_emit,
         ), patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -753,7 +758,7 @@ class TestPrecheckSocketBroadcast:
             "backend.realtime.socketio_server.schedule_emit",
             side_effect=fake_schedule_emit,
         ), patch(
-            "backend.services.plan_precheck._gather_verify",
+            "backend.services.precheck.verify._gather_verify",
             side_effect=RuntimeError("boom"),
         ):
             with pytest.raises(RuntimeError, match="boom"):
@@ -778,10 +783,10 @@ class TestChainScheduleDispatchGate:
         from backend.services.plan_dispatcher_sync import dispatch_plan_sync
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, "aabbcc11")
+            return ack_ok(host_id, "aabbcc11")
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             pr = dispatch_plan_sync(
@@ -811,7 +816,7 @@ class TestChainScheduleDispatchGate:
             raise AgentNotConnectedError(host_id)
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ), pytest.raises(PlanDispatchError, match="dispatch gate failed"):
             dispatch_plan_sync(

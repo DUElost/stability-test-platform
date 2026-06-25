@@ -15,6 +15,7 @@ from backend.services.precheck import (
     VERIFY_TIMEOUT_SECONDS,
     utc_iso,
 )
+from backend.services.precheck.notify import NotifyPayload
 from backend.services.precheck.runner import (
     PlanRunDispatchRetryError,
     _drive_dispatch_gate,
@@ -50,6 +51,7 @@ __all__ = [
     "DISPATCH_SYNC_MAX_ATTEMPTS",
     "MIXED_WATCHER_ACTIVITY_CODE",
     "MIXED_WATCHER_ACTIVITY_MESSAGE",
+    "NotifyPayload",
     "SYNC_SETTLE_SECONDS",
     "VERIFY_TIMEOUT_SECONDS",
     "PlanRunDispatchRetryError",

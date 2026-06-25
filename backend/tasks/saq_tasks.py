@@ -185,6 +185,17 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
                 retry_backoff=True,
             )
         )
+        await queue.enqueue(
+            SaqJob(
+                function="extract_task",
+                kwargs={"plan_run_id": plan_run_id},
+                key=f"extract:{plan_run_id}",
+                timeout=300,
+                retries=2,
+                retry_delay=10.0,
+                retry_backoff=True,
+            )
+        )
     except Exception as e:
         logger.error("saq_scan_enqueue_followup_failed plan_run=%d: %s", plan_run_id, e)
 
@@ -265,6 +276,70 @@ async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
     logger.info("saq_merge_done plan_run=%d", plan_run_id)
 
 
+async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
+    """ADR-0025 Sprint 4 归档-3: copy devices/ + merge xls → jira/{plan_run_id}/"""
+    import os
+    import shutil
+    from pathlib import Path
+
+    from backend.models.plan_run_artifact import PlanRunArtifact
+    from sqlalchemy import select
+    from backend.core.database import SessionLocal
+
+    logger.info("saq_extract_start plan_run=%d", plan_run_id)
+
+    db = SessionLocal()
+    try:
+        merge_rows = db.execute(
+            select(PlanRunArtifact).where(
+                PlanRunArtifact.plan_run_id == plan_run_id,
+                PlanRunArtifact.artifact_type == "merge_result_xls",
+            )
+        ).scalars().all()
+        if not merge_rows:
+            logger.warning("saq_extract_skip_no_merge plan_run=%d", plan_run_id)
+            return
+
+        nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
+        if not nfs_root:
+            logger.warning("saq_extract_skip_no_nfs plan_run=%d", plan_run_id)
+            return
+
+        devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)
+        jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
+        jira_dir.mkdir(parents=True, exist_ok=True)
+
+        extracted = 0
+        if devices_dir.is_dir():
+            for event_dir in sorted(devices_dir.iterdir()):
+                if not event_dir.is_dir():
+                    continue
+                dest = jira_dir / event_dir.name
+                if dest.exists():
+                    continue
+                try:
+                    shutil.copytree(str(event_dir), str(dest))
+                    extracted += 1
+                except Exception:
+                    logger.exception("saq_extract_event_dir_failed dir=%s", event_dir)
+
+        for row in merge_rows:
+            merge_xls = Path(row.storage_uri)
+            if not merge_xls.exists():
+                continue
+            dest = jira_dir / merge_xls.name
+            if not dest.exists():
+                try:
+                    shutil.copy2(str(merge_xls), str(dest))
+                    extracted += 1
+                except Exception:
+                    logger.exception("saq_extract_merge_xls_failed path=%s", merge_xls)
+
+        logger.info("saq_extract_done plan_run=%d extracted=%d", plan_run_id, extracted)
+    finally:
+        db.close()
+
+
 SAQ_FUNCTIONS = [
     post_completion_task,
     send_notification_task,
@@ -273,4 +348,5 @@ SAQ_FUNCTIONS = [
     scan_task,
     upload_task,
     merge_task,
+    extract_task,
 ]

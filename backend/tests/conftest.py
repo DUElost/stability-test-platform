@@ -323,6 +323,53 @@ def gate_chain(db_session):
     }
 
 
+@pytest.fixture
+def single_device_gate_chain(db_session):
+    """Plan + Script + 1 Host/Device for single-device dispatch-gate tests."""
+    host = Host(
+        id="h-1", hostname="agent1", status=HostStatus.ONLINE.value, ip="10.0.0.9",
+    )
+    device = Device(serial="dev-1", host_id="h-1", status="ONLINE")
+    script = Script(
+        name="check_device",
+        script_type="python",
+        version="1.0.0",
+        nfs_path="/scripts/check_device/v1.0.0/check_device.py",
+        content_sha256="aabbcc11",
+        default_params={"timeout": 30},
+    )
+    plan = Plan(name="single-device-plan", patrol_interval_seconds=60)
+    db_session.add_all([host, device, script, plan])
+    db_session.commit()
+    db_session.add(
+        PlanStep(
+            plan_id=plan.id,
+            step_key="init_check",
+            script_name="check_device",
+            script_version="1.0.0",
+            stage="init",
+            sort_order=0,
+            timeout_seconds=30,
+            retry=0,
+        )
+    )
+    db_session.commit()
+    return {"plan": plan, "host": host, "device": device, "script": script}
+
+
+@pytest.fixture(autouse=True)
+def _precheck_notify_test_mode(monkeypatch):
+    """Disable notify debounce in tests unless explicitly overridden."""
+    monkeypatch.setattr(
+        "backend.services.precheck.notify.PRECHECK_NOTIFY_DEBOUNCE_SECONDS", 0,
+    )
+    from backend.services.precheck.notify import reset_notify_debounce_state
+
+    reset_notify_debounce_state()
+    yield
+    reset_notify_debounce_state()
+
+
 # ── Script fixtures ─────────────────────────────────────────────────────────
 
 

@@ -65,7 +65,7 @@ class TestManualDispatchHappyPath:
             return _ack_ok(host_id, gate_chain["script"].content_sha256)
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             asyncio.run(_drive_dispatch_gate(pr.id, db=db_session))
@@ -96,7 +96,7 @@ class TestChainScheduleDispatchHappyPath:
             return _ack_ok(host_id, gate_chain["script"].content_sha256)
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             pr = dispatch_plan_sync(
@@ -126,7 +126,7 @@ class TestJobCompleteAggregationPath:
             return _ack_ok(host_id, gate_chain["script"].content_sha256)
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             pr = dispatch_plan_sync(
@@ -178,7 +178,7 @@ class TestMainChainApiRunEndpoint:
         def _run_gate_inline(*_args, **kwargs):
             plan_run_id = kwargs["plan_run_id"]
             with patch(
-                "backend.services.plan_precheck.call_agent_rpc",
+                "backend.services.precheck.verify.call_agent_rpc",
                 side_effect=_fake_call,
             ):
                 asyncio.run(_drive_dispatch_gate(plan_run_id, db=db_session))

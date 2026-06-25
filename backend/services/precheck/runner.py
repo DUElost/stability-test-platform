@@ -14,10 +14,14 @@ from sqlalchemy.orm.attributes import flag_modified
 from backend.core.database import SessionLocal
 from backend.core.metrics import record_dispatch_gate
 from backend.models.plan_run import PlanRun
+from backend.services import precheck as precheck_config
 from backend.services.plan_dispatcher_core import (
     snapshot_dispatch_host_watcher_admin_states,
 )
-from backend.services.plan_dispatcher_sync import initial_dispatch_state
+from backend.services.plan_dispatcher_sync import (
+    complete_plan_run_dispatch,
+    initial_dispatch_state,
+)
 
 from . import (
     MIXED_WATCHER_ACTIVITY_CODE,
@@ -30,20 +34,16 @@ from .notify import emit_dispatch_gate_invalidation
 from .scripts import expected_scripts_for_run
 from .state import (
     initial_precheck_state,
+    initialise_precheck_state,
     mark_precheck_failed,
     persist_precheck,
     update_dispatch_state,
 )
+from .sync import push_mismatched_scripts, sync_host_via_hot_update
+from .verify import gather_verify
 from .watcher import find_mixed_watcher_inactive_host_ids
 
 logger = logging.getLogger(__name__)
-
-
-def _plan_precheck():
-    """Lazy facade for test-patch compatibility (see plan_precheck re-exports)."""
-    import backend.services.plan_precheck as plan_precheck_facade
-
-    return plan_precheck_facade
 
 
 async def drive_dispatch_gate(
@@ -76,7 +76,7 @@ async def drive_dispatch_gate(
             last_error=None,
         )
 
-        precheck = _plan_precheck().initialise_precheck_state(plan_run_id, db)
+        precheck = initialise_precheck_state(plan_run_id, db)
         db.refresh(pr)
         persist_dispatch_idempotency(pr, db)
         host_ids = list(precheck["hosts"].keys())
@@ -108,7 +108,7 @@ async def drive_dispatch_gate(
 
         precheck["phase"] = "verifying"
         persist_precheck(plan_run_id, precheck, db)
-        verify_results = await _plan_precheck()._gather_verify(host_ids, expected_scripts)
+        verify_results = await gather_verify(host_ids, expected_scripts)
 
         out_of_sync_hosts: list[str] = []
         for hid in host_ids:
@@ -162,7 +162,7 @@ async def drive_dispatch_gate(
                     continue
 
                 ok_sync, err_sync = await asyncio.to_thread(
-                    _plan_precheck()._push_mismatched_scripts, hid, mismatched_entries, db
+                    push_mismatched_scripts, hid, mismatched_entries, db
                 )
                 if ok_sync:
                     host_state["synced_at"] = utc_iso()
@@ -174,7 +174,7 @@ async def drive_dispatch_gate(
                         hid, err_sync,
                     )
                     ok_hot, err_hot = await asyncio.to_thread(
-                        _plan_precheck()._sync_host_via_hot_update, hid, db
+                        sync_host_via_hot_update, hid, db
                     )
                     if ok_hot:
                         host_state["synced_at"] = utc_iso()
@@ -190,7 +190,7 @@ async def drive_dispatch_gate(
             if sync_failures:
                 retry_hosts = [
                     h for h, _ in sync_failures
-                    if precheck["hosts"][h]["sync_attempts"] < _plan_precheck().DISPATCH_SYNC_MAX_ATTEMPTS
+                    if precheck["hosts"][h]["sync_attempts"] < precheck_config.DISPATCH_SYNC_MAX_ATTEMPTS
                 ]
                 if retry_hosts:
                     logger.info(
@@ -207,9 +207,9 @@ async def drive_dispatch_gate(
 
             precheck["phase"] = "reverifying"
             persist_precheck(plan_run_id, precheck, db)
-            await asyncio.sleep(_plan_precheck().SYNC_SETTLE_SECONDS)
+            await asyncio.sleep(precheck_config.SYNC_SETTLE_SECONDS)
 
-            reverify_results = await _plan_precheck()._gather_verify(hosts_to_sync, expected_scripts)
+            reverify_results = await gather_verify(hosts_to_sync, expected_scripts)
             still_bad: list[str] = []
             for hid in hosts_to_sync:
                 ok, results, err = reverify_results[hid]
@@ -228,7 +228,7 @@ async def drive_dispatch_gate(
             if still_bad:
                 retry_hosts = [
                     h for h in still_bad
-                    if precheck["hosts"][h]["sync_attempts"] < _plan_precheck().DISPATCH_SYNC_MAX_ATTEMPTS
+                    if precheck["hosts"][h]["sync_attempts"] < precheck_config.DISPATCH_SYNC_MAX_ATTEMPTS
                 ]
                 if retry_hosts:
                     logger.info(
@@ -252,10 +252,8 @@ async def drive_dispatch_gate(
         db.refresh(pr)
         persist_dispatch_idempotency(pr, db)
 
-        import backend.services.plan_precheck as plan_precheck_facade
-
         await asyncio.to_thread(
-            plan_precheck_facade.complete_plan_run_dispatch, plan_run_id, db
+            complete_plan_run_dispatch, plan_run_id, db
         )
 
         db.expire(pr)
@@ -372,7 +370,7 @@ def retry_plan_run_dispatch(
     flag_modified(pr, "run_context")
     db.commit()
 
-    _plan_precheck().initialise_precheck_state(run_id, db)
+    initialise_precheck_state(run_id, db)
 
     try:
         enqueue_sync(

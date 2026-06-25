@@ -84,7 +84,7 @@ class TestPlanChainDispatchE2E:
             return _ack_ok(host_id, gate_chain["script"].content_sha256)
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             parent_run = dispatch_plan_sync(
@@ -126,7 +126,7 @@ class TestPlanChainDispatchE2E:
             return _ack_ok(host_id, gate_chain["script"].content_sha256)
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
         ):
             parent_run = dispatch_plan_sync(

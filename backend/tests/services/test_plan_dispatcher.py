@@ -160,7 +160,7 @@ class TestDispatchPlan:
         plan, device, host = _plan_fixture
 
         with patch(
-            "backend.services.plan_precheck.call_agent_rpc",
+            "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_mock_gate_rpc("h-disp"),
         ):
             pr = dispatch_plan_sync(

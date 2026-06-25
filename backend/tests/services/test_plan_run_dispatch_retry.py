@@ -62,7 +62,7 @@ def test_retry_dispatch_re_enqueues_gate(
         "backend.tasks.saq_worker.enqueue_sync",
         side_effect=lambda *args, **kwargs: enqueue_calls.append(kwargs),
     ), patch(
-        "backend.services.plan_precheck.initialise_precheck_state",
+        "backend.services.precheck.state.initialise_precheck_state",
         return_value={"phase": "verifying", "hosts": {}, "errors": []},
     ):
         resp = client.post(
@@ -100,7 +100,7 @@ def test_retry_dispatch_refreshes_watcher_admin_snapshot_for_new_dispatch(
         "backend.tasks.saq_worker.enqueue_sync",
         return_value=None,
     ), patch(
-        "backend.services.plan_precheck.initialise_precheck_state",
+        "backend.services.precheck.state.initialise_precheck_state",
         return_value={"phase": "verifying", "hosts": {}, "errors": []},
     ):
         resp = client.post(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from backend.realtime.socketio_server import AgentNotConnectedError, AgentRpcError
+from backend.realtime.socketio_server import AgentNotConnectedError, AgentRpcError, call_agent_rpc
 
 from . import VERIFY_TIMEOUT_SECONDS
 
@@ -14,10 +14,8 @@ async def verify_one_host(
     host_id: str, expected: list[dict]
 ) -> tuple[bool, list[dict], Optional[str]]:
     """Returns (ok, scripts_results, error_message)."""
-    import backend.services.plan_precheck as plan_precheck_facade
-
     try:
-        ack = await plan_precheck_facade.call_agent_rpc(
+        ack = await call_agent_rpc(
             host_id,
             "verify_scripts",
             {"expected": expected},
