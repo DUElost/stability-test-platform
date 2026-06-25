@@ -43,6 +43,10 @@ import { PageContainer, PageHeader } from '@/components/layout';
 
 import { Badge } from '@/components/ui/badge';
 
+import { STAT, TEXT } from '@/design-system/tokens';
+
+import { cn } from '@/lib/utils';
+
 
 
 
@@ -246,35 +250,11 @@ export default function PlanListPage() {
 
 
 
-            <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
+            <p className={STAT.value}>{stats.total}</p>
 
 
 
-            <p className="text-xs text-gray-500">Plan 总数</p>
-
-
-
-          </CardContent>
-
-
-
-        </Card>
-
-
-
-        <Card>
-
-
-
-          <CardContent className="py-4 text-center">
-
-
-
-            <p className="text-2xl font-bold text-gray-900">{stats.withSteps}</p>
-
-
-
-            <p className="text-xs text-gray-500">已配置步骤</p>
+            <p className={STAT.label}>Plan 总数</p>
 
 
 
@@ -294,11 +274,35 @@ export default function PlanListPage() {
 
 
 
-            <p className="text-2xl font-bold text-gray-900">{stats.chained}</p>
+            <p className={STAT.value}>{stats.withSteps}</p>
 
 
 
-            <p className="text-xs text-gray-500">链式 Plan</p>
+            <p className={STAT.label}>已配置步骤</p>
+
+
+
+          </CardContent>
+
+
+
+        </Card>
+
+
+
+        <Card>
+
+
+
+          <CardContent className="py-4 text-center">
+
+
+
+            <p className={STAT.value}>{stats.chained}</p>
+
+
+
+            <p className={STAT.label}>链式 Plan</p>
 
 
 
@@ -334,7 +338,7 @@ export default function PlanListPage() {
 
 
 
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4', TEXT.subtitle)} />
 
 
 
@@ -447,7 +451,7 @@ export default function PlanListPage() {
 
 
 
-                    <h3 className="font-medium text-gray-900 truncate">{plan.name}</h3>
+                    <h3 className={cn('font-medium truncate', TEXT.heading)}>{plan.name}</h3>
 
 
 
@@ -471,7 +475,7 @@ export default function PlanListPage() {
 
 
 
-                    <p className="text-sm text-gray-500 truncate">{plan.description}</p>
+                    <p className={cn('text-sm truncate', TEXT.subtitle)}>{plan.description}</p>
 
 
 
@@ -479,7 +483,7 @@ export default function PlanListPage() {
 
 
 
-                  <div className="flex items-center gap-3 text-xs text-gray-400 pt-1">
+                  <div className={cn('flex items-center gap-3 text-xs pt-1', TEXT.subtitle)}>
 
 
 
@@ -535,7 +539,7 @@ export default function PlanListPage() {
 
 
 
-                  <Button variant="ghost" size="sm" onClick={() => handleDelete(plan)} className="text-red-500 hover:text-red-700" title="删除">
+                  <Button variant="ghost" size="sm" onClick={() => handleDelete(plan)} className={cn(TEXT.destructive, 'hover:text-destructive')} title="删除">
 
 
 

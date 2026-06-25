@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import type { Plan } from '@/utils/api';
 import { ArrowDown, Plus } from 'lucide-react';
+import { PIPELINE_EDITOR, STATUS_CHIP, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 export interface PlanChainNode {
   id: number | null;
@@ -122,10 +124,10 @@ export default function PlanChainPanel({
   const isDraft = currentPlanId == null;
 
   return (
-    <aside className="flex flex-col h-full bg-white border-r border-slate-200">
-      <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-200 bg-[#fbfdff]">
-        <span className="text-sm font-bold text-slate-800">执行链</span>
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-violet-50 border border-violet-200 text-violet-700">
+    <aside className={cn(PIPELINE_EDITOR.panel, 'border-r')}>
+      <header className={cn('flex items-center justify-between gap-3 px-4 py-3', PIPELINE_EDITOR.panelHeader)}>
+        <span className={cn('text-sm font-bold', TEXT.heading)}>执行链</span>
+        <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold', STATUS_CHIP.primary)}>
           {chain.length} {chain.length === 1 ? 'Plan' : 'Plans'}
         </span>
       </header>
@@ -139,31 +141,29 @@ export default function PlanChainPanel({
                 if (node.id != null && !node.isCurrent) onSelectPlan(node.id);
               }}
               disabled={node.id == null || node.isCurrent}
-              className={[
+              className={cn(
                 'w-full text-left px-2.5 py-2 rounded-md grid gap-1 border transition',
-                node.isCurrent
-                  ? 'bg-cyan-50 border-cyan-200 shadow-[inset_3px_0_0_#0e7490]'
-                  : 'border-transparent hover:bg-slate-50',
-                node.id == null && !node.isCurrent ? 'cursor-not-allowed opacity-60' : '',
-              ].join(' ')}
+                node.isCurrent ? PIPELINE_EDITOR.chainCurrent : PIPELINE_EDITOR.chainIdle,
+                node.id == null && !node.isCurrent && 'cursor-not-allowed opacity-60',
+              )}
             >
-              <div className="text-[13px] font-bold text-slate-800 truncate">
+              <div className={cn('text-[13px] font-bold truncate', TEXT.heading)}>
                 {node.name}
                 {node.isDraftCurrent && (
-                  <span className="ml-1.5 text-[10px] font-semibold text-amber-700">草稿</span>
+                  <span className="ml-1.5 text-[10px] font-semibold text-warning">草稿</span>
                 )}
               </div>
               <div className="flex flex-wrap gap-1">
-                <span className="inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.muted)}>
                   Init {node.initCount}
                 </span>
                 {node.patrolCount > 0 && (
-                  <span className="inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.success)}>
                     Patrol {node.patrolCount}
                   </span>
                 )}
                 {node.teardownCount > 0 && (
-                  <span className="inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                  <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[11px] font-bold', STATUS_CHIP.warning)}>
                     TDown {node.teardownCount}
                   </span>
                 )}
@@ -171,8 +171,8 @@ export default function PlanChainPanel({
             </button>
 
             {idx < chain.length - 1 && (
-              <div className="px-3 py-1 flex items-center gap-1.5 text-[10px] font-bold text-violet-600">
-                <span className="block w-px h-4 bg-[repeating-linear-gradient(to_bottom,#d8b4fe_0,#d8b4fe_4px,transparent_4px,transparent_8px)]" />
+              <div className="px-3 py-1 flex items-center gap-1.5 text-[10px] font-bold text-primary">
+                <span className="block w-px h-4 bg-primary/30" />
                 <span className="inline-flex items-center gap-1">
                   执行后自动触发 <ArrowDown className="w-3 h-3" />
                 </span>
@@ -182,17 +182,22 @@ export default function PlanChainPanel({
         ))}
       </div>
 
-      <div className="border-t border-slate-200 bg-[#fbfdff]">
+      <div className={cn('border-t', PIPELINE_EDITOR.panelHeader)}>
         <button
           type="button"
           onClick={onAppendPlan}
           disabled={isDraft}
           title={isDraft ? '保存当前草稿后再追加链尾' : '在当前链末尾追加一个新 Plan'}
-          className="m-1.5 w-[calc(100%-12px)] flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-bold text-slate-500 border border-dashed border-slate-300 hover:border-cyan-500 hover:text-cyan-700 hover:bg-cyan-50/40 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-slate-300 disabled:hover:text-slate-500 transition"
+          className={cn(
+            'm-1.5 w-[calc(100%-12px)] flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-md text-xs font-bold',
+            'border border-dashed transition',
+            PIPELINE_EDITOR.addStepBtn,
+            'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-border disabled:hover:text-muted-foreground',
+          )}
         >
           <Plus className="w-3.5 h-3.5" /> 追加 Plan 到链末尾
         </button>
-        <p className="px-3.5 pb-2.5 text-[10px] leading-relaxed text-slate-400">
+        <p className={cn('px-3.5 pb-2.5 text-[10px] leading-relaxed', TEXT.subtitle)}>
           每个 Plan 是一个完整的测试计划。
           <br />
           链式执行：前一个 Plan 完成后自动触发下一个。

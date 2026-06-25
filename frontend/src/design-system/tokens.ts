@@ -431,6 +431,95 @@ export const PATROL_EVENT_SEVERITY = {
   ok: 'bg-success/10 text-success border-success/25',
 } as const;
 
+/** Job 实例状态 — 任务矩阵方块 */
+export interface JobStatusBadgeStyle {
+  cell: string;
+}
+
+export const JOB_STATUS_BADGE: Record<string, JobStatusBadgeStyle> = {
+  PENDING: { cell: 'bg-muted-foreground/40 border-muted-foreground/50' },
+  RUNNING: { cell: 'bg-warning border-warning' },
+  COMPLETED: { cell: 'bg-success border-success' },
+  FAILED: { cell: 'bg-destructive border-destructive' },
+  ABORTED: { cell: 'bg-warning/80 border-warning' },
+  UNKNOWN: { cell: 'bg-info border-info' },
+  PENDING_TOOL: { cell: 'bg-muted border-border' },
+};
+
+export function jobStatusCellClass(status: string): string {
+  return JOB_STATUS_BADGE[status]?.cell ?? 'bg-muted-foreground/30 border-border';
+}
+
+/** Step trace 事件圆点（PlanRun 矩阵抽屉） */
+export const STEP_TRACE_DOT = {
+  COMPLETED: 'bg-success',
+  FAILED: 'bg-destructive',
+  RETRIED: 'bg-warning',
+  default: 'bg-primary',
+} as const;
+
+/** 设备在线状态圆点（Plan 执行页） */
+export const DEVICE_STATUS_DOT = {
+  ONLINE: 'bg-success',
+  OFFLINE: 'bg-muted-foreground/40',
+  BUSY: 'bg-warning',
+  DEGRADED: 'bg-info',
+} as const;
+
+/** Plan 编排编辑器 — 链 / 画布 / Inspector */
+export const PIPELINE_EDITOR = {
+  panel: 'flex flex-col h-full bg-card border-border',
+  panelHeader: 'bg-muted/30 border-b border-border',
+  canvasBg: 'bg-muted/40',
+  card: 'bg-card border border-border rounded-[10px] shadow-sm',
+  cardInner: 'border border-border rounded-[7px] overflow-hidden bg-card',
+  cardHead:
+    'px-2.5 py-1.5 bg-muted/30 border-b border-border text-[11px] font-bold text-foreground flex items-center justify-between',
+  inputInline:
+    'border border-border rounded-[5px] bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring',
+  inputTitle:
+    'bg-transparent border-0 border-b border-transparent focus:border-primary focus:outline-none placeholder:text-muted-foreground/50',
+  stepSelected: 'border-primary/40 bg-primary/10 ring-2 ring-primary/10',
+  stepIdle: 'border-border bg-card hover:border-border/80',
+  stepIndex: 'bg-muted text-muted-foreground',
+  addStepBtn:
+    'text-muted-foreground border-dashed border-border hover:border-primary hover:text-primary hover:bg-primary/5',
+  chainCurrent: 'bg-primary/10 border-primary/30 shadow-[inset_3px_0_0_hsl(var(--primary))]',
+  chainIdle: 'border-transparent hover:bg-accent',
+  iconBtn:
+    'border border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed',
+  iconBtnDanger: 'hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30',
+  linkBtn:
+    'text-primary bg-primary/10 border border-dashed border-primary/25 hover:bg-primary/15',
+  emptyState:
+    'border border-dashed border-border bg-muted/30 text-center text-xs text-muted-foreground',
+} as const;
+
+export const PIPELINE_PHASE_HEAD = {
+  init: 'bg-muted text-foreground',
+  patrol: 'bg-success/10 text-success',
+  teardown: 'bg-warning/10 text-warning',
+} as const;
+
+/** 执行步骤树（Run 详情深色侧栏） */
+export const PIPELINE_TREE_DARK = {
+  phaseBtn: 'text-muted-foreground hover:bg-accent',
+  runningBadge: 'bg-primary/20 text-primary',
+  stepSelected: 'bg-accent text-foreground',
+  stepIdle: 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+  connector: 'border-border',
+  skipped: 'line-through text-muted-foreground/70',
+  duration: 'text-muted-foreground',
+  empty: 'text-muted-foreground',
+} as const;
+
+/** 执行全景图分组色调 */
+export const PIPELINE_TIMELINE_TONE = {
+  neutral: 'border-border bg-muted/50',
+  patrol: 'border-success/30 bg-success/5',
+  teardown: 'border-warning/30 bg-warning/5',
+} as const;
+
 /** 列表页骨架屏 */
 export const SKELETON_BLOCK = 'bg-muted animate-pulse rounded-lg';
 

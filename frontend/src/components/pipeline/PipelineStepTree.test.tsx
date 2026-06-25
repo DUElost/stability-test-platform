@@ -195,6 +195,6 @@ describe('PipelineStepTree', () => {
     );
 
     const stepButton = screen.getByText('monkey_check').closest('button');
-    expect(stepButton?.className).toContain('bg-slate-700');
+    expect(stepButton?.className).toContain('bg-accent');
   });
 });

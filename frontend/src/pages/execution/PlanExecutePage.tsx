@@ -59,8 +59,9 @@ import { Play, Smartphone, AlertCircle, Eye } from 'lucide-react';
 
 
 import { PageContainer, PageHeader } from '@/components/layout';
-
 import { STATUS_BG_COLORS } from '@/design-system/colors';
+import { DEVICE_STATUS_DOT, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 import { EmptyState } from '@/components/ui/empty-state';
 
@@ -146,23 +147,8 @@ function DeviceRow({
 
 
 
-  const statusColor = ({
-
-
-
-    ONLINE: 'bg-green-400',
-
-
-
-    OFFLINE: 'bg-gray-300',
-
-
-
-    BUSY: 'bg-yellow-400',
-
-
-
-  } as Record<string, string>)[device.status] ?? 'bg-gray-300';
+  const statusColor =
+    DEVICE_STATUS_DOT[device.status as keyof typeof DEVICE_STATUS_DOT] ?? DEVICE_STATUS_DOT.OFFLINE;
 
 
 
@@ -182,15 +168,10 @@ function DeviceRow({
 
 
 
-      className={`flex items-center gap-3 rounded-lg px-3 py-2.5 ${
-
-
-
-        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-gray-50'
-
-
-
-      }`}
+      className={cn(
+        'flex items-center gap-3 rounded-lg px-3 py-2.5',
+        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-accent',
+      )}
 
 
 
@@ -206,15 +187,15 @@ function DeviceRow({
 
 
 
-      <span className="font-mono text-sm text-gray-800">{device.serial}</span>
+      <span className={cn('font-mono text-sm', TEXT.body)}>{device.serial}</span>
 
 
 
-      {device.model && <span className="text-xs text-gray-500 flex-1 truncate">{device.model}</span>}
+      {device.model && <span className={cn('text-xs flex-1 truncate', TEXT.subtitle)}>{device.model}</span>}
 
 
 
-      <span className="text-xs text-gray-400">Host #{device.host_id}</span>
+      <span className={cn('text-xs', TEXT.subtitle)}>Host #{device.host_id}</span>
 
 
 
@@ -829,7 +810,7 @@ export default function PlanExecutePage() {
 
 
 
-            {selectedPlan?.description && <p className="mt-2 text-sm text-gray-500">{selectedPlan.description}</p>}
+            {selectedPlan?.description && <p className={cn('mt-2 text-sm', TEXT.subtitle)}>{selectedPlan.description}</p>}
 
 
 
@@ -885,7 +866,7 @@ export default function PlanExecutePage() {
 
 
 
-                <span className="text-sm font-normal text-gray-500">已选 {selectedSchedulableDeviceIds.length} / {availableCount} 台可用</span>
+                <span className={cn('text-sm font-normal', TEXT.subtitle)}>已选 {selectedSchedulableDeviceIds.length} / {availableCount} 台可用</span>
 
 
 
@@ -1003,11 +984,11 @@ export default function PlanExecutePage() {
 
 
 
-              <p className="text-sm text-gray-600">
+              <p className={cn('text-sm', TEXT.body)}>
 
 
 
-                <span className="font-medium text-gray-900">{Math.round((selectedPlan.failure_threshold ?? 0.05) * 100)}%</span>
+                <span className={cn('font-medium', TEXT.heading)}>{Math.round((selectedPlan.failure_threshold ?? 0.05) * 100)}%</span>
 
 
 

@@ -9,8 +9,8 @@ import {
   Loader2,
 } from 'lucide-react';
 import type { RunStep } from '@/utils/api';
-
-// ---------- Types ----------
+import { PIPELINE_TREE_DARK, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 export interface StepUpdateMessage {
   type: 'STEP_UPDATE';
@@ -33,11 +33,8 @@ interface PipelineStepTreeProps {
   steps: RunStep[];
   selectedStepId: number | null;
   onStepSelect: (stepId: number) => void;
-  /** Incoming WS step updates to apply reactively */
   stepUpdates?: StepUpdateMessage[];
 }
-
-// ---------- Helpers ----------
 
 function groupByPhase(steps: RunStep[]): PhaseGroup[] {
   const map = new Map<string, RunStep[]>();
@@ -77,26 +74,21 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
   return `${hours}h ${remainMin}m`;
 }
 
-// ---------- Step status icon ----------
-
 function StepStatusIcon({ status }: { status: RunStep['status'] }) {
   switch (status) {
     case 'RUNNING':
-      return <Loader2 size={14} className="text-blue-500 animate-spin" />;
+      return <Loader2 size={14} className="text-primary animate-spin" />;
     case 'COMPLETED':
-      return <CheckCircle2 size={14} className="text-green-500" />;
+      return <CheckCircle2 size={14} className="text-success" />;
     case 'FAILED':
-      return <XCircle size={14} className="text-red-500" />;
+      return <XCircle size={14} className="text-destructive" />;
     case 'SKIPPED':
-      return <MinusCircle size={14} className="text-slate-400" />;
     case 'CANCELED':
-      return <MinusCircle size={14} className="text-slate-400" />;
+      return <MinusCircle size={14} className={TEXT.subtitle} />;
     default:
-      return <Circle size={14} className="text-slate-400" />;
+      return <Circle size={14} className={TEXT.subtitle} />;
   }
 }
-
-// ---------- Phase group ----------
 
 function PhaseSection({
   phase,
@@ -119,29 +111,30 @@ function PhaseSection({
 
   return (
     <div className="mb-1">
-      {/* Phase header */}
       <button
         onClick={onToggle}
-        className="w-full flex items-center gap-2 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800 rounded transition-colors"
+        className={cn(
+          'w-full flex items-center gap-2 px-3 py-2 text-sm font-medium rounded transition-colors',
+          PIPELINE_TREE_DARK.phaseBtn,
+        )}
       >
         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         <span className="flex-1 text-left">{phase.name}</span>
         {phaseHasRunning && (
-          <span className="text-[10px] px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded-full">
+          <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full', PIPELINE_TREE_DARK.runningBadge)}>
             running
           </span>
         )}
         {phaseCompleted && !phaseHasRunning && (
-          <CheckCircle2 size={12} className="text-green-500" />
+          <CheckCircle2 size={12} className="text-success" />
         )}
         {phaseFailed && !phaseHasRunning && (
-          <XCircle size={12} className="text-red-500" />
+          <XCircle size={12} className="text-destructive" />
         )}
       </button>
 
-      {/* Steps */}
       {isExpanded && (
-        <div className="ml-3 border-l border-slate-700">
+        <div className={cn('ml-3 border-l', PIPELINE_TREE_DARK.connector)}>
           {phase.steps.map((step) => {
             const isSelected = step.id === selectedStepId;
             const isRunning = step.status === 'RUNNING';
@@ -150,16 +143,22 @@ function PhaseSection({
               <button
                 key={step.id}
                 onClick={() => onStepSelect(step.id)}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors
-                  ${isSelected ? 'bg-slate-700/70 text-white' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}
-                  ${isRunning ? 'border-l-2 border-blue-500 -ml-px' : ''}
-                `}
+                className={cn(
+                  'w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors',
+                  isSelected ? PIPELINE_TREE_DARK.stepSelected : PIPELINE_TREE_DARK.stepIdle,
+                  isRunning && 'border-l-2 border-primary -ml-px',
+                )}
               >
                 <StepStatusIcon status={step.status} />
-                <span className={`flex-1 text-left truncate ${step.status === 'SKIPPED' ? 'line-through text-slate-500' : ''}`}>
+                <span
+                  className={cn(
+                    'flex-1 text-left truncate',
+                    step.status === 'SKIPPED' && PIPELINE_TREE_DARK.skipped,
+                  )}
+                >
                   {step.name}
                 </span>
-                <span className="text-[10px] text-slate-500 font-mono whitespace-nowrap">
+                <span className={cn('text-[10px] font-mono whitespace-nowrap', PIPELINE_TREE_DARK.duration)}>
                   {formatDuration(step.started_at, step.finished_at)}
                 </span>
               </button>
@@ -171,26 +170,22 @@ function PhaseSection({
   );
 }
 
-// ---------- Main component ----------
-
 export function PipelineStepTree({
   steps: initialSteps,
   selectedStepId,
   onStepSelect,
   stepUpdates,
 }: PipelineStepTreeProps) {
-  // Merge WS updates into step state
   const [localSteps, setLocalSteps] = useState<RunStep[]>(initialSteps);
 
   useEffect(() => {
     setLocalSteps(initialSteps);
   }, [initialSteps]);
 
-  // Apply incoming step updates
   useEffect(() => {
     if (!stepUpdates || stepUpdates.length === 0) return;
     setLocalSteps((prev) => {
-      let updated = [...prev];
+      const updated = [...prev];
       for (const upd of stepUpdates) {
         const idx = updated.findIndex((s) => s.id === upd.step_id);
         if (idx >= 0) {
@@ -210,7 +205,6 @@ export function PipelineStepTree({
 
   const phases = useMemo(() => groupByPhase(localSteps), [localSteps]);
 
-  // Expand phases: auto-expand the phase with a RUNNING step
   const [expandedPhases, setExpandedPhases] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -220,18 +214,16 @@ export function PipelineStepTree({
         newExpanded.add(phase.name);
       }
     }
-    // If nothing is running, expand the first non-completed phase
     if (newExpanded.size === 0 && phases.length > 0) {
       const first = phases.find(
         (p) => !p.steps.every((s) => s.status === 'COMPLETED' || s.status === 'SKIPPED'),
       );
       if (first) newExpanded.add(first.name);
-      else newExpanded.add(phases[0].name); // All done, expand first
+      else newExpanded.add(phases[0].name);
     }
     setExpandedPhases(newExpanded);
-  }, [localSteps]); // Re-evaluate when steps change
+  }, [localSteps, phases]);
 
-  // Live duration tick for running steps
   const [, setTick] = useState(0);
   const hasRunning = localSteps.some((s) => s.status === 'RUNNING');
   useEffect(() => {
@@ -251,7 +243,7 @@ export function PipelineStepTree({
 
   if (localSteps.length === 0) {
     return (
-      <div className="p-4 text-sm text-slate-500 text-center">
+      <div className={cn('p-4 text-sm text-center', PIPELINE_TREE_DARK.empty)}>
         No pipeline steps
       </div>
     );

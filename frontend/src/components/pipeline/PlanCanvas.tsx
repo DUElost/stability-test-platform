@@ -1,16 +1,17 @@
 import type { PipelineDef, PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
 import { ArrowDown, ArrowUp, Copy, Trash2 } from 'lucide-react';
+import {
+  PIPELINE_EDITOR,
+  PIPELINE_PHASE_HEAD,
+  STATUS_CHIP,
+  TEXT,
+} from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 const PHASE_LABELS: Record<PipelinePhase, string> = {
   init: 'Init',
   patrol: 'Patrol',
   teardown: 'Teardown',
-};
-
-const PHASE_HEAD_TONE: Record<PipelinePhase, string> = {
-  init: 'bg-slate-50 text-slate-700',
-  patrol: 'bg-emerald-50 text-emerald-800',
-  teardown: 'bg-amber-50 text-amber-800',
 };
 
 interface PlanCanvasProps {
@@ -57,7 +58,7 @@ function setPhaseSteps(lifecycle: PipelineDef, phase: PipelinePhase, steps: Pipe
   const lc = { ...lifecycle.lifecycle };
   if (phase === 'patrol') {
     if (steps.length === 0) {
-      delete (lc as any).patrol;
+      delete (lc as { patrol?: unknown }).patrol;
     } else {
       lc.patrol = {
         interval_seconds: lc.patrol?.interval_seconds ?? 60,
@@ -65,7 +66,8 @@ function setPhaseSteps(lifecycle: PipelineDef, phase: PipelinePhase, steps: Pipe
       };
     }
   } else {
-    (lc as any)[phase] = steps;
+    if (phase === 'init') lc.init = steps;
+    else lc.teardown = steps;
   }
   return { lifecycle: lc };
 }
@@ -142,7 +144,7 @@ export default function PlanCanvas({
   };
 
   return (
-    <section className="flex-1 min-w-0 bg-slate-50 overflow-y-auto">
+    <section className={cn('flex-1 min-w-0 overflow-y-auto', PIPELINE_EDITOR.canvasBg)}>
       <div className="p-3.5 grid gap-3">
         <PlanHeader
           planName={planName}
@@ -217,8 +219,10 @@ function PlanHeader({
   isCurrentEditing,
   readOnly,
 }: PlanHeaderProps) {
+  const metaInputCls = cn('h-6 px-2 text-xs', PIPELINE_EDITOR.inputInline);
+
   return (
-    <div className="bg-white border border-slate-200 rounded-[10px] px-4 py-3.5 grid gap-2.5 shadow-[0_4px_12px_rgba(15,23,42,.03)]">
+    <div className={cn('px-4 py-3.5 grid gap-2.5', PIPELINE_EDITOR.card)}>
       <div className="flex items-center justify-between gap-4">
         <input
           type="text"
@@ -226,10 +230,13 @@ function PlanHeader({
           onChange={e => onPlanNameChange(e.target.value)}
           placeholder="Plan 名称"
           readOnly={readOnly}
-          className="flex-1 min-w-0 text-lg font-extrabold tracking-tight bg-transparent border-0 border-b border-transparent focus:border-cyan-500 focus:outline-none placeholder:text-slate-300"
+          className={cn(
+            'flex-1 min-w-0 text-lg font-extrabold tracking-tight',
+            PIPELINE_EDITOR.inputTitle,
+          )}
         />
         {isCurrentEditing && (
-          <span className="shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold bg-indigo-50 border border-indigo-200 text-indigo-700">
+          <span className={cn('shrink-0 inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold', STATUS_CHIP.primary)}>
             当前编辑
           </span>
         )}
@@ -241,10 +248,10 @@ function PlanHeader({
         onChange={e => onDescriptionChange(e.target.value)}
         placeholder="Plan 描述（可选）"
         readOnly={readOnly}
-        className="text-[12px] text-slate-500 bg-transparent border-0 border-b border-transparent focus:border-cyan-300 focus:outline-none placeholder:text-slate-300"
+        className={cn('text-[12px]', PIPELINE_EDITOR.inputTitle, TEXT.subtitle)}
       />
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+      <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 text-xs', TEXT.subtitle)}>
         <MetaItem label="Patrol 间隔">
           <input
             type="number"
@@ -257,9 +264,9 @@ function PlanHeader({
               if (raw === '') onPatrolIntervalChange(null);
               else onPatrolIntervalChange(Math.max(5, parseInt(raw, 10) || 60));
             }}
-            className="w-24 h-6 px-2 text-xs border border-slate-300 rounded-[5px] bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            className={cn('w-24', metaInputCls)}
           />
-          <span className="text-[11px] text-slate-400">秒</span>
+          <span className="text-[11px]">秒</span>
         </MetaItem>
 
         <MetaItem label="失败阈值">
@@ -271,9 +278,9 @@ function PlanHeader({
             value={failureThreshold}
             disabled={readOnly}
             onChange={e => onFailureThresholdChange(Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)))}
-            className="w-20 h-6 px-2 text-xs border border-slate-300 rounded-[5px] bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            className={cn('w-20', metaInputCls)}
           />
-          <span className="text-[11px] font-semibold text-slate-700">{Math.round(failureThreshold * 100)}%</span>
+          <span className={cn('text-[11px] font-semibold', TEXT.body)}>{Math.round(failureThreshold * 100)}%</span>
         </MetaItem>
 
         <MetaItem label="全局超时">
@@ -288,18 +295,18 @@ function PlanHeader({
               if (raw === '') onTimeoutChange(null);
               else onTimeoutChange(Math.max(0, parseInt(raw, 10) || 0));
             }}
-            className="w-24 h-6 px-2 text-xs border border-slate-300 rounded-[5px] bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            className={cn('w-24', metaInputCls)}
           />
-          <span className="text-[11px] text-slate-400">秒</span>
+          <span className="text-[11px]">秒</span>
         </MetaItem>
 
         <MetaItem label="总步骤">
-          <span className="text-[12px] font-semibold text-slate-700">{totalSteps}</span>
+          <span className={cn('text-[12px] font-semibold', TEXT.body)}>{totalSteps}</span>
         </MetaItem>
       </div>
 
       {nextPlanName && (
-        <div className="flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 bg-violet-50 rounded-md text-violet-700">
+        <div className={cn('flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-md', STATUS_CHIP.primary)}>
           完成 <strong className="font-semibold">{planName || '当前 Plan'}</strong> 后 → 自动执行{' '}
           <strong className="font-semibold">{nextPlanName}</strong>
         </div>
@@ -311,7 +318,7 @@ function PlanHeader({
 function MetaItem({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
+      <span className={cn('text-[11px] font-bold uppercase tracking-wide', TEXT.subtitle)}>{label}</span>
       {children}
     </div>
   );
@@ -350,8 +357,13 @@ function PhaseSection({
       : `收尾清理 · ${steps.length} ${steps.length === 1 ? 'Step' : 'Steps'}`;
 
   return (
-    <div className="bg-white border border-slate-200 rounded-[10px] overflow-hidden shadow-[0_4px_12px_rgba(15,23,42,.03)]">
-      <div className={`px-4 py-2.5 flex items-center justify-between gap-2.5 text-sm font-bold border-b border-slate-100 ${PHASE_HEAD_TONE[phase]}`}>
+    <div className={cn('overflow-hidden', PIPELINE_EDITOR.card)}>
+      <div
+        className={cn(
+          'px-4 py-2.5 flex items-center justify-between gap-2.5 text-sm font-bold border-b border-border',
+          PIPELINE_PHASE_HEAD[phase],
+        )}
+      >
         <span>{PHASE_LABELS[phase]}</span>
         <span className="text-[12px] font-medium opacity-70">{subTitle}</span>
       </div>
@@ -375,7 +387,10 @@ function PhaseSection({
           <button
             type="button"
             onClick={onAddStep}
-            className="w-full min-h-[34px] px-2 grid place-items-center text-[11px] text-slate-500 border border-dashed border-slate-300 rounded-md hover:border-cyan-500 hover:text-cyan-700 hover:bg-cyan-50/40 transition"
+            className={cn(
+              'w-full min-h-[34px] px-2 grid place-items-center text-[11px] rounded-md border transition',
+              PIPELINE_EDITOR.addStepBtn,
+            )}
           >
             + 添加 {PHASE_LABELS[phase]} 步骤
           </button>
@@ -423,33 +438,34 @@ function StepRow({
           onSelect();
         }
       }}
-      className={[
+      className={cn(
         'grid grid-cols-[24px_1fr_auto] gap-2.5 items-center px-2.5 py-2 rounded-md border transition cursor-pointer',
-        selected
-          ? 'border-cyan-300 bg-cyan-50/60 shadow-[0_0_0_2px_rgba(14,116,144,.08)]'
-          : 'border-slate-200 bg-white hover:border-slate-300',
-      ].join(' ')}
+        selected ? PIPELINE_EDITOR.stepSelected : PIPELINE_EDITOR.stepIdle,
+      )}
     >
       <div
         title={`${phase} #${index + 1}`}
-        className="w-6 h-6 rounded-[5px] grid place-items-center text-[11px] font-extrabold bg-slate-100 text-slate-500"
+        className={cn(
+          'w-6 h-6 rounded-[5px] grid place-items-center text-[11px] font-extrabold',
+          PIPELINE_EDITOR.stepIndex,
+        )}
       >
         {index + 1}
       </div>
 
       <div className="min-w-0">
-        <div className="flex items-center gap-1.5 text-[13px] font-bold text-slate-800">
+        <div className={cn('flex items-center gap-1.5 text-[13px] font-bold', TEXT.heading)}>
           <span className="truncate">{scriptName}</span>
           {step.version && (
-            <span className="text-[10px] font-mono text-slate-400">v{step.version.replace(/^v/, '')}</span>
+            <span className={cn('text-[10px] font-mono', TEXT.subtitle)}>v{step.version.replace(/^v/, '')}</span>
           )}
           {step.enabled === false && (
-            <span className="ml-1 inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+            <span className={cn('ml-1 inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.muted)}>
               已禁用
             </span>
           )}
         </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-slate-500">
+        <div className={cn('mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px]', TEXT.subtitle)}>
           <span className="font-mono">{step.action || '—'}</span>
           <span>{step.timeout_seconds != null ? `${step.timeout_seconds}s` : '∞'}</span>
           <span>retry {step.retry ?? 0}</span>
@@ -494,12 +510,11 @@ function IconBtn({
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className={[
-        'w-6 h-6 grid place-items-center rounded-[5px] border border-slate-200 bg-white text-slate-500 transition',
-        'hover:bg-slate-100 hover:text-slate-700',
-        tone === 'danger' ? 'hover:bg-red-50 hover:text-red-600 hover:border-red-200' : '',
-        'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-white disabled:hover:text-slate-500 disabled:hover:border-slate-200',
-      ].join(' ')}
+      className={cn(
+        'w-6 h-6 grid place-items-center rounded-[5px] transition',
+        PIPELINE_EDITOR.iconBtn,
+        tone === 'danger' && PIPELINE_EDITOR.iconBtnDanger,
+      )}
     >
       {children}
     </button>

@@ -2,6 +2,8 @@ import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, AlertTriangle } from 'lucide-react';
 import type { PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
+import { ALERT_BANNER, PIPELINE_EDITOR, STATUS_CHIP, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 interface PlanStepInspectorProps {
   step: PipelineStep | null;
@@ -36,10 +38,10 @@ export default function PlanStepInspector({
   );
 
   return (
-    <aside className="flex flex-col h-full bg-white border-l border-slate-200">
-      <header className="px-4 py-3 border-b border-slate-200 bg-[#fbfdff]">
-        <div className="text-sm font-bold text-slate-800">步骤属性</div>
-        <div className="text-[11px] mt-0.5 font-mono text-slate-400 truncate">
+    <aside className={cn(PIPELINE_EDITOR.panel, 'border-l')}>
+      <header className={cn('px-4 py-3', PIPELINE_EDITOR.panelHeader)}>
+        <div className={cn('text-sm font-bold', TEXT.heading)}>步骤属性</div>
+        <div className={cn('text-[11px] mt-0.5 font-mono truncate', TEXT.subtitle)}>
           {step
             ? `${scriptName || '—'} / v${(step.version || '').replace(/^v/, '') || '—'}`
             : '未选择步骤'}
@@ -74,7 +76,10 @@ export default function PlanStepInspector({
             {scriptName && (
               <Link
                 to={`/scripts?name=${encodeURIComponent(scriptName)}`}
-                className="inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-[11px] font-bold text-cyan-700 bg-cyan-50 border border-dashed border-cyan-200 rounded-md hover:bg-cyan-100/70 transition"
+                className={cn(
+                  'inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-[11px] font-bold rounded-md transition',
+                  PIPELINE_EDITOR.linkBtn,
+                )}
               >
                 在脚本管理中编辑参数
                 <ArrowUpRight className="w-3.5 h-3.5" />
@@ -84,7 +89,7 @@ export default function PlanStepInspector({
         )}
       </div>
 
-      <footer className="border-t border-slate-200 bg-[#fbfdff] px-3 py-2 text-[10px] leading-relaxed text-slate-400">
+      <footer className={cn('px-3 py-2 text-[10px] leading-relaxed', PIPELINE_EDITOR.panelHeader, TEXT.subtitle)}>
         {step
           ? `位于 ${phase ?? '—'} #${(index ?? 0) + 1}。脚本的参数和默认值在脚本管理页面维护。`
           : '点击中央画布的步骤可在此查看 / 编辑属性。'}
@@ -95,9 +100,9 @@ export default function PlanStepInspector({
 
 function EmptyState() {
   return (
-    <div className="m-1 px-3 py-6 rounded-md border border-dashed border-slate-200 bg-slate-50/40 text-center text-xs text-slate-500">
-      <div className="font-medium mb-1 text-slate-600">未选择步骤</div>
-      <div className="text-[11px] text-slate-400">在中央画布点击任意步骤以查看其属性。</div>
+    <div className={cn('m-1 px-3 py-6 rounded-md', PIPELINE_EDITOR.emptyState)}>
+      <div className={cn('font-medium mb-1', TEXT.body)}>未选择步骤</div>
+      <div className={cn('text-[11px]', TEXT.subtitle)}>在中央画布点击任意步骤以查看其属性。</div>
     </div>
   );
 }
@@ -127,17 +132,19 @@ function ScriptInfoCard({
   const knownNames = Array.from(new Set(allActive.map(s => s.name))).sort();
   const isUnknown = scriptName && !matchedScript;
 
+  const selectCls = cn('max-w-[60%] h-7 px-1.5', PIPELINE_EDITOR.inputInline, 'text-[12px]');
+
   return (
     <Card>
       <CardHead>
         <span>脚本信息</span>
-        <span className="inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold bg-cyan-50 text-cyan-700 border border-cyan-200">
+        <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.primary)}>
           来自脚本管理
         </span>
       </CardHead>
       <CardBody>
         {isUnknown && (
-          <div className="flex items-start gap-1.5 px-2 py-1.5 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-[11px]">
+          <div className={cn('flex items-start gap-1.5 px-2 py-1.5 rounded-md text-[11px]', ALERT_BANNER.warning)}>
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <span>
               当前脚本 <code className="font-mono">{scriptName}@{step.version || '?'}</code> 未在已激活脚本中找到，请重新选择。
@@ -155,7 +162,7 @@ function ScriptInfoCard({
               if (firstVersion) onPickScript(newName, firstVersion.version);
               else onPickScript(newName, '');
             }}
-            className="max-w-[60%] h-7 px-1.5 text-[12px] border border-slate-300 rounded-[5px] bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            className={selectCls}
           >
             <option value="">— 选择脚本 —</option>
             {knownNames.map(n => (
@@ -174,7 +181,7 @@ function ScriptInfoCard({
             disabled={readOnly || !scriptName}
             value={step.version || ''}
             onChange={e => onPickScript(scriptName, e.target.value)}
-            className="max-w-[60%] h-7 px-1.5 text-[12px] border border-slate-300 rounded-[5px] bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            className={selectCls}
           >
             <option value="">—</option>
             {versionsForName.map(s => (
@@ -190,21 +197,21 @@ function ScriptInfoCard({
         </Row>
 
         <Row label="类型 / 分类">
-          <span className="font-semibold text-slate-700">
+          <span className={cn('font-semibold', TEXT.body)}>
             {matchedScript ? `${matchedScript.script_type} / ${matchedScript.category ?? '—'}` : '—'}
           </span>
         </Row>
 
         <Row label="参数" align="start">
           {paramKeys.length === 0 ? (
-            <span className="text-slate-400 text-[11px]">无默认参数</span>
+            <span className={cn('text-[11px]', TEXT.subtitle)}>无默认参数</span>
           ) : (
             <div className="flex flex-wrap gap-1 justify-end max-w-[68%]">
               {paramKeys.map(k => (
                 <span
                   key={k}
                   title={JSON.stringify(params[k])}
-                  className="font-mono text-[10px] px-1.5 py-px rounded-[3px] bg-slate-100 border border-slate-200 text-slate-600"
+                  className={cn('font-mono text-[10px] px-1.5 py-px rounded-[3px]', STATUS_CHIP.muted)}
                 >
                   {k}
                 </span>
@@ -224,6 +231,8 @@ interface RuntimeConfigCardProps {
 }
 
 function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardProps) {
+  const inputCls = cn('h-7 px-2 text-[12px]', PIPELINE_EDITOR.inputInline);
+
   return (
     <Card>
       <CardHead>
@@ -243,7 +252,7 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
                 const next = raw === '' ? 0 : Math.max(1, parseInt(raw, 10) || 30);
                 onUpdateStep({ ...step, timeout_seconds: next });
               }}
-              className="h-7 px-2 text-[12px] border border-slate-300 rounded-[5px] bg-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
+              className={inputCls}
             />
           </FieldGroup>
           <FieldGroup label="重试次数">
@@ -257,29 +266,29 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
                 const next = Math.min(5, Math.max(0, parseInt(e.target.value, 10) || 0));
                 onUpdateStep({ ...step, retry: next });
               }}
-              className="h-7 px-2 text-[12px] border border-slate-300 rounded-[5px] bg-white focus:outline-none focus:ring-1 focus:ring-cyan-500"
+              className={inputCls}
             />
           </FieldGroup>
         </div>
 
         <div className="flex items-center justify-between py-1">
-          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-600">启用步骤</span>
+          <span className={cn('text-[10px] font-bold uppercase tracking-wide', TEXT.subtitle)}>启用步骤</span>
           <button
             type="button"
             disabled={readOnly}
             onClick={() => onUpdateStep({ ...step, enabled: !(step.enabled !== false) })}
-            className={[
+            className={cn(
               'relative w-8 h-[18px] rounded-full transition',
-              step.enabled !== false ? 'bg-emerald-500' : 'bg-slate-300',
+              step.enabled !== false ? 'bg-success' : 'bg-muted-foreground/40',
               readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
-            ].join(' ')}
+            )}
             aria-pressed={step.enabled !== false}
           >
             <span
-              className={[
-                'absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-white shadow transition-transform',
+              className={cn(
+                'absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-background shadow transition-transform',
                 step.enabled !== false ? 'translate-x-[14px]' : 'translate-x-0',
-              ].join(' ')}
+              )}
             />
           </button>
         </div>
@@ -290,7 +299,7 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
             value={step.step_id}
             disabled={readOnly}
             onChange={e => onUpdateStep({ ...step, step_id: e.target.value })}
-            className="max-w-[60%] h-7 px-2 text-[11px] font-mono border border-slate-300 rounded-[5px] bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-cyan-500"
+            className={cn('max-w-[60%] h-7 px-2 text-[11px] font-mono', PIPELINE_EDITOR.inputInline)}
           />
         </Row>
       </CardBody>
@@ -299,15 +308,11 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
 }
 
 function Card({ children }: { children: React.ReactNode }) {
-  return <div className="border border-slate-200 rounded-[7px] overflow-hidden bg-white">{children}</div>;
+  return <div className={PIPELINE_EDITOR.cardInner}>{children}</div>;
 }
 
 function CardHead({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="px-2.5 py-1.5 bg-[#fbfdff] border-b border-slate-200 text-[11px] font-bold text-slate-700 flex items-center justify-between">
-      {children}
-    </div>
-  );
+  return <div className={PIPELINE_EDITOR.cardHead}>{children}</div>;
 }
 
 function CardBody({ children }: { children: React.ReactNode }) {
@@ -325,13 +330,13 @@ function Row({
 }) {
   return (
     <div
-      className={[
+      className={cn(
         'flex justify-between text-[11px] gap-2.5',
         align === 'start' ? 'items-start' : 'items-center',
-      ].join(' ')}
+      )}
     >
-      <span className="text-slate-500 whitespace-nowrap">{label}</span>
-      <div className="text-slate-700 text-right text-[12px] font-medium flex-1 flex justify-end items-center gap-1.5">
+      <span className={cn('whitespace-nowrap', TEXT.subtitle)}>{label}</span>
+      <div className={cn('text-right text-[12px] font-medium flex-1 flex justify-end items-center gap-1.5', TEXT.body)}>
         {children}
       </div>
     </div>
@@ -341,7 +346,7 @@ function Row({
 function FieldGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="grid gap-1">
-      <span className="text-[10px] font-bold tracking-wide text-slate-600">{label}</span>
+      <span className={cn('text-[10px] font-bold tracking-wide', TEXT.subtitle)}>{label}</span>
       {children}
     </div>
   );

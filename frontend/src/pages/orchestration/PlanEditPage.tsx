@@ -42,6 +42,10 @@ import PlanStepInspector from '@/components/pipeline/PlanStepInspector';
 
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 
+import { SURFACE, TEXT } from '@/design-system/tokens';
+
+import { cn } from '@/lib/utils';
+
 
 
 const EMPTY_LIFECYCLE: PipelineDef = {
@@ -855,7 +859,7 @@ export default function PlanEditPage() {
 
       <div className="flex items-center justify-center min-h-[60vh]">
 
-        <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+        <Loader2 className={cn('w-6 h-6 animate-spin', TEXT.caption)} />
 
       </div>
 
@@ -1079,7 +1083,7 @@ export default function PlanEditPage() {
 
           </AlertDialogHeader>
 
-          <pre className="max-h-[60vh] overflow-auto bg-slate-50 border border-slate-200 rounded-md p-3 text-xs font-mono leading-relaxed">
+          <pre className={cn('max-h-[60vh] overflow-auto border border-border rounded-md p-3 text-xs font-mono leading-relaxed', SURFACE.subtle)}>
 
             {JSON.stringify(lifecycle, null, 2)}
 

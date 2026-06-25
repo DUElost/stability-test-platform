@@ -12,22 +12,21 @@ import {
   Clock, Activity,
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
-import { CHART_COLORS, STATUS_TEXT_COLORS } from '@/design-system/colors';
-import { TEXT } from '@/design-system/tokens';
+import { STATUS_TEXT_COLORS } from '@/design-system/colors';
+import {
+  DRAWER,
+  FORM,
+  STEP_TRACE_DOT,
+  SURFACE,
+  TEXT,
+  jobStatusCellClass,
+} from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 const TERMINAL_STATUSES = ['SUCCESS', 'PARTIAL_SUCCESS', 'FAILED', 'DEGRADED'];
 
-const JOB_STATUS_COLORS: Record<string, string> = {
-  PENDING: 'bg-gray-200 border-gray-300',
-  RUNNING: `bg-[${CHART_COLORS.primary}] border-[${CHART_COLORS.primary}]`,
-  COMPLETED: `bg-[${CHART_COLORS.success}] border-[${CHART_COLORS.success}]`,
-  FAILED: `bg-[${CHART_COLORS.error}] border-[${CHART_COLORS.error}]`,
-  ABORTED: `bg-[${CHART_COLORS.warning}] border-[${CHART_COLORS.warning}]`,
-  UNKNOWN: 'bg-purple-500 border-purple-600',
-};
-
 function JobBlock({ job, onClick }: { job: PlanJobInstance; onClick: () => void }) {
-  const color = JOB_STATUS_COLORS[job.status] || 'bg-gray-300 border-gray-400';
+  const cellClass = jobStatusCellClass(job.status);
   const tooltipContent = (
     <div className="space-y-1">
       <p className="font-medium">Job #{job.id}</p>
@@ -43,7 +42,12 @@ function JobBlock({ job, onClick }: { job: PlanJobInstance; onClick: () => void 
         <TooltipTrigger asChild>
           <button
             onClick={onClick}
-            className={`min-w-[40px] min-h-[40px] w-full aspect-square rounded-lg border-2 flex flex-col items-center justify-center text-white text-xs font-medium transition-transform hover:scale-105 ${color}`}
+            className={cn(
+              'min-w-[40px] min-h-[40px] w-full aspect-square rounded-lg border-2',
+              'flex flex-col items-center justify-center text-primary-foreground text-xs font-medium',
+              'transition-transform hover:scale-105',
+              cellClass,
+            )}
           >
             <span>{job.device_serial?.slice(-4) || `D${job.device_id}`}</span>
             <span className="text-[10px] opacity-75">{job.status}</span>
@@ -55,6 +59,13 @@ function JobBlock({ job, onClick }: { job: PlanJobInstance; onClick: () => void 
       </Tooltip>
     </TooltipProvider>
   );
+}
+
+function stepTraceDotClass(eventType: string): string {
+  if (eventType === 'COMPLETED') return STEP_TRACE_DOT.COMPLETED;
+  if (eventType === 'FAILED') return STEP_TRACE_DOT.FAILED;
+  if (eventType === 'RETRIED') return STEP_TRACE_DOT.RETRIED;
+  return STEP_TRACE_DOT.default;
 }
 
 export default function PlanRunMatrixPage() {
@@ -84,7 +95,6 @@ export default function PlanRunMatrixPage() {
 
   const runTerminal = run && TERMINAL_STATUSES.includes(run.status);
 
-  // SocketIO real-time
   useSocketIO('/', {
     enabled: !!id && !runTerminal,
   });
@@ -103,7 +113,12 @@ export default function PlanRunMatrixPage() {
   return (
     <PageContainer className="max-w-6xl">
       <div>
-        <Button variant="ghost" size="sm" onClick={() => navigate('/execution/plan-runs')} className="-ml-2 mb-2 text-xs text-gray-500">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate('/execution/plan-runs')}
+          className={cn('-ml-2 mb-2 text-xs', TEXT.subtitle)}
+        >
           <ArrowLeft className="w-3.5 h-3.5 mr-1" /> 返回执行列表
         </Button>
         <PageHeader
@@ -121,7 +136,6 @@ export default function PlanRunMatrixPage() {
         />
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {[
           { label: '完成', key: 'COMPLETED', color: STATUS_TEXT_COLORS.success, icon: CheckCircle },
@@ -134,27 +148,30 @@ export default function PlanRunMatrixPage() {
             <CardContent className="py-3 text-center">
               <s.icon className={`w-4 h-4 mx-auto mb-1 ${s.color}`} />
               <p className="text-lg font-bold">{statusCounts[s.key] || 0}</p>
-              <p className={`text-xs ${TEXT.subtitle}`}>{s.label}</p>
+              <p className={cn('text-xs', TEXT.subtitle)}>{s.label}</p>
             </CardContent>
           </Card>
         ))}
       </div>
 
-      {/* Job Grid */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center justify-between">
             <span>任务矩阵 ({jobs?.length ?? 0} Jobs)</span>
-            <input type="text" placeholder="搜索 Job ID / Serial / Status..." value={jobFilter}
+            <input
+              type="text"
+              placeholder="搜索 Job ID / Serial / Status..."
+              value={jobFilter}
               onChange={e => setJobFilter(e.target.value)}
-              className="w-56 px-3 py-1 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 font-normal" />
+              className={cn('w-56 font-normal', FORM.inputSm)}
+            />
           </CardTitle>
         </CardHeader>
         <CardContent>
           {!jobs ? (
             <Skeleton className="h-48 w-full" />
           ) : jobs.length === 0 ? (
-            <p className="text-sm text-gray-400 py-8 text-center">暂未创建 Job</p>
+            <p className={cn('text-sm py-8 text-center', TEXT.subtitle)}>暂未创建 Job</p>
           ) : (
             <div className="grid grid-cols-5 sm:grid-cols-6 md:grid-cols-8 xl:grid-cols-10 gap-2">
               {filteredJobs?.map(job => (
@@ -165,50 +182,79 @@ export default function PlanRunMatrixPage() {
         </CardContent>
       </Card>
 
-      {/* Selected Job Detail Drawer */}
       {selectedJob && (
-        <div className="fixed inset-y-0 right-0 z-40 w-96 bg-white shadow-2xl border-l overflow-y-auto" onClick={e => e.stopPropagation()}>
-          <div className="p-4">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-semibold">Job #{selectedJob.id}</h2>
-              <Button variant="ghost" size="sm" onClick={() => setSelectedJob(null)}>✕</Button>
-            </div>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">状态</span><span>{selectedJob.status}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">设备</span><span className="font-mono">{selectedJob.device_serial || `Device #${selectedJob.device_id}`}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">Host</span><span>{selectedJob.host_id || '-'}</span></div>
-              {selectedJob.status_reason && (
-                <div className="flex justify-between"><span className="text-gray-500">原因</span><span>{selectedJob.status_reason}</span></div>
-              )}
-              <div className="flex justify-between"><span className="text-gray-500">开始</span><span>{selectedJob.started_at ? new Date(selectedJob.started_at).toLocaleString() : '-'}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">结束</span><span>{selectedJob.ended_at ? new Date(selectedJob.ended_at).toLocaleString() : '-'}</span></div>
-            </div>
-            {selectedJob.step_traces && selectedJob.step_traces.length > 0 && (
-              <div className="mt-4">
-                <h3 className="text-sm font-medium mb-2">步骤追踪</h3>
-                <div className="space-y-1.5">
-                  {selectedJob.step_traces.map(t => (
-                    <div key={t.id} className="flex items-center gap-2 text-xs py-1 px-2 bg-gray-50 rounded">
-                      <span className={`w-1.5 h-1.5 rounded-full ${
-                        t.event_type === 'COMPLETED' ? 'bg-green-500' :
-                        t.event_type === 'FAILED' ? 'bg-red-500' :
-                        t.event_type === 'RETRIED' ? 'bg-yellow-500' : 'bg-blue-500'
-                      }`} />
-                      <span className="font-mono">{t.step_id}</span>
-                      <span className="text-gray-400">{t.event_type}</span>
-                    </div>
-                  ))}
-                </div>
+        <>
+          <div
+            className={DRAWER.overlay}
+            onClick={() => setSelectedJob(null)}
+            aria-hidden
+          />
+          <div
+            className={cn(DRAWER.panel, 'w-96')}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className={cn('font-semibold', TEXT.heading)}>Job #{selectedJob.id}</h2>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={DRAWER.closeBtn}
+                  onClick={() => setSelectedJob(null)}
+                >
+                  ✕
+                </Button>
               </div>
-            )}
-            <div className="mt-4">
-              <Button variant="outline" size="sm" className="w-full"
-                onClick={() => navigate(`/runs/${selectedJob.id}/report`)}>
-                <Activity className="w-3.5 h-3.5 mr-1.5" /> 查看运行报告
-              </Button>
+              <div className="space-y-2 text-sm">
+                {[
+                  ['状态', selectedJob.status],
+                  ['设备', selectedJob.device_serial || `Device #${selectedJob.device_id}`],
+                  ['Host', selectedJob.host_id || '-'],
+                  ...(selectedJob.status_reason ? [['原因', selectedJob.status_reason] as const] : []),
+                  ['开始', selectedJob.started_at ? new Date(selectedJob.started_at).toLocaleString() : '-'],
+                  ['结束', selectedJob.ended_at ? new Date(selectedJob.ended_at).toLocaleString() : '-'],
+                ].map(([label, value]) => (
+                  <div key={label} className="flex justify-between gap-2">
+                    <span className={TEXT.subtitle}>{label}</span>
+                    <span className={cn('text-right truncate max-w-[60%]', TEXT.body)} title={String(value)}>
+                      {value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {selectedJob.step_traces && selectedJob.step_traces.length > 0 && (
+                <div className="mt-4">
+                  <h3 className={cn('text-sm font-medium mb-2', TEXT.heading)}>步骤追踪</h3>
+                  <div className="space-y-1.5">
+                    {selectedJob.step_traces.map(t => (
+                      <div
+                        key={t.id}
+                        className={cn(
+                          'flex items-center gap-2 text-xs py-1 px-2 rounded',
+                          SURFACE.subtle,
+                        )}
+                      >
+                        <span className={cn('w-1.5 h-1.5 rounded-full', stepTraceDotClass(t.event_type))} />
+                        <span className="font-mono">{t.step_id}</span>
+                        <span className={TEXT.subtitle}>{t.event_type}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="mt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => navigate(`/runs/${selectedJob.id}/report`)}
+                >
+                  <Activity className="w-3.5 h-3.5 mr-1.5" /> 查看运行报告
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
     </PageContainer>
   );
