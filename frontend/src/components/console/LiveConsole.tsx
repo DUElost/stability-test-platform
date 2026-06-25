@@ -1,15 +1,13 @@
 /**
  * LiveConsole — ADR-0025 §9 RunConsole 的前端控制台（Jenkins 式 web 实时日志）。
- *
- * 复用 XTerminal(xterm.js) + useSocketIO：挂载时 GET 回填历史，随后订阅
- * SocketIO room `console:{id}` 实时增量。事件按 payload 形态 + run_id 过滤
- * （console_log 带 lines / console_status 带 status）。
  */
 import { useEffect, useRef, useState } from 'react';
 import { XTerminal, type XTerminalHandle } from '@/components/log/XTerminal';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { dedup } from '@/utils/api/dedup';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
+import { PANEL, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 interface Props {
   consoleRunId: string;
@@ -29,7 +27,6 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   const seqRef = useRef(0);
   const [status, setStatus] = useState('RUNNING');
 
-  // 挂载 / 切换 run → 清屏 + GET 回填
   useEffect(() => {
     let cancelled = false;
     seqRef.current = 0;
@@ -54,7 +51,6 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [consoleRunId]);
 
-  // 实时增量
   useSocketIO(`/ws/console/${consoleRunId}`, {
     onMessage: (msg: unknown) => {
       const d = msg as { run_id?: string; from_seq?: number; lines?: string[]; status?: string };
@@ -73,14 +69,15 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   });
 
   return (
-    <div className="rounded-lg border border-gray-200" data-testid="live-console">
-      <div className="flex items-center justify-between border-b bg-gray-50 px-3 py-1.5">
-        <span className="font-mono text-[11px] text-gray-500">{consoleRunId}</span>
+    <div className={cn('overflow-hidden rounded-lg', PANEL.root)} data-testid="live-console">
+      <div className={cn('flex items-center justify-between border-b px-3 py-1.5', PANEL.footer)}>
+        <span className={cn('font-mono text-[11px]', TEXT.subtitle)}>{consoleRunId}</span>
         <span
           data-testid="live-console-status"
-          className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
-            STATUS_TONE[status] ?? 'bg-gray-100 text-gray-600'
-          }`}
+          className={cn(
+            'rounded px-2 py-0.5 text-[11px] font-semibold',
+            STATUS_TONE[status] ?? 'bg-muted text-muted-foreground',
+          )}
         >
           {status}
         </span>

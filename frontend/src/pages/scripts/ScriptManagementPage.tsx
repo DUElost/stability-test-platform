@@ -11,6 +11,8 @@ import { PageContainer, PageHeader } from '@/components/layout';
 import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
+import { STATUS_CHIP, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 export default function ScriptManagementPage() {
   const queryClient = useQueryClient();
@@ -71,7 +73,7 @@ export default function ScriptManagementPage() {
 
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4', TEXT.subtitle)} />
           <Input type="text" placeholder="搜索脚本名称、分类、类型..." value={search}
             onChange={e => setSearch(e.target.value)}
             className="pl-9" />
@@ -117,17 +119,17 @@ export default function ScriptManagementPage() {
                   <div className="flex items-start justify-between">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <h3 className="font-medium text-gray-900">{script.name}</h3>
-                        <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-mono">{script.version}</span>
-                        <span className={`text-xs px-1.5 py-0.5 rounded ${
-                          script.category === 'device' ? 'bg-blue-100 text-blue-700' :
-                          script.category === 'host' ? 'bg-green-100 text-green-700' :
-                          'bg-gray-100 text-gray-600'
-                        }`}>{script.category || '未分类'}</span>
-                        <span className="text-xs text-gray-400">{script.script_type}</span>
+                        <h3 className={cn('font-medium', TEXT.heading)}>{script.name}</h3>
+                        <span className={cn('text-xs px-1.5 py-0.5 rounded font-mono', STATUS_CHIP.muted)}>{script.version}</span>
+                        <span className={cn('text-xs px-1.5 py-0.5 rounded', 
+                          script.category === 'device' ? STATUS_CHIP.primary :
+                          script.category === 'host' ? STATUS_CHIP.success :
+                          STATUS_CHIP.muted
+                        )}>{script.category || '未分类'}</span>
+                        <span className={cn('text-xs', TEXT.subtitle)}>{script.script_type}</span>
                       </div>
-                      {script.display_name && <p className="text-sm text-gray-600 mt-0.5">{script.display_name}</p>}
-                      <p className="text-xs text-gray-400 mt-1 truncate">{script.nfs_path}</p>
+                      {script.display_name && <p className={cn('text-sm mt-0.5', TEXT.subtitle)}>{script.display_name}</p>}
+                      <p className={cn('text-xs mt-1 truncate', TEXT.subtitle)}>{script.nfs_path}</p>
                     </div>
                     <div className="flex items-center gap-1 ml-4">
                       <Button variant="ghost" size="sm" onClick={() => toggleJson(key)} title="参数详情">
@@ -141,22 +143,22 @@ export default function ScriptManagementPage() {
 
                   {/* Expandable params */}
                   {expanded && (
-                    <div className="mt-3 p-3 bg-gray-50 rounded-lg text-xs space-y-2">
+                    <div className="mt-3 p-3 bg-muted/50 rounded-lg text-xs space-y-2">
                       {script.default_params && Object.keys(script.default_params).length > 0 && (
                         <div>
-                          <span className="font-medium text-gray-600">默认参数: </span>
-                          <code className="text-gray-800">{JSON.stringify(script.default_params, null, 2)}</code>
+                          <span className={cn('font-medium', TEXT.subtitle)}>默认参数: </span>
+                          <code className={TEXT.body}>{JSON.stringify(script.default_params, null, 2)}</code>
                         </div>
                       )}
                       {script.param_schema && Object.keys(script.param_schema).length > 0 && (
                         <div>
-                          <span className="font-medium text-gray-600">参数 Schema: </span>
-                          <code className="text-gray-800">{JSON.stringify(script.param_schema, null, 2)}</code>
+                          <span className={cn('font-medium', TEXT.subtitle)}>参数 Schema: </span>
+                          <code className={TEXT.body}>{JSON.stringify(script.param_schema, null, 2)}</code>
                         </div>
                       )}
                       {(!script.default_params || Object.keys(script.default_params).length === 0) &&
                        (!script.param_schema || Object.keys(script.param_schema).length === 0) && (
-                        <p className="text-gray-400">无参数定义</p>
+                        <p className={TEXT.subtitle}>无参数定义</p>
                       )}
                     </div>
                   )}

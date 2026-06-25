@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { X, UserPlus, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import type { User } from '@/utils/api';
+import { STATUS_TEXT_COLORS } from '@/design-system/colors';
+import { FORM, MODAL } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 interface UserModalProps {
   isOpen: boolean;
@@ -104,21 +108,24 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
 
   if (!isOpen) return null;
 
+  const fieldClass = (hasError: boolean) =>
+    cn(FORM.input, hasError && FORM.inputInvalid);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
+    <div className={MODAL.overlay}>
+      <div className={MODAL.panel}>
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+        <div className={MODAL.header}>
           <div className="flex items-center gap-2">
-            <UserPlus className="text-blue-600" size={20} />
-            <h2 className="text-lg font-semibold text-slate-900">
+            <UserPlus className={STATUS_TEXT_COLORS.primary} size={20} />
+            <h2 className={MODAL.title}>
               {isEditMode ? 'Edit User' : 'Add New User'}
             </h2>
           </div>
           <button
             onClick={handleClose}
             disabled={isSubmitting}
-            className="text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-50"
+            className={MODAL.closeButton}
           >
             <X size={20} />
           </button>
@@ -128,8 +135,8 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {/* Username */}
           <div>
-            <label htmlFor="user-username" className="block text-sm font-medium text-slate-700 mb-1">
-              Username <span className="text-red-500">*</span>
+            <label htmlFor="user-username" className={FORM.label}>
+              Username <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <input
               id="user-username"
@@ -137,18 +144,16 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
               placeholder="e.g., john_doe"
-              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
-                errors.username ? 'border-red-300' : 'border-slate-300'
-              }`}
+              className={fieldClass(!!errors.username)}
               disabled={isSubmitting}
             />
-            {errors.username && <p className="mt-1 text-sm text-red-600">{errors.username}</p>}
+            {errors.username && <p className={FORM.error}>{errors.username}</p>}
           </div>
 
           {/* Password (only for new users or password change) */}
           <div>
-            <label htmlFor="user-password" className="block text-sm font-medium text-slate-700 mb-1">
-              {isEditMode ? 'New Password' : 'Password'} {!isEditMode && <span className="text-red-500">*</span>}
+            <label htmlFor="user-password" className={FORM.label}>
+              {isEditMode ? 'New Password' : 'Password'} {!isEditMode && <span className={STATUS_TEXT_COLORS.error}>*</span>}
             </label>
             <input
               id="user-password"
@@ -156,18 +161,16 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
               placeholder={isEditMode ? 'Leave blank to keep current' : 'e.g., ********'}
-              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
-                errors.password ? 'border-red-300' : 'border-slate-300'
-              }`}
+              className={fieldClass(!!errors.password)}
               disabled={isSubmitting}
             />
-            {errors.password && <p className="mt-1 text-sm text-red-600">{errors.password}</p>}
+            {errors.password && <p className={FORM.error}>{errors.password}</p>}
           </div>
 
           {/* Confirm Password */}
           {(formData.password || !isEditMode) && (
             <div>
-              <label htmlFor="user-confirm-password" className="block text-sm font-medium text-slate-700 mb-1">
+              <label htmlFor="user-confirm-password" className={FORM.label}>
                 Confirm Password
               </label>
               <input
@@ -176,52 +179,47 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
                 value={formData.confirmPassword}
                 onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
                 placeholder="Re-enter password"
-                className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
-                  errors.confirmPassword ? 'border-red-300' : 'border-slate-300'
-                }`}
+                className={fieldClass(!!errors.confirmPassword)}
                 disabled={isSubmitting}
               />
-              {errors.confirmPassword && <p className="mt-1 text-sm text-red-600">{errors.confirmPassword}</p>}
+              {errors.confirmPassword && <p className={FORM.error}>{errors.confirmPassword}</p>}
             </div>
           )}
 
           {/* Role */}
           <div>
-            <label htmlFor="user-role" className="block text-sm font-medium text-slate-700 mb-1">
-              Role <span className="text-red-500">*</span>
+            <label htmlFor="user-role" className={FORM.label}>
+              Role <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <select
               id="user-role"
               value={formData.role}
               onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
-                errors.role ? 'border-red-300' : 'border-slate-300'
-              }`}
+              className={cn(FORM.select, 'w-full', errors.role && FORM.inputInvalid)}
               disabled={isSubmitting}
             >
               <option value="user">User</option>
               <option value="admin">Admin</option>
             </select>
-            {errors.role && <p className="mt-1 text-sm text-red-600">{errors.role}</p>}
-            <p className="mt-1 text-xs text-slate-500">
+            {errors.role && <p className={FORM.error}>{errors.role}</p>}
+            <p className={FORM.hint}>
               Admins can manage users and access all features
             </p>
           </div>
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">
-            <button
+            <Button
               type="button"
+              variant="outline"
               onClick={handleClose}
               disabled={isSubmitting}
-              className="px-4 py-2 text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={isSubmitting}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               {isSubmitting ? (
                 <>
@@ -231,7 +229,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               ) : (
                 isEditMode ? 'Save Changes' : 'Add User'
               )}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

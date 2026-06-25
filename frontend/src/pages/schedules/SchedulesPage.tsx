@@ -4,8 +4,11 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
 import { Plus, Trash2, Edit2, Play, Power, Clock } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
+import { INTERACTIVE, PANEL, SKELETON_BLOCK, STATUS_CHIP, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 interface ScheduleForm {
   name: string;
@@ -160,8 +163,8 @@ export default function SchedulesPage() {
       <PageContainer>
         <PageHeader title="定时任务" subtitle="管理 Cron 定时执行的 Plan" />
         <div className="space-y-4">
-          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
-          <div className="h-64 bg-gray-100 animate-pulse rounded-lg" />
+          <div className={cn('h-32', SKELETON_BLOCK)} />
+          <div className={cn('h-64', SKELETON_BLOCK)} />
         </div>
       </PageContainer>
     );
@@ -173,44 +176,41 @@ export default function SchedulesPage() {
         title="定时任务"
         subtitle="管理 Cron 定时执行的 Plan"
         action={
-          <button
-            onClick={openCreate}
-            className="inline-flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-medium transition-all text-sm"
-          >
+          <Button onClick={openCreate} size="sm">
             <Plus className="w-4 h-4" />
             新建定时任务
-          </button>
+          </Button>
         }
       />
 
       {showForm && (
-        <div className="bg-white rounded-xl border border-gray-200 p-6 max-w-lg">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">
+        <div className={cn('rounded-xl border p-6 max-w-lg', PANEL.root)}>
+          <h3 className={cn('text-lg font-medium mb-4', TEXT.heading)}>
             {editing ? '编辑定时任务' : '新建定时任务'}
           </h3>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">名称</label>
+              <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>名称</label>
               <input
                 type="text"
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+                className="w-full rounded-lg border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Cron 表达式</label>
+              <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>Cron 表达式</label>
               <CronExpressionInput
                 value={form.cron_expression}
                 onChange={(v) => setForm({ ...form, cron_expression: v })}
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Plan 蓝图</label>
+              <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>Plan 蓝图</label>
               <select
                 value={form.plan_id}
                 onChange={(e) => setForm({ ...form, plan_id: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                className="w-full rounded-lg border bg-card px-3 py-2 text-sm"
               >
                 <option value="">请选择 Plan</option>
                 {plans.map(p => (
@@ -219,13 +219,13 @@ export default function SchedulesPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">设备 IDs（逗号分隔）</label>
+              <label className={cn('block text-sm font-medium mb-1', TEXT.body)}>设备 IDs（逗号分隔）</label>
               <input
                 type="text"
                 value={form.device_ids}
                 onChange={(e) => setForm({ ...form, device_ids: e.target.value })}
                 placeholder="例如: 1,2,3"
-                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                className="w-full rounded-lg border bg-card px-3 py-2 text-sm"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -235,21 +235,17 @@ export default function SchedulesPage() {
                 onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
                 className="rounded"
               />
-              <span className="text-sm text-gray-700">启用</span>
+              <span className={cn('text-sm', TEXT.body)}>启用</span>
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={handleSave}
-                className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-medium hover:bg-gray-800"
-              >
-                保存
-              </button>
-              <button
+              <Button onClick={handleSave} size="sm">保存</Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => { setShowForm(false); setEditing(null); setForm(DEFAULT_FORM); }}
-                className="px-4 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50"
               >
                 取消
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -262,48 +258,49 @@ export default function SchedulesPage() {
           icon={<Clock className="w-16 h-16" />}
         />
       ) : (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        <div className={cn('overflow-hidden', PANEL.root)}>
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-100 bg-gray-50/50">
-                <th className="text-left px-4 py-3 font-medium text-gray-500">名称</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500">Cron</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500">执行对象</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500">状态</th>
-                <th className="text-left px-4 py-3 font-medium text-gray-500">下次执行</th>
-                <th className="text-right px-4 py-3 font-medium text-gray-500">操作</th>
+              <tr className="border-b bg-muted/50">
+                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>名称</th>
+                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>Cron</th>
+                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>执行对象</th>
+                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>状态</th>
+                <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>下次执行</th>
+                <th className={cn('text-right px-4 py-3 font-medium', TEXT.subtitle)}>操作</th>
               </tr>
             </thead>
             <tbody>
               {schedules.map((s) => (
-                <tr key={s.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                  <td className="px-4 py-3 font-medium text-gray-900">{s.name}</td>
-                  <td className="px-4 py-3 font-mono text-gray-600">{s.cron_expression}</td>
-                  <td className="px-4 py-3 text-gray-600">
+                <tr key={s.id} className="border-b hover:bg-muted/30">
+                  <td className={cn('px-4 py-3 font-medium', TEXT.heading)}>{s.name}</td>
+                  <td className={cn('px-4 py-3 font-mono', TEXT.subtitle)}>{s.cron_expression}</td>
+                  <td className={cn('px-4 py-3', TEXT.subtitle)}>
                     Plan #{s.plan_id} ({(s.device_ids || []).length} devices)
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                      s.enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-500'
-                    }`}>
+                    <span className={cn(
+                      'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium',
+                      s.enabled ? STATUS_CHIP.success : STATUS_CHIP.muted,
+                    )}>
                       {s.enabled ? '启用' : '禁用'}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs">
+                  <td className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
                     {s.next_run_at ? new Date(s.next_run_at).toLocaleString() : '-'}
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => handleRunNow(s.id)} title="立即执行" className="p-1.5 text-gray-400 hover:text-blue-600 rounded">
+                      <button onClick={() => handleRunNow(s.id)} title="立即执行" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary')}>
                         <Play className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleToggle(s.id)} title="切换状态" className="p-1.5 text-gray-400 hover:text-amber-600 rounded">
+                      <button onClick={() => handleToggle(s.id)} title="切换状态" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-warning')}>
                         <Power className="w-4 h-4" />
                       </button>
-                      <button onClick={() => openEdit(s)} title="编辑" className="p-1.5 text-gray-400 hover:text-gray-600 rounded">
+                      <button onClick={() => openEdit(s)} title="编辑" className={cn('p-1.5 rounded', INTERACTIVE.iconButton)}>
                         <Edit2 className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleDelete(s.id)} title="删除" className="p-1.5 text-gray-400 hover:text-red-600 rounded">
+                      <button onClick={() => handleDelete(s.id)} title="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-destructive')}>
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>

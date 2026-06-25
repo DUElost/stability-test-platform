@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
+import { SKELETON_BLOCK, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 import { Smartphone } from 'lucide-react';
 
 const deviceStatusMap: Record<string, DeviceStatus> = {
@@ -81,8 +83,8 @@ export default function DevicesPage() {
       <PageContainer>
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <div className="space-y-4">
-          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
-          <div className="h-64 bg-gray-100 animate-pulse rounded-lg" />
+          <div className={cn('h-32', SKELETON_BLOCK)} />
+          <div className={cn('h-64', SKELETON_BLOCK)} />
         </div>
       </PageContainer>
     );
@@ -142,7 +144,7 @@ export default function DevicesPage() {
       {/* Device Table */}
       <div>
         <div className="flex justify-end mb-2">
-          <span className="text-xs text-gray-400">点击设备行的指标按钮查看历史数据</span>
+          <span className={cn('text-xs', TEXT.subtitle)}>点击设备行的指标按钮查看历史数据</span>
         </div>
         <ExpandableDeviceTable
           devices={formattedDevices}

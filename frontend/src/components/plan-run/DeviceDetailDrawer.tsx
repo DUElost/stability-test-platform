@@ -20,6 +20,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { ALERT_BANNER, DRAWER, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
 import type { DeviceMatrixItem, DeviceUiStatus } from '@/utils/api/types';
 
@@ -85,7 +87,7 @@ export default function DeviceDetailDrawer({
       <div
         data-testid="device-drawer-overlay"
         onClick={onClose}
-        className="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm"
+        className={DRAWER.overlay}
       />
 
       {/* Drawer */}
@@ -96,15 +98,15 @@ export default function DeviceDetailDrawer({
         aria-modal="true"
         aria-label={`设备 ${device.device_serial || `#${device.device_id}`} 详情`}
         tabIndex={-1}
-        className="fixed inset-y-0 right-0 z-40 flex w-full max-w-md flex-col overflow-hidden border-l bg-white shadow-2xl focus:outline-none"
+        className={DRAWER.panel}
       >
         {/* Header */}
         <header className="flex items-center justify-between border-b px-4 py-3">
           <div className="min-w-0">
-            <p className="truncate text-xs text-gray-500">
+            <p className={cn('truncate text-xs', TEXT.subtitle)}>
               Job #{device.job_id} · {device.host_id || '—'}
             </p>
-            <h2 className="truncate font-mono text-base font-semibold text-gray-900">
+            <h2 className={cn('truncate font-mono text-base font-semibold', TEXT.heading)}>
               {device.device_serial || `Device #${device.device_id}`}
             </h2>
           </div>
@@ -130,7 +132,7 @@ export default function DeviceDetailDrawer({
               size="sm"
               spin={device.ui_status === 'running'}
             />
-            <span className="text-xs font-semibold text-gray-600">
+            <span className={cn('text-xs font-semibold', TEXT.subtitle)}>
               · {device.current_stage.toUpperCase()}
             </span>
           </div>
@@ -145,8 +147,8 @@ export default function DeviceDetailDrawer({
                     device.status_reason,
                     false,
                     device.ui_status === 'failed'
-                      ? 'text-red-600 font-semibold'
-                      : 'text-amber-700 font-semibold',
+                      ? 'text-destructive font-semibold'
+                      : 'text-warning font-semibold',
                   ] as [string, string, boolean, string]]
                 : []),
               ...(device.grace_remaining_seconds != null
@@ -160,7 +162,7 @@ export default function DeviceDetailDrawer({
                     'BUSY 来源',
                     busyReasonLabel(device.busy_reason),
                     false,
-                    'text-amber-700 font-semibold',
+                    'text-warning font-semibold',
                   ] as [string, string, boolean, string]]
                 : []),
               ...(device.busy_lease_job_id != null
@@ -179,9 +181,9 @@ export default function DeviceDetailDrawer({
           />
 
           {device.log_signal_count > 0 && (
-            <div className="mt-4 rounded-lg border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <div className={cn('mt-4 rounded-lg border-l-4 border-warning px-3 py-2 text-xs', ALERT_BANNER.warning)}>
               <div className="font-semibold">检测到 {device.log_signal_count} 条 Watcher 异常</div>
-              <p className="mt-0.5 text-xs text-amber-700">
+              <p className="mt-0.5 text-xs opacity-90">
                 明细见上方"业务流时间线"事件流(stage = patrol, severity = 异常)
               </p>
             </div>
@@ -193,11 +195,11 @@ export default function DeviceDetailDrawer({
           )}
 
           {(retryRequested || exitRequested) && (
-            <div className="mt-4 rounded-lg border-l-4 border-blue-400 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+            <div className="mt-4 rounded-lg border-l-4 border-primary bg-primary/5 px-3 py-2 text-xs text-primary">
               <div className="font-semibold">
                 {retryRequested ? '已请求立即重试' : '已请求退出该设备'}
               </div>
-              <p className="mt-0.5 text-xs text-blue-700">
+              <p className="mt-0.5 text-xs opacity-90">
                 Agent 将在下一次心跳处理(通常 10s 内)
               </p>
             </div>
@@ -205,7 +207,7 @@ export default function DeviceDetailDrawer({
         </div>
 
         {/* Footer — actions */}
-        <footer className="grid grid-cols-2 gap-2 border-t bg-gray-50 px-4 py-3">
+        <footer className="grid grid-cols-2 gap-2 border-t bg-muted/50 px-4 py-3">
           <Button
             variant="outline"
             size="sm"
@@ -226,7 +228,7 @@ export default function DeviceDetailDrawer({
             data-testid="device-drawer-exit-btn"
             disabled={isTerminal || isExitPending || exitRequested}
             onClick={() => setConfirmOpen('exit')}
-            className="border-red-200 text-red-700 hover:bg-red-50"
+            className="border-destructive/30 text-destructive hover:bg-destructive/10"
           >
             {isExitPending ? (
               <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
@@ -273,7 +275,7 @@ export default function DeviceDetailDrawer({
                 setConfirmOpen(null);
               }}
               className={
-                confirmOpen === 'exit' ? 'bg-red-600 text-white hover:bg-red-700' : ''
+                confirmOpen === 'exit' ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : ''
               }
             >
               确认
@@ -290,11 +292,14 @@ function KvList({ rows }: { rows: Array<[string, string, boolean, string?]> }) {
     <dl className="divide-y rounded-lg border">
       {rows.map(([k, v, mono, extraCls]) => (
         <div key={k} className="flex items-start justify-between px-3 py-1.5 text-xs">
-          <dt className={`text-gray-500 ${extraCls || ''}`}>{k}</dt>
+          <dt className={cn(TEXT.subtitle, extraCls || '')}>{k}</dt>
           <dd
-            className={`max-w-[60%] text-right text-gray-900 ${
-              mono ? 'font-mono' : ''
-            } ${extraCls || ''}`}
+            className={cn(
+              'max-w-[60%] text-right',
+              TEXT.body,
+              mono && 'font-mono',
+              extraCls || '',
+            )}
           >
             {v}
           </dd>
@@ -325,7 +330,7 @@ function CrashArtifactsBlock({ runId, jobId }: { runId: number; jobId: number })
 
   if (isLoading) {
     return (
-      <div className="mt-4 flex items-center gap-1.5 text-xs text-gray-400">
+      <div className={cn('mt-4 flex items-center gap-1.5 text-xs', TEXT.subtitle)}>
         <Loader2 className="h-3 w-3 animate-spin" /> 加载 Crash 产物...
       </div>
     );
@@ -334,27 +339,27 @@ function CrashArtifactsBlock({ runId, jobId }: { runId: number; jobId: number })
 
   return (
     <div className="mt-4" data-testid="crash-artifacts-block">
-      <div className="mb-1 flex items-center gap-1 text-xs font-semibold text-gray-700">
-        <FileWarning className="h-3.5 w-3.5 text-amber-500" />
+      <div className={cn('mb-1 flex items-center gap-1 text-xs font-semibold', TEXT.body)}>
+        <FileWarning className="h-3.5 w-3.5 text-warning" />
         Crash 产物（{crashArtifacts.length}）
       </div>
       <div className="space-y-1">
         {crashArtifacts.map((a) => (
           <div key={a.id} className="flex items-center gap-2 rounded border px-2 py-1 text-[11px]">
-            <span className="font-mono text-gray-500">
+            <span className={cn('font-mono', TEXT.subtitle)}>
               {ARTIFACT_LABELS[a.artifact_type] || a.artifact_type}
             </span>
             <a
               href={`/api/v1/plan-runs/${runId}/jobs/${jobId}/artifacts/${a.id}/download`}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-0.5 text-blue-600 hover:underline"
+              className="inline-flex items-center gap-0.5 text-primary hover:underline"
               data-testid="crash-artifact-download"
             >
               <ExternalLink className="h-3 w-3" /> 下载
             </a>
             {a.filename && (
-              <span className="flex-1 truncate font-mono text-gray-400" title={a.filename}>
+              <span className={cn('flex-1 truncate font-mono text-muted-foreground/70', TEXT.subtitle)} title={a.filename}>
                 {a.filename}
               </span>
             )}

@@ -10,6 +10,8 @@ import { UserTable } from './components/UserTable';
 import { UserModal } from './components/UserModal';
 import { api, type User } from '@/utils/api';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 export default function UsersPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -111,7 +113,7 @@ export default function UsersPage() {
       <PageContainer>
         <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
         <div className="flex items-center justify-center h-64">
-          <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+          <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.subtitle)} />
         </div>
       </PageContainer>
     );
@@ -122,11 +124,11 @@ export default function UsersPage() {
       <PageContainer>
         <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
         <Card className="p-6">
-          <div className="flex items-center gap-3 text-red-600">
+          <div className={cn('flex items-center gap-3', TEXT.destructive)}>
             <AlertCircle className="w-5 h-5" />
             <div>
               <p className="font-medium">Failed to load users</p>
-              <p className="text-sm text-slate-500">
+              <p className={cn('text-sm', TEXT.subtitle)}>
                 {error instanceof Error ? error.message : 'Please check if you have admin privileges'}
               </p>
             </div>
@@ -160,13 +162,13 @@ export default function UsersPage() {
         />
       ) : (
         <Card className="p-12 text-center">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-slate-50 flex items-center justify-center">
-            <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-muted flex items-center justify-center">
+            <svg className={cn('w-8 h-8', TEXT.subtitle)} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
           </div>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">暂无用户</h3>
-          <p className="text-sm text-gray-400 mb-4">添加您的第一个用户以开始使用。</p>
+          <h3 className={cn('text-lg font-medium mb-2', TEXT.heading)}>暂无用户</h3>
+          <p className={cn('text-sm mb-4', TEXT.subtitle)}>添加您的第一个用户以开始使用。</p>
           <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />
             添加用户

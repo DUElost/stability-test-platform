@@ -38,6 +38,8 @@ import {
   AlertDialogAction,
 } from '@/components/ui/alert-dialog';
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
+import { ALERT_BANNER, STATUS_CHIP, SURFACE, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 import { ErrorState } from '@/components/ui/error-state';
 
 import type { PrecheckState } from '@/utils/api/types';
@@ -143,19 +145,20 @@ function PrecheckSummaryRow({
       type="button"
       data-testid="precheck-row"
       onClick={onToggle}
-      className="mx-1 flex w-full items-start gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-left shadow-sm hover:bg-gray-50"
+      className="mx-1 flex w-full items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left shadow-sm hover:bg-muted/50"
     >
       <ChevronDown
-        className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform ${
-          expanded ? '' : '-rotate-90'
-        }`}
+        className={cn(
+          'mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform',
+          !expanded && '-rotate-90',
+        )}
       />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-violet-700">
+          <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider', STATUS_CHIP.primary)}>
             预检
           </span>
-          <span className="flex-1 text-xs font-semibold text-gray-900">健康预检</span>
+          <span className={cn('flex-1 text-xs font-semibold', TEXT.heading)}>健康预检</span>
           <span
             className={`text-xs font-semibold ${
               phase === 'ready'
@@ -169,13 +172,13 @@ function PrecheckSummaryRow({
           </span>
           {gateFailed && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />}
         </div>
-        <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-gray-500">
+        <div className={cn('mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]', TEXT.subtitle)}>
           <span>
-            <b className="font-semibold text-gray-800">{hostEntries.length}</b> 主机
+            <b className={cn('font-semibold', TEXT.heading)}>{hostEntries.length}</b> 主机
           </span>
           {total > 0 && (
             <span>
-              <b className="font-semibold text-gray-800">
+              <b className={cn('font-semibold', TEXT.heading)}>
                 {verified}/{total}
               </b>{' '}
               脚本
@@ -191,7 +194,7 @@ function PrecheckSummaryRow({
           )}
           {mixedWatcherFailure &&
             mixedWatcherFailure.inactive_host_ids.length > 0 && (
-              <span className="basis-full font-mono text-red-500">
+              <span className="basis-full font-mono text-destructive">
                 不激活节点ID：{mixedWatcherFailure.inactive_host_ids.join(', ')}
               </span>
             )}
@@ -352,7 +355,7 @@ export default function PlanRunDetailPage() {
           data-testid="plan-run-left-panel-toggle"
           onClick={() => setLeftPanelOpen((v) => !v)}
           aria-label="切换状态面板"
-          className="-ml-1 px-1.5 text-gray-500 lg:hidden"
+          className="-ml-1 px-1.5 text-muted-foreground lg:hidden"
         >
           <PanelLeft className="h-4 w-4" />
         </Button>
@@ -360,13 +363,13 @@ export default function PlanRunDetailPage() {
           variant="ghost"
           size="sm"
           onClick={() => navigate('/execution/plan-runs')}
-          className="-ml-2 text-xs text-gray-500"
+          className="-ml-2 text-xs text-muted-foreground"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回执行列表
         </Button>
         <PlanRunTabs runId={id} active="overview" />
         <div className="ml-auto flex items-center gap-2">
-          <span className="hidden text-[11px] text-gray-400 sm:inline">
+          <span className={cn('hidden text-[11px] sm:inline', TEXT.caption)}>
             最后更新{' '}
             {runQ.dataUpdatedAt
               ? new Date(runQ.dataUpdatedAt).toLocaleTimeString('zh-CN')
@@ -378,7 +381,7 @@ export default function PlanRunDetailPage() {
             data-testid="plan-run-refresh-btn"
             onClick={refreshAll}
             disabled={isAnyFetching}
-            className="text-xs text-gray-500"
+            className="text-xs text-muted-foreground"
           >
             <RefreshCw
               className={`mr-1 h-3.5 w-3.5 ${isAnyFetching ? 'animate-spin' : ''}`}
@@ -526,7 +529,7 @@ export default function PlanRunDetailPage() {
   // ── Error / invalid states ──
   if (!id || Number.isNaN(id)) {
     return (
-      <div className="flex h-64 items-center justify-center text-sm text-gray-500">
+      <div className={cn('flex h-64 items-center justify-center text-sm', TEXT.subtitle)}>
         <AlertCircle className="mr-2 h-4 w-4" /> 无效 PlanRun ID
       </div>
     );
@@ -558,22 +561,24 @@ export default function PlanRunDetailPage() {
   const showDiag = diagOpen || gateFailed;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-gray-50">
+    <div className={cn('flex h-full flex-col overflow-hidden', SURFACE.page)}>
       {/* Main two-column layout */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
         {/* 窄屏遮罩:点击关闭左栏抽屉 */}
         {leftPanelOpen && (
           <div
             data-testid="left-panel-backdrop"
-            className="fixed inset-x-0 bottom-0 top-20 z-30 bg-black/30 lg:hidden"
+            className="fixed inset-x-0 bottom-0 top-20 z-30 bg-foreground/30 lg:hidden"
             onClick={() => setLeftPanelOpen(false)}
           />
         )}
         {/* 左栏:宽屏固定双栏,窄屏左侧滑出抽屉 */}
         <aside
-          className={`flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-gray-100 bg-white p-4 transition-transform fixed bottom-0 left-0 top-20 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none ${
-            leftPanelOpen ? 'translate-x-0' : '-translate-x-full'
-          } lg:translate-x-0`}
+          className={cn(
+            'flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-card p-4 transition-transform fixed bottom-0 left-0 top-20 z-40 shadow-xl lg:static lg:bottom-auto lg:top-auto lg:z-auto lg:shadow-none',
+            leftPanelOpen ? 'translate-x-0' : '-translate-x-full',
+            'lg:translate-x-0',
+          )}
         >
           {runQ.isLoading ? (
             <Skeleton className="h-36 w-full rounded-xl" />
@@ -624,14 +629,14 @@ export default function PlanRunDetailPage() {
           {stuckJobs.length > 0 && (
             <div
               data-testid="stuck-jobs-banner"
-              className="flex shrink-0 items-start gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900"
+              className={cn('flex shrink-0 items-start gap-2 px-4 py-2.5 text-xs', ALERT_BANNER.warning)}
             >
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
               <div className="min-w-0 space-y-1">
                 <p className="font-semibold">
                   {stuckJobs.length} 个 Job 心跳超时，可能已断开
                 </p>
-                <p className="text-xs text-amber-800/90">
+                <p className="text-xs text-warning/90">
                   后端 recycler 将把超时 Job 标记为 UNKNOWN；grace 窗口内 Agent 可通过 recovery 恢复。
                   设备：
                   {stuckJobs

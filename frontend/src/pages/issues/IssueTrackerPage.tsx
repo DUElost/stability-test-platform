@@ -11,6 +11,8 @@ import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
 import { EmptyState } from '@/components/ui/empty-state';
+import { INTERACTIVE, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 interface RunWithDraft {
   run: PlanRun;
@@ -97,27 +99,27 @@ export default function IssueTrackerPage() {
                 return (
                   <div
                     key={run.id}
-                    className="flex items-start gap-4 p-4 rounded-lg border hover:bg-gray-50 cursor-pointer transition-colors"
+                    className={cn('flex cursor-pointer items-start gap-4 rounded-lg border p-4 transition-colors', INTERACTIVE.hover)}
                     onClick={() => navigate(`/execution/plan-runs/${run.id}`)}
                   >
-                    <AlertCircle className="w-5 h-5 text-orange-500 mt-0.5" />
+                    <AlertCircle className="mt-0.5 h-5 w-5 text-warning" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-medium truncate">{draft?.summary}</span>
                         <StatusBadge kind="priority" status={priority} size="sm" />
                       </div>
-                      <div className="text-sm text-gray-500 mt-1">
+                      <div className={cn('mt-1 text-sm', TEXT.subtitle)}>
                         {draft?.project_key}-{draft?.issue_type} | Plan #{run.plan_id ?? '-'} | Job #{run.id}
                       </div>
-                      <div className="text-sm text-gray-400 mt-1">
+                      <div className={cn('mt-1 text-sm', TEXT.caption)}>
                         {draft?.description ? `${draft.description.substring(0, 100)}...` : '-'}
                       </div>
-                      <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
+                      <div className={cn('mt-2 flex items-center gap-4 text-xs', TEXT.caption)}>
                         <span>标签: {draft?.labels?.join(', ') || '-'}</span>
                         <span>组件: {draft?.component || '-'}</span>
                       </div>
                     </div>
-                    <div className="text-right text-sm text-gray-500">
+                    <div className={cn('text-right text-sm', TEXT.subtitle)}>
                       <div>{formatTime(run.ended_at ?? null)}</div>
                     </div>
                   </div>
@@ -132,7 +134,7 @@ export default function IssueTrackerPage() {
         <CardHeader>
           <CardTitle>说明</CardTitle>
         </CardHeader>
-        <CardContent className="text-sm text-gray-500 space-y-2">
+        <CardContent className={cn('space-y-2 text-sm', TEXT.subtitle)}>
           <p>问题追踪页面展示任务执行后自动生成的 JIRA 草稿。</p>
           <ul className="list-disc list-inside space-y-1">
             <li>草稿基于任务执行结果自动生成</li>

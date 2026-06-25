@@ -8,6 +8,8 @@ import type { EventSeverity, EventStage, PlanRunStatus } from '@/utils/api/types
 import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import PlanRunEventStream from '@/components/plan-run/PlanRunEventStream';
 import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 const PAGE_SIZE = 50;
 const SLOW_REFETCH_MS = 30_000;
@@ -58,7 +60,7 @@ export default function PlanRunLogsPage() {
           variant="ghost"
           size="sm"
           onClick={() => navigate('/execution/plan-runs')}
-          className="-ml-2 text-xs text-gray-500"
+          className="-ml-2 text-xs text-muted-foreground"
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回执行列表
         </Button>
@@ -80,7 +82,7 @@ export default function PlanRunLogsPage() {
 
   if (!id || Number.isNaN(id)) {
     return (
-      <div className="flex h-64 items-center justify-center text-sm text-gray-500">
+      <div className={cn('flex h-64 items-center justify-center text-sm', TEXT.subtitle)}>
         <AlertCircle className="mr-2 h-4 w-4" /> 无效 PlanRun ID
       </div>
     );

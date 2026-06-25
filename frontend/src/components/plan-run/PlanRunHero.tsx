@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Download, X, Loader2, ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -232,7 +232,7 @@ export default function PlanRunHero({
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="例如：资源池整改"
-              className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30"
+              className="w-full rounded-md border border-border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-destructive/30"
             />
           </div>
           <AlertDialogFooter>
@@ -243,7 +243,7 @@ export default function PlanRunHero({
                 setConfirmOpen(false);
                 onAbort?.(reason.trim() || 'aborted_by_user');
               }}
-              className="bg-red-600 text-white hover:bg-red-700"
+              className={cn(buttonVariants({ variant: 'destructive' }))}
             >
               确认中止
             </AlertDialogAction>

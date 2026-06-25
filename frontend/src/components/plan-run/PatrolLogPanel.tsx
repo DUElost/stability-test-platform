@@ -1,5 +1,13 @@
 import { useState, useMemo } from 'react';
 import { ChevronDown, ChevronRight, AlertTriangle, Info, XCircle } from 'lucide-react';
+import {
+  FILTER_CHIP,
+  INTERACTIVE,
+  PATROL_EVENT_SEVERITY,
+  STATUS_CHIP,
+  TEXT,
+} from '@/design-system';
+import { cn } from '@/lib/utils';
 import type { PlanRunEventsPayload, PlanRunTimeline, PlanRunEvent, TimelineStage } from '@/utils/api/types';
 import SectionHeader from './SectionHeader';
 
@@ -18,20 +26,12 @@ interface Props {
 }
 
 const SEVERITY_ICON: Record<string, JSX.Element> = {
-  err:      <XCircle       className="h-3.5 w-3.5 text-red-500"    />,
-  warn:     <AlertTriangle className="h-3.5 w-3.5 text-yellow-500" />,
-  info:     <Info          className="h-3.5 w-3.5 text-blue-400"   />,
-  ok:       <Info          className="h-3.5 w-3.5 text-green-400"  />,
+  err: <XCircle className="h-3.5 w-3.5 text-destructive" />,
+  warn: <AlertTriangle className="h-3.5 w-3.5 text-warning" />,
+  info: <Info className="h-3.5 w-3.5 text-info" />,
+  ok: <Info className="h-3.5 w-3.5 text-success" />,
 };
 
-const SEVERITY_CLS: Record<string, string> = {
-  err:      'bg-red-50    text-red-800   border-red-200',
-  warn:     'bg-yellow-50 text-yellow-800 border-yellow-200',
-  info:     'bg-white      text-gray-700   border-gray-200',
-  ok:       'bg-green-50   text-green-800  border-green-200',
-};
-
-/** Infer patrol cycle index from event timestamp relative to patrol stage start */
 function inferCycle(
   ts: string,
   patrolStage: TimelineStage | undefined,
@@ -62,11 +62,11 @@ function groupByCycle(
 
 function EventRow({ ev }: { ev: PlanRunEvent }) {
   const severity = ev.severity ?? 'info';
-  const cls = SEVERITY_CLS[severity] ?? SEVERITY_CLS.info;
+  const cls = PATROL_EVENT_SEVERITY[severity as keyof typeof PATROL_EVENT_SEVERITY] ?? PATROL_EVENT_SEVERITY.info;
   const icon = SEVERITY_ICON[severity] ?? SEVERITY_ICON.info;
 
   return (
-    <div className={`flex gap-2 rounded border px-2.5 py-1.5 text-xs ${cls}`}>
+    <div className={cn('flex gap-2 rounded border px-2.5 py-1.5 text-xs', cls)}>
       <span className="mt-0.5 shrink-0">{icon}</span>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
@@ -93,19 +93,19 @@ function CycleAccordion({ cycle, events }: { cycle: number; events: PlanRunEvent
   const errorCount = events.filter((e) => e.severity === 'err').length;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-gray-200">
+    <div className="overflow-hidden rounded-lg border">
       <button
-        className="flex w-full items-center gap-2 bg-gray-50 px-3 py-2 text-left hover:bg-gray-100"
+        className={cn('flex w-full items-center gap-2 bg-muted/50 px-3 py-2 text-left', INTERACTIVE.hover)}
         onClick={() => setOpen((o) => !o)}
         data-testid={`cycle-accordion-${cycle}`}
       >
         {open
-          ? <ChevronDown  className="h-3.5 w-3.5 text-gray-400" />
-          : <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
-        <span className="text-xs font-semibold text-gray-700">巡检周期 #{cycle + 1}</span>
-        <span className="text-[10px] text-gray-400">{events.length} 条</span>
+          ? <ChevronDown className={cn('h-3.5 w-3.5', TEXT.subtitle)} />
+          : <ChevronRight className={cn('h-3.5 w-3.5', TEXT.subtitle)} />}
+        <span className={cn('text-xs font-semibold', TEXT.body)}>巡检周期 #{cycle + 1}</span>
+        <span className={cn('text-[10px]', TEXT.subtitle)}>{events.length} 条</span>
         {errorCount > 0 && (
-          <span className="ml-auto rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] text-red-700">
+          <span className={cn('ml-auto rounded-full px-1.5 py-0.5 text-[10px]', STATUS_CHIP.destructive)}>
             {errorCount} 错误
           </span>
         )}
@@ -124,10 +124,10 @@ function CycleAccordion({ cycle, events }: { cycle: number; events: PlanRunEvent
 const SEVERITIES = ['ALL', 'ok', 'info', 'warn', 'err'];
 const SEVERITY_LABELS: Record<string, string> = {
   ALL: 'ALL',
-  ok:   'OK',
+  ok: 'OK',
   info: 'INFO',
   warn: 'WARN',
-  err:  'ERR',
+  err: 'ERR',
 };
 
 export default function PatrolLogPanel({
@@ -144,7 +144,6 @@ export default function PatrolLogPanel({
   deviceFilter = '',
 }: Props) {
   const rawEvents = useMemo<PlanRunEvent[]>(() => events?.events ?? [], [events]);
-
   const totalCount = events?.total;
 
   const patrolStage = useMemo(
@@ -163,25 +162,24 @@ export default function PatrolLogPanel({
   );
 
   const cycles = useMemo(() => Array.from(cycleMap.keys()).sort((a, b) => a - b), [cycleMap]);
-
   const totalPages = totalCount != null ? Math.ceil(totalCount / pageSize) : null;
 
   return (
     <div className="space-y-3" data-testid="patrol-log-panel">
       <SectionHeader title="巡检日志" color="amber" />
 
-      {/* 过滤行 */}
       <div className="flex flex-wrap gap-2">
         <div className="flex gap-1">
           {SEVERITIES.map((s) => (
             <button
               key={s}
               onClick={() => onSeverityChange?.(s)}
-              className={`rounded px-2 py-0.5 text-[10px] font-medium ${
+              className={cn(
+                'rounded px-2 py-0.5 text-[10px] font-medium',
                 severityFilter === s
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
+                  ? 'bg-primary text-primary-foreground'
+                  : cn('bg-muted', TEXT.subtitle, INTERACTIVE.hover),
+              )}
               data-testid={`severity-btn-${s}`}
             >
               {SEVERITY_LABELS[s] ?? s}
@@ -193,22 +191,22 @@ export default function PatrolLogPanel({
           placeholder="过滤设备 serial"
           value={deviceFilter}
           onChange={(e) => onDeviceChange?.(e.target.value)}
-          className="min-w-[120px] rounded border px-2 py-0.5 text-[10px] focus:outline-none focus:ring-2 focus:ring-blue-300"
+          className="min-w-[120px] rounded border bg-card px-2 py-0.5 text-[10px] focus:outline-none focus:ring-2 focus:ring-primary/20"
           data-testid="device-filter-input"
         />
       </div>
 
       {isLoading && (
-        <div className="flex h-20 items-center justify-center text-xs text-gray-400">加载中…</div>
+        <div className={cn('flex h-20 items-center justify-center text-xs', TEXT.subtitle)}>加载中…</div>
       )}
       {isError && (
-        <div className="flex h-20 items-center justify-center text-xs text-red-500">加载失败</div>
+        <div className="flex h-20 items-center justify-center text-xs text-destructive">加载失败</div>
       )}
 
       {!isLoading && !isError && (
         <>
           {cycles.length === 0 && (
-            <div className="flex h-16 items-center justify-center text-xs text-gray-400">
+            <div className={cn('flex h-16 items-center justify-center text-xs', TEXT.subtitle)}>
               暂无巡检日志
             </div>
           )}
@@ -222,24 +220,23 @@ export default function PatrolLogPanel({
             ))}
           </div>
 
-          {/* 分页 */}
           {totalPages != null && totalPages > 1 && (
-            <div className="flex items-center justify-center gap-2">
+            <div className={cn('flex items-center justify-center gap-2')}>
               <button
                 disabled={page <= 1}
                 onClick={() => onPageChange?.(page - 1)}
-                className="rounded px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                className={cn('rounded px-2 py-1 text-xs disabled:opacity-40', FILTER_CHIP.idle, INTERACTIVE.hover)}
                 data-testid="patrol-prev-page"
               >
                 上一页
               </button>
-              <span className="text-[10px] text-gray-500">
+              <span className={cn('text-[10px]', TEXT.subtitle)}>
                 {page} / {totalPages}
               </span>
               <button
                 disabled={page >= totalPages}
                 onClick={() => onPageChange?.(page + 1)}
-                className="rounded px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-40"
+                className={cn('rounded px-2 py-1 text-xs disabled:opacity-40', FILTER_CHIP.idle, INTERACTIVE.hover)}
                 data-testid="patrol-next-page"
               >
                 下一页

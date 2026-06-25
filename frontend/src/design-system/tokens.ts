@@ -223,6 +223,64 @@ export const PANEL = {
   sectionLabel: 'text-[11px] text-muted-foreground',
 } as const;
 
+/** 表单控件 */
+export const FORM = {
+  label: 'block text-sm font-medium text-foreground mb-1',
+  hint: 'mt-1 text-xs text-muted-foreground',
+  error: 'mt-1 text-sm text-destructive',
+  input:
+    'w-full px-3 py-2 border border-border rounded-md bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring transition-all',
+  inputSm:
+    'w-full rounded-lg border border-border py-1.5 pl-7 pr-2 text-xs bg-background focus:outline-none focus:ring-2 focus:ring-ring',
+  inputInvalid: 'border-destructive/50 focus:ring-destructive/30',
+  select:
+    'border border-border rounded-md py-2 pl-3 pr-8 focus:outline-none focus:ring-2 focus:ring-ring bg-background text-sm min-w-[140px]',
+  selectSm:
+    'rounded-lg border border-border px-2 py-1.5 text-xs bg-background focus:outline-none focus:ring-2 focus:ring-ring',
+  textarea:
+    'w-full px-3 py-2 border border-border rounded-lg bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono',
+} as const;
+
+/** 模态框 */
+export const MODAL = {
+  overlay: 'fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/50',
+  panel: 'bg-card rounded-lg shadow-xl w-full max-w-md',
+  panelLg: 'bg-card rounded-xl shadow-xl w-full max-w-lg mx-4 p-6',
+  header: 'flex items-center justify-between px-6 py-4 border-b border-border',
+  title: 'text-lg font-semibold text-foreground',
+  closeButton: 'text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50',
+} as const;
+
+/** 侧边列表项 */
+export const LIST_ITEM = {
+  base: 'w-full text-left transition-colors',
+  active: 'bg-primary/10',
+  idle: 'hover:bg-accent',
+  divider: 'divide-y divide-border',
+  sectionBorder: 'border-b border-border',
+} as const;
+
+export function listItemClass(active: boolean, extra?: string): string {
+  return cn(LIST_ITEM.base, active ? LIST_ITEM.active : LIST_ITEM.idle, extra);
+}
+
+/** 日志行级别着色 */
+export const LOG_LEVEL = {
+  fatal: 'text-destructive font-bold bg-destructive/10',
+  error: 'text-destructive',
+  warn: 'text-warning',
+  debug: 'text-muted-foreground',
+  info: 'text-foreground',
+  default: 'text-muted-foreground',
+  highlight: 'rounded bg-warning/30 px-0.5 text-warning',
+  rowError: 'text-destructive',
+  rowWarn: 'text-warning',
+  rowDefault: 'text-muted-foreground',
+  tagJob: 'text-primary',
+  tagStep: 'text-info',
+  tagLevelOk: 'text-success',
+} as const;
+
 /** 筛选 Chip（设备总览 / 时间线事件过滤） */
 export const FILTER_CHIP = {
   active: 'bg-primary/10 font-semibold text-primary',
@@ -337,3 +395,45 @@ export const STEPPER_STAGE = {
   pending: { border: 'border-border', bg: 'bg-card', icon: 'text-muted-foreground/40' },
   current: { border: 'border-primary/30', bg: 'bg-card', icon: 'text-primary' },
 } as const;
+
+/** PlanRun KPI 横条圆点 / 数值 */
+export const KPI_BAR_DOT = {
+  default: 'bg-muted-foreground/40',
+  warning: 'bg-warning',
+  destructive: 'bg-destructive',
+  info: 'bg-info',
+} as const;
+
+/** Plan 链节点 Chip（面包屑） */
+export const CHAIN_CHIP = {
+  pending: 'border-border bg-card text-muted-foreground',
+  current: 'border-warning/30 bg-warning/5 text-foreground ring-2 ring-warning/20',
+  success: 'border-success/30 bg-card text-success',
+  failed: 'border-destructive/30 bg-card text-destructive',
+  hover: 'hover:bg-muted/50',
+  currentTag: 'bg-warning/20 text-warning',
+} as const;
+
+/** Plan 链侧栏圆点 */
+export const CHAIN_DOT = {
+  pending: 'border-dashed border-border bg-card',
+  running: 'border-warning bg-warning/10',
+  done: 'border-success bg-success/10',
+  failed: 'border-destructive bg-destructive/10',
+  connector: 'bg-border',
+} as const;
+
+/** 巡检日志事件严重度行 */
+export const PATROL_EVENT_SEVERITY = {
+  err: 'bg-destructive/10 text-destructive border-destructive/25',
+  warn: 'bg-warning/10 text-warning border-warning/25',
+  info: 'bg-card text-foreground border-border',
+  ok: 'bg-success/10 text-success border-success/25',
+} as const;
+
+/** 列表页骨架屏 */
+export const SKELETON_BLOCK = 'bg-muted animate-pulse rounded-lg';
+
+/** 次要工具按钮（去重报告等） */
+export const TOOL_BTN =
+  'inline-flex items-center gap-1 rounded border bg-card px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-50';

@@ -3,6 +3,9 @@ import { api } from '@/utils/api';
 import { Loader2, Shield } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 interface AuditLogEntry {
   id: number;
@@ -100,43 +103,43 @@ export default function AuditLogPage() {
 
       {loading ? (
         <div className="flex items-center justify-center h-64">
-          <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+          <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.subtitle)} />
         </div>
       ) : logs.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-          <Shield className="w-12 h-12 mx-auto mb-3 text-gray-300" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">暂无审计记录</h3>
-          <p className="text-sm text-gray-400">操作日志将在此处记录</p>
+        <div className={cn(PANEL.root, 'p-12 text-center')}>
+          <Shield className={cn('w-12 h-12 mx-auto mb-3', TEXT.subtle)} />
+          <h3 className={cn('text-lg font-medium mb-2', TEXT.heading)}>暂无审计记录</h3>
+          <p className={cn('text-sm', TEXT.subtitle)}>操作日志将在此处记录</p>
         </div>
       ) : (
         <>
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className={cn(PANEL.root, 'overflow-hidden')}>
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-gray-100 bg-gray-50/50">
-                  <th className="text-left px-4 py-3 font-medium text-gray-500">时间</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500">用户</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500">操作</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500">资源</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-500">IP</th>
+                <tr className="border-b border-border bg-muted/50">
+                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>时间</th>
+                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>用户</th>
+                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>操作</th>
+                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>资源</th>
+                  <th className={cn('text-left px-4 py-3 font-medium', TEXT.subtitle)}>IP</th>
                 </tr>
               </thead>
               <tbody>
                 {logs.map((log) => (
-                  <tr key={log.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                    <td className="px-4 py-3 text-xs text-gray-500">
+                  <tr key={log.id} className="border-b border-border/50 hover:bg-muted/50">
+                    <td className={cn('px-4 py-3 text-xs', TEXT.subtitle)}>
                       {new Date(log.timestamp).toLocaleString()}
                     </td>
-                    <td className="px-4 py-3 text-gray-700">{log.username || '-'}</td>
+                    <td className={cn('px-4 py-3', TEXT.body)}>{log.username || '-'}</td>
                     <td className="px-4 py-3">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                      <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium', STATUS_CHIP.primary)}>
                         {log.action}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-600">
+                    <td className={cn('px-4 py-3', TEXT.subtitle)}>
                       {log.resource_type}{log.resource_id ? ` #${log.resource_id}` : ''}
                     </td>
-                    <td className="px-4 py-3 text-xs text-gray-400 font-mono">{log.ip_address || '-'}</td>
+                    <td className={cn('px-4 py-3 text-xs font-mono', TEXT.subtitle)}>{log.ip_address || '-'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -144,24 +147,26 @@ export default function AuditLogPage() {
           </div>
 
           {/* Pagination */}
-          <div className="flex items-center justify-between text-sm text-gray-500">
+          <div className={cn('flex items-center justify-between text-sm', TEXT.subtitle)}>
             <span>共 {total} 条记录</span>
-            <div className="flex gap-2">
-              <button
+            <div className="flex gap-2 items-center">
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setPage(p => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="px-3 py-1 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50"
               >
                 上一页
-              </button>
+              </Button>
               <span className="px-3 py-1">第 {page + 1} 页</span>
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setPage(p => p + 1)}
                 disabled={(page + 1) * pageSize >= total}
-                className="px-3 py-1 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50"
               >
                 下一页
-              </button>
+              </Button>
             </div>
           </div>
         </>

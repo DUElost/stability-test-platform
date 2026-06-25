@@ -500,11 +500,10 @@ const DonutChart = memo(function DonutChart({
           return (
             <span
               key={`legend-${item.key}`}
-              className={`inline-flex items-center gap-1 text-xs cursor-pointer transition rounded px-1.5 py-0.5 ${
-                isActive
-                  ? 'bg-slate-100 text-slate-900'
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
+              className={cn(
+                'inline-flex items-center gap-1 text-xs cursor-pointer transition rounded px-1.5 py-0.5',
+                isActive ? 'bg-muted text-foreground' : cn(TEXT.subtitle, 'hover:text-foreground'),
+              )}
               onMouseEnter={() => setActiveIndex(index)}
               onMouseLeave={() => setActiveIndex(null)}
             >
@@ -590,7 +589,7 @@ export default function AnomalyDashboard({
       )}
 
       {isError && (
-        <div className="flex h-28 items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 text-sm text-rose-700">
+        <div className={cn('flex h-28 items-center justify-center gap-2 rounded-2xl text-sm', ALERT_BANNER.destructive)}>
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>异常数据加载失败，请稍后重试</span>
         </div>
@@ -602,39 +601,39 @@ export default function AnomalyDashboard({
             <SummaryCard
               label={`${primaryLabel}异常总量`}
               value={String(currentRun.total_events)}
-              accent="text-slate-900"
+              accent={KPI_TONE.default.value}
             />
             <SummaryCard
               label="影响设备数"
               value={String(currentRun.affected_device_count)}
-              accent="text-sky-700"
+              accent={KPI_TONE.info.value}
             />
             <SummaryCard
               label="Top 包名"
               value={formatCompactValue(currentRun.top_package_name)}
-              accent="text-amber-700"
+              accent={KPI_TONE.warning.value}
             />
             <SummaryCard
               label="Top 类型"
               value={formatCompactValue(currentRun.top_subtype)}
-              accent="text-rose-700"
+              accent={KPI_TONE.destructive.value}
             />
           </div>
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-            <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-4 text-sm font-semibold text-slate-900">
+            <div className={DASHBOARD_SUMMARY_CARD.panel}>
+              <div className={cn('mb-4 text-sm font-semibold', TEXT.heading)}>
                 {`${primaryLabel} · 细分类型占比`}
               </div>
               {currentRun.total_events > 0 ? (
                 <DonutChart
                   items={chartDistribution}
                   total={chartTotal}
-                  tone="text-slate-900"
+                  tone={KPI_TONE.default.value}
                   chartTestId="current-run-pie-chart"
                 />
               ) : (
-                <div className="flex h-32 items-center justify-center text-sm text-slate-400">
+                <div className={cn('flex h-32 items-center justify-center text-sm', TEXT.subtitle)}>
                   {supportsOriginSplit
                     ? '当前范围内未发现新增 AEE / Vendor AEE 异常'
                     : '当前范围内未发现 AEE / Vendor AEE 异常'}
@@ -642,11 +641,11 @@ export default function AnomalyDashboard({
               )}
             </div>
 
-            <div className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-1 text-sm font-semibold text-slate-900">
+            <div className={DASHBOARD_SUMMARY_CARD.panel}>
+              <div className={cn('mb-1 text-sm font-semibold', TEXT.heading)}>
                 {`${primaryLabel} · 包名榜`}
               </div>
-              <div className="mb-4 text-[11px] text-slate-400">
+              <div className={cn('mb-4 text-[11px]', TEXT.subtitle)}>
                 点击包名筛选饼图
               </div>
               {currentRun.package_ranking.length > 0 ? (
@@ -655,16 +654,9 @@ export default function AnomalyDashboard({
                     const active = selectedPackageRow?.package_name === row.package_name;
                     const isUnknown = row.package_name === 'unknown';
                     const dominantColor = isUnknown
-                      ? '#94a3b8'
+                      ? CHART_COLORS.muted
                       : packageDominantColor(row);
-                    const rankCls =
-                      index === 0
-                        ? 'text-amber-500 font-bold text-sm'
-                        : index === 1
-                          ? 'text-slate-500 font-bold text-sm'
-                          : index === 2
-                            ? 'text-amber-700 font-semibold'
-                            : 'text-slate-400';
+                    const rankCls = packageRankClass(index);
 
                     return (
                       <button
@@ -676,34 +668,35 @@ export default function AnomalyDashboard({
                             current === row.package_name ? null : row.package_name,
                           )
                         }
-                        className={`group flex w-full items-stretch rounded-xl border text-left transition-all duration-200 ${
-                          active
-                            ? 'border-slate-300 bg-slate-50 ring-1 ring-slate-300'
-                            : isUnknown
-                              ? 'border-dashed border-slate-200 bg-slate-50/50 hover:bg-slate-50'
-                              : 'border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300'
-                        }`}
+                        className={cn(
+                          'group flex w-full items-stretch rounded-xl border text-left transition-all duration-200',
+                          active ? PACKAGE_ROW.active
+                            : isUnknown ? PACKAGE_ROW.unknown
+                            : PACKAGE_ROW.default,
+                        )}
                       >
                         <div
-                          className={`shrink-0 w-1 rounded-l-xl transition-all duration-200 ${
-                            active ? 'w-1.5' : 'group-hover:w-1.5'
-                          }`}
+                          className={cn(
+                            'shrink-0 w-1 rounded-l-xl transition-all duration-200',
+                            active ? 'w-1.5' : 'group-hover:w-1.5',
+                          )}
                           style={{ backgroundColor: dominantColor }}
                         />
                         <div className="flex-1 min-w-0 px-3 py-2 flex items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className={`font-mono tabular-nums ${rankCls}`}>
+                              <span className={cn('font-mono tabular-nums', rankCls)}>
                                 #{index + 1}
                               </span>
                               <span
-                                className={`truncate text-sm ${
+                                className={cn(
+                                  'truncate text-sm',
                                   isUnknown
-                                    ? 'italic text-slate-400'
+                                    ? cn('italic', TEXT.subtitle)
                                     : active
-                                      ? 'font-semibold text-slate-900'
-                                      : 'font-medium text-slate-700'
-                                }`}
+                                      ? cn('font-semibold', TEXT.heading)
+                                      : cn('font-medium', TEXT.body),
+                                )}
                               >
                                 {isUnknown ? '未知进程' : row.package_name}
                               </span>
@@ -714,21 +707,16 @@ export default function AnomalyDashboard({
                           </div>
                           <div className="shrink-0 text-right transition-all duration-300">
                             <div
-                              className={`text-lg font-bold transition-colors duration-200 ${
-                                active
-                                  ? 'text-slate-900'
-                                  : isUnknown
-                                    ? 'text-slate-400'
-                                    : 'text-slate-800'
-                              }`}
+                              className={cn(
+                                'text-lg font-bold transition-colors duration-200',
+                                active ? TEXT.heading
+                                  : isUnknown ? TEXT.subtitle
+                                  : TEXT.body,
+                              )}
                             >
                               {row.total_count}
                             </div>
-                            <div
-                              className={`text-[11px] ${
-                                active ? 'text-slate-500' : 'text-slate-400'
-                              }`}
-                            >
+                            <div className={cn('text-[11px]', active ? TEXT.subtitle : 'text-muted-foreground/70')}>
                               {row.affected_device_count} 台设备
                             </div>
                             <button
@@ -740,7 +728,7 @@ export default function AnomalyDashboard({
                                   crashDetailPackage === row.package_name ? null : row.package_name,
                                 );
                               }}
-                              className="mt-1 inline-flex items-center gap-0.5 text-[10px] font-medium text-sky-600 hover:text-sky-800"
+                              className="mt-1 inline-flex items-center gap-0.5 text-[10px] font-medium text-info hover:text-info/80"
                             >
                               查看 {row.total_count} 条详情
                               <ChevronRight className="h-2.5 w-2.5" />
@@ -764,54 +752,58 @@ export default function AnomalyDashboard({
                     <button
                       type="button"
                       onClick={() => setPackageDrawerOpen(true)}
-                      className="w-full rounded-xl border border-dashed border-slate-300 py-2 text-xs font-medium text-slate-500 hover:border-slate-400 hover:text-slate-700 transition"
+                      className={cn(
+                        'w-full rounded-xl border border-dashed py-2 text-xs font-medium transition',
+                        TEXT.subtitle,
+                        'hover:border-border hover:text-foreground',
+                      )}
                     >
                       查看全部 ({currentRun.package_ranking.length})
                     </button>
                   )}
                 </div>
               ) : (
-                <div className="flex h-32 items-center justify-center text-sm text-slate-400">
+                <div className={cn('flex h-32 items-center justify-center text-sm', TEXT.subtitle)}>
                   当前范围内暂无异常包名数据
                 </div>
               )}
             </div>
           </div>
 
-          <div className="rounded-[24px] border border-slate-200 bg-slate-100/80 p-4">
-            <div className="mb-4 text-sm font-semibold text-slate-700">运行前遗留</div>
+          <div className={DASHBOARD_SUMMARY_CARD.sectionMuted}>
+            <div className={cn('mb-4 text-sm font-semibold', TEXT.body)}>运行前遗留</div>
             {supportsOriginSplit ? (
               preexisting.total_events > 0 ? (
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-center">
                   <DonutChart
                     items={preexistingDistribution}
                     total={preexistingTotal}
-                    tone="text-slate-700"
+                    tone={KPI_TONE.default.label}
                     chartTestId="preexisting-pie-chart"
                   />
                   <div className="grid gap-3 sm:grid-cols-3">
                     <SummaryCard
                       label="遗留总量"
                       value={String(preexisting.total_events)}
-                      accent="text-slate-800"
+                      accent={KPI_TONE.default.value}
                     />
                     <SummaryCard
                       label="Top 包名"
                       value={formatCompactValue(preexisting.top_package_name)}
-                      accent="text-slate-700"
+                      accent={KPI_TONE.default.label}
                     />
                     <SummaryCard
                       label="Top 类型"
                       value={formatCompactValue(preexisting.top_subtype)}
-                      accent="text-slate-700"
+                      accent={KPI_TONE.default.label}
                     />
                   </div>
                 </div>
               ) : (
-                <div className="text-sm text-slate-500">运行开始前无遗留异常记录</div>
+                <div className={cn('text-sm', TEXT.subtitle)}>运行开始前无遗留异常记录</div>
               )
             ) : (
-              <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 px-4 py-3 text-sm text-slate-500">
+              <div className={cn('rounded-2xl border border-dashed bg-card/70 px-4 py-3 text-sm', TEXT.subtitle)}>
                 该计划运行未记录新增/遗留来源标记，无法拆分运行前遗留
               </div>
             )}
@@ -845,34 +837,30 @@ function CrashDetailPanel({
   return (
     <div
       data-testid="crash-detail-panel"
-      className="rounded-xl border border-sky-200 bg-sky-50/50 p-3"
+      className="rounded-xl border border-info/25 bg-info/5 p-3"
     >
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold text-slate-700">
+        <span className={cn('text-xs font-semibold', TEXT.body)}>
           {packageName === 'unknown' ? '未知进程' : packageName} · Crash 详情
         </span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
-        >
+        <button type="button" onClick={onClose} className={DRAWER.closeBtn}>
           <X className="h-3 w-3" />
         </button>
       </div>
       {isLoading ? (
-        <div className="py-3 text-center text-xs text-slate-400">加载中…</div>
+        <div className={cn('py-3 text-center text-xs', TEXT.subtitle)}>加载中…</div>
       ) : !details || details.length === 0 ? (
-        <div className="py-3 text-center text-xs text-slate-400">暂无详情数据</div>
+        <div className={cn('py-3 text-center text-xs', TEXT.subtitle)}>暂无详情数据</div>
       ) : (
         <div className="max-h-48 space-y-1 overflow-y-auto">
           {details.map((d, i) => (
             <div
               key={i}
-              className="flex items-center gap-2 rounded border border-slate-200 bg-white px-2 py-1 text-[11px]"
+              className="flex items-center gap-2 rounded border bg-card px-2 py-1 text-[11px]"
             >
-              <span className="font-mono text-slate-500">{d.subtype}</span>
-              <span className="text-slate-400">{d.device_serial}</span>
-              <span className="text-slate-300">{d.detected_at}</span>
+              <span className={cn('font-mono', TEXT.subtitle)}>{d.subtype}</span>
+              <span className="text-muted-foreground/70">{d.device_serial}</span>
+              <span className="text-muted-foreground/50">{d.detected_at}</span>
             </div>
           ))}
         </div>

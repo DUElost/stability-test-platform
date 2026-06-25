@@ -11,16 +11,10 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import type { PlanRun, PlanRunStatus } from '@/utils/api/types';
+import { PLAN_RUN_STATUS_PILL, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
+import type { PlanRun } from '@/utils/api/types';
 import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
-
-const STATUS_CLS: Record<PlanRunStatus, string> = {
-  RUNNING: 'bg-orange-100 text-orange-800 ring-orange-300',
-  SUCCESS: 'bg-green-100 text-green-800 ring-green-300',
-  PARTIAL_SUCCESS: 'bg-yellow-100 text-yellow-800 ring-yellow-300',
-  FAILED: 'bg-red-100 text-red-800 ring-red-300',
-  DEGRADED: 'bg-purple-100 text-purple-800 ring-purple-300',
-};
 
 function formatDuration(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '—';
@@ -38,7 +32,6 @@ interface Props {
   isAborting?: boolean;
   onAbort?: (reason: string) => void;
   onExportReport?: () => void;
-  /** Override "now" for deterministic tests. */
   now?: Date;
 }
 
@@ -53,7 +46,6 @@ export default function PlanRunTopbar({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [reason, setReason] = useState('');
 
-  // Tick once a second to keep the run-time live for non-terminal runs.
   const [tick, setTick] = useState(0);
   const isTerminal = !!run && isPlanRunTerminal(run.status);
   useEffect(() => {
@@ -67,39 +59,41 @@ export default function PlanRunTopbar({
     const start = new Date(run.started_at).getTime();
     const end = run.ended_at ? new Date(run.ended_at).getTime() : (now ?? new Date()).getTime();
     return formatDuration(Math.max(0, (end - start) / 1000));
-    // tick is intentionally listed to refresh non-terminal duration each second.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, now, tick]);
 
   const pill = run ? PLAN_RUN_PILL[run.status] : null;
-  const pillCls = run ? STATUS_CLS[run.status] : '';
+  const pillCls = run ? PLAN_RUN_STATUS_PILL[run.status as keyof typeof PLAN_RUN_STATUS_PILL] : '';
 
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-gradient-to-b from-white to-gray-50 px-4 py-2.5 shadow-sm">
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border bg-gradient-to-b from-card to-muted/30 px-4 py-2.5 shadow-sm">
       <div className="flex items-center gap-1.5">
-        <span className="text-sm font-bold tracking-wide text-blue-600">⬢ STP</span>
+        <span className="text-sm font-bold tracking-wide text-primary">⬢ STP</span>
       </div>
-      <div className="flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+      <div className={cn('flex flex-wrap items-center gap-1.5 text-xs', TEXT.subtitle)}>
         <span>编排</span>
-        <span className="text-gray-300">/</span>
+        <span className="text-muted-foreground/50">/</span>
         <span>{planName ? `Plan #${run?.plan_id ?? ''} · ${planName}` : `Plan #${run?.plan_id ?? '-'}`}</span>
-        <span className="text-gray-300">/</span>
-        <span className="font-semibold text-gray-900">PlanRun #{run?.id ?? '-'}</span>
+        <span className="text-muted-foreground/50">/</span>
+        <span className={cn('font-semibold', TEXT.heading)}>PlanRun #{run?.id ?? '-'}</span>
       </div>
 
       <div className="ml-auto flex items-center gap-2">
         {pill && (
           <span
             data-testid="plan-run-status-pill"
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold ring-1 ring-inset ${pillCls}`}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold ring-1 ring-inset',
+              pillCls,
+            )}
           >
             <pill.Icon
-              className={`h-3 w-3 ${run?.status === 'RUNNING' ? 'animate-spin' : ''}`}
+              className={cn('h-3 w-3', run?.status === 'RUNNING' && 'animate-spin')}
             />
             {pill.label}
             {runDuration && (
               <>
-                <span className="text-gray-400">·</span>
+                <span className="text-muted-foreground/70">·</span>
                 <span data-testid="plan-run-duration" className="font-mono">
                   {runDuration}
                 </span>
@@ -151,7 +145,7 @@ export default function PlanRunTopbar({
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label className={cn('block text-sm font-medium', TEXT.body)}>
                     中止原因(可选)
                   </label>
                   <input
@@ -159,7 +153,7 @@ export default function PlanRunTopbar({
                     value={reason}
                     onChange={(e) => setReason(e.target.value)}
                     placeholder="例如:资源池整改"
-                    className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500/30"
+                    className="w-full rounded-md border bg-card px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-destructive/30"
                   />
                 </div>
                 <AlertDialogFooter>
@@ -170,7 +164,7 @@ export default function PlanRunTopbar({
                       setConfirmOpen(false);
                       onAbort?.(reason.trim() || 'aborted_by_user');
                     }}
-                    className="bg-red-600 text-white hover:bg-red-700"
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   >
                     确认中止
                   </AlertDialogAction>

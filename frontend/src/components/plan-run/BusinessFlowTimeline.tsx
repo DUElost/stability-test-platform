@@ -141,8 +141,8 @@ function PrecheckRow({
   const isFailed = phase === 'failed' || finalResult === 'failed' || failedHosts > 0;
 
   let nodeIcon: React.ElementType = Clock;
-  let nodeCls = TIMELINE_NODE.precheck.node;
-  let cardCls = TIMELINE_NODE.precheck.card;
+  let nodeCls: string = TIMELINE_NODE.precheck.node;
+  let cardCls: string = TIMELINE_NODE.precheck.card;
   let statusText = '等待中';
   let statusColor = 'text-info';
 
@@ -248,9 +248,9 @@ function StageRow({
   onClick: () => void;
 }) {
   let nodeIcon: React.ElementType = Circle;
-  let nodeCls = TIMELINE_NODE.idle.node;
-  let cardCls = TIMELINE_NODE.idle.card;
-  let codeCls = TIMELINE_NODE.idle.badge;
+  let nodeCls: string = TIMELINE_NODE.idle.node;
+  let cardCls: string = TIMELINE_NODE.idle.card;
+  let codeCls: string = TIMELINE_NODE.idle.badge;
 
   if (stage.status === 'completed') {
     nodeIcon = Check;

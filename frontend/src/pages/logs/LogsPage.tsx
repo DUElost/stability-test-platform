@@ -13,8 +13,21 @@ import {
   ChevronsUp,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/layout';
 import { formatLocalDateTime, parseIsoToDate } from '@/utils/time';
+import {
+  FORM,
+  LIST_ITEM,
+  LOG_LEVEL,
+  PANEL,
+  SEGMENTED,
+  STATUS_CHIP,
+  TEXT,
+  TOOL_BTN,
+  listItemClass,
+} from '@/design-system';
+import { cn } from '@/lib/utils';
 
 interface DisplayLog extends RuntimeLogEntry {
   key: string;
@@ -62,7 +75,7 @@ function highlightLogText(text: string): ReactNode[] {
   const parts = text.split(/(\bFATAL\b|\bCRASH\b|\bANR\b)/gi);
   return parts.map((part, index) => (
     /^(FATAL|CRASH|ANR)$/i.test(part)
-      ? <mark key={index} className="rounded bg-amber-200 px-0.5 text-amber-950">{part}</mark>
+      ? <mark key={index} className={LOG_LEVEL.highlight}>{part}</mark>
       : <span key={index}>{part}</span>
   ));
 }
@@ -442,17 +455,18 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
             title="日志总览"
             subtitle={`${isLiveMode ? (isConnected ? '实时连接中' : '实时未连接') : '历史聚合模式'}${selectedRunId ? ` | Job: #${selectedRunId}` : ''}`}
             action={
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => {
                   void loadTasks();
                   void loadRuns(selectedTaskId);
                   void handleRefreshLogs();
                 }}
-                className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 <RefreshCw className="h-4 w-4" />
                 刷新
-              </button>
+              </Button>
             }
           />
         </div>
@@ -461,18 +475,18 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
       <div className="flex min-h-0 flex-1 gap-4">
         <div className="w-80 flex-shrink-0">
           <Card className="flex h-full flex-col overflow-hidden">
-            <div className="border-b border-gray-100 p-3">
+            <div className={cn('p-3', LIST_ITEM.sectionBorder)}>
               <div className="flex items-center justify-between">
-                <h3 className="font-medium text-gray-900">任务视图</h3>
-                <span className="text-xs text-gray-400">{plans.length}</span>
+                <h3 className={cn('font-medium', TEXT.heading)}>任务视图</h3>
+                <span className={cn('text-xs', TEXT.subtitle)}>{plans.length}</span>
               </div>
               <div className="relative mt-2">
-                <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                <Search className={cn('absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2', TEXT.subtitle)} />
                 <input
                   value={taskSearch}
                   onChange={(e) => setTaskSearch(e.target.value)}
                   placeholder="搜索工作流"
-                  className="w-full rounded-lg border border-gray-300 py-1.5 pl-7 pr-2 text-xs focus:border-slate-500 focus:outline-none"
+                  className={FORM.inputSm}
                 />
               </div>
             </div>
@@ -481,37 +495,33 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
               <button
                 type="button"
                 onClick={() => setSelectedTaskId(null)}
-                className={`w-full border-b border-gray-100 px-4 py-3 text-left text-sm transition-colors ${
-                  selectedTaskId === null ? 'bg-slate-50' : 'hover:bg-gray-50'
-                }`}
+                className={listItemClass(selectedTaskId === null, cn('border-b px-4 py-3 text-sm', LIST_ITEM.sectionBorder))}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-medium text-gray-900">全部任务</span>
-                  <Database className="h-4 w-4 text-gray-400" />
+                  <span className={cn('font-medium', TEXT.heading)}>全部任务</span>
+                  <Database className={cn('h-4 w-4', TEXT.subtitle)} />
                 </div>
-                <p className="mt-1 text-xs text-gray-500">跨任务聚合日志</p>
+                <p className={cn('mt-1 text-xs', TEXT.subtitle)}>跨任务聚合日志</p>
               </button>
 
               {taskLoading ? (
-                <div className="p-4 text-center text-sm text-gray-400">加载中...</div>
+                <div className={cn('p-4 text-center text-sm', TEXT.subtitle)}>加载中...</div>
               ) : filteredTasks.length === 0 ? (
-                <div className="p-4 text-center text-sm text-gray-400">无匹配任务</div>
+                <div className={cn('p-4 text-center text-sm', TEXT.subtitle)}>无匹配任务</div>
               ) : (
-                <div className="divide-y divide-gray-100">
+                <div className={LIST_ITEM.divider}>
                   {filteredTasks.map((wf) => (
                     <button
                       key={wf.id}
                       type="button"
                       onClick={() => setSelectedTaskId(wf.id)}
-                      className={`w-full px-4 py-3 text-left transition-colors ${
-                        selectedTaskId === wf.id ? 'bg-blue-50' : 'hover:bg-gray-50'
-                      }`}
+                      className={listItemClass(selectedTaskId === wf.id, 'w-full px-4 py-3')}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="truncate text-sm font-medium text-gray-900">{wf.name}</span>
+                        <span className={cn('truncate text-sm font-medium', TEXT.heading)}>{wf.name}</span>
                       </div>
                       {wf.description && (
-                        <div className="mt-1 text-[11px] text-gray-500 truncate">{wf.description}</div>
+                        <div className={cn('mt-1 truncate text-[11px]', TEXT.subtitle)}>{wf.description}</div>
                       )}
                     </button>
                   ))}
@@ -523,27 +533,27 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
 
         <div className="w-72 flex-shrink-0">
           <Card className="flex h-full flex-col overflow-hidden">
-            <div className="border-b border-gray-100 p-3">
+            <div className={cn('p-3', LIST_ITEM.sectionBorder)}>
               <div className="flex items-center justify-between">
-                <h3 className="font-medium text-gray-900">执行节点</h3>
-                <span className="text-xs text-gray-400">{jobs.length}</span>
+                <h3 className={cn('font-medium', TEXT.heading)}>执行节点</h3>
+                <span className={cn('text-xs', TEXT.subtitle)}>{jobs.length}</span>
               </div>
               <div className="mt-2">
-                <div className="mb-1 flex items-center justify-between text-xs text-gray-500">
+                <div className={cn('mb-1 flex items-center justify-between text-xs', TEXT.subtitle)}>
                   <span>整体进度</span>
                   <span>{overallProgress}%</span>
                 </div>
-                <div className="h-1.5 w-full rounded-full bg-gray-100">
-                  <div className="h-1.5 rounded-full bg-slate-600" style={{ width: `${overallProgress}%` }} />
+                <div className="h-1.5 w-full rounded-full bg-muted">
+                  <div className="h-1.5 rounded-full bg-primary" style={{ width: `${overallProgress}%` }} />
                 </div>
               </div>
               <div className="relative mt-2">
-                <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                <Search className={cn('absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2', TEXT.subtitle)} />
                 <input
                   value={runSearch}
                   onChange={(e) => setRunSearch(e.target.value)}
                   placeholder="搜索 Job"
-                  className="w-full rounded-lg border border-gray-300 py-1.5 pl-7 pr-2 text-xs focus:border-slate-500 focus:outline-none"
+                  className={FORM.inputSm}
                 />
               </div>
             </div>
@@ -552,40 +562,38 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
               <button
                 type="button"
                 onClick={() => setSelectedRunId(null)}
-                className={`w-full border-b border-gray-100 px-3 py-3 text-left transition-colors ${
-                  selectedRunId === null ? 'bg-slate-50' : 'hover:bg-gray-50'
-                }`}
+                className={listItemClass(selectedRunId === null, cn('border-b px-3 py-3', LIST_ITEM.sectionBorder))}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-gray-900">全部执行节点</span>
-                  <Server className="h-4 w-4 text-gray-400" />
+                  <span className={cn('text-sm font-medium', TEXT.heading)}>全部执行节点</span>
+                  <Server className={cn('h-4 w-4', TEXT.subtitle)} />
                 </div>
-                <p className="mt-1 text-[11px] text-gray-500">当前任务范围内聚合</p>
+                <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>当前任务范围内聚合</p>
               </button>
 
               {runLoading ? (
-                <div className="p-4 text-center text-sm text-gray-400">加载中...</div>
+                <div className={cn('p-4 text-center text-sm', TEXT.subtitle)}>加载中...</div>
               ) : filteredRuns.length === 0 ? (
-                <div className="p-4 text-center text-sm text-gray-400">暂无执行节点</div>
+                <div className={cn('p-4 text-center text-sm', TEXT.subtitle)}>暂无执行节点</div>
               ) : (
-                <div className="divide-y divide-gray-100">
+                <div className={LIST_ITEM.divider}>
                   {filteredRuns.map((job) => (
                     <button
                       key={job.id}
                       type="button"
                       onClick={() => setSelectedRunId(job.id)}
-                      className={`w-full px-3 py-3 text-left transition-colors ${
-                        selectedRunId === job.id ? 'bg-blue-50' : 'hover:bg-gray-50'
-                      }`}
+                      className={listItemClass(selectedRunId === job.id, 'w-full px-3 py-3')}
                     >
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
-                          <Smartphone className="h-4 w-4 text-gray-400" />
-                          <span className="text-sm font-medium text-gray-900">Job {job.id}</span>
+                          <Smartphone className={cn('h-4 w-4', TEXT.subtitle)} />
+                          <span className={cn('text-sm font-medium', TEXT.heading)}>Job {job.id}</span>
                         </div>
-                        <span className="rounded bg-gray-100 px-2 py-0.5 text-[11px] text-gray-600">{job.status}</span>
+                        <span className={cn('rounded px-2 py-0.5 text-[11px]', STATUS_CHIP.muted)}>{job.status}</span>
                       </div>
-                      <div className="mt-1 text-[11px] text-gray-500">{job.run_type} | {job.triggered_by || 'auto'}</div>
+                      <div className={cn('mt-1 text-[11px]', TEXT.subtitle)}>
+                        {job.run_type} | {job.triggered_by || 'auto'}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -596,26 +604,22 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
 
         <div className="min-w-0 flex-1">
           <Card className="flex h-full flex-col overflow-hidden">
-            <div className="border-b border-gray-100 p-3">
+            <div className={cn('p-3', LIST_ITEM.sectionBorder)}>
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    void handleLoadOlder();
-                  }}
+                  onClick={() => void handleLoadOlder()}
                   disabled={!hasMore || loadingOlder || historyLoading}
-                  className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  className={TOOL_BTN}
                 >
                   <ChevronsUp className="h-3.5 w-3.5" />
                   {loadingOlder ? '加载中...' : '加载更早日志'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    void handleRefreshLogs();
-                  }}
+                  onClick={() => void handleRefreshLogs()}
                   disabled={historyLoading}
-                  className="flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  className={TOOL_BTN}
                 >
                   <RefreshCw className="h-3.5 w-3.5" />
                   {historyLoading ? '刷新中...' : '刷新历史'}
@@ -623,11 +627,10 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                 <button
                   type="button"
                   onClick={() => setAutoScroll((v) => !v)}
-                  className={`flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs ${
-                    autoScroll
-                      ? 'border-blue-200 bg-blue-50 text-blue-700'
-                      : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-                  }`}
+                  className={cn(
+                    TOOL_BTN,
+                    autoScroll && SEGMENTED.itemActive,
+                  )}
                 >
                   <Radio className="h-3.5 w-3.5" />
                   自动滚动
@@ -635,7 +638,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                 <button
                   type="button"
                   onClick={clearLogs}
-                  className="rounded-lg border border-gray-300 bg-white p-1.5 text-gray-600 hover:bg-gray-50"
+                  className={TOOL_BTN}
                   title="清空已加载日志"
                 >
                   <X className="h-4 w-4" />
@@ -644,7 +647,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                   type="button"
                   onClick={downloadLogs}
                   disabled={filteredLogs.length === 0}
-                  className="rounded-lg border border-gray-300 bg-white p-1.5 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                  className={TOOL_BTN}
                   title="下载当前过滤结果"
                 >
                   <Download className="h-4 w-4" />
@@ -653,24 +656,24 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
 
               <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
                 <div className="relative md:col-span-2">
-                  <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+                  <Search className={cn('absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2', TEXT.subtitle)} />
                   <input
                     value={keyword}
                     onChange={(e) => setKeyword(e.target.value)}
                     placeholder="关键词（message / step / job）"
-                    className="w-full rounded-lg border border-gray-300 py-1.5 pl-7 pr-2 text-xs focus:border-slate-500 focus:outline-none"
+                    className={FORM.inputSm}
                   />
                 </div>
                 <input
                   value={stepFilter}
                   onChange={(e) => setStepFilter(e.target.value)}
                   placeholder="step_id"
-                  className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
+                  className={FORM.selectSm}
                 />
                 <select
                   value={levelFilter}
                   onChange={(e) => setLevelFilter(e.target.value)}
-                  className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
+                  className={FORM.selectSm}
                 >
                   <option value="all">全部级别</option>
                   <option value="DEBUG">DEBUG</option>
@@ -681,7 +684,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                 <select
                   value={quickRange}
                   onChange={(e) => setQuickRange(e.target.value as QuickRange)}
-                  className="rounded-lg border border-gray-300 px-2 py-1.5 text-xs focus:border-slate-500 focus:outline-none"
+                  className={FORM.selectSm}
                 >
                   <option value="15m">最近 15 分钟</option>
                   <option value="1h">最近 1 小时</option>
@@ -691,7 +694,7 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                 </select>
               </div>
 
-              <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-gray-500">
+              <div className={cn('mt-2 flex flex-wrap items-center gap-3 text-xs', TEXT.subtitle)}>
                 <span>范围: {selectedTask ? selectedTask.name : '全部任务'}</span>
                 <span>模式: {selectedRun ? `单 Job #${selectedRun.id}` : '聚合模式'}</span>
                 <span>已加载: {logs.length}</span>
@@ -701,13 +704,13 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
 
             <div
               ref={logViewportRef}
-              className="flex-1 overflow-y-auto bg-gray-900 p-2 font-mono text-xs"
+              className="dark flex-1 overflow-y-auto bg-background p-2 font-mono text-xs"
               onScroll={handleLogScroll}
             >
               {historyLoading && logs.length === 0 ? (
-                <div className="py-8 text-center text-gray-500">加载日志中...</div>
+                <div className={cn('py-8 text-center', TEXT.subtitle)}>加载日志中...</div>
               ) : filteredLogs.length === 0 ? (
-                <div className="py-8 text-center text-gray-500">
+                <div className={cn('py-8 text-center', TEXT.subtitle)}>
                   {selectedTaskId === null && !selectedRunId
                     ? '暂无日志，已处于跨任务聚合模式'
                     : selectedRunId
@@ -719,13 +722,14 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                     {visibleLogs.map((log, visibleIndex) => (
                       <div
                         key={log.key}
-                        className={`grid grid-cols-[64px_minmax(0,1fr)] leading-[22px] ${
+                        className={cn(
+                          'grid grid-cols-[64px_minmax(0,1fr)] leading-[22px]',
                           log.level === 'ERROR'
-                            ? 'text-red-400'
+                            ? LOG_LEVEL.rowError
                             : log.level === 'WARN'
-                              ? 'text-yellow-400'
-                              : 'text-gray-300'
-                        }`}
+                              ? LOG_LEVEL.rowWarn
+                              : LOG_LEVEL.rowDefault,
+                        )}
                         style={{ height: LOG_ROW_HEIGHT }}
                         title={`${formatLocalDateTime(log.timestamp, {
                           year: 'numeric',
@@ -736,11 +740,11 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                           second: '2-digit',
                         })} [${log.level}] [job-${log.job_id ?? 'na'}] [${log.step_id || '-'}] ${log.message}`}
                       >
-                        <span className="select-none pr-3 text-right text-gray-600">
+                        <span className={cn('select-none pr-3 text-right', TEXT.subtitle)}>
                           {startIndex + visibleIndex + 1}
                         </span>
                         <span className="truncate">
-                          <span className="text-gray-500">
+                          <span className={TEXT.subtitle}>
                             [{formatLocalDateTime(log.timestamp, {
                               month: '2-digit',
                               day: '2-digit',
@@ -749,9 +753,17 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
                               second: '2-digit',
                             })}]
                           </span>{' '}
-                          <span className="text-blue-400">[job-{log.job_id ?? 'na'}]</span>{' '}
-                          <span className="text-purple-300">[{log.step_id || '-'}]</span>{' '}
-                          <span className={log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARN' ? 'text-yellow-400' : 'text-green-400'}>
+                          <span className={LOG_LEVEL.tagJob}>[job-{log.job_id ?? 'na'}]</span>{' '}
+                          <span className={LOG_LEVEL.tagStep}>[{log.step_id || '-'}]</span>{' '}
+                          <span
+                            className={
+                              log.level === 'ERROR'
+                                ? LOG_LEVEL.error
+                                : log.level === 'WARN'
+                                  ? LOG_LEVEL.warn
+                                  : LOG_LEVEL.tagLevelOk
+                            }
+                          >
                             [{log.level}]
                           </span>{' '}
                           {highlightLogText(log.message)}
@@ -763,15 +775,25 @@ export default function LogsPage({ embedded = false }: LogsPageProps) {
               )}
             </div>
 
-            <div className="flex items-center justify-between border-t border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+            <div className={cn('flex items-center justify-between px-3 py-2 text-xs', PANEL.footer, TEXT.subtitle)}>
               <span>
                 {isLiveMode ? (
-                  <span className={`inline-flex items-center gap-1 ${isConnected ? 'text-green-600' : 'text-gray-400'}`}>
-                    <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-gray-400'}`} />
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1',
+                      isConnected ? 'text-success' : TEXT.subtitle,
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        'h-2 w-2 rounded-full',
+                        isConnected ? 'bg-success' : 'bg-muted-foreground',
+                      )}
+                    />
                     {isConnected ? '单 Job 实时订阅已连接' : '单 Job 实时订阅未连接'}
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 text-slate-600">
+                  <span className={cn('inline-flex items-center gap-1', TEXT.body)}>
                     <Database className="h-3.5 w-3.5" />
                     聚合历史查询模式（非实时）
                   </span>

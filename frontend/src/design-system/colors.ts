@@ -168,4 +168,13 @@ export const PLAN_RUN_HERO_BADGE = {
   DEGRADED: 'border-warning/50 bg-card text-warning',
 } as const;
 
+/** PlanRun Topbar 状态胶囊（含 ring） */
+export const PLAN_RUN_STATUS_PILL: Record<PlanRunHeroStatus, string> = {
+  RUNNING: 'bg-warning/10 text-warning ring-warning/30',
+  SUCCESS: 'bg-success/10 text-success ring-success/30',
+  PARTIAL_SUCCESS: 'bg-warning/10 text-warning ring-warning/30',
+  FAILED: 'bg-destructive/10 text-destructive ring-destructive/30',
+  DEGRADED: 'bg-info/10 text-info ring-info/30',
+} as const;
+
 export type PlanRunHeroStatus = keyof typeof PLAN_RUN_HERO_SURFACE;

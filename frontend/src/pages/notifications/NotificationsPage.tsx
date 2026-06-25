@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api, NotificationChannel, AlertRule } from '@/utils/api';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/hooks/useConfirm';
 import {
@@ -15,6 +16,8 @@ import {
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
+import { FORM, INTERACTIVE, MODAL, SEGMENTED, SKELETON_BLOCK, STATUS_CHIP, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 type TabKey = 'channels' | 'rules';
 
@@ -184,40 +187,39 @@ export default function NotificationsPage() {
     setShowRuleForm(true);
   };
 
+  const tabBtnClass = (active: boolean) =>
+    cn(
+      'px-4 py-2 text-sm rounded-md transition-colors',
+      active ? 'bg-card text-foreground shadow-sm' : SEGMENTED.toggleIdle,
+    );
+
   return (
     <PageContainer>
       <PageHeader title="通知管理" subtitle="配置通知渠道和告警规则" />
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
-        <button
-          onClick={() => setTab('channels')}
-          className={`px-4 py-2 text-sm rounded-md transition-colors ${tab === 'channels' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-        >
+      <div className={cn(SEGMENTED.track, 'w-fit text-sm bg-muted border-0 p-1')}>
+        <button onClick={() => setTab('channels')} className={tabBtnClass(tab === 'channels')}>
           通知渠道 ({channels.length})
         </button>
-        <button
-          onClick={() => setTab('rules')}
-          className={`px-4 py-2 text-sm rounded-md transition-colors ${tab === 'rules' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-        >
+        <button onClick={() => setTab('rules')} className={tabBtnClass(tab === 'rules')}>
           告警规则 ({rules.length})
         </button>
       </div>
 
       {loading ? (
         <div className="space-y-3">
-          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
-          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
+          <div className={cn(SKELETON_BLOCK, 'h-32')} />
+          <div className={cn(SKELETON_BLOCK, 'h-32')} />
         </div>
       ) : tab === 'channels' ? (
         <div className="space-y-3">
           <div className="flex justify-end">
-            <button
+            <Button
               onClick={() => { setEditingChannel(null); setChannelForm({ name: '', type: 'WEBHOOK', url: '', enabled: true }); setShowChannelForm(true); }}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm"
             >
               <Plus size={16} /> 添加渠道
-            </button>
+            </Button>
           </div>
 
           {channels.length === 0 ? (
@@ -231,29 +233,37 @@ export default function NotificationsPage() {
               <Card key={ch.id} className="px-5 py-4 flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-2">
-                    <Bell size={16} className="text-gray-500" />
-                    <span className="font-medium text-gray-900">{ch.name}</span>
-                    <span className="text-xs px-2 py-0.5 bg-gray-100 rounded text-gray-600">
+                    <Bell size={16} className={TEXT.subtitle} />
+                    <span className={cn('font-medium', TEXT.heading)}>{ch.name}</span>
+                    <span className={cn('text-xs px-2 py-0.5 rounded', STATUS_CHIP.muted)}>
                       {CHANNEL_TYPE_LABELS[ch.type] || ch.type}
                     </span>
                     {ch.enabled ? (
-                      <ToggleRight size={16} className="text-green-500" />
+                      <ToggleRight size={16} className="text-success" />
                     ) : (
-                      <ToggleLeft size={16} className="text-gray-400" />
+                      <ToggleLeft size={16} className={TEXT.subtitle} />
                     )}
                   </div>
-                  <p className="text-xs text-gray-400 mt-1">
+                  <p className={cn('text-xs mt-1', TEXT.subtitle)}>
                     {ch.config?.url || ch.config?.to || '-'}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => handleTestChannel(ch.id)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded" title="测试">
+                  <button
+                    onClick={() => handleTestChannel(ch.id)}
+                    className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary hover:bg-primary/10')}
+                    title="测试"
+                  >
                     <Send size={14} />
                   </button>
-                  <button onClick={() => openEditChannel(ch)} className="p-1.5 text-gray-500 hover:bg-gray-50 rounded" title="编辑">
+                  <button onClick={() => openEditChannel(ch)} className={cn('p-1.5 rounded', INTERACTIVE.iconButton)} title="编辑">
                     <Edit2 size={14} />
                   </button>
-                  <button onClick={() => handleDeleteChannel(ch.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded" title="删除">
+                  <button
+                    onClick={() => handleDeleteChannel(ch.id)}
+                    className={cn('p-1.5 rounded', INTERACTIVE.destructiveMenu)}
+                    title="删除"
+                  >
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -264,13 +274,12 @@ export default function NotificationsPage() {
       ) : (
         <div className="space-y-3">
           <div className="flex justify-end">
-            <button
+            <Button
               onClick={() => { setEditingRule(null); setRuleForm({ name: '', event_type: 'RUN_FAILED', channel_id: channels[0]?.id || 0, enabled: true }); setShowRuleForm(true); }}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm"
               disabled={channels.length === 0}
             >
               <Plus size={16} /> 添加规则
-            </button>
+            </Button>
           </div>
 
           {rules.length === 0 ? (
@@ -284,23 +293,27 @@ export default function NotificationsPage() {
               <Card key={rule.id} className="px-5 py-4 flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-medium text-gray-900">{rule.name}</span>
-                    <span className="text-xs px-2 py-0.5 bg-orange-50 text-orange-600 rounded">
+                    <span className={cn('font-medium', TEXT.heading)}>{rule.name}</span>
+                    <span className={cn('text-xs px-2 py-0.5 rounded', STATUS_CHIP.warning)}>
                       {EVENT_LABELS[rule.event_type] || rule.event_type}
                     </span>
-                    <span className="text-xs text-gray-400">→ {rule.channel_name || `Channel #${rule.channel_id}`}</span>
+                    <span className={cn('text-xs', TEXT.subtitle)}>→ {rule.channel_name || `Channel #${rule.channel_id}`}</span>
                     {rule.enabled ? (
-                      <ToggleRight size={16} className="text-green-500" />
+                      <ToggleRight size={16} className="text-success" />
                     ) : (
-                      <ToggleLeft size={16} className="text-gray-400" />
+                      <ToggleLeft size={16} className={TEXT.subtitle} />
                     )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => openEditRule(rule)} className="p-1.5 text-gray-500 hover:bg-gray-50 rounded" title="编辑">
+                  <button onClick={() => openEditRule(rule)} className={cn('p-1.5 rounded', INTERACTIVE.iconButton)} title="编辑">
                     <Edit2 size={14} />
                   </button>
-                  <button onClick={() => handleDeleteRule(rule.id)} className="p-1.5 text-red-500 hover:bg-red-50 rounded" title="删除">
+                  <button
+                    onClick={() => handleDeleteRule(rule.id)}
+                    className={cn('p-1.5 rounded', INTERACTIVE.destructiveMenu)}
+                    title="删除"
+                  >
                     <Trash2 size={14} />
                   </button>
                 </div>
@@ -312,26 +325,26 @@ export default function NotificationsPage() {
 
       {/* Channel Form Modal */}
       {showChannelForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/40" onClick={() => setShowChannelForm(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
-            <h3 className="text-lg font-semibold mb-4">{editingChannel ? '编辑渠道' : '添加渠道'}</h3>
+        <div className={MODAL.overlay}>
+          <div className="fixed inset-0" onClick={() => setShowChannelForm(false)} />
+          <div className={cn(MODAL.panelLg, 'relative')}>
+            <h3 className={cn(MODAL.title, 'mb-4')}>{editingChannel ? '编辑渠道' : '添加渠道'}</h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">名称</label>
+                <label className={FORM.label}>名称</label>
                 <input
                   value={channelForm.name}
                   onChange={(e) => setChannelForm({ ...channelForm, name: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  className={FORM.input}
                   placeholder="渠道名称"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">类型</label>
+                <label className={FORM.label}>类型</label>
                 <select
                   value={channelForm.type}
                   onChange={(e) => setChannelForm({ ...channelForm, type: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  className={FORM.select}
                 >
                   <option value="WEBHOOK">Webhook</option>
                   <option value="DINGTALK">钉钉</option>
@@ -339,13 +352,13 @@ export default function NotificationsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className={FORM.label}>
                   {channelForm.type === 'EMAIL' ? '收件人邮箱' : 'Webhook URL'}
                 </label>
                 <input
                   value={channelForm.url}
                   onChange={(e) => setChannelForm({ ...channelForm, url: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  className={FORM.input}
                   placeholder={channelForm.type === 'EMAIL' ? 'user@example.com' : 'https://...'}
                 />
               </div>
@@ -359,14 +372,13 @@ export default function NotificationsPage() {
               </label>
             </div>
             <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setShowChannelForm(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-lg">取消</button>
-              <button
+              <Button variant="outline" onClick={() => setShowChannelForm(false)}>取消</Button>
+              <Button
                 onClick={handleSaveChannel}
                 disabled={actionLoading || !channelForm.name}
-                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
                 {actionLoading ? <Loader2 size={16} className="animate-spin" /> : '保存'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -374,26 +386,26 @@ export default function NotificationsPage() {
 
       {/* Rule Form Modal */}
       {showRuleForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/40" onClick={() => setShowRuleForm(false)} />
-          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6">
-            <h3 className="text-lg font-semibold mb-4">{editingRule ? '编辑规则' : '添加规则'}</h3>
+        <div className={MODAL.overlay}>
+          <div className="fixed inset-0" onClick={() => setShowRuleForm(false)} />
+          <div className={cn(MODAL.panelLg, 'relative')}>
+            <h3 className={cn(MODAL.title, 'mb-4')}>{editingRule ? '编辑规则' : '添加规则'}</h3>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">名称</label>
+                <label className={FORM.label}>名称</label>
                 <input
                   value={ruleForm.name}
                   onChange={(e) => setRuleForm({ ...ruleForm, name: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  className={FORM.input}
                   placeholder="规则名称"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">事件类型</label>
+                <label className={FORM.label}>事件类型</label>
                 <select
                   value={ruleForm.event_type}
                   onChange={(e) => setRuleForm({ ...ruleForm, event_type: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  className={FORM.select}
                 >
                   {Object.entries(EVENT_LABELS).map(([k, v]) => (
                     <option key={k} value={k}>{v}</option>
@@ -401,11 +413,11 @@ export default function NotificationsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">通知渠道</label>
+                <label className={FORM.label}>通知渠道</label>
                 <select
                   value={ruleForm.channel_id}
                   onChange={(e) => setRuleForm({ ...ruleForm, channel_id: Number(e.target.value) })}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  className={FORM.select}
                 >
                   {channels.map((ch) => (
                     <option key={ch.id} value={ch.id}>{ch.name} ({CHANNEL_TYPE_LABELS[ch.type]})</option>
@@ -422,14 +434,13 @@ export default function NotificationsPage() {
               </label>
             </div>
             <div className="flex justify-end gap-2 mt-6">
-              <button onClick={() => setShowRuleForm(false)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 rounded-lg">取消</button>
-              <button
+              <Button variant="outline" onClick={() => setShowRuleForm(false)}>取消</Button>
+              <Button
                 onClick={handleSaveRule}
                 disabled={actionLoading || !ruleForm.name || !ruleForm.channel_id}
-                className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
               >
                 {actionLoading ? <Loader2 size={16} className="animate-spin" /> : '保存'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

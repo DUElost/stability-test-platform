@@ -72,11 +72,11 @@ describe('DeviceDetailDrawer — status_reason 展示', () => {
     render_(<DeviceDetailDrawer device={device} {...handlers} />);
     const label = screen.getByText('状态原因');
     expect(label).toBeInTheDocument();
-    // label uses extraCls = text-red-600 font-semibold
-    expect(label.className).toMatch(/text-red-600/);
+    // label uses extraCls = text-destructive font-semibold
+    expect(label.className).toMatch(/text-destructive/);
     // value cell carries same red highlight + full reason text
     const value = screen.getByText('patrol_step_failed: monkey_launch');
-    expect(value.className).toMatch(/text-red-600/);
+    expect(value.className).toMatch(/text-destructive/);
     expect(value.className).toMatch(/font-semibold/);
   });
 
@@ -90,9 +90,9 @@ describe('DeviceDetailDrawer — status_reason 展示', () => {
     render_(<DeviceDetailDrawer device={device} {...handlers} />);
     const label = screen.getByText('状态原因');
     expect(label).toBeInTheDocument();
-    // non-failed → amber, not red
-    expect(label.className).toMatch(/text-amber-700/);
-    expect(label.className).not.toMatch(/text-red-600/);
+    // non-failed → warning, not destructive
+    expect(label.className).toMatch(/text-warning/);
+    expect(label.className).not.toMatch(/text-destructive/);
     expect(screen.getByText('awaiting_retry: backoff window')).toBeInTheDocument();
   });
 });

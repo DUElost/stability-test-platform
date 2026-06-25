@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { X, Server, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { STATUS_TEXT_COLORS } from '@/design-system/colors';
+import { FORM, MODAL } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 interface AddHostModalProps {
   isOpen: boolean;
@@ -18,7 +21,6 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Reset form when modal opens
   useEffect(() => {
     if (isOpen) {
       setFormData({ name: '', ip: '', ssh_port: 22, ssh_user: '' });
@@ -28,63 +30,49 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
-
-    if (!formData.name.trim()) {
-      newErrors.name = 'Host name is required';
-    }
-
+    if (!formData.name.trim()) newErrors.name = 'Host name is required';
     if (!formData.ip.trim()) {
       newErrors.ip = 'IP address is required';
     } else if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(formData.ip)) {
       newErrors.ip = 'Invalid IP address format';
     }
-
     if (formData.ssh_port < 1 || formData.ssh_port > 65535) {
       newErrors.ssh_port = 'Port must be between 1 and 65535';
     }
-
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (validate()) {
-      onSubmit(formData);
-    }
+    if (validate()) onSubmit(formData);
   };
 
   const handleClose = () => {
-    if (!isSubmitting) {
-      onClose();
-    }
+    if (!isSubmitting) onClose();
   };
 
   if (!isOpen) return null;
 
+  const fieldClass = (hasError: boolean) =>
+    cn(FORM.input, hasError && FORM.inputInvalid);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+    <div className={MODAL.overlay}>
+      <div className={MODAL.panel}>
+        <div className={MODAL.header}>
           <div className="flex items-center gap-2">
             <Server className={STATUS_TEXT_COLORS.primary} size={20} />
-            <h2 className="text-lg font-semibold text-slate-900">Add New Host</h2>
+            <h2 className={MODAL.title}>Add New Host</h2>
           </div>
-          <button
-            onClick={handleClose}
-            disabled={isSubmitting}
-            className="text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-50"
-          >
+          <button onClick={handleClose} disabled={isSubmitting} className={MODAL.closeButton}>
             <X size={20} />
           </button>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {/* Name */}
+        <form onSubmit={handleSubmit} className="space-y-4 p-6">
           <div>
-            <label htmlFor="host-name" className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="host-name" className={FORM.label}>
               Host Name <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <input
@@ -93,17 +81,14 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               placeholder="e.g., Test Server 01"
-              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
-                errors.name ? 'border-red-300' : 'border-slate-300'
-              }`}
+              className={fieldClass(!!errors.name)}
               disabled={isSubmitting}
             />
-            {errors.name && <p className={`mt-1 text-sm ${STATUS_TEXT_COLORS.error}`}>{errors.name}</p>}
+            {errors.name && <p className={FORM.error}>{errors.name}</p>}
           </div>
 
-          {/* IP Address */}
           <div>
-            <label htmlFor="host-ip" className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="host-ip" className={FORM.label}>
               IP Address <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <input
@@ -112,17 +97,14 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
               value={formData.ip}
               onChange={(e) => setFormData({ ...formData, ip: e.target.value })}
               placeholder="e.g., 192.168.1.100"
-              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
-                errors.ip ? 'border-red-300' : 'border-slate-300'
-              }`}
+              className={fieldClass(!!errors.ip)}
               disabled={isSubmitting}
             />
-            {errors.ip && <p className={`mt-1 text-sm ${STATUS_TEXT_COLORS.error}`}>{errors.ip}</p>}
+            {errors.ip && <p className={FORM.error}>{errors.ip}</p>}
           </div>
 
-          {/* SSH Port */}
           <div>
-            <label htmlFor="host-port" className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="host-port" className={FORM.label}>
               SSH Port
             </label>
             <input
@@ -132,17 +114,14 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
               max={65535}
               value={formData.ssh_port}
               onChange={(e) => setFormData({ ...formData, ssh_port: parseInt(e.target.value) || 22 })}
-              className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${
-                errors.ssh_port ? 'border-red-300' : 'border-slate-300'
-              }`}
+              className={fieldClass(!!errors.ssh_port)}
               disabled={isSubmitting}
             />
-            {errors.ssh_port && <p className={`mt-1 text-sm ${STATUS_TEXT_COLORS.error}`}>{errors.ssh_port}</p>}
+            {errors.ssh_port && <p className={FORM.error}>{errors.ssh_port}</p>}
           </div>
 
-          {/* SSH User */}
           <div>
-            <label htmlFor="host-user" className="block text-sm font-medium text-slate-700 mb-1">
+            <label htmlFor="host-user" className={FORM.label}>
               SSH User
             </label>
             <input
@@ -151,26 +130,16 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
               value={formData.ssh_user}
               onChange={(e) => setFormData({ ...formData, ssh_user: e.target.value })}
               placeholder="e.g., admin (optional)"
-              className="w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+              className={FORM.input}
               disabled={isSubmitting}
             />
           </div>
 
-          {/* Actions */}
           <div className="flex justify-end gap-3 pt-4">
-            <button
-              type="button"
-              onClick={handleClose}
-              disabled={isSubmitting}
-              className="px-4 py-2 text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors disabled:opacity-50"
-            >
+            <Button type="button" variant="outline" onClick={handleClose} disabled={isSubmitting}>
               Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50"
-            >
+            </Button>
+            <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? (
                 <>
                   <Loader2 size={18} className="animate-spin" />
@@ -179,7 +148,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
               ) : (
                 'Add Host'
               )}
-            </button>
+            </Button>
           </div>
         </form>
       </div>

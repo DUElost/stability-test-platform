@@ -8,6 +8,8 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
 import { Plus, Trash2, Wifi, WifiOff, Pencil, X } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { FORM, INTERACTIVE, MODAL, PANEL, STATUS_CHIP, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 const FORM_INITIAL = {
   name: '',
@@ -125,7 +127,7 @@ export default function WifiPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">{editingId ? '编辑 WiFi 池' : '新增 WiFi 池'}</CardTitle>
-              <button type="button" onClick={resetForm} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+              <button type="button" onClick={resetForm} className={cn('rounded p-1', MODAL.closeButton)}>
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -133,62 +135,62 @@ export default function WifiPage() {
           <CardContent>
             <form onSubmit={handleSubmit} className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">名称</label>
+                <label className={FORM.label}>名称</label>
                 <input
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   required
                   placeholder="例: Lab A - 2.4G Router"
-                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+                  className={FORM.input}
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">SSID</label>
+                <label className={FORM.label}>SSID</label>
                 <input
                   value={form.config_ssid}
                   onChange={(e) => setForm({ ...form, config_ssid: e.target.value })}
                   required
                   placeholder="WiFi SSID"
-                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+                  className={FORM.input}
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">密码</label>
+                <label className={FORM.label}>密码</label>
                 <input
                   value={form.config_password}
                   onChange={(e) => setForm({ ...form, config_password: e.target.value })}
                   required
                   placeholder="WiFi 密码"
-                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+                  className={FORM.input}
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">路由器 IP（可选）</label>
+                <label className={FORM.label}>路由器 IP（可选）</label>
                 <input
                   value={form.config_router_ip}
                   onChange={(e) => setForm({ ...form, config_router_ip: e.target.value })}
                   placeholder="172.21.15.1"
-                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+                  className={FORM.input}
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">最大设备数</label>
+                <label className={FORM.label}>最大设备数</label>
                 <input
                   type="number"
                   min={1}
                   max={1000}
                   value={form.max_concurrent_devices}
                   onChange={(e) => setForm({ ...form, max_concurrent_devices: parseInt(e.target.value, 10) || 1 })}
-                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+                  className={FORM.input}
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-600">主机组（可选）</label>
+                <label className={FORM.label}>主机组（可选）</label>
                 <input
                   value={form.host_group}
                   onChange={(e) => setForm({ ...form, host_group: e.target.value })}
                   placeholder="限制分配给指定主机"
-                  className="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/10"
+                  className={FORM.input}
                 />
               </div>
               <div className="flex items-end gap-2 md:col-span-2 lg:col-span-3">
@@ -212,7 +214,7 @@ export default function WifiPage() {
               {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}
             </div>
           ) : pools.length === 0 ? (
-            <div className="rounded-md border border-dashed py-10 text-center text-sm text-gray-500">
+            <div className={cn('rounded-md border border-dashed py-10 text-center text-sm', TEXT.subtitle)}>
               暂无 WiFi 资源池
             </div>
           ) : (
@@ -224,36 +226,39 @@ export default function WifiPage() {
                 const isFull = pool.current_devices >= pool.max_concurrent_devices;
 
                 return (
-                  <div key={pool.id} className="rounded-md border border-gray-200 bg-white p-4">
+                  <div key={pool.id} className={cn(PANEL.root, 'p-4')}>
                     <div className="flex items-start gap-3">
-                      <div className={`rounded-md p-2 ${isFull ? 'bg-red-100' : 'bg-green-100'}`}>
-                        {isFull ? <WifiOff className="h-4 w-4 text-red-600" /> : <Wifi className="h-4 w-4 text-green-600" />}
+                      <div className={cn('rounded-md p-2', isFull ? 'bg-destructive/10' : 'bg-success/10')}>
+                        {isFull ? <WifiOff className="h-4 w-4 text-destructive" /> : <Wifi className="h-4 w-4 text-success" />}
                       </div>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="truncate font-medium text-gray-900">{pool.name}</span>
+                          <span className={cn('truncate font-medium', TEXT.heading)}>{pool.name}</span>
                           {pool.host_group && (
-                            <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-500">{pool.host_group}</span>
+                            <span className={cn('rounded px-1.5 py-0.5 text-[10px]', STATUS_CHIP.muted)}>{pool.host_group}</span>
                           )}
                         </div>
-                        <div className="mt-1 font-mono text-xs text-gray-500">{pool.config?.ssid || '-'}</div>
+                        <div className={cn('mt-1 font-mono text-xs', TEXT.subtitle)}>{pool.config?.ssid || '-'}</div>
                       </div>
                     </div>
 
                     <div className="mt-3">
-                      <div className="flex items-center justify-between text-xs text-gray-500">
+                      <div className={cn('flex items-center justify-between text-xs', TEXT.subtitle)}>
                         <span>设备负载</span>
                         <span>{pool.current_devices} / {pool.max_concurrent_devices}</span>
                       </div>
-                      <div className="mt-1 h-2 w-full rounded-full bg-gray-100">
+                      <div className="mt-1 h-2 w-full rounded-full bg-muted">
                         <div
-                          className={`h-2 rounded-full transition-all ${loadPct > 80 ? 'bg-red-500' : loadPct > 50 ? 'bg-amber-500' : 'bg-green-500'}`}
+                          className={cn(
+                            'h-2 rounded-full transition-all',
+                            loadPct > 80 ? 'bg-destructive' : loadPct > 50 ? 'bg-warning' : 'bg-success',
+                          )}
                           style={{ width: `${Math.min(loadPct, 100)}%` }}
                         />
                       </div>
                     </div>
 
-                    <div className="mt-3 flex items-center gap-2 text-xs text-gray-400">
+                    <div className={cn('mt-3 flex items-center gap-2 text-xs', TEXT.subtitle)}>
                       <span>{pool.resource_type}</span>
                       {pool.config?.router_ip && <span>· {pool.config.router_ip}</span>}
                     </div>
@@ -262,7 +267,7 @@ export default function WifiPage() {
                       <button
                         type="button"
                         onClick={() => startEdit(pool)}
-                        className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+                        className={cn('flex items-center gap-1 rounded px-2 py-1 text-xs', INTERACTIVE.iconButton, INTERACTIVE.hover)}
                       >
                         <Pencil className="h-3.5 w-3.5" />
                         编辑
@@ -270,7 +275,7 @@ export default function WifiPage() {
                       <button
                         type="button"
                         onClick={() => { if (confirm('确定删除此 WiFi 池?')) deleteMutation.mutate(pool.id); }}
-                        className="flex items-center gap-1 rounded px-2 py-1 text-xs text-gray-400 hover:bg-red-50 hover:text-red-600"
+                        className={cn('flex items-center gap-1 rounded px-2 py-1 text-xs', INTERACTIVE.destructiveMenu)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         删除

@@ -5,6 +5,8 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { ArrowDown, Download, Search, X, ChevronUp, ChevronDown, Regex } from 'lucide-react';
+import { FORM, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 // ---------- ANSI helpers ----------
 
@@ -355,24 +357,24 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
     }, [runId, stepName]);
 
     return (
-      <div className="flex flex-col bg-[#0f172a] rounded-lg overflow-hidden border border-slate-700 shadow-xl" style={{ height }}>
+      <div className={cn('dark flex flex-col overflow-hidden rounded-lg border border-border bg-background shadow-xl')} style={{ height }}>
         {/* Toolbar */}
-        <div className="flex items-center justify-between px-3 py-1.5 bg-slate-800 border-b border-slate-700">
-          <span className="text-slate-400 text-xs uppercase tracking-wider font-bold">Terminal</span>
+        <div className="flex items-center justify-between border-b border-border bg-muted px-3 py-1.5">
+          <span className={cn('text-xs font-bold uppercase tracking-wider', TEXT.subtitle)}>Terminal</span>
           <div className="flex items-center gap-1.5">
             <button
               onClick={() => {
                 setShowSearch(s => !s);
                 if (!showSearch) setTimeout(() => searchInputRef.current?.focus(), 50);
               }}
-              className="p-1 text-slate-400 hover:text-indigo-400 transition-colors"
+              className={cn('p-1 transition-colors hover:text-primary', TEXT.subtitle)}
               title="Search (Ctrl+F)"
             >
               <Search size={14} />
             </button>
             <button
               onClick={handleDownload}
-              className="p-1 text-slate-400 hover:text-indigo-400 transition-colors"
+              className={cn('p-1 transition-colors hover:text-primary', TEXT.subtitle)}
               title="Download Log"
             >
               <Download size={14} />
@@ -380,7 +382,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
             {!autoScroll && (
               <button
                 onClick={scrollToBottom}
-                className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-indigo-600 text-white hover:bg-indigo-500 transition-colors"
+                className="flex items-center gap-1 rounded bg-primary px-2 py-0.5 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
                 title="Resume auto-scroll"
               >
                 <ArrowDown size={12} />
@@ -392,7 +394,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
 
         {/* Search bar */}
         {showSearch && (
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/80 border-b border-slate-700">
+          <div className="flex items-center gap-2 border-b border-border bg-muted/80 px-3 py-1.5">
             <input
               ref={searchInputRef}
               type="text"
@@ -400,19 +402,22 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
-              className="flex-1 bg-slate-900 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 focus:outline-none focus:border-indigo-500"
+              className={cn(FORM.inputSm, 'flex-1 bg-background pl-2')}
             />
             <button
               onClick={() => setUseRegex(r => !r)}
-              className={`p-1 rounded ${useRegex ? 'text-indigo-400 bg-slate-700' : 'text-slate-500 hover:text-slate-300'}`}
+              className={cn(
+                'rounded p-1',
+                useRegex ? 'bg-accent text-primary' : cn(TEXT.subtitle, 'hover:text-foreground'),
+              )}
               title="Toggle regex"
             >
               <Regex size={14} />
             </button>
-            <button onClick={() => doSearch('prev')} className="p-1 text-slate-400 hover:text-slate-200" title="Previous">
+            <button onClick={() => doSearch('prev')} className={cn('p-1 hover:text-foreground', TEXT.subtitle)} title="Previous">
               <ChevronUp size={14} />
             </button>
-            <button onClick={() => doSearch('next')} className="p-1 text-slate-400 hover:text-slate-200" title="Next">
+            <button onClick={() => doSearch('next')} className={cn('p-1 hover:text-foreground', TEXT.subtitle)} title="Next">
               <ChevronDown size={14} />
             </button>
             <button
@@ -420,7 +425,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
                 setShowSearch(false);
                 poolEntryRef.current?.searchAddon.clearDecorations();
               }}
-              className="p-1 text-slate-400 hover:text-red-400"
+              className={cn('p-1 hover:text-destructive', TEXT.subtitle)}
               title="Close search"
             >
               <X size={14} />

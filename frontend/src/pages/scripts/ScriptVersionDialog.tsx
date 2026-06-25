@@ -3,6 +3,8 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
 import { api, type ScriptEntry } from '@/utils/api';
 import { Tag, AlertCircle } from 'lucide-react';
+import { ALERT_BANNER, FORM, MODAL, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 interface Props {
   open: boolean;
@@ -21,7 +23,6 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
   const [description, setDescription] = useState('');
   const [parseError, setParseError] = useState('');
 
-  // Reset form when dialog opens with a different script
   useEffect(() => {
     if (!open || !script) return;
     setVersion('');
@@ -39,8 +40,8 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
     e.preventDefault();
     setParseError('');
 
-    let defaultParams: Record<string, any> = {};
-    let paramSchema: Record<string, any> = {};
+    let defaultParams: Record<string, unknown> = {};
+    let paramSchema: Record<string, unknown> = {};
 
     try {
       if (defaultParamsText.trim()) defaultParams = JSON.parse(defaultParamsText);
@@ -67,70 +68,103 @@ export default function ScriptVersionDialog({ open, script, onClose, onCreated }
       });
       toast.success(`版本 ${version} 已创建`);
       onCreated();
-    } catch (err: any) {
-      toast.error(err.message || '创建版本失败');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '创建版本失败';
+      toast.error(msg);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 p-6" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center gap-2 mb-4">
-          <Tag className="w-5 h-5 text-gray-500" />
-          <h2 className="text-lg font-semibold">新建脚本版本 — {script.name}</h2>
+    <div className={MODAL.overlay} onClick={onClose}>
+      <div className={MODAL.panelLg} onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center gap-2">
+          <Tag className={cn('h-5 w-5', TEXT.subtitle)} />
+          <h2 className={cn('text-lg font-semibold', TEXT.heading)}>新建脚本版本 — {script.name}</h2>
         </div>
 
-        <div className="mb-3 text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg flex items-center gap-2">
-          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
-          <span>修改 default_params 必须创建新的脚本版本。当前版本 <code className="font-mono">{script.version}</code> 的默认参数保持不变。</span>
+        <div className={cn('mb-3 flex items-center gap-2 rounded-lg px-3 py-2 text-xs', ALERT_BANNER.warning)}>
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            修改 default_params 必须创建新的脚本版本。当前版本{' '}
+            <code className="font-mono">{script.version}</code> 的默认参数保持不变。
+          </span>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">新版本 *</label>
-            <input type="text" value={version} onChange={e => setVersion(e.target.value)} required
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-              placeholder="如 2.0.0" />
+            <label className={FORM.label}>新版本 *</label>
+            <input
+              type="text"
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
+              required
+              className={FORM.input}
+              placeholder="如 2.0.0"
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">描述</label>
-            <input type="text" value={description} onChange={e => setDescription(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-              placeholder="此版本的变更说明…" />
+            <label className={FORM.label}>描述</label>
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className={FORM.input}
+              placeholder="此版本的变更说明…"
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">NFS 路径</label>
-            <input type="text" value={nfsPath} onChange={e => setNfsPath(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-              placeholder={script.nfs_path || '/scripts/name/v2.0.0/main.py'} />
+            <label className={FORM.label}>NFS 路径</label>
+            <input
+              type="text"
+              value={nfsPath}
+              onChange={(e) => setNfsPath(e.target.value)}
+              className={FORM.input}
+              placeholder={script.nfs_path || '/scripts/name/v2.0.0/main.py'}
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Content SHA256</label>
-            <input type="text" value={contentSha256} onChange={e => setContentSha256(e.target.value)}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 font-mono"
-              placeholder="64位 hex..." />
+            <label className={FORM.label}>Content SHA256</label>
+            <input
+              type="text"
+              value={contentSha256}
+              onChange={(e) => setContentSha256(e.target.value)}
+              className={cn(FORM.input, 'font-mono')}
+              placeholder="64位 hex..."
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className={FORM.label}>
               default_params (JSON) *
-              <span className="text-gray-400 font-normal ml-1">— 修改此字段即为新建版本</span>
+              <span className={cn('ml-1 font-normal', TEXT.subtitle)}>— 修改此字段即为新建版本</span>
             </label>
-            <textarea value={defaultParamsText} onChange={e => setDefaultParamsText(e.target.value)} rows={4}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 font-mono"
-              placeholder='{"timeout": 30, "retry": 2}' />
+            <textarea
+              value={defaultParamsText}
+              onChange={(e) => setDefaultParamsText(e.target.value)}
+              rows={4}
+              className={FORM.textarea}
+              placeholder='{"timeout": 30, "retry": 2}'
+            />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">param_schema (JSON)</label>
-            <textarea value={paramSchemaText} onChange={e => setParamSchemaText(e.target.value)} rows={3}
-              className="w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 font-mono"
-              placeholder='{"timeout": {"type": "int"}}' />
+            <label className={FORM.label}>param_schema (JSON)</label>
+            <textarea
+              value={paramSchemaText}
+              onChange={(e) => setParamSchemaText(e.target.value)}
+              rows={3}
+              className={FORM.textarea}
+              placeholder='{"timeout": {"type": "int"}}'
+            />
           </div>
 
-          {parseError && <p className="text-sm text-red-600">{parseError}</p>}
+          {parseError && <p className={FORM.error}>{parseError}</p>}
 
-          <div className="flex justify-end gap-2 mt-4">
-            <Button type="button" variant="outline" onClick={onClose}>取消</Button>
-            <Button type="submit" disabled={!version.trim()}>创建版本</Button>
+          <div className="mt-4 flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={onClose}>
+              取消
+            </Button>
+            <Button type="submit" disabled={!version.trim()}>
+              创建版本
+            </Button>
           </div>
         </form>
       </div>

@@ -13,6 +13,8 @@ import { Card } from '@/components/ui/card';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
+import { SKELETON_BLOCK, TEXT } from '@/design-system';
+import { cn } from '@/lib/utils';
 
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -317,8 +319,8 @@ export default function HostsPage() {
       <PageContainer>
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <div className="space-y-4">
-          <div className="h-32 bg-gray-100 animate-pulse rounded-lg" />
-          <div className="h-64 bg-gray-100 animate-pulse rounded-lg" />
+          <div className={cn('h-32', SKELETON_BLOCK)} />
+          <div className={cn('h-64', SKELETON_BLOCK)} />
         </div>
       </PageContainer>
     );
@@ -405,8 +407,8 @@ export default function HostsPage() {
         />
       ) : (
         <Card className="p-12 text-center">
-          <h3 className="text-lg font-medium text-gray-900 mb-2">暂无主机</h3>
-          <p className="text-sm text-gray-400 mb-4">添加您的第一台主机以开始使用。</p>
+          <h3 className={cn('text-lg font-medium mb-2', TEXT.heading)}>暂无主机</h3>
+          <p className={cn('text-sm mb-4', TEXT.subtitle)}>添加您的第一台主机以开始使用。</p>
           <Button onClick={() => setIsModalOpen(true)}>
             <Plus className="w-4 h-4" />
             添加主机
