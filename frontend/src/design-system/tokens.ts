@@ -98,6 +98,7 @@ export const LAYOUT = {
     list: 'max-w-5xl mx-auto w-full',
     default: 'max-w-6xl mx-auto w-full',
     wide: 'max-w-7xl mx-auto w-full',
+    logs: 'max-w-[1480px] mx-auto w-full',
     full: 'w-full',
   },
 } as const;

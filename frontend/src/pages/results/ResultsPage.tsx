@@ -5,6 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { RiskDistributionChart } from '@/components/charts/RiskDistributionChart';
 import { TestTypePassFailChart } from '@/components/charts/TestTypePassFailChart';
+import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
 import { api, type ResultsSummary } from '@/utils/api';
 import {
   CheckCircle,
@@ -16,7 +17,7 @@ import {
 import { PageContainer, PageHeader } from '@/components/layout';
 import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
 import { EmptyState } from '@/components/ui/empty-state';
-import { KPI_TONE, RUN_RESULT_STATUS_CHIP, STATUS_CHIP } from '@/design-system/tokens';
+import { KPI_TONE, RUN_RESULT_STATUS_CHIP, STAT, STATUS_CHIP } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 export default function ResultsPage() {
@@ -37,36 +38,41 @@ export default function ResultsPage() {
     <PageContainer width="default">
       <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Runs"
-          value={stats?.total}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <DashboardStatCard
+          label="运行总数"
+          value={stats?.total ?? 0}
+          loading={isLoading}
           icon={<ListChecks size={18} className={KPI_TONE.default.label} />}
-          isLoading={isLoading}
+          iconWellClassName={STAT.iconWellMuted}
         />
-        <StatCard
-          label="Finished"
-          value={stats?.finished}
+        <DashboardStatCard
+          label="已完成"
+          value={stats?.finished ?? 0}
+          loading={isLoading}
           icon={<CheckCircle size={18} className={KPI_TONE.success.value} />}
-          isLoading={isLoading}
+          iconWellClassName={STAT.iconWellSuccess}
+          valueClassName={KPI_TONE.success.value}
         />
-        <StatCard
-          label="Failed"
-          value={stats?.failed}
+        <DashboardStatCard
+          label="失败"
+          value={stats?.failed ?? 0}
+          loading={isLoading}
           icon={<XCircle size={18} className={KPI_TONE.destructive.value} />}
-          isLoading={isLoading}
+          iconWellClassName={STAT.iconWellDestructive}
+          valueClassName={KPI_TONE.destructive.value}
         />
-        <StatCard
-          label="Running"
-          value={stats?.running}
+        <DashboardStatCard
+          label="运行中"
+          value={stats?.running ?? 0}
+          loading={isLoading}
           icon={<PlayCircle size={18} className={KPI_TONE.primary.value} />}
-          isLoading={isLoading}
+          iconWellClassName={STAT.iconWellPrimary}
+          valueClassName={KPI_TONE.primary.value}
         />
       </div>
 
-      {/* Charts row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <RiskDistributionChart
           data={data?.risk_distribution ?? { high: 0, medium: 0, low: 0, unknown: 0 }}
           isLoading={isLoading}
@@ -77,12 +83,11 @@ export default function ResultsPage() {
         />
       </div>
 
-      {/* Recent runs table */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
+          <CardTitle className="flex items-center gap-2 text-sm font-medium">
             <Clock size={16} className="text-muted-foreground" />
-            Recent Runs
+            最近运行
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -97,7 +102,7 @@ export default function ResultsPage() {
               <EmptyState
                 title="暂无测试运行"
                 description="还没有执行过测试"
-                icon={<Clock className="w-12 h-12" />}
+                icon={<Clock className="h-12 w-12" />}
               />
             </div>
           ) : (
@@ -106,30 +111,30 @@ export default function ResultsPage() {
                 <thead>
                   <tr className="border-b text-left text-xs text-muted-foreground">
                     <th className="pb-2 pr-4">Run</th>
-                    <th className="pb-2 pr-4">Task</th>
-                    <th className="pb-2 pr-4">Type</th>
-                    <th className="pb-2 pr-4">Status</th>
-                    <th className="pb-2 pr-4">Risk</th>
-                    <th className="pb-2 pr-4">Duration</th>
-                    <th className="pb-2">Started</th>
+                    <th className="pb-2 pr-4">任务</th>
+                    <th className="pb-2 pr-4">类型</th>
+                    <th className="pb-2 pr-4">状态</th>
+                    <th className="pb-2 pr-4">风险</th>
+                    <th className="pb-2 pr-4">时长</th>
+                    <th className="pb-2">开始时间</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.recent_runs.map((run) => (
                     <tr
                       key={run.run_id}
-                      className="border-b last:border-0 hover:bg-muted/50 cursor-pointer transition-colors"
+                      className="cursor-pointer border-b transition-colors last:border-0 hover:bg-muted/50"
                       onClick={() => navigate(`/runs/${run.run_id}/report`)}
                     >
                       <td className="py-2 pr-4 font-mono text-xs">#{run.run_id}</td>
-                      <td className="py-2 pr-4 truncate max-w-[180px]">{run.task_name}</td>
+                      <td className="max-w-[180px] truncate py-2 pr-4">{run.task_name}</td>
                       <td className="py-2 pr-4">
-                        <span className={cn('px-1.5 py-0.5 rounded text-xs font-medium', STATUS_CHIP.muted)}>
+                        <span className={cn('rounded px-1.5 py-0.5 text-xs font-medium', STATUS_CHIP.muted)}>
                           {run.task_type}
                         </span>
                       </td>
                       <td className="py-2 pr-4">
-                        <span className={cn('px-1.5 py-0.5 rounded text-xs font-medium', RUN_RESULT_STATUS_CHIP[run.status] ?? STATUS_CHIP.muted)}>
+                        <span className={cn('rounded px-1.5 py-0.5 text-xs font-medium', RUN_RESULT_STATUS_CHIP[run.status] ?? STATUS_CHIP.muted)}>
                           {run.status}
                         </span>
                       </td>
@@ -151,33 +156,5 @@ export default function ResultsPage() {
         </CardContent>
       </Card>
     </PageContainer>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  icon,
-  isLoading,
-}: {
-  label: string;
-  value?: number;
-  icon: React.ReactNode;
-  isLoading?: boolean;
-}) {
-  return (
-    <Card>
-      <CardContent className="pt-4 pb-3 px-4">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs text-muted-foreground">{label}</span>
-          {icon}
-        </div>
-        {isLoading ? (
-          <Skeleton className="h-7 w-16" />
-        ) : (
-          <span className="text-2xl font-semibold">{value ?? 0}</span>
-        )}
-      </CardContent>
-    </Card>
   );
 }

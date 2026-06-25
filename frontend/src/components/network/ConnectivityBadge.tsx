@@ -1,26 +1,24 @@
 import React from 'react';
+import { STATUS_CHIP } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 
 interface ConnectivityBadgeProps {
   status: 'online' | 'offline' | 'warning';
   latency?: number;
 }
 
-export const ConnectivityBadge: React.FC<ConnectivityBadgeProps> = ({ status, latency }) => {
-  const colorMap = {
-    online: 'bg-green-500',
-    offline: 'bg-red-500',
-    warning: 'bg-yellow-500',
-  };
+const STATUS_STYLE = {
+  online: { chip: STATUS_CHIP.success, dot: 'bg-success' },
+  offline: { chip: STATUS_CHIP.destructive, dot: 'bg-destructive' },
+  warning: { chip: STATUS_CHIP.warning, dot: 'bg-warning' },
+} as const;
 
-  const textColorMap = {
-    online: 'text-green-700 bg-green-100',
-    offline: 'text-red-700 bg-red-100',
-    warning: 'text-yellow-700 bg-yellow-100',
-  };
+export const ConnectivityBadge: React.FC<ConnectivityBadgeProps> = ({ status, latency }) => {
+  const style = STATUS_STYLE[status];
 
   return (
-    <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${textColorMap[status]}`}>
-      <span className={`w-2 h-2 mr-1.5 rounded-full ${colorMap[status]}`} />
+    <div className={cn('inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium', style.chip)}>
+      <span className={cn('mr-1.5 h-2 w-2 rounded-full', style.dot)} />
       <span className="capitalize">{status}</span>
       {latency !== undefined && (
         <span className="ml-1 opacity-75">({latency}ms)</span>

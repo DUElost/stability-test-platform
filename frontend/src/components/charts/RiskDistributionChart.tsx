@@ -69,13 +69,13 @@ export function RiskDistributionChart({ data, isLoading }: RiskDistributionChart
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <ShieldAlert size={16} className="text-muted-foreground" />
-            Risk Distribution
+            风险分布
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="h-[200px] flex flex-col items-center justify-center text-muted-foreground">
             <ShieldAlert size={32} className="mb-2 opacity-50" />
-            <span className="text-sm">No risk data</span>
+            <span className="text-sm">暂无风险数据</span>
           </div>
         </CardContent>
       </Card>
@@ -87,7 +87,7 @@ export function RiskDistributionChart({ data, isLoading }: RiskDistributionChart
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2">
           <ShieldAlert size={16} className="text-muted-foreground" />
-          Risk Distribution
+          风险分布
         </CardTitle>
       </CardHeader>
       <CardContent>

@@ -7,6 +7,7 @@ import { api } from '@/utils/api';
 import type { EventSeverity, EventStage, PlanRunStatus } from '@/utils/api/types';
 import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import PlanRunEventStream from '@/components/plan-run/PlanRunEventStream';
+import { PageContainer } from '@/components/layout';
 import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
@@ -89,7 +90,7 @@ export default function PlanRunLogsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1480px] space-y-3">
+    <PageContainer width="logs">
       <PlanRunEventStream
         events={eventsQ.data}
         stageFilter={stageFilter}
@@ -102,6 +103,6 @@ export default function PlanRunLogsPage() {
         pageSize={PAGE_SIZE}
         onPageChange={setPage}
       />
-    </div>
+    </PageContainer>
   );
 }

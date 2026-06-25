@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/alert-dialog';
 import { api } from '@/utils/api';
 import { formatTimeLabel } from '@/utils/format';
+import { STATUS_CHIP, SURFACE, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 import type { HostActiveJob } from '@/utils/api/types';
 
 interface Props {
@@ -45,33 +47,32 @@ function ActiveJobRow({ job }: { job: HostActiveJob }) {
       data-testid={`hot-update-active-job-${job.id}`}
       className="grid grid-cols-[60px_1fr_auto_auto] items-center gap-2 border-b px-3 py-1.5 text-xs last:border-b-0"
     >
-      <span className="font-mono text-[11px] text-gray-500">#{job.id}</span>
-      <span className="truncate font-mono text-[11px] text-gray-700">
+      <span className={cn('font-mono text-[11px]', TEXT.subtitle)}>#{job.id}</span>
+      <span className={cn('truncate font-mono text-[11px]', TEXT.body)}>
         Device #{job.device_id}
         {job.plan_run_id && (
-          <span className="ml-2 text-gray-400">
+          <span className={cn('ml-2', TEXT.subtle)}>
             · PlanRun #{job.plan_run_id}
           </span>
         )}
       </span>
       <span
-        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-          job.status === 'RUNNING'
-            ? 'bg-orange-100 text-orange-800'
-            : 'bg-blue-100 text-blue-800'
-        }`}
+        className={cn(
+          'rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+          job.status === 'RUNNING' ? STATUS_CHIP.warning : STATUS_CHIP.primary,
+        )}
       >
         {job.status}
       </span>
       {job.abort_pending ? (
         <span
           data-testid={`hot-update-job-abort-pending-${job.id}`}
-          className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
+          className={cn('rounded px-1.5 py-0.5 text-[10px] font-semibold', STATUS_CHIP.warning)}
         >
           收口中…
         </span>
       ) : (
-        <span className="font-mono text-[10.5px] text-gray-400">
+        <span className={cn('font-mono text-[10.5px]', TEXT.subtle)}>
           {fmtTime(job.started_at)}
         </span>
       )}
@@ -166,23 +167,23 @@ export default function HostHotUpdateConfirmDialog({
         </AlertDialogHeader>
 
         {/* Active-jobs section */}
-        <section className="space-y-2 rounded-lg border bg-gray-50 p-3">
+        <section className={cn('space-y-2 rounded-lg border border-border p-3', SURFACE.subtle)}>
           {detailQ.isLoading ? (
             <div
               data-testid="host-detail-loading"
-              className="flex items-center justify-center py-4 text-xs text-gray-500"
+              className={cn('flex items-center justify-center py-4 text-xs', TEXT.subtitle)}
             >
               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> 拉取活跃 Job…
             </div>
           ) : detailQ.isError ? (
-            <div className="flex items-center gap-2 rounded border-l-4 border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
+            <div className={cn('flex items-center gap-2 rounded border-l-4 px-3 py-2 text-xs', 'border-destructive bg-destructive/10 text-destructive')}>
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
               {(detailQ.error as Error)?.message || '拉取主机失败'}
             </div>
           ) : !hasActive ? (
             <div
               data-testid="host-no-active-jobs"
-              className="flex items-center gap-2 rounded border-l-4 border-green-300 bg-green-50 px-3 py-2 text-xs text-green-800"
+              className={cn('flex items-center gap-2 rounded border-l-4 px-3 py-2 text-xs', 'border-success bg-success/10 text-success')}
             >
               <ShieldCheck className="h-3.5 w-3.5 shrink-0" />
               该主机当前无活跃 Job,可直接执行热更新
@@ -191,7 +192,7 @@ export default function HostHotUpdateConfirmDialog({
             <>
               <div
                 data-testid="host-abort-draining-banner"
-                className="flex items-center gap-2 rounded border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+                className={cn('flex items-center gap-2 rounded border-l-4 px-3 py-2 text-xs', 'border-warning bg-warning/10 text-warning')}
               >
                 <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
                 <span>
@@ -210,8 +211,8 @@ export default function HostHotUpdateConfirmDialog({
                 </span>
               </div>
 
-              <div className="rounded-md border bg-white">
-                <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              <div className="rounded-md border border-border bg-card">
+                <div className={cn('flex items-center gap-2 border-b px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider', SURFACE.subtle, TEXT.subtitle)}>
                   <Server className="h-3 w-3" /> 收口中的 Job
                 </div>
                 <div className="max-h-40 overflow-y-auto">
@@ -223,7 +224,7 @@ export default function HostHotUpdateConfirmDialog({
             </>
           ) : (
             <>
-              <div className="flex items-center gap-2 rounded border-l-4 border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <div className={cn('flex items-center gap-2 rounded border-l-4 px-3 py-2 text-xs', 'border-warning bg-warning/10 text-warning')}>
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                 <span>
                   该主机仍有{' '}
@@ -237,8 +238,8 @@ export default function HostHotUpdateConfirmDialog({
                 </span>
               </div>
 
-              <div className="rounded-md border bg-white">
-                <div className="flex items-center gap-2 border-b bg-gray-50 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              <div className="rounded-md border border-border bg-card">
+                <div className={cn('flex items-center gap-2 border-b px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider', SURFACE.subtle, TEXT.subtitle)}>
                   <Server className="h-3 w-3" /> 受影响 Job
                 </div>
                 <div className="max-h-40 overflow-y-auto">
@@ -250,19 +251,19 @@ export default function HostHotUpdateConfirmDialog({
 
               <label
                 data-testid="host-hot-update-abort-toggle-label"
-                className="flex cursor-pointer items-start gap-2 rounded border-l-4 border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800"
+                className={cn('flex cursor-pointer items-start gap-2 rounded border-l-4 px-3 py-2 text-xs', 'border-destructive bg-destructive/10 text-destructive')}
               >
                 <input
                   type="checkbox"
                   data-testid="host-hot-update-abort-toggle"
                   checked={abortChecked}
                   onChange={(e) => setAbortChecked(e.target.checked)}
-                  className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-red-600"
+                  className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-destructive"
                 />
                 <span>
                   我已知悉:确认后将先 abort 上述 {activeCount} 个 Job
                   (释放设备租约、Agent 自然退出 ≤45s),然后执行热更新。
-                  <span className="block text-[10.5px] text-red-700">
+                  <span className="block text-[10.5px] opacity-90">
                     所有受影响的 PlanRun 会被标记为
                     <b className="font-mono">FAILED</b> /{' '}
                     <b className="font-mono">DEGRADED</b>。
@@ -283,13 +284,9 @@ export default function HostHotUpdateConfirmDialog({
           </Button>
           <Button
             data-testid="host-hot-update-confirm"
+            variant={hasActive && abortChecked ? 'destructive' : 'default'}
             disabled={confirmDisabled}
             onClick={handleConfirm}
-            className={
-              hasActive && abortChecked
-                ? 'bg-red-600 text-white hover:bg-red-700'
-                : ''
-            }
           >
             {isHotUpdatePending && (
               <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />

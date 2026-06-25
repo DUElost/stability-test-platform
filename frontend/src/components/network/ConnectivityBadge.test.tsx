@@ -7,21 +7,21 @@ describe('ConnectivityBadge', () => {
     render(<ConnectivityBadge status="online" />);
     const badge = screen.getByText(/online/i);
     expect(badge).toBeInTheDocument();
-    expect(badge.parentElement).toHaveClass('text-green-700');
+    expect(badge.parentElement).toHaveClass('text-success');
   });
 
   it('renders offline status correctly', () => {
     render(<ConnectivityBadge status="offline" />);
     const badge = screen.getByText(/offline/i);
     expect(badge).toBeInTheDocument();
-    expect(badge.parentElement).toHaveClass('text-red-700');
+    expect(badge.parentElement).toHaveClass('text-destructive');
   });
 
   it('renders warning status correctly', () => {
     render(<ConnectivityBadge status="warning" />);
     const badge = screen.getByText(/warning/i);
     expect(badge).toBeInTheDocument();
-    expect(badge.parentElement).toHaveClass('text-yellow-700');
+    expect(badge.parentElement).toHaveClass('text-warning');
   });
 
   it('displays latency when provided', () => {

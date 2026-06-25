@@ -45,13 +45,13 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <BarChart3 size={16} className="text-muted-foreground" />
-            Pass / Fail by Test Type
+            按测试类型统计通过/失败
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="h-[200px] flex flex-col items-center justify-center text-muted-foreground">
             <BarChart3 size={32} className="mb-2 opacity-50" />
-            <span className="text-sm">No test data</span>
+            <span className="text-sm">暂无测试数据</span>
           </div>
         </CardContent>
       </Card>
@@ -63,7 +63,7 @@ export function TestTypePassFailChart({ data, isLoading }: TestTypePassFailChart
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2">
           <BarChart3 size={16} className="text-muted-foreground" />
-          Pass / Fail by Test Type
+          按测试类型统计通过/失败
         </CardTitle>
       </CardHeader>
       <CardContent>
