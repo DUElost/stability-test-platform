@@ -202,6 +202,7 @@ def run_merge_sync(plan_run_id: int) -> str:
                         **os.environ,
                         "STP_MERGE_FILE_LIST": str(listfile),
                         "STP_DEDUP_SCAN_SIDE": side,
+                        "STP_DEDUP_SCAN_PYTHON": tool["python"],
                     },
                 )
             finally:
