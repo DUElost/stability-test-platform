@@ -11,6 +11,7 @@ import {
 import type { RunStep } from '@/utils/api';
 import { PIPELINE_TREE_DARK, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { formatStepDuration } from '@/utils/format';
 
 export interface StepUpdateMessage {
   type: 'STEP_UPDATE';
@@ -57,21 +58,6 @@ function groupByPhase(steps: RunStep[]): PhaseGroup[] {
 
 function hasRunningStep(phase: PhaseGroup): boolean {
   return phase.steps.some((s) => s.status === 'RUNNING');
-}
-
-function formatDuration(startedAt: string | null, finishedAt: string | null): string {
-  if (!startedAt) return '';
-  const start = new Date(startedAt).getTime();
-  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
-  const diffMs = Math.max(0, end - start);
-  const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainSec = seconds % 60;
-  if (minutes < 60) return `${minutes}m ${remainSec}s`;
-  const hours = Math.floor(minutes / 60);
-  const remainMin = minutes % 60;
-  return `${hours}h ${remainMin}m`;
 }
 
 function StepStatusIcon({ status }: { status: RunStep['status'] }) {
@@ -159,7 +145,7 @@ function PhaseSection({
                   {step.name}
                 </span>
                 <span className={cn('text-[10px] font-mono whitespace-nowrap', PIPELINE_TREE_DARK.duration)}>
-                  {formatDuration(step.started_at, step.finished_at)}
+                  {formatStepDuration(step.started_at, step.finished_at)}
                 </span>
               </button>
             );

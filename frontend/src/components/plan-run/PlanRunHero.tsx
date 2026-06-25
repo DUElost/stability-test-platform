@@ -19,6 +19,7 @@ import {
 } from '@/design-system/colors';
 import { ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+import { formatDurationSeconds } from '@/utils/format';
 import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
 
 // 状态 → 容器背景/边框（与 StatusBadge plan-run 语义对齐）
@@ -26,16 +27,6 @@ const HERO_CLS: Record<PlanRunStatus, string> = PLAN_RUN_HERO_SURFACE;
 
 // 状态 → badge 样式
 const BADGE_CLS: Record<PlanRunStatus, string> = PLAN_RUN_HERO_BADGE;
-
-function formatDuration(seconds: number): string {
-  if (!isFinite(seconds) || seconds < 0) return '—';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
 
 interface Props {
   run: PlanRun | undefined;
@@ -73,7 +64,7 @@ export default function PlanRunHero({
     const end = run.ended_at
       ? new Date(run.ended_at).getTime()
       : (now ?? new Date()).getTime();
-    return formatDuration(Math.max(0, (end - start) / 1000));
+    return formatDurationSeconds(Math.max(0, (end - start) / 1000));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, now, tick]);
 

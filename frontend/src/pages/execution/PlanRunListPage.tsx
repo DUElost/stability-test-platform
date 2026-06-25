@@ -20,7 +20,7 @@ export default function PlanRunListPage() {
   });
 
   return (
-    <PageContainer className="max-w-5xl">
+    <PageContainer width="list">
       <PageHeader title="Plan 执行记录" subtitle="查看所有 PlanRun 历史记录" />
 
       {isLoading ? (

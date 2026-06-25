@@ -111,7 +111,7 @@ export default function PlanRunMatrixPage() {
   }, {} as Record<string, number>) ?? {};
 
   return (
-    <PageContainer className="max-w-6xl">
+    <PageContainer width="default">
       <div>
         <Button
           variant="ghost"

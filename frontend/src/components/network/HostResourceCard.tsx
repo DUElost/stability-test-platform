@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
+import { formatBytesFromGb, formatDurationSeconds } from '@/utils/format';
 
 export interface HostResources {
   cpu_load: number;
@@ -72,21 +73,6 @@ const statusConfig = {
     borderColor: 'border-warning/30',
   },
 };
-
-function formatDuration(seconds: number): string {
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
-
-function formatBytes(gb: number): string {
-  if (gb >= 1024) return `${(gb / 1024).toFixed(1)} TB`;
-  return `${gb.toFixed(1)} GB`;
-}
 
 function getResourceColor(percentage: number): string {
   if (percentage >= 90) return 'text-destructive';
@@ -268,7 +254,7 @@ export function HostResourceCard({
                         <span className="text-muted-foreground">RAM</span>
                         {resources.ram_total_gb && (
                           <span className="text-muted-foreground/60">
-                            ({formatBytes(resources.ram_total_gb)})
+                            ({formatBytesFromGb(resources.ram_total_gb)})
                           </span>
                         )}
                       </div>
@@ -303,7 +289,7 @@ export function HostResourceCard({
                         <span className="text-muted-foreground">Disk</span>
                         {resources.disk_total_gb && (
                           <span className="text-muted-foreground/60">
-                            ({formatBytes(resources.disk_total_gb)})
+                            ({formatBytesFromGb(resources.disk_total_gb)})
                           </span>
                         )}
                       </div>
@@ -354,7 +340,7 @@ export function HostResourceCard({
                     <Clock className="h-3.5 w-3.5 text-muted-foreground" />
                     <span className="text-muted-foreground">Uptime</span>
                   </div>
-                  <span className="font-mono">{formatDuration(resources.uptime_seconds)}</span>
+                  <span className="font-mono">{formatDurationSeconds(resources.uptime_seconds, 'compact')}</span>
                 </div>
               )}
             </div>
@@ -386,7 +372,7 @@ export function HostResourceCard({
                         </div>
                         {mount.available_gb !== undefined && (
                           <span className="text-muted-foreground">
-                            {formatBytes(mount.available_gb)} free
+                            {formatBytesFromGb(mount.available_gb)} free
                           </span>
                         )}
                       </div>
@@ -397,7 +383,7 @@ export function HostResourceCard({
                       </p>
                       {mount.total_gb && (
                         <p>
-                          {formatBytes(mount.available_gb || 0)} / {formatBytes(mount.total_gb)}{' '}
+                          {formatBytesFromGb(mount.available_gb || 0)} / {formatBytesFromGb(mount.total_gb)}{' '}
                           available
                         </p>
                       )}

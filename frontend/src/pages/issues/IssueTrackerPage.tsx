@@ -13,20 +13,11 @@ import JiraSubmitPanel from '@/components/issues/JiraSubmitPanel';
 import { EmptyState } from '@/components/ui/empty-state';
 import { INTERACTIVE, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { formatLocalDateTime } from '@/utils/format';
 
 interface RunWithDraft {
   run: PlanRun;
   draft: JiraDraft | null;
-}
-
-function formatTime(iso: string | null): string {
-  if (!iso) return '-';
-  return new Date(iso).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 }
 
 export default function IssueTrackerPage() {
@@ -120,7 +111,7 @@ export default function IssueTrackerPage() {
                       </div>
                     </div>
                     <div className={cn('text-right text-sm', TEXT.subtitle)}>
-                      <div>{formatTime(run.ended_at ?? null)}</div>
+                      <div>{formatLocalDateTime(run.ended_at ?? null)}</div>
                     </div>
                   </div>
                 );

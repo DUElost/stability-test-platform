@@ -73,7 +73,7 @@ export default function RunReportPage() {
   const counts = risk.counts || {};
 
   return (
-    <PageContainer>
+    <PageContainer width="default">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>

@@ -218,7 +218,7 @@ export default function PlanListPage() {
 
 
 
-    <PageContainer className="max-w-5xl">
+    <PageContainer width="list">
 
 
 

@@ -34,7 +34,7 @@ function ResourceCard({ title, description, icon: Icon, to }: ResourceCardProps)
 
 export default function ResourcesPage() {
   return (
-    <PageContainer>
+    <PageContainer width="default">
       <PageHeader title="环境资源" subtitle="管理测试所需的 WiFi 配置、脚本等环境资源" />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

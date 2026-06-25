@@ -57,7 +57,7 @@ export default function ScriptManagementPage() {
   };
 
   return (
-    <PageContainer className="max-w-5xl">
+    <PageContainer width="list">
       <ScriptVersionDialog
         open={showVersionDialog}
         script={versionTarget}

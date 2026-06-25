@@ -160,7 +160,7 @@ export default function SchedulesPage() {
 
   if (loading) {
     return (
-      <PageContainer>
+      <PageContainer width="default">
         <PageHeader title="定时任务" subtitle="管理 Cron 定时执行的 Plan" />
         <div className="space-y-4">
           <div className={cn('h-32', SKELETON_BLOCK)} />
@@ -171,7 +171,7 @@ export default function SchedulesPage() {
   }
 
   return (
-    <PageContainer>
+    <PageContainer width="default">
       <PageHeader
         title="定时任务"
         subtitle="管理 Cron 定时执行的 Plan"

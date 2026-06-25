@@ -93,7 +93,16 @@ export const LAYOUT = {
   pagePadding: 'p-4 lg:p-8',
   pageGap: 'space-y-6',
   pageEnter: 'page-enter',
+  pageWidth: {
+    narrow: 'max-w-3xl mx-auto w-full',
+    list: 'max-w-5xl mx-auto w-full',
+    default: 'max-w-6xl mx-auto w-full',
+    wide: 'max-w-7xl mx-auto w-full',
+    full: 'w-full',
+  },
 } as const;
+
+export type PageWidth = keyof typeof LAYOUT.pageWidth;
 
 /** 阴影（与 Tailwind 默认阶梯一致，集中引用便于全局调整） */
 export const ELEVATION = {

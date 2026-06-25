@@ -9,6 +9,7 @@ import {
 import { ALERT_BANNER, CHAIN_CHIP, PANEL, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type { ChainDispatchFailed, ChainNode, PlanChain } from '@/utils/api/types';
+import { formatDurationSeconds } from '@/utils/format';
 
 interface Props {
   chain: PlanChain | undefined;
@@ -16,16 +17,6 @@ interface Props {
   isError?: boolean;
   chainDispatchFailed?: ChainDispatchFailed | null;
   onNavigateRun?: (planRunId: number) => void;
-}
-
-function formatDuration(seconds: number | null | undefined): string {
-  if (!seconds || !isFinite(seconds) || seconds <= 0) return '';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  if (m === 0) return `${s}s`;
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
 }
 
 function nodeChipClass(node: ChainNode): string {
@@ -54,7 +45,7 @@ function NodeChip({
   onNavigate?: (planRunId: number) => void;
 }) {
   const passRate = node.pass_rate != null ? Math.round(node.pass_rate * 100) : null;
-  const dur = formatDuration(node.duration_seconds);
+  const dur = formatDurationSeconds(node.duration_seconds, 'brief', '');
   const clickable = !!node.plan_run_id && !node.is_current && !!onNavigate;
 
   const inner = (

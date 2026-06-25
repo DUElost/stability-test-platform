@@ -14,17 +14,8 @@ import {
 import { PLAN_RUN_STATUS_PILL, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import type { PlanRun } from '@/utils/api/types';
+import { formatDurationSeconds } from '@/utils/format';
 import { PLAN_RUN_PILL, isPlanRunTerminal } from './planRunStatus';
-
-function formatDuration(seconds: number): string {
-  if (!isFinite(seconds) || seconds < 0) return '—';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
-}
 
 interface Props {
   run: PlanRun | undefined;
@@ -58,7 +49,7 @@ export default function PlanRunTopbar({
     if (!run) return null;
     const start = new Date(run.started_at).getTime();
     const end = run.ended_at ? new Date(run.ended_at).getTime() : (now ?? new Date()).getTime();
-    return formatDuration(Math.max(0, (end - start) / 1000));
+    return formatDurationSeconds(Math.max(0, (end - start) / 1000));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run, now, tick]);
 

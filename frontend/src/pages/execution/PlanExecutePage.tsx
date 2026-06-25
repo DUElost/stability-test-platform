@@ -731,7 +731,7 @@ export default function PlanExecutePage() {
 
 
 
-    <PageContainer className="max-w-3xl">
+    <PageContainer width="narrow">
 
 
 

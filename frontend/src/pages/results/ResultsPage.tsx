@@ -14,6 +14,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
+import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
 import { EmptyState } from '@/components/ui/empty-state';
 
 const STATUS_BADGE: Record<string, string> = {
@@ -24,25 +25,6 @@ const STATUS_BADGE: Record<string, string> = {
   QUEUED: 'bg-gray-100 text-gray-600',
   CANCELED: 'bg-yellow-100 text-yellow-700',
 };
-
-function formatDuration(seconds: number | null): string {
-  if (seconds == null) return '-';
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return `${h}h ${m}m`;
-}
-
-function formatTime(iso: string | null): string {
-  if (!iso) return '-';
-  return new Date(iso).toLocaleString('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
 
 export default function ResultsPage() {
   const navigate = useNavigate();
@@ -59,7 +41,7 @@ export default function ResultsPage() {
   const stats = data?.runs_by_status;
 
   return (
-    <PageContainer>
+    <PageContainer width="default">
       <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
 
       {/* Stat cards */}
@@ -162,10 +144,10 @@ export default function ResultsPage() {
                         <StatusBadge kind="risk" status={run.risk_level} size="sm" />
                       </td>
                       <td className="py-2 pr-4 text-xs text-muted-foreground">
-                        {formatDuration(run.duration_seconds)}
+                        {formatDurationSeconds(run.duration_seconds, 'precise', '-')}
                       </td>
                       <td className="py-2 text-xs text-muted-foreground">
-                        {formatTime(run.started_at)}
+                        {formatLocalDateTime(run.started_at)}
                       </td>
                     </tr>
                   ))}

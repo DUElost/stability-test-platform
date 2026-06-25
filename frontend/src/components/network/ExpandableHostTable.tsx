@@ -16,6 +16,7 @@ import {
   resourceUsageBgClass,
   resourceUsageTextClass,
 } from '@/design-system/tokens';
+import { formatBytesFromGb, formatDurationSeconds } from '@/utils/format';
 
 export interface HostResources {
   cpu_load: number;
@@ -63,20 +64,6 @@ interface ExpandableHostTableProps {
   canManageWatcherAdminState?: boolean;
   selectedIds?: Set<string | number>;
   onSelectionChange?: (ids: Set<string | number>) => void;
-}
-
-function formatBytes(gb: number): string {
-  if (gb >= 1024) return `${(gb / 1024).toFixed(1)} TB`;
-  return `${gb.toFixed(1)} GB`;
-}
-
-function formatDuration(seconds: number): string {
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
 }
 
 function getResourceColor(percentage: number): string {
@@ -462,7 +449,7 @@ export function ExpandableHostTable({
                                   {host.resources.ram_total_gb && (
                                     <div className="flex justify-between text-xs">
                                       <span className="text-muted-foreground">总量</span>
-                                      <span className="font-mono text-foreground">{formatBytes(host.resources.ram_total_gb)}</span>
+                                      <span className="font-mono text-foreground">{formatBytesFromGb(host.resources.ram_total_gb)}</span>
                                     </div>
                                   )}
                                 </div>
@@ -488,7 +475,7 @@ export function ExpandableHostTable({
                                   {host.resources.disk_total_gb && (
                                     <div className="flex justify-between text-xs">
                                       <span className="text-muted-foreground">总量</span>
-                                      <span className="font-mono text-foreground">{formatBytes(host.resources.disk_total_gb)}</span>
+                                      <span className="font-mono text-foreground">{formatBytesFromGb(host.resources.disk_total_gb)}</span>
                                     </div>
                                   )}
                                 </div>
@@ -520,7 +507,7 @@ export function ExpandableHostTable({
                                   {host.resources.uptime_seconds !== undefined && (
                                     <div className="flex justify-between text-xs">
                                       <span className="text-muted-foreground">运行时间</span>
-                                      <span className="font-mono text-foreground">{formatDuration(host.resources.uptime_seconds)}</span>
+                                      <span className="font-mono text-foreground">{formatDurationSeconds(host.resources.uptime_seconds, 'compact')}</span>
                                     </div>
                                   )}
                                 </div>
