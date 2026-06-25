@@ -1,4 +1,6 @@
 import React from 'react';
+import { BORDER, SURFACE, TEXT } from '@/design-system/tokens';
+import { cn } from '@/lib/utils';
 import { DeviceCard, Device } from './DeviceCard';
 
 interface DeviceGridProps {
@@ -9,7 +11,7 @@ interface DeviceGridProps {
 export const DeviceGrid: React.FC<DeviceGridProps> = ({ devices, isLoading }) => {
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-64 text-slate-500">
+      <div className={cn('flex items-center justify-center h-64', TEXT.subtitle)}>
         加载设备中...
       </div>
     );
@@ -17,8 +19,15 @@ export const DeviceGrid: React.FC<DeviceGridProps> = ({ devices, isLoading }) =>
 
   if (!devices || devices.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-slate-400 bg-slate-50 rounded-lg border border-dashed border-slate-300">
-        No devices matching your criteria
+      <div
+        className={cn(
+          'flex items-center justify-center h-64 rounded-lg border border-dashed',
+          SURFACE.subtle,
+          BORDER.default,
+          TEXT.subtle,
+        )}
+      >
+        没有符合条件的设备
       </div>
     );
   }
