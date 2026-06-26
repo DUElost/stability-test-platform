@@ -57,7 +57,7 @@ export default function IssueTrackerPage() {
         title="问题追踪"
         subtitle="查看任务生成的 JIRA 草稿"
         action={
-          <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
+          <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing} aria-label="刷新 JIRA 草稿列表">
             <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
             刷新
           </Button>

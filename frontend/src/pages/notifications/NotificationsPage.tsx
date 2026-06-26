@@ -250,19 +250,29 @@ export default function NotificationsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <button
+                    type="button"
                     onClick={() => handleTestChannel(ch.id)}
                     className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary hover:bg-primary/10')}
                     title="测试"
+                    aria-label={`测试渠道 ${ch.name}`}
                   >
                     <Send size={14} />
                   </button>
-                  <button onClick={() => openEditChannel(ch)} className={cn('p-1.5 rounded', INTERACTIVE.iconButton)} title="编辑">
+                  <button
+                    type="button"
+                    onClick={() => openEditChannel(ch)}
+                    className={cn('p-1.5 rounded', INTERACTIVE.iconButton)}
+                    title="编辑"
+                    aria-label={`编辑渠道 ${ch.name}`}
+                  >
                     <Edit2 size={14} />
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleDeleteChannel(ch.id)}
                     className={cn('p-1.5 rounded', INTERACTIVE.destructiveMenu)}
                     title="删除"
+                    aria-label={`删除渠道 ${ch.name}`}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -297,7 +307,9 @@ export default function NotificationsPage() {
                     <span className={cn('text-xs px-2 py-0.5 rounded', STATUS_CHIP.warning)}>
                       {EVENT_LABELS[rule.event_type] || rule.event_type}
                     </span>
-                    <span className={cn('text-xs', TEXT.subtitle)}>→ {rule.channel_name || `Channel #${rule.channel_id}`}</span>
+                    <span className={cn('text-xs', TEXT.subtitle)}>
+                      → {rule.channel_name || `渠道 #${rule.channel_id}`}
+                    </span>
                     {rule.enabled ? (
                       <ToggleRight size={16} className="text-success" />
                     ) : (
@@ -306,13 +318,21 @@ export default function NotificationsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => openEditRule(rule)} className={cn('p-1.5 rounded', INTERACTIVE.iconButton)} title="编辑">
+                  <button
+                    type="button"
+                    onClick={() => openEditRule(rule)}
+                    className={cn('p-1.5 rounded', INTERACTIVE.iconButton)}
+                    title="编辑"
+                    aria-label={`编辑规则 ${rule.name}`}
+                  >
                     <Edit2 size={14} />
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleDeleteRule(rule.id)}
                     className={cn('p-1.5 rounded', INTERACTIVE.destructiveMenu)}
                     title="删除"
+                    aria-label={`删除规则 ${rule.name}`}
                   >
                     <Trash2 size={14} />
                   </button>

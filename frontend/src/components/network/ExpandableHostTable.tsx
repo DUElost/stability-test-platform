@@ -343,6 +343,7 @@ export function ExpandableHostTable({
                             <button
                               role="switch"
                               aria-checked={host.watcher_admin_active !== false}
+                              aria-label={`${host.name ?? host.id} Watcher 管理开关`}
                               disabled={
                                 !canManageWatcherAdminState ||
                                 !!isWatcherAdminStateUpdating?.(host.id)
@@ -386,11 +387,13 @@ export function ExpandableHostTable({
                       <TableCell className="p-3 text-right">
                         {host.status === 'ONLINE' && onHotUpdate ? (
                           <button
+                            type="button"
                             onClick={(e) => {
                               e.stopPropagation();
                               onHotUpdate(host.id);
                             }}
                             disabled={isHotUpdating?.(host.id)}
+                            aria-label={`${host.name ?? host.id} 热更新 Agent`}
                             className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                           >
                             {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
