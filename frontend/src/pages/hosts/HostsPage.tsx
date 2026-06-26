@@ -316,7 +316,7 @@ export default function HostsPage() {
 
   if (isLoading) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <div className="space-y-4">
           <div className={cn('h-32', SKELETON_BLOCK)} />
@@ -328,7 +328,7 @@ export default function HostsPage() {
 
   if (error) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <ErrorState
           title="加载主机失败"
@@ -341,7 +341,7 @@ export default function HostsPage() {
 
   if (tableData.length === 0) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <EmptyState
           title="还没有主机"
@@ -365,7 +365,7 @@ export default function HostsPage() {
   }
 
   return (
-    <PageContainer>
+    <PageContainer width="wide">
       <PageHeader
         title="主机管理"
         subtitle="管理和监控测试执行节点"

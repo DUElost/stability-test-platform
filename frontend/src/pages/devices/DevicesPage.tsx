@@ -80,7 +80,7 @@ export default function DevicesPage() {
 
   if (isLoading) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <div className="space-y-4">
           <div className={cn('h-32', SKELETON_BLOCK)} />
@@ -92,7 +92,7 @@ export default function DevicesPage() {
 
   if (error) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <ErrorState
           title="加载设备失败"
@@ -105,7 +105,7 @@ export default function DevicesPage() {
 
   if (formattedDevices.length === 0) {
     return (
-      <PageContainer>
+      <PageContainer width="wide">
         <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
         <EmptyState
           title="还没有设备"
@@ -129,7 +129,7 @@ export default function DevicesPage() {
   }
 
   return (
-    <PageContainer>
+    <PageContainer width="wide">
       <PageHeader
         title="设备管理"
         subtitle="管理和监控测试设备"

@@ -210,7 +210,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
       </div>
 
       {/* Table */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden">
+      <div className="bg-card rounded-xl border border-border overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/50 hover:bg-muted/50">

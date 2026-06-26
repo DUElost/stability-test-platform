@@ -111,7 +111,7 @@ export default function UsersPage() {
 
   if (isLoading) {
     return (
-      <PageContainer>
+      <PageContainer width="list">
         <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
         <div className="flex items-center justify-center h-64">
           <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.subtitle)} />
@@ -122,7 +122,7 @@ export default function UsersPage() {
 
   if (error) {
     return (
-      <PageContainer>
+      <PageContainer width="list">
         <PageHeader title="用户管理" subtitle="管理系统用户和权限" />
         <InlineError
           message={
@@ -136,7 +136,7 @@ export default function UsersPage() {
   }
 
   return (
-    <PageContainer>
+    <PageContainer width="list">
       <PageHeader
         title="用户管理"
         subtitle="管理系统用户和权限"

@@ -61,7 +61,7 @@ export default function AuditLogPage() {
   useEffect(() => { loadLogs(); }, [page, filters]);
 
   return (
-    <PageContainer>
+    <PageContainer width="list">
       <PageHeader title="操作日志" subtitle="查看系统操作审计记录（仅管理员）" />
 
       {/* Filters */}

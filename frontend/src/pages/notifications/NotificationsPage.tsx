@@ -194,7 +194,7 @@ export default function NotificationsPage() {
     );
 
   return (
-    <PageContainer>
+    <PageContainer width="default">
       <PageHeader title="通知管理" subtitle="配置通知渠道和告警规则" />
 
       {/* Tabs */}

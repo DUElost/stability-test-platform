@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/hooks/useConfirm';
 import { Plus, Trash2, Wifi, WifiOff, Pencil, X } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
@@ -24,6 +25,7 @@ const FORM_INITIAL = {
 
 export default function WifiPage() {
   const toast = useToast();
+  const confirmDialog = useConfirm();
   const queryClient = useQueryClient();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -106,8 +108,18 @@ export default function WifiPage() {
 
   const pending = createMutation.isLoading || updateMutation.isLoading;
 
+  const handleDeletePool = async (pool: ResourcePoolLoad) => {
+    const ok = await confirmDialog({
+      title: '删除 WiFi 池',
+      description: `确定删除「${pool.name}」？已分配的设备将不再使用该池。`,
+      confirmText: '删除',
+      variant: 'destructive',
+    });
+    if (ok) deleteMutation.mutate(pool.id);
+  };
+
   return (
-    <PageContainer>
+    <PageContainer width="default">
       <PageHeader
         title="WiFi 资源池"
         subtitle="管理 WiFi 路由器池，平台按容量自动为设备分配接入点"
@@ -128,7 +140,12 @@ export default function WifiPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-base">{editingId ? '编辑 WiFi 池' : '新增 WiFi 池'}</CardTitle>
-              <button type="button" onClick={resetForm} className={cn('rounded p-1', MODAL.closeButton)}>
+              <button
+                type="button"
+                onClick={resetForm}
+                className={cn('rounded p-1', MODAL.closeButton)}
+                aria-label="关闭表单"
+              >
                 <X className="h-4 w-4" />
               </button>
             </div>
@@ -274,14 +291,16 @@ export default function WifiPage() {
                         type="button"
                         onClick={() => startEdit(pool)}
                         className={cn('flex items-center gap-1 rounded px-2 py-1 text-xs', INTERACTIVE.iconButton, INTERACTIVE.hover)}
+                        aria-label={`编辑 ${pool.name}`}
                       >
                         <Pencil className="h-3.5 w-3.5" />
                         编辑
                       </button>
                       <button
                         type="button"
-                        onClick={() => { if (confirm('确定删除此 WiFi 池?')) deleteMutation.mutate(pool.id); }}
+                        onClick={() => void handleDeletePool(pool)}
                         className={cn('flex items-center gap-1 rounded px-2 py-1 text-xs', INTERACTIVE.destructiveMenu)}
+                        aria-label={`删除 ${pool.name}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         删除
