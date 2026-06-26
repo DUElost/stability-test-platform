@@ -12,13 +12,13 @@ import {
 } from 'lucide-react';
 import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart } from '@/components/charts';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
-import { PageContainer, PageHeader } from '../components/layout';
+import { PageContainer, PageHeader } from '@/components/layout';
 import { Card } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { InlineError } from '@/components/ui/error-state';
-import { useRealtimeDashboard } from '../hooks/useRealtimeDashboard';
-import { api } from '../utils/api';
-import { WS_DASHBOARD_ENDPOINT } from '../config';
+import { useRealtimeDashboard } from '@/hooks/useRealtimeDashboard';
+import { api } from '@/utils/api';
+import { WS_DASHBOARD_ENDPOINT } from '@/config';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { CHART_SECTION, STAT, TEXT } from '@/design-system/tokens';
 import { formatTimeFromDate } from '@/utils/format';

@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, NotificationChannel, AlertRule } from '@/utils/api';
+import { notificationKeys } from '@/utils/api/queryKeys';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useToast } from '@/components/ui/toast';
@@ -37,10 +39,8 @@ const CHANNEL_TYPE_LABELS: Record<string, string> = {
 export default function NotificationsPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
+  const qc = useQueryClient();
   const [tab, setTab] = useState<TabKey>('channels');
-  const [channels, setChannels] = useState<NotificationChannel[]>([]);
-  const [rules, setRules] = useState<AlertRule[]>([]);
-  const [loading, setLoading] = useState(true);
 
   // Channel form
   const [showChannelForm, setShowChannelForm] = useState(false);
@@ -54,22 +54,30 @@ export default function NotificationsPage() {
 
   const [actionLoading, setActionLoading] = useState(false);
 
-  const loadData = async () => {
-    try {
-      const [chResp, ruleResp] = await Promise.all([
-        api.notifications.listChannels(0, 200),
-        api.notifications.listRules(0, 200),
-      ]);
-      setChannels(chResp.data.items);
-      setRules(ruleResp.data.items);
-    } catch (err) {
-      console.error('加载通知配置失败:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const channelsQ = useQuery({
+    queryKey: notificationKeys.channels(),
+    queryFn: async () => {
+      const resp = await api.notifications.listChannels(0, 200);
+      return resp.data.items;
+    },
+  });
 
-  useEffect(() => { loadData(); }, []);
+  const rulesQ = useQuery({
+    queryKey: notificationKeys.rules(),
+    queryFn: async () => {
+      const resp = await api.notifications.listRules(0, 200);
+      return resp.data.items;
+    },
+  });
+
+  const channels = channelsQ.data ?? [];
+  const rules = rulesQ.data ?? [];
+  const loading = channelsQ.isLoading || rulesQ.isLoading;
+
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: notificationKeys.channels() });
+    qc.invalidateQueries({ queryKey: notificationKeys.rules() });
+  };
 
   // Channel actions
   const handleSaveChannel = async () => {
@@ -99,7 +107,7 @@ export default function NotificationsPage() {
       }
       setShowChannelForm(false);
       setEditingChannel(null);
-      loadData();
+      invalidateAll();
     } catch (err) {
       toast.error('保存失败');
     } finally {
@@ -111,7 +119,7 @@ export default function NotificationsPage() {
     if (!(await confirmDialog({ description: '确定要删除此通知渠道吗？关联的告警规则也会被删除。', variant: 'destructive' }))) return;
     try {
       await api.notifications.deleteChannel(id);
-      loadData();
+      invalidateAll();
     } catch (err) {
       toast.error('删除失败');
     }
@@ -158,7 +166,7 @@ export default function NotificationsPage() {
       }
       setShowRuleForm(false);
       setEditingRule(null);
-      loadData();
+      invalidateAll();
     } catch (err) {
       toast.error('保存失败');
     } finally {
@@ -170,7 +178,7 @@ export default function NotificationsPage() {
     if (!(await confirmDialog({ description: '确定要删除此告警规则吗？', variant: 'destructive' }))) return;
     try {
       await api.notifications.deleteRule(id);
-      loadData();
+      invalidateAll();
     } catch (err) {
       toast.error('删除失败');
     }

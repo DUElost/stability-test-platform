@@ -1,18 +1,18 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
-import { useToast } from '../../components/ui/toast';
-import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '../../components/device/ExpandableDeviceTable';
+import { Plus, Smartphone } from 'lucide-react';
+import { useToast } from '@/components/ui/toast';
+import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '@/components/device/ExpandableDeviceTable';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { DeviceMetricsModal } from './components/DeviceMetricsModal';
-import { api } from '../../utils/api';
+import { api } from '@/utils/api';
+import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SKELETON_BLOCK, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
-import { Smartphone } from 'lucide-react';
 
 const deviceStatusMap: Record<string, DeviceStatus> = {
   'ONLINE': 'idle',
@@ -28,13 +28,13 @@ export default function DevicesPage() {
   const toast = useToast();
 
   const { data: devices, isLoading, error } = useQuery({
-    queryKey: ['devices'],
+    queryKey: deviceKeys.list(),
     queryFn: () => api.devices.list(0, 1200).then(res => res.data.items),
     refetchInterval: 10000,
   });
 
   const { data: hosts } = useQuery({
-    queryKey: ['hosts'],
+    queryKey: hostKeys.list(),
     queryFn: () => api.hosts.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
@@ -43,7 +43,7 @@ export default function DevicesPage() {
     mutationFn: (data: { serial: string; model?: string; host_id?: number; tags?: string[] }) =>
       api.devices.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['devices'] });
+      queryClient.invalidateQueries({ queryKey: deviceKeys.list() });
       setIsModalOpen(false);
       toast.success('设备添加成功');
     },
@@ -97,7 +97,7 @@ export default function DevicesPage() {
         <ErrorState
           title="加载设备失败"
           description="请检查后端服务连接"
-          onRetry={() => queryClient.invalidateQueries({ queryKey: ['devices'] })}
+          onRetry={() => queryClient.invalidateQueries({ queryKey: deviceKeys.list() })}
         />
       </PageContainer>
     );

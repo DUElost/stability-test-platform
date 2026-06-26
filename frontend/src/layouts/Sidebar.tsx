@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -12,14 +12,15 @@ import {
   X,
   TestTube2,
   FileBox,
-  Folder,
   AlertCircle,
   Rocket,
   Code2,
   CalendarClock,
   BellRing,
+  Wifi,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuthSession } from '@/hooks/useAuthSession';
 import {
   BORDER,
   INTERACTIVE,
@@ -33,6 +34,8 @@ interface NavItem {
   path: string;
   label: string;
   icon: React.ElementType;
+  /** 与 router AdminRoute 对齐，非 admin 不展示 */
+  adminOnly?: boolean;
 }
 
 interface NavGroup {
@@ -59,7 +62,7 @@ const navGroups: NavGroup[] = [
     label: '测试资产',
     items: [
       { path: '/script-management', label: '脚本库', icon: Code2 },
-      { path: '/resources', label: '环境资源', icon: Folder },
+      { path: '/wifi', label: 'WiFi 资源池', icon: Wifi },
     ],
   },
   {
@@ -80,7 +83,7 @@ const navGroups: NavGroup[] = [
     label: '运营配置',
     items: [
       { path: '/schedules', label: '定时调度', icon: CalendarClock },
-      { path: '/notifications', label: '通知管理', icon: BellRing },
+      { path: '/notifications', label: '通知管理', icon: BellRing, adminOnly: true },
     ],
   },
 ];
@@ -104,7 +107,20 @@ export default function Sidebar({
   onCloseMobile,
 }: SidebarProps) {
   const location = useLocation();
+  const sessionQ = useAuthSession();
+  const isAdmin = sessionQ.data?.role === 'admin';
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+
+  const visibleGroups = useMemo(
+    () =>
+      navGroups
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => !item.adminOnly || isAdmin),
+        }))
+        .filter((group) => group.items.length > 0),
+    [isAdmin],
+  );
 
   const toggleGroup = (label: string) =>
     setCollapsedGroups((prev) => ({ ...prev, [label]: !prev[label] }));
@@ -158,7 +174,7 @@ export default function Sidebar({
 
       {/* Navigation Groups */}
       <nav className="p-3 overflow-y-auto flex-1 sidebar-scroll">
-        {navGroups.map((group) => {
+        {visibleGroups.map((group) => {
           const isGroupCollapsed = !collapsed && !!collapsedGroups[group.label];
           return (
             <div

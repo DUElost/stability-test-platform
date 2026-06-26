@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/utils/api';
+import { planRunKeys } from '@/utils/api/queryKeys';
 import type { EventSeverity, EventStage, PlanRunStatus } from '@/utils/api/types';
 import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import PlanRunEventStream from '@/components/plan-run/PlanRunEventStream';
@@ -33,14 +34,14 @@ export default function PlanRunLogsPage() {
   const [page, setPage] = useState(0); // 0-based,与 PlanRunEventStream 对齐
 
   const runQ = useQuery({
-    queryKey: ['plan-run', id],
+    queryKey: planRunKeys.detail(id),
     queryFn: () => api.planRuns.get(id),
     enabled: !!id,
   });
   const isTerminal = !!runQ.data && TERMINAL.includes(runQ.data.status);
 
   const eventsQ = useQuery({
-    queryKey: ['plan-run-logs', id, stageFilter, severityFilter, page],
+    queryKey: planRunKeys.logs(id, stageFilter, severityFilter, page),
     queryFn: () =>
       api.planRuns.getEvents(id, {
         stage: stageFilter,

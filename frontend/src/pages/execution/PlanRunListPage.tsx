@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { CardContent } from '@/components/ui/card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/utils/api';
+import { planRunKeys } from '@/utils/api/queryKeys';
 import { Clock } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
@@ -15,7 +16,7 @@ export default function PlanRunListPage() {
   const navigate = useNavigate();
 
   const { data: runs, isLoading } = useQuery({
-    queryKey: ['plan-runs-list'],
+    queryKey: planRunKeys.list(),
     queryFn: () => api.planRuns.list(0, 50),
     refetchInterval: 15_000,
   });

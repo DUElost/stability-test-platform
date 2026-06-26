@@ -17,4 +17,44 @@ export const planKeys = {
    *  react-query partial matching: ['plans'] matches ['plans', {limit: X}].
    */
   allLists: () => ['plans'] as const,
+  detail: (id: number) => ['plan', id] as const,
+} as const;
+
+export const hostKeys = {
+  list: () => ['hosts'] as const,
+} as const;
+
+export const deviceKeys = {
+  list: () => ['devices'] as const,
+} as const;
+
+export const planRunKeys = {
+  detail: (id: number) => ['plan-run', id] as const,
+  timeline: (id: number) => ['plan-run-timeline', id] as const,
+  devices: (id: number, status?: string, hostId?: number | string | null) =>
+    ['plan-run-devices', id, status, hostId] as const,
+  /** Partial key — invalidates all device queries for a PlanRun. */
+  devicesByRun: (id: number) => ['plan-run-devices', id] as const,
+  watcher: (id: number, scope?: string) => ['plan-run-watcher', id, scope] as const,
+  watcherByRun: (id: number) => ['plan-run-watcher', id] as const,
+  chain: (id: number) => ['plan-run-chain', id] as const,
+  events: (id: number) => ['plan-run-events', id] as const,
+  logs: (id: number, stage: string, severity: string, page: number) =>
+    ['plan-run-logs', id, stage, severity, page] as const,
+  list: () => ['plan-runs-list'] as const,
+} as const;
+
+export const dedupKeys = {
+  status: (runId: number) => ['dedup-status', runId] as const,
+} as const;
+
+export const notificationKeys = {
+  channels: () => ['notifications', 'channels'] as const,
+  rules: () => ['notifications', 'rules'] as const,
+} as const;
+
+/** Job report keys — `jobId` is Job.id, not PlanRun.id. */
+export const jobReportKeys = {
+  report: (jobId: number) => ['job-report', jobId] as const,
+  jiraDraft: (jobId: number) => ['job-jira-draft', jobId] as const,
 } as const;

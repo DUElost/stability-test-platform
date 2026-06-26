@@ -7,7 +7,7 @@ const GLOBAL_QUERY_DEFAULTS = {
   staleTime: 5_000,
 } as const;
 
-const ADMIN_QUERY_KEYS = [['users']] as const;
+const ADMIN_QUERY_KEYS = [['users'], ['notifications']] as const;
 const REFERENCE_QUERY_KEYS = [['plans'], ['plan'], ['scripts-active']] as const;
 const OPERATIONAL_QUERY_KEYS = [
   ['dashboard-summary'],
@@ -21,6 +21,8 @@ const OPERATIONAL_QUERY_KEYS = [
   ['results-summary'],
   ['task-runs'],
   ['plan-runs-list'],
+  ['job-report'],
+  ['job-jira-draft'],
   ['runs-with-jira-drafts'],
   ['resource-pools'],
 ] as const;
@@ -30,7 +32,10 @@ const LIVE_QUERY_KEYS = [
   ['plan-run-events'],
   ['plan-run-devices'],
   ['plan-run-watcher'],
+  ['plan-run-chain'],
+  ['plan-run-logs'],
   ['plan-run-jobs'],
+  ['dedup-status'],
   ['host-detail'],
   ['device-metrics'],
 ] as const;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createQueryClient } from './QueryProvider';
+import { planRunKeys } from '@/utils/api/queryKeys';
 
 describe('createQueryClient', () => {
   it('applies layered staleTime defaults by query key prefix', () => {
@@ -22,7 +23,7 @@ describe('createQueryClient', () => {
       queryFn: async () => null,
     });
     const planRun = queryClient.defaultQueryOptions({
-      queryKey: ['plan-run', 42],
+      queryKey: planRunKeys.detail(42),
       queryFn: async () => null,
     });
 

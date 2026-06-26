@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSocketIO as useWebSocket } from './useSocketIO';
 import { SOCKET_MESSAGE_TYPES, type SocketMessageType } from '@/utils/socketEvents';
+import { planRunKeys } from '@/utils/api/queryKeys';
 
 interface DeviceUpdate {
   serial: string;
@@ -72,7 +73,7 @@ export function useRealtimeDashboard(wsUrl: string) {
         break;
       }
       case SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS: {
-        queryClient.invalidateQueries({ queryKey: ['plan-runs-list'] });
+        queryClient.invalidateQueries({ queryKey: planRunKeys.list() });
         break;
       }
       case SOCKET_MESSAGE_TYPES.DEPLOY_UPDATE: {

@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { RunReport, JiraDraft, RunRiskSummary } from '@/utils/api';
-import apiClient from '@/utils/api/client';
+import { useQuery } from '@tanstack/react-query';
+import { api, type RunRiskSummary } from '@/utils/api';
+import { jobReportKeys } from '@/utils/api/queryKeys';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Button } from '@/components/ui/button';
-import { PageContainer } from '@/components/layout';
+import { PageContainer, PageHeader } from '@/components/layout';
+import { ErrorState } from '@/components/ui/error-state';
 import {
   ArrowLeft,
   Download,
@@ -28,29 +30,47 @@ const severityIcons: Record<string, React.ReactNode> = {
 export default function RunReportPage() {
   const { runId } = useParams<{ runId: string }>();
   const navigate = useNavigate();
-  const [report, setReport] = useState<RunReport | null>(null);
-  const [jiraDraft, setJiraDraft] = useState<JiraDraft | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showJira, setShowJira] = useState(false);
 
-  useEffect(() => {
-    if (!runId) return;
-    const id = parseInt(runId, 10);
-    setLoading(true);
-    Promise.all([
-      apiClient.get(`/runs/${id}/report/cached`).then((r) => r.data).catch(() => null),
-      apiClient.get(`/runs/${id}/jira-draft/cached`).then((r) => r.data).catch(() => null),
-    ])
-      .then(([r, j]) => {
-        if (r) setReport(r);
-        else setError('报告数据加载失败');
-        if (j) setJiraDraft(j);
-      })
-      .finally(() => setLoading(false));
-  }, [runId]);
+  const jobId = runId ? parseInt(runId, 10) : NaN;
+  const enabled = !!runId && !Number.isNaN(jobId);
 
-  if (loading) {
+  const reportQ = useQuery({
+    queryKey: jobReportKeys.report(jobId),
+    queryFn: () => api.runs.getCachedReport(jobId),
+    enabled,
+    retry: false,
+  });
+
+  const jiraQ = useQuery({
+    queryKey: jobReportKeys.jiraDraft(jobId),
+    queryFn: async () => {
+      try {
+        return await api.runs.getCachedJiraDraft(jobId);
+      } catch {
+        return null;
+      }
+    },
+    enabled: enabled && reportQ.isSuccess,
+    retry: false,
+  });
+
+  if (!enabled) {
+    return (
+      <ErrorState
+        title="无效 Job ID"
+        description="URL 中的 Job ID 无法解析"
+        action={
+          <Button variant="outline" onClick={() => navigate(-1)}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            返回
+          </Button>
+        }
+      />
+    );
+  }
+
+  if (reportQ.isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -59,10 +79,14 @@ export default function RunReportPage() {
     );
   }
 
-  if (error || !report) {
+  if (reportQ.isError || !reportQ.data) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-4">
-        <p className="text-destructive">{error || '报告不存在'}</p>
+        <ErrorState
+          title="报告加载失败"
+          description="报告数据不存在或尚未生成"
+          onRetry={() => reportQ.refetch()}
+        />
         <Button variant="outline" onClick={() => navigate(-1)}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           返回
@@ -71,47 +95,44 @@ export default function RunReportPage() {
     );
   }
 
+  const report = reportQ.data;
+  const jiraDraft = jiraQ.data ?? null;
   const risk: RunRiskSummary = report.risk_summary || {};
   const riskLevel = risk.risk_level || 'UNKNOWN';
   const counts = risk.counts || {};
 
   return (
     <PageContainer width="default">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <h1 className="text-xl font-semibold">
-              运行报告 #{report.run.id}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              任务: {report.task.name} ({report.task.type})
-            </p>
+      <PageHeader
+        title={`Job 运行报告 #${report.run.id}`}
+        subtitle={`任务: ${report.task.name} (${report.task.type})`}
+        breadcrumbs={[{ label: '测试结果', path: '/results' }, { label: `Job #${report.run.id}` }]}
+        action={
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <a
+              href={`/api/v1/runs/${jobId}/report/export?format=markdown`}
+              download
+            >
+              <Button variant="outline" size="sm">
+                <Download className="mr-2 h-4 w-4" />
+                Markdown
+              </Button>
+            </a>
+            <a
+              href={`/api/v1/runs/${jobId}/report/export?format=json`}
+              download
+            >
+              <Button variant="outline" size="sm">
+                <Download className="mr-2 h-4 w-4" />
+                JSON
+              </Button>
+            </a>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <a
-            href={`/api/v1/runs/${parseInt(runId!, 10)}/report/export?format=markdown`}
-            download
-          >
-            <Button variant="outline" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              Markdown
-            </Button>
-          </a>
-          <a
-            href={`/api/v1/runs/${parseInt(runId!, 10)}/report/export?format=json`}
-            download
-          >
-            <Button variant="outline" size="sm">
-              <Download className="mr-2 h-4 w-4" />
-              JSON
-            </Button>
-          </a>
-        </div>
-      </div>
+        }
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="rounded-lg border p-4 space-y-2">

@@ -4,6 +4,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Scan, Merge, FileDown, Loader2 } from 'lucide-react';
 import { api } from '@/utils/api';
+import { dedupKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/components/ui/toast';
 import { PANEL, TEXT, TOOL_BTN } from '@/design-system';
 import { cn } from '@/lib/utils';
@@ -38,7 +39,7 @@ export default function DedupReportCard({ runId }: Props) {
   const toast = useToast();
 
   const statusQ = useQuery({
-    queryKey: ['dedup-status', runId],
+    queryKey: dedupKeys.status(runId),
     queryFn: () => api.planRuns.getDedupStatus(runId),
     staleTime: 15_000,
   });
@@ -47,7 +48,7 @@ export default function DedupReportCard({ runId }: Props) {
     mutationFn: (isFinal: boolean) => api.planRuns.triggerScan(runId, isFinal),
     onSuccess: () => {
       toast.success('已触发扫描');
-      qc.invalidateQueries({ queryKey: ['dedup-status', runId] });
+      qc.invalidateQueries({ queryKey: dedupKeys.status(runId) });
     },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
@@ -59,7 +60,7 @@ export default function DedupReportCard({ runId }: Props) {
     mutationFn: () => api.planRuns.triggerMerge(runId),
     onSuccess: () => {
       toast.success('合并完成');
-      qc.invalidateQueries({ queryKey: ['dedup-status', runId] });
+      qc.invalidateQueries({ queryKey: dedupKeys.status(runId) });
     },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);
@@ -71,7 +72,7 @@ export default function DedupReportCard({ runId }: Props) {
     mutationFn: () => api.planRuns.triggerExtract(runId),
     onSuccess: () => {
       toast.success('已提取日志到提单目录');
-      qc.invalidateQueries({ queryKey: ['dedup-status', runId] });
+      qc.invalidateQueries({ queryKey: dedupKeys.status(runId) });
     },
     onError: (e: unknown) => {
       const msg = e instanceof Error ? e.message : String(e);

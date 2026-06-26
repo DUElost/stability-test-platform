@@ -64,10 +64,6 @@ vi.mock('@/components/charts', () => ({
   CompletionTrendChart: () => <div data-testid="completion-trend-chart" />,
 }));
 
-vi.mock('@/mappers', () => ({
-  mapDeviceToViewModel: (d: any) => d,
-}));
-
 vi.mock('../components/layout', () => ({
   PageContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   PageHeader: ({ title, subtitle }: { title: string; subtitle?: string }) => (

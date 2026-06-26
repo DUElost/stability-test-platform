@@ -1,13 +1,14 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Rocket, Server } from 'lucide-react';
-import { useToast } from '../../components/ui/toast';
-import { useConfirm } from '../../hooks/useConfirm';
-import { useAuthSession } from '../../hooks/useAuthSession';
-import { ExpandableHostTable, type HostTableData } from '../../components/network/ExpandableHostTable';
+import { useToast } from '@/components/ui/toast';
+import { useConfirm } from '@/hooks/useConfirm';
+import { useAuthSession } from '@/hooks/useAuthSession';
+import { ExpandableHostTable, type HostTableData } from '@/components/network/ExpandableHostTable';
 import { AddHostModal } from './components/AddHostModal';
-import HostHotUpdateConfirmDialog from '../../components/host/HostHotUpdateConfirmDialog';
-import { api } from '../../utils/api';
+import HostHotUpdateConfirmDialog from '@/components/host/HostHotUpdateConfirmDialog';
+import { api } from '@/utils/api';
+import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -26,13 +27,13 @@ export default function HostsPage() {
   const canManageWatcherAdminState = sessionQ.data?.role === 'admin';
 
   const { data: hosts, isLoading, error } = useQuery({
-    queryKey: ['hosts'],
+    queryKey: hostKeys.list(),
     queryFn: () => api.hosts.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
 
   const { data: devices } = useQuery({
-    queryKey: ['devices'],
+    queryKey: deviceKeys.list(),
     queryFn: () => api.devices.list(0, 200).then(res => res.data.items),
     refetchInterval: 10000,
   });
@@ -41,7 +42,7 @@ export default function HostsPage() {
     mutationFn: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
       api.hosts.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['hosts'] });
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       setIsModalOpen(false);
       toast.success('主机添加成功');
     },
@@ -80,7 +81,7 @@ export default function HostsPage() {
     onSuccess: () => {
       toast.success(`已启动 ${selectedHostIds.size} 台主机的批量部署`);
       setSelectedHostIds(new Set());
-      queryClient.invalidateQueries({ queryKey: ['hosts'] });
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
     },
     onError: (error: any) => {
       toast.error(`批量部署失败: ${error.response?.data?.detail || error.message}`);
@@ -105,7 +106,7 @@ export default function HostsPage() {
         vars.watcher_admin_active ? `主机 ${vars.hostId} 已设为已激活` : `主机 ${vars.hostId} 已设为未激活`,
       );
       setWatcherAdminUpdatingHostId(null);
-      queryClient.invalidateQueries({ queryKey: ['hosts'] });
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
     },
     onError: (error: any, vars) => {
@@ -129,7 +130,7 @@ export default function HostsPage() {
       );
       setHotUpdatingHostId(null);
       setPendingHotUpdateHostId(null);
-      queryClient.invalidateQueries({ queryKey: ['hosts'] });
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
     },
     onError: (error: any, vars) => {
@@ -333,7 +334,7 @@ export default function HostsPage() {
         <ErrorState
           title="加载主机失败"
           description="请检查后端服务连接"
-          onRetry={() => queryClient.invalidateQueries({ queryKey: ['hosts'] })}
+          onRetry={() => queryClient.invalidateQueries({ queryKey: hostKeys.list() })}
         />
       </PageContainer>
     );

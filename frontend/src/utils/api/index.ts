@@ -11,6 +11,7 @@ export { results, stats } from './analytics';
 export { users, notifications, schedules, audit } from './management';
 export { plans } from './plans';
 export { planRuns } from './planRuns';
+export { runs } from './runs';
 
 export type {
   Host, Device, Task, RunStep, TaskRun,
@@ -45,6 +46,7 @@ import { results, stats } from './analytics';
 import { users, notifications, schedules, audit } from './management';
 import { plans } from './plans';
 import { planRuns } from './planRuns';
+import { runs } from './runs';
 
 export const api = {
   auth,
@@ -66,4 +68,5 @@ export const api = {
   resourcePools,
   plans,
   planRuns,
+  runs,
 };
