@@ -119,6 +119,7 @@ PlanRun 终态
        └→ enqueue merge_task ───────────────────────────────┘
             ├→ run_merge_sync → PlanRunArtifact(merge_result_xls) 注册 DB
             ├→ poll upload:{run_id} SAQ job 至 complete/failed/aborted
+            ├→ poll NFS devices/{run_id}/ 直至出现时间戳事件目录（10s × 30 = 300s max）
             └→ enqueue extract_task
                  └→ copy devices/ + merge xls → jira/{run_id}/
 ```
@@ -130,7 +131,8 @@ PlanRun 终态
 | scan_task | — | 入口 | 链式入口，poll 完成后 enqueue upload + merge |
 | upload_task | scan_task 完成 | `devices/{run_id}/` | 与 merge_task 可并行（读/写不同 NFS 子目录） |
 | merge_task | scan_task 完成 | `dedup/{run_id}/` | 读 scan 产物 _org.xls，产出 merge xls |
-| extract_task | upload_task **与** merge_task 均完成 | `devices/` → `jira/{run_id}/` | merge_task 成功后在 enqueue 前 poll `upload:{run_id}`；超时仍 enqueue（best-effort） |
+| extract_task | upload_task **与** merge_task 均完成 | `devices/` → `jira/{run_id}/` | merge 成功后 poll `upload:{run_id}` SAQ job + poll NFS `devices/`；任一超时仍 enqueue extract（best-effort） |
+| merge_task SAQ timeout | — | — | `_MERGE_TASK_SAQ_TIMEOUT` = 300 + 660 + 300 + 120s，覆盖子进程与两轮 poll |
 
 - **多 host**：`scan_task` poll 等待所有 triggered host 的 artifact 或超时
 - **Agent 上送**：`upload_scan_report` 与 `upload_event_dirs` 由 Agent daemon thread 分别执行

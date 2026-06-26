@@ -8,15 +8,24 @@ and keyword arguments that were passed at enqueue time.
 
 import logging
 import asyncio
+import re
 
 logger = logging.getLogger(__name__)
 
 asyncio_sleep = asyncio.sleep
 asyncio_to_thread = asyncio.to_thread
 
+_MERGE_SYNC_TIMEOUT = 300
 _UPLOAD_WAIT_INTERVAL = 5
-_UPLOAD_WAIT_MAX = 660  # upload_task timeout=600，留余量
+_UPLOAD_WAIT_MAX = 660  # upload_task SAQ timeout=600，留余量
+_DEVICES_POLL_INTERVAL = 10
+_DEVICES_POLL_MAX = 300
 _TERMINAL_SAQ_STATUSES = frozenset({"complete", "failed", "aborted"})
+# merge 子进程 + upload SAQ poll + devices NFS poll + 余量
+_MERGE_TASK_SAQ_TIMEOUT = (
+    _MERGE_SYNC_TIMEOUT + _UPLOAD_WAIT_MAX + _DEVICES_POLL_MAX + 120
+)
+_EVENT_DIR_RE = re.compile(r"^\d{4}[-_]\d{2}[-_]\d{2}[_T]")
 
 
 async def post_completion_task(ctx: dict, *, job_id: int) -> None:
@@ -192,7 +201,7 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
                 function="merge_task",
                 kwargs={"plan_run_id": plan_run_id},
                 key=f"merge:{plan_run_id}",
-                timeout=300,
+                timeout=_MERGE_TASK_SAQ_TIMEOUT,
                 retries=2,
                 retry_delay=10.0,
                 retry_backoff=True,
@@ -330,6 +339,48 @@ async def _wait_for_upload_task(plan_run_id: int) -> bool:
     return False
 
 
+def _count_devices_event_dirs_sync(plan_run_id: int) -> int:
+    """统计 NFS devices/{plan_run_id}/ 下时间戳事件目录数（与 UploadManager 命名一致）。"""
+    import os
+    from pathlib import Path
+
+    nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
+    if not nfs_root:
+        return 0
+    devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)
+    if not devices_dir.is_dir():
+        return 0
+    return sum(
+        1 for p in devices_dir.iterdir()
+        if p.is_dir() and _EVENT_DIR_RE.match(p.name)
+    )
+
+
+async def _wait_for_devices_on_nfs(plan_run_id: int) -> int:
+    """poll NFS devices/{plan_run_id}/ 直至出现事件目录；超时返回 0（best-effort extract）。"""
+    elapsed = 0
+    while elapsed < _DEVICES_POLL_MAX:
+        count = await asyncio_to_thread(_count_devices_event_dirs_sync, plan_run_id)
+        if count > 0:
+            logger.info(
+                "saq_merge_devices_ready plan_run=%d dirs=%d waited=%ds",
+                plan_run_id, count, elapsed,
+            )
+            return count
+        logger.info(
+            "saq_merge_devices_wait plan_run=%d elapsed=%ds",
+            plan_run_id, elapsed,
+        )
+        await asyncio_sleep(_DEVICES_POLL_INTERVAL)
+        elapsed += _DEVICES_POLL_INTERVAL
+
+    logger.warning(
+        "saq_merge_devices_wait_timeout plan_run=%d waited=%ds",
+        plan_run_id, elapsed,
+    )
+    return 0
+
+
 async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
     """ADR-0025 Sprint 4: 归档-2 集中合并（-merge_files 各 agent _org.xls）。"""
     from backend.services.dedup_scan import run_merge_sync
@@ -349,7 +400,19 @@ async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
         )
         return
 
-    await _wait_for_upload_task(plan_run_id)
+    upload_ready = await _wait_for_upload_task(plan_run_id)
+    if not upload_ready:
+        logger.warning(
+            "saq_merge_extract_best_effort plan_run=%d reason=upload_saq_timeout",
+            plan_run_id,
+        )
+
+    n_devices = await _wait_for_devices_on_nfs(plan_run_id)
+    if n_devices == 0:
+        logger.warning(
+            "saq_merge_extract_best_effort plan_run=%d reason=devices_empty_or_timeout",
+            plan_run_id,
+        )
 
     try:
         await _enqueue_extract_task(plan_run_id)

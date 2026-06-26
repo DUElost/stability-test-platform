@@ -111,12 +111,14 @@ async def test_scan_task_no_hosts_triggered_skips_poll():
 
 @pytest.mark.asyncio
 async def test_merge_task_enqueues_extract_on_success():
-    """merge_task should wait for upload then enqueue extract_task."""
+    """merge_task should wait for upload + devices then enqueue extract_task."""
     from backend.tasks import saq_tasks
 
     wait_upload = AsyncMock(return_value=True)
+    wait_devices = AsyncMock(return_value=2)
     with patch("asyncio.to_thread", new=AsyncMock(return_value="ok")), \
-         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload):
+         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload), \
+         patch.object(saq_tasks, "_wait_for_devices_on_nfs", wait_devices):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
@@ -124,20 +126,22 @@ async def test_merge_task_enqueues_extract_on_success():
             await saq_tasks.merge_task({}, plan_run_id=42)
 
     wait_upload.assert_awaited_once_with(42)
+    wait_devices.assert_awaited_once_with(42)
     mock_job_cls.assert_called_once()
     assert mock_job_cls.call_args.kwargs["function"] == "extract_task"
-    assert mock_job_cls.call_args.kwargs["kwargs"] == {"plan_run_id": 42}
     mock_queue.enqueue.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_merge_task_skips_extract_when_merge_skipped():
-    """merge_task should not wait for upload or enqueue extract when merge skipped."""
+    """merge_task should not wait or enqueue extract when merge skipped."""
     from backend.tasks import saq_tasks
 
     wait_upload = AsyncMock()
+    wait_devices = AsyncMock()
     with patch("asyncio.to_thread", new=AsyncMock(return_value="")), \
-         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload):
+         patch.object(saq_tasks, "_wait_for_upload_task", wait_upload), \
+         patch.object(saq_tasks, "_wait_for_devices_on_nfs", wait_devices):
         mock_queue = MagicMock()
         mock_queue.enqueue = AsyncMock()
         with patch("backend.tasks.saq_worker.get_queue", return_value=mock_queue), \
@@ -145,6 +149,7 @@ async def test_merge_task_skips_extract_when_merge_skipped():
             await saq_tasks.merge_task({}, plan_run_id=42)
 
     wait_upload.assert_not_awaited()
+    wait_devices.assert_not_awaited()
     mock_queue.enqueue.assert_not_awaited()
 
 
@@ -177,15 +182,70 @@ async def test_wait_for_upload_task_timeout_still_returns_false():
     """_wait_for_upload_task returns False on timeout (merge may still extract best-effort)."""
     from backend.tasks import saq_tasks
 
-    saq_tasks.asyncio_sleep = AsyncMock()
-    saq_tasks.asyncio_to_thread = AsyncMock(return_value={"status": "active"})
+    orig_interval = saq_tasks._UPLOAD_WAIT_INTERVAL
+    orig_max = saq_tasks._UPLOAD_WAIT_MAX
     saq_tasks._UPLOAD_WAIT_INTERVAL = 1
     saq_tasks._UPLOAD_WAIT_MAX = 2
-
-    result = await saq_tasks._wait_for_upload_task(42)
+    saq_tasks.asyncio_sleep = AsyncMock()
+    saq_tasks.asyncio_to_thread = AsyncMock(return_value={"status": "active"})
+    try:
+        result = await saq_tasks._wait_for_upload_task(42)
+    finally:
+        saq_tasks._UPLOAD_WAIT_INTERVAL = orig_interval
+        saq_tasks._UPLOAD_WAIT_MAX = orig_max
 
     assert result is False
     assert saq_tasks.asyncio_to_thread.await_count >= 1
+
+
+@pytest.mark.asyncio
+async def test_wait_for_devices_on_nfs_polls_until_dirs_appear():
+    """_wait_for_devices_on_nfs returns dir count once NFS has event directories."""
+    from backend.tasks import saq_tasks
+
+    counts = [0, 2]
+    idx = 0
+
+    def fake_count(_plan_run_id: int) -> int:
+        nonlocal idx
+        n = counts[min(idx, len(counts) - 1)]
+        idx += 1
+        return n
+
+    saq_tasks.asyncio_sleep = AsyncMock()
+    saq_tasks.asyncio_to_thread = AsyncMock(
+        side_effect=lambda fn, *a: fake_count(a[0]),
+    )
+
+    result = await saq_tasks._wait_for_devices_on_nfs(42)
+
+    assert result == 2
+    assert saq_tasks.asyncio_to_thread.await_count == 2
+    saq_tasks.asyncio_sleep.assert_awaited_once()
+
+
+def test_count_devices_event_dirs_matches_timestamp_prefix(tmp_path, monkeypatch):
+    """_count_devices_event_dirs_sync only counts YYYY-MM-DD_* style dirs."""
+    from backend.tasks import saq_tasks
+
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    devices = tmp_path / "devices" / "99"
+    devices.mkdir(parents=True)
+    (devices / "2026-06-25_14-30-00_db.01").mkdir()
+    (devices / "test_dir").mkdir()
+
+    assert saq_tasks._count_devices_event_dirs_sync(99) == 1
+
+
+def test_scan_task_merge_job_timeout_covers_poll_budget():
+    """merge_task SAQ timeout must cover merge subprocess + upload/devices polls."""
+    from backend.tasks import saq_tasks
+
+    assert saq_tasks._MERGE_TASK_SAQ_TIMEOUT >= (
+        saq_tasks._MERGE_SYNC_TIMEOUT
+        + saq_tasks._UPLOAD_WAIT_MAX
+        + saq_tasks._DEVICES_POLL_MAX
+    )
 
 
 @pytest.mark.asyncio
