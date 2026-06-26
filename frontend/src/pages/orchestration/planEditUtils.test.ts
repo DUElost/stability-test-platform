@@ -20,7 +20,6 @@ const basePlan: Plan = {
   steps: [
     {
       id: 1,
-      plan_id: 1,
       step_key: 'step_init_1',
       script_name: 'check_device',
       script_version: '1.0.0',
@@ -32,7 +31,6 @@ const basePlan: Plan = {
     },
     {
       id: 2,
-      plan_id: 1,
       step_key: 'step_patrol_1',
       script_name: 'monkey',
       script_version: '2.0.0',
@@ -44,7 +42,6 @@ const basePlan: Plan = {
     },
     {
       id: 3,
-      plan_id: 1,
       step_key: 'step_teardown_1',
       script_name: 'cleanup',
       script_version: '1.0.0',
