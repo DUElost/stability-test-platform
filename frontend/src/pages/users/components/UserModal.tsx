@@ -46,29 +46,29 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
     const newErrors: Record<string, string> = {};
 
     if (!formData.username.trim()) {
-      newErrors.username = 'Username is required';
+      newErrors.username = '请输入用户名';
     } else if (formData.username.length < 3) {
-      newErrors.username = 'Username must be at least 3 characters';
+      newErrors.username = '用户名至少 3 个字符';
     } else if (!/^[a-zA-Z0-9_]+$/.test(formData.username)) {
-      newErrors.username = 'Username can only contain letters, numbers and underscores';
+      newErrors.username = '用户名只能包含字母、数字和下划线';
     }
 
     if (!isEditMode) {
       if (!formData.password) {
-        newErrors.password = 'Password is required';
+        newErrors.password = '请输入密码';
       } else if (formData.password.length < 6) {
-        newErrors.password = 'Password must be at least 6 characters';
+        newErrors.password = '密码至少 6 个字符';
       }
     }
 
     if (formData.password || formData.confirmPassword) {
       if (formData.password !== formData.confirmPassword) {
-        newErrors.confirmPassword = 'Passwords do not match';
+        newErrors.confirmPassword = '两次输入的密码不一致';
       }
     }
 
     if (formData.role !== 'user' && formData.role !== 'admin') {
-      newErrors.role = 'Invalid role';
+      newErrors.role = '无效的角色';
     }
 
     setErrors(newErrors);
@@ -119,13 +119,15 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
           <div className="flex items-center gap-2">
             <UserPlus className={STATUS_TEXT_COLORS.primary} size={20} />
             <h2 className={MODAL.title}>
-              {isEditMode ? 'Edit User' : 'Add New User'}
+              {isEditMode ? '编辑用户' : '添加用户'}
             </h2>
           </div>
           <button
+            type="button"
             onClick={handleClose}
             disabled={isSubmitting}
             className={MODAL.closeButton}
+            aria-label="关闭"
           >
             <X size={20} />
           </button>
@@ -136,14 +138,14 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
           {/* Username */}
           <div>
             <label htmlFor="user-username" className={FORM.label}>
-              Username <span className={STATUS_TEXT_COLORS.error}>*</span>
+              用户名 <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <input
               id="user-username"
               type="text"
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-              placeholder="e.g., john_doe"
+              placeholder="例如：zhang_san"
               className={fieldClass(!!errors.username)}
               disabled={isSubmitting}
             />
@@ -153,14 +155,14 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
           {/* Password (only for new users or password change) */}
           <div>
             <label htmlFor="user-password" className={FORM.label}>
-              {isEditMode ? 'New Password' : 'Password'} {!isEditMode && <span className={STATUS_TEXT_COLORS.error}>*</span>}
+              {isEditMode ? '新密码' : '密码'} {!isEditMode && <span className={STATUS_TEXT_COLORS.error}>*</span>}
             </label>
             <input
               id="user-password"
               type="password"
               value={formData.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              placeholder={isEditMode ? 'Leave blank to keep current' : 'e.g., ********'}
+              placeholder={isEditMode ? '留空表示不修改' : '至少 6 位'}
               className={fieldClass(!!errors.password)}
               disabled={isSubmitting}
             />
@@ -171,14 +173,14 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
           {(formData.password || !isEditMode) && (
             <div>
               <label htmlFor="user-confirm-password" className={FORM.label}>
-                Confirm Password
+                确认密码
               </label>
               <input
                 id="user-confirm-password"
                 type="password"
                 value={formData.confirmPassword}
                 onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                placeholder="Re-enter password"
+                placeholder="再次输入密码"
                 className={fieldClass(!!errors.confirmPassword)}
                 disabled={isSubmitting}
               />
@@ -189,7 +191,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
           {/* Role */}
           <div>
             <label htmlFor="user-role" className={FORM.label}>
-              Role <span className={STATUS_TEXT_COLORS.error}>*</span>
+              角色 <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <select
               id="user-role"
@@ -198,12 +200,12 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               className={cn(FORM.select, 'w-full', errors.role && FORM.inputInvalid)}
               disabled={isSubmitting}
             >
-              <option value="user">User</option>
-              <option value="admin">Admin</option>
+              <option value="user">普通用户</option>
+              <option value="admin">管理员</option>
             </select>
             {errors.role && <p className={FORM.error}>{errors.role}</p>}
             <p className={FORM.hint}>
-              Admins can manage users and access all features
+              管理员可管理用户并访问全部功能
             </p>
           </div>
 
@@ -215,7 +217,7 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               onClick={handleClose}
               disabled={isSubmitting}
             >
-              Cancel
+              取消
             </Button>
             <Button
               type="submit"
@@ -224,10 +226,10 @@ export function UserModal({ isOpen, onClose, onSubmit, onUpdate, isSubmitting, e
               {isSubmitting ? (
                 <>
                   <Loader2 size={18} className="animate-spin" />
-                  {isEditMode ? 'Saving...' : 'Adding...'}
+                  {isEditMode ? '保存中…' : '添加中…'}
                 </>
               ) : (
-                isEditMode ? 'Save Changes' : 'Add User'
+                isEditMode ? '保存修改' : '添加用户'
               )}
             </Button>
           </div>

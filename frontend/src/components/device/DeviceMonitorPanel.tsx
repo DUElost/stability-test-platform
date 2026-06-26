@@ -214,7 +214,8 @@ export function DeviceMonitorPanel({
         <div className="flex items-center gap-2 flex-1 min-w-[200px]">
           <Search className="h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search devices..."
+            placeholder="搜索设备…"
+            aria-label="搜索设备"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="h-8 text-sm"
@@ -224,13 +225,13 @@ export function DeviceMonitorPanel({
         <div className="flex items-center gap-2">
           <Filter className="h-4 w-4 text-muted-foreground" />
           <Select value={sortBy} onValueChange={(v: string) => setSortBy(v as SortBy)}>
-            <SelectTrigger className="w-32 h-8 text-xs">
-              <SelectValue placeholder="Sort by" />
+            <SelectTrigger className="w-32 h-8 text-xs" aria-label="排序方式">
+              <SelectValue placeholder="排序" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="status">Status</SelectItem>
-              <SelectItem value="name">Name</SelectItem>
-              <SelectItem value="lastSeen">Last Seen</SelectItem>
+              <SelectItem value="status">状态</SelectItem>
+              <SelectItem value="name">名称</SelectItem>
+              <SelectItem value="lastSeen">最近活跃</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -241,6 +242,7 @@ export function DeviceMonitorPanel({
             size="sm"
             className="h-8 w-8 p-0"
             onClick={() => setViewMode('grid')}
+            aria-label="网格视图"
           >
             <LayoutGrid className="h-4 w-4" />
           </Button>
@@ -249,6 +251,7 @@ export function DeviceMonitorPanel({
             size="sm"
             className="h-8 w-8 p-0"
             onClick={() => setViewMode('list')}
+            aria-label="列表视图"
           >
             <List className="h-4 w-4" />
           </Button>
@@ -260,7 +263,7 @@ export function DeviceMonitorPanel({
             className="flex items-center gap-1"
           >
             {isConnected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-            {isConnected ? 'Live' : 'Offline'}
+            {isConnected ? '实时' : '离线'}
           </Badge>
         )}
 

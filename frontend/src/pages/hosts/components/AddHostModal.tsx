@@ -30,14 +30,14 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
-    if (!formData.name.trim()) newErrors.name = 'Host name is required';
+    if (!formData.name.trim()) newErrors.name = '请输入主机名称';
     if (!formData.ip.trim()) {
-      newErrors.ip = 'IP address is required';
+      newErrors.ip = '请输入 IP 地址';
     } else if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(formData.ip)) {
-      newErrors.ip = 'Invalid IP address format';
+      newErrors.ip = 'IP 地址格式不正确';
     }
     if (formData.ssh_port < 1 || formData.ssh_port > 65535) {
-      newErrors.ssh_port = 'Port must be between 1 and 65535';
+      newErrors.ssh_port = '端口须在 1–65535 之间';
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -63,9 +63,15 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
         <div className={MODAL.header}>
           <div className="flex items-center gap-2">
             <Server className={STATUS_TEXT_COLORS.primary} size={20} />
-            <h2 className={MODAL.title}>Add New Host</h2>
+            <h2 className={MODAL.title}>添加主机</h2>
           </div>
-          <button onClick={handleClose} disabled={isSubmitting} className={MODAL.closeButton}>
+          <button
+            type="button"
+            onClick={handleClose}
+            disabled={isSubmitting}
+            className={MODAL.closeButton}
+            aria-label="关闭"
+          >
             <X size={20} />
           </button>
         </div>
@@ -73,14 +79,14 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
         <form onSubmit={handleSubmit} className="space-y-4 p-6">
           <div>
             <label htmlFor="host-name" className={FORM.label}>
-              Host Name <span className={STATUS_TEXT_COLORS.error}>*</span>
+              主机名称 <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <input
               id="host-name"
               type="text"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="e.g., Test Server 01"
+              placeholder="例如：测试机 01"
               className={fieldClass(!!errors.name)}
               disabled={isSubmitting}
             />
@@ -89,14 +95,14 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
 
           <div>
             <label htmlFor="host-ip" className={FORM.label}>
-              IP Address <span className={STATUS_TEXT_COLORS.error}>*</span>
+              IP 地址 <span className={STATUS_TEXT_COLORS.error}>*</span>
             </label>
             <input
               id="host-ip"
               type="text"
               value={formData.ip}
               onChange={(e) => setFormData({ ...formData, ip: e.target.value })}
-              placeholder="e.g., 192.168.1.100"
+              placeholder="例如：192.168.1.100"
               className={fieldClass(!!errors.ip)}
               disabled={isSubmitting}
             />
@@ -105,7 +111,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
 
           <div>
             <label htmlFor="host-port" className={FORM.label}>
-              SSH Port
+              SSH 端口
             </label>
             <input
               id="host-port"
@@ -122,14 +128,14 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
 
           <div>
             <label htmlFor="host-user" className={FORM.label}>
-              SSH User
+              SSH 用户
             </label>
             <input
               id="host-user"
               type="text"
               value={formData.ssh_user}
               onChange={(e) => setFormData({ ...formData, ssh_user: e.target.value })}
-              placeholder="e.g., admin (optional)"
+              placeholder="例如：admin（可选）"
               className={FORM.input}
               disabled={isSubmitting}
             />
@@ -137,16 +143,16 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting }: AddHos
 
           <div className="flex justify-end gap-3 pt-4">
             <Button type="button" variant="outline" onClick={handleClose} disabled={isSubmitting}>
-              Cancel
+              取消
             </Button>
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? (
                 <>
                   <Loader2 size={18} className="animate-spin" />
-                  Adding...
+                  添加中…
                 </>
               ) : (
-                'Add Host'
+                '添加主机'
               )}
             </Button>
           </div>

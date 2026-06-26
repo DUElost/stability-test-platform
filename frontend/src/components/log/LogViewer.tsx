@@ -89,14 +89,15 @@ export const LogViewer: React.FC<{ wsUrl: string }> = ({ wsUrl }) => {
       <div className="flex items-center justify-between border-b border-border bg-muted p-2">
         <div className="flex items-center gap-2">
           <span className={cn('px-2 text-xs font-bold uppercase tracking-wider', TEXT.subtitle)}>
-            Live Console
+            实时日志
           </span>
           <select
             value={levelFilter}
             onChange={(e) => setLevelFilter(e.target.value)}
             className={cn(FORM.selectSm, 'bg-background')}
+            aria-label="日志级别"
           >
-            <option value="ALL">ALL LEVELS</option>
+            <option value="ALL">全部级别</option>
             <option value="INFO">INFO</option>
             <option value="WARN">WARN</option>
             <option value="ERROR">ERROR</option>
@@ -104,7 +105,8 @@ export const LogViewer: React.FC<{ wsUrl: string }> = ({ wsUrl }) => {
           </select>
           <input
             type="text"
-            placeholder="Filter logs..."
+            placeholder="筛选日志…"
+            aria-label="筛选日志"
             className={cn(FORM.inputSm, 'w-48 bg-background pl-2')}
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -112,28 +114,34 @@ export const LogViewer: React.FC<{ wsUrl: string }> = ({ wsUrl }) => {
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setLogs([])}
             className={cn('p-1 hover:text-destructive', INTERACTIVE.iconButton)}
-            title="Clear Logs"
+            title="清空日志"
+            aria-label="清空日志"
           >
             <Trash2 size={14} />
           </button>
           <button
+            type="button"
             onClick={downloadLogs}
             className={cn('p-1 hover:text-primary', INTERACTIVE.iconButton)}
-            title="Download Logs"
+            title="下载日志"
+            aria-label="下载日志"
           >
             <Download size={14} />
           </button>
           <button
+            type="button"
             onClick={() => setAutoScroll(!autoScroll)}
             className={cn(
               'flex items-center gap-1 rounded px-2 py-1 text-xs',
               autoScroll ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
             )}
+            aria-label={autoScroll ? '关闭自动滚动' : '开启自动滚动'}
           >
             {autoScroll ? <Pause size={12} /> : <Play size={12} />}
-            {autoScroll ? 'Auto' : 'Paused'}
+            {autoScroll ? '自动滚动' : '已暂停'}
           </button>
         </div>
       </div>

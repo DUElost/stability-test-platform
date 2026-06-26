@@ -49,15 +49,18 @@ export function DeviceToolbar({
           <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2', TEXT.subtitle)} size={18} />
           <input
             type="text"
-            placeholder="Search by serial or model..."
+            placeholder="按序列号或型号搜索…"
+            aria-label="搜索设备"
             value={localFilterText}
             onChange={(e) => setLocalFilterText(e.target.value)}
             className={cn(FORM.input, 'pl-10 pr-10')}
           />
           {localFilterText && (
             <button
+              type="button"
               onClick={handleClearFilter}
               className={cn('absolute right-3 top-1/2 -translate-y-1/2', INTERACTIVE.iconButton)}
+              aria-label="清除搜索"
             >
               <X size={16} />
             </button>
@@ -65,11 +68,12 @@ export function DeviceToolbar({
         </div>
 
         <div className="flex items-center gap-2">
-          <Filter size={18} className={TEXT.subtitle} />
+          <Filter size={18} className={TEXT.subtitle} aria-hidden />
           <select
             value={statusFilter}
             onChange={(e) => onStatusFilterChange(e.target.value)}
             className={FORM.select}
+            aria-label="按状态筛选"
           >
             {STATUS_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>
@@ -81,19 +85,29 @@ export function DeviceToolbar({
 
         {(filterText || statusFilter !== 'all') && (
           <div className={cn('flex items-center gap-2 text-sm', TEXT.subtitle)}>
-            <span>Active filters:</span>
+            <span>当前筛选：</span>
             {filterText && (
               <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs', STATUS_CHIP.primary)}>
-                Search: {filterText.length > 15 ? `${filterText.slice(0, 15)}...` : filterText}
-                <button onClick={handleClearFilter} className="hover:text-primary">
+                搜索：{filterText.length > 15 ? `${filterText.slice(0, 15)}…` : filterText}
+                <button
+                  type="button"
+                  onClick={handleClearFilter}
+                  className="hover:text-primary"
+                  aria-label="移除搜索筛选"
+                >
                   <X size={12} />
                 </button>
               </span>
             )}
             {statusFilter !== 'all' && (
               <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs', STATUS_CHIP.success)}>
-                Status: {STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label}
-                <button onClick={() => onStatusFilterChange('all')} className="hover:text-success">
+                状态：{STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label}
+                <button
+                  type="button"
+                  onClick={() => onStatusFilterChange('all')}
+                  className="hover:text-success"
+                  aria-label="移除状态筛选"
+                >
                   <X size={12} />
                 </button>
               </span>

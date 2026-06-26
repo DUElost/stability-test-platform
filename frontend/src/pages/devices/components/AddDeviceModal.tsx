@@ -29,9 +29,9 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
 
   const validate = (): boolean => {
     const newErrors: Record<string, string> = {};
-    if (!formData.serial.trim()) newErrors.serial = 'Device serial is required';
+    if (!formData.serial.trim()) newErrors.serial = '请输入设备序列号';
     if (formData.host_id && (!Number.isInteger(Number(formData.host_id)) || Number(formData.host_id) < 1)) {
-      newErrors.host_id = 'Host ID must be a positive integer';
+      newErrors.host_id = '主机 ID 须为正整数';
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -67,9 +67,15 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
         <div className={MODAL.header}>
           <div className="flex items-center gap-2">
             <Smartphone className="text-primary" size={20} />
-            <h2 className={MODAL.title}>Add New Device</h2>
+            <h2 className={MODAL.title}>添加设备</h2>
           </div>
-          <button onClick={handleClose} disabled={isSubmitting} className={MODAL.closeButton}>
+          <button
+            type="button"
+            onClick={handleClose}
+            disabled={isSubmitting}
+            className={MODAL.closeButton}
+            aria-label="关闭"
+          >
             <X size={20} />
           </button>
         </div>
@@ -77,14 +83,14 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
         <form onSubmit={handleSubmit} className="space-y-4 p-6">
           <div>
             <label htmlFor="device-serial" className={FORM.label}>
-              Serial Number <span className="text-destructive">*</span>
+              序列号 <span className="text-destructive">*</span>
             </label>
             <input
               id="device-serial"
               type="text"
               value={formData.serial}
               onChange={(e) => setFormData({ ...formData, serial: e.target.value })}
-              placeholder="e.g., A1B2C3D4E5F6"
+              placeholder="例如：A1B2C3D4E5F6"
               className={fieldClass(!!errors.serial)}
               disabled={isSubmitting}
             />
@@ -93,14 +99,14 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
 
           <div>
             <label htmlFor="device-model" className={FORM.label}>
-              Model
+              型号
             </label>
             <input
               id="device-model"
               type="text"
               value={formData.model}
               onChange={(e) => setFormData({ ...formData, model: e.target.value })}
-              placeholder="e.g., SM-G991B (optional)"
+              placeholder="例如：SM-G991B（可选）"
               className={FORM.input}
               disabled={isSubmitting}
             />
@@ -108,7 +114,7 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
 
           <div>
             <label htmlFor="device-host" className={FORM.label}>
-              Host ID
+              主机 ID
             </label>
             <input
               id="device-host"
@@ -116,19 +122,19 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
               min={1}
               value={formData.host_id}
               onChange={(e) => setFormData({ ...formData, host_id: e.target.value })}
-              placeholder="e.g., 1 (optional)"
+              placeholder="例如：1（可选）"
               className={fieldClass(!!errors.host_id)}
               disabled={isSubmitting}
             />
             {errors.host_id && <p className={FORM.error}>{errors.host_id}</p>}
-            <p className={FORM.hint}>Associate this device with a specific host</p>
+            <p className={FORM.hint}>将设备关联到指定主机</p>
           </div>
 
           <div>
             <label htmlFor="device-tags" className={FORM.label}>
               <span className="flex items-center gap-1">
                 <Tag size={14} />
-                Tags
+                标签
               </span>
             </label>
             <input
@@ -136,25 +142,25 @@ export function AddDeviceModal({ isOpen, onClose, onSubmit, isSubmitting }: AddD
               type="text"
               value={formData.tags}
               onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
-              placeholder="e.g., android, samsung, test-group (comma separated)"
+              placeholder="例如：android、samsung、test-group（逗号分隔）"
               className={FORM.input}
               disabled={isSubmitting}
             />
-            <p className={FORM.hint}>Separate multiple tags with commas</p>
+            <p className={FORM.hint}>多个标签用英文逗号分隔</p>
           </div>
 
           <div className="flex justify-end gap-3 pt-4">
             <Button type="button" variant="outline" onClick={handleClose} disabled={isSubmitting}>
-              Cancel
+              取消
             </Button>
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? (
                 <>
                   <Loader2 size={18} className="animate-spin" />
-                  Adding...
+                  添加中…
                 </>
               ) : (
-                'Add Device'
+                '添加设备'
               )}
             </Button>
           </div>
