@@ -130,22 +130,18 @@ export default function DevicesPage() {
 
   return (
     <PageContainer width="wide">
-      <PageHeader
-        title="设备管理"
-        subtitle="管理和监控测试设备"
-        action={
-          <Button onClick={() => setIsModalOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加设备
-          </Button>
-        }
-      />
+      <PageHeader title="设备管理" subtitle="管理和监控测试设备" />
+
+      <div className="flex items-center justify-between gap-2 py-2">
+        <span className={cn('text-xs', TEXT.subtitle)}>点击设备行的指标按钮查看历史数据</span>
+        <Button onClick={() => setIsModalOpen(true)}>
+          <Plus className="w-4 h-4" />
+          添加设备
+        </Button>
+      </div>
 
       {/* Device Table */}
       <div>
-        <div className="flex justify-end mb-2">
-          <span className={cn('text-xs', TEXT.subtitle)}>点击设备行的指标按钮查看历史数据</span>
-        </div>
         <ExpandableDeviceTable
           devices={formattedDevices}
           onViewMetrics={(device) => setMetricsDevice({ id: device.id, serial: device.serial })}

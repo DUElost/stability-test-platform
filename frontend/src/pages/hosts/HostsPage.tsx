@@ -367,28 +367,24 @@ export default function HostsPage() {
 
   return (
     <PageContainer width="wide">
-      <PageHeader
-        title="主机管理"
-        subtitle="管理和监控测试执行节点"
-        action={
-          <>
-            {selectedHostIds.size > 0 && (
-              <Button
-                variant="outline"
-                onClick={handleBatchDeploy}
-                disabled={batchDeployMutation.isPending}
-              >
-                <Rocket className="w-4 h-4" />
-                {batchDeployMutation.isPending ? '部署中...' : `批量部署 (${selectedHostIds.size})`}
-              </Button>
-            )}
-            <Button onClick={() => setIsModalOpen(true)}>
-              <Plus className="w-4 h-4" />
-              添加主机
-            </Button>
-          </>
-        }
-      />
+      <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
+
+      <div className="flex items-center justify-end gap-2 py-2">
+        {selectedHostIds.size > 0 && (
+          <Button
+            variant="outline"
+            onClick={handleBatchDeploy}
+            disabled={batchDeployMutation.isPending}
+          >
+            <Rocket className="w-4 h-4" />
+            {batchDeployMutation.isPending ? '部署中...' : `批量部署 (${selectedHostIds.size})`}
+          </Button>
+        )}
+        <Button onClick={() => setIsModalOpen(true)}>
+          <Plus className="w-4 h-4" />
+          添加主机
+        </Button>
+      </div>
 
       {/* Host Table */}
       {tableData.length > 0 ? (
