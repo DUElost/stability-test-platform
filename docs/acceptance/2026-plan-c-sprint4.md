@@ -56,7 +56,7 @@
 - [ ] AC-S4-26 ~ AC-S4-27 前端 build 通过
 - [ ] AC-S4-28 standalone import test PASS
 - [ ] AC-S4-29 scheduler job 注册正常
-- [ ] 真机联调：Agent scan 产出 _org.xls + UploadManager 上送 NFS
+- [x] 真机联调：Agent scan 产出 _org.xls + UploadManager 上送 NFS（PlanRun #52，见 [真机记录](./2026-plan-c-sprint4-real-device.md) §九）
 
 ---
 
@@ -65,3 +65,4 @@
 | 日期 | 变更 |
 |------|------|
 | 2026-06-23 | 初版 Sprint 4 验收矩阵 |
+| 2026-06-27 | 真机联调勾选：PlanRun #52 PASS，关 #30 |

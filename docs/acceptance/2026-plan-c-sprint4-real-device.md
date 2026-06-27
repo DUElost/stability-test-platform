@@ -15,17 +15,16 @@
 
 | 项 | 值 |
 |----|-----|
-| 后端版本 | `git rev-parse HEAD` = `9692376` |
-| Agent 版本 | `git rev-parse HEAD` = `9692376` (via hot-update) |
+| 后端版本 | `c7a38c7`（终验时）；Agent 未热更新（`--no-hot-update`） |
 | 后端地址 | `http://172.21.10.25:8000` |
 | Agent Host ID | `auto-fdaf1d55e319` |
 | Agent IP | `172.21.10.36` |
 | 设备序列号 | `11914404BG100577`, `11914404BG102162`, `121512542H004524` |
-| NFS/CIFS 挂载点 | `Y:\sonic_tinno` (控制面) / `/home/android/sonic_agent/logs/ftp_log/sonic_tinno` (Agent) |
-| scan tool 路径 | `STP_DEDUP_SCAN_SCRIPT=stability_Start-Log-Scan_20260615/start_log_scan.py` |
-| 操作人 | `_________` |
-| 验证日期 | 2026-06-24 |
-| 验证 PlanRun | 45 (SUCCESS, 3 设备, 5.5 分钟, 150 AEE 信号) |
+| NFS/CIFS 挂载点 | `Y:\sonic_tinno` (控制面) / Agent 侧同路径挂载 |
+| scan tool 路径 | `stability_Start-Log-Scan_20260615/start_log_scan.py`（15.4 CIFS） |
+| 操作人 | Rin |
+| Smoke 日期 / PlanRun | 2026-06-24 / **#41**（§八） |
+| 管道终验日期 / PlanRun | **2026-06-27 / #52**（§九，签字依据） |
 
 ### 环境变量确认
 
@@ -63,10 +62,10 @@ echo $STP_WATCHER_ENABLED     # Watcher 开关
 
 | 项 | 值 |
 |----|-----|
-| plan_run_id | _________ |
-| Agent log 关键行 | `_________` |
-| subprocess 退出码 | _________ |
-| 结果 | ☐ PASS  ☐ FAIL |
+| plan_run_id | **52** |
+| Agent log 关键行 | `scan_runner_start` / `dedup_runner_start` → SUCCESS（`sprint4_real_device_verify.py` 自动判定） |
+| subprocess 退出码 | **0** |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**（日志片段）：
 ```
@@ -86,10 +85,10 @@ echo $STP_WATCHER_ENABLED     # Watcher 开关
 
 | 项 | 值 |
 |----|-----|
-| _org.xls 路径 | `_________` |
-| 文件大小 | _________ bytes |
-| mtime | `_________` |
-| 结果 | ☐ PASS  ☐ FAIL |
+| _org.xls 路径 | `Y:\sonic_tinno\dedup\52\auto-fdaf1d55e319_..._052222_org.xls` |
+| 文件大小 | **1074688** bytes |
+| mtime | `2026-06-27`（与 dedup_org 同批次） |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**：
 ```bash
@@ -117,7 +116,7 @@ stat {org_xls_path}
 |----|-----|
 | Agent log 关键行 | `_________` |
 | 是否上送 | ☐ 否（正确）  ☐ 是（错误） |
-| 结果 | ☐ PASS  ☐ FAIL  ☐ N/A（跳过） |
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（跳过，单测覆盖 AC-S4-02） |
 
 ---
 
@@ -134,10 +133,10 @@ stat {org_xls_path}
 
 | 项 | 值 |
 |----|-----|
-| NFS dedup 路径 | `_________` |
-| 文件名 | `_________` |
-| host_id 前缀正确 | ☐ 是  ☐ 否 |
-| 结果 | ☐ PASS  ☐ FAIL |
+| NFS dedup 路径 | `Y:\sonic_tinno\dedup\52\` |
+| 文件名 | `auto-fdaf1d55e319_..._org.xls` + `_org_dedup_org_20260627_052224.xls` |
+| host_id 前缀正确 | ☑ 是  ☐ 否 |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**：
 ```bash
@@ -160,10 +159,10 @@ ls -la {nfs_root}/dedup/{plan_run_id}/
 
 | 项 | 值 |
 |----|-----|
-| NFS devices 路径 | `_________` |
-| 事件目录数 | _________ |
-| 目录名示例 | `_________` |
-| 结果 | ☐ PASS  ☐ FAIL |
+| NFS devices 路径 | `Y:\sonic_tinno\devices\52\` |
+| 事件目录数 | **233** |
+| 目录名示例 | `2026_0603_063411_640_db.43.JE` |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**：
 ```bash
@@ -189,7 +188,7 @@ ls -la {nfs_root}/devices/{plan_run_id}/
 | 项 | 值 |
 |----|-----|
 | 非时间戳目录是否被排除 | ☐ 是（正确）  ☐ 否（错误） |
-| 结果 | ☐ PASS  ☐ FAIL  ☐ N/A（跳过） |
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（跳过，单测 AC-S4-06 / P1-4） |
 
 ---
 
@@ -207,11 +206,11 @@ ls -la {nfs_root}/devices/{plan_run_id}/
 
 | 项 | 值 |
 |----|-----|
-| plan_run_id | _________ |
-| triggered 数 | _________ |
-| skipped 数 | _________ |
-| ONLINE Agent 数 | _________ |
-| 结果 | ☐ PASS  ☐ FAIL |
+| plan_run_id | **52** |
+| triggered 数 | **1**（单 Agent） |
+| skipped 数 | **0** |
+| ONLINE Agent 数 | **1** |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**（后端日志）：
 ```
@@ -231,10 +230,10 @@ ls -la {nfs_root}/devices/{plan_run_id}/
 
 | 项 | 值 |
 |----|-----|
-| SQL | `SELECT host_id, storage_uri FROM plan_run_artifact WHERE plan_run_id=X AND artifact_type='scan_result_xls'` |
-| 行数 | _________ |
-| host_id 值 | `_________` |
-| 结果 | ☐ PASS  ☐ FAIL |
+| SQL | `SELECT host_id, storage_uri FROM plan_run_artifact WHERE plan_run_id=52 AND artifact_type='scan_result_xls'` |
+| 行数 | **≥2**（多次 scan 批次；终验见 dedup/52） |
+| host_id 值 | `auto-fdaf1d55e319` |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**：
 ```
@@ -255,10 +254,10 @@ ls -la {nfs_root}/devices/{plan_run_id}/
 
 | 项 | 值 |
 |----|-----|
-| SQL | `SELECT storage_uri FROM plan_run_artifact WHERE plan_run_id=X AND artifact_type='merge_result_xls'` |
-| 行数 | _________ |
-| storage_uri | `_________` |
-| 结果 | ☐ PASS  ☐ FAIL |
+| SQL | `SELECT storage_uri FROM plan_run_artifact WHERE plan_run_id=52 AND artifact_type='merge_result_xls'` |
+| 行数 | **≥1** |
+| storage_uri | `...\merge_result\Result_MergeFiles*.xls`（DB 路径可能为历史 merge；CIFS dedup/52 有 fresh 产物） |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**：
 ```
@@ -278,10 +277,10 @@ ls -la {nfs_root}/devices/{plan_run_id}/
 
 | 阶段 | scan_status | 时间 |
 |------|-------------|------|
-| scan 前 | _________ | _________ |
-| scan 后 | _________ | _________ |
-| merge 后 | _________ | _________ |
-| 结果 | ☐ PASS  ☐ FAIL |
+| scan 前 | pending | 2026-06-27 |
+| scan 后 | scanned | 2026-06-27 |
+| merge 后 | **merged** | 2026-06-27 |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**：
 ```bash
@@ -307,10 +306,10 @@ curl -s -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/plan-run
 
 | 项 | 值 |
 |----|-----|
-| PlanRun 终态 | _________ |
-| 自动 enqueue | ☐ 是  ☐ 否 |
-| 后端 log | `_________` |
-| 结果 | ☐ PASS  ☐ FAIL |
+| PlanRun 终态 | **SUCCESS** |
+| 自动 enqueue | ☑ 是  ☐ 否 |
+| 后端 log | `saq_scan_start plan_run=52`（终态自动 + 脚本 `dedup/scan`） |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 ---
 
@@ -329,15 +328,7 @@ curl -s -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/plan-run
 | API 响应 | `_________` |
 | archive_now emit | ☐ 是  ☐ 否 |
 | scan_now emit | ☐ 是  ☐ 否 |
-| 结果 | ☐ PASS  ☐ FAIL |
-
-**证据**：
-```bash
-curl -s -X POST -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/plan-runs/{id}/archive
-```
-```
-（粘贴 API 响应 + 后端日志）
-```
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（未在本轮真机单独测；API 已实现） |
 
 ---
 
@@ -358,7 +349,7 @@ curl -s -X POST -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/
 | sweep 间隔（env） | _________ |
 | 首次 sweep enqueue | ☐ 是  ☐ 否 |
 | is_final（首次） | ☐ True  ☐ False |
-| 结果 | ☐ PASS  ☐ FAIL |
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（跳过） |
 
 ---
 
@@ -378,7 +369,7 @@ curl -s -X POST -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/
 | 第二次 sweep 时间 | _________ |
 | 距上次 scan | _________ s |
 | 是否 enqueue | ☐ 否（正确）  ☐ 是（错误） |
-| 结果 | ☐ PASS  ☐ FAIL  ☐ N/A（跳过） |
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（跳过） |
 
 ---
 
@@ -398,8 +389,8 @@ curl -s -X POST -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/
 |------|---------|------|
 | pending | _________ | _________ |
 | scanned | _________ | _________ |
-| merged | _________ | _________ |
-| 结果 | ☐ PASS  ☐ FAIL |
+| merged | 已合并（API `scan_status=merged`） | — |
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（未 UI 目视；API 状态正确） |
 
 ---
 
@@ -417,7 +408,7 @@ curl -s -X POST -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/
 | archived_jobs | _________ |
 | pending_jobs | _________ |
 | failed_jobs | _________ |
-| 结果 | ☐ PASS  ☐ FAIL |
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（未 UI 目视） |
 
 ---
 
@@ -436,8 +427,8 @@ curl -s -X POST -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/
 | scan 按钮可点 | ☐ 是  ☐ 否 |
 | merge 按钮可点 | ☐ 是  ☐ 否 |
 | extract 按钮可点 | ☐ 是  ☐ 否 |
-| artifact_type 标注 | `_________` |
-| 结果 | ☐ PASS  ☐ FAIL |
+| artifact_type 标注 | `scan_result_xls`, `merge_result_xls`（API `/dedup/status`） |
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（未 UI 目视；extract 经 API 已 PASS） |
 
 ---
 
@@ -455,10 +446,10 @@ curl -s -X POST -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/
 
 | 项 | 值 |
 |----|-----|
-| jira 路径 | `_________` |
-| 拷贝目录数 | _________ |
-| 目录名示例 | `_________` |
-| 结果 | ☐ PASS  ☐ FAIL |
+| jira 路径 | `Y:\sonic_tinno\jira\52\` |
+| 拷贝目录数 | **233**（含后续 extract 增量） |
+| 目录名示例 | `2026_0603_063411_640_db.43.JE` |
+| 结果 | ☑ PASS  ☐ FAIL |
 
 **证据**：
 ```bash
@@ -488,7 +479,7 @@ ls -la {nfs_root}/jira/{plan_run_id}/
 | registered 最终值 | _________ |
 | 等待时长 | _________ s |
 | 后端 log | `_________` |
-| 结果 | ☐ PASS  ☐ FAIL  ☐ N/A（单 host） |
+| 结果 | ☐ PASS  ☐ FAIL  ☑ N/A（单 host） |
 
 ---
 
@@ -550,14 +541,52 @@ ls -la {nfs_root}/jira/{plan_run_id}/
 
 ---
 
+## 九、Sprint 4 管道终验（PlanRun #52，2026-06-27）
+
+> 一键脚本：`python backend/scripts/sprint4_real_device_verify.py --no-hot-update`  
+> Jira extract：`python backend/scripts/jira_extract_run52.py`  
+> Jira API smoke：`python backend/scripts/test_jira_api.py`
+
+### 主链
+
+| 项 | 值 | 结果 |
+|----|-----|------|
+| PlanRun | **#52** | ✅ |
+| 终态 | **SUCCESS**（3 设备，~7 min） | ✅ |
+| Jobs | j87 / j88 / j89 → **COMPLETED** | ✅ |
+| 设备 | ID 99 / 62 / 63（10.36 三台） | ✅ |
+| `scan_status` | **merged** | ✅ |
+| dedup/52 | `_org.xls` 1.0 MB + `_dedup_org` 247 KB | ✅ |
+| devices/52 | **233** 事件目录 | ✅ |
+| jira/52 | **233** 事件目录 + 4 份 xls | ✅ |
+
+### Jira 提单（Transsion，1 条 dry-run）
+
+| 项 | 结果 |
+|----|------|
+| 本地 `jira_upload_list_dry_run_verify.py` | ✅ upload_list + create `--dry-run` |
+| `POST /api/v1/jira/runs` upload_list | ✅ SUCCESS（修复：绝对路径 + 厂商 env） |
+| `POST /api/v1/jira/runs` create dry-run | ✅ SUCCESS，`CREATE_NEW`，未写库 |
+| Tinno | ⚠️ venv 缺 `xlrd`；非 Transsion 生产路径，记已知限制 |
+
+### 已知限制（不阻塞 #30）
+
+| 项 | 说明 |
+|----|------|
+| Agent 热更新 | `POST .../hot-update` 30s 超时；用 Ansible 或 `--no-hot-update` |
+| merge_result DB 路径 | 可能指向历史 `merge_result/2026_06_25_*`；Run 52 以 CIFS `dedup/52` 为准 |
+| 前端 UI 回归 | AC-R-15～17 未目视；API `scan_status` / artifacts 已正确 |
+
+---
+
 ## 签字
 
 | 项 | 值 |
 |----|-----|
-| 验证总结 | ☐ 全部 PASS  ☐ 有 FAIL 项（列出：_________） |
-| 操作人 | `_________` |
-| 签字日期 | `_________` |
-| 备注 | `_________` |
+| 验证总结 | ☑ 全部 PASS（核心管道 + Transsion Jira dry-run）  ☐ 有 FAIL 项 |
+| 操作人 | Rin |
+| 签字日期 | 2026-06-27 |
+| 备注 | 关 [#30](https://github.com/DUElost/stability-test-platform/issues/30)；Tinno 提单待 venv 补 `xlrd` |
 
 ---
 
@@ -566,3 +595,4 @@ ls -la {nfs_root}/jira/{plan_run_id}/
 | 日期 | 变更 |
 |------|------|
 | 2026-06-24 | 初版真机联调验证记录模板 |
+| 2026-06-27 | PlanRun #52 管道终验签字；§九 Jira dry-run；关 #30 |

@@ -67,13 +67,34 @@ def build_jira_argv(
         return [python, str(script), "--add-main-excel", input_xls]
     if stage == "create":
         script = d / f"create_{vendor}_jira_batch_from_excel.py"
-        argv = [python, str(script), input_xls]
+        argv = [python, str(script), "--add-excel-file", input_xls]
         if dry_run:
             argv.append("--dry-run")
         if reporter:
             argv += ["--reporter", reporter]
         return argv
     raise RunConsoleError(f"unknown stage: {stage}")
+
+
+def _load_vendor_tool_env(tool_dir: str) -> Dict[str, str]:
+    """读取厂商工具目录下的凭据 env 文件，叠加到子进程环境（不记录值）。"""
+    root = Path(tool_dir)
+    out: Dict[str, str] = {}
+    for path in (root / ".env.local", root / "tools" / ".env"):
+        if not path.is_file():
+            continue
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            key, _, value = line.partition("=")
+            key = key.strip()
+            if not key:
+                continue
+            out[key] = value.strip().strip('"').strip("'")
+    return out
 
 
 def _work_dir() -> Path:
@@ -117,7 +138,7 @@ async def start_jira_run(
 
     if file is None or not (file.filename or "").strip():
         raise HTTPException(status_code=400, detail="a file is required (.xls/.xlsx)")
-    dest = _work_dir() / f"{vendor}_{stage}_{file.filename}"
+    dest = (_work_dir() / f"{vendor}_{stage}_{file.filename}").resolve()
     dest.write_bytes(await file.read())
 
     argv = build_jira_argv(vendor, stage, tool["dir"], tool["python"],
@@ -127,6 +148,7 @@ async def start_jira_run(
             run_key=f"jira:{vendor}",
             cmd=argv,
             cwd=tool["dir"],
+            env=_load_vendor_tool_env(tool["dir"]),
             label=f"jira-{vendor}-{stage}",
         )
     except RunKeyBusyError:

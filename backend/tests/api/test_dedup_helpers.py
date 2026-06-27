@@ -41,7 +41,8 @@ def test_build_argv_create_dry_run_flag():
         input_xls="/data/JIRA_Upload_List.xlsx", dry_run=True,
     )
     assert argv_dry[1].endswith("create_tinno_jira_batch_from_excel.py")
-    assert "/data/JIRA_Upload_List.xlsx" in argv_dry  # 建单也消费文件
+    assert "--add-excel-file" in argv_dry
+    assert "/data/JIRA_Upload_List.xlsx" in argv_dry
     assert "--dry-run" in argv_dry
 
     argv_real = build_jira_argv(
