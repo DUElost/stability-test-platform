@@ -15,7 +15,7 @@ interface PageContainerProps {
 
 /**
  * 页面容器 — 统一间距、入场动画与可选最大宽度。
- * 新页面应优先使用 fullBleed + PageHeaderV2，旧 width 预设保留兼容。
+ * 新页面应优先使用 fullBleed + PageHeader，旧 width 预设保留兼容。
  */
 export const PageContainer: React.FC<PageContainerProps> = ({
   children,
