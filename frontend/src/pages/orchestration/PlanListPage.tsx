@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { planKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { api, type Plan } from '@/utils/api';
 import { Badge } from '@/components/ui/badge';
 import { PageContainer, PageHeaderV2 } from '@/components/layout';
@@ -18,6 +19,7 @@ import { Plus, Edit, Play, LayoutGrid, List, FileText } from 'lucide-react';
 type ViewMode = 'grid' | 'list';
 
 export default function PlanListPage() {
+  useDocumentTitle('Plan 编排');
   const navigate = useNavigate();
   const toast = useToast();
   const confirmDialog = useConfirm();

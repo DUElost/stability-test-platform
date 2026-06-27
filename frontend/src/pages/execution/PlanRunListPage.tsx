@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api } from '@/utils/api';
 import { planRunKeys } from '@/utils/api/queryKeys';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { Clock } from 'lucide-react';
 import { PageContainer, PageHeaderV2 } from '@/components/layout';
 import { DataList, DataListItem, DataToolbar, DataEmptyState } from '@/components/data';
@@ -11,6 +12,7 @@ import { cn } from '@/lib/utils';
 import { formatDateTimeFull } from '@/utils/format';
 
 export default function PlanRunListPage() {
+  useDocumentTitle('Plan 执行记录');
   const navigate = useNavigate();
 
   const { data: runs, isLoading } = useQuery({

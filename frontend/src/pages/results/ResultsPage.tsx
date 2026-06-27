@@ -16,6 +16,7 @@ import {
 import { PageContainer, PageHeaderV2 } from '@/components/layout';
 import { DataTable, DataEmptyState } from '@/components/data';
 import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { KPI_TONE, RUN_RESULT_STATUS_CHIP, STAT, STATUS_CHIP } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import type { ColumnDef } from '@tanstack/react-table';
@@ -23,6 +24,7 @@ import type { ColumnDef } from '@tanstack/react-table';
 type RecentRun = NonNullable<ResultsSummary['recent_runs']>[number];
 
 export default function ResultsPage() {
+  useDocumentTitle('测试结果');
   const navigate = useNavigate();
 
   const { data, isLoading } = useQuery<ResultsSummary>({

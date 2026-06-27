@@ -14,6 +14,7 @@ import { RunLogsTab } from './RunLogsTab';
 import { RunSignalsTab } from './RunSignalsTab';
 import { RunTimelineTab } from './RunTimelineTab';
 import { useToast } from '@/hooks/useToast';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { api } from '@/utils/api';
 
 export default function PlanRunDetailPage() {
@@ -34,6 +35,7 @@ export default function PlanRunDetailPage() {
   }
 
   const run = runQ.data;
+  useDocumentTitle(run?.plan_name || `Plan Run #${id}`);
   const isTerminal = isPlanRunTerminal(run?.status);
 
   return (

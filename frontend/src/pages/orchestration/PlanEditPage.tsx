@@ -25,6 +25,7 @@ import { STATUS_BG_COLORS } from '@/design-system/colors';
 import { SURFACE, TEXT, FORM } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { usePlanEditForm } from './usePlanEditForm';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { PageContainer, PageHeaderV2 } from '@/components/layout';
 
 export default function PlanEditPage() {
@@ -32,6 +33,7 @@ export default function PlanEditPage() {
   const planId = id && id !== 'new' && Number(id) > 0 ? Number(id) : null;
 
   const form = usePlanEditForm(planId);
+  useDocumentTitle(form.name || (form.isNew ? '新建 Plan' : '编辑 Plan'));
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const leftPanelRef = useRef<PanelImperativeHandle | null>(null);
