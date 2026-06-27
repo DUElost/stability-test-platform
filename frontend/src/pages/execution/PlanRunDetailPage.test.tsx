@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PlanRunDetailPage from './PlanRunDetailPage';
-import { Toaster } from '@/components/ui/Toaster';
+import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -24,6 +24,16 @@ const mocks = vi.hoisted(() => ({
   triggerScan: vi.fn().mockResolvedValue({ plan_run_id: 12, triggered_hosts: [], skipped_offline: [] }),
   triggerMerge: vi.fn().mockResolvedValue({ status: 'ok', plan_run_id: 12 }),
   socketCallback: { current: undefined as undefined | ((msg: any) => void) },
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    promise: vi.fn(),
+  },
+}));
+
+vi.mock('@/hooks/useToast', () => ({
+  useToast: () => mocks.toast,
 }));
 
 vi.mock('react-router-dom', async () => {
@@ -73,22 +83,30 @@ vi.mock('@/hooks/useSocketIO', () => ({
   },
 }));
 
-// Mock AnomalyDashboard with a stable testid so Signals tab assertions work.
+// Mock AnomalyDashboard with backward-compatible testids so existing assertions still pass.
 vi.mock('@/components/plan-run/AnomalyDashboard', () => ({
   default: () => <div data-testid="watcher-summary" />,
 }));
+
+/** 模拟 AppShell 消费 HeaderSlotContext,把页面注入的顶栏内容渲染到 DOM。 */
+function HeaderSlotOutlet() {
+  const { headerSlot } = useHeaderSlot();
+  return <>{headerSlot}</>;
+}
 
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
   return render(
-    <MemoryRouter>
-      <QueryClientProvider client={queryClient}>
-        <PlanRunDetailPage />
-        <Toaster />
-      </QueryClientProvider>
-    </MemoryRouter>,
+    <HeaderSlotProvider>
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <HeaderSlotOutlet />
+          <PlanRunDetailPage />
+        </QueryClientProvider>
+      </MemoryRouter>
+    </HeaderSlotProvider>,
   );
 }
 
@@ -103,7 +121,51 @@ beforeEach(() => {
     triggered_by: 'tester@local',
     started_at: new Date(Date.now() - 90_000).toISOString(),
     ended_at: null,
-    plan_name: '24h 烧机',
+    run_context: {
+      precheck: {
+        phase: 'syncing',
+        started_at: '2026-05-08T11:59:00Z',
+        completed_at: null,
+        hosts: {
+          'host-101': {
+            status: 'ok',
+            checked_at: '2026-05-08T11:59:10Z',
+            synced_at: null,
+            scripts: [
+              {
+                name: 'monkey_check',
+                version: '1.0.0',
+                expected_sha: 'abcdef0123',
+                actual_sha: 'abcdef0123',
+                exists: true,
+                ok: true,
+              },
+            ],
+            sync_attempts: 0,
+            error: null,
+          },
+          'host-202': {
+            status: 'syncing',
+            checked_at: '2026-05-08T11:59:11Z',
+            synced_at: null,
+            scripts: [
+              {
+                name: 'monkey_check',
+                version: '1.0.0',
+                expected_sha: 'abcdef0123',
+                actual_sha: 'deadbeef99',
+                exists: true,
+                ok: false,
+              },
+            ],
+            sync_attempts: 1,
+            error: null,
+          },
+        },
+        final_result: null,
+        errors: [],
+      },
+    },
   });
   mocks.getTimeline.mockResolvedValue({
     plan_run_id: 12,
@@ -143,10 +205,41 @@ beforeEach(() => {
   });
   mocks.getEvents.mockResolvedValue({
     plan_run_id: 12,
-    total: 0,
-    events: [],
-    facets: { by_stage: { all: 0 }, by_severity: { all: 0 } },
+    total: 3,
+    events: [
+      {
+        ts: '2026-05-08T12:31:20Z',
+        stage: 'patrol',
+        severity: 'info',
+        category: 'system',
+        title: 'PATROL 进行中 · 周期 #12',
+        description: '最近 3 分钟内 1 台设备上报心跳',
+      },
+      {
+        ts: '2026-05-08T12:30:00Z',
+        stage: 'patrol',
+        severity: 'err',
+        category: 'step',
+        title: 'monkey_check 失败',
+        description: 'DEV-3064 连续失败',
+        device_serial: 'DEV-3064',
+        job_id: 3064,
+      },
+      {
+        ts: '2026-05-08T12:00:00Z',
+        stage: 'trigger',
+        severity: 'ok',
+        category: 'trigger',
+        title: 'PlanRun #12 启动',
+        description: '触发方式 MANUAL · 用户 tester@local',
+      },
+    ],
+    facets: {
+      by_stage: { all: 3, trigger: 1, patrol: 2 },
+      by_severity: { all: 3, ok: 1, info: 1, err: 1 },
+    },
   });
+  mocks.abort.mockResolvedValue({ plan_run_id: 12, status: 'FAILED' });
   mocks.getDevices.mockResolvedValue({
     plan_run_id: 12,
     total: 2,
@@ -250,112 +343,97 @@ beforeEach(() => {
       package_ranking: [],
     },
   });
-  mocks.abort.mockResolvedValue({ plan_run_id: 12, status: 'FAILED' });
-  mocks.retryDispatch.mockResolvedValue({
+  mocks.manualRetryJob.mockResolvedValue({
+    job_id: 3002,
     plan_run_id: 12,
+    action: 'manual_retry',
     status: 'RUNNING',
-    dispatch_state: { status: 'queued' },
+    manual_action: 'RETRY_NOW',
+    next_retry_at: new Date().toISOString(),
+    current_failure_streak: 4,
+  });
+  mocks.manualExitJob.mockResolvedValue({
+    job_id: 3002,
+    plan_run_id: 12,
+    action: 'manual_exit',
+    status: 'RUNNING',
+    manual_action: 'EXIT_REQUESTED',
+    current_failure_streak: 4,
   });
   mocks.socketCallback.current = undefined;
 });
 
 describe('PlanRunDetailPage', () => {
-  it('renders overview tab by default with status banner and meta', async () => {
+  it('renders Hero / Minimap / Stepper / DeviceTable / Watcher', async () => {
     renderPage();
     await waitFor(() =>
-      expect(screen.getByTestId('plan-run-status-banner')).toHaveTextContent('RUNNING'),
+      expect(screen.getByTestId('plan-run-status-pill')).toHaveTextContent('RUNNING'),
     );
-    expect(screen.getByText('PlanRun 正在执行中')).toBeInTheDocument();
-    expect(screen.getByText('设备数')).toBeInTheDocument();
-    expect(screen.getByText('PlanRun 信息')).toBeInTheDocument();
-    expect(screen.getByText('Plan ID: 7')).toBeInTheDocument();
-  });
-
-  it('switches to devices tab and renders the device table', async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByRole('tab', { name: '设备' })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('tab', { name: '设备' }));
-    await waitFor(() => expect(screen.getByText('DEV-AAAA')).toBeInTheDocument());
-    expect(screen.getByText('DEV-BBBB')).toBeInTheDocument();
-  });
-
-  it('switches to signals tab and renders the watcher summary', async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByRole('tab', { name: 'Signals' })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('tab', { name: 'Signals' }));
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('健康预检');
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-202');
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('1/2');
+    // BusinessFlowStepper replaces BusinessFlowTimeline
+    expect(screen.getByTestId('business-flow-stepper')).toBeInTheDocument();
+    expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
+    // AnomalyDashboard (mocked) uses watcher-summary testid for backward compat
     expect(await screen.findByTestId('watcher-summary')).toBeInTheDocument();
+    // Switch to table view to verify row content
+    fireEvent.click(screen.getByTestId('device-overview-table-btn'));
+    // BACKOFF row visible with red failure streak
+    expect(await screen.findByTestId('device-row-3002')).toHaveTextContent('退避');
+    // 概览/日志 tab 存在;逐条事件流已迁至日志页(详情页无 event-list)
+    expect(screen.getByTestId('plan-run-tabs')).toBeInTheDocument();
+    expect(screen.queryByTestId('event-list')).not.toBeInTheDocument();
   });
 
-  it('switches to timeline tab and renders the business flow stepper', async () => {
-    renderPage();
-    await waitFor(() => expect(screen.getByRole('tab', { name: '时间线' })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('tab', { name: '时间线' }));
-    expect(await screen.findByTestId('business-flow-stepper')).toBeInTheDocument();
-  });
-
-  it('aborts the PlanRun via the topbar cancel button', async () => {
+  it('aborts the PlanRun via the Topbar confirm dialog', async () => {
     renderPage();
     await waitFor(() => screen.getByTestId('plan-run-abort-btn'));
     fireEvent.click(screen.getByTestId('plan-run-abort-btn'));
+    fireEvent.click(await screen.findByTestId('plan-run-abort-confirm'));
     await waitFor(() => expect(mocks.abort).toHaveBeenCalledWith(12, 'aborted_by_user'));
   });
 
-  it('retries dispatch via the topbar retry button', async () => {
-    mocks.getRun.mockResolvedValueOnce({
-      id: 12,
-      plan_id: 7,
-      status: 'FAILED',
-      failure_threshold: 0.05,
-      run_type: 'MANUAL',
-      triggered_by: 'tester@local',
-      started_at: new Date(Date.now() - 90_000).toISOString(),
-      ended_at: new Date(Date.now() - 30_000).toISOString(),
-      plan_name: '24h 烧机',
-    });
+  it('navigates back to the PlanRun list', async () => {
     renderPage();
-    await waitFor(() => screen.getByTestId('plan-run-retry-btn'));
-    fireEvent.click(screen.getByTestId('plan-run-retry-btn'));
-    await waitFor(() => expect(mocks.retryDispatch).toHaveBeenCalledWith(12));
+    fireEvent.click(await screen.findByText(/返回执行列表/));
+    expect(mocks.navigate).toHaveBeenCalledWith('/execution/plan-runs');
   });
 
-  it('renders breadcrumb link back to the PlanRun list', async () => {
+  it('opens the device drawer and triggers manual retry via confirm dialog', async () => {
     renderPage();
-    const link = (await screen.findByText('Plan Runs')).closest('a');
-    expect(link).toHaveAttribute('href', '/execution/plan-runs');
+    // Click grid cell to open drawer (default grid view in DeviceOverview)
+    fireEvent.click(await screen.findByTestId('minimap-cell-3002'));
+    expect(await screen.findByTestId('device-drawer')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('device-drawer-retry-btn'));
+    fireEvent.click(await screen.findByTestId('device-drawer-confirm'));
+    await waitFor(() => expect(mocks.manualRetryJob).toHaveBeenCalledWith(12, 3002));
   });
 
-  it('exports report via backend API', async () => {
-    const blob = new Blob(['# PlanRun #12 Report'], { type: 'text/plain' });
-    mocks.exportReport.mockResolvedValueOnce(blob);
-    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    const createObjectURL = vi.fn(() => 'blob:mock');
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal('URL', {
-      ...URL,
-      createObjectURL,
-      revokeObjectURL,
-    });
-
+  it('opens device report via the drawer', async () => {
     renderPage();
-    await waitFor(() => screen.getByTestId('plan-run-export-btn'));
-    fireEvent.click(screen.getByTestId('plan-run-export-btn'));
+    // Click grid cell to open drawer (default grid view in DeviceOverview)
+    fireEvent.click(await screen.findByTestId('minimap-cell-3001'));
+    fireEvent.click(await screen.findByTestId('device-drawer-open-report'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/runs/3001/report');
+  });
 
-    await waitFor(() => {
-      expect(mocks.exportReport).toHaveBeenCalledWith(12, 'markdown');
-    });
-    expect(createObjectURL).toHaveBeenCalledWith(blob);
-    clickSpy.mockRestore();
-    vi.unstubAllGlobals();
+  it('renders device overview and business-flow stepper in the details view', async () => {
+    renderPage();
+    // Overview content is always visible (no inner tab switching)
+    expect(await screen.findByTestId('device-overview')).toBeInTheDocument();
+    expect(await screen.findByTestId('business-flow-stepper')).toBeInTheDocument();
   });
 
   it('invalidates devices+timeline on JOB_STATUS push and watcher on WATCHER_SIGNAL', async () => {
     renderPage();
-    await waitFor(() => screen.getByText('设备数'));
+    await waitFor(() => screen.getByTestId('device-overview'));
     expect(typeof mocks.socketCallback.current).toBe('function');
 
     // Reset call counts to isolate post-mount invalidation behaviour.
     mocks.getDevices.mockClear();
     mocks.getTimeline.mockClear();
+    mocks.getEvents.mockClear();
     mocks.getWatcherSummary.mockClear();
     mocks.getRun.mockClear();
 
@@ -403,5 +481,351 @@ describe('PlanRunDetailPage', () => {
     await waitFor(() => expect(mocks.getRun).toHaveBeenCalled());
     expect(mocks.getTimeline).toHaveBeenCalled();
     expect(mocks.getDevices).toHaveBeenCalled();
+  });
+
+  it('hides the dispatch gate card when precheck is absent', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'SUCCESS',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T11:30:00Z',
+      run_context: null,
+    });
+    renderPage();
+    await waitFor(() => screen.getByTestId('plan-run-status-pill'));
+    expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
+    // Hero should NOT render the abort button on terminal runs.
+    expect(screen.queryByTestId('plan-run-abort-btn')).not.toBeInTheDocument();
+  });
+
+  it('keeps precheck summary visible for active runs after precheck ready', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'RUNNING',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: null,
+      run_context: {
+        precheck: {
+          phase: 'ready',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:01:00Z',
+          hosts: {
+            'host-101': {
+              status: 'ok',
+              checked_at: '2026-05-08T11:00:10Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: null,
+            },
+          },
+          final_result: 'ready',
+          errors: [],
+        },
+        dispatch_state: {
+          status: 'completed',
+          enqueued_at: '2026-05-08T11:01:01Z',
+          started_at: '2026-05-08T11:01:05Z',
+          completed_at: '2026-05-08T11:01:20Z',
+          last_error: null,
+        },
+      },
+    });
+
+    renderPage();
+
+    await waitFor(() => screen.getByTestId('plan-run-status-pill'));
+    expect(screen.getByTestId('precheck-row')).toBeInTheDocument();
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('通过');
+  });
+
+  it('keeps host details visible while dispatch is still running after precheck ready', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'RUNNING',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: null,
+      run_context: {
+        precheck: {
+          phase: 'syncing',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: null,
+          hosts: {
+            'host-101': {
+              status: 'syncing',
+              checked_at: '2026-05-08T11:00:10Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 1,
+              error: null,
+            },
+          },
+          final_result: null,
+          errors: [],
+        },
+        dispatch_state: {
+          status: 'running',
+          enqueued_at: '2026-05-08T11:01:01Z',
+          started_at: '2026-05-08T11:01:05Z',
+          completed_at: null,
+          last_error: null,
+        },
+      },
+    });
+
+    renderPage();
+
+    await waitFor(() => screen.getByTestId('plan-run-status-pill'));
+    expect(screen.getByTestId('precheck-row')).toBeInTheDocument();
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('同步中');
+    expect(screen.getByTestId('precheck-row')).toHaveTextContent('host-101');
+  });
+
+  it('shows chain dispatch failure banner when result_summary records failure', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'SUCCESS',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T13:00:00Z',
+      result_summary: {
+        total: 2,
+        completed: 2,
+        pass_rate: 1,
+        chain_dispatch_failed: {
+          at: '2026-05-08T13:00:01Z',
+          error: 'Plan 8: scripts unavailable at dispatch',
+        },
+      },
+      run_context: null,
+    });
+    mocks.getChain.mockResolvedValueOnce({
+      plan_run_id: 12,
+      root_plan_run_id: 12,
+      nodes: [
+        {
+          plan_id: 7,
+          plan_name: '24h 烧机',
+          plan_run_id: 12,
+          status: 'SUCCESS',
+          chain_index: 0,
+          failure_threshold: 0.05,
+          pass_rate: 1,
+          is_current: true,
+          is_blocked: false,
+        },
+        {
+          plan_id: 11,
+          plan_name: '后置回收',
+          plan_run_id: null,
+          status: 'pending',
+          chain_index: 1,
+          failure_threshold: 0.1,
+          is_current: false,
+          is_blocked: true,
+          block_reason: '下游 Plan 派发失败: Plan 8: scripts unavailable at dispatch',
+        },
+      ],
+    });
+
+    renderPage();
+
+    const banner = await screen.findByTestId('chain-dispatch-failed-banner');
+    expect(banner).toHaveTextContent('下游 Plan 派发失败');
+    expect(banner).toHaveTextContent('scripts unavailable');
+    expect(screen.getByTestId('chain-node-11')).toHaveTextContent('暂不触发');
+  });
+
+  it('shows stuck-jobs banner when RUNNING job patrol heartbeat is stale', async () => {
+    mocks.getDevices.mockResolvedValueOnce({
+      plan_run_id: 12,
+      total: 1,
+      by_status: { all: 1, running: 1 },
+      by_host: { 'host-101': 1 },
+      devices: [
+        {
+          device_id: 1,
+          device_serial: 'DEV-STALE',
+          device_model: 'Pixel 8',
+          host_id: 'host-101',
+          job_id: 3001,
+          job_status: 'RUNNING',
+          ui_status: 'running',
+          current_stage: 'patrol',
+          current_step: 'monkey_check',
+          patrol_cycle_count: 12,
+          patrol_success_cycle_count: 12,
+          patrol_failed_cycle_count: 0,
+          current_failure_streak: 0,
+          next_retry_at: null,
+          manual_action: null,
+          log_signal_count: 0,
+          last_heartbeat_at: new Date(Date.now() - 300_000).toISOString(),
+          started_at: new Date(Date.now() - 600_000).toISOString(),
+          ended_at: null,
+        },
+      ],
+    });
+
+    renderPage();
+
+    const banner = await screen.findByTestId('stuck-jobs-banner');
+    expect(banner).toHaveTextContent('1 个 Job 心跳超时');
+    expect(banner).toHaveTextContent('可能已断开');
+    expect(banner).toHaveTextContent('DEV-STALE');
+  });
+
+  it('renders agent_offline precheck failure in dispatch gate', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'FAILED',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T11:00:30Z',
+      run_context: {
+        precheck: {
+          phase: 'failed',
+          started_at: '2026-05-08T11:00:00Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          final_result: 'failed',
+          errors: ['agent_offline: host-202'],
+          sync_max_attempts: 1,
+          hosts: {
+            'host-202': {
+              status: 'failed',
+              checked_at: '2026-05-08T11:00:11Z',
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'agent_offline',
+            },
+          },
+        },
+        dispatch_state: {
+          status: 'failed',
+          enqueued_at: '2026-05-08T11:00:00Z',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          last_error: 'precheck:agent_offline: host-202',
+        },
+      },
+    });
+    renderPage();
+    await waitFor(() => screen.getByTestId('dispatch-gate-card'));
+    expect(screen.getAllByText(/agent_offline: host-202/).length).toBeGreaterThan(0);
+    expect(screen.getByTestId('dispatch-gate-host-host-202')).toHaveTextContent(
+      'agent_offline',
+    );
+  });
+
+  it('surfaces mixed watcher failure in precheck summary row', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'FAILED',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T11:00:30Z',
+      run_context: {
+        precheck: {
+          phase: 'failed',
+          started_at: '2026-05-08T11:00:00Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          final_result: 'failed',
+          errors: ['watch激活与不激活的节点不能同时在一个计划中'],
+          sync_max_attempts: 1,
+          gate_failure: {
+            code: 'MIXED_WATCHER_ACTIVITY',
+            message: 'watch激活与不激活的节点不能同时在一个计划中',
+            inactive_host_ids: ['host-202', 'host-303'],
+          },
+          hosts: {
+            'host-101': {
+              status: 'pending',
+              checked_at: null,
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: null,
+            },
+            'host-202': {
+              status: 'failed',
+              checked_at: null,
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'watcher_inactive',
+            },
+            'host-303': {
+              status: 'failed',
+              checked_at: null,
+              synced_at: null,
+              scripts: [],
+              sync_attempts: 0,
+              error: 'watcher_inactive',
+            },
+          },
+        },
+        dispatch_state: {
+          status: 'failed',
+          enqueued_at: '2026-05-08T11:00:00Z',
+          started_at: '2026-05-08T11:00:05Z',
+          completed_at: '2026-05-08T11:00:30Z',
+          last_error: 'precheck:MIXED_WATCHER_ACTIVITY',
+        },
+      },
+    });
+
+    renderPage();
+
+    const row = await screen.findByTestId('precheck-row');
+    expect(row).toHaveTextContent('失败');
+    expect(row).toHaveTextContent('watch激活与不激活的节点不能同时在一个计划中');
+    expect(row).toHaveTextContent('不激活节点ID：host-202, host-303');
+  });
+
+  it('exports report via backend API', async () => {
+    const blob = new Blob(['# PlanRun #12 Report'], { type: 'text/plain' });
+    mocks.exportReport.mockResolvedValueOnce(blob);
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const createObjectURL = vi.fn(() => 'blob:mock');
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL,
+      revokeObjectURL,
+    });
+
+    renderPage();
+    await waitFor(() => screen.getByTestId('plan-run-export-btn'));
+    fireEvent.click(screen.getByTestId('plan-run-export-btn'));
+    fireEvent.click(await screen.findByTestId('plan-run-export-md'));
+
+    await waitFor(() => {
+      expect(mocks.exportReport).toHaveBeenCalledWith(12, 'markdown');
+    });
+    expect(createObjectURL).toHaveBeenCalledWith(blob);
+    clickSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 });
