@@ -5,7 +5,7 @@ import { api } from '@/utils/api';
 import { planRunKeys } from '@/utils/api/queryKeys';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { Clock } from 'lucide-react';
-import { PageContainer, PageHeaderV2 } from '@/components/layout';
+import { PageContainer, PageHeader } from '@/components/layout';
 import { DataList, DataListItem, DataToolbar, DataEmptyState } from '@/components/data';
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
@@ -23,7 +23,7 @@ export default function PlanRunListPage() {
 
   return (
     <PageContainer fullBleed>
-      <PageHeaderV2 title="Plan 执行记录" description="查看所有 PlanRun 历史记录" />
+      <PageHeader title="Plan 执行记录" subtitle="查看所有 PlanRun 历史记录" />
 
       <div className="px-6 pb-6 flex-1">
         <DataList

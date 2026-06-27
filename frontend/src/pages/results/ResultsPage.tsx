@@ -13,7 +13,7 @@ import {
   ListChecks,
   Clock,
 } from 'lucide-react';
-import { PageContainer, PageHeaderV2 } from '@/components/layout';
+import { PageContainer, PageHeader } from '@/components/layout';
 import { DataTable, DataEmptyState } from '@/components/data';
 import { formatDurationSeconds, formatLocalDateTime } from '@/utils/format';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -108,7 +108,7 @@ export default function ResultsPage() {
 
   return (
     <PageContainer fullBleed>
-      <PageHeaderV2 title="测试结果" description="测试运行统计与风险分布概览" />
+      <PageHeader title="测试结果" subtitle="测试运行统计与风险分布概览" />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4 px-6">
         <DashboardStatCard

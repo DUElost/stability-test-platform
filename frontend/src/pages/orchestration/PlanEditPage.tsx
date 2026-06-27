@@ -26,7 +26,7 @@ import { SURFACE, TEXT, FORM } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { usePlanEditForm } from './usePlanEditForm';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { PageContainer, PageHeaderV2 } from '@/components/layout';
+import { PageContainer, PageHeader } from '@/components/layout';
 
 export default function PlanEditPage() {
   const { id } = useParams<{ id: string }>();
@@ -49,14 +49,13 @@ export default function PlanEditPage() {
 
   return (
     <PageContainer scrollable={false} className="p-0">
-      <PageHeaderV2
-        className="px-4 pt-4"
+      <PageHeader
         title={form.name || (form.isNew ? '新建 Plan' : '未命名 Plan')}
         breadcrumbs={[
           { label: 'Plans', path: '/orchestration/plans' },
           { label: form.isNew ? 'Create' : 'Edit' },
         ]}
-        actions={
+        action={
           <>
             <Button variant="ghost" size="sm" onClick={() => form.setShowJson(true)}>
               <Code2 className="w-4 h-4 mr-1.5" />

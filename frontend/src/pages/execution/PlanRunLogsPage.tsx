@@ -7,7 +7,7 @@ import { planRunKeys } from '@/utils/api/queryKeys';
 import type { EventSeverity, EventStage, PlanRunStatus } from '@/utils/api/types';
 import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import PlanRunEventStream from '@/components/plan-run/PlanRunEventStream';
-import { PageContainer, PageHeaderV2 } from '@/components/layout';
+import { PageContainer, PageHeader } from '@/components/layout';
 import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
@@ -69,14 +69,16 @@ export default function PlanRunLogsPage() {
 
   return (
     <PageContainer width="logs">
-      <PageHeaderV2
+      <PageHeader
         title={`PlanRun #${id}`}
         breadcrumbs={[
           { label: 'Plan Runs', path: '/execution/plan-runs' },
           { label: `#${id}` },
         ]}
-        secondaryActions={<PlanRunTabs runId={id} active="logs" />}
       />
+      <div className="px-4 pb-2">
+        <PlanRunTabs runId={id} active="logs" />
+      </div>
       <PlanRunEventStream
         events={eventsQ.data}
         stageFilter={stageFilter}

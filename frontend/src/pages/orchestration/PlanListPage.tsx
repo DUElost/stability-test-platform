@@ -9,7 +9,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { api, type Plan } from '@/utils/api';
 import { Badge } from '@/components/ui/badge';
-import { PageContainer, PageHeaderV2 } from '@/components/layout';
+import { PageContainer, PageHeader } from '@/components/layout';
 import { DataList, DataListItem, DataToolbar, DataEmptyState } from '@/components/data';
 import { STAT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
@@ -141,10 +141,10 @@ export default function PlanListPage() {
 
   return (
     <PageContainer fullBleed>
-      <PageHeaderV2
+      <PageHeader
         title="Plan 编排"
-        description="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"
-        actions={
+        subtitle="基于 Plan-Step 模型管理测试编排，支持链接式 Plan 链"
+        action={
           <Button onClick={() => navigate('/orchestration/plans/new')}>
             <Plus className="w-4 h-4 mr-1.5" /> 新建 Plan
           </Button>

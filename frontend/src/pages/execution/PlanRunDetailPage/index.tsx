@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { PageContainer, PageHeaderV2 } from '@/components/layout';
+import { PageContainer, PageHeader } from '@/components/layout';
 import { usePlanRunDetailData } from '@/hooks/plan-run/usePlanRunDetailData';
 import { isPlanRunTerminal } from '@/hooks/plan-run/planRunDetailUtils';
 import { PlanRunMeta } from './PlanRunMeta';
@@ -40,14 +40,13 @@ export default function PlanRunDetailPage() {
 
   return (
     <PageContainer>
-      <PageHeaderV2
+      <PageHeader
         title={run?.plan_name || `Plan Run #${id}`}
         breadcrumbs={[
           { label: 'Plan Runs', path: '/execution/plan-runs' },
           { label: `#${id}` },
         ]}
-        description={<PlanRunMeta run={run} />}
-        actions={
+        action={
           <>
             <Button
               variant="outline"
@@ -91,6 +90,9 @@ export default function PlanRunDetailPage() {
           </>
         }
       />
+      <div className="px-4 pb-2">
+        <PlanRunMeta run={run} />
+      </div>
 
       <RunStatusBanner run={run} />
 
