@@ -368,6 +368,7 @@ export default function WatcherSummaryCard({
           data-testid="watcher-details-toggle"
           onClick={() => setShowDetails((v) => !v)}
           title={showDetails ? '隐藏技术详情' : '显示技术详情'}
+          aria-label={showDetails ? '隐藏技术详情' : '显示技术详情'}
           className={cn(
             'ml-0.5 rounded p-0.5 transition',
             showDetails ? SEGMENTED.toggleActive : cn(SEGMENTED.toggleIdle),

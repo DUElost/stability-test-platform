@@ -283,6 +283,7 @@ function RuntimeConfigCard({ step, onUpdateStep, readOnly }: RuntimeConfigCardPr
               readOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
             )}
             aria-pressed={step.enabled !== false}
+            aria-label={step.enabled !== false ? '禁用步骤' : '启用步骤'}
           >
             <span
               className={cn(

@@ -44,7 +44,7 @@ export function DeviceMetricsModal({ isOpen, onClose, deviceId, deviceSerial }: 
               <option value={72}>最近3天</option>
               <option value={168}>最近7天</option>
             </select>
-            <button onClick={onClose} className={MODAL.closeButton}>
+            <button onClick={onClose} className={MODAL.closeButton} aria-label="关闭">
               <X size={20} />
             </button>
           </div>

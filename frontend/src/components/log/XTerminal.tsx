@@ -369,6 +369,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
               }}
               className={cn('p-1 transition-colors hover:text-primary', TEXT.subtitle)}
               title="Search (Ctrl+F)"
+              aria-label="搜索 (Ctrl+F)"
             >
               <Search size={14} />
             </button>
@@ -376,6 +377,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
               onClick={handleDownload}
               className={cn('p-1 transition-colors hover:text-primary', TEXT.subtitle)}
               title="Download Log"
+              aria-label="下载日志"
             >
               <Download size={14} />
             </button>
@@ -411,13 +413,14 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
                 useRegex ? 'bg-accent text-primary' : cn(TEXT.subtitle, 'hover:text-foreground'),
               )}
               title="Toggle regex"
+              aria-label="切换正则表达式"
             >
               <Regex size={14} />
             </button>
-            <button onClick={() => doSearch('prev')} className={cn('p-1 hover:text-foreground', TEXT.subtitle)} title="Previous">
+            <button onClick={() => doSearch('prev')} className={cn('p-1 hover:text-foreground', TEXT.subtitle)} title="Previous" aria-label="上一个匹配项">
               <ChevronUp size={14} />
             </button>
-            <button onClick={() => doSearch('next')} className={cn('p-1 hover:text-foreground', TEXT.subtitle)} title="Next">
+            <button onClick={() => doSearch('next')} className={cn('p-1 hover:text-foreground', TEXT.subtitle)} title="Next" aria-label="下一个匹配项">
               <ChevronDown size={14} />
             </button>
             <button
@@ -427,6 +430,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
               }}
               className={cn('p-1 hover:text-destructive', TEXT.subtitle)}
               title="Close search"
+              aria-label="关闭搜索"
             >
               <X size={14} />
             </button>

@@ -115,6 +115,7 @@ export default function DeviceDetailDrawer({
             size="sm"
             onClick={onClose}
             data-testid="device-drawer-close"
+            aria-label="关闭设备详情"
           >
             <X className="h-4 w-4" />
           </Button>

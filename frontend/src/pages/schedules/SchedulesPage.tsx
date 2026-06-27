@@ -292,16 +292,16 @@ export default function SchedulesPage() {
                   </td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <button onClick={() => handleRunNow(s.id)} title="立即执行" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary')}>
+                      <button onClick={() => handleRunNow(s.id)} title="立即执行" aria-label="立即执行" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-primary')}>
                         <Play className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleToggle(s.id)} title="切换状态" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-warning')}>
+                      <button onClick={() => handleToggle(s.id)} title="切换状态" aria-label="切换状态" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-warning')}>
                         <Power className="w-4 h-4" />
                       </button>
-                      <button onClick={() => openEdit(s)} title="编辑" className={cn('p-1.5 rounded', INTERACTIVE.iconButton)}>
+                      <button onClick={() => openEdit(s)} title="编辑" aria-label="编辑" className={cn('p-1.5 rounded', INTERACTIVE.iconButton)}>
                         <Edit2 className="w-4 h-4" />
                       </button>
-                      <button onClick={() => handleDelete(s.id)} title="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-destructive')}>
+                      <button onClick={() => handleDelete(s.id)} title="删除" aria-label="删除" className={cn('p-1.5 rounded', INTERACTIVE.iconButton, 'hover:text-destructive')}>
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>

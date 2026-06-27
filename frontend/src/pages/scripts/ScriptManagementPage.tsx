@@ -132,10 +132,10 @@ export default function ScriptManagementPage() {
                       <p className={cn('text-xs mt-1 truncate', TEXT.subtitle)}>{script.nfs_path}</p>
                     </div>
                     <div className="flex items-center gap-1 ml-4">
-                      <Button variant="ghost" size="sm" onClick={() => toggleJson(key)} title="参数详情">
+                      <Button variant="ghost" size="sm" onClick={() => toggleJson(key)} title="参数详情" aria-label="参数详情">
                         <Code2 className="w-4 h-4" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => { setVersionTarget(script); setShowVersionDialog(true); }} title="新建版本">
+                      <Button variant="ghost" size="sm" onClick={() => { setVersionTarget(script); setShowVersionDialog(true); }} title="新建版本" aria-label="新建版本">
                         <Tag className="w-4 h-4" />
                       </Button>
                     </div>

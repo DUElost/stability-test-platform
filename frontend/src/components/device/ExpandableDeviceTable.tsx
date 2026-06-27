@@ -394,6 +394,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
               <button
                 onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
+                aria-label="上一页"
                 className="p-1.5 rounded-md border border-border hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronLeft className="w-4 h-4 text-muted-foreground" />
@@ -404,6 +405,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
               <button
                 onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
+                aria-label="下一页"
                 className="p-1.5 rounded-md border border-border hover:bg-muted/50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <ChevronRight className="w-4 h-4 text-muted-foreground" />

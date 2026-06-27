@@ -71,6 +71,7 @@ export function PaginationBar({
           className="h-8 w-8 p-0"
           onClick={() => onGoToPage(1)}
           disabled={!canPreviousPage}
+          aria-label="首页"
         >
           <ChevronsLeft className="h-4 w-4" />
         </Button>
@@ -80,6 +81,7 @@ export function PaginationBar({
           className="h-8 w-8 p-0"
           onClick={onPrevPage}
           disabled={!canPreviousPage}
+          aria-label="上一页"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -104,6 +106,7 @@ export function PaginationBar({
           className="h-8 w-8 p-0"
           onClick={onNextPage}
           disabled={!canNextPage}
+          aria-label="下一页"
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
@@ -113,6 +116,7 @@ export function PaginationBar({
           className="h-8 w-8 p-0"
           onClick={() => onGoToPage(totalPages)}
           disabled={!canNextPage}
+          aria-label="末页"
         >
           <ChevronsRight className="h-4 w-4" />
         </Button>

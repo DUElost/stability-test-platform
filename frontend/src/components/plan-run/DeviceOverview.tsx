@@ -336,6 +336,7 @@ export default function DeviceOverview({
           viewMode === 'grid' ? SEGMENTED.itemActive : SEGMENTED.item,
         )}
         title="缩略图视图"
+        aria-label="缩略图视图"
       >
         <Grid3X3 className="h-3 w-3" />
       </button>
@@ -348,6 +349,7 @@ export default function DeviceOverview({
           viewMode === 'table' ? SEGMENTED.itemActive : SEGMENTED.item,
         )}
         title="表格视图"
+        aria-label="表格视图"
       >
         <List className="h-3 w-3" />
       </button>

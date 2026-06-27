@@ -166,6 +166,7 @@ export default function Sidebar({
           <button
             onClick={onCloseMobile}
             className={cn('ml-auto lg:hidden p-1', INTERACTIVE.iconButton)}
+            aria-label="关闭侧边栏"
           >
             <X className="w-5 h-5" />
           </button>
@@ -245,6 +246,7 @@ export default function Sidebar({
           <button
             onClick={onToggleCollapse}
             className={navLinkClass(false, collapsed)}
+            aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
           >
             {collapsed ? (
               <ChevronRight className="w-4 h-4" />

@@ -109,7 +109,7 @@ export default function RunReportPage() {
         breadcrumbs={[{ label: '测试结果', path: '/results' }, { label: `Job #${report.run.id}` }]}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
+            <Button variant="ghost" size="sm" onClick={() => navigate(-1)} aria-label="返回">
               <ArrowLeft className="h-4 w-4" />
             </Button>
             <a

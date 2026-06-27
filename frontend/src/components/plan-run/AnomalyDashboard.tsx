@@ -222,7 +222,7 @@ function PackageRankingDrawer({
               包名榜 · 全部 ({rankings.length})
             </h2>
           </div>
-          <button type="button" onClick={onClose} className={DRAWER.closeBtn}>
+          <button type="button" onClick={onClose} className={DRAWER.closeBtn} aria-label="关闭包名榜">
             <X className="h-4 w-4" />
           </button>
         </header>
@@ -823,7 +823,7 @@ function CrashDetailPanel({
         <span className={cn('text-xs font-semibold', TEXT.body)}>
           {packageName === 'unknown' ? '未知进程' : packageName} · Crash 详情
         </span>
-        <button type="button" onClick={onClose} className={DRAWER.closeBtn}>
+        <button type="button" onClick={onClose} className={DRAWER.closeBtn} aria-label="关闭 Crash 详情">
           <X className="h-3 w-3" />
         </button>
       </div>
