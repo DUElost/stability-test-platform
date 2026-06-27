@@ -174,14 +174,13 @@ describe('PlanEditPage', () => {
     expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
-  it('navigates back to plan list from header back button', async () => {
+  it('links back to plan list from breadcrumb', async () => {
     renderPage('/orchestration/plans/new');
 
     await screen.findByText('新建 Plan');
-    const backBtn = screen.getAllByRole('button')[0];
-    fireEvent.click(backBtn);
+    const plansLink = screen.getByRole('link', { name: /Plans/ });
 
-    expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans');
+    expect(plansLink).toHaveAttribute('href', '/orchestration/plans');
   });
 
   it('prompts to save before execute when plan has unsaved edits', async () => {
