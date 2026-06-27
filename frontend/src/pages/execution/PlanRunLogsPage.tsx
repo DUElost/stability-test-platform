@@ -1,15 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, AlertCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { AlertCircle } from 'lucide-react';
 import { api } from '@/utils/api';
 import { planRunKeys } from '@/utils/api/queryKeys';
 import type { EventSeverity, EventStage, PlanRunStatus } from '@/utils/api/types';
 import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import PlanRunEventStream from '@/components/plan-run/PlanRunEventStream';
-import { PageContainer } from '@/components/layout';
-import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
+import { PageContainer, PageHeaderV2 } from '@/components/layout';
 import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
@@ -26,8 +24,6 @@ const TERMINAL: ReadonlyArray<PlanRunStatus> = [
 export default function PlanRunLogsPage() {
   const { runId } = useParams<{ runId: string }>();
   const id = Number(runId);
-  const navigate = useNavigate();
-  const { setHeaderSlot } = useHeaderSlot();
 
   const [stageFilter, setStageFilter] = useState<EventStage | 'all'>('all');
   const [severityFilter, setSeverityFilter] = useState<EventSeverity | 'all'>('all');
@@ -53,25 +49,6 @@ export default function PlanRunLogsPage() {
     refetchInterval: isTerminal ? false : SLOW_REFETCH_MS,
   });
 
-  // ── 将 "返回 / PlanRun # / 概览 / 日志" 注入 AppShell 顶栏 ──
-  useEffect(() => {
-    if (!id || Number.isNaN(id)) return;
-    setHeaderSlot(
-      <div className="flex min-w-0 items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => navigate('/execution/plan-runs')}
-          className="-ml-2 text-xs text-muted-foreground"
-        >
-          <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回执行列表
-        </Button>
-        <PlanRunTabs runId={id} active="logs" />
-      </div>,
-    );
-    return () => setHeaderSlot(null);
-  }, [id, navigate, setHeaderSlot]);
-
   const handleStageChange = useCallback((s: EventStage | 'all') => {
     setStageFilter(s);
     setPage(0);
@@ -92,6 +69,14 @@ export default function PlanRunLogsPage() {
 
   return (
     <PageContainer width="logs">
+      <PageHeaderV2
+        title={`PlanRun #${id}`}
+        breadcrumbs={[
+          { label: 'Plan Runs', path: '/execution/plan-runs' },
+          { label: `#${id}` },
+        ]}
+        secondaryActions={<PlanRunTabs runId={id} active="logs" />}
+      />
       <PlanRunEventStream
         events={eventsQ.data}
         stageFilter={stageFilter}

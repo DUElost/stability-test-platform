@@ -1,7 +1,6 @@
-import React, { ReactNode, useEffect, useMemo } from 'react';
+import React, { ReactNode } from 'react';
 import { ChevronRight, Home } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { INTERACTIVE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
@@ -52,41 +51,6 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
   action,
   breadcrumbs,
 }) => {
-  const { setHeaderSlot, isDefault } = useHeaderSlot();
-  const breadcrumbKey = useMemo(
-    () => (breadcrumbs?.length ? JSON.stringify(breadcrumbs) : ''),
-    [breadcrumbs],
-  );
-
-  useEffect(() => {
-    if (isDefault) return;
-    setHeaderSlot(
-      <div className="flex w-full min-w-0 items-center justify-between gap-4">
-        <div className="flex min-w-0 flex-col justify-center gap-1">
-          {breadcrumbs && breadcrumbs.length > 0 && (
-            <PageHeaderBreadcrumbs breadcrumbs={breadcrumbs} />
-          )}
-          <h1 className={cn('truncate text-lg font-semibold leading-tight tracking-tight', TEXT.heading)}>
-            {title}
-          </h1>
-          {subtitle && (
-            <span className={cn('truncate text-xs leading-tight', TEXT.caption)}>
-              {subtitle}
-            </span>
-          )}
-        </div>
-        {action && (
-          <div className="flex shrink-0 items-center gap-2">{action}</div>
-        )}
-      </div>,
-    );
-    return () => setHeaderSlot(null);
-  }, [title, subtitle, action, breadcrumbKey, breadcrumbs, isDefault, setHeaderSlot]);
-
-  if (!isDefault) {
-    return null;
-  }
-
   return (
     <div className="space-y-3">
       {breadcrumbs && breadcrumbs.length > 0 && (

@@ -2,7 +2,6 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { HeaderSlotProvider } from '@/contexts/HeaderSlotContext';
 import PlanEditPage from './PlanEditPage';
 import { api } from '@/utils/api';
 
@@ -72,11 +71,9 @@ function renderPage(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <QueryClientProvider client={queryClient}>
-        <HeaderSlotProvider>
-          <Routes>
-            <Route path="/orchestration/plans/:id" element={<PlanEditPage />} />
-          </Routes>
-        </HeaderSlotProvider>
+        <Routes>
+          <Route path="/orchestration/plans/:id" element={<PlanEditPage />} />
+        </Routes>
       </QueryClientProvider>
     </MemoryRouter>,
   );
