@@ -1,5 +1,5 @@
 import { useState, useEffect, Suspense } from 'react';
-import { Outlet, useNavigate, NavLink } from 'react-router-dom';
+import { Outlet, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import { Menu, ChevronRight, FileText, LogOut, User, ChevronDown, Loader2, KeyRound, Wifi, WifiOff, Users, Shield, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -8,9 +8,8 @@ import { clearAppQueryCache } from '@/components/QueryProvider';
 import { useSocketIO, disconnectDashSocket } from '@/hooks/useSocketIO';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { api } from '@/utils/api';
-import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { WS_DASHBOARD_ENDPOINT } from '@/config';
-import { BORDER, ELEVATION, INTERACTIVE, LAYOUT, SURFACE, TEXT } from '@/design-system/tokens';
+import { BORDER, ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
 
 /**
  * 主应用布局 - 源自 web 样板设计风格
@@ -23,10 +22,8 @@ export default function AppShell() {
   const navigate = useNavigate();
   const sessionQ = useAuthSession();
   const currentUser = sessionQ.data;
-  const { headerSlot, fullBleed } = useHeaderSlot();
   const { isConnected: dashConnected } = useSocketIO(WS_DASHBOARD_ENDPOINT);
 
-  // 监听窗口大小变化
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 1024);
@@ -34,13 +31,11 @@ export default function AppShell() {
         setSidebarOpen(false);
       }
     };
-
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // ESC 键关闭侧边栏和菜单
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -68,7 +63,6 @@ export default function AppShell() {
 
   return (
     <div className={cn('flex h-screen', SURFACE.page)}>
-      {/* 移动端遮罩层 */}
       {isMobile && sidebarOpen && (
         <div
           className={cn('fixed inset-0 z-40 transition-opacity duration-300', SURFACE.overlay)}
@@ -76,7 +70,6 @@ export default function AppShell() {
         />
       )}
 
-      {/* Sidebar - 桌面端 */}
       <aside
         className={cn(
           'hidden lg:flex flex-col transition-all duration-300',
@@ -93,7 +86,6 @@ export default function AppShell() {
         />
       </aside>
 
-      {/* Sidebar - 移动端抽屉模式 */}
       <aside
         className={cn(
           'fixed inset-y-0 left-0 z-50 w-56 transform transition-transform duration-300 lg:hidden border-r',
@@ -110,7 +102,6 @@ export default function AppShell() {
         />
       </aside>
 
-      {/* 桌面端悬浮展开按钮 (当侧边栏折叠时) */}
       {!isMobile && sidebarCollapsed && (
         <button
           onClick={toggleSidebarCollapse}
@@ -127,26 +118,20 @@ export default function AppShell() {
         </button>
       )}
 
-      {/* 主内容区 - 样板风格 */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Header - 样板风格 */}
         <header className={cn('sticky top-0 z-30 border-b', SURFACE.header, BORDER.default)}>
-          <div className="flex items-center justify-between h-20 px-4 lg:px-8">
+          <div className="flex items-center justify-between h-14 px-4 lg:px-6">
             <button
               onClick={toggleSidebar}
               className={cn('lg:hidden p-2', INTERACTIVE.iconButton)}
+              aria-label="打开侧边栏"
             >
               <Menu className="w-5 h-5" />
             </button>
 
-            {/* 页面可通过 HeaderSlotContext 向此区域注入导航内容 */}
-            <div className="flex flex-1 items-center min-w-0">
-              {headerSlot}
-            </div>
+            <div className="flex-1" />
 
-            {/* Right side: User Menu */}
             <div className="flex items-center gap-2">
-              {/* 实时连接状态 — dashboard socket(全局),位于用户菜单左侧 */}
               <Badge
                 variant={dashConnected ? 'success' : 'destructive'}
                 className="hidden gap-1.5 sm:inline-flex"
@@ -155,12 +140,13 @@ export default function AppShell() {
                 {dashConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
                 {dashConnected ? '实时连接' : '已断开'}
               </Badge>
-              {/* User Menu - Top Right Corner */}
+
               <div className="relative ml-2">
                 <button
                   onClick={() => setShowUserMenu(!showUserMenu)}
                   className={cn('flex items-center gap-2 p-1.5 rounded-lg transition-colors', INTERACTIVE.hover)}
                   aria-label="用户菜单"
+                  aria-expanded={showUserMenu}
                 >
                   <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', SURFACE.subtle)}>
                     <User className={cn('w-4 h-4', TEXT.subtitle)} />
@@ -180,7 +166,6 @@ export default function AppShell() {
                   )} />
                 </button>
 
-                {/* Dropdown Menu */}
                 {showUserMenu && (
                   <>
                     <div
@@ -198,41 +183,41 @@ export default function AppShell() {
                         <FileText className="w-4 h-4" />
                         文档
                       </a>
-                      <NavLink
-                        to="/account/password"
+                      <a
+                        href="/account/password"
                         onClick={() => setShowUserMenu(false)}
                         className={cn('flex items-center gap-3 px-4 py-2 text-sm', INTERACTIVE.menuItem)}
                       >
                         <KeyRound className="w-4 h-4" />
                         修改密码
-                      </NavLink>
+                      </a>
                       {currentUser?.role === 'admin' && (
                         <>
                           <hr className={cn('my-1', BORDER.default)} />
-                          <NavLink
-                            to="/users"
+                          <a
+                            href="/users"
                             onClick={() => setShowUserMenu(false)}
                             className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
                           >
                             <Users className="w-4 h-4" />
                             用户管理
-                          </NavLink>
-                          <NavLink
-                            to="/audit"
+                          </a>
+                          <a
+                            href="/audit"
                             onClick={() => setShowUserMenu(false)}
                             className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
                           >
                             <Shield className="w-4 h-4" />
                             操作日志
-                          </NavLink>
-                          <NavLink
-                            to="/settings"
+                          </a>
+                          <a
+                            href="/settings"
                             onClick={() => setShowUserMenu(false)}
                             className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
                           >
                             <Settings className="w-4 h-4" />
                             系统设置
-                          </NavLink>
+                          </a>
                         </>
                       )}
                       <hr className={cn('my-1', BORDER.default)} />
@@ -251,30 +236,15 @@ export default function AppShell() {
           </div>
         </header>
 
-        {/* 主内容区 — fullBleed 时去掉内边距并锁定 overflow，页面自管滚动 */}
-        {fullBleed ? (
-          <main className="flex-1 overflow-hidden">
-            <Suspense fallback={
-              <div className="flex items-center justify-center h-64">
-                <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.caption)} />
-              </div>
-            }>
-              <Outlet />
-            </Suspense>
-          </main>
-        ) : (
-          <main className="flex-1 overflow-x-hidden overflow-y-auto">
-            <div className={LAYOUT.pagePadding}>
-              <Suspense fallback={
-                <div className="flex items-center justify-center h-64">
-                  <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.caption)} />
-                </div>
-              }>
-                <Outlet />
-              </Suspense>
+        <main className="flex-1 min-h-0 overflow-hidden">
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-64">
+              <Loader2 className={cn('w-8 h-8 animate-spin', TEXT.caption)} />
             </div>
-          </main>
-        )}
+          }>
+            <Outlet />
+          </Suspense>
+        </main>
       </div>
     </div>
   );
