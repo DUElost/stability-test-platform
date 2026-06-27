@@ -6,3 +6,5 @@ export { DataPagination } from './DataPagination';
 export { DataList } from './DataList';
 export { DataListItem } from './DataListItem';
 export type { MoreAction } from './DataListItem';
+export { DataTable } from './DataTable';
+export type { RowAction } from './DataTable';
