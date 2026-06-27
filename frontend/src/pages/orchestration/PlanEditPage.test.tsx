@@ -55,11 +55,12 @@ vi.mock('@/utils/api', () => ({
   },
 }));
 
-vi.mock('@/components/ui/toast', () => ({
+vi.mock('@/hooks/useToast', () => ({
   useToast: () => ({
     success: vi.fn(),
     error: vi.fn(),
     info: vi.fn(),
+    promise: vi.fn(),
   }),
 }));
 
@@ -171,13 +172,14 @@ describe('PlanEditPage', () => {
     expect(screen.getByText('已保存')).toBeInTheDocument();
   });
 
-  it('links back to plan list from breadcrumb', async () => {
+  it('navigates back to plan list from header back button', async () => {
     renderPage('/orchestration/plans/new');
 
     await screen.findByText('新建 Plan');
-    const plansLink = screen.getByRole('link', { name: /Plans/ });
+    const backBtn = screen.getAllByRole('button')[0];
+    fireEvent.click(backBtn);
 
-    expect(plansLink).toHaveAttribute('href', '/orchestration/plans');
+    expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans');
   });
 
   it('prompts to save before execute when plan has unsaved edits', async () => {

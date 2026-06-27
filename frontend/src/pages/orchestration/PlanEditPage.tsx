@@ -1,13 +1,6 @@
-import { useState, useRef } from 'react';
-import { useParams } from 'react-router-dom';
-import { Code2, Play, Save, PanelLeft, PanelRight } from 'lucide-react';
-import type { PanelImperativeHandle } from 'react-resizable-panels';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Loader2, ArrowLeft, Code2, Play, Save, AlertCircle, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from '@/components/ui/resizable';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,169 +19,116 @@ import { SURFACE, TEXT, FORM } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { usePlanEditForm } from './usePlanEditForm';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { PageContainer, PageHeader } from '@/components/layout';
 
 export default function PlanEditPage() {
   const { id } = useParams<{ id: string }>();
   const planId = id && id !== 'new' && Number(id) > 0 ? Number(id) : null;
+  const navigate = useNavigate();
 
   const form = usePlanEditForm(planId);
   useDocumentTitle(form.name || (form.isNew ? '新建 Plan' : '编辑 Plan'));
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
-  const leftPanelRef = useRef<PanelImperativeHandle | null>(null);
-  const rightPanelRef = useRef<PanelImperativeHandle | null>(null);
 
   if (!form.isNew && form.planLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className={cn('w-6 h-6 animate-spin border-2 border-current border-t-transparent rounded-full', TEXT.caption)} />
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <Loader2 className={cn('w-6 h-6 animate-spin', TEXT.caption)} />
       </div>
     );
   }
 
   return (
-    <PageContainer scrollable={false} className="p-0">
-      <PageHeader
-        title={form.name || (form.isNew ? '新建 Plan' : '未命名 Plan')}
-        breadcrumbs={[
-          { label: 'Plans', path: '/orchestration/plans' },
-          { label: form.isNew ? 'Create' : 'Edit' },
-        ]}
-        action={
-          <>
-            <Button variant="ghost" size="sm" onClick={() => form.setShowJson(true)}>
-              <Code2 className="w-4 h-4 mr-1.5" />
-              查看 JSON
-            </Button>
-            <Button variant="default" size="sm" onClick={form.handleExecute} disabled={form.saving}>
-              <Play className="w-4 h-4 mr-1.5" />
-              发起测试
-            </Button>
-            <Button size="sm" onClick={form.handleSave} disabled={form.saving || !form.isDirty}>
-              <Save className="w-4 h-4 mr-1.5" />
-              {form.saving ? '保存中…' : form.isNew ? '创建' : '保存修改'}
-            </Button>
-          </>
-        }
-      />
-
-      <div className="flex items-center justify-between px-4 py-2 border-b bg-card">
-        <div className="flex items-center gap-2">
+    <div className="h-full flex flex-col bg-muted/40">
+      <header className="h-16 shrink-0 px-6 flex items-center justify-between gap-4 bg-card/95 backdrop-blur border-b border-border">
+        <div className="flex items-center gap-2.5 min-w-0">
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => {
-              const panel = leftPanelRef.current;
-              if (panel) {
-                if (panel.isCollapsed()) panel.expand();
-                else panel.collapse();
-              }
-              setLeftCollapsed((v) => !v);
-            }}
-            aria-label={leftCollapsed ? '展开左栏' : '折叠左栏'}
+            className="h-8 px-2 text-muted-foreground"
+            onClick={() => navigate('/orchestration/plans')}
           >
-            <PanelLeft className="w-4 h-4" />
+            <ArrowLeft className="w-4 h-4" />
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              const panel = rightPanelRef.current;
-              if (panel) {
-                if (panel.isCollapsed()) panel.expand();
-                else panel.collapse();
-              }
-              setRightCollapsed((v) => !v);
-            }}
-            aria-label={rightCollapsed ? '展开右栏' : '折叠右栏'}
-          >
-            <PanelRight className="w-4 h-4" />
-          </Button>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className={cn('text-xs', TEXT.caption)}>
+          <div className="flex items-center gap-2 text-[13px] text-muted-foreground min-w-0">
+            <span>测试计划</span>
+            <ChevronRight className="w-3.5 h-3.5 text-border" />
+            <strong className="text-foreground font-bold text-base truncate">
+              {form.name || (form.isNew ? '新建 Plan' : '未命名 Plan')}
+            </strong>
             {form.isDirty ? (
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_BG_COLORS.warning} border border-warning`}>
-                未保存
+              <span
+                className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_BG_COLORS.warning} border border-warning`}
+              >
+                <AlertCircle className="w-3 h-3" /> 未保存
               </span>
             ) : (
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_BG_COLORS.success} border border-success`}>
-                已保存
+              <span
+                className={`ml-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold ${STATUS_BG_COLORS.success} border border-success`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-success" /> 已保存
               </span>
             )}
-          </span>
+          </div>
         </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground hover:text-foreground"
+            onClick={() => form.setShowJson(true)}
+          >
+            <Code2 className="w-4 h-4 mr-1.5" />
+            查看 JSON
+          </Button>
+          <Button variant="default" size="sm" onClick={form.handleExecute} disabled={form.saving}>
+            <Play className="w-4 h-4 mr-1.5" />
+            发起测试
+          </Button>
+          <Button size="sm" onClick={form.handleSave} disabled={form.saving || !form.isDirty}>
+            <Save className="w-4 h-4 mr-1.5" />
+            {form.saving ? '保存中…' : form.isNew ? '创建' : '保存修改'}
+          </Button>
+        </div>
+      </header>
+
+      <div className="flex-1 grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-hidden">
+        <PlanChainPanel
+          plans={form.allPlans || []}
+          currentPlanId={planId}
+          draftStepCounts={form.isNew ? form.draftStepCounts : null}
+          draftPlanName={form.name}
+          onSelectPlan={form.handleSelectChainPlan}
+          onAppendPlan={form.handleAppendChainPlan}
+        />
+
+        <PlanCanvas
+          planName={form.name}
+          onPlanNameChange={form.setName}
+          description={form.description}
+          onDescriptionChange={form.setDescription}
+          failureThreshold={form.failureThreshold}
+          onFailureThresholdChange={form.setFailureThreshold}
+          patrolIntervalSeconds={form.lifecycle.lifecycle.patrol?.interval_seconds ?? null}
+          onPatrolIntervalChange={form.handlePatrolIntervalChange}
+          timeoutSeconds={form.lifecycle.lifecycle.timeout_seconds ?? null}
+          onTimeoutChange={form.handleTimeoutChange}
+          nextPlanName={form.nextPlanName}
+          isCurrentEditing
+          lifecycle={form.lifecycle}
+          onLifecycleChange={form.setLifecycle}
+          selectedStepKey={form.selectedStepKey}
+          onSelectStep={form.setSelectedStepKey}
+          scripts={form.scripts || []}
+        />
+
+        <PlanStepInspector
+          step={form.selectedStep}
+          phase={form.selectedRef.phase}
+          index={form.selectedRef.index >= 0 ? form.selectedRef.index : null}
+          scripts={form.scripts || []}
+          onUpdateStep={form.handleStepUpdate}
+        />
       </div>
-
-      <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
-        <ResizablePanel
-          panelRef={leftPanelRef}
-          defaultSize={20}
-          minSize={15}
-          maxSize={30}
-          collapsible
-          collapsedSize={0}
-        >
-          <div className="h-full overflow-auto">
-            <PlanChainPanel
-              plans={form.allPlans || []}
-              currentPlanId={planId}
-              draftStepCounts={form.isNew ? form.draftStepCounts : null}
-              draftPlanName={form.name}
-              onSelectPlan={form.handleSelectChainPlan}
-              onAppendPlan={form.handleAppendChainPlan}
-            />
-          </div>
-        </ResizablePanel>
-
-        <ResizableHandle withHandle />
-
-        <ResizablePanel defaultSize={60} minSize={40}>
-          <div className="h-full overflow-auto bg-muted/40">
-            <PlanCanvas
-              planName={form.name}
-              onPlanNameChange={form.setName}
-              description={form.description}
-              onDescriptionChange={form.setDescription}
-              failureThreshold={form.failureThreshold}
-              onFailureThresholdChange={form.setFailureThreshold}
-              patrolIntervalSeconds={form.lifecycle.lifecycle.patrol?.interval_seconds ?? null}
-              onPatrolIntervalChange={form.handlePatrolIntervalChange}
-              timeoutSeconds={form.lifecycle.lifecycle.timeout_seconds ?? null}
-              onTimeoutChange={form.handleTimeoutChange}
-              nextPlanName={form.nextPlanName}
-              isCurrentEditing
-              lifecycle={form.lifecycle}
-              onLifecycleChange={form.setLifecycle}
-              selectedStepKey={form.selectedStepKey}
-              onSelectStep={form.setSelectedStepKey}
-              scripts={form.scripts || []}
-            />
-          </div>
-        </ResizablePanel>
-
-        <ResizableHandle withHandle />
-
-        <ResizablePanel
-          panelRef={rightPanelRef}
-          defaultSize={20}
-          minSize={15}
-          maxSize={30}
-          collapsible
-          collapsedSize={0}
-        >
-          <div className="h-full overflow-auto">
-            <PlanStepInspector
-              step={form.selectedStep}
-              phase={form.selectedRef.phase}
-              index={form.selectedRef.index >= 0 ? form.selectedRef.index : null}
-              scripts={form.scripts || []}
-              onUpdateStep={form.handleStepUpdate}
-            />
-          </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
 
       <AlertDialog open={form.showJson} onOpenChange={form.setShowJson}>
         <AlertDialogContent className="max-w-3xl">
@@ -281,6 +221,6 @@ export default function PlanEditPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </PageContainer>
+    </div>
   );
 }
