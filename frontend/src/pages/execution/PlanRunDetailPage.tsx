@@ -119,7 +119,6 @@ export default function PlanRunDetailPage() {
     dataUpdatedAt: runQ.dataUpdatedAt,
     isAnyFetching,
     refreshAll,
-    leftPanelOpen,
     onToggleLeftPanel: toggleLeftPanel,
   });
 

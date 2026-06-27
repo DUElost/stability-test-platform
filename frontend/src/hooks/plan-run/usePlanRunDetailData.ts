@@ -80,6 +80,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
     qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
     qc.invalidateQueries({ queryKey: planRunKeys.watcherByRun(id) });
     qc.invalidateQueries({ queryKey: planRunKeys.chain(id) });
+    qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
   }, [qc, id]);
 
   const onSocketMessage = useCallback(
@@ -88,15 +89,18 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
       if (msg.type === SOCKET_MESSAGE_TYPES.JOB_STATUS) {
         qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
+        qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PLAN_RUN_STATUS) {
         qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.chain(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
+        qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.PRECHECK_UPDATE) {
         qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
         qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
+        qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
       } else if (msg.type === SOCKET_MESSAGE_TYPES.WATCHER_SIGNAL) {
         if (watcherSignalTimer.current) clearTimeout(watcherSignalTimer.current);
         watcherSignalTimer.current = setTimeout(() => {

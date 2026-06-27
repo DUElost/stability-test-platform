@@ -13,7 +13,6 @@ interface Options {
   dataUpdatedAt: number;
   isAnyFetching: boolean;
   refreshAll: () => void;
-  leftPanelOpen: boolean;
   onToggleLeftPanel: () => void;
 }
 
