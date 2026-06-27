@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { api, type JiraDraft, type PlanRun } from '@/utils/api';
-import apiClient from '@/utils/api/client';
 import { AlertCircle, RefreshCw, FileText } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
@@ -33,8 +32,8 @@ export default function IssueTrackerPage() {
       const runsWithDrafts: RunWithDraft[] = await Promise.all(
         runs.map(async (run: PlanRun) => {
           try {
-            const draftResp = await apiClient.get(`/runs/${run.id}/jira-draft/cached`);
-            return { run, draft: draftResp.data };
+            const draft = await api.runs.getCachedJiraDraft(run.id);
+            return { run, draft };
           } catch {
             return { run, draft: null };
           }

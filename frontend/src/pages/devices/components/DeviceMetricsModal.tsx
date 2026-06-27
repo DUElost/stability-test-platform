@@ -18,7 +18,7 @@ export function DeviceMetricsModal({ isOpen, onClose, deviceId, deviceSerial }: 
 
   const { data, isLoading } = useQuery({
     queryKey: ['device-metrics', deviceId, hours],
-    queryFn: () => api.stats.deviceMetrics(deviceId, hours).then((res) => res.data),
+    queryFn: () => api.stats.deviceMetrics(deviceId, hours),
     enabled: isOpen,
     refetchInterval: 30000,
   });

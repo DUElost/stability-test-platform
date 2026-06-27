@@ -1,6 +1,4 @@
 import axios from 'axios';
-import { clearAppQueryCache } from '@/components/QueryProvider';
-import { disconnectDashSocket } from '@/hooks/useSocketIO';
 import { refreshAccessToken } from '@/utils/auth';
 
 export class ApiError extends Error {
@@ -11,6 +9,13 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.code = code;
   }
+}
+
+type AuthFailureHandler = () => void;
+let _authFailureHandler: AuthFailureHandler | null = null;
+
+export function registerAuthFailureHandler(fn: AuthFailureHandler): void {
+  _authFailureHandler = fn;
 }
 
 const apiClient = axios.create({
@@ -75,9 +80,11 @@ apiClient.interceptors.response.use(
         return Promise.reject(error);
       }
 
-      clearAppQueryCache();
-      disconnectDashSocket();
-      window.location.href = '/login';
+      if (_authFailureHandler) {
+        _authFailureHandler();
+      } else {
+        window.location.href = '/login';
+      }
     }
 
     return Promise.reject(error);

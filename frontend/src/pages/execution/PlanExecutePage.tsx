@@ -399,7 +399,7 @@ export default function PlanExecutePage() {
 
 
 
-    queryFn: async () => { const resp = await api.devices.list(0, 200); return resp.data; },
+    queryFn: async () => { const resp = await api.devices.list(0, 200); return resp; },
 
 
 

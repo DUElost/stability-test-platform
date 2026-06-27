@@ -8,39 +8,37 @@ vi.mock('../utils/api', () => ({
   api: {
     stats: {
       dashboardSummary: vi.fn().mockResolvedValue({
-        data: {
-          hosts: {
-            total: 453,
-            online: 1,
-            offline: 451,
-            degraded: 1,
-            avg_cpu_load: 0.36,
-            avg_ram_usage: 23.87,
-            avg_disk_usage: 8.07,
-            online_rate: 0.0022,
-          },
-          devices: {
-            total: 483,
-            idle: 1,
-            testing: 0,
-            offline: 482,
-            error: 0,
-            low_battery: 169,
-            high_temp: 0,
-          },
-          alerts: {
-            total: 169,
-            low_battery: 169,
-            high_temp: 0,
-            error: 0,
-          },
-          host_resources: [
-            { ip: '172.21.10.36', cpu_load: 0.36, ram_usage: 23.87, disk_usage: 8.07 },
-          ],
+        hosts: {
+          total: 453,
+          online: 1,
+          offline: 451,
+          degraded: 1,
+          avg_cpu_load: 0.36,
+          avg_ram_usage: 23.87,
+          avg_disk_usage: 8.07,
+          online_rate: 0.0022,
         },
+        devices: {
+          total: 483,
+          idle: 1,
+          testing: 0,
+          offline: 482,
+          error: 0,
+          low_battery: 169,
+          high_temp: 0,
+        },
+        alerts: {
+          total: 169,
+          low_battery: 169,
+          high_temp: 0,
+          error: 0,
+        },
+        host_resources: [
+          { ip: '172.21.10.36', cpu_load: 0.36, ram_usage: 23.87, disk_usage: 8.07 },
+        ],
       }),
-      activity: vi.fn().mockResolvedValue({ data: { points: [], hours: 24 } }),
-      completionTrend: vi.fn().mockResolvedValue({ data: { points: [], days: 7 } }),
+      activity: vi.fn().mockResolvedValue({ points: [], hours: 24 }),
+      completionTrend: vi.fn().mockResolvedValue({ points: [], days: 7 }),
     },
   },
 }));

@@ -1,5 +1,4 @@
 import axios from 'axios';
-import { clearAppQueryCache } from '@/components/QueryProvider';
 
 // 防抖：避免并发 refresh 导致重复请求 (axios interceptor + Socket.IO recovery 共用)
 let _refreshInFlight: Promise<boolean> | null = null;
@@ -9,6 +8,11 @@ let _refreshInFlight: Promise<boolean> | null = null;
  *
  * Why: 前端不再持有 access/refresh token，统一依赖 HttpOnly cookie。
  *      所有 401 恢复都走这里，避免并发 refresh 风暴。
+ *
+ * 副作用边界：本函数只负责尝试 refresh 并返回成败。清缓存/断 socket/跳转
+ * 登录等副作用由调用方负责（client.ts 401 拦截器经
+ * registerAuthFailureHandler 注册的 handler 执行；useSocketIO 仅据返回值
+ * 决定是否重连，不触发页面跳转）。
  */
 export async function refreshAccessToken(): Promise<boolean> {
   if (_refreshInFlight) return _refreshInFlight;
@@ -22,14 +26,6 @@ export async function refreshAccessToken(): Promise<boolean> {
       );
       return true;
     } catch {
-      // 已经在 /login 时跳过 clearAppQueryCache + redirect:
-      // queryClient.clear() 会重置仍挂载的 useAuthSession 观察者 → 立即重新 GET /auth/me
-      // → 再次 401 → 再次清缓存,形成 "校验登录状态中..." 无限刷新。pathname 已是 /login
-      // 时本就无需 redirect,这两个副作用纯粹是死循环触发器,必须一并跳过。
-      if (window.location.pathname !== '/login') {
-        clearAppQueryCache();
-        window.location.href = '/login';
-      }
       return false;
     } finally {
       _refreshInFlight = null;

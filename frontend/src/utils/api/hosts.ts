@@ -2,23 +2,24 @@ import apiClient from './client';
 import type { Host, PaginatedResponse } from './types';
 
 export const hosts = {
-  list: (skip = 0, limit = 50) => apiClient.get<PaginatedResponse<Host>>('/hosts', { params: { skip, limit } }),
-  get: (id: number | string) => apiClient.get<Host>(`/hosts/${id}`),
+  list: (skip = 0, limit = 50) =>
+    apiClient.get<PaginatedResponse<Host>>('/hosts', { params: { skip, limit } }).then(r => r.data),
+  get: (id: number | string) => apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
   getDetail: (id: number | string) =>
     apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
   create: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
-    apiClient.post<Host>('/hosts', data),
+    apiClient.post<Host>('/hosts', data).then(r => r.data),
   update: (id: number | string, data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
-    apiClient.put<Host>(`/hosts/${id}`, data),
+    apiClient.put<Host>(`/hosts/${id}`, data).then(r => r.data),
   updateWatcherAdminState: (
     id: number | string,
     data: { watcher_admin_active: boolean },
-  ) => apiClient.patch<Host>(`/hosts/${id}/watcher-admin-state`, data),
+  ) => apiClient.patch<Host>(`/hosts/${id}/watcher-admin-state`, data).then(r => r.data),
 };
 
 export const heartbeat = {
   send: (hostId: number, data: { status: string; mount_status?: Record<string, any> }) =>
-    apiClient.post(`/heartbeat`, { host_id: hostId, ...data }),
+    apiClient.post('/heartbeat', { host_id: hostId, ...data }).then(r => r.data),
 };
 
 export interface HotUpdateResult {
@@ -69,18 +70,19 @@ export const hotUpdate = {
       opts.abortRunningJobs
         ? { params: { abort_running_jobs: true } }
         : undefined,
-    ),
+    ).then(r => r.data),
 };
 
 export const deploy = {
   trigger: (hostId: number | string, installPath: string = '/opt/stability-test-agent') =>
     apiClient.post<{ id: number; host_id: number; status: string; started_at: string }>(
       `/deploy/hosts/${hostId}`,
-      { install_path: installPath }
-    ),
+      { install_path: installPath },
+    ).then(r => r.data),
   getHistory: (hostId: number | string, limit: number = 10) =>
-    apiClient.get<any[]>(`/deploy/hosts/${hostId}/history?limit=${limit}`),
-  getLatest: (hostId: number | string) => apiClient.get<any>(`/deploy/hosts/${hostId}/latest`),
+    apiClient.get<any[]>(`/deploy/hosts/${hostId}/history?limit=${limit}`).then(r => r.data),
+  getLatest: (hostId: number | string) =>
+    apiClient.get<any>(`/deploy/hosts/${hostId}/latest`).then(r => r.data),
   batchDeploy: (hostIds: Array<number | string>, installPath: string = '/opt/stability-test-agent') =>
-    apiClient.post<{ deployments: any[]; total: number }>('/deploy/batch', { host_ids: hostIds, install_path: installPath }),
+    apiClient.post<{ deployments: any[]; total: number }>('/deploy/batch', { host_ids: hostIds, install_path: installPath }).then(r => r.data),
 };

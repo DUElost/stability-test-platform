@@ -16,5 +16,5 @@ export const resourcePools = {
   update: (id: number, data: ResourcePoolCreatePayload) =>
     unwrapApiResponse<ResourcePool>(apiClient.put(`/resource-pools/${id}`, data)),
   delete: (id: number) =>
-    apiClient.delete(`/resource-pools/${id}`),
+    apiClient.delete(`/resource-pools/${id}`).then(r => r.data),
 };

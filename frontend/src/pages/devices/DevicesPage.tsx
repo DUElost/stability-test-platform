@@ -29,13 +29,13 @@ export default function DevicesPage() {
 
   const { data: devices, isLoading, error } = useQuery({
     queryKey: deviceKeys.list(),
-    queryFn: () => api.devices.list(0, 1200).then(res => res.data.items),
+    queryFn: () => api.devices.list(0, 1200).then(res => res.items),
     refetchInterval: 10000,
   });
 
   const { data: hosts } = useQuery({
     queryKey: hostKeys.list(),
-    queryFn: () => api.hosts.list(0, 200).then(res => res.data.items),
+    queryFn: () => api.hosts.list(0, 200).then(res => res.items),
     refetchInterval: 10000,
   });
 

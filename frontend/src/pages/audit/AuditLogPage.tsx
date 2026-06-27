@@ -47,8 +47,8 @@ export default function AuditLogPage() {
       if (filters.start_time) params.start_time = filters.start_time;
       if (filters.end_time) params.end_time = filters.end_time;
       const res = await api.audit.list(page * pageSize, pageSize, params);
-      setLogs(res.data.items);
-      setTotal(res.data.total);
+      setLogs(res.items);
+      setTotal(res.total);
     } catch {
       setError('加载失败，请检查网络连接或管理员权限');
       setLogs([]);

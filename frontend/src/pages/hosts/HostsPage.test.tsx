@@ -11,22 +11,22 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../utils/api', () => ({
   api: {
     hosts: {
-      list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
-      create: vi.fn().mockResolvedValue({ data: {} }),
-      updateWatcherAdminState: vi.fn().mockResolvedValue({ data: {} }),
+      list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+      create: vi.fn().mockResolvedValue({}),
+      updateWatcherAdminState: vi.fn().mockResolvedValue({}),
     },
     devices: {
-      list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
+      list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     },
     tasks: {
-      list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
+      list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     },
     deploy: {
-      trigger: vi.fn().mockResolvedValue({ data: {} }),
-      batchDeploy: vi.fn().mockResolvedValue({ data: {} }),
+      trigger: vi.fn().mockResolvedValue({}),
+      batchDeploy: vi.fn().mockResolvedValue({}),
     },
     hotUpdate: {
-      trigger: vi.fn().mockResolvedValue({ data: {} }),
+      trigger: vi.fn().mockResolvedValue({}),
     },
     planRuns: {
       list: vi.fn().mockResolvedValue([]),
@@ -107,8 +107,8 @@ describe('HostsPage', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     const { api } = await import('../../utils/api');
-    (api.hosts.list as any).mockResolvedValue({ data: { items: [], total: 0 } });
-    (api.devices.list as any).mockResolvedValue({ data: { items: [], total: 0 } });
+    (api.hosts.list as any).mockResolvedValue({ items: [], total: 0 });
+    (api.devices.list as any).mockResolvedValue({ items: [], total: 0 });
     (api.planRuns.list as any).mockResolvedValue([]);
   });
 
@@ -160,13 +160,11 @@ describe('HostsPage', () => {
   it('renders host table when hosts exist', async () => {
     const { api } = await import('../../utils/api');
     (api.hosts.list as any).mockResolvedValue({
-      data: {
-        items: [
-          { id: 1, name: 'Worker-01', ip: '172.21.15.10', status: 'ONLINE', extra: {}, mount_status: {} },
-          { id: 2, name: 'Worker-02', ip: '172.21.15.11', status: 'OFFLINE', extra: {}, mount_status: {} },
-        ],
-        total: 2,
-      },
+      items: [
+        { id: 1, name: 'Worker-01', ip: '172.21.15.10', status: 'ONLINE', extra: {}, mount_status: {} },
+        { id: 2, name: 'Worker-02', ip: '172.21.15.11', status: 'OFFLINE', extra: {}, mount_status: {} },
+      ],
+      total: 2,
     });
 
     const HostsPage = (await import('./HostsPage')).default;
@@ -181,21 +179,19 @@ describe('HostsPage', () => {
   it('does not query plan runs to compute host active task counts', async () => {
     const { api } = await import('../../utils/api');
     (api.hosts.list as any).mockResolvedValue({
-      data: {
-        items: [
-          {
-            id: 'host-1',
-            name: 'Worker-01',
-            ip: '172.21.15.10',
-            status: 'ONLINE',
-            extra: {},
-            mount_status: {},
-            watcher_admin_active: true,
-            capacity: { active_jobs: 2 },
-          },
-        ],
-        total: 1,
-      },
+      items: [
+        {
+          id: 'host-1',
+          name: 'Worker-01',
+          ip: '172.21.15.10',
+          status: 'ONLINE',
+          extra: {},
+          mount_status: {},
+          watcher_admin_active: true,
+          capacity: { active_jobs: 2 },
+        },
+      ],
+      total: 1,
     });
 
     const HostsPage = (await import('./HostsPage')).default;
@@ -208,20 +204,18 @@ describe('HostsPage', () => {
   it('deactivates watcher admin state after confirmation', async () => {
     const { api } = await import('../../utils/api');
     (api.hosts.list as any).mockResolvedValue({
-      data: {
-        items: [
-          {
-            id: 'host-1',
-            name: 'Worker-01',
-            ip: '172.21.15.10',
-            status: 'ONLINE',
-            extra: {},
-            mount_status: {},
-            watcher_admin_active: true,
-          },
-        ],
-        total: 1,
-      },
+      items: [
+        {
+          id: 'host-1',
+          name: 'Worker-01',
+          ip: '172.21.15.10',
+          status: 'ONLINE',
+          extra: {},
+          mount_status: {},
+          watcher_admin_active: true,
+        },
+      ],
+      total: 1,
     });
 
     const HostsPage = (await import('./HostsPage')).default;

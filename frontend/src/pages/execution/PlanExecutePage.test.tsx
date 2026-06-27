@@ -59,7 +59,8 @@ function renderPage({
   });
   (api.plans.list as any).mockResolvedValue(plans);
   (api.devices.list as any).mockResolvedValue({
-    data: { items: devices, total: devices.length },
+    items: devices,
+    total: devices.length,
   });
   (api.plans.previewRun as any).mockResolvedValue({
     plan_name: 'Smoke Plan',

@@ -19,8 +19,8 @@ export const logs = {
     } else {
       delete reqParams.job_ids;
     }
-    return apiClient.get<RuntimeLogQueryResponse>('/logs/query', { params: reqParams });
+    return apiClient.get<RuntimeLogQueryResponse>('/logs/query', { params: reqParams }).then(r => r.data);
   },
   queryAgent: (data: { host_id: number; log_path?: string; lines?: number }) =>
-    apiClient.post<AgentLogOut>('/agent/logs', data),
+    apiClient.post<AgentLogOut>('/agent/logs', data).then(r => r.data),
 };

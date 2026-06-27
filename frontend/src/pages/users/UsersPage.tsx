@@ -25,7 +25,7 @@ export default function UsersPage() {
   // Fetch users list
   const { data: users, isLoading, error } = useQuery({
     queryKey: ['users'],
-    queryFn: () => api.users.list(0, 200).then(res => res.data.items),
+    queryFn: () => api.users.list(0, 200).then(res => res.items),
   });
 
   // Create user mutation

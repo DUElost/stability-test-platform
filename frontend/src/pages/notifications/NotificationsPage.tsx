@@ -58,7 +58,7 @@ export default function NotificationsPage() {
     queryKey: notificationKeys.channels(),
     queryFn: async () => {
       const resp = await api.notifications.listChannels(0, 200);
-      return resp.data.items;
+      return resp.items;
     },
   });
 
@@ -66,7 +66,7 @@ export default function NotificationsPage() {
     queryKey: notificationKeys.rules(),
     queryFn: async () => {
       const resp = await api.notifications.listRules(0, 200);
-      return resp.data.items;
+      return resp.items;
     },
   });
 

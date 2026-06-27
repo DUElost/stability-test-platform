@@ -47,7 +47,7 @@ describe('LoginPage', () => {
   });
 
   it('clears cached queries before navigating after successful login', async () => {
-    mocks.login.mockResolvedValue({ data: { ok: true } });
+    mocks.login.mockResolvedValue({ ok: true });
 
     render(<LoginPage />);
 

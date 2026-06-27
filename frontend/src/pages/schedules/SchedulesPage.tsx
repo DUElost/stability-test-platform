@@ -47,7 +47,7 @@ export default function SchedulesPage() {
 
   const loadSchedules = async () => {
     const res = await api.schedules.list(0, 200);
-    setSchedules(res.data.items || []);
+    setSchedules(res.items || []);
   };
 
   const loadPlans = async () => {
@@ -130,7 +130,7 @@ export default function SchedulesPage() {
   const handleRunNow = async (id: number) => {
     try {
       const res = await api.schedules.runNow(id);
-      const planRunId = res.data.plan_run_id;
+      const planRunId = res.plan_run_id;
       if (planRunId) {
         toast.success(`Plan 已触发，Run ID: ${planRunId}`);
       } else {

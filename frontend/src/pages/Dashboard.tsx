@@ -28,7 +28,7 @@ export default function Dashboard() {
 
   const { data: summary, isLoading: summaryLoading, error: summaryError } = useQuery({
     queryKey: ['dashboard-summary'],
-    queryFn: () => api.stats.dashboardSummary().then((res) => res.data),
+    queryFn: () => api.stats.dashboardSummary(),
     refetchInterval: 10000,
   });
 
@@ -36,13 +36,13 @@ export default function Dashboard() {
 
   const { data: activityData, isLoading: activityLoading } = useQuery({
     queryKey: ['stats-activity'],
-    queryFn: () => api.stats.activity(24).then((res) => res.data),
+    queryFn: () => api.stats.activity(24),
     refetchInterval: 60000,
   });
 
   const { data: trendData, isLoading: trendLoading } = useQuery({
     queryKey: ['stats-completion-trend'],
-    queryFn: () => api.stats.completionTrend(7).then((res) => res.data),
+    queryFn: () => api.stats.completionTrend(7),
     refetchInterval: 60000,
   });
 

@@ -2,8 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
 
 const mocks = vi.hoisted(() => ({
-  clearAppQueryCache: vi.fn(),
-  disconnectDashSocket: vi.fn(),
+  authFailureHandler: vi.fn(),
 }));
 
 // We need to test the module-level interceptors, so we'll import after mocking
@@ -27,22 +26,20 @@ vi.mock('axios', () => {
   };
 });
 
-vi.mock('@/components/QueryProvider', () => ({
-  clearAppQueryCache: mocks.clearAppQueryCache,
-}));
-
-vi.mock('@/hooks/useSocketIO', () => ({
-  disconnectDashSocket: mocks.disconnectDashSocket,
-}));
-
 describe('api module', () => {
   let requestFulfilled: (config: any) => any;
   let responseRejected: (error: any) => any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules();
     vi.clearAllMocks();
-    // Re-import to trigger interceptor registration
+    // Re-import to trigger interceptor registration, then wire the auth-failure
+    // handler that client.ts dispatches to on terminal 401.
+    const mod = await import('./api');
+    mod.registerAuthFailureHandler(mocks.authFailureHandler);
+    const instance = (axios.create as any).mock.results[0].value;
+    requestFulfilled = instance.interceptors.request.use.mock.calls[0]?.[0];
+    responseRejected = instance.interceptors.response.use.mock.calls[0]?.[1];
   });
 
   afterEach(() => {
@@ -50,7 +47,6 @@ describe('api module', () => {
   });
 
   it('creates axios instance with correct baseURL', async () => {
-    await import('./api');
     expect(axios.create).toHaveBeenCalledWith(
       expect.objectContaining({
         baseURL: '/api/v1',
@@ -61,19 +57,12 @@ describe('api module', () => {
   });
 
   it('registers request and response interceptors', async () => {
-    await import('./api');
     const instance = (axios.create as any).mock.results[0].value;
     expect(instance.interceptors.request.use).toHaveBeenCalled();
     expect(instance.interceptors.response.use).toHaveBeenCalled();
   });
 
   describe('request interceptor', () => {
-    beforeEach(async () => {
-      await import('./api');
-      const instance = (axios.create as any).mock.results[0].value;
-      requestFulfilled = instance.interceptors.request.use.mock.calls[0][0];
-    });
-
     it('does not attach Authorization header for cookie-based auth', () => {
       const config = { headers: {} as any, method: 'get', url: '/hosts' };
       const result = requestFulfilled(config);
@@ -82,12 +71,6 @@ describe('api module', () => {
   });
 
   describe('response interceptor - 401 handling', () => {
-    beforeEach(async () => {
-      await import('./api');
-      const instance = (axios.create as any).mock.results[0].value;
-      responseRejected = instance.interceptors.response.use.mock.calls[0][1];
-    });
-
     it('attempts cookie-based refresh on 401 for non-auth endpoints', async () => {
       (axios.post as any).mockResolvedValueOnce({ data: { ok: true } });
       const error = { response: { status: 401 }, config: {} };
@@ -140,7 +123,7 @@ describe('api module', () => {
       expect(axios.post).not.toHaveBeenCalled();
     });
 
-    it('does not clear cache or redirect when already on /login after terminal 401', async () => {
+    it('does not invoke auth-failure handler when already on /login after terminal 401', async () => {
       const error = {
         response: { status: 401 },
         config: { headers: {}, __retry: true, url: '/auth/me' },
@@ -157,12 +140,12 @@ describe('api module', () => {
         // expected rejection
       }
 
-      expect(mocks.clearAppQueryCache).not.toHaveBeenCalled();
-      expect(mocks.disconnectDashSocket).not.toHaveBeenCalled();
-      expect(window.location.href).toBe('/login');
+      expect(mocks.authFailureHandler).not.toHaveBeenCalled();
     });
 
-    it('clears cached queries before redirecting after terminal 401', async () => {
+    it('invokes auth-failure handler after terminal 401 on a protected route', async () => {
+      // refresh must fail so the interceptor falls through to the handler
+      (axios.post as any).mockRejectedValueOnce(new Error('401'));
       const error = {
         response: { status: 401 },
         config: { headers: {}, __retry: true, url: '/hosts' },
@@ -179,9 +162,7 @@ describe('api module', () => {
         // expected rejection
       }
 
-      expect(mocks.clearAppQueryCache).toHaveBeenCalledTimes(1);
-      expect(mocks.disconnectDashSocket).toHaveBeenCalledTimes(1);
-      expect(window.location.href).toBe('/login');
+      expect(mocks.authFailureHandler).toHaveBeenCalledTimes(1);
     });
   });
 

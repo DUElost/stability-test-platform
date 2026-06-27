@@ -31,7 +31,7 @@ export default function ResultsPage() {
     queryKey: ['results-summary'],
     queryFn: async () => {
       const resp = await api.results.summary(30);
-      return resp.data;
+      return resp;
     },
     refetchInterval: 30_000,
   });

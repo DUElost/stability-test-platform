@@ -279,11 +279,11 @@ function DedupActionButtons({
   const [loading, setLoading] = useState(false);
   const doScan = async () => {
     setLoading(true);
-    try { await triggerDedupScan(runId); } finally { setLoading(false); onAction?.(); }
+    try { await api.planRuns.triggerScan(runId); } finally { setLoading(false); onAction?.(); }
   };
   const doMerge = async () => {
     setLoading(true);
-    try { await triggerDedupMerge(runId); } finally { setLoading(false); onAction?.(); }
+    try { await api.planRuns.triggerMerge(runId); } finally { setLoading(false); onAction?.(); }
   };
   return (
     <span className="inline-flex items-center gap-1">
