@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { useSocketIO, type SocketIOMessage } from '@/hooks/useSocketIO';
 import {
   isJobStuck,

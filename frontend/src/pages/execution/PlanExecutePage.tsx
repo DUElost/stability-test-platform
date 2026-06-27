@@ -42,7 +42,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 
 
 
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 
 
 

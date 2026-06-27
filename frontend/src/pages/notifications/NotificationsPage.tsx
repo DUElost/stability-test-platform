@@ -4,7 +4,7 @@ import { api, NotificationChannel, AlertRule } from '@/utils/api';
 import { notificationKeys } from '@/utils/api/queryKeys';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import {
   Plus,

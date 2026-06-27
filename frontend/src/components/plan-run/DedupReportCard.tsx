@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Scan, Merge, FileDown, Loader2 } from 'lucide-react';
 import { api } from '@/utils/api';
 import { dedupKeys } from '@/utils/api/queryKeys';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { PANEL, TEXT, TOOL_BTN } from '@/design-system';
 import { cn } from '@/lib/utils';
 

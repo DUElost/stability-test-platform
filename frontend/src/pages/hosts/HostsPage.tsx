@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Rocket, Server } from 'lucide-react';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { ExpandableHostTable, type HostTableData } from '@/components/network/ExpandableHostTable';

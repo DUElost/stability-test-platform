@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { api, type ScriptEntry } from '@/utils/api';
 import { Tag, AlertCircle } from 'lucide-react';
 import { ALERT_BANNER, FORM, MODAL, TEXT } from '@/design-system';

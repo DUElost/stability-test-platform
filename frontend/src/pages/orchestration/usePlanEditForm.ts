@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useBeforeUnload } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { api, type Plan, type PlanCreate, type PlanUpdate, type PipelineDef, type PipelineStep } from '@/utils/api';
 import { planKeys } from '@/utils/api/queryKeys';
 import {

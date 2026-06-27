@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Smartphone } from 'lucide-react';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { ExpandableDeviceTable, type DeviceTableData, type DeviceStatus } from '@/components/device/ExpandableDeviceTable';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { DeviceMetricsModal } from './components/DeviceMetricsModal';

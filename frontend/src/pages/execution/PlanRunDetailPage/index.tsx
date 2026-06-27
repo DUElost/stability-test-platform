@@ -13,7 +13,7 @@ import { RunArtifactsTab } from './RunArtifactsTab';
 import { RunLogsTab } from './RunLogsTab';
 import { RunSignalsTab } from './RunSignalsTab';
 import { RunTimelineTab } from './RunTimelineTab';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { api } from '@/utils/api';
 
 export default function PlanRunDetailPage() {

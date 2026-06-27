@@ -5,7 +5,7 @@ import type { ResourcePool, ResourcePoolLoad } from '@/utils/api/types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { Plus, Trash2, Wifi, WifiOff, Pencil, X } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';

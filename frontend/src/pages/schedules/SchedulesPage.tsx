@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, type TaskSchedule, type TaskScheduleCreatePayload, type Plan } from '@/utils/api';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
 import { Plus, Trash2, Edit2, Play, Power, Clock } from 'lucide-react';

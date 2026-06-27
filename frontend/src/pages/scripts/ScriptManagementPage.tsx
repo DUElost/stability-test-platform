@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import { api, type ScriptEntry } from '@/utils/api';
 import { Search, FileCode, Code2, Tag, RefreshCw } from 'lucide-react';
 import ScriptVersionDialog from './ScriptVersionDialog';

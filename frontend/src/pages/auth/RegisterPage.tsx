@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertCircle } from 'lucide-react';
-import { useToast } from '@/components/ui/toast';
+import { useToast } from '@/hooks/useToast';
 import axios from 'axios';
 import { SURFACE, TEXT } from '@/design-system/tokens';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
