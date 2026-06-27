@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { useSocketIO, disconnectDashSocket } from '@/hooks/useSocketIO';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { UserMenu } from '@/components/ui/UserMenu';
 import { api } from '@/utils/api';
 import { WS_DASHBOARD_ENDPOINT } from '@/config';
@@ -23,6 +24,7 @@ export default function AppShell() {
   const sessionQ = useAuthSession();
   const currentUser = sessionQ.data;
   const { isConnected: dashConnected } = useSocketIO(WS_DASHBOARD_ENDPOINT);
+  const { headerSlot } = useHeaderSlot();
 
   useEffect(() => {
     const checkMobile = () => {
@@ -119,7 +121,7 @@ export default function AppShell() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header className={cn('sticky top-0 z-30 border-b', SURFACE.header, BORDER.default)}>
-          <div className="flex items-center justify-between h-14 px-4 lg:px-6">
+          <div className="flex items-center justify-between h-20 px-4 lg:px-6">
             <button
               onClick={toggleSidebar}
               className={cn('lg:hidden p-2', INTERACTIVE.iconButton)}
@@ -128,7 +130,9 @@ export default function AppShell() {
               <Menu className="w-5 h-5" />
             </button>
 
-            <div className="flex-1" />
+            <div className="flex flex-1 items-center min-w-0">
+              {headerSlot}
+            </div>
 
             <div className="flex items-center gap-2">
               <Badge
