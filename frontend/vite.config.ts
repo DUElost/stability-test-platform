@@ -22,6 +22,21 @@ function manualChunks(id: string): string | undefined {
   if (id.includes('/node_modules/@xterm/')) {
     return 'vendor-xterm';
   }
+  if (id.includes('/node_modules/recharts/')) {
+    return 'vendor-recharts';
+  }
+  if (id.includes('/node_modules/@radix-ui/')) {
+    return 'vendor-radix';
+  }
+  if (id.includes('/node_modules/socket.io-client/')) {
+    return 'vendor-socket';
+  }
+  if (id.includes('/node_modules/date-fns/')) {
+    return 'vendor-date-fns';
+  }
+  if (id.includes('/node_modules/@dnd-kit/')) {
+    return 'vendor-dnd';
+  }
   return undefined;
 }
 

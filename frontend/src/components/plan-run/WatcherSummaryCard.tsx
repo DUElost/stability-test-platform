@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import SectionHeader from './SectionHeader';
-import { triggerDedupScan, triggerDedupMerge } from '@/utils/api/planRuns';
+import { api } from '@/utils/api';
 import {
   ALERT_BANNER,
   DEDUP_STATUS_CHIP,

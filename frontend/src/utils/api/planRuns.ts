@@ -147,18 +147,6 @@ export const planRuns = {
     ),
 };
 
-export const triggerDedupScan = async (runId: number, isFinal = false) => {
-  const { data } = await apiClient.post(`/api/v1/plan-runs/${runId}/dedup/scan`, null, {
-    params: { is_final: isFinal },
-  })
-  return data.data
-}
-
-export const triggerDedupMerge = async (runId: number) => {
-  const { data } = await apiClient.post(`/api/v1/plan-runs/${runId}/dedup/merge`)
-  return data.data
-}
-
 function cleanParams(p: object): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(p)) {

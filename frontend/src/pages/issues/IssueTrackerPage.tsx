@@ -64,15 +64,16 @@ export default function IssueTrackerPage() {
         }
       />
 
-      {isError && <InlineError message="JIRA 草稿列表加载失败，请检查后端服务连接。" />}
+      <div className="space-y-6">
+        {isError && <InlineError message="JIRA 草稿列表加载失败，请检查后端服务连接。" />}
 
-      {/* ADR-0025 §10: 去重→Jira 批量提单（上传 Result/Upload-List + 一键执行 + web 实时日志） */}
-      <JiraSubmitPanel />
+        {/* ADR-0025 §10: 去重→Jira 批量提单（上传 Result/Upload-List + 一键执行 + web 实时日志） */}
+        <JiraSubmitPanel />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>JIRA 草稿</CardTitle>
-        </CardHeader>
+        <Card>
+          <CardHeader>
+            <CardTitle>JIRA 草稿</CardTitle>
+          </CardHeader>
         <CardContent>
           {isLoading ? (
             <div className="space-y-3">
@@ -137,6 +138,7 @@ export default function IssueTrackerPage() {
           </ul>
         </CardContent>
       </Card>
+      </div>
     </PageContainer>
   );
 }
