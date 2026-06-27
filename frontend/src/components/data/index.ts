@@ -3,3 +3,6 @@ export { DataErrorState } from './DataErrorState';
 export { DataSkeleton } from './DataSkeleton';
 export { DataToolbar } from './DataToolbar';
 export { DataPagination } from './DataPagination';
+export { DataList } from './DataList';
+export { DataListItem } from './DataListItem';
+export type { MoreAction } from './DataListItem';
