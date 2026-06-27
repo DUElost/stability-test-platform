@@ -1,0 +1,35 @@
+---
+description: 后端 Python — Pydantic、DB、pytest
+globs: backend/**/*.py
+alwaysApply: false
+---
+
+# Backend Python
+
+## Pydantic v2 only
+
+禁止：`.dict()` / `parse_obj` / `from_orm` / `class Config`
+
+使用：`model_dump()` / `model_validate()` / `ConfigDict(from_attributes=True)`
+
+`ORMBaseModel`（`backend/api/schemas/base.py`）datetime 经 `field_serializer(when_used="json")` 序列化为 ISO-UTC。
+
+## 数据库
+
+- 表名单数：`device`、`host`、`plan`、`plan_run_artifact`
+- 同步 URL：`DATABASE_URL` 去掉 `+asyncpg` → `postgresql://...`
+
+## 测试（`backend/tests/`）
+
+- 必须 `python -m pytest`（裸 `pytest` 可能落到错误解释器）
+- PG：`TEST_DATABASE_URL`；本地无 PG：`ALLOW_SQLITE_TESTS=1`（`test_agent_dual_write.py` 仍 skip）
+- `conftest.py` 设 `TESTING=1`，lifespan 不启 Redis/SAQ/APScheduler
+- 全量 suite 可能超时 → 单文件：`pytest backend/tests/api/test_dedup_scan_endpoints.py -x`
+
+## 控制面 scan/merge
+
+- `dedup_scan.py:run_merge_sync` 调 `start_log_scan.py -merge_files`
+- NFS：`{STP_AEE_NFS_ROOT}/dedup/{run_id}/` + `devices/{run_id}/` + `jira/{run_id}/`
+- 终端 dedup：`STP_DEDUP_AUTO_SCAN`（默认 `1`）
+
+Control-plane 测试放 `backend/tests/`；无 DB 的 agent 单测放 `backend/agent/tests/`。

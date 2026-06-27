@@ -1,6 +1,6 @@
 # stability-test-platform
 
-开发命令、测试运行方式、约定见 @AGENTS.md。设计文档见 @docs/DOC-MAP.md。
+开发命令、测试运行方式、约定见 @AGENTS.md。设计文档见 @docs/DOC-MAP.md。Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以本文与 AGENTS.md 为准）；说明见 @docs/development/cursor-rules.md。
 
 ---
 

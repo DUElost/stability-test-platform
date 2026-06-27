@@ -1,0 +1,42 @@
+---
+description: Agent 运行时 — Watcher、AEE、scan/upload、ADB
+globs: backend/agent/**/*
+alwaysApply: false
+---
+
+# Agent Runtime
+
+Agent 跑 Linux + ADB。注册：`install_agent.sh`（systemd）或 dev `python -m backend.agent.main`（须设 `API_URL`）。
+
+## 必配环境
+
+| 变量 | 说明 |
+|------|------|
+| `ANDROID_ADB_SERVER_PORT=5039` | WSL 必配，否则心跳正常但设备数 0 |
+| `STP_AEE_LOCAL_ROOT` | HDD AEE 根（默认 `/mnt/hdd/aee_events`） |
+| `STP_WATCHER_ENABLED` | Watcher 门控（默认 `true`） |
+| `AGENT_SECRET` | 生产 SocketIO 认证 |
+
+WSL：rsync 到本地 FS 再运行；`/mnt/` 有 CRLF/权限问题；`sed -i 's/\r$//'`。
+
+## Watcher / AEE（ADR-0018）
+
+监测目录：仅 `/data/aee_exp` + `/data/vendor/aee_exp`（不监测 `/data/anr`）。
+
+**Reconciler（主）**：60s 周期读 `db_history` → sha256 变化 → pull → 解析 `ZZ_INTERNAL`（优先）/ `__exp_main.txt` → `SignalEmitter(source=reconciler)`。
+
+**inotifyd（兜底）**：Reconciler 失败时回退；`extra` 为 NULL，仅计数。
+
+数据流：SignalEmitter → SQLite outbox → `POST /agent/log-signals` → `job_log_signal`。
+
+## Scan / Upload / Merge（Sprint 4）
+
+- **ScanRunner**：`start_log_scan.py -m 0 -d {hdd} -side {side}`（AEE_TNE，非 `-dedup_org`）→ HDD 上 `Result_*_org.xls`
+- **UploadManager**：`_org.xls` → NFS `dedup/{run_id}/`；事件目录 → `devices/{run_id}/`（depth=1，`YYYY-MM-DD_HH-MM-SS_*`）
+- **reload_config**：`POST .../reload-config` → Agent 重读 env；`configure(force=True)`
+
+SAQ 链：`scan_task` → `upload_task` → `merge_task`。
+
+## Agent 测试
+
+`pytest backend/agent/tests/` — 无 PG/Redis，~30s。必须 `python -m pytest`。

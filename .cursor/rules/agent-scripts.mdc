@@ -1,0 +1,39 @@
+---
+description: Agent 脚本目录契约（ADR-0020）
+globs: backend/agent/scripts/**/*
+alwaysApply: false
+---
+
+# Script Catalog (ADR-0020)
+
+## 目录布局
+
+```
+<STP_SCRIPT_ROOT>/<name>/v<version>/<entry>.{py,sh,bat,cmd}
+```
+
+- 一级 = 脚本名；二级 = `v` 开头版本号
+- 入口 = 首个非 `_` 前缀的可识别文件；`_` 开头模块扫描跳过
+
+## 开发必设
+
+- `STP_SCRIPT_ROOT` = `<repo>/backend/agent/scripts`（默认指向生产 NFS，**必须覆盖**）
+- 扫描机 ≠ 运行机：`STP_SCRIPT_RUNTIME_ROOT`（WSL 联调示例 `/opt/stability-test-agent/scripts`）
+
+## 扫描结果语义
+
+| 结果 | 含义 |
+|------|------|
+| created | INSERT |
+| skipped | sha256 一致 |
+| conflicts | sha256 不一致，不动 DB，须新建版本 |
+| deactivated | 磁盘无文件，标 `false` |
+
+## 参数与执行链
+
+- `default_params` 不可变（422）→ 新建版本
+- **唯一例外**：`_inject_wifi_params` 对 `connect_wifi` 注入 `{ssid, password, pool_name, pool_id}`
+
+链路：磁盘 → `POST /scripts/scan` → DB.script → PlanStep → dispatcher `deepcopy(default_params)` → `pipeline_def` → Agent `ScriptRegistry.resolve` → `subprocess.run` → **stdout JSON** → step_trace → JobStatus
+
+Pipeline action 仅 `script:<name>`。

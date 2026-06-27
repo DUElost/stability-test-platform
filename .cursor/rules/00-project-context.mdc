@@ -1,0 +1,39 @@
+---
+description: STP 项目入口 — 权威文档与架构不变量
+alwaysApply: true
+---
+
+# stability-test-platform
+
+完整约定见仓库根目录 **AGENTS.md**（命令/测试）与 **CLAUDE.md**（架构/ADR）。设计文档入口：`docs/DOC-MAP.md`。
+
+## 架构不变量（违反即 bug）
+
+- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — `backend/main.py:122`
+- **Plan 无 lifecycle 列**：由 PlanStep + `patrol_interval_seconds`/`timeout_seconds` 在 dispatcher 组装为 `pipeline_def.lifecycle`
+- **Redis 仅 SAQ broker**，不存业务数据
+- **Pipeline 仅 `lifecycle` 顶层键**；`stages`/`phases` 被拒绝
+- **唯一 action** `script:<name>`（`builtin:`/`tool:`/`shell:` 已删）
+- **Production guard**（ADR-0024）：`ENV=production` 时须 `AUTH_COOKIE_SECURE=1` + `AUTH_COOKIE_SAMESITE ∈ {lax,strict}` + `STP_CSRF_ENABLED`
+
+## 状态机
+
+- **Job**：`PENDING → RUNNING → COMPLETED/FAILED/ABORTED`；`PENDING → FAILED`（recycler）；`UNKNOWN → RUNNING/COMPLETED/FAILED`
+- **PlanRun**：`RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED/DEGRADED`
+
+## 跨层约定
+
+- **版本即参数**：`default_params` 422 不可变 → `POST /api/v1/scripts/{name}/versions`
+- **DB 表名单数**：`device`/`host`/`plan`（非复数）
+- **前端类型权威源**：`frontend/src/utils/api/types.ts` ↔ 后端 Pydantic schema
+- **`host.max_concurrent_jobs` 已删**；容量 = `min(MAX_CONCURRENT_TASKS - active, heartbeat effective_slots)`
+
+## 方案 C 存储（ADR-0025）— 勿依赖已取消项
+
+| 层 | 用途 |
+|----|------|
+| Agent SSD | 运行日志唯一副本 `logs/runs/{job_id}/` |
+| Agent HDD | AEE/mobilelog/bugreport（`STP_AEE_LOCAL_ROOT`） |
+| 15.4 CIFS | 汇总 xls、按需事件、HDD 溢出 — **不含运行日志** |
+
+已取消：运行日志上送 15.4、`run_log_bundle` JobArtifact、patrol `snapshots/`。

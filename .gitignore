@@ -1,5 +1,7 @@
 .ace-tool/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 __pycache__/
 *.pyc
 *.pyo
