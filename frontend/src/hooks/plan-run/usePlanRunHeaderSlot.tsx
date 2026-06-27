@@ -29,6 +29,7 @@ export function usePlanRunHeaderSlot({
   const { setHeaderSlot } = useHeaderSlot();
 
   useEffect(() => {
+    if (!runId || Number.isNaN(runId)) return;
     setHeaderSlot(
       <div className="flex w-full min-w-0 items-center gap-3">
         <Button

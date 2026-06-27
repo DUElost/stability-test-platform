@@ -119,7 +119,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
       toast.success(`PlanRun 中止已发起 — 状态: ${data.status}`);
       qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
       qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
-      qc.invalidateQueries({ queryKey: planRunKeys.events(id) });
+      qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
       qc.invalidateQueries({ queryKey: planRunKeys.devicesByRun(id) });
     },
     onError: (err: unknown) => {
@@ -170,7 +170,7 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
       toast.success('已重新入队派发门禁');
       qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
       qc.invalidateQueries({ queryKey: planRunKeys.timeline(id) });
-      qc.invalidateQueries({ queryKey: planRunKeys.events(id) });
+      qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
     },
     onError: (err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);

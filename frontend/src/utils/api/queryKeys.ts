@@ -38,9 +38,10 @@ export const planRunKeys = {
   watcher: (id: number, scope?: string) => ['plan-run-watcher', id, scope] as const,
   watcherByRun: (id: number) => ['plan-run-watcher', id] as const,
   chain: (id: number) => ['plan-run-chain', id] as const,
-  events: (id: number) => ['plan-run-events', id] as const,
   logs: (id: number, stage: string, severity: string, page: number) =>
     ['plan-run-logs', id, stage, severity, page] as const,
+  /** Partial key — invalidates all log queries for a PlanRun. */
+  logsByRun: (id: number) => ['plan-run-logs', id] as const,
   list: () => ['plan-runs-list'] as const,
 } as const;
 

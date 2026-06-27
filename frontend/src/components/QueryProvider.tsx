@@ -29,7 +29,6 @@ const OPERATIONAL_QUERY_KEYS = [
 const LIVE_QUERY_KEYS = [
   ['plan-run'],
   ['plan-run-timeline'],
-  ['plan-run-events'],
   ['plan-run-devices'],
   ['plan-run-watcher'],
   ['plan-run-chain'],
