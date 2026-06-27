@@ -1,12 +1,13 @@
 import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import { Menu, ChevronRight, FileText, LogOut, User, ChevronDown, Loader2, KeyRound, Wifi, WifiOff, Users, Shield, Settings } from 'lucide-react';
+import { Menu, ChevronRight, FileText, LogOut, Loader2, KeyRound, Wifi, WifiOff, Users, Shield, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge';
 import { clearAppQueryCache } from '@/components/QueryProvider';
 import { useSocketIO, disconnectDashSocket } from '@/hooks/useSocketIO';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { UserMenu } from '@/components/ui/UserMenu';
 import { api } from '@/utils/api';
 import { WS_DASHBOARD_ENDPOINT } from '@/config';
 import { BORDER, ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
@@ -18,7 +19,6 @@ export default function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [showUserMenu, setShowUserMenu] = useState(false);
   const navigate = useNavigate();
   const sessionQ = useAuthSession();
   const currentUser = sessionQ.data;
@@ -40,7 +40,6 @@ export default function AppShell() {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSidebarOpen(false);
-        setShowUserMenu(false);
       }
     };
     window.addEventListener('keydown', handleEsc);
@@ -141,97 +140,29 @@ export default function AppShell() {
                 {dashConnected ? '实时连接' : '已断开'}
               </Badge>
 
-              <div className="relative ml-2">
-                <button
-                  onClick={() => setShowUserMenu(!showUserMenu)}
-                  className={cn('flex items-center gap-2 p-1.5 rounded-lg transition-colors', INTERACTIVE.hover)}
-                  aria-label="用户菜单"
-                  aria-expanded={showUserMenu}
-                >
-                  <div className={cn('w-8 h-8 rounded-full flex items-center justify-center', SURFACE.subtle)}>
-                    <User className={cn('w-4 h-4', TEXT.subtitle)} />
-                  </div>
-                  <div className="hidden sm:flex flex-col items-start leading-tight">
-                    <span className={cn('text-sm font-medium', TEXT.heading)}>
-                      {currentUser?.username ?? '...'}
-                    </span>
-                    {currentUser?.role && (
-                      <span className={cn('text-xs', TEXT.caption)}>{currentUser.role}</span>
-                    )}
-                  </div>
-                  <ChevronDown className={cn(
-                    'w-4 h-4 transition-transform hidden sm:block',
-                    TEXT.caption,
-                    showUserMenu && 'rotate-180',
-                  )} />
-                </button>
-
-                {showUserMenu && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-10"
-                      onClick={() => setShowUserMenu(false)}
-                    />
-                    <div className={cn('absolute right-0 top-full mt-1 w-48 rounded-lg py-1 z-20', SURFACE.elevated, ELEVATION.dropdown)}>
-                      <a
-                        href="/docs"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => setShowUserMenu(false)}
-                        className={cn('flex items-center gap-3 px-4 py-2 text-sm', INTERACTIVE.menuItem)}
-                      >
-                        <FileText className="w-4 h-4" />
-                        文档
-                      </a>
-                      <a
-                        href="/account/password"
-                        onClick={() => setShowUserMenu(false)}
-                        className={cn('flex items-center gap-3 px-4 py-2 text-sm', INTERACTIVE.menuItem)}
-                      >
-                        <KeyRound className="w-4 h-4" />
-                        修改密码
-                      </a>
-                      {currentUser?.role === 'admin' && (
-                        <>
-                          <hr className={cn('my-1', BORDER.default)} />
-                          <a
-                            href="/users"
-                            onClick={() => setShowUserMenu(false)}
-                            className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
-                          >
-                            <Users className="w-4 h-4" />
-                            用户管理
-                          </a>
-                          <a
-                            href="/audit"
-                            onClick={() => setShowUserMenu(false)}
-                            className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
-                          >
-                            <Shield className="w-4 h-4" />
-                            操作日志
-                          </a>
-                          <a
-                            href="/settings"
-                            onClick={() => setShowUserMenu(false)}
-                            className={cn('flex items-center gap-3 px-4 py-2 text-sm focus-visible:outline-none', INTERACTIVE.menuItem)}
-                          >
-                            <Settings className="w-4 h-4" />
-                            系统设置
-                          </a>
-                        </>
-                      )}
-                      <hr className={cn('my-1', BORDER.default)} />
-                      <button
-                        onClick={handleLogout}
-                        className={cn('w-full flex items-center gap-3 px-4 py-2 text-sm', INTERACTIVE.destructiveMenu)}
-                      >
-                        <LogOut className="w-4 h-4" />
-                        退出登录
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
+              <UserMenu
+                username={currentUser?.username}
+                role={currentUser?.role}
+                items={[
+                  { label: '文档', href: '/docs', icon: <FileText className="w-4 h-4" /> },
+                  { label: '修改密码', href: '/account/password', icon: <KeyRound className="w-4 h-4" /> },
+                  ...(currentUser?.role === 'admin'
+                    ? [
+                        { label: '__SEPARATOR__' } as const,
+                        { label: '用户管理', href: '/users', icon: <Users className="w-4 h-4" /> },
+                        { label: '操作日志', href: '/audit', icon: <Shield className="w-4 h-4" /> },
+                        { label: '系统设置', href: '/settings', icon: <Settings className="w-4 h-4" /> },
+                      ]
+                    : []),
+                  { label: '__SEPARATOR__' },
+                  {
+                    label: '退出登录',
+                    onClick: handleLogout,
+                    icon: <LogOut className="w-4 h-4" />,
+                    destructive: true,
+                  },
+                ]}
+              />
             </div>
           </div>
         </header>
