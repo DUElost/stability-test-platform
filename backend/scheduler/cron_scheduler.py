@@ -275,48 +275,69 @@ def run_retention_cleanup() -> None:
 
 
 def auto_archive_sweep() -> None:
-    """Scan terminal PlanRuns whose Plan.auto_archive_interval_seconds has elapsed
-    and enqueue the scan→upload→merge pipeline.
+    """Enqueue scan→upload→merge for at most one PlanRun per Plan.
 
-    ADR-0025 Sprint 4 five-trigger scenario 5: the Plan-run reaches terminal
-    status, the configured interval passes, and the scheduler automatically
-    triggers the dedup pipeline so that scan/merge can proceed without manual
-    intervention.
+    ADR-0025 Sprint 4 five-trigger scenario 5: after a PlanRun reaches terminal
+    status (or while one is still RUNNING on long patrol), the configured
+    ``Plan.auto_archive_interval_seconds`` elapses and the scheduler triggers
+    dedup incrementally.
 
-    SAQ queue keys distinguish final (``scan:{id}``) and incremental (``scan:{id}:inc``)
-    scans. First sweep triggers is_final=True; subsequent sweeps trigger incremental
-    is_final=False scans so that agents re-scan newly produced AEE events.
+    Selection (one run per plan — avoids scanning every historical terminal run):
+      1. If the Plan has a RUNNING PlanRun → that is the active run.
+      2. Else → the latest terminal PlanRun (max id among SUCCESS/FAILED/…).
 
-    Rate-limited: incremental scans are only enqueued when
-    ``Plan.auto_archive_interval_seconds`` has elapsed since the last scan
-    artifact's ``created_at``. This prevents the 120s sweep from re-enqueuing
-    the same incremental scan every cycle.
+    Terminal runs: one final scan (``is_final=True``) after ``ended_at + interval``;
+    once a ``scan_result_xls`` artifact exists, that run is never scanned again.
+
+    RUNNING runs: incremental ``is_final=False`` scans while patrol is active, rate-limited
+    by ``auto_archive_interval_seconds`` since the last scan artifact.
     """
+    from backend.models.enums import PlanRunStatus
     from backend.models.plan import Plan
     from backend.models.plan_run import PlanRun
     from backend.models.plan_run_artifact import PlanRunArtifact
     from backend.services.dedup_scan import enqueue_dedup_terminal_sync
 
-    _TERMINAL = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED"}
+    _TERMINAL = {
+        PlanRunStatus.SUCCESS.value,
+        PlanRunStatus.PARTIAL_SUCCESS.value,
+        PlanRunStatus.FAILED.value,
+        PlanRunStatus.DEGRADED.value,
+    }
     now = datetime.now(timezone.utc)
 
     with SessionLocal() as db:
         try:
-            runs = (
-                db.query(PlanRun)
-                .join(Plan, Plan.id == PlanRun.plan_id)
-                .filter(
-                    PlanRun.status.in_(_TERMINAL),
-                    PlanRun.ended_at.isnot(None),
-                    Plan.auto_archive_interval_seconds.isnot(None),
-                )
+            plans = (
+                db.query(Plan)
+                .filter(Plan.auto_archive_interval_seconds.isnot(None))
                 .all()
             )
 
             triggered = 0
-            for run in runs:
-                interval = run.plan.auto_archive_interval_seconds
-                if now - run.ended_at < timedelta(seconds=interval):
+            for plan in plans:
+                interval = plan.auto_archive_interval_seconds
+                run = (
+                    db.query(PlanRun)
+                    .filter(
+                        PlanRun.plan_id == plan.id,
+                        PlanRun.status == PlanRunStatus.RUNNING.value,
+                    )
+                    .order_by(PlanRun.id.desc())
+                    .first()
+                )
+                if run is None:
+                    run = (
+                        db.query(PlanRun)
+                        .filter(
+                            PlanRun.plan_id == plan.id,
+                            PlanRun.status.in_(_TERMINAL),
+                            PlanRun.ended_at.isnot(None),
+                        )
+                        .order_by(PlanRun.id.desc())
+                        .first()
+                    )
+                if run is None:
                     continue
 
                 scan_count = db.execute(
@@ -326,9 +347,16 @@ def auto_archive_sweep() -> None:
                     )
                 ).scalar_one()
 
-                is_final = scan_count == 0
+                if run.status in _TERMINAL:
+                    if run.ended_at is None or now - run.ended_at < timedelta(seconds=interval):
+                        continue
+                    if scan_count > 0:
+                        continue
+                    enqueue_dedup_terminal_sync(run.id, is_final=True)
+                    triggered += 1
+                    continue
 
-                if not is_final:
+                if scan_count > 0:
                     last_scan_at = db.execute(
                         select(func.max(PlanRunArtifact.created_at)).where(
                             PlanRunArtifact.plan_run_id == run.id,
@@ -338,10 +366,7 @@ def auto_archive_sweep() -> None:
                     if last_scan_at and now - last_scan_at < timedelta(seconds=interval):
                         continue
 
-                enqueue_dedup_terminal_sync(
-                    run.id,
-                    is_final=is_final,
-                )
+                enqueue_dedup_terminal_sync(run.id, is_final=False)
                 triggered += 1
 
             if triggered:

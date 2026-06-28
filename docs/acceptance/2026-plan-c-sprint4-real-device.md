@@ -353,13 +353,17 @@ curl -s -H "Authorization: Bearer {token}" http://{backend}:8000/api/v1/plan-run
 
 ---
 
-### AC-R-14：增量 re-scan 限频（P1-3 回归）
+### AC-R-14：增量 re-scan 限频（P1-3 回归，2026-06-27 更新）
 
 **步骤**：
-1. 首次 scan 完成后，等待第二次 sweep（在 interval 内）
-2. 检查是否重复 enqueue
+1. Plan 有 **RUNNING** PlanRun 且 `auto_archive_interval_seconds` 已设
+2. 首次增量 scan 完成后，在 interval 内观察 sweep
+3. interval 过后再观察是否 enqueue 下一次增量 scan
+4. PlanRun **终态且已有 scan artifact** 后，确认 sweep **不再** enqueue
 
-**期望**：interval 内不重复 enqueue `:inc` scan。后端 log 无 `auto_archive_sweep triggered=N`（N > 0 的情况在 interval 内不再出现）。
+**期望**：
+- RUNNING：interval 内不重复 enqueue `:inc` scan；interval 过后可再 enqueue
+- 终态：仅首次 `is_final=True`；已有 `scan_result_xls` 后 sweep 永久 skip 该 run
 
 **实际结果**：
 

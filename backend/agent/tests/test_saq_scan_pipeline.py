@@ -280,6 +280,34 @@ async def test_scan_task_enqueues_upload_and_merge_only():
 # ---------------------------------------------------------------------------
 
 
+def _mock_auto_archive_db(mock_db, *, plan, run, scan_count: int, last_scan_at=None):
+    """Wire mock db.query for per-plan auto_archive_sweep."""
+    plan_query = MagicMock()
+    plan_query.filter.return_value = plan_query
+    plan_query.all.return_value = [plan]
+
+    run_query = MagicMock()
+    run_query.filter.return_value = run_query
+    run_query.order_by.return_value = run_query
+    run_query.first.return_value = run
+
+    def _query(model):
+        name = getattr(model, "__name__", str(model))
+        if name == "Plan":
+            return plan_query
+        if name == "PlanRun":
+            return run_query
+        return MagicMock()
+
+    mock_db.query.side_effect = _query
+    execute_result = MagicMock()
+    if last_scan_at is None:
+        execute_result.scalar_one.side_effect = [scan_count]
+    else:
+        execute_result.scalar_one.side_effect = [scan_count, last_scan_at]
+    mock_db.execute.return_value = execute_result
+
+
 def test_auto_archive_sweep_first_scan_is_final():
     """First sweep (no scan artifacts) enqueues with is_final=True."""
     import backend.scheduler.cron_scheduler as mod
@@ -290,20 +318,16 @@ def test_auto_archive_sweep_first_scan_is_final():
     session_cm.__exit__ = MagicMock(return_value=False)
     mock_SessionLocal = MagicMock(return_value=session_cm)
 
+    mock_plan = MagicMock()
+    mock_plan.id = 10
+    mock_plan.auto_archive_interval_seconds = 3600
+
     mock_run = MagicMock()
     mock_run.id = 1
+    mock_run.status = "FAILED"
     mock_run.ended_at = datetime.now(timezone.utc) - timedelta(hours=2)
-    mock_run.plan.auto_archive_interval_seconds = 3600
 
-    mock_query = MagicMock()
-    mock_query.join.return_value = mock_query
-    mock_query.filter.return_value = mock_query
-    mock_query.all.return_value = [mock_run]
-    mock_db.query.return_value = mock_query
-
-    execute_result = MagicMock()
-    execute_result.scalar_one.side_effect = [0]
-    mock_db.execute.return_value = execute_result
+    _mock_auto_archive_db(mock_db, plan=mock_plan, run=mock_run, scan_count=0)
 
     orig = mod.SessionLocal
     mod.SessionLocal = mock_SessionLocal
@@ -316,8 +340,8 @@ def test_auto_archive_sweep_first_scan_is_final():
         mod.SessionLocal = orig
 
 
-def test_auto_archive_sweep_incremental_respects_interval():
-    """Incremental scan skipped when last scan is within interval."""
+def test_auto_archive_sweep_skips_terminal_already_scanned():
+    """Terminal run with scan artifacts is never scanned again."""
     import backend.scheduler.cron_scheduler as mod
 
     mock_db = MagicMock()
@@ -326,21 +350,19 @@ def test_auto_archive_sweep_incremental_respects_interval():
     session_cm.__exit__ = MagicMock(return_value=False)
     mock_SessionLocal = MagicMock(return_value=session_cm)
 
+    mock_plan = MagicMock()
+    mock_plan.id = 10
+    mock_plan.auto_archive_interval_seconds = 3600
+
     mock_run = MagicMock()
     mock_run.id = 2
+    mock_run.status = "SUCCESS"
     mock_run.ended_at = datetime.now(timezone.utc) - timedelta(hours=5)
-    mock_run.plan.auto_archive_interval_seconds = 3600
-
-    mock_query = MagicMock()
-    mock_query.join.return_value = mock_query
-    mock_query.filter.return_value = mock_query
-    mock_query.all.return_value = [mock_run]
-    mock_db.query.return_value = mock_query
 
     last_scan_time = datetime.now(timezone.utc) - timedelta(minutes=30)
-    execute_result = MagicMock()
-    execute_result.scalar_one.side_effect = [1, last_scan_time]
-    mock_db.execute.return_value = execute_result
+    _mock_auto_archive_db(
+        mock_db, plan=mock_plan, run=mock_run, scan_count=1, last_scan_at=last_scan_time,
+    )
 
     orig = mod.SessionLocal
     mod.SessionLocal = mock_SessionLocal
@@ -353,8 +375,8 @@ def test_auto_archive_sweep_incremental_respects_interval():
         mod.SessionLocal = orig
 
 
-def test_auto_archive_sweep_incremental_enqueues_after_interval():
-    """Incremental scan enqueued when interval elapsed since last scan."""
+def test_auto_archive_sweep_running_incremental_enqueues_after_interval():
+    """RUNNING PlanRun gets incremental scan when interval elapsed since last scan."""
     import backend.scheduler.cron_scheduler as mod
 
     mock_db = MagicMock()
@@ -363,21 +385,19 @@ def test_auto_archive_sweep_incremental_enqueues_after_interval():
     session_cm.__exit__ = MagicMock(return_value=False)
     mock_SessionLocal = MagicMock(return_value=session_cm)
 
+    mock_plan = MagicMock()
+    mock_plan.id = 10
+    mock_plan.auto_archive_interval_seconds = 3600
+
     mock_run = MagicMock()
     mock_run.id = 3
-    mock_run.ended_at = datetime.now(timezone.utc) - timedelta(hours=5)
-    mock_run.plan.auto_archive_interval_seconds = 3600
-
-    mock_query = MagicMock()
-    mock_query.join.return_value = mock_query
-    mock_query.filter.return_value = mock_query
-    mock_query.all.return_value = [mock_run]
-    mock_db.query.return_value = mock_query
+    mock_run.status = "RUNNING"
+    mock_run.ended_at = None
 
     last_scan_time = datetime.now(timezone.utc) - timedelta(hours=2)
-    execute_result = MagicMock()
-    execute_result.scalar_one.side_effect = [2, last_scan_time]
-    mock_db.execute.return_value = execute_result
+    _mock_auto_archive_db(
+        mock_db, plan=mock_plan, run=mock_run, scan_count=2, last_scan_at=last_scan_time,
+    )
 
     orig = mod.SessionLocal
     mod.SessionLocal = mock_SessionLocal
@@ -400,16 +420,16 @@ def test_auto_archive_sweep_skips_run_before_interval():
     session_cm.__exit__ = MagicMock(return_value=False)
     mock_SessionLocal = MagicMock(return_value=session_cm)
 
+    mock_plan = MagicMock()
+    mock_plan.id = 10
+    mock_plan.auto_archive_interval_seconds = 3600
+
     mock_run = MagicMock()
     mock_run.id = 4
+    mock_run.status = "FAILED"
     mock_run.ended_at = datetime.now(timezone.utc) - timedelta(minutes=30)
-    mock_run.plan.auto_archive_interval_seconds = 3600
 
-    mock_query = MagicMock()
-    mock_query.join.return_value = mock_query
-    mock_query.filter.return_value = mock_query
-    mock_query.all.return_value = [mock_run]
-    mock_db.query.return_value = mock_query
+    _mock_auto_archive_db(mock_db, plan=mock_plan, run=mock_run, scan_count=0)
 
     orig = mod.SessionLocal
     mod.SessionLocal = mock_SessionLocal
@@ -418,5 +438,52 @@ def test_auto_archive_sweep_skips_run_before_interval():
         with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
             mod.auto_archive_sweep()
             mock_enqueue.assert_not_called()
+    finally:
+        mod.SessionLocal = orig
+
+
+def test_auto_archive_sweep_prefers_running_over_older_terminal():
+    """Only the active RUNNING PlanRun is scanned, not older terminal runs."""
+    import backend.scheduler.cron_scheduler as mod
+
+    mock_db = MagicMock()
+    session_cm = MagicMock()
+    session_cm.__enter__ = MagicMock(return_value=mock_db)
+    session_cm.__exit__ = MagicMock(return_value=False)
+    mock_SessionLocal = MagicMock(return_value=session_cm)
+
+    mock_plan = MagicMock()
+    mock_plan.id = 2
+    mock_plan.auto_archive_interval_seconds = 3600
+
+    mock_running = MagicMock()
+    mock_running.id = 55
+    mock_running.status = "RUNNING"
+    mock_running.ended_at = None
+
+    plan_query = MagicMock()
+    plan_query.filter.return_value = plan_query
+    plan_query.all.return_value = [mock_plan]
+
+    running_query = MagicMock()
+    running_query.filter.return_value = running_query
+    running_query.order_by.return_value = running_query
+    running_query.first.return_value = mock_running
+
+    mock_db.query.side_effect = lambda model: (
+        plan_query if getattr(model, "__name__", "") == "Plan" else running_query
+    )
+
+    execute_result = MagicMock()
+    execute_result.scalar_one.side_effect = [0, None]
+    mock_db.execute.return_value = execute_result
+
+    orig = mod.SessionLocal
+    mod.SessionLocal = mock_SessionLocal
+
+    try:
+        with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
+            mod.auto_archive_sweep()
+            mock_enqueue.assert_called_once_with(55, is_final=False)
     finally:
         mod.SessionLocal = orig

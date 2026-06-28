@@ -145,7 +145,17 @@ PlanRun 终态
 | 2 | abort | True | 前端确认后 enqueue | 用户 abort → FAILED；scan/merge 自动，仅 extract 需确认 |
 | 3 | FAILED/DEGRADED | True | 前端确认后 enqueue | 中断/失败；scan/merge 自动，仅 extract 需确认 |
 | 4 | 手动归档 | True | POST /archive | 同时触发 archive_now + scan_now |
-| 5 | 自动归档间隔 | 首次 True / 增量 False | auto_archive_sweep 周期 | 已有 scan 时增量 re-scan |
+| 5 | 自动归档间隔 | RUNNING：增量 False；终态：仅首次 True | `auto_archive_sweep` 周期（默认 120s） | 见下节 |
+
+### auto_archive_sweep 选型与节流（2026-06-27）
+
+每个配置了 `Plan.auto_archive_interval_seconds` 的 Plan，**每轮 sweep 最多 enqueue 一条 PlanRun**：
+
+1. **有 RUNNING PlanRun** → 选该活跃 run，按 interval 做增量 scan（`is_final=False`）。
+2. **无 RUNNING** → 选该 Plan **最新终态 run**（`max(id)`）；仅在 `ended_at + interval` 之后且 **尚无** `scan_result_xls` artifact 时触发 **一次** 终态 scan（`is_final=True`）。
+3. **终态 run 已有 scan artifact** → **不再扫描**（避免历史终态 run 被周期性 re-scan）。
+
+Agent 侧 **`scan_now` 同 host 串行执行**：单 worker 线程 + FIFO 队列；**同一 `plan_run_id` 在队列中合并为最新一条**（coalesce）。正在执行的 scan 不可中断；busy 期间新来的同 run 请求入队等待，不再 `busy_skip` 丢弃。控制面 SAQ `scan_task` 仍按 NFS poll 等待 artifact（最长 300s），与 Agent 队列独立。
 
 ### Agent 端事件目录命名
 

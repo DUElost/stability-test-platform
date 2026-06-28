@@ -34,7 +34,7 @@
 | AC-S4-19 | 五触发场景②—abort/失败确认 | abort 流程 | `aggregator_sync` + `plan_run_abort` 已覆盖 | 现有测试 | PR #35 |
 | AC-S4-20 | 五触发场景③—原三场景 | 保留 | 保留不变 | — | N/A |
 | AC-S4-21 | 五触发场景④—手动归档 | POST archive | 同时发 `archive_now` + `scan_now` | `test_plan_run_archive_endpoint.py` | PR #35 |
-| AC-S4-22 | 五触发场景⑤—auto_archive | PlanRun 终态 + interval 过期 | `auto_archive_sweep` enqueue scan→upload→merge | `cron_scheduler.py:auto_archive_sweep` | PR #35 |
+| AC-S4-22 | 五触发场景⑤—auto_archive | RUNNING 增量 / 终态仅首次 scan | 每 Plan 每轮 1 run；终态已有 artifact 不再扫 | `cron_scheduler.py:auto_archive_sweep` | PR #35 + 2026-06-27 |
 | AC-S4-23 | `Plan.auto_archive_interval_seconds` 列 | — | nullable INTEGER, CRD API 暴露 | `models/plan.py` + 迁移 | PR #35 |
 | AC-S4-24 | `scan_status` 从 artifact 计算 | 无/scan/merge artifact | pending / scanned / merged | `plan_runs.py:_aggregate_run_log_archive` | PR #35 |
 | AC-S4-25 | `scan_triggered_at` 取最早 artifact | 有 scan artifact | 最早 `created_at.isoformat()` | `_aggregate_run_log_archive` | PR #35 |

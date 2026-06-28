@@ -424,6 +424,19 @@ Agent 重启
 | 5 | Grafana provisioning | 自动导入 `docs/grafana/stability-platform-dashboard.json` + 验证 scrape |
 | 6 | 决策 | RBAC 第三档评估：需要则立项，不需要则在 ADR 标注关闭 |
 
+## 2026-06-27 运维加固（scan 风暴收口）
+
+PlanRun #54 失败复盘后，对五触发场景⑤与 Agent scan 并发做如下约束（实现：`cron_scheduler.auto_archive_sweep`、`agent/scan_runner.py`、`agent/main.py`）：
+
+| 规则 | 行为 |
+|------|------|
+| Plan 选型 | 每 Plan 每轮最多 1 条 run：优先 **RUNNING**，否则 **最新终态**（`max(id)`） |
+| 终态 scan | 仅首次（`is_final=True`，无 `scan_result_xls`）；**已有 artifact 则永久跳过** |
+| RUNNING scan | patrol 期间按 `auto_archive_interval_seconds` 增量 scan（`is_final=False`） |
+| Agent 并发 | 单 worker + FIFO 队列；同 `plan_run_id` 在队列中 coalesce 为最新一条 |
+| 控制面缺口 | Agent 队列与 SAQ poll 独立；poll 超时仍可能 best-effort 进入 upload/merge |
+| Host 心跳 | 控制面 `HOST_HEARTBEAT_TIMEOUT_SECONDS` 建议 **300**（长跑 patrol + scan 时 HTTP 心跳可能 >120s 间隔） |
+
 ## 验证
 
 1. **Sprint 1**（已落地）：Agent 重启后 Watcher 自动恢复 + 信号不丢失 + enable.py 默认值一致

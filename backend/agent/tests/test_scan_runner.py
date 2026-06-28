@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -136,6 +138,64 @@ def test_build_argv_without_end_flag():
     argv = r._build_argv(is_final=False)
     assert "-end" not in argv
     assert "-m" in argv
+
+
+def test_host_scan_semaphore_limits_concurrency():
+    _make_runner()
+    assert ScanRunner.try_begin_host_scan() is True
+    assert ScanRunner.try_begin_host_scan() is False
+    ScanRunner.end_host_scan()
+    assert ScanRunner.try_begin_host_scan() is True
+    ScanRunner.end_host_scan()
+
+
+def test_enqueue_coalesces_same_plan_run():
+    _make_runner()
+    with patch.object(ScanRunner, "_ensure_worker"):
+        ScanRunner.enqueue_scan_now(55, "host-1", is_final=False)
+        ScanRunner.enqueue_scan_now(55, "host-1", is_final=False)
+        ScanRunner.enqueue_scan_now(55, "host-1", is_final=True)
+        assert ScanRunner.pending_count() == 1
+        job = ScanRunner._dequeue_next()
+        assert job is not None
+        assert job.plan_run_id == 55
+        assert job.is_final is True
+
+
+def test_enqueue_fifo_preserves_distinct_plan_runs():
+    _make_runner()
+    with patch.object(ScanRunner, "_ensure_worker"):
+        ScanRunner.enqueue_scan_now(55, "host-1", is_final=False)
+        ScanRunner.enqueue_scan_now(56, "host-1", is_final=True)
+        assert ScanRunner.pending_count() == 2
+        first = ScanRunner._dequeue_next()
+        second = ScanRunner._dequeue_next()
+        assert first is not None and first.plan_run_id == 55
+        assert second is not None and second.plan_run_id == 56
+
+
+def test_worker_runs_queued_job_after_active_scan():
+    r = _make_runner()
+    executed: list[tuple[int, bool]] = []
+    gate = threading.Event()
+
+    def slow_scan(self, plan_run_id: int, host_id: str, *, is_final: bool = False):
+        executed.append((plan_run_id, is_final))
+        if len(executed) == 1:
+            gate.wait(timeout=2)
+
+    with patch.object(ScanRunner, "run_scan_and_upload", slow_scan):
+        ScanRunner.enqueue_scan_now(55, "host-1", is_final=False)
+        deadline = time.time() + 1
+        while time.time() < deadline and not executed:
+            time.sleep(0.02)
+        ScanRunner.enqueue_scan_now(55, "host-1", is_final=True)
+        assert ScanRunner.pending_count() == 1
+        gate.set()
+        deadline = time.time() + 3
+        while time.time() < deadline and len(executed) < 2:
+            time.sleep(0.05)
+    assert executed == [(55, False), (55, True)]
 
 
 def test_run_local_scan_returns_none_when_no_fresh_xls(tmp_path):

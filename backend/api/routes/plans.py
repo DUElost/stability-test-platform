@@ -468,13 +468,13 @@ def update_plan(
         plan.patrol_interval_seconds = payload.patrol_interval_seconds
     if payload.timeout_seconds is not None:
         plan.timeout_seconds = payload.timeout_seconds
-    if payload.auto_archive_interval_seconds is not None:
+    fields_set = getattr(payload, "model_fields_set", set())
+    if "auto_archive_interval_seconds" in fields_set:
         plan.auto_archive_interval_seconds = payload.auto_archive_interval_seconds
     if payload.watcher_policy is not None:
         plan.watcher_policy = payload.watcher_policy
 
     # DAG validation for next_plan_id changes
-    fields_set = getattr(payload, "model_fields_set", set())
     if "next_plan_id" in fields_set:
         _validate_plan_dag(db, plan_id, payload.next_plan_id)
         plan.next_plan_id = payload.next_plan_id
