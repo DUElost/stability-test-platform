@@ -108,3 +108,20 @@ def test_bugreport_failed_attempt_does_not_poison_cooldown(tmp_path, monkeypatch
     assert first is False
     assert second is True, "失败导出不应占用 cooldown,第二次应允许立即重试"
     assert calls["n"] == 2, "第二次必须真正再次执行 adb bugreport"
+
+
+def test_bugreport_accepts_adb_appended_zip_suffix(tmp_path, monkeypatch):
+    """adb bugreport 可能在给定路径后追加 .zip,应能正确 rename 到最终文件。"""
+
+    def _fake_run_appends_zip(argv, **kwargs):
+        temp_path = Path(argv[-1])
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        Path(f"{temp_path}.zip").write_bytes(b"PK\x03\x04 fake-bugreport-zip")
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(br.subprocess, "run", _fake_run_appends_zip)
+
+    assert _export(tmp_path) is True
+    final = tmp_path / "bugreport" / "2026_0528_100000_000_bugreport.zip"
+    assert final.is_file()
+    assert final.read_bytes().startswith(b"PK")

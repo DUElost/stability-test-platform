@@ -25,7 +25,13 @@ from .db_history import (
 )
 from .folder_name import get_aee_log_folder_name, make_getprop_from_shell
 from .mobilelog import export_correlated_mobilelogs, make_adb_pull_fn, make_adb_shell_fn
-from .paths import get_aee_local_root, get_or_create_run_date_stamp, resolve_device_output_dir
+from .paths import (
+    get_aee_local_root,
+    get_or_create_run_date_stamp,
+    resolve_bugreport_subdir,
+    resolve_device_output_dir,
+    resolve_mobilelog_subdir,
+)
 from .timestamp import format_timestamp_for_filename, parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -177,7 +183,6 @@ def process_device_logs(
             line: str,
             parsed: Dict[str, Any],
             local_target_dir: Path,
-            export_side_effects: bool,
         ) -> None:
             pending_tasks.pop(line, None)
             result.pulled += 1
@@ -204,30 +209,19 @@ def process_device_logs(
             save_processed_lines(state_store, processed_key, processed_lines)
             _save_pending_tasks(state_store, pending_key, pending_tasks)
 
-            if not export_side_effects or stop_requested:
+            if stop_requested:
                 return
 
-            if cfg.export_mobilelog:
-                export_correlated_mobilelogs(
-                    aee_ts_str=parsed["timestamp"],
-                    output_dir=local_target_dir,
-                    remote_mobilelog_path=cfg.remote_mobilelog_path,
-                    shell_fn=shell_fn,
-                    pull_fn=pull_fn,
-                )
-
-            if cfg.export_bugreport:
-                export_bugreport_for_timestamp(
-                    serial=serial,
-                    timestamp_str=parsed["timestamp"],
-                    output_dir=local_target_dir,
-                    adb_path=adb_path,
-                    event_type=parsed.get("event_type"),
-                    cooldown_seconds=cfg.bugreport_cooldown_seconds,
-                    cooldown_event_types=cfg.bugreport_cooldown_event_types,
-                    timeout_seconds=cfg.bugreport_timeout_seconds,
-                    stop_event=stop_event,
-                )
+            _run_side_exports_if_needed(
+                local_target_dir=local_target_dir,
+                parsed=parsed,
+                cfg=cfg,
+                serial=serial,
+                adb_path=adb_path,
+                shell_fn=shell_fn,
+                pull_fn=pull_fn,
+                stop_event=stop_event,
+            )
 
         for line, task in _iter_pending_tasks_newest_first(pending_tasks):
             if stop_event is not None and stop_event.is_set():
@@ -275,7 +269,6 @@ def process_device_logs(
                         line=line,
                         parsed=parsed,
                         local_target_dir=local_target_dir,
-                        export_side_effects=False,
                     )
                     continue
                 logger.info(
@@ -308,7 +301,6 @@ def process_device_logs(
                 line=line,
                 parsed=parsed,
                 local_target_dir=local_target_dir,
-                export_side_effects=True,
             )
 
         _save_pending_tasks(state_store, pending_key, pending_tasks)
@@ -317,6 +309,96 @@ def process_device_logs(
             break
 
     return result
+
+
+def _subdir_has_nonempty_files(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    try:
+        return any(p.is_file() and p.stat().st_size > 0 for p in path.iterdir())
+    except OSError:
+        return False
+
+
+def _bugreport_already_exported(local_target_dir: Path, timestamp_str: str) -> bool:
+    br_dir = local_target_dir / resolve_bugreport_subdir()
+    if not br_dir.is_dir():
+        return False
+    formatted_ts = format_timestamp_for_filename(timestamp_str)
+    final_path = br_dir / f"{formatted_ts}_bugreport.zip"
+    if final_path.is_file() and final_path.stat().st_size > 0:
+        return True
+    try:
+        for candidate in br_dir.iterdir():
+            if not candidate.is_file():
+                continue
+            name = candidate.name
+            if ".partial" in name:
+                continue
+            if name.endswith("_bugreport.zip") and candidate.stat().st_size > 0:
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _event_side_exports_satisfied(
+    local_target_dir: Path,
+    *,
+    timestamp_str: str,
+    want_mobilelog: bool,
+    want_bugreport: bool,
+) -> bool:
+    if want_mobilelog:
+        ml_dir = local_target_dir / resolve_mobilelog_subdir()
+        if not _subdir_has_nonempty_files(ml_dir):
+            return False
+    if want_bugreport and not _bugreport_already_exported(local_target_dir, timestamp_str):
+        return False
+    return True
+
+
+def _run_side_exports_if_needed(
+    *,
+    local_target_dir: Path,
+    parsed: Dict[str, Any],
+    cfg: ProcessConfig,
+    serial: str,
+    adb_path: str,
+    shell_fn: ShellFn,
+    pull_fn: PullFn,
+    stop_event: Optional[threading.Event],
+) -> None:
+    timestamp_str = str(parsed.get("timestamp") or "")
+    if _event_side_exports_satisfied(
+        local_target_dir,
+        timestamp_str=timestamp_str,
+        want_mobilelog=cfg.export_mobilelog,
+        want_bugreport=cfg.export_bugreport,
+    ):
+        return
+
+    if cfg.export_mobilelog:
+        export_correlated_mobilelogs(
+            aee_ts_str=timestamp_str,
+            output_dir=local_target_dir,
+            remote_mobilelog_path=cfg.remote_mobilelog_path,
+            shell_fn=shell_fn,
+            pull_fn=pull_fn,
+        )
+
+    if cfg.export_bugreport:
+        export_bugreport_for_timestamp(
+            serial=serial,
+            timestamp_str=timestamp_str,
+            output_dir=local_target_dir,
+            adb_path=adb_path,
+            event_type=parsed.get("event_type"),
+            cooldown_seconds=cfg.bugreport_cooldown_seconds,
+            cooldown_event_types=cfg.bugreport_cooldown_event_types,
+            timeout_seconds=cfg.bugreport_timeout_seconds,
+            stop_event=stop_event,
+        )
 
 
 def _dir_has_content(path: Path) -> bool:

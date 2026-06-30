@@ -606,6 +606,124 @@ def test_process_device_logs_persists_processed_before_side_effects(tmp_path, mo
     assert observed["pending"] == {}
 
 
+def test_process_device_logs_exports_on_existing_dir_when_side_exports_missing(
+    tmp_path, monkeypatch,
+):
+    """AEE 目录已落盘但缺 mobilelog/bugreport 时,仍应触发首次关联导出。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.77,Native (NE),pkg,_,_,_,_,_,com.app,2026-06-30 10:08:55.000"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    folder_name = get_aee_log_folder_name(
+        getprop=lambda name, timeout=10: {
+            "ro.product.name": "X6851-OP",
+            "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+            "ro.build.version.incremental": "0401",
+            "ro.build.version.release": "16",
+        }.get(name, ""),
+        run_date_stamp="0630",
+    )
+    assert folder_name is not None
+    existing_dir = resolve_device_output_dir(
+        local_root=tmp_path,
+        folder_name=folder_name,
+        serial="dev_missing_exports",
+    ) / "aee_exp" / f"{format_timestamp_for_filename('2026-06-30 10:08:55.000')}_db.77.NE"
+    existing_dir.mkdir(parents=True, exist_ok=True)
+    (existing_dir / "main.dbg").write_text("ok", encoding="utf-8")
+
+    export_calls = {"mobilelog": 0, "bugreport": 0}
+    from backend.agent.aee import processor as proc_mod
+
+    def fake_mobilelog(**kw):
+        export_calls["mobilelog"] += 1
+        return {"matched": 1, "pulled": 1}
+
+    def fake_bugreport(**kw):
+        export_calls["bugreport"] += 1
+        return True
+
+    monkeypatch.setattr(proc_mod, "export_correlated_mobilelogs", fake_mobilelog)
+    monkeypatch.setattr(proc_mod, "export_bugreport_for_timestamp", fake_bugreport)
+
+    cfg = ProcessConfig(export_mobilelog=True, export_bugreport=True)
+    r = process_device_logs(
+        serial="dev_missing_exports",
+        job_id=101,
+        state_store=store,
+        config=cfg,
+        run_date_stamp="0630",
+    )
+
+    assert r.pulled == 1
+    assert export_calls == {"mobilelog": 1, "bugreport": 1}
+
+
+def test_process_device_logs_skips_side_exports_when_already_present(
+    tmp_path, monkeypatch,
+):
+    """mobilelog/bugreport 已存在时不重复导出。"""
+    monkeypatch.setenv("STP_AEE_NFS_ROOT", str(tmp_path))
+    store = _MemStore()
+    line = "/data/aee_exp/db.88,CRASH,pkg,_,_,_,_,_,com.app,2026-06-30 11:00:00.000"
+    _setup_pdl_stubs(monkeypatch, line)
+
+    folder_name = get_aee_log_folder_name(
+        getprop=lambda name, timeout=10: {
+            "ro.product.name": "X6851-OP",
+            "ro.build.display.id": "X6851-OP-16.3.0.022(SU_0401)",
+            "ro.build.version.incremental": "0401",
+            "ro.build.version.release": "16",
+        }.get(name, ""),
+        run_date_stamp="0630",
+    )
+    assert folder_name is not None
+    ts_label = format_timestamp_for_filename("2026-06-30 11:00:00.000")
+    existing_dir = resolve_device_output_dir(
+        local_root=tmp_path,
+        folder_name=folder_name,
+        serial="dev_has_exports",
+    ) / "aee_exp" / f"{ts_label}_db.88"
+    existing_dir.mkdir(parents=True, exist_ok=True)
+    (existing_dir / "main.dbg").write_text("ok", encoding="utf-8")
+    from backend.agent.aee.mobilelog import _resolve_mobilelog_subdir
+    from backend.agent.aee.paths import resolve_bugreport_subdir
+
+    ml_dir = existing_dir / _resolve_mobilelog_subdir()
+    ml_dir.mkdir(parents=True, exist_ok=True)
+    (ml_dir / "main_log_test").write_text("x", encoding="utf-8")
+    br_dir = existing_dir / resolve_bugreport_subdir()
+    br_dir.mkdir(parents=True, exist_ok=True)
+    (br_dir / f"{ts_label}_bugreport.zip").write_bytes(b"PK")
+
+    export_calls = {"mobilelog": 0, "bugreport": 0}
+    from backend.agent.aee import processor as proc_mod
+
+    monkeypatch.setattr(
+        proc_mod,
+        "export_correlated_mobilelogs",
+        lambda **kw: export_calls.__setitem__("mobilelog", export_calls["mobilelog"] + 1),
+    )
+    monkeypatch.setattr(
+        proc_mod,
+        "export_bugreport_for_timestamp",
+        lambda **kw: export_calls.__setitem__("bugreport", export_calls["bugreport"] + 1) or True,
+    )
+
+    cfg = ProcessConfig(export_mobilelog=True, export_bugreport=True)
+    r = process_device_logs(
+        serial="dev_has_exports",
+        job_id=102,
+        state_store=store,
+        config=cfg,
+        run_date_stamp="0630",
+    )
+
+    assert r.pulled == 1
+    assert export_calls == {"mobilelog": 0, "bugreport": 0}
+
+
 def test_get_aee_local_root_default_is_hdd(monkeypatch):
     """方案 C: get_aee_local_root() 默认回退 Agent 本地 HDD 路径。"""
     from backend.agent.aee.paths import get_aee_local_root

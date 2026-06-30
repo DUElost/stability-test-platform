@@ -298,7 +298,7 @@ def test_first_tick_runs_baseline_snapshot_and_marks_runtime_processed(monkeypat
     )
     assert rec.tick_once() == 1
     assert calls[:2] == [
-        "watcher_baseline:904|ml=False|br=False",
+        "watcher_baseline:904|ml=True|br=True",
         "watcher:aee|ml=True|br=True",
     ]
     assert rec.stats.baseline_entries_total == 1

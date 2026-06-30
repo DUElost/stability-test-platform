@@ -561,8 +561,6 @@ class AeeDbHistoryReconciler:
         baseline_cfg = replace(
             self._cfg,
             state_key_prefix=baseline_prefix,
-            export_mobilelog=False,
-            export_bugreport=False,
             max_entries_per_run=self._baseline_chunk_size,
         )
         baseline_lines_by_type: Dict[str, Set[str]] = {

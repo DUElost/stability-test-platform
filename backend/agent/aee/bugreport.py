@@ -153,12 +153,9 @@ def export_bugreport_for_timestamp(
             _mark_bugreport_exported(serial)
         return True
 
-    temp_path = Path(str(final_path) + temp_suffix)
-    if temp_path.exists():
-        try:
-            temp_path.unlink()
-        except OSError:
-            pass
+    temp_path = bugreport_dir / f"{formatted_ts}_bugreport{temp_suffix}"
+    for stale in bugreport_dir.glob(f"{formatted_ts}_bugreport*{temp_suffix}*"):
+        _safe_unlink(stale)
 
     try:
         result = _run_bugreport_interruptibly(
@@ -169,9 +166,11 @@ def export_bugreport_for_timestamp(
     except subprocess.TimeoutExpired:
         logger.error("bugreport_timeout serial=%s", serial)
         _safe_unlink(temp_path)
+        _safe_unlink(Path(f"{temp_path}.zip"))
         return False
 
-    if result.returncode != 0 or not temp_path.exists():
+    actual_temp = _locate_bugreport_temp_output(temp_path)
+    if result.returncode != 0 or actual_temp is None:
         logger.error(
             "bugreport_failed serial=%s rc=%s stderr=%s",
             serial,
@@ -179,19 +178,28 @@ def export_bugreport_for_timestamp(
             (result.stderr or "")[:200],
         )
         _safe_unlink(temp_path)
+        _safe_unlink(Path(f"{temp_path}.zip"))
         return False
 
     try:
-        os.replace(temp_path, final_path)
+        os.replace(actual_temp, final_path)
     except OSError as exc:
         logger.error("bugreport_rename_failed: %s", exc)
-        _safe_unlink(temp_path)
+        _safe_unlink(actual_temp)
         return False
 
     if normalized_type in cooldown_types:
         _mark_bugreport_exported(serial)
     logger.info("bugreport_exported serial=%s path=%s", serial, final_path.name)
     return True
+
+
+def _locate_bugreport_temp_output(temp_path: Path) -> Optional[Path]:
+    """Resolve adb bugreport output (device may append .zip to the given path)."""
+    for candidate in (temp_path, Path(f"{temp_path}.zip")):
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate
+    return None
 
 
 def _safe_unlink(path: Path) -> None:
