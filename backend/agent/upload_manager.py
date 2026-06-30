@@ -13,11 +13,15 @@ ADR-0025 Sprint 4 Task 2: Agent 侧文件上送管理器。
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import threading
 from pathlib import Path
 from typing import List, Optional
+
+try:
+    from backend.agent.aee.event_dirs import find_event_dir_under_root, is_event_dir_basename
+except ImportError:
+    from agent.aee.event_dirs import find_event_dir_under_root, is_event_dir_basename
 
 try:
     from backend.agent.aee.paths import get_aee_nfs_root
@@ -34,8 +38,6 @@ except ImportError:
         return Path("/mnt/hdd/aee_events")
 
 logger = logging.getLogger(__name__)
-
-_EVENT_DIR_RE = re.compile(r"^\d{4}[-_]\d{2}[-_]\d{2}[_T]")
 
 
 class UploadManager:
@@ -128,10 +130,9 @@ class UploadManager:
     ) -> int:
         """Copy event directories → {nfs_root}/devices/{plan_run_id}/{dirname}/.
 
-        If event_dir_names is empty, auto-discover by iterating {source_root}
-        for timestamp-prefixed event directories (e.g. 2026-06-23_14-30-00_db.01).
-        Only direct children matching YYYY-MM-DD_HH-MM-SS_* are selected.
-        Skip if dest already exists. Returns count copied.
+        ADR-0025: only explicit ``event_dir_names`` from control plane (JobLogSignal
+        + scan xls Path). Empty list → no upload (no HDD-wide auto-discovery).
+        Resolves nested ``{folder}/{serial}/{dirname}`` under ``source_root``.
         """
         if not self._configured:
             logger.warning(
@@ -140,42 +141,29 @@ class UploadManager:
             )
             return 0
 
+        if not event_dir_names:
+            logger.info(
+                "upload_event_dirs_skip_empty plan_run=%d reason=no_event_dir_names",
+                plan_run_id,
+            )
+            return 0
+
         count = 0
         base_src = Path(source_root)
         base_dst = Path(self._nfs_root) / "devices" / str(plan_run_id)
 
-        if not event_dir_names:
-            for event_dir in sorted(base_src.iterdir()):
-                if not event_dir.is_dir():
-                    continue
-                if not _EVENT_DIR_RE.match(event_dir.name):
-                    continue
-                dst_dir = base_dst / event_dir.name
-                if dst_dir.exists():
-                    continue
-                try:
-                    self._copytree_safe(str(event_dir), str(dst_dir))
-                    count += 1
-                except Exception:
-                    logger.exception(
-                        "upload_event_dirs_auto_copy_failed plan_run=%d dir=%s",
-                        plan_run_id, event_dir,
-                    )
-            if count == 0:
-                count += self._upload_nested_event_dirs(
-                    base_src, base_dst, plan_run_id,
-                )
-            logger.info(
-                "upload_event_dirs_auto plan_run=%d copied=%d from=%s",
-                plan_run_id, count, source_root,
-            )
-            return count
-
         for dirname in event_dir_names:
-            src_dir = base_src / dirname
+            if not is_event_dir_basename(dirname):
+                logger.warning(
+                    "upload_event_dirs_skip_invalid_name plan_run=%d dir=%s",
+                    plan_run_id, dirname,
+                )
+                continue
+
+            src_dir = find_event_dir_under_root(base_src, dirname)
             dst_dir = base_dst / dirname
 
-            if not src_dir.is_dir():
+            if src_dir is None:
                 logger.warning(
                     "upload_event_dirs_source_missing plan_run=%d dir=%s",
                     plan_run_id, dirname,
@@ -202,38 +190,6 @@ class UploadManager:
             "upload_event_dirs_done plan_run=%d copied=%d total=%d",
             plan_run_id, count, len(event_dir_names),
         )
-        return count
-
-    def _upload_nested_event_dirs(
-        self, base_src: Path, base_dst: Path, plan_run_id: int,
-    ) -> int:
-        """Walk subdirectories (depth ≤5) to find Reconciler event dirs (containing ZZ_INTERNAL)."""
-        count = 0
-        max_depth = 5
-        base_depth = len(base_src.parts)
-        for event_dir in sorted(base_src.rglob("*")):
-            if not event_dir.is_dir():
-                continue
-            if len(event_dir.parts) - base_depth > max_depth:
-                continue
-            if not (event_dir / "ZZ_INTERNAL").exists():
-                continue
-            dst_dir = base_dst / event_dir.name
-            if dst_dir.exists():
-                continue
-            try:
-                self._copytree_safe(str(event_dir), str(dst_dir))
-                count += 1
-            except Exception:
-                logger.exception(
-                    "upload_event_dirs_nested_copy_failed plan_run=%d dir=%s",
-                    plan_run_id, event_dir,
-                )
-        if count:
-            logger.info(
-                "upload_event_dirs_nested plan_run=%d copied=%d from=%s",
-                plan_run_id, count, base_src,
-            )
         return count
 
     @staticmethod

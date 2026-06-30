@@ -8,7 +8,6 @@ and keyword arguments that were passed at enqueue time.
 
 import logging
 import asyncio
-import re
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,6 @@ _TERMINAL_SAQ_STATUSES = frozenset({"complete", "failed", "aborted"})
 _MERGE_TASK_SAQ_TIMEOUT = (
     _MERGE_SYNC_TIMEOUT + _UPLOAD_WAIT_MAX + _DEVICES_POLL_MAX + 120
 )
-_EVENT_DIR_RE = re.compile(r"^\d{4}[-_]\d{2}[-_]\d{2}[_T]")
 
 
 async def post_completion_task(ctx: dict, *, job_id: int) -> None:
@@ -213,17 +211,16 @@ async def scan_task(ctx: dict, *, plan_run_id: int, is_final: bool = False) -> N
     logger.info("saq_scan_done plan_run=%d", plan_run_id)
 
 
-def _query_hosts_for_upload(plan_run_id: int) -> tuple[set[str], list[tuple[str, str]]]:
-    """同步查询 upload_task 所需的 host 列表，由 asyncio.to_thread 调用。
+def _query_hosts_for_upload(plan_run_id: int) -> tuple[set[str], list[tuple[str, str]], list[str]]:
+    """同步查询 upload_task 所需 host 列表与 event_dir_names。
 
-    返回 (hosts_with_scan, host_rows)：
-      hosts_with_scan — 有 scan 产物的 host_id 集合
-      host_rows        — [(host_id, host_status), ...] 列表
+    返回 (hosts_with_scan, host_rows, event_dir_names)。
     """
     from backend.core.database import SessionLocal
     from backend.models.job import JobInstance
     from backend.models.plan_run_artifact import PlanRunArtifact
     from backend.models.host import Host
+    from backend.services.dedup_extract import collect_upload_event_dir_names
     from sqlalchemy import select, distinct
 
     db = SessionLocal()
@@ -242,10 +239,12 @@ def _query_hosts_for_upload(plan_run_id: int) -> tuple[set[str], list[tuple[str,
             .join(Host, Host.id == JobInstance.host_id)
             .where(JobInstance.plan_run_id == plan_run_id)
         ).all()
+
+        event_dir_names = collect_upload_event_dir_names(db, plan_run_id)
     finally:
         db.close()
 
-    return hosts_with_scan, host_rows
+    return hosts_with_scan, host_rows, event_dir_names
 
 
 async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
@@ -259,7 +258,7 @@ async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
     logger.info("saq_upload_start plan_run=%d", plan_run_id)
 
     try:
-        hosts_with_scan, host_rows = await asyncio.to_thread(
+        hosts_with_scan, host_rows, event_dir_names = await asyncio.to_thread(
             _query_hosts_for_upload, plan_run_id,
         )
         triggered: list[str] = []
@@ -274,13 +273,16 @@ async def upload_task(ctx: dict, *, plan_run_id: int) -> None:
 
             await emit_agent_control(
                 host_id, "upload_events",
-                payload={"plan_run_id": plan_run_id},
+                payload={
+                    "plan_run_id": plan_run_id,
+                    "event_dir_names": event_dir_names,
+                },
             )
             triggered.append(host_id)
 
         logger.info(
-            "saq_upload_dispatched plan_run=%d triggered=%d skipped=%d",
-            plan_run_id, len(triggered), len(skipped),
+            "saq_upload_dispatched plan_run=%d triggered=%d skipped=%d event_dirs=%d",
+            plan_run_id, len(triggered), len(skipped), len(event_dir_names),
         )
     except Exception:
         logger.exception("saq_upload_failed plan_run=%d", plan_run_id)
@@ -340,9 +342,11 @@ async def _wait_for_upload_task(plan_run_id: int) -> bool:
 
 
 def _count_devices_event_dirs_sync(plan_run_id: int) -> int:
-    """统计 NFS devices/{plan_run_id}/ 下时间戳事件目录数（与 UploadManager 命名一致）。"""
+    """统计 NFS devices/{plan_run_id}/ 下时间戳事件目录数。"""
     import os
     from pathlib import Path
+
+    from backend.agent.aee.event_dirs import is_event_dir_basename
 
     nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
     if not nfs_root:
@@ -352,7 +356,7 @@ def _count_devices_event_dirs_sync(plan_run_id: int) -> int:
         return 0
     return sum(
         1 for p in devices_dir.iterdir()
-        if p.is_dir() and _EVENT_DIR_RE.match(p.name)
+        if p.is_dir() and is_event_dir_basename(p.name)
     )
 
 
@@ -424,72 +428,10 @@ async def merge_task(ctx: dict, *, plan_run_id: int) -> None:
 
 
 def _run_extract_sync(plan_run_id: int) -> int:
-    """同步执行 extract（NFS 文件拷贝），由 asyncio.to_thread 调用。
+    """同步执行 extract（NFS 文件拷贝），由 asyncio.to_thread 调用。"""
+    from backend.services.dedup_extract import run_extract_sync
 
-    返回值：
-      >= 0  提取的文件/目录数
-      -1    无 merge 产物（skip_no_merge，已自行 log）
-      -2    无 NFS 根路径（skip_no_nfs，已自行 log）
-    """
-    import os
-    import shutil
-    from pathlib import Path
-
-    from backend.models.plan_run_artifact import PlanRunArtifact
-    from sqlalchemy import select
-    from backend.core.database import SessionLocal
-
-    db = SessionLocal()
-    try:
-        merge_rows = db.execute(
-            select(PlanRunArtifact).where(
-                PlanRunArtifact.plan_run_id == plan_run_id,
-                PlanRunArtifact.artifact_type == "merge_result_xls",
-            )
-        ).scalars().all()
-        if not merge_rows:
-            logger.warning("saq_extract_skip_no_merge plan_run=%d", plan_run_id)
-            return -1
-
-        nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
-        if not nfs_root:
-            logger.warning("saq_extract_skip_no_nfs plan_run=%d", plan_run_id)
-            return -2
-
-        devices_dir = Path(nfs_root) / "devices" / str(plan_run_id)
-        jira_dir = Path(nfs_root) / "jira" / str(plan_run_id)
-        jira_dir.mkdir(parents=True, exist_ok=True)
-
-        extracted = 0
-        if devices_dir.is_dir():
-            for event_dir in sorted(devices_dir.iterdir()):
-                if not event_dir.is_dir():
-                    continue
-                dest = jira_dir / event_dir.name
-                if dest.exists():
-                    continue
-                try:
-                    shutil.copytree(str(event_dir), str(dest))
-                    extracted += 1
-                except Exception:
-                    logger.exception("saq_extract_event_dir_failed dir=%s", event_dir)
-
-        for row in merge_rows:
-            merge_xls = Path(row.storage_uri)
-            if not merge_xls.exists():
-                continue
-            dest = jira_dir / merge_xls.name
-            if not dest.exists():
-                try:
-                    shutil.copy2(str(merge_xls), str(dest))
-                    extracted += 1
-                except Exception:
-                    logger.exception("saq_extract_merge_xls_failed path=%s", merge_xls)
-
-        logger.info("saq_extract_done plan_run=%d extracted=%d", plan_run_id, extracted)
-        return extracted
-    finally:
-        db.close()
+    return run_extract_sync(plan_run_id)
 
 
 async def extract_task(ctx: dict, *, plan_run_id: int) -> None:

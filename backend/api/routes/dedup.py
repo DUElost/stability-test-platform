@@ -328,7 +328,6 @@ async def trigger_merge(
 @scan_router.post("/{run_id}/dedup/extract", response_model=ApiResponse[dict])
 def trigger_extract(
     run_id: int,
-    db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
     """ADR-0025 Sprint 4 归档-3: 从 15.4 `devices/{run_id}/` 提取事件目录到提单目录。
@@ -336,54 +335,17 @@ def trigger_extract(
     按 merge Result.xls 引用的事件目录定位 15.4 上的事件目录 → 复制到
     `nfs_root/jira/{run_id}/` 供厂商 Jira 工具消费。
     """
-    from backend.models.plan_run_artifact import PlanRunArtifact
-    from sqlalchemy import select
-    import shutil
+    from backend.services.dedup_extract import run_extract_sync
 
-    merge_rows = db.execute(
-        select(PlanRunArtifact).where(
-            PlanRunArtifact.plan_run_id == run_id,
-            PlanRunArtifact.artifact_type == "merge_result_xls",
-        )
-    ).scalars().all()
-    if not merge_rows:
+    extracted = run_extract_sync(run_id)
+    if extracted == -1:
         raise HTTPException(status_code=409, detail="no merge result available, run merge first")
 
     nfs_root = os.getenv("STP_AEE_NFS_ROOT", os.getenv("STP_WATCHER_NFS_BASE_DIR", "")).strip()
-    if not nfs_root:
+    if extracted == -2 or not nfs_root:
         raise HTTPException(status_code=503, detail="NFS root not configured (STP_AEE_NFS_ROOT)")
 
-    devices_dir = Path(nfs_root) / "devices" / str(run_id)
     jira_dir = Path(nfs_root) / "jira" / str(run_id)
-    jira_dir.mkdir(parents=True, exist_ok=True)
-
-    extracted = 0
-    if devices_dir.is_dir():
-        for event_dir in sorted(devices_dir.iterdir()):
-            if not event_dir.is_dir():
-                continue
-            dest = jira_dir / event_dir.name
-            if dest.exists():
-                continue
-            try:
-                shutil.copytree(str(event_dir), str(dest))
-                extracted += 1
-            except Exception:
-                logger.exception("extract_event_dir_failed dir=%s", event_dir)
-
-    for row in merge_rows:
-        merge_xls = Path(row.storage_uri)
-        if not merge_xls.exists():
-            continue
-        dest = jira_dir / merge_xls.name
-        if not dest.exists():
-            try:
-                shutil.copy2(str(merge_xls), str(dest))
-                extracted += 1
-            except Exception:
-                logger.exception("extract_merge_xls_failed path=%s", merge_xls)
-
-    logger.info("extract_done plan_run=%d extracted=%d", run_id, extracted)
     return ok({
         "plan_run_id": run_id,
         "jira_dir": str(jira_dir),

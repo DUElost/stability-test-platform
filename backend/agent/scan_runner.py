@@ -163,8 +163,7 @@ class ScanRunner:
         try:
             from backend.agent.upload_manager import UploadManager
         except ImportError:
-            logger.warning("control_scan_now_skip_uploader_not_configured")
-            return
+            from agent.upload_manager import UploadManager
         uploader = UploadManager.instance()
         if not uploader.is_configured():
             logger.warning("control_scan_now_skip_uploader_not_configured")
