@@ -132,7 +132,7 @@ export default function PlanChainPanel({
         </span>
       </header>
 
-      <div className="flex-1 overflow-y-auto p-1.5">
+      <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
         {chain.map((node, idx) => (
           <div key={node.id ?? `draft-${idx}`}>
             <button
