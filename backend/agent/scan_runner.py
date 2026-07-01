@@ -1,7 +1,8 @@
-"""ScanRunner — Agent 本地 dedup_org scan 执行器（ADR-0025 Sprint 4 Task 1）。
+"""ScanRunner — Agent 本地 scan 执行器（ADR-0025 Sprint 4 Task 1）。
 
-包装 start_log_scan.py -dedup_org 调用，同步 subprocess.run。
+主扫描包装 start_log_scan.py -m 0（AEE_TNE，扫 hdd_root，同步 subprocess.run），
 产物 _org.xls 在 hdd_root 下；UploadManager（Task 2）负责上送到控制面 NFS。
+`-dedup_org` 仅在 `run_dedup_org()` 中作为对已产出 _org.xls 的二次去重调用，非主扫描模式。
 """
 
 from __future__ import annotations

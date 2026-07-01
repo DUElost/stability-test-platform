@@ -161,7 +161,7 @@ Job 执行期间 `JobSession` 绑定 `DeviceLogWatcher`：
 
 ### 8.4 方案 C 演进
 
-scan 输入路径从「15.4 NFS archives」改为 **Agent 本地 HDD**（Sprint 4）；`check_archive_completed` 不得再依赖 `run_log_bundle`。见 [`2026-plan-c-storage-and-access.md`](./2026-plan-c-storage-and-access.md) §4.2。
+scan 输入路径从「15.4 NFS archives」改为 **Agent 本地 HDD**（Sprint 4）；dedup 终态触发条件最终落地为 `should_trigger_dedup(run.status)`（`aggregator.py`），不依赖 `run_log_bundle`；过渡期的 `check_archive_completed` 已废弃删除。见 [`2026-plan-c-storage-and-access.md`](./2026-plan-c-storage-and-access.md) §4.2。
 
 **历史详设（已归档）**：[`archive/migrations/adr-0025-dedup-integration-design-2026-06-16.md`](../archive/migrations/adr-0025-dedup-integration-design-2026-06-16.md)
 

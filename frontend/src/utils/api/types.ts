@@ -12,10 +12,10 @@ export interface HostActiveJob {
 }
 
 export interface Host {
-  id: string | number;
-  name: string;
-  ip: string;
-  ssh_port: number;
+  id: string;
+  name?: string | null;
+  ip?: string | null;
+  ssh_port?: number;
   ssh_user: string | null;
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
   watcher_admin_active?: boolean;
@@ -565,8 +565,7 @@ export type JobStatus =
   | 'COMPLETED'
   | 'FAILED'
   | 'ABORTED'
-  | 'UNKNOWN'
-  | 'PENDING_TOOL';
+  | 'UNKNOWN';
 
 export interface StepTrace {
   id: number;
@@ -578,6 +577,7 @@ export interface StepTrace {
   output?: string | null;
   error_message?: string | null;
   original_ts: string;
+  created_at: string;
 }
 
 export interface JobArtifactEntry {

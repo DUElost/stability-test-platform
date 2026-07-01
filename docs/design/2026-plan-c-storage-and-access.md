@@ -126,7 +126,7 @@ LogArchiver、HddSpill 当前在 `watcher_subsystem_enabled()` 块内启动。`S
 | `plan_runs._aggregate_run_log_archive` | 聚合 `run_log_bundle` JobArtifact | 废弃或改为 prune 语义 |
 | `ArchiveStatusCard` | 展示 bundle `storage_uri` | 运维指标 + prune 语义 |
 | `report_service` | 从 tar `run_log_bundle` 读 `risk_summary` | log_signal 聚合（#16，已落地） |
-| `dedup_scan.check_archive_completed` | 查 `run_log_bundle` 齐套 | 新完成条件（Sprint 4） |
+| ~~`dedup_scan.check_archive_completed`~~ | 查 `run_log_bundle` 齐套 | 已废弃：Sprint 4 最终改为 `should_trigger_dedup(run.status)` 终态门禁（`aggregator.py`），原函数无调用方，已于 2026-07-01 删除 |
 | `agent_api` archive-status | 统计 bundle | 重新定义 |
 
 ### 4.3 Sprint 4 待建

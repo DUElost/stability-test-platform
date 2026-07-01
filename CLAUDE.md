@@ -6,11 +6,11 @@
 
 ## 架构不变量
 
-- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — 合并 ASGI 挂载（`backend/main.py:122`）
+- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — 合并 ASGI 挂载（`backend/main.py:181-182`）
 - **Plan 无 lifecycle 列**：由 PlanStep 行 + `patrol_interval_seconds`/`timeout_seconds` 在 dispatcher 阶段组装为 `pipeline_def.lifecycle`（唯一事实源）
 - **Redis 仅做 SAQ broker**，不存业务数据
 - **Production guard**：`ENV=production` 时强制 `AUTH_COOKIE_SECURE=1` + `AUTH_COOKIE_SAMESITE ∈ {lax,strict}` + `STP_CSRF_ENABLED` 开启，否则 `RuntimeError`（ADR-0024）
-- **Pipeline 仅接受 `lifecycle` 顶层键**：`stages`/`phases` 格式被拒绝（`pipeline_engine.py L158-179`）
+- **Pipeline 仅接受 `lifecycle` 顶层键**：`stages`/`phases` 格式被拒绝（`backend/agent/pipeline_engine.py:431-473`）
 - **唯一 action 类型** `script:<name>`：`builtin:<name>` / `tool:<id>` / `shell:<command>` 已删除
 
 ---
@@ -27,8 +27,8 @@
 
 ## 状态机
 
-- **Job**：`PENDING → RUNNING → COMPLETED/FAILED/ABORTED`；`PENDING → FAILED`（recycler 超时）；`UNKNOWN → RUNNING/COMPLETED/FAILED`
-- **PlanRun**：`RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED/DEGRADED`
+- **Job**（集中校验见 `backend/services/state_machine.py` 的 `VALID_TRANSITIONS`）：`PENDING → RUNNING → COMPLETED/FAILED/ABORTED`；`PENDING → FAILED`（recycler 派发超时）；`PENDING → ABORTED`（PlanRun abort）；`RUNNING → UNKNOWN`（recycler/watchdog/reconciler 心跳超时或 patrol stall——**不是**直接到 FAILED）；`UNKNOWN → RUNNING`（grace 内 recovery/sync 恢复）或 `UNKNOWN → FAILED`（grace 到期）
+- **PlanRun**（无集中状态机，靠 `_TERMINAL_PLAN_RUN_STATUSES` 终态守卫防覆盖）：`RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED/DEGRADED`；存在有意的 `FAILED → RUNNING`（precheck 失败后人工重试派发，`precheck/runner.py:retry_plan_run_dispatch`）
 
 ---
 

@@ -17,7 +17,6 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.models.job import JobInstance, JobLogSignal
 from backend.models.plan_run_artifact import PlanRunArtifact
 
 logger = logging.getLogger(__name__)
@@ -46,28 +45,6 @@ def get_scan_env_defaults() -> Dict[str, str]:
         "place": os.getenv("STP_DEDUP_PLACE", "SH"),
         "tag": os.getenv("STP_DEDUP_SCAN_TAG", ""),
     }
-
-
-def check_archive_completed(db: Session, plan_run_id: int) -> tuple[bool, int, int]:
-    """检查该 PlanRun 的初筛选数据是否就绪（方案 C：存在 log_signal 即可 scan）。
-
-    返回 (completed, signal_job_count, total_count)。
-    scan 实际执行在 Sprint 4;Sprint 3 仅判断数据就绪。
-    """
-    from sqlalchemy import func
-
-    total = db.execute(
-        select(func.count(JobInstance.id)).where(JobInstance.plan_run_id == plan_run_id)
-    ).scalar_one()
-    if total == 0:
-        return False, 0, 0
-    job_ids_subq = select(JobInstance.id).where(JobInstance.plan_run_id == plan_run_id)
-    signal_job_count = db.execute(
-        select(func.count(func.distinct(JobLogSignal.job_id))).where(
-            JobLogSignal.job_id.in_(job_ids_subq),
-        )
-    ).scalar_one()
-    return signal_job_count >= total, int(signal_job_count or 0), int(total)
 
 
 _HOST_PREFIX_RE = re.compile(r"^([A-Za-z0-9_-]+?)_")

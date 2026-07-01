@@ -20,6 +20,12 @@ class TestHeartbeatCapacityBackwardCompat:
         )
 
     def test_heartbeat_with_capacity(self, client):
+        # NOTE: `max_concurrent_jobs` here is a legacy/tolerated key kept only
+        # to verify older Agent payloads still round-trip without a 422.
+        # The `host.max_concurrent_jobs` column itself was dropped by
+        # migration q2r3s4t5u6v7 — this field has no effect on capacity
+        # calculation; the heartbeat payload's `capacity` is a generic
+        # `Dict[str, Any]` passthrough (`backend/api/schemas/host.py`).
         resp = client.post(
             "/api/v1/heartbeat",
             json={
@@ -37,6 +43,9 @@ class TestHeartbeatCapacityBackwardCompat:
         )
 
     def test_heartbeat_capacity_string_ignored(self, client):
+        # `max_concurrent_jobs` is accepted-but-unused (see note above); this
+        # test only asserts that a malformed value in this legacy key doesn't
+        # fail Pydantic validation for the whole `capacity` payload.
         resp = client.post(
             "/api/v1/heartbeat",
             json={

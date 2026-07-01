@@ -9,7 +9,7 @@ alwaysApply: true
 
 ## 架构不变量（违反即 bug）
 
-- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — `backend/main.py:122`
+- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — `backend/main.py:181-182`
 - **Plan 无 lifecycle 列**：由 PlanStep + `patrol_interval_seconds`/`timeout_seconds` 在 dispatcher 组装为 `pipeline_def.lifecycle`
 - **Redis 仅 SAQ broker**，不存业务数据
 - **Pipeline 仅 `lifecycle` 顶层键**；`stages`/`phases` 被拒绝
@@ -18,8 +18,8 @@ alwaysApply: true
 
 ## 状态机
 
-- **Job**：`PENDING → RUNNING → COMPLETED/FAILED/ABORTED`；`PENDING → FAILED`（recycler）；`UNKNOWN → RUNNING/COMPLETED/FAILED`
-- **PlanRun**：`RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED/DEGRADED`
+- **Job**：`PENDING → RUNNING → COMPLETED/FAILED/ABORTED`；`PENDING → FAILED`（recycler）；`PENDING → ABORTED`；`RUNNING → UNKNOWN`（心跳超时/patrol stall，非直接 FAILED）；`UNKNOWN → RUNNING/FAILED`（grace 内恢复/grace 到期）
+- **PlanRun**：`RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED/DEGRADED`；另有有意的 `FAILED → RUNNING`（precheck 重试）；无集中状态机
 
 ## 跨层约定
 

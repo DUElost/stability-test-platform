@@ -55,10 +55,13 @@ _TERMINAL = {
     JobStatus.ABORTED.value,
 }
 # NOTE: UNKNOWN is intentionally excluded — it is a transient recovery state,
-# not a terminal one.  Agent completion for an UNKNOWN job must be allowed to
-# transition via the normal state-machine path (UNKNOWN→COMPLETED/FAILED).
-# At L574 (heartbeat status-update) this also ensures UNKNOWN does not
-# trigger premature PlanRun aggregation.
+# not a terminal one.  `JobStateMachine` allows UNKNOWN→COMPLETED/FAILED, but
+# `complete_job()`'s runtime-lease gate (`_get_valid_runtime_lease`, default
+# `allowed_job_statuses={RUNNING}`) rejects a direct complete while the job is
+# still UNKNOWN — the agent must first re-sync via the recovery path
+# (UNKNOWN→RUNNING) before completing normally. This also ensures the
+# heartbeat status-update path (L574) does not trigger premature PlanRun
+# aggregation while a job's true status is still unresolved.
 
 
 class _LockAcquireFailed(Exception):

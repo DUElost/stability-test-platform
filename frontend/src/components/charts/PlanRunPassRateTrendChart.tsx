@@ -5,12 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TrendingUp } from 'lucide-react';
 import { CHART_COLORS } from '@/design-system/colors';
+import type { PlanRunPassRatePoint } from '@/utils/api/types';
 
-export interface PlanRunPassRateTrendPoint {
-  date: string;
-  avg_pass_rate: number;
-  run_count: number;
-}
+/** @deprecated use `PlanRunPassRatePoint` from `@/utils/api/types` */
+export type PlanRunPassRateTrendPoint = PlanRunPassRatePoint;
 
 interface PlanRunPassRateTrendChartProps {
   data?: PlanRunPassRateTrendPoint[];
