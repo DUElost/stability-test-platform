@@ -172,7 +172,14 @@ def build_lifecycle_from_steps(
     for step in sorted(steps, key=lambda s: (s.stage, s.sort_order)):
         if step.enabled is False:
             continue
-        default_params = script_defaults[(step.script_name, step.script_version)]
+        key = (step.script_name, step.script_version)
+        if key not in script_defaults:
+            raise PlanDispatchError(
+                f"Script {step.script_name}@{step.script_version} referenced by "
+                f"step '{step.step_key}' is not found or has been deactivated. "
+                f"Update the step to an active version before dispatching."
+            )
+        default_params = script_defaults[key]
         step_def: dict[str, Any] = {
             "step_id": step.step_key,
             "action": f"script:{step.script_name}",

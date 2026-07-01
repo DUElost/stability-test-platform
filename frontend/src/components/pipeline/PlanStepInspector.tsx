@@ -1,9 +1,21 @@
-import { useMemo } from 'react';
+import { useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, AlertTriangle } from 'lucide-react';
 import type { PipelinePhase, PipelineStep, ScriptEntry } from '@/utils/api/types';
 import { ALERT_BANNER, PIPELINE_EDITOR, STATUS_CHIP, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
+
+/* ── param_schema field descriptor ───────────────────────────────────────── */
+
+interface ParamFieldSchema {
+  type: 'string' | 'integer' | 'boolean' | 'number';
+  required?: boolean;
+  label?: string;
+  description?: string;
+  enum?: string[];
+  default?: unknown;
+  minimum?: number;
+}
 
 interface PlanStepInspectorProps {
   step: PipelineStep | null;
@@ -71,6 +83,13 @@ export default function PlanStepInspector({
               readOnly={readOnly}
             />
 
+            <ParamFormCard
+              step={step}
+              matchedScript={matchedScript}
+              onUpdateStep={onUpdateStep}
+              readOnly={readOnly}
+            />
+
             <RuntimeConfigCard step={step} onUpdateStep={onUpdateStep} readOnly={readOnly} />
 
             {scriptName && (
@@ -126,11 +145,17 @@ function ScriptInfoCard({
   onPickScript,
   readOnly,
 }: ScriptInfoCardProps) {
-  const params = matchedScript?.default_params ?? {};
-  const paramKeys = Object.keys(params);
   const allActive = scripts.filter(s => s.is_active);
   const knownNames = Array.from(new Set(allActive.map(s => s.name))).sort();
   const isUnknown = scriptName && !matchedScript;
+
+  // Distinguish: version deactivated vs. completely unknown
+  const deactivatedMatch = isUnknown
+    ? scripts.find(s => s.name === scriptName && s.version === step.version && !s.is_active)
+    : null;
+  const warningMessage = deactivatedMatch
+    ? <>当前脚本 <code className="font-mono">{scriptName}@{step.version}</code> 版本已停用，请选择已激活版本后再执行调度。</>
+    : <>当前脚本 <code className="font-mono">{scriptName}@{step.version || '?'}</code> 未在已激活脚本中找到，请重新选择。</>;
 
   const selectCls = cn('max-w-[60%] h-7 px-1.5', PIPELINE_EDITOR.inputInline, 'text-[12px]');
 
@@ -147,7 +172,7 @@ function ScriptInfoCard({
           <div className={cn('flex items-start gap-1.5 px-2 py-1.5 rounded-md text-[11px]', ALERT_BANNER.warning)}>
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <span>
-              当前脚本 <code className="font-mono">{scriptName}@{step.version || '?'}</code> 未在已激活脚本中找到，请重新选择。
+              {warningMessage}
             </span>
           </div>
         )}
@@ -201,26 +226,213 @@ function ScriptInfoCard({
             {matchedScript ? `${matchedScript.script_type} / ${matchedScript.category ?? '—'}` : '—'}
           </span>
         </Row>
-
-        <Row label="参数" align="start">
-          {paramKeys.length === 0 ? (
-            <span className={cn('text-[11px]', TEXT.subtitle)}>无默认参数</span>
-          ) : (
-            <div className="flex flex-wrap gap-1 justify-end max-w-[68%]">
-              {paramKeys.map(k => (
-                <span
-                  key={k}
-                  title={JSON.stringify(params[k])}
-                  className={cn('font-mono text-[10px] px-1.5 py-px rounded-[3px]', STATUS_CHIP.muted)}
-                >
-                  {k}
-                </span>
-              ))}
-            </div>
-          )}
-        </Row>
       </CardBody>
     </Card>
+  );
+}
+
+/* ── ParamFormCard: structured parameter form driven by param_schema ─────── */
+
+interface ParamFormCardProps {
+  step: PipelineStep;
+  matchedScript: ScriptEntry | null;
+  onUpdateStep: (next: PipelineStep) => void;
+  readOnly?: boolean;
+}
+
+function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFormCardProps) {
+  const schema = matchedScript?.param_schema ?? {};
+  const schemaKeys = Object.keys(schema);
+  const defaultParams = matchedScript?.default_params ?? {};
+  const stepParams = step.params ?? {};
+
+  /** Merge: step.params overrides default_params overrides schema.default */
+  const resolvedValue = useCallback(
+    (key: string, field: ParamFieldSchema): unknown => {
+      if (key in stepParams) return stepParams[key];
+      if (key in defaultParams) return defaultParams[key];
+      return field.default;
+    },
+    [stepParams, defaultParams],
+  );
+
+  const setParam = useCallback(
+    (key: string, value: unknown) => {
+      const next = { ...stepParams, [key]: value };
+      // Remove entry if it equals the default — keep payload minimal
+      if (value === defaultParams[key] || (value === undefined && !(key in defaultParams))) {
+        delete next[key];
+      }
+      onUpdateStep({ ...step, params: next });
+    },
+    [step, stepParams, defaultParams, onUpdateStep],
+  );
+
+  if (schemaKeys.length === 0) {
+    const dpKeys = Object.keys(defaultParams);
+    if (dpKeys.length === 0) return null;
+    // Fallback: no schema but has default_params — show as read-only tags
+    return (
+      <Card>
+        <CardHead>
+          <span>脚本参数</span>
+          <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.muted)}>
+            无 schema
+          </span>
+        </CardHead>
+        <CardBody>
+          <div className="flex flex-wrap gap-1">
+            {dpKeys.map(k => (
+              <span
+                key={k}
+                title={JSON.stringify(defaultParams[k])}
+                className={cn('font-mono text-[10px] px-1.5 py-px rounded-[3px]', STATUS_CHIP.muted)}
+              >
+                {k}
+              </span>
+            ))}
+          </div>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  // Sort: required first, then optional
+  const sortedKeys = [...schemaKeys].sort((a, b) => {
+    const aReq = schema[a].required ? 0 : 1;
+    const bReq = schema[b].required ? 0 : 1;
+    return aReq - bReq;
+  });
+
+  return (
+    <Card>
+      <CardHead>
+        <span>脚本参数</span>
+        {matchedScript && (
+          <span className={cn('inline-flex items-center px-1.5 py-px rounded-full text-[10px] font-bold', STATUS_CHIP.primary)}>
+            {schemaKeys.length} 项
+          </span>
+        )}
+      </CardHead>
+      <CardBody>
+        {sortedKeys.map(key => {
+          const field = schema[key];
+          if (!field) return null;
+          return (
+            <ParamFieldRow
+              key={key}
+              fieldKey={key}
+              field={field}
+              value={resolvedValue(key, field)}
+              onChange={v => setParam(key, v)}
+              disabled={!!readOnly}
+            />
+          );
+        })}
+      </CardBody>
+    </Card>
+  );
+}
+
+/* ── Single parameter field row ──────────────────────────────────────────── */
+
+interface ParamFieldRowProps {
+  fieldKey: string;
+  field: ParamFieldSchema;
+  value: unknown;
+  onChange: (v: unknown) => void;
+  disabled: boolean;
+}
+
+function ParamFieldRow({ fieldKey, field, value, onChange, disabled }: ParamFieldRowProps) {
+  const label = field.label || fieldKey;
+  const isRequired = !!field.required;
+  const displayLabel = isRequired ? `${label} *` : label;
+  const inputCls = cn('max-w-[60%] h-7 px-2 text-[12px]', PIPELINE_EDITOR.inputInline);
+
+  // string with enum → <select>
+  if (field.type === 'string' && field.enum && field.enum.length > 0) {
+    return (
+      <Row label={displayLabel}>
+        <select
+          disabled={disabled}
+          value={String(value ?? '')}
+          onChange={e => onChange(e.target.value || undefined)}
+          className={inputCls}
+        >
+          <option value="">—</option>
+          {field.enum.map(opt => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+        </select>
+      </Row>
+    );
+  }
+
+  // boolean → toggle switch
+  if (field.type === 'boolean') {
+    const checked = value === true || value === 'true';
+    return (
+      <Row label={displayLabel}>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(!checked)}
+          className={cn(
+            'relative w-8 h-[18px] rounded-full transition',
+            checked ? 'bg-success' : 'bg-muted-foreground/40',
+            disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
+          )}
+          aria-pressed={checked}
+          aria-label={`${label}: ${checked ? '是' : '否'}`}
+        >
+          <span
+            className={cn(
+              'absolute top-0.5 left-0.5 w-3.5 h-3.5 rounded-full bg-background shadow transition-transform',
+              checked ? 'translate-x-[14px]' : 'translate-x-0',
+            )}
+          />
+        </button>
+      </Row>
+    );
+  }
+
+  // integer / number → numeric input
+  if (field.type === 'integer' || field.type === 'number') {
+    return (
+      <Row label={displayLabel}>
+        <input
+          type="number"
+          min={field.minimum}
+          value={value != null ? Number(value) : ''}
+          placeholder={String(field.default ?? '')}
+          disabled={disabled}
+          onChange={e => {
+            const raw = e.target.value;
+            if (raw === '') { onChange(undefined); return; }
+            const num = field.type === 'integer'
+              ? parseInt(raw, 10)
+              : parseFloat(raw);
+            if (!isNaN(num)) onChange(num);
+          }}
+          className={inputCls}
+        />
+      </Row>
+    );
+  }
+
+  // string (no enum) → text input
+  return (
+    <Row label={displayLabel}>
+      <input
+        type="text"
+        value={String(value ?? '')}
+        placeholder={field.description || ''}
+        disabled={disabled}
+        onChange={e => onChange(e.target.value || undefined)}
+        className={cn(inputCls, 'min-w-[50%]')}
+      />
+    </Row>
   );
 }
 

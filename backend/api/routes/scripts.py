@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import distinct
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -29,6 +29,35 @@ from backend.services.script_catalog import scan_script_root
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
 
+_VALID_PARAM_TYPES = {"string", "integer", "boolean", "number"}
+
+
+def _validate_param_schema(schema: Dict[str, Any]) -> Optional[str]:
+    """Return an error message if *schema* is malformed, else None.
+
+    Rules:
+    - Each value must be a dict with a ``type`` key.
+    - ``type`` must be one of ``string | integer | boolean | number``.
+    - ``required``, if present, must be a bool.
+    - ``enum``, if present, must be a list of strings.
+    """
+    for key, field in schema.items():
+        if not isinstance(field, dict):
+            return f"param_schema[{key!r}]: expected dict, got {type(field).__name__}"
+        ftype = field.get("type")
+        if ftype not in _VALID_PARAM_TYPES:
+            return (
+                f"param_schema[{key!r}].type: must be one of "
+                f"{sorted(_VALID_PARAM_TYPES)}, got {ftype!r}"
+            )
+        req = field.get("required")
+        if req is not None and not isinstance(req, bool):
+            return f"param_schema[{key!r}].required: must be bool, got {type(req).__name__}"
+        enum_val = field.get("enum")
+        if enum_val is not None and not isinstance(enum_val, list):
+            return f"param_schema[{key!r}].enum: must be list, got {type(enum_val).__name__}"
+    return None
+
 
 class ScriptCreate(BaseModel):
     name: str
@@ -43,6 +72,13 @@ class ScriptCreate(BaseModel):
     is_active: bool = True
     description: Optional[str] = None
 
+    @model_validator(mode="after")
+    def _check_param_schema(self) -> "ScriptCreate":
+        err = _validate_param_schema(self.param_schema)
+        if err:
+            raise ValueError(err)
+        return self
+
 
 class ScriptUpdate(BaseModel):
     name: Optional[str] = None
@@ -56,6 +92,14 @@ class ScriptUpdate(BaseModel):
     default_params: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None
     description: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_param_schema(self) -> "ScriptUpdate":
+        if self.param_schema is not None:
+            err = _validate_param_schema(self.param_schema)
+            if err:
+                raise ValueError(err)
+        return self
 
 
 class ScriptOut(BaseModel):
@@ -415,6 +459,13 @@ class ScriptVersionCreate(BaseModel):
     param_schema: Dict[str, Any] = Field(default_factory=dict)
     default_params: Dict[str, Any] = Field(...)
     description: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _check_param_schema(self) -> "ScriptVersionCreate":
+        err = _validate_param_schema(self.param_schema)
+        if err:
+            raise ValueError(err)
+        return self
 
 
 @router.post("/{name}/versions", response_model=ApiResponse[ScriptOut], status_code=201)
