@@ -76,16 +76,19 @@ class TestScriptDefaultParamsAPI:
             "version": "1.0.0",
             "nfs_path": f"/scripts/{name}/main.py",
             "content_sha256": "d" * 64,
-            "param_schema": {"timeout": {"type": "int"}},
+            "param_schema": {"timeout": {"type": "integer"}},
             "default_params": {"timeout": 30},
         }
         create = client.post("/api/v1/scripts", json=payload, headers=admin_headers)
-        assert create.status_code == 201
+        assert create.status_code == 201, create.text
         script_id = create.json()["data"]["id"]
 
         # param_schema should be freely modifiable
         update_resp = client.put(f"/api/v1/scripts/{script_id}", json={
-            "param_schema": {"timeout": {"type": "int"}, "retry": {"type": "int"}},
+            "param_schema": {
+                "timeout": {"type": "integer"},
+                "retry": {"type": "integer"},
+            },
         }, headers=admin_headers)
         assert update_resp.status_code == 200
         assert "retry" in update_resp.json()["data"]["param_schema"]
