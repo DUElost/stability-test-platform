@@ -91,7 +91,7 @@ export default function PlanEditPage() {
         </div>
       </header>
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-hidden">
+      <div className="flex-1 min-h-0 grid grid-cols-1 grid-rows-1 lg:grid-cols-[260px_minmax(0,1fr)_320px] overflow-hidden">
         <PlanChainPanel
           plans={form.allPlans || []}
           currentPlanId={planId}
