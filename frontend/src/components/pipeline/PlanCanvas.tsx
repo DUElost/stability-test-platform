@@ -144,7 +144,7 @@ export default function PlanCanvas({
   };
 
   return (
-    <section className={cn('flex-1 min-w-0 overflow-y-auto', PIPELINE_EDITOR.canvasBg)}>
+    <section className={cn('flex-1 min-h-0 min-w-0 overflow-y-auto', PIPELINE_EDITOR.canvasBg)}>
       <div className="p-3.5 grid gap-3">
         <PlanHeader
           planName={planName}

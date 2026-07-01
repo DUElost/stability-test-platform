@@ -124,7 +124,7 @@ export default function PlanChainPanel({
   const isDraft = currentPlanId == null;
 
   return (
-    <aside className={cn(PIPELINE_EDITOR.panel, 'border-r')}>
+    <aside className={cn('flex flex-col min-h-0 overflow-hidden bg-card border-border border-r')}>
       <header className={cn('flex items-center justify-between gap-3 px-4 py-3', PIPELINE_EDITOR.panelHeader)}>
         <span className={cn('text-sm font-bold', TEXT.heading)}>执行链</span>
         <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-bold', STATUS_CHIP.primary)}>

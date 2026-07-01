@@ -50,7 +50,7 @@ export default function PlanStepInspector({
   );
 
   return (
-    <aside className={cn(PIPELINE_EDITOR.panel, 'border-l')}>
+    <aside className={cn('flex flex-col min-h-0 overflow-hidden bg-card border-border border-l')}>
       <header className={cn('px-4 py-3', PIPELINE_EDITOR.panelHeader)}>
         <div className={cn('text-sm font-bold', TEXT.heading)}>步骤属性</div>
         <div className={cn('text-[11px] mt-0.5 font-mono truncate', TEXT.subtitle)}>
