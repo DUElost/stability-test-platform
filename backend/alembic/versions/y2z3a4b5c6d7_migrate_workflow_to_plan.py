@@ -449,6 +449,8 @@ def upgrade():
 
 
 def downgrade():
+    from backend.core.migration_guard import guard_nonempty
+    guard_nonempty(["plan", "plan_step", "plan_migration_audit"], migration_id="y2z3a4b5c6d7")
     conn = op.get_bind()
     conn.execute(text("DELETE FROM plan_migration_audit"))
     conn.execute(text("DELETE FROM plan_step"))

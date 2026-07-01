@@ -360,6 +360,8 @@ def upgrade():
 
 
 def downgrade():
+    from backend.core.migration_guard import guard_nonempty
+    guard_nonempty(["plan_run"], migration_id="z3a4b5c6d7e8")
     conn = op.get_bind()
     conn.execute(text("UPDATE job_instance SET plan_run_id = NULL, plan_id = NULL"))
     conn.execute(text("DELETE FROM plan_run"))

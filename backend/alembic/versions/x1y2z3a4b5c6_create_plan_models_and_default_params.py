@@ -162,6 +162,9 @@ def upgrade():
 
 
 def downgrade():
+    from backend.core.migration_guard import guard_nonempty
+    guard_nonempty(["plan_run", "plan", "plan_step", "plan_migration_audit"],
+                   migration_id="x1y2z3a4b5c6")
     op.drop_column("script", "default_params")
 
     op.alter_column("job_instance", "task_template_id", nullable=False)
