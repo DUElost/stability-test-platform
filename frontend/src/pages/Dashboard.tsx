@@ -54,7 +54,7 @@ export default function Dashboard() {
 
   const { data: planSuccessData, isLoading: planSuccessLoading } = useQuery({
     queryKey: ['stats-plan-success-rate'],
-    queryFn: () => api.stats.planSuccessRate(30),
+    queryFn: () => api.stats.planSuccessRate(30, 10),
     refetchInterval: 60000,
   });
 
@@ -246,30 +246,18 @@ export default function Dashboard() {
               <CompletionTrendChart data={trendData?.points ?? []} />
             )}
           </Card>
-          <Card className="p-4">
-            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>方案成功率 (30d)</h4>
-            {planSuccessLoading ? (
-              <Skeleton className="h-[200px] w-full" />
-            ) : (
-              <PlanSuccessRateChart data={planSuccessData?.items ?? []} />
-            )}
-          </Card>
-          <Card className="p-4">
-            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>节点失败率排行 (30d)</h4>
-            {hostFailureLoading ? (
-              <Skeleton className="h-[200px] w-full" />
-            ) : (
-              <HostFailureRateChart data={hostFailureData?.items ?? []} />
-            )}
-          </Card>
-          <Card className="p-4">
-            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>运行通过率趋势 (30d)</h4>
-            {passRateTrendLoading ? (
-              <Skeleton className="h-[200px] w-full" />
-            ) : (
-              <PlanRunPassRateTrendChart data={passRateTrendData?.points ?? []} />
-            )}
-          </Card>
+          <PlanSuccessRateChart
+            data={planSuccessData?.items ?? []}
+            isLoading={planSuccessLoading}
+          />
+          <HostFailureRateChart
+            data={hostFailureData?.items ?? []}
+            isLoading={hostFailureLoading}
+          />
+          <PlanRunPassRateTrendChart
+            data={passRateTrendData?.points ?? []}
+            isLoading={passRateTrendLoading}
+          />
         </div>
       </div>
 

@@ -73,11 +73,23 @@ export default function PlanStepInspector({
               versionsForName={versionsForName}
               onPickScript={(name, version) => {
                 if (readOnly) return;
+                const sameScript = name === scriptName;
+                let params: Record<string, unknown> = {};
+                if (sameScript && step.params && Object.keys(step.params).length > 0) {
+                  const newScript = scripts.find(s => s.name === name && s.version === version);
+                  const validKeys = new Set([
+                    ...Object.keys(newScript?.param_schema ?? {}),
+                    ...Object.keys(newScript?.default_params ?? {}),
+                  ]);
+                  params = Object.fromEntries(
+                    Object.entries(step.params).filter(([k]) => validKeys.has(k)),
+                  );
+                }
                 onUpdateStep({
                   ...step,
                   action: `script:${name}`,
                   version,
-                  params: {},
+                  params,
                 });
               }}
               readOnly={readOnly}

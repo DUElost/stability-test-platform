@@ -17,8 +17,8 @@ export const stats = {
     apiClient.get<DashboardSummary>('/stats/dashboard-summary').then(r => r.data),
   hostFailureRate: (days: number = 30, limit: number = 10) =>
     apiClient.get<HostFailureRateResponse>('/stats/host-failure-rate', { params: { days, limit } }).then(r => r.data),
-  planSuccessRate: (days: number = 30) =>
-    apiClient.get<PlanSuccessRateResponse>('/stats/plan-success-rate', { params: { days } }).then(r => r.data),
+  planSuccessRate: (days: number = 30, limit: number = 10) =>
+    apiClient.get<PlanSuccessRateResponse>('/stats/plan-success-rate', { params: { days, limit } }).then(r => r.data),
   planRunPassRateTrend: (days: number = 30) =>
     apiClient.get<PlanRunPassRateTrendResponse>('/stats/plan-run-pass-rate-trend', { params: { days } }).then(r => r.data),
 };

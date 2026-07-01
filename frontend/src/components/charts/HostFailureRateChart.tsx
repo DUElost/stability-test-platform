@@ -44,7 +44,7 @@ function renderTooltip(item: RateBarRow<HostFailureRateItem>) {
 export function HostFailureRateChart({ data, isLoading }: HostFailureRateChartProps) {
   return (
     <VerticalRateBarChart
-      title="节点失败率排行"
+      title="节点失败率排行 (30d)"
       icon={<AlertTriangle size={16} className="text-muted-foreground" />}
       data={data}
       isLoading={isLoading}

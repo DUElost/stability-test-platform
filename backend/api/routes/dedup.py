@@ -308,11 +308,12 @@ def get_jira_run_log(
 ):
     """文件 replay：断线/首次打开拉全量或增量日志（配合 SocketIO 实时增量）。
 
-  run 不在内存（进程重启后的历史 run）时，read_log 从 log_root/{id}.log
+    run 不在内存（进程重启后的历史 run）时，read_log 从 log_root/{id}.log
     文件 fallback 读，status 回退 UNKNOWN（前端可调 /record 拿 DB 持久化 status）。
+    仅当 run 既不在内存、也无落盘日志文件时返回 404。
     """
     console = RunConsole.instance()
-    if console.status(console_run_id) is None:
+    if console.status(console_run_id) is None and not console.log_file_path(console_run_id).exists():
         raise HTTPException(status_code=404, detail="run not found")
     return ok(console.read_log(console_run_id, from_seq=from_seq))
 

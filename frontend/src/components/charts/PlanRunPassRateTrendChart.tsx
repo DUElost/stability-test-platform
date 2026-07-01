@@ -47,7 +47,7 @@ export function PlanRunPassRateTrendChart({
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
             <TrendingUp size={16} className="text-muted-foreground" />
-            运行通过率趋势
+            运行通过率趋势 (30d)
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -64,7 +64,7 @@ export function PlanRunPassRateTrendChart({
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-medium flex items-center gap-2">
           <TrendingUp size={16} className="text-muted-foreground" />
-          运行通过率趋势
+          运行通过率趋势 (30d)
         </CardTitle>
       </CardHeader>
       <CardContent>

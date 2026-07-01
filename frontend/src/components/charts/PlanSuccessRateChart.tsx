@@ -40,7 +40,7 @@ function renderTooltip(item: RateBarRow<PlanSuccessRateItem>) {
 export function PlanSuccessRateChart({ data, isLoading }: PlanSuccessRateChartProps) {
   return (
     <VerticalRateBarChart
-      title="方案成功率"
+      title="方案成功率排行 (30d)"
       icon={<CheckCircle size={16} className="text-muted-foreground" />}
       data={data}
       isLoading={isLoading}

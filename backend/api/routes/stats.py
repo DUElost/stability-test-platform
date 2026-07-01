@@ -442,6 +442,7 @@ def get_host_failure_rate(
 @router.get("/plan-success-rate", response_model=PlanSuccessRateResponse)
 def get_plan_success_rate(
     days: int = Query(30, ge=1, le=90),
+    limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
@@ -464,7 +465,7 @@ def get_plan_success_rate(
     """ + hidden_clause + """
         GROUP BY p.id, p.name
         HAVING COUNT(*) > 0
-        ORDER BY total_jobs DESC
+        ORDER BY passed * 1.0 / COUNT(*) DESC, total_jobs DESC
     """)
     if hidden_plan_ids:
         stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
@@ -482,7 +483,7 @@ def get_plan_success_rate(
             failed=row[4],
             pass_rate=round(passed / total, 4) if total > 0 else 0.0,
         ))
-    return PlanSuccessRateResponse(items=items, days=days)
+    return PlanSuccessRateResponse(items=items[:limit], days=days)
 
 
 @router.get("/plan-run-pass-rate-trend", response_model=PlanRunPassRateTrendResponse)

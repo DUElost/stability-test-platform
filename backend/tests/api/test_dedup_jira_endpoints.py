@@ -177,9 +177,27 @@ class TestGetJiraRunLog:
     def test_unknown_run_returns_404(self, client, auth_headers, monkeypatch):
         inst = MagicMock()
         inst.status.return_value = None
+        inst.log_file_path.return_value.exists.return_value = False
         monkeypatch.setattr("backend.api.routes.dedup.RunConsole.instance", lambda: inst)
         resp = client.get("/api/v1/jira/runs/con-missing/log", headers=auth_headers)
         assert resp.status_code == 404
+
+    def test_log_replay_from_file_when_not_in_memory(self, client, auth_headers, monkeypatch):
+        inst = MagicMock()
+        inst.status.return_value = None
+        inst.log_file_path.return_value.exists.return_value = True
+        inst.read_log.return_value = {
+            "run_id": "con-historic",
+            "from_seq": 1,
+            "lines": ["archived line"],
+            "seq": 1,
+            "status": "UNKNOWN",
+        }
+        monkeypatch.setattr("backend.api.routes.dedup.RunConsole.instance", lambda: inst)
+        resp = client.get("/api/v1/jira/runs/con-historic/log", headers=auth_headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["lines"] == ["archived line"]
+        inst.read_log.assert_called_once_with("con-historic", from_seq=0)
 
     def test_log_replay_returns_200(self, client, auth_headers, mock_run_console):
         resp = client.get(
