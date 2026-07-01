@@ -63,6 +63,47 @@ class CompletionTrendResponse(BaseModel):
     days: int
 
 
+# ── Phase 2: 成功率/失败率细分 ──
+
+class HostFailureRateItem(BaseModel):
+    host_id: str
+    hostname: str
+    ip_address: Optional[str] = None
+    total_jobs: int = 0
+    failed: int = 0
+    failure_rate: float = 0.0
+
+
+class HostFailureRateResponse(BaseModel):
+    items: List[HostFailureRateItem]
+    days: int
+
+
+class PlanSuccessRateItem(BaseModel):
+    plan_id: int
+    plan_name: str
+    total_jobs: int = 0
+    passed: int = 0
+    failed: int = 0
+    pass_rate: float = 0.0
+
+
+class PlanSuccessRateResponse(BaseModel):
+    items: List[PlanSuccessRateItem]
+    days: int
+
+
+class PlanRunPassRatePoint(BaseModel):
+    date: str
+    avg_pass_rate: float = 0.0
+    run_count: int = 0
+
+
+class PlanRunPassRateTrendResponse(BaseModel):
+    points: List[PlanRunPassRatePoint]
+    days: int
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -345,3 +386,181 @@ def get_completion_trend(
         cursor += timedelta(days=1)
 
     return CompletionTrendResponse(points=points, days=days)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 2 — 成功率/失败率细分端点
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/host-failure-rate", response_model=HostFailureRateResponse)
+def get_host_failure_rate(
+    days: int = Query(30, ge=1, le=90),
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    hidden_plan_ids = hidden_legacy_plan_ids(db)
+    hidden_clause = ""
+    params = {"since": since}
+    if hidden_plan_ids:
+        hidden_clause = " AND j.plan_id NOT IN :hidden_plan_ids"
+        params["hidden_plan_ids"] = tuple(hidden_plan_ids)
+
+    stmt = text("""
+        SELECT h.id, h.hostname, h.ip_address,
+               COUNT(*) AS total_jobs,
+               SUM(CASE WHEN j.status IN ('FAILED', 'ABORTED') THEN 1 ELSE 0 END) AS failed
+        FROM job_instance j
+        JOIN host h ON j.host_id = h.id
+        WHERE j.started_at >= :since
+    """ + hidden_clause + """
+        GROUP BY h.id, h.hostname, h.ip_address
+        HAVING COUNT(*) > 0
+        ORDER BY failed * 1.0 / COUNT(*) DESC
+    """)
+    if hidden_plan_ids:
+        stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
+    rows = db.execute(stmt, params).fetchall()
+
+    items: list[HostFailureRateItem] = []
+    for row in rows:
+        total = row[3]
+        failed = row[4]
+        items.append(HostFailureRateItem(
+            host_id=row[0],
+            hostname=row[1],
+            ip_address=row[2],
+            total_jobs=total,
+            failed=failed,
+            failure_rate=round(failed / total, 4) if total > 0 else 0.0,
+        ))
+    return HostFailureRateResponse(items=items[:limit], days=days)
+
+
+@router.get("/plan-success-rate", response_model=PlanSuccessRateResponse)
+def get_plan_success_rate(
+    days: int = Query(30, ge=1, le=90),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    hidden_plan_ids = hidden_legacy_plan_ids(db)
+    hidden_clause = ""
+    params = {"since": since}
+    if hidden_plan_ids:
+        hidden_clause = " AND j.plan_id NOT IN :hidden_plan_ids"
+        params["hidden_plan_ids"] = tuple(hidden_plan_ids)
+
+    stmt = text("""
+        SELECT p.id, p.name,
+               COUNT(*) AS total_jobs,
+               SUM(CASE WHEN j.status = 'COMPLETED' THEN 1 ELSE 0 END) AS passed,
+               SUM(CASE WHEN j.status IN ('FAILED', 'ABORTED') THEN 1 ELSE 0 END) AS failed
+        FROM job_instance j
+        JOIN plan p ON j.plan_id = p.id
+        WHERE j.started_at >= :since
+    """ + hidden_clause + """
+        GROUP BY p.id, p.name
+        HAVING COUNT(*) > 0
+        ORDER BY total_jobs DESC
+    """)
+    if hidden_plan_ids:
+        stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
+    rows = db.execute(stmt, params).fetchall()
+
+    items: list[PlanSuccessRateItem] = []
+    for row in rows:
+        total = row[2]
+        passed = row[3]
+        items.append(PlanSuccessRateItem(
+            plan_id=row[0],
+            plan_name=row[1],
+            total_jobs=total,
+            passed=passed,
+            failed=row[4],
+            pass_rate=round(passed / total, 4) if total > 0 else 0.0,
+        ))
+    return PlanSuccessRateResponse(items=items, days=days)
+
+
+@router.get("/plan-run-pass-rate-trend", response_model=PlanRunPassRateTrendResponse)
+def get_plan_run_pass_rate_trend(
+    days: int = Query(30, ge=1, le=90),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    dialect = db.bind.dialect.name if db.bind is not None else ""
+
+    if dialect == "postgresql":
+        stmt = text("""
+            SELECT
+                to_char(date_trunc('day', pr.ended_at), 'YYYY-MM-DD') AS day,
+                AVG(CASE WHEN rs.total > 0 THEN rs.completed::float / rs.total ELSE NULL END) AS avg_pass_rate,
+                COUNT(*) AS run_count
+            FROM (
+                SELECT plan_run_id,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed
+                FROM job_instance
+                WHERE plan_run_id IN (
+                    SELECT id FROM plan_run WHERE ended_at >= :since AND ended_at IS NOT NULL
+                )
+                GROUP BY plan_run_id
+            ) rs
+            JOIN plan_run pr ON rs.plan_run_id = pr.id
+            WHERE pr.ended_at >= :since AND pr.ended_at IS NOT NULL
+            GROUP BY date_trunc('day', pr.ended_at)
+            ORDER BY day
+        """)
+    else:
+        stmt = text("""
+            SELECT
+                date(pr.ended_at) AS day,
+                AVG(CASE WHEN rs.total > 0 THEN CAST(rs.completed AS REAL) / rs.total ELSE NULL END) AS avg_pass_rate,
+                COUNT(*) AS run_count
+            FROM (
+                SELECT plan_run_id,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed
+                FROM job_instance
+                WHERE plan_run_id IN (
+                    SELECT id FROM plan_run WHERE ended_at >= :since AND ended_at IS NOT NULL
+                )
+                GROUP BY plan_run_id
+            ) rs
+            JOIN plan_run pr ON rs.plan_run_id = pr.id
+            WHERE pr.ended_at >= :since AND pr.ended_at IS NOT NULL
+            GROUP BY date(pr.ended_at)
+            ORDER BY day
+        """)
+
+    rows = db.execute(stmt, {"since": since}).fetchall()
+
+    buckets: dict[str, dict] = {}
+    for row in rows:
+        day_str = row[0]
+        avg_pr = row[1]
+        rc = row[2]
+        if day_str:
+            buckets[day_str] = {
+                "avg_pass_rate": round(float(avg_pr), 4) if avg_pr is not None else 0.0,
+                "run_count": int(rc),
+            }
+
+    points = []
+    cursor = since.date()
+    end = datetime.now(timezone.utc).date()
+    while cursor <= end:
+        key = cursor.isoformat()
+        b = buckets.get(key, {})
+        points.append(PlanRunPassRatePoint(
+            date=key,
+            avg_pass_rate=b.get("avg_pass_rate", 0.0),
+            run_count=b.get("run_count", 0),
+        ))
+        cursor += timedelta(days=1)
+
+    return PlanRunPassRateTrendResponse(points=points, days=days)

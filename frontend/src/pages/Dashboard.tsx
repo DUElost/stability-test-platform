@@ -10,7 +10,7 @@ import {
   Wifi,
   Zap,
 } from 'lucide-react';
-import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart } from '@/components/charts';
+import { DeviceStatusChart, HostResourceChart, ActivityChart, CompletionTrendChart, HostFailureRateChart, PlanSuccessRateChart, PlanRunPassRateTrendChart } from '@/components/charts';
 import { DashboardStatCard } from '@/components/dashboard/DashboardStatCard';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Card } from '@/components/ui/card';
@@ -43,6 +43,24 @@ export default function Dashboard() {
   const { data: trendData, isLoading: trendLoading } = useQuery({
     queryKey: ['stats-completion-trend'],
     queryFn: () => api.stats.completionTrend(7),
+    refetchInterval: 60000,
+  });
+
+  const { data: hostFailureData, isLoading: hostFailureLoading } = useQuery({
+    queryKey: ['stats-host-failure-rate'],
+    queryFn: () => api.stats.hostFailureRate(30, 10),
+    refetchInterval: 60000,
+  });
+
+  const { data: planSuccessData, isLoading: planSuccessLoading } = useQuery({
+    queryKey: ['stats-plan-success-rate'],
+    queryFn: () => api.stats.planSuccessRate(30),
+    refetchInterval: 60000,
+  });
+
+  const { data: passRateTrendData, isLoading: passRateTrendLoading } = useQuery({
+    queryKey: ['stats-plan-run-pass-rate-trend'],
+    queryFn: () => api.stats.planRunPassRateTrend(30),
     refetchInterval: 60000,
   });
 
@@ -226,6 +244,30 @@ export default function Dashboard() {
               <Skeleton className="h-[200px] w-full" />
             ) : (
               <CompletionTrendChart data={trendData?.points ?? []} />
+            )}
+          </Card>
+          <Card className="p-4">
+            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>方案成功率 (30d)</h4>
+            {planSuccessLoading ? (
+              <Skeleton className="h-[200px] w-full" />
+            ) : (
+              <PlanSuccessRateChart data={planSuccessData?.items ?? []} />
+            )}
+          </Card>
+          <Card className="p-4">
+            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>节点失败率排行 (30d)</h4>
+            {hostFailureLoading ? (
+              <Skeleton className="h-[200px] w-full" />
+            ) : (
+              <HostFailureRateChart data={hostFailureData?.items ?? []} />
+            )}
+          </Card>
+          <Card className="p-4">
+            <h4 className={`${CHART_SECTION.subtitle} mb-3`}>运行通过率趋势 (30d)</h4>
+            {passRateTrendLoading ? (
+              <Skeleton className="h-[200px] w-full" />
+            ) : (
+              <PlanRunPassRateTrendChart data={passRateTrendData?.points ?? []} />
             )}
           </Card>
         </div>

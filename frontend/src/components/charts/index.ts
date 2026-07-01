@@ -5,3 +5,6 @@ export { RiskDistributionChart } from './RiskDistributionChart';
 export { TestTypePassFailChart } from './TestTypePassFailChart';
 export { CompletionTrendChart } from './CompletionTrendChart';
 export { DeviceMetricsChart } from './DeviceMetricsChart';
+export { HostFailureRateChart } from './HostFailureRateChart';
+export { PlanSuccessRateChart } from './PlanSuccessRateChart';
+export { PlanRunPassRateTrendChart } from './PlanRunPassRateTrendChart';
