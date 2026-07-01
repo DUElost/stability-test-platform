@@ -20,19 +20,24 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user
-from backend.core.database import get_db
+from backend.api.schemas.jira_run import JiraRunOut
+from backend.core.database import SessionLocal, get_db
+from backend.models.jira_run import JiraRun
 from backend.models.user import User
-from backend.services.run_console import RunConsole, RunKeyBusyError, RunConsoleError
-from sqlalchemy.orm import Session
+from backend.services.jira_issue_parser import parse_issue_keys
+from backend.services.run_console import RunConsole, RunKeyBusyError, RunConsoleError, ConsoleRun
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/jira", tags=["dedup-jira"])
 
 _VENDORS = {"transsion", "tinno"}
 _STAGES = {"upload_list", "create"}
+_SOURCES = {"upload", "plan_run"}
 
 
 def resolve_vendor_tool(vendor: str) -> Optional[Dict[str, str]]:
@@ -103,20 +108,61 @@ def _work_dir() -> Path:
     return root
 
 
+def _on_jira_run_complete(run: "ConsoleRun") -> None:
+    """RunConsole 终态回调：把结果写回 jira_run 行（run.run_id == console_run_id）。
+
+    在 reader 线程跑（同步），用独立 SessionLocal 操作 DB，解析落盘日志提取
+    issue_keys。任何异常只记录日志——不影响 RunConsole 主流程。
+    找不到行（极小竞态：子进程秒级结束早于主线程 INSERT）时记 warning 跳过。
+    """
+    console_run_id = run.run_id
+    try:
+        status_snapshot = run.to_status()
+        issue_keys: list[str] = []
+        try:
+            replay = RunConsole.instance().read_log(console_run_id, from_seq=0)
+            issue_keys = parse_issue_keys(replay.get("lines", []))
+        except Exception:
+            logger.exception("jira_run_parse_issue_keys_failed run_id=%s", console_run_id)
+
+        with SessionLocal() as db:
+            row = db.query(JiraRun).filter_by(console_run_id=console_run_id).first()
+            if row is None:
+                logger.warning("jira_run_complete_row_missing run_id=%s", console_run_id)
+                return
+            row.status = status_snapshot.get("status") or row.status
+            row.exit_code = status_snapshot.get("exit_code")
+            row.ended_at = status_snapshot.get("ended_at")
+            row.error = (status_snapshot.get("error") or "")[:1024] or None
+            if issue_keys:
+                row.issue_keys = issue_keys
+            db.commit()
+        logger.info(
+            "jira_run_completed run_id=%s status=%s keys=%d",
+            console_run_id, status_snapshot.get("status"), len(issue_keys),
+        )
+    except Exception:
+        logger.exception("jira_run_complete_callback_failed run_id=%s", console_run_id)
+
+
 @router.post("/runs", response_model=ApiResponse[dict])
 async def start_jira_run(
     vendor: str = Form(...),
     stage: str = Form("upload_list"),
     dry_run: bool = Form(True),
     reporter: Optional[str] = Form(None),
-    file: UploadFile = File(...),
+    source: str = Form("upload"),
+    plan_run_id: Optional[int] = Form(None),
+    artifact_id: Optional[int] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
     _user: User = Depends(get_current_active_user),
 ):
-    """一键执行：上传文件 + 参数菜单 → RunConsole 起厂商工具 subprocess。
+    """一键执行：上传文件或选 PlanRun 产物 → RunConsole 起厂商工具 subprocess。
 
-    两阶段均需上传文件：
-      - upload_list: 上传去重后的 Result_*.xls（生成 Jira 上传模板）
-      - create:      上传 stage1 产出的 JIRA_Upload_List_*.xlsx（批量建单）
+    两阶段均需输入文件，来源二选一：
+      - source=upload:  手动上传（upload_list=去重 Result_*.xls；create=JIRA_Upload_List_*.xlsx）
+      - source=plan_run: 直接选 PlanRunArtifact（storage_uri 作为厂商工具输入路径，免上传）
     reporter（可选，create 阶段）：指定建单负责人，透传到厂商工具 --reporter。
     返回 console run_id + SocketIO room；前端订阅 room 看实时日志。
     同一厂商同时只允许一个 run（工具目录共享，串行）。
@@ -125,6 +171,8 @@ async def start_jira_run(
         raise HTTPException(status_code=422, detail=f"vendor must be one of {sorted(_VENDORS)}")
     if stage not in _STAGES:
         raise HTTPException(status_code=422, detail=f"stage must be one of {sorted(_STAGES)}")
+    if source not in _SOURCES:
+        raise HTTPException(status_code=422, detail=f"source must be one of {sorted(_SOURCES)}")
 
     tool = resolve_vendor_tool(vendor)
     if tool is None:
@@ -136,13 +184,38 @@ async def start_jira_run(
             ),
         )
 
-    if file is None or not (file.filename or "").strip():
-        raise HTTPException(status_code=400, detail="a file is required (.xls/.xlsx)")
-    dest = (_work_dir() / f"{vendor}_{stage}_{file.filename}").resolve()
-    dest.write_bytes(await file.read())
+    # 解析输入文件路径 + 记录来源信息
+    input_xls: str
+    input_source_label: str
+    resolved_plan_run_id: Optional[int] = None
+    resolved_artifact_id: Optional[int] = None
+
+    if source == "upload":
+        if file is None or not (file.filename or "").strip():
+            raise HTTPException(status_code=400, detail="a file is required (.xls/.xlsx) for source=upload")
+        dest = (_work_dir() / f"{vendor}_{stage}_{file.filename}").resolve()
+        dest.write_bytes(await file.read())
+        input_xls = str(dest)
+        input_source_label = file.filename or "upload"
+    else:  # source == "plan_run"
+        if artifact_id is None:
+            raise HTTPException(status_code=400, detail="artifact_id is required for source=plan_run")
+        from backend.models.plan_run_artifact import PlanRunArtifact
+        artifact = db.get(PlanRunArtifact, artifact_id)
+        if artifact is None:
+            raise HTTPException(status_code=404, detail=f"plan_run_artifact {artifact_id} not found")
+        if not artifact.storage_uri:
+            raise HTTPException(status_code=409, detail="artifact has empty storage_uri")
+        input_xls = artifact.storage_uri
+        input_source_label = artifact.storage_uri
+        resolved_plan_run_id = artifact.plan_run_id
+        resolved_artifact_id = artifact.id
 
     argv = build_jira_argv(vendor, stage, tool["dir"], tool["python"],
-                           input_xls=str(dest), dry_run=dry_run, reporter=reporter)
+                           input_xls=input_xls, dry_run=dry_run, reporter=reporter)
+
+    # on_complete 回调直接用 run.run_id（== console_run_id），无需闭包捕获；
+    # 极小竞态（子进程秒级结束早于下方 INSERT）时回调记 warning 跳过，可接受。
     try:
         console_run_id = RunConsole.instance().start(
             run_key=f"jira:{vendor}",
@@ -150,15 +223,73 @@ async def start_jira_run(
             cwd=tool["dir"],
             env=_load_vendor_tool_env(tool["dir"]),
             label=f"jira-{vendor}-{stage}",
+            on_complete=_on_jira_run_complete,
         )
     except RunKeyBusyError:
         raise HTTPException(status_code=409, detail=f"a {vendor} jira run is already in progress")
     except RunConsoleError as exc:
         raise HTTPException(status_code=500, detail=f"failed to start: {exc}")
 
-    logger.info("dedup_jira_run_started vendor=%s stage=%s run_id=%s", vendor, stage, console_run_id)
+    # 持久化 jira_run 行（RUNNING 态）；失败仅记日志，不阻塞 run（历史记录缺失而已）
+    try:
+        with SessionLocal() as db2:
+            row = JiraRun(
+                console_run_id=console_run_id,
+                vendor=vendor,
+                stage=stage,
+                dry_run=dry_run,
+                reporter=reporter,
+                input_source=input_source_label,
+                plan_run_id=resolved_plan_run_id,
+                artifact_id=resolved_artifact_id,
+                status="RUNNING",
+                created_by_user_id=getattr(_user, "id", None),
+            )
+            db2.add(row)
+            db2.commit()
+    except Exception:
+        logger.exception("jira_run_persist_failed run_id=%s", console_run_id)
+
+    logger.info("dedup_jira_run_started vendor=%s stage=%s source=%s run_id=%s", vendor, stage, source, console_run_id)
     return ok({"console_run_id": console_run_id, "room": f"console:{console_run_id}",
-               "vendor": vendor, "stage": stage})
+               "vendor": vendor, "stage": stage, "source": source})
+
+
+@router.get("/runs", response_model=ApiResponse[list[JiraRunOut]])
+def list_jira_runs(
+    vendor: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """批量提单历史记录列表（按 created_at 倒序，可选 vendor/status 过滤）。"""
+    q = select(JiraRun).order_by(JiraRun.created_at.desc()).limit(limit)
+    if vendor:
+        q = q.where(JiraRun.vendor == vendor)
+    if status:
+        q = q.where(JiraRun.status == status)
+    rows = db.execute(q).scalars().all()
+    return ok([JiraRunOut.model_validate(r) for r in rows])
+
+
+@router.get("/runs/{console_run_id}/record", response_model=ApiResponse[JiraRunOut])
+def get_jira_run_detail(
+    console_run_id: str,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_active_user),
+):
+    """单条批量提单持久化记录（DB 行：vendor/stage/终态/issue_keys 等）。
+
+    与 GET /runs/{id}（RunConsole 内存态实时 status）解耦：本接口从 DB 读，
+    进程重启后仍可查；运行中记录的 status 字段在 on_complete 回调后更新。
+    """
+    row = db.execute(
+        select(JiraRun).where(JiraRun.console_run_id == console_run_id)
+    ).scalars().first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="jira run not found")
+    return ok(JiraRunOut.model_validate(row))
 
 
 @router.get("/runs/{console_run_id}", response_model=ApiResponse[dict])
@@ -175,9 +306,11 @@ def get_jira_run_log(
     from_seq: int = Query(0, ge=0),
     _user: User = Depends(get_current_active_user),
 ):
-    """文件 replay：断线/首次打开拉全量或增量日志（配合 SocketIO 实时增量）。"""
-    if RunConsole.instance().status(console_run_id) is None:
-        raise HTTPException(status_code=404, detail="run not found")
+    """文件 replay：断线/首次打开拉全量或增量日志（配合 SocketIO 实时增量）。
+
+    run 不在内存（进程重启后的历史 run）时，read_log 从 log_root/{id}.log
+    文件 fallback 读，status 回退 UNKNOWN（前端可调 /record 拿 DB 持久化 status）。
+    """
     return ok(RunConsole.instance().read_log(console_run_id, from_seq=from_seq))
 
 

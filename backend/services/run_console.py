@@ -363,13 +363,22 @@ class RunConsole:
         return run.to_status() if run else None
 
     def read_log(self, run_id: str, *, from_seq: int = 0) -> Dict[str, Any]:
-        """文件 replay：返回从 from_seq（1-based，含）起的行 + 当前 seq/status。"""
+        """文件 replay：返回从 from_seq（1-based，含）起的行 + 当前 seq/status。
+
+        run 不在内存（进程重启后的历史 run）时，仍尝试从 log_root/{run_id}.log
+        读文件——status 回退为 UNKNOWN，由调用方按需从持久化层补全（如 jira_run 表）。
+        """
         run = self._runs.get(run_id)
-        if run is None or run._log_path is None or not run._log_path.exists():
+        if run is not None and run._log_path is not None:
+            log_path = run._log_path
+        else:
+            # 历史记录 replay：run 不在内存，按约定路径找日志文件
+            log_path = self._log_root / f"{run_id}.log"
+        if not log_path or not log_path.exists():
             return {"run_id": run_id, "from_seq": from_seq, "lines": [],
                     "seq": run.seq if run else 0, "status": run.status if run else "UNKNOWN"}
         try:
-            with open(run._log_path, "r", encoding="utf-8", errors="replace") as f:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 all_lines = [ln.rstrip("\n") for ln in f.readlines()]
         except Exception:
             logger.exception("run_console_read_log_failed run_id=%s", run_id)
@@ -381,8 +390,15 @@ class RunConsole:
             "from_seq": start + 1,
             "lines": sliced,
             "seq": len(all_lines),
-            "status": run.status,
+            "status": run.status if run else "UNKNOWN",
         }
+
+    def log_file_path(self, run_id: str) -> Path:
+        """返回 run 的日志文件路径（不依赖 run 是否在内存）。"""
+        run = self._runs.get(run_id)
+        if run is not None and run._log_path is not None:
+            return run._log_path
+        return self._log_root / f"{run_id}.log"
 
     def is_key_busy(self, run_key: str) -> bool:
         with self._lock:

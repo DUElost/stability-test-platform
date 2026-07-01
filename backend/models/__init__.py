@@ -4,6 +4,7 @@ from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
 from backend.models.job import JobArtifact, JobInstance, StepTrace
+from backend.models.jira_run import JiraRun
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_migration_audit import PlanMigrationAudit
 from backend.models.plan_run import PlanRun
@@ -28,6 +29,7 @@ __all__ = [
     "JobArtifact",
     "JobInstance",
     "JobStatus",
+    "JiraRun",
     "LeaseStatus",
     "LeaseType",
     "NotificationChannel",

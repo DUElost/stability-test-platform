@@ -204,6 +204,26 @@ export interface JiraDraft {
   extra: Record<string, any>;
 }
 
+export interface JiraRunRecord {
+  id: number;
+  console_run_id: string;
+  vendor: 'transsion' | 'tinno' | string;
+  stage: 'upload_list' | 'create' | string;
+  dry_run: boolean;
+  reporter?: string | null;
+  input_source: string;
+  plan_run_id?: number | null;
+  artifact_id?: number | null;
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED' | string;
+  started_at: string;
+  ended_at?: string | null;
+  exit_code?: number | null;
+  issue_keys: string[];
+  error?: string | null;
+  created_by_user_id?: number | null;
+  created_at: string;
+}
+
 export interface PipelineTemplate {
   name: string;
   description: string;
@@ -349,6 +369,47 @@ export interface DashboardSummary {
   devices: DashboardDeviceSummary;
   alerts: DashboardAlertSummary;
   host_resources: DashboardHostResourcePoint[];
+}
+
+// ─── Phase 2: 成功率/失败率细分 ──────────────────────────────────────────────
+
+export interface HostFailureRateItem {
+  host_id: string;
+  hostname: string;
+  ip_address: string | null;
+  total_jobs: number;
+  failed: number;
+  failure_rate: number;
+}
+
+export interface HostFailureRateResponse {
+  items: HostFailureRateItem[];
+  days: number;
+}
+
+export interface PlanSuccessRateItem {
+  plan_id: number;
+  plan_name: string;
+  total_jobs: number;
+  passed: number;
+  failed: number;
+  pass_rate: number;
+}
+
+export interface PlanSuccessRateResponse {
+  items: PlanSuccessRateItem[];
+  days: number;
+}
+
+export interface PlanRunPassRatePoint {
+  date: string;
+  avg_pass_rate: number;
+  run_count: number;
+}
+
+export interface PlanRunPassRateTrendResponse {
+  points: PlanRunPassRatePoint[];
+  days: number;
 }
 
 // ─── 通知/调度/审计类型 ──────────────────────────────────────────────────────

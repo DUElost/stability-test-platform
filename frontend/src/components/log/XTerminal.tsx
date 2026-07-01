@@ -16,11 +16,13 @@ const ANSI = {
   dim: '\x1b[2m',
   // Log level colors
   red: '\x1b[31m',
+  green: '\x1b[32m',
   yellow: '\x1b[33m',
   gray: '\x1b[90m',
   white: '\x1b[37m',
   // Keyword highlights
   boldRed: '\x1b[1;31m',
+  boldGreen: '\x1b[1;32m',
   boldYellow: '\x1b[1;33m',
 };
 
@@ -41,6 +43,10 @@ function colorizeLogLevel(level: string): string {
 const KEYWORD_PATTERNS: Array<{ regex: RegExp; ansi: string }> = [
   { regex: /\b(FATAL|CRASH)\b/gi, ansi: ANSI.boldRed },
   { regex: /\bANR\b/gi, ansi: ANSI.boldYellow },
+  // Jira 建单成功标记：形如 STABILITY-123 的 issue key（大写项目前缀 + 数字）
+  { regex: /\b[A-Z][A-Z0-9_]{1,}-\d+\b/g, ansi: ANSI.boldGreen },
+  // 错误关键词（大小写敏感，避免误伤 "no error" 等）
+  { regex: /\b(Traceback|Exception|Failed to create|建单失败)\b/g, ansi: ANSI.boldRed },
 ];
 
 function highlightKeywords(text: string): string {

@@ -25,6 +25,7 @@ from backend.api.schemas.notification import (
 )
 from backend.api.schemas.schedule import TaskScheduleCreate, TaskScheduleUpdate, TaskScheduleOut
 from backend.api.schemas.audit import AuditLogOut
+from backend.api.schemas.jira_run import JiraRunOut
 from backend.api.schemas.plan_run_precheck import (
     PrecheckPhase,
     PrecheckHostStatus,
@@ -78,6 +79,7 @@ __all__ = [
     "TaskScheduleUpdate",
     "TaskScheduleOut",
     "AuditLogOut",
+    "JiraRunOut",
     "PrecheckPhase",
     "PrecheckHostStatus",
     "PrecheckFinalResult",
