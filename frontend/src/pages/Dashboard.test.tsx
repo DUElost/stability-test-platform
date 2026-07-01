@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock dependencies before importing Dashboard
-vi.mock('../utils/api', () => ({
+vi.mock('@/utils/api', () => ({
   api: {
     stats: {
       dashboardSummary: vi.fn().mockResolvedValue({
@@ -39,6 +39,9 @@ vi.mock('../utils/api', () => ({
       }),
       activity: vi.fn().mockResolvedValue({ points: [], hours: 24 }),
       completionTrend: vi.fn().mockResolvedValue({ points: [], days: 7 }),
+      hostFailureRate: vi.fn().mockResolvedValue({ items: [] }),
+      planSuccessRate: vi.fn().mockResolvedValue({ items: [] }),
+      planRunPassRateTrend: vi.fn().mockResolvedValue({ points: [] }),
     },
   },
 }));
@@ -60,6 +63,9 @@ vi.mock('@/components/charts', () => ({
   HostResourceChart: () => <div data-testid="host-resource-chart" />,
   ActivityChart: () => <div data-testid="activity-chart" />,
   CompletionTrendChart: () => <div data-testid="completion-trend-chart" />,
+  HostFailureRateChart: () => <div data-testid="host-failure-rate-chart" />,
+  PlanSuccessRateChart: () => <div data-testid="plan-success-rate-chart" />,
+  PlanRunPassRateTrendChart: () => <div data-testid="plan-run-pass-rate-trend-chart" />,
 }));
 
 vi.mock('../components/layout', () => ({
@@ -119,8 +125,8 @@ describe('Dashboard', () => {
   });
 
   it('renders error state when data loading fails', async () => {
-    const { api } = await import('../utils/api');
-    (api.stats.dashboardSummary as any).mockRejectedValue(new Error('Network Error'));
+    const { api } = await import('@/utils/api');
+    (api.stats.dashboardSummary as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Network Error'));
 
     const Dashboard = (await import('./Dashboard')).default;
     render(<Dashboard />, { wrapper: createWrapper() });
