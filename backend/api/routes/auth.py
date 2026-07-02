@@ -268,9 +268,11 @@ def refresh(
         if is_revoked(db, jti):
             return _refresh_unauthorized("Invalid refresh token")
     else:
-        # Grace 期:本提交之前签发的 refresh 没有 jti。WARN 但放行,30 天后
-        # 所有旧 token 自然过期 → 那时可将本分支改为直接 401。
-        logger.warning("refresh_token_missing_jti grace_window_active sub=%s", payload_data.get("sub"))
+        # ADR-0024 grace 期已于 2026-06-21 结束:本提交之前签发、无 jti 的
+        # refresh token 一律拒绝(黑名单机制对无 jti token 本就无效,
+        # 继续放行会让存量旧 token 无限期可重放)。
+        logger.warning("refresh_token_missing_jti rejected_after_grace sub=%s", payload_data.get("sub"))
+        return _refresh_unauthorized("Invalid refresh token")
 
     username: str = payload_data.get("sub")
     if not username:
