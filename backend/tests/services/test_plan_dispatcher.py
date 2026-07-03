@@ -196,6 +196,30 @@ class TestDispatchPlan:
         assert jobs[0].plan_id == plan.id
         assert jobs[0].status == "PENDING"
 
+        # #47: 落库的 pipeline_def["lifecycle"] 必须与 _build_lifecycle_from_steps
+        # 组装结果一致 —— 派发链路 (dispatch_plan_sync → resolved_pipeline) 不能
+        # 悄悄偏离 lifecycle 组装的唯一事实源。
+        steps = (
+            db_session.query(PlanStep)
+            .filter(PlanStep.plan_id == plan.id)
+            .order_by(PlanStep.sort_order)
+            .all()
+        )
+        expected_lifecycle = _build_lifecycle_from_steps(
+            plan, steps, {("check_device", "1.0.0"): {"timeout": 30}},
+        )
+        assert jobs[0].pipeline_def == {"lifecycle": expected_lifecycle}
+
+        # 结构层面同时锁定 ADR-0020 唯一 action 契约（script:<name>），防止
+        # 未来误改回 builtin:/stages 等已废弃格式。
+        init_step = jobs[0].pipeline_def["lifecycle"]["init"][0]
+        assert init_step["action"] == "script:check_device"
+        assert init_step["params"] == {"timeout": 30}
+        assert init_step["step_id"] == "init_check"
+        teardown_step = jobs[0].pipeline_def["lifecycle"]["teardown"][0]
+        assert teardown_step["action"] == "script:check_device"
+        assert teardown_step["step_id"] == "td_clean"
+
     def test_preview_returns_structure(self, db_session, _plan_fixture):
         plan, device, host = _plan_fixture
 
