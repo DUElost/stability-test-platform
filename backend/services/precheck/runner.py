@@ -13,6 +13,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.database import SessionLocal
 from backend.core.metrics import record_dispatch_gate
+from backend.models.enums import PlanRunStatus
 from backend.models.plan_run import PlanRun
 from backend.services import precheck as precheck_config
 from backend.services.precheck import sync as precheck_sync
@@ -42,6 +43,7 @@ from .state import (
     update_dispatch_state,
 )
 from .watcher import find_mixed_watcher_inactive_host_ids
+from backend.services.state_machine import PlanRunStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +284,7 @@ async def drive_dispatch_gate(
                 precheck.setdefault("errors", []).append("unexpected_exception")
                 run_ctx["precheck"] = precheck
                 pr.run_context = run_ctx
-                pr.status = "FAILED"
+                PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="unexpected_exception")
                 pr.ended_at = datetime.now(timezone.utc)
                 pr.result_summary = {
                     "precheck_failed": True,
@@ -342,9 +344,8 @@ def retry_plan_run_dispatch(
     summary = dict(pr.result_summary or {})
     precheck = run_ctx.get("precheck") or {}
     dispatch_state = run_ctx.get("dispatch_state") or {}
-    eligible = (
-        pr.status == "FAILED" and summary.get("precheck_failed")
-    ) or (
+    was_failed = pr.status == "FAILED" and summary.get("precheck_failed")
+    eligible = was_failed or (
         pr.status == "RUNNING"
         and (
             precheck.get("phase") == "failed"
@@ -356,7 +357,11 @@ def retry_plan_run_dispatch(
             f"plan run not eligible for dispatch retry (status={pr.status})"
         )
 
-    pr.status = "RUNNING"
+    if was_failed:
+        PlanRunStateMachine.transition(pr, PlanRunStatus.RUNNING, reason="dispatch_retry")
+    # else: pr.status is already RUNNING (precheck phase failed but the
+    # top-level status was never flipped) — this is an idempotent reset, not
+    # a real transition, so it intentionally bypasses the state machine.
     pr.ended_at = None
     pr.result_summary = None
 
@@ -387,7 +392,7 @@ def retry_plan_run_dispatch(
         now = datetime.now(timezone.utc)
         pr = db.get(PlanRun, run_id)
         if pr is not None:
-            pr.status = "FAILED"
+            PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="dispatch_queue_unavailable")
             pr.ended_at = now
             run_ctx = dict(pr.run_context or {})
             dispatch_state = dict(run_ctx.get("dispatch_state") or {})
