@@ -30,16 +30,18 @@ from backend.models.plan_run import PlanRun
 
 
 PIPELINE_DEF = {
-    "stages": {
-        "prepare": [
+    "lifecycle": {
+        "init": [
             {
                 "step_id": "check_device",
-                "action": "builtin:check_device",
+                "action": "script:check_device",
+                "version": "1.0.0",
+                "params": {},
                 "timeout_seconds": 30,
+                "retry": 0,
             }
         ],
-        "execute": [],
-        "post_process": [],
+        "teardown": [],
     }
 }
 
