@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.core.metrics import record_plan_run_terminal
 from backend.models.enums import JobStatus, PlanRunStatus
+from backend.services.state_machine import PlanRunStateMachine
 
 _TERMINAL = {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}
 # UNKNOWN is intentionally excluded: with the B4 fix (agent_api.py _TERMINAL no
@@ -34,7 +35,7 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
 
     total = len(jobs)
     if total == 0:
-        run.status = PlanRunStatus.FAILED.value
+        PlanRunStateMachine.transition(run, PlanRunStatus.FAILED, reason="empty_job_set")
         run.ended_at = datetime.now(timezone.utc)
         record_plan_run_terminal(run.status, pass_rate=0.0)
         return True
@@ -53,25 +54,29 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
 
     # v3: abort 是有意终止信号, 不参与 failure_threshold 容忍判断;
     #     任何 ABORTED → FAILED (覆盖 threshold).
+    # 先在本地变量算出目标态、应用 abort override,最后统一走一次状态机
+    # transition:SUCCESS/PARTIAL_SUCCESS 是终态,若边算边写会导致 override
+    # 分支尝试做 SUCCESS→FAILED 这类非法的终态间跳转。
     if unknown > 0:
-        run.status = PlanRunStatus.DEGRADED.value
+        new_status = PlanRunStatus.DEGRADED
     elif failed_only + aborted == 0:
-        run.status = PlanRunStatus.SUCCESS.value
+        new_status = PlanRunStatus.SUCCESS
     elif aborted > 0:
-        run.status = PlanRunStatus.FAILED.value
+        new_status = PlanRunStatus.FAILED
     elif failed_only / total <= run.failure_threshold:
-        run.status = PlanRunStatus.PARTIAL_SUCCESS.value
+        new_status = PlanRunStatus.PARTIAL_SUCCESS
     else:
-        run.status = PlanRunStatus.FAILED.value
+        new_status = PlanRunStatus.FAILED
 
     # abort_requested override: 自然 SUCCESS/PARTIAL_SUCCESS 时强制 FAILED。
     # 不影响 DEGRADED(已属人工介入)与 FAILED(无需 override)。
-    if abort_requested and run.status in (
-        PlanRunStatus.SUCCESS.value,
-        PlanRunStatus.PARTIAL_SUCCESS.value,
+    if abort_requested and new_status in (
+        PlanRunStatus.SUCCESS,
+        PlanRunStatus.PARTIAL_SUCCESS,
     ):
-        run.status = PlanRunStatus.FAILED.value
+        new_status = PlanRunStatus.FAILED
 
+    PlanRunStateMachine.transition(run, new_status, reason="aggregation")
     run.ended_at = datetime.now(timezone.utc)
 
     completed = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.COMPLETED)

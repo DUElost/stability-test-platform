@@ -27,8 +27,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.database import SessionLocal
+from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
+from backend.services.state_machine import PlanRunStateMachine
 
 # Import sync SAQ helpers at module level so tests can patch them.
 # The underlying functions safely return None when the queue is not initialised.
@@ -87,7 +89,7 @@ def _is_stale_epoch_ms(epoch_ms: int | float | None, stale_seconds: int) -> bool
 
 def _fail_plan_run(pr: PlanRun, db: Session, reason: str) -> None:
     """Transition a RUNNING PlanRun to FAILED with a clear reason."""
-    pr.status = "FAILED"
+    PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason=reason)
     pr.ended_at = _utc_now()
     run_ctx = dict(pr.run_context or {})
     dispatch_state = dict(run_ctx.get("dispatch_state") or {})

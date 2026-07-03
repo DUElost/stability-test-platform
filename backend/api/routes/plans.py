@@ -21,8 +21,10 @@ from backend.api.routes.auth import get_current_active_user, User
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
+from backend.models.enums import PlanRunStatus
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
+from backend.services.state_machine import PlanRunStateMachine
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     dispatch_plan_sync,
@@ -641,7 +643,7 @@ def run_plan(
         )
     except EnqueueSyncError as exc:
         now = datetime.now(timezone.utc)
-        pr.status = "FAILED"
+        PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="dispatch_queue_unavailable")
         pr.ended_at = now
         run_ctx = dict(pr.run_context or {})
         dispatch_state = dict(run_ctx.get("dispatch_state") or {})

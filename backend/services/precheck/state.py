@@ -9,9 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.models.enums import PlanRunStatus
 from backend.models.host import Device
 from backend.models.plan_run import PlanRun
 from backend.services.plan_dispatcher_sync import PlanDispatchError
+from backend.services.state_machine import PlanRunStateMachine
 
 from . import DISPATCH_SYNC_MAX_ATTEMPTS, utc_iso
 from .notify import emit_dispatch_gate_invalidation
@@ -141,7 +143,7 @@ def mark_precheck_failed(
     run_ctx = dict(pr.run_context or {})
     run_ctx["precheck"] = precheck
     pr.run_context = run_ctx
-    pr.status = "FAILED"
+    PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason=error)
     pr.ended_at = datetime.now(timezone.utc)
     pr.result_summary = {
         "precheck_failed": True,

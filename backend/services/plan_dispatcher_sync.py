@@ -17,7 +17,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
@@ -36,6 +36,7 @@ from backend.services.plan_dispatcher_core import (
     script_defaults as _script_defaults,
     snapshot_dispatch_host_watcher_admin_states,
 )
+from backend.services.state_machine import PlanRunStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -457,7 +458,7 @@ def complete_plan_run_dispatch(
         # 此时 PlanRun 行已存在且前端正在观测,不能回退;转为 FAILED 终态
         # 供审计,**不 raise**——_drive_dispatch_gate 重读 status 决策。
         from backend.core.audit import record_audit
-        pr.status = "FAILED"
+        PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="scripts_unavailable_at_dispatch")
         pr.ended_at = datetime.now(timezone.utc)
         pr.result_summary = {
             "dispatch_failed": True,
@@ -495,7 +496,7 @@ def complete_plan_run_dispatch(
     except PlanDispatchError as exc:
         from backend.core.audit import record_audit
         unavailable = exc.unavailable_devices or []
-        pr.status = "FAILED"
+        PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="devices_unavailable_at_dispatch")
         pr.ended_at = datetime.now(timezone.utc)
         pr.result_summary = {
             "dispatch_failed": True,
@@ -529,7 +530,7 @@ def complete_plan_run_dispatch(
         # Why: prepare 阶段 _validate_dispatch_devices_sync 已覆盖 no_host;
         # 若仍走到这里说明 complete 前并发 race(host_id 被改为 NULL) — 必须 FAILED 而非静默 WARN。
         from backend.core.audit import record_audit
-        pr.status = "FAILED"
+        PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="devices_without_host")
         pr.ended_at = datetime.now(timezone.utc)
         pr.result_summary = {
             "dispatch_failed": True,
@@ -566,7 +567,7 @@ def complete_plan_run_dispatch(
             logger.info("plan_dispatch_wifi_allocated: devices=%d", len(device_ids))
         except AllocationError as exc:
             from backend.core.audit import record_audit
-            pr.status = "FAILED"
+            PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="wifi_allocation_failed")
             pr.ended_at = datetime.now(timezone.utc)
             pr.result_summary = {
                 "dispatch_failed": True,

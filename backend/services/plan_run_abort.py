@@ -38,11 +38,12 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.audit import record_audit
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import JobStatus, LeaseStatus, LeaseType
+from backend.models.enums import JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
+from backend.services.state_machine import PlanRunStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ def abort_plan_run(
             if all_jobs:
                 apply_plan_run_aggregation(pr, all_jobs)
             else:
-                pr.status = "FAILED"
+                PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason=reason)
                 pr.ended_at = now
                 pr.result_summary = {
                     "aborted": True,
@@ -197,7 +198,7 @@ def abort_plan_run(
         precheck["completed_at"] = now_iso
         precheck.setdefault("errors", []).append(f"aborted: {reason}")
         run_ctx["precheck"] = precheck
-        pr.status = "FAILED"
+        PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason=reason)
         pr.ended_at = datetime.now(timezone.utc)
         pr.result_summary = {
             "precheck_failed": True,
