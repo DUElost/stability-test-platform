@@ -106,7 +106,7 @@ Origin in allowed_origins → 放行(严格 string match,不做子域 relax)
 - **2026-05-21 ~ 2026-06-21**:无 jti 旧 refresh token 兼容期。期间日志中 `refresh_token_missing_jti` 是预期 WARN,不告警。
 - **2026-06-21 之后**:把 `backend/api/routes/auth.py` 中 `else: logger.warning(...)` 分支替换为 `return _refresh_unauthorized("Invalid refresh token")`,grace 收口。
 
-> ⚠️ **2026-06-12 状态确认**：代码中 `auth.py:270-273` 的 grace 分支仍为 `logger.warning + 放行`。扫码时点距到期日尚有 9 天，此状态符合预期。**到期后需执行以下改动**：(1) `auth.py:270-273` 的 `else:` 分支改为 `return _refresh_unauthorized("Invalid refresh token")`；(2) 删除或更新 `test_refresh_with_legacy_token_without_jti_passes_in_grace` 测试（该测试断言 200 + WARN，收紧后应断言 401）。改动量极小，无架构风险。
+> ✅ **2026-07-02 收紧完成**：`auth.py` 无 jti 分支已改为 `logger.warning(...)` 后直接 `return _refresh_unauthorized(...)`(401);`test_refresh_with_legacy_token_without_jti_passes_in_grace` 已更名为 `test_refresh_with_legacy_token_without_jti_rejected_after_grace` 并改为断言 401。距约定收紧日期(2026-06-21)已逾期 11 天,追踪于 issue #48。
 
 ## 落地与后续动作
 
@@ -119,9 +119,7 @@ Origin in allowed_origins → 放行(严格 string match,不做子域 relax)
 | `.gitattributes` 收敛 EOL 噪声(扫除诊断噪声) | ✅ | `d5cc670` |
 | `db_session` TRUNCATE RESTART IDENTITY 隔离(扫除假阳/假阴) | ✅ | `f000899` |
 | `stability_csrf_rejected_total{reason}` 指标 | ✅ | `a6a633d` |
-| 收紧无 jti grace 分支为 401 | ⏳ 2026-06-21 后 | — |
-
-> ⚠️ **2026-06-12 状态确认**：此条仍为 ⏳。代码 `auth.py:270-273` 未改动，仍在 grace 期内放行无 `jti` 的 refresh token。此行为符合渐进设计意图——立即收紧会导致存量用户被强制重新登录，对生产线有冲击。到期后改动量约 3 行代码 + 1 个测试更新，无架构影响。
+| 收紧无 jti grace 分支为 401 | ✅ 2026-07-02(逾期 11 天) | issue #48 |
 | 接入 Prometheus AlertManager 规则(`origin_not_allowed` 突增) | 待独立 ADR 定义告警框架后接入 | — |
 
 ## 关联实现/文档

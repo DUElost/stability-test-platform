@@ -1,6 +1,6 @@
 """Refresh token blacklist tests.
 
-Cover: revoke→refresh 拒绝;旧无 jti token grace 放行;logout 幂等;cleanup_expired。
+Cover: revoke→refresh 拒绝;旧无 jti token 在 grace 期结束后被拒绝;logout 幂等;cleanup_expired。
 """
 from __future__ import annotations
 
@@ -106,14 +106,15 @@ def test_logout_without_refresh_token_returns_200(client):
     assert response.status_code == 200
 
 
-def test_refresh_with_legacy_token_without_jti_passes_in_grace(client, test_user, caplog):
+def test_refresh_with_legacy_token_without_jti_rejected_after_grace(client, test_user, caplog):
+    """ADR-0024 grace 期已于 2026-06-21 结束,无 jti 的旧 refresh token 现在应被 401 拒绝。"""
     legacy = _legacy_refresh_token_without_jti("testuser")
     client.cookies.set(REFRESH_COOKIE_NAME, legacy)
 
     with caplog.at_level(logging.WARNING, logger="backend.api.routes.auth"):
         response = client.post("/api/v1/auth/refresh")
 
-    assert response.status_code == 200
+    assert response.status_code == 401
     assert any("refresh_token_missing_jti" in r.message for r in caplog.records)
 
 
