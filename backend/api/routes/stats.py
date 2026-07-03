@@ -418,7 +418,7 @@ def get_host_failure_rate(
     """ + hidden_clause + """
         GROUP BY h.id, h.hostname, h.ip_address
         HAVING COUNT(*) > 0
-        ORDER BY failed * 1.0 / COUNT(*) DESC
+        ORDER BY SUM(CASE WHEN j.status IN ('FAILED', 'ABORTED') THEN 1 ELSE 0 END) * 1.0 / COUNT(*) DESC
     """)
     if hidden_plan_ids:
         stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))
@@ -465,7 +465,7 @@ def get_plan_success_rate(
     """ + hidden_clause + """
         GROUP BY p.id, p.name
         HAVING COUNT(*) > 0
-        ORDER BY passed * 1.0 / COUNT(*) DESC, total_jobs DESC
+        ORDER BY SUM(CASE WHEN j.status = 'COMPLETED' THEN 1 ELSE 0 END) * 1.0 / COUNT(*) DESC, total_jobs DESC
     """)
     if hidden_plan_ids:
         stmt = stmt.bindparams(bindparam("hidden_plan_ids", expanding=True))

@@ -267,3 +267,256 @@ class TestCompletionTrend:
 
         assert sum(point["passed"] for point in data["points"]) == 0
         assert sum(point["failed"] for point in data["points"]) == 0
+
+
+def _make_plan_run(db_session, plan_id: str | int, *, status: str = "SUCCESS") -> "PlanRun":
+    plan_run = PlanRun(
+        plan_id=plan_id,
+        status=status,
+        failure_threshold=0.05,
+        plan_snapshot={"plan_id": plan_id},
+        run_type="MANUAL",
+        triggered_by="pytest",
+    )
+    db_session.add(plan_run)
+    db_session.flush()
+    return plan_run
+
+
+class TestHostFailureRate:
+    def test_empty(self, client, auth_headers):
+        response = client.get("/api/v1/stats/host-failure-rate", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data == {"items": [], "days": 30}
+
+    def test_aggregates_failure_rate_per_host(
+        self, client, auth_headers, db_session, sample_host, sample_device,
+    ):
+        now = datetime.now(timezone.utc)
+        plan = Plan(name="host-failure-plan", description="", failure_threshold=0.05)
+        db_session.add(plan)
+        db_session.flush()
+        plan_run = _make_plan_run(db_session, plan.id)
+
+        for status in ("COMPLETED", "FAILED", "FAILED"):
+            db_session.add(JobInstance(
+                plan_run_id=plan_run.id,
+                plan_id=plan.id,
+                device_id=sample_device.id,
+                host_id=sample_host.id,
+                status=status,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now - timedelta(minutes=10),
+                ended_at=now - timedelta(minutes=9),
+            ))
+        db_session.commit()
+
+        response = client.get("/api/v1/stats/host-failure-rate", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["items"]) == 1
+        item = data["items"][0]
+        assert item["host_id"] == sample_host.id
+        assert item["total_jobs"] == 3
+        assert item["failed"] == 2
+        assert item["failure_rate"] == 0.6667
+
+    def test_respects_limit_param(self, client, auth_headers, db_session, sample_device):
+        now = datetime.now(timezone.utc)
+        plan = Plan(name="host-failure-limit-plan", description="", failure_threshold=0.05)
+        db_session.add(plan)
+        db_session.flush()
+        plan_run = _make_plan_run(db_session, plan.id)
+
+        for i in range(3):
+            host = Host(
+                id=f"host-limit-{i}",
+                hostname=f"host-limit-{i}",
+                ip=f"10.0.1.{i}",
+                ip_address=f"10.0.1.{i}",
+                status=HostStatus.ONLINE.value,
+                last_heartbeat=now,
+            )
+            db_session.add(host)
+            db_session.flush()
+            db_session.add(JobInstance(
+                plan_run_id=plan_run.id,
+                plan_id=plan.id,
+                device_id=sample_device.id,
+                host_id=host.id,
+                status="FAILED",
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now - timedelta(minutes=5),
+                ended_at=now - timedelta(minutes=4),
+            ))
+        db_session.commit()
+
+        response = client.get(
+            "/api/v1/stats/host-failure-rate", params={"limit": 2}, headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert len(response.json()["items"]) == 2
+
+    def test_excludes_hidden_legacy_aee_plan_jobs(
+        self, client, auth_headers, db_session, sample_host, sample_device,
+    ):
+        now = datetime.now(timezone.utc)
+        hidden_plan = Plan(name="Hidden Legacy Host Plan", description="", failure_threshold=0.05)
+        db_session.add(hidden_plan)
+        db_session.flush()
+        db_session.add(PlanStep(
+            plan_id=hidden_plan.id,
+            step_key="scan",
+            script_name="scan_aee",
+            script_version="1.0.0",
+            stage="patrol",
+            sort_order=0,
+        ))
+        plan_run = _make_plan_run(db_session, hidden_plan.id)
+        db_session.add(JobInstance(
+            plan_run_id=plan_run.id,
+            plan_id=hidden_plan.id,
+            device_id=sample_device.id,
+            host_id=sample_host.id,
+            status="FAILED",
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            started_at=now - timedelta(minutes=10),
+            ended_at=now - timedelta(minutes=9),
+        ))
+        db_session.commit()
+
+        response = client.get("/api/v1/stats/host-failure-rate", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()["items"] == []
+
+
+class TestPlanSuccessRate:
+    def test_empty(self, client, auth_headers):
+        response = client.get("/api/v1/stats/plan-success-rate", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json() == {"items": [], "days": 30}
+
+    def test_ranks_by_pass_rate_desc(
+        self, client, auth_headers, db_session, sample_host, sample_device,
+    ):
+        now = datetime.now(timezone.utc)
+        good_plan = Plan(name="good-plan", description="", failure_threshold=0.05)
+        bad_plan = Plan(name="bad-plan", description="", failure_threshold=0.05)
+        db_session.add_all([good_plan, bad_plan])
+        db_session.flush()
+        good_run = _make_plan_run(db_session, good_plan.id)
+        bad_run = _make_plan_run(db_session, bad_plan.id, status="FAILED")
+
+        # good_plan: 2/2 passed; bad_plan: 0/2 passed
+        for status in ("COMPLETED", "COMPLETED"):
+            db_session.add(JobInstance(
+                plan_run_id=good_run.id, plan_id=good_plan.id,
+                device_id=sample_device.id, host_id=sample_host.id,
+                status=status, pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
+            ))
+        for status in ("FAILED", "FAILED"):
+            db_session.add(JobInstance(
+                plan_run_id=bad_run.id, plan_id=bad_plan.id,
+                device_id=sample_device.id, host_id=sample_host.id,
+                status=status, pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
+            ))
+        db_session.commit()
+
+        response = client.get("/api/v1/stats/plan-success-rate", headers=auth_headers)
+        assert response.status_code == 200
+        items = response.json()["items"]
+        assert len(items) == 2
+        assert items[0]["plan_name"] == "good-plan"
+        assert items[0]["pass_rate"] == 1.0
+        assert items[1]["plan_name"] == "bad-plan"
+        assert items[1]["pass_rate"] == 0.0
+
+    def test_excludes_hidden_legacy_aee_plan_jobs(
+        self, client, auth_headers, db_session, sample_host, sample_device,
+    ):
+        now = datetime.now(timezone.utc)
+        hidden_plan = Plan(name="Hidden Legacy Success Plan", description="", failure_threshold=0.05)
+        db_session.add(hidden_plan)
+        db_session.flush()
+        db_session.add(PlanStep(
+            plan_id=hidden_plan.id,
+            step_key="export",
+            script_name="export_mobilelogs",
+            script_version="1.0.0",
+            stage="teardown",
+            sort_order=0,
+        ))
+        plan_run = _make_plan_run(db_session, hidden_plan.id)
+        db_session.add(JobInstance(
+            plan_run_id=plan_run.id,
+            plan_id=hidden_plan.id,
+            device_id=sample_device.id,
+            host_id=sample_host.id,
+            status="COMPLETED",
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            started_at=now - timedelta(minutes=10),
+            ended_at=now - timedelta(minutes=9),
+        ))
+        db_session.commit()
+
+        response = client.get("/api/v1/stats/plan-success-rate", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()["items"] == []
+
+
+class TestPlanRunPassRateTrend:
+    def test_empty(self, client, auth_headers):
+        response = client.get("/api/v1/stats/plan-run-pass-rate-trend", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert "points" in data
+        assert data["days"] == 30
+        # 空数据也应返回 [since, today] 区间内每天一个占位点
+        assert len(data["points"]) >= 1
+        assert all(p["run_count"] == 0 for p in data["points"])
+
+    def test_custom_days_param(self, client, auth_headers):
+        response = client.get(
+            "/api/v1/stats/plan-run-pass-rate-trend", params={"days": 7}, headers=auth_headers,
+        )
+        assert response.status_code == 200
+        assert response.json()["days"] == 7
+
+    def test_aggregates_completed_plan_runs_by_day(
+        self, client, auth_headers, db_session, sample_host, sample_device,
+    ):
+        now = datetime.now(timezone.utc)
+        plan = Plan(name="trend-plan", description="", failure_threshold=0.05)
+        db_session.add(plan)
+        db_session.flush()
+
+        plan_run = PlanRun(
+            plan_id=plan.id,
+            status="SUCCESS",
+            failure_threshold=0.05,
+            plan_snapshot={"plan_id": plan.id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+            ended_at=now,
+        )
+        db_session.add(plan_run)
+        db_session.flush()
+
+        for status in ("COMPLETED", "FAILED"):
+            db_session.add(JobInstance(
+                plan_run_id=plan_run.id, plan_id=plan.id,
+                device_id=sample_device.id, host_id=sample_host.id,
+                status=status, pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+                started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
+            ))
+        db_session.commit()
+
+        response = client.get("/api/v1/stats/plan-run-pass-rate-trend", headers=auth_headers)
+        assert response.status_code == 200
+        points = response.json()["points"]
+        today_point = next(p for p in points if p["date"] == now.date().isoformat())
+        assert today_point["run_count"] == 1
+        assert today_point["avg_pass_rate"] == 0.5
