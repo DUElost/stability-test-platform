@@ -102,6 +102,12 @@ def _validate_dispatch_devices_sync(
                 "device_status": snap.device_status,
             })
             continue
+        if snap.device_status == DeviceStatus.ERROR.value:
+            unavailable.append({
+                "id": did, "reason": "device_error",
+                "device_status": snap.device_status,
+            })
+            continue
         if snap.host_status == HostStatus.OFFLINE.value:
             unavailable.append({
                 "id": did, "reason": "host_offline",

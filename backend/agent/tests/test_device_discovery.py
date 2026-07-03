@@ -103,6 +103,24 @@ def test_collect_device_info_returns_early_when_adb_check_failed(adb_path: str, 
     mock_ping.assert_not_called()
 
 
+def test_collect_device_info_short_circuits_on_unauthorized_raw_state(adb_path: str, serial: str):
+    """adb devices -l 已报告 unauthorized 时直接判定 error,不再探测 shell（必然失败）。"""
+    with patch.object(device_module.subprocess, "run") as mock_run:
+        info = device_module.collect_device_info(adb_path, serial, raw_adb_state="unauthorized")
+
+    assert info == {
+        "serial": serial,
+        "adb_state": "unauthorized",
+        "adb_connected": False,
+        "model": None,
+        "battery_level": None,
+        "temperature": None,
+        "network_latency": None,
+        "build_display_id": None,
+    }
+    mock_run.assert_not_called()
+
+
 def test_collect_device_info_handles_adb_check_exception(adb_path: str, serial: str):
     with patch.object(
         device_module.subprocess,

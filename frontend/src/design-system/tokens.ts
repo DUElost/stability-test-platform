@@ -499,6 +499,7 @@ export const DEVICE_STATUS_DOT = {
   OFFLINE: 'bg-muted-foreground/40',
   BUSY: 'bg-warning',
   DEGRADED: 'bg-info',
+  ERROR: 'bg-destructive',
 } as const;
 
 /** Plan 编排编辑器 — 链 / 画布 / Inspector */

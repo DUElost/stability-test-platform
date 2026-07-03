@@ -28,6 +28,7 @@ class DeviceStatus(str, Enum):
     ONLINE  = "ONLINE"
     OFFLINE = "OFFLINE"
     BUSY    = "BUSY"
+    ERROR   = "ERROR"  # ADB 已发现设备但状态非 "device"（如 unauthorized），非物理离线
 
 
 # ADR-0019: Device Lease enums
