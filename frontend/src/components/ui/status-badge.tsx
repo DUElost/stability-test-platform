@@ -47,6 +47,7 @@ const DEVICE: Record<string, StatusEntry> = {
   ONLINE: { label: "在线", variant: "success", Icon: CheckCircle2 },
   BUSY: { label: "占用", variant: "warning", Icon: Activity },
   OFFLINE: { label: "离线", variant: "secondary", Icon: PowerOff },
+  ERROR: { label: "异常", variant: "destructive", Icon: AlertTriangle },
 };
 
 const DEVICE_UI: Record<string, StatusEntry> = {
