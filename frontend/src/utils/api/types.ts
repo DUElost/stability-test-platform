@@ -46,7 +46,7 @@ export interface Device {
   serial: string;
   model: string | null;
   host_id: string | number | null;
-  status: 'ONLINE' | 'OFFLINE' | 'BUSY';
+  status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   last_seen: string | null;
   tags: string[];
   extra?: Record<string, any>;

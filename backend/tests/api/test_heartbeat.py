@@ -222,6 +222,29 @@ class TestHeartbeat:
         device = db_session.query(Device).filter(Device.serial == "OFFLINE_DEVICE").first()
         assert device.status == DeviceStatus.OFFLINE.value
 
+    def test_heartbeat_device_error_when_adb_unauthorized(self, client, sample_host, db_session):
+        """issue #52: adb 已发现设备但 adb_state 非 'device'（如 unauthorized）应判定为
+        ERROR，区别于纯粹未被发现的 OFFLINE。"""
+        response = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": sample_host.id,
+                "status": "ONLINE",
+                "devices": [
+                    {
+                        "serial": "UNAUTHORIZED_DEVICE",
+                        "model": "TestModel",
+                        "adb_state": "unauthorized",
+                        "adb_connected": False,
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 200
+
+        device = db_session.query(Device).filter(Device.serial == "UNAUTHORIZED_DEVICE").first()
+        assert device.status == DeviceStatus.ERROR.value
+
     def test_heartbeat_device_busy_when_locked(self, client, sample_host, db_session):
         """Phase 6c: device status becomes BUSY when it has an active DeviceLease."""
         from backend.models.device_lease import DeviceLease

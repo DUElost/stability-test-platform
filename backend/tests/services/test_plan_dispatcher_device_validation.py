@@ -144,6 +144,19 @@ class TestValidateDispatchDevicesSync:
         assert entries[0]["reason"] == "device_offline"
         assert entries[0]["device_status"] == "OFFLINE"
 
+    def test_device_error(self, db_session, dispatch_fixture):
+        """issue #52: device.status=ERROR（如 adb unauthorized）应与 OFFLINE 一样被排除派发。"""
+        dispatch_fixture["device"].status = DeviceStatus.ERROR.value
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as exc:
+            _validate_dispatch_devices_sync(
+                db_session, [dispatch_fixture["device"].id]
+            )
+        entries = exc.value.detail()["unavailable_devices"]
+        assert entries[0]["reason"] == "device_error"
+        assert entries[0]["device_status"] == "ERROR"
+
     def test_host_offline(self, db_session, dispatch_fixture):
         dispatch_fixture["host"].status = HostStatus.OFFLINE.value
         db_session.commit()

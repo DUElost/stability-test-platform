@@ -8,6 +8,11 @@ describe("StatusBadge", () => {
     expect(screen.getByText("在线")).toBeInTheDocument();
   });
 
+  it("renders device ERROR with destructive variant + 异常 label", () => {
+    render(<StatusBadge kind="device" status="ERROR" />);
+    expect(screen.getByText("异常")).toBeInTheDocument();
+  });
+
   it("renders host DEGRADED with warning variant", () => {
     render(<StatusBadge kind="host" status="DEGRADED" />);
     expect(screen.getByText("降级")).toBeInTheDocument();

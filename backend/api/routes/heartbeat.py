@@ -309,7 +309,12 @@ def _process_heartbeat_with_db(
             device.last_seen = now
 
             # Phase 6c: Business status — based on ADB connection and active lease
-            if not device.adb_connected:
+            # ADB 已发现设备但状态非 "device"（如 unauthorized）：设备物理在线但不可用，
+            # 区别于纯粹未被发现的 OFFLINE，需要操作员介入（如重新授权调试）。
+            if device.adb_state not in ("device", "offline", "unknown", "", None) and not device.adb_connected:
+                device.status = "ERROR"
+                logger.info(f"device_status_error: serial={serial}, adb_state={device.adb_state}")
+            elif not device.adb_connected:
                 device.status = "OFFLINE"
                 logger.info(f"device_status_offline: serial={serial}, reason=adb_connected_false")
             elif device.id and device.id in busy_device_ids:

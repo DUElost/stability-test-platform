@@ -55,13 +55,16 @@ def discover_devices(adb_path: str = "adb") -> List[Dict[str, Any]]:
     return devices
 
 
-def collect_device_info(adb_path: str, serial: str) -> Dict[str, Any]:
+def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device") -> Dict[str, Any]:
     """
     采集单台设备的基础信息
 
     Args:
         adb_path: adb 命令路径
         serial: 设备序列号
+        raw_adb_state: `adb devices -l` 原始上报状态（discover_devices 产出）。
+            非 "device"（如 "unauthorized"/"no permissions"/"authorizing"）说明
+            设备已被 ADB 发现但不可用，直接判定为 error，不再探测 shell（探测必然失败）。
 
     Returns:
         设备信息字典
@@ -76,6 +79,12 @@ def collect_device_info(adb_path: str, serial: str) -> Dict[str, Any]:
         "network_latency": None,
         "build_display_id": None,
     }
+
+    if raw_adb_state and raw_adb_state != "device":
+        info["adb_state"] = raw_adb_state
+        info["adb_connected"] = False
+        logger.warning(f"adb_device_unusable: {serial}, raw_adb_state={raw_adb_state}, adb_connected=False")
+        return info
 
     # 检查 ADB 连接状态
     try:

@@ -123,7 +123,7 @@ class HeartbeatThread:
             for dev in discovered:
                 discovered_serials.add(dev["serial"])
                 info = device_discovery.collect_device_info(
-                    self._adb_path, dev["serial"]
+                    self._adb_path, dev["serial"], raw_adb_state=dev.get("adb_state", "device")
                 )
                 device_data = {
                     "serial": dev["serial"],
