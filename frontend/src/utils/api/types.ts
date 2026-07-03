@@ -643,6 +643,7 @@ export interface Plan {
   failure_threshold: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
+  auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
   created_by?: string | null;
@@ -657,6 +658,7 @@ export interface PlanCreate {
   failure_threshold?: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
+  auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
   steps?: PlanStepCreate[];
@@ -668,6 +670,7 @@ export interface PlanUpdate {
   failure_threshold?: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
+  auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
   steps?: PlanStepCreate[];
