@@ -46,6 +46,7 @@ services:
       STP_NFS_ROOT: /var/lib/stp-dev/nfs
       STP_AEE_NFS_ROOT: /var/lib/stp-dev/aee-nfs
       STP_AEE_LOCAL_ROOT: /var/lib/stp-dev/aee-local
+      STP_RUN_CONSOLE_LOG_ROOT: /tmp/stp-dev/console
     depends_on:
       postgres:
         condition: service_healthy

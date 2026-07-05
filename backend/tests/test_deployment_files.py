@@ -36,6 +36,7 @@ def test_docker_compose_mounts_repo_root_and_dev_storage_only():
     assert "- ./.docker/dev-nfs:/var/lib/stp-dev/nfs" in compose
     assert "- ./.docker/dev-aee-nfs:/var/lib/stp-dev/aee-nfs" in compose
     assert "- ./.docker/dev-aee-local:/var/lib/stp-dev/aee-local" in compose
+    assert "STP_RUN_CONSOLE_LOG_ROOT: /tmp/stp-dev/console" in compose
 
 
 def test_frontend_dockerfile_accepts_vite_build_args():
