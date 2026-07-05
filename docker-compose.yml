@@ -1,16 +1,17 @@
 services:
   postgres:
     image: postgres:15-alpine
+    # Dev-only database. Keep it off production defaults when sharing a host.
     environment:
-      POSTGRES_DB: stp
-      POSTGRES_USER: stp
+      POSTGRES_DB: ${POSTGRES_DB:-stp_dev}
+      POSTGRES_USER: ${POSTGRES_USER:-stp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_dev_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:${DEV_POSTGRES_PORT:-15432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U stp"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stp} -d ${POSTGRES_DB:-stp_dev}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -24,7 +25,7 @@ services:
       --maxmemory 512mb
       --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${DEV_REDIS_PORT:-16379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -35,34 +36,43 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    # Local secret source; generated from .env.server.example by tools/prepare_env.py
-    # or the start-backend launchers when missing.
+    # Dev-only env source; keep a dedicated checkout/env when sharing a host
+    # with production.
     env_file: .env.server
     environment:
-      DATABASE_URL: postgresql+asyncpg://stp:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/stp
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-stp}:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/${POSTGRES_DB:-stp_dev}
+      REDIS_URL: redis://redis:6379/0
+      STP_SCRIPT_ROOT: /app/backend/agent/scripts
+      STP_NFS_ROOT: /var/lib/stp-dev/nfs
+      STP_AEE_NFS_ROOT: /var/lib/stp-dev/aee-nfs
+      STP_AEE_LOCAL_ROOT: /var/lib/stp-dev/aee-local
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${DEV_BACKEND_PORT:-18000}:8000"
     volumes:
-      - ./backend:/app
+      - ./:/app
+      - ./.docker/dev-nfs:/var/lib/stp-dev/nfs
+      - ./.docker/dev-aee-nfs:/var/lib/stp-dev/aee-nfs
+      - ./.docker/dev-aee-local:/var/lib/stp-dev/aee-local
       - tool_packages:/opt/stp/tools
+    command: python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:${DEV_BACKEND_PORT:-18000}
+        VITE_WS_BASE_URL: ws://localhost:${DEV_BACKEND_PORT:-18000}
     ports:
-      - "5173:80"
-    environment:
-      - VITE_API_BASE_URL=http://localhost:8000
-      - VITE_WS_BASE_URL=ws://localhost:8000
+      - "127.0.0.1:${DEV_FRONTEND_PORT:-15173}:80"
     depends_on:
       - server
 
 volumes:
-  postgres_data:
+  postgres_dev_data:
   tool_packages:

@@ -8,6 +8,8 @@ Type=simple
 User=<deploy-user>
 WorkingDirectory=/opt/stability-test-platform
 EnvironmentFile=/opt/stability-test-platform/.env.backend
+# Keep schema in sync with the running code path before the single backend instance starts.
+ExecStartPre=/bin/bash -lc 'cd /opt/stability-test-platform/backend && ../venv/bin/python -m alembic upgrade head'
 ExecStart=/opt/stability-test-platform/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
