@@ -30,6 +30,7 @@ deploy/
 ├── control-plane/
 │   ├── env/.env.backend.example
 │   ├── nginx/stability-platform.conf
+│   ├── nginx/stability-platform-https.conf
 │   └── systemd/stability-backend.service
 ├── postgres/docker-compose.yml
 ├── nginx/frontend-docker.conf
@@ -38,7 +39,7 @@ deploy/
     └── alertmanager.yml
 ```
 
-根目录 `docker-compose.yml`、`Dockerfile.*` 用于 CI/容器化构建。
+生产 / 预发布控制平面使用 **Linux 宿主机 systemd + Nginx** 部署；根目录 `docker-compose.yml`、`Dockerfile.*` 仅用于 **开发隔离 / CI / 容器化构建**，不是生产控制平面主入口。
 
 ---
 
@@ -61,7 +62,7 @@ deploy/
 
 ## 6. 可观测性
 
-- 指标：`GET /metrics`（生产建议 `STP_METRICS_AUTH_REQUIRED=1`）  
+- 指标：`GET /metrics`（生产建议保持 `STP_METRICS_AUTH_REQUIRED=1`，必要时叠加 Nginx IP 白名单）  
 - Grafana：`docs/grafana/stability-platform-dashboard.json`  
 - 告警草案：`deploy/prometheus/alerts-stability-platform.yml`（ADR-0011 待挂载）
 

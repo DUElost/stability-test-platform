@@ -13,8 +13,10 @@
 ## 1. 目标拓扑
 
 - 1 台主 Linux Host（控制平面）：
-  - Backend API + WebSocket（`127.0.0.1:8000`，由 Nginx 反向代理）
-  - Frontend 静态资源（Nginx 直接托管）
+  - 生产部署在宿主机上运行，不使用根目录 `docker-compose.yml` 作为生产入口
+  - Backend API + WebSocket 由宿主机 systemd 管理（`127.0.0.1:8000`，由 Nginx 反向代理）
+  - Frontend 静态资源由宿主机 Nginx 直接托管
+  - PostgreSQL / Redis 使用宿主机服务或受控基础设施服务，不复用开发 Compose 容器
 - N 台 Linux Host Agent（数据平面）：
   - 每台主机运行 `stability-test-agent.service`
   - 每台主机配置唯一 `HOST_ID`，心跳上报到控制平面 `API_URL`
@@ -23,8 +25,9 @@
 
 - 当前版本后端会在应用启动时启动调度线程和回收线程（`backend/main.py`）。
 - 生产 MVP 必须使用单实例后端（`1` 个进程）运行，避免多进程重复调度。
+- 根目录 `docker-compose.yml` 仅用于开发隔离 / CI，不作为生产控制平面部署方式。
 - 不允许 Agent 使用 `HOST_ID=0`；每台 Agent 必须唯一且固定。
-- 读 API 已要求登录（`get_current_active_user`）；`/metrics` 仍无鉴权，生产请用 Nginx IP 白名单限制。
+- 读 API 已要求登录；`/metrics` 默认受 `STP_METRICS_AUTH_REQUIRED=1` 保护，生产可额外叠加 Nginx IP 白名单。
 - 前端 SocketIO 生产构建须设 `VITE_API_BASE_URL=`（空），Nginx 须反代 `/socket.io/`（见 §3.6）。
 
 ## 3. 控制平面部署清单（主 Linux Host）
@@ -94,6 +97,13 @@ sed -i 's|<deploy-user>|'"$USER"'|g' /tmp/stability-backend.service
 sudo cp /tmp/stability-backend.service /etc/systemd/system/stability-backend.service
 ```
 
+首次部署或需要人工确认时，建议先显式执行一次迁移：
+
+```bash
+cd /opt/stability-test-platform/backend
+../venv/bin/python -m alembic upgrade head
+```
+
 启用服务：
 
 ```bash
@@ -111,6 +121,8 @@ sudo systemctl status stability-backend --no-pager
 ```bash
 sudo cp deploy/control-plane/nginx/stability-platform.conf /etc/nginx/sites-available/stability-platform
 ```
+
+若预发布 / 生产已经具备证书，优先改用 `deploy/control-plane/nginx/stability-platform-https.conf` 作为模板。
 
 模板已包含 `/api/`、`/socket.io/`（WebSocket 升级）与 legacy `/ws/`。
 
@@ -137,6 +149,7 @@ JWT_SECRET_KEY=<强随机>
 AGENT_SECRET=<非 placeholder>
 CORS_ORIGINS=https://<你的前端域名>
 STP_ENABLE_INPROCESS_SAQ=1
+STP_METRICS_AUTH_REQUIRED=1
 REDIS_URL=redis://...
 ```
 
@@ -180,9 +193,12 @@ sudo ./install_agent.sh
 
 ```env
 # 可先复制模板：
-# cp deploy/control-plane/env/agent.env.example /opt/stability-test-agent/.env
-API_URL=http://<控制平面IP或域名>
+# cp backend/agent/.env.example /opt/stability-test-agent/.env
+# 指向 Nginx 对外入口；不要指向 backend loopback 端口 127.0.0.1:8000
+API_URL=https://<控制平面域名或IP>
 HOST_ID=<唯一且非0的整数>
+AUTO_REGISTER_HOST=false
+AGENT_SECRET=<与控制平面 .env.backend 中 AGENT_SECRET 一致>
 POLL_INTERVAL=10
 MOUNT_POINTS=
 ADB_PATH=adb
@@ -194,6 +210,9 @@ LOG_LEVEL=INFO
 - 同一 `HOST_ID` 不可被多台 Agent 复用。
 - 不可使用 `HOST_ID=0`。
 - `HOST_ID` 必须与后端数据库中的 `hosts.id` 对齐，否则会出现“心跳正常但拉不到任务”。
+- `AUTO_REGISTER_HOST=true` 仅保留给临时实验环境或旧 agent 兼容，不应作为生产默认。
+- `AGENT_SECRET` 必须与控制平面一致，否则 Agent API / SocketIO 认证会失败。
+- 后端 systemd 默认监听 `127.0.0.1:8000`，远端 Agent 应通过 Nginx 入口访问控制平面；只有明确开放 backend 端口时才可直连 `:8000`。
 
 建议在控制平面执行以下查询后再填 Agent 配置：
 
@@ -243,8 +262,8 @@ curl -v --max-time 5 http://<控制平面IP>:80/
 curl -v --max-time 5 http://<控制平面IP>/api/v1/hosts
 ```
 3. Dashboard 可见主机 `ONLINE` 与设备 `ONLINE/BUSY` 实时状态。
-4. 创建一个绑定设备任务后，状态应完整经历：
-`PENDING -> QUEUED -> RUNNING -> COMPLETED|FAILED|CANCELED`
+4. 创建一个绑定设备任务后，Job 状态应完整经历：
+`PENDING -> RUNNING -> COMPLETED|FAILED|ABORTED`；心跳丢失 / patrol stall 时符合 `RUNNING -> UNKNOWN -> RUNNING|FAILED`
 5. 任务终态后设备锁释放（设备可再次调度）。
 
 ## 6. 迁移切换步骤（WSL -> 主 Linux Host）
@@ -255,8 +274,8 @@ curl -v --max-time 5 http://<控制平面IP>/api/v1/hosts
 sudo systemctl stop stability-test-agent
 ```
 2. 在主 Linux Host 启动后端与 Nginx。
-3. 批量更新所有 Agent 的 `API_URL` 指向新控制平面地址。
-4. 检查是否存在误配置 `HOST_ID=0` 的 Agent，发现即修复并重启。
+3. 批量更新所有 Agent 的 `API_URL` 指向新控制平面的 Nginx 对外入口。
+4. 检查所有 Agent 的 `HOST_ID`、`AUTO_REGISTER_HOST=false`、`AGENT_SECRET` 是否符合生产配置，发现即修复并重启。
 5. 观察 30 分钟：心跳、任务分发、任务回收均正常后再开放业务使用。
 
 ## 7. 运维最小值班清单

@@ -3,6 +3,8 @@
 目标：在 1 台控制平面主机 + 1 台 Linux Agent 上跑通完整闭环：  
 `任务创建 -> 自动分发 -> Agent 执行 -> 完成回传 -> UI 可见`
 
+预发布按生产形态演练：控制平面运行在 Linux 宿主机（systemd + Nginx + PostgreSQL + Redis），不使用根目录 Docker Compose；Docker Compose 仅用于开发隔离环境。
+
 ---
 
 ## 0. 变量约定（先改成你的实际值）
@@ -11,9 +13,12 @@
 
 ```bash
 export CONTROL_IP="172.21.10.15"
+export CONTROL_BASE_URL="http://$CONTROL_IP"
 export CONTROL_DIR="/opt/stability-test-platform"
 export DEPLOY_USER="$USER"
 ```
+
+若预发布已启用 HTTPS，将 `CONTROL_BASE_URL` 改为 `https://<控制平面域名>`。
 
 ---
 
@@ -52,6 +57,7 @@ cd "$CONTROL_DIR"
 python3 -m venv venv
 source venv/bin/activate
 pip install -r backend/requirements.txt
+cd backend && ../venv/bin/python -m alembic upgrade head && cd ..
 
 python3 tools/prepare_env.py --template deploy/control-plane/env/.env.backend.example --target "$CONTROL_DIR/.env.backend"
 mkdir -p "$CONTROL_DIR/logs"
@@ -71,9 +77,10 @@ sudo systemctl status stability-backend --no-pager
 ```bash
 cd "$CONTROL_DIR/frontend"
 npm install
-npm run build
+VITE_API_BASE_URL= npm run build
 
 sudo cp "$CONTROL_DIR/deploy/control-plane/nginx/stability-platform.conf" /etc/nginx/sites-available/stability-platform
+# 如已具备证书，优先改用 stability-platform-https.conf
 sudo ln -sf /etc/nginx/sites-available/stability-platform /etc/nginx/sites-enabled/stability-platform
 sudo nginx -t
 sudo systemctl restart nginx
@@ -108,14 +115,18 @@ sudo ./install_agent.sh
 ```bash
 sudo cp /opt/stability-test-agent/.env /opt/stability-test-agent/.env.bak.$(date +%F-%H%M%S) || true
 sudo tee /opt/stability-test-agent/.env > /dev/null << EOF
-API_URL=http://$CONTROL_IP:8000
+API_URL=$CONTROL_BASE_URL
 HOST_ID=<填写与后端 hosts.id 对齐的正整数>
+AUTO_REGISTER_HOST=false
+AGENT_SECRET=<填写与控制平面 AGENT_SECRET 一致的值>
 POLL_INTERVAL=10
 MOUNT_POINTS=
 ADB_PATH=adb
 LOG_LEVEL=INFO
 EOF
 ```
+
+`stability-backend.service` 默认只监听 `127.0.0.1:8000`，远端 Agent 应访问 Nginx 对外入口（HTTP/HTTPS 域名或 IP），不要直接指向控制平面的 `:8000` 端口，除非你明确额外开放了 backend 端口。
 
 ### 2.3 启动验证
 
@@ -137,6 +148,10 @@ curl -s "http://127.0.0.1:8000/api/v1/hosts"
 
 按 Agent 主机 IP 找到 `id`，确保 Agent `.env` 的 `HOST_ID` 与该 `id` 一致。  
 若不一致，Agent 会出现“心跳正常但拉不到任务”。
+
+同时确认 Agent `.env` 的 `AGENT_SECRET` 与控制平面 `.env.backend` 一致；不一致时 Agent API / SocketIO 会被拒绝。
+
+`AUTO_REGISTER_HOST=true` 仅保留给旧 agent 或临时实验环境，本 Runbook 的预发布与上线前验收一律按固定 `HOST_ID` 执行。
 
 ---
 
@@ -232,7 +247,7 @@ sudo journalctl -u stability-test-agent -f
 
 - [ ] **主链路 smoke**：`seed_and_smoke.py` 已执行且退出码为 0（§4.0；或等价 UI 全路径手动验收并记录 plan_run_id）
 
-1. 任务状态完整流转：`PENDING -> QUEUED -> RUNNING -> COMPLETED|FAILED|CANCELED`
+1. Job 状态完整流转：`PENDING -> RUNNING -> COMPLETED|FAILED|ABORTED`；心跳丢失 / patrol stall 时符合 `RUNNING -> UNKNOWN -> RUNNING|FAILED`
 2. `task.target_device_id == run.device_id`（目标设备不漂移）
 3. 任务终态后设备锁释放（设备可再次被分发）
 4. Dashboard 状态在 1-2 秒内有增量更新

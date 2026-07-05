@@ -3,7 +3,7 @@
 **版本**：1.0.0
 **最后更新**：2026-06-21
 
-中心化 Android 设备稳定性测试管理平台：Windows/Linux 控制平面运行 FastAPI 后端与 React 前端，Linux Agent 集群通过 ADB 连接设备执行 Plan 编排任务，支持实时监控、日志采集与报告生成。
+中心化 Android 设备稳定性测试管理平台：Linux-first 控制平面运行 FastAPI 后端与 React 前端，Linux Agent 集群通过 ADB 连接设备执行 Plan 编排任务，支持实时监控、日志采集与报告生成。Windows / WSL 仅保留开发联调与兼容入口，不再作为默认生产基线。
 
 详细架构与模块说明见 [`CLAUDE.md`](./CLAUDE.md)；AI/自动化开发约定见 [`AGENTS.md`](./AGENTS.md)。
 
@@ -13,7 +13,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  控制平面（Windows 开发 / Linux 生产）                      │
+│  控制平面（Linux-first，Windows/WSL 仅兼容）               │
 │  FastAPI :8000  ·  React :5173  ·  APScheduler  ·  SAQ     │
 │  PostgreSQL  ·  Redis（SAQ 队列）  ·  SocketIO 实时推送      │
 └──────────────────────────┬──────────────────────────────────┘
@@ -34,7 +34,24 @@
 
 ## 快速启动
 
-### 方式一：批处理脚本（Windows 推荐）
+生产 / 预发布控制平面按 Linux 宿主机部署（systemd + Nginx + PostgreSQL + Redis）；开发环境默认使用 Docker Compose 容器隔离。下面的批处理脚本和宿主机手动启动仅作为历史兼容或排障入口。
+
+### 方式一：Docker Compose 开发隔离（默认开发方式）
+
+```bash
+# 建议在独立 checkout 中执行，避免与生产宿主机目录混用
+cp .env.server.example .env.server
+docker compose up --build
+
+# 前端: http://127.0.0.1:15173
+# 后端: http://127.0.0.1:18000
+# PostgreSQL: 127.0.0.1:15432
+# Redis: 127.0.0.1:16379
+```
+
+> Docker Compose 仅用于开发环境。不要在生产 checkout 内直接启动，也不要把开发容器挂到生产 NFS / AEE / 日志目录。
+
+### 方式二：批处理脚本（Windows / WSL 兼容入口）
 
 ```bash
 # 终端 1 — 后端（自动 alembic upgrade + 启动）
@@ -53,7 +70,7 @@ start-frontend-windows.bat  # http://localhost:5173
 > .\start-backend.bat
 > ```
 
-### 方式二：手动启动
+### 方式三：手动启动（Linux / 本地排障）
 
 **后端**
 
@@ -80,6 +97,9 @@ npm run dev                # http://localhost:5173
 export API_URL="http://<控制平面IP>:8000"
 export STP_SCRIPT_ROOT="<repo>/backend/agent/scripts"   # 后端扫描用
 python -m backend.agent.main
+
+# 若后端跑在 docker compose 开发隔离环境：
+# export API_URL="http://127.0.0.1:18000"
 
 # 生产模式：backend/agent/install_agent.sh → systemd stability-test-agent
 # WSL 联调须设 ANDROID_ADB_SERVER_PORT=5039，详见 CLAUDE.md
@@ -115,9 +135,9 @@ python -m backend.agent.main
 | `STP_CSRF_ENABLED` | 浏览器 CSRF 校验（生产须开启） |
 | `CORS_ORIGINS` | 前端域名白名单 |
 | `STP_ALLOW_REGISTER` | 公开注册开关；**生产默认关闭**，显式设 `1` 才允许 |
-| `STP_METRICS_AUTH_REQUIRED` | 设 `1` 时 `/metrics` 须 Bearer token 或 `X-Agent-Secret` |
+| `STP_METRICS_AUTH_REQUIRED` | 生产建议 `1`；`/metrics` 需 Bearer token 或 `X-Agent-Secret` |
 | `STP_ENABLE_INPROCESS_SAQ` | 进程内 SAQ Worker（生产建议 `1`） |
-| `STP_WATCHER_ENABLED` | Agent 侧 Watcher 灰度开关（默认 `false`） |
+| `STP_WATCHER_ENABLED` | Agent 侧 Watcher 灰度开关（默认 `true`） |
 | `STP_AEE_LOCAL_ROOT` | Agent HDD AEE 根（方案 C，默认 `/mnt/hdd/aee_events`） |
 | `STP_AEE_CIFS_ROOT` | Agent 上送 15.4 的 CIFS 挂载根（HDD spill / Sprint 4 upload） |
 
@@ -214,7 +234,7 @@ CI 流程见 `.github/workflows/ci.yml`（compileall → pytest → tsc → buil
 3. **数据库迁移**：`alembic upgrade head`（含 refresh token 黑名单等表）
 4. **Agent 配置**：每台唯一 `HOST_ID`；`AGENT_SECRET` 与后端一致
 5. **前端构建**：`VITE_API_BASE_URL=`（空）实现同源；Nginx 反代 `/api/` 与 `/socket.io/`
-6. **Metrics 鉴权**：生产建议 `STP_METRICS_AUTH_REQUIRED=1` 或 Nginx IP 白名单
+6. **Metrics 鉴权**：生产建议 `STP_METRICS_AUTH_REQUIRED=1`；如需额外收口，可叠加 Nginx IP 白名单
 7. **冒烟验收**：控制平面健康 → Agent ONLINE → 创建 PlanRun → 任务完整流转至终态 → 设备锁释放
 
 预发布逐条执行：[`docs/preprod-drill-runbook.md`](./docs/preprod-drill-runbook.md)
