@@ -240,6 +240,28 @@ def test_script_scan_ignores_legacy_aee_script_directories(
     assert all(item["name"] != "scan_aee" for item in list_resp.json()["data"])
 
 
+def test_script_scan_ignores_windows_batch_entries(client, tmp_path, monkeypatch, admin_headers, auth_headers):
+    root = tmp_path / "scripts"
+    version_dir = root / "legacy_windows" / "v1.0.0"
+    version_dir.mkdir(parents=True)
+    (version_dir / "legacy_windows.bat").write_text("@echo off\necho legacy\n", encoding="utf-8")
+
+    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
+
+    scan_resp = client.post("/api/v1/scripts/scan", headers=admin_headers)
+
+    assert scan_resp.status_code == 200
+    data = scan_resp.json()["data"]
+    assert data["created"] == 0
+    assert data["skipped"] == 0
+    assert data["deactivated"] == 0
+    assert data["conflicts"] == []
+
+    list_resp = client.get("/api/v1/scripts", params={"is_active": True}, headers=auth_headers)
+    assert list_resp.status_code == 200
+    assert all(item["name"] != "legacy_windows" for item in list_resp.json()["data"])
+
+
 def test_script_endpoints_require_auth_and_admin_for_writes(client, admin_headers, auth_headers):
     list_resp = client.get("/api/v1/scripts")
     assert list_resp.status_code == 401
@@ -259,6 +281,26 @@ def test_script_endpoints_require_auth_and_admin_for_writes(client, admin_header
         headers=auth_headers,
     )
     assert create_resp.status_code == 403
+
+
+def test_create_rejects_windows_batch_script_type(client, admin_headers):
+    resp = client.post(
+        "/api/v1/scripts",
+        json={
+            "name": _uniq("legacy_windows"),
+            "display_name": "Legacy Windows Script",
+            "category": "device",
+            "script_type": "bat",
+            "version": "1.0.0",
+            "nfs_path": "/scripts/legacy_windows/v1.0.0/legacy_windows.bat",
+            "content_sha256": "d" * 64,
+            "default_params": {},
+        },
+        headers=admin_headers,
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert "script_type" in resp.text
 
 
 def test_create_rejects_legacy_aee_script_name(client, admin_headers):

@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
 
 _VALID_PARAM_TYPES = {"string", "integer", "boolean", "number"}
+_VALID_SCRIPT_TYPES = {"python", "shell"}
 
 
 def _validate_param_schema(schema: Dict[str, Any]) -> Optional[str]:
@@ -74,6 +75,10 @@ class ScriptCreate(BaseModel):
 
     @model_validator(mode="after")
     def _check_param_schema(self) -> "ScriptCreate":
+        if self.script_type not in _VALID_SCRIPT_TYPES:
+            raise ValueError(
+                f"script_type must be one of {sorted(_VALID_SCRIPT_TYPES)}, got {self.script_type!r}"
+            )
         err = _validate_param_schema(self.param_schema)
         if err:
             raise ValueError(err)
@@ -95,6 +100,10 @@ class ScriptUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _check_param_schema(self) -> "ScriptUpdate":
+        if self.script_type is not None and self.script_type not in _VALID_SCRIPT_TYPES:
+            raise ValueError(
+                f"script_type must be one of {sorted(_VALID_SCRIPT_TYPES)}, got {self.script_type!r}"
+            )
         if self.param_schema is not None:
             err = _validate_param_schema(self.param_schema)
             if err:

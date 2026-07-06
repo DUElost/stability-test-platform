@@ -16,8 +16,6 @@ from backend.models.script import Script
 _SUPPORTED_SUFFIXES = {
     ".py": "python",
     ".sh": "shell",
-    ".bat": "bat",
-    ".cmd": "bat",
 }
 @dataclass
 class ScriptScanResult:

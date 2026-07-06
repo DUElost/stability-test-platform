@@ -1018,8 +1018,6 @@ class PipelineEngine:
 
             "shell": ["bash", entry.nfs_path],
 
-            "bat": ["cmd.exe", "/c", entry.nfs_path],
-
         }
 
         cmd = runners.get(entry.script_type)

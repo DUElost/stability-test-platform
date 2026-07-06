@@ -223,3 +223,27 @@ def test_pipeline_engine_script_timeout_returns_124(tmp_path):
 
     assert result.success is False
     assert result.exit_code == 124
+
+
+def test_pipeline_engine_rejects_windows_batch_script_action():
+    engine = PipelineEngine(
+        adb=SimpleNamespace(adb_path="adb"),
+        serial="SERIAL001",
+        run_id=42,
+        script_registry=FakeScriptRegistry("/tmp/legacy_windows.bat", script_type="bat"),
+    )
+
+    result = engine._execute_step(
+        "init",
+        {
+            "step_id": "legacy_windows",
+            "action": "script:legacy_windows",
+            "version": "1.0.0",
+            "params": {},
+            "timeout_seconds": 5,
+        },
+    )
+
+    assert result.success is False
+    assert result.exit_code == 1
+    assert "Unsupported script_type: bat" in result.error_message
