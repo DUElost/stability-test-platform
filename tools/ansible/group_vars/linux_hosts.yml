@@ -12,7 +12,7 @@ agent_service_name: "stability-test-agent"
 agent_remote_tmp_dir: "/tmp/stability-test-agent-ansible"
 agent_user: "android"
 agent_group: "android"
-agent_auto_register_host: true
+agent_auto_register_host: false
 agent_poll_interval: 10
 agent_adb_path: "adb"
 agent_log_level: "INFO"

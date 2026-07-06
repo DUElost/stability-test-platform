@@ -113,13 +113,13 @@ sudo nano /opt/stability-test-agent/.env
 
 ```bash
 # 服务器地址（必填）
-# - 远程 Linux 主机：使用 Windows 中心服务器的局域网 IP
-# - WSL 环境（同机）：使用 127.0.0.1（安装脚本自动检测并设置）
+# - 远程 Linux 主机：使用 Linux 控制平面的固定域名或固定 IP
+# - WSL 环境（同机开发联调）：使用 127.0.0.1（安装脚本自动检测并设置）
 API_URL=http://172.21.10.5:8000
 
-# 主机 ID（推荐 auto，首次心跳时自动注册）
-HOST_ID=auto
-AUTO_REGISTER_HOST=true
+# 主机 ID（生产/预发布默认使用固定 hosts.id）
+HOST_ID=12
+AUTO_REGISTER_HOST=false
 
 # 心跳间隔（秒）
 POLL_INTERVAL=10
@@ -139,6 +139,11 @@ LOG_LEVEL=INFO
 > - `API_URL` 必须使用 `http://127.0.0.1:8000`，不能使用 Windows 局域网 IP
 > - WSL 的 localhost 自动转发到 Windows 宿主，但局域网 IP 会被 Windows 防火墙拦截
 > - 安装脚本会自动检测 WSL 环境（通过 `/proc/version` 包含 `microsoft`）并设置默认值
+
+> **生产建议**
+>
+> - 预发布 / 生产环境下请显式配置固定 `HOST_ID`，并保证与后端 `hosts.id` 一致。
+> - `AUTO_REGISTER_HOST=true` 仅保留给临时实验环境或旧 agent 兼容，不应作为默认部署方式。
 
 ### 4. 启动服务
 

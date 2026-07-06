@@ -22,7 +22,7 @@
 
 当前实现位于主仓库：
 
-- 仓库根目录：`F:\stability-test-platform`
+- 仓库根目录：建议使用 Linux 本地路径，例如 `/opt/stability-test-platform` 或开发 checkout 路径
 - Ansible 入口目录：`tools/ansible/`
 
 关键文件：
@@ -36,16 +36,16 @@
 - `tools/ansible/playbooks/check_agent.yml`：状态检查
 - `tools/ansible/roles/agent_deploy/defaults/main.yml`：服务动作白名单等默认值
 
-建议在 WSL 中先定义仓库根路径：
+建议先定义仓库根路径：
 
 ```bash
-export REPO_ROOT=/mnt/f/stability-test-platform
+export REPO_ROOT=/path/to/stability-test-platform
 cd "$REPO_ROOT/tools/ansible"
 ```
 
 ## 3. 执行前提
 
-- 在 Windows 上通过 `wsl bash -lc` 执行 Ansible
+- 优先在 Linux 控制主机或 Linux 运维环境中执行 Ansible
 - 远端连接用户为 `android`
 - Ansible 使用 `sudo/become` 提权
 - 当前默认将 `inventory.ini` 中的 `ansible_password` 同时作为 `ansible_become_password`
@@ -78,6 +78,11 @@ cd "$REPO_ROOT/tools/ansible"
 - 默认值放在 `group_vars/linux_hosts.yml`
 - 当前不再保留 `172.21.10.36` 的单独 `host_vars`
 - 开发环境临时切换 API 地址时，优先使用 `-e agent_api_url=...` 覆盖，不必改文件
+
+生产与预发布默认约束：
+
+- `HOST_ID` 应固定并与后端 `hosts.id` 对齐
+- `AUTO_REGISTER_HOST=true` 仅保留给旧 agent / 临时实验兼容，不应作为批量运维默认值
 
 ## 5. Playbook 职责
 
@@ -141,85 +146,83 @@ cd "$REPO_ROOT/tools/ansible"
 ### 连通性检查
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping -o'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping -o
 ```
 
 ### 单机首次部署
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 172.21.10.36'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 172.21.10.36
 ```
 
 ### 单机热更新
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit 172.21.10.36'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit 172.21.10.36
 ```
 
 ### 单机状态检查
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 172.21.10.36'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 172.21.10.36
 ```
 
 ### 单机重启服务
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart'
-
-wsl bash -lc 'cd "/mnt/f/stability-test-platform/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=restart
 ```
 
 ### 单机查看服务状态
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=status'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_service_action=status
 ```
 
 ### 批量首次部署
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml
 ```
 
 ### 批量热更新
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml
 ```
 
 ### 批量服务重启
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml -e agent_service_action=restart'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/service_agent.yml -e agent_service_action=restart
 ```
 
 ### 批量状态检查
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml
 ```
 
 ### 只操作部分主机
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit "172.21.10.36,172.21.15.7,172.21.15.2"'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml --limit "172.21.10.36,172.21.15.7,172.21.15.2"
 ```
 
 ## 7. 开发环境 IP 变化时的标准流程
 
-开发环境下 Windows 平台 IP 可能随重启变化。当前推荐做法不是重装所有 agent，而是临时覆盖 `agent_api_url` 并批量热更新。
+开发环境下平台 IP 可能变化。当前推荐做法不是重装所有 agent，而是临时覆盖 `agent_api_url` 并批量热更新。
 
 示例：平台地址变为 `172.21.10.13`
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml -e agent_api_url=http://172.21.10.13:8000'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml -e agent_api_url=http://172.21.10.13:8000
 ```
 
 更新后立即批量检查：
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml
 ```
 
 如果要把新地址改成默认值，再修改：
@@ -243,7 +246,7 @@ wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansi
 
 ### 开发环境平台 IP 变更
 
-1. 确认新的 Windows 平台地址
+1. 确认新的控制平面地址
 2. 使用 `-e agent_api_url=http://<new-ip>:8000` 批量执行 `update_agent.yml`
 3. 立即跑 `check_agent.yml`
 4. 观察平台前端节点与设备归属是否恢复正常
@@ -287,7 +290,7 @@ wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansi
 当前正确做法不是重装，而是重新执行：
 
 ```bash
-wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml -e agent_api_url=http://<new-ip>:8000'
+cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/update_agent.yml -e agent_api_url=http://<new-ip>:8000
 ```
 
 ### 批量检查时未安装主机也通过
@@ -311,7 +314,7 @@ wsl bash -lc 'cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansi
 - 热更新当前只自动回写 `API_URL`，不会模板化重建整份 `.env`
 - 还没有实现 `serial` 滚动分批和失败主机汇总报告
 - `inventory.ini` 为本地敏感文件，不纳入版本控制，需要各执行环境自行维护
-- 当前文档面向开发/验证环境；生产环境建议使用固定平台地址或域名
+- 当前文档默认以 Linux-first 运维为准；Windows / WSL 仅作为兼容入口保留
 
 ## 12. 相关文件
 

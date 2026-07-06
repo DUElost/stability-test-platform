@@ -202,7 +202,7 @@ except:
 }
 
 # 提示用户输入 API_URL
-# WSL 环境检测：WSL 中 Agent 访问同机 Windows 后端应使用 127.0.0.1
+# WSL 环境检测：WSL 中 Agent 访问同机开发后端应使用 127.0.0.1
 DEFAULT_API_URL="http://172.21.10.15:8000"
 if grep -qi microsoft /proc/version 2>/dev/null; then
     DEFAULT_API_URL="http://127.0.0.1:8000"
@@ -236,8 +236,8 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
 # 主机信息: $HOSTNAME ($IP_ADDR)
 
 API_URL=$API_URL
-HOST_ID=auto
-AUTO_REGISTER_HOST=true
+HOST_ID=$HOST_ID
+AUTO_REGISTER_HOST=false
 POLL_INTERVAL=10
 MOUNT_POINTS=
 ADB_PATH=adb
@@ -253,8 +253,8 @@ EOF
 else
     # 更新现有配置文件
     sed -i "s|^API_URL=.*|API_URL=$API_URL|" "$INSTALL_DIR/.env"
-    sed -i "s|^HOST_ID=.*|HOST_ID=auto|" "$INSTALL_DIR/.env"
-    sed -i "s|^AUTO_REGISTER_HOST=.*|AUTO_REGISTER_HOST=true|" "$INSTALL_DIR/.env"
+    sed -i "s|^HOST_ID=.*|HOST_ID=$HOST_ID|" "$INSTALL_DIR/.env"
+    sed -i "s|^AUTO_REGISTER_HOST=.*|AUTO_REGISTER_HOST=false|" "$INSTALL_DIR/.env"
     if ! grep -q "^AGENT_SECRET=" "$INSTALL_DIR/.env"; then
         echo "AGENT_SECRET=${AGENT_SECRET:-}" >> "$INSTALL_DIR/.env"
     else

@@ -6,7 +6,8 @@
 
 ## 前提
 
-- 在 WSL 的普通用户下执行 Ansible，**不要使用 `wsl -u root`**。
+- 优先在 Linux 控制主机或 Linux 运维环境中执行 Ansible。
+- 如仍使用 Windows / WSL 联调，可通过 WSL 兼容命令执行，但这不再是默认运维基线。
 - 使用 `tools/ansible/inventory.ini` 中的 `android` 账号连接目标主机。
 - `inventory.ini` 中的登录密码当前同时作为 sudo 密码使用。
 - `AGENT_SECRET` 必须与后端 `.env` 中的 `AGENT_SECRET` 保持一致。
@@ -20,7 +21,7 @@
 仓库不再保存真实主机密码，首次使用先复制示例文件：
 
 ```bash
-cd /mnt/f/stability-test-platform/tools/ansible
+cd /path/to/stability-test-platform/tools/ansible
 cp inventory.example.ini inventory.ini
 ```
 
@@ -52,9 +53,11 @@ export AGENT_SECRET="<与后端一致且长度至少 16 的 AGENT_SECRET>"
 后续命令都建议在 Ansible 目录下执行：
 
 ```bash
-cd /mnt/f/stability-test-platform/tools/ansible
+cd /path/to/stability-test-platform/tools/ansible
 export ANSIBLE_CONFIG=./ansible.cfg
 ```
+
+Windows / WSL 兼容示例仍可用，但仅作为补充入口。
 
 ## 日常命令
 
@@ -64,7 +67,7 @@ export ANSIBLE_CONFIG=./ansible.cfg
 ansible -i inventory.ini linux_hosts -m ping -o
 ```
 
-从 Windows 终端直接执行：
+Windows / WSL 兼容执行：
 
 ```bash
 wsl bash -lc 'cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible -i inventory.ini linux_hosts -m ping -o'
@@ -76,7 +79,7 @@ wsl bash -lc 'cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=
 ansible-playbook playbooks/check_agent.yml --limit 172.21.10.36
 ```
 
-从 Windows 终端直接执行：
+Windows / WSL 兼容执行：
 
 ```bash
 wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/check_agent.yml --limit 172.21.10.36"
@@ -106,7 +109,7 @@ ansible-playbook playbooks/service_agent.yml --limit 172.21.10.36 -e agent_servi
 ansible-playbook playbooks/install_agent.yml --limit 172.21.10.36
 ```
 
-从 Windows 终端直接执行：
+Windows / WSL 兼容执行：
 
 ```bash
 wsl bash -lc "cd /mnt/f/stability-test-platform/tools/ansible && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook playbooks/install_agent.yml --limit 172.21.10.36"
@@ -219,6 +222,11 @@ ansible-playbook playbooks/check_agent.yml
 ```
 
 如果只是想修改默认值，编辑 `tools/ansible/group_vars/linux_hosts.yml` 中的 `agent_api_url`。
+
+## HOST_ID 约束
+
+- 生产与预发布默认使用固定 `HOST_ID`，并要求与后端 `hosts.id` 对齐。
+- `AUTO_REGISTER_HOST=true` 仅保留给旧 agent / 临时实验兼容，不应作为批量运维默认值。
 
 ## SSH 公钥分发（可选）
 

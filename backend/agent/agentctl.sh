@@ -1,21 +1,103 @@
 #!/usr/bin/env bash
-set -euo pipefail
-INSTALL_DIR="${STP_INSTALL_DIR:-/opt/stability-test-agent}"
+set -uo pipefail
 
-cmd_health() {
-    echo -e "\033[0;34mHealth Check:\033[0m"; echo ""
-    systemctl -q is-active stability-test-agent 2>/dev/null && echo "  Service: \033[0;32mactive\033[0m" || { echo "  Service: \033[0;31minactive\033[0m"; return 1; }
-    systemctl -q is-enabled stability-test-agent 2>/dev/null && echo "  Auto-start: \033[0;32menabled\033[0m"
-    [ -f "${INSTALL_DIR}/.env" ] && echo "  Config: \033[0;32mfound\033[0m" || echo "  Config: \033[0;31mmissing\033[0m"
-    [ -f "${INSTALL_DIR}/.env" ] && { grep -q "^API_URL=" "${INSTALL_DIR}/.env" && echo "    API_URL: $(grep "^API_URL=" ${INSTALL_DIR}/.env | cut -d= -f2-)"; }
-    [ -f "${INSTALL_DIR}/logs/agent_error.log" ] && echo "  Error log: \033[0;32mfound ($(stat -c%s ${INSTALL_DIR}/logs/agent_error.log) bytes)\033[0m" || echo "  Error log: \033[0;31mmissing\033[0m"
-    python3 --version >/dev/null 2>&1 && echo "  Python: \033[0;32mOK\033[0m" || echo "  Python: \033[0;31mFAIL\033[0m"
-    adb version >/dev/null 2>&1 && echo "  ADB: \033[0;32mOK ($(adb version | head -1))\033[0m" || echo "  ADB: \033[0;31mFAIL\033[0m"
-    ndevices=$(adb devices 2>/dev/null | tail -n +2 | grep -v "^$" | wc -l)
-    echo "  Devices: \033[0;32m${ndevices}\033[0m"
-    api_url=$(grep "^API_URL=" "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-    if [ -n "${api_url}" ]; then curl -s --max-time 5 "${api_url}/" >/dev/null 2>&1 && echo "  Server: \033[0;32mreachable\033[0m" || echo "  Server: \033[0;31munreachable (${api_url})\033[0m"; else echo "  Server: \033[0;31mnot configured\033[0m"; fi
+INSTALL_DIR="${STP_INSTALL_DIR:-/opt/stability-test-agent}"
+SERVICE_NAME="${STP_AGENT_SERVICE:-stability-test-agent}"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+check_server_connection() {
+    local api_url="${1:-}"
+    if [ -z "$api_url" ]; then
+        return 1
+    fi
+    curl -fsS --max-time 5 "${api_url%/}/health" >/dev/null 2>&1 \
+        || curl -fsS --max-time 5 "${api_url%/}/" >/dev/null 2>&1
 }
-cmd_restart() { sudo systemctl restart stability-test-agent; }
-main() { [ $# -lt 1 ] && { echo "Usage: agentctl <health|restart>" >&2; exit 2; }; case "$1" in health) cmd_health ;; restart) cmd_restart ;; *) echo "Unknown: $1" >&2; exit 2 ;; esac; }
+
+health_check() {
+    local exit_code=0
+    local env_file="${INSTALL_DIR}/.env"
+    local API_URL=""
+
+    echo -e "${BLUE}健康检查:${NC}"
+    echo ""
+
+    if systemctl -q is-active "$SERVICE_NAME" 2>/dev/null; then
+        echo -e "  服务状态: ${GREEN}active${NC}"
+    else
+        echo -e "  服务状态: ${RED}inactive${NC}"
+        exit_code=1
+    fi
+
+    if systemctl -q is-enabled "$SERVICE_NAME" 2>/dev/null; then
+        echo -e "  开机自启: ${GREEN}enabled${NC}"
+    else
+        echo -e "  开机自启: ${YELLOW}disabled${NC}"
+        exit_code=1
+    fi
+
+    if [ -f "$env_file" ]; then
+        echo -e "  配置文件: ${GREEN}存在${NC}"
+        API_URL="$(grep "^API_URL=" "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+        HOST_ID="$(grep "^HOST_ID=" "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+        [ -n "$API_URL" ] && echo "    API_URL: $API_URL"
+        [ -n "$HOST_ID" ] && echo "    HOST_ID: $HOST_ID"
+    else
+        echo -e "  配置文件: ${RED}缺失${NC}"
+        exit_code=1
+    fi
+
+    if python3 --version >/dev/null 2>&1; then
+        echo -e "  Python 环境: ${GREEN}正常${NC}"
+    else
+        echo -e "  Python 环境: ${RED}异常${NC}"
+        exit_code=1
+    fi
+
+    if adb version >/dev/null 2>&1; then
+        echo -e "  ADB: ${GREEN}可用${NC} ($(adb version | sed -n '1p'))"
+    else
+        echo -e "  ADB: ${YELLOW}不可用${NC}"
+    fi
+
+    if command -v adb >/dev/null 2>&1; then
+        devices="$(adb devices 2>/dev/null | awk 'NR > 1 && NF {count++} END {print count + 0}')"
+        echo -e "  已识别设备: ${GREEN}${devices} 台${NC}"
+    fi
+
+    if [ -z "$API_URL" ]; then
+        echo -e "  服务器连接: ${RED}未配置${NC}"
+        exit_code=1
+    elif check_server_connection "$API_URL"; then
+        echo -e "  服务器连接: ${GREEN}正常${NC}"
+    else
+        echo -e "  服务器连接: ${YELLOW}无法连接${NC}"
+        exit_code=1
+    fi
+
+    return "$exit_code"
+}
+
+restart_service() {
+    sudo systemctl restart "$SERVICE_NAME"
+}
+
+main() {
+    if [ $# -lt 1 ]; then
+        echo "Usage: agentctl <health|restart>" >&2
+        exit 2
+    fi
+
+    case "$1" in
+        health) health_check ;;
+        restart) restart_service ;;
+        *) echo "Unknown: $1" >&2; exit 2 ;;
+    esac
+}
+
 main "$@"

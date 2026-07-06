@@ -17,6 +17,14 @@ def test_install_script_deploys_tracked_agentctl_script():
     )
 
 
+def test_install_script_defaults_to_fixed_host_id_mode():
+    text = INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+    assert "HOST_ID=$HOST_ID" in text
+    assert "AUTO_REGISTER_HOST=false" in text
+    assert "HOST_ID=auto" not in text
+
+
 def test_agentctl_health_returns_nonzero_for_critical_failures():
     text = AGENTCTL_SCRIPT.read_text(encoding="utf-8")
     match = re.search(r"health_check\(\) \{(?P<body>.*?)^\}", text, re.MULTILINE | re.DOTALL)
