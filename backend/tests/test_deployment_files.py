@@ -37,6 +37,9 @@ def test_docker_compose_mounts_repo_root_and_dev_storage_only():
     assert "- ./.docker/dev-aee-nfs:/var/lib/stp-dev/aee-nfs" in compose
     assert "- ./.docker/dev-aee-local:/var/lib/stp-dev/aee-local" in compose
     assert "STP_RUN_CONSOLE_LOG_ROOT: /tmp/stp-dev/console" in compose
+    assert "CORS_ORIGINS: http://127.0.0.1:${DEV_FRONTEND_PORT:-15173},http://localhost:${DEV_FRONTEND_PORT:-15173}" in compose
+    assert "STP_ADMIN_PASSWORD: ${STP_ADMIN_PASSWORD:-admin123}" in compose
+    assert "python /app/backend/scripts/init_dev_db.py" in compose
 
 
 def test_frontend_dockerfile_accepts_vite_build_args():
@@ -61,6 +64,15 @@ def test_https_nginx_template_exists_for_production_tls():
     https_conf = ROOT / "deploy" / "control-plane" / "nginx" / "stability-platform-https.conf"
 
     assert https_conf.exists()
+
+
+def test_control_plane_nginx_templates_proxy_health_endpoint():
+    nginx_dir = ROOT / "deploy" / "control-plane" / "nginx"
+
+    for filename in ("stability-platform.conf", "stability-platform-https.conf"):
+        conf = (nginx_dir / filename).read_text(encoding="utf-8")
+        assert "location /health" in conf
+        assert "proxy_pass http://127.0.0.1:8000/health;" in conf
 
 
 def test_frontend_docker_nginx_targets_server_service():

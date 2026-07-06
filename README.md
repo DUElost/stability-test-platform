@@ -49,6 +49,23 @@ docker compose up --build
 # Redis: 127.0.0.1:16379
 ```
 
+Compose 后端启动时会执行 dev-only 初始化脚本，按当前 ORM schema 创建本地开发库，并使用 `.env.server` 中的 `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` 创建或更新管理员账号。默认可用账号：
+
+```text
+admin / admin123
+```
+
+常用检查与日志：
+
+```bash
+docker compose ps
+curl http://127.0.0.1:18000/health
+docker compose logs -f server     # 后端 API / CSRF / 登录错误
+docker compose logs -f frontend   # 前端容器 Nginx 访问日志
+```
+
+如果登录提示 `CSRF check failed`，优先确认浏览器访问地址是否为 `http://127.0.0.1:15173` 或 `http://localhost:15173`，且 `.env.server` / Compose 中的 `CORS_ORIGINS` 包含对应 Origin。
+
 > Docker Compose 仅用于开发环境。不要在生产 checkout 内直接启动，也不要把开发容器挂到生产 NFS / AEE / 日志目录。
 
 ### 方式二：批处理脚本（Windows / WSL 兼容入口）
@@ -127,6 +144,7 @@ python -m backend.agent.main
 | `REDIS_URL` | `redis://localhost:6379/0` — SAQ 任务队列 |
 | `JWT_SECRET_KEY` | JWT 签名密钥（生产必改） |
 | `AGENT_SECRET` | Agent SocketIO 认证（生产必改，与 Agent 侧一致） |
+| `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD` | Docker Compose 开发初始化管理员账号；生产不要使用默认值 |
 | `STP_SCRIPT_ROOT` | 脚本扫描根；**开发环境必须显式设为** `<repo>/backend/agent/scripts` |
 | `STP_NFS_ROOT` | NFS 存储根（脚本/日志/产物） |
 | `ENV` | `development` / `production` — 生产触发多项 guard |
@@ -229,15 +247,61 @@ CI 流程见 `.github/workflows/ci.yml`（compileall → pytest → tsc → buil
 
 上线前请阅读 [`docs/production-minimum-deployment-checklist.md`](./docs/production-minimum-deployment-checklist.md)，核心检查项：
 
-1. **HTTPS**：Nginx 终止 TLS；`AUTH_COOKIE_SECURE=1`；`CORS_ORIGINS` 指向 HTTPS 域名
+1. **访问入口**：内网 HTTP 正式环境用 `ENV=internal` + `AUTH_COOKIE_SECURE=0`；HTTPS 环境才用 `ENV=production` + `AUTH_COOKIE_SECURE=1`
 2. **单实例后端**：避免多进程重复调度（APScheduler / SAQ 均在进程内）
 3. **数据库迁移**：`alembic upgrade head`（含 refresh token 黑名单等表）
 4. **Agent 配置**：每台唯一 `HOST_ID`；`AGENT_SECRET` 与后端一致
-5. **前端构建**：`VITE_API_BASE_URL=`（空）实现同源；Nginx 反代 `/api/` 与 `/socket.io/`
+5. **前端构建**：`VITE_API_BASE_URL=`（空）实现同源；Nginx 反代 `/api/`、`/health` 与 `/socket.io/`
 6. **Metrics 鉴权**：生产建议 `STP_METRICS_AUTH_REQUIRED=1`；如需额外收口，可叠加 Nginx IP 白名单
 7. **冒烟验收**：控制平面健康 → Agent ONLINE → 创建 PlanRun → 任务完整流转至终态 → 设备锁释放
 
 预发布逐条执行：[`docs/preprod-drill-runbook.md`](./docs/preprod-drill-runbook.md)
+
+### 生产环境运行与排障
+
+生产 / 预发布控制平面按 Linux 宿主机方式运行，不使用根目录 `docker-compose.yml`，也不会执行 Docker Compose 的 dev-only 数据库初始化脚本。内网 HTTP 正式环境属于业务生产，但技术 profile 应使用 `ENV=internal`，避免 `ENV=production` 的 HTTPS Cookie guard 阻断浏览器登录。
+
+生产数据库迁移由 systemd `ExecStartPre` 或人工命令执行：
+
+```bash
+cd /opt/stability-test-platform/backend
+../venv/bin/python -m alembic upgrade head
+```
+
+生产登录不要使用开发默认账号 `admin/admin123`。首次管理员账号应通过受控的生产用户初始化 / 管理流程创建；生产环境也不要保留 `STP_ADMIN_PASSWORD=admin123` 一类默认值。
+
+生产常用日志位置：
+
+```bash
+sudo systemctl status stability-backend --no-pager
+sudo journalctl -u stability-backend -f
+sudo tail -f /opt/stability-test-platform/logs/backend.log
+sudo tail -f /opt/stability-test-platform/logs/backend_error.log
+sudo tail -f /var/log/nginx/access.log
+sudo tail -f /var/log/nginx/error.log
+```
+
+生产若出现 `CSRF check failed`，优先检查浏览器访问的实际 Origin 是否与 `.env.backend` 中 `CORS_ORIGINS` 完全一致。内网 HTTP 正式环境通常应同时满足：
+
+```env
+ENV=internal
+AUTH_COOKIE_SECURE=0
+AUTH_COOKIE_SAMESITE=lax
+STP_CSRF_ENABLED=1
+STP_ALLOW_REGISTER=0
+STP_METRICS_AUTH_REQUIRED=1
+CORS_ORIGINS=http://<控制平面内网IP或主机名>
+```
+
+HTTPS 生产环境才使用：
+
+```env
+ENV=production
+AUTH_COOKIE_SECURE=1
+AUTH_COOKIE_SAMESITE=lax
+STP_CSRF_ENABLED=1
+CORS_ORIGINS=https://<你的前端域名>
+```
 
 ---
 

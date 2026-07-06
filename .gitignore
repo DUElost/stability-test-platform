@@ -50,6 +50,7 @@ venv-wsl/
 tools/ansible/inventory.ini
 tools/ansible/*.retry
 .worktrees/
+.docker/
 /backend/agent/tools/AIMonkeyTest_20260317
 .deepseek/
 .superpowers/

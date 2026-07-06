@@ -29,6 +29,7 @@
 - 不允许 Agent 使用 `HOST_ID=0`；每台 Agent 必须唯一且固定。
 - 读 API 已要求登录；`/metrics` 默认受 `STP_METRICS_AUTH_REQUIRED=1` 保护，生产可额外叠加 Nginx IP 白名单。
 - 前端 SocketIO 生产构建须设 `VITE_API_BASE_URL=`（空），Nginx 须反代 `/socket.io/`（见 §3.6）。
+- 内网 HTTP 正式环境使用 `ENV=internal`；只有 HTTPS 入口才使用 `ENV=production`，否则 `AUTH_COOKIE_SECURE=1` 会导致 HTTP 登录 Cookie 不可用。
 
 ## 3. 控制平面部署清单（主 Linux Host）
 
@@ -37,7 +38,7 @@
 - 安装基础依赖：
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip nginx curl
+sudo apt install -y python3 python3-venv python3-pip nginx postgresql redis-server nodejs npm rsync curl
 ```
 - 安装 Node.js 20（推荐 nvm）：
 ```bash
@@ -124,7 +125,7 @@ sudo cp deploy/control-plane/nginx/stability-platform.conf /etc/nginx/sites-avai
 
 若预发布 / 生产已经具备证书，优先改用 `deploy/control-plane/nginx/stability-platform-https.conf` 作为模板。
 
-模板已包含 `/api/`、`/socket.io/`（WebSocket 升级）与 legacy `/ws/`。
+模板已包含 `/api/`、`/health`、`/socket.io/`（WebSocket 升级）与 legacy `/ws/`。
 
 生产前端构建（同源，SocketIO 走 Nginx 443/80）：
 
@@ -135,10 +136,26 @@ VITE_API_BASE_URL= npm run build
 
 构建后确认：`frontend/src/config/index.ts` 在非 localhost 且 `VITE_API_BASE_URL` 为空时，
 `dashboardSocketUrl()` 返回相对路径 `/dashboard`（浏览器连 `wss://<域名>/socket.io/...`）。
-Nginx 模板须同时反代 `/api/` 与 `/socket.io/`（见 `deploy/control-plane/nginx/stability-platform.conf`
+Nginx 模板须同时反代 `/api/`、`/health` 与 `/socket.io/`（见 `deploy/control-plane/nginx/stability-platform.conf`
 与 Docker 版 `deploy/nginx/frontend-docker.conf`）。
 
-生产后端 env 必配（ADR-0024 guard 会校验）：
+内网 HTTP 正式环境后端 env 建议：
+
+```env
+ENV=internal
+AUTH_COOKIE_SECURE=0
+AUTH_COOKIE_SAMESITE=lax
+STP_CSRF_ENABLED=1
+STP_ALLOW_REGISTER=0
+JWT_SECRET_KEY=<强随机>
+AGENT_SECRET=<非 placeholder>
+CORS_ORIGINS=http://<控制平面内网IP或主机名>
+STP_ENABLE_INPROCESS_SAQ=1
+STP_METRICS_AUTH_REQUIRED=1
+REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+HTTPS 生产后端 env 必配（ADR-0024 guard 会校验）：
 
 ```env
 ENV=production
