@@ -1,5 +1,5 @@
-/opt/stability-test-platform/logs/backend.log
-/opt/stability-test-platform/logs/backend_error.log
+/home/debian13/stability-test-platform/logs/backend.log
+/home/debian13/stability-test-platform/logs/backend_error.log
 {
   daily
   rotate 14
