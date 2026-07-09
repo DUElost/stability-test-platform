@@ -8,6 +8,7 @@ Type=simple
 User=<deploy-user>
 WorkingDirectory=/home/debian13/stability-test-platform
 EnvironmentFile=/home/debian13/stability-test-platform/.env.backend
+ExecStartPre=/home/debian13/stability-test-platform/venv/bin/python -m py_compile /home/debian13/stability-test-platform/backend/main.py
 ExecStart=/home/debian13/stability-test-platform/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
