@@ -5,6 +5,7 @@ import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from typing import Any, List, Union
 
@@ -15,6 +16,7 @@ from backend.core.ssh_security import (
     SshSecurityConfigError,
     encrypt_ssh_password,
     resolve_host_ssh_credentials,
+    trust_host_key,
 )
 from backend.models.enums import JobStatus
 from backend.models.host import Host
@@ -27,8 +29,9 @@ from backend.api.schemas import (
     PaginatedResponse,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
-from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds
+from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
 from backend.services.plan_run_abort import abort_jobs_for_host
+from backend.tasks.saq_worker import enqueue_sync, EnqueueSyncError, get_saq_job_state_sync
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +88,7 @@ def _visible_plan_id(plan_id: int | None, hidden_plan_ids_set: set[int]) -> int 
     return None if int(plan_id) in hidden_plan_ids_set else int(plan_id)
 
 
-def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
+def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | None = None) -> HostOut:
     """从 ORM 对象构造 HostOut，从 host.extra 中提取 capacity/health。
 
     不能仅靠 HostOut.model_validate(h) —— Pydantic 不会自动从 JSON 列
@@ -100,6 +103,7 @@ def _host_to_out(h: Host, *, db: Session | None = None) -> HostOut:
     out.extra = extra
     out.capacity = extra.get("capacity")
     out.health = extra.get("health")
+    out.host_key_trust = host_key_trust
 
     if db is not None:
         from backend.models.plan_run import PlanRun
@@ -171,7 +175,14 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
         ssh_known_hosts_path=payload.ssh_known_hosts_path,
     )
     db.add(host)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"主机已存在（名称或 IP 重复）：{payload.name} / {payload.ip}",
+        ) from exc
     record_audit(
         db,
         action="create",
@@ -185,7 +196,17 @@ def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user
     )
     db.commit()
     db.refresh(host)
-    return _host_to_out(host)
+
+    # Best-effort ssh-keyscan so subsequent hot-update/install won't trip
+    # paramiko.RejectPolicy. Failure is non-fatal — surfaced as a warning.
+    key_ok, key_reason = trust_host_key(
+        host.ip or "", host.ssh_port or 22, host.ssh_known_hosts_path or "",
+    )
+    host_key_trust = "ok" if key_ok else f"failed: {key_reason}"
+    if not key_ok:
+        logger.warning("host_key_trust_failed host=%s ip=%s reason=%s", host.id, host.ip, key_reason)
+
+    return _host_to_out(host, host_key_trust=host_key_trust)
 
 
 @router.get("", response_model=Union[List[HostOut], PaginatedResponse])
@@ -236,6 +257,8 @@ def update_host(
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
 
+    old_ip = host.ip
+    old_port = host.ssh_port
     host.name = payload.name
     host.hostname = payload.name
     host.ip = payload.ip
@@ -261,9 +284,75 @@ def update_host(
         username=current_user.username,
         request=request,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"主机名或 IP 与其他主机冲突：{payload.name} / {payload.ip}",
+        ) from exc
     db.refresh(host)
-    return _host_to_out(host)
+
+    # Re-scan host key only when IP or port changed.
+    host_key_trust = None
+    if payload.ip != old_ip or payload.ssh_port != old_port:
+        key_ok, key_reason = trust_host_key(
+            host.ip or "", host.ssh_port or 22, host.ssh_known_hosts_path or "",
+        )
+        host_key_trust = "ok" if key_ok else f"failed: {key_reason}"
+        if not key_ok:
+            logger.warning("host_key_trust_failed host=%s ip=%s reason=%s", host.id, host.ip, key_reason)
+
+    return _host_to_out(host, host_key_trust=host_key_trust)
+
+
+@router.delete("/{host_id}")
+def delete_host(
+    host_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
+    """删除主机记录。仅 admin。若主机仍 ONLINE 或有活跃 Job 拒绝删除。"""
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="host not found")
+
+    if host.status == "ONLINE":
+        raise HTTPException(
+            status_code=409,
+            detail="主机当前 ONLINE，请先停止 Agent 服务再删除",
+        )
+
+    # 检查活跃 Job
+    active_jobs = (
+        db.query(JobInstance)
+        .filter(
+            JobInstance.host_id == host_id,
+            JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+        )
+        .count()
+    )
+    if active_jobs > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"主机有 {active_jobs} 个活跃 Job，请先 abort 再删除",
+        )
+
+    record_audit(
+        db,
+        action="delete",
+        resource_type="host",
+        resource_id=host.id,
+        details={"name": host.name, "ip": host.ip},
+        user_id=current_user.id,
+        username=current_user.username,
+        request=request,
+    )
+    db.delete(host)
+    db.commit()
+    return {"ok": True, "host_id": host_id, "message": "host deleted"}
 
 
 @router.patch("/{host_id}/watcher-admin-state", response_model=HostOut)
@@ -515,6 +604,7 @@ def host_hot_update(
         )
 
     agent_secret = _get_syncable_agent_secret() if sync_agent_secret else ""
+    code_version = get_agent_code_version()
 
     record_audit(
         db,
@@ -529,6 +619,7 @@ def host_hot_update(
             "aborted_jobs": (
                 aborted_summary["aborted_jobs"] if aborted_summary else []
             ),
+            "code_version": code_version,
         },
         user_id=current_user.id if current_user else None,
         username=current_user.username if current_user else None,
@@ -544,7 +635,27 @@ def host_hot_update(
         known_hosts_path=creds.known_hosts_path,
         sync_agent_secret=sync_agent_secret,
         agent_secret=agent_secret,
+        code_version=code_version,
     )
+
+    record_audit(
+        db,
+        action="hot_update_result",
+        resource_type="host",
+        resource_id=None,
+        details={
+            "host_id": host_id,
+            "ip": host.ip,
+            "ok": bool(result.get("ok")),
+            "deps_refreshed": bool(result.get("deps_refreshed")),
+            "code_version": result.get("code_version", ""),
+            "duration_ms": result.get("duration_ms"),
+            "message": result.get("message", ""),
+        },
+        user_id=current_user.id if current_user else None,
+        username=current_user.username if current_user else None,
+    )
+    db.commit()
 
     if not result["ok"]:
         raise HTTPException(status_code=502, detail=result["message"])
@@ -554,5 +665,98 @@ def host_hot_update(
         "host_id": host_id,
         "message": result["message"],
         "duration_ms": result.get("duration_ms"),
+        "deps_refreshed": result.get("deps_refreshed", False),
+        "code_version": result.get("code_version", ""),
         "abort_summary": aborted_summary,
+    }
+
+
+@router.post("/{host_id}/install")
+def host_install_agent(
+    host_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    """触发 Agent 首次安装（ansible-playbook install_agent.yml，SAQ 异步执行）。
+
+    自动检测控制平面 ansible-playbook + sshpass 是否可用；缺失则 501。
+    装完 install_agent.sh 自动落 sudoers.d NOPASSWD，解锁后续免密热更新。
+    """
+    import shutil
+
+    missing = [
+        cmd for cmd in ("ansible-playbook", "sshpass")
+        if not shutil.which(cmd)
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=501,
+            detail=(
+                f"Agent 首次安装缺少依赖：{', '.join(missing)}。"
+                f"控制平面请执行：apt install ansible-core sshpass。"
+                f"或改用 CLI: ansible-playbook tools/ansible/playbooks/install_agent.yml"
+            ),
+        )
+
+    host = db.get(Host, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail="host not found")
+    if not host.ip:
+        raise HTTPException(status_code=400, detail="Host has no IP address configured")
+
+    record_audit(
+        db,
+        action="install_agent_request",
+        resource_type="host",
+        resource_id=host_id,
+        details={"host_id": host_id, "ip": host.ip},
+        user_id=current_user.id if current_user else None,
+        username=current_user.username if current_user else None,
+    )
+    db.commit()
+
+    saq_key = f"install:{host_id}"
+    try:
+        enqueue_sync(
+            "install_agent_task",
+            key=saq_key,
+            timeout=900,
+            retries=0,
+            required=True,
+            host_id=host_id,
+            initiated_by=current_user.username if current_user else None,
+        )
+    except EnqueueSyncError as exc:
+        raise HTTPException(status_code=503, detail=f"SAQ enqueue failed: {exc}") from exc
+
+    return {
+        "ok": True,
+        "host_id": host_id,
+        "saq_key": saq_key,
+        "status": "queued",
+        "message": "Agent 安装任务已入队，轮询 GET /hosts/{id}/install/status 查看进度",
+    }
+
+
+@router.get("/{host_id}/install/status")
+def host_install_status(
+    host_id: str,
+    _db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
+    """查询 Agent 首次安装 SAQ 任务状态。返回 status + 已记录的 log_path（如有）。"""
+    saq_key = f"install:{host_id}"
+    state = get_saq_job_state_sync(saq_key)
+    if state is None:
+        return {"host_id": host_id, "saq_key": saq_key, "status": "unknown",
+                "log_path": None, "result": None}
+    result = None
+    if isinstance(state.get("result"), dict):
+        result = state["result"]
+    return {
+        "host_id": host_id,
+        "saq_key": saq_key,
+        "status": state.get("status", "unknown"),
+        "log_path": (result or {}).get("log_path"),
+        "result": result,
     }

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Rocket, Server } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
@@ -8,6 +8,7 @@ import { ExpandableHostTable, type HostTableData } from '@/components/network/Ex
 import { AddHostModal } from './components/AddHostModal';
 import HostHotUpdateConfirmDialog from '@/components/host/HostHotUpdateConfirmDialog';
 import { api } from '@/utils/api';
+import type { Host } from '@/utils/api/types';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -25,6 +26,7 @@ export default function HostsPage() {
   const confirmDialog = useConfirm();
   const sessionQ = useAuthSession();
   const canManageWatcherAdminState = sessionQ.data?.role === 'admin';
+  const isAdmin = sessionQ.data?.role === 'admin';
 
   const { data: hosts, isLoading, error } = useQuery({
     queryKey: hostKeys.list(),
@@ -39,15 +41,47 @@ export default function HostsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
-      api.hosts.create(data),
-    onSuccess: () => {
+    mutationFn: (data: Parameters<typeof api.hosts.create>[0]) => api.hosts.create(data),
+    onSuccess: (host) => {
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       setIsModalOpen(false);
       toast.success('主机添加成功');
+      if (host.host_key_trust && host.host_key_trust !== 'ok') {
+        toast.info(
+          `主机密钥自动信任失败（${host.host_key_trust}），热更新/首次安装前请手动 ssh-keyscan`,
+        );
+      }
     },
     onError: (error: any) => {
       toast.error(`添加主机失败: ${error.response?.data?.detail || error.message}`);
+    },
+  });
+
+  const [editingHost, setEditingHost] = useState<Host | null>(null);
+  const updateMutation = useMutation({
+    mutationFn: (vars: { hostId: string | number; data: Parameters<typeof api.hosts.update>[1] }) =>
+      api.hosts.update(vars.hostId, vars.data),
+    onSuccess: (host) => {
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      setEditingHost(null);
+      toast.success('主机已更新');
+      if (host.host_key_trust && host.host_key_trust !== 'ok') {
+        toast.info(`主机密钥自动信任失败（${host.host_key_trust}）`);
+      }
+    },
+    onError: (error: any) => {
+      toast.error(`更新主机失败: ${error.response?.data?.detail || error.message}`);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (hostId: string | number) => api.hosts.delete(hostId),
+    onSuccess: (_data, hostId) => {
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      toast.success(`主机 ${hostId} 已删除`);
+    },
+    onError: (error: any) => {
+      toast.error(`删除主机失败: ${error.response?.data?.detail || error.message}`);
     },
   });
 
@@ -89,6 +123,7 @@ export default function HostsPage() {
   });
 
   const [hotUpdatingHostId, setHotUpdatingHostId] = useState<number | string | null>(null);
+  const [installingHostId, setInstallingHostId] = useState<number | string | null>(null);
   const [pendingHotUpdateHostId, setPendingHotUpdateHostId] = useState<
     number | string | null
   >(null);
@@ -122,11 +157,15 @@ export default function HostsPage() {
   const hotUpdateMutation = useMutation({
     mutationFn: (vars: { hostId: number | string; abortRunningJobs: boolean }) =>
       api.hotUpdate.trigger(vars.hostId, { abortRunningJobs: vars.abortRunningJobs }),
-    onSuccess: (_data, vars) => {
+    onSuccess: (data, vars) => {
+      const depNote = data.deps_refreshed
+        ? ' (依赖已刷新)'
+        : ' (依赖未变)';
+      const verNote = data.code_version ? ` @${data.code_version}` : '';
       toast.success(
         vars.abortRunningJobs
-          ? `主机 ${vars.hostId} 已中止活跃 Job 并完成热更新`
-          : `主机 ${vars.hostId} 热更新完成`,
+          ? `主机 ${vars.hostId} 已中止活跃 Job 并完成热更新${depNote}${verNote}`
+          : `主机 ${vars.hostId} 热更新完成${depNote}${verNote}`,
       );
       setHotUpdatingHostId(null);
       setPendingHotUpdateHostId(null);
@@ -176,6 +215,72 @@ export default function HostsPage() {
   ) => {
     setHotUpdatingHostId(hostId);
     hotUpdateMutation.mutate({ hostId, abortRunningJobs: opts.abortRunningJobs });
+  };
+
+  const agentInstallStatusQ = useQuery({
+    queryKey: ['agent-install-status', installingHostId],
+    queryFn: () => api.agentInstall.status(installingHostId as string | number),
+    enabled: installingHostId != null,
+    refetchInterval: 3000,
+  });
+
+  useEffect(() => {
+    if (installingHostId == null) return;
+    const data = agentInstallStatusQ.data;
+    if (!data) return;
+    const s = data.status;
+    if (s !== 'complete' && s !== 'failed' && s !== 'aborted') return;
+    const result = data.result;
+    if (s === 'complete' && result?.ok) {
+      toast.success(`主机 ${installingHostId} Agent 安装完成`);
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+    } else {
+      toast.error(
+        `主机 ${installingHostId} Agent 安装失败: ${result?.message ?? s}`,
+      );
+    }
+    setInstallingHostId(null);
+  }, [agentInstallStatusQ.data, installingHostId, queryClient, toast]);
+
+  const handleInstall = (hostId: number | string) => {
+    setInstallingHostId(hostId);
+    api.agentInstall
+      .trigger(hostId)
+      .then(() => {
+        toast.info(`主机 ${hostId} 安装任务已入队，轮询进度中…`);
+        agentInstallStatusQ.refetch();
+      })
+      .catch((err: any) => {
+        toast.error(
+          `触发安装失败: ${err?.response?.data?.detail ?? (err?.message || '未知错误')}`,
+        );
+        setInstallingHostId(null);
+      });
+  };
+
+  const handleEdit = (host: HostTableData) => {
+    const full = hosts?.find((h: any) => h.id === host.id);
+    if (full) setEditingHost(full);
+  };
+
+  const handleEditSubmit = (data: {
+    name: string;
+    ip: string;
+    ssh_port: number;
+    ssh_user: string;
+    ssh_password?: string | null;
+  }) => {
+    if (!editingHost) return;
+    updateMutation.mutate({ hostId: editingHost.id, data });
+  };
+
+  const handleDelete = async (host: HostTableData) => {
+    const ok = await confirmDialog({
+      description: `确定删除主机「${host.name ?? host.id}」(${host.ip ?? '?'})？此操作不可恢复。`,
+    });
+    if (ok) {
+      deleteMutation.mutate(host.id);
+    }
   };
 
   const handleBatchDeploy = async () => {
@@ -349,10 +454,12 @@ export default function HostsPage() {
           description="添加您的第一台测试执行节点"
           icon={<Server className="w-16 h-16" />}
           action={
-            <Button onClick={() => setIsModalOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              添加主机
-            </Button>
+            isAdmin ? (
+              <Button onClick={() => setIsModalOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" />
+                添加主机
+              </Button>
+            ) : undefined
           }
         />
         <AddHostModal
@@ -380,10 +487,12 @@ export default function HostsPage() {
             {batchDeployMutation.isPending ? '部署中...' : `批量部署 (${selectedHostIds.size})`}
           </Button>
         )}
-        <Button onClick={() => setIsModalOpen(true)}>
-          <Plus className="w-4 h-4" />
-          添加主机
-        </Button>
+        {isAdmin && (
+          <Button onClick={() => setIsModalOpen(true)}>
+            <Plus className="w-4 h-4" />
+            添加主机
+          </Button>
+        )}
       </div>
 
       {/* Host Table */}
@@ -392,13 +501,19 @@ export default function HostsPage() {
           hosts={tableData}
           onDeploy={handleDeploy}
           isDeploying={(hostId: string | number) => deployMutation.isPending && deployingHostId === hostId}
-          onHotUpdate={handleHotUpdate}
+          onHotUpdate={isAdmin ? handleHotUpdate : undefined}
           isHotUpdating={(hostId: string | number) => hotUpdateMutation.isPending && hotUpdatingHostId === hostId}
+          onInstall={isAdmin ? handleInstall : undefined}
+          isInstalling={(hostId: string | number) => installingHostId === hostId}
+          onEdit={isAdmin ? handleEdit : undefined}
+          onDelete={isAdmin ? handleDelete : undefined}
+          isDeleting={(hostId: string | number) => deleteMutation.isPending && deleteMutation.variables === hostId}
           onWatcherAdminStateChange={handleWatcherAdminStateChange}
           isWatcherAdminStateUpdating={(hostId: string | number) =>
             watcherAdminStateMutation.isPending && watcherAdminUpdatingHostId === hostId
           }
           canManageWatcherAdminState={canManageWatcherAdminState}
+          isAdmin={isAdmin}
           selectedIds={selectedHostIds}
           onSelectionChange={setSelectedHostIds}
         />
@@ -406,10 +521,12 @@ export default function HostsPage() {
         <Card className="p-12 text-center">
           <h3 className={cn('text-lg font-medium mb-2', TEXT.heading)}>暂无主机</h3>
           <p className={cn('text-sm mb-4', TEXT.subtitle)}>添加您的第一台主机以开始使用。</p>
-          <Button onClick={() => setIsModalOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加主机
-          </Button>
+          {isAdmin && (
+            <Button onClick={() => setIsModalOpen(true)}>
+              <Plus className="w-4 h-4" />
+              添加主机
+            </Button>
+          )}
         </Card>
       )}
 
@@ -418,6 +535,16 @@ export default function HostsPage() {
         onClose={() => setIsModalOpen(false)}
         onSubmit={(data) => createMutation.mutate(data)}
         isSubmitting={createMutation.isPending}
+      />
+
+      <AddHostModal
+        isOpen={editingHost != null}
+        editingHost={editingHost}
+        onClose={() => {
+          if (!updateMutation.isPending) setEditingHost(null);
+        }}
+        onSubmit={handleEditSubmit}
+        isSubmitting={updateMutation.isPending}
       />
 
       <HostHotUpdateConfirmDialog

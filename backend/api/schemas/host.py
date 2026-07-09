@@ -50,6 +50,8 @@ class HostOut(ORMBaseModel):
     # ADR-0021: hot-update guard — populated only on GET /hosts/{id}.
     active_job_count: int = 0
     active_jobs: List[HostActiveJob] = Field(default_factory=list)
+    # ssh-keyscan result on create/update ("ok" | "failed: <reason>" | None).
+    host_key_trust: Optional[str] = None
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod

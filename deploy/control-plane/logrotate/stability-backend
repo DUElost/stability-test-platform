@@ -1,0 +1,12 @@
+/opt/stability-test-platform/logs/backend.log
+/opt/stability-test-platform/logs/backend_error.log
+{
+  daily
+  rotate 14
+  compress
+  delaycompress
+  missingok
+  notifempty
+  copytruncate
+}
+

@@ -2,10 +2,25 @@
 设备发现和采集模块 - 用于测试
 """
 import logging
+import os
 import subprocess
 from typing import Dict, List, Any, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+_STATIC_DEVICE_SERIALS_ENV = "STP_STATIC_DEVICE_SERIALS"
+
+
+def _static_device_serials() -> list[str]:
+    """Optional dev/testing override: provide a static device list without ADB.
+
+    When set (CSV), HeartbeatThread will report these devices as connected so
+    control-plane smoke tests can run in environments without adb/real devices.
+    """
+    raw = os.getenv(_STATIC_DEVICE_SERIALS_ENV, "").strip()
+    if not raw:
+        return []
+    return [s.strip() for s in raw.split(",") if s.strip()]
 
 
 def discover_devices(adb_path: str = "adb") -> List[Dict[str, Any]]:
@@ -15,6 +30,18 @@ def discover_devices(adb_path: str = "adb") -> List[Dict[str, Any]]:
     Returns:
         设备列表，每个设备包含 serial, adb_state, model
     """
+    static_serials = _static_device_serials()
+    if static_serials:
+        logger.info(
+            "discovered_static_devices: %d devices (env=%s)",
+            len(static_serials),
+            _STATIC_DEVICE_SERIALS_ENV,
+        )
+        return [
+            {"serial": serial, "adb_state": "device", "model": "static"}
+            for serial in static_serials
+        ]
+
     try:
         result = subprocess.run(
             [adb_path, "devices", "-l"],
@@ -69,6 +96,18 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
     Returns:
         设备信息字典
     """
+    if serial in set(_static_device_serials()):
+        return {
+            "serial": serial,
+            "adb_state": "device",
+            "adb_connected": True,
+            "model": "static",
+            "battery_level": None,
+            "temperature": None,
+            "network_latency": None,
+            "build_display_id": None,
+        }
+
     info = {
         "serial": serial,
         "adb_state": "unknown",

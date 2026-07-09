@@ -200,7 +200,8 @@ def login_failure_hint(
 class APIClient:
     def __init__(self, base_url: str, origin: str, timeout: float = 30.0):
         self._origin = origin
-        self._client = httpx.Client(base_url=base_url, timeout=timeout)
+        # Avoid implicit proxies from environment variables in preprod hosts.
+        self._client = httpx.Client(base_url=base_url, timeout=timeout, trust_env=False)
         self._logged_in = False
 
     def login(self, username: str, password: str, *, env_file: Optional[Path] = None) -> None:
@@ -413,9 +414,15 @@ def hot_update(client: APIClient, host_id: str) -> bool:
     return True
 
 
-def _update_existing_plan(client: APIClient, plan_id: int, plan_name: str) -> int:
+def _update_existing_plan(
+    client: APIClient,
+    plan_id: int,
+    plan_name: str,
+    *,
+    plan_payload: dict[str, Any],
+) -> int:
     """PUT 更新已有 Plan（保留 plan_id，供有执行历史的 Plan 复用）。"""
-    payload = {**PLAN_PAYLOAD, "name": plan_name}
+    payload = {**plan_payload, "name": plan_name}
     r = client.put(f"/api/v1/plans/{plan_id}", json=payload)
     if r.status_code != 200:
         die(f"update plan {plan_id} status={r.status_code} body={r.text[:500]}")
@@ -426,7 +433,12 @@ def _update_existing_plan(client: APIClient, plan_id: int, plan_name: str) -> in
     return int(plan["id"])
 
 
-def ensure_smoke_plan(client: APIClient, plan_name: str) -> int:
+def ensure_smoke_plan(
+    client: APIClient,
+    plan_name: str,
+    *,
+    plan_payload: dict[str, Any],
+) -> int:
     """清理或复用同名 smoke Plan：能删则删后新建，有执行历史则 PUT 就地更新。"""
     step(f"确保 smoke Plan name={plan_name}")
     r = client.get("/api/v1/plans?limit=200")
@@ -438,7 +450,7 @@ def ensure_smoke_plan(client: APIClient, plan_name: str) -> int:
     matched = [p for p in plans if p.get("name") == plan_name]
     if not matched:
         info("无同名旧 Plan，创建新 Plan")
-        return create_plan(client)
+        return create_plan(client, plan_payload=plan_payload)
 
     reuse_id: Optional[int] = None
     deleted_any = False
@@ -461,15 +473,20 @@ def ensure_smoke_plan(client: APIClient, plan_name: str) -> int:
         die(f"DELETE plan {pid} 失败 status={d.status_code} body={d.text[:300]}")
 
     if reuse_id is not None:
-        return _update_existing_plan(client, reuse_id, plan_name)
+        return _update_existing_plan(
+            client,
+            reuse_id,
+            plan_name,
+            plan_payload=plan_payload,
+        )
     if deleted_any:
-        return create_plan(client)
+        return create_plan(client, plan_payload=plan_payload)
     die(f"同名 Plan 存在但无法删除或更新: name={plan_name}")
 
 
-def create_plan(client: APIClient) -> int:
+def create_plan(client: APIClient, *, plan_payload: dict[str, Any]) -> int:
     step("创建 Plan")
-    r = client.post("/api/v1/plans", json=PLAN_PAYLOAD)
+    r = client.post("/api/v1/plans", json=plan_payload)
     if r.status_code != 201:
         die(f"create_plan status={r.status_code} body={r.text[:500]}")
     plan = _unwrap(r.json())
@@ -596,6 +613,11 @@ def main() -> None:
                    help="跳过 Agent 热更新")
     p.add_argument("--no-wait", action="store_true",
                    help="触发后立即退出，不等待 PlanRun 终态")
+    p.add_argument(
+        "--no-adb",
+        action="store_true",
+        help="在无 adb/真机环境下使用 noop 脚本跑通 dispatcher 链路（DEV ONLY）",
+    )
     p.add_argument("--timeout", type=int, default=600,
                    help="轮询超时秒数（default: 600）")
     p.add_argument("--poll-interval", type=int, default=5,
@@ -630,7 +652,23 @@ def main() -> None:
         if not args.no_hot_update:
             hot_update(client, target_host_id)
 
-        plan_id = ensure_smoke_plan(client, DEFAULT_PLAN_NAME)
+        plan_payload = PLAN_PAYLOAD
+        if args.no_adb:
+            plan_payload = {**PLAN_PAYLOAD}
+            plan_payload["patrol_interval_seconds"] = 2
+            plan_payload["timeout_seconds"] = 20
+            plan_payload["steps"] = [
+                {"step_key": "init_noop_0", "script_name": "noop", "script_version": "1.0.0",
+                 "stage": "init", "sort_order": 0, "timeout_seconds": 10, "retry": 0},
+                {"step_key": "init_noop_1", "script_name": "noop", "script_version": "1.0.0",
+                 "stage": "init", "sort_order": 1, "timeout_seconds": 10, "retry": 0},
+                {"step_key": "patrol_noop", "script_name": "noop", "script_version": "1.0.0",
+                 "stage": "patrol", "sort_order": 0, "timeout_seconds": 10, "retry": 0},
+                {"step_key": "teardown_noop", "script_name": "noop", "script_version": "1.0.0",
+                 "stage": "teardown", "sort_order": 0, "timeout_seconds": 10, "retry": 0},
+            ]
+
+        plan_id = ensure_smoke_plan(client, DEFAULT_PLAN_NAME, plan_payload=plan_payload)
         preview(client, plan_id, [device_id])
         plan_run_id = trigger(client, plan_id, [device_id])
 

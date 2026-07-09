@@ -39,7 +39,7 @@
     - name: Run install script non-interactively
       become: true
       ansible.builtin.shell: |
-        printf '%s\n\n' '{{ agent_api_url }}' | bash install_agent.sh
+        printf '%s\n%s\n' '{{ agent_api_url }}' '{{ agent_host_id }}' | bash install_agent.sh
       args:
         chdir: "{{ agent_remote_tmp_dir }}"
         executable: /bin/bash
@@ -48,6 +48,7 @@
         AGENT_USER: "{{ agent_user }}"
         AGENT_GROUP: "{{ agent_group }}"
         AGENT_SECRET: "{{ agent_secret }}"
+        PIP_INDEX_URL: "{{ agent_pip_index_url | default('') }}"
 
     - name: Refresh agentctl command from staged source
       become: true
@@ -80,12 +81,12 @@
         group: "{{ agent_group }}"
         mode: "0640"
 
-    - name: Enable and start agent service
+    - name: Restart agent service to load updated .env
       become: true
       ansible.builtin.systemd:
         name: "{{ agent_service_name }}"
         enabled: true
-        state: started
+        state: restarted
         daemon_reload: true
 
     - name: Verify service is active after install

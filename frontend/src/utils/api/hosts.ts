@@ -1,16 +1,28 @@
 import apiClient from './client';
 import type { Host, PaginatedResponse } from './types';
 
+export interface HostMutationInput {
+  name: string;
+  ip: string;
+  ssh_port?: number;
+  ssh_user?: string;
+  ssh_password?: string | null;
+  ssh_auth_type?: string;
+  ssh_key_path?: string | null;
+}
+
 export const hosts = {
   list: (skip = 0, limit = 50) =>
     apiClient.get<PaginatedResponse<Host>>('/hosts', { params: { skip, limit } }).then(r => r.data),
   get: (id: number | string) => apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
   getDetail: (id: number | string) =>
     apiClient.get<Host>(`/hosts/${id}`).then(r => r.data),
-  create: (data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
+  create: (data: HostMutationInput) =>
     apiClient.post<Host>('/hosts', data).then(r => r.data),
-  update: (id: number | string, data: { name: string; ip: string; ssh_port?: number; ssh_user?: string }) =>
+  update: (id: number | string, data: HostMutationInput) =>
     apiClient.put<Host>(`/hosts/${id}`, data).then(r => r.data),
+  delete: (id: number | string) =>
+    apiClient.delete<{ ok: boolean; host_id: string; message: string }>(`/hosts/${id}`).then(r => r.data),
   updateWatcherAdminState: (
     id: number | string,
     data: { watcher_admin_active: boolean },
@@ -27,6 +39,8 @@ export interface HotUpdateResult {
   host_id: number;
   message: string;
   duration_ms?: number;
+  deps_refreshed?: boolean;
+  code_version?: string;
   // Present when the request was issued with abort_running_jobs=true.
   aborted?: {
     plan_runs?: number[];
@@ -71,6 +85,32 @@ export const hotUpdate = {
         ? { params: { abort_running_jobs: true } }
         : undefined,
     ).then(r => r.data),
+};
+
+export interface AgentInstallResult {
+  ok: boolean;
+  rc: number;
+  log_path: string;
+  message: string;
+}
+
+export interface AgentInstallStatus {
+  host_id: string;
+  saq_key: string;
+  status: string; // queued | active | complete | failed | aborted | unknown
+  log_path?: string | null;
+  result?: AgentInstallResult | null;
+}
+
+export const agentInstall = {
+  trigger: (hostId: number | string) =>
+    apiClient
+      .post<{ ok: boolean; host_id: string; saq_key: string; status: string; message: string }>(
+        `/hosts/${hostId}/install`,
+      )
+      .then(r => r.data),
+  status: (hostId: number | string) =>
+    apiClient.get<AgentInstallStatus>(`/hosts/${hostId}/install/status`).then(r => r.data),
 };
 
 export const deploy = {

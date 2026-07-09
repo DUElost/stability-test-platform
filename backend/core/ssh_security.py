@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
 import posixpath
 import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
@@ -105,6 +107,68 @@ def get_ssh_log_roots() -> tuple[str, ...]:
     if not roots:
         raise SshSecurityConfigError("STP_SSH_LOG_ROOTS must contain at least one absolute path")
     return roots
+
+
+def _resolve_known_hosts_path(explicit: str = "") -> Path:
+    """Resolve the known_hosts file to use for host-key trust writes.
+
+    Order: explicit arg > STP_SSH_KNOWN_HOSTS env > ~/.ssh/known_hosts.
+    """
+    raw = (explicit or os.getenv("STP_SSH_KNOWN_HOSTS", "") or "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / ".ssh" / "known_hosts"
+
+
+def trust_host_key(ip: str, port: int = 22, known_hosts_path: str = "", timeout: int = 10) -> tuple[bool, str]:
+    """Best-effort ssh-keyscan of (ip, port) appended to known_hosts.
+
+    Returns (ok, reason). Never raises — failures are captured so callers can
+    surface a warning without blocking host creation.
+    """
+    ip = (ip or "").strip()
+    if not ip:
+        return False, "empty ip"
+
+    try:
+        path = _resolve_known_hosts_path(known_hosts_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+
+        # Probe the host key. ssh-keyscan prints plain `ip` for port 22 and
+        # `[ip]:port` for non-default ports.
+        keyscan = subprocess.run(
+            ["ssh-keyscan", "-T", str(timeout), "-p", str(port), ip],
+            capture_output=True,
+            text=True,
+            timeout=timeout + 5,
+            check=False,
+        )
+        new_keys = [ln for ln in keyscan.stdout.splitlines() if ln.strip() and not ln.startswith("#")]
+        if not new_keys:
+            return False, f"ssh-keyscan returned no keys (rc={keyscan.returncode})"
+
+        # Rewrite the file under an exclusive lock: drop prior entries for this
+        # host, then append the freshly-scanned keys.
+        port_token = f"[{ip}]:{port}" if port and port != 22 else None
+        with open(path, "r+", encoding="utf-8") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            try:
+                existing = fh.read().splitlines()
+                kept = [
+                    ln for ln in existing
+                    if ln.split(" ", 1)[0] != ip and (port_token is None or ln.split(" ", 1)[0] != port_token)
+                ]
+                merged = kept + new_keys
+                fh.seek(0)
+                fh.truncate()
+                fh.write("\n".join(merged) + "\n")
+                fh.flush()
+            finally:
+                fcntl.flock(fh, fcntl.LOCK_UN)
+        return True, "ok"
+    except Exception as exc:  # noqa: BLE001 — best-effort, never raise
+        return False, f"{type(exc).__name__}: {exc}"
 
 
 def normalize_remote_log_path(

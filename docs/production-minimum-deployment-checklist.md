@@ -77,7 +77,17 @@ pip install -r backend/requirements.txt
 创建后端环境文件 `/opt/stability-test-platform/.env.backend`：
 
 ```bash
-python3 tools/prepare_env.py --template deploy/control-plane/env/.env.backend.example --target /opt/stability-test-platform/.env.backend
+# 内网 HTTP 正式环境：使用 internal profile（ENV=internal + AUTH_COOKIE_SECURE=0）
+python3 tools/prepare_env.py \
+  --template deploy/control-plane/env/.env.backend.internal.example \
+  --target /opt/stability-test-platform/.env.backend \
+  --replace-placeholders
+
+# HTTPS 生产环境：使用 production profile（ENV=production + AUTH_COOKIE_SECURE=1）
+# python3 tools/prepare_env.py \
+#   --template deploy/control-plane/env/.env.backend.example \
+#   --target /opt/stability-test-platform/.env.backend \
+#   --replace-placeholders
 ```
 
 ### 3.4 前端构建
@@ -105,6 +115,11 @@ cd /opt/stability-test-platform/backend
 ../venv/bin/python -m alembic upgrade head
 ```
 
+迁移后可考虑将“迁移”与“服务启动”解耦（避免每次重启都跑迁移）：
+
+- 使用 `deploy/control-plane/systemd/stability-backend-nomigrate.service` 作为常驻服务
+- 部署时手动/CI 执行 `deploy/control-plane/systemd/stability-backend-migrate.service`（oneshot）
+
 启用服务：
 
 ```bash
@@ -113,6 +128,16 @@ sudo systemctl daemon-reload
 sudo systemctl enable stability-backend
 sudo systemctl start stability-backend
 sudo systemctl status stability-backend --no-pager
+```
+
+### 3.5.1 日志轮转（logrotate）
+
+`stability-backend.service` 默认把 stdout/stderr append 到本地文件（`logs/backend.log` / `logs/backend_error.log`），建议配置 logrotate：
+
+```bash
+sudo cp deploy/control-plane/logrotate/stability-backend /etc/logrotate.d/stability-backend
+# 可选：立即验证一次
+sudo logrotate -f /etc/logrotate.d/stability-backend
 ```
 
 ### 3.6 Nginx（前端静态 + API / SocketIO 反向代理）
@@ -138,6 +163,16 @@ VITE_API_BASE_URL= npm run build
 `dashboardSocketUrl()` 返回相对路径 `/dashboard`（浏览器连 `wss://<域名>/socket.io/...`）。
 Nginx 模板须同时反代 `/api/`、`/health` 与 `/socket.io/`（见 `deploy/control-plane/nginx/stability-platform.conf`
 与 Docker 版 `deploy/nginx/frontend-docker.conf`）。
+
+部署自检（模板 + Stage A env/health/login/CSRF 探测）：
+
+```bash
+# 如需登录/CSRF probe，请先在环境中设置 STP_ADMIN_PASSWORD（不打印 secret）
+python3 backend/scripts/preflight_control_plane.py \
+  --backend http://127.0.0.1:8000 \
+  --env-file /opt/stability-test-platform/.env.backend \
+  --origin http://<你的前端Origin>
+```
 
 内网 HTTP 正式环境后端 env 建议：
 

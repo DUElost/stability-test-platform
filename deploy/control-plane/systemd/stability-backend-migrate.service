@@ -1,0 +1,14 @@
+[Unit]
+Description=Stability Test Platform Backend DB Migration (oneshot)
+After=network.target
+
+[Service]
+Type=oneshot
+User=<deploy-user>
+WorkingDirectory=/opt/stability-test-platform
+EnvironmentFile=/opt/stability-test-platform/.env.backend
+ExecStart=/bin/bash -lc 'cd /opt/stability-test-platform/backend && ../venv/bin/python -m alembic upgrade head'
+
+[Install]
+WantedBy=multi-user.target
+

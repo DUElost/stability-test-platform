@@ -39,6 +39,8 @@ export interface Host {
   // ADR-0021 hot-update gate — populated only on GET /hosts/{id}.
   active_job_count?: number;
   active_jobs?: HostActiveJob[];
+  // ssh-keyscan result on create/update ("ok" | "failed: <reason>" | null).
+  host_key_trust?: string | null;
 }
 
 export interface Device {

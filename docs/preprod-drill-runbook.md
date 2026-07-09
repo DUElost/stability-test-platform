@@ -59,7 +59,17 @@ source venv/bin/activate
 pip install -r backend/requirements.txt
 cd backend && ../venv/bin/python -m alembic upgrade head && cd ..
 
-python3 tools/prepare_env.py --template deploy/control-plane/env/.env.backend.example --target "$CONTROL_DIR/.env.backend"
+# 内网 HTTP 演练（推荐）：使用 internal profile，避免 Secure Cookie 在 HTTP 下不可用。
+python3 tools/prepare_env.py \
+  --template deploy/control-plane/env/.env.backend.internal.example \
+  --target "$CONTROL_DIR/.env.backend" \
+  --replace-placeholders
+
+# 若预发布已启用 HTTPS，改用 production profile：
+# python3 tools/prepare_env.py \
+#   --template deploy/control-plane/env/.env.backend.example \
+#   --target "$CONTROL_DIR/.env.backend" \
+#   --replace-placeholders
 mkdir -p "$CONTROL_DIR/logs"
 
 cp deploy/control-plane/systemd/stability-backend.service /tmp/stability-backend.service

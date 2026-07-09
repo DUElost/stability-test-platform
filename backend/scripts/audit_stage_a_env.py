@@ -74,8 +74,12 @@ def mask(val: str) -> str:
 
 def probe_backend(base: str) -> dict:
     out: dict = {}
+    # This audit runs in preprod/dev environments where global proxy env vars
+    # (e.g. ALL_PROXY) can be present. For health/auth checks we must talk to
+    # the control-plane directly, not through an implicit proxy.
+    client = httpx.Client(timeout=15, trust_env=False)
     try:
-        r = httpx.get(f"{base}/health", timeout=10)
+        r = client.get(f"{base}/health")
         out["health_status"] = r.status_code
         out["health_body"] = r.json() if r.status_code == 200 else r.text[:200]
     except Exception as exc:
@@ -87,11 +91,10 @@ def probe_backend(base: str) -> dict:
     pwd = os.getenv("STP_ADMIN_PASSWORD", "")
     if pwd:
         try:
-            lr = httpx.post(
+            lr = client.post(
                 f"{base}/api/v1/auth/login",
                 data={"username": os.getenv("STP_ADMIN_USER", "admin"), "password": pwd},
                 headers=h,
-                timeout=15,
             )
             out["login_status"] = lr.status_code
             cookies = lr.headers.get_list("set-cookie") if hasattr(lr.headers, "get_list") else []
@@ -109,14 +112,17 @@ def probe_backend(base: str) -> dict:
                     flags.append(f"SameSite={m.group(1)}")
                 out["set_cookie_flags"].append(flags)
             # CSRF: POST without Origin should fail if enabled
-            bad = httpx.post(
+            bad = client.post(
                 f"{base}/api/v1/auth/logout",
                 cookies=lr.cookies,
-                timeout=10,
             )
             out["csrf_logout_no_origin"] = bad.status_code
         except Exception as exc:
             out["login_error"] = str(exc)
+        finally:
+            client.close()
+    else:
+        client.close()
     return out
 
 

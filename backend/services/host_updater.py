@@ -112,6 +112,7 @@ SERVICE_NAME="{service_name}"
 TAR_PATH="{tar_path}"
 SYNC_AGENT_SECRET="{sync_agent_secret}"
 AGENT_SECRET_B64="{agent_secret_b64}"
+export PIP_INDEX_URL="{pip_index_url}"
 
 if [ ! -d "$INSTALL_DIR" ]; then
     echo "ERROR: Agent not installed at $INSTALL_DIR"
@@ -127,6 +128,9 @@ tar xzf "$TAR_PATH" -C "$TMPDIR"
 # Fix CRLF from Windows sources
 find "$TMPDIR" -type f \( -name "*.py" -o -name "*.sh" \) \
     -exec sed -i 's/\r$//' {{}} + 2>/dev/null || true
+
+# Capture pre-sync requirements.txt sha to detect dependency changes
+OLD_REQ_SHA=$(sudo sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
 
 # Rsync into install dir
 sudo rsync -av --delete \
@@ -174,6 +178,22 @@ fi
 # Fix ownership
 sudo chown -R {user}:{group} "$INSTALL_DIR"
 
+# Refresh Python dependencies if requirements.txt changed
+DEPS_REFRESHED=0
+NEW_REQ_SHA=$(sha256sum "$INSTALL_DIR/agent/requirements.txt" 2>/dev/null | cut -d' ' -f1 || echo "none")
+if [ -n "$NEW_REQ_SHA" ] && [ "$NEW_REQ_SHA" != "none" ] && [ "$OLD_REQ_SHA" != "$NEW_REQ_SHA" ]; then
+    echo "INFO: requirements.txt changed ($OLD_REQ_SHA -> $NEW_REQ_SHA), running pip install"
+    "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/agent/requirements.txt" -q --disable-pip-version-check
+    PIP_RC=$?
+    if [ "$PIP_RC" -ne 0 ]; then
+        echo "ERROR: pip install failed (exit=$PIP_RC); service NOT restarted to avoid crash"
+        echo "STP_DEPS_REFRESHED=0"
+        exit 1
+    fi
+    DEPS_REFRESHED=1
+fi
+echo "STP_DEPS_REFRESHED=$DEPS_REFRESHED"
+
 # Restart service
 sudo systemctl restart "$SERVICE_NAME"
 
@@ -196,6 +216,7 @@ def _build_remote_script(
     group: str,
     sync_agent_secret: bool = False,
     agent_secret: str = "",
+    pip_index_url: str = "",
 ) -> str:
     agent_secret_b64 = ""
     if sync_agent_secret:
@@ -211,6 +232,7 @@ def _build_remote_script(
         agent_secret_b64=agent_secret_b64,
         user=user,
         group=group,
+        pip_index_url=pip_index_url,
     )
 
 
@@ -232,6 +254,34 @@ def _ssh_connect(host_ip: str, port: int, username: str,
     return client, sftp
 
 
+def _parse_deps_refreshed(stdout_text: str) -> bool:
+    """Extract the STP_DEPS_REFRESHED sentinel (0/1) from remote script stdout."""
+    for line in reversed(stdout_text.splitlines()):
+        line = line.strip()
+        if line.startswith("STP_DEPS_REFRESHED="):
+            return line.split("=", 1)[1].strip() == "1"
+    return False
+
+
+def get_agent_code_version() -> str:
+    """Return the short git HEAD of the agent source tree, or '' if unavailable."""
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(_AGENT_SOURCE_DIR), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if completed.returncode == 0:
+            return completed.stdout.strip()
+    except Exception:
+        logger.debug("agent_code_version_lookup_failed", exc_info=True)
+    return ""
+
+
 def execute_hot_update(
     host_ip: str,
     ssh_port: int = 22,
@@ -243,13 +293,19 @@ def execute_hot_update(
     install_group: str = "android",
     sync_agent_secret: bool = False,
     agent_secret: str = "",
+    code_version: str = "",
+    pip_index_url: str = "",
 ) -> dict:
     """Execute a hot-update on a remote Linux host.
 
-    Returns a dict with keys: ok, host_id (str), message, duration_ms.
-    Raises no exceptions — failures are captured in the returned dict.
+    Returns a dict with keys: ok, host_id (str), message, duration_ms,
+    deps_refreshed (bool), code_version (str). Raises no exceptions —
+    failures are captured in the returned dict.
     """
     import paramiko
+
+    if not pip_index_url:
+        pip_index_url = os.getenv("STP_AGENT_PIP_INDEX_URL", "")
 
     t0 = time.monotonic()
 
@@ -284,6 +340,7 @@ def execute_hot_update(
                 group=install_group,
                 sync_agent_secret=sync_agent_secret,
                 agent_secret=agent_secret,
+                pip_index_url=pip_index_url,
             )
 
             logger.info("hot_update_executing host=%s", host_ip)
@@ -292,20 +349,29 @@ def execute_hot_update(
             out_text = stdout.read().decode("utf-8", errors="replace")
             err_text = stderr.read().decode("utf-8", errors="replace")
 
+            deps_refreshed = _parse_deps_refreshed(out_text)
+
             if exit_code != 0:
                 logger.error("hot_update_remote_failed exit=%d stderr=%s", exit_code, err_text[:500])
                 return {
                     "ok": False,
                     "message": f"Remote script failed (exit={exit_code}): {err_text[:300]}",
                     "duration_ms": int((time.monotonic() - t0) * 1000),
+                    "deps_refreshed": deps_refreshed,
+                    "code_version": code_version,
                 }
 
             msg = out_text.strip().split("\n")[-1] if out_text.strip() else "OK"
-            logger.info("hot_update_success host=%s msg=%s", host_ip, msg)
+            logger.info(
+                "hot_update_success host=%s msg=%s deps_refreshed=%s code_version=%s",
+                host_ip, msg, deps_refreshed, code_version,
+            )
             return {
                 "ok": True,
                 "message": msg,
                 "duration_ms": int((time.monotonic() - t0) * 1000),
+                "deps_refreshed": deps_refreshed,
+                "code_version": code_version,
             }
 
         finally:
@@ -315,12 +381,24 @@ def execute_hot_update(
     except paramiko.AuthenticationException:
         msg = f"SSH authentication failed for {ssh_user}@{host_ip}"
         logger.warning("hot_update_auth_failed host=%s", host_ip)
-        return {"ok": False, "message": msg, "duration_ms": int((time.monotonic() - t0) * 1000)}
+        return {
+            "ok": False,
+            "message": msg,
+            "duration_ms": int((time.monotonic() - t0) * 1000),
+            "deps_refreshed": False,
+            "code_version": code_version,
+        }
 
     except (OSError, IOError) as e:
         msg = f"SSH connection failed: {e}"
         logger.warning("hot_update_connection_failed host=%s:%d err=%s", host_ip, ssh_port, e)
-        return {"ok": False, "message": msg, "duration_ms": int((time.monotonic() - t0) * 1000)}
+        return {
+            "ok": False,
+            "message": msg,
+            "duration_ms": int((time.monotonic() - t0) * 1000),
+            "deps_refreshed": False,
+            "code_version": code_version,
+        }
 
     except Exception:
         logger.exception("hot_update_unexpected_error host=%s", host_ip)
@@ -328,4 +406,6 @@ def execute_hot_update(
             "ok": False,
             "message": "Unexpected error during hot-update, check server logs.",
             "duration_ms": int((time.monotonic() - t0) * 1000),
+            "deps_refreshed": False,
+            "code_version": code_version,
         }

@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/table';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, Pencil, Trash2 } from 'lucide-react';
 import {
   resourceUsageBgClass,
   resourceUsageTextClass,
@@ -59,6 +59,12 @@ interface ExpandableHostTableProps {
   isDeploying?: (hostId: string | number) => boolean;
   onHotUpdate?: (hostId: string | number) => void;
   isHotUpdating?: (hostId: string | number) => boolean;
+  onInstall?: (hostId: string | number) => void;
+  isInstalling?: (hostId: string | number) => boolean;
+  onEdit?: (host: HostTableData) => void;
+  onDelete?: (host: HostTableData) => void;
+  isDeleting?: (hostId: string | number) => boolean;
+  isAdmin?: boolean;
   onWatcherAdminStateChange?: (hostId: string | number, nextActive: boolean) => void;
   isWatcherAdminStateUpdating?: (hostId: string | number) => boolean;
   canManageWatcherAdminState?: boolean;
@@ -88,6 +94,12 @@ export function ExpandableHostTable({
   isDeploying: _isDeploying,
   onHotUpdate,
   isHotUpdating,
+  onInstall,
+  isInstalling,
+  onEdit,
+  onDelete,
+  isDeleting,
+  isAdmin,
   onWatcherAdminStateChange,
   isWatcherAdminStateUpdating,
   canManageWatcherAdminState = false,
@@ -385,22 +397,64 @@ export function ExpandableHostTable({
                           : '-'}
                       </TableCell>
                       <TableCell className="p-3 text-right">
-                        {host.status === 'ONLINE' && onHotUpdate ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onHotUpdate(host.id);
-                            }}
-                            disabled={isHotUpdating?.(host.id)}
-                            aria-label={`${host.name ?? host.id} 热更新 Agent`}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
-                          >
-                            {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
-                          </button>
-                        ) : (
-                          <span className="text-muted-foreground/40 text-xs">-</span>
-                        )}
+                        <div className="inline-flex items-center gap-1.5">
+                          {host.status === 'ONLINE' && onHotUpdate ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onHotUpdate(host.id);
+                              }}
+                              disabled={isHotUpdating?.(host.id)}
+                              aria-label={`${host.name ?? host.id} 热更新 Agent`}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-primary bg-primary/10 hover:bg-primary/15 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                            >
+                              {isHotUpdating?.(host.id) ? '更新中...' : '热更新'}
+                            </button>
+                          ) : host.status !== 'ONLINE' && onInstall ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onInstall(host.id);
+                              }}
+                              disabled={isInstalling?.(host.id)}
+                              aria-label={`${host.name ?? host.id} 首次安装 Agent`}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-amber-600 bg-amber-500/10 hover:bg-amber-500/20 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                            >
+                              {isInstalling?.(host.id) ? '安装中...' : '首次安装'}
+                            </button>
+                          ) : (
+                            <span className="text-muted-foreground/40 text-xs">-</span>
+                          )}
+                          {isAdmin && onEdit && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onEdit(host);
+                              }}
+                              aria-label={`${host.name ?? host.id} 编辑`}
+                              className="inline-flex items-center justify-center p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {isAdmin && onDelete && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onDelete(host);
+                              }}
+                              disabled={isDeleting?.(host.id)}
+                              aria-label={`${host.name ?? host.id} 删除`}
+                              className="inline-flex items-center justify-center p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
 

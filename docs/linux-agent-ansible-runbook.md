@@ -312,9 +312,59 @@ cd "$REPO_ROOT/tools/ansible" && ANSIBLE_CONFIG=./ansible.cfg ansible-playbook p
 
 - 首次部署仍复用 `install_agent.sh`，不是完全原生 Ansible
 - 热更新当前只自动回写 `API_URL`，不会模板化重建整份 `.env`
-- 还没有实现 `serial` 滚动分批和失败主机汇总报告
 - `inventory.ini` 为本地敏感文件，不纳入版本控制，需要各执行环境自行维护
 - 当前文档默认以 Linux-first 运维为准；Windows / WSL 仅作为兼容入口保留
+
+## 11a. UI 触发的 Agent 安装与热更新
+
+除 CLI（`ansible-playbook`）外，控制平面提供 UI 入口，适合开发期高频同步代码到子 agent。
+
+### 前提
+
+- 控制平面已装 `ansible-core` + `sshpass`（首次安装端点会自动 `shutil.which` 检测，缺失返回 501 + 提示装什么）
+- 可选：`STP_AGENT_PIP_INDEX_URL=<镜像>`（agent 主机 pip 镜像；留空用公网 PyPI）
+- 可选：`STP_SSH_KNOWN_HOSTS=<路径>`（host key 信任文件；默认 `~/.ssh/known_hosts`）
+
+### 新增主机（自动 ssh-keyscan）
+
+1. UI「主机管理」→「添加主机」，填 IP/SSH 端口/SSH 用户/密码
+2. 后端 `create_host` 落库后自动 `ssh-keyscan` 写入 known_hosts
+3. 成功：响应 `host_key_trust="ok"`；失败：`host_key_trust="failed: <reason>"` + 前端 info 提示，**不阻塞建主机**
+4. 失败时需手动 `ssh-keyscan -p <port> <ip> >> <known_hosts>` 后再热更新/安装
+
+### 首次安装（UI 按钮）
+
+1. 主机行 `status != ONLINE` 时显示「首次安装」按钮（ONLINE 显示「热更新」）
+2. 点击 → `POST /api/v1/hosts/{id}/install` → SAQ 异步任务 `install_agent_task`
+3. 任务写临时 inventory（`ansible_become_password` = SSH 密码），调 `install_agent.yml --limit <ip>`
+4. ansible stdout 落盘 `$STP_INSTALL_LOG_DIR/install_<host_id>_<ts>.log`（默认 `/tmp/stp-install-logs/`）
+5. `install_agent.sh:79-113` 自动写 `/etc/sudoers.d/stability-test-agent` NOPASSWD（rsync/systemctl），**装完即解锁后续免密热更新**
+6. 前端每 3s 轮询 `GET /hosts/{id}/install/status`，终态 toast 通知
+
+### 热更新（UI 按钮，高频）
+
+1. ONLINE 主机行显示「热更新」按钮 → `POST /api/v1/hosts/{id}/hot-update`
+2. 后端 `execute_hot_update`：tar 打包 `backend/agent/` → SFTP → 远端 rsync 到 `/opt/stability-test-agent/agent/`
+3. **依赖刷新**：rsync 前后比对 `requirements.txt` sha256，变化则 `pip install -r`（`PIP_INDEX_URL` 取 `STP_AGENT_PIP_INDEX_URL`）；pip 失败则**不重启**服务以避免崩溃
+4. **版本审计**：响应含 `code_version`（`backend/agent` 的 `git rev-parse --short HEAD`）与 `deps_refreshed`，写入 `audit_log`（`hot_update` + `hot_update_result` 两条）
+5. 前端成功 toast 显示「(依赖已刷新/未变) @<code_version>」
+6. sudo 免密靠首次安装落的 sudoers.d；未装主机点热更新会因 `INSTALL_DIR` 缺失失败 → 先用「首次安装」
+
+### pip 镜像不可达时的兜底
+
+- 在线：`STP_AGENT_PIP_INDEX_URL=<内网/公网镜像>`
+- 离线 wheelhouse（首次安装）：预置 `STP_AGENT_WHEELHOUSE=<wheel 目录>`（计划项，当前 install playbook 仅注入 `PIP_INDEX_URL`；离线 `--no-index --find-links` 兜底为后续增强）
+- 两者皆无：install/热更新会在 pip 步骤失败并给出明确错误，不会静默继续
+
+### 相关环境变量
+
+| 变量 | 作用 | 默认 |
+|------|------|------|
+| `STP_AGENT_PIP_INDEX_URL` | agent pip 镜像（热更新 + 首次安装） | 空（公网 PyPI） |
+| `STP_SSH_KNOWN_HOSTS` | host key 信任文件 | `~/.ssh/known_hosts` |
+| `STP_INSTALL_LOG_DIR` | UI 安装 ansible 日志目录 | `/tmp/stp-install-logs` |
+
+> 首次安装端点（`POST /hosts/{id}/install`）不依赖 env 开关，请求时自动检测 `ansible-playbook` + `sshpass` 是否在 PATH，缺失返回 501。
 
 ## 12. 相关文件
 

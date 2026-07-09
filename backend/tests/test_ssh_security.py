@@ -114,3 +114,66 @@ def test_query_agent_logs_rejects_path_outside_allowed_roots(monkeypatch, db_ses
         query_agent_logs(query, db_session, True)
 
     assert excinfo.value.status_code == 400
+
+
+def test_trust_host_key_appends_scanned_key(monkeypatch, tmp_path):
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("10.0.0.1 ssh-ed25519 OLDKEY\n", encoding="utf-8")
+
+    fake_completed = SimpleNamespace(returncode=0, stdout="10.0.0.99 ssh-ed25519 AAAAFAKE\n", stderr="")
+    monkeypatch.setattr(
+        ssh_security.subprocess,
+        "run",
+        lambda *args, **kwargs: fake_completed,
+    )
+
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 22, str(known_hosts))
+
+    assert ok is True
+    assert reason == "ok"
+    content = known_hosts.read_text(encoding="utf-8")
+    assert "10.0.0.99 ssh-ed25519 AAAAFAKE" in content
+    # Old entry for a different IP is preserved.
+    assert "10.0.0.1 ssh-ed25519 OLDKEY" in content
+
+
+def test_trust_host_key_returns_failure_when_keyscan_empty(monkeypatch, tmp_path):
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.touch()
+
+    fake_completed = SimpleNamespace(returncode=1, stdout="", stderr="no route")
+    monkeypatch.setattr(
+        ssh_security.subprocess,
+        "run",
+        lambda *args, **kwargs: fake_completed,
+    )
+
+    ok, reason = ssh_security.trust_host_key("10.0.0.99", 22, str(known_hosts))
+
+    assert ok is False
+    assert "no keys" in reason
+
+
+def test_trust_host_key_replaces_prior_entry_for_same_ip(monkeypatch, tmp_path):
+    from backend.core import ssh_security
+
+    known_hosts = tmp_path / "known_hosts"
+    known_hosts.write_text("10.0.0.99 ssh-ed25519 OLDKEY\n", encoding="utf-8")
+
+    fake_completed = SimpleNamespace(returncode=0, stdout="10.0.0.99 ssh-ed25519 NEWKEY\n", stderr="")
+    monkeypatch.setattr(
+        ssh_security.subprocess,
+        "run",
+        lambda *args, **kwargs: fake_completed,
+    )
+
+    ok, _ = ssh_security.trust_host_key("10.0.0.99", 22, str(known_hosts))
+
+    assert ok is True
+    content = known_hosts.read_text(encoding="utf-8")
+    assert "OLDKEY" not in content
+    assert "10.0.0.99 ssh-ed25519 NEWKEY" in content

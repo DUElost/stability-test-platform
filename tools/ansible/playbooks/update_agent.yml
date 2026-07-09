@@ -87,6 +87,27 @@
           - agent_env_file_stat.stat.exists
         fail_msg: "Agent environment file is missing on {{ inventory_hostname }}. Run install_agent.yml first."
 
+    - name: Capture installed requirements.txt sha before sync
+      become: true
+      ansible.builtin.command: "sha256sum {{ agent_install_dir }}/agent/requirements.txt"
+      register: agent_installed_req_sha_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Compute staged requirements.txt sha on control plane
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command: "sha256sum {{ agent_source_dir }}/requirements.txt"
+      register: agent_staged_req_sha_raw
+      changed_when: false
+      failed_when: false
+
+    - name: Record requirements.txt sha facts
+      ansible.builtin.set_fact:
+        agent_installed_req_sha: "{{ (agent_installed_req_sha_raw.stdout | default('')).split(' ')[0] | default('none') }}"
+        agent_staged_req_sha: "{{ (agent_staged_req_sha_raw.stdout | default('')).split(' ')[0] | default('none') }}"
+        agent_deps_refreshed: false
+
     - name: Preview agent code changes with rsync dry-run
       delegate_to: localhost
       become: false
@@ -313,6 +334,29 @@
             recurse: true
           when: agent_code_change_lines | length > 0 or agentctl_change_lines | length > 0
 
+        - name: Refresh Python dependencies when requirements.txt changed
+          become: true
+          become_user: "{{ agent_user }}"
+          ansible.builtin.command: >-
+            {{ agent_install_dir }}/venv/bin/pip install -r {{ agent_install_dir }}/agent/requirements.txt
+            -q --disable-pip-version-check
+          args:
+            chdir: "{{ agent_install_dir }}"
+          environment:
+            PIP_INDEX_URL: "{{ agent_pip_index_url | default('') }}"
+          when: >-
+            agent_staged_req_sha is defined
+            and agent_installed_req_sha is defined
+            and agent_staged_req_sha != 'none'
+            and agent_installed_req_sha != agent_staged_req_sha
+          register: agent_pip_install_result
+          changed_when: true
+
+        - name: Record deps refresh status
+          ansible.builtin.set_fact:
+            agent_deps_refreshed: "{{ agent_pip_install_result is changed }}"
+          when: agent_pip_install_result is defined
+
         - name: Reload systemd and restart service
           become: true
           ansible.builtin.systemd:
@@ -414,6 +458,7 @@
           agentctl_change_count: "{{ agentctl_change_lines | default([]) | length }}"
           service_unit_change_count: "{{ agent_service_change_lines | default([]) | length }}"
           env_changed: "{{ agent_env_changed | default(false) }}"
+          deps_refreshed: "{{ agent_deps_refreshed | default(false) }}"
           restart_required: "{{ agent_update_requires_restart | default(false) }}"
           backup_dir: "{{ agent_backup_dir if (agent_code_change_lines | default([]) | length > 0) else 'skipped' }}"
           agentctl_backup: "{{ agent_agentctl_backup_path if (agentctl_change_lines | default([]) | length > 0) else 'skipped' }}"

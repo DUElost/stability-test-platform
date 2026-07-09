@@ -6,12 +6,16 @@ agent_check_strict: true
 agent_status_require_active: true
 
 # 开发环境可在执行时用 -e agent_api_url=http://<ip>:8000 临时覆盖。
-agent_api_url: "http://172.21.10.25:8000"
+# 此处为本控制平面真实可达 IP（同网段），agent 通过该地址回连后端。
+agent_api_url: "http://172.21.8.202:8000"
 agent_install_dir: "/opt/stability-test-agent"
 agent_service_name: "stability-test-agent"
 agent_remote_tmp_dir: "/tmp/stability-test-agent-ansible"
 agent_user: "android"
 agent_group: "android"
+# UI 触发安装时由 saq_tasks 通过 -e agent_host_id=<UUID> 注入，使 agent 心跳
+# 能匹配 DB host 记录。手动跑 playbook 不传则回退 install_agent.sh 自动生成。
+agent_host_id: ""
 agent_auto_register_host: false
 agent_poll_interval: 10
 agent_adb_path: "adb"
@@ -19,6 +23,10 @@ agent_log_level: "INFO"
 agent_health_log_tail_lines: 40
 agent_agentctl_path: "{{ agent_install_dir }}/agentctl"
 agent_source_dir: "{{ playbook_dir }}/../../../backend/agent"
+
+# pip 镜像地址（热更新 requirements.txt 变化时使用）。空则用 pip 默认 index。
+# 优先级：-e agent_pip_index_url=... > 环境变量 STP_AGENT_PIP_INDEX_URL > 空。
+agent_pip_index_url: "{{ lookup('ansible.builtin.env', 'STP_AGENT_PIP_INDEX_URL') | default('', true) }}"
 
 # Agent-Backend 双向认证密钥，默认所有 Linux Agent 共用 Backend .env 中的 AGENT_SECRET。
 # 覆盖优先级：有效 vault_agent_secret > 本机环境变量 AGENT_SECRET > backend/.env。

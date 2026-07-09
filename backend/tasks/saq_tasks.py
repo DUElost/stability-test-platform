@@ -444,6 +444,150 @@ async def extract_task(ctx: dict, *, plan_run_id: int) -> None:
     await asyncio.to_thread(_run_extract_sync, plan_run_id)
 
 
+def _run_install_agent_sync(host_id: str, initiated_by: str | None) -> dict:
+    """同步执行 ansible-playbook install_agent.yml，由 asyncio.to_thread 调用。
+
+    返回 {ok, rc, log_path, message}。ansible stdout/stderr 落盘到
+    STP_INSTALL_LOG_DIR/install_<host_id>_<ts>.log 供前端轮询读取尾部。
+    """
+    import os
+    import shlex
+    import subprocess
+    import tempfile
+    import time
+    from pathlib import Path
+
+    from backend.core.database import SessionLocal
+    from backend.core.ssh_security import resolve_host_ssh_credentials
+    from backend.services.host_updater import _resolve_ssh_creds
+
+    log_dir = Path(os.getenv("STP_INSTALL_LOG_DIR", "/tmp/stp-install-logs"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    log_path = log_dir / f"install_{host_id}_{ts}.log"
+
+    db = SessionLocal()
+    try:
+        from backend.models.host import Host
+        host = db.get(Host, host_id)
+        if not host:
+            return {"ok": False, "rc": -1, "log_path": str(log_path),
+                    "message": f"host {host_id} not found"}
+        ip = host.ip or ""
+        port = host.ssh_port or 22
+        try:
+            creds, _migrated = resolve_host_ssh_credentials(host, inventory_lookup=_resolve_ssh_creds)
+        except Exception as exc:
+            return {"ok": False, "rc": -1, "log_path": str(log_path),
+                    "message": f"resolve ssh creds failed: {exc}"}
+        if not creds.password and not creds.key_path:
+            return {"ok": False, "rc": -1, "log_path": str(log_path),
+                    "message": "no SSH credentials available"}
+    finally:
+        db.close()
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    ansible_dir = repo_root / "tools" / "ansible"
+    playbook = ansible_dir / "playbooks" / "install_agent.yml"
+    ansible_cfg = ansible_dir / "ansible.cfg"
+    if not playbook.exists():
+        return {"ok": False, "rc": -1, "log_path": str(log_path),
+                "message": f"playbook missing: {playbook}"}
+
+    # 临时 inventory 必须落在 ansible_dir 下，否则 ansible 无法自动加载
+    # 同级 group_vars/linux_hosts.yml（agent_secret 等变量解析依赖它）。
+    # inventory_dir = ansible_dir 才会命中 group_vars/。
+    inv_fd, inv_path = tempfile.mkstemp(
+        prefix=".stp-install-", suffix=".ini", dir=str(ansible_dir), text=True
+    )
+    try:
+        with os.fdopen(inv_fd, "w", encoding="utf-8") as fh:
+            fh.write(f"[linux_hosts]\n")
+            fh.write(
+                f"{ip} ansible_host={ip} ansible_port={port} "
+                f"ansible_user={creds.user} ansible_password={creds.password} "
+                f"ansible_become_password={creds.password}\n"
+            )
+        env = dict(os.environ)
+        env["ANSIBLE_CONFIG"] = str(ansible_cfg) if ansible_cfg.exists() else env.get("ANSIBLE_CONFIG", "")
+        env["ANSIBLE_NO_LOG"] = "true"
+
+        cmd = [
+            "ansible-playbook", str(playbook),
+            "-i", inv_path,
+            "--limit", ip,
+            "-e", f"agent_host_id={host_id}",
+        ]
+        with open(log_path, "w", encoding="utf-8") as logf:
+            logf.write(f"$ {' '.join(shlex.quote(c) for c in cmd)}\n")
+            logf.flush()
+            proc = subprocess.run(
+                cmd, env=env, cwd=str(ansible_dir),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=900,
+            )
+            logf.write(proc.stdout)
+            logf.write(f"\n[rc={proc.returncode}]\n")
+        return {
+            "ok": proc.returncode == 0,
+            "rc": proc.returncode,
+            "log_path": str(log_path),
+            "message": "ok" if proc.returncode == 0 else f"ansible exit {proc.returncode}",
+        }
+    finally:
+        try:
+            os.remove(inv_path)
+        except OSError:
+            pass
+
+
+async def install_agent_task(ctx: dict, *, host_id: str, initiated_by: str | None = None) -> dict:
+    """UI 触发的 Agent 首次安装：ansible-playbook install_agent.yml（become 喂 sudo 密码）。
+
+    装完 install_agent.sh 自动落 /etc/sudoers.d/stability-test-agent NOPASSWD，
+    解锁后续 UI 热更新（execute_hot_update）的免密 sudo rsync/systemctl。
+    """
+    logger.info("saq_install_agent_start host=%s by=%s", host_id, initiated_by)
+    try:
+        result = await asyncio.to_thread(_run_install_agent_sync, host_id, initiated_by)
+    except Exception:
+        logger.exception("saq_install_agent_failed host=%s", host_id)
+        raise
+
+    # Record audit outcome (best-effort).
+    try:
+        from backend.core.audit import record_audit
+        from backend.core.database import SessionLocal
+        from backend.models.host import Host
+        db = SessionLocal()
+        try:
+            host = db.get(Host, host_id)
+            record_audit(
+                db,
+                action="install_agent",
+                resource_type="host",
+                resource_id=host_id,
+                details={
+                    "host_id": host_id,
+                    "ip": host.ip if host else None,
+                    "ok": bool(result.get("ok")),
+                    "rc": result.get("rc"),
+                    "log_path": result.get("log_path"),
+                    "message": result.get("message"),
+                    "initiated_by": initiated_by,
+                },
+                username=initiated_by,
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.warning("install_agent_audit_failed host=%s", host_id, exc_info=True)
+
+    logger.info("saq_install_agent_done host=%s ok=%s", host_id, result.get("ok"))
+    return result
+
+
 SAQ_FUNCTIONS = [
     post_completion_task,
     send_notification_task,
@@ -453,4 +597,5 @@ SAQ_FUNCTIONS = [
     upload_task,
     merge_task,
     extract_task,
+    install_agent_task,
 ]
