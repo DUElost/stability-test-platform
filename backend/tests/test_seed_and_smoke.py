@@ -97,7 +97,7 @@ def test_load_repo_dotenv_simple_parser_without_dotenv_package(tmp_path, monkeyp
 
 
 def test_ensure_smoke_plan_updates_on_delete_409():
-    from backend.scripts.seed_and_smoke import ensure_smoke_plan
+    from backend.scripts.seed_and_smoke import PLAN_PAYLOAD, ensure_smoke_plan
 
     list_response = MagicMock(status_code=200)
     list_response.json.return_value = {
@@ -117,14 +117,16 @@ def test_ensure_smoke_plan_updates_on_delete_409():
     client.delete.return_value = delete_response
     client.put.return_value = update_response
 
-    plan_id = ensure_smoke_plan(client, "smoke-plan-001")
+    plan_id = ensure_smoke_plan(
+        client, "smoke-plan-001", plan_payload=PLAN_PAYLOAD
+    )
     assert plan_id == 1
     client.put.assert_called_once()
     client.post.assert_not_called()
 
 
 def test_ensure_smoke_plan_deletes_then_creates():
-    from backend.scripts.seed_and_smoke import ensure_smoke_plan
+    from backend.scripts.seed_and_smoke import PLAN_PAYLOAD, ensure_smoke_plan
 
     list_response = MagicMock(status_code=200)
     list_response.json.return_value = {
@@ -144,7 +146,9 @@ def test_ensure_smoke_plan_deletes_then_creates():
     client.delete.return_value = delete_response
     client.post.return_value = create_response
 
-    plan_id = ensure_smoke_plan(client, "smoke-plan-001")
+    plan_id = ensure_smoke_plan(
+        client, "smoke-plan-001", plan_payload=PLAN_PAYLOAD
+    )
     assert plan_id == 99
     client.delete.assert_called_once_with("/api/v1/plans/7")
     client.post.assert_called_once()
@@ -152,7 +156,7 @@ def test_ensure_smoke_plan_deletes_then_creates():
 
 
 def test_ensure_smoke_plan_creates_when_no_match():
-    from backend.scripts.seed_and_smoke import ensure_smoke_plan
+    from backend.scripts.seed_and_smoke import PLAN_PAYLOAD, ensure_smoke_plan
 
     list_response = MagicMock(status_code=200)
     list_response.json.return_value = {"data": [], "error": None}
@@ -166,7 +170,9 @@ def test_ensure_smoke_plan_creates_when_no_match():
     client.get.return_value = list_response
     client.post.return_value = create_response
 
-    plan_id = ensure_smoke_plan(client, "smoke-plan-001")
+    plan_id = ensure_smoke_plan(
+        client, "smoke-plan-001", plan_payload=PLAN_PAYLOAD
+    )
     assert plan_id == 3
     client.delete.assert_not_called()
     client.put.assert_not_called()
