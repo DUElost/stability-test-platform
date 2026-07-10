@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 from backend.api.routes.hosts import _derive_agent_installed, _host_to_out
 
@@ -33,18 +32,19 @@ def test_derive_from_heartbeat_history():
 
 
 def test_host_to_out_exposes_agent_installed():
-    host = MagicMock()
-    host.id = "h1"
-    host.name = "n"
-    host.ip = "1.2.3.4"
-    host.ssh_port = 22
-    host.ssh_user = "android"
-    host.ssh_auth_type = "password"
-    host.status = "OFFLINE"
-    host.watcher_admin_active = True
-    host.last_heartbeat = datetime(2026, 7, 10, tzinfo=timezone.utc)
-    host.extra = {"agent_installed": True}
-    host.mount_status = {}
+    host = SimpleNamespace(
+        id="h1",
+        name="n",
+        ip="1.2.3.4",
+        ssh_port=22,
+        ssh_user="android",
+        ssh_auth_type="password",
+        status="OFFLINE",
+        watcher_admin_active=True,
+        last_heartbeat=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        extra={"agent_installed": True},
+        mount_status={},
+    )
 
     out = _host_to_out(host)
     assert out.agent_installed is True
