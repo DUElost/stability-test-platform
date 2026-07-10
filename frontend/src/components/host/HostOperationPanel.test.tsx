@@ -63,9 +63,41 @@ describe('HostOperationPanel', () => {
         onTerminalStatus={onTerminal}
       />,
     );
-    // first running op auto-expands with LiveConsole
-    fireEvent.click(screen.getByText('finish'));
+    fireEvent.click(screen.getByTestId('mock-live-console-con-1').querySelector('button')!);
     expect(onTerminal).toHaveBeenCalledWith('h1', 'SUCCESS');
+  });
+
+  it('can collapse all consoles and keep them mounted hidden', () => {
+    render(
+      <HostOperationPanel
+        open
+        ops={ops}
+        onClose={vi.fn()}
+        onTerminalStatus={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('mock-live-console-con-1')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('host-op-collapse-all'));
+    // still mounted (not removed from DOM) — parent uses hidden
+    expect(screen.getByTestId('mock-live-console-con-1')).toBeInTheDocument();
+    const row1 = screen.getByTestId('host-op-row-h1');
+    // chevron should indicate collapsed (button still there)
+    expect(row1.querySelector('button')).toBeTruthy();
+  });
+
+  it('expand all shows consoles for every host with consoleRunId', () => {
+    render(
+      <HostOperationPanel
+        open
+        ops={ops}
+        onClose={vi.fn()}
+        onTerminalStatus={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('host-op-collapse-all'));
+    fireEvent.click(screen.getByTestId('host-op-expand-all'));
+    expect(screen.getByTestId('mock-live-console-con-1')).toBeInTheDocument();
+    expect(screen.getByTestId('mock-live-console-con-2')).toBeInTheDocument();
   });
 
   it('calls onClose', () => {

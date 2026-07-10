@@ -1,5 +1,13 @@
-import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Download, Loader2, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Download,
+  Loader2,
+  X,
+} from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -59,7 +67,30 @@ export default function HostOperationPanel({
   onClose,
   onTerminalStatus,
 }: Props) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  /** null = 自动模式；Set（可为空）= 用户手动控制，空集表示全部折叠 */
+  const [expanded, setExpanded] = useState<Set<string> | null>(null);
+  /** 一旦拿到 consoleRunId 就挂载 LiveConsole，折叠仅 CSS 隐藏，避免再展开空白 */
+  const [mountedConsoles, setMountedConsoles] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    setMountedConsoles((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const op of ops) {
+        if (op.consoleRunId && !next.has(op.hostId)) {
+          next.add(op.hostId);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [ops]);
+
+  // 新一批操作时恢复自动展开
+  const opsKey = ops.map((o) => o.hostId).join(',');
+  useEffect(() => {
+    setExpanded(null);
+  }, [opsKey]);
 
   const summary = useMemo(() => {
     let running = 0;
@@ -73,27 +104,41 @@ export default function HostOperationPanel({
     return { running, success, failed };
   }, [ops]);
 
-  // Auto-expand first running / pending with console
-  const effectiveExpanded = useMemo(() => {
-    if (expanded.size > 0) return expanded;
+  const autoExpanded = useMemo(() => {
     const auto = new Set<string>();
     for (const op of ops) {
       if (op.consoleRunId && (op.status === 'running' || op.status === 'pending')) {
         auto.add(op.hostId);
-        break;
       }
     }
-    if (auto.size === 0 && ops[0]) auto.add(ops[0].hostId);
+    if (auto.size === 0) {
+      const withConsole = ops.find((o) => o.consoleRunId);
+      if (withConsole) auto.add(withConsole.hostId);
+      else if (ops[0]) auto.add(ops[0].hostId);
+    }
+    // 自动模式最多展开 2 个，减轻首屏压力；用户可「全部展开」
+    if (auto.size > 2) {
+      return new Set(Array.from(auto).slice(0, 2));
+    }
     return auto;
-  }, [expanded, ops]);
+  }, [ops]);
+
+  const effectiveExpanded = expanded ?? autoExpanded;
 
   const toggle = (hostId: string) => {
     setExpanded((prev) => {
-      const base = prev.size ? new Set(prev) : new Set(effectiveExpanded);
+      const base = new Set(prev ?? effectiveExpanded);
       if (base.has(hostId)) base.delete(hostId);
       else base.add(hostId);
-      return base;
+      return base; // 允许空 Set = 全部折叠
     });
+  };
+
+  const collapseAll = () => setExpanded(new Set());
+  const expandAll = () => {
+    setExpanded(
+      new Set(ops.filter((o) => o.consoleRunId || o.status === 'running').map((o) => o.hostId)),
+    );
   };
 
   return (
@@ -119,6 +164,30 @@ export default function HostOperationPanel({
               <span>
                 失败 <b className="font-mono text-foreground">{summary.failed}</b>
               </span>
+              <span className="ml-auto flex gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  data-testid="host-op-expand-all"
+                  className="h-7 gap-1 px-2 text-xs"
+                  onClick={expandAll}
+                >
+                  <ChevronsUpDown className="h-3.5 w-3.5" />
+                  全部展开
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  data-testid="host-op-collapse-all"
+                  className="h-7 gap-1 px-2 text-xs"
+                  onClick={collapseAll}
+                >
+                  <ChevronsDownUp className="h-3.5 w-3.5" />
+                  全部折叠
+                </Button>
+              </span>
             </div>
           </DialogDescription>
         </DialogHeader>
@@ -126,6 +195,7 @@ export default function HostOperationPanel({
         <div className="max-h-[70vh] space-y-2 overflow-y-auto">
           {ops.map((op) => {
             const isOpen = effectiveExpanded.has(op.hostId);
+            const shouldMount = Boolean(op.consoleRunId) && mountedConsoles.has(op.hostId);
             return (
               <div
                 key={op.hostId}
@@ -165,8 +235,9 @@ export default function HostOperationPanel({
                   </div>
                 )}
 
-                {isOpen && op.consoleRunId && (
-                  <div className="border-t p-2">
+                {/* 折叠用 hidden，不卸载 — 避免再展开空白 / 丢 socket */}
+                {shouldMount && op.consoleRunId && (
+                  <div className={cn('border-t p-2', !isOpen && 'hidden')}>
                     <LiveConsole
                       consoleRunId={op.consoleRunId}
                       height="280px"

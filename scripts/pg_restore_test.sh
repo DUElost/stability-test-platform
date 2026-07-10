@@ -13,17 +13,17 @@
 # Environment variables:
 #   PGHOST       — default 127.0.0.1
 #   PGPORT       — default 5432
-#   PGUSER       — default stability (must have CREATEDB privilege)
-#   PGDATABASE   — default stability (the production DB name)
-#   BACKUP_DIR   — default /opt/stability-test-platform/backups
+#   PGUSER       — default stp (must have CREATEDB privilege)
+#   PGDATABASE   — default stp (the production DB name)
+#   BACKUP_DIR   — default /home/debian13/stability-test-platform/backups
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 PGHOST="${PGHOST:-127.0.0.1}"
 PGPORT="${PGPORT:-5432}"
-PGUSER="${PGUSER:-stability}"
-PGDATABASE="${PGDATABASE:-stability}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/stability-test-platform/backups}"
+PGUSER="${PGUSER:-stp}"
+PGDATABASE="${PGDATABASE:-stp}"
+BACKUP_DIR="${BACKUP_DIR:-/home/debian13/stability-test-platform/backups}"
 
 # Find the latest backup if not specified
 if [ $# -ge 1 ]; then

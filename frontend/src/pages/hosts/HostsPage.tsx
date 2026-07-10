@@ -95,11 +95,24 @@ export default function HostsPage() {
   const {
     ops: hostOps,
     panelOpen: opPanelOpen,
+    setPanelOpen: setOpPanelOpen,
     startInstallBatch,
     markTerminal,
     closePanel,
     isHostBusy,
-  } = useHostOperations({ concurrency: 2 });
+  } = useHostOperations({
+    concurrency: 2,
+    onTerminal: (ev) => {
+      if (ev.ok) {
+        toast.success(`主机 ${ev.label} Agent 安装完成`);
+        queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      } else {
+        toast.error(
+          `主机 ${ev.label} Agent 安装失败: ${ev.error ?? ev.status}`,
+        );
+      }
+    },
+  });
 
   const [hotUpdatingHostId, setHotUpdatingHostId] = useState<number | string | null>(null);
   const [pendingHotUpdateHostId, setPendingHotUpdateHostId] = useState<
@@ -196,15 +209,11 @@ export default function HostsPage() {
   };
 
   const handleInstallTerminalStatus = (hostId: string, status: string) => {
-    const op = hostOps.find((o) => o.hostId === hostId);
-    const label = op?.label ?? hostId;
+    // LiveConsole 终态回调（仅展开行会触发）；与 hook 轮询双通道，markTerminal 幂等
     if (status === 'SUCCESS') {
       markTerminal(hostId, 'success');
-      toast.success(`主机 ${label} Agent 安装完成`);
-      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
-    } else {
+    } else if (status === 'FAILED' || status === 'CANCELED') {
       markTerminal(hostId, 'failed', status);
-      toast.error(`主机 ${label} Agent 安装失败 (${status})`);
     }
   };
 
@@ -516,6 +525,18 @@ export default function HostsPage() {
 
       <div className="flex flex-col gap-2 py-2">
         <div className="flex items-center justify-end gap-2">
+          {!opPanelOpen && hostOps.length > 0 && (
+            <Button
+              variant="outline"
+              data-testid="host-op-panel-reopen"
+              onClick={() => setOpPanelOpen(true)}
+            >
+              安装进度
+              {installPending
+                ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
+                : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败)`}
+            </Button>
+          )}
           {isAdmin && (
             <Button onClick={() => setIsModalOpen(true)}>
               <Plus className="w-4 h-4" />

@@ -63,3 +63,4 @@ tools/ansible/*.retry
 # 本地排障产物 / 外部参考脚本，不入库
 patches/
 MonkeyAEEinfo_260523.py
+backups/

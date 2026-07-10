@@ -1,7 +1,10 @@
 /**
  * LiveConsole — ADR-0025 §9 RunConsole 的前端控制台（Jenkins 式 web 实时日志）。
+ *
+ * 注意：日志回放必须在 XTerminal onReady 之后执行，否则折叠再展开时
+ * termRef 尚未就绪，writeLines 会被静默丢弃 → 空白终端。
  */
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { XTerminal, type XTerminalHandle } from '@/components/log/XTerminal';
 import { useSocketIO } from '@/hooks/useSocketIO';
 import { dedup } from '@/utils/api/dedup';
@@ -42,8 +45,11 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
   const termRef = useRef<XTerminalHandle>(null);
   const seqRef = useRef(0);
   const issueKeysRef = useRef<Set<string>>(new Set());
+  const onStatusChangeRef = useRef(onStatusChange);
+  onStatusChangeRef.current = onStatusChange;
   const [status, setStatus] = useState('RUNNING');
   const [issueCount, setIssueCount] = useState(0);
+  const [termReady, setTermReady] = useState(false);
 
   const tallyIssues = (lines: string[]) => {
     if (!enableIssueCount) return;
@@ -53,7 +59,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
     setIssueCount(issueKeysRef.current.size);
   };
 
-  useEffect(() => {
+  const replayFromStart = useCallback(() => {
     let cancelled = false;
     seqRef.current = 0;
     issueKeysRef.current = new Set();
@@ -69,7 +75,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
         }
         seqRef.current = res.seq;
         setStatus(res.status);
-        onStatusChange?.(res.status);
+        onStatusChangeRef.current?.(res.status);
       })
       .catch(() => {
         /* 回填失败不阻塞实时流 */
@@ -78,7 +84,17 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consoleRunId, enableIssueCount]);
+
+  // consoleRunId 变化时重置 ready，等待 XTerminal 重新 open
+  useEffect(() => {
+    setTermReady(false);
   }, [consoleRunId]);
+
+  useEffect(() => {
+    if (!termReady) return;
+    return replayFromStart();
+  }, [termReady, replayFromStart]);
 
   useSocketIO(`/ws/console/${consoleRunId}`, {
     onMessage: (msg: unknown) => {
@@ -93,7 +109,7 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
         }
       } else if (typeof d.status === 'string') {
         setStatus(d.status);
-        onStatusChange?.(d.status);
+        onStatusChangeRef.current?.(d.status);
       }
     },
   });
@@ -122,7 +138,12 @@ export default function LiveConsole({ consoleRunId, height = '420px', onStatusCh
           </span>
         </div>
       </div>
-      <XTerminal ref={termRef} poolKey={`console-${consoleRunId}`} height={height} />
+      <XTerminal
+        ref={termRef}
+        poolKey={`console-${consoleRunId}`}
+        height={height}
+        onReady={() => setTermReady(true)}
+      />
     </div>
   );
 }

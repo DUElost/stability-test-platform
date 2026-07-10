@@ -4,26 +4,26 @@
 #
 # Usage:
 #   ./pg_backup.sh                          # default: localhost:5432/stability
-#   PGHOST=db PGUSER=stability ./pg_backup.sh  # override via env
+#   PGHOST=db PGUSER=stp ./pg_backup.sh  # override via env
 #
 # Cron example (daily at 02:30):
-#   30 2 * * * /opt/stability-test-platform/scripts/pg_backup.sh >> /var/log/pg_backup.log 2>&1
+#   30 2 * * * /home/debian13/stability-test-platform/scripts/pg_backup.sh >> /home/debian13/stability-test-platform/logs/pg_backup.log 2>&1
 #
 # Environment variables (all optional, sensible defaults for in-subnet deploy):
 #   PGHOST       — default 127.0.0.1
 #   PGPORT       — default 5432
-#   PGUSER       — default stability
-#   PGDATABASE   — default stability
-#   BACKUP_DIR   — default /opt/stability-test-platform/backups
+#   PGUSER       — default stp
+#   PGDATABASE   — default stp
+#   BACKUP_DIR   — default /home/debian13/stability-test-platform/backups
 #   KEEP_DAYS    — default 7 (delete backups older than N days)
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 PGHOST="${PGHOST:-127.0.0.1}"
 PGPORT="${PGPORT:-5432}"
-PGUSER="${PGUSER:-stability}"
-PGDATABASE="${PGDATABASE:-stability}"
-BACKUP_DIR="${BACKUP_DIR:-/opt/stability-test-platform/backups}"
+PGUSER="${PGUSER:-stp}"
+PGDATABASE="${PGDATABASE:-stp}"
+BACKUP_DIR="${BACKUP_DIR:-/home/debian13/stability-test-platform/backups}"
 KEEP_DAYS="${KEEP_DAYS:-7}"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)

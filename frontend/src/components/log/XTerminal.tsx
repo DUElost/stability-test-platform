@@ -99,7 +99,8 @@ interface PoolEntry {
 }
 
 const terminalPool: Map<string, PoolEntry> = new Map();
-const MAX_POOL_SIZE = 3;
+/** 批量安装可同时挂载多路 LiveConsole（折叠仅 CSS 隐藏），池需够大避免 LRU 误杀仍在用的实例 */
+const MAX_POOL_SIZE = 24;
 
 function getOrCreateTerminal(key: string): PoolEntry {
   const existing = terminalPool.get(key);

@@ -36,9 +36,10 @@ vi.mock('../../utils/api', () => ({
       status: vi.fn().mockResolvedValue({
         host_id: 'h1',
         saq_key: 'install:h1',
-        status: 'active',
+        status: 'complete',
         console_run_id: 'con-test',
-        console_status: 'RUNNING',
+        console_status: 'SUCCESS',
+        result: { ok: true, rc: 0, message: 'ok' },
       }),
     },
     hotUpdate: {
