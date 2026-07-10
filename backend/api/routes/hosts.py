@@ -29,7 +29,12 @@ from backend.api.schemas import (
     PaginatedResponse,
 )
 from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.services.agent_installer import (
+    get_active_install_console_id,
+    start_install_agent_runconsole,
+)
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
+from backend.services.run_console import RunConsole
 from backend.services.plan_run_abort import abort_jobs_for_host
 from backend.tasks.saq_worker import enqueue_sync, EnqueueSyncError, get_saq_job_state_sync
 
@@ -88,6 +93,29 @@ def _visible_plan_id(plan_id: int | None, hidden_plan_ids_set: set[int]) -> int 
     return None if int(plan_id) in hidden_plan_ids_set else int(plan_id)
 
 
+def _derive_agent_installed(h: Host) -> tuple[bool, str | None]:
+    """推断 Agent 是否曾安装成功（与 ONLINE/OFFLINE 正交）。
+
+    信号优先级：extra.agent_installed → agent_version → last_heartbeat 非空。
+    """
+    extra = h.extra if isinstance(h.extra, dict) else {}
+    raw_at = extra.get("agent_installed_at")
+    installed_at = str(raw_at) if raw_at else None
+    if extra.get("agent_installed") is True:
+        return True, installed_at
+    if extra.get("agent_version"):
+        return True, installed_at
+    if h.last_heartbeat is not None:
+        if not installed_at:
+            installed_at = (
+                h.last_heartbeat.isoformat()
+                if hasattr(h.last_heartbeat, "isoformat")
+                else str(h.last_heartbeat)
+            )
+        return True, installed_at
+    return False, None
+
+
 def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | None = None) -> HostOut:
     """从 ORM 对象构造 HostOut，从 host.extra 中提取 capacity/health。
 
@@ -104,6 +132,9 @@ def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | No
     out.capacity = extra.get("capacity")
     out.health = extra.get("health")
     out.host_key_trust = host_key_trust
+    installed, installed_at = _derive_agent_installed(h)
+    out.agent_installed = installed
+    out.agent_installed_at = installed_at
 
     if db is not None:
         from backend.models.plan_run import PlanRun
@@ -704,12 +735,35 @@ def host_install_agent(
     if not host.ip:
         raise HTTPException(status_code=400, detail="Host has no IP address configured")
 
+    initiated_by = current_user.username if current_user else None
+    started = start_install_agent_runconsole(host_id, initiated_by=initiated_by)
+    if not started.get("ok"):
+        msg = started.get("message", "start failed")
+        if msg == "install already in progress":
+            cid = started.get("console_run_id")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": msg,
+                    "console_run_id": cid,
+                    "room": f"console:{cid}" if cid else None,
+                },
+            )
+        raise HTTPException(status_code=400, detail=msg)
+
+    console_run_id = started["console_run_id"]
+    room = started["room"]
+
     record_audit(
         db,
         action="install_agent_request",
         resource_type="host",
         resource_id=host_id,
-        details={"host_id": host_id, "ip": host.ip},
+        details={
+            "host_id": host_id,
+            "ip": host.ip,
+            "console_run_id": console_run_id,
+        },
         user_id=current_user.id if current_user else None,
         username=current_user.username if current_user else None,
     )
@@ -724,17 +778,21 @@ def host_install_agent(
             retries=0,
             required=True,
             host_id=host_id,
-            initiated_by=current_user.username if current_user else None,
+            initiated_by=initiated_by,
+            console_run_id=console_run_id,
         )
     except EnqueueSyncError as exc:
+        RunConsole.instance().cancel(console_run_id)
         raise HTTPException(status_code=503, detail=f"SAQ enqueue failed: {exc}") from exc
 
     return {
         "ok": True,
         "host_id": host_id,
         "saq_key": saq_key,
-        "status": "queued",
-        "message": "Agent 安装任务已入队，轮询 GET /hosts/{id}/install/status 查看进度",
+        "console_run_id": console_run_id,
+        "room": room,
+        "status": "running",
+        "message": "Agent 安装已启动，实时日志见 RunConsole",
     }
 
 
@@ -744,19 +802,35 @@ def host_install_status(
     _db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
-    """查询 Agent 首次安装 SAQ 任务状态。返回 status + 已记录的 log_path（如有）。"""
+    """查询 Agent 首次安装状态：SAQ 任务 + RunConsole 实时态。"""
     saq_key = f"install:{host_id}"
     state = get_saq_job_state_sync(saq_key)
-    if state is None:
-        return {"host_id": host_id, "saq_key": saq_key, "status": "unknown",
-                "log_path": None, "result": None}
     result = None
-    if isinstance(state.get("result"), dict):
-        result = state["result"]
+    saq_status = "unknown"
+    if state is not None:
+        saq_status = state.get("status", "unknown")
+        if isinstance(state.get("result"), dict):
+            result = state["result"]
+
+    console_run_id = get_active_install_console_id(host_id)
+    if not console_run_id and isinstance(result, dict):
+        console_run_id = result.get("console_run_id")
+
+    console_status = None
+    room = None
+    if console_run_id:
+        room = f"console:{console_run_id}"
+        st = RunConsole.instance().status(console_run_id)
+        if st is not None:
+            console_status = st.get("status")
+
     return {
         "host_id": host_id,
         "saq_key": saq_key,
-        "status": state.get("status", "unknown"),
+        "status": saq_status,
+        "console_run_id": console_run_id,
+        "console_status": console_status,
+        "room": room,
         "log_path": (result or {}).get("log_path"),
         "result": result,
     }

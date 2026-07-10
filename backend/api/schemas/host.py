@@ -52,6 +52,10 @@ class HostOut(ORMBaseModel):
     active_jobs: List[HostActiveJob] = Field(default_factory=list)
     # ssh-keyscan result on create/update ("ok" | "failed: <reason>" | None).
     host_key_trust: Optional[str] = None
+    # 安装态信号（非 HostStatus）：曾成功安装 / 有过心跳 / 有 agent_version。
+    # 用于区分「从未安装」与「已装但 OFFLINE」，避免 UI 误显示「首次安装」。
+    agent_installed: bool = False
+    agent_installed_at: Optional[str] = None
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod

@@ -13,6 +13,8 @@ vi.mock('../../utils/api', () => ({
     hosts: {
       list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
       create: vi.fn().mockResolvedValue({}),
+      update: vi.fn().mockResolvedValue({}),
+      delete: vi.fn().mockResolvedValue({}),
       updateWatcherAdminState: vi.fn().mockResolvedValue({}),
     },
     devices: {
@@ -21,9 +23,23 @@ vi.mock('../../utils/api', () => ({
     tasks: {
       list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     },
-    deploy: {
-      trigger: vi.fn().mockResolvedValue({}),
-      batchDeploy: vi.fn().mockResolvedValue({}),
+    agentInstall: {
+      trigger: vi.fn().mockResolvedValue({
+        ok: true,
+        host_id: 'h1',
+        saq_key: 'install:h1',
+        console_run_id: 'con-test',
+        room: 'console:con-test',
+        status: 'running',
+        message: 'ok',
+      }),
+      status: vi.fn().mockResolvedValue({
+        host_id: 'h1',
+        saq_key: 'install:h1',
+        status: 'active',
+        console_run_id: 'con-test',
+        console_status: 'RUNNING',
+      }),
     },
     hotUpdate: {
       trigger: vi.fn().mockResolvedValue({}),

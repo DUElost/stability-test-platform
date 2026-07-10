@@ -90,7 +90,18 @@ export const hotUpdate = {
 export interface AgentInstallResult {
   ok: boolean;
   rc: number;
-  log_path: string;
+  log_path?: string | null;
+  console_run_id?: string | null;
+  message: string;
+}
+
+export interface AgentInstallTriggerResult {
+  ok: boolean;
+  host_id: string;
+  saq_key: string;
+  console_run_id: string;
+  room: string;
+  status: string;
   message: string;
 }
 
@@ -98,6 +109,9 @@ export interface AgentInstallStatus {
   host_id: string;
   saq_key: string;
   status: string; // queued | active | complete | failed | aborted | unknown
+  console_run_id?: string | null;
+  console_status?: string | null;
+  room?: string | null;
   log_path?: string | null;
   result?: AgentInstallResult | null;
 }
@@ -105,24 +119,8 @@ export interface AgentInstallStatus {
 export const agentInstall = {
   trigger: (hostId: number | string) =>
     apiClient
-      .post<{ ok: boolean; host_id: string; saq_key: string; status: string; message: string }>(
-        `/hosts/${hostId}/install`,
-      )
+      .post<AgentInstallTriggerResult>(`/hosts/${hostId}/install`)
       .then(r => r.data),
   status: (hostId: number | string) =>
     apiClient.get<AgentInstallStatus>(`/hosts/${hostId}/install/status`).then(r => r.data),
-};
-
-export const deploy = {
-  trigger: (hostId: number | string, installPath: string = '/opt/stability-test-agent') =>
-    apiClient.post<{ id: number; host_id: number; status: string; started_at: string }>(
-      `/deploy/hosts/${hostId}`,
-      { install_path: installPath },
-    ).then(r => r.data),
-  getHistory: (hostId: number | string, limit: number = 10) =>
-    apiClient.get<any[]>(`/deploy/hosts/${hostId}/history?limit=${limit}`).then(r => r.data),
-  getLatest: (hostId: number | string) =>
-    apiClient.get<any>(`/deploy/hosts/${hostId}/latest`).then(r => r.data),
-  batchDeploy: (hostIds: Array<number | string>, installPath: string = '/opt/stability-test-agent') =>
-    apiClient.post<{ deployments: any[]; total: number }>('/deploy/batch', { host_ids: hostIds, install_path: installPath }).then(r => r.data),
 };

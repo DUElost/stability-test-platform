@@ -5,9 +5,9 @@ ansible_become_password: "{{ ansible_password }}"
 agent_check_strict: true
 agent_status_require_active: true
 
-# 开发环境可在执行时用 -e agent_api_url=http://<ip>:8000 临时覆盖。
-# 此处为本控制平面真实可达 IP（同网段），agent 通过该地址回连后端。
-agent_api_url: "http://172.21.8.202:8000"
+# Agent 回连控制平面 Nginx 入口（:80），不直连 backend loopback :8000。
+# UI/CLI 触发安装时可用 -e agent_api_url=... 临时覆盖。
+agent_api_url: "http://172.21.8.202"
 agent_install_dir: "/opt/stability-test-agent"
 agent_service_name: "stability-test-agent"
 agent_remote_tmp_dir: "/tmp/stability-test-agent-ansible"

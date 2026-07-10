@@ -41,6 +41,9 @@ export interface Host {
   active_jobs?: HostActiveJob[];
   // ssh-keyscan result on create/update ("ok" | "failed: <reason>" | null).
   host_key_trust?: string | null;
+  /** 与 ONLINE/OFFLINE 正交：曾安装 / 有过心跳 / agent_version */
+  agent_installed?: boolean;
+  agent_installed_at?: string | null;
 }
 
 export interface Device {

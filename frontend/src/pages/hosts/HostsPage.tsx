@@ -1,12 +1,15 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Rocket, Server } from 'lucide-react';
+import { Plus, Server } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useAuthSession } from '@/hooks/useAuthSession';
+import { useHostOperations } from '@/hooks/useHostOperations';
 import { ExpandableHostTable, type HostTableData } from '@/components/network/ExpandableHostTable';
 import { AddHostModal } from './components/AddHostModal';
 import HostHotUpdateConfirmDialog from '@/components/host/HostHotUpdateConfirmDialog';
+import HostBulkActionBar from '@/components/host/HostBulkActionBar';
+import HostOperationPanel from '@/components/host/HostOperationPanel';
 import { api } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
@@ -85,45 +88,20 @@ export default function HostsPage() {
     },
   });
 
-  const [deployingHostId, setDeployingHostId] = useState<string | number | null>(null);
   const [watcherAdminUpdatingHostId, setWatcherAdminUpdatingHostId] = useState<
     string | number | null
   >(null);
 
-  const deployMutation = useMutation({
-    mutationFn: (hostId: string | number) => api.deploy.trigger(hostId),
-    onSuccess: (_data, hostId) => {
-      toast.success(`主机 ${hostId} 部署已启动`);
-      setDeployingHostId(null);
-    },
-    onError: (error: any) => {
-      toast.error(`部署失败: ${error.response?.data?.detail || error.message}`);
-      setDeployingHostId(null);
-    },
-  });
-
-  const handleDeploy = async (hostId: string | number) => {
-    const ok = await confirmDialog({ description: `确定要部署到主机 ${hostId} 吗？` });
-    if (ok) {
-      setDeployingHostId(hostId);
-      deployMutation.mutate(hostId);
-    }
-  };
-
-  const batchDeployMutation = useMutation({
-    mutationFn: (hostIds: Array<string | number>) => api.deploy.batchDeploy(hostIds),
-    onSuccess: () => {
-      toast.success(`已启动 ${selectedHostIds.size} 台主机的批量部署`);
-      setSelectedHostIds(new Set());
-      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
-    },
-    onError: (error: any) => {
-      toast.error(`批量部署失败: ${error.response?.data?.detail || error.message}`);
-    },
-  });
+  const {
+    ops: hostOps,
+    panelOpen: opPanelOpen,
+    startInstallBatch,
+    markTerminal,
+    closePanel,
+    isHostBusy,
+  } = useHostOperations({ concurrency: 2 });
 
   const [hotUpdatingHostId, setHotUpdatingHostId] = useState<number | string | null>(null);
-  const [installingHostId, setInstallingHostId] = useState<number | string | null>(null);
   const [pendingHotUpdateHostId, setPendingHotUpdateHostId] = useState<
     number | string | null
   >(null);
@@ -217,45 +195,84 @@ export default function HostsPage() {
     hotUpdateMutation.mutate({ hostId, abortRunningJobs: opts.abortRunningJobs });
   };
 
-  const agentInstallStatusQ = useQuery({
-    queryKey: ['agent-install-status', installingHostId],
-    queryFn: () => api.agentInstall.status(installingHostId as string | number),
-    enabled: installingHostId != null,
-    refetchInterval: 3000,
-  });
-
-  useEffect(() => {
-    if (installingHostId == null) return;
-    const data = agentInstallStatusQ.data;
-    if (!data) return;
-    const s = data.status;
-    if (s !== 'complete' && s !== 'failed' && s !== 'aborted') return;
-    const result = data.result;
-    if (s === 'complete' && result?.ok) {
-      toast.success(`主机 ${installingHostId} Agent 安装完成`);
+  const handleInstallTerminalStatus = (hostId: string, status: string) => {
+    const op = hostOps.find((o) => o.hostId === hostId);
+    const label = op?.label ?? hostId;
+    if (status === 'SUCCESS') {
+      markTerminal(hostId, 'success');
+      toast.success(`主机 ${label} Agent 安装完成`);
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
     } else {
-      toast.error(
-        `主机 ${installingHostId} Agent 安装失败: ${result?.message ?? s}`,
-      );
+      markTerminal(hostId, 'failed', status);
+      toast.error(`主机 ${label} Agent 安装失败 (${status})`);
     }
-    setInstallingHostId(null);
-  }, [agentInstallStatusQ.data, installingHostId, queryClient, toast]);
+  };
 
-  const handleInstall = (hostId: number | string) => {
-    setInstallingHostId(hostId);
-    api.agentInstall
-      .trigger(hostId)
-      .then(() => {
-        toast.info(`主机 ${hostId} 安装任务已入队，轮询进度中…`);
-        agentInstallStatusQ.refetch();
+  const resolveInstallTargets = (hostIds: Array<string | number>) => {
+    return hostIds
+      .map((id) => {
+        const full = hosts?.find((h: Host) => h.id === id);
+        if (!full) return null;
+        if (full.status === 'ONLINE') return null;
+        return {
+          hostId: full.id,
+          label: full.name ?? full.ip ?? String(full.id),
+          agentInstalled: Boolean(full.agent_installed),
+        };
       })
-      .catch((err: any) => {
+      .filter((t): t is NonNullable<typeof t> => t != null);
+  };
+
+  const handleInstall = async (hostId: number | string) => {
+    const targets = resolveInstallTargets([hostId]);
+    if (!targets.length) {
+      toast.info('该主机在线，请使用热更新');
+      return;
+    }
+    const t = targets[0];
+    const ok = await confirmDialog({
+      description: t.agentInstalled
+        ? `确定重新安装主机「${t.label}」的 Agent？`
+        : `确定对主机「${t.label}」执行首次安装？`,
+    });
+    if (!ok) return;
+    await startInstallBatch(targets);
+  };
+
+  const handleBulkInstall = async () => {
+    const targets = resolveInstallTargets(Array.from(selectedHostIds));
+    if (!targets.length) {
+      toast.info('选中主机中没有可安装目标（ONLINE 请用热更新）');
+      return;
+    }
+    const first = targets.filter((t) => !t.agentInstalled).length;
+    const re = targets.filter((t) => t.agentInstalled).length;
+    const ok = await confirmDialog({
+      description: `将对 ${targets.length} 台主机安装 Agent（首次 ${first} / 重装 ${re}，并发 2）。是否继续？`,
+    });
+    if (!ok) return;
+    await startInstallBatch(targets);
+    setSelectedHostIds(new Set());
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedHostIds.size === 0) return;
+    const ok = await confirmDialog({
+      description: `确定删除选中的 ${selectedHostIds.size} 台主机？此操作不可恢复。`,
+    });
+    if (!ok) return;
+    for (const id of Array.from(selectedHostIds)) {
+      try {
+        await api.hosts.delete(id);
+      } catch (error: any) {
         toast.error(
-          `触发安装失败: ${err?.response?.data?.detail ?? (err?.message || '未知错误')}`,
+          `删除 ${id} 失败: ${error?.response?.data?.detail || error?.message || '未知错误'}`,
         );
-        setInstallingHostId(null);
-      });
+      }
+    }
+    toast.success('批量删除已完成');
+    setSelectedHostIds(new Set());
+    queryClient.invalidateQueries({ queryKey: hostKeys.list() });
   };
 
   const handleEdit = (host: HostTableData) => {
@@ -280,14 +297,6 @@ export default function HostsPage() {
     });
     if (ok) {
       deleteMutation.mutate(host.id);
-    }
-  };
-
-  const handleBatchDeploy = async () => {
-    if (selectedHostIds.size === 0) return;
-    const ok = await confirmDialog({ description: `确定要部署到 ${selectedHostIds.size} 台选中主机吗？` });
-    if (ok) {
-      batchDeployMutation.mutate(Array.from(selectedHostIds));
     }
   };
 
@@ -393,6 +402,7 @@ export default function HostsPage() {
         status: host.status,
         watcher_admin_active: host.watcher_admin_active !== false,
         last_heartbeat: host.last_heartbeat,
+        agent_installed: Boolean(host.agent_installed),
         resources: host.status === 'ONLINE' ? {
           cpu_load: extra.cpu_load || 0,
           cpu_cores: extra.cpu_cores,
@@ -419,6 +429,34 @@ export default function HostsPage() {
       };
     });
   }, [hosts, deviceCountMap, hostDeviceStats]);
+
+  const bulkCounts = useMemo(() => {
+    const selected = Array.from(selectedHostIds)
+      .map((id) => hosts?.find((h: Host) => h.id === id))
+      .filter((h): h is Host => Boolean(h));
+    let firstInstall = 0;
+    let reinstall = 0;
+    let hotUpdate = 0;
+    for (const h of selected) {
+      if (h.status === 'ONLINE') {
+        hotUpdate += 1;
+      } else if (h.agent_installed) {
+        reinstall += 1;
+      } else {
+        firstInstall += 1;
+      }
+    }
+    return {
+      selected: selectedHostIds.size,
+      firstInstall,
+      reinstall,
+      hotUpdate,
+    };
+  }, [selectedHostIds, hosts]);
+
+  const installPending = hostOps.some(
+    (op) => op.status === 'pending' || op.status === 'running',
+  );
 
   if (isLoading) {
     return (
@@ -476,22 +514,24 @@ export default function HostsPage() {
     <PageContainer width="wide">
       <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
 
-      <div className="flex items-center justify-end gap-2 py-2">
-        {selectedHostIds.size > 0 && (
-          <Button
-            variant="outline"
-            onClick={handleBatchDeploy}
-            disabled={batchDeployMutation.isPending}
-          >
-            <Rocket className="w-4 h-4" />
-            {batchDeployMutation.isPending ? '部署中...' : `批量部署 (${selectedHostIds.size})`}
-          </Button>
-        )}
+      <div className="flex flex-col gap-2 py-2">
+        <div className="flex items-center justify-end gap-2">
+          {isAdmin && (
+            <Button onClick={() => setIsModalOpen(true)}>
+              <Plus className="w-4 h-4" />
+              添加主机
+            </Button>
+          )}
+        </div>
         {isAdmin && (
-          <Button onClick={() => setIsModalOpen(true)}>
-            <Plus className="w-4 h-4" />
-            添加主机
-          </Button>
+          <HostBulkActionBar
+            counts={bulkCounts}
+            isAdmin={isAdmin}
+            installPending={installPending}
+            onInstall={handleBulkInstall}
+            onDelete={handleBulkDelete}
+            onClear={() => setSelectedHostIds(new Set())}
+          />
         )}
       </div>
 
@@ -499,12 +539,10 @@ export default function HostsPage() {
       {tableData.length > 0 ? (
         <ExpandableHostTable
           hosts={tableData}
-          onDeploy={handleDeploy}
-          isDeploying={(hostId: string | number) => deployMutation.isPending && deployingHostId === hostId}
           onHotUpdate={isAdmin ? handleHotUpdate : undefined}
           isHotUpdating={(hostId: string | number) => hotUpdateMutation.isPending && hotUpdatingHostId === hostId}
           onInstall={isAdmin ? handleInstall : undefined}
-          isInstalling={(hostId: string | number) => installingHostId === hostId}
+          isInstalling={(hostId: string | number) => isHostBusy(hostId)}
           onEdit={isAdmin ? handleEdit : undefined}
           onDelete={isAdmin ? handleDelete : undefined}
           isDeleting={(hostId: string | number) => deleteMutation.isPending && deleteMutation.variables === hostId}
@@ -555,6 +593,13 @@ export default function HostsPage() {
         onConfirm={handleHotUpdateConfirm}
         isHotUpdatePending={hotUpdateMutation.isPending}
         retryAfterSeconds={pendingRetryAfter}
+      />
+
+      <HostOperationPanel
+        open={opPanelOpen}
+        ops={hostOps}
+        onClose={closePanel}
+        onTerminalStatus={handleInstallTerminalStatus}
       />
     </PageContainer>
   );

@@ -49,6 +49,7 @@ venv-wsl/
 !.codex/hooks.json
 # Ansible / SSH 部署本地配置（敏感清单继续忽略，其余自动化文件纳入版本控制）
 tools/ansible/inventory.ini
+tools/ansible/.stp-install-*.ini
 tools/ansible/*.retry
 .worktrees/
 .docker/

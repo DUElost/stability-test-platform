@@ -43,6 +43,8 @@ export interface HostTableData {
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
   watcher_admin_active?: boolean;
   last_heartbeat?: string;
+  /** 与 status 正交：曾安装成功 / 有过心跳 */
+  agent_installed?: boolean;
   resources?: HostResources;
   mount_status?: MountStatus[];
   device_count?: number;
@@ -55,8 +57,6 @@ export interface HostTableData {
 
 interface ExpandableHostTableProps {
   hosts: HostTableData[];
-  onDeploy?: (hostId: string | number) => void;
-  isDeploying?: (hostId: string | number) => boolean;
   onHotUpdate?: (hostId: string | number) => void;
   isHotUpdating?: (hostId: string | number) => boolean;
   onInstall?: (hostId: string | number) => void;
@@ -90,8 +90,6 @@ const REASON_LABELS: Record<string, string> = {
 
 export function ExpandableHostTable({
   hosts,
-  onDeploy: _onDeploy,
-  isDeploying: _isDeploying,
   onHotUpdate,
   isHotUpdating,
   onInstall,
@@ -419,10 +417,23 @@ export function ExpandableHostTable({
                                 onInstall(host.id);
                               }}
                               disabled={isInstalling?.(host.id)}
-                              aria-label={`${host.name ?? host.id} 首次安装 Agent`}
+                              aria-label={
+                                host.agent_installed
+                                  ? `${host.name ?? host.id} 重新安装 Agent`
+                                  : `${host.name ?? host.id} 首次安装 Agent`
+                              }
+                              title={
+                                host.agent_installed
+                                  ? 'Agent 曾安装成功，当前离线 — 可重新安装'
+                                  : '尚未检测到 Agent 安装记录'
+                              }
                               className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-amber-600 bg-amber-500/10 hover:bg-amber-500/20 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                             >
-                              {isInstalling?.(host.id) ? '安装中...' : '首次安装'}
+                              {isInstalling?.(host.id)
+                                ? '安装中...'
+                                : host.agent_installed
+                                  ? '重新安装'
+                                  : '首次安装'}
                             </button>
                           ) : (
                             <span className="text-muted-foreground/40 text-xs">-</span>

@@ -1,7 +1,7 @@
 export { default } from './client';
 export { ApiError, unwrapApiResponse, registerAuthFailureHandler } from './client';
 export { auth } from './auth';
-export { hosts, heartbeat, hotUpdate, deploy, agentInstall } from './hosts';
+export { hosts, heartbeat, hotUpdate, agentInstall } from './hosts';
 export { devices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
@@ -37,7 +37,7 @@ export type {
 } from './types';
 
 import { auth } from './auth';
-import { hosts, heartbeat, hotUpdate, deploy, agentInstall } from './hosts';
+import { hosts, heartbeat, hotUpdate, agentInstall } from './hosts';
 import { devices } from './devices';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
@@ -54,7 +54,6 @@ export const api = {
   hosts,
   heartbeat,
   hotUpdate,
-  deploy,
   agentInstall,
   devices,
   logs,

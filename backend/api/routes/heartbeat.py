@@ -190,10 +190,11 @@ def _process_heartbeat_with_db(
 
     # Merge extra data without losing system stats
     host_extra = {}
-    # Preserve agent_version across extra rebuild (written by preflight heartbeat path)
+    # Preserve agent_version / install flags across extra rebuild
     prev_extra = host.extra or {}
-    if "agent_version" in prev_extra:
-        host_extra["agent_version"] = prev_extra["agent_version"]
+    for keep_key in ("agent_version", "agent_installed", "agent_installed_at"):
+        if keep_key in prev_extra:
+            host_extra[keep_key] = prev_extra[keep_key]
     if payload.extra:
         host_extra.update(payload.extra)
     if payload.host:
@@ -206,6 +207,10 @@ def _process_heartbeat_with_db(
     # ADR-0020: persist agent_version from heartbeat payload
     if payload.agent_version:
         host_extra["agent_version"] = payload.agent_version
+    # 心跳即证明 Agent 已安装（与 ONLINE/OFFLINE 正交的安装态信号）
+    host_extra["agent_installed"] = True
+    if not host_extra.get("agent_installed_at"):
+        host_extra["agent_installed_at"] = now.isoformat()
     host.extra = host_extra
 
     extra = payload.extra or {}
