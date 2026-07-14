@@ -48,6 +48,11 @@ export const DEVICE_UI_STATUS: Record<DeviceUiStatus, DeviceUiStatusStyle> = {
     cellCls: 'bg-destructive/90 hover:bg-destructive',
     tone: 'destructive',
   },
+  aborted: {
+    label: '已中止',
+    cellCls: 'bg-muted-foreground/60 hover:bg-muted-foreground/70',
+    tone: 'default',
+  },
   backoff: {
     label: '退避',
     cellCls: 'bg-primary/90 hover:bg-primary',

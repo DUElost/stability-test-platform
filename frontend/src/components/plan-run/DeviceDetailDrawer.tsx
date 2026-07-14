@@ -48,7 +48,12 @@ function busyReasonLabel(reason: string | null | undefined): string {
   return BUSY_REASON_LABELS[reason] ?? reason;
 }
 
-const TERMINAL_DEVICE: ReadonlyArray<DeviceUiStatus> = ['completed', 'failed', 'unknown'];
+const TERMINAL_DEVICE: ReadonlyArray<DeviceUiStatus> = [
+  'completed',
+  'failed',
+  'aborted',
+  'unknown',
+];
 
 export default function DeviceDetailDrawer({
   device,
@@ -80,6 +85,13 @@ export default function DeviceDetailDrawer({
   const isTerminal = TERMINAL_DEVICE.includes(device.ui_status);
   const exitRequested = device.manual_action === 'EXIT_REQUESTED';
   const retryRequested = device.manual_action === 'RETRY_NOW';
+  const canManualRetry = device.capabilities
+    ? device.capabilities.manual_retry === true
+    : !isTerminal;
+  const canManualExit = device.capabilities
+    ? device.capabilities.manual_exit === true
+    : !isTerminal;
+  const canOpenReport = device.capabilities?.open_report ?? true;
 
   return (
     <>
@@ -209,45 +221,51 @@ export default function DeviceDetailDrawer({
 
         {/* Footer — actions */}
         <footer className="grid grid-cols-2 gap-2 border-t bg-muted/50 px-4 py-3">
-          <Button
-            variant="outline"
-            size="sm"
-            data-testid="device-drawer-retry-btn"
-            disabled={isTerminal || isRetryPending || retryRequested}
-            onClick={() => setConfirmOpen('retry')}
-          >
-            {isRetryPending ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RotateCw className="mr-1 h-3.5 w-3.5" />
-            )}
-            立即重试
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            data-testid="device-drawer-exit-btn"
-            disabled={isTerminal || isExitPending || exitRequested}
-            onClick={() => setConfirmOpen('exit')}
-            className="border-destructive/30 text-destructive hover:bg-destructive/10"
-          >
-            {isExitPending ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <LogOut className="mr-1 h-3.5 w-3.5" />
-            )}
-            退出该设备
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="col-span-2"
-            data-testid="device-drawer-open-report"
-            onClick={() => onOpenReport(device.job_id)}
-          >
-            <ExternalLink className="mr-1 h-3.5 w-3.5" />
-            查看 Job 报告
-          </Button>
+          {canManualRetry && (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="device-drawer-retry-btn"
+              disabled={isRetryPending || retryRequested}
+              onClick={() => setConfirmOpen('retry')}
+            >
+              {isRetryPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RotateCw className="mr-1 h-3.5 w-3.5" />
+              )}
+              立即重试
+            </Button>
+          )}
+          {canManualExit && (
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="device-drawer-exit-btn"
+              disabled={isExitPending || exitRequested}
+              onClick={() => setConfirmOpen('exit')}
+              className="border-destructive/30 text-destructive hover:bg-destructive/10"
+            >
+              {isExitPending ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <LogOut className="mr-1 h-3.5 w-3.5" />
+              )}
+              退出该设备
+            </Button>
+          )}
+          {canOpenReport && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="col-span-2"
+              data-testid="device-drawer-open-report"
+              onClick={() => onOpenReport(device.job_id)}
+            >
+              <ExternalLink className="mr-1 h-3.5 w-3.5" />
+              查看 Job 报告
+            </Button>
+          )}
         </footer>
       </aside>
 

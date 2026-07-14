@@ -2,7 +2,15 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useBeforeUnload } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/hooks/useToast';
-import { api, type Plan, type PlanCreate, type PlanUpdate, type PipelineDef, type PipelineStep } from '@/utils/api';
+import {
+  api,
+  ApiError,
+  type Plan,
+  type PlanCreate,
+  type PlanUpdate,
+  type PipelineDef,
+  type PipelineStep,
+} from '@/utils/api';
 import { planKeys } from '@/utils/api/queryKeys';
 import {
   EMPTY_LIFECYCLE,
@@ -33,18 +41,34 @@ export function usePlanEditForm(planId: number | null) {
   const [chainAppendName, setChainAppendName] = useState('');
   const [origSnapshot, setOrigSnapshot] = useState('');
 
-  const { data: plan, isLoading: planLoading } = useQuery({
+  const {
+    data: plan,
+    isLoading: planLoading,
+    isError: planIsError,
+    error: planError,
+    refetch: refetchPlan,
+  } = useQuery({
     queryKey: planKeys.detail(planId!),
     queryFn: () => api.plans.get(planId!),
     enabled: planId != null,
   });
 
-  const { data: allPlans } = useQuery({
+  const {
+    data: allPlans,
+    isError: allPlansIsError,
+    error: allPlansError,
+    refetch: refetchAllPlans,
+  } = useQuery({
     queryKey: planKeys.list(200),
     queryFn: () => api.plans.list(0, 200),
   });
 
-  const { data: scripts } = useQuery({
+  const {
+    data: scripts,
+    isError: scriptsIsError,
+    error: scriptsError,
+    refetch: refetchScripts,
+  } = useQuery({
     queryKey: ['scripts-active'],
     queryFn: () => api.scripts.list(true),
     staleTime: 60_000,
@@ -205,7 +229,9 @@ export function usePlanEditForm(planId: number | null) {
       return saved;
     } catch (err: unknown) {
       const ax = err as { response?: { data?: { detail?: unknown } }; message?: string };
-      const detail = ax.response?.data?.detail;
+      const detail = err instanceof ApiError
+        ? err.details
+        : ax.response?.data?.detail;
       if (Array.isArray(detail)) {
         toast.error(
           detail.map((d: { loc?: unknown[]; msg?: string }) => `${(d.loc || []).join('.')} ${d.msg}`).join('; '),
@@ -333,6 +359,15 @@ export function usePlanEditForm(planId: number | null) {
     isNew,
     planId,
     planLoading,
+    planIsError,
+    planError,
+    refetchPlan,
+    dependenciesError: allPlansError ?? scriptsError,
+    dependenciesIsError: allPlansIsError || scriptsIsError,
+    refetchDependencies: () => {
+      void refetchAllPlans();
+      void refetchScripts();
+    },
     name,
     setName,
     description,

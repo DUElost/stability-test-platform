@@ -11,25 +11,17 @@ import {
 } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { formatIsoCompact } from '@/utils/format';
-import type { PrecheckState } from '@/utils/api/types';
+import type { PlanDispatchState, PrecheckState } from '@/utils/api/types';
 
 interface Props {
   precheck: PrecheckState | null | undefined;
-  dispatchState?:
-    | {
-        status?: string | null;
-        enqueued_at?: string | null;
-        started_at?: string | null;
-        completed_at?: string | null;
-        last_error?: string | null;
-      }
-    | null
-    | undefined;
+  dispatchState?: PlanDispatchState | null;
   /** Whether the parent PlanRun is in a terminal status. */
   isTerminal: boolean;
   /** Manual retry after precheck / sync failure. */
   onRetryDispatch?: () => void;
   isRetrying?: boolean;
+  retryable?: boolean;
 }
 
 const PHASE_SPIN: ReadonlyArray<string> = ['verifying', 'syncing', 'reverifying'];
@@ -65,15 +57,20 @@ export function gateElapsedSeconds(
 
 export function isGateStale(
   dispatchState: Props['dispatchState'],
-  precheck: PrecheckState,
+  precheck: PrecheckState | null | undefined,
   isTerminal: boolean,
   nowMs: number = Date.now(),
 ): boolean {
   if (isTerminal) return false;
+  if (typeof dispatchState?.stale === 'boolean') return dispatchState.stale;
+  if (dispatchState?.deadline_at) {
+    const deadlineMs = new Date(dispatchState.deadline_at).getTime();
+    if (!Number.isNaN(deadlineMs)) return nowMs >= deadlineMs;
+  }
 
   const dispatchStatus = dispatchState?.status;
   const precheckActive =
-    precheck.phase !== 'ready' && precheck.phase !== 'failed';
+    !!precheck && precheck.phase !== 'ready' && precheck.phase !== 'failed';
   const dispatchActive =
     dispatchStatus === 'queued' || dispatchStatus === 'running';
 
@@ -89,31 +86,40 @@ export default function DispatchGateCard({
   isTerminal,
   onRetryDispatch,
   isRetrying = false,
+  retryable,
   nowMs = Date.now(),
 }: Props & { nowMs?: number }) {
-  // Don't render at all when:
-  //   1) there is no precheck context (PlanRun pre-dates ADR-0021).
-  if (!precheck) return null;
+  const dispatchOnly = !precheck;
+  const gate: PrecheckState = precheck ?? {
+    phase: dispatchState?.status === 'failed' ? 'failed' : 'verifying',
+    started_at: dispatchState?.started_at ?? dispatchState?.enqueued_at ?? '',
+    completed_at: dispatchState?.completed_at,
+    hosts: {},
+    final_result: dispatchState?.status === 'failed' ? 'failed' : null,
+    errors: dispatchState?.last_error ? [dispatchState.last_error] : [],
+  };
 
   const readySuffix =
-    precheck.phase === 'ready'
+    gate.phase === 'ready'
       ? getReadySuffix(dispatchState?.status, isTerminal)
       : null;
-  const isPhaseSpinning = PHASE_SPIN.includes(precheck.phase);
-  const hostEntries = Object.entries(precheck.hosts);
+  const isPhaseSpinning = PHASE_SPIN.includes(gate.phase);
+  const hostEntries = Object.entries(gate.hosts);
   const totalHosts = hostEntries.length;
   const isCompactReady =
     !isTerminal &&
-    precheck.phase === 'ready' &&
+    gate.phase === 'ready' &&
     dispatchState?.status === 'completed';
   const showStaleBanner = isGateStale(dispatchState, precheck, isTerminal, nowMs);
   const staleElapsedSec = Math.floor(gateElapsedSeconds(dispatchState, precheck, nowMs) ?? 0);
   const canRetryDispatch =
     !isRetrying &&
-    (precheck.phase === 'failed' || dispatchState?.status === 'failed');
+    (retryable ??
+      dispatchState?.retryable ??
+      (gate.phase === 'failed' || dispatchState?.status === 'failed'));
   const mixedWatcherFailure =
-    precheck.gate_failure?.code === 'MIXED_WATCHER_ACTIVITY'
-      ? precheck.gate_failure
+    gate.gate_failure?.code === 'MIXED_WATCHER_ACTIVITY'
+      ? gate.gate_failure
       : null;
 
   // Aggregate counts for the summary line
@@ -122,15 +128,15 @@ export default function DispatchGateCard({
     for (const [, h] of hostEntries) out[h.status] += 1;
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [precheck]);
+  }, [gate]);
 
   // ── Collapse logic: auto-hide per-host details when all pass ──────────
   // isCompactReady: gate completely done → full compact (already implemented)
   // allHealthy: every host ok/synced, no errors → eligible for auto-collapse
   const allHealthy =
-    (precheck.phase === 'ready' || precheck.phase === 'failed') &&
+    (gate.phase === 'ready' || gate.phase === 'failed') &&
     counts.failed === 0 &&
-    !precheck.errors?.length &&
+    !gate.errors?.length &&
     hostEntries.every(([, h]) => h.status === 'ok' || h.status === 'synced');
 
   // Default: collapse when all healthy, expand when failures need attention.
@@ -160,7 +166,7 @@ export default function DispatchGateCard({
         <div className="inline-flex items-center gap-1.5">
           <StatusBadge
             kind="precheck-phase"
-            status={precheck.phase}
+            status={gate.phase}
             size="sm"
             spin={isPhaseSpinning}
           />
@@ -169,7 +175,9 @@ export default function DispatchGateCard({
           )}
         </div>
         <span className={cn('text-xs', TEXT.subtitle)}>
-          派发门禁 · {totalHosts} 主机 · {counts.ok + counts.synced}/{totalHosts} 通过
+          {dispatchOnly
+            ? '派发状态'
+            : `派发门禁 · ${totalHosts} 主机 · ${counts.ok + counts.synced}/${totalHosts} 通过`}
           {counts.failed > 0 && (
             <span className="ml-2 font-semibold text-destructive">
               失败 {counts.failed}
@@ -194,10 +202,10 @@ export default function DispatchGateCard({
             )}
           </button>
         )}
-        {precheck.errors && precheck.errors.length > 0 && (
+        {gate.errors && gate.errors.length > 0 && (
           <span className="ml-auto inline-flex items-center gap-1 text-xs text-destructive">
             <AlertTriangle className="h-3.5 w-3.5" />
-            {precheck.errors[precheck.errors.length - 1]}
+            {gate.errors[gate.errors.length - 1]}
           </span>
         )}
         {canRetryDispatch && onRetryDispatch && (
@@ -223,7 +231,8 @@ export default function DispatchGateCard({
         >
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            派发门禁已运行 {staleElapsedSec}s（超过 90s 阈值）。若长时间无 Job 出现，请检查
+            派发门禁已运行 {staleElapsedSec}s（
+            {dispatchState?.deadline_at ? '已超过后端截止时间' : '超过 90s 兼容阈值'}）。若长时间无 Job 出现，请检查
             SAQ Worker / Redis 或等待 precheck reaper 补偿。
           </span>
         </div>
@@ -289,7 +298,7 @@ export default function DispatchGateCard({
       )}
 
       {/* Per-host details: hidden when fully compact, collapsed when all-healthy, expanded on failure */}
-      {!isCompactReady && (
+      {!isCompactReady && !dispatchOnly && (
         <div className="divide-y">
           {allHealthy && !expanded ? (
             <div
@@ -332,8 +341,8 @@ export default function DispatchGateCard({
                     {state.sync_attempts > 0 && (
                       <span className="text-xs text-muted-foreground/70">
                         sync ×{state.sync_attempts}
-                        {precheck.sync_max_attempts != null
-                          ? `/${precheck.sync_max_attempts}`
+                        {gate.sync_max_attempts != null
+                          ? `/${gate.sync_max_attempts}`
                           : ''}
                       </span>
                     )}

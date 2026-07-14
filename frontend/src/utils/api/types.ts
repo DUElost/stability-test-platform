@@ -44,6 +44,12 @@ export interface Host {
   /** 与 ONLINE/OFFLINE 正交：曾安装 / 有过心跳 / agent_version */
   agent_installed?: boolean;
   agent_installed_at?: string | null;
+  agent_protocol_version?: string | null;
+  agent_code_revision?: string | null;
+  expected_code_revision?: string | null;
+  agent_code_deployed?: string | null;
+  agent_code_deployed_at?: string | null;
+  agent_code_sync_status?: 'unknown' | 'matched' | 'drift' | 'pending';
 }
 
 export interface Device {
@@ -52,6 +58,9 @@ export interface Device {
   model: string | null;
   host_id: string | number | null;
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
+  /** Authoritative backend admission decision. Legacy servers may omit it. */
+  schedulable?: boolean;
+  scheduling_reason?: string | null;
   last_seen: string | null;
   tags: string[];
   extra?: Record<string, any>;
@@ -481,6 +490,30 @@ export interface PaginatedResponse<T> {
   limit: number;
 }
 
+// ─── API error contract ───────────────────────────────────────────────────────
+
+export interface ApiErrorCapabilities {
+  retry?: boolean;
+  retry_dispatch?: boolean;
+  navigate_to_plan_run?: boolean;
+  [key: string]: boolean | undefined;
+}
+
+export interface StructuredApiError {
+  code: string;
+  message: string;
+  retryable?: boolean;
+  plan_run_id?: number;
+  current_status?: string;
+  capabilities?: ApiErrorCapabilities;
+  [key: string]: unknown;
+}
+
+export interface ApiResponseEnvelope<T> {
+  data?: T;
+  error?: StructuredApiError | null;
+}
+
 // ─── 编排模型类型 ──────────────────────────────────────────────────────────────
 
 export interface ScriptEntry {
@@ -692,14 +725,22 @@ export interface PlanDispatchState {
   started_at?: string | null;
   completed_at?: string | null;
   last_error?: string | null;
+  /** Backend authority for whether retry-dispatch is currently legal. */
+  retryable?: boolean;
+  /** Backend-derived stale projection/deadline. */
+  stale?: boolean;
+  deadline_at?: string | null;
 }
 
 export interface PlanSnapshotStep {
+  id?: number;
   stage: 'init' | 'patrol' | 'teardown';
   step_key: string;
   script_name: string;
   script_version: string;
   nfs_path: string;
+  script_type?: string;
+  content_sha256?: string;
   param_schema: Record<string, unknown>;
   default_params: Record<string, unknown>;
   timeout_seconds?: number | null;
@@ -709,15 +750,30 @@ export interface PlanSnapshotStep {
 }
 
 export interface PlanSnapshot {
+  schema_version?: number;
+  captured_at?: string;
   plan: {
     id: number;
     name: string;
     description?: string | null;
     failure_threshold: number;
     patrol_interval_seconds?: number | null;
+    timeout_seconds?: number | null;
+    auto_archive_interval_seconds?: number | null;
+    next_plan_id?: number | null;
     watcher_policy: WatcherPolicy | Record<string, never>;
+    created_by?: string | null;
+    created_at?: string;
+    updated_at?: string;
   };
   steps: PlanSnapshotStep[];
+  lifecycle?: PipelineLifecycle;
+}
+
+export interface PlanRunCapabilities {
+  abort?: boolean;
+  retry_dispatch?: boolean;
+  final_archive?: boolean;
 }
 
 export interface PlanRun {
@@ -738,6 +794,7 @@ export interface PlanRun {
   chain_index?: number;
   next_plan_triggered?: boolean;
   plan_name?: string | null;
+  capabilities?: PlanRunCapabilities | null;
 }
 
 export interface PlanRunCreate {
@@ -823,11 +880,20 @@ export interface PrecheckState {
   gate_failure?: PrecheckGateFailure | null;
 }
 
+export interface PlanRunAbortRequest {
+  at: string;
+  reason: string;
+  triggered_by?: string | null;
+  deadline_at?: string | null;
+  requested_job_ids?: number[];
+  acknowledged_job_ids?: number[];
+}
+
 export interface PlanRunContext {
   precheck?: PrecheckState;
   dispatch_state?: PlanDispatchState | null;
   dispatch_device_ids?: number[];
-  abort_requested?: boolean;
+  abort_requested?: PlanRunAbortRequest;
   [key: string]: unknown;
 }
 
@@ -938,7 +1004,20 @@ export interface PlanRunEventsPayload {
   };
 }
 
-export type DeviceUiStatus = 'completed' | 'running' | 'failed' | 'unknown' | 'backoff' | 'pending';
+export type DeviceUiStatus =
+  | 'completed'
+  | 'running'
+  | 'failed'
+  | 'aborted'
+  | 'unknown'
+  | 'backoff'
+  | 'pending';
+
+export interface JobActionCapabilities {
+  manual_retry: boolean;
+  manual_exit: boolean;
+  open_report?: boolean;
+}
 
 export interface DeviceMatrixItem {
   device_id: number;
@@ -948,7 +1027,7 @@ export interface DeviceMatrixItem {
   job_id: number;
   job_status: JobStatus;
   ui_status: DeviceUiStatus;
-  current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending' | 'failed' | 'unknown';
+  current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending' | 'failed' | 'aborted' | 'unknown';
   current_step?: string | null;
   patrol_cycle_count: number;
   patrol_success_cycle_count: number;
@@ -967,10 +1046,18 @@ export interface DeviceMatrixItem {
   grace_remaining_seconds?: number | null;
   /** PENDING claim SLA remaining (seconds). */
   pending_claim_remaining_seconds?: number | null;
+  /** Absolute server-derived claim deadline, preferred over frontend SLA math. */
+  pending_claim_deadline_at?: string | null;
+  /** Absolute server-derived RUNNING heartbeat/stall deadline. */
+  heartbeat_deadline_at?: string | null;
+  /** Authoritative backend projection; avoids duplicating timeout policy. */
+  is_stuck?: boolean;
   /** Why device is BUSY / blocked: active_lease | device_offline | host_offline */
   busy_reason?: string | null;
   /** Job ID holding the active lease when busy_reason=active_lease. */
   busy_lease_job_id?: number | null;
+  /** Authoritative manual actions for the current Job state. */
+  capabilities?: JobActionCapabilities | null;
 }
 
 export interface PlanRunDevicesPayload {
@@ -1088,6 +1175,13 @@ export interface WatcherArchive {
   archived_jobs?: number;
   pending_jobs?: number;
   failed_jobs?: number;
+  /** Authoritative readiness for final archive extraction. */
+  readiness?: {
+    ready: boolean;
+    reason?: string | null;
+  } | null;
+  /** Compatibility with backends exposing the readiness boolean directly. */
+  ready_for_extract?: boolean;
 }
 
 export interface JobManualActionResult {
@@ -1103,6 +1197,14 @@ export interface JobManualActionResult {
 export interface PlanRunAbortResult {
   plan_run_id: number;
   status: string;
+  phase?: 'precheck' | 'running';
+  abort_requested?: PlanRunAbortRequest | null;
+  aborted_jobs?: number[];
+  pending_aborted_job_ids?: number[];
+  running_abort_requested_job_ids?: number[];
+  quarantined_job_ids?: number[];
+  // Legacy counters retained during the one-shot API transition.
+  released_leases?: number;
   released_lease_count?: number;
   aborted_pending_count?: number;
   drained_running_count?: number;

@@ -33,7 +33,7 @@ interface Props {
 
 // ── Table helpers ────────────────────────────────────────────────────────
 
-const DISPATCHED_CLAIM_TIMEOUT_SECONDS = 120;
+const LEGACY_DISPATCHED_CLAIM_TIMEOUT_SECONDS = 120;
 
 const BUSY_REASON_LABELS: Record<string, string> = {
   active_lease: '设备租约占用',
@@ -79,9 +79,25 @@ function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
   }
   if (d.status_reason) return d.status_reason;
   if (d.ui_status === 'pending') {
+    if (d.pending_claim_remaining_seconds != null) {
+      return d.pending_claim_remaining_seconds > 0
+        ? `等待 Agent 认领；剩余 ${d.pending_claim_remaining_seconds}s`
+        : '等待 Agent 认领；认领 SLA 已到期，recycler 将标记失败';
+    }
+    if (d.pending_claim_deadline_at) {
+      const deadline = new Date(d.pending_claim_deadline_at).getTime();
+      if (!Number.isNaN(deadline)) {
+        const remaining = Math.max(0, Math.ceil((deadline - now) / 1000));
+        return remaining > 0
+          ? `等待 Agent 认领；剩余 ${remaining}s`
+          : '等待 Agent 认领；认领 SLA 已到期，recycler 将标记失败';
+      }
+    }
+    // Compatibility with legacy servers that do not expose an SLA projection.
     const baseTs = d.created_at ?? d.started_at;
     if (baseTs) {
-      const deadline = new Date(baseTs).getTime() + DISPATCHED_CLAIM_TIMEOUT_SECONDS * 1000;
+      const deadline =
+        new Date(baseTs).getTime() + LEGACY_DISPATCHED_CLAIM_TIMEOUT_SECONDS * 1000;
       const remaining = Math.max(0, Math.ceil((deadline - now) / 1000));
       if (remaining > 0) return `等待 Agent 认领；${remaining}s 内未认领将自动失败（120s SLA）`;
       return '等待 Agent 认领；认领 SLA 已到期，recycler 将标记失败';

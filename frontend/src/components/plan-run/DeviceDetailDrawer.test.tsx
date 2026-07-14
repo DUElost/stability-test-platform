@@ -151,6 +151,39 @@ describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
   });
 });
 
+describe('DeviceDetailDrawer — backend action capabilities', () => {
+  it('hides manual actions when backend capabilities deny them', () => {
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          capabilities: { manual_retry: false, manual_exit: false },
+        })}
+        {...handlers}
+      />,
+    );
+
+    expect(screen.queryByTestId('device-drawer-retry-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('device-drawer-exit-btn')).not.toBeInTheDocument();
+  });
+
+  it('allows a backend capability to expose retry independently of UI status', () => {
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          ui_status: 'failed',
+          job_status: 'FAILED',
+          current_stage: 'failed',
+          capabilities: { manual_retry: true, manual_exit: false },
+        })}
+        {...handlers}
+      />,
+    );
+
+    expect(screen.getByTestId('device-drawer-retry-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('device-drawer-exit-btn')).not.toBeInTheDocument();
+  });
+});
+
 describe('DeviceDetailDrawer — a11y / 键盘', () => {
   it('exposes dialog role + aria-modal', () => {
     render_(<DeviceDetailDrawer device={makeDevice()} {...handlers} />);

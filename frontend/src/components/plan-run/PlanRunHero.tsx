@@ -72,6 +72,9 @@ export default function PlanRunHero({
   const heroCls = run ? HERO_CLS[run.status as PlanRunHeroStatus] : cn(SURFACE.elevated, 'border-border');
   const badgeCls = run ? BADGE_CLS[run.status as PlanRunHeroStatus] : '';
   const isRunning = run?.status === 'RUNNING';
+  const canAbort = run?.capabilities
+    ? run.capabilities.abort === true
+    : !isTerminal;
 
   return (
     <div className={cn('rounded-xl border overflow-hidden', ELEVATION.sm, heroCls)}>
@@ -184,7 +187,7 @@ export default function PlanRunHero({
           )}
         </div>
 
-        {!isTerminal && (
+        {canAbort && (
           <Button
             variant="destructive"
             size="sm"
@@ -207,8 +210,8 @@ export default function PlanRunHero({
           <AlertDialogHeader>
             <AlertDialogTitle>确认中止 PlanRun?</AlertDialogTitle>
             <AlertDialogDescription>
-              将释放运行中设备的租约，PENDING Job 标记为 ABORTED；Agent 上正在运行的 step
-              会异步收到中止信号。操作不可撤销。
+              PENDING Job 将直接标记为 ABORTED；运行中 Job 会收到中止请求，并在 Agent
+              确认执行进程停止后释放租约。操作不可撤销。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="space-y-2">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, AlertCircle, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -33,7 +33,7 @@ import { normalizeWatcherTimeScope } from '@/hooks/plan-run/planRunDetailUtils';
 import { usePlanRunDetailData } from '@/hooks/plan-run/usePlanRunDetailData';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 import { api } from '@/utils/api';
-import type { DeviceMatrixItem, DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
+import type { DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
 
 export default function PlanRunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -74,7 +74,7 @@ export default function PlanRunDetailPage() {
     [updateParam],
   );
 
-  const [selectedDevice, setSelectedDevice] = useState<DeviceMatrixItem | null>(null);
+  const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [diagOpen, setDiagOpen] = useState(false);
   const [leftPanelOpen, setLeftPanelOpen] = useState(false);
   const [finalArchiveOpen, setFinalArchiveOpen] = useState(false);
@@ -102,15 +102,32 @@ export default function PlanRunDetailPage() {
     watcherTimeScope,
   });
 
+  const selectedDevice = useMemo(
+    () =>
+      selectedJobId == null
+        ? null
+        : devicesQ.data?.devices.find((device) => device.job_id === selectedJobId) ?? null,
+    [devicesQ.data?.devices, selectedJobId],
+  );
+
   const finalArchivePromptedKey = `plan-run-${id}-final-archive-prompted`;
+  const archiveReadiness = watcherQ.data?.archive?.readiness;
+  const archiveDataReady =
+    archiveReadiness?.ready ??
+    watcherQ.data?.archive?.ready_for_extract ??
+    false;
+  const finalArchiveReady =
+    archiveDataReady &&
+    (runQ.data?.capabilities?.final_archive ?? false);
   useEffect(() => {
     if (!runQ.data) return;
     const status = runQ.data.status;
     if (status !== 'FAILED' && status !== 'DEGRADED') return;
+    if (!finalArchiveReady) return;
     if (sessionStorage.getItem(finalArchivePromptedKey)) return;
     sessionStorage.setItem(finalArchivePromptedKey, '1');
     setFinalArchiveOpen(true);
-  }, [runQ.data?.status, finalArchivePromptedKey]);
+  }, [runQ.data?.status, finalArchivePromptedKey, finalArchiveReady]);
 
   const toggleLeftPanel = useCallback(() => setLeftPanelOpen((v) => !v), []);
 
@@ -153,8 +170,9 @@ export default function PlanRunDetailPage() {
 
   const precheck = runQ.data?.run_context?.precheck ?? null;
   const dispatchState = runQ.data?.run_context?.dispatch_state ?? null;
+  const dispatchFailed = dispatchState?.status === 'failed';
   const gateFailed =
-    precheck?.phase === 'failed' || dispatchState?.status === 'failed';
+    precheck?.phase === 'failed' || dispatchFailed;
   const showDiag = diagOpen || gateFailed;
 
   return (
@@ -248,7 +266,7 @@ export default function PlanRunDetailPage() {
               hostFilter={deviceHostFilter}
               onStatusFilterChange={setDeviceStatusFilter}
               onHostFilterChange={setDeviceHostFilter}
-              onSelectDevice={setSelectedDevice}
+              onSelectDevice={(device) => setSelectedJobId(device.job_id)}
             />
 
             <AnomalyDashboard
@@ -273,21 +291,24 @@ export default function PlanRunDetailPage() {
               isError={timelineQ.isError}
             />
 
-            {precheck && (
+            {(precheck || dispatchFailed) && (
               <section data-testid="dispatch-gate-section" className="space-y-2">
-                <PrecheckSummaryRow
-                  precheck={precheck}
-                  expanded={showDiag}
-                  onToggle={() => setDiagOpen((v) => !v)}
-                  gateFailed={gateFailed}
-                />
-                <div className={showDiag ? '' : 'hidden'}>
+                {precheck && (
+                  <PrecheckSummaryRow
+                    precheck={precheck}
+                    expanded={showDiag}
+                    onToggle={() => setDiagOpen((v) => !v)}
+                    gateFailed={gateFailed}
+                  />
+                )}
+                <div className={!precheck || showDiag ? '' : 'hidden'}>
                   <DispatchGateCard
                     precheck={precheck}
                     dispatchState={dispatchState}
                     isTerminal={isTerminal}
                     onRetryDispatch={() => retryDispatchMut.mutate()}
                     isRetrying={retryDispatchMut.isPending}
+                    retryable={runQ.data?.capabilities?.retry_dispatch}
                   />
                 </div>
               </section>
@@ -299,7 +320,7 @@ export default function PlanRunDetailPage() {
       <DeviceDetailDrawer
         device={selectedDevice}
         runId={id}
-        onClose={() => setSelectedDevice(null)}
+        onClose={() => setSelectedJobId(null)}
         onManualRetry={(jobId) => retryMut.mutate(jobId)}
         onManualExit={(jobId) => exitMut.mutate(jobId)}
         onOpenReport={(jobId) => navigate(`/runs/${jobId}/report`)}
@@ -312,8 +333,10 @@ export default function PlanRunDetailPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>PlanRun 已结束 — 是否最终归档？</AlertDialogTitle>
             <AlertDialogDescription>
-              测试已中止或失败。归档-2 scan + merge 已自动触发。
-              是否执行归档-3 分类提取（按去重结果从 15.4 取事件日志到提单目录）？
+              测试已中止或失败，系统不会自动归档。检测到已人工完成
+              scan + merge，是否继续执行分类提取（按去重结果从 15.4
+              取事件日志到提单目录）？
+              {archiveReadiness?.reason ? ` 当前状态：${archiveReadiness.reason}` : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

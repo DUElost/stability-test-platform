@@ -108,6 +108,28 @@ describe('PlanEditPage', () => {
     });
   });
 
+  it('renders detail query failure with a retry action', async () => {
+    (api.plans.get as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('plan unavailable'))
+      .mockResolvedValueOnce({
+        id: 42,
+        name: 'Recovered Plan',
+        description: '',
+        failure_threshold: 0.05,
+        steps: [],
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      });
+
+    renderPage('/orchestration/plans/42');
+
+    expect(await screen.findByText('加载 Plan 详情失败')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+
+    expect(await screen.findByText('Recovered Plan')).toBeInTheDocument();
+    expect(api.plans.get).toHaveBeenCalledTimes(2);
+  });
+
   it('renders new-plan workspace with saved badge and disabled save until dirty', async () => {
     renderPage('/orchestration/plans/new');
 

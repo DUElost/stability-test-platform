@@ -46,7 +46,7 @@ import { useToast } from '@/hooks/useToast';
 
 
 
-import { api, type PlanRunPreview } from '@/utils/api';
+import { api, ApiError, type PlanRunPreview } from '@/utils/api';
 
 
 
@@ -54,7 +54,7 @@ import { planKeys } from '@/utils/api/queryKeys';
 
 
 
-import { Play, Smartphone, AlertCircle, Eye } from 'lucide-react';
+import { Play, Smartphone, AlertCircle, Eye, ExternalLink, RefreshCw } from 'lucide-react';
 
 
 
@@ -64,6 +64,7 @@ import { DEVICE_STATUS_DOT, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 
 
 
@@ -92,6 +93,8 @@ type DeviceSummary = {
 
 
   status: string;
+  schedulable?: boolean;
+  scheduling_reason?: string | null;
 
 
 
@@ -103,7 +106,10 @@ type DeviceSummary = {
 
 
 
-const isSchedulable = (device: DeviceSummary) => device.status === 'ONLINE';
+const isSchedulable = (device: DeviceSummary) =>
+  typeof device.schedulable === 'boolean'
+    ? device.schedulable
+    : device.status === 'ONLINE';
 
 
 
@@ -372,6 +378,12 @@ export default function PlanExecutePage() {
 
 
   const [submitting, setSubmitting] = useState(false);
+  const [retryingDispatch, setRetryingDispatch] = useState(false);
+  const [dispatchFailure, setDispatchFailure] = useState<{
+    planRunId: number;
+    message: string;
+    retryable: boolean;
+  } | null>(null);
 
 
 
@@ -379,7 +391,13 @@ export default function PlanExecutePage() {
 
 
 
-  const { data: plans, isLoading: plansLoading } = useQuery({
+  const {
+    data: plans,
+    isLoading: plansLoading,
+    isError: plansError,
+    error: plansQueryError,
+    refetch: refetchPlans,
+  } = useQuery({
 
 
 
@@ -391,7 +409,13 @@ export default function PlanExecutePage() {
 
 
 
-  const { data: devicesResp, isLoading: devLoading } = useQuery({
+  const {
+    data: devicesResp,
+    isLoading: devLoading,
+    isError: devicesError,
+    error: devicesQueryError,
+    refetch: refetchDevices,
+  } = useQuery({
 
 
 
@@ -412,6 +436,8 @@ export default function PlanExecutePage() {
 
 
   const selectedPlan = plans?.find(p => p.id === selectedPlanId);
+  const executableStepCount =
+    selectedPlan?.steps?.filter((step) => step.enabled !== false).length ?? 0;
 
 
 
@@ -596,6 +622,10 @@ export default function PlanExecutePage() {
 
 
     if (!selectedPlanId) { toast.error('请选择 Plan'); return; }
+    if (!selectedPlan || executableStepCount === 0) {
+      toast.error('Plan 至少需要一个已启用步骤才能执行');
+      return;
+    }
 
 
 
@@ -611,11 +641,12 @@ export default function PlanExecutePage() {
 
 
 
+      const frozenDeviceIds = [...selectedSchedulableDeviceIds];
       const p = await api.plans.previewRun(selectedPlanId, {
 
 
 
-        device_ids: selectedSchedulableDeviceIds,
+        device_ids: frozenDeviceIds,
 
 
 
@@ -623,7 +654,15 @@ export default function PlanExecutePage() {
 
 
 
-      setPreview(p);
+      if (p.total_steps === 0) {
+        toast.error('Plan 没有可执行步骤，无法发起');
+        return;
+      }
+      setPreview({
+        ...p,
+        device_ids: p.device_ids?.length ? [...p.device_ids] : frozenDeviceIds,
+      });
+      setDispatchFailure(null);
 
 
 
@@ -631,11 +670,11 @@ export default function PlanExecutePage() {
 
 
 
-    } catch (err: any) {
+    } catch (err: unknown) {
 
 
 
-      toast.error(err.message || '预览失败');
+      toast.error(err instanceof Error ? err.message : '预览失败');
 
 
 
@@ -655,7 +694,7 @@ export default function PlanExecutePage() {
 
 
 
-    if (!selectedPlanId) return;
+    if (!selectedPlanId || !preview || preview.total_steps === 0) return;
 
 
 
@@ -671,7 +710,7 @@ export default function PlanExecutePage() {
 
 
 
-        device_ids: selectedSchedulableDeviceIds,
+        device_ids: [...preview.device_ids],
 
 
 
@@ -691,11 +730,19 @@ export default function PlanExecutePage() {
 
 
 
-    } catch (err: any) {
-
-
-
-      toast.error(err.message || '发起失败');
+    } catch (err: unknown) {
+      const apiError = err instanceof ApiError ? err : null;
+      if (apiError?.status === 503 && apiError.planRunId != null) {
+        setShowPreview(false);
+        setDispatchFailure({
+          planRunId: apiError.planRunId,
+          message: apiError.message,
+          retryable: apiError.retryable !== false,
+        });
+        toast.error(apiError.message || '派发队列不可用');
+      } else {
+        toast.error(err instanceof Error ? err.message : '发起失败');
+      }
 
 
 
@@ -711,6 +758,20 @@ export default function PlanExecutePage() {
 
 
 
+  };
+
+  const handleRetryDispatch = async () => {
+    if (!dispatchFailure) return;
+    setRetryingDispatch(true);
+    try {
+      await api.planRuns.retryDispatch(dispatchFailure.planRunId);
+      toast.success('已重新入队派发门禁');
+      navigate(`/execution/plan-runs/${dispatchFailure.planRunId}`);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : '重试派发失败');
+    } finally {
+      setRetryingDispatch(false);
+    }
   };
 
 
@@ -741,6 +802,34 @@ export default function PlanExecutePage() {
 
       <PageHeader title="Plan 执行" subtitle="选择已保存的 Plan 和目标设备，创建 PlanRun" />
 
+      {dispatchFailure && (
+        <ErrorState
+          title={`PlanRun #${dispatchFailure.planRunId} 派发失败`}
+          description={dispatchFailure.message}
+          action={
+            <div className="flex justify-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => navigate(`/execution/plan-runs/${dispatchFailure.planRunId}`)}
+              >
+                <ExternalLink className="mr-2 h-4 w-4" /> 查看详情
+              </Button>
+              {dispatchFailure.retryable && (
+                <Button
+                  type="button"
+                  onClick={() => void handleRetryDispatch()}
+                  disabled={retryingDispatch}
+                >
+                  <RefreshCw className={cn('mr-2 h-4 w-4', retryingDispatch && 'animate-spin')} />
+                  {retryingDispatch ? '重试中…' : '重试派发'}
+                </Button>
+              )}
+            </div>
+          }
+        />
+      )}
+
 
 
 
@@ -763,13 +852,23 @@ export default function PlanExecutePage() {
 
 
 
-            {plansLoading ? <Skeleton className="h-10 w-full" /> : (
+            {plansLoading ? <Skeleton className="h-10 w-full" /> : plansError ? (
+              <ErrorState
+                title="加载 Plan 失败"
+                description={(plansQueryError as Error)?.message || '请检查网络连接或稍后重试'}
+                onRetry={() => void refetchPlans()}
+              />
+            ) : (
 
 
 
               <Select
                 value={selectedPlanId != null ? String(selectedPlanId) : ''}
-                onValueChange={(v) => setSelectedPlanId(v ? Number(v) : null)}
+                onValueChange={(v) => {
+                  setSelectedPlanId(v ? Number(v) : null);
+                  setPreview(null);
+                  setDispatchFailure(null);
+                }}
               >
 
 
@@ -814,7 +913,7 @@ export default function PlanExecutePage() {
 
 
 
-            {selectedPlan && selectedPlan.steps?.length === 0 && (
+            {selectedPlan && executableStepCount === 0 && (
 
 
 
@@ -822,7 +921,7 @@ export default function PlanExecutePage() {
 
 
 
-                <AlertCircle className="w-4 h-4" /> 此 Plan 没有步骤，将不会执行任何操作
+                <AlertCircle className="w-4 h-4" /> 此 Plan 没有已启用步骤，无法执行
 
 
 
@@ -886,7 +985,13 @@ export default function PlanExecutePage() {
 
 
 
-            {devLoading ? <Skeleton className="h-40 w-full" /> : allDevices.length === 0 ? (
+            {devLoading ? <Skeleton className="h-40 w-full" /> : devicesError ? (
+              <ErrorState
+                title="加载设备失败"
+                description={(devicesQueryError as Error)?.message || '请检查网络连接或稍后重试'}
+                onRetry={() => void refetchDevices()}
+              />
+            ) : allDevices.length === 0 ? (
 
 
 
@@ -1024,7 +1129,10 @@ export default function PlanExecutePage() {
 
 
 
-          <Button type="submit" disabled={!selectedPlanId || selectedSchedulableDeviceIds.length === 0}>
+          <Button
+            type="submit"
+            disabled={!selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0}
+          >
 
 
 

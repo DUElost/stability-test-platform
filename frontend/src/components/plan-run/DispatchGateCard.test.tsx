@@ -95,6 +95,47 @@ describe('DispatchGateCard stale banner', () => {
     expect(isGateStale(null, precheckFixture, false, staleNow)).toBe(true);
   });
 
+  it('uses backend deadline/stale projection before the legacy threshold', () => {
+    const now = new Date('2026-05-08T11:00:40Z').getTime();
+    const dispatch = {
+      status: 'running',
+      started_at: '2026-05-08T11:00:20Z',
+      deadline_at: '2026-05-08T11:00:30Z',
+    };
+
+    expect(isGateStale(dispatch, precheckFixture, false, now)).toBe(true);
+    render(
+      <DispatchGateCard
+        precheck={precheckFixture}
+        dispatchState={dispatch}
+        isTerminal={false}
+        nowMs={now}
+      />,
+    );
+    expect(screen.getByTestId('dispatch-gate-stale-banner')).toHaveTextContent(
+      '已超过后端截止时间',
+    );
+  });
+
+  it('renders dispatch-only failure and honors backend retryable=false', () => {
+    render(
+      <DispatchGateCard
+        precheck={null}
+        dispatchState={{
+          status: 'failed',
+          completed_at: '2026-05-08T11:00:30Z',
+          last_error: 'queue unavailable',
+          retryable: false,
+        }}
+        isTerminal={true}
+        onRetryDispatch={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('dispatch-gate-card')).toHaveTextContent('queue unavailable');
+    expect(screen.queryByTestId('dispatch-gate-retry-button')).not.toBeInTheDocument();
+  });
+
   it('shows retry button when precheck failed', () => {
     const onRetry = vi.fn();
     render(

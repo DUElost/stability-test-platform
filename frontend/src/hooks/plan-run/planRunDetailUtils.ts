@@ -51,6 +51,14 @@ export function isDispatchGateActive(run: PlanRun | undefined): boolean {
 
 export function isJobStuck(d: DeviceMatrixItem, now = Date.now()): boolean {
   if (d.job_status !== 'RUNNING') return false;
+  if (typeof d.is_stuck === 'boolean') return d.is_stuck;
+  if (d.heartbeat_deadline_at) {
+    const deadline = new Date(d.heartbeat_deadline_at).getTime();
+    if (!Number.isNaN(deadline)) return now >= deadline;
+  }
+
+  // Legacy backend fallback. New servers own this policy through is_stuck /
+  // heartbeat_deadline_at so frontend constants cannot drift from recycler.
   if (d.last_heartbeat_at) {
     const t = new Date(d.last_heartbeat_at).getTime();
     if (!Number.isNaN(t) && now - t > STALE_PATROL_HEARTBEAT_MS) return true;

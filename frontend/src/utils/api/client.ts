@@ -1,14 +1,99 @@
 import axios from 'axios';
 import { refreshAccessToken } from '@/utils/auth';
+import type {
+  ApiResponseEnvelope,
+  StructuredApiError,
+} from './types';
 
 export class ApiError extends Error {
   code: string;
+  status?: number;
+  details?: Record<string, unknown>;
+  responseData?: unknown;
+  originalError?: unknown;
 
-  constructor(code: string, message: string) {
+  constructor(
+    code: string,
+    message: string,
+    options: {
+      status?: number;
+      details?: Record<string, unknown>;
+      responseData?: unknown;
+      originalError?: unknown;
+    } = {},
+  ) {
     super(message);
     this.name = 'ApiError';
     this.code = code;
+    this.status = options.status;
+    this.details = options.details;
+    this.responseData = options.responseData;
+    this.originalError = options.originalError;
   }
+
+  get retryable(): boolean | undefined {
+    return typeof this.details?.retryable === 'boolean'
+      ? this.details.retryable
+      : undefined;
+  }
+
+  get planRunId(): number | undefined {
+    const value = this.details?.plan_run_id;
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validationMessage(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const messages = value
+    .map((item) => {
+      if (!isRecord(item)) return null;
+      const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';
+      const msg = typeof item.msg === 'string' ? item.msg : '';
+      return `${loc} ${msg}`.trim() || null;
+    })
+    .filter((item): item is string => item !== null);
+  return messages.length > 0 ? messages.join('; ') : undefined;
+}
+
+function structuredDetails(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? { ...value } : undefined;
+}
+
+export function toApiError(error: unknown): ApiError {
+  if (error instanceof ApiError) return error;
+
+  const source = isRecord(error) ? error : undefined;
+  const response = isRecord(source?.response) ? source.response : undefined;
+  const status = typeof response?.status === 'number' ? response.status : undefined;
+  const responseData = response?.data;
+  const responseBody = isRecord(responseData) ? responseData : undefined;
+  const candidate =
+    responseBody?.error ??
+    responseBody?.detail ??
+    responseData;
+  const details = structuredDetails(candidate);
+
+  const message =
+    (details && typeof details.message === 'string' ? details.message : undefined) ??
+    (typeof candidate === 'string' ? candidate : undefined) ??
+    validationMessage(candidate) ??
+    (typeof source?.message === 'string' ? source.message : undefined) ??
+    (status ? `请求失败 (${status})` : '网络请求失败');
+  const code =
+    (details && typeof details.code === 'string' ? details.code : undefined) ??
+    (status ? `HTTP_${status}` : 'NETWORK_ERROR');
+
+  return new ApiError(code, message, {
+    status,
+    details,
+    responseData,
+    originalError: error,
+  });
 }
 
 type AuthFailureHandler = () => void;
@@ -69,7 +154,7 @@ apiClient.interceptors.response.use(
       }
 
       if (isLoginRequest(error.config?.url)) {
-        return Promise.reject(error);
+        return Promise.reject(toApiError(error));
       }
 
       // 已经在 /login 时跳过 clearAppQueryCache + disconnect + redirect:
@@ -77,7 +162,7 @@ apiClient.interceptors.response.use(
       // 再 401 → 再清缓存,造成永久 "校验登录状态中..." 死循环。pathname 已是 /login
       // 时这一整组副作用本就无业务收益。
       if (window.location.pathname === '/login') {
-        return Promise.reject(error);
+        return Promise.reject(toApiError(error));
       }
 
       if (_authFailureHandler) {
@@ -87,18 +172,24 @@ apiClient.interceptors.response.use(
       }
     }
 
-    return Promise.reject(error);
+    return Promise.reject(toApiError(error));
   }
 );
 
 export default apiClient;
 
 export async function unwrapApiResponse<T>(
-  request: Promise<{ data: { data?: T; error?: { code: string; message: string } | null } }>
+  request: Promise<{ data: ApiResponseEnvelope<T> }>
 ): Promise<T> {
   const resp = await request;
-  const body = resp.data as { data?: T; error?: { code: string; message: string } | null };
-  if (body?.error) throw new ApiError(body.error.code, body.error.message);
+  const body = resp.data;
+  if (body?.error) {
+    const detail = body.error as StructuredApiError;
+    throw new ApiError(detail.code, detail.message, {
+      details: { ...detail },
+      responseData: body,
+    });
+  }
   // 审计 Frontend #4: ApiResponse 契约要求 success 必带 data;严格化 null/undefined 兜底
   // Why: 旧版 `return body.data as T` 把 null 当成 T 偷渡,调用方拿到 null 才发现已迟。
   // How to apply: data 缺失视为后端契约违反,直接抛 ApiError(MALFORMED_RESPONSE)。

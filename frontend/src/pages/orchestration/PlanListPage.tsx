@@ -11,6 +11,7 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { api, type Plan } from '@/utils/api';
 import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { Plus, Edit, Trash2, Search, FileText, Play } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { Badge } from '@/components/ui/badge';
@@ -26,7 +27,13 @@ export default function PlanListPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
 
-  const { data: plans, isLoading } = useQuery({
+  const {
+    data: plans,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: planKeys.list(100),
     queryFn: () => api.plans.list(0, 100),
   });
@@ -107,6 +114,12 @@ export default function PlanListPage() {
       {/* List */}
       {isLoading ? (
         <LoadingGrid count={3} columns={1} component={CardSkeleton} />
+      ) : isError ? (
+        <ErrorState
+          title="加载 Plan 列表失败"
+          description={(error as Error)?.message || '请检查网络连接或稍后重试'}
+          onRetry={() => void refetch()}
+        />
       ) : filtered.length === 0 ? (
         search ? (
           <SearchEmptyState keyword={search} />

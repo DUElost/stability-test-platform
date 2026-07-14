@@ -22,6 +22,7 @@ const STATUS_DEF: Array<{ key: DeviceUiStatus | 'all'; label: string }> = [
   { key: 'completed', label: '完成' },
   { key: 'unknown', label: '已断开' },
   { key: 'failed', label: '失败' },
+  { key: 'aborted', label: '已中止' },
   { key: 'backoff', label: '退避' },
   { key: 'pending', label: '等待' },
 ];

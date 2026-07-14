@@ -19,6 +19,7 @@ import { SURFACE, TEXT, FORM } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { usePlanEditForm } from './usePlanEditForm';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { ErrorState } from '@/components/ui/error-state';
 
 export default function PlanEditPage() {
   const { id } = useParams<{ id: string }>();
@@ -32,6 +33,44 @@ export default function PlanEditPage() {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <Loader2 className={cn('w-6 h-6 animate-spin', TEXT.caption)} />
+      </div>
+    );
+  }
+
+  if (!form.isNew && form.planIsError) {
+    return (
+      <div className="space-y-3 p-6">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate('/orchestration/plans')}
+        >
+          <ArrowLeft className="mr-1 h-4 w-4" /> 返回 Plan 列表
+        </Button>
+        <ErrorState
+          title="加载 Plan 详情失败"
+          description={(form.planError as Error)?.message || '请检查网络连接或稍后重试'}
+          onRetry={() => void form.refetchPlan()}
+        />
+      </div>
+    );
+  }
+
+  if (form.dependenciesIsError) {
+    return (
+      <div className="space-y-3 p-6">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate('/orchestration/plans')}
+        >
+          <ArrowLeft className="mr-1 h-4 w-4" /> 返回 Plan 列表
+        </Button>
+        <ErrorState
+          title="加载 Plan 编辑依赖失败"
+          description={(form.dependenciesError as Error)?.message || '脚本或 Plan 链数据加载失败'}
+          onRetry={form.refetchDependencies}
+        />
       </div>
     );
   }

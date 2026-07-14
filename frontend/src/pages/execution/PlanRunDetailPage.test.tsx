@@ -112,6 +112,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
   mocks.getRun.mockResolvedValue({
     id: 12,
     plan_id: 7,
@@ -734,6 +735,137 @@ describe('PlanRunDetailPage', () => {
     expect(screen.getByTestId('dispatch-gate-host-host-202')).toHaveTextContent(
       'agent_offline',
     );
+  });
+
+  it('renders failed dispatch state without precheck and honors retryable=false', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'FAILED',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T11:00:10Z',
+      run_context: {
+        dispatch_state: {
+          status: 'failed',
+          enqueued_at: '2026-05-08T11:00:00Z',
+          completed_at: '2026-05-08T11:00:10Z',
+          last_error: 'dispatch queue unavailable',
+          retryable: false,
+        },
+      },
+    });
+
+    renderPage();
+
+    const gate = await screen.findByTestId('dispatch-gate-card');
+    expect(gate).toHaveTextContent('dispatch queue unavailable');
+    expect(gate).toHaveTextContent('failed');
+    expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch-gate-retry-button')).not.toBeInTheDocument();
+  });
+
+  it('keeps an open drawer synchronized with the latest device query object', async () => {
+    mocks.getDevices
+      .mockResolvedValueOnce({
+        plan_run_id: 12,
+        total: 1,
+        by_status: { all: 1, running: 1 },
+        by_host: { 'host-101': 1 },
+        devices: [{
+          device_id: 2,
+          device_serial: 'DEV-LIVE',
+          host_id: 'host-101',
+          job_id: 3002,
+          job_status: 'RUNNING',
+          ui_status: 'running',
+          current_stage: 'patrol',
+          current_step: 'before-refetch',
+          patrol_cycle_count: 1,
+          patrol_success_cycle_count: 1,
+          patrol_failed_cycle_count: 0,
+          current_failure_streak: 0,
+          manual_action: null,
+          log_signal_count: 0,
+        }],
+      })
+      .mockResolvedValueOnce({
+        plan_run_id: 12,
+        total: 1,
+        by_status: { all: 1, backoff: 1 },
+        by_host: { 'host-101': 1 },
+        devices: [{
+          device_id: 2,
+          device_serial: 'DEV-LIVE',
+          host_id: 'host-101',
+          job_id: 3002,
+          job_status: 'RUNNING',
+          ui_status: 'backoff',
+          current_stage: 'patrol',
+          current_step: 'after-refetch',
+          patrol_cycle_count: 2,
+          patrol_success_cycle_count: 1,
+          patrol_failed_cycle_count: 1,
+          current_failure_streak: 1,
+          manual_action: null,
+          log_signal_count: 0,
+        }],
+      });
+
+    renderPage();
+    fireEvent.click(await screen.findByTestId('minimap-cell-3002'));
+    expect(await screen.findByTestId('device-drawer')).toHaveTextContent('before-refetch');
+
+    mocks.socketCallback.current!({
+      type: 'JOB_STATUS',
+      payload: { job_id: 3002, status: 'RUNNING' },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('device-drawer')).toHaveTextContent('after-refetch'),
+    );
+  });
+
+  it('prompts for final archive only when backend readiness is true', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 12,
+      plan_id: 7,
+      status: 'FAILED',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      started_at: '2026-05-08T11:00:00Z',
+      ended_at: '2026-05-08T11:30:00Z',
+      run_context: null,
+    });
+    mocks.getWatcherSummary.mockResolvedValueOnce({
+      plan_run_id: 12,
+      time_scope: 'all',
+      window_start_at: '2026-05-08T11:00:00Z',
+      window_end_at: '2026-05-08T11:30:00Z',
+      categories: [],
+      total: 0,
+      affected_device_count: 0,
+      total_devices: 0,
+      abnormal_rate: 0,
+      threshold: 0.05,
+      exceeded: false,
+      archive: {
+        ops_metrics: {
+          pruned_total: 0,
+          local_disk_usage_pct: null,
+          spill_cycles: 0,
+          spilled_total: 0,
+        },
+        readiness: { ready: true, reason: 'merge complete' },
+      },
+    });
+
+    renderPage();
+
+    expect(await screen.findByText('PlanRun 已结束 — 是否最终归档？')).toBeInTheDocument();
+    expect(screen.getByText(/merge complete/)).toBeInTheDocument();
   });
 
   it('surfaces mixed watcher failure in precheck summary row', async () => {

@@ -8,6 +8,7 @@ import { Clock } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { ClickableCard } from '@/components/ui/clickable-card';
 import { TEXT } from '@/design-system/tokens';
 import { formatDateTimeFull } from '@/utils/format';
@@ -17,7 +18,13 @@ export default function PlanRunListPage() {
   useDocumentTitle('Plan 执行记录');
   const navigate = useNavigate();
 
-  const { data: runs, isLoading } = useQuery({
+  const {
+    data: runs,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: planRunKeys.list(),
     queryFn: () => api.planRuns.list(0, 50),
     refetchInterval: 15_000,
@@ -29,6 +36,12 @@ export default function PlanRunListPage() {
 
       {isLoading ? (
         <LoadingGrid count={2} columns={1} component={CardSkeleton} />
+      ) : isError ? (
+        <ErrorState
+          title="加载执行记录失败"
+          description={(error as Error)?.message || '请检查网络连接或稍后重试'}
+          onRetry={() => void refetch()}
+        />
       ) : !runs || runs.length === 0 ? (
         <EmptyState
           title="暂无执行记录"

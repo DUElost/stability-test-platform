@@ -31,7 +31,7 @@ export function ErrorState({
         <h3 className={`text-base font-medium ${TEXT.heading} mb-2`}>{title}</h3>
         <p className={`text-sm ${TEXT.subtitle} mb-6`}>{description}</p>
         {action || (onRetry && (
-          <Button onClick={onRetry} variant="outline">
+          <Button type="button" onClick={onRetry} variant="outline">
             <RefreshCw className="w-4 h-4 mr-2" />
             重试
           </Button>

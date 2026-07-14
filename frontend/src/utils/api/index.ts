@@ -1,5 +1,10 @@
 export { default } from './client';
-export { ApiError, unwrapApiResponse, registerAuthFailureHandler } from './client';
+export {
+  ApiError,
+  toApiError,
+  unwrapApiResponse,
+  registerAuthFailureHandler,
+} from './client';
 export { auth } from './auth';
 export { hosts, heartbeat, hotUpdate, agentInstall } from './hosts';
 export { devices } from './devices';
@@ -32,7 +37,9 @@ export type {
   ResourcePool, ResourcePoolLoad, ResourcePoolCreatePayload,
   Plan, PlanStep, PlanStepCreate, PlanCreate, PlanUpdate,
   PlanRunStatus, PlanRunType, PlanRun, PlanRunCreate, PlanRunPreview,
-  PlanJobInstance, PlanRunSummary,
+  PlanJobInstance, PlanRunSummary, PlanSnapshot, PlanSnapshotStep,
+  PlanRunAbortRequest, PlanRunAbortResult, PlanRunCapabilities,
+  JobActionCapabilities, StructuredApiError, ApiErrorCapabilities,
   HostActiveJob,
 } from './types';
 

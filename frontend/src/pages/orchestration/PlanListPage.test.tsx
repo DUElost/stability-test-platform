@@ -67,4 +67,19 @@ describe('PlanListPage', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/new');
     await waitFor(() => expect(mocks.createPlan).not.toHaveBeenCalled());
   });
+
+  it('renders query errors with a retry instead of an empty list', async () => {
+    mocks.listPlans
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValueOnce([]);
+
+    renderPage();
+
+    expect(await screen.findByText('加载 Plan 列表失败')).toBeInTheDocument();
+    expect(screen.queryByText('还没有 Plan')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+
+    await waitFor(() => expect(mocks.listPlans).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('还没有 Plan')).toBeInTheDocument();
+  });
 });
