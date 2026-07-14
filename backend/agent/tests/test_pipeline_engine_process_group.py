@@ -97,6 +97,7 @@ def test_terminate_posix_escalates_to_sigkill_on_wait_timeout(monkeypatch):
         _terminate_process_tree(proc, grace_seconds=0.01)
         sigs = [c.args[1] for c in killpg.call_args_list]
         assert sigs == [signal.SIGTERM, pipeline_engine._SIGKILL]
+        assert proc.wait.call_count == 2
 
 
 def test_terminate_posix_swallows_getpgid_lookup_error(monkeypatch):

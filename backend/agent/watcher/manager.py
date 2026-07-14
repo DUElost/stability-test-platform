@@ -128,6 +128,7 @@ class LogWatcherManager:
         api_url: str = "",
         agent_secret: str = "",
         nfs_base_dir: str = "",
+        agent_instance_id: str = "",
         prober_factory: Optional[ProberFactory] = None,
         watcher_factory: Optional[WatcherFactory] = None,
     ) -> None:
@@ -149,6 +150,7 @@ class LogWatcherManager:
             "api_url":      api_url,
             "agent_secret": agent_secret,
             "nfs_base_dir": nfs_base_dir,
+            "agent_instance_id": agent_instance_id,
         }
         if prober_factory is not None:
             self._prober_factory = prober_factory
@@ -182,6 +184,7 @@ class LogWatcherManager:
         job_id: int,
         log_dir: str,
         policy: WatcherPolicy,
+        fencing_token: str,
     ) -> WatcherHandle:
         """启动一个 DeviceLogWatcher（5A 真实现）。
 
@@ -295,6 +298,8 @@ class LogWatcherManager:
                 capability=probe_result.capability,
                 probe_result=probe_result,
                 aee_reconciler_active=aee_reconciler_active,
+                fencing_token=fencing_token,
+                agent_instance_id=str(self._deps.get("agent_instance_id") or ""),
             )
             # 5B1：若配置了 NFS 根目录，且实盘 inotifyd 能力可用，则注入 LogPuller
             # 为 AEE / VENDOR_AEE 事件异步拉 crash 文件并富化 envelope

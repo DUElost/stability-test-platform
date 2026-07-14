@@ -35,7 +35,12 @@ def db(tmp_path):
 @pytest.fixture
 def emitter(db):
     return SignalEmitter(
-        local_db=db, job_id=101, host_id="host-test", device_serial="SERIAL-1",
+        local_db=db,
+        job_id=101,
+        host_id="host-test",
+        device_serial="SERIAL-1",
+        fencing_token="101:1",
+        agent_instance_id="agent-test",
     )
 
 
@@ -72,16 +77,24 @@ def test_emit_persists_to_outbox(db, emitter):
     assert env["seq_no"] == 1
     assert env["category"] == "ANR"
     assert env["extra"] == {"pid": 1234}
+    assert env["fencing_token"] == "101:1"
+    assert env["agent_instance_id"] == "agent-test"
 
 
 def test_emit_resumes_seq_after_restart(db):
     """Agent 重启模拟：新建 emitter 必须从 LocalDB MAX(seq_no)+1 继续。"""
-    e1 = SignalEmitter(local_db=db, job_id=101, host_id="h", device_serial="S")
+    e1 = SignalEmitter(
+        local_db=db, job_id=101, host_id="h", device_serial="S",
+        fencing_token="101:1", agent_instance_id="agent-test",
+    )
     e1.emit(category="ANR", source="inotifyd", path_on_device="/a")
     e1.emit(category="ANR", source="inotifyd", path_on_device="/b")
 
     # 模拟 Agent 重启：创建第二个 emitter 实例
-    e2 = SignalEmitter(local_db=db, job_id=101, host_id="h", device_serial="S")
+    e2 = SignalEmitter(
+        local_db=db, job_id=101, host_id="h", device_serial="S",
+        fencing_token="101:1", agent_instance_id="agent-test",
+    )
     seq = e2.emit(category="ANR", source="inotifyd", path_on_device="/c")
     assert seq == 3, "恢复后应从 3 继续（不是 1，避免冲突）"
 
@@ -98,7 +111,10 @@ def test_emit_rejects_bad_source(emitter):
 
 def test_emit_concurrent_unique_seq_no(db):
     """50 线程并发 emit，seq_no 必须全局唯一（无重复、无空洞）。"""
-    emitter = SignalEmitter(local_db=db, job_id=200, host_id="h", device_serial="S")
+    emitter = SignalEmitter(
+        local_db=db, job_id=200, host_id="h", device_serial="S",
+        fencing_token="42:1", agent_instance_id="agent-test",
+    )
     results: List[int] = []
     lock = threading.Lock()
 

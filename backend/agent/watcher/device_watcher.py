@@ -110,6 +110,8 @@ class DeviceLogWatcher:
         probe_result: Optional[ProbeResult] = None,
         puller: Optional[LogPuller] = None,
         aee_reconciler_active: bool = False,
+        fencing_token: str = "test:fencing",
+        agent_instance_id: str = "test-agent",
     ) -> None:
         self._adb_path = str(adb_path)
         self._host_id = str(host_id)
@@ -123,6 +125,8 @@ class DeviceLogWatcher:
         # AEE/VENDOR_AEE 的 emit(reconciler 通过 db_history 唯一 emit);
         # 仍保留 LogPuller pull + ArtifactUploader,ANR/MOBILELOG 不受影响。
         self._aee_reconciler_active = bool(aee_reconciler_active)
+        self._fencing_token = str(fencing_token)
+        self._agent_instance_id = str(agent_instance_id)
 
         # SignalEmitter：持久化 → outbox（OutboxDrainer 异步上送）
         self._emitter = SignalEmitter(
@@ -130,6 +134,8 @@ class DeviceLogWatcher:
             job_id=self._job_id,
             host_id=self._host_id,
             device_serial=self._serial,
+            fencing_token=self._fencing_token,
+            agent_instance_id=self._agent_instance_id,
         )
 
         # EventBatcher：聚合 + 路由
@@ -428,6 +434,8 @@ class DeviceLogWatcher:
                 checksum=enrichment.get("sha256"),
                 source_category=event.category,
                 source_path_on_device=event.full_path,
+                fencing_token=self._fencing_token,
+                device_serial=self._serial,
             )
         except Exception:
             logger.exception(

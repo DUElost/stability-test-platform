@@ -153,6 +153,7 @@ def _make_payload(
         "device_serial": serial,
         "host_id": "host-e2e",
         "pipeline_def": {"stages": {"prepare": [], "execute": [], "post_process": []}},
+        "fencing_token": f"{job_id}:1",
     }
     if watcher_policy is not None:
         payload["watcher_policy"] = watcher_policy
@@ -221,6 +222,7 @@ def test_e2e_aee_event_flows_through_puller_to_outbox_and_http(
         adb=adb,
         adb_path="adb",
         local_db=db,
+        agent_instance_id="agent-e2e",
         api_url="http://fake-backend:8000",
         agent_secret="test-secret",
         nfs_base_dir=str(nfs_dir),
@@ -264,6 +266,8 @@ def test_e2e_aee_event_flows_through_puller_to_outbox_and_http(
     assert env["sha256"] is not None and len(env["sha256"]) == 64
     assert env["size_bytes"] == len(b"AEE crash header\nstack frame 1\nstack frame 2\n")
     assert "AEE crash header" in env["first_lines"]
+    assert env["fencing_token"] == "1001:1"
+    assert env["agent_instance_id"] == "agent-e2e"
 
     # OutboxDrainer 真实推送（仅 mock requests.Session）
     sess = _make_mock_session(200)
@@ -297,6 +301,7 @@ def test_e2e_anr_event_flows_through_batcher_without_puller_enrichment(
         adb=adb,
         adb_path="adb",
         local_db=db,
+        agent_instance_id="agent-e2e",
         api_url="http://fake-backend:8000",
         agent_secret="",
         nfs_base_dir=str(nfs_dir),
@@ -353,6 +358,7 @@ def test_e2e_nfs_disabled_aee_still_emits_without_enrichment(
         adb=adb,
         adb_path="adb",
         local_db=db,
+        agent_instance_id="agent-e2e",
         api_url="http://fake-backend:8000",
         agent_secret="",
         nfs_base_dir="",  # 关键：禁用 puller
@@ -397,6 +403,7 @@ def test_e2e_exit_drain_flushes_pending_mobilelog_to_outbox(db, nfs_dir, lock_tr
         adb=adb,
         adb_path="adb",
         local_db=db,
+        agent_instance_id="agent-e2e",
         api_url="http://fake-backend:8000",
         agent_secret="",
         nfs_base_dir=str(nfs_dir),
@@ -459,6 +466,7 @@ def test_e2e_degraded_policy_continues_when_probe_unavailable(
         adb=adb,
         adb_path="adb",
         local_db=db,
+        agent_instance_id="agent-e2e",
         api_url="http://fake-backend:8000",
         agent_secret="",
         nfs_base_dir=str(nfs_dir),
@@ -503,6 +511,7 @@ def test_e2e_fail_policy_raises_jobstartuperror_and_releases_lock(
         adb=adb,
         adb_path="adb",
         local_db=db,
+        agent_instance_id="agent-e2e",
         api_url="http://fake-backend:8000",
         agent_secret="",
         nfs_base_dir=str(nfs_dir),
@@ -549,6 +558,7 @@ def test_e2e_source_spawn_failure_rolls_back_puller_and_releases_lock(
         adb=adb,
         adb_path="adb",
         local_db=db,
+        agent_instance_id="agent-e2e",
         api_url="http://fake-backend:8000",
         agent_secret="",
         nfs_base_dir=str(nfs_dir),
@@ -634,6 +644,7 @@ def test_e2e_restart_resilience_watcher_reattaches_and_seq_no_monotonic(
             adb=adb,
             adb_path="adb",
             local_db=db,
+            agent_instance_id="agent-e2e",
             api_url="http://fake-backend:8000",
             agent_secret="",
             nfs_base_dir=str(nfs_dir),
@@ -699,6 +710,7 @@ def test_e2e_reconcile_on_startup_cleans_residual_active_state(db, nfs_dir):
         adb=_adb_with_root_probe("S-RESIDUAL", dirs=["/data/aee_exp"]),
         adb_path="adb",
         local_db=db,
+        agent_instance_id="agent-e2e",
         api_url="http://fake-backend:8000",
         agent_secret="",
         nfs_base_dir=str(nfs_dir),

@@ -324,7 +324,7 @@ def test_auto_archive_sweep_first_scan_is_final():
 
     mock_run = MagicMock()
     mock_run.id = 1
-    mock_run.status = "FAILED"
+    mock_run.status = "SUCCESS"
     mock_run.ended_at = datetime.now(timezone.utc) - timedelta(hours=2)
 
     _mock_auto_archive_db(mock_db, plan=mock_plan, run=mock_run, scan_count=0)
@@ -336,6 +336,33 @@ def test_auto_archive_sweep_first_scan_is_final():
         with patch("backend.services.dedup_scan.enqueue_dedup_terminal_sync") as mock_enqueue:
             mod.auto_archive_sweep()
             mock_enqueue.assert_called_once_with(1, is_final=True)
+    finally:
+        mod.SessionLocal = orig
+
+
+def test_auto_archive_sweep_skips_failed_run_without_confirmation():
+    import backend.scheduler.cron_scheduler as mod
+
+    mock_db = MagicMock()
+    session_cm = MagicMock()
+    session_cm.__enter__ = MagicMock(return_value=mock_db)
+    session_cm.__exit__ = MagicMock(return_value=False)
+    mock_plan = MagicMock(id=10, auto_archive_interval_seconds=3600)
+    mock_run = MagicMock(
+        id=1,
+        status="FAILED",
+        ended_at=datetime.now(timezone.utc) - timedelta(hours=2),
+    )
+    _mock_auto_archive_db(mock_db, plan=mock_plan, run=mock_run, scan_count=0)
+
+    orig = mod.SessionLocal
+    mod.SessionLocal = MagicMock(return_value=session_cm)
+    try:
+        with patch(
+            "backend.services.dedup_scan.enqueue_dedup_terminal_sync"
+        ) as mock_enqueue:
+            mod.auto_archive_sweep()
+            mock_enqueue.assert_not_called()
     finally:
         mod.SessionLocal = orig
 

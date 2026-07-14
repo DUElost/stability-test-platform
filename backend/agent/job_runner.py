@@ -1,7 +1,7 @@
 """Thread-pool job execution wrapper for the agent."""
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, MutableMapping, Optional
 
@@ -28,12 +28,22 @@ class JobRunnerState:
     device_id_register: Callable[[int], None]
     device_id_deregister: Callable[[int], None]
     on_job_not_running_recovery: Optional[Callable[[int], None]] = None
+    active_runners: MutableMapping[int, tuple[str, Any]] = field(default_factory=dict)
+    abort_requested_job_ids: set[int] = field(default_factory=set)
 
     def is_aborted(self, job_id: int, worker_token: str) -> bool:
         with self.active_jobs_lock:
             return (
-                job_id not in self.active_job_ids
+                job_id in self.abort_requested_job_ids
+                or job_id not in self.active_job_ids
                 or self.active_job_tokens.get(job_id, "") != worker_token
+            )
+
+    def is_current_worker(self, job_id: int, worker_token: str) -> bool:
+        with self.active_jobs_lock:
+            return (
+                job_id in self.active_job_ids
+                and self.active_job_tokens.get(job_id, "") == worker_token
             )
 
     def try_mark_worker_started(self, job_id: int, worker_token: str) -> bool:
@@ -42,6 +52,50 @@ class JobRunnerState:
                 return False
             self.running_worker_tokens[job_id] = worker_token
             return True
+
+    def attach_runner(self, job_id: int, worker_token: str, runner: Any) -> None:
+        """Attach a cancellable runner if this worker still owns the job."""
+        should_cancel = False
+        with self.active_jobs_lock:
+            if (
+                job_id not in self.active_job_ids
+                or self.active_job_tokens.get(job_id, "") != worker_token
+                or job_id in self.abort_requested_job_ids
+            ):
+                should_cancel = True
+            else:
+                self.active_runners[job_id] = (worker_token, runner)
+        if should_cancel:
+            runner.cancel()
+
+    def detach_runner(self, job_id: int, worker_token: str, runner: Any) -> None:
+        with self.active_jobs_lock:
+            current = self.active_runners.get(job_id)
+            if current == (worker_token, runner):
+                self.active_runners.pop(job_id, None)
+
+    def cancel_runner(self, job_id: int) -> bool:
+        """Signal the current runner without holding the shared state lock."""
+        with self.active_jobs_lock:
+            current = self.active_runners.get(job_id)
+        if current is None:
+            return False
+        _worker_token, runner = current
+        try:
+            runner.cancel()
+        except Exception:
+            logger.exception("run_cancel_failed job_id=%d", job_id)
+            return False
+        return True
+
+    def request_abort(self, job_id: int) -> bool:
+        """Keep worker ownership until it uploads the post-termination ACK."""
+        with self.active_jobs_lock:
+            if job_id not in self.active_job_ids:
+                return False
+            self.abort_requested_job_ids.add(job_id)
+        self.cancel_runner(job_id)
+        return True
 
     def release(
         self,
@@ -55,6 +109,11 @@ class JobRunnerState:
         with self.active_jobs_lock:
             if self.running_worker_tokens.get(job_id) == worker_token:
                 self.running_worker_tokens.pop(job_id, None)
+            current = self.active_runners.get(job_id)
+            if current is not None and current[0] == worker_token:
+                self.active_runners.pop(job_id, None)
+            if self.active_job_tokens.get(job_id) in (None, worker_token):
+                self.abort_requested_job_ids.discard(job_id)
 
 
 def _validate_pipeline_def(pipeline_def: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -65,15 +124,15 @@ def _validate_pipeline_def(pipeline_def: Optional[Dict[str, Any]]) -> Optional[s
     expected by the agent job runner.
     """
     try:
-        from backend.core.pipeline_validator import validate_lifecycle_semantics
+        from backend.core.pipeline_validator import validate_pipeline_def
     except ImportError:
-        from .pipeline_validator import validate_lifecycle_semantics
+        from .pipeline_validator import validate_pipeline_def
 
     if not pipeline_def or not isinstance(pipeline_def, dict):
         return "pipeline_def is required"
 
-    ok_sem, errors = validate_lifecycle_semantics(pipeline_def)
-    if ok_sem:
+    ok, errors = validate_pipeline_def(pipeline_def)
+    if ok:
         return None
     return "; ".join(errors)
 
@@ -89,7 +148,7 @@ def _complete_job_if_current_worker(
     local_db: Optional[Any],
     suppress_reason: str,
 ) -> bool:
-    if state.is_aborted(job_id, local_worker_token):
+    if not state.is_current_worker(job_id, local_worker_token):
         logger.info(
             "run_complete_suppressed_superseded_worker job_id=%d status=%s reason=%s worker=%s",
             job_id,
@@ -245,6 +304,12 @@ def run_task_wrapper(
                 session.summary.watcher_capability if session is not None else None
             ),
             patrol_cycle_checkpoint_store=patrol_cycle_checkpoint_store,
+            on_engine_started=lambda engine: state.attach_runner(
+                job_id, local_worker_token, engine,
+            ),
+            on_engine_stopped=lambda engine: state.detach_runner(
+                job_id, local_worker_token, engine,
+            ),
         )
 
         watcher_summary = None

@@ -58,11 +58,15 @@ class SignalEmitter:
         job_id: int,
         host_id: str,
         device_serial: str,
+        fencing_token: str,
+        agent_instance_id: str,
     ) -> None:
         self._db = local_db
         self._job_id = int(job_id)
         self._host_id = str(host_id)
         self._device_serial = str(device_serial)
+        self._fencing_token = str(fencing_token)
+        self._agent_instance_id = str(agent_instance_id)
         self._lock = threading.Lock()
         # 恢复 seq_no 起点：Agent 重启后继续单调递增，避免与已持久化条目冲突
         self._next_seq = self._db.next_log_signal_seq_no(self._job_id)
@@ -98,14 +102,16 @@ class SignalEmitter:
             ts = ts.replace(tzinfo=timezone.utc)
 
         envelope: Dict[str, Any] = {
-            "job_id":         self._job_id,
-            "seq_no":         seq_no,
-            "host_id":        self._host_id,
-            "device_serial":  self._device_serial,
-            "category":       category,
-            "source":         source,
-            "path_on_device": path_on_device,
-            "detected_at":    ts.isoformat(),
+            "job_id":              self._job_id,
+            "seq_no":              seq_no,
+            "host_id":             self._host_id,
+            "device_serial":       self._device_serial,
+            "fencing_token":       self._fencing_token,
+            "agent_instance_id":   self._agent_instance_id,
+            "category":            category,
+            "source":              source,
+            "path_on_device":      path_on_device,
+            "detected_at":         ts.isoformat(),
         }
         if artifact_uri is not None:
             envelope["artifact_uri"] = artifact_uri

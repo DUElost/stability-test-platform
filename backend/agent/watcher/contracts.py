@@ -35,6 +35,7 @@ class JobClaimPayload(TypedDict, total=False):
     device_serial:     str    # 设备序列号（adb -s 参数）
     host_id:           str
     pipeline_def:      Dict[str, Any]
+    fencing_token:     str    # device lease 历史 token（上传鉴权）
 
     # ---- 可选字段 ----
     plan_run_id:   int
@@ -49,6 +50,7 @@ REQUIRED_CLAIM_FIELDS: tuple[str, ...] = (
     "device_serial",
     "host_id",
     "pipeline_def",
+    "fencing_token",
 )
 
 
@@ -99,14 +101,16 @@ class LogSignalEnvelope(TypedDict, total=False):
     """
 
     # ---- 必需字段 ----
-    job_id:         int
-    seq_no:         int
-    host_id:        str
-    device_serial:  str
-    category:       str    # AEE | VENDOR_AEE | MOBILELOG | ANR（ANR 生产路径为 AEE+extra.event_type；category=ANR 仅遗留/自定义 policy）
-    source:         str    # inotifyd | polling | reconciler
-    path_on_device: str
-    detected_at:    str    # ISO8601
+    job_id:              int
+    seq_no:              int
+    host_id:             str
+    device_serial:       str
+    fencing_token:       str    # emit 时快照的 lease token（延迟上送鉴权）
+    agent_instance_id:   str    # emit 时快照的 agent 实例 id
+    category:            str    # AEE | VENDOR_AEE | MOBILELOG | ANR（ANR 生产路径为 AEE+extra.event_type；category=ANR 仅遗留/自定义 policy）
+    source:              str    # inotifyd | polling | reconciler
+    path_on_device:      str
+    detected_at:         str    # ISO8601
 
     # ---- 可选字段（LogPuller 完成后补充）----
     artifact_uri:   Optional[str]   # NFS 路径
@@ -121,6 +125,8 @@ REQUIRED_LOG_SIGNAL_FIELDS: tuple[str, ...] = (
     "seq_no",
     "host_id",
     "device_serial",
+    "fencing_token",
+    "agent_instance_id",
     "category",
     "source",
     "path_on_device",
@@ -157,7 +163,7 @@ def validate_claim_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     for int_field in ("id", "device_id"):
         if not isinstance(payload[int_field], int):
             raise ContractViolation(f"claim_payload.{int_field} must be int, got {type(payload[int_field])}")
-    for str_field in ("device_serial", "host_id"):
+    for str_field in ("device_serial", "host_id", "fencing_token"):
         if not isinstance(payload[str_field], str) or not payload[str_field]:
             raise ContractViolation(f"claim_payload.{str_field} must be non-empty string")
     return payload
@@ -174,4 +180,7 @@ def validate_log_signal(envelope: Dict[str, Any]) -> Dict[str, Any]:
         raise ContractViolation(f"log_signal.category unknown: {envelope['category']}")
     if envelope["source"] not in {"inotifyd", "polling", "reconciler"}:
         raise ContractViolation(f"log_signal.source unknown: {envelope['source']}")
+    for str_field in ("fencing_token", "agent_instance_id"):
+        if not isinstance(envelope[str_field], str) or not envelope[str_field]:
+            raise ContractViolation(f"log_signal.{str_field} must be non-empty string")
     return envelope

@@ -35,7 +35,12 @@ def db(tmp_path):
 @pytest.fixture
 def emitter(db):
     return SignalEmitter(
-        local_db=db, job_id=101, host_id="host-test", device_serial="SERIAL-1",
+        local_db=db,
+        job_id=101,
+        host_id="host-test",
+        device_serial="SERIAL-1",
+        fencing_token="42:1",
+        agent_instance_id="agent-test",
     )
 
 

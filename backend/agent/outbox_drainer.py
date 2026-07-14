@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class OutboxDrainThread:
     """Background thread that retries un-acked terminal-state payloads."""
 
-    _TERMINAL_STATUSES = {"COMPLETED", "FAILED", "ABORTED", "UNKNOWN"}
+    _ACKABLE_TERMINAL_STATUSES = {"COMPLETED", "FAILED", "ABORTED"}
 
     def __init__(self, api_url: str, local_db, interval: float = 15.0):
         self._api_url = api_url
@@ -28,6 +28,8 @@ class OutboxDrainThread:
         self._metrics_lock = threading.Lock()
         self._pending_backlog = 0
         self._flushed_total = 0
+        self._conflicts_retained_total = 0
+        self._unknown_retained_total = 0
 
     def snapshot_metrics(self) -> Dict[str, Any]:
         """Outbox backlog + flush counters for heartbeat / ops."""
@@ -35,6 +37,8 @@ class OutboxDrainThread:
             return {
                 "pending_backlog": self._pending_backlog,
                 "flushed_total": self._flushed_total,
+                "conflicts_retained_total": self._conflicts_retained_total,
+                "unknown_retained_total": self._unknown_retained_total,
             }
 
     def _set_pending_backlog(self, count: int) -> None:
@@ -44,6 +48,12 @@ class OutboxDrainThread:
     def _bump_flushed(self, delta: int) -> None:
         with self._metrics_lock:
             self._flushed_total += delta
+
+    def _bump_retained_conflict(self, *, unknown: bool = False) -> None:
+        with self._metrics_lock:
+            self._conflicts_retained_total += 1
+            if unknown:
+                self._unknown_retained_total += 1
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -102,18 +112,26 @@ class OutboxDrainThread:
             except requests.HTTPError as e:
                 status_code = e.response.status_code if e.response else None
                 if status_code == 409:
+                    error_code = self._parse_error_code(e.response)
                     current = self._parse_current_status(e.response)
-                    if current is None:
-                        # Plain-string detail (e.g. "invalid or expired fencing_token",
-                        # "device locked by another job", InvalidTransitionError).
-                        # Fencing token is definitively rejected — ack and stop retrying.
-                        self._local_db.ack_terminal(job_id)
-                        sent += 1
-                        logger.info(
-                            "outbox_drain_conflict_ack job=%d (definitive rejection)",
+                    if error_code == "TERMINAL_PAYLOAD_CONFLICT":
+                        self._local_db.bump_terminal_attempt(job_id, str(e))
+                        self._bump_retained_conflict()
+                        logger.error(
+                            "outbox_drain_terminal_payload_conflict job=%d",
                             job_id,
                         )
-                    elif current in self._TERMINAL_STATUSES:
+                    elif current is None:
+                        # An unstructured 409 does not prove that the requested
+                        # terminal fact is already durable. Retain it so
+                        # recovery/sync can reconcile the fencing/state race.
+                        self._local_db.bump_terminal_attempt(job_id, str(e))
+                        self._bump_retained_conflict()
+                        logger.warning(
+                            "outbox_drain_conflict_retained job=%d current=unstructured",
+                            job_id,
+                        )
+                    elif current in self._ACKABLE_TERMINAL_STATUSES:
                         self._local_db.ack_terminal(job_id)
                         sent += 1
                         logger.info(
@@ -122,8 +140,9 @@ class OutboxDrainThread:
                         )
                     else:
                         self._local_db.bump_terminal_attempt(job_id, str(e))
+                        self._bump_retained_conflict(unknown=current == "UNKNOWN")
                         logger.warning(
-                            "outbox_drain_conflict_retry job=%d current=%s",
+                            "outbox_drain_conflict_retained job=%d current=%s",
                             job_id, current,
                         )
                 elif status_code == 404:
@@ -153,6 +172,20 @@ class OutboxDrainThread:
             err = body.get("error", {})
             if isinstance(err, dict):
                 return err.get("current_status")
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _parse_error_code(response) -> Optional[str]:
+        try:
+            body = response.json()
+            detail = body.get("detail", {})
+            if isinstance(detail, dict) and detail.get("code"):
+                return str(detail["code"])
+            error = body.get("error", {})
+            if isinstance(error, dict) and error.get("code"):
+                return str(error["code"])
         except Exception:
             pass
         return None

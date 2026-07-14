@@ -25,6 +25,26 @@ import pytest
 from backend.agent.artifact_uploader import ArtifactUploader
 
 
+_AUTH_KW = {
+    "fencing_token": "42:1",
+    "device_serial": "SERIAL-1",
+    "host_id": "host-test",
+    "agent_instance_id": "agent-test",
+}
+
+
+def _submit(u: ArtifactUploader, **kwargs) -> None:
+    payload = {
+        "job_id": 1,
+        "artifact_type": "aee_crash",
+        "storage_uri": "/x",
+        "fencing_token": _AUTH_KW["fencing_token"],
+        "device_serial": _AUTH_KW["device_serial"],
+    }
+    payload.update(kwargs)
+    u.submit(**payload)
+
+
 # ----------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------
@@ -90,6 +110,8 @@ def uploader_and_session():
     u.configure(
         api_url="http://fake-api:8000",
         agent_secret="s3cr3t",
+        host_id=_AUTH_KW["host_id"],
+        agent_instance_id=_AUTH_KW["agent_instance_id"],
         session=sess,
     )
     u.start()
@@ -103,7 +125,8 @@ def uploader_and_session():
 
 def test_submit_then_post_increments_posts_ok(uploader_and_session):
     u, sess = uploader_and_session
-    u.submit(
+    _submit(
+        u,
         job_id=101,
         artifact_type="aee_crash",
         storage_uri="/mnt/nfs/jobs/101/AEE/1700000000_db.0.0",
@@ -125,6 +148,10 @@ def test_submit_then_post_increments_posts_ok(uploader_and_session):
     assert body["artifact_type"] == "aee_crash"
     assert body["size_bytes"] == 2048
     assert body["source_category"] == "AEE"
+    assert body["fencing_token"] == _AUTH_KW["fencing_token"]
+    assert body["agent_instance_id"] == _AUTH_KW["agent_instance_id"]
+    assert body["host_id"] == _AUTH_KW["host_id"]
+    assert body["device_serial"] == _AUTH_KW["device_serial"]
 
 
 # ----------------------------------------------------------------------
@@ -136,7 +163,7 @@ def test_conflict_response_counted_separately(uploader_and_session):
     sess.queue_response(_FakeResponse(
         200, {"data": {"artifact_id": 42, "created": False}, "error": None},
     ))
-    u.submit(job_id=1, artifact_type="bugreport", storage_uri="/x/y")
+    _submit(u, job_id=1, artifact_type="bugreport", storage_uri="/x/y")
     assert _wait_for(lambda: u.stats.posts_conflict == 1)
     assert u.stats.posts_ok == 0
     assert u.stats.posts_failed == 0
@@ -149,7 +176,7 @@ def test_conflict_response_counted_separately(uploader_and_session):
 def test_http_5xx_counts_as_failed_but_does_not_raise(uploader_and_session):
     u, sess = uploader_and_session
     sess.queue_response(_FakeResponse(500, {"error": "boom"}))
-    u.submit(job_id=1, artifact_type="aee_crash", storage_uri="/x")
+    _submit(u, job_id=1, storage_uri="/x")
     assert _wait_for(lambda: u.stats.posts_failed == 1)
     assert u.stats.posts_ok == 0
 
@@ -161,7 +188,7 @@ def test_http_5xx_counts_as_failed_but_does_not_raise(uploader_and_session):
 def test_connection_error_counts_as_failed_and_swallowed(uploader_and_session):
     u, sess = uploader_and_session
     sess.set_exception(ConnectionError("refused"))
-    u.submit(job_id=1, artifact_type="aee_crash", storage_uri="/x")
+    _submit(u, job_id=1, storage_uri="/x")
     assert _wait_for(lambda: u.stats.posts_failed == 1)
     # 异常必须被吞掉 —— 下一次 submit 仍可工作
     sess.set_exception(None)  # type: ignore[arg-type]
@@ -174,9 +201,14 @@ def test_connection_error_counts_as_failed_and_swallowed(uploader_and_session):
 def test_submit_before_start_is_silently_dropped():
     u = ArtifactUploader.instance()
     sess = _FakeSession()
-    u.configure(api_url="http://x", session=sess)
+    u.configure(
+        api_url="http://x",
+        host_id=_AUTH_KW["host_id"],
+        agent_instance_id=_AUTH_KW["agent_instance_id"],
+        session=sess,
+    )
     # 未 start
-    u.submit(job_id=1, artifact_type="aee_crash", storage_uri="/x")
+    _submit(u, job_id=1, storage_uri="/x")
     assert u.stats.submits_total == 1
     assert u.stats.submits_dropped == 1
     assert len(sess.posts) == 0
@@ -201,17 +233,19 @@ def test_queue_full_drops_without_blocking():
     bsess = _BlockingSession()
     u.configure(
         api_url="http://x",
+        host_id=_AUTH_KW["host_id"],
+        agent_instance_id=_AUTH_KW["agent_instance_id"],
         session=bsess,
         queue_maxsize=2,
     )
     u.start()
     try:
         # 1 条被 worker 立刻拎走卡住；之后 2 条填满队列；第 4 条必须直接丢
-        u.submit(job_id=1, artifact_type="aee_crash", storage_uri="/a")
+        _submit(u, storage_uri="/a")
         time.sleep(0.05)  # 让 worker 把首条拎走
-        u.submit(job_id=1, artifact_type="aee_crash", storage_uri="/b")
-        u.submit(job_id=1, artifact_type="aee_crash", storage_uri="/c")
-        u.submit(job_id=1, artifact_type="aee_crash", storage_uri="/d")  # full
+        _submit(u, storage_uri="/b")
+        _submit(u, storage_uri="/c")
+        _submit(u, storage_uri="/d")  # full
         # 至少 1 条因队列满而 drop
         assert u.stats.submits_dropped >= 1
         assert u.stats.submits_total == 4
@@ -228,10 +262,17 @@ def test_queue_full_drops_without_blocking():
     {"job_id": 1, "artifact_type": "", "storage_uri": "/x"},
     {"job_id": 1, "artifact_type": "aee_crash", "storage_uri": ""},
     {"job_id": 0, "artifact_type": "aee_crash", "storage_uri": "/x"},
+    {"job_id": 1, "artifact_type": "aee_crash", "storage_uri": "/x", "fencing_token": ""},
+    {"job_id": 1, "artifact_type": "aee_crash", "storage_uri": "/x", "device_serial": ""},
 ])
 def test_invalid_payload_is_dropped_locally(uploader_and_session, kwargs):
     u, sess = uploader_and_session
-    u.submit(**kwargs)
+    merged = {
+        "fencing_token": _AUTH_KW["fencing_token"],
+        "device_serial": _AUTH_KW["device_serial"],
+    }
+    merged.update(kwargs)
+    u.submit(**merged)
     # 本地直接拒绝；worker 不接到这条 → 没有 POST
     time.sleep(0.15)
     assert u.stats.submits_dropped == 1
@@ -245,12 +286,15 @@ def test_invalid_payload_is_dropped_locally(uploader_and_session, kwargs):
 def test_stop_with_drain_waits_queue_empty():
     u = ArtifactUploader.instance()
     sess = _FakeSession()
-    u.configure(api_url="http://x", session=sess)
+    u.configure(
+        api_url="http://x",
+        host_id=_AUTH_KW["host_id"],
+        agent_instance_id=_AUTH_KW["agent_instance_id"],
+        session=sess,
+    )
     u.start()
     for i in range(5):
-        u.submit(
-            job_id=1, artifact_type="aee_crash", storage_uri=f"/f/{i}",
-        )
+        _submit(u, storage_uri=f"/f/{i}")
     u.stop(drain=True, timeout=3.0)
     assert u.stats.posts_ok == 5
     assert u.stats.submits_dropped == 0
@@ -270,15 +314,19 @@ def test_stop_without_drain_drops_residual():
             return _FakeResponse()
 
     sess = _BlockingSession()
-    u.configure(api_url="http://x", session=sess, queue_maxsize=10)
+    u.configure(
+        api_url="http://x",
+        host_id=_AUTH_KW["host_id"],
+        agent_instance_id=_AUTH_KW["agent_instance_id"],
+        session=sess,
+        queue_maxsize=10,
+    )
     u.start()
     # 让首条卡住，随后多投若干填进队列
-    u.submit(job_id=1, artifact_type="aee_crash", storage_uri="/a")
+    _submit(u, storage_uri="/a")
     time.sleep(0.05)
     for i in range(3):
-        u.submit(
-            job_id=1, artifact_type="aee_crash", storage_uri=f"/q{i}",
-        )
+        _submit(u, storage_uri=f"/q{i}")
     u.stop(drain=False, timeout=0.3)
     blocker.set()
     # 残余 3 条被 stop 丢
@@ -291,7 +339,12 @@ def test_stop_without_drain_drops_residual():
 
 def test_configure_after_start_raises():
     u = ArtifactUploader.instance()
-    u.configure(api_url="http://x", session=_FakeSession())
+    u.configure(
+        api_url="http://x",
+        host_id=_AUTH_KW["host_id"],
+        agent_instance_id=_AUTH_KW["agent_instance_id"],
+        session=_FakeSession(),
+    )
     u.start()
     try:
         with pytest.raises(RuntimeError, match="configure"):

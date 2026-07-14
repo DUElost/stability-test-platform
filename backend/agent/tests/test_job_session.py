@@ -37,6 +37,7 @@ def _make_payload(watcher_policy: Dict[str, Any] | None = None) -> Dict[str, Any
         "device_serial": "SERIAL-ABC",
         "host_id": "host-unittest",
         "pipeline_def": {"stages": {"prepare": [], "execute": [], "post_process": []}},
+        "fencing_token": "101:1",
     }
     if watcher_policy is not None:
         payload["watcher_policy"] = watcher_policy
@@ -59,7 +60,16 @@ class _FakeManager:
         self.started: List[Dict[str, Any]] = []
         self.stopped: List[str] = []
 
-    def start(self, *, host_id: str, serial: str, job_id: int, log_dir: str, policy: WatcherPolicy) -> WatcherHandle:
+    def start(
+        self,
+        *,
+        host_id: str,
+        serial: str,
+        job_id: int,
+        log_dir: str,
+        policy: WatcherPolicy,
+        fencing_token: str = "",
+    ) -> WatcherHandle:
         self.started.append({
             "host_id": host_id, "serial": serial, "job_id": job_id,
             "log_dir": log_dir,

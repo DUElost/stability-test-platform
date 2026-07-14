@@ -62,6 +62,8 @@ class _ArtifactJob:
     job_id: int
     artifact_type: str
     storage_uri: str
+    fencing_token: str
+    device_serial: str
     size_bytes: Optional[int] = None
     checksum: Optional[str] = None
     source_category: Optional[str] = None
@@ -84,6 +86,8 @@ class ArtifactUploader:
     def __init__(self) -> None:
         self._api_url: str = ""
         self._agent_secret: str = ""
+        self._host_id: str = ""
+        self._agent_instance_id: str = ""
         self._http_timeout: float = self.DEFAULT_TIMEOUT
         self._queue: "queue.Queue[_ArtifactJob]" = queue.Queue(
             maxsize=self.DEFAULT_QUEUE_MAXSIZE,
@@ -127,6 +131,8 @@ class ArtifactUploader:
         *,
         api_url: str,
         agent_secret: str = "",
+        host_id: str = "",
+        agent_instance_id: str = "",
         http_timeout_seconds: float = DEFAULT_TIMEOUT,
         queue_maxsize: int = DEFAULT_QUEUE_MAXSIZE,
         session: Optional[requests.Session] = None,
@@ -136,6 +142,8 @@ class ArtifactUploader:
             raise RuntimeError("configure() after start() is not allowed")
         self._api_url = api_url.rstrip("/")
         self._agent_secret = agent_secret or ""
+        self._host_id = str(host_id or "")
+        self._agent_instance_id = str(agent_instance_id or "")
         self._http_timeout = max(1.0, float(http_timeout_seconds))
         if queue_maxsize != self.DEFAULT_QUEUE_MAXSIZE:
             self._queue = queue.Queue(maxsize=int(queue_maxsize))
@@ -206,6 +214,8 @@ class ArtifactUploader:
         job_id: int,
         artifact_type: str,
         storage_uri: str,
+        fencing_token: str,
+        device_serial: str,
         size_bytes: Optional[int] = None,
         checksum: Optional[str] = None,
         source_category: Optional[str] = None,
@@ -221,7 +231,15 @@ class ArtifactUploader:
             )
             return
         # 客户端侧极简校验：必填字段缺失直接丢；类型白名单由后端兜底
-        if not storage_uri or not artifact_type or not job_id:
+        if (
+            not storage_uri
+            or not artifact_type
+            or not job_id
+            or not fencing_token
+            or not device_serial
+            or not self._host_id
+            or not self._agent_instance_id
+        ):
             self.stats.submits_dropped += 1
             logger.warning(
                 "artifact_uploader_invalid_payload_dropped "
@@ -233,6 +251,8 @@ class ArtifactUploader:
             job_id=int(job_id),
             artifact_type=str(artifact_type),
             storage_uri=str(storage_uri),
+            fencing_token=str(fencing_token),
+            device_serial=str(device_serial),
             size_bytes=size_bytes,
             checksum=checksum,
             source_category=source_category,
@@ -275,6 +295,10 @@ class ArtifactUploader:
         payload: Dict[str, Any] = {
             "storage_uri": job.storage_uri,
             "artifact_type": job.artifact_type,
+            "fencing_token": job.fencing_token,
+            "agent_instance_id": self._agent_instance_id,
+            "host_id": self._host_id,
+            "device_serial": job.device_serial,
         }
         if job.size_bytes is not None:
             payload["size_bytes"] = int(job.size_bytes)

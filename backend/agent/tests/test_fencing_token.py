@@ -134,6 +134,36 @@ def test_job_runner_state_replacement_token_marks_old_worker_aborted(job_runner_
     assert job_runner_state.active_job_tokens[26] == "63:7"
 
 
+def test_abort_request_keeps_worker_current_until_terminal_ack(job_runner_state):
+    job_runner_state.lock_register(26, "63:6", 63, "SERIAL-63", "worker-1")
+    runner = MagicMock()
+    job_runner_state.attach_runner(26, "worker-1", runner)
+
+    assert job_runner_state.request_abort(26) is True
+
+    runner.cancel.assert_called_once()
+    assert job_runner_state.is_aborted(26, "worker-1") is True
+    assert job_runner_state.is_current_worker(26, "worker-1") is True
+    assert 26 in job_runner_state.active_job_ids
+    assert job_runner_state.active_job_tokens[26] == "worker-1"
+
+    job_runner_state.release(
+        26, "63:6", 63, local_worker_token="worker-1",
+    )
+    assert 26 not in job_runner_state.abort_requested_job_ids
+
+
+def test_runner_attached_after_abort_request_is_cancelled(job_runner_state):
+    job_runner_state.lock_register(26, "63:6", 63, "SERIAL-63", "worker-1")
+    assert job_runner_state.request_abort(26) is True
+    runner = MagicMock()
+
+    job_runner_state.attach_runner(26, "worker-1", runner)
+
+    runner.cancel.assert_called_once()
+    assert 26 not in job_runner_state.active_runners
+
+
 def test_job_runner_state_same_fencing_token_new_local_worker_replaces_old(job_runner_state):
     """同 fencing_token 的恢复 worker 也必须能接管本地执行权。"""
     job_runner_state.lock_register(26, "63:6", 63, "SERIAL-63", "worker-old")
@@ -225,6 +255,49 @@ def test_run_task_wrapper_skips_complete_when_local_worker_superseded(job_runner
     mock_complete.assert_not_called()
     assert 109 in job_runner_state.active_job_ids
     assert job_runner_state.active_job_tokens[109] == "worker-new"
+
+
+def test_run_task_wrapper_reports_aborted_after_local_abort_request(job_runner_state):
+    run = {
+        "id": 110,
+        "device_id": 2,
+        "device_serial": "SN-110",
+        "fencing_token": "2:10",
+        "local_worker_token": "worker-1",
+        "pipeline_def": {
+            "lifecycle": {
+                "init": [{
+                    "step_id": "x",
+                    "action": "script:noop",
+                    "version": "1.0.0",
+                    "timeout_seconds": 1,
+                }],
+                "teardown": [],
+            }
+        },
+    }
+
+    def abort_before_complete(*_args, **_kwargs):
+        assert job_runner_state.request_abort(110) is True
+        return {
+            "status": "ABORTED",
+            "exit_code": 1,
+            "error_code": "JOB_ABORTED",
+        }
+
+    with patch("backend.agent.job_runner.update_job"), \
+         patch("backend.agent.job_runner.complete_job") as mock_complete, \
+         patch(
+             "backend.agent.job_runner.execute_pipeline_run",
+             side_effect=abort_before_complete,
+         ):
+        run_task_wrapper(
+            run, MagicMock(), "http://x", "h1",
+            job_runner_state, None, None, None,
+        )
+
+    mock_complete.assert_called_once()
+    assert mock_complete.call_args.args[2]["status"] == "ABORTED"
 
 
 def test_run_task_wrapper_passes_session_watcher_capability(job_runner_state):

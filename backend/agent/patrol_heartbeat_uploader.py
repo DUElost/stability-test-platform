@@ -175,6 +175,32 @@ class PatrolHeartbeatUploader:
         data = body.get("data") if isinstance(body, dict) else None
         return data if isinstance(data, dict) else None
 
+    def poll_control(
+        self,
+        *,
+        job_id: int,
+        fencing_token: str,
+        cycle_index: int,
+        current_step: Optional[str] = None,
+        current_failure_streak: int = 0,
+        next_retry_at: Optional[datetime] = None,
+        watcher_capability: Optional[str] = None,
+        manual_action_observed: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Poll/ACK controls during a long backoff without changing counters."""
+        return self.send(
+            job_id=job_id,
+            fencing_token=fencing_token,
+            cycle_index=cycle_index,
+            success_delta=0,
+            failed_delta=0,
+            current_step=current_step,
+            current_failure_streak=current_failure_streak,
+            next_retry_at=next_retry_at,
+            watcher_capability=watcher_capability,
+            manual_action_observed=manual_action_observed,
+        )
+
 
 def compute_backoff_seconds(
     streak: int,

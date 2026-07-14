@@ -27,14 +27,16 @@ def db(tmp_path):
 
 def _make_envelope(job_id: int, seq_no: int, **overrides):
     base = {
-        "job_id":         job_id,
-        "seq_no":         seq_no,
-        "host_id":        "host-test",
-        "device_serial":  "SERIAL-1",
-        "category":       "ANR",
-        "source":         "inotifyd",
-        "path_on_device": f"/data/anr/trace_{seq_no:03d}.txt",
-        "detected_at":    datetime.now(timezone.utc).isoformat(),
+        "job_id":              job_id,
+        "seq_no":              seq_no,
+        "host_id":             "host-test",
+        "device_serial":       "SERIAL-1",
+        "fencing_token":       f"{job_id}:1",
+        "agent_instance_id":   "agent-test",
+        "category":            "ANR",
+        "source":              "inotifyd",
+        "path_on_device":      f"/data/anr/trace_{seq_no:03d}.txt",
+        "detected_at":         datetime.now(timezone.utc).isoformat(),
     }
     base.update(overrides)
     return base

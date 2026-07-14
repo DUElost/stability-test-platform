@@ -42,11 +42,18 @@ def fetch_pending_jobs(api_url: str, host_id: str, agent_instance_id: str = "",
     *capacity* should be the Agent's actual available slots to avoid claiming
     more jobs than the thread pool can execute (orphaned RUNNING jobs).
     """
+    from . import __version__ as agent_version
+
     agent_secret = _get_agent_secret()
     headers = {"X-Agent-Secret": agent_secret} if agent_secret else {}
     resp = requests.post(
         f"{api_url}/api/v1/agent/jobs/claim",
-        json={"host_id": host_id, "capacity": capacity, "agent_instance_id": agent_instance_id},
+        json={
+            "host_id": host_id,
+            "capacity": capacity,
+            "agent_instance_id": agent_instance_id,
+            "agent_version": agent_version,
+        },
         headers=headers,
         timeout=10,
     )

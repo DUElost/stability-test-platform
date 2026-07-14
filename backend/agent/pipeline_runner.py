@@ -26,6 +26,8 @@ def execute_pipeline_run(
     on_job_not_running_recovery: Optional[Callable[[int], None]] = None,
     watcher_capability: Optional[str] = None,
     patrol_cycle_checkpoint_store: Optional[Any] = None,
+    on_engine_started: Optional[Callable[[PipelineEngine], None]] = None,
+    on_engine_stopped: Optional[Callable[[PipelineEngine], None]] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -68,7 +70,13 @@ def execute_pipeline_run(
                 row.checkpoint.get("cycle"),
             )
 
-    result = engine.execute(pipeline_def)
+    if on_engine_started is not None:
+        on_engine_started(engine)
+    try:
+        result = engine.execute(pipeline_def)
+    finally:
+        if on_engine_stopped is not None:
+            on_engine_stopped(engine)
 
     status = "FINISHED" if result.success else "FAILED"
     if not result.success and isinstance(getattr(result, "metadata", None), dict):

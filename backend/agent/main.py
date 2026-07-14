@@ -1,10 +1,10 @@
+import hashlib
 import logging
 import os
 import signal
 import sys
 import threading
 import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Set
 
@@ -90,9 +90,17 @@ _active_jobs_lock = threading.Lock()
 _lock_renewal_stop_event = threading.Event()
 
 
-def _make_local_worker_token(job_id: int, prefix: str) -> str:
-    """Create a per-submit worker ownership token scoped to this agent process."""
-    return f"{prefix}-{job_id}-{uuid.uuid4().hex[:12]}"
+def _make_local_worker_token(
+    job_id: int,
+    fencing_token: str,
+    *,
+    prefix: str = "worker",
+) -> str:
+    """Return stable local ownership for one ``(job_id, fencing_token)`` pair."""
+    digest = hashlib.sha256(
+        f"{int(job_id)}\0{fencing_token}".encode("utf-8")
+    ).hexdigest()[:16]
+    return f"{prefix}-{int(job_id)}-{digest}"
 
 
 def _migrate_legacy_aee_state_on_startup(db_path: str) -> Dict[str, Any]:
@@ -243,6 +251,7 @@ def execute_recovery_actions_impl(
     outbox_drain: Any,
     register_active_job: Any,
     resume_job: Any = None,
+    abort_local_job: Any = None,
 ) -> None:
     """ADR-0019 Phase 3a: execute recovery actions (module-level for testability)."""
     job_actions = resp.get("actions", [])
@@ -267,7 +276,9 @@ def execute_recovery_actions_impl(
                 continue
             persisted_job = active_jobs_by_id.get(jid) or {}
             device_serial = (a.get("device_serial") or persisted_job.get("device_serial") or "").strip()
-            local_worker_token = _make_local_worker_token(jid, "resume")
+            local_worker_token = _make_local_worker_token(
+                jid, token, prefix="resume",
+            )
             register_active_job(
                 jid,
                 token,
@@ -299,10 +310,14 @@ def execute_recovery_actions_impl(
                 local_worker_token,
             )
         elif action == "CLEANUP":
+            if abort_local_job is not None:
+                abort_local_job(jid)
             local_db.delete_active_job(jid)
             lease_renewer.clear_fencing_token(jid)
             logger.warning("recovery_cleanup job=%d reason=%s", jid, a.get("reason"))
         elif action == "ABORT_LOCAL":
+            if abort_local_job is not None:
+                abort_local_job(jid)
             local_db.delete_active_job(jid)
             lease_renewer.clear_fencing_token(jid)
             logger.warning("recovery_abort_local job=%d reason=%s", jid, a.get("reason"))
@@ -343,7 +358,13 @@ def _check_agent_version(api_url: str, host_id: str, mount_points, host_info) ->
     from .heartbeat import send_heartbeat
 
     try:
-        resp = send_heartbeat(api_url, host_id, mount_points, host_info=host_info)
+        resp = send_heartbeat(
+            api_url,
+            host_id,
+            mount_points,
+            host_info=host_info,
+            agent_version=agent_version,
+        )
     except Exception:
         logger.warning("version_check_heartbeat_failed — skipping version guard")
         return
@@ -428,7 +449,16 @@ def main() -> None:
     boot_id = read_boot_id()
     # ADR-0020: agent version for preflight consistency check
     from . import __version__ as _agent_pkg_version
-    logger.info("agent_identity instance=%s boot=%s version=%s", agent_instance_id, boot_id, _agent_pkg_version)
+    from .version_info import read_agent_code_revision
+
+    _agent_code_revision = read_agent_code_revision()
+    logger.info(
+        "agent_identity instance=%s boot=%s version=%s code_revision=%s",
+        agent_instance_id,
+        boot_id,
+        _agent_pkg_version,
+        _agent_code_revision or "(none)",
+    )
 
     # 加载 HOST_ID，支持自动注册
     try:
@@ -513,6 +543,7 @@ def main() -> None:
             sio_client=sio_client,
             api_url=api_url,
             agent_secret=agent_secret,
+            agent_instance_id=agent_instance_id,
             nfs_base_dir=nfs_base_dir,
         )
         # log_signal_outbox 后台批量上送线程（watcher 写入 → drainer 推送到后端）
@@ -528,6 +559,8 @@ def main() -> None:
         ArtifactUploader.instance().configure(
             api_url=api_url,
             agent_secret=agent_secret,
+            host_id=str(host_id),
+            agent_instance_id=agent_instance_id,
         )
         ArtifactUploader.instance().start()
         logger.info("watcher_subsystem_enabled log_signal_drainer=started artifact_uploader=started")
@@ -584,6 +617,10 @@ def main() -> None:
     # Step trace local writer (Redis XADD removed in Phase 4; HTTP upload via StepTraceUploader)
     mq_producer = StepTraceWriter("", host_id, local_db=local_db)
 
+    # Assigned after the executor is created; the control closure also handles
+    # commands received during the small startup window.
+    job_runner_state: Optional[JobRunnerState] = None
+
     # Control commands via SocketIO (replaces Redis ControlListener)
     def _handle_control(data):
         command = data.get("command", "")
@@ -598,10 +635,21 @@ def main() -> None:
                     pass
             mq_producer.set_log_rate_limit(limit)
         elif command == "abort":
-            job_id = payload.get("job_id")
-            if job_id:
-                _deregister_active_job(int(job_id))
-                logger.info("control_abort job_id=%s", job_id)
+            raw_job_ids = payload.get("job_ids")
+            if isinstance(raw_job_ids, list):
+                job_ids = [int(jid) for jid in raw_job_ids]
+            elif payload.get("job_id"):
+                job_ids = [int(payload["job_id"])]
+            else:
+                job_ids = []
+            for job_id in job_ids:
+                if job_runner_state is not None:
+                    requested = job_runner_state.request_abort(job_id)
+                else:
+                    requested = False
+                logger.info(
+                    "control_abort job_id=%s requested=%s", job_id, requested,
+                )
         elif command == "archive_now":
             arch = LogArchiver.instance()
             if arch.is_configured():
@@ -668,6 +716,10 @@ def main() -> None:
 
     _execute_recovery_actions = None
 
+    # One-shot protocol gate: do not start workers/background threads when this
+    # Agent build is below the backend's minimum supported version.
+    _check_agent_version(api_url, host_id, mount_points, host_info)
+
     # 启动心跳守护线程（独立于任务执行循环）
     heartbeat_thread = HeartbeatThread(
         api_url=api_url,
@@ -686,6 +738,7 @@ def main() -> None:
         agent_instance_id=agent_instance_id,
         boot_id=boot_id,
         agent_version=_agent_pkg_version,
+        agent_code_revision=_agent_code_revision,
         get_outbox_counts=lambda: {
             "terminal_outbox_pending": local_db.count_pending_terminals(),
             "log_signal_outbox_pending": local_db.count_pending_log_signals(),
@@ -788,6 +841,10 @@ def main() -> None:
     _resume_recovered_job = None
 
     # ── ADR-0019 Phase 3a: Recovery Sync ──
+    def _cancel_recovery_job(jid: int) -> None:
+        if job_runner_state is not None:
+            job_runner_state.request_abort(jid)
+
     def _execute_recovery_actions_impl_closure(
         resp: dict,
         active_jobs_by_id: dict,
@@ -801,6 +858,7 @@ def main() -> None:
             outbox_drain=outbox_drain,
             register_active_job=_register_active_job,
             resume_job=_resume_recovered_job,
+            abort_local_job=_cancel_recovery_job,
         )
     _execute_recovery_actions = _execute_recovery_actions_impl_closure
 
@@ -814,9 +872,6 @@ def main() -> None:
         local_db=local_db,
         execute_actions=_execute_recovery_actions_impl_closure,
     )
-
-    # Version compatibility guard: refuse to run if agent is below backend's min_version
-    _check_agent_version(api_url, host_id, mount_points, host_info)
 
     # StepTrace HTTP 批量上报（Phase 3.7: acked=0 补传 → Phase 4: 唯一上报路径）
     step_trace_uploader = StepTraceUploader(
@@ -844,6 +899,7 @@ def main() -> None:
     )
 
     def _resume_recovered_job_impl(job_payload: dict) -> None:
+        job_payload.setdefault("agent_instance_id", agent_instance_id)
         executor.submit(
             run_task_wrapper,
             job_payload,
@@ -922,8 +978,11 @@ def main() -> None:
                             if device_id:
                                 _active_device_ids.add(device_id)
 
-                        local_worker_token = _make_local_worker_token(job["id"], "claim")
+                        local_worker_token = _make_local_worker_token(
+                            job["id"], job["fencing_token"],
+                        )
                         job["local_worker_token"] = local_worker_token
+                        job["agent_instance_id"] = agent_instance_id
 
                         # ADR-0019 Phase 2b + 3a: 注册 job + fencing_token + 持久化 active_job
                         _register_active_job(

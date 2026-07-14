@@ -99,6 +99,8 @@ def test_aee_success_submits_to_uploader(mock_instance, db):
     assert kwargs["checksum"] == "a" * 64
     assert kwargs["source_category"] == "AEE"
     assert kwargs["source_path_on_device"] == event.full_path
+    assert kwargs["fencing_token"] == "test:fencing"
+    assert kwargs["device_serial"] == "SX"
 
 
 @patch("backend.agent.artifact_uploader.ArtifactUploader.instance")

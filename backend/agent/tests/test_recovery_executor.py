@@ -333,6 +333,7 @@ class TestRecoveryExecutor:
         local_db = MagicMock()
         lease_renewer = MagicMock()
         outbox_drain = MagicMock()
+        abort_local_job = MagicMock()
 
         resp = {
             "actions": [
@@ -348,8 +349,10 @@ class TestRecoveryExecutor:
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=MagicMock(),
+            abort_local_job=abort_local_job,
         )
 
+        abort_local_job.assert_called_once_with(5)
         local_db.delete_active_job.assert_called_once_with(5)
         lease_renewer.clear_fencing_token.assert_called_once_with(5)
 
@@ -390,6 +393,7 @@ class TestRecoveryExecutor:
         local_db = MagicMock()
         lease_renewer = MagicMock()
         outbox_drain = MagicMock()
+        abort_local_job = MagicMock()
 
         resp = {
             "actions": [
@@ -405,8 +409,10 @@ class TestRecoveryExecutor:
             local_db=local_db,
             outbox_drain=outbox_drain,
             register_active_job=MagicMock(),
+            abort_local_job=abort_local_job,
         )
 
+        abort_local_job.assert_called_once_with(7)
         local_db.delete_active_job.assert_called_once_with(7)
         lease_renewer.clear_fencing_token.assert_called_once_with(7)
 

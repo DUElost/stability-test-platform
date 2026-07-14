@@ -95,6 +95,8 @@ class _StubWatcher:
     probe_result: Any = None
     # M0/PR #2: manager.start 在创建 DeviceLogWatcher 时会透传该开关;stub 接住即可
     aee_reconciler_active: bool = False
+    fencing_token: str = ""
+    agent_instance_id: str = ""
 
     def __post_init__(self):
         self.start_called = False
@@ -168,9 +170,19 @@ def _probe_unavailable() -> ProbeResult:
     )
 
 
-# ----------------------------------------------------------------------
-# configure / 守卫
-# ----------------------------------------------------------------------
+_FENCING_TOKEN = "42:1"
+_AGENT_INSTANCE_ID = "agent-test"
+
+
+def _configure_mgr(mgr, db, **kwargs) -> None:
+    defaults = {
+        "adb": MagicMock(),
+        "adb_path": "adb",
+        "local_db": db,
+        "agent_instance_id": _AGENT_INSTANCE_ID,
+    }
+    defaults.update(kwargs)
+    mgr.configure(**defaults)
 
 def test_start_without_configure_raises(db):
     mgr = LogWatcherManager.instance()
@@ -178,6 +190,7 @@ def test_start_without_configure_raises(db):
         mgr.start(
             host_id="H", serial="S", job_id=1, log_dir="/tmp",
             policy=WatcherPolicy(),
+            fencing_token=_FENCING_TOKEN,
         )
 
 
@@ -189,7 +202,7 @@ def test_start_success_creates_watcher_and_writes_active_state(db):
     mgr = LogWatcherManager.instance()
     wf = _watcher_factory_producing(_StubWatcher)
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"S1": _probe_root()}),
         watcher_factory=wf,
     )
@@ -197,6 +210,7 @@ def test_start_success_creates_watcher_and_writes_active_state(db):
     handle = mgr.start(
         host_id="H1", serial="S1", job_id=101, log_dir="/tmp/j",
         policy=WatcherPolicy(),
+        fencing_token=_FENCING_TOKEN,
     )
 
     # 登记表
@@ -221,13 +235,13 @@ def test_start_success_creates_watcher_and_writes_active_state(db):
 def test_duplicate_serial_raises_already_running(db):
     mgr = LogWatcherManager.instance()
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"S1": _probe_root()}),
         watcher_factory=_watcher_factory_producing(_StubWatcher),
     )
-    mgr.start(host_id="H", serial="S1", job_id=1, log_dir="/tmp", policy=WatcherPolicy())
+    mgr.start(host_id="H", serial="S1", job_id=1, log_dir="/tmp", policy=WatcherPolicy(), fencing_token=_FENCING_TOKEN)
     with pytest.raises(WatcherStartError) as excinfo:
-        mgr.start(host_id="H", serial="S1", job_id=2, log_dir="/tmp", policy=WatcherPolicy())
+        mgr.start(host_id="H", serial="S1", job_id=2, log_dir="/tmp", policy=WatcherPolicy(), fencing_token=_FENCING_TOKEN)
     assert excinfo.value.code == "already_running"
 
 
@@ -238,6 +252,7 @@ def test_start_passes_policy_pull_timeout_to_puller(db):
         adb=MagicMock(),
         adb_path="adb",
         local_db=db,
+        agent_instance_id=_AGENT_INSTANCE_ID,
         nfs_base_dir="/mnt/nfs/stability",
         prober_factory=_stub_prober_factory({"SP": _probe_root()}),
         watcher_factory=wf,
@@ -250,6 +265,7 @@ def test_start_passes_policy_pull_timeout_to_puller(db):
         job_id=201,
         log_dir="/tmp/j",
         policy=policy,
+        fencing_token=_FENCING_TOKEN,
     )
 
     assert handle.impl is wf.produced[0]
@@ -272,12 +288,12 @@ def test_probe_exception_rolls_back_and_raises_probe_failed(db):
         return _BadProber()
 
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=broken_factory,
         watcher_factory=_watcher_factory_producing(_StubWatcher),
     )
     with pytest.raises(WatcherStartError) as excinfo:
-        mgr.start(host_id="H", serial="SB", job_id=1, log_dir="/tmp", policy=WatcherPolicy())
+        mgr.start(host_id="H", serial="SB", job_id=1, log_dir="/tmp", policy=WatcherPolicy(), fencing_token=_FENCING_TOKEN)
     assert excinfo.value.code == "probe_failed"
     # 登记表已回滚
     assert mgr.get_by_serial("SB") is None
@@ -288,13 +304,13 @@ def test_probe_exception_rolls_back_and_raises_probe_failed(db):
 def test_unavailable_fail_policy_raises_probe_failed(db):
     mgr = LogWatcherManager.instance()
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"SU": _probe_unavailable()}),
         watcher_factory=_watcher_factory_producing(_StubWatcher),
     )
     policy = WatcherPolicy(on_unavailable=OnUnavailableAction.FAIL)
     with pytest.raises(WatcherStartError) as excinfo:
-        mgr.start(host_id="H", serial="SU", job_id=1, log_dir="/tmp", policy=policy)
+        mgr.start(host_id="H", serial="SU", job_id=1, log_dir="/tmp", policy=policy, fencing_token=_FENCING_TOKEN)
     assert excinfo.value.code == "probe_failed"
     assert "reasons" in excinfo.value.context
     assert mgr.get_by_serial("SU") is None
@@ -304,12 +320,12 @@ def test_unavailable_degraded_keeps_handle_without_watcher(db):
     mgr = LogWatcherManager.instance()
     wf = _watcher_factory_producing(_StubWatcher)
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"SD": _probe_unavailable()}),
         watcher_factory=wf,
     )
     policy = WatcherPolicy(on_unavailable=OnUnavailableAction.DEGRADED)
-    handle = mgr.start(host_id="H", serial="SD", job_id=1, log_dir="/tmp", policy=policy)
+    handle = mgr.start(host_id="H", serial="SD", job_id=1, log_dir="/tmp", policy=policy, fencing_token=_FENCING_TOKEN)
 
     assert handle.impl is None, "DEGRADED 模式下不创建 DeviceLogWatcher"
     assert len(wf.produced) == 0
@@ -326,12 +342,12 @@ def test_unavailable_skip_keeps_handle_but_no_state(db):
     mgr = LogWatcherManager.instance()
     wf = _watcher_factory_producing(_StubWatcher)
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"SK": _probe_unavailable()}),
         watcher_factory=wf,
     )
     policy = WatcherPolicy(on_unavailable=OnUnavailableAction.SKIP)
-    handle = mgr.start(host_id="H", serial="SK", job_id=1, log_dir="/tmp", policy=policy)
+    handle = mgr.start(host_id="H", serial="SK", job_id=1, log_dir="/tmp", policy=policy, fencing_token=_FENCING_TOKEN)
 
     assert handle.impl is None
     assert len(wf.produced) == 0
@@ -344,12 +360,12 @@ def test_watcher_start_failure_rolls_back_and_writes_failed_state(db):
     """watcher.start() 抛 WatcherStartError → 登记回滚 + state='failed' + 向上抛。"""
     mgr = LogWatcherManager.instance()
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"SX": _probe_root()}),
         watcher_factory=_watcher_factory_producing(_FailingWatcher),
     )
     with pytest.raises(WatcherStartError) as excinfo:
-        mgr.start(host_id="H", serial="SX", job_id=1, log_dir="/tmp", policy=WatcherPolicy())
+        mgr.start(host_id="H", serial="SX", job_id=1, log_dir="/tmp", policy=WatcherPolicy(), fencing_token=_FENCING_TOKEN)
     assert excinfo.value.code == "source_start_failed"
     # 登记表回滚
     assert mgr.get_by_serial("SX") is None
@@ -370,11 +386,11 @@ def test_stop_calls_real_watcher_stop_and_writes_stopped_state(db):
     mgr = LogWatcherManager.instance()
     wf = _watcher_factory_producing(_StubWatcher)
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"ST": _probe_root()}),
         watcher_factory=wf,
     )
-    handle = mgr.start(host_id="H", serial="ST", job_id=1, log_dir="/tmp", policy=WatcherPolicy())
+    handle = mgr.start(host_id="H", serial="ST", job_id=1, log_dir="/tmp", policy=WatcherPolicy(), fencing_token=_FENCING_TOKEN)
 
     stopped = mgr.stop(handle.watcher_id, drain=True, timeout=2.0)
     assert stopped is handle
@@ -394,18 +410,18 @@ def test_stop_calls_real_watcher_stop_and_writes_stopped_state(db):
 
 def test_stop_unknown_watcher_id_returns_none(db):
     mgr = LogWatcherManager.instance()
-    mgr.configure(adb=MagicMock(), adb_path="adb", local_db=db)
+    mgr.configure(adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID)
     assert mgr.stop("wch-nonexistent", drain=False, timeout=0.5) is None
 
 
 def test_stop_is_idempotent(db):
     mgr = LogWatcherManager.instance()
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"SI": _probe_root()}),
         watcher_factory=_watcher_factory_producing(_StubWatcher),
     )
-    handle = mgr.start(host_id="H", serial="SI", job_id=1, log_dir="/tmp", policy=WatcherPolicy())
+    handle = mgr.start(host_id="H", serial="SI", job_id=1, log_dir="/tmp", policy=WatcherPolicy(), fencing_token=_FENCING_TOKEN)
     mgr.stop(handle.watcher_id, drain=False, timeout=0.5)
     # 第二次 stop 应返回 None 而非抛
     assert mgr.stop(handle.watcher_id, drain=False, timeout=0.5) is None
@@ -415,13 +431,14 @@ def test_stop_degraded_handle_without_impl(db):
     """DEGRADED 模式下 handle.impl=None；stop 仍更新 watcher_state='stopped'。"""
     mgr = LogWatcherManager.instance()
     mgr.configure(
-        adb=MagicMock(), adb_path="adb", local_db=db,
+        adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID,
         prober_factory=_stub_prober_factory({"SDD": _probe_unavailable()}),
         watcher_factory=_watcher_factory_producing(_StubWatcher),
     )
     handle = mgr.start(
         host_id="H", serial="SDD", job_id=1, log_dir="/tmp",
         policy=WatcherPolicy(on_unavailable=OnUnavailableAction.DEGRADED),
+        fencing_token=_FENCING_TOKEN,
     )
     stopped = mgr.stop(handle.watcher_id)
     assert stopped is handle
@@ -436,7 +453,7 @@ def test_stop_degraded_handle_without_impl(db):
 def test_reconcile_on_startup_marks_stale_active_states_stopped(db):
     """模拟上次进程崩溃残留的 active watcher_state → 重启后统一标 stopped。"""
     mgr = LogWatcherManager.instance()
-    mgr.configure(adb=MagicMock(), adb_path="adb", local_db=db)
+    mgr.configure(adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID)
     # 崩溃残留:两条 active(进程没机会优雅 stop)
     db.upsert_watcher_state(
         watcher_id="wch-stale-1", job_id=1, serial="S1",
@@ -468,7 +485,7 @@ def test_reconcile_on_startup_marks_stale_active_states_stopped(db):
 
 def test_reconcile_on_startup_noop_without_stale(db):
     mgr = LogWatcherManager.instance()
-    mgr.configure(adb=MagicMock(), adb_path="adb", local_db=db)
+    mgr.configure(adb=MagicMock(), adb_path="adb", local_db=db, agent_instance_id=_AGENT_INSTANCE_ID)
     assert mgr.reconcile_on_startup() == 0
 
 

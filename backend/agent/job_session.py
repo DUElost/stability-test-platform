@@ -136,6 +136,7 @@ class JobSession:
                 job_id=self._job_id,
                 log_dir=self._log_dir,
                 policy=self._policy,
+                fencing_token=str(self._payload["fencing_token"]),
             )
             self._summary.watcher_id         = self._handle.watcher_id
             self._summary.watcher_started_at = self._handle.started_at

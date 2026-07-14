@@ -59,6 +59,7 @@ class StepTraceWriter:
         output: Optional[str] = None,
         error_message: Optional[str] = None,
         fencing_token: str = "",
+        trace_event_id: str = "",
     ) -> Optional[int]:
         """Save step_trace to SQLite WAL only. HTTP upload delegated to StepTraceUploader."""
         ts = _utcnow()
@@ -75,6 +76,7 @@ class StepTraceWriter:
                     error_message=error_message,
                     original_ts=_dt.fromisoformat(ts.replace("Z", "+00:00")),
                     fencing_token=fencing_token,
+                    trace_event_id=trace_event_id,
                 )
             except Exception as e:
                 logger.warning("SQLite save_step_trace failed: %s", e)

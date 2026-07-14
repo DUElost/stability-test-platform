@@ -45,6 +45,7 @@ class HeartbeatThread:
         boot_id: str = "",
         # ADR-0020: agent version for preflight consistency check
         agent_version: str = "",
+        agent_code_revision: str = "",
         get_outbox_counts: Optional[Callable[[], Dict[str, int]]] = None,
         # ADR-0025 Sprint 2: 运行日志归档可观测指标（→ extra['archive']）
         get_archive_metrics: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
@@ -64,6 +65,7 @@ class HeartbeatThread:
         self._agent_instance_id = agent_instance_id
         self._boot_id = boot_id
         self._agent_version = agent_version
+        self._agent_code_revision = agent_code_revision
         self._get_outbox_counts = get_outbox_counts
         self._get_archive_metrics = get_archive_metrics
         self._on_devices_reconnected = on_devices_reconnected
@@ -228,6 +230,7 @@ class HeartbeatThread:
             agent_instance_id=self._agent_instance_id,
             boot_id=self._boot_id,
             agent_version=self._agent_version,
+            agent_code_revision=self._agent_code_revision,
             system_stats=system_stats,
             mount_status=mount_status,
         )

@@ -18,19 +18,15 @@ import logging
 
 import os
 
-import shutil
-
 import signal
 
 import subprocess
 
 import sys
 
-import tarfile
+import threading
 
 import time
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dataclasses import dataclass, field
 
@@ -121,6 +117,12 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
         return
     except Exception:
         logger.exception("killpg_sigkill_failed pgid=%d", pgid)
+        return
+
+    try:
+        proc.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        logger.error("process_tree_did_not_exit_after_sigkill pgid=%d", pgid)
 
 
 
@@ -171,6 +173,8 @@ class StepContext:
     adb_path: str = ""
 
     nfs_root: str = ""
+
+    phase: str = ""
 
 
 
@@ -308,6 +312,12 @@ class PipelineEngine:
 
         self._canceled = False
 
+        self._process_lock = threading.Lock()
+
+        self._active_process: Optional[subprocess.Popen] = None
+
+        self._patrol_cycle_index = 0
+
 
 
     def set_patrol_cycle_resume(self, checkpoint: dict) -> None:
@@ -408,9 +418,57 @@ class PipelineEngine:
 
     def cancel(self):
 
-        """Signal cancellation to the engine."""
+        """Signal cancellation and terminate the running script process tree."""
 
         self._canceled = True
+
+        with self._process_lock:
+
+            proc = self._active_process
+
+        if proc is not None:
+
+            _terminate_process_tree(proc)
+
+
+
+    def _set_active_process(
+
+        self, proc: subprocess.Popen, *, allow_after_cancel: bool = False
+
+    ) -> None:
+
+        if not hasattr(self, "_process_lock"):
+
+            self._process_lock = threading.Lock()
+
+            self._active_process = None
+
+        with self._process_lock:
+
+            self._active_process = proc
+
+            should_terminate = (
+                getattr(self, "_canceled", False) and not allow_after_cancel
+            )
+
+        if should_terminate:
+
+            _terminate_process_tree(proc)
+
+
+
+    def _clear_active_process(self, proc: subprocess.Popen) -> None:
+
+        if not hasattr(self, "_process_lock"):
+
+            return
+
+        with self._process_lock:
+
+            if self._active_process is proc:
+
+                self._active_process = None
 
 
 
@@ -600,72 +658,6 @@ class PipelineEngine:
 
 
 
-    def _archive_logs(self) -> Optional[dict]:
-
-        """Archive the run log directory into a tar.gz file and return artifact info."""
-
-        if not self._log_dir or not os.path.exists(self._log_dir):
-
-            return None
-
-
-
-        try:
-
-            # Archive filename
-
-            archive_path = f"{self._log_dir}.tar.gz"
-
-
-
-            # Create tarball
-
-            with tarfile.open(archive_path, "w:gz") as tar:
-
-                tar.add(self._log_dir, arcname=os.path.basename(self._log_dir))
-
-
-
-            # Calculate size and checksum
-
-            size_bytes = os.path.getsize(archive_path)
-
-            sha256 = hashlib.sha256()
-
-            with open(archive_path, "rb") as f:
-
-                for chunk in iter(lambda: f.read(4096), b""):
-
-                    sha256.update(chunk)
-
-            checksum = sha256.hexdigest()
-
-
-
-            # Create storage_uri (file:// scheme for central storage)
-
-            storage_uri = f"file://{os.path.abspath(archive_path)}"
-
-
-
-            return {
-
-                "storage_uri": storage_uri,
-
-                "size_bytes": size_bytes,
-
-                "checksum": checksum,
-
-            }
-
-        except Exception as e:
-
-            logger.warning(f"Failed to archive logs: {e}")
-
-            return None
-
-
-
     def _run_with_timeout(
 
         self, action_fn: Callable, ctx: StepContext, timeout: int
@@ -704,7 +696,7 @@ class PipelineEngine:
 
             # Check for lock lost (LeaseRenewer removed us from active set)
 
-            if self._is_lock_lost():
+            if self._is_lock_lost() or self._canceled:
 
                 return StepResult(
 
@@ -721,6 +713,18 @@ class PipelineEngine:
             success = self._run_step_with_retry(phase, step)
 
             if not success:
+
+                if self._is_lock_lost() or self._canceled:
+
+                    return StepResult(
+
+                        success=False,
+
+                        exit_code=1,
+
+                        error_message="job_aborted",
+
+                    )
 
                 step_id = step.get("step_id", "unknown")
 
@@ -760,15 +764,31 @@ class PipelineEngine:
 
         for attempt in range(max_retry + 1):
 
-            result = self._execute_step(phase, step)
+            result = self._execute_step(phase, step, retry_attempt=attempt)
 
             if result.success:
 
                 return True
 
+            if self._is_lock_lost() or self._canceled:
+
+                return False
+
             if attempt < max_retry:
 
-                time.sleep(5 * (attempt + 1))
+                sleep_remaining = 5.0 * (attempt + 1)
+
+                while sleep_remaining > 0:
+
+                    chunk = min(0.5, sleep_remaining)
+
+                    time.sleep(chunk)
+
+                    sleep_remaining -= chunk
+
+                    if self._is_lock_lost() or self._canceled:
+
+                        return False
 
         return False
 
@@ -785,6 +805,8 @@ class PipelineEngine:
         *,
 
         suppress_success_trace: bool = False,
+
+        retry_attempt: int = 0,
 
     ) -> StepResult:
 
@@ -828,6 +850,8 @@ class PipelineEngine:
 
                 output=result.skip_reason,
 
+                retry_attempt=retry_attempt,
+
             )
 
             return result
@@ -836,7 +860,13 @@ class PipelineEngine:
 
         if not suppress_success_trace:
 
-            self._report_step_trace_mq(step_id, phase, "STARTED", "RUNNING")
+            self._report_step_trace_mq(
+
+                step_id, phase, "STARTED", "RUNNING",
+
+                retry_attempt=retry_attempt,
+
+            )
 
 
 
@@ -877,6 +907,8 @@ class PipelineEngine:
             adb_path=self._adb_path or "",
 
             nfs_root=self._nfs_root or "",
+
+            phase=phase,
 
         )
 
@@ -945,6 +977,8 @@ class PipelineEngine:
                 output=result.skip_reason if result.skipped else (result.output or None),
 
                 error_message=result.error_message if not result.success else None,
+
+                retry_attempt=retry_attempt,
 
             )
 
@@ -1091,31 +1125,45 @@ class PipelineEngine:
 
             )
 
+            self._set_active_process(
+
+                proc,
+
+                allow_after_cancel=(ctx.phase == "teardown"),
+
+            )
+
             try:
 
-                stdout, stderr = proc.communicate(timeout=timeout_seconds)
+                try:
 
-            except subprocess.TimeoutExpired:
+                    stdout, stderr = proc.communicate(timeout=timeout_seconds)
 
-                _terminate_process_tree(proc)
+                except subprocess.TimeoutExpired:
 
-                stdout, stderr = proc.communicate()
+                    _terminate_process_tree(proc)
 
-                combined_output = "\n".join(
-                    part for part in ((stdout or "").strip(), (stderr or "").strip()) if part
-                )
+                    stdout, stderr = proc.communicate()
 
-                return StepResult(
+                    combined_output = "\n".join(
+                        part for part in ((stdout or "").strip(), (stderr or "").strip()) if part
+                    )
 
-                    success=False,
+                    return StepResult(
 
-                    exit_code=124,
+                        success=False,
 
-                    error_message="script timeout",
+                        exit_code=124,
 
-                    output=_truncate_step_output(combined_output),
+                        error_message="script timeout",
 
-                )
+                        output=_truncate_step_output(combined_output),
+
+                    )
+
+            finally:
+
+                self._clear_active_process(proc)
 
         except Exception as exc:
 
@@ -1201,11 +1249,24 @@ class PipelineEngine:
 
         error_message: Optional[str] = None,
 
+        retry_attempt: int = 0,
+
     ) -> None:
 
         """Send step_trace via MQ (local_db → StepTraceUploader HTTP batch)."""
 
         if self._mq and self._mq.connected:
+
+            cycle_index = self._patrol_cycle_index if stage == "patrol" else 0
+
+            trace_key = (
+                f"{self._run_id}\0{self._fencing_token}\0{stage}\0{step_id}\0"
+                f"{event_type}\0retry={retry_attempt}\0cycle={cycle_index}"
+            )
+
+            trace_event_id = hashlib.sha256(
+                trace_key.encode("utf-8")
+            ).hexdigest()
 
             self._mq.send_step_trace(
 
@@ -1224,6 +1285,8 @@ class PipelineEngine:
                 error_message=error_message,
 
                 fencing_token=self._fencing_token,
+
+                trace_event_id=trace_event_id,
 
             )
 
@@ -1369,7 +1432,7 @@ class PipelineEngine:
 
                 # Distinguish lock_lost (abort) from genuine init failure
 
-                if init_result.error_message == "device_lease_lost":
+                if init_result.error_message in ("device_lease_lost", "job_aborted"):
 
                     termination_reason = "abort"
 
@@ -1441,8 +1504,6 @@ class PipelineEngine:
 
         success = termination_reason in ("completed", "timeout")
 
-        artifact = self._archive_logs()
-
 
 
         # Map termination_reason to MQ terminal status
@@ -1495,7 +1556,7 @@ class PipelineEngine:
 
             error_message="" if success else (lifecycle_error or f"lifecycle ended: {termination_reason}"),
 
-            artifact=artifact,
+            artifact=None,
 
             metadata=final_metadata,
 
@@ -1599,6 +1660,8 @@ class PipelineEngine:
 
         last_observed_action: Optional[str] = None
 
+        pending_manual_action_ack: Optional[str] = None
+
         _LEASE_REVERIFY_INTERVAL = 300
 
 
@@ -1611,6 +1674,11 @@ class PipelineEngine:
 
             last_observed_action = resume.get("last_observed_action")
 
+            pending_manual_action_ack = (
+                resume.get("pending_manual_action_ack")
+                or last_observed_action
+            )
+
             logger.info(
 
                 "[Lifecycle] run=%d — resuming patrol from cycle=%d streak=%d",
@@ -1622,6 +1690,86 @@ class PipelineEngine:
                 failure_streak,
 
             )
+
+
+
+        def _accept_heartbeat_ack(
+
+            ack: Any, observed_sent: Optional[str]
+
+        ) -> bool:
+
+            """Update manual-action state; return True for JOB_NOT_RUNNING."""
+
+            nonlocal last_observed_action, pending_manual_action_ack
+
+            if not isinstance(ack, dict):
+
+                return False
+
+            if ack.get("_job_not_running"):
+
+                self._canceled = True
+
+                return True
+
+            # A structured response proves the observed value reached the
+            # server. Until this point it must remain pending across cycles.
+            if observed_sent:
+
+                pending_manual_action_ack = None
+
+            action = ack.get("manual_action") or None
+
+            if action:
+
+                last_observed_action = action
+
+                pending_manual_action_ack = action
+
+            return False
+
+
+
+        def _poll_patrol_control(
+
+            *, current_step: Optional[str], next_retry_at: Optional[datetime]
+
+        ) -> bool:
+
+            if self._patrol_heartbeat is None:
+
+                return False
+
+            poll = getattr(self._patrol_heartbeat, "poll_control", None)
+
+            if not callable(poll):
+
+                return False
+
+            observed_sent = pending_manual_action_ack
+
+            ack = poll(
+
+                job_id=self._run_id,
+
+                fencing_token=self._fencing_token,
+
+                cycle_index=iteration,
+
+                current_step=current_step,
+
+                current_failure_streak=failure_streak,
+
+                next_retry_at=next_retry_at,
+
+                watcher_capability=self._watcher_capability,
+
+                manual_action_observed=observed_sent,
+
+            )
+
+            return _accept_heartbeat_ack(ack, observed_sent)
 
 
 
@@ -1665,6 +1813,8 @@ class PipelineEngine:
 
                 logger.info("[Lifecycle] run=%d — manual EXIT_REQUESTED observed, ending patrol", self._run_id)
 
+                _poll_patrol_control(current_step=None, next_retry_at=None)
+
                 return _end_patrol("manual_exit", "")
 
 
@@ -1686,6 +1836,8 @@ class PipelineEngine:
 
 
             iteration += 1
+
+            self._patrol_cycle_index = iteration
 
             logger.info("[Lifecycle] run=%d — [Patrol #%d] starting (streak=%d)", self._run_id, iteration, failure_streak)
 
@@ -1763,6 +1915,8 @@ class PipelineEngine:
 
             if self._patrol_heartbeat is not None:
 
+                observed_sent = pending_manual_action_ack
+
                 ack = self._patrol_heartbeat.send(
 
                     job_id=self._run_id,
@@ -1783,27 +1937,21 @@ class PipelineEngine:
 
                     watcher_capability=self._watcher_capability,
 
-                    manual_action_observed=last_observed_action,
+                    manual_action_observed=observed_sent,
 
                 )
 
-                if isinstance(ack, dict):
+                if _accept_heartbeat_ack(ack, observed_sent):
 
-                    if ack.get("_job_not_running"):
+                    logger.warning(
 
-                        logger.warning(
+                        "[Lifecycle] run=%d — patrol heartbeat rejected JOB_NOT_RUNNING, stopping patrol",
 
-                            "[Lifecycle] run=%d — patrol heartbeat rejected JOB_NOT_RUNNING, stopping patrol",
+                        self._run_id,
 
-                            self._run_id,
+                    )
 
-                        )
-
-                        self._canceled = True
-
-                        return _end_patrol("abort", "job_not_running")
-
-                    last_observed_action = ack.get("manual_action") or None
+                    return _end_patrol("abort", "job_not_running")
 
 
 
@@ -1839,6 +1987,8 @@ class PipelineEngine:
 
                 "last_observed_action": last_observed_action,
 
+                "pending_manual_action_ack": pending_manual_action_ack,
+
             })
 
 
@@ -1849,6 +1999,12 @@ class PipelineEngine:
 
                 logger.info("[Lifecycle] run=%d — manual EXIT_REQUESTED observed post-cycle, ending patrol", self._run_id)
 
+                if _poll_patrol_control(
+                    current_step=current_step_for_ui,
+                    next_retry_at=next_retry_dt if had_failure else None,
+                ):
+                    return _end_patrol("abort", "job_not_running")
+
                 return _end_patrol("manual_exit", "")
 
             if last_observed_action == "RETRY_NOW":
@@ -1857,13 +2013,15 @@ class PipelineEngine:
 
                 logger.info("[Lifecycle] run=%d — manual RETRY_NOW observed, skipping backoff sleep", self._run_id)
 
-                last_observed_action = None  # consume locally; server-side cleared via next heartbeat
+                last_observed_action = None
 
                 continue
 
 
 
             sleep_remaining = next_sleep
+
+            retry_requested = False
 
             while sleep_remaining > 0:
 
@@ -1882,6 +2040,40 @@ class PipelineEngine:
                     logger.info("[Lifecycle] run=%d — timeout reached during sleep", self._run_id)
 
                     return _end_patrol("timeout", "")
+
+                if had_failure:
+
+                    if _poll_patrol_control(
+                        current_step=current_step_for_ui,
+                        next_retry_at=next_retry_dt,
+                    ):
+                        return _end_patrol("abort", "job_not_running")
+
+                    if last_observed_action == "EXIT_REQUESTED":
+
+                        _poll_patrol_control(
+                            current_step=current_step_for_ui,
+                            next_retry_at=next_retry_dt,
+                        )
+
+                        return _end_patrol("manual_exit", "")
+
+                    if last_observed_action == "RETRY_NOW":
+
+                        logger.info(
+                            "[Lifecycle] run=%d — manual RETRY_NOW observed during backoff",
+                            self._run_id,
+                        )
+
+                        last_observed_action = None
+
+                        retry_requested = True
+
+                        break
+
+            if retry_requested:
+
+                continue
 
 
 

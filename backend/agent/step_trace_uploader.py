@@ -318,4 +318,7 @@ def _to_payload(trace: Dict[str, Any]) -> Dict[str, Any]:
         "error_message": trace.get("error_message"),
         "original_ts": trace.get("original_ts"),
         "fencing_token": trace.get("fencing_token", ""),
+        # Older servers ignore this extra field; the cutover schema can use it
+        # as the idempotency key without changing the Agent payload again.
+        "trace_event_id": trace.get("trace_event_id", ""),
     }

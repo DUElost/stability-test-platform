@@ -57,8 +57,12 @@ class LocalDB:
                 error_message TEXT,
                 original_ts   TEXT    NOT NULL,
                 fencing_token TEXT    NOT NULL DEFAULT '',
+                trace_event_id TEXT   NOT NULL,
+                attempts      INTEGER NOT NULL DEFAULT 0,
+                last_error    TEXT,
+                dead_letter   INTEGER NOT NULL DEFAULT 0,
                 acked         INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(job_id, step_id, event_type)
+                UNIQUE(trace_event_id)
             );
             CREATE TABLE IF NOT EXISTS script_cache (
                 cache_key       TEXT    PRIMARY KEY,
@@ -182,6 +186,63 @@ class LocalDB:
                 "ALTER TABLE step_trace_cache "
                 "ADD COLUMN dead_letter INTEGER NOT NULL DEFAULT 0"
             )
+        if "trace_event_id" not in columns:
+            self._conn.execute(
+                "ALTER TABLE step_trace_cache "
+                "ADD COLUMN trace_event_id TEXT NOT NULL DEFAULT ''"
+            )
+        self._conn.execute(
+            "UPDATE step_trace_cache "
+            "SET trace_event_id = 'legacy:' || id "
+            "WHERE trace_event_id = ''"
+        )
+        self._rebuild_legacy_step_trace_unique_constraint()
+
+    def _rebuild_legacy_step_trace_unique_constraint(self) -> None:
+        """Replace the legacy per-step uniqueness with event-id uniqueness."""
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='table' AND name='step_trace_cache'"
+        ).fetchone()
+        table_sql = (row["sql"] if row else "") or ""
+        normalized = "".join(table_sql.lower().split())
+        if "unique(job_id,step_id,event_type)" not in normalized:
+            return
+
+        self._conn.executescript(
+            """
+            CREATE TABLE step_trace_cache_v2 (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id         INTEGER NOT NULL,
+                step_id        TEXT    NOT NULL,
+                stage          TEXT    NOT NULL,
+                event_type     TEXT    NOT NULL,
+                status         TEXT    NOT NULL,
+                output         TEXT,
+                error_message  TEXT,
+                original_ts    TEXT    NOT NULL,
+                fencing_token  TEXT    NOT NULL DEFAULT '',
+                trace_event_id TEXT    NOT NULL,
+                attempts       INTEGER NOT NULL DEFAULT 0,
+                last_error     TEXT,
+                dead_letter    INTEGER NOT NULL DEFAULT 0,
+                acked          INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(trace_event_id)
+            );
+            INSERT INTO step_trace_cache_v2 (
+                id, job_id, step_id, stage, event_type, status, output,
+                error_message, original_ts, fencing_token, trace_event_id,
+                attempts, last_error, dead_letter, acked
+            )
+            SELECT
+                id, job_id, step_id, stage, event_type, status, output,
+                error_message, original_ts, fencing_token, trace_event_id,
+                attempts, last_error, dead_letter, acked
+            FROM step_trace_cache;
+            DROP TABLE step_trace_cache;
+            ALTER TABLE step_trace_cache_v2 RENAME TO step_trace_cache;
+            """
+        )
 
     def _ensure_log_signal_outbox_schema(self) -> None:
         """log_signal_outbox 增列 dead_letter (#9):与 step_trace_cache 同套路。
@@ -257,16 +318,21 @@ class LocalDB:
         error_message: Optional[str] = None,
         original_ts: Optional[datetime] = None,
         fencing_token: str = "",
+        trace_event_id: str = "",
     ) -> int:
         """Insert (or ignore duplicate) step trace. Returns row id."""
         ts = (original_ts or datetime.now(timezone.utc)).isoformat()
+        stable_event_id = trace_event_id or (
+            f"legacy:{job_id}:{stage}:{step_id}:{event_type}"
+        )
         with self._lock:
             with self._conn:
                 cursor = self._conn.execute(
                     """
                     INSERT OR IGNORE INTO step_trace_cache
-                    (job_id, step_id, stage, event_type, status, output, error_message, original_ts, fencing_token)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (job_id, step_id, stage, event_type, status, output,
+                     error_message, original_ts, fencing_token, trace_event_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -278,9 +344,16 @@ class LocalDB:
                         error_message,
                         ts,
                         fencing_token,
+                        stable_event_id,
                     ),
                 )
-                return cursor.lastrowid
+                if cursor.rowcount > 0:
+                    return cursor.lastrowid
+                row = self._conn.execute(
+                    "SELECT id FROM step_trace_cache WHERE trace_event_id = ?",
+                    (stable_event_id,),
+                ).fetchone()
+                return int(row["id"]) if row else 0
 
     def mark_acked(self, trace_id: int) -> None:
         with self._lock:
@@ -452,14 +525,33 @@ class LocalDB:
     # ------------------------------------------------------------------
 
     def enqueue_terminal(self, job_id: int, payload: Dict[str, Any]) -> int:
-        """Persist a terminal-state payload. Idempotent per job_id (REPLACE)."""
+        """Persist the first terminal fact; conflicting replays are rejected."""
         now = datetime.now(timezone.utc).isoformat()
-        raw = json.dumps(payload, ensure_ascii=False)
+        raw = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         with self._lock:
             with self._conn:
+                existing = self._conn.execute(
+                    "SELECT id, payload FROM job_terminal_outbox WHERE job_id = ?",
+                    (job_id,),
+                ).fetchone()
+                if existing is not None:
+                    try:
+                        same_payload = json.loads(existing["payload"]) == payload
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        same_payload = existing["payload"] == raw
+                    if not same_payload:
+                        raise ValueError(
+                            f"conflicting terminal payload for job {job_id}"
+                        )
+                    return int(existing["id"])
                 cur = self._conn.execute(
                     """
-                    INSERT OR REPLACE INTO job_terminal_outbox
+                    INSERT INTO job_terminal_outbox
                     (job_id, payload, created_at, attempts, last_error, acked)
                     VALUES (?, ?, ?, 0, NULL, 0)
                     """,

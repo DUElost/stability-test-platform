@@ -43,7 +43,6 @@ class TestActiveJobRegistry:
         assert jobs[0]["device_id"] == 20
         assert jobs[0]["device_serial"] == "SERIAL-NEW"
         assert jobs[0]["fencing_token"] == "new-token"
-
     def test_delete_active_job(self, db):
         """delete 后 get 不再返回该 job."""
         db.save_active_job(1, 10, "token-1", "SERIAL-1")
@@ -76,6 +75,34 @@ class TestActiveJobRegistry:
         assert worker_conn[0] is not main_conn
         jobs = db.get_active_jobs()
         assert any(job["job_id"] == 3 for job in jobs)
+
+
+class TestTerminalOutboxImmutability:
+    def test_same_payload_is_idempotent(self, db):
+        payload = {
+            "update": {"status": "COMPLETED", "exit_code": 0},
+            "fencing_token": "10:1",
+        }
+        first_id = db.enqueue_terminal(1, payload)
+        assert db.enqueue_terminal(1, dict(payload)) == first_id
+
+    def test_conflicting_payload_cannot_replace_first_fact(self, db):
+        first = {
+            "update": {"status": "COMPLETED", "exit_code": 0},
+            "fencing_token": "10:1",
+        }
+        db.enqueue_terminal(1, first)
+
+        with pytest.raises(ValueError, match="conflicting terminal payload"):
+            db.enqueue_terminal(
+                1,
+                {
+                    "update": {"status": "FAILED", "exit_code": 1},
+                    "fencing_token": "10:1",
+                },
+            )
+
+        assert db.get_pending_terminals()[0]["payload"] == first
 
 
 class TestPendingOutbox:
