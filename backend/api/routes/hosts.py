@@ -34,6 +34,7 @@ from backend.services.agent_installer import (
     start_install_agent_runconsole,
 )
 from backend.services.host_updater import execute_hot_update, _resolve_ssh_creds, get_agent_code_version
+from backend.services.agent_version_info import build_host_version_view, record_agent_code_deployed
 from backend.services.run_console import RunConsole
 from backend.services.plan_run_abort import abort_jobs_for_host
 from backend.tasks.saq_worker import enqueue_sync, EnqueueSyncError, get_saq_job_state_sync
@@ -135,6 +136,13 @@ def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | No
     installed, installed_at = _derive_agent_installed(h)
     out.agent_installed = installed
     out.agent_installed_at = installed_at
+    version_view = build_host_version_view(extra)
+    out.agent_protocol_version = version_view["agent_protocol_version"]
+    out.agent_code_revision = version_view["agent_code_revision"]
+    out.expected_code_revision = version_view["expected_code_revision"]
+    out.agent_code_deployed = version_view["agent_code_deployed"]
+    out.agent_code_deployed_at = version_view["agent_code_deployed_at"]
+    out.agent_code_sync_status = version_view["agent_code_sync_status"]
 
     if db is not None:
         from backend.models.plan_run import PlanRun
@@ -690,6 +698,9 @@ def host_hot_update(
 
     if not result["ok"]:
         raise HTTPException(status_code=502, detail=result["message"])
+
+    record_agent_code_deployed(host, code_version)
+    db.commit()
 
     return {
         "ok": True,

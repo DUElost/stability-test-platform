@@ -56,6 +56,13 @@ class HostOut(ORMBaseModel):
     # 用于区分「从未安装」与「已装但 OFFLINE」，避免 UI 误显示「首次安装」。
     agent_installed: bool = False
     agent_installed_at: Optional[str] = None
+    # Agent version display (protocol semver + git revision traceability)
+    agent_protocol_version: Optional[str] = None
+    agent_code_revision: Optional[str] = None
+    expected_code_revision: Optional[str] = None
+    agent_code_deployed: Optional[str] = None
+    agent_code_deployed_at: Optional[str] = None
+    agent_code_sync_status: Literal["unknown", "matched", "drift", "pending"] = "unknown"
 
     @field_validator('extra', 'mount_status', mode='before')
     @classmethod
@@ -83,6 +90,7 @@ class HeartbeatIn(BaseModel):
     agent_instance_id: str = ""   # ADR-0019 Phase 3a
     boot_id: str = ""             # ADR-0019 Phase 3a
     agent_version: Optional[str] = None  # ADR-0020 preflight data source
+    agent_code_revision: Optional[str] = None  # git short SHA from agent VERSION file
 
     @field_validator('host_id', mode='before')
     @classmethod

@@ -144,6 +144,11 @@ sudo rsync -av --delete \
     --exclude='hosts.txt' \
     "$TMPDIR/" "$INSTALL_DIR/agent/"
 
+CODE_VERSION="{code_version}"
+if [ -n "$CODE_VERSION" ]; then
+    echo "$CODE_VERSION" | sudo tee "$INSTALL_DIR/agent/VERSION" > /dev/null
+fi
+
 if [ "$SYNC_AGENT_SECRET" = "1" ]; then
     sudo INSTALL_DIR="$INSTALL_DIR" AGENT_SECRET_B64="$AGENT_SECRET_B64" python3 - <<'PY'
 import base64
@@ -217,6 +222,7 @@ def _build_remote_script(
     sync_agent_secret: bool = False,
     agent_secret: str = "",
     pip_index_url: str = "",
+    code_version: str = "",
 ) -> str:
     agent_secret_b64 = ""
     if sync_agent_secret:
@@ -233,6 +239,7 @@ def _build_remote_script(
         user=user,
         group=group,
         pip_index_url=pip_index_url,
+        code_version=code_version,
     )
 
 
@@ -341,6 +348,7 @@ def execute_hot_update(
                 sync_agent_secret=sync_agent_secret,
                 agent_secret=agent_secret,
                 pip_index_url=pip_index_url,
+                code_version=code_version,
             )
 
             logger.info("hot_update_executing host=%s", host_ip)

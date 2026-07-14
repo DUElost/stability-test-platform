@@ -36,6 +36,8 @@ export interface MountStatus {
   total_gb?: number;
 }
 
+export type AgentCodeSyncStatus = 'unknown' | 'matched' | 'drift' | 'pending';
+
 export interface HostTableData {
   id: string | number;
   name: string;
@@ -45,6 +47,12 @@ export interface HostTableData {
   last_heartbeat?: string;
   /** 与 status 正交：曾安装成功 / 有过心跳 */
   agent_installed?: boolean;
+  agent_protocol_version?: string | null;
+  agent_code_revision?: string | null;
+  expected_code_revision?: string | null;
+  agent_code_deployed?: string | null;
+  agent_code_deployed_at?: string | null;
+  agent_code_sync_status?: AgentCodeSyncStatus;
   resources?: HostResources;
   mount_status?: MountStatus[];
   device_count?: number;
@@ -87,6 +95,35 @@ const REASON_LABELS: Record<string, string> = {
   mount_failed: '挂载失败',
   adb_low_healthy_devices: '无健康设备',
 };
+
+const AGENT_SYNC_LABELS: Record<AgentCodeSyncStatus, string> = {
+  matched: '已对齐',
+  pending: '待上报',
+  drift: '版本漂移',
+  unknown: '未知',
+};
+
+function formatAgentVersionLabel(host: HostTableData): string {
+  const protocol = host.agent_protocol_version;
+  const revision = host.agent_code_revision ?? host.agent_code_deployed;
+  if (protocol && revision) return `${protocol} @${revision}`;
+  if (protocol) return protocol;
+  if (revision) return `@${revision}`;
+  return '—';
+}
+
+function agentSyncBadgeClass(status: AgentCodeSyncStatus | undefined): string {
+  switch (status) {
+    case 'matched':
+      return 'bg-success/10 text-success';
+    case 'pending':
+      return 'bg-info/10 text-info';
+    case 'drift':
+      return 'bg-destructive/10 text-destructive';
+    default:
+      return 'bg-muted/50 text-muted-foreground';
+  }
+}
 
 export function ExpandableHostTable({
   hosts,
@@ -134,12 +171,18 @@ export function ExpandableHostTable({
     setExpandedRows(newExpanded);
   };
 
-  const stats = useMemo(() => ({
-    total: hosts.length,
-    online: hosts.filter(h => h.status === 'ONLINE').length,
-    offline: hosts.filter(h => h.status === 'OFFLINE').length,
-    degraded: hosts.filter(h => h.status === 'DEGRADED').length,
-  }), [hosts]);
+  const stats = useMemo(() => {
+    const onlineHosts = hosts.filter((h) => h.status === 'ONLINE' && h.agent_installed);
+    const aligned = onlineHosts.filter((h) => h.agent_code_sync_status === 'matched').length;
+    return {
+      total: hosts.length,
+      online: hosts.filter(h => h.status === 'ONLINE').length,
+      offline: hosts.filter(h => h.status === 'OFFLINE').length,
+      degraded: hosts.filter(h => h.status === 'DEGRADED').length,
+      agentAligned: aligned,
+      agentTrackable: onlineHosts.length,
+    };
+  }, [hosts]);
 
   return (
     <TooltipProvider>
@@ -153,6 +196,11 @@ export function ExpandableHostTable({
             <div>
               <div className="text-xl font-semibold text-foreground">{stats.total}</div>
               <div className="text-xs text-muted-foreground">主机总数</div>
+              {stats.agentTrackable > 0 && (
+                <div className="text-[11px] text-muted-foreground mt-0.5">
+                  Agent 已对齐 {stats.agentAligned}/{stats.agentTrackable}
+                </div>
+              )}
             </div>
           </div>
           <div className="bg-card rounded-lg border border-success/30 p-3 flex items-center gap-3">
@@ -209,6 +257,7 @@ export function ExpandableHostTable({
                 <TableHead className="font-medium">内存</TableHead>
                 <TableHead className="font-medium">磁盘</TableHead>
                 <TableHead className="font-medium text-center whitespace-nowrap">Watch状态</TableHead>
+                <TableHead className="font-medium whitespace-nowrap">Agent 版本</TableHead>
                 <TableHead className="font-medium text-right">心跳</TableHead>
                 <TableHead className="font-medium text-right">操作</TableHead>
               </TableRow>
@@ -389,6 +438,33 @@ export function ExpandableHostTable({
                           )}
                         </div>
                       </TableCell>
+                      <TableCell className="p-3">
+                        {host.agent_installed ? (
+                          <div className="flex flex-col gap-1 min-w-[108px]">
+                            <span
+                              className="font-mono text-xs text-foreground truncate"
+                              title={formatAgentVersionLabel(host)}
+                            >
+                              {formatAgentVersionLabel(host)}
+                            </span>
+                            <span
+                              className={cn(
+                                'inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                                agentSyncBadgeClass(host.agent_code_sync_status),
+                              )}
+                              title={
+                                host.expected_code_revision
+                                  ? `期望修订 ${host.expected_code_revision}`
+                                  : undefined
+                              }
+                            >
+                              {AGENT_SYNC_LABELS[host.agent_code_sync_status ?? 'unknown']}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/40 text-xs">未安装</span>
+                        )}
+                      </TableCell>
                       <TableCell className="p-3 text-right text-xs text-muted-foreground">
                         {host.last_heartbeat
                           ? formatLocalTime(host.last_heartbeat)
@@ -472,8 +548,8 @@ export function ExpandableHostTable({
                     {/* Expanded Details */}
                     {isExpanded && (
                       <TableRow className="bg-muted/50/50 hover:bg-muted/50/50">
-                        <TableCell colSpan={selectable ? 13 : 12} className="p-4">
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <TableCell colSpan={selectable ? 14 : 13} className="p-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                             {/* CPU Details */}
                             <div className="bg-card rounded-lg border border-border p-3">
                               <div className="flex items-center gap-2 mb-2">
@@ -549,6 +625,63 @@ export function ExpandableHostTable({
                                 </div>
                               ) : (
                                 <span className="text-xs text-muted-foreground">无数据</span>
+                              )}
+                            </div>
+
+                            {/* Agent Version */}
+                            <div className="bg-card rounded-lg border border-border p-3">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Server className="w-4 h-4 text-muted-foreground" />
+                                <span className="text-sm font-medium text-foreground">Agent 版本</span>
+                              </div>
+                              {host.agent_installed ? (
+                                <div className="space-y-1">
+                                  <div className="flex justify-between text-xs gap-2">
+                                    <span className="text-muted-foreground shrink-0">协议</span>
+                                    <span className="font-mono text-foreground truncate">
+                                      {host.agent_protocol_version ?? '—'}
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between text-xs gap-2">
+                                    <span className="text-muted-foreground shrink-0">上报修订</span>
+                                    <span className="font-mono text-foreground truncate">
+                                      {host.agent_code_revision ? `@${host.agent_code_revision}` : '—'}
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between text-xs gap-2">
+                                    <span className="text-muted-foreground shrink-0">期望修订</span>
+                                    <span className="font-mono text-foreground truncate">
+                                      {host.expected_code_revision ? `@${host.expected_code_revision}` : '—'}
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between text-xs gap-2">
+                                    <span className="text-muted-foreground shrink-0">热更新部署</span>
+                                    <span className="font-mono text-foreground truncate">
+                                      {host.agent_code_deployed ? `@${host.agent_code_deployed}` : '—'}
+                                    </span>
+                                  </div>
+                                  {host.agent_code_deployed_at && (
+                                    <div className="flex justify-between text-xs gap-2">
+                                      <span className="text-muted-foreground shrink-0">部署时间</span>
+                                      <span className="font-mono text-foreground truncate">
+                                        {formatLocalTime(host.agent_code_deployed_at)}
+                                      </span>
+                                    </div>
+                                  )}
+                                  <div className="flex justify-between text-xs gap-2">
+                                    <span className="text-muted-foreground shrink-0">对齐状态</span>
+                                    <span
+                                      className={cn(
+                                        'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
+                                        agentSyncBadgeClass(host.agent_code_sync_status),
+                                      )}
+                                    >
+                                      {AGENT_SYNC_LABELS[host.agent_code_sync_status ?? 'unknown']}
+                                    </span>
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">未安装 Agent</span>
                               )}
                             </div>
 

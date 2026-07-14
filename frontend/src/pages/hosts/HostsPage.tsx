@@ -412,6 +412,12 @@ export default function HostsPage() {
         watcher_admin_active: host.watcher_admin_active !== false,
         last_heartbeat: host.last_heartbeat,
         agent_installed: Boolean(host.agent_installed),
+        agent_protocol_version: host.agent_protocol_version ?? host.extra?.agent_version ?? null,
+        agent_code_revision: host.agent_code_revision ?? null,
+        expected_code_revision: host.expected_code_revision ?? null,
+        agent_code_deployed: host.agent_code_deployed ?? null,
+        agent_code_deployed_at: host.agent_code_deployed_at ?? null,
+        agent_code_sync_status: host.agent_code_sync_status ?? 'unknown',
         resources: host.status === 'ONLINE' ? {
           cpu_load: extra.cpu_load || 0,
           cpu_cores: extra.cpu_cores,
