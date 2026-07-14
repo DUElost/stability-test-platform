@@ -10,7 +10,7 @@ from backend.models.plan_migration_audit import PlanMigrationAudit
 from backend.models.plan_run import PlanRun
 from backend.models.plan_run_artifact import PlanRunArtifact
 from backend.models.resource_pool import ResourceAllocation, ResourcePool
-from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel
+from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel, NotificationLog, NotificationSeverity, NotificationSource
 from backend.models.schedule import TaskSchedule
 from backend.models.script import Script
 from backend.models.user import User
@@ -33,6 +33,9 @@ __all__ = [
     "LeaseStatus",
     "LeaseType",
     "NotificationChannel",
+    "NotificationLog",
+    "NotificationSeverity",
+    "NotificationSource",
     "Plan",
     "PlanMigrationAudit",
     "PlanRun",

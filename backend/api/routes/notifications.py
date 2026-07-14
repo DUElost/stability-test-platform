@@ -20,7 +20,7 @@ from backend.api.schemas import (
 )
 from backend.core.database import get_db
 from backend.core.audit import record_audit
-from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel
+from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel, NotificationLog, NotificationSource
 from backend.api.routes.auth import require_admin, User
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
@@ -290,4 +290,73 @@ def delete_rule(
         request=request,
     )
     db.commit()
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Notification logs (unified history: platform events + alertmanager alerts)
+# ---------------------------------------------------------------------------
+
+@router.get("/logs")
+def list_logs(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    unread_only: bool = Query(False),
+    db: Session = Depends(get_db),
+):
+    q = db.query(NotificationLog)
+    if unread_only:
+        q = q.filter(NotificationLog.read.is_(False))
+    total = q.count()
+    items = q.order_by(NotificationLog.created_at.desc()).offset(skip).limit(limit).all()
+    return {
+        "items": [
+            {
+                "id": r.id,
+                "source": r.source.value if hasattr(r.source, "value") else str(r.source),
+                "event_type": r.event_type,
+                "severity": r.severity.value if hasattr(r.severity, "value") else str(r.severity),
+                "title": r.title,
+                "message": r.message,
+                "context": r.context or {},
+                "read": r.read,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in items
+        ],
+        "total": total,
+        "skip": skip,
+        "limit": limit,
+    }
+
+
+@router.get("/logs/unread-count")
+def unread_count(db: Session = Depends(get_db)):
+    count = db.query(NotificationLog).filter(NotificationLog.read.is_(False)).count()
+    return {"unread": count}
+
+
+@router.patch("/logs/{log_id}/read")
+def mark_read(log_id: int, db: Session = Depends(get_db)):
+    log = db.get(NotificationLog, log_id)
+    if not log:
+        raise HTTPException(status_code=404, detail="Notification log not found")
+    log.read = True
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/logs/read-all")
+def mark_all_read(db: Session = Depends(get_db)):
+    db.query(NotificationLog).filter(NotificationLog.read.is_(False)).update({"read": True})
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/webhook")
+async def alertmanager_webhook(request: Request):
+    """Receive alertmanager webhook alerts and log them."""
+    body = await request.json()
+    from backend.services.notification_service import receive_alertmanager_alert
+    receive_alertmanager_alert(body)
     return {"ok": True}

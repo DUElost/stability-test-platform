@@ -18,7 +18,7 @@ import requests
 from sqlalchemy.orm import joinedload
 
 from backend.core.database import SessionLocal
-from backend.models.notification import AlertRule, EventType, NotificationChannel
+from backend.models.notification import AlertRule, EventType, NotificationChannel, NotificationLog, NotificationSeverity, NotificationSource
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +162,28 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
     Safe to call from any thread.
     """
     try:
+        message = _format_message(event_type, context)
+        severity = NotificationSeverity.WARNING if event_type in (
+            EventType.RUN_FAILED.value, EventType.DEVICE_OFFLINE.value, EventType.RISK_HIGH.value,
+        ) else NotificationSeverity.INFO
+
+        with SessionLocal() as db:
+            log = NotificationLog(
+                source=NotificationSource.PLATFORM,
+                event_type=event_type,
+                severity=severity,
+                title=event_type.replace("_", " ").title(),
+                message=message,
+                context=context,
+            )
+            db.add(log)
+            db.commit()
+            db.refresh(log)
+            log_id = log.id
+            log_created = log.created_at.isoformat() if log.created_at else None
+
+        _emit_notification_socketio(log_id, NotificationSource.PLATFORM.value, event_type, severity.value, event_type.replace("_", " ").title(), message, log_created)
+
         with SessionLocal() as db:
             rules = (
                 db.query(AlertRule)
@@ -173,7 +195,6 @@ def dispatch_notification(event_type: str, context: Dict[str, Any]) -> None:
             if not rules:
                 return
 
-            message = _format_message(event_type, context)
             pending_dispatches = []
 
             for rule in rules:
@@ -229,3 +250,76 @@ def dispatch_notification_async(event_type: str, context: Dict[str, Any]) -> Non
     """Fire-and-forget wrapper — submits to bounded thread pool."""
     from backend.core.thread_pool import submit as pool_submit
     pool_submit(dispatch_notification, event_type, context)
+
+
+def _emit_notification_socketio(
+    log_id: int,
+    source: str,
+    event_type: str,
+    severity: str,
+    title: str,
+    message: str,
+    created_at: str | None,
+) -> None:
+    """Emit notification:new to all dashboard clients (best-effort)."""
+    try:
+        import asyncio
+        from backend.realtime.socketio_server import get_sio
+
+        sio = get_sio()
+        payload = {
+            "id": log_id,
+            "source": source,
+            "event_type": event_type,
+            "severity": severity,
+            "title": title,
+            "message": message,
+            "created_at": created_at,
+        }
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(sio.emit("notification:new", payload, namespace="/dashboard"))
+        except RuntimeError:
+            asyncio.run(sio.emit("notification:new", payload, namespace="/dashboard"))
+    except Exception:
+        logger.debug("emit_notification_socketio_failed", exc_info=True)
+
+
+def receive_alertmanager_alert(alert_data: Dict[str, Any]) -> None:
+    """Process an alertmanager webhook payload and log it."""
+    try:
+        status = alert_data.get("status", "firing")
+        alerts = alert_data.get("alerts", [])
+        for alert in alerts:
+            labels = alert.get("labels", {})
+            annotations = alert.get("annotations", {})
+            alertname = labels.get("alertname", "UnknownAlert")
+            severity = labels.get("severity", "warning")
+
+            sev = NotificationSeverity.CRITICAL if severity == "critical" else (
+                NotificationSeverity.WARNING if severity == "warning" else NotificationSeverity.INFO
+            )
+
+            title = f"[{alertname}] {status}"
+            message = annotations.get("description", annotations.get("summary", ""))
+
+            with SessionLocal() as db:
+                log = NotificationLog(
+                    source=NotificationSource.ALERTMANAGER,
+                    event_type=alertname,
+                    severity=sev,
+                    title=title,
+                    message=message,
+                    context={"labels": labels, "annotations": annotations, "status": status},
+                )
+                db.add(log)
+                db.commit()
+                db.refresh(log)
+                log_id = log.id
+                log_created = log.created_at.isoformat() if log.created_at else None
+
+            _emit_notification_socketio(
+                log_id, NotificationSource.ALERTMANAGER.value, alertname, sev.value, title, message, log_created
+            )
+    except Exception:
+        logger.exception("receive_alertmanager_alert_failed")

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import relationship
 
 from backend.core.database import Base
@@ -18,6 +18,17 @@ class EventType(str, PyEnum):
     RUN_FAILED = "RUN_FAILED"
     RISK_HIGH = "RISK_HIGH"
     DEVICE_OFFLINE = "DEVICE_OFFLINE"
+
+
+class NotificationSource(str, PyEnum):
+    PLATFORM = "PLATFORM"
+    ALERTMANAGER = "ALERTMANAGER"
+
+
+class NotificationSeverity(str, PyEnum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
 
 
 class NotificationChannel(Base):
@@ -45,3 +56,17 @@ class AlertRule(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     channel = relationship("NotificationChannel", back_populates="rules")
+
+
+class NotificationLog(Base):
+    __tablename__ = "notification_logs"
+
+    id = Column(Integer, primary_key=True)
+    source = Column(Enum(NotificationSource, values_callable=lambda e: [m.value for m in e]), nullable=False, default=NotificationSource.PLATFORM)
+    event_type = Column(String(64), nullable=False)
+    severity = Column(Enum(NotificationSeverity, values_callable=lambda e: [m.value for m in e]), nullable=False, default=NotificationSeverity.INFO)
+    title = Column(String(256), nullable=False)
+    message = Column(Text, nullable=False, default="")
+    context = Column(JSON, default=dict)
+    read = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
