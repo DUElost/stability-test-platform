@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from backend.models.notification import EventType
@@ -22,8 +23,11 @@ class _FakeSession:
     def __init__(self, rules):
         self._rules = rules
         self.closed = False
+        self._pending = None
+        self._next_id = 1
 
     def __enter__(self):
+        self.closed = False
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -32,6 +36,23 @@ class _FakeSession:
 
     def query(self, model):
         return _FakeQuery(self._rules)
+
+    def add(self, obj):
+        self._pending = obj
+
+    def commit(self):
+        if self._pending is not None and getattr(self._pending, "id", None) is None:
+            self._pending.id = self._next_id
+            self._next_id += 1
+        if self._pending is not None and getattr(self._pending, "created_at", None) is None:
+            self._pending.created_at = datetime.now(timezone.utc)
+
+    def refresh(self, obj):
+        if getattr(obj, "id", None) is None:
+            obj.id = self._next_id
+            self._next_id += 1
+        if getattr(obj, "created_at", None) is None:
+            obj.created_at = datetime.now(timezone.utc)
 
     def close(self):
         self.closed = True
@@ -48,6 +69,7 @@ def test_dispatch_notification_closes_db_before_network_io(monkeypatch):
     fake_session = _FakeSession([rule])
 
     monkeypatch.setattr(mod, "SessionLocal", lambda: fake_session)
+    monkeypatch.setattr(mod, "_emit_notification_socketio", lambda *args, **kwargs: None)
 
     closed_states = []
 

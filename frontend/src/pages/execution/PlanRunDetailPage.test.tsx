@@ -838,6 +838,8 @@ describe('PlanRunDetailPage', () => {
       started_at: '2026-05-08T11:00:00Z',
       ended_at: '2026-05-08T11:30:00Z',
       run_context: null,
+      // final_archive defaults false when omitted; prompt requires explicit true.
+      capabilities: { final_archive: true },
     });
     mocks.getWatcherSummary.mockResolvedValueOnce({
       plan_run_id: 12,

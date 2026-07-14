@@ -23,6 +23,7 @@ def test_gate_enabled_when_env_set(monkeypatch):
     assert resolve_agent_min_version() == "2.0.0"
     assert agent_version_gate_enabled() is True
     assert agent_version_is_supported("2.1.0", "2.0.0") is True
+    assert agent_version_is_supported("2.1", "2.0.0") is True
     assert agent_version_is_supported("1.9.9", "2.0.0") is False
 
 

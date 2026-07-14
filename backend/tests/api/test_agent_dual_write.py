@@ -2207,9 +2207,11 @@ def test_claim_request_default_agent_instance_id_empty():
 
 
 def test_claim_protocol_enforces_minimum_agent_version():
+    # Partial versions are padded with zeros ("2.1" → 2.1.0) for rollout-safe compares.
     assert _agent_version_is_supported("2.0.0", "2.0.0")
     assert _agent_version_is_supported("2.1.0", "2.0.9")
-    assert not _agent_version_is_supported("2.1", "2.0.9")
+    assert _agent_version_is_supported("2.1", "2.0.9")
+    assert not _agent_version_is_supported("2.0.0", "2.0.9")
     assert not _agent_version_is_supported("1.9.9", "2.0.0")
     assert not _agent_version_is_supported("unknown", "2.0.0")
 
