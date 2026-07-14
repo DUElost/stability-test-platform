@@ -473,9 +473,20 @@ export default function HostsPage() {
     (op) => op.status === 'pending' || op.status === 'running',
   );
 
+  const handleSelectedHotUpdate = () => {
+    if (selectedHostIds.size !== 1) return;
+    const [hostId] = Array.from(selectedHostIds);
+    const host = hosts?.find((item: Host) => item.id === hostId);
+    if (!host || host.status !== 'ONLINE') {
+      toast.info('请选择一台在线主机进行热更新');
+      return;
+    }
+    handleHotUpdate(hostId);
+  };
+
   if (isLoading) {
     return (
-      <PageContainer width="wide">
+      <PageContainer width="full">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <div className="space-y-4">
           <div className={cn('h-32', SKELETON_BLOCK)} />
@@ -487,7 +498,7 @@ export default function HostsPage() {
 
   if (error) {
     return (
-      <PageContainer width="wide">
+      <PageContainer width="full">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <ErrorState
           title="加载主机失败"
@@ -500,7 +511,7 @@ export default function HostsPage() {
 
   if (tableData.length === 0) {
     return (
-      <PageContainer width="wide">
+      <PageContainer width="full">
         <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
         <EmptyState
           title="还没有主机"
@@ -526,39 +537,30 @@ export default function HostsPage() {
   }
 
   return (
-    <PageContainer width="wide">
+    <PageContainer
+      width="full"
+      className={selectedHostIds.size > 0 ? 'pb-28' : undefined}
+    >
       <PageHeader title="主机管理" subtitle="管理和监控测试执行节点" />
 
-      <div className="flex flex-col gap-2 py-2">
-        <div className="flex items-center justify-end gap-2">
-          {!opPanelOpen && hostOps.length > 0 && (
-            <Button
-              variant="outline"
-              data-testid="host-op-panel-reopen"
-              onClick={() => setOpPanelOpen(true)}
-            >
-              安装进度
-              {installPending
-                ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
-                : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败)`}
-            </Button>
-          )}
-          {isAdmin && (
-            <Button onClick={() => setIsModalOpen(true)}>
-              <Plus className="w-4 h-4" />
-              添加主机
-            </Button>
-          )}
-        </div>
+      <div className="flex items-center justify-end gap-2 py-2">
+        {!opPanelOpen && hostOps.length > 0 && (
+          <Button
+            variant="outline"
+            data-testid="host-op-panel-reopen"
+            onClick={() => setOpPanelOpen(true)}
+          >
+            安装进度
+            {installPending
+              ? ` (${hostOps.filter((o) => o.status === 'pending' || o.status === 'running').length} 进行中)`
+              : ` (${hostOps.filter((o) => o.status === 'success').length} 成功 / ${hostOps.filter((o) => o.status === 'failed').length} 失败)`}
+          </Button>
+        )}
         {isAdmin && (
-          <HostBulkActionBar
-            counts={bulkCounts}
-            isAdmin={isAdmin}
-            installPending={installPending}
-            onInstall={handleBulkInstall}
-            onDelete={handleBulkDelete}
-            onClear={() => setSelectedHostIds(new Set())}
-          />
+          <Button onClick={() => setIsModalOpen(true)}>
+            <Plus className="w-4 h-4" />
+            添加主机
+          </Button>
         )}
       </div>
 
@@ -593,6 +595,18 @@ export default function HostsPage() {
             </Button>
           )}
         </Card>
+      )}
+
+      {isAdmin && (
+        <HostBulkActionBar
+          counts={bulkCounts}
+          isAdmin={isAdmin}
+          installPending={installPending}
+          onInstall={handleBulkInstall}
+          onHotUpdate={handleSelectedHotUpdate}
+          onDelete={handleBulkDelete}
+          onClear={() => setSelectedHostIds(new Set())}
+        />
       )}
 
       <AddHostModal

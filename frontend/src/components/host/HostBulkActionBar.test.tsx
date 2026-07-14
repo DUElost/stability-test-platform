@@ -25,6 +25,7 @@ describe('HostBulkActionBar', () => {
         onClear={vi.fn()}
       />,
     );
+    expect(screen.getByTestId('host-bulk-action-bar')).toHaveClass('fixed', 'bottom-4');
     const btn = screen.getByTestId('host-bulk-install');
     expect(btn).toHaveTextContent('首次安装 (2)');
     expect(btn).not.toBeDisabled();
@@ -41,15 +42,32 @@ describe('HostBulkActionBar', () => {
         onClear={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('host-bulk-install')).toHaveTextContent(
-      '安装 Agent (3) · 首次 2 / 重装 1',
-    );
+    expect(screen.getByTestId('host-bulk-install')).toHaveTextContent('安装 Agent (3)');
+    expect(screen.getByText('首次安装 2 · 重新安装 1 · 在线 2')).toBeInTheDocument();
     const hot = screen.getByTestId('host-bulk-hot-update');
     expect(hot).toBeDisabled();
     expect(hot).toHaveAttribute(
       'title',
-      expect.stringContaining('SAQ'),
+      expect.stringContaining('仅选择一台'),
     );
+  });
+
+  it('enables hot update for one selected online host', () => {
+    const onHotUpdate = vi.fn();
+    render(
+      <HostBulkActionBar
+        counts={{ selected: 1, firstInstall: 0, reinstall: 0, hotUpdate: 1 }}
+        isAdmin
+        onInstall={vi.fn()}
+        onHotUpdate={onHotUpdate}
+        onClear={vi.fn()}
+      />,
+    );
+
+    const hot = screen.getByTestId('host-bulk-hot-update');
+    expect(hot).not.toBeDisabled();
+    fireEvent.click(hot);
+    expect(onHotUpdate).toHaveBeenCalledOnce();
   });
 
   it('disables install when no installable hosts', () => {
