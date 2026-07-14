@@ -17,6 +17,37 @@
 
 **Verification order**: agent tests → tsc → build → (backend tests if PG available).
 
+## 生产机调试约束
+
+部分部署机上 **本机 PostgreSQL 即生产库**（如 `backend/.env` 的 `DATABASE_URL=...@localhost:5432/stp_dev`），而 **Docker testcontainers 仅用于隔离测试**。在生产机上改代码时务必遵守：
+
+| 场景 | 做法 |
+|------|------|
+| 日常改码验证 | 优先 `pytest backend/agent/tests/`（不连 PG，~30s） |
+| 必须跑 `backend/tests/` | 使用 **Docker testcontainers**（`conftest.py` 自动起临时 `postgres:16` 容器），**不要**把 `TEST_DATABASE_URL` 指到 `stp_dev` 或任何生产库名 |
+| 迁移试验 | 禁止对生产库执行 `alembic upgrade` 试跑；在开发机/CI 或容器内验证 |
+| 手工 API 冒烟 | 可连生产控制面，但避免破坏性写操作 |
+
+**禁止示例**（会在生产数据上建表/清库/跑用例）：
+
+```bash
+# ❌ 切勿在生产机这样跑后端测试
+export TEST_DATABASE_URL=postgresql+psycopg://...@127.0.0.1:5432/stp_dev
+pytest backend/tests/
+```
+
+**推荐示例**（隔离 PG，与 CI 一致）：
+
+```bash
+# 用户须在 docker 组（一次性：sudo usermod -aG docker $USER && newgrp docker）
+unset TEST_DATABASE_URL   # 让 conftest 走 testcontainers
+JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
+```
+
+- 未设置 `TEST_DATABASE_URL` 时，`backend/tests/conftest.py` 通过 Docker 拉起**独立**测试库，测完销毁。
+- 若 `docker ps` 报 `permission denied`，将当前用户加入 `docker` 组后**重新登录**（或 `newgrp docker`），不要用生产 `DATABASE_URL` 代替。
+- `ALLOW_SQLITE_TESTS=1` 仅适合少量用例；`test_agent_dual_write.py` 等仍需 PostgreSQL partial unique index，不能替代完整 backend 套件。
+
 ## Test quirks
 
 - Backend pytest needs `TEST_DATABASE_URL` (PostgreSQL). Set `ALLOW_SQLITE_TESTS=1` for local SQLite (no PG required, but `test_agent_dual_write.py` skips on SQLite — needs PG partial unique index).

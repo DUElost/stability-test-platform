@@ -17,6 +17,7 @@ venv/
 env/
 .env*
 !.env.example
+!.env.test.example
 !.env.server.example
 !backend/.env.example
 !backend/agent/.env.example
