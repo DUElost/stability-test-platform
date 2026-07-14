@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 # Paths
 _AGENT_SOURCE_DIR = Path(__file__).resolve().parent.parent / "agent"
+_PIPELINE_SCHEMA_FILE = (
+    Path(__file__).resolve().parent.parent / "schemas" / "pipeline_schema.json"
+)
 _REMOTE_INSTALL_DIR = "/opt/stability-test-agent"
 _REMOTE_SERVICE_NAME = "stability-test-agent"
 _REMOTE_TAR_PATH = "/tmp/stp-agent-update.tar.gz"
@@ -102,6 +105,12 @@ def _build_tarball() -> bytes:
                 arcname = os.path.relpath(full_path, _AGENT_SOURCE_DIR)
                 tar.add(full_path, arcname=arcname)
 
+        if _PIPELINE_SCHEMA_FILE.is_file():
+            tar.add(
+                _PIPELINE_SCHEMA_FILE,
+                arcname="stp_schemas/pipeline_schema.json",
+            )
+
     return buf.getvalue()
 
 
@@ -147,6 +156,11 @@ sudo rsync -av --delete \
 CODE_VERSION="{code_version}"
 if [ -n "$CODE_VERSION" ]; then
     echo "$CODE_VERSION" | sudo tee "$INSTALL_DIR/agent/VERSION" > /dev/null
+fi
+
+if [ -f "$TMPDIR/stp_schemas/pipeline_schema.json" ]; then
+    sudo mkdir -p "$INSTALL_DIR/schemas"
+    sudo install -m 0644 "$TMPDIR/stp_schemas/pipeline_schema.json" "$INSTALL_DIR/schemas/pipeline_schema.json"
 fi
 
 if [ "$SYNC_AGENT_SECRET" = "1" ]; then
