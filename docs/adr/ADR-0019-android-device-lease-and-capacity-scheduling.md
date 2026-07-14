@@ -83,7 +83,7 @@ Phase 1 migration 需新增 `device.lease_generation INTEGER NOT NULL DEFAULT 0`
 
 **为什么不用 Redis INCR**：claim/lease 不是热路径（每秒 < 100 次），Postgres 强一致比 Redis 低延迟更重要。Redis 数据回退（AOF 截断、主从切换）会导致 fencing token 重复，旧 Agent 进程的上报可能被误认为合法。
 
-控制面所有接受 Agent 上报的端点（renew、complete、upload log、upload trace）必须校验 `fencing_token == active_lease.fencing_token`。不匹配时返回 409 或记录 stale event，不推进状态机。
+控制面所有接受 Agent 上报的端点必须校验 fencing。运行期 heartbeat/status/trace 只接受 ACTIVE lease；`complete` 在首次终态校验 ACTIVE/grace-held lease，终态重放校验历史 lease token 与 payload digest；终态后的延迟 signal/artifact 上传可校验匹配的历史 lease token、instance、host/job/device 绑定。不匹配时返回结构化 409 并记录 stale/conflict 审计，不推进状态机。
 
 ### 3. 容量模型
 
@@ -154,14 +154,15 @@ Reconciler 作为 APScheduler `IntervalTrigger` job 运行，分多个节奏：
 |--------|------|------|
 | Host heartbeat 超时 | 10-15s | 标记 Host OFFLINE，暂停分配新任务 |
 | Device lease 过期扫描 | 10-15s | lease 过期 → job UNKNOWN，冻结 fencing_token |
-| UNKNOWN grace 超时 | 30s | grace 超时 → job FAILED/ABORTED，释放 lease |
-| Device health 对账 | 30-60s | 设备离线 → 释放或冻结对应任务 |
+| UNKNOWN grace 超时 | 30s | grace 超时 → job FAILED，释放 lease；abort 请求同样先进入 UNKNOWN |
+| Device health 对账 | 30-60s | 设备离线 → RUNNING 转 UNKNOWN 并保留 lease 隔离 |
 | Running job stale 检查 | 30s | job 无心跳/无 step 更新 → 标记 STALE |
 
 **两段式过期处理**（防止网络抖动误杀长稳任务）：
 
-1. **lease 过期**（`expires_at < now`）：标记 job UNKNOWN，冻结旧 fencing_token，停止接受旧上报
-2. **grace 超时**（UNKNOWN 持续 2-5min）：根据重试策略 requeue / FAILED / ABORTED，释放设备 lease
+1. **lease/心跳过期**：`RUNNING → UNKNOWN`，保留 lease 与 fencing token；普通运行期写入停止，Agent 必须先经 recovery 恢复到 RUNNING
+2. **grace 内 recovery**：同 instance 重复 sync 返回 NOOP；同 boot 新 instance 接管时原子提升 generation 并旋转 token，旧 worker 被 fencing
+3. **grace 超时**：`UNKNOWN → FAILED` 并释放 lease；之后晚到终态不得改写，只记录 stale-completion 审计
 
 **Lease TTL 参数**：
 
@@ -222,6 +223,8 @@ Agent 启动流程变为：`discover devices → recovery sync → claim new job
 
 `agent_instance_id` 在 Agent 启动时用 `uuid.uuid4()` 生成，存储到内存和 SQLite。`boot_id` 从 `/proc/sys/kernel/random/boot_id` 读取，用于检测 Host 是否重启过。
 
+Recovery 必须同时校验 `job_id/device_id/host_id/device.host_id/lease.host_id/fencing_token/device_serial`。同一 live instance 的重复 sync 不得再次启动 worker；同 boot 新 instance 的 RESUME 必须携带旋转后的 token 与完整冻结 Job payload。Host reboot 时本地进程视为不可恢复，控制面收敛 Job 并释放 lease。
+
 ### 7. 临时脚本统一
 
 `ScriptBatch` + `ScriptExecution` 不再走独立链路：
@@ -268,8 +271,8 @@ Agent 启动流程变为：`discover devices → recovery sync → claim new job
 
 1. **ADR-0017 双通道原则**：HTTP 是权威写入路径，SocketIO 是展示路径。Lease 操作（acquire/renew/release）必须走 HTTP。
 2. **ADR-0018 单进程约束**：Reconciler 作为 APScheduler 回调运行在 FastAPI 进程内，不引入额外独立进程。
-3. **ADR-0003 状态机保留**：Job 状态转换路径不变（PENDING → RUNNING → COMPLETED/FAILED/ABORTED/UNKNOWN），本次只增补 fencing 校验和 lease 双写。
-4. **ADR-0017 Outbox 幂等保留**：Agent outbox + drain 机制不变，409 冲突语义不变。
+3. **精确状态矩阵**：`PENDING → RUNNING/FAILED/ABORTED`；`RUNNING → COMPLETED/FAILED/ABORTED/UNKNOWN`；`UNKNOWN → RUNNING/FAILED`。禁止 `UNKNOWN → COMPLETED`，晚到终态先 recovery 到 RUNNING。
+4. **Outbox 不丢事实**：终态 outbox 首次写入不可覆盖；未知 409 或 UNKNOWN 必须保留，只有相同终态 payload 已持久化才可 ACK，不同 payload 返回 409 并审计。
 5. **Claim 原子性**：`transition RUNNING + INSERT lease` 必须在同一 savepoint 内完成，任一步失败全部回滚。
 
 ## 影响

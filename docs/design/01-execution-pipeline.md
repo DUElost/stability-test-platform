@@ -16,7 +16,7 @@
     ↓
 [分发] plan_dispatcher(_sync) — 创 PlanRun + N×JobInstance(PENDING)
     ↓
-[Agent] GET /agent/jobs/pending → claim → RUNNING
+[Agent] POST /agent/jobs/claim（版本门禁）→ RUNNING
     ↓
 [pipeline_engine] init → patrol(循环) → teardown
     ↓ step_trace / patrol-heartbeat / log_signal
@@ -63,9 +63,12 @@
 |------|------|
 | PENDING | 已创建，待 Agent claim |
 | RUNNING | Agent 执行中 |
-| COMPLETED / FAILED / ABORTED | 终态 |
+| UNKNOWN | 心跳/进程存活待确认；仍持有 lease，非终态 |
+| COMPLETED / FAILED / ABORTED | 终态；仅 `/jobs/{id}/complete` 可写入 |
 
-**设备锁**：claim 时创 `device_leases` ACTIVE；续期 `LeaseRenewer`；异常由 `recycler` / `session_watchdog` 释放。
+**设备锁**：claim 时创 `device_leases` ACTIVE；续期 `LeaseRenewer`。`RUNNING → UNKNOWN` 时 lease 保留用于设备隔离；仅终态 finalizer 或 UNKNOWN grace 到期释放。Recovery takeover 必须轮换 fencing token。
+
+**中止**：PENDING 可直接 ABORTED；RUNNING 仅记录 `abort_requested` 并要求 Agent 杀掉进程树后通过 `/complete` ACK。ACK 超时先进入 UNKNOWN，不提前释放 lease。
 
 **超时**（`backend/core/job_timeout_config.py`）：
 
@@ -102,9 +105,9 @@
 
 **服务**：`aggregator_sync.py` / `plan_run_aggregation.py`
 
-- 全部 Job 终态后计算 PlanRun：SUCCESS / PARTIAL_SUCCESS / FAILED / DEGRADED  
-- `next_plan_id` 链式触发下游 Plan（`next_plan_triggered` 防重）  
-- 终态可触发 dedup `scan_task`（`STP_DEDUP_AUTO_SCAN`）
+- UNKNOWN 存在时不得聚合终态；全部 Job 终态后计算 SUCCESS / PARTIAL_SUCCESS / FAILED（DEGRADED 仅历史可读，不再生产）
+- lifecycle、watcher_policy、next_plan_id 均以 `PlanRun.plan_snapshot` 为权威；链式触发由 `next_plan_triggered` + 子 Run 唯一约束防重并可补偿
+- 仅 SUCCESS / PARTIAL_SUCCESS 默认触发 dedup `scan_task`；FAILED / ABORTED 需人工确认
 
 **查询聚合 API**（PlanRun 详情页）：
 

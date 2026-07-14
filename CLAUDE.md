@@ -28,7 +28,8 @@
 ## 状态机
 
 - **Job**（集中校验见 `backend/services/state_machine.py` 的 `VALID_TRANSITIONS`）：`PENDING → RUNNING → COMPLETED/FAILED/ABORTED`；`PENDING → FAILED`（recycler 派发超时）；`PENDING → ABORTED`（PlanRun abort）；`RUNNING → UNKNOWN`（recycler/watchdog/reconciler 心跳超时或 patrol stall——**不是**直接到 FAILED）；`UNKNOWN → RUNNING`（grace 内 recovery/sync 恢复）或 `UNKNOWN → FAILED`（grace 到期）
-- **PlanRun**（无集中状态机，靠 `_TERMINAL_PLAN_RUN_STATUSES` 终态守卫防覆盖）：`RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED/DEGRADED`；存在有意的 `FAILED → RUNNING`（precheck 失败后人工重试派发，`precheck/runner.py:retry_plan_run_dispatch`）
+- **PlanRun**（无集中状态机，靠 `_TERMINAL_PLAN_RUN_STATUSES` 终态守卫防覆盖）：新执行仅 `RUNNING → SUCCESS/PARTIAL_SUCCESS/FAILED`；`DEGRADED` 仅历史可读，不再生产。存在有意的 `FAILED → RUNNING`（precheck 失败后人工重试派发，`precheck/runner.py:retry_plan_run_dispatch`）
+- **Agent 终态协议**：`/jobs/{id}/status` 与 `/heartbeat` 仅接受 RUNNING；COMPLETED/FAILED/ABORTED 只能通过 `/jobs/{id}/complete`，相同 payload 幂等、冲突 payload 返回 409。
 
 ---
 

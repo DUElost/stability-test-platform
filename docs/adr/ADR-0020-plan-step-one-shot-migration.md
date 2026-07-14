@@ -188,6 +188,9 @@ CREATE UNIQUE INDEX uniq_plan_run_chain_child
     "description": "对设备进行 Monkey 压力测试并监控日志",
     "failure_threshold": 0.05,
     "patrol_interval_seconds": 60,
+    "timeout_seconds": 86400,
+    "auto_archive_interval_seconds": 3600,
+    "next_plan_id": 2,
     "watcher_policy": {}
   },
   "steps": [
@@ -213,6 +216,7 @@ CREATE UNIQUE INDEX uniq_plan_run_chain_child
 - 进行中的 PlanRun 和 JobInstance 使用创建时刻的 `plan_snapshot` / `pipeline_def`，后续 Plan 编辑不回溯。
 - PlanRun 创建时复制 Plan 的 `failure_threshold`，后续 Plan 修改不影响已创建 PlanRun 的阈值判定。
 - 每个 PlanRun 仅使用其 Plan 自身的 `watcher_policy`，不继承上游 PlanRun 或 root PlanRun 的 watcher_policy。
+- lifecycle timing、watcher、archive 与 `next_plan_id` 都只从 `plan_snapshot` 读取；派发、claim、recovery 和链触发不得回读 live Plan 补值。
 
 链式触发幂等要求：
 
@@ -220,9 +224,10 @@ CREATE UNIQUE INDEX uniq_plan_run_chain_child
 - `root_plan_run_id` 记录链路根运行，便于查询整条执行链。
 - `next_plan_triggered` 防止重复触发。
 - 链式触发仅在上游 PlanRun 终态属于 `SUCCESS` 或 `PARTIAL_SUCCESS` 时执行。
-- `FAILED`、`DEGRADED`、`ABORTED`、`UNKNOWN` 等终态中止执行链。
+- `FAILED` 中止执行链；`DEGRADED` 仅历史可读，`UNKNOWN` 是 Job 非终态，不得触发 PlanRun 聚合。
 - `uniq_plan_run_chain_child` 防止同一个 `parent_plan_run_id + plan_id` 创建重复 next PlanRun。
 - 触发逻辑必须在事务内锁定父 PlanRun 行，检查 `next_plan_triggered = false` 后创建子 PlanRun，再回写 `next_plan_triggered = true`。
+- 子 PlanRun 的门禁任务只在上述事务提交后入队；持久化 sweeper 必须补偿“子 Run 已创建但门禁未入队”和“父 flag 已写但子 Run 缺失”两种中断窗口。
 
 ### 7. JobInstance 作为执行实例直接复用
 
