@@ -9,6 +9,7 @@ import { useSocketIO, disconnectDashSocket } from '@/hooks/useSocketIO';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { useHeaderSlot } from '@/contexts/HeaderSlotContext';
 import { UserMenu } from '@/components/ui/UserMenu';
+import { NotificationBell } from '@/components/ui/NotificationBell';
 import { api } from '@/utils/api';
 import { WS_DASHBOARD_ENDPOINT } from '@/config';
 import { BORDER, ELEVATION, INTERACTIVE, SURFACE, TEXT } from '@/design-system/tokens';
@@ -143,6 +144,8 @@ export default function AppShell() {
                 {dashConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
                 {dashConnected ? '实时连接' : '已断开'}
               </Badge>
+
+              <NotificationBell />
 
               <UserMenu
                 username={currentUser?.username}

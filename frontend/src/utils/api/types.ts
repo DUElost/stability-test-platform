@@ -448,6 +448,29 @@ export interface AlertRule {
   created_at: string;
 }
 
+export interface NotificationLog {
+  id: number;
+  source: 'PLATFORM' | 'ALERTMANAGER';
+  event_type: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  message: string;
+  context: Record<string, any>;
+  read: boolean;
+  created_at: string;
+}
+
+export interface NotificationLogsResponse {
+  items: NotificationLog[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
+export interface UnreadCountResponse {
+  unread: number;
+}
+
 export interface TaskSchedule {
   id: number;
   name: string;

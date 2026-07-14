@@ -2,6 +2,7 @@ import apiClient from './client';
 import type {
   User, NotificationChannel, AlertRule, TaskSchedule, TaskScheduleCreatePayload,
   TaskScheduleUpdatePayload, ScheduleRunNowResult, PaginatedResponse,
+  NotificationLogsResponse, UnreadCountResponse,
 } from './types';
 
 export const users = {
@@ -35,6 +36,14 @@ export const notifications = {
   updateRule: (id: number, data: Partial<{ name: string; event_type: string; channel_id: number; filters: Record<string, any>; enabled: boolean }>) =>
     apiClient.put<AlertRule>(`/notifications/rules/${id}`, data).then(r => r.data),
   deleteRule: (id: number) => apiClient.delete<void>(`/notifications/rules/${id}`).then(r => r.data),
+  listLogs: (skip = 0, limit = 50, unreadOnly = false) =>
+    apiClient.get<NotificationLogsResponse>('/notifications/logs', { params: { skip, limit, unread_only: unreadOnly } }).then(r => r.data),
+  unreadCount: () =>
+    apiClient.get<UnreadCountResponse>('/notifications/logs/unread-count').then(r => r.data),
+  markRead: (id: number) =>
+    apiClient.patch<{ ok: boolean }>(`/notifications/logs/${id}/read`).then(r => r.data),
+  markAllRead: () =>
+    apiClient.post<{ ok: boolean }>('/notifications/logs/read-all').then(r => r.data),
 };
 
 export const schedules = {

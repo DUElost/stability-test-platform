@@ -15,13 +15,17 @@ import {
   ToggleLeft,
   ToggleRight,
   Loader2,
+  CheckCheck,
+  AlertCircle,
+  AlertTriangle,
+  Info,
 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { EmptyState } from '@/components/ui/empty-state';
 import { FORM, INTERACTIVE, MODAL, SEGMENTED, SKELETON_BLOCK, STATUS_CHIP, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 
-type TabKey = 'channels' | 'rules';
+type TabKey = 'channels' | 'rules' | 'logs';
 
 const EVENT_LABELS: Record<string, string> = {
   RUN_COMPLETED: '任务完成',
@@ -213,6 +217,9 @@ export default function NotificationsPage() {
         <button onClick={() => setTab('rules')} className={tabBtnClass(tab === 'rules')}>
           告警规则 ({rules.length})
         </button>
+        <button onClick={() => setTab('logs')} className={tabBtnClass(tab === 'logs')}>
+          通知记录
+        </button>
       </div>
 
       {loading ? (
@@ -289,7 +296,7 @@ export default function NotificationsPage() {
             ))
           )}
         </div>
-      ) : (
+      ) : tab === 'rules' ? (
         <div className="space-y-3">
           <div className="flex justify-end">
             <Button
@@ -349,6 +356,8 @@ export default function NotificationsPage() {
             ))
           )}
         </div>
+      ) : (
+        <NotificationLogsTab />
       )}
 
       {/* Channel Form Modal */}
@@ -474,5 +483,123 @@ export default function NotificationsPage() {
         </div>
       )}
     </PageContainer>
+  );
+}
+
+const SEVERITY_ICON_MAP: Record<string, typeof Info> = {
+  critical: AlertCircle,
+  warning: AlertTriangle,
+  info: Info,
+};
+
+const SEVERITY_COLOR_MAP: Record<string, string> = {
+  critical: 'text-red-500',
+  warning: 'text-amber-500',
+  info: 'text-blue-500',
+};
+
+const SOURCE_LABEL_MAP: Record<string, string> = {
+  PLATFORM: '平台',
+  ALERTMANAGER: '监控',
+};
+
+function NotificationLogsTab() {
+  const qc = useQueryClient();
+  const [page, setPage] = useState(0);
+  const pageSize = 20;
+
+  const logsQ = useQuery({
+    queryKey: ['notification-logs', page],
+    queryFn: () => api.notifications.listLogs(page * pageSize, pageSize),
+  });
+
+  const handleMarkAllRead = async () => {
+    await api.notifications.markAllRead();
+    qc.invalidateQueries({ queryKey: ['notification-logs'] });
+    qc.invalidateQueries({ queryKey: ['notification-unread-count'] });
+  };
+
+  const logs = logsQ.data?.items ?? [];
+  const total = logsQ.data?.total ?? 0;
+  const totalPages = Math.ceil(total / pageSize);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex justify-between items-center">
+        <span className={cn('text-sm', TEXT.caption)}>共 {total} 条通知</span>
+        <Button onClick={handleMarkAllRead} variant="outline" size="sm">
+          <CheckCheck size={14} className="mr-1" /> 全部标为已读
+        </Button>
+      </div>
+
+      {logsQ.isLoading ? (
+        <div className={cn(SKELETON_BLOCK, 'h-64')} />
+      ) : logs.length === 0 ? (
+        <EmptyState
+          title="暂无通知记录"
+          description="平台业务事件和监控告警将在此统一展示"
+          icon={<Bell className="w-16 h-16" />}
+        />
+      ) : (
+        <>
+          <div className="space-y-2">
+            {logs.map((log) => {
+              const Icon = SEVERITY_ICON_MAP[log.severity] ?? Info;
+              return (
+                <Card key={log.id} className={cn('p-4', !log.read && 'border-blue-300 dark:border-blue-800')}>
+                  <div className="flex gap-3">
+                    <Icon className={cn('w-5 h-5 mt-0.5 shrink-0', SEVERITY_COLOR_MAP[log.severity])} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={cn('text-sm font-medium', TEXT.heading)}>{log.title}</span>
+                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded', 'bg-muted', TEXT.caption)}>
+                          {SOURCE_LABEL_MAP[log.source] ?? log.source}
+                        </span>
+                        <span className={cn('text-[10px] px-1.5 py-0.5 rounded', 'bg-muted', TEXT.caption)}>
+                          {log.event_type}
+                        </span>
+                        {!log.read && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500 text-white">未读</span>
+                        )}
+                      </div>
+                      {log.message && (
+                        <p className={cn('text-xs mt-1.5 whitespace-pre-wrap', TEXT.caption)}>{log.message}</p>
+                      )}
+                      <span className={cn('text-[10px] mt-2 block', TEXT.caption)}>
+                        {log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : ''}
+                      </span>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page === 0}
+                onClick={() => setPage(page - 1)}
+              >
+                上一页
+              </Button>
+              <span className={cn('text-sm', TEXT.caption)}>
+                {page + 1} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= totalPages - 1}
+                onClick={() => setPage(page + 1)}
+              >
+                下一页
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   );
 }

@@ -27,7 +27,7 @@ export type {
   RunsByStatus, TestTypeStat, RiskDistribution, RecentRun, ResultsSummary,
   ActivityPoint, ActivityResponse, DeviceMetricPoint, DeviceMetricsResponse,
   CompletionTrendPoint, CompletionTrendResponse,
-  NotificationChannel, AlertRule,
+  NotificationChannel, AlertRule, NotificationLog, NotificationLogsResponse, UnreadCountResponse,
   TaskSchedule, TaskScheduleCreatePayload, TaskScheduleUpdatePayload, ScheduleRunNowResult,
   PaginatedResponse,
   ScriptEntry,
