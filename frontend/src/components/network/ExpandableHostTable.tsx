@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from 'react';
+import { useEffect, useMemo, useRef, useState, Fragment } from 'react';
 import { cn } from '@/lib/utils';
 import { Progress } from '@/components/ui/progress';
 import {
@@ -9,14 +9,17 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { StatusBadge } from '@/components/ui/status-badge';
-import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, Pencil, Trash2 } from 'lucide-react';
-import {
-  resourceUsageBgClass,
-  resourceUsageTextClass,
-} from '@/design-system/tokens';
-import { formatBytesFromGb, formatDurationSeconds, formatLocalTime } from '@/utils/format';
+import { ChevronDown, Server, Cpu, HardDrive, MemoryStick, Clock, Activity, AlertTriangle, CheckCircle2, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
+import { resourceUsageBgClass, resourceUsageTextClass } from '@/design-system/tokens';
+import { formatBytesFromGb, formatDurationSeconds, formatLocalTime, parseIsoToDate } from '@/utils/format';
 
 export interface HostResources {
   cpu_load: number;
@@ -125,6 +128,17 @@ function agentSyncBadgeClass(status: AgentCodeSyncStatus | undefined): string {
   }
 }
 
+function formatHeartbeatLabel(value?: string): string {
+  if (!value) return '—';
+  const date = parseIsoToDate(value);
+  if (!date) return formatLocalTime(value);
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (elapsedSeconds < 60) return '刚刚';
+  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)} 分钟前`;
+  if (elapsedSeconds < 86400) return `${Math.floor(elapsedSeconds / 3600)} 小时前`;
+  return `${Math.floor(elapsedSeconds / 86400)} 天前`;
+}
+
 export function ExpandableHostTable({
   hosts,
   onHotUpdate,
@@ -143,6 +157,13 @@ export function ExpandableHostTable({
 }: ExpandableHostTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
   const selectable = !!onSelectionChange;
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectedCount = selectedIds?.size ?? 0;
+
+  useEffect(() => {
+    if (!selectAllRef.current) return;
+    selectAllRef.current.indeterminate = selectedCount > 0 && selectedCount < hosts.length;
+  }, [hosts.length, selectedCount]);
 
   const toggleSelect = (id: string | number, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -188,7 +209,7 @@ export function ExpandableHostTable({
     <TooltipProvider>
       <div className="space-y-4">
         {/* Summary Stats - 简洁版本 */}
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
           <div className="bg-card rounded-lg border border-border p-3 flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
               <Server className="w-5 h-5 text-muted-foreground" />
@@ -233,33 +254,33 @@ export function ExpandableHostTable({
         </div>
 
         {/* Table */}
-        <div className="bg-card rounded-xl border border-border overflow-x-auto">
-          <Table>
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <Table className="min-w-[720px]">
             <TableHeader>
               <TableRow className="bg-muted/50 hover:bg-muted/50">
                 {selectable && (
                   <TableHead className="w-10 p-3">
                     <input
+                      ref={selectAllRef}
                       type="checkbox"
-                      checked={selectedIds ? selectedIds.size === hosts.length && hosts.length > 0 : false}
+                      checked={selectedCount === hosts.length && hosts.length > 0}
                       onChange={toggleAll}
-                      className="rounded border-border"
+                      aria-label="选择全部主机"
+                      className="h-4 w-4 rounded border-border accent-primary"
                     />
                   </TableHead>
                 )}
                 <TableHead className="w-10"></TableHead>
-                <TableHead className="font-medium">主机名称</TableHead>
-                <TableHead className="font-medium">IP地址</TableHead>
-                <TableHead className="font-medium">状态</TableHead>
-                <TableHead className="font-medium text-center">设备数</TableHead>
-                <TableHead className="font-medium text-center">任务数</TableHead>
-                <TableHead className="font-medium">CPU</TableHead>
-                <TableHead className="font-medium">内存</TableHead>
-                <TableHead className="font-medium">磁盘</TableHead>
-                <TableHead className="font-medium text-center whitespace-nowrap">Watch状态</TableHead>
-                <TableHead className="font-medium whitespace-nowrap">Agent 版本</TableHead>
-                <TableHead className="font-medium text-right">心跳</TableHead>
-                <TableHead className="font-medium text-right">操作</TableHead>
+                <TableHead className="min-w-[150px] font-medium">主机</TableHead>
+                <TableHead className="min-w-[104px] font-medium">状态</TableHead>
+                <TableHead className="min-w-[112px] font-medium text-center whitespace-nowrap">设备 / 任务</TableHead>
+                <TableHead className="min-w-[156px] font-medium 2xl:hidden">资源</TableHead>
+                <TableHead className="hidden min-w-[112px] font-medium 2xl:table-cell">CPU</TableHead>
+                <TableHead className="hidden min-w-[112px] font-medium 2xl:table-cell">内存</TableHead>
+                <TableHead className="hidden min-w-[112px] font-medium 2xl:table-cell">磁盘</TableHead>
+                <TableHead className="w-28 font-medium whitespace-nowrap">Agent</TableHead>
+                <TableHead className="hidden min-w-[96px] font-medium text-right 2xl:table-cell">心跳</TableHead>
+                <TableHead className="min-w-[112px] font-medium text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -272,8 +293,10 @@ export function ExpandableHostTable({
                       key={host.id}
                       className={cn(
                         'cursor-pointer hover:bg-muted/50 transition-colors',
-                        isExpanded && 'bg-muted/50'
+                        isExpanded && 'bg-muted/50',
+                        selectedIds?.has(host.id) && 'bg-primary/5 hover:bg-primary/10',
                       )}
+                      data-state={selectedIds?.has(host.id) ? 'selected' : undefined}
                       onClick={() => toggleRow(host.id)}
                     >
                       {selectable && (
@@ -283,7 +306,8 @@ export function ExpandableHostTable({
                             checked={selectedIds?.has(host.id) ?? false}
                             onClick={(e) => toggleSelect(host.id, e)}
                             onChange={() => {}}
-                            className="rounded border-border"
+                            aria-label={`选择主机 ${host.name ?? host.id}`}
+                            className="h-4 w-4 rounded border-border accent-primary"
                           />
                         </TableCell>
                       )}
@@ -295,50 +319,83 @@ export function ExpandableHostTable({
                           )}
                         />
                       </TableCell>
-                      <TableCell className="p-3 font-medium text-foreground max-w-[200px] truncate" title={host.name ?? ''}>
-                        {host.name}
-                      </TableCell>
-                      <TableCell className="p-3 text-muted-foreground font-mono text-sm">
-                        {host.ip}
+                      <TableCell className="max-w-[200px] p-3">
+                        <div className="truncate font-medium text-foreground" title={host.name ?? ''}>
+                          {host.name}
+                        </div>
+                        <div className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground" title={host.ip}>
+                          {host.ip}
+                        </div>
                       </TableCell>
                       <TableCell className="p-3">
-                        <div className="flex items-center gap-1.5">
-                          <StatusBadge kind="host" status={host.status} size="sm" />
-                          {host.health_status && host.health_status !== 'HEALTHY' && (
-                            <span
-                              className={cn(
-                                'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help',
-                                host.health_status === 'UNSCHEDULABLE'
-                                  ? 'bg-destructive/10 text-destructive'
-                                  : 'bg-warning/10 text-warning'
-                              )}
-                              title={host.health_reasons?.map(r => REASON_LABELS[r] || r).join(', ') || ''}
-                            >
-                              {host.health_status === 'UNSCHEDULABLE' ? '禁调' : '降级'}
-                            </span>
-                          )}
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            <StatusBadge kind="host" status={host.status} size="sm" />
+                            {host.health_status && host.health_status !== 'HEALTHY' && (
+                              <span
+                                className={cn(
+                                  'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium cursor-help',
+                                  host.health_status === 'UNSCHEDULABLE'
+                                    ? 'bg-destructive/10 text-destructive'
+                                    : 'bg-warning/10 text-warning'
+                                )}
+                                title={host.health_reasons?.map(r => REASON_LABELS[r] || r).join(', ') || ''}
+                              >
+                                {host.health_status === 'UNSCHEDULABLE' ? '禁调' : '降级'}
+                              </span>
+                            )}
+                          </div>
+                          <div
+                            className={cn(
+                              'flex items-center gap-1 text-[10px]',
+                              host.watcher_admin_active !== false ? 'text-success' : 'text-destructive',
+                            )}
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-current" />
+                            Watch {host.watcher_admin_active !== false ? '已激活' : '未激活'}
+                          </div>
                         </div>
                       </TableCell>
                       <TableCell className="p-3 text-center">
-                        <span
-                          className={cn(
-                          'inline-flex items-center justify-center min-w-[32px] px-2 py-0.5 rounded-full text-xs font-medium',
-                          (host.device_count || 0) > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground'
+                        <div className="inline-flex items-center gap-1">
+                          <span
+                            className={cn(
+                              'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                              (host.device_count || 0) > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground'
+                            )}
+                            title={host.claim_hint ?? '设备数'}
+                          >
+                            设备 {host.device_count || 0}
+                          </span>
+                          <span className={cn(
+                            'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
+                            (host.active_tasks || 0) > 0 ? 'bg-info/10 text-info' : 'bg-muted/50 text-muted-foreground'
+                          )}>
+                            任务 {host.active_tasks || 0}
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="p-3 2xl:hidden">
+                        {host.resources && host.status === 'ONLINE' ? (
+                          <div className="grid min-w-[150px] grid-cols-3 gap-1.5">
+                            {[
+                              ['CPU', host.resources.cpu_load],
+                              ['内存', host.resources.ram_usage],
+                              ['磁盘', host.resources.disk_usage],
+                            ].map(([label, value]) => (
+                              <div key={String(label)} className="text-center">
+                                <div className="text-[10px] text-muted-foreground">{label}</div>
+                                <div className={cn('font-mono text-[11px]', getResourceColor(Number(value)))}>
+                                  {Number(value).toFixed(0)}%
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/40">-</span>
                         )}
-                          title={host.claim_hint ?? undefined}
-                        >
-                          {host.device_count || 0}
-                        </span>
                       </TableCell>
-                      <TableCell className="p-3 text-center">
-                        <span className={cn(
-                          'inline-flex items-center justify-center min-w-[32px] px-2 py-0.5 rounded-full text-xs font-medium',
-                          (host.active_tasks || 0) > 0 ? 'bg-info/10 text-info' : 'bg-muted/50 text-muted-foreground'
-                        )}>
-                          {host.active_tasks || 0}
-                        </span>
-                      </TableCell>
-                      <TableCell className="p-3">
+                      <TableCell className="hidden p-3 2xl:table-cell">
                         {host.resources && host.status === 'ONLINE' ? (
                           <div className="flex items-center gap-2">
                             <Progress
@@ -354,7 +411,7 @@ export function ExpandableHostTable({
                           <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="p-3">
+                      <TableCell className="hidden p-3 2xl:table-cell">
                         {host.resources && host.status === 'ONLINE' ? (
                           <div className="flex items-center gap-2">
                             <Progress
@@ -370,7 +427,7 @@ export function ExpandableHostTable({
                           <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="p-3">
+                      <TableCell className="hidden p-3 2xl:table-cell">
                         {host.resources && host.status === 'ONLINE' ? (
                           <div className="flex items-center gap-2">
                             <Progress
@@ -386,61 +443,9 @@ export function ExpandableHostTable({
                           <span className="text-muted-foreground/40">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="p-3 text-center">
-                        <div className="inline-flex items-center gap-2">
-                          <span
-                            className={cn(
-                              'rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap',
-                              host.watcher_admin_active !== false
-                                ? 'bg-success/10 text-success'
-                                : 'bg-destructive/10 text-destructive'
-                            )}
-                          >
-                            {host.watcher_admin_active !== false ? '已激活' : '未激活'}
-                          </span>
-                          {onWatcherAdminStateChange && (
-                            <button
-                              role="switch"
-                              aria-checked={host.watcher_admin_active !== false}
-                              aria-label={`${host.name ?? host.id} Watcher 管理开关`}
-                              disabled={
-                                !canManageWatcherAdminState ||
-                                !!isWatcherAdminStateUpdating?.(host.id)
-                              }
-                              data-testid={`watcher-admin-toggle-${host.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onWatcherAdminStateChange(
-                                  host.id,
-                                  !(host.watcher_admin_active !== false),
-                                );
-                              }}
-                              className={cn(
-                                'relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full',
-                                'border-2 border-transparent transition-colors',
-                                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                                'disabled:cursor-not-allowed disabled:opacity-50',
-                                host.watcher_admin_active !== false
-                                  ? 'bg-success'
-                                  : 'bg-muted',
-                              )}
-                            >
-                              <span
-                                className={cn(
-                                  'pointer-events-none inline-block h-4 w-4 rounded-full bg-card shadow-sm',
-                                  'ring-0 transition-transform',
-                                  host.watcher_admin_active !== false
-                                    ? 'translate-x-4'
-                                    : 'translate-x-0',
-                                )}
-                              />
-                            </button>
-                          )}
-                        </div>
-                      </TableCell>
                       <TableCell className="p-3">
                         {host.agent_installed ? (
-                          <div className="flex flex-col gap-1 min-w-[108px]">
+                          <div className="flex w-28 flex-col gap-1">
                             <span
                               className="font-mono text-xs text-foreground truncate"
                               title={formatAgentVersionLabel(host)}
@@ -465,10 +470,13 @@ export function ExpandableHostTable({
                           <span className="text-muted-foreground/40 text-xs">未安装</span>
                         )}
                       </TableCell>
-                      <TableCell className="p-3 text-right text-xs text-muted-foreground">
+                      <TableCell
+                        className="hidden p-3 text-right text-xs text-muted-foreground 2xl:table-cell"
+                        title={host.last_heartbeat ? formatLocalTime(host.last_heartbeat) : undefined}
+                      >
                         {host.last_heartbeat
-                          ? formatLocalTime(host.last_heartbeat)
-                          : '-'}
+                          ? formatHeartbeatLabel(host.last_heartbeat)
+                          : '—'}
                       </TableCell>
                       <TableCell className="p-3 text-right">
                         <div className="inline-flex items-center gap-1.5">
@@ -514,32 +522,37 @@ export function ExpandableHostTable({
                           ) : (
                             <span className="text-muted-foreground/40 text-xs">-</span>
                           )}
-                          {isAdmin && onEdit && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onEdit(host);
-                              }}
-                              aria-label={`${host.name ?? host.id} 编辑`}
-                              className="inline-flex items-center justify-center p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          {isAdmin && onDelete && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDelete(host);
-                              }}
-                              disabled={isDeleting?.(host.id)}
-                              aria-label={`${host.name ?? host.id} 删除`}
-                              className="inline-flex items-center justify-center p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                          {isAdmin && (onEdit || onDelete) && (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={(e) => e.stopPropagation()}
+                                  aria-label={`${host.name ?? host.id} 更多操作`}
+                                  className="inline-flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                >
+                                  <MoreHorizontal className="h-4 w-4" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-32">
+                                {onEdit && (
+                                  <DropdownMenuItem onClick={() => onEdit(host)}>
+                                    <Pencil className="mr-2 h-3.5 w-3.5" />
+                                    编辑
+                                  </DropdownMenuItem>
+                                )}
+                                {onDelete && (
+                                  <DropdownMenuItem
+                                    disabled={isDeleting?.(host.id)}
+                                    onClick={() => onDelete(host)}
+                                    className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                                  >
+                                    <Trash2 className="mr-2 h-3.5 w-3.5" />
+                                    删除
+                                  </DropdownMenuItem>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           )}
                         </div>
                       </TableCell>
@@ -548,7 +561,7 @@ export function ExpandableHostTable({
                     {/* Expanded Details */}
                     {isExpanded && (
                       <TableRow className="bg-muted/50/50 hover:bg-muted/50/50">
-                        <TableCell colSpan={selectable ? 14 : 13} className="p-4">
+                        <TableCell colSpan={selectable ? 12 : 11} className="p-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                             {/* CPU Details */}
                             <div className="bg-card rounded-lg border border-border p-3">
@@ -691,30 +704,81 @@ export function ExpandableHostTable({
                                 <Clock className="w-4 h-4 text-muted-foreground" />
                                 <span className="text-sm font-medium text-foreground">其他</span>
                               </div>
-                              {host.resources ? (
-                                <div className="space-y-1">
-                                  {host.resources.temperature !== undefined && (
-                                    <div className="flex justify-between text-xs">
-                                      <span className="text-muted-foreground">温度</span>
-                                      <span className={cn(
-                                        'font-mono',
-                                        host.resources.temperature > 80 ? 'text-destructive' :
-                                        host.resources.temperature > 60 ? 'text-warning' : 'text-foreground'
-                                      )}>
-                                        {host.resources.temperature.toFixed(1)}°C
-                                      </span>
-                                    </div>
-                                  )}
-                                  {host.resources.uptime_seconds !== undefined && (
-                                    <div className="flex justify-between text-xs">
-                                      <span className="text-muted-foreground">运行时间</span>
-                                      <span className="font-mono text-foreground">{formatDurationSeconds(host.resources.uptime_seconds, 'compact')}</span>
-                                    </div>
-                                  )}
+                              <div className="space-y-1.5">
+                                <div className="flex items-center justify-between gap-2 text-xs">
+                                  <span className="text-muted-foreground">Watch</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className={host.watcher_admin_active !== false ? 'text-success' : 'text-destructive'}>
+                                      {host.watcher_admin_active !== false ? '已激活' : '未激活'}
+                                    </span>
+                                    {onWatcherAdminStateChange && (
+                                      <button
+                                        role="switch"
+                                        aria-checked={host.watcher_admin_active !== false}
+                                        aria-label={`${host.name ?? host.id} Watcher 管理开关`}
+                                        disabled={
+                                          !canManageWatcherAdminState ||
+                                          !!isWatcherAdminStateUpdating?.(host.id)
+                                        }
+                                        data-testid={`watcher-admin-toggle-${host.id}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          onWatcherAdminStateChange(
+                                            host.id,
+                                            !(host.watcher_admin_active !== false),
+                                          );
+                                        }}
+                                        className={cn(
+                                          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full',
+                                          'border-2 border-transparent transition-colors',
+                                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                                          'disabled:cursor-not-allowed disabled:opacity-50',
+                                          host.watcher_admin_active !== false ? 'bg-success' : 'bg-muted',
+                                        )}
+                                      >
+                                        <span
+                                          className={cn(
+                                            'pointer-events-none inline-block h-4 w-4 rounded-full bg-card shadow-sm',
+                                            'ring-0 transition-transform',
+                                            host.watcher_admin_active !== false ? 'translate-x-4' : 'translate-x-0',
+                                          )}
+                                        />
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">无数据</span>
-                              )}
+                                <div className="flex justify-between gap-2 text-xs">
+                                  <span className="text-muted-foreground">最近心跳</span>
+                                  <span
+                                    className="font-mono text-foreground"
+                                    title={host.last_heartbeat ? formatLocalTime(host.last_heartbeat) : undefined}
+                                  >
+                                    {formatHeartbeatLabel(host.last_heartbeat)}
+                                  </span>
+                                </div>
+                                {host.resources && (
+                                  <>
+                                    {host.resources.temperature !== undefined && (
+                                      <div className="flex justify-between text-xs">
+                                        <span className="text-muted-foreground">温度</span>
+                                        <span className={cn(
+                                          'font-mono',
+                                          host.resources.temperature > 80 ? 'text-destructive' :
+                                          host.resources.temperature > 60 ? 'text-warning' : 'text-foreground'
+                                        )}>
+                                          {host.resources.temperature.toFixed(1)}°C
+                                        </span>
+                                      </div>
+                                    )}
+                                    {host.resources.uptime_seconds !== undefined && (
+                                      <div className="flex justify-between text-xs">
+                                        <span className="text-muted-foreground">运行时间</span>
+                                        <span className="font-mono text-foreground">{formatDurationSeconds(host.resources.uptime_seconds, 'compact')}</span>
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </TableCell>
