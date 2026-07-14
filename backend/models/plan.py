@@ -59,6 +59,10 @@ class Plan(Base):
 
     __table_args__ = (
         CheckConstraint(
+            "failure_threshold >= 0.0 AND failure_threshold <= 1.0",
+            name="ck_plan_failure_threshold",
+        ),
+        CheckConstraint(
             "next_plan_id IS NULL OR next_plan_id <> id",
             name="ck_plan_no_self_chain",
         ),

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 
-from sqlalchemy import BigInteger, Column, DateTime, Enum as SAEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Column, DateTime, Enum as SAEnum, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 
@@ -29,6 +30,7 @@ class JobInstance(Base):
     ended_at           = Column(DateTime(timezone=True))
     report_json        = Column(JSONB)
     jira_draft_json    = Column(JSONB)
+    terminal_payload_digest = Column(String(64))
     post_processed_at  = Column(DateTime(timezone=True))
     watcher_started_at = Column(DateTime(timezone=True))
     watcher_stopped_at = Column(DateTime(timezone=True))
@@ -64,6 +66,18 @@ class JobInstance(Base):
         Index("idx_job_instance_status",   "status"),
         Index("idx_job_instance_plan_run_status", "plan_run_id", "status"),
         Index("idx_job_instance_host",      "host_id"),
+        UniqueConstraint(
+            "plan_run_id", "device_id",
+            name="uq_job_instance_plan_run_device",
+        ),
+        Index(
+            "uq_job_active_per_device",
+            "device_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('PENDING', 'RUNNING', 'UNKNOWN')"
+            ),
+        ),
         # ADR-0022: stall 检测 + per-PlanRun 设备矩阵聚合
         Index("idx_job_instance_patrol_heartbeat", "plan_run_id", "last_patrol_heartbeat_at"),
     )
@@ -80,13 +94,16 @@ class StepTrace(Base):
     event_type    = Column(String(32), nullable=False)
     output        = Column(Text)
     error_message = Column(Text)
+    trace_event_id = Column(
+        String(256), nullable=False, default=lambda: uuid4().hex,
+    )
     original_ts   = Column(DateTime(timezone=True), nullable=False)
     created_at    = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     job = relationship("JobInstance", foreign_keys=[job_id], back_populates="step_traces")
 
     __table_args__ = (
-        UniqueConstraint("job_id", "step_id", "event_type", name="uq_step_trace_idempotent"),
+        UniqueConstraint("trace_event_id", name="uq_step_trace_event_id"),
         Index("idx_step_trace_job", "job_id"),
         # ADR-0021/ADR-0022 C5a₂: timeline 端点按 (job_id, stage) GROUP BY 聚合
         Index("idx_step_trace_job_stage", "job_id", "stage"),

@@ -62,6 +62,10 @@ class PlanRun(Base):
 
     __table_args__ = (
         CheckConstraint(
+            "failure_threshold >= 0.0 AND failure_threshold <= 1.0",
+            name="ck_plan_run_failure_threshold",
+        ),
+        CheckConstraint(
             "run_type IN ('MANUAL','SCHEDULE','CHAIN')",
             name="ck_plan_run_type",
         ),
