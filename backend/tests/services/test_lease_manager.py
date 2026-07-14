@@ -17,8 +17,6 @@ from uuid import uuid4
 
 import pytest
 
-from sqlalchemy import select
-
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
@@ -76,7 +74,7 @@ async def _create_seed(db, suffix, host_id=None, serial=None):
         plan_run_id=pr.id, plan_id=plan.id,
         device_id=device.id, host_id=host.id,
         status=JobStatus.PENDING.value,
-        pipeline_def={"version": 1, "stages": []},
+        pipeline_def={"lifecycle": {"init": [], "teardown": []}},
     )
     db.add(job)
     await db.flush()
@@ -104,14 +102,24 @@ class TestAcquireLeaseMain:
             assert lease1 is not None
             await db.commit()
 
-            # 同一设备上创建第二个 JobInstance（不同 job_id）
-            plan = (await db.execute(select(Plan).limit(1))).scalars().first()
-            pr = (await db.execute(select(PlanRun).limit(1))).scalars().first()
+            # 新契约禁止同一 (plan_run_id, device_id) 出现多个 Job。另建
+            # PlanRun，仍用同一设备验证 ACTIVE lease 的跨运行冲突。
+            plan = await db.get(Plan, job.plan_id)
+            pr = PlanRun(
+                plan_id=plan.id,
+                status="RUNNING",
+                failure_threshold=0.1,
+                triggered_by="test",
+                plan_snapshot={"name": plan.name, "plan_id": plan.id},
+                run_type="MANUAL",
+            )
+            db.add(pr)
+            await db.flush()
             job2 = JobInstance(
                 plan_run_id=pr.id, plan_id=plan.id,
                 device_id=did, host_id=host.id,
                 status=JobStatus.COMPLETED.value,
-                pipeline_def={"version": 1, "stages": []},
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
             )
             db.add(job2)
             await db.flush()

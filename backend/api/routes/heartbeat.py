@@ -192,7 +192,14 @@ def _process_heartbeat_with_db(
     host_extra = {}
     # Preserve agent_version / install flags across extra rebuild
     prev_extra = host.extra or {}
-    for keep_key in ("agent_version", "agent_installed", "agent_installed_at"):
+    for keep_key in (
+        "agent_version",
+        "agent_installed",
+        "agent_installed_at",
+        "agent_code_revision",
+        "agent_code_deployed",
+        "agent_code_deployed_at",
+    ):
         if keep_key in prev_extra:
             host_extra[keep_key] = prev_extra[keep_key]
     if payload.extra:
@@ -207,6 +214,8 @@ def _process_heartbeat_with_db(
     # ADR-0020: persist agent_version from heartbeat payload
     if payload.agent_version:
         host_extra["agent_version"] = payload.agent_version
+    if payload.agent_code_revision:
+        host_extra["agent_code_revision"] = payload.agent_code_revision
     # 心跳即证明 Agent 已安装（与 ONLINE/OFFLINE 正交的安装态信号）
     host_extra["agent_installed"] = True
     if not host_extra.get("agent_installed_at"):
@@ -250,12 +259,18 @@ def _process_heartbeat_with_db(
         # Phase 6c: pre-compute busy device IDs from device_leases (replaces lock_run_id)
         existing_device_ids = [d.id for d in existing_devices.values() if d.id]
         busy_device_ids: set[int] = set()
+        active_lease_host_by_device: dict[int, str] = {}
         if existing_device_ids:
-            active_leases = db.query(DeviceLease.device_id).filter(
+            active_leases = db.query(
+                DeviceLease.device_id, DeviceLease.host_id,
+            ).filter(
                 DeviceLease.device_id.in_(existing_device_ids),
                 DeviceLease.status == LeaseStatus.ACTIVE.value,
             ).all()
             busy_device_ids = {row.device_id for row in active_leases}
+            active_lease_host_by_device = {
+                row.device_id: row.host_id for row in active_leases
+            }
 
         for dev_data in devices_data:
             serial = dev_data.get("serial")
@@ -275,6 +290,15 @@ def _process_heartbeat_with_db(
                 db.add(device)
                 db.flush()
                 existing_devices[serial] = device
+
+            lease_host = active_lease_host_by_device.get(device.id)
+            if lease_host is not None and lease_host != host.id:
+                logger.warning(
+                    "device_host_reassignment_blocked serial=%s device=%s "
+                    "reported_host=%s lease_host=%s",
+                    serial, device.id, host.id, lease_host,
+                )
+                continue
 
             device.host_id = host.id
             if dev_data.get("model") is not None:
@@ -364,6 +388,8 @@ def _process_heartbeat_with_db(
 
     db.commit()
 
+    from backend.services.agent_version_gate import resolve_agent_min_version
+
     return {
         "ok": True,
         "host_id": host.id,
@@ -373,4 +399,5 @@ def _process_heartbeat_with_db(
         "capacity": {
             "online_healthy_devices": online_healthy_count,
         },
+        "agent_min_version": resolve_agent_min_version(),
     }, ws_device_updates

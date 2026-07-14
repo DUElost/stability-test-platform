@@ -1,7 +1,11 @@
+import threading
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
+import pytest
+
 from backend.core.database import SessionLocal
+from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
@@ -34,6 +38,12 @@ PATROL_PIPELINE_DEF = {
         "teardown": [],
     }
 }
+
+
+@pytest.fixture(autouse=True)
+def _reset_database_for_recycler_tests(db_session):
+    """Recycler uses SessionLocal directly, so still request DB truncation."""
+    yield
 
 
 def _seed_running_job(
@@ -292,10 +302,203 @@ def test_pending_timeout_fails_with_lease_release_attempt(engine, monkeypatch):
             assert dl.status == LeaseStatus.RELEASED.value, (
                 f"PENDING timeout must release lease; got {dl.status}"
             )
+            audit = (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "job_terminalized",
+                    AuditLog.resource_type == "job_instance",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .one()
+            )
+            assert audit.details["source"] == "recycler_pending_timeout"
         finally:
             db.close()
     finally:
         _cleanup_seed(seed)
+
+
+def test_pending_timeout_rolls_back_when_aggregation_fails(engine, monkeypatch):
+    now = datetime.now(timezone.utc)
+    seed = _seed_pending_job(
+        created_at=now - timedelta(
+            seconds=recycler.DISPATCHED_TIMEOUT_SECONDS + 60,
+        ),
+    )
+
+    def fail_aggregation(*_args, **_kwargs):
+        raise RuntimeError("aggregate unavailable")
+
+    monkeypatch.setattr(
+        "backend.services.aggregator_sync.plan_aggregator_sync",
+        fail_aggregation,
+    )
+    try:
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            with pytest.raises(RuntimeError, match="aggregate unavailable"):
+                with db.begin_nested():
+                    recycler._mark_pending_timeout(
+                        db, job, now, "pending_timeout",
+                    )
+            db.commit()
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.PENDING.value
+            assert (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "job_terminalized",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .count()
+                == 0
+            )
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_postgresql_heartbeat_wins_against_stale_timeout_candidate(engine):
+    now = datetime.now(timezone.utc)
+    stale_at = now - timedelta(
+        seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS + 60,
+    )
+    seed = _seed_running_job(started_at=stale_at, updated_at=stale_at)
+    barrier = threading.Barrier(2)
+    timeout_results: list[bool] = []
+    errors: list[Exception] = []
+
+    def timeout_worker():
+        db = SessionLocal()
+        try:
+            stale_job = db.get(JobInstance, seed["job_id"])
+            barrier.wait(timeout=5)
+            barrier.wait(timeout=5)
+            timeout_results.append(
+                recycler._mark_running_timeout(
+                    db, stale_job, now, "running_timeout",
+                ),
+            )
+            db.commit()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            db.close()
+
+    def heartbeat_worker():
+        db = SessionLocal()
+        try:
+            barrier.wait(timeout=5)
+            db.query(JobInstance).filter(
+                JobInstance.id == seed["job_id"],
+                JobInstance.status == JobStatus.RUNNING.value,
+            ).update(
+                {JobInstance.updated_at: now},
+                synchronize_session=False,
+            )
+            db.commit()
+            barrier.wait(timeout=5)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            db.close()
+
+    try:
+        threads = [
+            threading.Thread(target=timeout_worker),
+            threading.Thread(target=heartbeat_worker),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        assert timeout_results == [False]
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.RUNNING.value
+            assert job.updated_at == now
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_pending_timeout_skips_when_host_has_running_jobs(engine, monkeypatch):
+    """Queued PENDING behind parallel capacity must not be pending_timeout'd."""
+    now = datetime.now(timezone.utc)
+    old_created = now - timedelta(seconds=recycler.DISPATCHED_TIMEOUT_SECONDS + 60)
+    pending_seed = _seed_pending_job(created_at=old_created)
+
+    db = SessionLocal()
+    try:
+        # Sibling RUNNING job on the same host (= Agent still draining queue)
+        sibling_device = Device(
+            serial=f"RQ-{uuid4().hex[:8]}",
+            host_id=pending_seed["host_id"],
+            status="ONLINE",
+            tags=[],
+            created_at=now,
+            adb_connected=True,
+            adb_state="device",
+        )
+        db.add(sibling_device)
+        db.flush()
+        running_job = JobInstance(
+            plan_run_id=pending_seed["plan_run_id"],
+            plan_id=pending_seed["plan_id"],
+            device_id=sibling_device.id,
+            host_id=pending_seed["host_id"],
+            status=JobStatus.RUNNING.value,
+            pipeline_def=PIPELINE_DEF,
+            created_at=old_created,
+            updated_at=now,
+            started_at=now,
+        )
+        db.add(running_job)
+        db.commit()
+        running_job_id = running_job.id
+        sibling_device_id = sibling_device.id
+    finally:
+        db.close()
+
+    monkeypatch.setattr(recycler, "_fill_deferred_post_completions", lambda db, current: 0)
+    monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda db, current: None)
+    monkeypatch.setattr(recycler, "schedule_emit", lambda *args, **kwargs: None)
+    try:
+        recycler.recycle_once()
+
+        db = SessionLocal()
+        try:
+            pending_job = db.get(JobInstance, pending_seed["job_id"])
+            assert pending_job is not None
+            assert pending_job.status == JobStatus.PENDING.value, (
+                f"queued PENDING must stay PENDING; got {pending_job.status}"
+            )
+            running = db.get(JobInstance, running_job_id)
+            assert running is not None
+            assert running.status == JobStatus.RUNNING.value
+        finally:
+            db.close()
+    finally:
+        db = SessionLocal()
+        try:
+            db.query(JobInstance).filter(JobInstance.id == running_job_id).delete()
+            db.query(Device).filter(Device.id == sibling_device_id).delete()
+            db.commit()
+        finally:
+            db.close()
+        _cleanup_seed(pending_seed)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -325,6 +528,85 @@ def test_running_timeout_transitions_to_unknown(engine, monkeypatch):
             assert job.ended_at is not None, "ended_at must be set"
         finally:
             db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_running_timeout_cas_does_not_overwrite_concurrent_completion(engine, monkeypatch):
+    """候选读取后 Agent 完成 Job 时，recycler CAS 不得把 COMPLETED 覆盖成 UNKNOWN。"""
+    from sqlalchemy import update as sa_update
+
+    now = datetime.now(timezone.utc)
+    old_time = now - timedelta(seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS + 60)
+    seed = _seed_running_job(started_at=old_time, updated_at=old_time)
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        stale_db = SessionLocal()
+        try:
+            stale_job = stale_db.get(JobInstance, seed["job_id"])
+            assert stale_job is not None
+            observed_updated_at = stale_job.updated_at
+
+            with SessionLocal.begin() as concurrent_db:
+                concurrent_db.execute(
+                    sa_update(JobInstance)
+                    .where(JobInstance.id == seed["job_id"])
+                    .values(
+                        status=JobStatus.COMPLETED.value,
+                        ended_at=now,
+                        updated_at=now,
+                    )
+                )
+
+            flipped = recycler._mark_running_timeout(
+                stale_db, stale_job, now, "test_completion_race",
+            )
+            stale_db.commit()
+
+            assert flipped is False
+            stale_db.expire_all()
+            completed = stale_db.get(JobInstance, seed["job_id"])
+            assert completed.status == JobStatus.COMPLETED.value
+            assert completed.updated_at != observed_updated_at
+        finally:
+            stale_db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+def test_running_timeout_cas_does_not_overwrite_concurrent_heartbeat(engine, monkeypatch):
+    """候选读取后心跳刷新 updated_at 时，recycler CAS 必须失败并保留 RUNNING。"""
+    from sqlalchemy import update as sa_update
+
+    now = datetime.now(timezone.utc)
+    old_time = now - timedelta(seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS + 60)
+    seed = _seed_running_job(started_at=old_time, updated_at=old_time)
+    _patch_recycler_neutrals(monkeypatch)
+    try:
+        stale_db = SessionLocal()
+        try:
+            stale_job = stale_db.get(JobInstance, seed["job_id"])
+            assert stale_job is not None
+
+            with SessionLocal.begin() as concurrent_db:
+                concurrent_db.execute(
+                    sa_update(JobInstance)
+                    .where(JobInstance.id == seed["job_id"])
+                    .values(updated_at=now)
+                )
+
+            flipped = recycler._mark_running_timeout(
+                stale_db, stale_job, now, "test_heartbeat_race",
+            )
+            stale_db.commit()
+
+            assert flipped is False
+            stale_db.expire_all()
+            running = stale_db.get(JobInstance, seed["job_id"])
+            assert running.status == JobStatus.RUNNING.value
+            assert running.updated_at > old_time
+        finally:
+            stale_db.close()
     finally:
         _cleanup_seed(seed)
 

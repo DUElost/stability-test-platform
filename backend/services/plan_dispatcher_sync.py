@@ -27,6 +27,7 @@ from backend.models.script import Script
 from backend.services.plan_dispatcher_core import (
     PlanDispatchError,
     build_lifecycle_from_steps as _build_lifecycle_from_steps,
+    build_lifecycle_from_snapshot as _build_lifecycle_from_snapshot,
     build_plan_snapshot as _build_plan_snapshot,
     build_preview as _build_preview,
     check_legacy_aee_script_refs as _check_legacy_aee_script_refs,
@@ -40,7 +41,11 @@ from backend.services.state_machine import PlanRunStateMachine
 
 logger = logging.getLogger(__name__)
 
-ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+ACTIVE_JOB_STATUSES = (
+    JobStatus.PENDING.value,
+    JobStatus.RUNNING.value,
+    JobStatus.UNKNOWN.value,
+)
 
 
 
@@ -167,6 +172,8 @@ def _sync_allocate_devices(
             ResourcePool.resource_type == resource_type,
             ResourcePool.is_active.is_(True),
         )
+        .order_by(ResourcePool.id)
+        .with_for_update()
     ).scalars().all()
 
     if not pools:
@@ -314,6 +321,7 @@ def prepare_plan_run(
     parent_plan_run_id: int | None = None,
     root_plan_run_id: int | None = None,
     chain_index: int | None = None,
+    commit: bool = True,
 ) -> PlanRun:
     """ADR-0021 C3 — Stage 1 of dispatch: create PlanRun + plan_snapshot only.
 
@@ -402,8 +410,11 @@ def prepare_plan_run(
         pr.run_context = {**merged_run_ctx, "dispatch_state": dispatch_state}
         flag_modified(pr, "run_context")
 
-    db.commit()
-    db.refresh(pr)
+    if commit:
+        db.commit()
+        db.refresh(pr)
+    else:
+        db.flush()
     logger.info(
         "plan_run_prepared plan=%d plan_run=%d devices=%d type=%s",
         plan_id, pr.id, len(device_ids), run_type,
@@ -425,9 +436,22 @@ def complete_plan_run_dispatch(
     ``dispatch_plan_sync`` after the PlanRun INSERT — relocated here so the
     dispatch gate (SAQ task) can call it independently after precheck.
     """
-    pr = db.get(PlanRun, plan_run_id)
+    pr = db.execute(
+        select(PlanRun)
+        .where(PlanRun.id == plan_run_id)
+        .with_for_update(key_share=True)
+    ).scalar_one_or_none()
     if pr is None:
         raise PlanDispatchError(f"PlanRun {plan_run_id} not found")
+    run_ctx = dict(pr.run_context or {})
+    if pr.status != PlanRunStatus.RUNNING.value or run_ctx.get("abort_requested"):
+        logger.info(
+            "complete_plan_run_dispatch_skip plan_run=%d status=%s abort=%s",
+            plan_run_id,
+            pr.status,
+            bool(run_ctx.get("abort_requested")),
+        )
+        return
 
     existing_jobs = db.execute(
         select(JobInstance.id).where(JobInstance.plan_run_id == plan_run_id).limit(1)
@@ -439,50 +463,13 @@ def complete_plan_run_dispatch(
         )
         return
 
-    plan = db.get(Plan, pr.plan_id)
-    if plan is None:
-        raise PlanDispatchError(f"Plan {pr.plan_id} not found")
+    # Stage 2 is isolated from later Plan/PlanStep edits.  Script availability
+    # and content integrity were verified against this same snapshot by the
+    # dispatch gate; materialization must not silently switch to live rows.
+    lifecycle = _build_lifecycle_from_snapshot(pr.plan_snapshot)
+    if not any(True for _ in _iter_lifecycle_steps({"lifecycle": lifecycle})):
+        raise PlanDispatchError(f"PlanRun {plan_run_id} snapshot has no enabled steps")
 
-    steps = db.execute(
-        select(PlanStep)
-        .where(PlanStep.plan_id == pr.plan_id)
-        .order_by(PlanStep.stage, PlanStep.sort_order)
-    ).scalars().all()
-    if not steps:
-        raise PlanDispatchError(f"Plan {pr.plan_id} has no steps")
-
-    metadata = _fetch_script_metadata(db, steps)
-    missing = _check_script_keys_complete(steps, metadata)
-    if missing:
-        # ADR-0023 C1 阶段 2:prepare 与 complete 之间的窗口内脚本被失活。
-        # 此时 PlanRun 行已存在且前端正在观测,不能回退;转为 FAILED 终态
-        # 供审计,**不 raise**——_drive_dispatch_gate 重读 status 决策。
-        from backend.core.audit import record_audit
-        PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="scripts_unavailable_at_dispatch")
-        pr.ended_at = datetime.now(timezone.utc)
-        pr.result_summary = {
-            "dispatch_failed": True,
-            "missing_scripts": missing,
-        }
-        flag_modified(pr, "result_summary")
-        record_audit(
-            db,
-            action="plan_dispatch_failed",
-            resource_type="plan_run",
-            resource_id=pr.id,
-            details={"missing_scripts": missing, "reason": "scripts_unavailable_at_dispatch"},
-        )
-        db.commit()
-        logger.warning(
-            "plan_dispatch_failed_missing_scripts plan_run=%d missing=%s",
-            plan_run_id, missing,
-        )
-        return
-
-    defaults = _script_defaults(metadata)
-    lifecycle = _build_lifecycle_from_steps(plan, steps, defaults)
-
-    run_ctx = pr.run_context or {}
     device_ids = list(run_ctx.get("dispatch_device_ids") or [])
     if not device_ids:
         raise PlanDispatchError(
@@ -600,7 +587,7 @@ def complete_plan_run_dispatch(
 
         job = JobInstance(
             plan_run_id=pr.id,
-            plan_id=plan.id,
+            plan_id=pr.plan_id,
             device_id=device_id,
             host_id=device_host_map.get(device_id),
             status=JobStatus.PENDING.value,

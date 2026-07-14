@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -88,7 +88,7 @@ class PlanUpdate(BaseModel):
 
     name: Optional[str] = None
     description: Optional[str] = None
-    failure_threshold: Optional[float] = None
+    failure_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
     patrol_interval_seconds: Optional[int] = Field(default=None, ge=1)
     timeout_seconds: Optional[int] = Field(default=None, ge=1)
     auto_archive_interval_seconds: Optional[int] = Field(default=None, ge=1)
@@ -132,7 +132,16 @@ class PlanOut(BaseModel):
 class PlanRunTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    device_ids: List[int]
+    device_ids: List[int] = Field(min_length=1)
+
+    @field_validator("device_ids")
+    @classmethod
+    def validate_unique_device_ids(cls, value: List[int]) -> List[int]:
+        if any(device_id <= 0 for device_id in value):
+            raise ValueError("device_ids must contain positive IDs")
+        if len(value) != len(set(value)):
+            raise ValueError("device_ids must be unique")
+        return value
 
 
 class PlanRunOut(BaseModel):
@@ -265,6 +274,21 @@ def _validate_assembled_lifecycle(
     timeout_seconds: int | None,
 ) -> None:
     """先组装、再用统一的 pipeline_validator 校验。"""
+    has_patrol_steps = any(
+        step.enabled is not False and step.stage == "patrol"
+        for step in steps
+    )
+    if has_patrol_steps != (patrol_interval_seconds is not None):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_PATROL_CONFIGURATION",
+                "message": (
+                    "enabled patrol steps and patrol_interval_seconds "
+                    "must either both exist or both be absent"
+                ),
+            },
+        )
     lifecycle = _assemble_lifecycle_for_validation(
         steps, patrol_interval_seconds, timeout_seconds
     )
@@ -284,6 +308,7 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
         failure_threshold=plan.failure_threshold,
         patrol_interval_seconds=plan.patrol_interval_seconds,
         timeout_seconds=plan.timeout_seconds,
+        auto_archive_interval_seconds=plan.auto_archive_interval_seconds,
         next_plan_id=plan.next_plan_id,
         watcher_policy=plan.watcher_policy,
         created_by=plan.created_by,
@@ -294,6 +319,7 @@ def _plan_out(plan: Plan, steps: list) -> PlanOut:
 
 
 MAX_CHAIN_DEPTH = 20
+_PLAN_DAG_ADVISORY_LOCK_KEY = 0x53545044
 
 
 def _validate_plan_dag(db: Session, plan_id: int | None,
@@ -309,19 +335,18 @@ def _validate_plan_dag(db: Session, plan_id: int | None,
 
     然后顺着 ``next_plan_id`` 走链，最多 ``MAX_CHAIN_DEPTH`` 跳。
     """
+    if not db.get_bind().dialect.name.startswith("sqlite"):
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:pid)"),
+            {"pid": _PLAN_DAG_ADVISORY_LOCK_KEY},
+        )
+
     if next_plan_id is None:
         return
 
     # 自环（仅在 update 场景下有 plan_id）
     if plan_id is not None and next_plan_id == plan_id:
         raise HTTPException(status_code=422, detail="next_plan_id cannot reference self")
-
-    # Advisory lock 目标，缩小锁竞争面：
-    #   - update：锁当前行（防"我"被并发改）
-    #   - create：锁目标 next_plan_id 行（防目标的链路被并发改）
-    if not db.get_bind().dialect.name.startswith("sqlite"):
-        lock_key = plan_id if plan_id is not None else next_plan_id
-        db.execute(text("SELECT pg_advisory_xact_lock(:pid)"), {"pid": int(lock_key)})
 
     target = db.get(Plan, next_plan_id)
     _raise_if_hidden_next_plan(db, target, next_plan_id)
@@ -466,11 +491,11 @@ def update_plan(
         plan.description = payload.description
     if payload.failure_threshold is not None:
         plan.failure_threshold = payload.failure_threshold
-    if payload.patrol_interval_seconds is not None:
-        plan.patrol_interval_seconds = payload.patrol_interval_seconds
-    if payload.timeout_seconds is not None:
-        plan.timeout_seconds = payload.timeout_seconds
     fields_set = getattr(payload, "model_fields_set", set())
+    if "patrol_interval_seconds" in fields_set:
+        plan.patrol_interval_seconds = payload.patrol_interval_seconds
+    if "timeout_seconds" in fields_set:
+        plan.timeout_seconds = payload.timeout_seconds
     if "auto_archive_interval_seconds" in fields_set:
         plan.auto_archive_interval_seconds = payload.auto_archive_interval_seconds
     if payload.watcher_policy is not None:
@@ -507,6 +532,12 @@ def update_plan(
                 enabled=s.enabled,
                 created_at=now,
             ))
+    elif {"patrol_interval_seconds", "timeout_seconds"} & fields_set:
+        _validate_assembled_lifecycle(
+            steps,
+            plan.patrol_interval_seconds,
+            plan.timeout_seconds,
+        )
 
     db.commit()
     db.refresh(plan)

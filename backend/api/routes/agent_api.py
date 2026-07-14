@@ -4,6 +4,7 @@ Authentication: X-Agent-Secret header (compared to AGENT_SECRET env var).
 """
 
 import json
+import hashlib
 import logging
 import os
 import secrets
@@ -18,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.response import ApiResponse, err, ok
 from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
+from backend.core.audit import record_audit_async
 from backend.core.artifact_paths import ArtifactPathError, resolve_local_artifact_path
 from backend.core.database import get_async_db
 from backend.core.metrics import (
@@ -55,13 +57,12 @@ _TERMINAL = {
     JobStatus.ABORTED.value,
 }
 # NOTE: UNKNOWN is intentionally excluded — it is a transient recovery state,
-# not a terminal one.  `JobStateMachine` allows UNKNOWN→COMPLETED/FAILED, but
-# `complete_job()`'s runtime-lease gate (`_get_valid_runtime_lease`, default
-# `allowed_job_statuses={RUNNING}`) rejects a direct complete while the job is
-# still UNKNOWN — the agent must first re-sync via the recovery path
-# (UNKNOWN→RUNNING) before completing normally. This also ensures the
-# heartbeat status-update path (L574) does not trigger premature PlanRun
-# aggregation while a job's true status is still unresolved.
+# not a terminal one.  Valid transitions are UNKNOWN→RUNNING (grace recovery)
+# or UNKNOWN→FAILED (grace expiry).  ``complete_job()``'s runtime-lease gate
+# (``_get_valid_runtime_lease``, default ``allowed_job_statuses={RUNNING}``)
+# rejects direct completion while UNKNOWN — the agent must re-sync via recovery
+# (UNKNOWN→RUNNING) before completing normally.  This also prevents premature
+# PlanRun aggregation while a job's true status is still unresolved.
 
 
 class _LockAcquireFailed(Exception):
@@ -95,7 +96,7 @@ async def _enrich_job_metadata(
 
     返回：
         serial_map:         device_id -> serial
-        watcher_policy_map: job_id    -> watcher_policy (来自 Plan.watcher_policy)
+        watcher_policy_map: job_id    -> watcher_policy (来自 PlanRun.plan_snapshot)
     空 jobs 返回 ({}, {})，避免空集合上的 IN ()（PostgreSQL 会报语法错误）。
     """
     if not jobs:
@@ -107,29 +108,33 @@ async def _enrich_job_metadata(
     )
     serial_map = {row.id: row.serial for row in serial_rows.all()}
 
-    plan_ids = {j.plan_id for j in jobs if j.plan_id is not None}
-    # Plan.watcher_policy (ADR-0020: direct Plan lookup)
-    plan_policy: Dict[int, Optional[dict]] = {}
-    if plan_ids:
-        policy_rows = await db.execute(
-            select(Plan.id, Plan.watcher_policy).where(Plan.id.in_(plan_ids))
-        )
-        plan_policy = {row.id: row.watcher_policy for row in policy_rows.all()}
-
     plan_run_ids = {j.plan_run_id for j in jobs if j.plan_run_id is not None}
     watcher_admin_snapshot_by_run: Dict[int, Dict[str, bool]] = {}
+    watcher_policy_by_run: Dict[int, Optional[dict]] = {}
     if plan_run_ids:
         snapshot_rows = await db.execute(
-            select(PlanRun.id, PlanRun.run_context).where(PlanRun.id.in_(plan_run_ids))
+            select(
+                PlanRun.id,
+                PlanRun.run_context,
+                PlanRun.plan_snapshot,
+            ).where(PlanRun.id.in_(plan_run_ids))
         )
-        watcher_admin_snapshot_by_run = {
-            row.id: extract_dispatch_host_watcher_admin_states(row.run_context)
-            for row in snapshot_rows.all()
-        }
+        for row in snapshot_rows.all():
+            watcher_admin_snapshot_by_run[row.id] = (
+                extract_dispatch_host_watcher_admin_states(row.run_context)
+            )
+            snapshot_plan = (
+                (row.plan_snapshot or {}).get("plan", {})
+                if isinstance(row.plan_snapshot, dict)
+                else {}
+            )
+            watcher_policy_by_run[row.id] = snapshot_plan.get("watcher_policy")
 
     watcher_policy_map = {
         j.id: apply_dispatch_host_watcher_admin_state_to_policy(
-            plan_policy.get(j.plan_id) if j.plan_id is not None else None,
+            watcher_policy_by_run.get(j.plan_run_id)
+            if j.plan_run_id is not None
+            else None,
             host_id=j.host_id,
             dispatch_host_watcher_admin_states=(
                 watcher_admin_snapshot_by_run.get(j.plan_run_id)
@@ -158,14 +163,16 @@ async def _build_recovery_job_payload(
     as a parameter to avoid N+1 queries.
     """
     watcher_policy = None
-    if job.plan_id is not None:
-        plan = await db.get(Plan, job.plan_id)
-        if plan is not None:
-            watcher_policy = plan.watcher_policy
     dispatch_host_watcher_admin_states: Dict[str, bool] = {}
     if job.plan_run_id is not None:
         plan_run = await db.get(PlanRun, job.plan_run_id)
         if plan_run is not None:
+            snapshot_plan = (
+                (plan_run.plan_snapshot or {}).get("plan", {})
+                if isinstance(plan_run.plan_snapshot, dict)
+                else {}
+            )
+            watcher_policy = snapshot_plan.get("watcher_policy")
             dispatch_host_watcher_admin_states = (
                 extract_dispatch_host_watcher_admin_states(plan_run.run_context)
             )
@@ -195,6 +202,7 @@ class ClaimRequest(BaseModel):
     host_id: str
     capacity: int = 10
     agent_instance_id: str = ""   # ADR-0019 Phase 3a
+    agent_version: str = ""
 
 
 class JobOut(BaseModel):
@@ -227,6 +235,7 @@ class StepTraceIn(BaseModel):
     output: Optional[str] = None
     error_message: Optional[str] = None
     original_ts: Optional[str] = None
+    trace_event_id: Optional[str] = None
     fencing_token: str
 
 
@@ -291,6 +300,22 @@ class _RecoverySyncOut(BaseModel):
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 
+def _version_tuple(value: str) -> tuple[int, ...]:
+    raw = (value or "").strip()
+    if "-" in raw:
+        raise ValueError("pre-release Agent versions are not supported")
+    core = raw.split("+", 1)[0]
+    parts = core.split(".")
+    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+        raise ValueError(f"invalid semantic version: {value!r}")
+    return tuple(int(part) for part in parts)
+
+
+def _agent_version_is_supported(agent_version: str, minimum: str) -> bool:
+    from backend.services.agent_version_gate import agent_version_is_supported
+    return agent_version_is_supported(agent_version, minimum)
+
+
 async def _claim_jobs_for_host(
     db: AsyncSession,
     host_id: str,
@@ -317,6 +342,9 @@ async def _claim_jobs_for_host(
     )).scalars().first()
     if not host_row:
         return [], {}  # host not found, no lock acquired — safe early return
+    if host_row.status != HostStatus.ONLINE.value:
+        await db.rollback()
+        return [], {}
 
     # 2. Effective capacity — each device runs at most 1 Job;
     #    Agent's "capacity" is the soft cap on concurrent jobs.
@@ -366,9 +394,11 @@ async def _claim_jobs_for_host(
 
         ranked = (
             select(JobInstance.id, rn)
+            .join(PlanRun, PlanRun.id == JobInstance.plan_run_id)
             .where(
                 JobInstance.device_id.in_(free_device_ids),
                 JobInstance.status == JobStatus.PENDING.value,
+                PlanRun.status == "RUNNING",
             )
         ).subquery("ranked")
 
@@ -517,6 +547,28 @@ async def _resume_expired_lease_for_recovery(
     return True
 
 
+async def _rotate_recovery_lease_token(
+    db: AsyncSession,
+    lease: DeviceLease,
+    *,
+    agent_instance_id: str,
+) -> str:
+    """Fence the previous local worker when a new Agent instance takes over."""
+    device = (await db.execute(
+        select(Device)
+        .where(Device.id == lease.device_id)
+        .with_for_update()
+    )).scalars().first()
+    if device is None:
+        raise HTTPException(status_code=409, detail="recovery device not found")
+    device.lease_generation = int(device.lease_generation or 0) + 1
+    lease.lease_generation = device.lease_generation
+    lease.fencing_token = f"{lease.device_id}:{device.lease_generation}"
+    lease.agent_instance_id = agent_instance_id
+    lease.renewed_at = datetime.now(timezone.utc)
+    return lease.fencing_token
+
+
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/jobs/claim", response_model=ApiResponse[List[JobOut]])
@@ -531,6 +583,24 @@ async def claim_jobs(
     Uses device_leases as the sole conflict source (Phase 2c).
     Response includes device_serial + watcher_policy for Agent JobSession boot.
     """
+    from backend.services.agent_version_gate import (
+        agent_version_is_supported,
+        resolve_agent_min_version,
+    )
+
+    minimum_version = resolve_agent_min_version()
+    if minimum_version and not agent_version_is_supported(
+        payload.agent_version, minimum_version,
+    ):
+        raise HTTPException(
+            status_code=426,
+            detail={
+                "code": "AGENT_UPGRADE_REQUIRED",
+                "agent_version": payload.agent_version,
+                "minimum_version": minimum_version,
+            },
+        )
+
     claimed, fencing_token_map = await _claim_jobs_for_host(
         db, payload.host_id, payload.capacity, payload.agent_instance_id,
     )
@@ -573,18 +643,25 @@ async def update_job_status(
     except ValueError:
         raise HTTPException(status_code=400, detail=f"unknown status: {payload.status}")
 
-    try:
-        JobStateMachine.transition(job, new_status, payload.reason)
-    except InvalidTransitionError as e:
+    if new_status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
+        raise_api_http_error(
+            status_code=409,
+            code="TERMINAL_STATUS_REQUIRES_COMPLETE",
+            message="terminal status must be reported through /jobs/{job_id}/complete",
+        )
+    if new_status != JobStatus.RUNNING:
         raise_api_http_error(
             status_code=409,
             code="INVALID_JOB_TRANSITION",
-            message="job status transition rejected",
+            message="status endpoint only accepts RUNNING",
         )
 
-    if job.status in _TERMINAL:
-        job.ended_at = datetime.now(timezone.utc)
-        await PlanAggregator.on_job_terminal(job, db)
+    # Compatibility endpoint is now heartbeat-only.  Claim already performs
+    # PENDING→RUNNING atomically with lease acquisition, so repeated RUNNING is
+    # a no-op rather than a second state transition.
+    job.updated_at = datetime.now(timezone.utc)
+    if payload.reason:
+        job.status_reason = payload.reason
 
     await db.commit()
     return ok({"job_id": job_id, "status": job.status})
@@ -666,14 +743,14 @@ async def agent_heartbeat(
     await db.commit()
 
     backpressure = await _get_backpressure()
-    from backend import __version__ as backend_version
+    from backend.services.agent_version_gate import resolve_agent_min_version
     return ok(HeartbeatResponse(
         script_catalog_outdated=scripts_outdated,
         backpressure=BackpressureInfo(log_rate_limit=backpressure),
         capacity={
             "online_healthy_devices": online_healthy,
         },
-        agent_min_version=backend_version,
+        agent_min_version=resolve_agent_min_version(),
     ))
 
 
@@ -730,51 +807,14 @@ async def get_pending_jobs(
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
-    """.. deprecated:: Phase 2c
-    Use POST /jobs/claim instead.
-
-    Return PENDING JobInstances for devices on this host (pull model).
-    Internally delegates to _claim_jobs_for_host (same logic as POST /jobs/claim).
-    """
-    # Deprecation headers
-    if response is not None:
-        response.headers["Deprecation"] = "true"
-        response.headers["Sunset"] = "Sat, 01 Nov 2026 00:00:00 GMT"
-    logger.info("agent_get_pending_jobs_deprecated host_id=%s", host_id)
-
-    claimed, fencing_token_map = await _claim_jobs_for_host(
-        db, host_id, limit,
+    """Removed by the one-shot Agent protocol switch; use POST /jobs/claim."""
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "LEGACY_CLAIM_ENDPOINT_REMOVED",
+            "message": "use POST /api/v1/agent/jobs/claim",
+        },
     )
-
-    if not claimed:
-        return ok([])
-
-    # Pre-fetch serial_map for response enrichment
-    serial_map: Dict[int, str] = {}
-    rows = await db.execute(
-        select(Device.id, Device.serial)
-        .where(Device.id.in_([j.device_id for j in claimed]))
-    )
-    serial_map = {row.id: row.serial for row in rows.all()}
-
-    _, watcher_policy_map = await _enrich_job_metadata(db, claimed)
-
-    logger.info(
-        "agent_claimed_jobs: host_id=%s, claimed=%d, device_ids=%s",
-        host_id, len(claimed), [j.device_id for j in claimed],
-    )
-
-    return ok([
-        JobOut(
-            id=j.id, plan_run_id=j.plan_run_id,
-            plan_id=j.plan_id, device_id=j.device_id,
-            device_serial=serial_map.get(j.device_id),
-            host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
-            watcher_policy=watcher_policy_map.get(j.id),
-            fencing_token=fencing_token_map[j.id],
-        )
-        for j in claimed
-    ])
 
 
 @router.post("/jobs/{job_id}/heartbeat", response_model=ApiResponse[dict])
@@ -784,7 +824,7 @@ async def job_heartbeat(
     db: AsyncSession = Depends(get_async_db),
     _=Depends(_verify_agent),
 ):
-    """Keep job alive / transition to RUNNING."""
+    """Keep an already claimed RUNNING job alive."""
     job = await db.get(JobInstance, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
@@ -794,18 +834,20 @@ async def job_heartbeat(
         db,
         job,
         payload.fencing_token,
-        allowed_job_statuses={JobStatus.PENDING.value, JobStatus.RUNNING.value},
+        allowed_job_statuses={JobStatus.RUNNING.value},
     )
     if valid_lease is None:
         raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
 
     target = _RUN_TO_JOB.get(payload.status.upper(), JobStatus.RUNNING)
+    if target != JobStatus.RUNNING:
+        raise_api_http_error(
+            status_code=409,
+            code="TERMINAL_STATUS_REQUIRES_COMPLETE",
+            message="job heartbeat cannot finalize a job; use /complete",
+        )
     now = datetime.now(timezone.utc)
-    try:
-        JobStateMachine.transition(job, target, "agent_heartbeat")
-    except InvalidTransitionError:
-        pass  # idempotent — already in target state
-    if target == JobStatus.RUNNING and job.status == JobStatus.RUNNING.value:
+    if job.status == JobStatus.RUNNING.value:
         if not job.started_at:
             job.started_at = now
         job.updated_at = now
@@ -822,37 +864,200 @@ async def complete_job(
     _=Depends(_verify_agent),
 ):
     """Transition job to a terminal status."""
-    job = await db.get(JobInstance, job_id)
+    job = (await db.execute(
+        select(JobInstance)
+        .where(JobInstance.id == job_id)
+        .with_for_update()
+    )).scalars().first()
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
 
     raw = str(payload.update.get("status", "FAILED")).upper()
     target = _RUN_TO_JOB.get(raw, JobStatus.FAILED)
+    if target not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_TERMINAL_STATUS", "requested_status": raw},
+        )
 
-    # Idempotent: if the job is already in *any* terminal state, skip fencing_token
-    # validation and state transition — the outcome is settled and cannot be changed.
-    # This also prevents infinite 409 retry loops when the agent's outbox drain
-    # retries a completion for a job that was already finalised by another path.
+    completion_fact = {
+        "update": payload.update,
+        "artifact": payload.artifact,
+        "watcher_summary": payload.watcher_summary,
+    }
+    payload_digest = hashlib.sha256(
+        json.dumps(
+            completion_fact,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    # Terminal replay is strictly read-only.  Validate against the historical
+    # lease token so a stale/cross-host Agent cannot rewrite completion facts.
     already_terminal = job.status in _TERMINAL
-
-    # ADR-0019 Phase 4b: fencing_token validation
-    if not already_terminal:
-        valid_lease = await _get_valid_runtime_lease(db, job, payload.fencing_token)
-        if valid_lease is None:
-            raise HTTPException(status_code=409, detail="invalid or expired fencing_token")
-
-    if not already_terminal:
-        try:
-            JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
-        except InvalidTransitionError as exc:
+    if already_terminal:
+        historical_lease = (await db.execute(
+            select(DeviceLease)
+            .where(
+                DeviceLease.device_id == job.device_id,
+                DeviceLease.job_id == job.id,
+                DeviceLease.lease_type == LeaseType.JOB.value,
+            )
+            .order_by(DeviceLease.id.desc())
+        )).scalars().first()
+        if (
+            historical_lease is None
+            or historical_lease.fencing_token != payload.fencing_token
+        ):
+            current_status = job.status
+            await record_audit_async(
+                db,
+                action="stale_job_completion_rejected",
+                resource_type="job",
+                resource_id=job.id,
+                details={
+                    "plan_run_id": job.plan_run_id,
+                    "current_status": current_status,
+                    "reason": "historical_fencing_token_mismatch",
+                },
+                username="agent",
+            )
+            await db.commit()
             raise HTTPException(
                 status_code=409,
                 detail={
-                    "message": str(exc),
-                    "current_status": job.status,
-                    "requested_status": target.value,
+                    "code": "STALE_COMPLETION_TOKEN",
+                    "current_status": current_status,
                 },
             )
+        expected_digest = job.terminal_payload_digest
+        if expected_digest is None:
+            historical_trace = (await db.execute(
+                select(StepTrace).where(
+                    StepTrace.job_id == job_id,
+                    StepTrace.step_id == "__job__",
+                    StepTrace.event_type == "RUN_COMPLETE",
+                )
+            )).scalars().first()
+            if historical_trace is not None and historical_trace.output:
+                try:
+                    historical_fact = json.loads(historical_trace.output)
+                    current_legacy_fact = {
+                        "update": payload.update,
+                        "artifact": payload.artifact,
+                    }
+                    expected_digest = hashlib.sha256(
+                        json.dumps(
+                            historical_fact,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    replay_digest = hashlib.sha256(
+                        json.dumps(
+                            current_legacy_fact,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    replay_digest = ""
+            else:
+                replay_digest = ""
+        else:
+            replay_digest = payload_digest
+        if not expected_digest or not secrets.compare_digest(
+            expected_digest, replay_digest,
+        ):
+            current_status = job.status
+            await record_audit_async(
+                db,
+                action="terminal_payload_conflict",
+                resource_type="job",
+                resource_id=job.id,
+                details={
+                    "plan_run_id": job.plan_run_id,
+                    "current_status": current_status,
+                    "expected_digest": expected_digest,
+                    "received_digest": replay_digest or payload_digest,
+                },
+                username="agent",
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "TERMINAL_PAYLOAD_CONFLICT",
+                    "current_status": current_status,
+                },
+            )
+        current_status = job.status
+        await db.rollback()
+        return ok({"job_id": job_id, "status": current_status, "idempotent": True})
+    else:
+        valid_lease = None
+        if job.status == JobStatus.UNKNOWN.value:
+            # Explicit late-terminal reconciliation: a matching grace-held
+            # token may atomically restore UNKNOWN→RUNNING before completion.
+            # This preserves the terminal outbox fact without adding the
+            # forbidden UNKNOWN→COMPLETED edge to the state machine.
+            candidate = (await db.execute(
+                select(DeviceLease)
+                .where(
+                    DeviceLease.device_id == job.device_id,
+                    DeviceLease.job_id == job.id,
+                    DeviceLease.lease_type == LeaseType.JOB.value,
+                    DeviceLease.status == LeaseStatus.ACTIVE.value,
+                )
+                .with_for_update()
+            )).scalars().first()
+            if (
+                candidate is not None
+                and secrets.compare_digest(
+                    candidate.fencing_token, payload.fencing_token,
+                )
+                and await _resume_expired_lease_for_recovery(
+                    db,
+                    candidate,
+                    job,
+                    candidate.agent_instance_id,
+                    datetime.now(timezone.utc),
+                )
+            ):
+                JobStateMachine.transition(
+                    job, JobStatus.RUNNING, "late_completion_recovery",
+                )
+                valid_lease = candidate
+        if valid_lease is None:
+            valid_lease = await _get_valid_runtime_lease(
+                db, job, payload.fencing_token,
+            )
+        if valid_lease is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "INVALID_OR_EXPIRED_FENCING_TOKEN",
+                    "current_status": job.status,
+                },
+            )
+
+    transition_from_status = job.status
+    try:
+        JobStateMachine.transition(job, target, payload.update.get("error_message") or "")
+    except InvalidTransitionError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "INVALID_JOB_TRANSITION",
+                "message": str(exc),
+                "current_status": job.status,
+                "requested_status": target.value,
+            },
+        )
 
     # 持久化一次性完成快照（log_summary + artifact），为新链路报告读取提供数据闭环。
     snapshot = {
@@ -870,13 +1075,7 @@ async def complete_job(
             )
         )
     ).scalars().first()
-    if existing_snapshot:
-        existing_snapshot.stage = "post_process"
-        existing_snapshot.status = target.value
-        existing_snapshot.output = snapshot_output
-        existing_snapshot.error_message = payload.update.get("error_message")
-        existing_snapshot.original_ts = now_ts
-    else:
+    if existing_snapshot is None:
         db.add(
             StepTrace(
                 job_id=job_id,
@@ -886,38 +1085,70 @@ async def complete_job(
                 event_type="RUN_COMPLETE",
                 output=snapshot_output,
                 error_message=payload.update.get("error_message"),
+                trace_event_id=f"terminal:{job_id}:{payload_digest}",
                 original_ts=now_ts,
                 created_at=datetime.now(timezone.utc),
             )
         )
 
-    # Preserve original ended_at when the job was already terminal —
-    # overwriting it would reset the UNKNOWN→FAILED grace window that the
-    # reconciler computes from ended_at (see device_lease_reconciler.py).
-    if not already_terminal:
-        job.ended_at = datetime.now(timezone.utc)
+    job.ended_at = datetime.now(timezone.utc)
+    job.terminal_payload_digest = payload_digest
 
     # Watcher 摘要回填（来自 Agent JobSession.summary.to_complete_payload）
     # 字段契约见 backend/agent/watcher/contracts.py WatcherSummaryPayload
     if payload.watcher_summary:
         _apply_watcher_summary(job, payload.watcher_summary)
 
-    if job.status in _TERMINAL and not already_terminal:
+    if target == JobStatus.ABORTED:
+        plan_run = (await db.execute(
+            select(PlanRun)
+            .where(PlanRun.id == job.plan_run_id)
+            .with_for_update(key_share=True)
+        )).scalars().first()
+        if plan_run is not None and isinstance(plan_run.run_context, dict):
+            run_context = dict(plan_run.run_context)
+            abort_request = dict(run_context.get("abort_requested") or {})
+            acknowledged = list(
+                abort_request.get("acknowledged_job_ids") or []
+            )
+            if job.id not in acknowledged:
+                acknowledged.append(job.id)
+            abort_request["acknowledged_job_ids"] = acknowledged
+            run_context["abort_requested"] = abort_request
+            plan_run.run_context = run_context
+
+    if job.status in _TERMINAL:
         # M0/Task2: 仅在首次终态桥接 reconciler 计数,避免 outbox 重试重复计数。
         if payload.watcher_summary:
             _bridge_reconciler_metrics(job.host_id, payload.watcher_summary)
             # M4/T4-2: 终态时按 watcher_capability 自增一次(覆盖率监控盘);
             # 与 reconciler 桥接同处 not-already_terminal 守卫内,每 Job 仅计一次。
             record_watcher_capability(job.watcher_capability or "unknown")
-        await PlanAggregator.on_job_terminal(job, db)
-        # Release device lease on terminal state (ADR-0019 Phase 2c: device_leases is source of truth)
+        # Release before aggregation.  Chain dispatch inherits the same devices
+        # and must observe them as free when the terminal transaction commits.
         released = await release_lease(db, job.device_id, job_id, LeaseType.JOB)
         if not released:
             logger.warning("release_lease_miss device=%s job=%s", job.device_id, job_id)
+        await db.flush()
+        await record_audit_async(
+            db,
+            action="job_terminalized",
+            resource_type="job",
+            resource_id=job.id,
+            details={
+                "plan_run_id": job.plan_run_id,
+                "from_status": transition_from_status,
+                "to_status": target.value,
+                "payload_digest": payload_digest,
+                "lease_released": bool(released),
+            },
+            username="agent",
+        )
+        await PlanAggregator.on_job_terminal(job, db)
 
     await db.commit()
 
-    if job.status in _TERMINAL and not already_terminal:
+    if job.status in _TERMINAL:
         # ── SocketIO push: job completed/failed → notify PlanRun subscribers ──
         await broadcast_run_job_update(job.plan_run_id, job_id, job.status)
         run = await db.get(PlanRun, job.plan_run_id)
@@ -1224,6 +1455,8 @@ class LogSignalIn(BaseModel):
     幂等键：(job_id, seq_no)
     """
     job_id:         int
+    fencing_token:  str
+    agent_instance_id: str
     seq_no:         int
     host_id:        str
     device_serial:  str
@@ -1269,6 +1502,17 @@ async def ingest_log_signals(
             validate_log_signal(envelope)
         except ContractViolation as exc:
             raise HTTPException(status_code=400, detail=f"log_signal contract violation: {exc}")
+        job = await db.get(JobInstance, s.job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"job {s.job_id} not found")
+        await _require_job_bound_upload_lease(
+            db,
+            job,
+            fencing_token=s.fencing_token,
+            agent_instance_id=s.agent_instance_id,
+            host_id=s.host_id,
+            device_serial=s.device_serial,
+        )
 
         # detected_at: ISO string → datetime
         try:
@@ -1395,6 +1639,10 @@ class ArtifactIn(BaseModel):
     """
     storage_uri:           str                       # NFS 路径（已由 Agent LogPuller 落盘）
     artifact_type:         str                       # 白名单
+    fencing_token:         str
+    agent_instance_id:     str
+    host_id:               str
+    device_serial:         str
     size_bytes:            Optional[int] = None
     checksum:              Optional[str] = None      # sha256 hex，可选
     source_category:       Optional[str] = None      # AEE | VENDOR_AEE | BUGREPORT（溯源）
@@ -1404,6 +1652,46 @@ class ArtifactIn(BaseModel):
 class ArtifactOut(BaseModel):
     artifact_id: int
     created:     bool   # True=首次插入；False=幂等命中（已存在同 storage_uri）
+
+
+async def _require_job_bound_upload_lease(
+    db: AsyncSession,
+    job: JobInstance,
+    *,
+    fencing_token: str,
+    agent_instance_id: str,
+    host_id: str,
+    device_serial: str,
+) -> DeviceLease:
+    """Authorize active and delayed terminal uploads by historical token."""
+    lease = (await db.execute(
+        select(DeviceLease)
+        .where(
+            DeviceLease.job_id == job.id,
+            DeviceLease.device_id == job.device_id,
+            DeviceLease.lease_type == LeaseType.JOB.value,
+            DeviceLease.fencing_token == fencing_token,
+        )
+        .order_by(DeviceLease.id.desc())
+    )).scalars().first()
+    device = await db.get(Device, job.device_id)
+    if (
+        lease is None
+        or device is None
+        or lease.host_id != host_id
+        or job.host_id != host_id
+        or (
+            job.status not in _TERMINAL
+            and device.host_id != host_id
+        )
+        or lease.agent_instance_id != agent_instance_id
+        or (device.serial or "").strip() != (device_serial or "").strip()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "UPLOAD_FENCING_MISMATCH"},
+        )
+    return lease
 
 
 @router.post("/jobs/{job_id}/artifacts", response_model=ApiResponse[ArtifactOut])
@@ -1449,6 +1737,14 @@ async def ingest_artifact(
     job = await db.get(JobInstance, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
+    await _require_job_bound_upload_lease(
+        db,
+        job,
+        fencing_token=payload.fencing_token,
+        agent_instance_id=payload.agent_instance_id,
+        host_id=payload.host_id,
+        device_serial=payload.device_serial,
+    )
 
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -1579,7 +1875,9 @@ async def recovery_sync(
     _recovery_grace_seconds = 300  # UNKNOWN grace for recovery, matches watchdog
     job_actions: list[_RecoveryAction] = []
     for entry in payload.active_jobs:
-        # Query ACTIVE lease for this device+job (Phase 4b: row lock)
+        # Lock the complete ownership tuple.  Shared AGENT_SECRET authenticates
+        # an Agent process, not a host/job relationship; the fencing token and
+        # relational checks below establish that relationship.
         lease = (await db.execute(
             select(DeviceLease).where(
                 DeviceLease.device_id == entry.device_id,
@@ -1610,64 +1908,79 @@ async def recovery_sync(
                 ))
             continue
 
-        device = await db.get(Device, entry.device_id)
+        job = (await db.execute(
+            select(JobInstance)
+            .where(JobInstance.id == entry.job_id)
+            .with_for_update()
+        )).scalars().first()
+        device = (await db.execute(
+            select(Device)
+            .where(Device.id == entry.device_id)
+            .with_for_update()
+        )).scalars().first()
         actual_serial = ((device.serial or "").strip() if device is not None else "")
         reported_serial = (entry.device_serial or "").strip()
-        if reported_serial:
-            if actual_serial != reported_serial:
-                logger.warning(
-                    "recovery_sync_device_serial_mismatch host=%s job=%s device_id=%s reported=%s actual=%s",
-                    payload.host_id,
-                    entry.job_id,
-                    entry.device_id,
-                    reported_serial,
-                    actual_serial,
-                )
-                job_actions.append(_RecoveryAction(
-                    job_id=entry.job_id,
-                    device_id=entry.device_id,
-                    action="ABORT_LOCAL",
-                    reason="device_serial_mismatch",
-                ))
-                continue
+        ownership_valid = (
+            job is not None
+            and device is not None
+            and job.device_id == entry.device_id
+            and job.host_id == payload.host_id
+            and lease.host_id == payload.host_id
+            and device.host_id == payload.host_id
+            and bool(entry.fencing_token)
+            and secrets.compare_digest(entry.fencing_token, lease.fencing_token)
+            and (not reported_serial or actual_serial == reported_serial)
+        )
+        if not ownership_valid:
+            logger.warning(
+                "recovery_sync_ownership_rejected host=%s job=%s device=%s",
+                payload.host_id, entry.job_id, entry.device_id,
+            )
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                device_id=entry.device_id,
+                action="ABORT_LOCAL",
+                reason="recovery_ownership_mismatch",
+            ))
+            continue
 
-        # D3: legacy lease adoption
         lease_agent_id = lease.agent_instance_id or ""
-
-        is_resume = (
-            lease_agent_id == payload.agent_instance_id
-            or lease_agent_id == payload.host_id
-            or not lease_agent_id
-            or previous_boot_id == payload.boot_id
+        boot_matches = (
+            previous_boot_id == payload.boot_id
+            if previous_boot_id and payload.boot_id
+            else lease_agent_id == payload.agent_instance_id
         )
 
-        if not is_resume:
-            # D7: CLEANUP — boot mismatch → release_lease + job→FAILED
-            job = await db.get(JobInstance, entry.job_id)
-            if job is not None:
-                try:
-                    JobStateMachine.transition(job, JobStatus.FAILED, "recovery_cleanup_boot_mismatch")
-                except InvalidTransitionError:
-                    pass
+        if not boot_matches:
+            # Host reboot invalidates the local process.  Finalize through the
+            # same terminal side effects expected from normal completion.
+            try:
+                JobStateMachine.transition(
+                    job, JobStatus.FAILED, "recovery_cleanup_boot_mismatch",
+                )
+                job.ended_at = now
+            except InvalidTransitionError:
+                pass
             await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+            await db.flush()
+            if job.status == JobStatus.FAILED.value:
+                await PlanAggregator.on_job_terminal(job, db)
             job_actions.append(_RecoveryAction(
                 job_id=entry.job_id, device_id=entry.device_id,
                 action="CLEANUP", reason="boot_id_mismatch",
             ))
             continue
 
-        # ── RESUME path: check job status for UNKNOWN / terminal edge cases ──
-        # Load job with row lock to prevent race with Reconciler
-        job = (await db.execute(
-            select(JobInstance).where(JobInstance.id == entry.job_id).with_for_update()
-        )).scalars().first()
-
-        if job is not None and job.status == JobStatus.UNKNOWN.value:
+        if job.status == JobStatus.UNKNOWN.value:
             # Phase 4b: UNKNOWN→RUNNING resurrection (within grace)
             resumed = await _resume_expired_lease_for_recovery(
                 db, lease, job, payload.agent_instance_id, now, _recovery_grace_seconds,
             )
             if resumed:
+                if lease_agent_id != payload.agent_instance_id:
+                    await _rotate_recovery_lease_token(
+                        db, lease, agent_instance_id=payload.agent_instance_id,
+                    )
                 try:
                     JobStateMachine.transition(job, JobStatus.RUNNING, "recovery_resume_unknown")
                 except InvalidTransitionError:
@@ -1694,7 +2007,7 @@ async def recovery_sync(
                 ))
             continue
 
-        if job is not None and job.status in _TERMINAL:
+        if job.status in _TERMINAL:
             # D5: terminal job with lingering ACTIVE lease → release, ABORT_LOCAL
             await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
             job_actions.append(_RecoveryAction(
@@ -1703,27 +2016,31 @@ async def recovery_sync(
             ))
             continue
 
-        # Guard: job row missing → cannot RESUME. A RESUME without job_payload
-        # would leave the Agent with a zombie active_job that never re-enters
-        # JobSession (so the watcher never re-attaches). Release the lingering
-        # lease and tell the Agent to drop its local record instead.
-        if job is None:
-            await release_lease(db, entry.device_id, entry.job_id, LeaseType.JOB)
+        if job.status != JobStatus.RUNNING.value:
             job_actions.append(_RecoveryAction(
                 job_id=entry.job_id, device_id=entry.device_id,
-                action="ABORT_LOCAL", reason="resume_job_row_missing",
+                action="ABORT_LOCAL", reason=f"job_not_resumable:{job.status}",
             ))
             continue
 
-        # Normal RESUME: legacy adoption / same_boot update
-        if not lease_agent_id or lease_agent_id == payload.host_id:
-            lease.agent_instance_id = payload.agent_instance_id
-            reason = "legacy_lease_adopted"
-        elif previous_boot_id == payload.boot_id and lease_agent_id != payload.agent_instance_id:
-            lease.agent_instance_id = payload.agent_instance_id
-            reason = "same_boot_instance_updated"
-        else:
-            reason = "same_instance"
+        # Repeated sync from the same live instance must not launch a second
+        # local worker.  A new instance on the same boot receives a rotated
+        # token so the old worker is fenced before RESUME is returned.
+        if lease_agent_id == payload.agent_instance_id:
+            job_actions.append(_RecoveryAction(
+                job_id=entry.job_id,
+                device_id=entry.device_id,
+                action="NOOP",
+                fencing_token=lease.fencing_token,
+                device_serial=actual_serial,
+                reason="same_instance_worker_already_owned",
+            ))
+            continue
+
+        await _rotate_recovery_lease_token(
+            db, lease, agent_instance_id=payload.agent_instance_id,
+        )
+        reason = "same_boot_instance_takeover"
 
         job_payload = await _build_recovery_job_payload(
             db,

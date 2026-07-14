@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from backend.services.aggregator_sync import plan_aggregator_sync
 from backend.services.plan_chain_trigger import trigger_next_plan_sync
 from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_dispatcher_sync import dispatch_plan_sync
+from backend.services.precheck.runner import precheck_and_dispatch_task
 
 pytestmark = pytest.mark.integration
 
@@ -39,7 +41,7 @@ def _ack_ok(host_id: str, expected_sha: str) -> dict:
 
 
 def _seed_chain_plans(db_session, gate_chain):
-    child_plan = Plan(name="chain-child", patrol_interval_seconds=60)
+    child_plan = Plan(name="chain-child")
     parent_plan = gate_chain["plan"]
     parent_plan.next_plan_id = None
     db_session.add(child_plan)
@@ -83,9 +85,13 @@ class TestPlanChainDispatchE2E:
         async def _fake_call(host_id, event, data, *, timeout=10.0):
             return _ack_ok(host_id, gate_chain["script"].content_sha256)
 
+        enqueued: list[tuple[str, dict]] = []
         with patch(
             "backend.services.precheck.verify.call_agent_rpc",
             side_effect=_fake_call,
+        ), patch(
+            "backend.services.plan_chain_trigger.enqueue_sync",
+            side_effect=lambda task, **kwargs: enqueued.append((task, kwargs)),
         ):
             parent_run = dispatch_plan_sync(
                 plan_id=parent_plan.id,
@@ -95,6 +101,12 @@ class TestPlanChainDispatchE2E:
                 run_type="MANUAL",
             )
             _complete_parent_and_aggregate(db_session, parent_run)
+            assert enqueued[0][0] == "precheck_and_dispatch_task"
+            asyncio.run(
+                precheck_and_dispatch_task(
+                    {}, plan_run_id=enqueued[0][1]["plan_run_id"],
+                ),
+            )
 
         db_session.expire_all()
         parent_refreshed = db_session.get(PlanRun, parent_run.id)
@@ -144,7 +156,7 @@ class TestPlanChainDispatchE2E:
         db_session.commit()
 
         with patch(
-            "backend.services.plan_chain_trigger.dispatch_plan_sync",
+            "backend.services.plan_chain_trigger.prepare_plan_run",
             side_effect=PlanDispatchError("devices unavailable"),
         ):
             result = trigger_next_plan_sync(parent_refreshed, db_session)

@@ -306,7 +306,7 @@ def gate_chain(db_session):
         nfs_path="/scripts/check_device/v1.0.0/check_device.py",
         content_sha256="aabbcc11", default_params={"timeout": 30},
     )
-    plan = Plan(name="precheck-plan", patrol_interval_seconds=60)
+    plan = Plan(name="precheck-plan")
     db_session.add_all([host_a, host_b, dev_a, dev_b, script, plan])
     db_session.commit()
     db_session.add(PlanStep(
@@ -338,7 +338,7 @@ def single_device_gate_chain(db_session):
         content_sha256="aabbcc11",
         default_params={"timeout": 30},
     )
-    plan = Plan(name="single-device-plan", patrol_interval_seconds=60)
+    plan = Plan(name="single-device-plan")
     db_session.add_all([host, device, script, plan])
     db_session.commit()
     db_session.add(

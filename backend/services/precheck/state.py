@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.core.audit import record_audit
 from backend.models.enums import PlanRunStatus
 from backend.models.host import Device
 from backend.models.plan_run import PlanRun
@@ -163,6 +164,18 @@ def mark_precheck_failed(
     )
     run_ctx["dispatch_state"] = dispatch_state
 
+    record_audit(
+        db,
+        action="plan_dispatch_gate_failed",
+        resource_type="plan_run",
+        resource_id=plan_run_id,
+        details={
+            "error": error,
+            "code": code,
+            "inactive_host_ids": list(inactive_host_ids or []),
+        },
+        username="system",
+    )
     db.commit()
     emit_dispatch_gate_invalidation(
         plan_run_id,

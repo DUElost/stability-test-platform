@@ -369,14 +369,14 @@ def _register_merge_artifacts(db: Session, plan_run_id: int, merge_dir: Path) ->
 # ── 终态触发 helpers（供 aggregator / aggregator_sync 调用）─────────────
 
 _DEDUP_AUTO_ENV = "STP_DEDUP_AUTO_SCAN"
-_PLAN_RUN_TERMINAL = {"SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED"}
+_DEDUP_AUTO_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS"}
 
 
 def should_trigger_dedup(run_status: str) -> bool:
-    """是否应触发终态去重（env 开关 + PlanRun 终态）。"""
+    """Auto-scan successful runs; failed/aborted runs require confirmation."""
     if os.getenv(_DEDUP_AUTO_ENV, "1") != "1":
         return False
-    return run_status in _PLAN_RUN_TERMINAL
+    return run_status in _DEDUP_AUTO_STATUSES
 
 
 async def enqueue_dedup_terminal_async(plan_run_id: int, *, is_final: bool = True) -> None:

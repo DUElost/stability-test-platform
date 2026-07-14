@@ -11,6 +11,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.core.audit import record_audit
 from backend.core.database import SessionLocal
 from backend.core.metrics import record_dispatch_gate
 from backend.models.enums import PlanRunStatus
@@ -344,7 +345,9 @@ def retry_plan_run_dispatch(
     summary = dict(pr.result_summary or {})
     precheck = run_ctx.get("precheck") or {}
     dispatch_state = run_ctx.get("dispatch_state") or {}
-    was_failed = pr.status == "FAILED" and summary.get("precheck_failed")
+    was_failed = pr.status == "FAILED" and (
+        summary.get("precheck_failed") or summary.get("dispatch_failed")
+    )
     eligible = was_failed or (
         pr.status == "RUNNING"
         and (
@@ -362,10 +365,22 @@ def retry_plan_run_dispatch(
     # else: pr.status is already RUNNING (precheck phase failed but the
     # top-level status was never flipped) — this is an idempotent reset, not
     # a real transition, so it intentionally bypasses the state machine.
+    retry_history = list(run_ctx.get("dispatch_attempt_history") or [])
+    retry_history.append({
+        "at": datetime.now(timezone.utc).isoformat(),
+        "triggered_by": triggered_by,
+        "result_summary": summary,
+        "precheck": precheck,
+        "dispatch_state": dispatch_state,
+    })
+    run_ctx["dispatch_attempt_history"] = retry_history
     pr.ended_at = None
     pr.result_summary = None
 
     new_dispatch = initial_dispatch_state()
+    new_dispatch["requeue_attempts"] = (
+        int(dispatch_state.get("requeue_attempts") or 0) + 1
+    )
     new_dispatch["enqueue_key"] = f"precheck:{run_id}"
     run_ctx["dispatch_state"] = new_dispatch
     run_ctx["dispatch_host_watcher_admin_states"] = (
@@ -375,6 +390,18 @@ def retry_plan_run_dispatch(
     )
     pr.run_context = run_ctx
     flag_modified(pr, "run_context")
+    record_audit(
+        db,
+        action="plan_dispatch_retry_requested",
+        resource_type="plan_run",
+        resource_id=run_id,
+        details={
+            "triggered_by": triggered_by,
+            "attempt": len(retry_history),
+            "previous_result": summary,
+        },
+        username=triggered_by,
+    )
     db.commit()
 
     initialise_precheck_state(run_id, db)
@@ -407,6 +434,14 @@ def retry_plan_run_dispatch(
                 "error": str(exc),
             }
             flag_modified(pr, "run_context")
+            record_audit(
+                db,
+                action="plan_dispatch_retry_enqueue_failed",
+                resource_type="plan_run",
+                resource_id=run_id,
+                details={"triggered_by": triggered_by, "error": str(exc)},
+                username=triggered_by,
+            )
             db.commit()
         raise PlanRunDispatchRetryError(
             f"dispatch queue unavailable: {exc}"

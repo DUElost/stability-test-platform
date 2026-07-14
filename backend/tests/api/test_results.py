@@ -3,6 +3,7 @@
 import json
 from datetime import datetime, timedelta, timezone
 
+from backend.models.host import Device
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
@@ -57,12 +58,22 @@ class TestResultsSummary:
         db_session.flush()
 
         pipeline_def = {"lifecycle": {"init": [], "teardown": []}}
+        devices = [sample_device]
+        for index in range(3):
+            device = Device(
+                serial=f"RESULT-{suffix}-{index}",
+                host_id=sample_device.host_id,
+                status="ONLINE",
+            )
+            db_session.add(device)
+            devices.append(device)
+        db_session.flush()
 
         jobs = [
             JobInstance(
                 plan_run_id=plan_run.id,
                 plan_id=plan_smoke.id,
-                device_id=sample_device.id,
+                device_id=devices[0].id,
                 host_id=sample_device.host_id,
                 status="COMPLETED",
                 status_reason=None,
@@ -75,7 +86,7 @@ class TestResultsSummary:
             JobInstance(
                 plan_run_id=plan_run.id,
                 plan_id=plan_stress.id,
-                device_id=sample_device.id,
+                device_id=devices[1].id,
                 host_id=sample_device.host_id,
                 status="FAILED",
                 status_reason="tool failed",
@@ -88,7 +99,7 @@ class TestResultsSummary:
             JobInstance(
                 plan_run_id=plan_run.id,
                 plan_id=plan_stress.id,
-                device_id=sample_device.id,
+                device_id=devices[2].id,
                 host_id=sample_device.host_id,
                 status="ABORTED",
                 status_reason="manual stop",
@@ -101,7 +112,7 @@ class TestResultsSummary:
             JobInstance(
                 plan_run_id=plan_run.id,
                 plan_id=plan_smoke.id,
-                device_id=sample_device.id,
+                device_id=devices[3].id,
                 host_id=sample_device.host_id,
                 status="RUNNING",
                 status_reason=None,

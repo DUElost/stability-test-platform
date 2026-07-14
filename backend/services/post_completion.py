@@ -32,6 +32,18 @@ def run_post_completion(job_id: int, db: Session) -> bool:
         logger.warning("post_completion: job %d not found, skipping", job_id)
         return False
 
+    # Durable chain repair: this task is retried independently from the
+    # terminal request and can recover a process crash between the parent CAS
+    # and child PlanRun creation.
+    try:
+        from backend.services.plan_chain_trigger import reconcile_chain_trigger_sync
+        reconcile_chain_trigger_sync(job.plan_run_id, db)
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "post_completion: chain reconciliation failed for job %d", job_id,
+        )
+
     if job.post_processed_at is not None:
         logger.debug("post_completion: job %d already processed at %s", job_id, job.post_processed_at)
         return True

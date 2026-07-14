@@ -284,7 +284,7 @@ def auto_archive_sweep() -> None:
 
     Selection (one run per plan — avoids scanning every historical terminal run):
       1. If the Plan has a RUNNING PlanRun → that is the active run.
-      2. Else → the latest terminal PlanRun (max id among SUCCESS/FAILED/…).
+      2. Else → the latest successful terminal PlanRun.
 
     Terminal runs: one final scan (``is_final=True``) after ``ended_at + interval``;
     once a ``scan_result_xls`` artifact exists, that run is never scanned again.
@@ -298,11 +298,9 @@ def auto_archive_sweep() -> None:
     from backend.models.plan_run_artifact import PlanRunArtifact
     from backend.services.dedup_scan import enqueue_dedup_terminal_sync
 
-    _TERMINAL = {
+    _AUTO_FINAL_STATUSES = {
         PlanRunStatus.SUCCESS.value,
         PlanRunStatus.PARTIAL_SUCCESS.value,
-        PlanRunStatus.FAILED.value,
-        PlanRunStatus.DEGRADED.value,
     }
     now = datetime.now(timezone.utc)
 
@@ -331,13 +329,18 @@ def auto_archive_sweep() -> None:
                         db.query(PlanRun)
                         .filter(
                             PlanRun.plan_id == plan.id,
-                            PlanRun.status.in_(_TERMINAL),
+                            PlanRun.status.in_(_AUTO_FINAL_STATUSES),
                             PlanRun.ended_at.isnot(None),
                         )
                         .order_by(PlanRun.id.desc())
                         .first()
                     )
                 if run is None:
+                    continue
+                if (
+                    run.status != PlanRunStatus.RUNNING.value
+                    and run.status not in _AUTO_FINAL_STATUSES
+                ):
                     continue
 
                 scan_count = db.execute(
@@ -347,7 +350,7 @@ def auto_archive_sweep() -> None:
                     )
                 ).scalar_one()
 
-                if run.status in _TERMINAL:
+                if run.status in _AUTO_FINAL_STATUSES:
                     if run.ended_at is None or now - run.ended_at < timedelta(seconds=interval):
                         continue
                     if scan_count > 0:

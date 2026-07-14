@@ -55,18 +55,26 @@ def _seed(
             id=host_id, hostname=f"h-{host_id}",
             status=HostStatus.ONLINE.value, created_at=now,
         )
-        device = Device(
-            id=device_id, serial=f"AR-{device_id}", host_id=host_id,
-            status="BUSY", tags=[], created_at=now,
-            adb_connected=True, adb_state="device",
-        )
+        devices = [
+            Device(
+                id=device_id + index,
+                serial=f"AR-{device_id}-{index}",
+                host_id=host_id,
+                status="BUSY",
+                tags=[],
+                created_at=now,
+                adb_connected=True,
+                adb_state="device",
+            )
+            for index in range(len(job_statuses))
+        ]
         plan = Plan(
             name=f"ar-plan-{device_id}",
             description="abort reaper test",
             failure_threshold=0.1,
             created_by="pytest",
         )
-        db.add_all([host, device, plan])
+        db.add_all([host, *devices, plan])
         db.flush()
 
         step = PlanStep(
@@ -88,10 +96,10 @@ def _seed(
         db.flush()
 
         job_ids: list[int] = []
-        for status in job_statuses:
+        for device, status in zip(devices, job_statuses):
             j = JobInstance(
                 plan_run_id=run.id, plan_id=plan.id,
-                device_id=device_id, host_id=host_id, status=status,
+                device_id=device.id, host_id=host_id, status=status,
                 pipeline_def=PIPELINE_DEF, created_at=now, updated_at=now,
                 started_at=now if status == JobStatus.RUNNING.value else None,
             )
@@ -137,7 +145,7 @@ def _cleanup(host_id: str, device_id: int) -> None:
         db.execute(PlanStep.__table__.delete())
         db.execute(PlanRun.__table__.delete())
         db.execute(Plan.__table__.delete())
-        db.execute(Device.__table__.delete().where(Device.id == device_id))
+        db.execute(Device.__table__.delete().where(Device.host_id == host_id))
         db.execute(Host.__table__.delete().where(Host.id == host_id))
         db.commit()
     finally:
@@ -184,8 +192,8 @@ async def test_grace_not_expired_job_untouched():
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_grace_expired_job_transitions_to_aborted():
-    """grace 已到, job 转 ABORTED"""
+async def test_grace_expired_job_transitions_to_unknown():
+    """abort ACK grace 已到时 RUNNING 转 UNKNOWN，且仍为非终态。"""
     host_id, device_id = _new_ids()
     _, job_ids = _seed(
         host_id, device_id,
@@ -204,19 +212,20 @@ async def test_grace_expired_job_transitions_to_aborted():
             assert len(items) == 1
             assert items[0]["type"] == "job_status"
             assert items[0]["job_id"] == job_id
-            assert items[0]["status"] == "ABORTED"
+            assert items[0]["status"] == "UNKNOWN"
+            assert items[0]["plan_run_terminal"] is False
 
             job = await db.get(JobInstance, job_id)
-            assert job.status == JobStatus.ABORTED.value
+            assert job.status == JobStatus.UNKNOWN.value
             assert job.ended_at is not None
-            assert job.status_reason == "aborted_reaper_timeout"
+            assert job.status_reason == "abort_ack_timeout"
     finally:
         _cleanup(host_id, device_id)
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_plan_run_failed_on_abort_v3_override():
-    """PlanRun 转 FAILED (v3 §P4: abort 覆盖 threshold)"""
+async def test_plan_run_stays_running_after_abort_ack_timeout():
+    """UNKNOWN 非终态，abort ACK 超时不得终态化 PlanRun。"""
     host_id, device_id = _new_ids()
     plan_run_id, _ = _seed(
         host_id, device_id,
@@ -236,18 +245,16 @@ async def test_plan_run_failed_on_abort_v3_override():
 
             assert count == 1
             run = await db.get(PlanRun, plan_run_id)
-            assert run.status == "FAILED"
-            assert run.result_summary is not None
-            assert run.result_summary["total"] == 3
-            assert run.result_summary["aborted"] == 1
-            assert run.result_summary["failed_only"] == 1
+            assert run.status == "RUNNING"
+            assert run.ended_at is None
+            assert run.result_summary is None
     finally:
         _cleanup(host_id, device_id)
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_lingering_active_lease_released_on_abort():
-    """残留 ACTIVE lease 被防御性释放"""
+async def test_active_lease_retained_after_abort_ack_timeout():
+    """RUNNING→UNKNOWN 后 ACTIVE lease 保留以隔离设备。"""
     host_id, device_id = _new_ids()
     _, job_ids = _seed(
         host_id, device_id,
@@ -265,6 +272,6 @@ async def test_lingering_active_lease_released_on_abort():
 
             assert count == 1
             lease = await db.get(DeviceLease, lease_id)
-            assert lease.status == LeaseStatus.RELEASED.value
+            assert lease.status == LeaseStatus.ACTIVE.value
     finally:
         _cleanup(host_id, device_id)

@@ -21,8 +21,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from sqlalchemy import DateTime, Integer, case, cast, func, literal, select, update
+from sqlalchemy import DateTime, Integer, case, cast, exists, func, literal, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
+from sqlalchemy.orm import aliased
 
 from backend.core.audit import record_audit
 from backend.core.database import SessionLocal
@@ -45,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 from backend.core.job_timeout_config import (
     DISPATCHED_TIMEOUT_SECONDS,
+    PATROL_STALL_MULTIPLIER,
     PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     running_heartbeat_timeout_seconds,
@@ -53,7 +55,6 @@ RECYCLER_BATCH_SIZE = int(os.getenv("RECYCLER_BATCH_SIZE", "200"))
 ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
 
 # ADR-0022 D10: patrol-heartbeat stall detection
-PATROL_STALL_MULTIPLIER = int(os.getenv("PATROL_STALL_MULTIPLIER", "3"))
 PATROL_STALL_BATCH_LIMIT = int(os.getenv("PATROL_STALL_BATCH_LIMIT", "100"))
 
 
@@ -234,33 +235,47 @@ def _collect_patrol_stall_candidates(db, now: datetime) -> list[tuple[JobInstanc
     return _collect_patrol_stall_candidates_py(db, now)
 
 
-def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
+def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> bool:
     """PENDING timeout → FAILED + release lease (defensive, normally no-op).
 
-    ADR-0019 Phase 4c: PENDING handling unchanged — agent never claimed,
-    so no lease existed in the normal path. release_lease_sync is kept as
-    a safety net.
+    Only for jobs the Agent never claimed while the host had no RUNNING work.
+    Jobs waiting behind an intentional parallel cap must remain PENDING
+    (see recycle_once PENDING filter).
+
+    ADR-0019 Phase 4c: release_lease_sync is kept as a safety net (normal
+    PENDING path has no lease).
     """
     _terminal = {
         JobStatus.COMPLETED.value, JobStatus.FAILED.value,
         JobStatus.ABORTED.value, JobStatus.UNKNOWN.value,
     }
     if job.status in _terminal:
-        return
+        return False
     if job.status != JobStatus.PENDING.value:
-        return  # Phase 4c: only PENDING; RUNNING handled by _mark_running_timeout
+        return False  # Phase 4c: only PENDING; RUNNING handled by _mark_running_timeout
 
     old_status = job.status
-    try:
-        JobStateMachine.transition(job, JobStatus.FAILED, reason)
-    except InvalidTransitionError:
-        logger.info(
-            "recycler_skip_transition job=%d current=%s reason=%s",
-            job.id, job.status, reason,
+    updated = db.execute(
+        update(JobInstance)
+        .execution_options(synchronize_session=False)
+        .where(
+            JobInstance.id == job.id,
+            JobInstance.status == JobStatus.PENDING.value,
         )
-        return
-
-    job.ended_at = now
+        .values(
+            status=JobStatus.FAILED.value,
+            status_reason=reason,
+            ended_at=now,
+            updated_at=now,
+        )
+        .returning(JobInstance.id)
+    ).first()
+    if updated is None:
+        return False
+    db.expire(job)
+    job = db.get(JobInstance, job.id)
+    if job is None:
+        return False
     # Phase 6d: release_lease_sync is now a single UPDATE — no projection,
     # no LeaseProjectionError fallback needed.
     release_lease_sync(db, job.device_id, job.id, LeaseType.JOB)
@@ -271,14 +286,23 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
     except Exception as e:
         from backend.core.metrics import record_plan_run_aggregation_failed
         record_plan_run_aggregation_failed()
-        record_audit(
-            db,
-            action="plan_run_aggregation_failed",
-            resource_type="plan_run",
-            resource_id=job.plan_run_id,
-            details={"job_id": job.id, "error": str(e)[:500]},
-        )
         logger.warning("recycler_aggregation_failed job=%d: %s", job.id, e)
+        raise
+
+    record_audit(
+        db,
+        action="job_terminalized",
+        resource_type="job_instance",
+        resource_id=job.id,
+        details={
+            "plan_run_id": job.plan_run_id,
+            "from_status": old_status,
+            "to_status": JobStatus.FAILED.value,
+            "reason": reason,
+            "source": "recycler_pending_timeout",
+        },
+        username="system",
+    )
 
     # Check if PlanRun became terminal after aggregation (B3)
     plan_run_terminal = False
@@ -322,9 +346,10 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
                 "status": pr.status,
             },
         }, namespace="/dashboard", room=room)
+    return True
 
 
-def _mark_running_timeout(db, job: JobInstance, now: datetime, reason: str) -> None:
+def _mark_running_timeout(db, job: JobInstance, now: datetime, reason: str) -> bool:
     """RUNNING timeout → UNKNOWN (ADR-0019 Phase 4c).
 
     Lease stays ACTIVE — the device remains blocked. Reconciler will
@@ -334,19 +359,28 @@ def _mark_running_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
     FAILED notification.
     """
     if job.status != JobStatus.RUNNING.value:
-        return
+        return False
 
     old_status = job.status
-    try:
-        JobStateMachine.transition(job, JobStatus.UNKNOWN, reason)
-    except InvalidTransitionError:
-        logger.info(
-            "recycler_skip_transition job=%d current=%s reason=%s",
-            job.id, job.status, reason,
+    observed_updated_at = job.updated_at
+    updated = db.execute(
+        update(JobInstance)
+        .execution_options(synchronize_session=False)
+        .where(
+            JobInstance.id == job.id,
+            JobInstance.status == JobStatus.RUNNING.value,
+            JobInstance.updated_at == observed_updated_at,
         )
-        return
-
-    job.ended_at = now
+        .values(
+            status=JobStatus.UNKNOWN.value,
+            status_reason=reason,
+            ended_at=now,
+            updated_at=now,
+        )
+        .returning(JobInstance.id)
+    ).first()
+    if updated is None:
+        return False
 
     task_run_state_changes.labels(from_state=old_status, to_state="UNKNOWN").inc()
     recycler_timeouts.labels(timeout_type="running").inc()
@@ -370,6 +404,7 @@ def _mark_running_timeout(db, job: JobInstance, now: datetime, reason: str) -> N
             "reason": reason,
         },
     }, namespace="/dashboard", room=f"plan_run:{job.plan_run_id}")
+    return True
 
 
 def _mark_patrol_stall(
@@ -534,15 +569,27 @@ def recycle_once() -> None:
     now = datetime.now(timezone.utc)
     pending_deadline = now - timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
 
-    # 1) PENDING timeout — processed in batches to limit memory and
-    #    avoid a single huge transaction.
+    # 1) PENDING timeout — only jobs whose host has *no* RUNNING work.
+    #    Excess PENDING behind Agent parallel capacity must stay queued
+    #    (FIFO claim when slots free), not fail as pending_timeout.
     while True:
         with SessionLocal() as db:
+            running_job = aliased(JobInstance)
+            host_has_running_job = exists(
+                select(1).where(
+                    running_job.host_id == JobInstance.host_id,
+                    running_job.status == JobStatus.RUNNING.value,
+                )
+            )
             batch = (
                 db.query(JobInstance)
                 .filter(
                     JobInstance.status == JobStatus.PENDING.value,
                     JobInstance.created_at < pending_deadline,
+                    or_(
+                        JobInstance.host_id.is_(None),
+                        ~host_has_running_job,
+                    ),
                 )
                 .order_by(JobInstance.id)
                 .limit(RECYCLER_BATCH_SIZE)
@@ -556,7 +603,19 @@ def recycle_once() -> None:
                         _mark_pending_timeout(
                             db, job, now, "pending_timeout: agent never claimed job",
                         )
-                except Exception:
+                except Exception as exc:
+                    record_audit(
+                        db,
+                        action="job_terminalization_failed",
+                        resource_type="job_instance",
+                        resource_id=job.id,
+                        details={
+                            "plan_run_id": job.plan_run_id,
+                            "source": "recycler_pending_timeout",
+                            "error": str(exc)[:500],
+                        },
+                        username="system",
+                    )
                     logger.exception(
                         "recycler_pending_failed job=%d device=%d",
                         job.id, job.device_id,

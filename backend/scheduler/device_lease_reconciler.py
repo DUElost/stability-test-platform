@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy.exc
@@ -44,8 +43,10 @@ from backend.services.state_machine import InvalidTransitionError, JobStateMachi
 
 logger = logging.getLogger(__name__)
 
-from backend.core.job_timeout_config import UNKNOWN_GRACE_SECONDS as _UNKNOWN_GRACE_SECONDS
-_ABORT_REAPER_GRACE_SECONDS = int(os.getenv("ABORT_REAPER_GRACE_SECONDS", "60"))
+from backend.core.job_timeout_config import (
+    ABORT_ACK_GRACE_SECONDS as _ABORT_REAPER_GRACE_SECONDS,
+    UNKNOWN_GRACE_SECONDS as _UNKNOWN_GRACE_SECONDS,
+)
 
 # ── Phase 4b: terminal statuses for D5 cleanup.  Does NOT include UNKNOWN —
 #    UNKNOWN must go through the grace-period branch.
@@ -79,12 +80,22 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
     failed_count = 0
     terminal_released_count = 0
 
-    for lease in expired:
-        job_id = lease.job_id
-        device_id = lease.device_id
-
+    for candidate in expired:
         try:
             async with db.begin_nested():
+                lease = (await db.execute(
+                    select(DeviceLease)
+                    .where(DeviceLease.id == candidate.id)
+                    .with_for_update()
+                )).scalars().first()
+                if (
+                    lease is None
+                    or lease.status != LeaseStatus.ACTIVE.value
+                    or lease.expires_at >= now
+                ):
+                    continue
+                job_id = lease.job_id
+                device_id = lease.device_id
                 if job_id is None:
                     # Orphan lease (no associated job) — release it directly
                     lease.status = LeaseStatus.RELEASED.value
@@ -96,7 +107,11 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
                     continue
 
                 try:
-                    job = await db.get(JobInstance, job_id)
+                    job = (await db.execute(
+                        select(JobInstance)
+                        .where(JobInstance.id == job_id)
+                        .with_for_update()
+                    )).scalars().first()
                 except Exception:
                     logger.warning("reconciler_job_load_failed job=%s", job_id, exc_info=True)
                     continue
@@ -161,7 +176,7 @@ async def _reconcile_expired_leases(db) -> tuple[int, int, int]:
         except Exception:
             logger.exception(
                 "reconciler_expired_lease_failed lease=%s device=%s job=%s",
-                lease.id, device_id, job_id,
+                candidate.id, candidate.device_id, candidate.job_id,
             )
 
     return unknown_count, failed_count, terminal_released_count
@@ -188,9 +203,21 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
     )).scalars().all()
 
     failed = 0
-    for job in stale:
+    for candidate in stale:
         try:
             async with db.begin_nested():
+                job = (await db.execute(
+                    select(JobInstance)
+                    .where(JobInstance.id == candidate.id)
+                    .with_for_update()
+                )).scalars().first()
+                if (
+                    job is None
+                    or job.status != JobStatus.UNKNOWN.value
+                    or job.ended_at is None
+                    or job.ended_at >= grace_deadline
+                ):
+                    continue
                 # If there's still an ACTIVE lease, release it
                 active_lease = (await db.execute(
                     select(DeviceLease).where(
@@ -217,7 +244,7 @@ async def _reconcile_stale_unknown_jobs(db) -> int:
         except Exception:
             logger.exception(
                 "reconciler_stale_unknown_failed device=%s job=%s",
-                job.device_id, job.id,
+                candidate.device_id, candidate.id,
             )
 
     return failed
@@ -264,7 +291,7 @@ async def _reconcile_terminal_job_active_leases(db) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Check 0 (v3): abort reaper — RUNNING + abort_requested + grace → ABORTED
+# Check 0: abort reaper — RUNNING + abort_requested + grace → UNKNOWN
 # ═══════════════════════════════════════════════════════════════════════════════
 
 _ABORT_REAPER_BROADCASTS: dict[str, list[dict]] = {}
@@ -272,8 +299,8 @@ _ABORT_REAPER_BROADCASTS: dict[str, list[dict]] = {}
 
 async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     """P1: 扫描 RUNNING job 且 PlanRun.run_context 含 abort_requested 且
-    grace 已到 → 防御性释放 lease → JobStateMachine.transition ABORTED →
-    PlanAggregator 驱动 PlanRun 终态聚合。
+    grace 已到 → JobStateMachine.transition UNKNOWN，保留 ACTIVE lease 隔离
+    设备。UNKNOWN grace 到期后再由标准 reconciler FAILED + release。
 
     返回 (aborted_count, broadcast_items) — 每项 dict:
         {type, job_id, plan_run_id, status, plan_run_terminal}
@@ -311,18 +338,22 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
             )
         )).all()
 
-    aborted_count = 0
+    unknown_count = 0
     broadcast_items: list[dict] = []
 
-    for job, pr in rows:
+    for candidate, pr in rows:
         try:
             async with db.begin_nested():
-                # 防御性释放任何残留 ACTIVE lease
-                await release_lease(db, job.device_id, job.id, LeaseType.JOB)
-
+                job = (await db.execute(
+                    select(JobInstance)
+                    .where(JobInstance.id == candidate.id)
+                    .with_for_update()
+                )).scalars().first()
+                if job is None or job.status != JobStatus.RUNNING.value:
+                    continue
                 try:
                     JobStateMachine.transition(
-                        job, JobStatus.ABORTED, "aborted_reaper_timeout",
+                        job, JobStatus.UNKNOWN, "abort_ack_timeout",
                     )
                 except InvalidTransitionError:
                     logger.debug(
@@ -332,32 +363,27 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
                     continue
 
                 job.ended_at = now
-
-                # 驱动 PlanRun 终态聚合
                 plan_run_terminal = False
-                applied, new_pr_status = await PlanAggregator.on_job_terminal(job, db)
-                plan_run_terminal = applied
-
-                aborted_count += 1
+                unknown_count += 1
                 broadcast_items.append({
                     "type": "job_status",
                     "job_id": job.id,
                     "plan_run_id": job.plan_run_id,
-                    "status": "ABORTED",
+                    "status": "UNKNOWN",
                     "plan_run_terminal": plan_run_terminal,
                 })
 
                 logger.warning(
-                    "abort_reaper job=%d plan_run=%d -> ABORTED",
+                    "abort_reaper job=%d plan_run=%d -> UNKNOWN (lease retained)",
                     job.id, job.plan_run_id,
                 )
         except Exception:
             logger.exception(
                 "abort_reaper_failed job=%d plan_run=%d",
-                job.id, job.plan_run_id,
+                candidate.id, candidate.plan_run_id,
             )
 
-    return aborted_count, broadcast_items
+    return unknown_count, broadcast_items
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -440,11 +466,11 @@ def _record_check(label: str, outcome: str, result) -> None:
         reconciler_runs.labels(check=label, outcome=outcome).inc()
 
         if label == "aborted_running_jobs" and result is not None:
-            aborted_count, _broadcast_items = result
-            if aborted_count:
+            unknown_count, _broadcast_items = result
+            if unknown_count:
                 reconciler_actions.labels(
-                    action="to_aborted", reason="abort_reaper_timeout",
-                ).inc(aborted_count)
+                    action="to_unknown", reason="abort_ack_timeout",
+                ).inc(unknown_count)
         elif label == "expired_leases" and result is not None:
             unknown, failed, terminal = result
             if unknown:

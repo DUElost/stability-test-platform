@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 # 项目约定：API 层契约测试仅在 PostgreSQL 下运行（pg_insert + 跨 engine seed 验证）。
 # 命令：TEST_DATABASE_URL=postgresql+psycopg://... python -m pytest <this>
@@ -111,7 +112,14 @@ def _seed_job_with_policy(
             plan_id=plan.id,
             status="RUNNING",
             failure_threshold=0.1,
-            plan_snapshot={"name": plan.name, "plan_id": plan.id},
+            plan_snapshot={
+                "plan": {
+                    "id": plan.id,
+                    "name": plan.name,
+                    "watcher_policy": watcher_policy,
+                },
+                "steps": [],
+            },
             run_type="MANUAL",
             triggered_by="pytest",
             run_context=run_context,
@@ -225,7 +233,9 @@ async def test_claim_returns_device_serial_and_watcher_policy():
     try:
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
-                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
                 db=async_db,
                 _=None,
             )
@@ -252,7 +262,9 @@ async def test_claim_returns_null_watcher_policy_when_plan_has_none():
     try:
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
-                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
                 db=async_db,
                 _=None,
             )
@@ -291,7 +303,9 @@ async def test_claim_overrides_watcher_policy_to_disabled_when_dispatch_snapshot
 
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
-                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
                 db=async_db,
                 _=None,
             )
@@ -543,8 +557,24 @@ async def test_complete_without_watcher_summary_keeps_columns_null():
 # ----------------------------------------------------------------------
 
 def _make_signal(job_id: int, device_serial: str, host_id: str, seq_no: int, **overrides) -> LogSignalIn:
+    db = SessionLocal()
+    try:
+        lease = (
+            db.query(DeviceLease)
+            .filter(DeviceLease.job_id == job_id)
+            .order_by(DeviceLease.id.desc())
+            .first()
+        )
+        fencing_token = lease.fencing_token if lease is not None else "missing-lease"
+        agent_instance_id = (
+            lease.agent_instance_id if lease is not None else host_id
+        )
+    finally:
+        db.close()
     base = dict(
         job_id=job_id,
+        fencing_token=fencing_token,
+        agent_instance_id=agent_instance_id,
         seq_no=seq_no,
         host_id=host_id,
         device_serial=device_serial,
@@ -561,6 +591,7 @@ def _make_signal(job_id: int, device_serial: str, host_id: str, seq_no: int, **o
 async def test_log_signals_inserts_unique_per_seq_no():
     """同 (job_id, seq_no) 重复上送只入库一次（ON CONFLICT DO NOTHING）。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
     sig1 = _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=1)
     try:
         async with AsyncSessionLocal() as async_db:
@@ -603,6 +634,7 @@ async def test_log_signals_inserts_unique_per_seq_no():
 async def test_log_signals_increments_log_signal_count():
     """批量 3 条不同 seq_no → job_instance.log_signal_count += 3。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
     signals = [
         _make_signal(seed["job_id"], seed["device_serial"], seed["host_id"], seq_no=i, category="ANR")
         for i in range(1, 4)
@@ -654,6 +686,7 @@ async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatc
     并附带正确的 plan_run_id / job_id / device_serial / category。
     冲突丢弃的不应触发推送。"""
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
     plan_run_id = seed["plan_run_id"]
     captured: list[dict] = []
 
@@ -708,6 +741,31 @@ async def test_log_signals_broadcasts_watcher_signal_per_inserted_row(monkeypatc
             )
         assert r2.data == {"inserted": 0, "total": 1}
         assert captured == [], "broadcast must not fire for ON CONFLICT no-ops"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_log_signals_reject_upload_fencing_mismatch():
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
+    signal = _make_signal(
+        seed["job_id"],
+        seed["device_serial"],
+        seed["host_id"],
+        seq_no=1,
+        fencing_token="stale-worker-token",
+    )
+    try:
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as excinfo:
+                await ingest_log_signals(
+                    payload=LogSignalBatchIn(signals=[signal]),
+                    db=async_db,
+                    _=None,
+                )
+        assert excinfo.value.status_code == 409
+        assert excinfo.value.detail["code"] == "UPLOAD_FENCING_MISMATCH"
     finally:
         _cleanup_seed(seed)
 

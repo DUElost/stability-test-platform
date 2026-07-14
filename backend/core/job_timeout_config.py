@@ -35,7 +35,8 @@ def _int_env(*names: str, production_default: int, dev_default: int | None = Non
     return production_default
 
 
-# PENDING job never claimed by Agent → recycler marks FAILED
+# PENDING job never claimed by Agent → recycler marks FAILED.
+# Does NOT apply while the same host still has RUNNING jobs (capacity queue).
 DISPATCHED_TIMEOUT_SECONDS = _int_env(
     "DISPATCHED_TIMEOUT_SECONDS",
     "RUN_DISPATCHED_TIMEOUT_SECONDS",
@@ -54,6 +55,26 @@ PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS = _int_env(
     "PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS",
     production_default=300,
     dev_default=180,
+)
+
+# Patrol cadence stall threshold shared by recycler and API deadline projection.
+PATROL_STALL_MULTIPLIER = _int_env(
+    "PATROL_STALL_MULTIPLIER",
+    production_default=3,
+)
+
+PRECHECK_QUEUE_STALE_SECONDS = _int_env(
+    "PRECHECK_QUEUE_STALE_SECONDS",
+    production_default=90,
+)
+PRECHECK_ACTIVE_STALE_SECONDS = _int_env(
+    "PRECHECK_ACTIVE_STALE_SECONDS",
+    production_default=180,
+)
+
+ABORT_ACK_GRACE_SECONDS = _int_env(
+    "ABORT_REAPER_GRACE_SECONDS",
+    production_default=60,
 )
 
 # UNKNOWN job grace before lease release + FAILED

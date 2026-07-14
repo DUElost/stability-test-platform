@@ -1,7 +1,13 @@
 """Plan CRUD + dispatch API tests — ADR-0020."""
 
+import threading
 from uuid import uuid4
 
+from fastapi import HTTPException
+
+from backend.api.routes.plans import _validate_plan_dag
+from backend.core.database import SessionLocal
+from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 
 
@@ -252,6 +258,57 @@ class TestPlanCRUD:
             "next_plan_id": plan_id,
         }, headers=auth_headers)
         assert resp.status_code == 422
+
+    def test_postgresql_concurrent_plan_links_cannot_create_cycle(
+        self, db_session,
+    ):
+        plan_a = Plan(name=_uniq("dag_a"))
+        plan_b = Plan(name=_uniq("dag_b"))
+        db_session.add_all([plan_a, plan_b])
+        db_session.commit()
+        plan_ids = (plan_a.id, plan_b.id)
+        barrier = threading.Barrier(2)
+        results: list[str] = []
+        errors: list[Exception] = []
+
+        def link(source_id: int, target_id: int):
+            db = SessionLocal()
+            try:
+                barrier.wait(timeout=5)
+                _validate_plan_dag(db, source_id, target_id)
+                source = db.get(Plan, source_id)
+                source.next_plan_id = target_id
+                db.commit()
+                results.append("linked")
+            except HTTPException as exc:
+                db.rollback()
+                assert exc.status_code == 422
+                results.append("cycle_rejected")
+            except Exception as exc:
+                db.rollback()
+                errors.append(exc)
+            finally:
+                db.close()
+
+        threads = [
+            threading.Thread(target=link, args=(plan_ids[0], plan_ids[1])),
+            threading.Thread(target=link, args=(plan_ids[1], plan_ids[0])),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        assert sorted(results) == ["cycle_rejected", "linked"]
+        db_session.expire_all()
+        persisted_a = db_session.get(Plan, plan_ids[0])
+        persisted_b = db_session.get(Plan, plan_ids[1])
+        assert not (
+            persisted_a.next_plan_id == persisted_b.id
+            and persisted_b.next_plan_id == persisted_a.id
+        )
 
     def test_create_rejects_hidden_legacy_next_plan_reference(
         self, client, auth_headers, sample_script, db_session,

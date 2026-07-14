@@ -129,7 +129,11 @@ def chain_setup(db_session):
     db_session.commit()
 
     snapshot = {
-        "plan": {"id": plan_cur.id, "name": plan_cur.name},
+        "plan": {
+            "id": plan_cur.id,
+            "name": plan_cur.name,
+            "patrol_interval_seconds": 60,
+        },
         "steps": [
             {"step_key": s.step_key, "script_name": s.script_name,
              "script_version": s.script_version, "stage": s.stage,
@@ -359,9 +363,9 @@ class TestTimelineEndpoint:
         # 3 stages declared in PlanStep
         stages = {s["stage"]: s for s in data["stages"]}
         assert set(stages) == {"init", "patrol", "teardown"}
-        # init: 2 steps × 2 jobs (j1/j3) successful → succeeded=4 across both steps
+        # Stage-level counters count devices that completed every enabled step.
         init_stage = stages["init"]
-        assert init_stage["device_succeeded"] == 4  # 2 steps × 2 successful jobs
+        assert init_stage["device_succeeded"] == 2
         assert init_stage["device_failed"] == 0
         assert init_stage["device_total"] == 3  # 3 jobs in run
         assert len(init_stage["steps"]) == 2
@@ -905,7 +909,7 @@ class TestDevicesEndpoint:
         assert unknown["ui_status"] == "unknown"
         assert data["by_status"].get("unknown") == 1
 
-    def test_devices_unknown_job_with_online_device_maps_to_failed(
+    def test_devices_unknown_job_with_online_device_stays_unknown(
         self, client, auth_headers, db_session, chain_setup,
     ):
         from backend.models.enums import DeviceStatus, JobStatus
@@ -927,8 +931,9 @@ class TestDevicesEndpoint:
         data = resp.json()["data"]
         by_serial = {d["device_serial"]: d for d in data["devices"]}
         failed = by_serial["dev-bb-01"]
-        assert failed["ui_status"] == "failed"
-        assert data["by_status"].get("failed") == 1
+        assert failed["ui_status"] == "unknown"
+        assert data["by_status"].get("unknown") == 1
+        assert data["by_status"].get("failed", 0) == 0
 
     def test_devices_unknown_status_distinct_from_failed(
         self, client, auth_headers, db_session, chain_setup,

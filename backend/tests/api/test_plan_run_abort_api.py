@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from backend.api.routes.agent_api import _RunCompleteIn, complete_job
+from backend.core.database import AsyncSessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
@@ -14,6 +16,7 @@ from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
+from backend.services.plan_run_abort import abort_plan_run
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +142,7 @@ def _make_active_lease(db_session, device_id: int, host_id: str, job_id: int) ->
         agent_instance_id="test-agent",
         acquired_at=now,
         renewed_at=now,
-        expires_at=now,
+        expires_at=now + timedelta(minutes=10),
     )
     db_session.add(lease)
     db_session.commit()
@@ -153,7 +156,7 @@ def _make_active_lease(db_session, device_id: int, host_id: str, job_id: int) ->
 
 
 class TestPlanRunAbort:
-    def test_abort_running_plan_run_releases_leases_and_aborts_pending(
+    def test_abort_running_plan_run_keeps_lease_and_aborts_pending(
         self, client, auth_headers, db_session, abort_chain
     ):
         plan = abort_chain["plan"]
@@ -184,20 +187,87 @@ class TestPlanRunAbort:
         body = resp.json()["data"]
         assert body["plan_run_id"] == pr.id
         assert body["phase"] == "running"
-        assert sorted(body["aborted_jobs"]) == sorted([running_job.id, pending_job.id])
-        assert body["released_leases"] == 1
+        assert body["aborted_jobs"] == [pending_job.id]
+        assert body["abort_requested_jobs"] == [running_job.id]
+        assert body["released_leases"] == 0
 
         db_session.expire_all()
         # PENDING → ABORTED inline; RUNNING stays RUNNING (Agent will drain).
         assert db_session.get(JobInstance, pending_job.id).status == JobStatus.ABORTED.value
         assert db_session.get(JobInstance, running_job.id).status == JobStatus.RUNNING.value
 
-        # Lease released.
-        assert db_session.get(DeviceLease, lease.id).status == LeaseStatus.RELEASED.value
+        # RUNNING 的 lease 必须保持 ACTIVE，直到 Agent ACK ABORTED。
+        assert db_session.get(DeviceLease, lease.id).status == LeaseStatus.ACTIVE.value
 
         # PlanRun.run_context.abort_requested set.
         pr_after = db_session.get(PlanRun, pr.id)
         assert pr_after.run_context["abort_requested"]["reason"] == "误派发"
+
+    @pytest.mark.asyncio
+    async def test_abort_running_job_releases_lease_only_after_agent_ack(
+        self, db_session, abort_chain,
+    ):
+        plan = abort_chain["plan"]
+        pr = _make_plan_run(db_session, plan.id)
+        running_job = _make_job(
+            db_session,
+            pr.id,
+            plan.id,
+            abort_chain["dev1"].id,
+            "h-abort",
+            status=JobStatus.RUNNING.value,
+        )
+        lease = _make_active_lease(
+            db_session, abort_chain["dev1"].id, "h-abort", running_job.id,
+        )
+
+        with patch("backend.services.plan_run_abort.schedule_emit"), patch(
+            "backend.services.plan_run_abort.should_trigger_dedup",
+            return_value=False,
+        ):
+            summary = abort_plan_run(
+                pr.id,
+                db=db_session,
+                reason="用户停止",
+                triggered_by="testuser",
+            )
+
+        assert summary["abort_requested_jobs"] == [running_job.id]
+        db_session.expire_all()
+        assert db_session.get(JobInstance, running_job.id).status == JobStatus.RUNNING.value
+        assert db_session.get(DeviceLease, lease.id).status == LeaseStatus.ACTIVE.value
+
+        await async_engine.dispose()
+        with patch(
+            "backend.api.routes.agent_api.broadcast_run_job_update",
+            new=AsyncMock(),
+        ), patch(
+            "backend.api.routes.agent_api.broadcast_plan_run_status",
+            new=AsyncMock(),
+        ), patch(
+            "backend.tasks.saq_worker.get_queue",
+        ) as get_queue:
+            get_queue.return_value.enqueue = AsyncMock()
+            async with AsyncSessionLocal() as async_db:
+                result = await complete_job(
+                    job_id=running_job.id,
+                    payload=_RunCompleteIn(
+                        update={"status": "ABORTED", "exit_code": 130},
+                        fencing_token=lease.fencing_token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+
+        assert result.error is None
+        assert result.data["status"] == JobStatus.ABORTED.value
+        db_session.expire_all()
+        assert db_session.get(JobInstance, running_job.id).status == JobStatus.ABORTED.value
+        assert db_session.get(DeviceLease, lease.id).status == LeaseStatus.RELEASED.value
+        persisted_run = db_session.get(PlanRun, pr.id)
+        assert persisted_run.status == "FAILED"
+        assert persisted_run.result_summary["abort_requested"] is True
+        assert persisted_run.result_summary["aborted"] == 1
 
     def test_abort_during_precheck_marks_plan_run_failed_and_aborted(
         self, client, auth_headers, db_session, abort_chain
@@ -530,3 +600,53 @@ class TestHostHotUpdateSoftLock:
         assert body["detail"]["code"] == "ABORT_DRAIN_TIMEOUT"
         assert running_job.id in body["detail"]["lingering_jobs"]
         mock_exec.assert_not_called()
+
+
+def test_abort_control_emit_scoped_per_host(db_session, abort_chain):
+    """Each agent room must only receive abort job_ids bound to that host."""
+    plan = abort_chain["plan"]
+    host_b = Host(
+        id="h-abort-b",
+        hostname="hostB",
+        status=HostStatus.ONLINE.value,
+        ip="10.0.0.51",
+        ssh_user="root",
+        ssh_port=22,
+        extra={"ssh_password": "x"},
+        last_heartbeat=datetime.now(timezone.utc),
+    )
+    dev_b = Device(serial="dev-b", host_id="h-abort-b", status="BUSY")
+    db_session.add_all([host_b, dev_b])
+    db_session.commit()
+
+    pr = _make_plan_run(db_session, plan.id)
+    job_a = _make_job(
+        db_session, pr.id, plan.id,
+        abort_chain["dev1"].id, "h-abort",
+        status=JobStatus.RUNNING.value,
+    )
+    job_b = _make_job(
+        db_session, pr.id, plan.id,
+        dev_b.id, "h-abort-b",
+        status=JobStatus.RUNNING.value,
+    )
+
+    emitted: dict[str, list[int]] = {}
+
+    def _capture_emit(_event, payload, *, namespace, room):
+        if payload.get("command") == "abort":
+            emitted[room] = list(payload["payload"]["job_ids"])
+
+    with patch(
+        "backend.services.plan_run_abort.schedule_emit",
+        side_effect=_capture_emit,
+    ), patch(
+        "backend.services.plan_run_abort.should_trigger_dedup",
+        return_value=False,
+    ):
+        abort_plan_run(pr.id, db=db_session, reason="scope-test")
+
+    assert emitted["agent:h-abort"] == [job_a.id]
+    assert emitted["agent:h-abort-b"] == [job_b.id]
+    assert job_a.id not in emitted["agent:h-abort-b"]
+    assert job_b.id not in emitted["agent:h-abort"]

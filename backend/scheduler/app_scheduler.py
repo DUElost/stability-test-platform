@@ -35,6 +35,9 @@ CRON_POLL_INTERVAL = float(os.getenv("CRON_POLL_INTERVAL", "30"))
 RETENTION_CLEANUP_INTERVAL = int(os.getenv("RETENTION_CLEANUP_INTERVAL_SECONDS", "3600"))
 QUEUE_DEPTH_INTERVAL = int(os.getenv("QUEUE_DEPTH_POLL_INTERVAL_SECONDS", "15"))
 PRECHECK_REAPER_INTERVAL = int(os.getenv("PRECHECK_REAPER_INTERVAL_SECONDS", "45"))
+CHAIN_RECONCILER_INTERVAL = int(
+    os.getenv("CHAIN_RECONCILER_INTERVAL_SECONDS", "60")
+)
 # 一天扫一次 expired jti 即可:refresh 黑名单只在 user 主动 logout 时增长,
 # 量级低;同时 expires_at 是 30 天后,过期窗口很宽,扫太频反而浪费 IO。
 REVOKED_TOKEN_CLEANUP_INTERVAL = int(
@@ -189,6 +192,20 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     logger.info(
         "schedule_registered id=precheck_reaper interval=%ds",
         PRECHECK_REAPER_INTERVAL,
+    )
+
+    from backend.scheduler.plan_chain_reconciler import reconcile_plan_chains
+
+    await scheduler.add_schedule(
+        _instrumented("plan_chain_reconciler", reconcile_plan_chains),
+        IntervalTrigger(seconds=CHAIN_RECONCILER_INTERVAL),
+        id="plan_chain_reconciler",
+        misfire_grace_time=MISFIRE_GRACE,
+        conflict_policy=ConflictPolicy.replace,
+    )
+    logger.info(
+        "schedule_registered id=plan_chain_reconciler interval=%ds",
+        CHAIN_RECONCILER_INTERVAL,
     )
 
     from backend.scheduler.revoked_token_cleanup import cleanup_revoked_refresh_tokens_job

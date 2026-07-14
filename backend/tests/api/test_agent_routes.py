@@ -206,61 +206,60 @@ def _cleanup_seed(seed: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_pending_jobs_success():
+async def test_get_pending_jobs_legacy_endpoint_removed():
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            result = await get_pending_jobs(host_id=seed["host_id"], limit=5, db=async_db, _=None)
-        assert result.error is None
-        assert isinstance(result.data, list)
-        assert len(result.data) == 1
-        item = result.data[0]
-        assert item.id == seed["job_id"]
-        assert item.host_id == seed["host_id"]
-        assert item.device_id == seed["device_id"]
-        assert item.device_serial == seed["device_serial"]
-        # claim 端点原子过渡 PENDING → RUNNING（ADR-0018 锁保护机制）
-        assert item.status == JobStatus.RUNNING.value
+            with pytest.raises(HTTPException) as exc_info:
+                await get_pending_jobs(
+                    host_id=seed["host_id"], limit=5, db=async_db, _=None,
+                )
+        assert exc_info.value.status_code == 410
+        assert exc_info.value.detail["code"] == "LEGACY_CLAIM_ENDPOINT_REMOVED"
     finally:
         _cleanup_seed(seed)
 
 
 @pytest.mark.asyncio
-async def test_get_pending_jobs_empty():
+async def test_get_pending_jobs_legacy_endpoint_removed_for_empty_host():
     seed = _seed_host_only()
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            result = await get_pending_jobs(host_id=seed["host_id"], limit=10, db=async_db, _=None)
-        assert result.error is None
-        assert result.data == []
+            with pytest.raises(HTTPException) as exc_info:
+                await get_pending_jobs(
+                    host_id=seed["host_id"], limit=10, db=async_db, _=None,
+                )
+        assert exc_info.value.status_code == 410
     finally:
         _cleanup_seed(seed)
 
 
 @pytest.mark.asyncio
-async def test_job_heartbeat_transitions_to_running():
+async def test_job_heartbeat_cannot_claim_pending_job():
     seed = _seed_job(status=JobStatus.PENDING.value)
     token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            result = await job_heartbeat(
-                job_id=seed["job_id"],
-                payload=_JobHeartbeatIn(status="RUNNING", fencing_token=token),
-                db=async_db,
-                _=None,
-            )
-        assert result.error is None
-        assert result.data["status"] == JobStatus.RUNNING.value
+            with pytest.raises(HTTPException) as exc_info:
+                await job_heartbeat(
+                    job_id=seed["job_id"],
+                    payload=_JobHeartbeatIn(
+                        status="RUNNING", fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert exc_info.value.status_code == 409
 
         db = SessionLocal()
         try:
             job = db.get(JobInstance, seed["job_id"])
             assert job is not None
-            assert job.status == JobStatus.RUNNING.value
-            assert job.started_at is not None
+            assert job.status == JobStatus.PENDING.value
+            assert job.started_at is None
         finally:
             db.close()
     finally:
@@ -268,24 +267,21 @@ async def test_job_heartbeat_transitions_to_running():
 
 
 @pytest.mark.asyncio
-async def test_update_job_status_invalid_transition_returns_structured_error():
+async def test_update_job_status_repeated_running_is_heartbeat_noop():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
-            with pytest.raises(HTTPException) as exc_info:
-                await update_job_status(
-                    job_id=seed["job_id"],
-                    payload=JobStatusUpdate(status="RUNNING", fencing_token=token),
-                    db=async_db,
-                    _=None,
-                )
-        assert exc_info.value.status_code == 409
-        assert exc_info.value.detail == {
-            "code": "INVALID_JOB_TRANSITION",
-            "message": "job status transition rejected",
-        }
+            result = await update_job_status(
+                job_id=seed["job_id"],
+                payload=JobStatusUpdate(
+                    status="RUNNING", fencing_token=token,
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.data["status"] == JobStatus.RUNNING.value
     finally:
         _cleanup_seed(seed)
 

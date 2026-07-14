@@ -283,6 +283,13 @@ def _make_plan_run(db_session, plan_id: str | int, *, status: str = "SUCCESS") -
     return plan_run
 
 
+def _make_device(db_session, host_id: str, serial: str) -> Device:
+    device = Device(serial=serial, host_id=host_id, status="ONLINE")
+    db_session.add(device)
+    db_session.flush()
+    return device
+
+
 class TestHostFailureRate:
     def test_empty(self, client, auth_headers):
         response = client.get("/api/v1/stats/host-failure-rate", headers=auth_headers)
@@ -299,11 +306,18 @@ class TestHostFailureRate:
         db_session.flush()
         plan_run = _make_plan_run(db_session, plan.id)
 
-        for status in ("COMPLETED", "FAILED", "FAILED"):
+        devices = [
+            sample_device,
+            _make_device(db_session, sample_host.id, "HOST-RATE-2"),
+            _make_device(db_session, sample_host.id, "HOST-RATE-3"),
+        ]
+        for status, device in zip(
+            ("COMPLETED", "FAILED", "FAILED"), devices,
+        ):
             db_session.add(JobInstance(
                 plan_run_id=plan_run.id,
                 plan_id=plan.id,
-                device_id=sample_device.id,
+                device_id=device.id,
                 host_id=sample_host.id,
                 status=status,
                 pipeline_def={"lifecycle": {"init": [], "teardown": []}},
@@ -340,10 +354,13 @@ class TestHostFailureRate:
             )
             db_session.add(host)
             db_session.flush()
+            device = _make_device(
+                db_session, host.id, f"HOST-LIMIT-DEVICE-{i}",
+            )
             db_session.add(JobInstance(
                 plan_run_id=plan_run.id,
                 plan_id=plan.id,
-                device_id=sample_device.id,
+                device_id=device.id,
                 host_id=host.id,
                 status="FAILED",
                 pipeline_def={"lifecycle": {"init": [], "teardown": []}},
@@ -407,19 +424,23 @@ class TestPlanSuccessRate:
         db_session.flush()
         good_run = _make_plan_run(db_session, good_plan.id)
         bad_run = _make_plan_run(db_session, bad_plan.id, status="FAILED")
+        second_device = _make_device(
+            db_session, sample_host.id, "PLAN-RATE-DEVICE-2",
+        )
+        devices = [sample_device, second_device]
 
         # good_plan: 2/2 passed; bad_plan: 0/2 passed
-        for status in ("COMPLETED", "COMPLETED"):
+        for status, device in zip(("COMPLETED", "COMPLETED"), devices):
             db_session.add(JobInstance(
                 plan_run_id=good_run.id, plan_id=good_plan.id,
-                device_id=sample_device.id, host_id=sample_host.id,
+                device_id=device.id, host_id=sample_host.id,
                 status=status, pipeline_def={"lifecycle": {"init": [], "teardown": []}},
                 started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
             ))
-        for status in ("FAILED", "FAILED"):
+        for status, device in zip(("FAILED", "FAILED"), devices):
             db_session.add(JobInstance(
                 plan_run_id=bad_run.id, plan_id=bad_plan.id,
-                device_id=sample_device.id, host_id=sample_host.id,
+                device_id=device.id, host_id=sample_host.id,
                 status=status, pipeline_def={"lifecycle": {"init": [], "teardown": []}},
                 started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
             ))
@@ -504,11 +525,17 @@ class TestPlanRunPassRateTrend:
         )
         db_session.add(plan_run)
         db_session.flush()
+        second_device = _make_device(
+            db_session, sample_host.id, "TREND-DEVICE-2",
+        )
 
-        for status in ("COMPLETED", "FAILED"):
+        for status, device in zip(
+            ("COMPLETED", "FAILED"),
+            (sample_device, second_device),
+        ):
             db_session.add(JobInstance(
                 plan_run_id=plan_run.id, plan_id=plan.id,
-                device_id=sample_device.id, host_id=sample_host.id,
+                device_id=device.id, host_id=sample_host.id,
                 status=status, pipeline_def={"lifecycle": {"init": [], "teardown": []}},
                 started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
             ))

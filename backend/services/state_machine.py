@@ -12,7 +12,10 @@ logger = logging.getLogger(__name__)
 VALID_TRANSITIONS: dict[JobStatus, set[JobStatus]] = {
     JobStatus.PENDING:      {JobStatus.RUNNING, JobStatus.FAILED, JobStatus.ABORTED},
     JobStatus.RUNNING:      {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED, JobStatus.UNKNOWN},
-    JobStatus.UNKNOWN:      {JobStatus.RUNNING, JobStatus.COMPLETED, JobStatus.FAILED},
+    # UNKNOWN is a fenced recovery state.  A late Agent completion must first
+    # re-establish the lease through recovery (UNKNOWN → RUNNING); otherwise
+    # grace expiry is the only legal terminal path (UNKNOWN → FAILED).
+    JobStatus.UNKNOWN:      {JobStatus.RUNNING, JobStatus.FAILED},
     JobStatus.FAILED:       set(),
     JobStatus.COMPLETED:    set(),
     JobStatus.ABORTED:      set(),
@@ -46,7 +49,6 @@ PLAN_RUN_VALID_TRANSITIONS: dict[PlanRunStatus, set[PlanRunStatus]] = {
         PlanRunStatus.SUCCESS,
         PlanRunStatus.PARTIAL_SUCCESS,
         PlanRunStatus.FAILED,
-        PlanRunStatus.DEGRADED,
     },
     # 手动 retry_plan_run_dispatch:precheck/dispatch 失败后允许重置回 RUNNING
     # 重新走一遍 dispatch gate(见 precheck/runner.py::retry_plan_run_dispatch)。

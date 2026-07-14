@@ -30,3 +30,22 @@ def test_running_to_aborted_is_valid():
     )
     JobStateMachine.transition(job, JobStatus.ABORTED, "aborted_by_user")
     assert job.status == JobStatus.ABORTED.value
+
+
+def test_unknown_cannot_transition_directly_to_completed():
+    """UNKNOWN 必须先完成 fenced recovery 回到 RUNNING，不能直接接受完成态。"""
+    job = JobInstance(
+        status=JobStatus.UNKNOWN.value, plan_run_id=1, plan_id=1, device_id=1
+    )
+    with pytest.raises(InvalidTransitionError):
+        JobStateMachine.transition(job, JobStatus.COMPLETED, "late_complete")
+    assert job.status == JobStatus.UNKNOWN.value
+
+
+def test_unknown_recovery_then_completed_is_valid():
+    job = JobInstance(
+        status=JobStatus.UNKNOWN.value, plan_run_id=1, plan_id=1, device_id=1
+    )
+    JobStateMachine.transition(job, JobStatus.RUNNING, "recovery_sync")
+    JobStateMachine.transition(job, JobStatus.COMPLETED, "agent_complete")
+    assert job.status == JobStatus.COMPLETED.value

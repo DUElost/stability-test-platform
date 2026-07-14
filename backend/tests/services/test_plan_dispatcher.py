@@ -402,15 +402,15 @@ class TestFailFastSyncDispatch:
             )
         assert excinfo.value.missing_scripts == ["aux_a:1.0.0"]
 
-    def test_complete_writes_failed_when_script_deactivated_after_prepare(
+    def test_complete_uses_snapshot_when_script_deactivated_after_prepare(
         self, db_session, _failfast_fixture,
     ):
-        """prepare 成功后,在 complete 之前脚本被失活 → 内部写 FAILED + audit,不抛异常。"""
+        """prepare 后 live Script 失活不改变当前运行的不可变快照。"""
         from backend.services.plan_dispatcher_sync import (
             complete_plan_run_dispatch, prepare_plan_run,
         )
         from backend.models.audit import AuditLog
-        from backend.models.plan_run import PlanRun
+        from backend.models.job import JobInstance
 
         plan, device, _host, script = _failfast_fixture
         pr = prepare_plan_run(
@@ -423,29 +423,25 @@ class TestFailFastSyncDispatch:
         script.is_active = False
         db_session.commit()
 
-        # complete 内部捕获,不抛
         complete_plan_run_dispatch(pr.id, db=db_session)
 
         db_session.refresh(pr)
-        assert pr.status == "FAILED"
-        assert pr.ended_at is not None
-        assert pr.result_summary == {
-            "dispatch_failed": True,
-            "missing_scripts": ["check_device:1.0.0"],
-        }
-        # JobInstance 不该被创建
-        from backend.models.job import JobInstance
-        assert db_session.query(JobInstance).filter(
+        assert pr.status == "RUNNING"
+        assert pr.ended_at is None
+        assert pr.result_summary is None
+        jobs = db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id
-        ).count() == 0
+        ).all()
+        assert len(jobs) == 1
+        assert jobs[0].pipeline_def["lifecycle"]["init"][0]["action"] == (
+            "script:check_device"
+        )
 
-        # audit log 落了
-        audit = db_session.query(AuditLog).filter(
+        audit_count = db_session.query(AuditLog).filter(
             AuditLog.action == "plan_dispatch_failed",
             AuditLog.resource_id == str(pr.id),
-        ).first()
-        assert audit is not None
-        assert audit.details["missing_scripts"] == ["check_device:1.0.0"]
+        ).count()
+        assert audit_count == 0
 
     def test_plan_snapshot_includes_nfs_path(self, db_session, _failfast_fixture):
         """ADR-0023 D3 实施前提:plan_snapshot.steps[i] 持有 nfs_path,为 DeviceDetailDrawer 准备。"""

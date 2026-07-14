@@ -195,14 +195,77 @@ def build_lifecycle_from_steps(
             patrol_steps.append(step_def)
 
     if patrol_steps:
+        if plan.patrol_interval_seconds is None:
+            raise PlanDispatchError(
+                "enabled patrol steps require patrol_interval_seconds"
+            )
         lifecycle["patrol"] = {
-            "interval_seconds": plan.patrol_interval_seconds or 60,
+            "interval_seconds": plan.patrol_interval_seconds,
             "steps": patrol_steps,
         }
+    elif plan.patrol_interval_seconds is not None:
+        raise PlanDispatchError(
+            "patrol_interval_seconds requires enabled patrol steps"
+        )
 
     if plan.timeout_seconds is not None:
         lifecycle["timeout_seconds"] = plan.timeout_seconds
 
+    return lifecycle
+
+
+def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
+    """Materialize an immutable lifecycle from a PlanRun snapshot."""
+    snapshot = plan_snapshot or {}
+    plan_data = snapshot.get("plan") or {}
+    snapshot_steps = snapshot.get("steps") or []
+    lifecycle: dict[str, Any] = {"init": [], "teardown": []}
+    patrol_steps: list[dict[str, Any]] = []
+
+    for step in sorted(
+        snapshot_steps,
+        key=lambda item: (item.get("stage", ""), item.get("sort_order", 0)),
+    ):
+        if not isinstance(step, dict) or step.get("enabled") is False:
+            continue
+        stage = step.get("stage")
+        if stage not in {"init", "patrol", "teardown"}:
+            raise PlanDispatchError(f"invalid snapshot stage: {stage!r}")
+        script_name = step.get("script_name")
+        script_version = step.get("script_version")
+        if not script_name or not script_version:
+            raise PlanDispatchError("snapshot step is missing script identity")
+        step_def: dict[str, Any] = {
+            "step_id": step.get("step_key"),
+            "action": f"script:{script_name}",
+            "version": script_version,
+            "params": deepcopy(step.get("default_params") or {}),
+            "timeout_seconds": step.get("timeout_seconds"),
+            "retry": step.get("retry", 0),
+        }
+        if stage == "patrol":
+            patrol_steps.append(step_def)
+        else:
+            lifecycle[stage].append(step_def)
+
+    if patrol_steps:
+        interval = plan_data.get("patrol_interval_seconds")
+        if not isinstance(interval, int) or interval < 1:
+            raise PlanDispatchError(
+                "snapshot patrol steps require patrol_interval_seconds"
+            )
+        lifecycle["patrol"] = {
+            "interval_seconds": interval,
+            "steps": patrol_steps,
+        }
+    elif plan_data.get("patrol_interval_seconds") is not None:
+        raise PlanDispatchError(
+            "snapshot patrol_interval_seconds requires enabled patrol steps"
+        )
+
+    timeout_seconds = plan_data.get("timeout_seconds")
+    if timeout_seconds is not None:
+        lifecycle["timeout_seconds"] = timeout_seconds
     return lifecycle
 
 
@@ -270,6 +333,9 @@ def build_plan_snapshot(
             "description": plan.description,
             "failure_threshold": failure_threshold,
             "patrol_interval_seconds": plan.patrol_interval_seconds,
+            "timeout_seconds": plan.timeout_seconds,
+            "auto_archive_interval_seconds": plan.auto_archive_interval_seconds,
+            "next_plan_id": plan.next_plan_id,
             "watcher_policy": plan.watcher_policy or {},
         },
         "steps": [

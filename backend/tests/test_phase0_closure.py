@@ -398,15 +398,20 @@ class TestLocalDBOutbox:
             os.unlink(path)
 
     def test_idempotent_enqueue(self):
-        """Same job_id enqueued twice should replace, not duplicate."""
+        """Same fact is idempotent; a conflicting terminal fact is immutable."""
         local_db, path = _make_local_db()
         try:
-            local_db.enqueue_terminal(5, {"update": {"status": "FINISHED"}})
-            local_db.enqueue_terminal(5, {"update": {"status": "FAILED"}})
+            first = {"update": {"status": "FINISHED"}}
+            first_id = local_db.enqueue_terminal(5, first)
+            assert local_db.enqueue_terminal(5, dict(first)) == first_id
+            with pytest.raises(ValueError, match="conflicting terminal payload"):
+                local_db.enqueue_terminal(
+                    5, {"update": {"status": "FAILED"}},
+                )
 
             pending = local_db.get_pending_terminals()
             assert len(pending) == 1
-            assert pending[0]["payload"]["update"]["status"] == "FAILED"
+            assert pending[0]["payload"] == first
         finally:
             local_db.close()
             os.unlink(path)

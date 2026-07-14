@@ -26,7 +26,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.core.audit import record_audit
 from backend.core.database import SessionLocal
+from backend.core.job_timeout_config import (
+    PRECHECK_ACTIVE_STALE_SECONDS,
+    PRECHECK_QUEUE_STALE_SECONDS,
+)
 from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
@@ -43,8 +48,6 @@ from backend.tasks.saq_worker import (
 
 logger = logging.getLogger(__name__)
 
-PRECHECK_QUEUE_STALE_SECONDS = int(os.getenv("PRECHECK_QUEUE_STALE_SECONDS", "90"))
-PRECHECK_ACTIVE_STALE_SECONDS = int(os.getenv("PRECHECK_ACTIVE_STALE_SECONDS", "180"))
 MAX_PRECHECK_REENQUEUE_ATTEMPTS = int(os.getenv("MAX_PRECHECK_REENQUEUE_ATTEMPTS", "1"))
 
 
@@ -104,6 +107,14 @@ def _fail_plan_run(pr: PlanRun, db: Session, reason: str) -> None:
     pr.result_summary = summary
     pr.run_context = run_ctx
     flag_modified(pr, "run_context")
+    record_audit(
+        db,
+        action="plan_dispatch_gate_failed",
+        resource_type="plan_run",
+        resource_id=pr.id,
+        details={"reason": reason, "source": "precheck_reaper"},
+        username="system",
+    )
     db.commit()
     logger.warning("precheck_reaper_failed plan_run=%d reason=%s", pr.id, reason)
 
@@ -225,6 +236,19 @@ def reconcile_stale_precheck_runs(db: Session | None = None) -> dict[str, int]:
                     last_error="precheck_job_missing_reenqueued",
                 )
                 summary["reenqueued"] += 1
+                continue
+
+            if (
+                not job
+                and state.get("started_at") is None
+                and int(state.get("requeue_attempts") or 0)
+                >= MAX_PRECHECK_REENQUEUE_ATTEMPTS
+                and _is_stale_iso(
+                    state.get("enqueued_at"), PRECHECK_QUEUE_STALE_SECONDS,
+                )
+            ):
+                _fail_plan_run(pr, db, "precheck_requeue_exhausted")
+                summary["failed"] += 1
                 continue
 
             summary["skipped"] += 1

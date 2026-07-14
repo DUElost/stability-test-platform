@@ -14,10 +14,9 @@ from backend.models.plan_run import PlanRun
 
 
 PIPELINE_DEF = {
-    "stages": {
-        "prepare": [{"step_id": "noop", "action": "builtin:check_device", "timeout_seconds": 30}],
-        "execute": [],
-        "post_process": [],
+    "lifecycle": {
+        "init": [],
+        "teardown": [],
     }
 }
 
@@ -102,7 +101,7 @@ def _get_job(job_id: int) -> JobInstance:
 @pytest.mark.asyncio
 async def test_claim_skips_locked_device():
     """Claim endpoint skips job when device has an ACTIVE lease (Phase 2c: lease is source of truth)."""
-    from backend.api.routes.agent_api import get_pending_jobs
+    from backend.api.routes.agent_api import ClaimRequest, claim_jobs
     from backend.models.device_lease import DeviceLease
     from backend.models.enums import LeaseStatus, LeaseType
 
@@ -136,7 +135,16 @@ async def test_claim_skips_locked_device():
         db.close()
 
     async with AsyncSessionLocal() as db:
-        resp = await get_pending_jobs(host_id=seed["host_id"], limit=10, db=db)
+        resp = await claim_jobs(
+            payload=ClaimRequest(
+                host_id=seed["host_id"],
+                capacity=10,
+                agent_instance_id=seed["host_id"],
+                agent_version="2.0.0",
+            ),
+            db=db,
+            _=None,
+        )
 
     # No jobs should be claimed since device has an ACTIVE lease
     assert resp.data == []

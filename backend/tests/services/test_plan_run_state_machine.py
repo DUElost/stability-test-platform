@@ -24,13 +24,20 @@ def _run(status: PlanRunStatus) -> SimpleNamespace:
         PlanRunStatus.SUCCESS,
         PlanRunStatus.PARTIAL_SUCCESS,
         PlanRunStatus.FAILED,
-        PlanRunStatus.DEGRADED,
     ],
 )
 def test_running_can_transition_to_any_terminal_status(target):
     run = _run(PlanRunStatus.RUNNING)
     PlanRunStateMachine.transition(run, target)
     assert run.status == target.value
+
+
+def test_running_cannot_transition_to_degraded():
+    """DEGRADED 是历史可读终态，但新聚合不得再生产该状态。"""
+    run = _run(PlanRunStatus.RUNNING)
+    with pytest.raises(InvalidTransitionError):
+        PlanRunStateMachine.transition(run, PlanRunStatus.DEGRADED)
+    assert run.status == PlanRunStatus.RUNNING.value
 
 
 def test_failed_can_retry_back_to_running():

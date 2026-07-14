@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from backend.models.enums import HostStatus, JobStatus
-from backend.models.host import Host
+from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 
 
@@ -95,18 +95,25 @@ class TestArchivePlanRunLogsEndpoint:
         mock_emit.assert_not_awaited()
 
     def test_mixed_hosts_online_and_offline(
-        self, client, auth_headers, db_session, sample_plan_run, sample_plan, sample_device
+        self, client, auth_headers, db_session, sample_plan_run, sample_plan
     ):
         online_host = Host(id="h-online", hostname="h-online", name="h-online", status=HostStatus.ONLINE.value)
         offline_host = Host(id="h-offline", hostname="h-offline", name="h-offline", status=HostStatus.OFFLINE.value)
         db_session.add_all([online_host, offline_host])
         db_session.commit()
 
-        for h in (online_host, offline_host):
+        devices = [
+            Device(serial="archive-online", host_id=online_host.id, status="ONLINE"),
+            Device(serial="archive-offline", host_id=offline_host.id, status="OFFLINE"),
+        ]
+        db_session.add_all(devices)
+        db_session.commit()
+
+        for h, device in zip((online_host, offline_host), devices):
             db_session.add(JobInstance(
                 plan_run_id=sample_plan_run.id,
                 plan_id=sample_plan.id,
-                device_id=sample_device.id,
+                device_id=device.id,
                 host_id=h.id,
                 status=JobStatus.PENDING.value,
                 pipeline_def={"lifecycle": {"init": [], "teardown": []}},

@@ -10,14 +10,15 @@ import pytest
 
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
-from backend.models.plan import Plan
+from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.services.plan_chain_trigger import (
+    reconcile_chain_trigger_sync,
     trigger_next_plan,
     trigger_next_plan_sync,
 )
-from backend.services.plan_dispatcher import PlanDispatchError as AsyncPlanDispatchError
 from backend.services.plan_dispatcher_core import PlanDispatchError
+from backend.scheduler.plan_chain_reconciler import reconcile_plan_chains
 
 
 def _seed_successful_parent_run(db_session, sample_device, sample_host):
@@ -31,7 +32,13 @@ def _seed_successful_parent_run(db_session, sample_device, sample_host):
         plan_id=parent_plan.id,
         status="SUCCESS",
         failure_threshold=0.1,
-        plan_snapshot={"plan_id": parent_plan.id},
+        plan_snapshot={
+            "plan": {
+                "id": parent_plan.id,
+                "next_plan_id": child_plan.id,
+            },
+            "steps": [],
+        },
         run_type="MANUAL",
         triggered_by="test",
         started_at=datetime.now(timezone.utc),
@@ -54,13 +61,58 @@ def _seed_successful_parent_run(db_session, sample_device, sample_host):
 
 
 class TestPlanChainTriggerRollback:
+    def test_child_row_and_parent_flag_commit_before_gate_enqueue(
+        self, db_session, sample_device, sample_host, sample_script,
+    ):
+        parent = _seed_successful_parent_run(
+            db_session, sample_device, sample_host,
+        )
+        child_plan = db_session.get(
+            Plan, parent.plan_snapshot["plan"]["next_plan_id"],
+        )
+        db_session.add(
+            PlanStep(
+                plan_id=child_plan.id,
+                stage="init",
+                sort_order=0,
+                step_key="child-init",
+                script_name=sample_script[0].name,
+                script_version=sample_script[0].version,
+                timeout_seconds=300,
+                enabled=True,
+            )
+        )
+        db_session.commit()
+
+        with patch(
+            "backend.services.plan_chain_trigger.enqueue_sync",
+        ) as enqueue:
+            child = trigger_next_plan_sync(parent, db_session)
+
+        assert child is not None
+        db_session.expire_all()
+        stored_parent = db_session.get(PlanRun, parent.id)
+        stored_child = db_session.get(PlanRun, child.id)
+        assert stored_parent.next_plan_triggered is True
+        assert stored_child.parent_plan_run_id == parent.id
+        assert stored_child.run_context["dispatch_state"]["enqueue_key"] == (
+            f"precheck:{stored_child.id}"
+        )
+        assert (
+            db_session.query(JobInstance)
+            .filter(JobInstance.plan_run_id == stored_child.id)
+            .count()
+            == 0
+        )
+        enqueue.assert_called_once()
+
     def test_dispatch_failure_rolls_back_next_plan_triggered(
         self, db_session, sample_device, sample_host,
     ):
         pr = _seed_successful_parent_run(db_session, sample_device, sample_host)
 
         with patch(
-            "backend.services.plan_chain_trigger.dispatch_plan_sync",
+            "backend.services.plan_chain_trigger.prepare_plan_run",
             side_effect=PlanDispatchError("devices unavailable"),
         ):
             result = trigger_next_plan_sync(pr, db_session)
@@ -84,7 +136,7 @@ class TestPlanChainTriggerRollback:
         pr = _seed_successful_parent_run(db_session, sample_device, sample_host)
 
         with patch(
-            "backend.services.plan_chain_trigger.dispatch_plan_sync",
+            "backend.services.plan_chain_trigger.prepare_plan_run",
             side_effect=RuntimeError("SAQ enqueue failed: redis timeout"),
         ):
             result = trigger_next_plan_sync(pr, db_session)
@@ -123,84 +175,168 @@ class TestPlanChainTriggerRollback:
         db_session.add(existing_child)
         db_session.commit()
 
-        with patch(
-            "backend.services.plan_chain_trigger.dispatch_plan_sync",
-            side_effect=PlanDispatchError("dispatch gate failed"),
-        ):
-            result = trigger_next_plan_sync(pr, db_session)
+        result = trigger_next_plan_sync(pr, db_session)
 
-        assert result is None
+        assert result.id == existing_child.id
         db_session.expire_all()
         refreshed = db_session.get(PlanRun, pr.id)
         # 关键不变量:child 已存在 → flag 保持 True,防止下次 aggregator INSERT 撞 unique
         assert refreshed.next_plan_triggered is True, (
             "child PlanRun 已落库,parent flag 必须保持 True 防止重试撞 unique 索引"
         )
-        assert refreshed.result_summary["chain_dispatch_failed"]["child_already_created"] is True
 
 
-# ── Async 路径 — Mock-based 验证 catch + rollback 决策分支 ───────────────
+class TestPlanChainInterruptedFlagReconciliation:
+    def test_orphaned_true_flag_is_reset_before_redispatch(
+        self, db_session, sample_device, sample_host,
+    ):
+        """CAS 已提交但 child 未创建的中断态，必须先清 flag 才能重新触发。"""
+        parent = _seed_successful_parent_run(db_session, sample_device, sample_host)
+        parent.next_plan_triggered = True
+        db_session.commit()
+        sentinel_child = SimpleNamespace(id=9876)
+
+        def _redispatch(refreshed_parent, db):
+            assert refreshed_parent.next_plan_triggered is False
+            assert db.get(PlanRun, parent.id).next_plan_triggered is False
+            return sentinel_child
+
+        with patch(
+            "backend.services.plan_chain_trigger.trigger_next_plan_sync",
+            side_effect=_redispatch,
+        ) as dispatch:
+            result = reconcile_chain_trigger_sync(parent.id, db_session)
+
+        assert result is sentinel_child
+        dispatch.assert_called_once()
+
+    def test_existing_child_repairs_false_parent_flag_without_redispatch(
+        self, db_session, sample_device, sample_host,
+    ):
+        """child 已落库但 parent flag 未提交时，以 durable child 行为准修复为 True。"""
+        parent = _seed_successful_parent_run(db_session, sample_device, sample_host)
+        parent_plan = db_session.get(Plan, parent.plan_id)
+        child = PlanRun(
+            plan_id=parent_plan.next_plan_id,
+            status="RUNNING",
+            failure_threshold=0.1,
+            plan_snapshot={"plan_id": parent_plan.next_plan_id},
+            run_type="CHAIN",
+            triggered_by="test",
+            parent_plan_run_id=parent.id,
+            root_plan_run_id=parent.id,
+            chain_index=1,
+            started_at=datetime.now(timezone.utc),
+        )
+        parent.next_plan_triggered = False
+        db_session.add(child)
+        db_session.commit()
+
+        with patch(
+            "backend.services.plan_chain_trigger.trigger_next_plan_sync",
+        ) as dispatch:
+            result = reconcile_chain_trigger_sync(parent.id, db_session)
+
+        assert result.id == child.id
+        db_session.expire_all()
+        assert db_session.get(PlanRun, parent.id).next_plan_triggered is True
+        dispatch.assert_not_called()
+
+    def test_scheduler_repairs_durable_child_parent_flag(
+        self, db_session, sample_device, sample_host,
+    ):
+        parent = _seed_successful_parent_run(
+            db_session, sample_device, sample_host,
+        )
+        next_plan_id = parent.plan_snapshot["plan"]["next_plan_id"]
+        child = PlanRun(
+            plan_id=next_plan_id,
+            status="RUNNING",
+            failure_threshold=0.1,
+            plan_snapshot={"plan": {"id": next_plan_id}},
+            run_type="CHAIN",
+            parent_plan_run_id=parent.id,
+            root_plan_run_id=parent.id,
+            chain_index=1,
+            started_at=datetime.now(timezone.utc),
+        )
+        parent.next_plan_triggered = False
+        db_session.add(child)
+        db_session.commit()
+
+        assert reconcile_plan_chains() == 1
+        db_session.expire_all()
+        assert db_session.get(PlanRun, parent.id).next_plan_triggered is True
 
 
-def _build_mock_async_session(plan_run_id: int, plan):
-    """构造 AsyncSession mock — 满足 trigger_next_plan 的 db.get / db.execute / db.commit。"""
+# ── Async 路径 — atomic child creation + post-commit enqueue ───────────────
+
+
+def _scalar_result(value):
+    result = MagicMock()
+    result.scalar_one_or_none.return_value = value
+    return result
+
+
+def _device_result(*device_ids):
+    result = MagicMock()
+    result.scalars.return_value.unique.return_value = list(device_ids)
+    return result
+
+
+def _build_mock_async_session(parent: PlanRun):
     mock_db = MagicMock()
-    # db.get(Plan, ...) 返回 plan;后续 _rollback 内 db.get(PlanRun, ...) 由测试 patch rollback 跳过
-    mock_db.get = AsyncMock(return_value=plan)
-
-    device_rows = [SimpleNamespace(device_id=1), SimpleNamespace(device_id=2)]
-    device_result = MagicMock()
-    device_result.all.return_value = device_rows
-
-    update_result = MagicMock()
-    update_result.scalar.return_value = plan_run_id  # CAS 成功
-
-    mock_db.execute = AsyncMock(side_effect=[device_result, update_result])
+    mock_db.execute = AsyncMock(
+        side_effect=[
+            _scalar_result(parent),
+            _scalar_result(None),
+            _device_result(1, 2),
+        ]
+    )
+    mock_db.run_sync = AsyncMock()
     mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+    mock_db.get = AsyncMock()
     return mock_db
 
 
 @pytest.mark.asyncio
 async def test_async_dispatch_failure_rolls_back():
-    """async 路径 PlanDispatchError 也走 rollback(对照 sync 已有覆盖)。"""
+    """Child creation failure rolls back the parent flag transaction."""
     pr = PlanRun(
         id=42, plan_id=10, status="SUCCESS",
         chain_index=0, root_plan_run_id=None, triggered_by="test",
         next_plan_triggered=False, result_summary=None,
+        plan_snapshot={"plan": {"id": 10, "next_plan_id": 20}, "steps": []},
     )
-    plan = Plan(id=10, name="p", next_plan_id=20)
-    mock_db = _build_mock_async_session(pr.id, plan)
+    mock_db = _build_mock_async_session(pr)
+    mock_db.run_sync.side_effect = PlanDispatchError("no devices")
 
     with patch(
-        "backend.services.plan_chain_trigger.dispatch_plan",
-        new=AsyncMock(side_effect=AsyncPlanDispatchError("no devices")),
-    ), patch(
         "backend.services.plan_chain_trigger._rollback_chain_trigger_async",
         new=AsyncMock(),
     ) as rb:
         result = await trigger_next_plan(pr, mock_db)
 
     assert result is None
+    mock_db.rollback.assert_awaited_once()
     rb.assert_awaited_once()
-    # 第二实参是 plan_run_id
     assert rb.call_args.args[1] == 42
 
 
 @pytest.mark.asyncio
 async def test_async_unexpected_exception_also_rolls_back():
-    """#4: async 兜底 — 非 PlanDispatchError 系统异常同样 rollback,不让 aggregator 挂。"""
+    """Unexpected child creation errors also leave a retryable parent."""
     pr = PlanRun(
         id=99, plan_id=10, status="SUCCESS",
         chain_index=0, root_plan_run_id=None, triggered_by="test",
         next_plan_triggered=False, result_summary=None,
+        plan_snapshot={"plan": {"id": 10, "next_plan_id": 20}, "steps": []},
     )
-    plan = Plan(id=10, name="p", next_plan_id=20)
-    mock_db = _build_mock_async_session(pr.id, plan)
+    mock_db = _build_mock_async_session(pr)
+    mock_db.run_sync.side_effect = ConnectionError("postgres link lost")
 
     with patch(
-        "backend.services.plan_chain_trigger.dispatch_plan",
-        new=AsyncMock(side_effect=ConnectionError("postgres link lost")),
-    ), patch(
         "backend.services.plan_chain_trigger._rollback_chain_trigger_async",
         new=AsyncMock(),
     ) as rb:
@@ -215,28 +351,81 @@ async def test_async_unexpected_exception_also_rolls_back():
 
 @pytest.mark.asyncio
 async def test_async_cas_loser_returns_none_without_dispatch():
-    """CAS 并发去重:UPDATE...WHERE next_plan_triggered.is_(False) 只有一个 winner;
-    输家 scalar() 返回 None,不进入 dispatch 分支。"""
+    """A parent already claimed by another trigger cannot create a child."""
     pr = PlanRun(
         id=7, plan_id=10, status="SUCCESS",
         chain_index=0, root_plan_run_id=None, triggered_by="test",
+        next_plan_triggered=True,
+        plan_snapshot={"plan": {"id": 10, "next_plan_id": 20}, "steps": []},
     )
-    plan = Plan(id=10, name="p", next_plan_id=20)
 
     mock_db = MagicMock()
-    mock_db.get = AsyncMock(return_value=plan)
-    device_rows = [SimpleNamespace(device_id=1)]
-    device_result = MagicMock()
-    device_result.all.return_value = device_rows
-    update_result = MagicMock()
-    update_result.scalar.return_value = None  # CAS 输家
-    mock_db.execute = AsyncMock(side_effect=[device_result, update_result])
+    mock_db.execute = AsyncMock(
+        side_effect=[_scalar_result(pr), _scalar_result(None)]
+    )
+    mock_db.run_sync = AsyncMock()
     mock_db.commit = AsyncMock()
 
-    with patch(
-        "backend.services.plan_chain_trigger.dispatch_plan", new=AsyncMock(),
-    ) as disp:
-        result = await trigger_next_plan(pr, mock_db)
+    result = await trigger_next_plan(pr, mock_db)
 
     assert result is None
-    disp.assert_not_awaited()  # 输家不应触发 dispatch
+    mock_db.run_sync.assert_not_awaited()
+
+
+class TestPlanChainLegacySnapshotFallback:
+    def test_trigger_sync_falls_back_to_live_plan_next_plan_id(
+        self, db_session, sample_device, sample_host, sample_script,
+    ):
+        child_plan = Plan(name="chain-child-fallback", failure_threshold=0.1)
+        parent_plan = Plan(name="chain-parent-fallback", failure_threshold=0.1)
+        db_session.add_all([parent_plan, child_plan])
+        db_session.flush()
+        parent_plan.next_plan_id = child_plan.id
+
+        pr = PlanRun(
+            plan_id=parent_plan.id,
+            status="SUCCESS",
+            failure_threshold=0.1,
+            plan_snapshot={
+                "plan": {"id": parent_plan.id},
+                "steps": [],
+            },
+            run_type="MANUAL",
+            triggered_by="test",
+            started_at=datetime.now(timezone.utc),
+        )
+        db_session.add(pr)
+        db_session.flush()
+        db_session.add(
+            JobInstance(
+                plan_run_id=pr.id,
+                plan_id=parent_plan.id,
+                device_id=sample_device.id,
+                host_id=sample_host.id,
+                status=JobStatus.COMPLETED.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            )
+        )
+        db_session.add(
+            PlanStep(
+                plan_id=child_plan.id,
+                stage="init",
+                sort_order=0,
+                step_key="child-init",
+                script_name=sample_script[0].name,
+                script_version=sample_script[0].version,
+                timeout_seconds=300,
+                enabled=True,
+            )
+        )
+        db_session.commit()
+        db_session.refresh(pr)
+
+        with patch(
+            "backend.services.plan_chain_trigger.enqueue_sync",
+        ):
+            child = trigger_next_plan_sync(pr, db_session)
+
+        assert child is not None
+        assert child.plan_id == child_plan.id
+        assert child.parent_plan_run_id == pr.id

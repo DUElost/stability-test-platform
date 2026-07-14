@@ -159,7 +159,7 @@ class TestManualRetry:
             headers=auth_headers,
         )
         assert resp.status_code == 409
-        assert "terminal" in resp.json()["detail"].lower()
+        assert "must be running" in resp.json()["detail"].lower()
 
     def test_manual_retry_wrong_plan_run_returns_404(
         self, client, auth_headers, db_session, manual_chain,

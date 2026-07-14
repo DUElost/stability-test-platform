@@ -29,11 +29,13 @@ from fastapi import HTTPException
 
 from backend.api.routes.agent_api import ArtifactIn, ingest_artifact, get_archive_status
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
-from backend.models.enums import JobStatus
-from backend.models.job import JobArtifact
+from backend.models.device_lease import DeviceLease
+from backend.models.enums import JobStatus, LeaseStatus
+from backend.models.job import JobArtifact, JobInstance
 from backend.tests.api.test_agent_api_watcher import (
     _cleanup_seed,
     _seed_job_with_policy,
+    _setup_watcher_lease,
 )
 
 
@@ -45,6 +47,23 @@ def _set_nfs_root(monkeypatch):
 # ----------------------------------------------------------------------
 # helper
 # ----------------------------------------------------------------------
+
+def _artifact_in(seed: dict | None, **kwargs) -> ArtifactIn:
+    identity = {
+        "fencing_token": (
+            f"{seed['device_id']}:1" if seed is not None else "missing-job:1"
+        ),
+        "agent_instance_id": (
+            seed["host_id"] if seed is not None else "missing-agent"
+        ),
+        "host_id": seed["host_id"] if seed is not None else "missing-host",
+        "device_serial": (
+            seed["device_serial"] if seed is not None else "missing-device"
+        ),
+    }
+    identity.update(kwargs)
+    return ArtifactIn(**identity)
+
 
 def _cleanup_with_artifacts(seed: dict) -> None:
     """扩展清理：先删本用例产生的 artifact 再走标准 cleanup。"""
@@ -66,12 +85,14 @@ def _cleanup_with_artifacts(seed: dict) -> None:
 @pytest.mark.asyncio
 async def test_ingest_artifact_happy_path_creates_new_row():
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await ingest_artifact(
                 job_id=seed["job_id"],
-                payload=ArtifactIn(
+                payload=_artifact_in(
+                    seed,
                     storage_uri="/mnt/nfs/stability/jobs/1/AEE/1700000000_db.0.0",
                     artifact_type="aee_crash",
                     size_bytes=1024,
@@ -110,8 +131,10 @@ async def test_ingest_artifact_happy_path_creates_new_row():
 @pytest.mark.asyncio
 async def test_ingest_artifact_is_idempotent_on_job_storage_uri():
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
     storage_uri = "/mnt/nfs/stability/jobs/1/VENDOR_AEE/1700000000_db.x"
-    payload = ArtifactIn(
+    payload = _artifact_in(
+        seed,
         storage_uri=storage_uri,
         artifact_type="vendor_aee_crash",
         size_bytes=2048,
@@ -133,7 +156,8 @@ async def test_ingest_artifact_is_idempotent_on_job_storage_uri():
         async with AsyncSessionLocal() as async_db:
             r2 = await ingest_artifact(
                 job_id=seed["job_id"],
-                payload=ArtifactIn(
+                payload=_artifact_in(
+                    seed,
                     storage_uri=storage_uri,
                     artifact_type="vendor_aee_crash",
                     size_bytes=9999,
@@ -176,7 +200,8 @@ async def test_ingest_artifact_rejects_unlisted_artifact_type():
             with pytest.raises(HTTPException) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
-                    payload=ArtifactIn(
+                    payload=_artifact_in(
+                        seed,
                         storage_uri="/mnt/nfs/x",
                         artifact_type="anr_trace",  # 不在白名单
                     ),
@@ -211,7 +236,8 @@ async def test_ingest_artifact_rejects_empty_storage_uri():
             with pytest.raises(HTTPException) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
-                    payload=ArtifactIn(
+                    payload=_artifact_in(
+                        seed,
                         storage_uri="",
                         artifact_type="aee_crash",
                     ),
@@ -233,7 +259,8 @@ async def test_ingest_artifact_rejects_storage_uri_outside_nfs_root():
             with pytest.raises(HTTPException) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
-                    payload=ArtifactIn(
+                    payload=_artifact_in(
+                        seed,
                         storage_uri="file:///etc/passwd",
                         artifact_type="aee_crash",
                     ),
@@ -251,12 +278,14 @@ async def test_ingest_artifact_accepts_storage_uri_under_watcher_nfs_root(monkey
     monkeypatch.setenv("STP_NFS_ROOT", "/mnt/storage/test-platform")
     monkeypatch.setenv("STP_WATCHER_NFS_BASE_DIR", "/mnt/nfs/stability")
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
     try:
         await async_engine.dispose()
         async with AsyncSessionLocal() as async_db:
             result = await ingest_artifact(
                 job_id=seed["job_id"],
-                payload=ArtifactIn(
+                payload=_artifact_in(
+                    seed,
                     storage_uri="/mnt/nfs/stability/jobs/1/AEE/1700000000_db.0.0",
                     artifact_type="aee_crash",
                     size_bytes=1024,
@@ -294,7 +323,8 @@ async def test_ingest_artifact_rejects_negative_size_bytes():
             with pytest.raises(HTTPException) as excinfo:
                 await ingest_artifact(
                     job_id=seed["job_id"],
-                    payload=ArtifactIn(
+                    payload=_artifact_in(
+                        seed,
                         storage_uri="/mnt/nfs/jobs/1/aee/file",
                         artifact_type="aee_crash",
                         size_bytes=-1,
@@ -319,7 +349,8 @@ async def test_ingest_artifact_returns_404_when_job_missing():
         with pytest.raises(HTTPException) as excinfo:
             await ingest_artifact(
                 job_id=999999999,
-                payload=ArtifactIn(
+                payload=_artifact_in(
+                    None,
                     storage_uri="/mnt/nfs/nope",
                     artifact_type="aee_crash",
                 ),
@@ -337,6 +368,7 @@ async def test_ingest_artifact_returns_404_when_job_missing():
 @pytest.mark.asyncio
 async def test_ingest_artifact_accepts_all_whitelisted_types():
     seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
     whitelist = ["aee_crash", "vendor_aee_crash", "bugreport"]
     try:
         for i, at in enumerate(whitelist):
@@ -344,7 +376,8 @@ async def test_ingest_artifact_accepts_all_whitelisted_types():
             async with AsyncSessionLocal() as async_db:
                 r = await ingest_artifact(
                     job_id=seed["job_id"],
-                    payload=ArtifactIn(
+                    payload=_artifact_in(
+                        seed,
                         storage_uri=f"/mnt/nfs/jobs/1/{at}/{i}",
                         artifact_type=at,
                     ),
@@ -364,6 +397,67 @@ async def test_ingest_artifact_accepts_all_whitelisted_types():
             db.close()
     finally:
         _cleanup_with_artifacts(seed)
+
+
+@pytest.mark.asyncio
+async def test_ingest_artifact_rejects_upload_fencing_mismatch():
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as excinfo:
+                await ingest_artifact(
+                    job_id=seed["job_id"],
+                    payload=_artifact_in(
+                        seed,
+                        storage_uri="/mnt/nfs/jobs/1/aee/fenced",
+                        artifact_type="aee_crash",
+                        fencing_token="stale-worker-token",
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert excinfo.value.status_code == 409
+        assert excinfo.value.detail["code"] == "UPLOAD_FENCING_MISMATCH"
+    finally:
+        _cleanup_with_artifacts(seed)
+
+
+@pytest.mark.asyncio
+async def test_ingest_artifact_accepts_terminal_delayed_upload_with_historical_token():
+    """Job 终态后 watcher 延迟上传可使用匹配的 RELEASED 历史 lease。"""
+    seed = _seed_job_with_policy(job_status=JobStatus.RUNNING.value)
+    _setup_watcher_lease(seed)
+    db = SessionLocal()
+    try:
+        job = db.get(JobInstance, seed["job_id"])
+        job.status = JobStatus.COMPLETED.value
+        lease = db.query(DeviceLease).filter(
+            DeviceLease.job_id == seed["job_id"],
+        ).one()
+        lease.status = LeaseStatus.RELEASED.value
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await ingest_artifact(
+                job_id=seed["job_id"],
+                payload=_artifact_in(
+                    seed,
+                    storage_uri="/mnt/nfs/jobs/1/aee/delayed",
+                    artifact_type="aee_crash",
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.data.created is True
+    finally:
+        _cleanup_with_artifacts(seed)
+
 
 @pytest.mark.asyncio
 async def test_archive_status_unknown_host_404():

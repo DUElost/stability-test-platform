@@ -13,9 +13,11 @@ Termination contract:
   - no jobs to release
 - RUNNING with active jobs:
   - PENDING jobs → status=ABORTED inline
-  - RUNNING jobs → release ACTIVE device leases → Agent's LeaseRenewer
-    detects 409 → pipeline_engine drains current step → reports ABORTED
-  - reconciler is the safety net for unresponsive agents (15s tick)
+  - RUNNING jobs keep their ACTIVE lease, receive an abort control command,
+    terminate the process tree, then report ABORTED through the canonical
+    completion endpoint
+  - unresponsive agents move to UNKNOWN/quarantine; the device is never
+    reallocated while the old process may still be alive
 - already terminal: no-op, returns False
 
 Always writes audit_log(action='abort_plan_run').
@@ -27,18 +29,19 @@ Frontend re-renders via SocketIO room ``plan_run:{id}``.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 from backend.realtime.socketio_server import schedule_emit
 from typing import Optional
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.audit import record_audit
-from backend.models.device_lease import DeviceLease
-from backend.models.enums import JobStatus, LeaseStatus, LeaseType, PlanRunStatus
+from backend.core.job_timeout_config import ABORT_ACK_GRACE_SECONDS
+from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.plan_run_aggregation import apply_plan_run_aggregation
@@ -64,29 +67,6 @@ _TERMINAL_JOB_STATUSES = {
 
 class PlanRunAbortError(Exception):
     """Raised when an abort is rejected for state-machine reasons."""
-
-
-def _release_active_lease_sync(
-    db: Session, device_id: int, job_id: int
-) -> bool:
-    """Release the ACTIVE JOB lease for (device_id, job_id) if present.
-
-    Mirrors :func:`backend.services.lease_manager.release_lease_sync` but
-    inlined here to avoid pulling the async-flavoured module's ORM imports
-    into this sync hot path.
-    """
-    now = datetime.now(timezone.utc)
-    result = db.execute(
-        update(DeviceLease)
-        .where(
-            DeviceLease.device_id == device_id,
-            DeviceLease.job_id == job_id,
-            DeviceLease.lease_type == LeaseType.JOB.value,
-            DeviceLease.status == LeaseStatus.ACTIVE.value,
-        )
-        .values(status=LeaseStatus.RELEASED.value, released_at=now)
-    )
-    return bool(result.rowcount)
 
 
 def abort_plan_run(
@@ -142,6 +122,9 @@ def abort_plan_run(
     )
 
     aborted_jobs: list[int] = []
+    abort_requested_jobs: list[int] = []
+    abort_jobs_by_host: dict[str, list[int]] = defaultdict(list)
+    abort_hosts: set[str] = set()
     released_leases = 0
 
     if not in_precheck:
@@ -164,16 +147,25 @@ def abort_plan_run(
                 job.ended_at = now
                 aborted_jobs.append(job.id)
             else:
-                # RUNNING: release lease, let Agent drain naturally.
-                if _release_active_lease_sync(db, job.device_id, job.id):
-                    released_leases += 1
-                aborted_jobs.append(job.id)
+                # RUNNING remains the authoritative state until the Agent has
+                # killed the process tree and ACKed ABORTED via /complete.
+                abort_requested_jobs.append(job.id)
+                if job.host_id:
+                    abort_hosts.add(job.host_id)
+                    abort_jobs_by_host[job.host_id].append(job.id)
         # Mark abort_requested so reconciler / aggregator know this is intentional.
         run_ctx["abort_requested"] = {
             "at": now.isoformat(),
             "reason": reason,
             "triggered_by": triggered_by,
+            "deadline_at": (
+                now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
+            ).isoformat(),
+            "requested_job_ids": abort_requested_jobs,
+            "acknowledged_job_ids": [],
         }
+        pr.run_context = run_ctx
+        flag_modified(pr, "run_context")
 
         has_active_jobs = any(
             job.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)
@@ -219,6 +211,7 @@ def abort_plan_run(
             "reason": reason,
             "phase": "precheck" if in_precheck else "running",
             "aborted_jobs": aborted_jobs,
+            "abort_requested_jobs": abort_requested_jobs,
             "released_leases": released_leases,
             "triggered_by": triggered_by,
         },
@@ -226,6 +219,27 @@ def abort_plan_run(
         username=audit_username,
     )
     db.commit()
+
+    # Non-blocking control delivery.  The lease remains ACTIVE until the Agent
+    # acknowledges termination, so a lost command cannot make the device
+    # schedulable while the old process is still running.
+    for host_id in abort_hosts:
+        host_job_ids = abort_jobs_by_host.get(host_id, [])
+        if not host_job_ids:
+            continue
+        schedule_emit(
+            "control",
+            {
+                "command": "abort",
+                "payload": {
+                    "plan_run_id": plan_run_id,
+                    "job_ids": host_job_ids,
+                    "reason": reason,
+                },
+            },
+            namespace="/agent",
+            room=f"agent:{host_id}",
+        )
 
     # ADR-0025 Sprint 4: abort 导致 PlanRun 终态时触发归档-2 scan + merge
     if should_trigger_dedup(pr.status):
@@ -243,6 +257,23 @@ def abort_plan_run(
                     "job_id": jid,
                     "plan_run_id": plan_run_id,
                     "status": "ABORTED",
+                    "reason": reason,
+                },
+                "timestamp": ts,
+            },
+            namespace="/dashboard",
+            room=room,
+        )
+    for jid in abort_requested_jobs:
+        schedule_emit(
+            "job_status",
+            {
+                "type": "JOB_STATUS",
+                "payload": {
+                    "job_id": jid,
+                    "plan_run_id": plan_run_id,
+                    "status": "RUNNING",
+                    "abort_requested": True,
                     "reason": reason,
                 },
                 "timestamp": ts,
@@ -279,6 +310,7 @@ def abort_plan_run(
         "status": pr.status,
         "phase": "precheck" if in_precheck else "running",
         "aborted_jobs": aborted_jobs,
+        "abort_requested_jobs": abort_requested_jobs,
         "released_leases": released_leases,
     }
 

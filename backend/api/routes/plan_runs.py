@@ -6,6 +6,7 @@ Provides PlanRun list/detail/jobs/summary endpoints.
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Optional
@@ -41,7 +42,11 @@ from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.core.job_timeout_config import (
     DISPATCHED_TIMEOUT_SECONDS,
+    PATROL_STALL_MULTIPLIER,
+    PRECHECK_ACTIVE_STALE_SECONDS,
+    PRECHECK_QUEUE_STALE_SECONDS,
     UNKNOWN_GRACE_SECONDS,
+    running_heartbeat_timeout_seconds,
 )
 from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
@@ -142,6 +147,7 @@ class PlanRunOut(BaseModel):
     chain_index: int = 0
     next_plan_triggered: bool = False
     plan_name: Optional[str] = None
+    capabilities: Optional[dict] = None
     jobs: list[JobInstanceOut] = []
 
 
@@ -151,6 +157,67 @@ def _iso(v) -> str | None:
     if v is None:
         return None
     return v.isoformat()
+
+
+def _project_run_context(pr: PlanRun) -> Optional[dict]:
+    if not isinstance(pr.run_context, dict):
+        return pr.run_context
+    context = deepcopy(pr.run_context)
+    state = context.get("dispatch_state")
+    if not isinstance(state, dict):
+        return context
+
+    status = str(state.get("status") or "")
+    anchor_raw = (
+        state.get("started_at")
+        if status == "running"
+        else state.get("enqueued_at")
+    )
+    timeout_seconds = (
+        PRECHECK_ACTIVE_STALE_SECONDS
+        if status == "running"
+        else PRECHECK_QUEUE_STALE_SECONDS
+    )
+    if status in {"queued", "running"} and anchor_raw:
+        try:
+            anchor = datetime.fromisoformat(
+                str(anchor_raw).replace("Z", "+00:00")
+            )
+            deadline = _aware(anchor) + timedelta(seconds=timeout_seconds)
+            state["deadline_at"] = deadline.isoformat()
+            state["stale"] = datetime.now(timezone.utc) >= deadline
+        except (TypeError, ValueError):
+            state["deadline_at"] = None
+            state["stale"] = False
+    else:
+        state["stale"] = False
+    summary = pr.result_summary if isinstance(pr.result_summary, dict) else {}
+    state["retryable"] = (
+        pr.status == PlanRunStatus.FAILED.value
+        and bool(summary.get("precheck_failed") or summary.get("dispatch_failed"))
+    )
+    return context
+
+
+def _plan_run_capabilities(pr: PlanRun) -> dict:
+    summary = pr.result_summary if isinstance(pr.result_summary, dict) else {}
+    terminal = pr.status in {
+        PlanRunStatus.SUCCESS.value,
+        PlanRunStatus.PARTIAL_SUCCESS.value,
+        PlanRunStatus.FAILED.value,
+        PlanRunStatus.DEGRADED.value,
+    }
+    return {
+        "abort": pr.status == PlanRunStatus.RUNNING.value,
+        "retry_dispatch": (
+            pr.status == PlanRunStatus.FAILED.value
+            and bool(
+                summary.get("precheck_failed")
+                or summary.get("dispatch_failed")
+            )
+        ),
+        "final_archive": terminal,
+    }
 
 
 def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_name: str | None = None) -> PlanRunOut:
@@ -164,13 +231,14 @@ def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_na
         started_at=_iso(pr.started_at) or "",
         ended_at=_iso(pr.ended_at),
         result_summary=pr.result_summary,
-        run_context=pr.run_context,
+        run_context=_project_run_context(pr),
         plan_snapshot=pr.plan_snapshot,
         parent_plan_run_id=pr.parent_plan_run_id,
         root_plan_run_id=pr.root_plan_run_id,
         chain_index=pr.chain_index or 0,
         next_plan_triggered=bool(pr.next_plan_triggered),
         plan_name=plan_name,
+        capabilities=_plan_run_capabilities(pr),
         jobs=jobs or [],
     )
 
@@ -300,9 +368,9 @@ def abort_plan_run_endpoint(
 ):
     """ADR-0021 D7 — abort a PlanRun.
 
-    Returns 409 if the PlanRun is already terminal.  Otherwise releases
-    active leases / marks PENDING jobs ABORTED / closes the run, then
-    returns immediately (Agent drain happens asynchronously).
+    Returns 409 if the PlanRun is already terminal. PENDING jobs become
+    ABORTED immediately; RUNNING jobs retain their lease until the Agent kills
+    the process tree and ACKs ABORTED through the completion endpoint.
     """
     reason = (payload.reason if payload else None) or "aborted_by_user"
     try:
@@ -409,10 +477,7 @@ def retry_plan_run_dispatch_endpoint(
 # ── ADR-0022: Manual retry / exit for patrol-backoff jobs ───────────────────
 
 
-_NON_TERMINAL_JOB_STATUSES = {
-    JobStatus.PENDING.value,
-    JobStatus.RUNNING.value,
-}
+_MANUAL_ACTION_JOB_STATUSES = {JobStatus.RUNNING.value}
 
 
 class JobManualActionIn(BaseModel):
@@ -488,10 +553,10 @@ def manual_retry_job(
     ``current_failure_streak`` — diagnostic information is preserved.
     """
     job = _load_job_in_run(db, run_id, job_id)
-    if job.status not in _NON_TERMINAL_JOB_STATUSES:
+    if job.status not in _MANUAL_ACTION_JOB_STATUSES:
         raise HTTPException(
             status_code=409,
-            detail=f"job is in terminal status {job.status}; cannot retry",
+            detail=f"job must be RUNNING for manual retry; current status is {job.status}",
         )
 
     # Why: 同向 manual_action 已等待 Agent 消费时,重复点击不再二次写 audit / emit / counter。
@@ -568,15 +633,15 @@ def manual_exit_job(
     next heartbeat and exits the patrol loop **without running teardown** (BO4).
     Recycler / device lease release ensures the device returns to the pool.
 
-    The job's status remains its current (PENDING/RUNNING) value here; it
+    The job's status remains RUNNING here; it
     transitions to ABORTED once the Agent reports the terminal state via
     /jobs/{id}/complete (or via Recycler's stall detection).
     """
     job = _load_job_in_run(db, run_id, job_id)
-    if job.status not in _NON_TERMINAL_JOB_STATUSES:
+    if job.status not in _MANUAL_ACTION_JOB_STATUSES:
         raise HTTPException(
             status_code=409,
-            detail=f"job is in terminal status {job.status}; cannot exit",
+            detail=f"job must be RUNNING for manual exit; current status is {job.status}",
         )
 
     # Why: 与 manual_retry 对称 — 同向 EXIT_REQUESTED 已等待 Agent 消费时短路,避免连点
@@ -653,7 +718,8 @@ def manual_exit_job(
 #     4) PlanRun 自身 trigger 事件 + patrol heartbeat 周期摘要
 #   - devices 端点的 ui_status 派生规则:
 #       COMPLETED                            → completed
-#       FAILED / ABORTED                     → failed
+#       FAILED                              → failed
+#       ABORTED                             → aborted
 #       UNKNOWN                              → unknown (grace / recovery window)
 #       PENDING                              → pending
 #       RUNNING + manual_action=EXIT_REQ.    → backoff
@@ -673,7 +739,7 @@ _MAX_WATCHER_WINDOW_MIN       = 1440  # 1 天
 _MAX_EVENTS_LIMIT             = 500
 _DEFAULT_EVENTS_LIMIT         = 100
 
-_FAILED_JOB_STATUSES   = {JobStatus.FAILED.value, JobStatus.ABORTED.value}
+_FAILED_JOB_STATUSES   = {JobStatus.FAILED.value}
 _TERMINAL_PR_STATUSES  = {
     PlanRunStatus.SUCCESS.value,
     PlanRunStatus.PARTIAL_SUCCESS.value,
@@ -1043,9 +1109,64 @@ def get_plan_run_timeline(
             and _aware(j.last_patrol_heartbeat_at) >= live_threshold
         )
 
-    # 5) 每 stage 的 succeeded/failed/skipped 总数(求和 step 级)
-    def _sum_stage(stage_name: str, accessor: str) -> int:
-        return sum(getattr(s, accessor) for s in stages_def.get(stage_name, []))
+    # 5) Stage counts are device counts, not step execution counts.  A device
+    # succeeds only after every enabled step in that stage has a successful
+    # terminal trace.
+    required_steps_by_stage: dict[str, set[str]] = {
+        stage: {
+            str(step.get("step_key", ""))
+            for step in snapshot_steps
+            if step.get("stage") == stage
+            and step.get("enabled", True) is not False
+        }
+        for stage in ("init", "patrol", "teardown")
+    }
+    job_step_results: dict[tuple[int, str, str], set[str]] = {}
+    if job_ids:
+        result_rows = db.execute(
+            select(
+                StepTrace.job_id,
+                StepTrace.stage,
+                StepTrace.step_id,
+                StepTrace.event_type,
+                StepTrace.status,
+            ).where(
+                StepTrace.job_id.in_(job_ids),
+                StepTrace.event_type != "STARTED",
+            )
+        ).all()
+        for job_id, stage, step_id, event_type, status in result_rows:
+            result = None
+            if event_type == "COMPLETED" and status == "COMPLETED":
+                result = "succeeded"
+            elif event_type == "COMPLETED" and status == "SKIPPED":
+                result = "skipped"
+            elif event_type == "FAILED" or status == "FAILED":
+                result = "failed"
+            if result:
+                job_step_results.setdefault(
+                    (job_id, stage, step_id), set(),
+                ).add(result)
+
+    def _stage_device_counts(stage_name: str) -> tuple[int, int, int]:
+        required = required_steps_by_stage[stage_name]
+        if not required:
+            return 0, 0, 0
+        succeeded = failed = skipped = 0
+        for job in jobs:
+            results = {
+                step_id: job_step_results.get(
+                    (job.id, stage_name, step_id), set(),
+                )
+                for step_id in required
+            }
+            if any("failed" in values and "succeeded" not in values for values in results.values()):
+                failed += 1
+            elif all("succeeded" in values for values in results.values()):
+                succeeded += 1
+            elif all(values & {"succeeded", "skipped"} for values in results.values()):
+                skipped += 1
+        return succeeded, failed, skipped
 
     # 6) 每 stage 的 started_at / ended_at — 取该 stage 第一个/最后一个 step_trace
     stage_ts: dict[str, dict[str, Optional[datetime]]] = {
@@ -1082,9 +1203,7 @@ def get_plan_run_timeline(
     stages_out: list[StageOut] = []
     for stage_name in ("init", "patrol", "teardown"):
         steps = stages_def.get(stage_name, [])
-        succeeded = _sum_stage(stage_name, "device_succeeded")
-        failed    = _sum_stage(stage_name, "device_failed")
-        skipped   = _sum_stage(stage_name, "device_skipped")
+        succeeded, failed, skipped = _stage_device_counts(stage_name)
         st = _stage_status_from_steps(
             stage_name,
             pr_status=pr.status,
@@ -1110,8 +1229,13 @@ def get_plan_run_timeline(
         if stage_name == "patrol":
             stage_obj.patrol_cycle_index = patrol_cycle_index
             stage_obj.patrol_active_devices = patrol_active
-            stage_obj.patrol_interval_seconds = (
-                plan.patrol_interval_seconds if plan else None
+            snapshot_plan = (
+                (pr.plan_snapshot or {}).get("plan", {})
+                if isinstance(pr.plan_snapshot, dict)
+                else {}
+            )
+            stage_obj.patrol_interval_seconds = snapshot_plan.get(
+                "patrol_interval_seconds",
             )
         stages_out.append(stage_obj)
 
@@ -1416,7 +1540,6 @@ def get_plan_run_events(
                 )
             )
             .order_by(StepTrace.original_ts.desc())
-            .limit(_MAX_EVENTS_LIMIT)
         ).scalars().all()
         for t in bad_traces:
             dev_id = job_to_device.get(t.job_id)
@@ -1461,7 +1584,6 @@ def get_plan_run_events(
             select(JobLogSignal)
             .where(JobLogSignal.job_id.in_(job_ids))
             .order_by(JobLogSignal.detected_at.desc())
-            .limit(_MAX_EVENTS_LIMIT)
         ).scalars().all()
         for s in signal_rows:
             dev_id = job_to_device.get(s.job_id)
@@ -1485,7 +1607,7 @@ def get_plan_run_events(
     audit_q = select(AuditLog).where(
         ((AuditLog.resource_type == "plan_run") & (AuditLog.resource_id == str(run_id)))
         | ((AuditLog.resource_type == "job_instance") & (AuditLog.resource_id.in_(job_id_strs)))
-    ).order_by(AuditLog.timestamp.desc()).limit(_MAX_EVENTS_LIMIT)
+    ).order_by(AuditLog.timestamp.desc())
     for log in db.execute(audit_q).scalars().all():
         sev = "warn" if "abort" in (log.action or "") or "fail" in (log.action or "") else "info"
         events.append(EventOut(
@@ -1536,7 +1658,7 @@ class DeviceMatrixItem(BaseModel):
     host_id: Optional[str] = None
     job_id: int
     job_status: str
-    ui_status: str                     # completed/running/failed/risk/backoff/pending
+    ui_status: str                     # completed/running/failed/aborted/risk/backoff/pending/unknown
     current_stage: str
     current_step: Optional[str] = None
     patrol_cycle_count: int = 0
@@ -1553,8 +1675,12 @@ class DeviceMatrixItem(BaseModel):
     status_reason: Optional[str] = None   # ADR-0021: pending_timeout / agent never claimed / etc.
     grace_remaining_seconds: Optional[int] = None
     pending_claim_remaining_seconds: Optional[int] = None
+    pending_claim_deadline_at: Optional[str] = None
+    heartbeat_deadline_at: Optional[str] = None
+    is_stuck: bool = False
     busy_reason: Optional[str] = None
     busy_lease_job_id: Optional[int] = None
+    capabilities: Optional[dict] = None
 
 
 class PlanRunDevicesOut(BaseModel):
@@ -1589,16 +1715,18 @@ def _ui_status_for_job(
     s = j.status
     if s == JobStatus.COMPLETED.value:
         return "completed"
+    if s == JobStatus.ABORTED.value:
+        return "aborted"
     if s in _FAILED_JOB_STATUSES:
         return "failed"
     if s == JobStatus.PENDING.value:
         return "pending"
 
-    disconnected = _device_currently_disconnected(device, host_status)
     if s == JobStatus.UNKNOWN.value:
-        return "unknown" if disconnected else "failed"
+        return "unknown"
 
     # RUNNING 分支
+    disconnected = _device_currently_disconnected(device, host_status)
     if disconnected:
         return "unknown"
     if (j.manual_action or "") == "EXIT_REQUESTED":
@@ -1615,6 +1743,8 @@ def _current_stage_for_job(j: JobInstance) -> str:
         return "done"
     if s == JobStatus.UNKNOWN.value:
         return "unknown"
+    if s == JobStatus.ABORTED.value:
+        return "aborted"
     if s in _FAILED_JOB_STATUSES:
         return "failed"
     if s == JobStatus.PENDING.value:
@@ -1643,6 +1773,40 @@ def _pending_claim_remaining_seconds(j: JobInstance, now: datetime) -> Optional[
         return None
     remaining = (base + timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS) - now).total_seconds()
     return max(0, int(remaining))
+
+
+def _pending_claim_deadline(j: JobInstance) -> Optional[datetime]:
+    if j.status != JobStatus.PENDING.value:
+        return None
+    base = _aware(j.created_at) or _aware(j.started_at)
+    if base is None:
+        return None
+    return base + timedelta(seconds=DISPATCHED_TIMEOUT_SECONDS)
+
+
+def _running_heartbeat_deadline(j: JobInstance) -> Optional[datetime]:
+    if j.status != JobStatus.RUNNING.value:
+        return None
+    updated = _aware(j.updated_at) or _aware(j.started_at)
+    candidates: list[datetime] = []
+    if updated is not None:
+        candidates.append(
+            updated + timedelta(seconds=running_heartbeat_timeout_seconds(j))
+        )
+
+    patrol = (
+        ((j.pipeline_def or {}).get("lifecycle") or {}).get("patrol")
+        if isinstance(j.pipeline_def, dict)
+        else None
+    )
+    interval = patrol.get("interval_seconds") if isinstance(patrol, dict) else None
+    heartbeat = _aware(j.last_patrol_heartbeat_at)
+    if heartbeat is not None and isinstance(interval, (int, float)) and interval > 0:
+        candidates.append(
+            heartbeat
+            + timedelta(seconds=float(interval) * PATROL_STALL_MULTIPLIER)
+        )
+    return min(candidates) if candidates else None
 
 
 def _adb_state_excluded(adb_state: str | None) -> bool:
@@ -1733,6 +1897,8 @@ def get_plan_run_devices(
         host_st = host_status_by_id.get(j.host_id) if j.host_id else None
         ui = _ui_status_for_job(j, now, dev, host_st)
         cur_stage = _current_stage_for_job(j)
+        pending_deadline = _pending_claim_deadline(j)
+        heartbeat_deadline = _running_heartbeat_deadline(j)
         lease_job_id = active_lease_by_device.get(j.device_id)
         busy_reason, busy_lease_job_id = _derive_busy_reason(dev, host_st, lease_job_id)
         items.append(DeviceMatrixItem(
@@ -1759,8 +1925,20 @@ def get_plan_run_devices(
             status_reason=j.status_reason,
             grace_remaining_seconds=_grace_remaining_seconds(j, now),
             pending_claim_remaining_seconds=_pending_claim_remaining_seconds(j, now),
+            pending_claim_deadline_at=_iso(pending_deadline),
+            heartbeat_deadline_at=_iso(heartbeat_deadline),
+            is_stuck=bool(heartbeat_deadline and now >= heartbeat_deadline),
             busy_reason=busy_reason,
             busy_lease_job_id=busy_lease_job_id,
+            capabilities={
+                "manual_retry": j.status == JobStatus.RUNNING.value,
+                "manual_exit": j.status == JobStatus.RUNNING.value,
+                "open_report": j.status in {
+                    JobStatus.COMPLETED.value,
+                    JobStatus.FAILED.value,
+                    JobStatus.ABORTED.value,
+                },
+            },
         ))
         by_status["all"] += 1
         by_status[ui] = by_status.get(ui, 0) + 1

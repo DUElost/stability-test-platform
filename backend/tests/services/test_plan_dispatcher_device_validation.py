@@ -9,10 +9,13 @@
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
+from backend.core.database import SessionLocal
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import (
     DeviceStatus,
@@ -26,10 +29,14 @@ from backend.models.plan import Plan, PlanStep
 from backend.models.script import Script
 from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_dispatcher_sync import (
+    AllocationError,
+    _sync_allocate_devices,
+    _sync_create_allocations,
     _validate_dispatch_devices_sync,
     complete_plan_run_dispatch,
     prepare_plan_run,
 )
+from backend.services.plan_run_abort import abort_plan_run
 
 
 # ── Fixture ────────────────────────────────────────────────────────────
@@ -323,6 +330,123 @@ class TestPrepareAndCompleteIntegration:
         assert jobs[0].device_id == dev.id
         assert pr.status == "RUNNING"
 
+    @pytest.mark.parametrize(
+        "terminal_status",
+        ["SUCCESS", "PARTIAL_SUCCESS", "FAILED", "DEGRADED"],
+    )
+    def test_complete_does_not_materialize_jobs_for_terminal_plan_run(
+        self, db_session, dispatch_fixture, terminal_status,
+    ):
+        """precheck 完成与 Job 物化之间若 PlanRun 已终态，Stage 2 必须只读跳过。"""
+        from backend.models.job import JobInstance
+
+        pr = prepare_plan_run(
+            plan_id=dispatch_fixture["plan"].id,
+            device_ids=[dispatch_fixture["device"].id],
+            triggered_by="pytest",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        pr.status = terminal_status
+        db_session.commit()
+
+        complete_plan_run_dispatch(pr.id, db=db_session)
+
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0
+
+    def test_complete_does_not_materialize_jobs_after_abort_requested(
+        self, db_session, dispatch_fixture,
+    ):
+        """abort 与 dispatch gate 竞态时，abort_requested 必须阻止创建 PENDING Job。"""
+        from backend.models.job import JobInstance
+
+        pr = prepare_plan_run(
+            plan_id=dispatch_fixture["plan"].id,
+            device_ids=[dispatch_fixture["device"].id],
+            triggered_by="pytest",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        pr.run_context = {
+            **(pr.run_context or {}),
+            "abort_requested": {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "reason": "test_abort_race",
+                "triggered_by": "pytest",
+            },
+        }
+        db_session.commit()
+
+        complete_plan_run_dispatch(pr.id, db=db_session)
+
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0
+
+    def test_postgresql_abort_and_dispatch_gate_leave_no_runnable_job(
+        self, db_session, dispatch_fixture,
+    ):
+        from backend.models.job import JobInstance
+        from backend.models.plan_run import PlanRun
+
+        pr = prepare_plan_run(
+            plan_id=dispatch_fixture["plan"].id,
+            device_ids=[dispatch_fixture["device"].id],
+            triggered_by="pytest",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+
+        def dispatch():
+            db = SessionLocal()
+            try:
+                barrier.wait(timeout=5)
+                complete_plan_run_dispatch(pr.id, db=db)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                db.close()
+
+        def abort():
+            db = SessionLocal()
+            try:
+                barrier.wait(timeout=5)
+                abort_plan_run(pr.id, db=db, reason="dispatch_race_abort")
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                db.close()
+
+        with patch(
+            "backend.services.plan_run_abort.should_trigger_dedup",
+            return_value=False,
+        ), patch(
+            "backend.services.plan_run_abort.enqueue_dedup_terminal_sync",
+        ), patch("backend.services.plan_run_abort.schedule_emit"):
+            threads = [
+                threading.Thread(target=dispatch),
+                threading.Thread(target=abort),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        db_session.expire_all()
+        persisted = db_session.get(PlanRun, pr.id)
+        assert persisted.status == "FAILED"
+        jobs = db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id,
+        ).all()
+        assert len(jobs) <= 1
+        assert all(job.status == JobStatus.ABORTED.value for job in jobs)
+
     def test_complete_fails_when_device_loses_host_at_complete(
         self, db_session, dispatch_fixture, monkeypatch,
     ):
@@ -403,6 +527,98 @@ class TestPrepareAndCompleteIntegration:
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id
         ).count() == 0
+
+    def test_postgresql_wifi_capacity_one_serializes_allocations(
+        self, db_session, dispatch_fixture,
+    ):
+        from backend.models.job import JobInstance
+        from backend.models.plan_run import PlanRun
+        from backend.models.resource_pool import (
+            ResourceAllocation,
+            ResourcePool,
+        )
+
+        second_device = Device(
+            serial="S-disp-v-wifi-2",
+            host_id=dispatch_fixture["host"].id,
+            status=DeviceStatus.ONLINE.value,
+        )
+        pool = ResourcePool(
+            name="single-slot",
+            resource_type="wifi",
+            config={"ssid": "lab", "password": "secret"},
+            max_concurrent_devices=1,
+            is_active=True,
+        )
+        db_session.add_all([second_device, pool])
+        db_session.flush()
+
+        jobs = []
+        for device in (dispatch_fixture["device"], second_device):
+            run = PlanRun(
+                plan_id=dispatch_fixture["plan"].id,
+                status="RUNNING",
+                failure_threshold=0.1,
+                plan_snapshot={"plan_id": dispatch_fixture["plan"].id},
+                run_type="MANUAL",
+                triggered_by="pytest",
+            )
+            db_session.add(run)
+            db_session.flush()
+            job = JobInstance(
+                plan_run_id=run.id,
+                plan_id=dispatch_fixture["plan"].id,
+                device_id=device.id,
+                host_id=dispatch_fixture["host"].id,
+                status=JobStatus.PENDING.value,
+                pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+            )
+            db_session.add(job)
+            db_session.flush()
+            jobs.append(job)
+        db_session.commit()
+
+        barrier = threading.Barrier(2)
+        results: list[str] = []
+        errors: list[Exception] = []
+
+        def allocate(job_id: int, device_id: int):
+            db = SessionLocal()
+            try:
+                barrier.wait(timeout=5)
+                assignments = _sync_allocate_devices(db, [device_id])
+                _sync_create_allocations(
+                    db, assignments, {job_id: device_id},
+                )
+                db.commit()
+                results.append("allocated")
+            except AllocationError:
+                db.rollback()
+                results.append("no_capacity")
+            except Exception as exc:
+                db.rollback()
+                errors.append(exc)
+            finally:
+                db.close()
+
+        threads = [
+            threading.Thread(
+                target=allocate, args=(job.id, job.device_id),
+            )
+            for job in jobs
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        assert sorted(results) == ["allocated", "no_capacity"]
+        db_session.expire_all()
+        assert db_session.query(ResourceAllocation).filter(
+            ResourceAllocation.resource_pool_id == pool.id,
+        ).count() == 1
 
 
 # ── PlanDispatchError.detail 结构 ──────────────────────────────────────

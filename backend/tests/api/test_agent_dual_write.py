@@ -14,6 +14,8 @@ Phase 6d-2：device_leases 是真源；生产代码已停止写投影列
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -21,7 +23,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy import select
 
 pytestmark = pytest.mark.skipif(
@@ -36,6 +38,7 @@ from backend.api.routes.agent_api import (
     _OutboxEntry,
     _RecoverySyncIn,
     _RunCompleteIn,
+    _agent_version_is_supported,
     _claim_jobs_for_host,
     ClaimRequest,
     JobStatusUpdate,
@@ -50,6 +53,7 @@ from backend.api.routes.agent_api import (
     upload_step_traces,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal
+from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.host import Device, Host
@@ -191,7 +195,9 @@ async def test_claim_jobs_writes_lock_and_lease():
     try:
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
-                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
                 db=async_db, _=None,
             )
         assert result.error is None
@@ -226,19 +232,17 @@ async def test_claim_jobs_writes_lock_and_lease():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_get_pending_jobs_writes_lock_and_lease():
-    """get_pending_jobs 成功后只写 device_leases（Phase 6d：投影列已废止）。"""
+async def test_get_pending_jobs_is_removed_without_claiming():
+    """The legacy GET claim path is gone and cannot mutate Job/lease state."""
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
         async with AsyncSessionLocal() as async_db:
-            result = await get_pending_jobs(
-                host_id=seed["host_id"], limit=5,
-                db=async_db, _=None,
-            )
-        assert result.error is None
-        assert len(result.data) == 1
-        assert result.data[0].id == seed["job_id"]
-        assert result.data[0].status == JobStatus.RUNNING.value
+            with pytest.raises(HTTPException) as exc:
+                await get_pending_jobs(
+                    host_id=seed["host_id"], limit=5,
+                    db=async_db, _=None,
+                )
+        assert exc.value.status_code == 410
 
         db = SessionLocal()
         try:
@@ -253,7 +257,7 @@ async def test_get_pending_jobs_writes_lock_and_lease():
                 )
                 .first()
             )
-            assert lease is not None, "get_pending_jobs must create an ACTIVE device_lease"
+            assert lease is None
         finally:
             db.close()
     finally:
@@ -404,6 +408,114 @@ async def test_complete_job_idempotent_replay_skips_release_lease_logging(caplog
         _cleanup_seed(seed)
 
 
+@pytest.mark.asyncio(loop_scope="module")
+async def test_postgresql_concurrent_same_terminal_payload_is_idempotent():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lock_and_lease(seed)
+    payload = _RunCompleteIn(
+        update={"status": "FINISHED", "exit_code": 0},
+        fencing_token=token,
+    )
+
+    async def complete_once():
+        async with AsyncSessionLocal() as async_db:
+            return await complete_job(
+                job_id=seed["job_id"],
+                payload=payload,
+                db=async_db,
+                _=None,
+            )
+
+    try:
+        results = await asyncio.gather(complete_once(), complete_once())
+        assert [result.data["status"] for result in results] == [
+            JobStatus.COMPLETED.value,
+            JobStatus.COMPLETED.value,
+        ]
+        assert sum(
+            result.data.get("idempotent", False) for result in results
+        ) == 1
+        with SessionLocal() as db:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job.status == JobStatus.COMPLETED.value
+            assert (
+                db.query(StepTrace)
+                .filter(
+                    StepTrace.job_id == seed["job_id"],
+                    StepTrace.step_id == "__job__",
+                    StepTrace.event_type == "RUN_COMPLETE",
+                )
+                .count()
+                == 1
+            )
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_postgresql_concurrent_conflicting_terminal_payload_is_rejected():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lock_and_lease(seed)
+    payloads = [
+        _RunCompleteIn(
+            update={"status": "FINISHED", "exit_code": 0},
+            fencing_token=token,
+        ),
+        _RunCompleteIn(
+            update={"status": "FAILED", "exit_code": 1},
+            fencing_token=token,
+        ),
+    ]
+
+    async def complete_once(payload):
+        async with AsyncSessionLocal() as async_db:
+            return await complete_job(
+                job_id=seed["job_id"],
+                payload=payload,
+                db=async_db,
+                _=None,
+            )
+
+    try:
+        results = await asyncio.gather(
+            *(complete_once(payload) for payload in payloads),
+            return_exceptions=True,
+        )
+        failures = [
+            result for result in results if isinstance(result, HTTPException)
+        ]
+        successes = [
+            result for result in results if not isinstance(result, Exception)
+        ]
+        assert len(successes) == 1
+        assert len(failures) == 1
+        assert failures[0].status_code == 409
+        assert failures[0].detail["code"] == "TERMINAL_PAYLOAD_CONFLICT"
+
+        with SessionLocal() as db:
+            assert (
+                db.query(StepTrace)
+                .filter(
+                    StepTrace.job_id == seed["job_id"],
+                    StepTrace.step_id == "__job__",
+                    StepTrace.event_type == "RUN_COMPLETE",
+                )
+                .count()
+                == 1
+            )
+            assert (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.action == "terminal_payload_conflict",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                )
+                .count()
+                == 1
+            )
+    finally:
+        _cleanup_seed(seed)
+
+
 # ============================================================================
 # Phase 2b fencing_token 强协议测试（14 个路由级）
 # ============================================================================
@@ -418,7 +530,9 @@ async def test_claim_jobs_response_includes_fencing_token():
     try:
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
-                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
                 db=async_db, _=None,
             )
         assert result.error is None
@@ -605,6 +719,56 @@ async def test_complete_job_wrong_token_returns_409():
         _cleanup_seed(seed)
 
 
+@pytest.mark.asyncio(loop_scope="module")
+async def test_unknown_complete_recovers_to_running_before_completed():
+    """UNKNOWN 的晚到完成必须先续约并走 UNKNOWN→RUNNING，再走 RUNNING→COMPLETED。"""
+    from backend.services.state_machine import JobStateMachine
+
+    seed = _seed_job(status=JobStatus.UNKNOWN.value)
+    token = _setup_lock_and_lease(seed)
+    db = SessionLocal()
+    try:
+        job = db.get(JobInstance, seed["job_id"])
+        job.ended_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        with patch.object(
+            JobStateMachine,
+            "transition",
+            wraps=JobStateMachine.transition,
+        ) as transition:
+            async with AsyncSessionLocal() as async_db:
+                result = await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "FINISHED", "exit_code": 0},
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+
+        targets = [call.args[1] for call in transition.call_args_list]
+        assert targets[:2] == [JobStatus.RUNNING, JobStatus.COMPLETED]
+        assert result.data["status"] == JobStatus.COMPLETED.value
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            lease = db.query(DeviceLease).filter(
+                DeviceLease.job_id == seed["job_id"],
+            ).one()
+            assert job.status == JobStatus.COMPLETED.value
+            assert lease.status == LeaseStatus.RELEASED.value
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
 def test_complete_job_missing_token_raises_validation_error():
     """缺 fencing_token → Pydantic 拒收 _RunCompleteIn 构造。"""
     from pydantic import ValidationError
@@ -650,8 +814,8 @@ async def test_complete_job_idempotent_replay_same_token_returns_200():
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_complete_job_idempotent_replay_wrong_token_returns_200():
-    """第一次 complete 后，第二次即使 token 错误也走 already_terminal 幂等成功。"""
+async def test_complete_job_idempotent_replay_wrong_token_returns_409():
+    """终态重放仍需匹配历史 lease token，跨 worker/stale token 必须冲突。"""
     seed = _seed_job(status=JobStatus.RUNNING.value)
     _setup_lock_and_lease(seed)
     token = f"{seed['device_id']}:1"
@@ -668,16 +832,92 @@ async def test_complete_job_idempotent_replay_wrong_token_returns_200():
         assert r1.error is None
 
         async with AsyncSessionLocal() as async_db:
-            r2 = await complete_job(
+            with pytest.raises(HTTPException) as exc_info:
+                await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={"status": "FINISHED", "exit_code": 0},
+                        fencing_token="WRONG_TOKEN",
+                    ),
+                    db=async_db, _=None,
+                )
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail["code"] == "STALE_COMPLETION_TOKEN"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_complete_job_terminal_conflicting_payload_is_read_only():
+    """Same-token terminal replay with different facts is a 409 conflict."""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lock_and_lease(seed)
+    first_payload = _RunCompleteIn(
+        update={
+            "status": "FINISHED",
+            "exit_code": 0,
+            "log_summary": "first-completion",
+        },
+        artifact={"storage_uri": "file:///first.tar.gz", "checksum": "aaa"},
+        fencing_token=token,
+    )
+    try:
+        async with AsyncSessionLocal() as async_db:
+            first = await complete_job(
                 job_id=seed["job_id"],
-                payload=_RunCompleteIn(
-                    update={"status": "FINISHED", "exit_code": 0},
-                    fencing_token="WRONG_TOKEN",
-                ),
-                db=async_db, _=None,
+                payload=first_payload,
+                db=async_db,
+                _=None,
             )
-        assert r2.error is None
-        assert r2.data["status"] == JobStatus.COMPLETED.value
+        assert first.data["status"] == JobStatus.COMPLETED.value
+
+        async with AsyncSessionLocal() as async_db:
+            with pytest.raises(HTTPException) as exc:
+                await complete_job(
+                    job_id=seed["job_id"],
+                    payload=_RunCompleteIn(
+                        update={
+                            "status": "FAILED",
+                            "exit_code": 1,
+                            "error_message": "conflicting replay",
+                        },
+                        artifact={
+                            "storage_uri": "file:///conflict.tar.gz",
+                            "checksum": "bbb",
+                        },
+                        fencing_token=token,
+                    ),
+                    db=async_db,
+                    _=None,
+                )
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "TERMINAL_PAYLOAD_CONFLICT"
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            snapshot = db.query(StepTrace).filter(
+                StepTrace.job_id == seed["job_id"],
+                StepTrace.step_id == "__job__",
+                StepTrace.event_type == "RUN_COMPLETE",
+            ).one()
+            persisted_payload = json.loads(snapshot.output)
+            assert job.status == JobStatus.COMPLETED.value
+            assert persisted_payload == {
+                "update": first_payload.update,
+                "artifact": first_payload.artifact,
+            }
+            conflict_audit = (
+                db.query(AuditLog)
+                .filter(
+                    AuditLog.resource_type == "job",
+                    AuditLog.resource_id == str(seed["job_id"]),
+                    AuditLog.action == "terminal_payload_conflict",
+                )
+                .one()
+            )
+            assert conflict_audit.details["current_status"] == "COMPLETED"
+        finally:
+            db.close()
     finally:
         _cleanup_seed(seed)
 
@@ -713,13 +953,13 @@ async def test_update_job_status_invalid_transition_returns_structured_error():
             with pytest.raises(HTTPException) as exc_info:
                 await update_job_status(
                     job_id=seed["job_id"],
-                    payload=JobStatusUpdate(status="RUNNING", fencing_token=token),
+                    payload=JobStatusUpdate(status="UNKNOWN", fencing_token=token),
                     db=async_db,
                     _=None,
                 )
         assert exc_info.value.status_code == 409
         assert exc_info.value.detail["code"] == "INVALID_JOB_TRANSITION"
-        assert "Cannot transition" not in exc_info.value.detail["message"]
+        assert exc_info.value.detail["message"] == "status endpoint only accepts RUNNING"
     finally:
         _cleanup_seed(seed)
 
@@ -833,6 +1073,36 @@ async def test_upload_step_traces_failed_event_keeps_job_running(stage: str):
         _cleanup_seed(seed)
 
 
+@pytest.mark.asyncio(loop_scope="module")
+async def test_step_trace_event_id_distinguishes_attempts_and_deduplicates_replay():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lock_and_lease(seed)
+    try:
+        traces = [
+            StepTraceIn(
+                job_id=seed["job_id"],
+                step_id="retryable-step",
+                stage="init",
+                event_type="FAILED",
+                status="FAILED",
+                trace_event_id=f"job:{seed['job_id']}:attempt:{attempt}",
+                fencing_token=token,
+            )
+            for attempt in (1, 2)
+        ]
+        async with AsyncSessionLocal() as async_db:
+            first = await upload_step_traces(traces=traces, db=async_db, _=None)
+        assert first.data["inserted"] == 2
+
+        async with AsyncSessionLocal() as async_db:
+            replay = await upload_step_traces(
+                traces=[traces[1]], db=async_db, _=None,
+            )
+        assert replay.data["inserted"] == 0
+    finally:
+        _cleanup_seed(seed)
+
+
 # ── C6: session_watchdog release_lease ──────────────────────────────────────
 
 @pytest.mark.asyncio(loop_scope="module")
@@ -941,41 +1211,36 @@ async def test_reconciler_releases_expired_lease_lock_expiration():
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_get_pending_jobs_deprecated_header():
-    """GET /jobs/pending 返回 Deprecation + Sunset header (Phase 2c)."""
+async def test_get_pending_jobs_returns_gone():
+    """GET /jobs/pending is a hard protocol cut, not a compatibility path."""
     from fastapi import Response as FapiResponse
 
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
         r = FapiResponse()
         async with AsyncSessionLocal() as async_db:
-            result = await get_pending_jobs(
-                host_id=seed["host_id"], limit=5,
-                response=r, db=async_db, _=None,
-            )
-        assert result.error is None
-        assert r.headers.get("Deprecation") == "true"
-        assert "Sunset" in r.headers
+            with pytest.raises(HTTPException) as exc:
+                await get_pending_jobs(
+                    host_id=seed["host_id"], limit=5,
+                    response=r, db=async_db, _=None,
+                )
+        assert exc.value.status_code == 410
     finally:
         _cleanup_seed(seed)
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_get_pending_jobs_still_works():
-    """GET /jobs/pending 虽已 deprecated 但功能与 claim_jobs 一致 (Phase 2c)."""
+async def test_get_pending_jobs_never_claims():
+    """The removed endpoint never creates a fencing token."""
     seed = _seed_job(status=JobStatus.PENDING.value)
     try:
         async with AsyncSessionLocal() as async_db:
-            result = await get_pending_jobs(
-                host_id=seed["host_id"], limit=5,
-                db=async_db, _=None,
-            )
-        assert result.error is None
-        assert len(result.data) == 1
-        item = result.data[0]
-        assert item.id == seed["job_id"]
-        assert item.status == JobStatus.RUNNING.value
-        assert item.fencing_token is not None
+            with pytest.raises(HTTPException) as exc:
+                await get_pending_jobs(
+                    host_id=seed["host_id"], limit=5,
+                    db=async_db, _=None,
+                )
+        assert exc.value.status_code == 410
 
         # Phase 6d: device_leases is the sole source of truth.
     finally:
@@ -995,7 +1260,9 @@ async def test_claim_jobs_skip_on_active_lease():
         with patch.object(claim_lease_failed_total, "inc") as mock_inc:
             async with AsyncSessionLocal() as async_db:
                 result = await claim_jobs(
-                    payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                    payload=ClaimRequest(
+                        host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                    ),
                     db=async_db, _=None,
                 )
             mock_inc.assert_not_called()
@@ -1057,7 +1324,9 @@ async def test_claim_jobs_claims_after_expired_lease():
     try:
         async with AsyncSessionLocal() as async_db:
             result = await claim_jobs(
-                payload=ClaimRequest(host_id=seed["host_id"], capacity=5),
+                payload=ClaimRequest(
+                    host_id=seed["host_id"], capacity=5, agent_version="2.0.0",
+                ),
                 db=async_db, _=None,
             )
         # Phase 4b: expired ACTIVE lease is a blocking grace-held lease.
@@ -1899,6 +2168,7 @@ async def test_claim_jobs_uses_real_agent_instance_id():
                 payload=ClaimRequest(
                     host_id=seed["host_id"], capacity=5,
                     agent_instance_id=real_instance_id,
+                    agent_version="2.0.0",
                 ),
                 db=async_db, _=None,
             )
@@ -1931,9 +2201,17 @@ async def test_claim_jobs_uses_real_agent_instance_id():
 
 
 def test_claim_request_default_agent_instance_id_empty():
-    """ClaimRequest 不传 agent_instance_id → 默认空字符串（向后兼容）。"""
-    req = ClaimRequest(host_id="host-1", capacity=5)
+    """agent_instance_id remains optional; version is part of the new protocol."""
+    req = ClaimRequest(host_id="host-1", capacity=5, agent_version="2.0.0")
     assert req.agent_instance_id == ""
+
+
+def test_claim_protocol_enforces_minimum_agent_version():
+    assert _agent_version_is_supported("2.0.0", "2.0.0")
+    assert _agent_version_is_supported("2.1.0", "2.0.9")
+    assert not _agent_version_is_supported("2.1", "2.0.9")
+    assert not _agent_version_is_supported("1.9.9", "2.0.0")
+    assert not _agent_version_is_supported("unknown", "2.0.0")
 
 
 # ---------------------------------------------------------------------------
@@ -1988,8 +2266,8 @@ async def test_recovery_sync_host_not_found_404():
 
 
 @pytest.mark.asyncio(loop_scope="module")
-async def test_recovery_sync_same_instance_resume():
-    """Lease 的 agent_instance_id == 请求的 instance_id → RESUME，并回传可恢复执行的完整 job_payload。"""
+async def test_recovery_sync_same_instance_is_noop():
+    """同一 live instance 重复 sync 不得启动第二个本地 worker。"""
     suffix = uuid4().hex[:8]
     host_id = f"rec-host-{suffix}"
     instance_id = uuid4().hex
@@ -2044,19 +2322,11 @@ async def test_recovery_sync_same_instance_resume():
         assert result.error is None
         actions = result.data["actions"]
         assert len(actions) == 1
-        assert actions[0]["action"] == "RESUME"
-        assert actions[0]["reason"] == "same_instance"
+        assert actions[0]["action"] == "NOOP"
+        assert actions[0]["reason"] == "same_instance_worker_already_owned"
         assert actions[0]["fencing_token"] == f"{seed['device_id']}:1"
         assert actions[0]["device_serial"] == actual_serial
-        assert actions[0]["job_payload"]["id"] == seed["job_id"]
-        assert actions[0]["job_payload"]["plan_run_id"] == seed["plan_run_id"]
-        assert actions[0]["job_payload"]["plan_id"] == seed["plan_id"]
-        assert actions[0]["job_payload"]["device_id"] == seed["device_id"]
-        assert actions[0]["job_payload"]["device_serial"] == actual_serial
-        assert actions[0]["job_payload"]["host_id"] == host_id
-        assert actions[0]["job_payload"]["status"] == JobStatus.RUNNING.value
-        assert actions[0]["job_payload"]["pipeline_def"] == PIPELINE_DEF
-        assert actions[0]["job_payload"]["fencing_token"] == f"{seed['device_id']}:1"
+        assert actions[0]["job_payload"] is None
     finally:
         _cleanup_seed(seed)
         _cleanup_recovery_host(host_id)
@@ -2104,6 +2374,7 @@ async def test_recovery_sync_legacy_lease_adopted():
             boot_id=boot_id,
             active_jobs=[_ActiveJobEntry(
                 job_id=seed["job_id"], device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
             )],
         )
 
@@ -2114,7 +2385,7 @@ async def test_recovery_sync_legacy_lease_adopted():
         actions = result.data["actions"]
         assert len(actions) == 1
         assert actions[0]["action"] == "RESUME"
-        assert actions[0]["reason"] == "legacy_lease_adopted"
+        assert actions[0]["reason"] == "same_boot_instance_takeover"
 
         # Verify lease agent_instance_id was updated
         db_sync2 = SessionLocal()
@@ -2175,6 +2446,7 @@ async def test_recovery_sync_same_boot_different_instance_resume():
             boot_id=boot_id,  # same boot
             active_jobs=[_ActiveJobEntry(
                 job_id=seed["job_id"], device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
             )],
         )
 
@@ -2185,7 +2457,7 @@ async def test_recovery_sync_same_boot_different_instance_resume():
         actions = result.data["actions"]
         assert len(actions) == 1
         assert actions[0]["action"] == "RESUME"
-        assert actions[0]["reason"] == "same_boot_instance_updated"
+        assert actions[0]["reason"] == "same_boot_instance_takeover"
 
         # Verify lease was adopted
         db_sync2 = SessionLocal()
@@ -2245,6 +2517,7 @@ async def test_recovery_sync_boot_id_mismatch_cleanup():
             boot_id=new_boot,  # different boot
             active_jobs=[_ActiveJobEntry(
                 job_id=seed["job_id"], device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
             )],
         )
 
@@ -2348,6 +2621,7 @@ async def test_recovery_sync_device_serial_mismatch_abort_local():
             active_jobs=[_ActiveJobEntry(
                 job_id=seed["job_id"],
                 device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
                 device_serial=f"{actual_serial}-WRONG",
             )],
         )
@@ -2359,7 +2633,7 @@ async def test_recovery_sync_device_serial_mismatch_abort_local():
         actions = result.data["actions"]
         assert len(actions) == 1
         assert actions[0]["action"] == "ABORT_LOCAL"
-        assert actions[0]["reason"] == "device_serial_mismatch"
+        assert actions[0]["reason"] == "recovery_ownership_mismatch"
 
         db_sync2 = SessionLocal()
         try:
@@ -2527,6 +2801,7 @@ async def test_recovery_sync_boot_id_not_overwritten_before_compare():
             boot_id=new_boot,  # different from old_boot
             active_jobs=[_ActiveJobEntry(
                 job_id=seed["job_id"], device_id=seed["device_id"],
+                fencing_token=f"{seed['device_id']}:1",
             )],
         )
 

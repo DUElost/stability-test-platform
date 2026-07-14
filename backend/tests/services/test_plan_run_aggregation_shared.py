@@ -62,6 +62,7 @@ async def test_async_plan_aggregator_delegates_to_shared_rule():
     db.execute = AsyncMock(side_effect=[run_result, jobs_result])
 
     with patch("backend.services.aggregator.apply_plan_run_aggregation") as mock_apply:
+        mock_apply.return_value = False
         await PlanAggregator.on_job_terminal(terminal_job, db)
 
     mock_apply.assert_called_once_with(run, jobs)

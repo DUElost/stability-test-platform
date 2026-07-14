@@ -23,7 +23,7 @@ async def reconcile_step_traces(
     Idempotently insert StepTraces from Agent replay.
 
     Returns ``{"inserted": int, "transitioned_jobs": list[int]}``.
-    Unique constraint (job_id, step_id, event_type) prevents duplicates.
+    Agent-provided trace_event_id is the replay idempotency key.
 
     StepTrace replay is a timeline durability path only. Job terminal state is
     owned by ``POST /agent/jobs/{job_id}/complete`` and its terminal outbox.
@@ -32,6 +32,11 @@ async def reconcile_step_traces(
     inserted = 0
 
     for t in traces:
+        trace_event_id = str(t.get("trace_event_id") or "").strip()
+        if not trace_event_id:
+            trace_event_id = (
+                f"legacy:{t['job_id']}:{t['step_id']}:{t['event_type']}"
+            )
         stmt = (
             pg_insert(StepTrace)
             .values(
@@ -42,11 +47,12 @@ async def reconcile_step_traces(
                 status=t.get("status", ""),
                 output=t.get("output"),
                 error_message=t.get("error_message"),
+                trace_event_id=trace_event_id,
                 original_ts=_parse_ts(t.get("original_ts")),
                 created_at=datetime.now(timezone.utc),
             )
             .on_conflict_do_nothing(
-                constraint="uq_step_trace_idempotent"
+                constraint="uq_step_trace_event_id"
             )
         )
         result = await db.execute(stmt)

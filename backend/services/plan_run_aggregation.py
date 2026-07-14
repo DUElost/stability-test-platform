@@ -42,11 +42,9 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
 
     failed_only = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.FAILED)
     aborted = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.ABORTED)
-    unknown = sum(1 for j in jobs if JobStatus(j.status) == JobStatus.UNKNOWN)
 
     # Why: 用户已发出 abort,但若所有 job 自然终态且 mix 仅含 COMPLETED/少量 FAILED,
     #      natural mix 会算出 SUCCESS/PARTIAL_SUCCESS,abort 意图会被静默吞掉。
-    #      UNKNOWN 走 DEGRADED 不受影响 — UNKNOWN 需要人工介入,abort 不应掩盖。
     run_context = getattr(run, "run_context", None)
     abort_requested = (
         isinstance(run_context, dict) and "abort_requested" in run_context
@@ -57,9 +55,7 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
     # 先在本地变量算出目标态、应用 abort override,最后统一走一次状态机
     # transition:SUCCESS/PARTIAL_SUCCESS 是终态,若边算边写会导致 override
     # 分支尝试做 SUCCESS→FAILED 这类非法的终态间跳转。
-    if unknown > 0:
-        new_status = PlanRunStatus.DEGRADED
-    elif failed_only + aborted == 0:
+    if failed_only + aborted == 0:
         new_status = PlanRunStatus.SUCCESS
     elif aborted > 0:
         new_status = PlanRunStatus.FAILED
@@ -69,7 +65,7 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
         new_status = PlanRunStatus.FAILED
 
     # abort_requested override: 自然 SUCCESS/PARTIAL_SUCCESS 时强制 FAILED。
-    # 不影响 DEGRADED(已属人工介入)与 FAILED(无需 override)。
+    # 不影响 FAILED(无需 override)。
     if abort_requested and new_status in (
         PlanRunStatus.SUCCESS,
         PlanRunStatus.PARTIAL_SUCCESS,
@@ -87,7 +83,7 @@ def apply_plan_run_aggregation(run: Any, jobs: Sequence[Any]) -> bool:
         "failed": failed_only + aborted,   # 兼容字段: terminal failure 总数
         "failed_only": failed_only,        # v3: 自然失败 (不含 aborted)
         "aborted": aborted,                # v3: abort 终止数
-        "unknown": unknown,
+        "unknown": 0,
         "pass_rate": pass_rate,
         "abort_requested": abort_requested,  # v3: 区分自然 FAILED vs abort 触发的 FAILED
     }

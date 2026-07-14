@@ -13,11 +13,12 @@ pass can retry, and ``result_summary.chain_dispatch_failed`` records the error.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -25,12 +26,54 @@ from sqlalchemy.orm.attributes import flag_modified
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
-from backend.services.plan_dispatcher import dispatch_plan, PlanDispatchError as AsyncPlanDispatchError
-from backend.services.plan_dispatcher_sync import dispatch_plan_sync, PlanDispatchError as SyncPlanDispatchError
+from backend.tasks.saq_worker import enqueue_sync
+from backend.services.plan_dispatcher_sync import (
+    initial_dispatch_state,
+    prepare_plan_run,
+)
 
 logger = logging.getLogger(__name__)
 
 TRIGGERABLE_TERMINAL_STATUSES = {"SUCCESS", "PARTIAL_SUCCESS"}
+
+
+def _next_plan_id_from_snapshot(plan_run: PlanRun) -> int | None | object:
+    """Return next_plan_id from snapshot, or _SNAPSHOT_MISS if absent."""
+    snapshot = plan_run.plan_snapshot or {}
+    if isinstance(snapshot, dict):
+        plan_data = snapshot.get("plan") or {}
+        if isinstance(plan_data, dict) and "next_plan_id" in plan_data:
+            return plan_data.get("next_plan_id")
+    return _SNAPSHOT_MISS
+
+
+_SNAPSHOT_MISS = object()
+
+
+def _resolve_next_plan_id_sync(plan_run: PlanRun, db: Session) -> int | None:
+    """Read next_plan_id from snapshot; fall back to live Plan for legacy runs."""
+    from_snapshot = _next_plan_id_from_snapshot(plan_run)
+    if from_snapshot is not _SNAPSHOT_MISS:
+        return from_snapshot  # type: ignore[return-value]
+    if plan_run.plan_id is not None:
+        plan = db.get(Plan, plan_run.plan_id)
+        if plan is not None:
+            return plan.next_plan_id
+    return None
+
+
+async def _resolve_next_plan_id_async(
+    plan_run: PlanRun,
+    db: AsyncSession,
+) -> int | None:
+    from_snapshot = _next_plan_id_from_snapshot(plan_run)
+    if from_snapshot is not _SNAPSHOT_MISS:
+        return from_snapshot  # type: ignore[return-value]
+    if plan_run.plan_id is not None:
+        plan = await db.get(Plan, plan_run.plan_id)
+        if plan is not None:
+            return plan.next_plan_id
+    return None
 
 
 def _record_chain_dispatch_failure(
@@ -72,8 +115,7 @@ async def _rollback_chain_trigger_async(
         pr = await db.get(PlanRun, plan_run_id)
         if pr is None:
             return
-        plan = await db.get(Plan, pr.plan_id)
-        next_plan_id = plan.next_plan_id if plan is not None else None
+        next_plan_id = await _resolve_next_plan_id_async(pr, db)
         child_exists = False
         if next_plan_id is not None:
             existing = (await db.execute(
@@ -105,8 +147,7 @@ def _rollback_chain_trigger_sync(
         pr = db.get(PlanRun, plan_run_id)
         if pr is None:
             return
-        plan = db.get(Plan, pr.plan_id)
-        next_plan_id = plan.next_plan_id if plan is not None else None
+        next_plan_id = _resolve_next_plan_id_sync(pr, db)
         child_exists = False
         if next_plan_id is not None:
             existing = db.execute(
@@ -132,140 +173,224 @@ async def trigger_next_plan(
     plan_run: PlanRun,
     db: AsyncSession,
 ) -> PlanRun | None:
-    """If *plan_run* is in a triggerable terminal status and has a next Plan,
-    atomically check-and-dispatch the child PlanRun.
-
-    Returns the child PlanRun if triggered, or None.
-    """
-    if plan_run.status not in TRIGGERABLE_TERMINAL_STATUSES:
-        return None
-
-    plan = await db.get(Plan, plan_run.plan_id)
-    if plan is None or plan.next_plan_id is None:
-        return None
-
-    # Aggregate device_ids from child JobInstances of the parent PlanRun.
-    device_rows = (await db.execute(
-        select(JobInstance.device_id).where(
-            JobInstance.plan_run_id == plan_run.id
-        )
-    )).all()
-    device_ids = list({r.device_id for r in device_rows})
-    if not device_ids:
-        logger.warning("plan_chain_trigger_no_devices plan_run=%d", plan_run.id)
-        return None
-
-    # Atomically mark triggered before dispatch. dispatch_plan() commits
-    # internally, so row locks would not survive long enough to protect
-    # the subsequent next_plan_triggered write.
-    result = await db.execute(
-        update(PlanRun)
+    """Create child Run + parent flag atomically; enqueue its gate post-commit."""
+    parent = (await db.execute(
+        select(PlanRun)
         .where(PlanRun.id == plan_run.id)
-        .where(PlanRun.next_plan_triggered.is_(False))
-        .values(next_plan_triggered=True)
-        .returning(PlanRun.id)
-    )
-    locked_id = result.scalar()
-    await db.commit()
-    if locked_id is None:
+        .with_for_update(key_share=True)
+    )).scalar_one_or_none()
+    if parent is None or parent.status not in TRIGGERABLE_TERMINAL_STATUSES:
         return None
 
-    chain_index = (plan_run.chain_index or 0) + 1
+    next_plan_id = await _resolve_next_plan_id_async(parent, db)
+    if next_plan_id is None:
+        return None
+    existing = (await db.execute(
+        select(PlanRun)
+        .where(
+            PlanRun.parent_plan_run_id == parent.id,
+            PlanRun.plan_id == next_plan_id,
+        )
+        .limit(1)
+    )).scalar_one_or_none()
+    if existing is not None:
+        if not parent.next_plan_triggered:
+            parent.next_plan_triggered = True
+            await db.commit()
+        return existing
+    if parent.next_plan_triggered:
+        return None
+
+    device_ids = list((await db.execute(
+        select(JobInstance.device_id).where(
+            JobInstance.plan_run_id == parent.id
+        )
+    )).scalars().unique())
+    if not device_ids:
+        logger.warning("plan_chain_trigger_no_devices plan_run=%d", parent.id)
+        return None
+
+    chain_index = (parent.chain_index or 0) + 1
     try:
-        child = await dispatch_plan(
-            plan_id=plan.next_plan_id,
-            device_ids=device_ids,
-            triggered_by=plan_run.triggered_by or "chain",
-            db=db,
-            run_type="CHAIN",
-            run_context={"triggered_from_plan_run_id": plan_run.id},
-            parent_plan_run_id=plan_run.id,
-            root_plan_run_id=plan_run.root_plan_run_id or plan_run.id,
-            chain_index=chain_index,
+        child = await db.run_sync(
+            lambda sync_db: prepare_plan_run(
+                plan_id=next_plan_id,
+                device_ids=device_ids,
+                triggered_by=parent.triggered_by or "chain",
+                db=sync_db,
+                run_type="CHAIN",
+                run_context={
+                    "triggered_from_plan_run_id": parent.id,
+                    "dispatch_state": initial_dispatch_state(),
+                },
+                parent_plan_run_id=parent.id,
+                root_plan_run_id=parent.root_plan_run_id or parent.id,
+                chain_index=chain_index,
+                commit=False,
+            )
         )
-    except AsyncPlanDispatchError as exc:
-        logger.error("plan_chain_dispatch_failed parent=%d err=%s", plan_run.id, exc)
-        await _rollback_chain_trigger_async(db, plan_run.id, exc)
-        return None
+        child_id = child.id
+        parent.next_plan_triggered = True
+        await db.commit()
     except Exception as exc:
-        # #4: 非 PlanDispatchError 兜底 — 网络/DB/SAQ enqueue 等系统错误若不回滚,
-        # next_plan_triggered 留 True 会让后续 aggregator 重试因 CAS 失败而链断。
-        # swallow + return None 保 aggregator 主流程不挂,留给下次 aggregator 重试。
-        logger.exception(
-            "plan_chain_dispatch_unexpected_error parent=%d", plan_run.id,
-        )
-        await _rollback_chain_trigger_async(db, plan_run.id, exc)
+        await db.rollback()
+        logger.exception("plan_chain_child_create_failed parent=%d", parent.id)
+        await _rollback_chain_trigger_async(db, parent.id, exc)
         return None
+
+    try:
+        await asyncio.to_thread(
+            enqueue_sync,
+            "precheck_and_dispatch_task",
+            key=f"precheck:{child_id}",
+            timeout=600,
+            retries=1,
+            required=True,
+            plan_run_id=child_id,
+        )
+    except Exception as exc:
+        logger.exception(
+            "plan_chain_gate_enqueue_failed parent=%d child=%d",
+            parent.id,
+            child_id,
+        )
+        await _rollback_chain_trigger_async(db, parent.id, exc)
 
     logger.info(
         "plan_chain_triggered parent=%d child=%d chain_index=%d",
-        plan_run.id, child.id, chain_index,
+        parent.id, child_id, chain_index,
     )
-    return child
+    return await db.get(PlanRun, child_id)
 
 
 def trigger_next_plan_sync(
     plan_run: PlanRun,
     db: Session,
 ) -> PlanRun | None:
-    """Synchronous version of trigger_next_plan for the sync aggregator path."""
-    if plan_run.status not in TRIGGERABLE_TERMINAL_STATUSES:
-        return None
-
-    plan = db.get(Plan, plan_run.plan_id)
-    if plan is None or plan.next_plan_id is None:
-        return None
-
-    device_rows = db.execute(
-        select(JobInstance.device_id).where(
-            JobInstance.plan_run_id == plan_run.id
-        )
-    ).all()
-    device_ids = list({r.device_id for r in device_rows})
-    if not device_ids:
-        logger.warning("plan_chain_trigger_sync_no_devices plan_run=%d", plan_run.id)
-        return None
-
-    # (1) Atomically mark triggered + commit — prevents concurrent duplicate dispatch.
-    result = db.execute(
-        update(PlanRun)
+    """Synchronous atomic child creation + post-commit gate enqueue."""
+    parent = db.execute(
+        select(PlanRun)
         .where(PlanRun.id == plan_run.id)
-        .where(PlanRun.next_plan_triggered.is_(False))
-        .values(next_plan_triggered=True)
-        .returning(PlanRun.id)
-    )
-    locked_id = result.scalar()
-    db.commit()
-    if locked_id is None:
+        .with_for_update(key_share=True)
+    ).scalar_one_or_none()
+    if parent is None or parent.status not in TRIGGERABLE_TERMINAL_STATUSES:
         return None
 
-    chain_index = (plan_run.chain_index or 0) + 1
+    next_plan_id = _resolve_next_plan_id_sync(parent, db)
+    if next_plan_id is None:
+        return None
+    existing = db.execute(
+        select(PlanRun)
+        .where(
+            PlanRun.parent_plan_run_id == parent.id,
+            PlanRun.plan_id == next_plan_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if existing is not None:
+        if not parent.next_plan_triggered:
+            parent.next_plan_triggered = True
+            db.commit()
+        return existing
+    if parent.next_plan_triggered:
+        return None
+
+    device_ids = list(db.execute(
+        select(JobInstance.device_id).where(
+            JobInstance.plan_run_id == parent.id
+        )
+    ).scalars().unique())
+    if not device_ids:
+        logger.warning(
+            "plan_chain_trigger_sync_no_devices plan_run=%d", parent.id,
+        )
+        return None
+
+    chain_index = (parent.chain_index or 0) + 1
     try:
-        child = dispatch_plan_sync(
-            plan_id=plan.next_plan_id,
+        child = prepare_plan_run(
+            plan_id=next_plan_id,
             device_ids=device_ids,
-            triggered_by=plan_run.triggered_by or "chain",
+            triggered_by=parent.triggered_by or "chain",
             db=db,
             run_type="CHAIN",
-            run_context={"triggered_from_plan_run_id": plan_run.id},
-            parent_plan_run_id=plan_run.id,
-            root_plan_run_id=plan_run.root_plan_run_id or plan_run.id,
+            run_context={
+                "triggered_from_plan_run_id": parent.id,
+                "dispatch_state": initial_dispatch_state(),
+            },
+            parent_plan_run_id=parent.id,
+            root_plan_run_id=parent.root_plan_run_id or parent.id,
             chain_index=chain_index,
+            commit=False,
         )
-    except SyncPlanDispatchError as exc:
-        logger.error("plan_chain_dispatch_sync_failed parent=%d err=%s", plan_run.id, exc)
-        _rollback_chain_trigger_sync(db, plan_run.id, exc)
-        return None
+        child_id = child.id
+        parent.next_plan_triggered = True
+        db.commit()
     except Exception as exc:
-        # #4: 同 async 路径 — 非 PlanDispatchError 系统错误也走 rollback。
+        db.rollback()
         logger.exception(
-            "plan_chain_dispatch_sync_unexpected_error parent=%d", plan_run.id,
+            "plan_chain_child_create_sync_failed parent=%d", parent.id,
         )
-        _rollback_chain_trigger_sync(db, plan_run.id, exc)
+        _rollback_chain_trigger_sync(db, parent.id, exc)
         return None
+
+    try:
+        enqueue_sync(
+            "precheck_and_dispatch_task",
+            key=f"precheck:{child_id}",
+            timeout=600,
+            retries=1,
+            required=True,
+            plan_run_id=child_id,
+        )
+    except Exception as exc:
+        logger.exception(
+            "plan_chain_gate_enqueue_sync_failed parent=%d child=%d",
+            parent.id,
+            child_id,
+        )
+        _rollback_chain_trigger_sync(db, parent.id, exc)
 
     logger.info(
         "plan_chain_triggered_sync parent=%d child=%d chain_index=%d",
-        plan_run.id, child.id, chain_index,
+        parent.id, child_id, chain_index,
     )
-    return child
+    return db.get(PlanRun, child_id)
+
+
+def reconcile_chain_trigger_sync(
+    plan_run_id: int,
+    db: Session,
+) -> PlanRun | None:
+    """Repair interrupted chain triggers from the durable parent/child rows.
+
+    A crash after the CAS commit but before child creation leaves
+    ``next_plan_triggered=true`` with no child.  Post-completion and recycler
+    retries call this helper to reset that orphaned flag and dispatch again.
+    """
+    parent = db.execute(
+        select(PlanRun)
+        .where(PlanRun.id == plan_run_id)
+        .with_for_update(key_share=True)
+    ).scalar_one_or_none()
+    if parent is None or parent.status not in TRIGGERABLE_TERMINAL_STATUSES:
+        return None
+
+    child = db.execute(
+        select(PlanRun)
+        .where(PlanRun.parent_plan_run_id == parent.id)
+        .order_by(PlanRun.id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if child is not None:
+        if not parent.next_plan_triggered:
+            parent.next_plan_triggered = True
+            db.commit()
+        return child
+
+    if parent.next_plan_triggered:
+        parent.next_plan_triggered = False
+        db.commit()
+        db.refresh(parent)
+
+    return trigger_next_plan_sync(parent, db)
