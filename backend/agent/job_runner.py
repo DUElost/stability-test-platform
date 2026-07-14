@@ -218,7 +218,12 @@ def run_task_wrapper(
             exc,
         )
 
-    pipeline_error = _validate_pipeline_def(pipeline_def)
+    try:
+        pipeline_error = _validate_pipeline_def(pipeline_def)
+    except Exception as exc:
+        logger.exception("pipeline_validation_crashed job_id=%d", job_id)
+        pipeline_error = f"pipeline validation error: {exc}"
+
     if pipeline_error is not None:
         _complete_job_if_current_worker(
             state=state,
