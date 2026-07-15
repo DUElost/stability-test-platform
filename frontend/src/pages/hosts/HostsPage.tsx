@@ -20,6 +20,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { SKELETON_BLOCK, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { executeBulkHotUpdate, precheckBulkHotUpdate } from './bulkHotUpdate';
 
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -121,6 +122,11 @@ export default function HostsPage() {
   const [pendingRetryAfter, setPendingRetryAfter] = useState<number | undefined>(
     undefined,
   );
+  const [bulkHotUpdateProgress, setBulkHotUpdateProgress] = useState<{
+    phase: 'checking' | 'updating';
+    completed: number;
+    total: number;
+  } | null>(null);
 
   const watcherAdminStateMutation = useMutation({
     mutationFn: (vars: { hostId: string | number; watcher_admin_active: boolean }) =>
@@ -197,6 +203,10 @@ export default function HostsPage() {
   });
 
   const handleHotUpdate = (hostId: number | string) => {
+    if (bulkHotUpdateProgress) {
+      toast.info('安全批量热更新正在执行，请等待完成');
+      return;
+    }
     setPendingHotUpdateHostId(hostId);
   };
 
@@ -473,15 +483,80 @@ export default function HostsPage() {
     (op) => op.status === 'pending' || op.status === 'running',
   );
 
-  const handleSelectedHotUpdate = () => {
-    if (selectedHostIds.size !== 1) return;
-    const [hostId] = Array.from(selectedHostIds);
-    const host = hosts?.find((item: Host) => item.id === hostId);
-    if (!host || host.status !== 'ONLINE') {
-      toast.info('请选择一台在线主机进行热更新');
+  const handleSelectedHotUpdate = async () => {
+    if (selectedHostIds.size === 0 || bulkHotUpdateProgress) return;
+    if (selectedHostIds.size === 1) {
+      const [hostId] = Array.from(selectedHostIds);
+      const host = hosts?.find((item: Host) => item.id === hostId);
+      if (!host || host.status !== 'ONLINE') {
+        toast.info('请选择一台在线主机进行热更新');
+        return;
+      }
+      handleHotUpdate(hostId);
       return;
     }
-    handleHotUpdate(hostId);
+
+    const targets = Array.from(selectedHostIds)
+      .map((id) => hosts?.find((host: Host) => host.id === id))
+      .filter((host): host is Host => Boolean(host))
+      .map((host) => ({
+        id: host.id,
+        label: host.name ?? host.ip ?? String(host.id),
+      }));
+    if (targets.length === 0) return;
+
+    setBulkHotUpdateProgress({ phase: 'checking', completed: 0, total: targets.length });
+    try {
+      const precheck = await precheckBulkHotUpdate(
+        targets,
+        api.hosts.getDetail,
+        (completed, total) => setBulkHotUpdateProgress({ phase: 'checking', completed, total }),
+      );
+      const activeJobs = precheck.skipped.filter((item) => item.reason === 'active_jobs').length;
+      const unavailable = precheck.skipped.filter(
+        (item) => item.reason === 'offline' || item.reason === 'not_installed',
+      ).length;
+      const checkFailed = precheck.skipped.filter((item) => item.reason === 'precheck_failed').length;
+
+      if (precheck.eligible.length === 0) {
+        toast.info(
+          `没有可安全热更新的主机：活跃 Job ${activeJobs} 台，离线/未安装 ${unavailable} 台，预检失败 ${checkFailed} 台`,
+        );
+        return;
+      }
+
+      const ok = await confirmDialog({
+        title: '确认安全批量热更新',
+        description:
+          `预检完成：可热更新 ${precheck.eligible.length} 台；` +
+          `将跳过活跃 Job ${activeJobs} 台、离线/未安装 ${unavailable} 台、预检失败 ${checkFailed} 台。` +
+          '系统将以并发 2 逐台重启 Agent，执行期间不会中止任何 Job。是否继续？',
+        confirmText: `热更新 ${precheck.eligible.length} 台`,
+      });
+      if (!ok) return;
+
+      setBulkHotUpdateProgress({ phase: 'updating', completed: 0, total: precheck.eligible.length });
+      const result = await executeBulkHotUpdate(
+        precheck.eligible,
+        (id) => api.hotUpdate.trigger(id),
+        (completed, total) => setBulkHotUpdateProgress({ phase: 'updating', completed, total }),
+      );
+      const remainingIds = new Set<string | number>([
+        ...precheck.skipped.map((item) => item.id),
+        ...result.skipped.map((item) => item.id),
+        ...result.failed.map((item) => item.id),
+      ]);
+      setSelectedHostIds(remainingIds);
+      queryClient.invalidateQueries({ queryKey: hostKeys.list() });
+      queryClient.invalidateQueries({ queryKey: ['host-detail'] });
+
+      const skippedCount = precheck.skipped.length + result.skipped.length;
+      const summary = `安全批量热更新完成：成功 ${result.succeeded.length} 台，跳过 ${skippedCount} 台，失败 ${result.failed.length} 台`;
+      if (result.failed.length > 0) toast.error(summary);
+      else toast.success(summary);
+    } finally {
+      setBulkHotUpdateProgress(null);
+    }
   };
 
   if (isLoading) {
@@ -569,7 +644,10 @@ export default function HostsPage() {
         <ExpandableHostTable
           hosts={tableData}
           onHotUpdate={isAdmin ? handleHotUpdate : undefined}
-          isHotUpdating={(hostId: string | number) => hotUpdateMutation.isPending && hotUpdatingHostId === hostId}
+          isHotUpdating={(hostId: string | number) =>
+            (hotUpdateMutation.isPending && hotUpdatingHostId === hostId) ||
+            (bulkHotUpdateProgress != null && selectedHostIds.has(hostId))
+          }
           onInstall={isAdmin ? handleInstall : undefined}
           isInstalling={(hostId: string | number) => isHostBusy(hostId)}
           onEdit={isAdmin ? handleEdit : undefined}
@@ -602,6 +680,10 @@ export default function HostsPage() {
           counts={bulkCounts}
           isAdmin={isAdmin}
           installPending={installPending}
+          hotUpdatePending={bulkHotUpdateProgress != null}
+          hotUpdateProgressLabel={bulkHotUpdateProgress
+            ? `${bulkHotUpdateProgress.phase === 'checking' ? '预检' : '热更新'} ${bulkHotUpdateProgress.completed}/${bulkHotUpdateProgress.total}`
+            : undefined}
           onInstall={handleBulkInstall}
           onHotUpdate={handleSelectedHotUpdate}
           onDelete={handleBulkDelete}

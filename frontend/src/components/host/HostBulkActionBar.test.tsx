@@ -33,23 +33,23 @@ describe('HostBulkActionBar', () => {
     expect(onInstall).toHaveBeenCalled();
   });
 
-  it('shows mixed install label and disables hot-update', () => {
+  it('shows mixed install label and enables safe batch hot-update', () => {
+    const onHotUpdate = vi.fn();
     render(
       <HostBulkActionBar
         counts={{ selected: 5, firstInstall: 2, reinstall: 1, hotUpdate: 2 }}
         isAdmin
         onInstall={vi.fn()}
+        onHotUpdate={onHotUpdate}
         onClear={vi.fn()}
       />,
     );
     expect(screen.getByTestId('host-bulk-install')).toHaveTextContent('安装 Agent (3)');
     expect(screen.getByText('首次安装 2 · 重新安装 1 · 在线 2')).toBeInTheDocument();
     const hot = screen.getByTestId('host-bulk-hot-update');
-    expect(hot).toBeDisabled();
-    expect(hot).toHaveAttribute(
-      'title',
-      expect.stringContaining('仅选择一台'),
-    );
+    expect(hot).not.toBeDisabled();
+    fireEvent.click(hot);
+    expect(onHotUpdate).toHaveBeenCalledOnce();
   });
 
   it('enables hot update for one selected online host', () => {
@@ -80,6 +80,26 @@ describe('HostBulkActionBar', () => {
       />,
     );
     expect(screen.getByTestId('host-bulk-install')).toBeDisabled();
+  });
+
+  it('shows progress and locks conflicting actions during batch hot-update', () => {
+    render(
+      <HostBulkActionBar
+        counts={{ selected: 3, firstInstall: 1, reinstall: 0, hotUpdate: 2 }}
+        isAdmin
+        hotUpdatePending
+        hotUpdateProgressLabel="热更新 1/2"
+        onInstall={vi.fn()}
+        onHotUpdate={vi.fn()}
+        onDelete={vi.fn()}
+        onClear={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('host-bulk-hot-update')).toHaveTextContent('热更新 1/2');
+    expect(screen.getByTestId('host-bulk-install')).toBeDisabled();
+    expect(screen.getByTestId('host-bulk-delete')).toBeDisabled();
+    expect(screen.getByTestId('host-bulk-clear')).toBeDisabled();
   });
 
   it('calls onClear', () => {

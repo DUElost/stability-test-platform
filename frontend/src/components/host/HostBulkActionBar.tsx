@@ -7,7 +7,7 @@ export interface BulkActionCounts {
   firstInstall: number;
   /** 已安装且非 ONLINE → 重新安装 */
   reinstall: number;
-  /** ONLINE → 可热更新（P0 仅展示计数，批量热更新未开放） */
+  /** ONLINE → 可进入安全热更新预检 */
   hotUpdate: number;
 }
 
@@ -15,6 +15,8 @@ interface Props {
   counts: BulkActionCounts;
   isAdmin: boolean;
   installPending?: boolean;
+  hotUpdatePending?: boolean;
+  hotUpdateProgressLabel?: string;
   onInstall: () => void;
   onHotUpdate?: () => void;
   onDelete?: () => void;
@@ -25,6 +27,8 @@ export default function HostBulkActionBar({
   counts,
   isAdmin,
   installPending,
+  hotUpdatePending = false,
+  hotUpdateProgressLabel,
   onInstall,
   onHotUpdate,
   onDelete,
@@ -39,11 +43,11 @@ export default function HostBulkActionBar({
       : counts.reinstall > 0 && counts.firstInstall === 0
         ? `重新安装 (${counts.reinstall})`
         : `首次安装 (${counts.firstInstall})`;
-  const canHotUpdate = counts.selected === 1 && counts.hotUpdate === 1 && !!onHotUpdate;
+  const canHotUpdate = counts.hotUpdate > 0 && !!onHotUpdate && !hotUpdatePending;
   const hotUpdateDisabledReason = counts.hotUpdate === 0
     ? '选中的主机当前不在线，无法热更新'
-    : counts.selected > 1
-      ? '暂不支持批量热更新，请仅选择一台在线主机'
+    : hotUpdatePending
+      ? '安全热更新正在执行'
       : '当前主机无法热更新';
   const breakdown = [
     counts.firstInstall > 0 ? `首次安装 ${counts.firstInstall}` : null,
@@ -80,7 +84,7 @@ export default function HostBulkActionBar({
               size="sm"
               variant="default"
               data-testid="host-bulk-install"
-              disabled={installable === 0 || installPending}
+              disabled={installable === 0 || installPending || hotUpdatePending}
               title={
                 installable === 0
                   ? '选中主机均已在线或无可安装目标（在线主机可单选后热更新）'
@@ -98,12 +102,14 @@ export default function HostBulkActionBar({
               variant="outline"
               data-testid="host-bulk-hot-update"
               disabled={!canHotUpdate}
-              title={canHotUpdate ? '热更新选中的在线主机' : hotUpdateDisabledReason}
+              title={canHotUpdate ? '预检并安全热更新选中的在线主机' : hotUpdateDisabledReason}
               onClick={onHotUpdate}
               className="gap-1"
             >
               <RotateCw className="h-3.5 w-3.5" />
-              热更新{counts.hotUpdate > 1 ? ` (${counts.hotUpdate})` : ''}
+              {hotUpdatePending
+                ? (hotUpdateProgressLabel || '热更新中…')
+                : `热更新${counts.hotUpdate > 1 ? ` (${counts.hotUpdate})` : ''}`}
             </Button>
 
             {onDelete && (
@@ -112,6 +118,7 @@ export default function HostBulkActionBar({
                 variant="destructive"
                 data-testid="host-bulk-delete"
                 onClick={onDelete}
+                disabled={hotUpdatePending}
                 className="gap-1"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -128,6 +135,7 @@ export default function HostBulkActionBar({
           aria-label="取消选择"
           title="取消选择"
           onClick={onClear}
+          disabled={hotUpdatePending}
           className="ml-auto h-8 w-8 shrink-0 p-0 text-muted-foreground"
         >
           <X className="h-4 w-4" />
