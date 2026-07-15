@@ -82,6 +82,27 @@ async def _validate_dispatch_devices(
     )).all()
     active_lease_by_device = {row.device_id: row.job_id for row in lease_rows}
 
+    # B4: mirror uq_job_active_per_device (PENDING/RUNNING/UNKNOWN) — a PENDING
+    # job from another PlanRun holds no lease yet still occupies the index, so the
+    # ACTIVE-lease check alone would let dispatch validation pass and then fail at
+    # materialization on an IntegrityError. See the sync counterpart for detail.
+    _active_job_statuses = (
+        JobStatus.PENDING.value,
+        JobStatus.RUNNING.value,
+        JobStatus.UNKNOWN.value,
+    )
+    active_job_rows = (await db.execute(
+        select(JobInstance.device_id, JobInstance.id, JobInstance.status)
+        .where(
+            JobInstance.device_id.in_(device_ids),
+            JobInstance.status.in_(_active_job_statuses),
+        )
+        .order_by(JobInstance.id)
+    )).all()
+    active_job_by_device: dict[int, tuple[int, str]] = {}
+    for row in active_job_rows:
+        active_job_by_device.setdefault(row.device_id, (row.id, row.status))
+
     unavailable: list[dict] = []
     for did in device_ids:
         snap = device_snapshot.get(did)
@@ -113,6 +134,14 @@ async def _validate_dispatch_devices(
             unavailable.append({
                 "id": did, "reason": "active_lease",
                 "lease_job_id": active_lease_by_device[did],
+            })
+            continue
+        if did in active_job_by_device:
+            conflict_job_id, conflict_status = active_job_by_device[did]
+            unavailable.append({
+                "id": did, "reason": "active_job",
+                "job_id": conflict_job_id,
+                "job_status": conflict_status,
             })
             continue
 

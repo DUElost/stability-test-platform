@@ -238,6 +238,102 @@ class TestValidateDispatchDevicesSync:
             _validate_dispatch_devices_sync(db_session, [dev.id])
         assert exc.value.detail()["unavailable_devices"][0]["reason"] == "device_offline"
 
+    def test_pending_job_without_lease_rejects_as_active_job(
+        self, db_session, dispatch_fixture
+    ):
+        """B4:另一 PlanRun 的 PENDING job(尚无 lease)已占 uq_job_active_per_device。
+        旧校验只看 lease → 放行 → 物化阶段撞唯一索引 → PlanRun 悬挂。
+        新校验按索引口径拦截,返回 active_job。
+        """
+        from backend.models.job import JobInstance
+        from backend.models.plan_run import PlanRun
+
+        dev = dispatch_fixture["device"]
+        other_run = PlanRun(
+            plan_id=dispatch_fixture["plan"].id,
+            status="RUNNING",
+            failure_threshold=0.1,
+            plan_snapshot={"plan_id": dispatch_fixture["plan"].id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+        )
+        db_session.add(other_run)
+        db_session.flush()
+        db_session.add(JobInstance(
+            plan_run_id=other_run.id,
+            plan_id=dispatch_fixture["plan"].id,
+            device_id=dev.id,
+            host_id=dispatch_fixture["host"].id,
+            status=JobStatus.PENDING.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        ))
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as exc:
+            _validate_dispatch_devices_sync(db_session, [dev.id])
+        entry = exc.value.detail()["unavailable_devices"][0]
+        assert entry["reason"] == "active_job"
+        assert entry["job_status"] == JobStatus.PENDING.value
+
+    def test_unknown_job_rejects_as_active_job(self, db_session, dispatch_fixture):
+        """UNKNOWN job 也占唯一索引(设备隔离中),同样应拦截派发。"""
+        from backend.models.job import JobInstance
+        from backend.models.plan_run import PlanRun
+
+        dev = dispatch_fixture["device"]
+        other_run = PlanRun(
+            plan_id=dispatch_fixture["plan"].id,
+            status="RUNNING",
+            failure_threshold=0.1,
+            plan_snapshot={"plan_id": dispatch_fixture["plan"].id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+        )
+        db_session.add(other_run)
+        db_session.flush()
+        db_session.add(JobInstance(
+            plan_run_id=other_run.id,
+            plan_id=dispatch_fixture["plan"].id,
+            device_id=dev.id,
+            host_id=dispatch_fixture["host"].id,
+            status=JobStatus.UNKNOWN.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        ))
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError) as exc:
+            _validate_dispatch_devices_sync(db_session, [dev.id])
+        assert exc.value.detail()["unavailable_devices"][0]["reason"] == "active_job"
+
+    def test_terminal_job_does_not_reject(self, db_session, dispatch_fixture):
+        """COMPLETED/FAILED job 不占唯一索引 → 同设备可重新派发(回归防护)。"""
+        from backend.models.job import JobInstance
+        from backend.models.plan_run import PlanRun
+
+        dev = dispatch_fixture["device"]
+        other_run = PlanRun(
+            plan_id=dispatch_fixture["plan"].id,
+            status="SUCCESS",
+            failure_threshold=0.1,
+            plan_snapshot={"plan_id": dispatch_fixture["plan"].id},
+            run_type="MANUAL",
+            triggered_by="pytest",
+        )
+        db_session.add(other_run)
+        db_session.flush()
+        db_session.add(JobInstance(
+            plan_run_id=other_run.id,
+            plan_id=dispatch_fixture["plan"].id,
+            device_id=dev.id,
+            host_id=dispatch_fixture["host"].id,
+            status=JobStatus.COMPLETED.value,
+            pipeline_def={"lifecycle": {"init": [], "teardown": []}},
+        ))
+        db_session.commit()
+
+        # Should not raise — device is free for a new dispatch.
+        _validate_dispatch_devices_sync(db_session, [dev.id])
+
 
 # ── prepare_plan_run / complete_plan_run_dispatch 集成 ──────────────────
 

@@ -65,9 +65,8 @@ import { cn } from '@/lib/utils';
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { evaluateDeviceReadiness } from '@/utils/planExecuteReadiness';
+import { evaluateDeviceReadiness, type ReadinessDevice } from '@/utils/planExecuteReadiness';
 import { PlanExecuteWizardNav, WIZARD_STEPS } from '@/components/execution/PlanExecuteWizardNav';
-import { PlanConfigStep, DeviceSelectionStep, VersionConfirmStep, ExecutionConfirmStep } from '@/components/execution/PlanExecuteSteps';
 
 
 
@@ -75,35 +74,11 @@ import { PlanConfigStep, DeviceSelectionStep, VersionConfirmStep, ExecutionConfi
 
 
 
-type DeviceSummary = {
+type DeviceSummary = ReadinessDevice & {
 
 
 
-  id: number;
-
-
-
-  serial: string;
-
-
-
-  model?: string | null;
-
-
-
-  host_id?: string | number | null;
-
-
-
-  status: string;
-  schedulable?: boolean;
   scheduling_reason?: string | null;
-  adb_connected?: boolean | null;
-  adb_state?: string | null;
-  build_display_id?: string | null;
-
-
-
 };
 
 
@@ -269,7 +244,6 @@ export default function PlanExecutePage() {
 
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
   const [currentStep, setCurrentStep] = useState(0);
-  const wizardSteps = WIZARD_STEPS;
   const [nodeSearch, setNodeSearch] = useState('');
 
 
@@ -827,7 +801,7 @@ export default function PlanExecutePage() {
 
 
 
-        {currentStep === 0 && <PlanConfigStep><Card>
+        {currentStep === 0 && <Card>
 
 
 
@@ -938,9 +912,9 @@ export default function PlanExecutePage() {
 
 
 
-        </Card></PlanConfigStep>}
+        </Card>}
 
-        {currentStep === 1 && <DeviceSelectionStep><Card>
+        {currentStep === 1 && <Card>
 
 
 
@@ -1038,9 +1012,9 @@ export default function PlanExecutePage() {
 
 
 
-        </Card></DeviceSelectionStep>}
+        </Card>}
 
-        {currentStep === 2 && <VersionConfirmStep><Card>
+        {currentStep === 2 && <Card>
           <CardHeader><CardTitle className="text-base">节点数量与版本一致性确认</CardTitle></CardHeader>
           <CardContent className="space-y-4">
             {selectedGroups.length === 0 ? <EmptyState title="尚未选择样机" description="请返回“样机选择”，按节点选择测试设备" icon={<Smartphone className="h-10 w-10" />} /> : <>
@@ -1049,23 +1023,23 @@ export default function PlanExecutePage() {
               {readinessResult.warnings.length > 0 ? <div className="rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning">{readinessResult.warnings.join('；')}</div> : <div className="rounded-lg bg-success/10 px-3 py-2 text-sm text-success">版本与型号信息一致，可以继续。</div>}
             </>}
           </CardContent>
-        </Card></VersionConfirmStep>}
+        </Card>}
 
-        {currentStep === 3 && <ExecutionConfirmStep><Card>
+        {currentStep === 3 && <Card>
           <CardHeader><CardTitle className="text-base">前置执行项与测试参数确认</CardTitle></CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg border p-3"><div className={cn('text-xs', TEXT.subtitle)}>测试计划</div><div className="mt-1 font-medium">{selectedPlan?.name || '未选择'}</div></div><div className="rounded-lg border p-3"><div className={cn('text-xs', TEXT.subtitle)}>执行步骤</div><div className="mt-1 font-medium">{executableStepCount} 个启用步骤</div></div><div className="rounded-lg border p-3"><div className={cn('text-xs', TEXT.subtitle)}>失败阈值</div><div className="mt-1 font-medium">{Math.round((selectedPlan?.failure_threshold ?? 0.05) * 100)}%</div></div><div className="rounded-lg border p-3"><div className={cn('text-xs', TEXT.subtitle)}>测试设备</div><div className="mt-1 font-medium">{selectedDevices.length} 台 / {readinessResult.byHost.length} 节点</div></div></div>
             <div className="rounded-lg border"><div className="border-b px-3 py-2 text-sm font-medium">前置执行检查</div><div className="divide-y text-sm"><div className="flex justify-between px-3 py-2"><span>Plan 包含可执行步骤</span><span className={executableStepCount > 0 ? 'text-success' : 'text-destructive'}>{executableStepCount > 0 ? '通过' : '未通过'}</span></div><div className="flex justify-between px-3 py-2"><span>设备与节点在线状态</span><span className={readinessResult.blockedCount === 0 && selectedDevices.length > 0 ? 'text-success' : 'text-destructive'}>{readinessResult.blockedCount === 0 && selectedDevices.length > 0 ? '通过' : `${readinessResult.blockedCount} 台阻塞`}</span></div><div className="flex justify-between px-3 py-2"><span>版本与型号一致性</span><span className={readinessResult.warnings.length ? 'text-warning' : 'text-success'}>{readinessResult.warnings.length ? '存在提醒' : '通过'}</span></div></div></div>
             {readinessResult.blockedCount > 0 && <Button type="button" variant="outline" onClick={() => removeDeviceIds(readinessResult.blockedDeviceIds)}><Trash2 className="mr-2 h-4 w-4" />移除全部阻塞设备</Button>}
           </CardContent>
-        </Card></ExecutionConfirmStep>}
+        </Card>}
 
         <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border bg-background/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center">
           <div className="flex-1 text-sm"><span className="font-medium">已选 {selectedDevices.length} 台</span><span className="mx-2 text-muted-foreground">|</span><span className="text-success">{readinessResult.readyCount} 台就绪</span><span className="mx-2 text-muted-foreground">|</span><span className={readinessResult.blockedCount ? 'text-destructive' : TEXT.subtitle}>{readinessResult.blockedCount} 台阻塞</span></div>
           {readinessResult.blockedCount > 0 && <Button type="button" variant="outline" onClick={() => removeDeviceIds(readinessResult.blockedDeviceIds)}><Trash2 className="mr-1.5 h-4 w-4" />移除阻塞设备</Button>}
           {selectedDevices.length > 0 && <Button type="button" variant="ghost" onClick={() => setSelectedDeviceIds(new Set())}>清空选择</Button>}
           {currentStep === 0 ? <Button type="button" variant="outline" onClick={() => navigate('/orchestration/plans')}>取消</Button> : <Button type="button" variant="outline" onClick={() => setCurrentStep(step => Math.max(0, step - 1))}><ChevronLeft className="mr-1.5 h-4 w-4" />上一步</Button>}
-          {currentStep < wizardSteps.length - 1 ? <Button type="button" onClick={() => setCurrentStep(step => Math.min(wizardSteps.length - 1, step + 1))} disabled={(currentStep === 0 && (!selectedPlanId || executableStepCount === 0)) || (currentStep === 1 && selectedSchedulableDeviceIds.length === 0)}>{currentStep === 0 ? '进入样机选择' : currentStep === 1 ? '确认节点与版本' : '进入执行前确认'}<ChevronRight className="ml-1.5 h-4 w-4" /></Button> : <Button type="submit" disabled={!selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed}><Eye className="mr-2 h-4 w-4" />预览并发起</Button>}
+          {currentStep < WIZARD_STEPS.length - 1 ? <Button type="button" onClick={() => handleStepChange(currentStep + 1)} disabled={(currentStep === 0 && (!selectedPlanId || executableStepCount === 0)) || (currentStep === 1 && selectedSchedulableDeviceIds.length === 0)}>{currentStep === 0 ? '进入样机选择' : currentStep === 1 ? '确认节点与版本' : '进入执行前确认'}<ChevronRight className="ml-1.5 h-4 w-4" /></Button> : <Button type="submit" disabled={!selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed}><Eye className="mr-2 h-4 w-4" />预览并发起</Button>}
 
 
 
