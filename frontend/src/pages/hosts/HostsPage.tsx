@@ -10,7 +10,7 @@ import { AddHostModal } from './components/AddHostModal';
 import HostHotUpdateConfirmDialog from '@/components/host/HostHotUpdateConfirmDialog';
 import HostBulkActionBar from '@/components/host/HostBulkActionBar';
 import HostOperationPanel from '@/components/host/HostOperationPanel';
-import { api } from '@/utils/api';
+import { api, coerceHostList, fetchHostList } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
@@ -32,11 +32,12 @@ export default function HostsPage() {
   const canManageWatcherAdminState = sessionQ.data?.role === 'admin';
   const isAdmin = sessionQ.data?.role === 'admin';
 
-  const { data: hosts, isLoading, error } = useQuery({
+  const { data: hostsData, isLoading, error } = useQuery({
     queryKey: hostKeys.list(),
-    queryFn: () => api.hosts.list(0, 200).then(res => res.items),
+    queryFn: () => fetchHostList(0, 200),
     refetchInterval: 10000,
   });
+  const hosts = useMemo(() => coerceHostList(hostsData), [hostsData]);
 
   const { data: devices } = useQuery({
     queryKey: deviceKeys.list(),

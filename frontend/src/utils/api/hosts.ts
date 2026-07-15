@@ -29,6 +29,23 @@ export const hosts = {
   ) => apiClient.patch<Host>(`/hosts/${id}/watcher-admin-state`, data).then(r => r.data),
 };
 
+/** Shared react-query fetcher — always returns Host[], never the paginated envelope. */
+export const fetchHostList = (skip = 0, limit = 200) =>
+  hosts.list(skip, limit).then((res) => res.items);
+
+/** Normalize react-query cache to Host[] (tolerates legacy PaginatedResponse pollution). */
+export function coerceHostList(data: unknown): Host[] {
+  if (Array.isArray(data)) return data;
+  if (
+    data &&
+    typeof data === 'object' &&
+    Array.isArray((data as PaginatedResponse<Host>).items)
+  ) {
+    return (data as PaginatedResponse<Host>).items;
+  }
+  return [];
+}
+
 export const heartbeat = {
   send: (hostId: number, data: { status: string; mount_status?: Record<string, any> }) =>
     apiClient.post('/heartbeat', { host_id: hostId, ...data }).then(r => r.data),

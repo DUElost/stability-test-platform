@@ -21,6 +21,7 @@ export const planKeys = {
 } as const;
 
 export const hostKeys = {
+  /** Always use fetchHostList() as queryFn — cache must store Host[], not PaginatedResponse. */
   list: () => ['hosts'] as const,
 } as const;
 

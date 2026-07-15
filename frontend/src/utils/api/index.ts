@@ -6,7 +6,7 @@ export {
   registerAuthFailureHandler,
 } from './client';
 export { auth } from './auth';
-export { hosts, heartbeat, hotUpdate, agentInstall } from './hosts';
+export { hosts, heartbeat, hotUpdate, agentInstall, fetchHostList, coerceHostList } from './hosts';
 export { devices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';

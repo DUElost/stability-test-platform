@@ -7,11 +7,17 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn().mockResolvedValue(true),
 }));
 
+const mockHostsList = vi.fn().mockResolvedValue({ items: [], total: 0 });
+
 // Mock api
-vi.mock('../../utils/api', () => ({
-  api: {
+vi.mock('../../utils/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/api')>();
+  return {
+    ...actual,
+    fetchHostList: vi.fn(() => mockHostsList().then((res: { items: unknown[] }) => res.items)),
+    api: {
     hosts: {
-      list: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+      list: (...args: unknown[]) => mockHostsList(...args),
       create: vi.fn().mockResolvedValue({}),
       update: vi.fn().mockResolvedValue({}),
       delete: vi.fn().mockResolvedValue({}),
@@ -48,8 +54,9 @@ vi.mock('../../utils/api', () => ({
     planRuns: {
       list: vi.fn().mockResolvedValue([]),
     },
-  },
-}));
+    },
+  };
+});
 
 // Mock toast
 vi.mock('../../components/ui/toast', () => ({
@@ -123,16 +130,80 @@ function createWrapper() {
 describe('HostsPage', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockHostsList.mockResolvedValue({ items: [], total: 0 });
     const { api } = await import('../../utils/api');
-    (api.hosts.list as any).mockResolvedValue({ items: [], total: 0 });
     (api.devices.list as any).mockResolvedValue({ items: [], total: 0 });
     (api.planRuns.list as any).mockResolvedValue([]);
   });
 
+  it('renders host rows when react-query cache already holds Host[]', async () => {
+    const { hostKeys } = await import('../../utils/api/queryKeys');
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(hostKeys.list(), [
+      {
+        id: 'h1',
+        name: 'node-1',
+        ip: '10.0.0.1',
+        status: 'ONLINE',
+        extra: {},
+        agent_installed: true,
+      },
+    ]);
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <HostsPage />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('host-row-h1')).toBeInTheDocument();
+    });
+  });
+
+  it('renders host rows when react-query cache holds paginated envelope', async () => {
+    const { hostKeys } = await import('../../utils/api/queryKeys');
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(hostKeys.list(), {
+      items: [
+        {
+          id: 'h2',
+          name: 'node-2',
+          ip: '10.0.0.2',
+          status: 'ONLINE',
+          extra: {},
+          agent_installed: true,
+        },
+      ],
+      total: 1,
+      skip: 0,
+      limit: 200,
+    });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <HostsPage />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('host-row-h2')).toBeInTheDocument();
+    });
+  });
+
   it('renders loading state initially', async () => {
-    const { api } = await import('../../utils/api');
     // Make the promise never resolve to show loading
-    (api.hosts.list as any).mockReturnValueOnce(new Promise(() => {}));
+    mockHostsList.mockReturnValueOnce(new Promise(() => {}));
 
     const HostsPage = (await import('./HostsPage')).default;
     render(<HostsPage />, { wrapper: createWrapper() });
@@ -175,8 +246,7 @@ describe('HostsPage', () => {
   });
 
   it('renders host table when hosts exist', async () => {
-    const { api } = await import('../../utils/api');
-    (api.hosts.list as any).mockResolvedValue({
+    mockHostsList.mockResolvedValue({
       items: [
         { id: 1, name: 'Worker-01', ip: '172.21.15.10', status: 'ONLINE', extra: {}, mount_status: {} },
         { id: 2, name: 'Worker-02', ip: '172.21.15.11', status: 'OFFLINE', extra: {}, mount_status: {} },
@@ -195,7 +265,7 @@ describe('HostsPage', () => {
 
   it('does not query plan runs to compute host active task counts', async () => {
     const { api } = await import('../../utils/api');
-    (api.hosts.list as any).mockResolvedValue({
+    mockHostsList.mockResolvedValue({
       items: [
         {
           id: 'host-1',
@@ -220,7 +290,7 @@ describe('HostsPage', () => {
 
   it('deactivates watcher admin state after confirmation', async () => {
     const { api } = await import('../../utils/api');
-    (api.hosts.list as any).mockResolvedValue({
+    mockHostsList.mockResolvedValue({
       items: [
         {
           id: 'host-1',

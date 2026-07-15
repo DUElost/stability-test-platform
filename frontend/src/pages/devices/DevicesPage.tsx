@@ -8,7 +8,7 @@ import DeviceBulkActionBar from '@/components/device/DeviceBulkActionBar';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { BatchEditDeviceTagsDialog, type DeviceTagOperation } from './components/BatchEditDeviceTagsDialog';
 import { DeviceMetricsModal } from './components/DeviceMetricsModal';
-import { api } from '@/utils/api';
+import { api, fetchHostList } from '@/utils/api';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -43,7 +43,7 @@ export default function DevicesPage() {
 
   const { data: hosts } = useQuery({
     queryKey: hostKeys.list(),
-    queryFn: () => api.hosts.list(0, 200).then(res => res.items),
+    queryFn: () => fetchHostList(0, 200),
     refetchInterval: 10000,
   });
 

@@ -787,6 +787,7 @@ def main() -> None:
         lock_renewal_stop_event=_lock_renewal_stop_event,
         agent_instance_id=agent_instance_id,
         on_lease_lost=_on_lease_lost,
+        host_id=host_id,
     )
     lease_renewer.start()
 

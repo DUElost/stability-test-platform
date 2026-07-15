@@ -93,6 +93,25 @@ def _validate_dispatch_devices_sync(
     ).all()
     active_lease_by_device = {row.device_id: row.job_id for row in lease_rows}
 
+    # B4: the partial unique index ``uq_job_active_per_device`` (job.py) forbids a
+    # second job on a device while one is PENDING/RUNNING/UNKNOWN. The ACTIVE-lease
+    # check above only catches RUNNING (leases exist post-claim); a PENDING job
+    # from another PlanRun holds no lease yet still occupies the index, so without
+    # this check dispatch validation passes and materialization later dies on an
+    # IntegrityError, leaving the PlanRun hung. Query the exact index predicate so
+    # validation and materialization share one source of truth.
+    active_job_rows = db.execute(
+        select(JobInstance.device_id, JobInstance.id, JobInstance.status)
+        .where(
+            JobInstance.device_id.in_(device_ids),
+            JobInstance.status.in_(ACTIVE_JOB_STATUSES),
+        )
+        .order_by(JobInstance.id)
+    ).all()
+    active_job_by_device: dict[int, tuple[int, str]] = {}
+    for row in active_job_rows:
+        active_job_by_device.setdefault(row.device_id, (row.id, row.status))
+
     unavailable: list[dict] = []
     for did in device_ids:
         snap = device_snapshot.get(did)
@@ -124,6 +143,17 @@ def _validate_dispatch_devices_sync(
             unavailable.append({
                 "id": did, "reason": "active_lease",
                 "lease_job_id": active_lease_by_device[did],
+            })
+            continue
+        if did in active_job_by_device:
+            # PENDING/UNKNOWN active job with no lease yet (RUNNING is already
+            # caught by active_lease above). Same index conflict, distinct reason
+            # so the caller/UI can tell "queued elsewhere" from "running elsewhere".
+            conflict_job_id, conflict_status = active_job_by_device[did]
+            unavailable.append({
+                "id": did, "reason": "active_job",
+                "job_id": conflict_job_id,
+                "job_status": conflict_status,
             })
             continue
 

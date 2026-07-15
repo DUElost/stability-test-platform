@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PlanExecutePage from './PlanExecutePage';
-import { api, ApiError } from '@/utils/api';
+import { api, ApiError, fetchHostList } from '@/utils/api';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -30,6 +30,7 @@ vi.mock('@/utils/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/utils/api')>();
   return {
     ...actual,
+    fetchHostList: vi.fn().mockResolvedValue([]),
     api: {
       plans: {
         list: vi.fn(),
@@ -87,7 +88,7 @@ function renderPage({
     total_steps: 1,
   });
   (api.plans.run as any).mockResolvedValue({ id: 88 });
-  (api.hosts.list as any).mockResolvedValue({ items: [], total: 0 });
+  (fetchHostList as any).mockResolvedValue([]);
   (api.planRuns.retryDispatch as any).mockResolvedValue({ plan_run_id: 88, status: 'RUNNING' });
 
   return render(
@@ -97,6 +98,11 @@ function renderPage({
       </QueryClientProvider>
     </MemoryRouter>,
   );
+}
+
+function selectFirstNode() {
+  const node = screen.getAllByRole('button').find(button => /auto-|h1/.test(button.textContent ?? ''));
+  if (node) fireEvent.click(node);
 }
 
 describe('PlanExecutePage', () => {
@@ -124,7 +130,7 @@ describe('PlanExecutePage', () => {
       ],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ })); selectFirstNode();
 
     const busyCheckbox = await screen.findByLabelText(/457854125444LMKJ/i);
     const freeCheckbox = screen.getByLabelText(/FREE123/i);
@@ -147,7 +153,7 @@ describe('PlanExecutePage', () => {
       ],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ })); selectFirstNode();
 
     expect(await screen.findByLabelText(/ONLINE-BLOCKED/)).toBeDisabled();
     expect(screen.getByLabelText(/BUSY-ADMITTED/)).not.toBeDisabled();
@@ -173,10 +179,8 @@ describe('PlanExecutePage', () => {
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
-    fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
-    expect(screen.getByRole('button', { name: /预览并发起/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /预览并发起/ })).not.toBeInTheDocument();
+    expect(await screen.findByText(/没有已启用步骤/)).toBeInTheDocument();
     expect(api.plans.previewRun).not.toHaveBeenCalled();
   });
 
@@ -188,7 +192,7 @@ describe('PlanExecutePage', () => {
       ],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ })); selectFirstNode();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
@@ -220,7 +224,7 @@ describe('PlanExecutePage', () => {
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ })); selectFirstNode();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
