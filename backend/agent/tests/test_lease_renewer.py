@@ -339,3 +339,161 @@ def test_500_does_not_trigger_lease_lost():
     assert 1 in r._job_ids
     assert 1 in r._fencing_tokens
     assert 1 in r._device_ids
+
+
+# ── P0: Host-level batch renewal ───────────────────────────────────────────────
+
+
+def _batch_resp(results, status_code=200):
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {"data": {"results": results}}
+    return resp
+
+
+def test_batch_renews_all_and_sends_one_request():
+    """host_id set → one POST /leases/extend-batch carries every token."""
+    r = _make_renewer(host_id="h-1")
+    for jid in (1, 2, 3):
+        r._job_ids.add(jid)
+        r.set_fencing_token(jid, f"tok-{jid}", device_id=jid * 10)
+
+    resp = _batch_resp([
+        {"job_id": 1, "status": "renewed", "expires_at": "2026-01-01T00:00:00Z"},
+        {"job_id": 2, "status": "renewed", "expires_at": "2026-01-01T00:00:00Z"},
+        {"job_id": 3, "status": "renewed", "expires_at": "2026-01-01T00:00:00Z"},
+    ])
+    with patch("requests.post", return_value=resp) as mock_post:
+        r._extend_batch([1, 2, 3])
+
+    assert mock_post.call_count == 1
+    body = mock_post.call_args.kwargs["json"]
+    assert body["host_id"] == "h-1"
+    assert {item["job_id"] for item in body["leases"]} == {1, 2, 3}
+    # All state intact after successful renewal
+    assert r._fencing_tokens == {1: "tok-1", 2: "tok-2", 3: "tok-3"}
+
+
+def test_batch_per_item_loss_isolates_from_survivors():
+    """One stale_token item tears down only that job; others keep renewing."""
+    lost_calls = []
+    r = _make_renewer(host_id="h-1", on_lease_lost=lambda j, d: lost_calls.append((j, d)))
+    for jid in (1, 2, 3):
+        r._job_ids.add(jid)
+        r.set_fencing_token(jid, f"tok-{jid}", device_id=jid * 10)
+
+    resp = _batch_resp([
+        {"job_id": 1, "status": "renewed", "expires_at": "2026-01-01T00:00:00Z"},
+        {"job_id": 2, "status": "stale_token"},
+        {"job_id": 3, "status": "job_not_running"},
+    ])
+    with patch("requests.post", return_value=resp):
+        r._extend_batch([1, 2, 3])
+
+    # Job 1 survives; 2 and 3 torn down with their device_ids
+    assert 1 in r._fencing_tokens
+    assert 2 not in r._fencing_tokens and 3 not in r._fencing_tokens
+    assert set(lost_calls) == {(2, 20), (3, 30)}
+
+
+def test_batch_lease_missing_triggers_teardown():
+    """lease_missing means the reconciler reclaimed it → stop renewing."""
+    lost_calls = []
+    r = _make_renewer(host_id="h-1", on_lease_lost=lambda j, d: lost_calls.append((j, d)))
+    r._job_ids.add(1)
+    r.set_fencing_token(1, "tok-1", device_id=10)
+
+    resp = _batch_resp([{"job_id": 1, "status": "lease_missing"}])
+    with patch("requests.post", return_value=resp):
+        r._extend_batch([1])
+
+    assert lost_calls == [(1, 10)]
+    assert 1 not in r._fencing_tokens
+
+
+def test_batch_stale_token_guard_preserves_reclaimed_job():
+    """If job_id was re-registered under a new token between snapshot and result,
+    the loss for the OLD token must not tear down the freshly reclaimed job."""
+    lost_calls = []
+    r = _make_renewer(host_id="h-1", on_lease_lost=lambda j, d: lost_calls.append((j, d)))
+    r._job_ids.add(1)
+    r.set_fencing_token(1, "tok-old", device_id=10)
+
+    def _post(*args, **kwargs):
+        # Simulate concurrent re-claim: token rotated after the request was built.
+        r.set_fencing_token(1, "tok-new", device_id=10)
+        return _batch_resp([{"job_id": 1, "status": "stale_token"}])
+
+    with patch("requests.post", side_effect=_post):
+        r._extend_batch([1])
+
+    # New token preserved — the stale loss was ignored
+    assert r._fencing_tokens.get(1) == "tok-new"
+    assert lost_calls == []
+
+
+def test_batch_network_error_preserves_all_state():
+    """Transport failure leaves every token intact for next-tick retry."""
+    lost_calls = []
+    r = _make_renewer(host_id="h-1", on_lease_lost=lambda j, d: lost_calls.append((j, d)))
+    for jid in (1, 2):
+        r._job_ids.add(jid)
+        r.set_fencing_token(jid, f"tok-{jid}", device_id=jid * 10)
+
+    with patch("requests.post", side_effect=requests.ConnectionError("down")):
+        r._extend_batch([1, 2])
+
+    assert r._fencing_tokens == {1: "tok-1", 2: "tok-2"}
+    assert lost_calls == []
+
+
+def test_batch_unsupported_falls_back_to_per_job():
+    """Old backend (404 on batch route) → permanent fallback + per-job retry now."""
+    r = _make_renewer(host_id="h-1")
+    r._job_ids.add(1)
+    r.set_fencing_token(1, "tok-1", device_id=10)
+
+    resp_404 = MagicMock()
+    resp_404.status_code = 404
+
+    calls = {"n": 0}
+
+    def _post(url, **kwargs):
+        calls["n"] += 1
+        if "extend-batch" in url:
+            return resp_404
+        # per-job fallback call
+        ok = MagicMock()
+        ok.raise_for_status.return_value = None
+        ok.json.return_value = {"expires_at": "2026-01-01T00:00:00Z"}
+        return ok
+
+    with patch("requests.post", side_effect=_post):
+        r._extend_batch([1])
+
+    assert r._batch_supported is False
+    # one batch attempt + one per-job fallback
+    assert calls["n"] == 2
+
+
+def test_batch_chunks_large_host(monkeypatch):
+    """Batch splits into chunks bounded by AGENT_LEASE_EXTEND_BATCH_CHUNK."""
+    monkeypatch.setenv("AGENT_LEASE_EXTEND_BATCH_CHUNK", "2")
+    r = _make_renewer(host_id="h-1")
+    for jid in (1, 2, 3, 4, 5):
+        r._job_ids.add(jid)
+        r.set_fencing_token(jid, f"tok-{jid}", device_id=jid)
+
+    def _post(url, **kwargs):
+        sent = kwargs["json"]["leases"]
+        return _batch_resp([
+            {"job_id": it["job_id"], "status": "renewed", "expires_at": "x"}
+            for it in sent
+        ])
+
+    with patch("requests.post", side_effect=_post) as mock_post:
+        r._extend_batch([1, 2, 3, 4, 5])
+
+    # 5 jobs / chunk 2 → 3 requests
+    assert mock_post.call_count == 3

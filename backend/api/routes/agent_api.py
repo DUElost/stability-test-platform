@@ -1236,8 +1236,10 @@ class _ExtendBatchItemIn(BaseModel):
     # + progress_marker ride along on the same renewal request so the Agent wire
     # contract is stable now. The backing JobInstance columns land in P1; until
     # then these are accepted and ignored (no second Agent migration needed).
+    # progress_marker is a structured snapshot (e.g. {"patrol_cycle_index": N,
+    # "last_progress_at": "..."}), so it is typed as an open dict, not a string.
     execution_state: Optional[str] = None
-    progress_marker: Optional[str] = None
+    progress_marker: Optional[Dict[str, Any]] = None
 
 
 class _ExtendBatchIn(BaseModel):

@@ -9,12 +9,15 @@ from fastapi import HTTPException
 
 from backend.api.routes.agent_api import (
     _ExtendLockIn,
+    _ExtendBatchIn,
+    _ExtendBatchItemIn,
     _JobHeartbeatIn,
     _RunCompleteIn,
     _StepStatusIn,
     JobStatusUpdate,
     complete_job,
     extend_job_lock,
+    extend_leases_batch,
     get_pending_jobs,
     job_heartbeat,
     update_job_status,
@@ -520,6 +523,147 @@ async def test_extend_lock_conflict():
         assert exc_info.value.status_code == 409
     finally:
         _cleanup_seed(seed)
+
+
+# ── P0: Host-level batch lease renewal ─────────────────────────────────────────
+
+
+def _extract_batch(result):
+    """Return {job_id: status} from an extend_leases_batch ApiResponse."""
+    return {item.job_id: item.status for item in result.data.results}
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_renews_running_job():
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    old_liveness = datetime.now(timezone.utc) - timedelta(hours=1)
+    try:
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            job.updated_at = old_liveness
+            db.commit()
+        finally:
+            db.close()
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id=seed["host_id"],
+                    agent_instance_id=seed["host_id"],
+                    leases=[_ExtendBatchItemIn(job_id=seed["job_id"], fencing_token=token)],
+                ),
+                db=async_db, _=None,
+            )
+        assert result.error is None
+        results = {item.job_id: item for item in result.data.results}
+        assert results[seed["job_id"]].status == "renewed"
+        assert results[seed["job_id"]].expires_at
+
+        # RUNNING keepalive: job.updated_at bumped (recycler heartbeat guard)
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert _as_utc(job.updated_at) > old_liveness
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_classifies_each_item():
+    """One request, three jobs, three distinct per-item outcomes — no item
+    failure aborts the others (invariant: results are isolated)."""
+    running = _seed_job(status=JobStatus.RUNNING.value)
+    running_token = _setup_lease(running)
+    stale = _seed_job(status=JobStatus.RUNNING.value)
+    _setup_lease(stale)
+    not_running = _seed_job(status=JobStatus.PENDING.value)  # no lease, PENDING
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id=running["host_id"],
+                    leases=[
+                        _ExtendBatchItemIn(job_id=running["job_id"], fencing_token=running_token),
+                        _ExtendBatchItemIn(job_id=stale["job_id"], fencing_token="9:99"),
+                        _ExtendBatchItemIn(job_id=not_running["job_id"], fencing_token="x"),
+                    ],
+                ),
+                db=async_db, _=None,
+            )
+        statuses = _extract_batch(result)
+        assert statuses[running["job_id"]] == "renewed"
+        assert statuses[stale["job_id"]] == "stale_token"
+        assert statuses[not_running["job_id"]] == "job_not_running"
+    finally:
+        _cleanup_seed(running)
+        _cleanup_seed(stale)
+        _cleanup_seed(not_running)
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_lease_missing_when_released():
+    """RUNNING job whose ACTIVE lease was released → lease_missing (not renewed)."""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        db = SessionLocal()
+        try:
+            db.query(DeviceLease).filter(
+                DeviceLease.job_id == seed["job_id"],
+            ).update({"status": LeaseStatus.RELEASED.value})
+            db.commit()
+        finally:
+            db.close()
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id=seed["host_id"],
+                    leases=[_ExtendBatchItemIn(job_id=seed["job_id"], fencing_token=token)],
+                ),
+                db=async_db, _=None,
+            )
+        assert _extract_batch(result)[seed["job_id"]] == "lease_missing"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_empty_returns_empty():
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as async_db:
+        result = await extend_leases_batch(
+            payload=_ExtendBatchIn(host_id="h-none", leases=[]),
+            db=async_db, _=None,
+        )
+    assert result.error is None
+    assert result.data.results == []
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_rejects_oversized_batch(monkeypatch):
+    import backend.api.routes.agent_api as agent_api
+    monkeypatch.setattr(agent_api, "_LEASE_EXTEND_BATCH_MAX", 2)
+    await async_engine.dispose()
+    async with AsyncSessionLocal() as async_db:
+        with pytest.raises(HTTPException) as exc_info:
+            await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id="h-1",
+                    leases=[
+                        _ExtendBatchItemIn(job_id=i, fencing_token="t") for i in range(3)
+                    ],
+                ),
+                db=async_db, _=None,
+            )
+    assert exc_info.value.status_code == 413
 
 
 @pytest.mark.asyncio
