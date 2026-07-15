@@ -20,10 +20,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.core.pipeline_validator import validate_pipeline_def
-from backend.models.device_lease import DeviceLease
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus
-from backend.models.host import Device, Host
-from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.resource_pool import ResourcePool
@@ -46,110 +42,6 @@ from backend.services.plan_dispatcher_core import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-async def _validate_dispatch_devices(
-    db: AsyncSession, device_ids: list[int]
-) -> None:
-    """Async counterpart of :func:`plan_dispatcher_sync._validate_dispatch_devices_sync`.
-
-    Walks the same 5-step priority ladder (not_found / no_host /
-    device_offline / host_offline / active_lease) and raises a
-    :class:`PlanDispatchError` carrying ``unavailable_devices`` on failure.
-    """
-    if not device_ids:
-        raise PlanDispatchError("device_ids must not be empty")
-
-    rows = (await db.execute(
-        select(
-            Device.id,
-            Device.host_id,
-            Device.status.label("device_status"),
-            Host.status.label("host_status"),
-        )
-        .select_from(Device)
-        .outerjoin(Host, Device.host_id == Host.id)
-        .where(Device.id.in_(device_ids))
-    )).all()
-    device_snapshot = {row.id: row for row in rows}
-
-    lease_rows = (await db.execute(
-        select(DeviceLease.device_id, DeviceLease.job_id)
-        .where(
-            DeviceLease.device_id.in_(device_ids),
-            DeviceLease.status == LeaseStatus.ACTIVE.value,
-        )
-    )).all()
-    active_lease_by_device = {row.device_id: row.job_id for row in lease_rows}
-
-    # B4: mirror uq_job_active_per_device (PENDING/RUNNING/UNKNOWN) — a PENDING
-    # job from another PlanRun holds no lease yet still occupies the index, so the
-    # ACTIVE-lease check alone would let dispatch validation pass and then fail at
-    # materialization on an IntegrityError. See the sync counterpart for detail.
-    _active_job_statuses = (
-        JobStatus.PENDING.value,
-        JobStatus.RUNNING.value,
-        JobStatus.UNKNOWN.value,
-    )
-    active_job_rows = (await db.execute(
-        select(JobInstance.device_id, JobInstance.id, JobInstance.status)
-        .where(
-            JobInstance.device_id.in_(device_ids),
-            JobInstance.status.in_(_active_job_statuses),
-        )
-        .order_by(JobInstance.id)
-    )).all()
-    active_job_by_device: dict[int, tuple[int, str]] = {}
-    for row in active_job_rows:
-        active_job_by_device.setdefault(row.device_id, (row.id, row.status))
-
-    unavailable: list[dict] = []
-    for did in device_ids:
-        snap = device_snapshot.get(did)
-        if snap is None:
-            unavailable.append({"id": did, "reason": "not_found"})
-            continue
-        if snap.host_id is None:
-            unavailable.append({"id": did, "reason": "no_host"})
-            continue
-        if snap.device_status == DeviceStatus.OFFLINE.value:
-            unavailable.append({
-                "id": did, "reason": "device_offline",
-                "device_status": snap.device_status,
-            })
-            continue
-        if snap.device_status == DeviceStatus.ERROR.value:
-            unavailable.append({
-                "id": did, "reason": "device_error",
-                "device_status": snap.device_status,
-            })
-            continue
-        if snap.host_status == HostStatus.OFFLINE.value:
-            unavailable.append({
-                "id": did, "reason": "host_offline",
-                "host_id": snap.host_id, "host_status": snap.host_status,
-            })
-            continue
-        if did in active_lease_by_device:
-            unavailable.append({
-                "id": did, "reason": "active_lease",
-                "lease_job_id": active_lease_by_device[did],
-            })
-            continue
-        if did in active_job_by_device:
-            conflict_job_id, conflict_status = active_job_by_device[did]
-            unavailable.append({
-                "id": did, "reason": "active_job",
-                "job_id": conflict_job_id,
-                "job_status": conflict_status,
-            })
-            continue
-
-    if unavailable:
-        raise PlanDispatchError(
-            f"Dispatch rejected: {len(unavailable)} device(s) unavailable",
-            unavailable_devices=unavailable,
-        )
 
 
 async def _fetch_script_metadata(
