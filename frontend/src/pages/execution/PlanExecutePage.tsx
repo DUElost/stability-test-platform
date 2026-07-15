@@ -54,18 +54,18 @@ import { hostKeys, planKeys } from '@/utils/api/queryKeys';
 
 
 
-import { Play, Smartphone, AlertCircle, Eye, ExternalLink, RefreshCw } from 'lucide-react';
+import { Play, Smartphone, AlertCircle, Eye, ExternalLink, RefreshCw, Layers3, Trash2, ChevronLeft, ChevronRight, Check } from 'lucide-react';
 
 
 
 import { PageContainer, PageHeader } from '@/components/layout';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
-import { DEVICE_STATUS_DOT, TEXT } from '@/design-system/tokens';
+import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { evaluateDeviceReadiness, PlanDeviceReadinessCard } from '@/components/execution/PlanDeviceReadinessCard';
+import { evaluateDeviceReadiness } from '@/components/execution/PlanDeviceReadinessCard';
 
 
 
@@ -115,113 +115,12 @@ const isSchedulable = (device: DeviceSummary) =>
     ? device.schedulable
     : device.status === 'ONLINE';
 
-
-
-
-
-
-
-function DeviceRow({
-
-
-
-  device,
-
-
-
-  selected,
-
-
-
-  onToggle,
-
-
-
-}: {
-
-
-
-  device: DeviceSummary;
-
-
-
-  selected: boolean;
-
-
-
-  onToggle: () => void;
-
-
-
-}) {
-
-
-
-  const statusColor =
-    DEVICE_STATUS_DOT[device.status as keyof typeof DEVICE_STATUS_DOT] ?? DEVICE_STATUS_DOT.OFFLINE;
-
-
-
-  const disabled = !isSchedulable(device);
-
-
-
-
-
-
-
-  return (
-
-
-
-    <label
-
-
-
-      className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2.5',
-        disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-accent',
-      )}
-
-
-
-    >
-
-
-
-      <input type="checkbox" checked={selected} onChange={onToggle} disabled={disabled} className="rounded" />
-
-
-
-      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColor}`} />
-
-
-
-      <span className={cn('font-mono text-sm', TEXT.body)}>{device.serial}</span>
-
-
-
-      {device.model && <span className={cn('text-xs flex-1 truncate', TEXT.subtitle)}>{device.model}</span>}
-
-
-
-      <span className={cn('text-xs', TEXT.subtitle)}>Host #{device.host_id}</span>
-
-
-
-      <StatusBadge kind="device" status={device.status} size="sm" />
-
-
-
-    </label>
-
-
-
-  );
-
-
-
-}
+const WIZARD_STEPS = [
+  { title: '计划配置', description: '选择并核对测试计划' },
+  { title: '样机选择', description: '先定位节点，再选择设备' },
+  { title: '数量与版本确认', description: '核对节点分布和版本一致性' },
+  { title: '执行前确认', description: '前置项、参数与最终预检' },
+];
 
 
 
@@ -233,7 +132,7 @@ function PreviewDialog({
 
 
 
-  open, preview, submitting, onClose, onConfirm,
+  open, preview, submitting, failureThreshold, groups, devices, onClose, onConfirm,
 
 
 
@@ -242,6 +141,9 @@ function PreviewDialog({
 
 
   open: boolean; preview: PlanRunPreview | null; submitting: boolean;
+  failureThreshold: number;
+  groups: Array<{ key: string; hostLabel: string; model: string; version: string; total: number; ready: number }>;
+  devices: DeviceSummary[];
 
 
 
@@ -281,7 +183,7 @@ function PreviewDialog({
 
 
 
-        <div className="space-y-2 text-sm">
+        <div className="space-y-3 text-sm">
 
 
 
@@ -294,6 +196,9 @@ function PreviewDialog({
 
 
           <div className="flex justify-between"><span className="text-muted-foreground">总步骤数</span><span className="font-medium">{preview?.total_steps ?? '—'}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">失败阈值</span><span className="font-medium">{Math.round(failureThreshold * 100)}%</span></div>
+          <div className="rounded-lg border"><div className="border-b px-3 py-2 font-medium">节点 / 型号 / 版本分布</div><div className="max-h-40 divide-y overflow-auto">{groups.map(group => <div key={group.key} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 px-3 py-2 text-xs"><span>{group.hostLabel}</span><span>{group.model}</span><span className="truncate" title={group.version}>{group.version}</span><span>{group.total} 台</span></div>)}</div></div>
+          <details className="rounded-lg border"><summary className="cursor-pointer px-3 py-2 font-medium">查看设备 Serial（{devices.length}）</summary><div className="max-h-32 overflow-auto border-t p-3 font-mono text-xs leading-6">{devices.map(device => <div key={device.id}>{device.serial}</div>)}</div></details>
 
 
 
@@ -339,6 +244,8 @@ function PreviewDialog({
 
 export default function PlanExecutePage() {
 
+  const wizardSteps = WIZARD_STEPS;
+
 
 
   const navigate = useNavigate();
@@ -366,13 +273,15 @@ export default function PlanExecutePage() {
 
 
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
+  const [currentStep, setCurrentStep] = useState(0);
+  const [nodeSearch, setNodeSearch] = useState('');
 
 
 
   const [deviceFilter, setDeviceFilter] = useState('');
-  const [targetDeviceCount, setTargetDeviceCount] = useState('');
-  const [expectedDeviceVersion, setExpectedDeviceVersion] = useState('');
-  const [expectedDevicesPerHost, setExpectedDevicesPerHost] = useState('');
+  const [deviceVersionFilter, setDeviceVersionFilter] = useState('all');
+  const [deviceHostFilter, setDeviceHostFilter] = useState('all');
+  const [deviceModelFilter, setDeviceModelFilter] = useState('all');
 
 
 
@@ -499,14 +408,47 @@ export default function PlanExecutePage() {
     () => allDevices.filter((device: DeviceSummary) => selectedDeviceIds.has(device.id)),
     [allDevices, selectedDeviceIds],
   );
+  const hostMap = useMemo(() => new Map((hostsResp?.items ?? []).map(host => [String(host.id), host])), [hostsResp?.items]);
+  const versionOptions = useMemo(() => Array.from(new Set(allDevices.map((device: DeviceSummary) => device.build_display_id).filter(Boolean) as string[])).sort(), [allDevices]);
+  const modelOptions = useMemo(() => Array.from(new Set(allDevices.map((device: DeviceSummary) => device.model).filter(Boolean) as string[])).sort(), [allDevices]);
+  const hostOptions = useMemo(() => Array.from(new Map(allDevices.map((device: DeviceSummary) => {
+    const id = String(device.host_id ?? 'unassigned');
+    const host = hostMap.get(id);
+    return [id, host?.ip || host?.name || (id === 'unassigned' ? '未分配节点' : id)];
+  })).entries()), [allDevices, hostMap]);
+  const nodeSummaries = useMemo(() => hostOptions.map(([id, label]) => {
+    const devices = allDevices.filter((device: DeviceSummary) => String(device.host_id ?? 'unassigned') === id);
+    const selected = devices.filter((device: DeviceSummary) => selectedDeviceIds.has(device.id)).length;
+    const available = devices.filter(isSchedulable).length;
+    const host = hostMap.get(id);
+    return { id, label, total: devices.length, selected, available, online: !host || host.status === 'ONLINE' };
+  }), [allDevices, hostMap, hostOptions, selectedDeviceIds]);
+  const visibleNodeSummaries = useMemo(() => {
+    const keyword = nodeSearch.trim().toLowerCase();
+    if (!keyword) return nodeSummaries;
+    return nodeSummaries.filter(node => node.label.toLowerCase().includes(keyword) || node.id.toLowerCase().includes(keyword));
+  }, [nodeSearch, nodeSummaries]);
   const readinessResult = useMemo(
-    () => evaluateDeviceReadiness(selectedDevices, hostsResp?.items ?? [], {
-      targetCount: Number(targetDeviceCount) || 0,
-      expectedVersion: expectedDeviceVersion.trim(),
-      expectedPerHost: Number(expectedDevicesPerHost) || 0,
-    }),
-    [expectedDeviceVersion, expectedDevicesPerHost, hostsResp?.items, selectedDevices, targetDeviceCount],
+    () => evaluateDeviceReadiness(selectedDevices, hostsResp?.items ?? []),
+    [hostsResp?.items, selectedDevices],
   );
+  const selectedGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; hostLabel: string; model: string; version: string; total: number; ready: number; ids: number[] }>();
+    for (const row of readinessResult.rows) {
+      const hostId = String(row.device.host_id ?? 'unassigned');
+      const host = hostMap.get(hostId);
+      const hostLabel = host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
+      const model = row.device.model || '型号未知';
+      const version = row.device.build_display_id || '版本未知';
+      const key = `${hostId}\u0000${model}\u0000${version}`;
+      const group = groups.get(key) ?? { key, hostLabel, model, version, total: 0, ready: 0, ids: [] };
+      group.total += 1;
+      group.ready += row.ready ? 1 : 0;
+      group.ids.push(row.device.id);
+      groups.set(key, group);
+    }
+    return Array.from(groups.values());
+  }, [hostMap, readinessResult.rows]);
 
 
 
@@ -520,9 +462,16 @@ export default function PlanExecutePage() {
 
     (d.model ?? '').toLowerCase().includes(deviceFilter.toLowerCase())
 
+  ).filter((d: DeviceSummary) =>
+    (deviceVersionFilter === 'all' || d.build_display_id === deviceVersionFilter) &&
+    (deviceHostFilter === 'all' || String(d.host_id ?? 'unassigned') === deviceHostFilter) &&
+    (deviceModelFilter === 'all' || d.model === deviceModelFilter)
+
 
 
   );
+  const filteredAvailableIds = filteredDevices.filter(isSchedulable).map((device: DeviceSummary) => device.id);
+  const allFilteredSelected = filteredAvailableIds.length > 0 && filteredAvailableIds.every(id => selectedDeviceIds.has(id));
 
 
 
@@ -551,6 +500,10 @@ export default function PlanExecutePage() {
 
 
   }, [schedulableDeviceIds]);
+
+  useEffect(() => {
+    if (deviceHostFilter === 'all' && hostOptions.length > 0) setDeviceHostFilter(hostOptions[0][0]);
+  }, [deviceHostFilter, hostOptions]);
 
 
 
@@ -631,6 +584,11 @@ export default function PlanExecutePage() {
 
 
   };
+  const removeDeviceIds = (ids: number[]) => setSelectedDeviceIds(prev => {
+    const next = new Set(prev);
+    ids.forEach(id => next.delete(id));
+    return next;
+  });
 
 
 
@@ -806,27 +764,24 @@ export default function PlanExecutePage() {
 
 
 
-  const availableCount = allDevices.filter(isSchedulable).length;
-
-
-
-
-
-
-
   return (
 
 
 
-    <PageContainer width="narrow">
+    <PageContainer width="wide">
 
 
 
-      <PreviewDialog open={showPreview} preview={preview} submitting={submitting} onClose={() => setShowPreview(false)} onConfirm={handleConfirm} />
+      <PreviewDialog open={showPreview} preview={preview} submitting={submitting} failureThreshold={selectedPlan?.failure_threshold ?? 0.05} groups={selectedGroups} devices={selectedDevices} onClose={() => setShowPreview(false)} onConfirm={handleConfirm} />
 
 
 
       <PageHeader title="Plan 执行" subtitle="选择已保存的 Plan 和目标设备，创建 PlanRun" />
+
+      <nav className="mb-4 rounded-xl border bg-card p-3" aria-label="执行配置进度">
+        <div className="grid gap-2 md:grid-cols-4">{wizardSteps.map((step, index) => <button key={step.title} type="button" onClick={() => setCurrentStep(index)} className={cn('relative rounded-lg border px-3 py-3 text-left transition-colors', currentStep === index ? 'border-primary bg-primary/10' : index < currentStep ? 'border-success/40 bg-success/5' : 'border-transparent bg-muted/30 hover:bg-accent')}><div className="flex items-center gap-2"><span className={cn('flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold', currentStep === index ? 'bg-primary text-primary-foreground' : index < currentStep ? 'bg-success text-success-foreground' : 'bg-muted-foreground/20')}>{index < currentStep ? <Check className="h-3.5 w-3.5" /> : index + 1}</span><span className="text-sm font-medium">{step.title}</span></div><div className={cn('mt-1 pl-8 text-xs', TEXT.subtitle)}>{step.description}</div>{index < wizardSteps.length - 1 && <ChevronRight className="absolute -right-3 top-1/2 z-10 hidden h-4 w-4 -translate-y-1/2 text-muted-foreground md:block" />}</button>)}</div>
+      </nav>
+
 
       {dispatchFailure && (
         <ErrorState
@@ -866,11 +821,11 @@ export default function PlanExecutePage() {
 
 
 
-        <Card>
+        {currentStep === 0 && <Card>
 
 
 
-          <CardHeader><CardTitle className="text-base">1. 选择 Plan</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-base">Plan 配置</CardTitle></CardHeader>
 
 
 
@@ -937,6 +892,20 @@ export default function PlanExecutePage() {
 
             {selectedPlan?.description && <p className={cn('mt-2 text-sm', TEXT.subtitle)}>{selectedPlan.description}</p>}
 
+            {selectedPlan && (
+              <div className="mt-4 grid gap-4 lg:grid-cols-[220px_1fr]">
+                <div className="grid grid-cols-2 gap-2 lg:grid-cols-1">
+                  <div className="rounded-lg bg-muted/50 p-3"><div className={cn('text-xs', TEXT.subtitle)}>失败阈值</div><div className="mt-1 font-semibold">{Math.round((selectedPlan.failure_threshold ?? 0.05) * 100)}%</div></div>
+                  <div className="rounded-lg bg-muted/50 p-3"><div className={cn('text-xs', TEXT.subtitle)}>启用步骤</div><div className="mt-1 font-semibold">{executableStepCount} / {selectedPlan.steps?.length ?? 0}</div></div>
+                </div>
+                <div className="rounded-lg border">
+                  <div className="border-b px-3 py-2 text-sm font-medium">执行步骤</div>
+                  <div className="divide-y">{selectedPlan.steps?.map((step, index) => <div key={step.id ?? step.step_key} className={cn('grid grid-cols-[32px_80px_1fr_auto] items-center gap-2 px-3 py-2 text-xs', step.enabled === false && 'opacity-50')}><span>{index + 1}</span><span>{step.stage}</span><span className="truncate">{step.script_name} · {step.script_version}</span><span>{step.enabled === false ? '停用' : '启用'}</span></div>)}</div>
+                </div>
+              </div>
+            )}
+            {selectedPlan && <div className={cn('mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs', TEXT.subtitle)}><span>更新时间：{selectedPlan.updated_at ? new Date(selectedPlan.updated_at).toLocaleString() : '暂无记录'}</span><span>巡检周期：{selectedPlan.patrol_interval_seconds ? `${selectedPlan.patrol_interval_seconds}s` : '未设置'}</span><span>超时：{selectedPlan.timeout_seconds ? `${selectedPlan.timeout_seconds}s` : '未设置'}</span></div>}
+
 
 
             {selectedPlan && executableStepCount === 0 && (
@@ -963,9 +932,9 @@ export default function PlanExecutePage() {
 
 
 
-        </Card>
+        </Card>}
 
-        <Card>
+        {currentStep === 1 && <Card>
 
 
 
@@ -981,11 +950,7 @@ export default function PlanExecutePage() {
 
 
 
-                <span>2. 选择设备</span>
-
-
-
-                <span className={cn('text-sm font-normal', TEXT.subtitle)}>已选 {selectedSchedulableDeviceIds.length} / {availableCount} 台可用</span>
+                <span>设备编排</span>
 
 
 
@@ -1029,46 +994,28 @@ export default function PlanExecutePage() {
 
               <>
 
-
-
-                <div className="flex gap-2 mb-3">
-
-
-
-                  <Input type="text" placeholder="搜索设备 serial / model..." value={deviceFilter}
-
-
-
-                    onChange={e => setDeviceFilter(e.target.value)}
-
-                  />
-
-
-
-                  <Button type="button" variant="outline" size="sm" onClick={toggleAll}>全选/取消</Button>
-
-
-
-                </div>
-
-
-
-                <div className="max-h-60 overflow-y-auto border rounded-lg divide-y">
-
-
-
-                  {filteredDevices.map((d: DeviceSummary) => (
-
-
-
-                    <DeviceRow key={d.id} device={d} selected={selectedDeviceIds.has(d.id)} onToggle={() => toggleDevice(d)} />
-
-
-
-                  ))}
-
-
-
+                <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+                  <aside className="rounded-lg border bg-muted/20 p-2">
+                    <div className="px-2 py-2 text-sm font-medium">搜索并选择节点</div><div className={cn('px-2 pb-2 text-xs', TEXT.subtitle)}>已选 {selectedSchedulableDeviceIds.length} / {schedulableDeviceIds.size} 台可用</div>
+                    <Input className="mb-2" value={nodeSearch} onChange={event => setNodeSearch(event.target.value)} placeholder="节点 IP / 名称" autoFocus />
+                    <div className="space-y-1">{visibleNodeSummaries.map(node => <button key={node.id} type="button" onClick={() => setDeviceHostFilter(node.id)} className={cn('w-full rounded-lg border px-3 py-2 text-left transition-colors', deviceHostFilter === node.id ? 'border-primary bg-primary/10' : 'border-transparent hover:bg-accent')}><div className="flex items-center justify-between gap-2"><span className="truncate font-mono text-xs">{node.label}</span><span className={cn('h-2 w-2 rounded-full', node.online ? 'bg-success' : 'bg-destructive')} /></div><div className={cn('mt-1 flex justify-between text-xs', TEXT.subtitle)}><span>{node.total} 台 · {node.available} 可用</span><span>{node.selected} 已选</span></div><div className="mt-2 h-1 overflow-hidden rounded bg-muted"><div className="h-full bg-primary" style={{ width: `${node.total ? node.selected / node.total * 100 : 0}%` }} /></div></button>)}</div>
+                    {visibleNodeSummaries.length === 0 && <div className={cn('px-2 py-6 text-center text-xs', TEXT.subtitle)}>未找到匹配节点</div>}
+                  </aside>
+                  <section className="min-w-0">
+                    {deviceHostFilter === 'all' ? <div className={cn('flex min-h-72 flex-col items-center justify-center rounded-lg border border-dashed text-sm', TEXT.subtitle)}><Layers3 className="mb-3 h-8 w-8" /><span>请先从左侧选择一个节点</span><span className="mt-1 text-xs">再查看该节点的设备矩阵并选择设备</span></div> : <>
+                      <div className="mb-3 flex flex-wrap items-center gap-2">
+                        <Input className="min-w-48 flex-1" type="text" placeholder="搜索当前节点的 Serial / 型号" value={deviceFilter} onChange={event => setDeviceFilter(event.target.value)} />
+                        <Select value={deviceVersionFilter} onValueChange={setDeviceVersionFilter}><SelectTrigger className="w-44"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部版本</SelectItem>{versionOptions.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select>
+                        <Select value={deviceModelFilter} onValueChange={setDeviceModelFilter}><SelectTrigger className="w-40"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部型号</SelectItem>{modelOptions.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}</SelectContent></Select>
+                        <Button type="button" variant="outline" onClick={toggleAll}>{allFilteredSelected ? '取消选择当前结果' : '全选当前结果'}</Button>
+                      </div>
+                      <div className="mb-3 rounded-lg border p-3">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2"><div><div className="text-sm font-medium">已选样机 Minimap</div><div className={cn('text-xs', TEXT.subtitle)}>跨节点汇总本次已选的 {selectedDevices.length} 台样机 · 点击方块可从本次测试中移除</div></div><div className="flex gap-3 text-xs"><span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-success" />已选就绪</span><span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-destructive" />已选阻塞</span></div></div>
+                        {selectedDevices.length === 0 ? <div className={cn('flex min-h-20 items-center justify-center text-xs', TEXT.subtitle)}>尚未选择样机</div> : <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(28px, 1fr))' }}>{selectedDevices.map((device: DeviceSummary) => { const row = readinessResult.rows.find(item => item.device.id === device.id); const blocked = row && !row.ready; const host = hostMap.get(String(device.host_id)); return <button key={device.id} type="button" aria-label={`已选设备方块 ${device.id}`} title={`${device.serial} · ${host?.ip || host?.name || device.host_id || '节点未知'} · ${device.model || '型号未知'} · ${device.build_display_id || '版本未知'}`} onClick={() => toggleDevice(device)} className={cn('aspect-square rounded-sm border transition-transform hover:scale-110 hover:ring-2 hover:ring-primary/40', blocked ? 'border-destructive bg-destructive' : 'border-success bg-success')} />; })}</div>}
+                      </div>
+                      <div className="overflow-x-auto rounded-lg border"><table className="w-full min-w-[680px] text-sm"><thead className="bg-muted/95 text-left text-xs"><tr><th className="w-10 px-3 py-2" /><th className="px-3 py-2">Serial</th><th className="px-3 py-2">型号</th><th className="px-3 py-2">版本</th><th className="px-3 py-2">状态</th><th className="px-3 py-2">预检</th></tr></thead><tbody className="divide-y">{filteredDevices.map((device: DeviceSummary) => { const disabled = !isSchedulable(device); const row = readinessResult.rows.find(item => item.device.id === device.id); return <tr key={device.id} className={cn(disabled ? 'opacity-50' : 'cursor-pointer hover:bg-accent/50')} onClick={() => toggleDevice(device)}><td className="px-3 py-2"><input aria-label={`选择 ${device.serial}`} type="checkbox" checked={selectedDeviceIds.has(device.id)} disabled={disabled} readOnly /></td><td className="px-3 py-2 font-mono text-xs">{device.serial}</td><td className="px-3 py-2">{device.model || '—'}</td><td className="px-3 py-2">{device.build_display_id || '—'}</td><td className="px-3 py-2"><StatusBadge kind="device" status={device.status} size="sm" /></td><td className={cn('px-3 py-2 text-xs', row?.ready ? 'text-success' : row ? 'text-destructive' : TEXT.subtitle)}>{row?.ready ? '就绪' : row ? row.reasons.join('、') : '选择后检查'}</td></tr>; })}</tbody></table></div>
+                    </>}
+                  </section>
                 </div>
 
 
@@ -1085,92 +1032,34 @@ export default function PlanExecutePage() {
 
 
 
-        </Card>
+        </Card>}
 
-        <PlanDeviceReadinessCard
-          result={readinessResult}
-          targetCount={targetDeviceCount}
-          expectedVersion={expectedDeviceVersion}
-          expectedPerHost={expectedDevicesPerHost}
-          onTargetCountChange={setTargetDeviceCount}
-          onExpectedVersionChange={setExpectedDeviceVersion}
-          onExpectedPerHostChange={setExpectedDevicesPerHost}
-        />
+        {currentStep === 2 && <Card>
+          <CardHeader><CardTitle className="text-base">节点数量与版本一致性确认</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            {selectedGroups.length === 0 ? <EmptyState title="尚未选择样机" description="请返回“样机选择”，按节点选择测试设备" icon={<Smartphone className="h-10 w-10" />} /> : <>
+              <div className="overflow-x-auto rounded-lg border"><table className="w-full min-w-[720px] text-sm"><thead className="bg-muted/70 text-left text-xs"><tr><th className="px-3 py-2">节点 IP</th><th className="px-3 py-2">型号</th><th className="px-3 py-2">版本</th><th className="px-3 py-2">选择数量</th><th className="px-3 py-2">就绪</th><th className="w-10 px-2 py-2" /></tr></thead><tbody className="divide-y">{selectedGroups.map(group => <tr key={group.key}><td className="px-3 py-2 font-mono text-xs">{group.hostLabel}</td><td className="px-3 py-2">{group.model}</td><td className="px-3 py-2">{group.version}</td><td className="px-3 py-2 font-medium">{group.total}</td><td className={cn('px-3 py-2', group.ready === group.total ? 'text-success' : 'text-destructive')}>{group.ready}/{group.total}</td><td className="px-2 py-2"><Button type="button" variant="ghost" size="icon" title="移除此组" onClick={() => removeDeviceIds(group.ids)}><Trash2 className="h-4 w-4" /></Button></td></tr>)}</tbody></table></div>
+              <div className="grid gap-3 md:grid-cols-3"><div className="rounded-lg bg-muted/50 p-3"><div className={cn('text-xs', TEXT.subtitle)}>节点数量</div><div className="mt-1 text-xl font-semibold">{readinessResult.byHost.length}</div></div><div className="rounded-lg bg-muted/50 p-3"><div className={cn('text-xs', TEXT.subtitle)}>版本数量</div><div className="mt-1 text-xl font-semibold">{new Set(selectedDevices.map(device => device.build_display_id).filter(Boolean)).size}</div></div><div className="rounded-lg bg-muted/50 p-3"><div className={cn('text-xs', TEXT.subtitle)}>型号数量</div><div className="mt-1 text-xl font-semibold">{new Set(selectedDevices.map(device => device.model).filter(Boolean)).size}</div></div></div>
+              {readinessResult.warnings.length > 0 ? <div className="rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning">{readinessResult.warnings.join('；')}</div> : <div className="rounded-lg bg-success/10 px-3 py-2 text-sm text-success">版本与型号信息一致，可以继续。</div>}
+            </>}
+          </CardContent>
+        </Card>}
 
+        {currentStep === 3 && <Card>
+          <CardHeader><CardTitle className="text-base">前置执行项与测试参数确认</CardTitle></CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4"><div className="rounded-lg border p-3"><div className={cn('text-xs', TEXT.subtitle)}>测试计划</div><div className="mt-1 font-medium">{selectedPlan?.name || '未选择'}</div></div><div className="rounded-lg border p-3"><div className={cn('text-xs', TEXT.subtitle)}>执行步骤</div><div className="mt-1 font-medium">{executableStepCount} 个启用步骤</div></div><div className="rounded-lg border p-3"><div className={cn('text-xs', TEXT.subtitle)}>失败阈值</div><div className="mt-1 font-medium">{Math.round((selectedPlan?.failure_threshold ?? 0.05) * 100)}%</div></div><div className="rounded-lg border p-3"><div className={cn('text-xs', TEXT.subtitle)}>测试设备</div><div className="mt-1 font-medium">{selectedDevices.length} 台 / {readinessResult.byHost.length} 节点</div></div></div>
+            <div className="rounded-lg border"><div className="border-b px-3 py-2 text-sm font-medium">前置执行检查</div><div className="divide-y text-sm"><div className="flex justify-between px-3 py-2"><span>Plan 包含可执行步骤</span><span className={executableStepCount > 0 ? 'text-success' : 'text-destructive'}>{executableStepCount > 0 ? '通过' : '未通过'}</span></div><div className="flex justify-between px-3 py-2"><span>设备与节点在线状态</span><span className={readinessResult.blockedCount === 0 && selectedDevices.length > 0 ? 'text-success' : 'text-destructive'}>{readinessResult.blockedCount === 0 && selectedDevices.length > 0 ? '通过' : `${readinessResult.blockedCount} 台阻塞`}</span></div><div className="flex justify-between px-3 py-2"><span>版本与型号一致性</span><span className={readinessResult.warnings.length ? 'text-warning' : 'text-success'}>{readinessResult.warnings.length ? '存在提醒' : '通过'}</span></div></div></div>
+            {readinessResult.blockedCount > 0 && <Button type="button" variant="outline" onClick={() => removeDeviceIds(readinessResult.blockedDeviceIds)}><Trash2 className="mr-2 h-4 w-4" />移除全部阻塞设备</Button>}
+          </CardContent>
+        </Card>}
 
-
-
-
-
-
-        {selectedPlan && (
-
-
-
-          <Card>
-
-
-
-            <CardHeader><CardTitle className="text-base">4. 失败阈值</CardTitle></CardHeader>
-
-
-
-            <CardContent>
-
-
-
-              <p className={cn('text-sm', TEXT.body)}>
-
-
-
-                <span className={cn('font-medium', TEXT.heading)}>{Math.round((selectedPlan.failure_threshold ?? 0.05) * 100)}%</span>
-
-
-
-                {' '}（来自 Plan 配置，执行时不可修改）
-
-
-
-              </p>
-
-
-
-            </CardContent>
-
-
-
-          </Card>
-
-
-
-        )}
-
-
-
-
-
-
-
-        <div className="flex justify-end gap-2">
-
-
-
-          <Button type="button" variant="outline" onClick={() => navigate(-1)}>取消</Button>
-
-
-
-          <Button
-            type="submit"
-            disabled={!selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed}
-          >
-
-
-
-            <Eye className="w-4 h-4 mr-2" />预览并发起
-
-
-
-          </Button>
+        <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border bg-background/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center">
+          <div className="flex-1 text-sm"><span className="font-medium">已选 {selectedDevices.length} 台</span><span className="mx-2 text-muted-foreground">|</span><span className="text-success">{readinessResult.readyCount} 台就绪</span><span className="mx-2 text-muted-foreground">|</span><span className={readinessResult.blockedCount ? 'text-destructive' : TEXT.subtitle}>{readinessResult.blockedCount} 台阻塞</span></div>
+          {readinessResult.blockedCount > 0 && <Button type="button" variant="outline" onClick={() => removeDeviceIds(readinessResult.blockedDeviceIds)}><Trash2 className="mr-1.5 h-4 w-4" />移除阻塞设备</Button>}
+          {selectedDevices.length > 0 && <Button type="button" variant="ghost" onClick={() => setSelectedDeviceIds(new Set())}>清空选择</Button>}
+          {currentStep === 0 ? <Button type="button" variant="outline" onClick={() => navigate('/orchestration/plans')}>取消</Button> : <Button type="button" variant="outline" onClick={() => setCurrentStep(step => Math.max(0, step - 1))}><ChevronLeft className="mr-1.5 h-4 w-4" />上一步</Button>}
+          {currentStep < wizardSteps.length - 1 ? <Button type="button" onClick={() => setCurrentStep(step => Math.min(wizardSteps.length - 1, step + 1))} disabled={(currentStep === 0 && (!selectedPlanId || executableStepCount === 0)) || (currentStep === 1 && selectedSchedulableDeviceIds.length === 0)}>{currentStep === 0 ? '进入样机选择' : currentStep === 1 ? '确认节点与版本' : '进入执行前确认'}<ChevronRight className="ml-1.5 h-4 w-4" /></Button> : <Button type="submit" disabled={!selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed}><Eye className="mr-2 h-4 w-4" />预览并发起</Button>}
 
 
 
@@ -1191,4 +1080,3 @@ export default function PlanExecutePage() {
 
 
 }
-

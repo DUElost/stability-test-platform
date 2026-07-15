@@ -124,6 +124,8 @@ describe('PlanExecutePage', () => {
       ],
     });
 
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
+
     const busyCheckbox = await screen.findByLabelText(/457854125444LMKJ/i);
     const freeCheckbox = screen.getByLabelText(/FREE123/i);
 
@@ -144,6 +146,8 @@ describe('PlanExecutePage', () => {
         { id: 2, serial: 'BUSY-ADMITTED', host_id: 'h1', status: 'BUSY', schedulable: true },
       ],
     });
+
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
 
     expect(await screen.findByLabelText(/ONLINE-BLOCKED/)).toBeDisabled();
     expect(screen.getByLabelText(/BUSY-ADMITTED/)).not.toBeDisabled();
@@ -169,9 +173,10 @@ describe('PlanExecutePage', () => {
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
 
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
     expect(screen.getByRole('button', { name: /预览并发起/ })).toBeDisabled();
-    expect(screen.getByText(/没有已启用步骤，无法执行/)).toBeInTheDocument();
     expect(api.plans.previewRun).not.toHaveBeenCalled();
   });
 
@@ -183,11 +188,12 @@ describe('PlanExecutePage', () => {
       ],
     });
 
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
     await screen.findByText('确认执行');
 
-    fireEvent.click(screen.getByLabelText(/DEV-2/));
     fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
 
     await waitFor(() => {
@@ -214,7 +220,9 @@ describe('PlanExecutePage', () => {
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
 
+    fireEvent.click(await screen.findByRole('button', { name: /先定位节点/ }));
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
     fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
     fireEvent.click(await screen.findByRole('button', { name: /确认发起/ }));
 

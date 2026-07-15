@@ -1,4 +1,4 @@
-import { CheckCircle2, Server, ShieldCheck, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Server, ShieldCheck, XCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
@@ -58,6 +58,12 @@ export function evaluateDeviceReadiness(
     byHost: Array.from(byHost.values()),
     readyCount: rows.filter((row) => row.ready).length,
     blockedCount: rows.filter((row) => !row.ready).length,
+    blockedDeviceIds: rows.filter((row) => !row.ready).map((row) => row.device.id),
+    warnings: [
+      ...((new Set(devices.map(device => device.build_display_id).filter(Boolean))).size > 1 ? ['已选设备包含多个版本'] : []),
+      ...((new Set(devices.map(device => device.model).filter(Boolean))).size > 1 ? ['已选设备包含多个型号'] : []),
+      ...(devices.some(device => !device.build_display_id) ? ['部分设备缺少版本信息'] : []),
+    ],
     passed: devices.length > 0 && rows.every((row) => row.ready),
   };
 }
@@ -111,6 +117,7 @@ export function PlanDeviceReadinessCard({
           ))}
           {(versionFilter !== 'all' || hostFilter !== 'all' || modelFilter !== 'all') && <div className={cn('text-xs', TEXT.subtitle)}>当前聚合结果：{visibleRows.length} 台，其中 {visibleRows.filter(row => row.ready).length} 台就绪</div>}
           {visibleRows.filter(row => !row.ready).slice(0, 5).map(row => <div key={row.device.id} className="flex items-center gap-2 text-xs text-destructive"><XCircle className="h-3.5 w-3.5" />{row.device.serial}：{row.reasons.join('、')}</div>)}
+          {result.warnings.map(warning => <div key={warning} className="flex items-center gap-2 text-xs text-warning"><AlertTriangle className="h-3.5 w-3.5" />{warning}（仅提醒，不阻断执行）</div>)}
         </div>
         <div className={cn('flex items-center gap-2 rounded-lg px-3 py-2 text-sm', result.passed ? 'bg-success/10 text-success' : 'bg-warning/10 text-warning')}>
           {result.passed ? <ShieldCheck className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
