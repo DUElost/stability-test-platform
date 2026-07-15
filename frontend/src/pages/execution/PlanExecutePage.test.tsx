@@ -42,6 +42,9 @@ vi.mock('@/utils/api', async (importOriginal) => {
       devices: {
         list: vi.fn(),
       },
+      hosts: {
+        list: vi.fn(),
+      },
     },
   };
 });
@@ -84,6 +87,7 @@ function renderPage({
     total_steps: 1,
   });
   (api.plans.run as any).mockResolvedValue({ id: 88 });
+  (api.hosts.list as any).mockResolvedValue({ items: [], total: 0 });
   (api.planRuns.retryDispatch as any).mockResolvedValue({ plan_run_id: 88, status: 'RUNNING' });
 
   return render(

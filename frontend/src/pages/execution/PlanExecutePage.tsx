@@ -50,7 +50,7 @@ import { api, ApiError, type PlanRunPreview } from '@/utils/api';
 
 
 
-import { planKeys } from '@/utils/api/queryKeys';
+import { hostKeys, planKeys } from '@/utils/api/queryKeys';
 
 
 
@@ -65,6 +65,7 @@ import { cn } from '@/lib/utils';
 
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
+import { evaluateDeviceReadiness, PlanDeviceReadinessCard } from '@/components/execution/PlanDeviceReadinessCard';
 
 
 
@@ -95,6 +96,9 @@ type DeviceSummary = {
   status: string;
   schedulable?: boolean;
   scheduling_reason?: string | null;
+  adb_connected?: boolean | null;
+  adb_state?: string | null;
+  build_display_id?: string | null;
 
 
 
@@ -366,6 +370,9 @@ export default function PlanExecutePage() {
 
 
   const [deviceFilter, setDeviceFilter] = useState('');
+  const [targetDeviceCount, setTargetDeviceCount] = useState('');
+  const [expectedDeviceVersion, setExpectedDeviceVersion] = useState('');
+  const [expectedDevicesPerHost, setExpectedDevicesPerHost] = useState('');
 
 
 
@@ -405,6 +412,11 @@ export default function PlanExecutePage() {
 
     queryFn: () => api.plans.list(0, 100),
 
+  });
+
+  const { data: hostsResp } = useQuery({
+    queryKey: hostKeys.list(),
+    queryFn: () => api.hosts.list(0, 200),
   });
 
 
@@ -481,6 +493,19 @@ export default function PlanExecutePage() {
 
 
 
+  );
+
+  const selectedDevices = useMemo(
+    () => allDevices.filter((device: DeviceSummary) => selectedDeviceIds.has(device.id)),
+    [allDevices, selectedDeviceIds],
+  );
+  const readinessResult = useMemo(
+    () => evaluateDeviceReadiness(selectedDevices, hostsResp?.items ?? [], {
+      targetCount: Number(targetDeviceCount) || 0,
+      expectedVersion: expectedDeviceVersion.trim(),
+      expectedPerHost: Number(expectedDevicesPerHost) || 0,
+    }),
+    [expectedDeviceVersion, expectedDevicesPerHost, hostsResp?.items, selectedDevices, targetDeviceCount],
   );
 
 
@@ -630,6 +655,7 @@ export default function PlanExecutePage() {
 
 
     if (selectedSchedulableDeviceIds.length === 0) { toast.error('请至少选择一台设备'); return; }
+    if (!readinessResult.passed) { toast.error('测试准备检查未通过'); return; }
 
 
 
@@ -939,12 +965,6 @@ export default function PlanExecutePage() {
 
         </Card>
 
-
-
-
-
-
-
         <Card>
 
 
@@ -1067,6 +1087,16 @@ export default function PlanExecutePage() {
 
         </Card>
 
+        <PlanDeviceReadinessCard
+          result={readinessResult}
+          targetCount={targetDeviceCount}
+          expectedVersion={expectedDeviceVersion}
+          expectedPerHost={expectedDevicesPerHost}
+          onTargetCountChange={setTargetDeviceCount}
+          onExpectedVersionChange={setExpectedDeviceVersion}
+          onExpectedPerHostChange={setExpectedDevicesPerHost}
+        />
+
 
 
 
@@ -1081,7 +1111,7 @@ export default function PlanExecutePage() {
 
 
 
-            <CardHeader><CardTitle className="text-base">3. 失败阈值</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-base">4. 失败阈值</CardTitle></CardHeader>
 
 
 
@@ -1131,7 +1161,7 @@ export default function PlanExecutePage() {
 
           <Button
             type="submit"
-            disabled={!selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0}
+            disabled={!selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed}
           >
 
 
@@ -1161,6 +1191,4 @@ export default function PlanExecutePage() {
 
 
 }
-
-
 
