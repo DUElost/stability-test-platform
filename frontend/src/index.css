@@ -136,6 +136,31 @@
     @apply bg-muted-foreground/50;
   }
 
+  /* 数据表格横向滚动条：仅在溢出时出现，并保持足够的可发现性。 */
+  .table-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.45) hsl(var(--muted) / 0.7);
+  }
+
+  .table-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .table-scrollbar::-webkit-scrollbar-track {
+    background: hsl(var(--muted) / 0.7);
+  }
+
+  .table-scrollbar::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--muted-foreground) / 0.4);
+    border: 2px solid hsl(var(--muted) / 0.7);
+    border-radius: 9999px;
+  }
+
+  .table-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted-foreground) / 0.65);
+  }
+
   /* 侧边栏滚动条:无操作时隐藏,hover 时以低透明度显示 */
   .sidebar-scroll {
     scrollbar-width: thin;
