@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, Fragment } from 'react';
+import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
 import { cn } from '@/lib/utils';
 import {
   Table,
@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   Zap,
   Search,
+  Tag,
 } from 'lucide-react';
 import { ENTITY_STATUS_COLORS } from '@/design-system/colors';
 import { FORM, resourceUsageBgClass, resourceUsageTextClass, TEXT } from '@/design-system/tokens';
@@ -32,6 +33,18 @@ import { formatDateTimeFull } from '@/utils/format';
 import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 
 export type DeviceStatus = 'idle' | 'testing' | 'offline' | 'error';
+
+function temperatureTextClass(temperature: number): string {
+  if (temperature > 45) return 'text-destructive';
+  if (temperature > 40) return 'text-warning';
+  return 'text-foreground';
+}
+
+function latencyTextClass(latency: number): string {
+  if (latency > 300) return 'text-destructive';
+  if (latency > 120) return 'text-warning';
+  return 'text-success';
+}
 
 export interface DeviceTableData {
   id: number;
@@ -46,19 +59,31 @@ export interface DeviceTableData {
   host_name?: string | null;
   current_task?: string;
   last_seen?: string;
+  tags?: string[];
 }
 
 interface ExpandableDeviceTableProps {
   devices: DeviceTableData[];
   onViewMetrics?: (device: DeviceTableData) => void;
+  selectedIds?: Set<number>;
+  onSelectionChange?: (ids: Set<number>) => void;
+  onFilteredDevicesChange?: (devices: DeviceTableData[]) => void;
 }
 
-export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDeviceTableProps) {
+export function ExpandableDeviceTable({
+  devices,
+  onViewMetrics,
+  selectedIds,
+  onSelectionChange,
+  onFilteredDevicesChange,
+}: ExpandableDeviceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const selectPageRef = useRef<HTMLInputElement>(null);
   const pageSize = 50;
+  const selectable = !!onSelectionChange;
 
   // 防抖搜索，减少不必要的过滤计算
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
@@ -81,7 +106,8 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
         return (
           device.model?.toLowerCase().includes(query) ||
           device.serial.toLowerCase().includes(query) ||
-          device.host_name?.toLowerCase().includes(query)
+          device.host_name?.toLowerCase().includes(query) ||
+          device.tags?.some((tag) => tag.toLowerCase().includes(query))
         );
       }
       return true;
@@ -98,6 +124,37 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
+  const pageDeviceIds = useMemo(() => paginatedDevices.map((device) => device.id), [paginatedDevices]);
+  const allPageSelected = pageDeviceIds.length > 0 && pageDeviceIds.every((id) => selectedIds?.has(id));
+  const somePageSelected = pageDeviceIds.some((id) => selectedIds?.has(id));
+
+  useEffect(() => {
+    onFilteredDevicesChange?.(filteredDevices);
+  }, [filteredDevices, onFilteredDevicesChange]);
+
+  useEffect(() => {
+    if (!selectPageRef.current) return;
+    selectPageRef.current.indeterminate = somePageSelected && !allPageSelected;
+  }, [allPageSelected, somePageSelected]);
+
+  const togglePageSelection = () => {
+    if (!onSelectionChange) return;
+    const next = new Set(selectedIds ?? []);
+    if (allPageSelected) {
+      pageDeviceIds.forEach((id) => next.delete(id));
+    } else {
+      pageDeviceIds.forEach((id) => next.add(id));
+    }
+    onSelectionChange(next);
+  };
+
+  const toggleDeviceSelection = (id: number, event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!onSelectionChange) return;
+    const next = new Set(selectedIds ?? []);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    onSelectionChange(next);
+  };
 
   const stats = useMemo(() => ({
     total: devices.length,
@@ -110,7 +167,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
   return (
     <div className="space-y-4">
       {/* Summary Stats */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <button
           onClick={() => setStatusFilter('all')}
           className={cn(
@@ -202,7 +259,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
           name="device-search"
           aria-label="搜索设备"
           type="text"
-          placeholder="搜索设备序列号/型号/主机..."
+          placeholder="搜索设备序列号/型号/主机/标签..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className={cn('w-full pl-9', FORM.inputSm)}
@@ -210,17 +267,32 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
       </div>
 
       {/* Table */}
-      <div className="bg-card rounded-xl border border-border overflow-x-auto">
-        <Table>
+      <div className="overflow-hidden rounded-xl border border-border bg-card">
+        <Table className="min-w-[1420px]">
           <TableHeader>
             <TableRow className="bg-muted/50 hover:bg-muted/50">
+              {selectable && (
+                <TableHead className="w-10 p-3">
+                  <input
+                    ref={selectPageRef}
+                    type="checkbox"
+                    checked={allPageSelected}
+                    onChange={togglePageSelection}
+                    aria-label="选择当前页设备"
+                    className="h-4 w-4 rounded border-border accent-primary"
+                  />
+                </TableHead>
+              )}
               <TableHead className="w-10"></TableHead>
-              <TableHead className="font-medium">序列号</TableHead>
-              <TableHead className="font-medium">型号</TableHead>
-              <TableHead className="font-medium">版本</TableHead>
-              <TableHead className="font-medium">状态</TableHead>
-              <TableHead className="font-medium">所属主机</TableHead>
-              <TableHead className="font-medium text-right">最后活跃</TableHead>
+              <TableHead className="min-w-[260px] font-medium">设备</TableHead>
+              <TableHead className="min-w-[180px] font-medium">版本</TableHead>
+              <TableHead className="min-w-[100px] font-medium">状态</TableHead>
+              <TableHead className="min-w-[120px] font-medium">电量</TableHead>
+              <TableHead className="min-w-[90px] font-medium">温度</TableHead>
+              <TableHead className="min-w-[110px] font-medium">网络</TableHead>
+              <TableHead className="min-w-[160px] font-medium">标签</TableHead>
+              <TableHead className="min-w-[180px] font-medium">所属主机</TableHead>
+              <TableHead className="min-w-[180px] font-medium text-right">最后活跃</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -233,10 +305,24 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                     key={device.id}
                     className={cn(
                       'cursor-pointer hover:bg-muted/50 transition-colors',
-                      isExpanded && 'bg-muted/50'
+                      isExpanded && 'bg-muted/50',
+                      selectedIds?.has(device.id) && 'bg-primary/5 hover:bg-primary/10',
                     )}
+                    data-state={selectedIds?.has(device.id) ? 'selected' : undefined}
                     onClick={() => toggleRow(device.id)}
                   >
+                    {selectable && (
+                      <TableCell className="p-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds?.has(device.id) ?? false}
+                          onClick={(event) => toggleDeviceSelection(device.id, event)}
+                          onChange={() => {}}
+                          aria-label={`选择设备 ${device.serial}`}
+                          className="h-4 w-4 rounded border-border accent-primary"
+                        />
+                      </TableCell>
+                    )}
                     <TableCell className="p-3">
                       <ChevronDown
                         className={cn(
@@ -245,22 +331,91 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                         )}
                       />
                     </TableCell>
-                    <TableCell className="p-3 font-mono text-sm text-foreground">
-                      {device.serial}
+                    <TableCell className="max-w-[260px] p-3">
+                      <div className="truncate font-mono text-sm text-foreground" title={device.serial}>
+                        {device.serial}
+                      </div>
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground" title={device.model ?? ''}>
+                        {device.model}
+                      </div>
                     </TableCell>
-                    <TableCell className="p-3 font-medium text-foreground max-w-[160px] truncate" title={device.model ?? ''}>
-                      {device.model}
-                    </TableCell>
-                    <TableCell className="p-3 text-xs text-muted-foreground font-mono whitespace-nowrap">
+                    <TableCell className="p-3 font-mono text-xs text-muted-foreground whitespace-nowrap">
                       {device.build_display_id || '-'}
                     </TableCell>
                     <TableCell className="p-3">
                       <StatusBadge kind="device-ui" status={device.status} size="sm" />
                     </TableCell>
+                    <TableCell className="p-3">
+                      {device.battery_level != null ? (
+                        <div className="flex items-center gap-2" title="最近一次上报电量">
+                          <Progress
+                            value={device.battery_level}
+                            className="h-2 w-14"
+                            indicatorClassName={resourceUsageBgClass(100 - device.battery_level)}
+                          />
+                          <span className={cn(
+                            'font-mono text-xs',
+                            resourceUsageTextClass(100 - device.battery_level),
+                          )}>
+                            {device.battery_level.toFixed(0)}%
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="p-3">
+                      {device.temperature != null ? (
+                        <span
+                          className={cn('font-mono text-xs', temperatureTextClass(device.temperature))}
+                          title="最近一次上报温度"
+                        >
+                          {device.temperature.toFixed(1)}°C
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="p-3">
+                      {device.network_latency != null ? (
+                        <div
+                          className={cn('flex items-center gap-1 font-mono text-xs', latencyTextClass(device.network_latency))}
+                          title="最近一次上报网络延迟"
+                        >
+                          <Wifi className="h-3.5 w-3.5" />
+                          {device.network_latency.toFixed(0)}ms
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground/40">
+                          <WifiOff className="h-3.5 w-3.5" />—
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="p-3">
+                      {device.tags?.length ? (
+                        <div className="flex max-w-[180px] items-center gap-1" title={device.tags.join(', ')}>
+                          {device.tags.slice(0, 2).map((tag) => (
+                            <span
+                              key={tag}
+                              className="max-w-[72px] truncate rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                            >
+                              {tag}
+                            </span>
+                          ))}
+                          {device.tags.length > 2 && (
+                            <span className="shrink-0 text-[10px] text-muted-foreground">
+                              +{device.tags.length - 2}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
+                    </TableCell>
                     <TableCell className="p-3 text-muted-foreground text-sm">
                       {device.host_name || '-'}
                     </TableCell>
-                    <TableCell className="p-3 text-right text-xs text-muted-foreground">
+                    <TableCell className="p-3 text-right text-xs text-muted-foreground whitespace-nowrap">
                       {device.last_seen
                         ? formatDateTimeFull(device.last_seen)
                         : '-'}
@@ -270,7 +425,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                   {/* Expanded Details */}
                   {isExpanded && (
                     <TableRow className="bg-muted/50/50 hover:bg-muted/50/50">
-                      <TableCell colSpan={7} className="p-4">
+                      <TableCell colSpan={selectable ? 11 : 10} className="p-4">
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                           {/* Device Info */}
                           <div className="bg-card rounded-lg border border-border p-3">
@@ -290,6 +445,20 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                               <div className="flex justify-between">
                                 <span className="text-muted-foreground">型号</span>
                                 <span className="text-foreground">{device.model}</span>
+                              </div>
+                              <div className="flex justify-between gap-2">
+                                <span className="text-muted-foreground">版本</span>
+                                <span className="max-w-[65%] truncate font-mono text-foreground" title={device.build_display_id ?? undefined}>
+                                  {device.build_display_id || '—'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between gap-2">
+                                <span className="flex items-center gap-1 text-muted-foreground">
+                                  <Tag className="h-3 w-3" />标签
+                                </span>
+                                <span className="max-w-[65%] truncate text-right text-foreground" title={device.tags?.join(', ') || undefined}>
+                                  {device.tags?.length ? device.tags.join(', ') : '—'}
+                                </span>
                               </div>
                             </div>
                           </div>
@@ -327,8 +496,7 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                             <div className="flex items-center gap-2">
                               <span className={cn(
                                 'text-2xl font-semibold font-mono',
-                                (device.temperature ?? 0) > 45 ? 'text-destructive' :
-                                (device.temperature ?? 0) > 40 ? 'text-warning' : 'text-foreground'
+                                device.temperature != null ? temperatureTextClass(device.temperature) : 'text-foreground'
                               )}>
                                 {device.temperature ?? '-'}
                               </span>
@@ -362,6 +530,9 @@ export function ExpandableDeviceTable({ devices, onViewMetrics }: ExpandableDevi
                             </div>
                             <div className="text-xs text-muted-foreground">
                               {device.current_task || '无任务'}
+                            </div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              最后活跃：{device.last_seen ? formatDateTimeFull(device.last_seen) : '—'}
                             </div>
                             {onViewMetrics && (
                               <button
