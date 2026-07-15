@@ -62,10 +62,13 @@ start-frontend-windows.bat
 
 ### 必配 env（开发）
 
+完整变量表见 [`environment-variables.md`](./environment-variables.md)。
+
 ```bash
 # backend/.env（宿主机手动启动时）
 DATABASE_URL=postgresql+psycopg://stability:stability@localhost:5432/stability
 STP_SCRIPT_ROOT=/absolute/path/to/repo/backend/agent/scripts
+# STP_AGENT_MIN_VERSION  rollout 期请留空，见 operations/agent-version-and-hot-update.md
 ```
 
 Compose 开发环境请优先使用根目录 `.env.server`，并显式保持以下路径独立：

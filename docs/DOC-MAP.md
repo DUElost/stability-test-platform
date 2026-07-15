@@ -1,10 +1,11 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-06-21  
+> **最后更新**：2026-07-15  
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
-本页说明文档**分层、权威来源与阅读顺序**。冲突时以**代码与测试**为准。
+本页说明文档**分层、权威来源与阅读顺序**。冲突时以**代码与测试**为准。  
+根目录 [`../README.md`](../README.md) 保持精简；环境变量、测试禁区、执行协议细则在子文档。
 
 ---
 
@@ -13,23 +14,25 @@
 ### 新人 onboarding
 
 ```
-README.md → AGENTS.md → docs/README.md
+../README.md → ../AGENTS.md → docs/README.md
     → design/00-system-overview.md
     → development/local-development.md
-    → design/01-execution-pipeline.md（理解主链）
+    → design/01-execution-pipeline.md
+    → design/07-execution-protocol.md（状态机 / abort / claim）
 ```
 
 ### 新功能开发
 
 ```
-prd/（或 Epic Issue）→ adr/（架构决策）→ design/（技术方案）
-    → 代码 + 测试 → acceptance/（验收矩阵）
+prd/（或 Epic Issue）→ adr/ → design/
+    → 代码 + 测试（见 development/testing.md）→ acceptance/
 ```
 
 ### 发版 / 运维
 
 ```
 operations/README.md → production-minimum-deployment-checklist.md
+    → operations/agent-version-and-hot-update.md（先升 Agent 再开版本门禁）
     → preprod-drill-runbook.md → acceptance/00-platform-smoke.md
 ```
 
@@ -39,15 +42,16 @@ operations/README.md → production-minimum-deployment-checklist.md
 
 | 层级 | 位置 | 回答什么 |
 |------|------|----------|
+| **仓库首页** | [`../README.md`](../README.md) | 是什么、怎么跑起来、文档指针 |
 | **需求 PRD** | [`prd/`](./prd/) | 做什么、成功标准、非目标 |
 | **架构 ADR** | [`adr/`](./adr/) | 为什么这样定 |
-| **技术设计** | [`design/`](./design/) | 模块、接口、数据流（与代码对齐） |
+| **技术设计** | [`design/`](./design/) | 模块、接口、数据流、**执行协议** |
 | **验收** | [`acceptance/`](./acceptance/) | 可测通过标准 + 测试映射 |
-| **开发** | [`development/`](./development/) | 本地环境、测试约定 |
-| **运维** | [`operations/`](./operations/) + runbook + `DEPLOY.md` | 部署、联调、监控 |
-| **百科** | [`CLAUDE.md`](../CLAUDE.md) | 端点表、数据模型详表、FAQ、Changelog |
+| **开发** | [`development/`](./development/) | 本地环境、**env 表**、测试约定 |
+| **运维** | [`operations/`](./operations/) + runbook | 部署、Agent 版本、联调、监控 |
+| **百科** | [`../CLAUDE.md`](../CLAUDE.md) | 端点表、FAQ、Changelog |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
-| **跟踪** | GitHub Issues（[#32](https://github.com/DUElost/stability-test-platform/issues/32) 等） | 进行中、审查结论 |
+| **跟踪** | GitHub Issues | 进行中、审查结论 |
 
 ---
 
@@ -57,12 +61,25 @@ operations/README.md → production-minimum-deployment-checklist.md
 |------|------|
 | [`00-system-overview.md`](./design/00-system-overview.md) | 部署拓扑、分层、领域模型摘要 |
 | [`01-execution-pipeline.md`](./design/01-execution-pipeline.md) | Plan→PlanRun→Job 主链路 |
+| [`07-execution-protocol.md`](./design/07-execution-protocol.md) | 状态机、abort ACK、snapshot、claim、schema |
 | [`02-backend.md`](./design/02-backend.md) | 后端路由、服务、启动 |
 | [`03-frontend.md`](./design/03-frontend.md) | 路由、API Client、核心页面 |
 | [`04-agent.md`](./design/04-agent.md) | Agent、Watcher、脚本执行 |
 | [`05-data-model.md`](./design/05-data-model.md) | ORM 与表关系 |
 | [`06-realtime-and-background.md`](./design/06-realtime-and-background.md) | SocketIO、APScheduler、SAQ |
 | [`2026-plan-c-storage-and-access.md`](./design/2026-plan-c-storage-and-access.md) | 方案 C 存储与访问 |
+
+---
+
+## 开发 / 运维索引
+
+| 文档 | 内容 |
+|------|------|
+| [`development/environment-variables.md`](./development/environment-variables.md) | env 详表（含超时与版本门禁） |
+| [`development/testing.md`](./development/testing.md) | pytest / vitest / 生产机禁区 |
+| [`operations/agent-version-and-hot-update.md`](./operations/agent-version-and-hot-update.md) | 滚动升级与 code revision |
+| [`operations/README.md`](./operations/README.md) | 运维索引 |
+| [`production-minimum-deployment-checklist.md`](./production-minimum-deployment-checklist.md) | 生产最小部署 |
 
 ---
 
@@ -77,45 +94,8 @@ operations/README.md → production-minimum-deployment-checklist.md
 
 ---
 
-## 权威 vs 归档 vs 过时
+## 权威 vs 归档
 
-| 级别 | 位置 |
-|------|------|
-| **权威** | `docs/prd`、`docs/design`、`docs/acceptance`、`docs/development`、`docs/operations`、`docs/adr`（Accepted）、`CLAUDE.md`、`README.md` |
-| **任务快照** | [`archive/sprints/`](./archive/sprints/) — 已归档 Sprint 计划 |
-| **归档** | [`archive/`](./archive/)（含 openspec、prototypes、assessments、sprints、migrations、plans、stp-spec-pre-adr0020） |
-| **重定向** | 根 [`openspec/README.md`](../openspec/README.md) → `archive/openspec/` |
-
----
-
-## 方案 C 快速链接（ADR-0025）
-
-| 类型 | 文档 |
-|------|------|
-| ADR | [`adr/ADR-0025-phase4-architecture-alignment.md`](./adr/ADR-0025-phase4-architecture-alignment.md) |
-| PRD / 设计 / 验收 | 见上表 `2026-plan-c-*` |
-| 跟踪 | [GitHub #32](https://github.com/DUElost/stability-test-platform/issues/32) |
-| Agent PR | [PR #31](https://github.com/DUElost/stability-test-platform/pull/31) |
-
----
-
-## 变更时更新清单
-
-| 你改了… | 至少更新… |
-|---------|-----------|
-| 用户可见行为 / 范围 | `prd/` + `acceptance/` |
-| 架构边界 | ADR + `design/` |
-| API / 路由 / 页面 | `design/02` 或 `03` + `types.ts` + 测试 |
-| Agent / Watcher / 存储 | `design/04` + agent tests |
-| 表结构 | Alembic + `design/05` + `CLAUDE.md` 摘要 |
-| 仅实现细节 | 测试；design 可选 |
-| 文档退役 | `DOC-RETIREMENT.md` |
-
----
-
-## 相关链接
-
-- [`docs/README.md`](./README.md) — 文档中心  
-- [`adr/README.md`](./adr/README.md) — ADR 索引  
-- [`project-vision.md`](./project-vision.md) — 愿景  
-- [`AGENTS.md`](../AGENTS.md) — 开发命令
+- **权威**：本树 `design/` · `development/` · `operations/` · `adr/` · `prd/` · `acceptance/`，及根 `AGENTS.md` / `CLAUDE.md` 摘要  
+- **归档**：`archive/`（不新增规范）  
+- **过时处理**：见 [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)

@@ -75,21 +75,24 @@ frontend/src/
 
 | 组件 | 职责 |
 |------|------|
-| `PlanRunTopbar` | 状态、中止、导出 |
+| `PlanRunTopbar` / `PlanRunHero` | 状态、中止、导出 |
 | `PlanChainBreadcrumb` | Plan 链 |
-| `DispatchGateCard` | 派发门禁 |
+| `DispatchGateCard` | 派发门禁；`retryable` 等读后端 capabilities |
 | `BusinessFlowTimeline` | 时间线 + 事件流 |
-| `DeviceMatrixCard` | 设备矩阵 |
+| `DeviceOverview` / `DeviceDetailDrawer` | 设备矩阵；`is_stuck` / deadline / aborted UI |
 | `WatcherSummaryCard` | 异常聚合 |
-| `ArchiveStatusCard` | 归档状态（**方案 C 待改写**） |
+| `ArchiveStatusCard` | 归档；最终归档弹窗需 `capabilities.final_archive` + readiness |
 | `DedupReportCard` / RunConsole | 去重报告 |
 | `AnomalyDashboard` | 包名榜、crash 下钻 |
+
+权威投影：`PlanRun.capabilities`、设备 `JobActionCapabilities`、结构化 `ApiError`（`utils/api/client.ts`）。契约见 [`07-execution-protocol.md`](./07-execution-protocol.md)。
 
 ### 其他
 
 | 域 | 组件/页面 |
 |----|-----------|
-| 主机 | `HostHotUpdateConfirmDialog`、`HostsPage` |
+| 主机 | `ExpandableHostTable`（紧凑列 / code sync）、`HostBulkActionBar`（浮动、单机热更新）、`HostsPage` |
+| 通知 | `NotificationBell`（AppShell）、`NotificationsPage` 通知记录 tab → `notification_logs` API |
 | Pipeline 编辑 | `PlanEditPage`、`PipelineEditor` |
 | 脚本 | `ScriptManagementPage` |
 | 日志 | `XTerminal`、`PlanRunLogsPage` |
@@ -104,6 +107,7 @@ frontend/src/
 |-----------|------|
 | `/dashboard` | 前端订阅 |
 | PlanRun room | `job_status`、`plan_run_status`、`watcher_signal`、`precheck_update` |
+| 全局 | `notification:new`（铃铛未读刷新） |
 
 策略：SocketIO 事件作 **invalidation hint**，权威态以 REST refetch 为准。
 

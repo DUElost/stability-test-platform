@@ -1,7 +1,8 @@
 # 执行主链路：Plan → PlanRun → Job
 
 > **状态**：Living  
-> **关联 ADR**：ADR-0020、ADR-0021、ADR-0022、ADR-0019、ADR-0025
+> **关联 ADR**：ADR-0020、ADR-0021、ADR-0022、ADR-0019、ADR-0025  
+> **硬契约（状态机 / abort / snapshot / claim）**：见 [`07-execution-protocol.md`](./07-execution-protocol.md)
 
 ---
 

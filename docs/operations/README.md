@@ -17,6 +17,7 @@
 | 文档 | 用途 |
 |------|------|
 | [`backend/agent/DEPLOY.md`](../../backend/agent/DEPLOY.md) | 安装、目录、systemd、热更新 |
+| [`agent-version-and-hot-update.md`](./agent-version-and-hot-update.md) | 协议版本门禁、code revision、滚动升级顺序 |
 | [`linux-agent-ansible-runbook.md`](../linux-agent-ansible-runbook.md) | Ansible 批量 |
 | [`wsl-linux-agent-setup.md`](../wsl-linux-agent-setup.md) | WSL 联调 |
 | [`tools/ansible/README.md`](../../tools/ansible/README.md) | Playbook 说明 |
@@ -88,3 +89,11 @@ cd backend && python -m alembic upgrade head
 ```
 
 生产发布前后必须执行；见 ADR-0008。
+
+执行协议硬化 revision（`c8d9e0f1a2b3` 等）前先跑：
+
+```bash
+python -m backend.scripts.migration.preflight_execution_protocol
+```
+
+契约说明：[`../design/07-execution-protocol.md`](../design/07-execution-protocol.md)。

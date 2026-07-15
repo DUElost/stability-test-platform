@@ -5,7 +5,8 @@
 | 文档 | 内容 |
 |------|------|
 | [00-system-overview.md](./00-system-overview.md) | 部署拓扑、逻辑分层、领域摘要 |
-| [01-execution-pipeline.md](./01-execution-pipeline.md) | Plan → PlanRun → Job 主链路 |
+| [01-execution-pipeline.md](./01-execution-pipeline.md) | Plan → PlanRun → Job 主链路（产品级流程） |
+| [07-execution-protocol.md](./07-execution-protocol.md) | **硬契约**：状态机、abort ACK、snapshot、claim 门禁、schema |
 | [02-backend.md](./02-backend.md) | 后端路由、服务、lifespan |
 | [03-frontend.md](./03-frontend.md) | 路由、API Client、核心 UI |
 | [04-agent.md](./04-agent.md) | Agent、Watcher、脚本、存储 |
