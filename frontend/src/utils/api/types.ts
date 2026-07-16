@@ -737,7 +737,14 @@ export interface PlanUpdate {
   steps?: PlanStepCreate[];
 }
 
-export type PlanRunStatus = 'RUNNING' | 'SUCCESS' | 'PARTIAL_SUCCESS' | 'FAILED' | 'DEGRADED';
+export type PlanRunStatus =
+  | 'QUEUED'
+  | 'PRECHECK'
+  | 'RUNNING'
+  | 'SUCCESS'
+  | 'PARTIAL_SUCCESS'
+  | 'FAILED'
+  | 'DEGRADED';
 export type PlanRunType = 'MANUAL' | 'SCHEDULE' | 'CHAIN';
 
 export interface PlanDispatchState {
@@ -818,6 +825,11 @@ export interface PlanRun {
   next_plan_triggered?: boolean;
   plan_name?: string | null;
   capabilities?: PlanRunCapabilities | null;
+  /** ADR-0026 admission queue — null/absent for legacy runs. */
+  queue_reason?: 'DEVICE_BUSY' | 'RESOURCE_BUSY' | 'PRIORITY_WAIT' | 'PRECHECK_STALE' | string | null;
+  enqueued_at?: string | null;
+  next_admission_at?: string | null;
+  priority?: number;
 }
 
 export interface PlanRunCreate {

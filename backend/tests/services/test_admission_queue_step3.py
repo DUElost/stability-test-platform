@@ -136,6 +136,49 @@ class TestQueuedPrepare:
             PlanRunTargetDevice.plan_run_id == pr.id).all()
         assert len(targets) == 2
 
+    def test_caller_prefilled_device_ids_overwritten(self, db_session, step3_fixture):
+        """Contract: V2 force-writes the canonicalized list — a caller-prefilled
+        run_context.dispatch_device_ids must never diverge from the snapshot."""
+        f = step3_fixture
+        pr = prepare_plan_run(
+            plan_id=f["plan"].id,
+            device_ids=[f["d2"].id, f["d1"].id],
+            triggered_by="pytest", db=db_session, run_type="MANUAL",
+            run_context={"dispatch_device_ids": [999999]},  # stale prefill
+        )
+        assert pr.run_context["dispatch_device_ids"] == sorted([f["d1"].id, f["d2"].id])
+
+    def test_mid_snapshot_insert_failure_leaves_no_residue(
+        self, db_session, step3_fixture,
+    ):
+        """Reviewer contract: any Host/Target insert failure rolls the WHOLE
+        PlanRun back — no PlanRun / PlanRunHost / PlanRunTargetDevice rows."""
+        f = step3_fixture
+        real_cls = PlanRunTargetDevice
+        calls = {"n": 0}
+
+        def exploding_target(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:  # fail on the SECOND target row (mid-insert)
+                raise RuntimeError("boom-mid-snapshot")
+            return real_cls(*args, **kwargs)
+
+        with patch(
+            "backend.models.plan_run.PlanRunTargetDevice",
+            side_effect=exploding_target,
+        ):
+            with pytest.raises(RuntimeError, match="boom-mid-snapshot"):
+                prepare_plan_run(
+                    plan_id=f["plan"].id,
+                    device_ids=[f["d1"].id, f["d2"].id],
+                    triggered_by="pytest", db=db_session, run_type="MANUAL",
+                )
+        db_session.rollback()
+
+        assert db_session.query(PlanRun).count() == 0
+        assert db_session.query(PlanRunHost).count() == 0
+        assert db_session.query(PlanRunTargetDevice).count() == 0
+
     def test_busy_device_queues_with_reason(self, db_session, step3_fixture):
         """THE cross-PlanRun queuing capability: active lease no longer 400s."""
         f = step3_fixture

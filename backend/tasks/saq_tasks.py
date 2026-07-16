@@ -94,6 +94,12 @@ async def precheck_and_dispatch_task(ctx: dict, *, plan_run_id: int) -> None:
     await _impl(ctx, plan_run_id=plan_run_id)
 
 
+async def plan_admission_task(ctx: dict, *, plan_run_id: int, attempt_id: str) -> None:
+    """ADR-0026 Step 4 — one V2 admission attempt (slow verify + short tx)."""
+    from backend.services.admission_pump import plan_admission_task as _impl
+    await _impl(ctx, plan_run_id=plan_run_id, attempt_id=attempt_id)
+
+
 def _query_hosts_for_scan(plan_run_id: int) -> tuple[list[str], list[str]]:
     """同步查询 scan_task 所需的 host 列表，由 asyncio.to_thread 调用。"""
     from backend.core.database import SessionLocal
@@ -522,6 +528,7 @@ SAQ_FUNCTIONS = [
     send_notification_task,
     publish_control_command,
     precheck_and_dispatch_task,
+    plan_admission_task,
     scan_task,
     upload_task,
     merge_task,

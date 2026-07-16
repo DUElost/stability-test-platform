@@ -166,6 +166,10 @@ async def lifespan(app: FastAPI):
             RunConsole.instance().shutdown()
         except Exception:
             logger.exception("run_console_shutdown_failed")
+        # ADR-0026: pump 随进程退出 — 立即撤销就绪标记,防止 shutdown 窗口内
+        # 新的 V2 QUEUED 产生却无人准入。
+        from backend.core.admission_queue import mark_queue_pump_ready
+        mark_queue_pump_ready(False)
         await stop_saq_worker()
         if scheduler is not None:
             await scheduler.__aexit__(None, None, None)

@@ -47,6 +47,9 @@ REVOKED_TOKEN_CLEANUP_INTERVAL = int(
 # ADR-0025 Sprint 4: auto_archive_interval  poll interval
 AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120"))
 
+# ADR-0026 Step 4: admission queue pump interval
+ADMISSION_PUMP_INTERVAL = int(os.getenv("STP_ADMISSION_PUMP_INTERVAL_SECONDS", "5"))
+
 MISFIRE_GRACE = timedelta(seconds=60)
 
 
@@ -232,3 +235,22 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=auto_archive_sweep interval=%ds", AUTO_ARCHIVE_INTERVAL)
+
+    # ── ADR-0026 Step 4: admission queue pump ──
+    # Registered unconditionally: with the env flag off the pump runs in
+    # drain-only mode (prepare stops creating new QUEUED runs, the pump keeps
+    # admitting existing ones until the queue is empty — reviewer boundary #5).
+    # An idle tick is one indexed no-op query. Readiness is marked HERE (the
+    # pump now exists in this process) and unmarked at lifespan shutdown.
+    from backend.core.admission_queue import mark_queue_pump_ready
+    from backend.services.admission_pump import pump_admission_tick
+
+    await scheduler.add_schedule(
+        _instrumented("admission_pump", pump_admission_tick),
+        IntervalTrigger(seconds=ADMISSION_PUMP_INTERVAL),
+        id="admission_pump",
+        misfire_grace_time=MISFIRE_GRACE,
+        conflict_policy=ConflictPolicy.replace,
+    )
+    mark_queue_pump_ready(True)
+    logger.info("schedule_registered id=admission_pump interval=%ds", ADMISSION_PUMP_INTERVAL)

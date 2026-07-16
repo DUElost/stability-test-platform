@@ -566,9 +566,10 @@ def _prepare_queued_plan_run(
     target_ids = sorted(set(device_ids))
 
     merged_run_ctx = dict(run_context or {})
-    # Compat read path (authoritative source is plan_run_target_device):
-    # keep the same key legacy consumers assert on (precheck/runner.py).
-    merged_run_ctx.setdefault("dispatch_device_ids", target_ids)
+    # Contract (reviewer, pre-Step-4): V2 FORCE-writes the canonicalized
+    # (deduped, sorted) list — never trust a caller-prefilled value, or the
+    # compat field could disagree with the relational snapshot.
+    merged_run_ctx["dispatch_device_ids"] = target_ids
     merged_run_ctx["dispatch_host_watcher_admin_states"] = (
         snapshot_dispatch_host_watcher_admin_states(db, target_ids)
     )
@@ -752,39 +753,6 @@ def complete_plan_run_dispatch(
         return
 
     wifi_allocations: dict[int, dict] = {}
-    if any(
-        "connect_wifi" in (step.get("action") or "")
-        for _, step in _iter_lifecycle_steps({"lifecycle": lifecycle})
-    ):
-        try:
-            assignments = _sync_allocate_devices(db, device_ids, resource_type="wifi")
-            for device_id, (_pool, alloc_params) in assignments.items():
-                wifi_allocations[device_id] = alloc_params
-            logger.info("plan_dispatch_wifi_allocated: devices=%d", len(device_ids))
-        except AllocationError as exc:
-            from backend.core.audit import record_audit
-            PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="wifi_allocation_failed")
-            pr.ended_at = datetime.now(timezone.utc)
-            pr.result_summary = {
-                "dispatch_failed": True,
-                "reason": "wifi_allocation_failed",
-                "error": str(exc),
-            }
-            flag_modified(pr, "result_summary")
-            record_audit(
-                db,
-                action="plan_dispatch_failed",
-                resource_type="plan_run",
-                resource_id=pr.id,
-                details={"reason": "wifi_allocation_failed", "error": str(exc)},
-            )
-            db.commit()
-            logger.warning(
-                "plan_dispatch_wifi_allocation_failed plan_run=%d error=%s",
-                plan_run_id, exc,
-            )
-            return
-
     now = datetime.now(timezone.utc)
     job_device_pairs: dict[int, int] = {}
 
@@ -793,45 +761,37 @@ def complete_plan_run_dispatch(
     # loser hits uq_job_active_per_device only at flush/commit. Without this
     # handler the IntegrityError escapes, the SAQ task retries into the same
     # conflict, and the PlanRun hangs in RUNNING. Roll back the ENTIRE
-    # materialization (jobs + wifi allocation rows share this transaction) and
-    # settle the PlanRun as structured FAILED. P1 admission-queue semantics will
-    # turn this terminal FAILED into a QUEUED retry (ADR invariant ④).
+    # materialization (jobs + wifi allocation rows share this transaction).
+    # Legacy policy: settle as structured FAILED. The V2 admission transaction
+    # reuses the same materializer with requeue policy instead (invariant ④).
     try:
-        for device_id in device_ids:
-            wifi_params = wifi_allocations.get(device_id)
-            resolved_pipeline = {"lifecycle": deepcopy(lifecycle)}
-            if wifi_params:
-                resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
-
-            job = JobInstance(
-                plan_run_id=pr.id,
-                plan_id=pr.plan_id,
-                device_id=device_id,
-                host_id=device_host_map.get(device_id),
-                status=JobStatus.PENDING.value,
-                pipeline_def=resolved_pipeline,
-                created_at=now,
-                updated_at=now,
-            )
-            db.add(job)
-            db.flush()
-            job_device_pairs[job.id] = device_id
-
-        if wifi_allocations:
-            assignment_refs = {
-                did: (
-                    db.execute(
-                        select(ResourcePool).where(
-                            ResourcePool.id == wifi_allocations[did]["pool_id"]
-                        )
-                    ).scalar(),
-                    wifi_allocations[did],
-                )
-                for did in wifi_allocations
-            }
-            _sync_create_allocations(db, assignment_refs, job_device_pairs)
-
+        job_device_pairs = materialize_jobs_and_allocations(
+            db, pr, lifecycle, device_ids, device_host_map,
+        )
         db.commit()
+    except AllocationError as exc:
+        from backend.core.audit import record_audit
+        PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="wifi_allocation_failed")
+        pr.ended_at = datetime.now(timezone.utc)
+        pr.result_summary = {
+            "dispatch_failed": True,
+            "reason": "wifi_allocation_failed",
+            "error": str(exc),
+        }
+        flag_modified(pr, "result_summary")
+        record_audit(
+            db,
+            action="plan_dispatch_failed",
+            resource_type="plan_run",
+            resource_id=pr.id,
+            details={"reason": "wifi_allocation_failed", "error": str(exc)},
+        )
+        db.commit()
+        logger.warning(
+            "plan_dispatch_wifi_allocation_failed plan_run=%d error=%s",
+            plan_run_id, exc,
+        )
+        return
     except IntegrityError as exc:
         if "uq_job_active_per_device" not in str(exc.orig or exc):
             raise  # unrelated constraint — surface it, don't mask
@@ -843,6 +803,71 @@ def complete_plan_run_dispatch(
         "plan_run_dispatch_completed plan=%d plan_run=%d jobs=%d",
         pr.plan_id, pr.id, len(device_ids),
     )
+
+
+def materialize_jobs_and_allocations(
+    db: Session,
+    pr: PlanRun,
+    lifecycle: dict,
+    device_ids: list[int],
+    device_host_map: dict,
+) -> dict[int, int]:
+    """Shared materializer: WiFi allocation (when the lifecycle needs it) + one
+    PENDING JobInstance per device + resource allocation rows.
+
+    Flushes but does NOT commit. Raises to the caller, whose policy differs:
+      - AllocationError (pool full): legacy → FAILED; V2 admission → requeue
+        (RESOURCE_BUSY, invariant ④).
+      - IntegrityError (uq_job_active_per_device race): legacy → FAILED;
+        V2 admission → requeue (DEVICE_BUSY).
+    """
+    wifi_allocations: dict[int, dict] = {}
+    if any(
+        "connect_wifi" in (step.get("action") or "")
+        for _, step in _iter_lifecycle_steps({"lifecycle": lifecycle})
+    ):
+        assignments = _sync_allocate_devices(db, device_ids, resource_type="wifi")
+        for device_id, (_pool, alloc_params) in assignments.items():
+            wifi_allocations[device_id] = alloc_params
+        logger.info("plan_dispatch_wifi_allocated: devices=%d", len(device_ids))
+
+    now = datetime.now(timezone.utc)
+    job_device_pairs: dict[int, int] = {}
+    for device_id in device_ids:
+        wifi_params = wifi_allocations.get(device_id)
+        resolved_pipeline = {"lifecycle": deepcopy(lifecycle)}
+        if wifi_params:
+            resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
+
+        job = JobInstance(
+            plan_run_id=pr.id,
+            plan_id=pr.plan_id,
+            device_id=device_id,
+            host_id=device_host_map.get(device_id),
+            status=JobStatus.PENDING.value,
+            pipeline_def=resolved_pipeline,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(job)
+        db.flush()
+        job_device_pairs[job.id] = device_id
+
+    if wifi_allocations:
+        assignment_refs = {
+            did: (
+                db.execute(
+                    select(ResourcePool).where(
+                        ResourcePool.id == wifi_allocations[did]["pool_id"]
+                    )
+                ).scalar(),
+                wifi_allocations[did],
+            )
+            for did in wifi_allocations
+        }
+        _sync_create_allocations(db, assignment_refs, job_device_pairs)
+
+    return job_device_pairs
 
 
 def _fail_plan_run_on_device_conflict(

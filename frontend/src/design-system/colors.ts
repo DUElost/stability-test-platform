@@ -153,6 +153,8 @@ export function getBooleanColor(success: boolean): string {
  * PlanRun Hero 区域 — 与 StatusBadge kind=plan-run 语义对齐
  */
 export const PLAN_RUN_HERO_SURFACE = {
+  QUEUED: 'border-border bg-gradient-to-br from-muted/40 to-card',
+  PRECHECK: 'border-info/25 bg-gradient-to-br from-info/10 to-card',
   RUNNING: 'border-primary/25 bg-gradient-to-br from-primary/10 to-card',
   SUCCESS: 'border-success/25 bg-gradient-to-br from-success/10 to-card',
   PARTIAL_SUCCESS: 'border-warning/25 bg-gradient-to-br from-warning/10 to-card',
@@ -161,6 +163,8 @@ export const PLAN_RUN_HERO_SURFACE = {
 } as const;
 
 export const PLAN_RUN_HERO_BADGE = {
+  QUEUED: 'border-border bg-card text-muted-foreground',
+  PRECHECK: 'border-info/40 bg-card text-info',
   RUNNING: 'border-primary/40 bg-card text-primary',
   SUCCESS: 'border-success/40 bg-card text-success',
   PARTIAL_SUCCESS: 'border-warning/40 bg-card text-warning',
@@ -170,6 +174,8 @@ export const PLAN_RUN_HERO_BADGE = {
 
 /** PlanRun Topbar 状态胶囊（含 ring） */
 export const PLAN_RUN_STATUS_PILL: Record<PlanRunHeroStatus, string> = {
+  QUEUED: 'bg-muted/40 text-muted-foreground ring-border',
+  PRECHECK: 'bg-info/10 text-info ring-info/30',
   RUNNING: 'bg-warning/10 text-warning ring-warning/30',
   SUCCESS: 'bg-success/10 text-success ring-success/30',
   PARTIAL_SUCCESS: 'bg-warning/10 text-warning ring-warning/30',

@@ -72,9 +72,33 @@ export default function PlanRunHero({
   const heroCls = run ? HERO_CLS[run.status as PlanRunHeroStatus] : cn(SURFACE.elevated, 'border-border');
   const badgeCls = run ? BADGE_CLS[run.status as PlanRunHeroStatus] : '';
   const isRunning = run?.status === 'RUNNING';
+  const isQueuedPhase = run?.status === 'QUEUED' || run?.status === 'PRECHECK';
   const canAbort = run?.capabilities
     ? run.capabilities.abort === true
     : !isTerminal;
+
+  // ADR-0026: queue wait is measured from enqueued_at (never started_at —
+  // admission resets started_at to the real execution start).
+  const queueWait = useMemo(() => {
+    if (!run?.enqueued_at || !isQueuedPhase) return null;
+    const start = new Date(run.enqueued_at).getTime();
+    const end = (now ?? new Date()).getTime();
+    return formatDurationSeconds(Math.max(0, (end - start) / 1000));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run, now, tick, isQueuedPhase]);
+
+  const queueBlockers = isQueuedPhase
+    ? ((run?.run_context as Record<string, unknown> | null | undefined)?.[
+        'queue_blockers'
+      ] as Array<{ id?: number; reason?: string }> | undefined) ?? []
+    : [];
+
+  const QUEUE_REASON_LABEL: Record<string, string> = {
+    DEVICE_BUSY: '设备占用中',
+    RESOURCE_BUSY: '资源不足',
+    PRIORITY_WAIT: '等待优先级调度',
+    PRECHECK_STALE: '准入中断,等待重试',
+  };
 
   return (
     <div className={cn('rounded-xl border overflow-hidden', ELEVATION.sm, heroCls)}>
@@ -140,6 +164,41 @@ export default function PlanRunHero({
             : '—'}
         </span>
       </div>
+
+      {/* ADR-0026: 准入队列信息条(仅 QUEUED/PRECHECK) */}
+      {isQueuedPhase && run && (
+        <div
+          data-testid="plan-run-queue-info"
+          className={cn(
+            'mx-4 mb-3 rounded-lg border border-border bg-muted/30 px-3 py-2',
+            'grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]',
+            TEXT.caption,
+          )}
+        >
+          <span>排队原因</span>
+          <span className={cn('font-medium', TEXT.heading)}>
+            {run.queue_reason
+              ? QUEUE_REASON_LABEL[run.queue_reason] ?? run.queue_reason
+              : run.status === 'PRECHECK'
+                ? '准入检查中'
+                : '等待调度'}
+          </span>
+          <span>已排队</span>
+          <span className={cn('font-mono', TEXT.heading)}>{queueWait ?? '—'}</span>
+          <span>下次准入</span>
+          <span className={cn('font-mono', TEXT.heading)}>
+            {run.next_admission_at ? formatDateTimeShort(run.next_admission_at) : '就绪即准入'}
+          </span>
+          <span>阻塞设备</span>
+          <span className={cn('font-medium', TEXT.heading)}>
+            {queueBlockers.length > 0
+              ? `${queueBlockers.length} 台(${[
+                  ...new Set(queueBlockers.map((b) => b.reason ?? 'unknown')),
+                ].join(', ')})`
+              : '—'}
+          </span>
+        </div>
+      )}
 
       {/* 操作按钮行 */}
       <div className="flex gap-1.5 px-4 pb-4">

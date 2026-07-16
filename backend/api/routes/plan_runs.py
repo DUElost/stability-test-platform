@@ -149,6 +149,11 @@ class PlanRunOut(BaseModel):
     plan_name: Optional[str] = None
     capabilities: Optional[dict] = None
     jobs: list[JobInstanceOut] = []
+    # ── ADR-0026: admission-queue observability (NULL for legacy runs) ──
+    queue_reason: Optional[str] = None
+    enqueued_at: Optional[str] = None
+    next_admission_at: Optional[str] = None
+    priority: int = 0
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -208,7 +213,12 @@ def _plan_run_capabilities(pr: PlanRun) -> dict:
         PlanRunStatus.DEGRADED.value,
     }
     return {
-        "abort": pr.status == PlanRunStatus.RUNNING.value,
+        "abort": pr.status in (
+            PlanRunStatus.RUNNING.value,
+            # ADR-0026: QUEUED/PRECHECK abort → straight FAILED (no jobs)
+            PlanRunStatus.QUEUED.value,
+            PlanRunStatus.PRECHECK.value,
+        ),
         "retry_dispatch": (
             pr.status == PlanRunStatus.FAILED.value
             and bool(
@@ -240,6 +250,10 @@ def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_na
         plan_name=plan_name,
         capabilities=_plan_run_capabilities(pr),
         jobs=jobs or [],
+        queue_reason=pr.queue_reason,
+        enqueued_at=_iso(pr.enqueued_at),
+        next_admission_at=_iso(pr.next_admission_at),
+        priority=pr.priority or 0,
     )
 
 

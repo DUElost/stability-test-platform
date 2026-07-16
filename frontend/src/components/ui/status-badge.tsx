@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   Ban,
   HelpCircle,
+  Hourglass,
   Zap,
   ShieldCheck,
   RefreshCw,
@@ -79,6 +80,8 @@ const JOB: Record<string, StatusEntry> = {
 };
 
 const PLAN_RUN: Record<string, StatusEntry> = {
+  QUEUED: { label: "排队中", variant: "secondary", Icon: Hourglass },
+  PRECHECK: { label: "准入检查", variant: "info", Icon: Loader2 },
   RUNNING: { label: "运行中", variant: "info", Icon: Loader2 },
   SUCCESS: { label: "成功", variant: "success", Icon: CheckCircle2 },
   PARTIAL_SUCCESS: { label: "部分成功", variant: "warning", Icon: AlertTriangle },
