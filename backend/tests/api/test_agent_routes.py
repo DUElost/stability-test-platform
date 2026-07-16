@@ -667,6 +667,268 @@ async def test_extend_batch_rejects_oversized_batch(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_extend_batch_host_mismatch_is_fenced():
+    """Ownership CAS: a valid token presented by the WRONG host must not renew."""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id="some-other-host",
+                    leases=[_ExtendBatchItemIn(job_id=seed["job_id"], fencing_token=token)],
+                ),
+                db=async_db, _=None,
+            )
+        assert _extract_batch(result)[seed["job_id"]] == "stale_token"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_agent_instance_mismatch_is_fenced():
+    """Ownership CAS: right host, right token, but a different agent instance
+    (e.g. a zombie process from before a takeover) must not renew."""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)  # lease.agent_instance_id == seed["host_id"]
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id=seed["host_id"],
+                    agent_instance_id="zombie-instance-uuid",
+                    leases=[_ExtendBatchItemIn(job_id=seed["job_id"], fencing_token=token)],
+                ),
+                db=async_db, _=None,
+            )
+        assert _extract_batch(result)[seed["job_id"]] == "stale_token"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_empty_instance_id_still_renews():
+    """Back-compat: an Agent that reports no agent_instance_id skips the
+    instance binding (host + token still enforced) and renews normally."""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id=seed["host_id"],
+                    agent_instance_id="",
+                    leases=[_ExtendBatchItemIn(job_id=seed["job_id"], fencing_token=token)],
+                ),
+                db=async_db, _=None,
+            )
+        assert _extract_batch(result)[seed["job_id"]] == "renewed"
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_swapped_tokens_renew_nothing():
+    """Pair binding: two jobs on the same host with each other's (individually
+    valid) tokens must BOTH be fenced. Separate job_id/token IN-lists would
+    wrongly renew both — this asserts (job_id, fencing_token) is matched as a
+    tuple, mirroring the DB-level CAS."""
+    seed_a = _seed_job(status=JobStatus.RUNNING.value)
+    token_a = _setup_lease(seed_a)
+    seed_b = _seed_job(status=JobStatus.RUNNING.value)
+    token_b = _setup_lease(seed_b)
+    try:
+        db = SessionLocal()
+        try:
+            # Put both leases under one host so host binding passes and only
+            # the pair binding can reject.
+            db.query(DeviceLease).filter(
+                DeviceLease.job_id.in_([seed_a["job_id"], seed_b["job_id"]]),
+            ).update(
+                {"host_id": seed_a["host_id"], "agent_instance_id": seed_a["host_id"]},
+                synchronize_session=False,
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id=seed_a["host_id"],
+                    leases=[
+                        _ExtendBatchItemIn(job_id=seed_a["job_id"], fencing_token=token_b),
+                        _ExtendBatchItemIn(job_id=seed_b["job_id"], fencing_token=token_a),
+                    ],
+                ),
+                db=async_db, _=None,
+            )
+        statuses = _extract_batch(result)
+        assert statuses[seed_a["job_id"]] == "stale_token"
+        assert statuses[seed_b["job_id"]] == "stale_token"
+    finally:
+        # seed_b's lease was re-pointed at seed_a's host — clean it first so
+        # deleting host A doesn't hit the device_leases FK.
+        _cleanup_seed(seed_b)
+        _cleanup_seed(seed_a)
+
+
+@pytest.mark.asyncio
+async def test_extend_batch_duplicate_job_id_dedupes_last_token_wins():
+    """Duplicate job_ids collapse to one result; the LAST occurrence's token is
+    the one evaluated (documented contract, not an error)."""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await extend_leases_batch(
+                payload=_ExtendBatchIn(
+                    host_id=seed["host_id"],
+                    leases=[
+                        _ExtendBatchItemIn(job_id=seed["job_id"], fencing_token="0:999"),
+                        _ExtendBatchItemIn(job_id=seed["job_id"], fencing_token=token),
+                    ],
+                ),
+                db=async_db, _=None,
+            )
+        # One result entry, evaluated with the last (valid) token → renewed.
+        assert len(result.data.results) == 1
+        assert _extract_batch(result)[seed["job_id"]] == "renewed"
+    finally:
+        _cleanup_seed(seed)
+
+
+# ── White-box CAS interleavings ────────────────────────────────────────────────
+# The endpoint's prelim classification catches these in the sequential case;
+# these tests drive _cas_renew_leases directly to prove the DB-level CAS also
+# rejects them when they happen AFTER the prelim SELECT (the race window).
+
+
+@pytest.mark.asyncio
+async def test_cas_rejects_rotated_token():
+    """Race: prelim validated the OLD token, then the lease token rotated
+    (recovery takeover). The old holder's CAS must hit zero rows — it must not
+    renew the NEW owner's lease."""
+    from backend.api.routes.agent_api import _cas_renew_leases
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    old_token = _setup_lease(seed)
+    try:
+        # Simulate the takeover happening after prelim: rotate the token.
+        db = SessionLocal()
+        try:
+            db.query(DeviceLease).filter(
+                DeviceLease.job_id == seed["job_id"],
+            ).update({"fencing_token": f"{seed['device_id']}:2"})
+            db.commit()
+        finally:
+            db.close()
+
+        now = datetime.now(timezone.utc)
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            renewed = await _cas_renew_leases(
+                async_db,
+                pairs=[(seed["job_id"], old_token)],  # stale snapshot token
+                host_id=seed["host_id"],
+                agent_instance_id=seed["host_id"],
+                now=now,
+                new_expires=now + timedelta(seconds=600),
+            )
+            await async_db.rollback()
+        assert renewed == set()
+
+        # And the new owner's lease TTL was left untouched.
+        db = SessionLocal()
+        try:
+            lease = db.query(DeviceLease).filter(
+                DeviceLease.job_id == seed["job_id"],
+            ).one()
+            assert _as_utc(lease.expires_at) < now + timedelta(seconds=600)
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_cas_rejects_concurrently_terminal_job():
+    """Race: prelim saw RUNNING, then the job reached a terminal state before
+    the UPDATE. The CAS joins on Job.status==RUNNING and must hit zero rows —
+    a finished job must not get a fresh lease TTL / keepalive."""
+    from backend.api.routes.agent_api import _cas_renew_leases
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        # Simulate the job completing after prelim.
+        db = SessionLocal()
+        try:
+            db.query(JobInstance).filter(
+                JobInstance.id == seed["job_id"],
+            ).update({"status": JobStatus.COMPLETED.value})
+            db.commit()
+        finally:
+            db.close()
+
+        now = datetime.now(timezone.utc)
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            renewed = await _cas_renew_leases(
+                async_db,
+                pairs=[(seed["job_id"], token)],  # token itself is still valid
+                host_id=seed["host_id"],
+                agent_instance_id=seed["host_id"],
+                now=now,
+                new_expires=now + timedelta(seconds=600),
+            )
+            await async_db.rollback()
+        assert renewed == set()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
+async def test_cas_rejects_wrong_host_and_instance_at_write_time():
+    """The CAS enforces host/instance binding independently of prelim."""
+    from backend.api.routes.agent_api import _cas_renew_leases
+
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        now = datetime.now(timezone.utc)
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            wrong_host = await _cas_renew_leases(
+                async_db,
+                pairs=[(seed["job_id"], token)],
+                host_id="not-this-host",
+                agent_instance_id=seed["host_id"],
+                now=now,
+                new_expires=now + timedelta(seconds=600),
+            )
+            await async_db.rollback()
+            wrong_instance = await _cas_renew_leases(
+                async_db,
+                pairs=[(seed["job_id"], token)],
+                host_id=seed["host_id"],
+                agent_instance_id="zombie-instance",
+                now=now,
+                new_expires=now + timedelta(seconds=600),
+            )
+            await async_db.rollback()
+        assert wrong_host == set()
+        assert wrong_instance == set()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
 async def test_update_job_step_status_upserts_trace():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)

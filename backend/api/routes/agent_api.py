@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import case, func, or_, select, update
+from sqlalchemy import case, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
@@ -1259,6 +1259,50 @@ class _ExtendBatchOut(BaseModel):
     results: List[_ExtendBatchItemOut]
 
 
+async def _cas_renew_leases(
+    db: AsyncSession,
+    *,
+    pairs: List[tuple],
+    host_id: str,
+    agent_instance_id: str,
+    now: datetime,
+    new_expires: datetime,
+) -> set[int]:
+    """Final ownership CAS for batch renewal. Returns job_ids actually renewed.
+
+    The caller's prelim classification validated a SNAPSHOT; between that
+    SELECT and this UPDATE the lease can be released and re-acquired (token
+    rotated, e.g. recovery takeover). Matching by job_id alone would let the
+    OLD Agent renew the NEW owner's lease. So this UPDATE re-asserts the full
+    ownership tuple at write time:
+      - (job_id, fencing_token) pair-bound via row-value IN
+      - host binding; agent-instance binding when the Agent reports one
+      - ACTIVE + expires_at > now (never revive a grace-held lease)
+      - Job.status == RUNNING join (a job that went terminal concurrently
+        must not get a fresh TTL)
+    Does NOT commit — runs inside the caller's transaction.
+    """
+    conditions = [
+        tuple_(DeviceLease.job_id, DeviceLease.fencing_token).in_(pairs),
+        DeviceLease.lease_type == LeaseType.JOB.value,
+        DeviceLease.status == LeaseStatus.ACTIVE.value,
+        DeviceLease.expires_at > now,  # Phase 4b: refuse expired lease
+        DeviceLease.host_id == host_id,
+        JobInstance.id == DeviceLease.job_id,  # UPDATE .. FROM job_instance
+        JobInstance.status == JobStatus.RUNNING.value,
+    ]
+    if agent_instance_id:
+        conditions.append(DeviceLease.agent_instance_id == agent_instance_id)
+    renewed_rows = (await db.execute(
+        update(DeviceLease)
+        .where(*conditions)
+        .values(renewed_at=now, expires_at=new_expires)
+        .returning(DeviceLease.job_id)
+        .execution_options(synchronize_session=False)
+    )).all()
+    return {row.job_id for row in renewed_rows}
+
+
 @router.post("/leases/extend-batch", response_model=ApiResponse[_ExtendBatchOut])
 async def extend_leases_batch(
     payload: _ExtendBatchIn,
@@ -1291,8 +1335,9 @@ async def extend_leases_batch(
             },
         )
 
-    # Preserve request order, collapse accidental duplicate job_ids (a job maps to
-    # exactly one ACTIVE lease, so job_id alone identifies the (device, job) pair).
+    # Preserve request order; duplicate job_ids collapse to ONE result entry and
+    # the LAST occurrence's token wins (the later token is the more recent claim
+    # a well-behaved Agent knows about). Documented + tested — not an error.
     ordered_job_ids: List[int] = []
     token_by_job: Dict[int, str] = {}
     for it in items:
@@ -1308,7 +1353,13 @@ async def extend_leases_batch(
     job_status = {row.id: row.status for row in job_rows}
 
     lease_rows = (await db.execute(
-        select(DeviceLease.job_id, DeviceLease.fencing_token, DeviceLease.expires_at)
+        select(
+            DeviceLease.job_id,
+            DeviceLease.fencing_token,
+            DeviceLease.expires_at,
+            DeviceLease.host_id,
+            DeviceLease.agent_instance_id,
+        )
         .where(
             DeviceLease.job_id.in_(ordered_job_ids),
             DeviceLease.lease_type == LeaseType.JOB.value,
@@ -1330,6 +1381,15 @@ async def extend_leases_batch(
         if lease.fencing_token != token_by_job[jid]:
             prelim[jid] = "stale_token"
             continue
+        # Ownership binding: the lease must belong to the requesting host (and
+        # agent instance when the Agent reports one). A token leaked across
+        # hosts/instances must not renew — classified as fenced.
+        if lease.host_id != payload.host_id:
+            prelim[jid] = "stale_token"
+            continue
+        if payload.agent_instance_id and lease.agent_instance_id != payload.agent_instance_id:
+            prelim[jid] = "stale_token"
+            continue
         expires_at = _as_utc(lease.expires_at)
         if expires_at is None or expires_at <= now:
             # Expired ACTIVE (grace-held) lease: the reconciler is the sole owner
@@ -1343,25 +1403,26 @@ async def extend_leases_batch(
     new_expires = now + timedelta(seconds=_DEVICE_LOCK_LEASE_SECONDS)
     renewed_ids: set[int] = set()
     if renewable_job_ids:
-        renewed_rows = (await db.execute(
-            update(DeviceLease)
-            .where(
-                DeviceLease.job_id.in_(renewable_job_ids),
-                DeviceLease.lease_type == LeaseType.JOB.value,
-                DeviceLease.status == LeaseStatus.ACTIVE.value,
-                DeviceLease.expires_at > now,  # Phase 4b: refuse expired lease
-            )
-            .values(renewed_at=now, expires_at=new_expires)
-            .returning(DeviceLease.job_id)
-            .execution_options(synchronize_session=False)
-        )).all()
-        renewed_ids = {row.job_id for row in renewed_rows}
+        cas_pairs = [(jid, token_by_job[jid]) for jid in renewable_job_ids]
+        renewed_ids = await _cas_renew_leases(
+            db,
+            pairs=cas_pairs,
+            host_id=payload.host_id,
+            agent_instance_id=payload.agent_instance_id,
+            now=now,
+            new_expires=new_expires,
+        )
         if renewed_ids:
             # Mirror the single endpoint: a renewal is also a RUNNING keepalive,
-            # so refresh job.updated_at to hold off the recycler heartbeat timeout.
+            # so refresh job.updated_at to hold off the recycler heartbeat
+            # timeout. RUNNING guard: never bump the liveness anchor of a job
+            # that reached a terminal state after the lease CAS above.
             await db.execute(
                 update(JobInstance)
-                .where(JobInstance.id.in_(renewed_ids))
+                .where(
+                    JobInstance.id.in_(renewed_ids),
+                    JobInstance.status == JobStatus.RUNNING.value,
+                )
                 .values(updated_at=now)
                 .execution_options(synchronize_session=False)
             )
@@ -1377,9 +1438,9 @@ async def extend_leases_batch(
                     expires_at=new_expires.isoformat(),
                 ))
             else:
-                # Concurrent release/expiry between SELECT and UPDATE — report the
-                # truth (not renewed) so the Agent recovers instead of trusting a
-                # phantom TTL.
+                # CAS miss: released/expired/token-rotated/job-terminal between
+                # SELECT and UPDATE. Report a lost status (not renewed) so the
+                # Agent recovers instead of trusting a phantom TTL.
                 results.append(_ExtendBatchItemOut(job_id=jid, status="lease_missing"))
         else:
             results.append(_ExtendBatchItemOut(job_id=jid, status=state))

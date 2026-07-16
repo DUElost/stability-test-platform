@@ -403,6 +403,158 @@ class TestPrepareAndCompleteIntegration:
         assert audit is not None
         assert audit.details["reason"] == "devices_unavailable_at_dispatch"
 
+    def test_postgresql_concurrent_materialization_race_settles_loser(
+        self, db_session, dispatch_fixture,
+    ):
+        """B4 终局竞态:两个 PlanRun 同设备、双事务同时通过 complete 阶段复查,
+        竞争 INSERT。败者撞 uq_job_active_per_device,必须:回滚本次全部物化、
+        落结构化 FAILED(reason=device_conflict_at_materialization),不得抛出
+        未处理 IntegrityError(否则 SAQ 重试死循环、PlanRun 悬挂)。
+        """
+        from backend.models.job import JobInstance
+        from backend.models.plan_run import PlanRun
+
+        dev = dispatch_fixture["device"]
+        runs = []
+        for _ in range(2):
+            pr = prepare_plan_run(
+                plan_id=dispatch_fixture["plan"].id,
+                device_ids=[dev.id],
+                triggered_by="pytest",
+                db=db_session,
+                run_type="MANUAL",
+            )
+            runs.append(pr.id)
+        # 注:第二个 prepare 能通过是因为第一个 run 尚未物化 Job(gate 异步),
+        # 这正是 B4 的真实生产序列。
+
+        barrier = threading.Barrier(2)
+        errors: list[Exception] = []
+
+        def materialize(run_id: int):
+            db = SessionLocal()
+            try:
+                barrier.wait(timeout=5)
+                complete_plan_run_dispatch(run_id, db=db)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                db.close()
+
+        threads = [
+            threading.Thread(target=materialize, args=(rid,)) for rid in runs
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert all(not t.is_alive() for t in threads)
+        # 关键断言 1:IntegrityError 不允许逃逸
+        assert errors == [], f"unhandled exceptions escaped: {errors}"
+
+        db_session.expire_all()
+        statuses = {}
+        for rid in runs:
+            pr = db_session.get(PlanRun, rid)
+            statuses[rid] = pr.status
+
+        # 关键断言 2:恰好一胜一败。
+        # 败者两种合法路径:复查看见胜者已提交的 PENDING → devices_unavailable;
+        # 或双双通过复查后 INSERT 撞索引 → device_conflict_at_materialization。
+        winner_ids = [rid for rid, s in statuses.items() if s == "RUNNING"]
+        loser_ids = [rid for rid, s in statuses.items() if s == "FAILED"]
+        assert len(winner_ids) == 1, f"expected one winner, got {statuses}"
+        assert len(loser_ids) == 1, f"expected one loser, got {statuses}"
+
+        loser = db_session.get(PlanRun, loser_ids[0])
+        assert loser.result_summary["dispatch_failed"] is True
+        # 败者两种合法收敛,summary 形态不同:
+        #   - INSERT 撞索引 → {"reason": "device_conflict_at_materialization"}
+        #   - 复查看见胜者已提交的 PENDING → {"unavailable_devices": [...]}(无 reason 键)
+        assert (
+            loser.result_summary.get("reason") == "device_conflict_at_materialization"
+            or "unavailable_devices" in loser.result_summary
+        ), f"unexpected loser summary: {loser.result_summary}"
+
+        # 关键断言 3:胜者恰好 1 个 Job;败者 0 个(物化整体回滚,无残留)。
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == winner_ids[0]
+        ).count() == 1
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == loser_ids[0]
+        ).count() == 0
+
+    def test_materialization_integrity_error_settles_structured_failed(
+        self, db_session, dispatch_fixture,
+    ):
+        """确定性覆盖 IntegrityError 分支(并发测试里该分支依赖时序):
+        绕过复查直接撞 uq_job_active_per_device,断言 handler 全行为——
+        回滚、FAILED、result_summary、审计,且不抛出。
+        """
+        from backend.core.audit import AuditLog
+        from backend.models.job import JobInstance
+        from backend.models.plan_run import PlanRun
+        from sqlalchemy import select
+
+        dev = dispatch_fixture["device"]
+
+        # 胜者:已物化的 PENDING job 占住唯一索引
+        winner = prepare_plan_run(
+            plan_id=dispatch_fixture["plan"].id,
+            device_ids=[dev.id],
+            triggered_by="pytest",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        complete_plan_run_dispatch(winner.id, db=db_session)
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == winner.id
+        ).count() == 1
+
+        # 败者:prepare 会被 active_job 校验拦住,所以直接手工造 PlanRun,
+        # 再 patch 掉复查,强制走到 INSERT 撞索引 —— 模拟"双双通过复查"时序。
+        loser = PlanRun(
+            plan_id=dispatch_fixture["plan"].id,
+            status="RUNNING",
+            failure_threshold=0.1,
+            plan_snapshot=winner.plan_snapshot,
+            run_type="MANUAL",
+            run_context={"dispatch_device_ids": [dev.id]},
+            triggered_by="pytest",
+        )
+        db_session.add(loser)
+        db_session.commit()
+
+        with patch(
+            "backend.services.plan_dispatcher_sync._validate_dispatch_devices_sync",
+            lambda _db, _ids: None,
+        ):
+            # 不得抛出 IntegrityError
+            complete_plan_run_dispatch(loser.id, db=db_session)
+
+        db_session.expire_all()
+        loser = db_session.get(PlanRun, loser.id)
+        assert loser.status == "FAILED"
+        assert loser.result_summary["dispatch_failed"] is True
+        assert loser.result_summary["reason"] == "device_conflict_at_materialization"
+        # 败者零残留
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == loser.id
+        ).count() == 0
+        # 胜者不受影响
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == winner.id
+        ).count() == 1
+        # 审计行
+        audit = db_session.execute(
+            select(AuditLog)
+            .where(AuditLog.action == "plan_dispatch_failed")
+            .where(AuditLog.resource_id == str(loser.id))
+        ).scalars().first()
+        assert audit is not None
+        assert audit.details["reason"] == "device_conflict_at_materialization"
+
     def test_complete_succeeds_for_clean_device(self, db_session, dispatch_fixture):
         """Happy path 回归:无变动时 complete 正常创建 Job。"""
         from backend.models.job import JobInstance

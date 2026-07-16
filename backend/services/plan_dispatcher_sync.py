@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select, and_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -609,45 +610,116 @@ def complete_plan_run_dispatch(
     now = datetime.now(timezone.utc)
     job_device_pairs: dict[int, int] = {}
 
-    for device_id in device_ids:
-        wifi_params = wifi_allocations.get(device_id)
-        resolved_pipeline = {"lifecycle": deepcopy(lifecycle)}
-        if wifi_params:
-            resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
+    # B4 final-window guard: two dispatches can BOTH pass the revalidation above
+    # (each in its own uncommitted transaction), then race the INSERTs — the
+    # loser hits uq_job_active_per_device only at flush/commit. Without this
+    # handler the IntegrityError escapes, the SAQ task retries into the same
+    # conflict, and the PlanRun hangs in RUNNING. Roll back the ENTIRE
+    # materialization (jobs + wifi allocation rows share this transaction) and
+    # settle the PlanRun as structured FAILED. P1 admission-queue semantics will
+    # turn this terminal FAILED into a QUEUED retry (ADR invariant ④).
+    try:
+        for device_id in device_ids:
+            wifi_params = wifi_allocations.get(device_id)
+            resolved_pipeline = {"lifecycle": deepcopy(lifecycle)}
+            if wifi_params:
+                resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
 
-        job = JobInstance(
-            plan_run_id=pr.id,
-            plan_id=pr.plan_id,
-            device_id=device_id,
-            host_id=device_host_map.get(device_id),
-            status=JobStatus.PENDING.value,
-            pipeline_def=resolved_pipeline,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(job)
-        db.flush()
-        job_device_pairs[job.id] = device_id
-
-    if wifi_allocations:
-        assignment_refs = {
-            did: (
-                db.execute(
-                    select(ResourcePool).where(
-                        ResourcePool.id == wifi_allocations[did]["pool_id"]
-                    )
-                ).scalar(),
-                wifi_allocations[did],
+            job = JobInstance(
+                plan_run_id=pr.id,
+                plan_id=pr.plan_id,
+                device_id=device_id,
+                host_id=device_host_map.get(device_id),
+                status=JobStatus.PENDING.value,
+                pipeline_def=resolved_pipeline,
+                created_at=now,
+                updated_at=now,
             )
-            for did in wifi_allocations
-        }
-        _sync_create_allocations(db, assignment_refs, job_device_pairs)
+            db.add(job)
+            db.flush()
+            job_device_pairs[job.id] = device_id
 
-    db.commit()
+        if wifi_allocations:
+            assignment_refs = {
+                did: (
+                    db.execute(
+                        select(ResourcePool).where(
+                            ResourcePool.id == wifi_allocations[did]["pool_id"]
+                        )
+                    ).scalar(),
+                    wifi_allocations[did],
+                )
+                for did in wifi_allocations
+            }
+            _sync_create_allocations(db, assignment_refs, job_device_pairs)
+
+        db.commit()
+    except IntegrityError as exc:
+        if "uq_job_active_per_device" not in str(exc.orig or exc):
+            raise  # unrelated constraint — surface it, don't mask
+        db.rollback()  # discards every job + allocation row of this attempt
+        _fail_plan_run_on_device_conflict(plan_run_id, db, error=str(exc.orig or exc))
+        return
     db.refresh(pr)
     logger.info(
         "plan_run_dispatch_completed plan=%d plan_run=%d jobs=%d",
         pr.plan_id, pr.id, len(device_ids),
+    )
+
+
+def _fail_plan_run_on_device_conflict(
+    plan_run_id: int, db: Session, *, error: str
+) -> None:
+    """Settle a materialization race loser as structured FAILED (fresh tx).
+
+    Runs after a rollback, so the PlanRun must be re-fetched and re-locked. A
+    concurrent abort/aggregation may already have moved it off RUNNING — the
+    terminal guard skips the transition in that case (never overwrite).
+    """
+    from backend.core.audit import record_audit
+
+    pr = db.execute(
+        select(PlanRun)
+        .where(PlanRun.id == plan_run_id)
+        .with_for_update(key_share=True)
+    ).scalar_one_or_none()
+    if pr is None:
+        db.rollback()
+        logger.warning(
+            "plan_dispatch_device_conflict_plan_run_gone plan_run=%d", plan_run_id,
+        )
+        return
+    if pr.status != PlanRunStatus.RUNNING.value:
+        db.rollback()
+        logger.info(
+            "plan_dispatch_device_conflict_skip_terminal plan_run=%d status=%s",
+            plan_run_id, pr.status,
+        )
+        return
+
+    PlanRunStateMachine.transition(
+        pr, PlanRunStatus.FAILED, reason="device_conflict_at_materialization",
+    )
+    pr.ended_at = datetime.now(timezone.utc)
+    pr.result_summary = {
+        "dispatch_failed": True,
+        "reason": "device_conflict_at_materialization",
+        "error": error[:500],
+    }
+    flag_modified(pr, "result_summary")
+    record_audit(
+        db,
+        action="plan_dispatch_failed",
+        resource_type="plan_run",
+        resource_id=pr.id,
+        details={
+            "reason": "device_conflict_at_materialization",
+            "error": error[:500],
+        },
+    )
+    db.commit()
+    logger.warning(
+        "plan_dispatch_failed_device_conflict plan_run=%d", plan_run_id,
     )
 
 
