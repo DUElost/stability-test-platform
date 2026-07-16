@@ -661,6 +661,27 @@ def run_plan(
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=e.detail())
 
+    # ADR-0026 Step 3: V2 prepare queued the run — return immediately. The
+    # queue pump (Step 4) owns admission; enqueueing the legacy SAQ gate here
+    # would create dual ownership (reviewer boundary #2).
+    if pr.status == PlanRunStatus.QUEUED.value:
+        logger.info(
+            "manual_dispatch_queued plan=%d plan_run=%d devices=%d by=%s",
+            plan_id, pr.id, len(payload.device_ids),
+            current_user.username if current_user else "api",
+        )
+        return ok(PlanRunOut(
+            id=pr.id, plan_id=pr.plan_id, status=pr.status,
+            failure_threshold=pr.failure_threshold, run_type=pr.run_type,
+            triggered_by=pr.triggered_by, started_at=pr.started_at,
+            ended_at=pr.ended_at, result_summary=pr.result_summary,
+            run_context=pr.run_context, plan_snapshot=pr.plan_snapshot,
+            parent_plan_run_id=pr.parent_plan_run_id,
+            root_plan_run_id=pr.root_plan_run_id,
+            chain_index=pr.chain_index or 0,
+            next_plan_triggered=bool(pr.next_plan_triggered),
+        ))
+
     assert pr.run_context["dispatch_state"]["enqueue_key"] == f"precheck:{pr.id}"
 
     try:

@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from backend.models.enums import PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
@@ -230,6 +231,7 @@ async def trigger_next_plan(
             )
         )
         child_id = child.id
+        child_status = child.status
         parent.next_plan_triggered = True
         await db.commit()
     except Exception as exc:
@@ -237,6 +239,15 @@ async def trigger_next_plan(
         logger.exception("plan_chain_child_create_failed parent=%d", parent.id)
         await _rollback_chain_trigger_async(db, parent.id, exc)
         return None
+
+    # ADR-0026 Step 3: V2 child is QUEUED — the queue pump owns admission;
+    # do not enqueue the legacy SAQ gate (dual ownership).
+    if child_status == PlanRunStatus.QUEUED.value:
+        logger.info(
+            "plan_chain_triggered_queued parent=%d child=%d chain_index=%d",
+            parent.id, child_id, chain_index,
+        )
+        return await db.get(PlanRun, child_id)
 
     try:
         await asyncio.to_thread(
@@ -324,6 +335,7 @@ def trigger_next_plan_sync(
             commit=False,
         )
         child_id = child.id
+        child_status = child.status
         parent.next_plan_triggered = True
         db.commit()
     except Exception as exc:
@@ -333,6 +345,15 @@ def trigger_next_plan_sync(
         )
         _rollback_chain_trigger_sync(db, parent.id, exc)
         return None
+
+    # ADR-0026 Step 3: V2 child is QUEUED — the queue pump owns admission;
+    # do not enqueue the legacy SAQ gate (dual ownership).
+    if child_status == PlanRunStatus.QUEUED.value:
+        logger.info(
+            "plan_chain_triggered_sync_queued parent=%d child=%d chain_index=%d",
+            parent.id, child_id, chain_index,
+        )
+        return db.get(PlanRun, child_id)
 
     try:
         enqueue_sync(

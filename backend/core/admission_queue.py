@@ -36,11 +36,15 @@ def is_queue_pump_ready() -> bool:
 
 
 def mark_queue_pump_ready(ready: bool = True) -> None:
-    """Called by the queue pump when it starts (P1 step 4) / by tests."""
+    """Called by the queue pump when it starts (P1 step 4) / by tests.
+
+    Resets the one-shot warning in both directions: after a pump goes away,
+    the next flag-on/pump-absent check should warn again.
+    """
     global _queue_pump_ready, _warned_pump_not_ready
     _queue_pump_ready = ready
+    _warned_pump_not_ready = False
     if ready:
-        _warned_pump_not_ready = False
         logger.info("admission_queue_pump_registered")
 
 

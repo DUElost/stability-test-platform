@@ -50,28 +50,30 @@ ACTIVE_JOB_STATUSES = (
 
 
 
-def _validate_dispatch_devices_sync(
+# 不可重试的设备级拒因(ADR-0026 Step 3 语义拆分):设备不存在 / 无 host 属于
+# 配置错误,prepare 直接 400。其余(offline/error/host_offline/active_lease/
+# active_job)是**可重试的调度状态**——V2 准入队列下不拒绝,只作为 queue_reason
+# 让 PlanRun 以 QUEUED 等待(不变量④);legacy 路径仍全量拒绝。
+_FATAL_DISPATCH_REASONS = ("not_found", "no_host")
+
+
+def _classify_dispatch_devices_sync(
     db: Session, device_ids: list[int]
-) -> None:
-    """Strict device availability check for dispatch.
+) -> tuple[list[dict], dict[int, str]]:
+    """Shared device-availability scan for both dispatch modes.
 
-    Why: 此前 dispatcher 对不存在/OFFLINE/已被 ACTIVE lease 占用的设备只 WARNING 后
-         继续创建 host_id=None 或永远 PENDING 的 job,用户体感"派发成功但永不跑"。
-         严格全拒 + 结构化 detail,前端拿到每台设备的具体原因。
+    Returns ``(unavailable, device_host_map)``:
+      - ``unavailable`` keeps the legacy ladder order and entry shape
+        (one entry per blocked device, first matching reason wins):
+        not_found / no_host / device_offline / device_error / host_offline /
+        active_lease / active_job
+      - ``device_host_map``: ``{device_id: host_id}`` for every device that
+        exists (used by the V2 snapshot builder).
 
-    判定优先级(短路返回第一个不通过原因):
-      - not_found:device_id 不存在
-      - no_host:Device.host_id 为 NULL
-      - device_offline:Device.status == OFFLINE
-      - host_offline:Host.status == OFFLINE
-      - active_lease:存在 DeviceLease.status == ACTIVE 行(lease 是占用真值)
-
-    Raises:
-        PlanDispatchError(unavailable_devices=[{id, reason, ...}])
+    Callers decide policy: legacy ``_validate_dispatch_devices_sync`` rejects
+    on ANY entry; the V2 admission-queue path rejects only
+    ``_FATAL_DISPATCH_REASONS`` and queues the rest.
     """
-    if not device_ids:
-        raise PlanDispatchError("device_ids must not be empty")
-
     rows = db.execute(
         select(
             Device.id,
@@ -84,6 +86,9 @@ def _validate_dispatch_devices_sync(
         .where(Device.id.in_(device_ids))
     ).all()
     device_snapshot = {row.id: row for row in rows}
+    device_host_map = {
+        row.id: row.host_id for row in rows if row.host_id is not None
+    }
 
     lease_rows = db.execute(
         select(DeviceLease.device_id, DeviceLease.job_id)
@@ -158,6 +163,28 @@ def _validate_dispatch_devices_sync(
             })
             continue
 
+    return unavailable, device_host_map
+
+
+def _validate_dispatch_devices_sync(
+    db: Session, device_ids: list[int]
+) -> None:
+    """Strict device availability check for LEGACY dispatch (flag=0).
+
+    Why: 此前 dispatcher 对不存在/OFFLINE/已被 ACTIVE lease 占用的设备只 WARNING 后
+         继续创建 host_id=None 或永远 PENDING 的 job,用户体感"派发成功但永不跑"。
+         严格全拒 + 结构化 detail,前端拿到每台设备的具体原因。
+
+    V2(准入队列)不用本函数——改用 `_classify_dispatch_devices_sync` 并只拒绝
+    `_FATAL_DISPATCH_REASONS`,其余作为 queue_reason 排队(ADR-0026 Step 3)。
+
+    Raises:
+        PlanDispatchError(unavailable_devices=[{id, reason, ...}])
+    """
+    if not device_ids:
+        raise PlanDispatchError("device_ids must not be empty")
+
+    unavailable, _ = _classify_dispatch_devices_sync(db, device_ids)
     if unavailable:
         raise PlanDispatchError(
             f"Dispatch rejected: {len(unavailable)} device(s) unavailable",
@@ -367,9 +394,35 @@ def prepare_plan_run(
     if plan is None:
         raise PlanDispatchError(f"Plan {plan_id} not found")
 
-    # #8: device 可用性快照校验 — 早返回避免创建落空 PlanRun。complete 阶段会再做一次
-    # TOCTOU 兜底,但用户期望的是 400,不是落 FAILED 的 PlanRun。
-    _validate_dispatch_devices_sync(db, device_ids)
+    # ── ADR-0026 Step 3: dispatch-mode fork ───────────────────────────────
+    # V2 (flag AND pump ready): retryable device states (busy/offline) queue
+    # instead of rejecting; only fatal config errors 400 at prepare.
+    # Legacy: strict full rejection, byte-for-byte unchanged.
+    from backend.core.admission_queue import admission_queue_enabled
+    use_admission_queue = admission_queue_enabled()
+
+    queue_blockers: list[dict] = []
+    device_host_map: dict[int, str] = {}
+    if use_admission_queue:
+        if not device_ids:
+            raise PlanDispatchError("device_ids must not be empty")
+        unavailable, device_host_map = _classify_dispatch_devices_sync(db, device_ids)
+        fatal = [e for e in unavailable if e["reason"] in _FATAL_DISPATCH_REASONS]
+        if fatal:
+            # not_found / no_host are configuration errors, not scheduling
+            # states — reject with only the fatal entries (busy devices are
+            # NOT an error in queue mode).
+            raise PlanDispatchError(
+                f"Dispatch rejected: {len(fatal)} device(s) unavailable",
+                unavailable_devices=fatal,
+            )
+        queue_blockers = [
+            e for e in unavailable if e["reason"] not in _FATAL_DISPATCH_REASONS
+        ]
+    else:
+        # #8: device 可用性快照校验 — 早返回避免创建落空 PlanRun。complete 阶段会再做一次
+        # TOCTOU 兜底,但用户期望的是 400,不是落 FAILED 的 PlanRun。
+        _validate_dispatch_devices_sync(db, device_ids)
 
     steps = db.execute(
         select(PlanStep)
@@ -406,6 +459,24 @@ def prepare_plan_run(
 
     effective_threshold = plan.failure_threshold
     plan_snapshot = _build_plan_snapshot(plan, steps, metadata, effective_threshold)
+
+    if use_admission_queue:
+        return _prepare_queued_plan_run(
+            db=db,
+            plan=plan,
+            device_ids=device_ids,
+            device_host_map=device_host_map,
+            queue_blockers=queue_blockers,
+            plan_snapshot=plan_snapshot,
+            effective_threshold=effective_threshold,
+            triggered_by=triggered_by,
+            run_type=run_type,
+            run_context=run_context,
+            parent_plan_run_id=parent_plan_run_id,
+            root_plan_run_id=root_plan_run_id,
+            chain_index=chain_index,
+            commit=commit,
+        )
 
     merged_run_ctx = dict(run_context or {})
     # IH1: dispatch_device_ids is critical — plan_precheck.py L101-105 explicitly
@@ -449,6 +520,113 @@ def prepare_plan_run(
     logger.info(
         "plan_run_prepared plan=%d plan_run=%d devices=%d type=%s",
         plan_id, pr.id, len(device_ids), run_type,
+    )
+    return pr
+
+
+def _prepare_queued_plan_run(
+    *,
+    db: Session,
+    plan: Plan,
+    device_ids: list[int],
+    device_host_map: dict[int, str],
+    queue_blockers: list[dict],
+    plan_snapshot: dict,
+    effective_threshold: float,
+    triggered_by: str,
+    run_type: str,
+    run_context: dict | None,
+    parent_plan_run_id: int | None,
+    root_plan_run_id: int | None,
+    chain_index: int | None,
+    commit: bool,
+) -> PlanRun:
+    """ADR-0026 Step 3 — V2 prepare: QUEUED PlanRun + immutable snapshot rows.
+
+    One transaction creates: PlanRun(status=QUEUED, enqueued_at, queue_reason)
+    + one PlanRunHost per host + one PlanRunTargetDevice per device (+ the
+    ``run_context.dispatch_device_ids`` compat list). Any insert failure rolls
+    the whole PlanRun back (reviewer boundary #3).
+
+    Deterministic snapshot ordering (reviewer boundary #4): device_ids are
+    deduplicated and sorted ascending; ``sort_order`` = index in that order;
+    host groups are created in sorted-host_id order. ``enqueued_at`` marks the
+    aging basis. ``started_at`` keeps a NOT-NULL compat value here — the
+    admission transaction (Step 4) resets it to the real execution start, and
+    queue wait time must always be computed from ``enqueued_at``.
+
+    Does NOT drive the legacy SAQ/inline gate (reviewer boundary #2) — the
+    queue pump (Step 4) is the only component that moves QUEUED forward.
+    """
+    from backend.models.plan_run import PlanRunHost, PlanRunTargetDevice
+
+    # Dedupe + stable order — duplicate ids in the request would violate
+    # uq_plan_run_target_device; last-write semantics are meaningless for a
+    # target list, so collapse them deterministically.
+    target_ids = sorted(set(device_ids))
+
+    merged_run_ctx = dict(run_context or {})
+    # Compat read path (authoritative source is plan_run_target_device):
+    # keep the same key legacy consumers assert on (precheck/runner.py).
+    merged_run_ctx.setdefault("dispatch_device_ids", target_ids)
+    merged_run_ctx["dispatch_host_watcher_admin_states"] = (
+        snapshot_dispatch_host_watcher_admin_states(db, target_ids)
+    )
+    if queue_blockers:
+        # Per-device detail for UI/debug; the coarse column is queue_reason.
+        merged_run_ctx["queue_blockers"] = queue_blockers
+
+    now = datetime.now(timezone.utc)
+    pr = PlanRun(
+        plan_id=plan.id,
+        status=PlanRunStatus.QUEUED.value,
+        failure_threshold=effective_threshold,
+        plan_snapshot=plan_snapshot,
+        run_type=run_type,
+        run_context=merged_run_ctx,
+        triggered_by=triggered_by,
+        parent_plan_run_id=parent_plan_run_id,
+        root_plan_run_id=root_plan_run_id,
+        chain_index=chain_index or 0,
+        # NOT NULL compat value while queued; admission (Step 4) resets it to
+        # the real start — queue latency is measured from enqueued_at only.
+        started_at=now,
+        enqueued_at=now,
+        queue_reason="DEVICE_BUSY" if queue_blockers else None,
+    )
+    db.add(pr)
+    db.flush()
+
+    host_ids = sorted({device_host_map[did] for did in target_ids})
+    host_rows: dict[str, PlanRunHost] = {}
+    for hid in host_ids:
+        row = PlanRunHost(
+            plan_run_id=pr.id,
+            host_id=hid,
+            device_count=sum(1 for d in target_ids if device_host_map[d] == hid),
+        )
+        db.add(row)
+        host_rows[hid] = row
+    db.flush()
+
+    for idx, did in enumerate(target_ids):
+        hid = device_host_map[did]
+        db.add(PlanRunTargetDevice(
+            plan_run_id=pr.id,
+            plan_run_host_id=host_rows[hid].id,
+            device_id=did,
+            host_id_snapshot=hid,
+            sort_order=idx,
+        ))
+
+    if commit:
+        db.commit()
+        db.refresh(pr)
+    else:
+        db.flush()
+    logger.info(
+        "plan_run_queued plan=%d plan_run=%d devices=%d hosts=%d type=%s blockers=%d",
+        plan.id, pr.id, len(target_ids), len(host_ids), run_type, len(queue_blockers),
     )
     return pr
 
@@ -756,6 +934,13 @@ def dispatch_plan_sync(
         root_plan_run_id=root_plan_run_id,
         chain_index=chain_index,
     )
+
+    # ADR-0026 Step 3: V2 prepare queued the run — the queue pump (Step 4) is
+    # the sole owner of admission from here. Driving the legacy inline gate
+    # would create dual ownership (reviewer boundary #2).
+    if pr.status == PlanRunStatus.QUEUED.value:
+        return pr
+
     _run_dispatch_gate_sync(pr.id, db)
     db.refresh(pr)
 
