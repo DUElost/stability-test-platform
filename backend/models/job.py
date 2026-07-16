@@ -51,6 +51,14 @@ class JobInstance(Base):
     # 手动干预: NULL / RETRY_NOW / EXIT_REQUESTED ; Agent 下一周期检查后清零或响应
     manual_action               = Column(String(32))
 
+    # ── ADR-0026 P1 step 1: 三个独立存活信号(不变量③,schema only) ──
+    # 目前无代码路径写入;批量续租请求已前向兼容承载(agent_api.py
+    # _ExtendBatchItemIn.execution_state / progress_marker),feature flag
+    # 落地后回填。在此之前 recycler 仍以 updated_at 为唯一判据。
+    execution_state             = Column(String(32))  # WAITING_EXECUTION_SLOT / EXECUTING_STEP / PATROL_SLEEP / WAITING_BARRIER
+    last_execution_heartbeat_at = Column(DateTime(timezone=True))  # 执行器存活(EXECUTING_STEP 超时判据)
+    last_progress_at            = Column(DateTime(timezone=True))  # 业务进度(非 patrol step 的进度证明)
+
     created_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at         = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

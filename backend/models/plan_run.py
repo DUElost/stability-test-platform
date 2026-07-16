@@ -20,6 +20,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -55,6 +56,27 @@ class PlanRun(Base):
     chain_index         = Column(Integer, nullable=False, default=0, server_default="0")
     next_plan_triggered = Column(Boolean, nullable=False, default=False, server_default="false")
 
+    # ── ADR-0026 P1 step 1: admission-queue columns (schema only) ──
+    # No code path writes these yet — they activate with the admission-queue
+    # feature flag. Kept nullable / defaulted so the migration is additive.
+    priority             = Column(Integer, nullable=False, default=0, server_default="0")
+    queue_reason         = Column(String(32))   # DEVICE_BUSY / RESOURCE_BUSY / PRIORITY_WAIT / PRECHECK_STALE
+    next_admission_at    = Column(DateTime(timezone=True))
+    admission_token      = Column(String(64))   # idempotent admission token (pump)
+    admission_attempt_id = Column(String(64))   # stale-PRECHECK ownership (reaper)
+    precheck_started_at  = Column(DateTime(timezone=True))
+    enqueued_at          = Column(DateTime(timezone=True))
+
+    # ── ADR-0026 §6: O(1) terminal-aggregation counters ──
+    # failed = failed_only semantics (excludes aborted), aligned with
+    # plan_run_aggregation.py. Maintained by the single terminalization
+    # service once it lands; until then they stay at their defaults.
+    total_job_count     = Column(Integer, nullable=False, default=0, server_default="0")
+    terminal_job_count  = Column(Integer, nullable=False, default=0, server_default="0")
+    completed_job_count = Column(Integer, nullable=False, default=0, server_default="0")
+    failed_job_count    = Column(Integer, nullable=False, default=0, server_default="0")
+    aborted_job_count   = Column(Integer, nullable=False, default=0, server_default="0")
+
     plan = relationship("Plan", foreign_keys=[plan_id],
                         back_populates="runs")
     jobs = relationship("backend.models.job.JobInstance",
@@ -80,4 +102,82 @@ class PlanRun(Base):
             unique=True,
             postgresql_where=text("parent_plan_run_id IS NOT NULL"),
         ),
+        # ADR-0026: queue-pump dequeue scan (partial — QUEUED rows are few)
+        Index(
+            "idx_plan_run_admission_queue",
+            "priority", "next_admission_at", "enqueued_at",
+            postgresql_where=text("status = 'QUEUED'"),
+        ),
+    )
+
+
+class PlanRunHost(Base):
+    """ADR-0026: per-host projection of a PlanRun (prepare-time snapshot).
+
+    Created together with :class:`PlanRunTargetDevice` at prepare as an
+    immutable dispatch snapshot. Coordinator fields (admitted_at /
+    coordinator_epoch / coordinator_heartbeat_at /
+    admission_batch_size_snapshot) are enabled after admission
+    (PRECHECK→RUNNING) and stay NULL/default while QUEUED.
+
+    Schema only in P1 step 1 — no code path writes rows yet.
+    """
+    __tablename__ = "plan_run_host"
+
+    id           = Column(Integer, primary_key=True)
+    plan_run_id  = Column(Integer, ForeignKey("plan_run.id"), nullable=False)
+    host_id      = Column(String(64), ForeignKey("host.id"), nullable=False)
+    device_count = Column(Integer, nullable=False, default=0, server_default="0")
+    # status expresses admission/liveness; phase expresses the business stage —
+    # the two are orthogonal (ADR-0026 data-model section).
+    status       = Column(String(32), nullable=False,
+                          default="PENDING_ADMISSION", server_default="PENDING_ADMISSION")
+    phase        = Column(String(32))  # INIT / PATROL / TEARDOWN / BARRIER_WAIT
+
+    admitted_at              = Column(DateTime(timezone=True))
+    coordinator_epoch        = Column(Integer, nullable=False, default=0, server_default="0")
+    coordinator_heartbeat_at = Column(DateTime(timezone=True))
+    # Audit-only snapshot of the OperationScheduler cap at admission time;
+    # the LIVE limit is host/agent config (hot-adjustable, host-global).
+    admission_batch_size_snapshot = Column(Integer)
+    last_error   = Column(String(512))
+    queue_reason = Column(String(32))
+
+    # Host-scoped mirror of the PlanRun O(1) counters (barrier/phase judgement)
+    total_job_count     = Column(Integer, nullable=False, default=0, server_default="0")
+    terminal_job_count  = Column(Integer, nullable=False, default=0, server_default="0")
+    completed_job_count = Column(Integer, nullable=False, default=0, server_default="0")
+    failed_job_count    = Column(Integer, nullable=False, default=0, server_default="0")
+    aborted_job_count   = Column(Integer, nullable=False, default=0, server_default="0")
+
+    __table_args__ = (
+        UniqueConstraint("plan_run_id", "host_id", name="uq_plan_run_host"),
+        Index("idx_plan_run_host_host_phase", "host_id", "phase"),
+    )
+
+
+class PlanRunTargetDevice(Base):
+    """ADR-0026: prepare-time relational snapshot of a PlanRun's target devices.
+
+    Authoritative replacement for ``run_context.dispatch_device_ids`` JSON
+    (which stays as a compatibility read path): supports the all-ready
+    admission join, host grouping, device-migration audit via
+    ``host_id_snapshot``, and 1000-device set queries.
+
+    Schema only in P1 step 1 — no code path writes rows yet.
+    """
+    __tablename__ = "plan_run_target_device"
+
+    id               = Column(Integer, primary_key=True)
+    plan_run_id      = Column(Integer, ForeignKey("plan_run.id"), nullable=False)
+    plan_run_host_id = Column(Integer, ForeignKey("plan_run_host.id"), nullable=False)
+    device_id        = Column(Integer, ForeignKey("device.id"), nullable=False)
+    # Host at prepare time; diverges from device.host_id if the device moved.
+    host_id_snapshot = Column(String(64), nullable=False)
+    sort_order       = Column(Integer, nullable=False, default=0, server_default="0")
+
+    __table_args__ = (
+        UniqueConstraint("plan_run_id", "device_id", name="uq_plan_run_target_device"),
+        Index("idx_prtd_device", "device_id"),
+        Index("idx_prtd_plan_run_host", "plan_run_host_id"),
     )

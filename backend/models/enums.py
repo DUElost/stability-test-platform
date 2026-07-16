@@ -16,6 +16,11 @@ class PlanRunStatus(str, Enum):
     PARTIAL_SUCCESS = "PARTIAL_SUCCESS"
     FAILED          = "FAILED"
     DEGRADED        = "DEGRADED"
+    # ADR-0026: schema-ready but NOT produced yet — they activate with the
+    # admission-queue feature flag (P1 step 2+). Declared LAST to match the
+    # migration's ALTER TYPE ADD VALUE append order (create_all/alembic parity).
+    QUEUED          = "QUEUED"
+    PRECHECK        = "PRECHECK"
 
 
 class HostStatus(str, Enum):
