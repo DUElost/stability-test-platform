@@ -17,6 +17,7 @@ from sqlalchemy import (
     Enum as SAEnum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -125,7 +126,9 @@ class PlanRunHost(Base):
     __tablename__ = "plan_run_host"
 
     id           = Column(Integer, primary_key=True)
-    plan_run_id  = Column(Integer, ForeignKey("plan_run.id"), nullable=False)
+    # CASCADE (step 1.1): retention cleanup deletes PlanRun rows directly —
+    # pure-snapshot children must go with them, at the DB level.
+    plan_run_id  = Column(Integer, ForeignKey("plan_run.id", ondelete="CASCADE"), nullable=False)
     host_id      = Column(String(64), ForeignKey("host.id"), nullable=False)
     device_count = Column(Integer, nullable=False, default=0, server_default="0")
     # status expresses admission/liveness; phase expresses the business stage —
@@ -152,6 +155,9 @@ class PlanRunHost(Base):
 
     __table_args__ = (
         UniqueConstraint("plan_run_id", "host_id", name="uq_plan_run_host"),
+        # FK-addressing target for PlanRunTargetDevice's composite consistency
+        # FK (id alone is already unique; the pair exists for FK matching).
+        UniqueConstraint("id", "plan_run_id", name="uq_plan_run_host_id_plan_run"),
         Index("idx_plan_run_host_host_phase", "host_id", "phase"),
     )
 
@@ -169,8 +175,11 @@ class PlanRunTargetDevice(Base):
     __tablename__ = "plan_run_target_device"
 
     id               = Column(Integer, primary_key=True)
-    plan_run_id      = Column(Integer, ForeignKey("plan_run.id"), nullable=False)
-    plan_run_host_id = Column(Integer, ForeignKey("plan_run_host.id"), nullable=False)
+    plan_run_id      = Column(Integer, ForeignKey("plan_run.id", ondelete="CASCADE"), nullable=False)
+    # No inline FK: bound to plan_run_host via the composite consistency FK in
+    # __table_args__ (step 1.1), so a target row can never reference another
+    # PlanRun's host-group row.
+    plan_run_host_id = Column(Integer, nullable=False)
     device_id        = Column(Integer, ForeignKey("device.id"), nullable=False)
     # Host at prepare time; diverges from device.host_id if the device moved.
     host_id_snapshot = Column(String(64), nullable=False)
@@ -178,6 +187,11 @@ class PlanRunTargetDevice(Base):
 
     __table_args__ = (
         UniqueConstraint("plan_run_id", "device_id", name="uq_plan_run_target_device"),
+        ForeignKeyConstraint(
+            ["plan_run_host_id", "plan_run_id"],
+            ["plan_run_host.id", "plan_run_host.plan_run_id"],
+            ondelete="CASCADE",
+        ),
         Index("idx_prtd_device", "device_id"),
         Index("idx_prtd_plan_run_host", "plan_run_host_id"),
     )
