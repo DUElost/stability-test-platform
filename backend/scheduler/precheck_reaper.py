@@ -272,3 +272,115 @@ def reconcile_stale_precheck_runs(db: Session | None = None) -> dict[str, int]:
 def precheck_reaper_job() -> None:
     """APScheduler-compatible callback (sync, runs in thread pool)."""
     reconcile_stale_precheck_runs()
+    reconcile_stale_precheck_v2()
+
+
+# ── ADR-0026 V2: stale PRECHECK recovery (admission queue) ────────────────────
+
+MAX_ADMISSION_REQUEUE_ATTEMPTS = int(os.getenv("MAX_ADMISSION_REQUEUE_ATTEMPTS", "3"))
+ADMISSION_REQUEUE_BACKOFF_SECONDS = int(os.getenv("ADMISSION_REQUEUE_BACKOFF_SECONDS", "60"))
+
+
+def reconcile_stale_precheck_v2(db: Session | None = None) -> dict[str, int]:
+    """Recover PlanRuns stuck in PRECHECK (pump/SAQ/backend died mid-admission).
+
+    Priority is QUEUED recovery (invariant ④ — admission competition and
+    infrastructure loss are retryable scheduling outcomes); only after
+    MAX_ADMISSION_REQUEUE_ATTEMPTS consecutive stale PRECHECKs does the run
+    fail. With the feature flag off no PRECHECK rows exist, so this scan is a
+    single indexed no-op query per tick.
+
+    Notes:
+    - ``enqueued_at`` is preserved on requeue — aging keeps its original basis.
+    - ``next_admission_at`` gets a backoff so a crash-looping pump does not
+      hot-spin one run.
+    """
+    from datetime import timedelta
+
+    own_session = db is None
+    if own_session:
+        db = SessionLocal()
+
+    try:
+        summary: dict[str, int] = {"checked": 0, "requeued": 0, "failed": 0}
+        now = _utc_now()
+        stale_deadline = now - timedelta(seconds=PRECHECK_ACTIVE_STALE_SECONDS)
+
+        runs = (
+            db.query(PlanRun)
+            .filter(
+                PlanRun.status == PlanRunStatus.PRECHECK.value,
+                PlanRun.precheck_started_at.isnot(None),
+                PlanRun.precheck_started_at < stale_deadline,
+            )
+            .all()
+        )
+
+        for pr in runs:
+            summary["checked"] += 1
+            run_ctx = dict(pr.run_context or {})
+            attempts = int(run_ctx.get("admission_requeue_attempts") or 0)
+
+            if attempts >= MAX_ADMISSION_REQUEUE_ATTEMPTS:
+                PlanRunStateMachine.transition(
+                    pr, PlanRunStatus.FAILED, reason="admission_requeue_exhausted",
+                )
+                pr.ended_at = now
+                pr.result_summary = {
+                    "precheck_failed": True,
+                    "reason": "admission_requeue_exhausted",
+                    "attempts": attempts,
+                }
+                pr.run_context = run_ctx
+                flag_modified(pr, "run_context")
+                record_audit(
+                    db,
+                    action="plan_admission_failed",
+                    resource_type="plan_run",
+                    resource_id=pr.id,
+                    details={"reason": "admission_requeue_exhausted", "attempts": attempts},
+                    username="system",
+                )
+                db.commit()
+                summary["failed"] += 1
+                logger.warning(
+                    "admission_reaper_failed plan_run=%d attempts=%d", pr.id, attempts,
+                )
+                continue
+
+            PlanRunStateMachine.transition(
+                pr, PlanRunStatus.QUEUED, reason="precheck_stale_requeue",
+            )
+            pr.queue_reason = "PRECHECK_STALE"
+            pr.next_admission_at = now + timedelta(
+                seconds=ADMISSION_REQUEUE_BACKOFF_SECONDS * (attempts + 1)
+            )
+            pr.admission_attempt_id = None
+            pr.precheck_started_at = None
+            if pr.enqueued_at is None:
+                pr.enqueued_at = now
+            run_ctx["admission_requeue_attempts"] = attempts + 1
+            pr.run_context = run_ctx
+            flag_modified(pr, "run_context")
+            record_audit(
+                db,
+                action="plan_admission_requeued",
+                resource_type="plan_run",
+                resource_id=pr.id,
+                details={
+                    "reason": "precheck_stale",
+                    "attempt": attempts + 1,
+                    "next_admission_at": pr.next_admission_at.isoformat(),
+                },
+                username="system",
+            )
+            db.commit()
+            summary["requeued"] += 1
+            logger.warning(
+                "admission_reaper_requeued plan_run=%d attempt=%d", pr.id, attempts + 1,
+            )
+
+        return summary
+    finally:
+        if own_session:
+            db.close()

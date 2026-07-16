@@ -45,14 +45,27 @@ class JobStateMachine:
 # PlanRun 无 status_reason/updated_at 列(与 JobInstance 不同),transition() 的
 # reason 仅用于 debug 日志留痕,不落库。
 PLAN_RUN_VALID_TRANSITIONS: dict[PlanRunStatus, set[PlanRunStatus]] = {
+    # ── ADR-0026 admission queue(feature flag 控制,P1 step 2 起 schema 就绪)──
+    # QUEUED 重新排队(竞争回队/退避)只更新排队字段,不走状态机自环。
+    PlanRunStatus.QUEUED: {
+        PlanRunStatus.PRECHECK,   # queue pump 取得所有权,进入准入预检
+        PlanRunStatus.FAILED,     # abort / 不可重试错误(配置失效等)
+    },
+    PlanRunStatus.PRECHECK: {
+        PlanRunStatus.QUEUED,     # 准入竞争失败回队 / reaper stale recovery(不变量④)
+        PlanRunStatus.RUNNING,    # admission transaction 提交,全部 Job 已物化
+        PlanRunStatus.FAILED,     # abort / 不可重试错误 / 重试次数耗尽
+    },
     PlanRunStatus.RUNNING: {
         PlanRunStatus.SUCCESS,
         PlanRunStatus.PARTIAL_SUCCESS,
         PlanRunStatus.FAILED,
     },
-    # 手动 retry_plan_run_dispatch:precheck/dispatch 失败后允许重置回 RUNNING
-    # 重新走一遍 dispatch gate(见 precheck/runner.py::retry_plan_run_dispatch)。
-    PlanRunStatus.FAILED: {PlanRunStatus.RUNNING},
+    # 迁移期双轨(ADR-0026 评审口径):
+    #   FAILED → RUNNING  legacy 人工重试(flag=0,precheck/runner.py retry 直建 RUNNING)
+    #   FAILED → QUEUED   V2 人工重试(flag=1,回准入队列走 pump)
+    # legacy 派发路径下线后移除 FAILED → RUNNING。
+    PlanRunStatus.FAILED: {PlanRunStatus.RUNNING, PlanRunStatus.QUEUED},
     PlanRunStatus.SUCCESS:         set(),
     PlanRunStatus.PARTIAL_SUCCESS: set(),
     PlanRunStatus.DEGRADED:        set(),

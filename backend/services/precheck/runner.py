@@ -360,6 +360,63 @@ def retry_plan_run_dispatch(
             f"plan run not eligible for dispatch retry (status={pr.status})"
         )
 
+    # ── ADR-0026 V2 retry (flag=1 AND queue pump ready): FAILED → QUEUED ────
+    # The run re-enters the admission queue instead of re-running the legacy
+    # SAQ gate; the pump owns admission from here. Unreachable until the pump
+    # registers (backend.core.admission_queue gate), so flag=0 behavior below
+    # is byte-for-byte the legacy path.
+    from backend.core.admission_queue import admission_queue_enabled
+
+    if was_failed and admission_queue_enabled():
+        now = datetime.now(timezone.utc)
+        PlanRunStateMachine.transition(pr, PlanRunStatus.QUEUED, reason="dispatch_retry_v2")
+        retry_history = list(run_ctx.get("dispatch_attempt_history") or [])
+        retry_history.append({
+            "at": now.isoformat(),
+            "triggered_by": triggered_by,
+            "result_summary": summary,
+            "precheck": precheck,
+            "dispatch_state": dispatch_state,
+            "mode": "admission_queue",
+        })
+        run_ctx["dispatch_attempt_history"] = retry_history
+        pr.ended_at = None
+        pr.result_summary = None
+        pr.queue_reason = None
+        pr.next_admission_at = None
+        pr.admission_attempt_id = None
+        pr.precheck_started_at = None
+        # Aging basis: first QUEUED entry. started_at stays untouched here —
+        # the admission transaction resets it when the run actually starts
+        # (queue wait must not count as execution time).
+        if pr.enqueued_at is None:
+            pr.enqueued_at = now
+        pr.run_context = run_ctx
+        flag_modified(pr, "run_context")
+        record_audit(
+            db,
+            action="plan_dispatch_retry_requested",
+            resource_type="plan_run",
+            resource_id=run_id,
+            details={
+                "triggered_by": triggered_by,
+                "attempt": len(retry_history),
+                "previous_result": summary,
+                "mode": "admission_queue",
+            },
+            username=triggered_by,
+        )
+        db.commit()
+        logger.info(
+            "plan_run_dispatch_retry_queued plan_run=%d triggered_by=%s",
+            run_id, triggered_by,
+        )
+        return {
+            "plan_run_id": run_id,
+            "status": PlanRunStatus.QUEUED.value,
+            "dispatch_state": None,
+        }
+
     if was_failed:
         PlanRunStateMachine.transition(pr, PlanRunStatus.RUNNING, reason="dispatch_retry")
     # else: pr.status is already RUNNING (precheck phase failed but the

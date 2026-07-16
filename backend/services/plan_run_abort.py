@@ -113,6 +113,65 @@ def abort_plan_run(
         )
 
     run_ctx = dict(pr.run_context or {})
+
+    # ── ADR-0026: QUEUED / PRECHECK abort — no jobs exist (invariant ①),
+    # so there is nothing to recycle: transition straight to FAILED.
+    # Unreachable with the feature flag off (nothing produces these states).
+    if pr.status in (PlanRunStatus.QUEUED.value, PlanRunStatus.PRECHECK.value):
+        now = datetime.now(timezone.utc)
+        stray_jobs = (
+            db.query(JobInstance.id)
+            .filter(JobInstance.plan_run_id == plan_run_id)
+            .first()
+        )
+        if stray_jobs is not None:
+            # Invariant ① violated — do NOT silently terminalize over live
+            # jobs; surface loudly and fall through to the standard path.
+            logger.error(
+                "abort_queued_plan_run_has_jobs plan_run=%d status=%s — "
+                "invariant ① violated, falling back to standard abort",
+                plan_run_id, pr.status,
+            )
+        else:
+            phase = "queued" if pr.status == PlanRunStatus.QUEUED.value else "precheck"
+            run_ctx["abort_requested"] = {
+                "at": now.isoformat(),
+                "reason": reason,
+                "triggered_by": triggered_by,
+                "requested_job_ids": [],
+                "acknowledged_job_ids": [],
+            }
+            PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason=reason)
+            pr.ended_at = now
+            pr.result_summary = {
+                "aborted": True,
+                "reason": reason,
+                "phase": phase,
+                "total": 0,
+            }
+            pr.run_context = run_ctx
+            flag_modified(pr, "run_context")
+            record_audit(
+                db,
+                action=audit_action,
+                resource_type="plan_run",
+                resource_id=plan_run_id,
+                details={"reason": reason, "phase": phase},
+                user_id=audit_user_id,
+                username=audit_username or triggered_by,
+            )
+            db.commit()
+            logger.info(
+                "plan_run_abort_admission_queue plan_run=%d phase=%s", plan_run_id, phase,
+            )
+            return {
+                "plan_run_id": plan_run_id,
+                "status": PlanRunStatus.FAILED.value,
+                "aborted_jobs": [],
+                "released_leases": 0,
+                "phase": phase,
+            }
+
     precheck = run_ctx.get("precheck") or None
 
     # Detect "still in dispatch gate, no jobs yet".
