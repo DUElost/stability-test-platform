@@ -74,6 +74,7 @@
 | [ADR-0023](./ADR-0023-script-traceability.md) | 脚本溯源与 sha256 契约 | Accepted | P1 | M3 | 已实现 |
 | [ADR-0024](./ADR-0024-browser-session-security-hardening.md) | 浏览器 Web 会话安全化（HttpOnly Cookie + CSRF + refresh 黑名单 + 可观测） | Accepted | P0 | M3.2 | 已实现（2026-05-21） |
 | [ADR-0025](./ADR-0025-phase4-architecture-alignment.md) | Phase 4 架构对齐（方案 C：存储三级 + Agent 归档闭环） | Accepted | P2 | M4 | 实施中（Sprint 2–4，见 [DOC-MAP](../DOC-MAP.md)） |
+| [ADR-0026](./ADR-0026-plan-execution-scaling.md) | 大规模化测试计划执行架构（PlanRun 准入队列 + 四层调度 + 控制面减负） | Accepted | P0 | M5（待定） | 预扩展/重构（P0 止血已落地 `64608a9`：批量续租 CAS + B4 双口径校验与物化兜底；2026-07-16 批准，P1 按 schema→状态机/flag→pump→Agent scheduler 顺序推进） |
 
 ## Proposed 里程碑看板（2026 上半年）
 
@@ -83,6 +84,7 @@
 | M2 | 2026-04-15 | ADR-0010, ADR-0011, ADR-0013, ADR-0014, ADR-0016, ADR-0018 |
 | M3 | 2026-05-15 | ADR-0012（第 2-3 层）, ADR-0019, ADR-0020, ADR-0021–0023 |
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
+| M5 | 待定 | ADR-0026（60+ host / 1000+ device 规模化执行，P0 止血已先行落地） |
 
 ## 维护约定
 
