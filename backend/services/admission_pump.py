@@ -309,9 +309,13 @@ class _FatalAdmission(Exception):
 
 # push_mismatched_scripts error codes that are DETERMINISTIC config faults
 # (retrying can never help) rather than transient SSH/network errors. Matched
-# against the returned error string's prefix. Everything else (ssh_exception,
-# ssh_timeout, SFTP failures, …) is treated as transient → requeue.
-_FATAL_PUSH_ERROR_PREFIXES = (
+# against the returned error string. Two forms:
+#   - Simple prefix match for bare error codes (host_not_found, …)
+#   - Sub-string match inside partial_fail: pushed=…, failed=… wrappers
+#     (e.g. "partial_fail: pushed=0, failed=check:v2: cannot map nfs_path")
+# Everything else (ssh_exception, ssh_timeout, SFTP failures, …) is treated
+# as transient → requeue.
+_FATAL_PUSH_ERROR_SUBSTRINGS = (
     "host_not_found",
     "host_missing_ip",
     "no_ssh_credentials",
@@ -322,7 +326,9 @@ _FATAL_PUSH_ERROR_PREFIXES = (
 
 
 def _is_fatal_push_error(err: Optional[str]) -> bool:
-    return bool(err) and err.startswith(_FATAL_PUSH_ERROR_PREFIXES)
+    return bool(err) and any(
+        substr in err for substr in _FATAL_PUSH_ERROR_SUBSTRINGS
+    )
 
 
 async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:

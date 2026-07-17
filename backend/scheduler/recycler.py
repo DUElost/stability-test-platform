@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from sqlalchemy import DateTime, Integer, case, cast, exists, func, literal, or_, select, tuple_, update
+from sqlalchemy import DateTime, Integer, and_, case, cast, exists, func, literal, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import aliased
 
@@ -205,6 +205,14 @@ def _collect_patrol_stall_candidates_py(db, now: datetime) -> list[tuple[JobInst
 
     stall_list: list[tuple[float, JobInstance, int, float]] = []
     for job in candidates:
+        # ADR-0026 §3 (Step 5a.1): WAITING_EXECUTION_SLOT / WAITING_BARRIER are
+        # legally idle and must never be killed by patrol stall (invariant ②).
+        # Only PATROL_SLEEP and legacy (NULL) execution_state are candidates.
+        if (
+            job.execution_state is not None
+            and job.execution_state not in ("PATROL_SLEEP",)
+        ):
+            continue
         pipeline_def = job.pipeline_def if isinstance(job.pipeline_def, dict) else _safe_json_loads(job.pipeline_def)
         patrol = (pipeline_def.get("lifecycle") or {}).get("patrol")
         if not isinstance(patrol, dict):
@@ -290,6 +298,15 @@ def _build_patrol_stall_candidates_stmt(now: datetime):
             interval_expr > 0,
             anchor_expr.isnot(None),
             overdue_expr > 0,
+            # ADR-0026 §3 (Step 5a.1): patrol stall only applies to PATROL_SLEEP
+            # and legacy (NULL execution_state, pre-ADR agents); WAITING_* and
+            # WAITING_BARRIER are legally idle (invariant ②, operation not yet
+            # started or waiting at a barrier) and must never be killed by
+            # patrol stall — they are guarded by the per-state running clock.
+            or_(
+                JobInstance.execution_state.is_(None),        # legacy agent
+                JobInstance.execution_state == "PATROL_SLEEP",
+            ),
         )
         .order_by(overdue_expr.desc(), JobInstance.id.asc())
         .limit(PATROL_STALL_BATCH_LIMIT)
@@ -704,6 +721,54 @@ def recycle_once() -> None:
         PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     )
     running_prefetch_deadline = now - timedelta(seconds=min_running_timeout)
+    coordinator_prefetch_deadline = now - timedelta(
+        seconds=COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
+    )
+    # ── Step 5a.1 (reviewer): candidate SELECTION must use the same per-state
+    # clock as the verdict. Filtering on updated_at alone would hide WAITING /
+    # PATROL_SLEEP jobs whose LeaseRenewer keeps updated_at fresh while their
+    # coordinator is dead — the coordinator clock would never get a chance to
+    # run. Clock per branch (Python-side _running_liveness_anchor re-derives
+    # the precise anchor for the final verdict):
+    #   NULL / unknown execution_state → updated_at (legacy, byte-for-byte)
+    #   EXECUTING_STEP                → last_execution_heartbeat_at
+    #                                   (fallback updated_at when unset)
+    #   WAITING_* / PATROL_SLEEP     → PlanRunHost.coordinator_heartbeat_at
+    #                                   (fallback updated_at when missing)
+    from backend.models.plan_run import PlanRunHost
+
+    _known_states = _WAITING_EXECUTION_STATES | {"EXECUTING_STEP"}
+    stale_clock_filter = or_(
+        # legacy agents / unknown values → old rule
+        and_(
+            or_(
+                JobInstance.execution_state.is_(None),
+                JobInstance.execution_state.notin_(list(_known_states)),
+            ),
+            JobInstance.updated_at < running_prefetch_deadline,
+        ),
+        # executor clock
+        and_(
+            JobInstance.execution_state == "EXECUTING_STEP",
+            func.coalesce(
+                JobInstance.last_execution_heartbeat_at, JobInstance.updated_at
+            ) < running_prefetch_deadline,
+        ),
+        # coordinator clock (per-host); no coordinator signal yet → legacy
+        and_(
+            JobInstance.execution_state.in_(list(_WAITING_EXECUTION_STATES)),
+            or_(
+                and_(
+                    PlanRunHost.coordinator_heartbeat_at.isnot(None),
+                    PlanRunHost.coordinator_heartbeat_at < coordinator_prefetch_deadline,
+                ),
+                and_(
+                    PlanRunHost.coordinator_heartbeat_at.is_(None),
+                    JobInstance.updated_at < running_prefetch_deadline,
+                ),
+            ),
+        ),
+    )
     # Keyset pagination (id > last_id), NOT re-querying the same window: jobs
     # legally skipped by their sub-state clock (e.g. WAITING with a fresh
     # coordinator heartbeat but stale updated_at) would otherwise reappear in
@@ -714,9 +779,16 @@ def recycle_once() -> None:
         with SessionLocal() as db:
             batch = (
                 db.query(JobInstance)
+                .outerjoin(
+                    PlanRunHost,
+                    and_(
+                        PlanRunHost.plan_run_id == JobInstance.plan_run_id,
+                        PlanRunHost.host_id == JobInstance.host_id,
+                    ),
+                )
                 .filter(
                     JobInstance.status == JobStatus.RUNNING.value,
-                    JobInstance.updated_at < running_prefetch_deadline,
+                    stale_clock_filter,
                     JobInstance.id > last_running_id,
                 )
                 .order_by(JobInstance.id)

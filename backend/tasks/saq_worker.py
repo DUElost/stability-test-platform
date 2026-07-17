@@ -147,6 +147,16 @@ async def start_saq_worker() -> None:
     )
     _worker_task = asyncio.create_task(_worker.start(), name="saq-worker")
     _worker_task.add_done_callback(_on_worker_task_done)
+    # ADR-0026 Step 5a.1: SAQ worker is the admission executor — mark the pump
+    # ready every time this worker starts (first boot + health-supervisor
+    # restart). Idempotent with the main.py lifespan call; the done-callback
+    # above unmarks it on exit. This is the SINGLE lifecycle contract: a live
+    # SAQ worker is the admission pump's readiness signal.
+    try:
+        from backend.core.admission_queue import mark_queue_pump_ready
+        mark_queue_pump_ready(True)
+    except Exception:
+        logger.debug("pump_ready_mark_failed", exc_info=True)
     logger.info(
         "saq_worker_started concurrency=%d queue=%s",
         SAQ_CONCURRENCY,

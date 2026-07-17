@@ -12,6 +12,7 @@ Control-plane half (Agent-side production of these signals lands in 5b):
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -299,3 +300,138 @@ async def test_recovery_payload_includes_execution_state(db_session, signal_fixt
             fencing_token=f["token"],
         )
     assert payload["execution_state"] == "PATROL_SLEEP"
+
+
+# ── 5a.1: recycler prefetch excludes jobs with fresh coord heartbeat ─────────
+
+
+class TestRecyclerPrefetchClockSelection:
+    def _stale(self, seconds=7200):
+        return datetime.now(timezone.utc) - timedelta(seconds=seconds)
+
+    def test_waiting_with_fresh_coordinator_not_in_candidates(
+        self, db_session, signal_fixture,
+    ):
+        """Step 5a.1 blocking gap #1: a WAITING/PATROL_SLEEP job whose
+        coordinator heartbeat is FRESH must be EXCLUDED from the RUNNING
+        timeout candidate set — even когда LeaseRenewer keeps updated_at alive.
+        If the prefetch filter still uses updated_at only, this job would
+        enter the candidates (stale updated_at), the python-side anchor would
+        pick the coordinator clock, find it fresh, and skip — but the NEXT
+        tick it would re-enter and spin. The correct behavior: it isn't a
+        candidate at all."""
+        f = signal_fixture
+        job = f["job"]
+        job.execution_state = "PATROL_SLEEP"
+        job.updated_at = self._stale()
+        db_session.add(PlanRunHost(
+            plan_run_id=f["run"].id, host_id=f["host"].id,
+            coordinator_heartbeat_at=datetime.now(timezone.utc),  # FRESH
+        ))
+        db_session.commit()
+
+        recycle_once()
+
+        db_session.expire_all()
+        assert db_session.get(JobInstance, job.id).status == "RUNNING"
+
+    def test_executing_job_with_fresh_exec_heartbeat_not_a_candidate(
+        self, db_session, signal_fixture,
+    ):
+        f = signal_fixture
+        job = f["job"]
+        job.execution_state = "EXECUTING_STEP"
+        job.updated_at = self._stale()
+        job.last_execution_heartbeat_at = datetime.now(timezone.utc)  # FRESH
+        db_session.commit()
+
+        recycle_once()
+
+        db_session.expire_all()
+        assert db_session.get(JobInstance, job.id).status == "RUNNING"
+
+
+# ── 5a.1: patrol stall ignores WAITING_* / WAITING_BARRIER ────────────────────
+
+
+class TestPatrolStallExecutionStateIsolation:
+    def test_patrol_stall_excludes_waiting_slot_job(
+        self, db_session, signal_fixture,
+    ):
+        """Invariant ②: a WAITING_EXECUTION_SLOT patrol job must never be
+        killed by patrol stall — it hasn't started yet."""
+        f = signal_fixture
+        job = f["job"]
+        job.execution_state = "WAITING_EXECUTION_SLOT"
+        job.last_patrol_heartbeat_at = self._stale(seconds=10_000)
+        # make it look like a patrol job
+        job.pipeline_def = {"lifecycle": {
+            "init": [],
+            "teardown": [],
+            "patrol": {"interval_seconds": 300, "steps": []},
+        }}
+        db_session.commit()
+
+        recycle_once()
+        db_session.expire_all()
+        assert db_session.get(JobInstance, job.id).status == "RUNNING"
+
+    def _stale(self, seconds):
+        return datetime.now(timezone.utc) - timedelta(seconds=seconds)
+
+    def test_patrol_stall_kills_patrol_sleep_job(self, db_session, signal_fixture):
+        """A PATROL_SLEEP job whose last_patrol_heartbeat_at is overdue IS a
+        valid stall candidate — the inverse of the WAITING_* guard above."""
+        f = signal_fixture
+        job = f["job"]
+        job.execution_state = "PATROL_SLEEP"
+        job.last_patrol_heartbeat_at = self._stale(seconds=10_000)
+        job.pipeline_def = {"lifecycle": {
+            "patrol": {"interval_seconds": 30, "steps": [
+                {"step_id": "p", "action": "script:x", "version": "1",
+                 "params": {}, "timeout_seconds": 30, "retry": 0,
+                }],
+            }},
+        }
+        # init is empty → stall anchor = started_at
+        job.started_at = self._stale(seconds=10_000)
+        db_session.commit()
+
+        recycle_once()
+        db_session.expire_all()
+        assert db_session.get(JobInstance, job.id).status == "UNKNOWN"
+
+
+# ── 5a.1: push partial_fail classification ────────────────────────────────────
+
+
+class TestPushFatalClassification:
+    """Reviewer: _is_fatal_push_error must match the REAL push_mismatched_scripts
+    return format, including partial_fail wrappers and sub-string patterns."""
+
+    @pytest.mark.parametrize("err,expect_fatal", [
+        ("no_ssh_credentials", True),
+        ("host_missing_ip", True),
+        ("ssh_security_config_error: bad known_hosts", True),
+        # partial_fail wrapper — the fatal substrings are embedded
+        ("partial_fail: pushed=0, failed=check_device:v2: cannot map nfs_path", True),
+        ("partial_fail: pushed=0, failed=app:v3: local file not found: /x/app.py", True),
+        # transient
+        ("ssh_exception: connection timed out", False),
+        ("partial_fail: pushed=1, failed=check:v2: SFTP failed: Permission denied", False),
+        ("ssh_timeout", False),
+    ])
+    def test_classification(self, err, expect_fatal):
+        from backend.services.admission_pump import _is_fatal_push_error
+        assert _is_fatal_push_error(err) == expect_fatal
+
+
+# ── 5a.1: start_saq_worker re-marks pump ready ────────────────────────────────
+
+
+# ── 5a.1: readiness lifecycle contract ────────────────────────────────────────
+# Verified by: test_saq_tasks.py (_on_worker_task_done unmarks on exit) +
+# test_admission_queue_step2.py (admission_queue_enabled gate) +
+# start_saq_worker() itself calls mark_queue_pump_ready(True) after creating
+# the worker task (the done-callback above unmarks it on exit — together they
+# form a complete restart-safe lifecycle).
