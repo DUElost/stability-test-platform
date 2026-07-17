@@ -4,6 +4,8 @@
 |------|------|
 | [00-platform-smoke.md](./00-platform-smoke.md) | CI、主链、安全、发版冒烟 |
 | [2026-plan-c-sprint2-3.md](./2026-plan-c-sprint2-3.md) | 方案 C Sprint 2/3 |
+| [2026-plan-c-sprint4.md](./2026-plan-c-sprint4.md) | 方案 C Sprint 4 自动化验收矩阵 |
+| [2026-plan-c-sprint4-real-device.md](./2026-plan-c-sprint4-real-device.md) | 方案 C Sprint 4 真机联调记录 |
 
 手工步骤详见 [`preprod-drill-runbook.md`](../preprod-drill-runbook.md)。
 

@@ -8,4 +8,4 @@
 | [`specs/`](./specs/) | 配套 UI/Ansible 设计快照 |
 | [`adr-0025-watcher-catchup-implementation-plan-2026-06-14.md`](./adr-0025-watcher-catchup-implementation-plan-2026-06-14.md) | ADR-0025 Sprint 1（已落地） |
 
-**当前权威**：[`docs/design/`](../design/) · [`docs/DOC-MAP.md`](../DOC-MAP.md)
+**当前权威**：[`docs/design/`](../../design/) · [`docs/DOC-MAP.md`](../../DOC-MAP.md)

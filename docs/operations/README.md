@@ -48,7 +48,8 @@ deploy/
 
 | 文档 | 用途 |
 |------|------|
-| [`host-connectivity-verification.md`](../host-connectivity-verification.md) | SSH、挂载验证 |
+| [`wsl-linux-agent-setup.md`](../wsl-linux-agent-setup.md) | WSL Agent、ADB 与连通配置 |
+| [`archive/host-connectivity-verification.md`](../archive/host-connectivity-verification.md) | 2026-01 SSH、挂载验证历史记录 |
 
 ---
 

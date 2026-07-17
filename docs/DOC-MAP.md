@@ -1,6 +1,6 @@
 # 文档地图（Documentation Map）
 
-> **最后更新**：2026-07-15  
+> **最后更新**：2026-07-17  
 > **文档中心**：[`README.md`](./README.md)  
 > **待删/归档清单**：[`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md)
 
@@ -68,6 +68,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`05-data-model.md`](./design/05-data-model.md) | ORM 与表关系 |
 | [`06-realtime-and-background.md`](./design/06-realtime-and-background.md) | SocketIO、APScheduler、SAQ |
 | [`2026-plan-c-storage-and-access.md`](./design/2026-plan-c-storage-and-access.md) | 方案 C 存储与访问 |
+| [`2026-07-plan-execute-page-improvements.md`](./design/2026-07-plan-execute-page-improvements.md) | Plan 执行页改造（分页拉全、复跑、容量/占用可见性） |
 
 ---
 
@@ -90,7 +91,9 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`prd/00-platform-overview.md`](./prd/00-platform-overview.md) | 平台级 PRD |
 | [`prd/2026-plan-c-storage-and-archive.md`](./prd/2026-plan-c-storage-and-archive.md) | 方案 C PRD |
 | [`acceptance/00-platform-smoke.md`](./acceptance/00-platform-smoke.md) | 平台冒烟与 CI 映射 |
-| [`acceptance/2026-plan-c-sprint2-3.md`](./acceptance/2026-plan-c-sprint2-3.md) | 方案 C 验收 |
+| [`acceptance/2026-plan-c-sprint2-3.md`](./acceptance/2026-plan-c-sprint2-3.md) | 方案 C Sprint 2/3 验收 |
+| [`acceptance/2026-plan-c-sprint4.md`](./acceptance/2026-plan-c-sprint4.md) | 方案 C Sprint 4 自动化验收矩阵 |
+| [`acceptance/2026-plan-c-sprint4-real-device.md`](./acceptance/2026-plan-c-sprint4-real-device.md) | 方案 C Sprint 4 真机联调记录 |
 
 ---
 

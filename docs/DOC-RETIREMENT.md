@@ -1,6 +1,6 @@
 # 文档退役与归档清单
 
-> **最后更新**：2026-06-21（第三批次）  
+> **最后更新**：2026-07-17（第四批次）  
 > 目的：标记**已完成迁移**或**一次性**文档，便于后续删除或移入 `docs/archive/`，避免与权威文档双轨。
 
 **操作前**：确认内容已并入 `docs/design/`、`docs/acceptance/`、`CLAUDE.md` 摘要或 ADR。
@@ -44,12 +44,12 @@
 
 ---
 
-## 3. 评估/健康度快照 — 已移 `docs/archive/assessments/`（批次一）
+## 3. 评估/健康度快照 — 已移 `docs/archive/assessments/`
 
 | 路径 | 说明 |
 |------|------|
-| ~~`docs/main-chain-*`~~、`project-health-*`、`production-readiness-*` | → `archive/assessments/` |
-| `docs/architecture-five-dimensional-assessment-2026-06.md` | **暂保留** — ADR-0025 背景 |
+| ~~`docs/main-chain-*`~~、`project-health-*`、`production-readiness-*` | 2026-05 快照 → `archive/assessments/` |
+| ~~`docs/architecture-five-dimensional-assessment-2026-06.md`~~ | 2026-06 快照 → `archive/assessments/` |
 
 ---
 
@@ -78,25 +78,11 @@
 | `docs/archive/openspec/` | OpenSpec 历史 spec（根 `openspec/` 仅重定向 stub） |
 | `docs/archive/prototypes/` | UI 原型 HTML/PNG |
 | `docs/archive/assessments-adr0018/` | ADR-0018 实施评估 |
+| `docs/archive/ops/` | 一次性上线审计资产 |
 
 ---
 
-## 6. 当前权威文档（勿删）
-
-- `docs/README.md`、`DOC-MAP.md`、本文件  
-- `docs/adr/`（Accepted ADR）  
-- `docs/prd/`、`docs/design/`、`docs/acceptance/`  
-- `docs/development/`、`docs/operations/`  
-- `docs/project-vision.md`  
-- `docs/production-minimum-deployment-checklist.md`、`preprod-drill-runbook.md`  
-- `docs/linux-agent-ansible-runbook.md`、`wsl-linux-agent-setup.md`、`host-connectivity-verification.md`  
-- `docs/architecture/non-adr20-followups.md`  
-- `backend/agent/DEPLOY.md`  
-- 根 `README.md`、`AGENTS.md`、`CLAUDE.md`
-
----
-
-## 7. OpenSpec / UI 原型 — 已移 archive（2026-06-21 批次三）
+## 6. OpenSpec / UI 原型 — 已移 archive（2026-06-21 批次三）
 
 | 路径 | 说明 |
 |------|------|
@@ -104,11 +90,40 @@
 | ~~`docs/prototypes/`~~、~~`docs/design/*.html`~~ → `archive/prototypes/` | UI 原型，非规范 |
 | ~~`docs/archive/implementation-plan-adr0018*.md`~~ → `archive/assessments-adr0018/` | 仅考古 |
 
-**第三批已全部完成**；后续无计划中的文档退役批次。
+**第三批已全部完成**；根 `openspec/` 仅保留重定向 stub。
 
 ---
 
-## 8. 退役流程
+## 7. 2026-07-17 第四批归档
+
+| 路径 | 说明 | 替代 |
+|------|------|------|
+| ~~`docs/superpowers/plans/2026-06-27-frontend-ux-redesign.md`~~ → `archive/sprints/plans/` | 未落地 UX 计划快照 | `design/03-frontend.md`、`design/2026-07-plan-execute-page-improvements.md` |
+| ~~`docs/superpowers/specs/2026-06-27-frontend-ux-redesign-design.md`~~ → `archive/sprints/specs/` | 配套设计快照 | `design/03-frontend.md` |
+| ~~`docs/superpowers/plans/2026-06-23-sprint4-1-p1-hardening.md`~~ → `archive/sprints/plans/` | Sprint 4 P1 加固任务单 | `design/06-realtime-and-background.md`、`acceptance/2026-plan-c-sprint4.md` |
+| ~~`docs/ops/adr-0023-c1-audit.sql`~~、~~`docs/ops/audit-results/*`~~ → `archive/ops/` | 一次性上线审计资产 | `operations/README.md` |
+| ~~`docs/host-connectivity-verification.md`~~ → `archive/` | 2026-01 主机连通性实施记录 | `operations/README.md`、`wsl-linux-agent-setup.md` |
+| `docs/stp-spec/CLAUDE.md` | 已是极简重定向入口，暂保留 | `archive/stp-spec-pre-adr0020/` |
+| `docs/architecture/non-adr20-followups.md` | 仍有未完成路由拆分债务，保留并刷新措辞 | GitHub Issues / 代码 |
+
+---
+
+## 8. 当前权威文档（勿删）
+
+- `docs/README.md`、`DOC-MAP.md`、本文件
+- `docs/adr/`（Accepted ADR）
+- `docs/prd/`、`docs/design/`、`docs/acceptance/`
+- `docs/development/`、`docs/operations/`
+- `docs/project-vision.md`
+- `docs/production-minimum-deployment-checklist.md`、`preprod-drill-runbook.md`
+- `docs/linux-agent-ansible-runbook.md`、`wsl-linux-agent-setup.md`
+- `docs/architecture/non-adr20-followups.md`
+- `backend/agent/DEPLOY.md`
+- 根 `README.md`、`AGENTS.md`、`CLAUDE.md`
+
+---
+
+## 9. 退役流程
 
 1. 在 PR 描述中引用本表  
 2. 删除或 `git mv` 到 `docs/archive/`  
