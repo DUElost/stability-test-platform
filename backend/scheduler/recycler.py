@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from sqlalchemy import DateTime, Integer, case, cast, exists, func, literal, or_, select, update
+from sqlalchemy import DateTime, Integer, case, cast, exists, func, literal, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import aliased
 
@@ -56,6 +56,79 @@ ARTIFACT_RETENTION_DAYS = int(os.getenv("ARTIFACT_RETENTION_DAYS", "30"))
 
 # ADR-0022 D10: patrol-heartbeat stall detection
 PATROL_STALL_BATCH_LIMIT = int(os.getenv("PATROL_STALL_BATCH_LIMIT", "100"))
+
+# ── ADR-0026 §3 (Step 5a): per-execution_state timeout clocks ────────────────
+# WAITING_* / PATROL_SLEEP jobs are legally idle (invariant ②) — their
+# liveness is judged by the per-host Coordinator heartbeat, not by the
+# per-job execution heartbeat. Window is provisional (ADR 待定清单) until
+# stress tests calibrate it; must stay comfortably above the Agent
+# coordinator heartbeat cadence (lands in Step 5b).
+COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS = int(
+    os.getenv("COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS", "300")
+)
+
+_WAITING_EXECUTION_STATES = {
+    "WAITING_EXECUTION_SLOT",
+    "PATROL_SLEEP",
+    "WAITING_BARRIER",
+}
+
+
+def _coordinator_heartbeats(db, jobs) -> dict[tuple[int, str], "datetime | None"]:
+    """Prefetch PlanRunHost.coordinator_heartbeat_at for a recycler batch.
+
+    Keyed by (plan_run_id, host_id). Empty until Agent-side coordinators
+    (Step 5b) start reporting — callers must treat a missing/None value as
+    "no coordinator signal" and fall back to the legacy clock.
+    """
+    from backend.models.plan_run import PlanRunHost
+
+    keys = {
+        (job.plan_run_id, job.host_id)
+        for job in jobs
+        if job.plan_run_id is not None and job.host_id
+    }
+    if not keys:
+        return {}
+    rows = db.execute(
+        select(
+            PlanRunHost.plan_run_id,
+            PlanRunHost.host_id,
+            PlanRunHost.coordinator_heartbeat_at,
+        ).where(
+            tuple_(PlanRunHost.plan_run_id, PlanRunHost.host_id).in_(list(keys))
+        )
+    ).all()
+    return {
+        (row.plan_run_id, row.host_id): _aware_dt(row.coordinator_heartbeat_at)
+        for row in rows
+    }
+
+
+def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", int]:
+    """Select the liveness clock for a RUNNING job per ADR-0026 §3.
+
+    Returns (anchor_datetime, timeout_seconds):
+      - EXECUTING_STEP + execution heartbeat present → per-job executor clock
+        (graded patrol/non-patrol window, unchanged).
+      - WAITING_EXECUTION_SLOT / PATROL_SLEEP / WAITING_BARRIER + a
+        coordinator heartbeat present → per-host coordinator clock (waiting
+        is legal, invariant ②; only a dead coordinator counts).
+      - Anything else (NULL execution_state — legacy agents, or signals not
+        yet reported) → legacy updated_at clock, byte-for-byte the old rule.
+    """
+    graded_timeout = running_heartbeat_timeout_seconds(job)
+
+    if job.execution_state == "EXECUTING_STEP":
+        exec_hb = _aware_dt(job.last_execution_heartbeat_at)
+        if exec_hb is not None:
+            return exec_hb, graded_timeout
+    elif job.execution_state in _WAITING_EXECUTION_STATES:
+        hb = coord_hb.get((job.plan_run_id, job.host_id))
+        if hb is not None:
+            return hb, COORDINATOR_HEARTBEAT_TIMEOUT_SECONDS
+
+    return _aware_dt(job.updated_at), graded_timeout
 
 
 
@@ -624,11 +697,19 @@ def recycle_once() -> None:
 
     # 2) RUNNING timeout → UNKNOWN (Phase 4c). Same batched approach.
     #    Uses graded per-job timeout when pipeline has an active patrol phase.
+    #    ADR-0026 §3 (Step 5a): per-sub-state clock selection — prefer the new
+    #    liveness signals, fall back to updated_at when absent (双写迁移期).
     min_running_timeout = min(
         RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
         PATROL_RUNNING_HEARTBEAT_TIMEOUT_SECONDS,
     )
     running_prefetch_deadline = now - timedelta(seconds=min_running_timeout)
+    # Keyset pagination (id > last_id), NOT re-querying the same window: jobs
+    # legally skipped by their sub-state clock (e.g. WAITING with a fresh
+    # coordinator heartbeat but stale updated_at) would otherwise reappear in
+    # every batch and spin this loop forever. Each candidate is visited at
+    # most once per recycle pass.
+    last_running_id = 0
     while True:
         with SessionLocal() as db:
             batch = (
@@ -636,6 +717,7 @@ def recycle_once() -> None:
                 .filter(
                     JobInstance.status == JobStatus.RUNNING.value,
                     JobInstance.updated_at < running_prefetch_deadline,
+                    JobInstance.id > last_running_id,
                 )
                 .order_by(JobInstance.id)
                 .limit(RECYCLER_BATCH_SIZE)
@@ -643,12 +725,12 @@ def recycle_once() -> None:
             )
             if not batch:
                 break
+            last_running_id = batch[-1].id
+            coord_hb = _coordinator_heartbeats(db, batch)
             for job in batch:
-                job_deadline = now - timedelta(
-                    seconds=running_heartbeat_timeout_seconds(job)
-                )
-                updated_at = _aware_dt(job.updated_at)
-                if updated_at is None or updated_at >= job_deadline:
+                anchor, timeout_seconds = _running_liveness_anchor(job, coord_hb)
+                job_deadline = now - timedelta(seconds=timeout_seconds)
+                if anchor is None or anchor >= job_deadline:
                     continue
                 try:
                     with db.begin_nested():

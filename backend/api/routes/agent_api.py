@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import case, func, or_, select, tuple_, update
+from sqlalchemy import bindparam, case, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.response import ApiResponse, err, ok
@@ -193,6 +193,10 @@ async def _build_recovery_job_payload(
         "pipeline_def": job.pipeline_def,
         "watcher_policy": watcher_policy,
         "fencing_token": fencing_token,
+        # ADR-0026 §3 (Step 5a): execution_state MUST ride in the frozen
+        # resume payload — without it a recovered PATROL_SLEEP job would be
+        # judged with the EXECUTING_STEP clock and vice versa.
+        "execution_state": job.execution_state,
     }
 
 
@@ -1228,6 +1232,26 @@ async def extend_job_lock(
 
 _LEASE_EXTEND_BATCH_MAX = int(os.getenv("AGENT_LEASE_EXTEND_BATCH_MAX", "200"))
 
+# ADR-0026 §3 execution_state sub-states (invariant ③). Anything else reported
+# by an Agent is ignored (column left untouched) — forward/backward tolerant.
+_VALID_EXECUTION_STATES = {
+    "WAITING_EXECUTION_SLOT",
+    "EXECUTING_STEP",
+    "PATROL_SLEEP",
+    "WAITING_BARRIER",
+}
+
+
+def _parse_progress_ts(raw: Any) -> Optional[datetime]:
+    """Parse progress_marker.last_progress_at (ISO8601) → aware UTC datetime."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return _as_utc(ts)
+
 
 class _ExtendBatchItemIn(BaseModel):
     job_id: int
@@ -1413,19 +1437,58 @@ async def extend_leases_batch(
             new_expires=new_expires,
         )
         if renewed_ids:
-            # Mirror the single endpoint: a renewal is also a RUNNING keepalive,
-            # so refresh job.updated_at to hold off the recycler heartbeat
-            # timeout. RUNNING guard: never bump the liveness anchor of a job
-            # that reached a terminal state after the lease CAS above.
-            await db.execute(
-                update(JobInstance)
-                .where(
-                    JobInstance.id.in_(renewed_ids),
-                    JobInstance.status == JobStatus.RUNNING.value,
+            # ADR-0026 invariant ③ (three independent signals), Step 5a:
+            # a confirmed renewal is simultaneously
+            #   - the legacy keepalive (updated_at — recycler fallback clock)
+            #   - executor-liveness proof (last_execution_heartbeat_at — the
+            #     request arrived from the live Agent process)
+            #   - optionally the reported execution_state sub-state and a
+            #     business-progress timestamp from progress_marker.
+            # RUNNING guard on every write: never bump liveness anchors of a
+            # job that reached a terminal state after the lease CAS above.
+            item_by_job = {it.job_id: it for it in items}
+            by_state: Dict[Optional[str], list[int]] = {}
+            for jid in renewed_ids:
+                reported = getattr(item_by_job.get(jid), "execution_state", None)
+                state_val = reported if reported in _VALID_EXECUTION_STATES else None
+                by_state.setdefault(state_val, []).append(jid)
+
+            for state_val, ids in by_state.items():
+                values: Dict[str, Any] = {
+                    "updated_at": now,
+                    "last_execution_heartbeat_at": now,
+                }
+                if state_val is not None:
+                    values["execution_state"] = state_val
+                await db.execute(
+                    update(JobInstance)
+                    .where(
+                        JobInstance.id.in_(ids),
+                        JobInstance.status == JobStatus.RUNNING.value,
+                    )
+                    .values(**values)
+                    .execution_options(synchronize_session=False)
                 )
-                .values(updated_at=now)
-                .execution_options(synchronize_session=False)
-            )
+
+            progress_rows = []
+            for jid in renewed_ids:
+                marker = getattr(item_by_job.get(jid), "progress_marker", None)
+                ts = _parse_progress_ts((marker or {}).get("last_progress_at"))
+                if ts is not None:
+                    progress_rows.append({"b_id": jid, "b_progress": ts})
+            if progress_rows:
+                # Core-table executemany (the ORM-entity form would engage
+                # "bulk UPDATE by primary key" and reject WHERE bindparams).
+                job_t = JobInstance.__table__
+                await db.execute(
+                    update(job_t)
+                    .where(
+                        job_t.c.id == bindparam("b_id"),
+                        job_t.c.status == JobStatus.RUNNING.value,
+                    )
+                    .values(last_progress_at=bindparam("b_progress")),
+                    progress_rows,
+                )
     await db.commit()
 
     results: List[_ExtendBatchItemOut] = []
