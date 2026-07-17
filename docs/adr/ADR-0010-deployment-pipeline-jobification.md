@@ -54,6 +54,6 @@
 - `backend/models/schemas.py`（通用 schema，与本 ADR 无单独部署作业模型）
 - ~~SSH 自动部署 OpenSpec 变更~~（OpenSpec 已整体归档；部署走 Plan/PlanStep）
 
-### 残留（2026-07-17 核验）
+### 残留清理（2026-07-17）
 
-- `backend/api/schemas/agent.py` 仍导出未使用的 `DeploymentCreate` / `DeploymentOut` / `DeploymentStatusOut`（仅 schema 定义 + `__init__` 再导出，无路由/服务引用）。属历史部署作业模型残骸，可在清理 PR 中删除，与本 ADR 已取代结论一致。
+- 已删除未使用的 `DeploymentCreate` / `DeploymentOut` / `DeploymentStatusOut`（原仅存在于 `backend/api/schemas/agent.py` 与 `__init__` 再导出，无路由/服务引用）。与本 ADR 已由 ADR-0020 取代的结论一致。
