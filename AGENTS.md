@@ -59,7 +59,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 
 ## Architecture
 
-- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — combined ASGI mount in `backend/main.py:122`.
+- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — combined ASGI mount in `backend/main.py:196`.
 - **Frontend pages** are `React.lazy()` loaded via `frontend/src/router/index.tsx`.
 - **API client** modules in `frontend/src/utils/api/` (`planRuns.ts`, `hosts.ts`, `plans.ts`, etc.).
 - **ADR-0020**: Plan/PlanStep replaced Workflow/TaskTemplate. No `plan.lifecycle` column — lifecycle composed from `PlanStep` rows + `patrol_interval_seconds`/`timeout_seconds` at dispatch time.

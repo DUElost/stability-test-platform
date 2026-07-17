@@ -23,7 +23,7 @@
 | 查产品范围 | [`prd/00-platform-overview.md`](./prd/00-platform-overview.md) |
 | 查架构决策 | [`adr/README.md`](./adr/README.md) |
 | 查上线清单 | [`operations/README.md`](./operations/README.md) |
-| 查运维百科（端点表、FAQ） | 根目录 [`CLAUDE.md`](../CLAUDE.md) |
+| 查架构不变量摘要 | 根目录 [`CLAUDE.md`](../CLAUDE.md) |
 | 查哪些旧文档可删除 | [`DOC-RETIREMENT.md`](./DOC-RETIREMENT.md) |
 
 ---

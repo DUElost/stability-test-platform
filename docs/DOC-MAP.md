@@ -49,7 +49,7 @@ operations/README.md → production-minimum-deployment-checklist.md
 | **验收** | [`acceptance/`](./acceptance/) | 可测通过标准 + 测试映射 |
 | **开发** | [`development/`](./development/) | 本地环境、**env 表**、测试约定 |
 | **运维** | [`operations/`](./operations/) + runbook | 部署、Agent 版本、联调、监控 |
-| **百科** | [`../CLAUDE.md`](../CLAUDE.md) | 端点表、FAQ、Changelog |
+| **不变量摘要** | [`../CLAUDE.md`](../CLAUDE.md) | 架构不变量、关键约定、状态机摘要 |
 | **Sprint 快照** | [`archive/sprints/`](./archive/sprints/) | 已归档一次性任务单 |
 | **跟踪** | GitHub Issues | 进行中、审查结论 |
 

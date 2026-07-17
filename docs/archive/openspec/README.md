@@ -18,4 +18,4 @@
 - `specs/` — 历史 spec 快照  
 - `changes/archive/` — 已归档变更提案  
 
-根目录 [`openspec/README.md`](../../../openspec/README.md) 为重定向 stub。
+根目录 `openspec/` 重定向 stub 已于 2026-07-17 删除；本目录为唯一留存。

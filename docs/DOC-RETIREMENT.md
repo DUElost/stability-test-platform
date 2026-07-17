@@ -75,7 +75,7 @@
 | `docs/archive/sprints/` | Sprint 任务快照 |
 | `docs/archive/migrations/` | Plan/dedup 设计快照 |
 | `docs/archive/plans/` | 专项计划（watcher-consolidate） |
-| `docs/archive/openspec/` | OpenSpec 历史 spec（根 `openspec/` 仅重定向 stub） |
+| `docs/archive/openspec/` | OpenSpec 历史 spec（根 stub 已于 2026-07-17 删除） |
 | `docs/archive/prototypes/` | UI 原型 HTML/PNG |
 | `docs/archive/assessments-adr0018/` | ADR-0018 实施评估 |
 | `docs/archive/ops/` | 一次性上线审计资产 |
@@ -86,11 +86,11 @@
 
 | 路径 | 说明 |
 |------|------|
-| ~~根 `openspec/`~~ → `archive/openspec/` | 根目录仅留 [`openspec/README.md`](../openspec/README.md) 重定向 |
+| ~~根 `openspec/`~~ → `archive/openspec/` | 内容已归档；根重定向 stub 已于 2026-07-17 删除 |
 | ~~`docs/prototypes/`~~、~~`docs/design/*.html`~~ → `archive/prototypes/` | UI 原型，非规范 |
 | ~~`docs/archive/implementation-plan-adr0018*.md`~~ → `archive/assessments-adr0018/` | 仅考古 |
 
-**第三批已全部完成**；根 `openspec/` 仅保留重定向 stub。
+**第三批已全部完成**；根 `openspec/` stub 已删除，仅保留 `docs/archive/openspec/`。
 
 ---
 
@@ -105,6 +105,7 @@
 | ~~`docs/host-connectivity-verification.md`~~ → `archive/` | 2026-01 主机连通性实施记录 | `operations/README.md`、`wsl-linux-agent-setup.md` |
 | `docs/stp-spec/CLAUDE.md` | 已是极简重定向入口，暂保留 | `archive/stp-spec-pre-adr0020/` |
 | `docs/architecture/non-adr20-followups.md` | 仍有未完成路由拆分债务，保留并刷新措辞 | GitHub Issues / 代码 |
+| ~~根 `openspec/`~~ | 删除重定向 stub（内容早已在 `archive/openspec/`） | `docs/archive/openspec/` |
 
 ---
 

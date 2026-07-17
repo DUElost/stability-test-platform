@@ -1,6 +1,6 @@
 # Stability Test Platform — 稳定性测试管理平台
 
-**版本**：1.0 · **文档更新**：2026-07-15
+**版本**：1.0 · **文档更新**：2026-07-17
 
 中心化 Android 设备稳定性测试管理平台：Linux-first 控制平面（FastAPI + React）编排执行，Linux Agent 经 ADB 驱动设备跑 Plan；支持实时监控、Watcher/AEE 采集、去重归档与通知。
 
@@ -8,7 +8,7 @@
 |------|------|
 | [`docs/README.md`](./docs/README.md) | **文档中心**（分层索引） |
 | [`AGENTS.md`](./AGENTS.md) | 开发命令与 AI 约定 |
-| [`CLAUDE.md`](./CLAUDE.md) | 架构不变量、FAQ、Changelog |
+| [`CLAUDE.md`](./CLAUDE.md) | 架构不变量、关键约定、状态机摘要 |
 
 ---
 
@@ -104,7 +104,7 @@ cd frontend && npx vitest run && npx tsc --noEmit
 | 通知 | `notification_logs` + 前端铃铛 / 历史页 | [`design/03-frontend.md`](./docs/design/03-frontend.md) |
 | 主机 UI | 紧凑主机表、浮动批量栏、单机热更新 | 同上 |
 
-Changelog：[`CLAUDE.md`](./CLAUDE.md)。
+关键决策记录见 [`docs/adr/`](./docs/adr/)；根 [`CLAUDE.md`](./CLAUDE.md) 仅保留 ADR 决策摘要表。
 
 ---
 
