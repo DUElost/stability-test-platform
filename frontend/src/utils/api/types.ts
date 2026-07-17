@@ -60,7 +60,6 @@ export interface Device {
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   /** Authoritative backend admission decision. Legacy servers may omit it. */
   schedulable?: boolean;
-  scheduling_reason?: string | null;
   last_seen: string | null;
   tags: string[];
   extra?: Record<string, any>;

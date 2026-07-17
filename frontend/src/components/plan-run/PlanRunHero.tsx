@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Download, X, Loader2, ChevronDown } from 'lucide-react';
+import { Download, X, Loader2, ChevronDown, RotateCcw } from 'lucide-react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -34,6 +34,8 @@ interface Props {
   isAborting?: boolean;
   onAbort?: (reason: string) => void;
   onExportReport?: (format: 'markdown' | 'json') => void;
+  /** 复跑：沿用本次 Plan 与设备集重新发起（仅终态显示）。 */
+  onRerun?: () => void;
   /** Override "now" for deterministic tests. */
   now?: Date;
 }
@@ -44,6 +46,7 @@ export default function PlanRunHero({
   isAborting = false,
   onAbort,
   onExportReport,
+  onRerun,
   now,
 }: Props) {
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -245,6 +248,20 @@ export default function PlanRunHero({
             </>
           )}
         </div>
+
+        {isTerminal && onRerun && (
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="plan-run-rerun-btn"
+            onClick={onRerun}
+            disabled={!run}
+            className="flex-1 text-[11px] h-7"
+          >
+            <RotateCcw className="mr-1 h-3 w-3" />
+            复跑
+          </Button>
+        )}
 
         {canAbort && (
           <Button

@@ -131,6 +131,25 @@ export default function PlanRunDetailPage() {
 
   const toggleLeftPanel = useCallback(() => setLeftPanelOpen((v) => !v), []);
 
+  const handleRerun = useCallback(async () => {
+    const run = runQ.data;
+    if (!run) return;
+    let deviceIds = run.run_context?.dispatch_device_ids ?? [];
+    if (deviceIds.length === 0) {
+      try {
+        const jobs = await api.planRuns.listJobs(id);
+        deviceIds = [...new Set(jobs.map((job) => job.device_id))];
+      } catch {
+        deviceIds = [];
+      }
+    }
+    if (deviceIds.length === 0) {
+      toast.error('未能获取上次执行的设备清单，无法复跑');
+      return;
+    }
+    navigate(`/execution/plan-execute?plan=${run.plan_id}&devices=${deviceIds.join(',')}`);
+  }, [id, navigate, runQ.data, toast]);
+
   usePlanRunHeaderSlot({
     runId: id,
     dataUpdatedAt: runQ.dataUpdatedAt,
@@ -200,6 +219,7 @@ export default function PlanRunDetailPage() {
               planName={planName}
               isAborting={abortMut.isPending}
               onAbort={(reason) => abortMut.mutate(reason)}
+              onRerun={() => void handleRerun()}
               onExportReport={async (format) => {
                 try {
                   const blob = await api.planRuns.exportReport(id, format);

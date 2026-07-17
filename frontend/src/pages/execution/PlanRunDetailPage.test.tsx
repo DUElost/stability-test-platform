@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   manualExitJob: vi.fn(),
   exportReport: vi.fn(),
   retryDispatch: vi.fn(),
+  listJobs: vi.fn(),
   getDedupStatus: vi.fn().mockResolvedValue({ plan_run_id: 12, artifacts: [] }),
   listJobArtifacts: vi.fn().mockResolvedValue([]),
   triggerExtract: vi.fn().mockResolvedValue({ plan_run_id: 12, extracted_count: 0 }),
@@ -59,6 +60,7 @@ vi.mock('@/utils/api', () => ({
       manualExitJob: mocks.manualExitJob,
       exportReport: mocks.exportReport,
       retryDispatch: mocks.retryDispatch,
+      listJobs: mocks.listJobs,
       getDedupStatus: mocks.getDedupStatus,
       listJobArtifacts: mocks.listJobArtifacts,
       triggerExtract: mocks.triggerExtract,
@@ -399,6 +401,55 @@ describe('PlanRunDetailPage', () => {
     renderPage();
     fireEvent.click(await screen.findByText(/返回执行列表/));
     expect(mocks.navigate).toHaveBeenCalledWith('/execution/plan-runs');
+  });
+
+  it('reruns a terminal PlanRun with the recorded device set', async () => {
+    mocks.getRun.mockResolvedValue({
+      id: 12,
+      plan_id: 7,
+      status: 'SUCCESS',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: new Date(Date.now() - 90_000).toISOString(),
+      ended_at: new Date().toISOString(),
+      run_context: { dispatch_device_ids: [3, 5, 8] },
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId('plan-run-rerun-btn'));
+
+    await waitFor(() => {
+      expect(mocks.navigate).toHaveBeenCalledWith('/execution/plan-execute?plan=7&devices=3,5,8');
+    });
+    expect(mocks.listJobs).not.toHaveBeenCalled();
+  });
+
+  it('falls back to job device ids when dispatch_device_ids is absent', async () => {
+    mocks.getRun.mockResolvedValue({
+      id: 12,
+      plan_id: 7,
+      status: 'FAILED',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: new Date(Date.now() - 90_000).toISOString(),
+      ended_at: new Date().toISOString(),
+      run_context: {},
+    });
+    mocks.listJobs.mockResolvedValue([
+      { id: 1, device_id: 3, status: 'FAILED' },
+      { id: 2, device_id: 3, status: 'FAILED' },
+      { id: 3, device_id: 9, status: 'COMPLETED' },
+    ]);
+    renderPage();
+
+    fireEvent.click(await screen.findByTestId('plan-run-rerun-btn'));
+
+    await waitFor(() => {
+      expect(mocks.listJobs).toHaveBeenCalledWith(12);
+      expect(mocks.navigate).toHaveBeenCalledWith('/execution/plan-execute?plan=7&devices=3,9');
+    });
   });
 
   it('opens the device drawer and triggers manual retry via confirm dialog', async () => {

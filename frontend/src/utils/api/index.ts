@@ -7,7 +7,7 @@ export {
 } from './client';
 export { auth } from './auth';
 export { hosts, heartbeat, hotUpdate, agentInstall, fetchHostList, coerceHostList } from './hosts';
-export { devices } from './devices';
+export { devices, fetchAllDevices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
 export { actionTemplates, scripts } from './tools';

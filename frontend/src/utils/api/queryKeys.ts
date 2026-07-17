@@ -23,10 +23,14 @@ export const planKeys = {
 export const hostKeys = {
   /** Always use fetchHostList() as queryFn — cache must store Host[], not PaginatedResponse. */
   list: () => ['hosts'] as const,
+  /** Host 详情（含 active_jobs 占用明细，仅 GET /hosts/{id} 返回）。 */
+  detail: (id: string | number) => ['host', String(id)] as const,
 } as const;
 
 export const deviceKeys = {
   list: () => ['devices'] as const,
+  /** 全量设备（fetchAllDevices 分页拉全）— PlanExecutePage 等需要完整设备视图的页面用。 */
+  all: () => ['devices-all'] as const,
 } as const;
 
 export const planRunKeys = {
