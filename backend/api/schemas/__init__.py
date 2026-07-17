@@ -17,7 +17,6 @@ from backend.api.schemas.run import (
 )
 from backend.api.schemas.agent import (
     AgentLogQuery, AgentLogOut,
-    DeploymentCreate, DeploymentOut, DeploymentStatusOut,
 )
 from backend.api.schemas.notification import (
     NotificationChannelCreate, NotificationChannelUpdate, NotificationChannelOut,
@@ -66,9 +65,6 @@ __all__ = [
     "RunRiskSummaryOut",
     "AgentLogQuery",
     "AgentLogOut",
-    "DeploymentCreate",
-    "DeploymentOut",
-    "DeploymentStatusOut",
     "NotificationChannelCreate",
     "NotificationChannelUpdate",
     "NotificationChannelOut",
