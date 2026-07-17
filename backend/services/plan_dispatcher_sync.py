@@ -832,14 +832,17 @@ def materialize_jobs_and_allocations(
         logger.info("plan_dispatch_wifi_allocated: devices=%d", len(device_ids))
 
     now = datetime.now(timezone.utc)
-    job_device_pairs: dict[int, int] = {}
+    # Bulk materialization (reviewer, Step 4.1): build every JobInstance, then
+    # ONE add_all + single flush — a 1000-device plan no longer does 1000
+    # round-trips while holding the PlanRun/PlanRunHost admission locks.
+    jobs: list[JobInstance] = []
     for device_id in device_ids:
         wifi_params = wifi_allocations.get(device_id)
         resolved_pipeline = {"lifecycle": deepcopy(lifecycle)}
         if wifi_params:
             resolved_pipeline = _inject_wifi_params(resolved_pipeline, wifi_params)
 
-        job = JobInstance(
+        jobs.append(JobInstance(
             plan_run_id=pr.id,
             plan_id=pr.plan_id,
             device_id=device_id,
@@ -848,21 +851,21 @@ def materialize_jobs_and_allocations(
             pipeline_def=resolved_pipeline,
             created_at=now,
             updated_at=now,
-        )
-        db.add(job)
-        db.flush()
-        job_device_pairs[job.id] = device_id
+        ))
+    db.add_all(jobs)
+    db.flush()  # single flush assigns every job.id (and trips the unique index)
+    job_device_pairs = {job.id: job.device_id for job in jobs}
 
     if wifi_allocations:
+        # Preload the pools once instead of per-device SELECTs.
+        pool_ids = {wifi_allocations[did]["pool_id"] for did in wifi_allocations}
+        pools = {
+            p.id: p for p in db.execute(
+                select(ResourcePool).where(ResourcePool.id.in_(pool_ids))
+            ).scalars().all()
+        }
         assignment_refs = {
-            did: (
-                db.execute(
-                    select(ResourcePool).where(
-                        ResourcePool.id == wifi_allocations[did]["pool_id"]
-                    )
-                ).scalar(),
-                wifi_allocations[did],
-            )
+            did: (pools.get(wifi_allocations[did]["pool_id"]), wifi_allocations[did])
             for did in wifi_allocations
         }
         _sync_create_allocations(db, assignment_refs, job_device_pairs)

@@ -240,9 +240,11 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     # Registered unconditionally: with the env flag off the pump runs in
     # drain-only mode (prepare stops creating new QUEUED runs, the pump keeps
     # admitting existing ones until the queue is empty — reviewer boundary #5).
-    # An idle tick is one indexed no-op query. Readiness is marked HERE (the
-    # pump now exists in this process) and unmarked at lifespan shutdown.
-    from backend.core.admission_queue import mark_queue_pump_ready
+    # An idle tick is one indexed no-op query; the tick itself short-circuits
+    # while the SAQ producer is down. Pump READINESS is deliberately NOT
+    # marked here — main.py marks it only after the SAQ worker start succeeds
+    # (Step 4.1: a pump without an executor must not let prepare create
+    # QUEUED runs that would just churn).
     from backend.services.admission_pump import pump_admission_tick
 
     await scheduler.add_schedule(
@@ -252,5 +254,4 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         misfire_grace_time=MISFIRE_GRACE,
         conflict_policy=ConflictPolicy.replace,
     )
-    mark_queue_pump_ready(True)
     logger.info("schedule_registered id=admission_pump interval=%ds", ADMISSION_PUMP_INTERVAL)

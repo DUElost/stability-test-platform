@@ -154,7 +154,17 @@ async def lifespan(app: FastAPI):
                 except Exception as exc:
                     logger.error("saq_worker_start_failed — %s", exc)
                     raise RuntimeError(f"SAQ worker failed to start: {exc}") from exc
+                # ADR-0026 Step 4.1: pump readiness requires BOTH the pump
+                # schedule (registered above) AND a live SAQ executor —
+                # otherwise prepare could mint QUEUED runs that only churn
+                # QUEUED↔PRECHECK with nothing to admit them.
+                from backend.core.admission_queue import mark_queue_pump_ready
+                mark_queue_pump_ready(True)
         else:
+            # No in-process SAQ → no admission executor in this process; the
+            # pump stays unready (V2 prepare stays legacy; the pump tick
+            # short-circuits). Revisit when the SAQ producer/worker split
+            # lands (ADR-0026 落地顺序 P0 剩余项).
             logger.warning("saq_worker_disabled_by_env")
 
     yield

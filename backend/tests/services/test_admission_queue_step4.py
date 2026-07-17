@@ -327,6 +327,45 @@ class TestAdmissionTransaction:
         assert pr.status == "FAILED"
         assert pr.result_summary["reason"] == "devices_unavailable_at_admission"
 
+    def test_host_drift_fails_fatal_never_silently_admits(
+        self, db_session, step4_fixture,
+    ):
+        """Step 4.1 blocking gap #1: device migrated hosts while queued —
+        current host_id != host_id_snapshot must be explicit non-retryable
+        drift. Silently admitting on the new host would create jobs on a host
+        with no PlanRunHost projection and no script verification."""
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id, f["d2"].id])
+        attempt = self._claim(db_session, pr)
+
+        # device migrates from h1 to h2 while queued
+        db_session.query(Device).filter(Device.id == f["d1"].id).update(
+            {"host_id": "aq4-h2"}
+        )
+        db_session.commit()
+
+        with pytest.raises(_FatalAdmission) as exc:
+            admission_transaction(db_session, pr.id, attempt)
+        assert exc.value.reason == "device_host_drift"
+        drifted = exc.value.detail["drifted_devices"]
+        assert drifted == [{
+            "id": f["d1"].id,
+            "reason": "host_drift",
+            "host_id_snapshot": "aq4-h1",
+            "current_host_id": "aq4-h2",
+        }]
+
+        fail_plan_run_admission(
+            db_session, pr.id, attempt,
+            reason=exc.value.reason, detail=exc.value.detail,
+        )
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "FAILED"
+        # zero jobs anywhere — especially none on the NEW host
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id).count() == 0
+
     def test_stale_attempt_noops(self, db_session, step4_fixture):
         """Ownership CAS: if the reaper already recovered the run (attempt
         rotated), an old admission attempt must not touch it."""
@@ -351,8 +390,15 @@ class TestAdmissionTransaction:
 # ── Pump tick end-to-end (enqueue mocked) ─────────────────────────────────────
 
 
+@pytest.fixture
+def _saq_ready():
+    """Pump ticks require a live SAQ producer (Step 4.1 gate)."""
+    with patch("backend.tasks.saq_worker.is_saq_ready", return_value=True):
+        yield
+
+
 class TestPumpTick:
-    def test_tick_claims_and_enqueues(self, db_session, step4_fixture):
+    def test_tick_claims_and_enqueues(self, db_session, step4_fixture, _saq_ready):
         f = step4_fixture
         pr = _queued_run(db_session, f, [f["d1"].id])
 
@@ -367,11 +413,15 @@ class TestPumpTick:
         kwargs = mock_enq.call_args.kwargs
         assert kwargs["plan_run_id"] == pr.id
         assert kwargs["attempt_id"]
+        # Step 4.1: Redis-confirmed enqueue, never fire-and-forget
+        assert kwargs["required"] is True
 
         db_session.expire_all()
         assert db_session.get(PlanRun, pr.id).status == "PRECHECK"
 
-    def test_tick_enqueue_failure_requeues_immediately(self, db_session, step4_fixture):
+    def test_tick_enqueue_failure_requeues_immediately(
+        self, db_session, step4_fixture, _saq_ready,
+    ):
         f = step4_fixture
         pr = _queued_run(db_session, f, [f["d1"].id])
 
@@ -387,7 +437,45 @@ class TestPumpTick:
         assert pr.queue_reason == "PRECHECK_STALE"
         assert pr.next_admission_at is not None
 
-    def test_drain_only_admits_with_flag_off(self, db_session, step4_fixture, monkeypatch):
+    def test_tick_enqueue_exception_requeues_immediately(
+        self, db_session, step4_fixture, _saq_ready,
+    ):
+        """required=True raises EnqueueSyncError on confirmed failure —
+        must land back in QUEUED, not strand in PRECHECK."""
+        from backend.tasks.saq_worker import EnqueueSyncError
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+
+        with patch(
+            "backend.tasks.saq_worker.enqueue_sync",
+            side_effect=EnqueueSyncError("redis down"),
+        ):
+            summary = pump_admission_tick()
+
+        assert summary["requeued_on_enqueue_failure"] == 1
+        db_session.expire_all()
+        assert db_session.get(PlanRun, pr.id).status == "QUEUED"
+
+    def test_tick_skips_entirely_when_saq_not_ready(self, db_session, step4_fixture):
+        """Step 4.1: no SAQ executor → do not claim at all (no QUEUED↔PRECHECK
+        churn, e.g. STP_ENABLE_INPROCESS_SAQ=0)."""
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+
+        with patch(
+            "backend.tasks.saq_worker.is_saq_ready", return_value=False,
+        ), patch("backend.tasks.saq_worker.enqueue_sync") as mock_enq:
+            summary = pump_admission_tick()
+
+        assert summary == {"claimed": 0, "enqueued": 0, "requeued_on_enqueue_failure": 0}
+        mock_enq.assert_not_called()
+        db_session.expire_all()
+        assert db_session.get(PlanRun, pr.id).status == "QUEUED"
+
+    def test_drain_only_admits_with_flag_off(
+        self, db_session, step4_fixture, monkeypatch, _saq_ready,
+    ):
         """Reviewer boundary #5: flag off must NOT strand existing QUEUED —
         the pump keeps draining them."""
         f = step4_fixture
@@ -405,7 +493,7 @@ class TestPumpTick:
         db_session.expire_all()
         assert db_session.get(PlanRun, pr.id).status == "PRECHECK"
 
-    def test_tick_noop_when_queue_empty(self, db_session):
+    def test_tick_noop_when_queue_empty(self, db_session, _saq_ready):
         with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enq:
             summary = pump_admission_tick()
         assert summary == {"claimed": 0, "enqueued": 0, "requeued_on_enqueue_failure": 0}
@@ -466,6 +554,40 @@ class TestAdmissionTaskEndToEnd:
             JobInstance.plan_run_id == pr.id).count() == 0
 
     def test_script_mismatch_after_sync_fails_fatal(self, db_session, step4_fixture):
+        """FATAL only when sync SUCCEEDED and reverify still reports a real
+        sha mismatch (genuine script contract failure)."""
+        import asyncio
+        from backend.services.admission_pump import plan_admission_task
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        claimed = claim_queued_plan_runs(db_session)
+        attempt = claimed[0][1]
+        db_session.expire_all()
+
+        async def fake_gather(host_ids, expected):
+            # both the first verify AND the post-sync reverify report mismatch
+            return {
+                hid: (False, [{"ok": False, "name": "check_device"}], "sha_mismatch")
+                for hid in host_ids
+            }
+
+        with patch(
+            "backend.services.precheck.verify.gather_verify", new=fake_gather,
+        ), patch(
+            "backend.services.precheck.sync.push_mismatched_scripts",
+            return_value=(True, None),  # sync SUCCEEDS
+        ):
+            asyncio.run(plan_admission_task({}, plan_run_id=pr.id, attempt_id=attempt))
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "FAILED"
+        assert pr.result_summary["reason"] == "script_verify_failed"
+
+    def test_sync_push_failure_requeues_not_fails(self, db_session, step4_fixture):
+        """Step 4.1 blocking gap #3a: SSH/network failure during the hot-update
+        push is transient infra fault → QUEUED, never script_verify_failed."""
         import asyncio
         from backend.services.admission_pump import plan_admission_task
 
@@ -485,11 +607,56 @@ class TestAdmissionTaskEndToEnd:
             "backend.services.precheck.verify.gather_verify", new=fake_gather,
         ), patch(
             "backend.services.precheck.sync.push_mismatched_scripts",
-            return_value=(False, "no_ssh_credentials"),
+            return_value=(False, "ssh_timeout"),  # push FAILS (network)
         ):
             asyncio.run(plan_admission_task({}, plan_run_id=pr.id, attempt_id=attempt))
 
         db_session.expire_all()
         pr = db_session.get(PlanRun, pr.id)
-        assert pr.status == "FAILED"
-        assert pr.result_summary["reason"] == "script_verify_failed"
+        assert pr.status == "QUEUED"
+        assert pr.queue_reason == "DEVICE_BUSY"
+        blockers = pr.run_context["queue_blockers"]
+        assert any(b.get("reason") == "script_sync_failed" for b in blockers)
+
+    def test_agent_offline_at_reverify_requeues_not_fails(
+        self, db_session, step4_fixture,
+    ):
+        """Step 4.1 blocking gap #3b: sync succeeded, but the Agent went
+        offline before the reverify — transient, must requeue (previously
+        misclassified as script_verify_failed → FAILED)."""
+        import asyncio
+        from backend.services.admission_pump import plan_admission_task
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        claimed = claim_queued_plan_runs(db_session)
+        attempt = claimed[0][1]
+        db_session.expire_all()
+
+        calls = {"n": 0}
+
+        async def fake_gather(host_ids, expected):
+            calls["n"] += 1
+            if calls["n"] == 1:  # first verify: real mismatch
+                return {
+                    hid: (False, [{"ok": False, "name": "check_device"}], "sha_mismatch")
+                    for hid in host_ids
+                }
+            # reverify after successful sync: agent dropped offline
+            return {hid: (False, [], "agent_offline") for hid in host_ids}
+
+        with patch(
+            "backend.services.precheck.verify.gather_verify", new=fake_gather,
+        ), patch(
+            "backend.services.precheck.sync.push_mismatched_scripts",
+            return_value=(True, None),  # sync SUCCEEDS
+        ):
+            asyncio.run(plan_admission_task({}, plan_run_id=pr.id, attempt_id=attempt))
+
+        assert calls["n"] == 2  # reverify actually happened
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "QUEUED"
+        assert pr.queue_reason == "DEVICE_BUSY"
+        blockers = pr.run_context["queue_blockers"]
+        assert any(b.get("reason") == "host_unreachable" for b in blockers)

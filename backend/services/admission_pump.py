@@ -132,11 +132,25 @@ def claim_queued_plan_runs(db: Session, *, batch: int | None = None) -> list[tup
 
 def pump_admission_tick() -> dict[str, int]:
     """APScheduler callback: claim a batch and hand each run to the SAQ
-    admission task. Enqueue failure requeues immediately (no stranded
-    PRECHECK waiting for the reaper)."""
-    from backend.tasks.saq_worker import enqueue_sync
+    admission task.
+
+    required=True makes enqueue block until Redis CONFIRMS the job (pump runs
+    in an APScheduler worker thread, so the sync bridge is safe) — best-effort
+    mode would report success before the actual enqueue and strand the run in
+    PRECHECK until the reaper (reviewer, Step 4.1). Confirmed failure requeues
+    immediately.
+
+    When the SAQ producer is not ready (worker not started, e.g.
+    STP_ENABLE_INPROCESS_SAQ=0), the tick short-circuits WITHOUT claiming —
+    claiming without an executor would just churn QUEUED↔PRECHECK.
+    """
+    from backend.tasks.saq_worker import enqueue_sync, is_saq_ready
 
     summary = {"claimed": 0, "enqueued": 0, "requeued_on_enqueue_failure": 0}
+    if not is_saq_ready():
+        logger.debug("admission_pump_skip_saq_not_ready")
+        return summary
+
     with SessionLocal() as db:
         claimed = claim_queued_plan_runs(db)
         summary["claimed"] = len(claimed)
@@ -149,6 +163,7 @@ def pump_admission_tick() -> dict[str, int]:
                     key=f"admission:{run_id}:{attempt_id}",
                     timeout=600,
                     retries=1,
+                    required=True,  # Redis-confirmed or raises — never fire-and-forget
                     plan_run_id=run_id,
                     attempt_id=attempt_id,
                 )
@@ -343,16 +358,41 @@ async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
             return out
 
         push_results = await asyncio.to_thread(_push_all)
+        # SSH/network failure during the push is a transient infra fault, not a
+        # script contract failure — requeue, don't FAIL (reviewer, Step 4.1).
+        push_failed = [
+            {"host_id": hid, "reason": "script_sync_failed", "error": err}
+            for hid, (ok, err) in push_results.items() if not ok
+        ]
         retry_hosts = [hid for hid, (ok, _err) in push_results.items() if ok]
+        still_mismatched: list[str] = []
         if retry_hosts:
             reverify = await gather_verify(retry_hosts, expected)
             for hid, (ok, _res, err) in reverify.items():
                 if ok:
                     mismatched_hosts.pop(hid, None)
-        if mismatched_hosts:
+                elif _is_unreachable(err):
+                    # Agent went offline between push and reverify — transient,
+                    # NOT a contract failure. Requeue instead of FAILED.
+                    unreachable.append(
+                        {"host_id": hid, "reason": "host_unreachable", "error": err}
+                    )
+                    mismatched_hosts.pop(hid, None)
+                else:
+                    still_mismatched.append(hid)
+
+        if push_failed:
+            # Retryable infra faults take priority over a fatal verdict — the
+            # sync never actually completed on these hosts.
+            raise _RetryableAdmission("DEVICE_BUSY", unreachable + push_failed)
+
+        # FATAL only when the sync SUCCEEDED and reverify still reports a real
+        # sha mismatch (a genuine script contract failure).
+        confirmed_mismatch = [h for h in still_mismatched if h in mismatched_hosts]
+        if confirmed_mismatch:
             raise _FatalAdmission(
                 "script_verify_failed",
-                {"hosts": sorted(mismatched_hosts.keys())},
+                {"hosts": sorted(confirmed_mismatch)},
             )
 
     if unreachable:
@@ -418,6 +458,27 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     if unavailable:
         db.rollback()
         raise _RetryableAdmission("DEVICE_BUSY", unavailable)
+
+    # Immutable-snapshot integrity (reviewer, Step 4.1): the run was verified
+    # and grouped against host_id_snapshot at prepare; a device that migrated
+    # hosts while queued would otherwise be materialized on a host with no
+    # PlanRunHost projection and no script verification. Drift is explicit,
+    # non-retryable configuration divergence — never silently admit on the
+    # current host. (target.host_id_snapshot == PlanRunHost.host_id holds by
+    # construction: targets are FK-bound to their host-group row.)
+    drifted = [
+        {
+            "id": t.device_id,
+            "reason": "host_drift",
+            "host_id_snapshot": t.host_id_snapshot,
+            "current_host_id": device_host_map.get(t.device_id),
+        }
+        for t in targets
+        if device_host_map.get(t.device_id) != t.host_id_snapshot
+    ]
+    if drifted:
+        db.rollback()
+        raise _FatalAdmission("device_host_drift", {"drifted_devices": drifted})
 
     now = _utc_now()
     lifecycle = _build_lifecycle_from_snapshot(pr.plan_snapshot)
