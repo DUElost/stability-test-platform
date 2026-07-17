@@ -270,6 +270,11 @@ class PipelineEngine:
 
         patrol_cycle_checkpoint_store=None,
 
+        # ADR-0026 Step 5b: per-host scheduler + per-job state reporting
+        operation_scheduler: Any = None,
+        coordinator: Any = None,
+        device_id: Optional[int] = None,
+
     ):
 
         self._adb = adb
@@ -277,6 +282,12 @@ class PipelineEngine:
         self._serial = serial
 
         self._run_id = run_id
+
+        self._device_id = device_id
+
+        self._scheduler = operation_scheduler
+
+        self._coordinator = coordinator
 
         self._log_dir = log_dir
 
@@ -755,6 +766,47 @@ class PipelineEngine:
         return False
 
 
+
+    def _update_execution_state(self, state: str, progress_ts: Optional[str] = None) -> None:
+        """ADR-0026 Step 5b: persist execution_state via coordinator (thread-safe)."""
+        coord = getattr(self, "_coordinator", None)
+        if coord is None:
+            return
+        jv = coord.register_job(self._run_id)
+        if jv is not None:
+            jv.update(state=state, progress_ts=progress_ts)
+
+    def _run_step_with_permit(self, phase: str, step: dict) -> bool:
+        """ADR-0026 Step 5b: wrap step execution with OperationScheduler permit.
+
+        Sets WAITING_EXECUTION_SLOT while waiting for the permit, EXECUTING_STEP
+        after grant, and releases the permit in finally. Step timeout is measured
+        from the moment the permit is granted (not from the wait start).
+        Falls back to the legacy path when no scheduler is available."""
+        scheduler = getattr(self, "_scheduler", None)
+        if scheduler is None:
+            return self._run_step_with_retry(phase, step)
+
+        device_id = self._device_id
+        if device_id is None:
+            return self._run_step_with_retry(phase, step)
+
+        from .operation_scheduler import PermitDenied
+
+        self._update_execution_state("WAITING_EXECUTION_SLOT")
+        permit = None
+        try:
+            try:
+                permit = scheduler.acquire(device_id)
+            except PermitDenied:
+                self._logger.warning("permit_denied step=%s job=%d", step.get("step_id"), self._run_id)
+                return False
+            self._update_execution_state("EXECUTING_STEP")
+            return self._run_step_with_retry(phase, step)
+        finally:
+            if permit is not None:
+                permit.release()
+                self._update_execution_state("PATROL_SLEEP" if phase == "patrol" else None)
 
     def _run_step_with_retry(self, phase: str, step: dict) -> bool:
 

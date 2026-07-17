@@ -1511,7 +1511,90 @@ async def extend_leases_batch(
     return ok(_ExtendBatchOut(results=results))
 
 
-@router.post("/jobs/{job_id}/steps/{step_id}/status", response_model=ApiResponse[dict])
+# ── ADR-0026 Step 5b: per-host Coordinator heartbeat ─────────────────────────
+# The HostRunCoordinator (Agent-side, per PlanRunHost projection) reports the
+# host it manages + every active job's current execution_state. Epoch fencing
+# prevents a stale coordinator (process restart) from overwriting a new one.
+
+
+class _CoordinatorHeartbeatJob(BaseModel):
+    job_id: int
+    execution_state: Optional[str] = None
+    last_progress_at: Optional[str] = None  # ISO8601
+
+
+class _CoordinatorHeartbeatIn(BaseModel):
+    host_id: str
+    agent_instance_id: str
+    coordinator_epoch: int  # monotonic per PlanRunHost, Agent increments on restart
+    plan_run_hosts: List[dict]  # [{plan_run_id, host_id}]
+    jobs: List[_CoordinatorHeartbeatJob] = []
+
+
+class _CoordinatorHeartbeatOut(BaseModel):
+    accepted: bool
+    stale_plan_run_host_ids: List[int] = []  # epoch was already higher → Agent must reconcile
+
+
+@router.post("/coordinator-heartbeat", response_model=ApiResponse[_CoordinatorHeartbeatOut])
+async def coordinator_heartbeat(
+    payload: _CoordinatorHeartbeatIn,
+    db: AsyncSession = Depends(get_async_db),
+    _=Depends(_verify_agent),
+):
+    """ADR-0026 Step 5b: per-host Coordinator liveness + per-job state sync.
+
+    - Bumps coordinator_heartbeat_at for every PlanRunHost in the payload
+      where coordinator_epoch >= stored epoch (epoch fencing).
+    - Persists execution_state + last_progress_at for every listed job
+      (RUNNING-guarded).
+    - Returns which PlanRunHost rows were stale (higher epoch already seen)
+      so the Agent can reconcile (terminate that Coordinator instance).
+    """
+    from backend.models.plan_run import PlanRunHost as _PRH
+
+    now = datetime.now(timezone.utc)
+    stale_host_ids: list[int] = []
+    for entry in payload.plan_run_hosts:
+        prh_id = entry.get("id")
+        pr_id = entry.get("plan_run_id")
+        hid = entry.get("host_id")
+        if not prh_id or not pr_id or not hid:
+            continue
+        row = await db.get(_PRH, prh_id)
+        if row is None:
+            continue
+        if row.coordinator_epoch > payload.coordinator_epoch:
+            stale_host_ids.append(prh_id)
+            continue
+        row.coordinator_epoch = payload.coordinator_epoch
+        row.coordinator_heartbeat_at = now
+
+    for j in payload.jobs:
+        reported = j.execution_state
+        state_val = reported if reported in _VALID_EXECUTION_STATES else None
+        values: dict[str, Any] = {"updated_at": now, "last_execution_heartbeat_at": now}
+        if state_val is not None:
+            values["execution_state"] = state_val
+        ts = _parse_progress_ts(j.last_progress_at)
+        if ts is not None:
+            values["last_progress_at"] = ts
+        await db.execute(
+            update(JobInstance)
+            .where(
+                JobInstance.id == j.job_id,
+                JobInstance.host_id == payload.host_id,
+                JobInstance.status == JobStatus.RUNNING.value,
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+
+    await db.commit()
+    return ok(_CoordinatorHeartbeatOut(
+        accepted=len(stale_host_ids) == 0,
+        stale_plan_run_host_ids=stale_host_ids,
+    ))
 async def update_job_step_status(
     job_id: int,
     step_id: str,

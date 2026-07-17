@@ -28,6 +28,10 @@ def execute_pipeline_run(
     patrol_cycle_checkpoint_store: Optional[Any] = None,
     on_engine_started: Optional[Callable[[PipelineEngine], None]] = None,
     on_engine_stopped: Optional[Callable[[PipelineEngine], None]] = None,
+    # ADR-0026 Step 5b: per-host scheduler + per-job state reporting
+    operation_scheduler: Any = None,
+    coordinator: Any = None,
+    device_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -58,6 +62,9 @@ def execute_pipeline_run(
         patrol_heartbeat_uploader=patrol_heartbeat,
         watcher_capability=watcher_capability,
         patrol_cycle_checkpoint_store=patrol_cycle_checkpoint_store,
+        operation_scheduler=operation_scheduler,
+        coordinator=coordinator,
+        device_id=device_id,
     )
 
     if patrol_cycle_checkpoint_store is not None:

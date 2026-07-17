@@ -178,6 +178,8 @@ def run_task_wrapper(
     script_registry: Optional[Any] = None,
     local_db: Optional[Any] = None,
     patrol_cycle_checkpoint_store: Optional[Any] = None,
+    operation_scheduler: Any = None,
+    coordinator: Any = None,
 ) -> None:
     """Run a claimed job in a worker thread and report its terminal state."""
     job_id = run["id"]
@@ -199,6 +201,13 @@ def run_task_wrapper(
 
     # ADR-0019 Phase 3a: register fencing_token + persist active_job before any work begins
     state.lock_register(job_id, fencing_token, device_id, device_serial, local_worker_token)
+
+    # ADR-0026 Step 5b: stash scheduler + coordinator on the run dict so
+    # pipeline_engine can acquire/release permits and report execution_state.
+    if operation_scheduler is not None:
+        run["stp_operation_scheduler"] = operation_scheduler
+    if coordinator is not None:
+        run["stp_coordinator"] = coordinator
 
     logger.info(
         "run_start job_id=%d task_id=%s device_id=%s device_serial=%s",
@@ -315,6 +324,9 @@ def run_task_wrapper(
             on_engine_stopped=lambda engine: state.detach_runner(
                 job_id, local_worker_token, engine,
             ),
+            operation_scheduler=operation_scheduler,
+            coordinator=coordinator,
+            device_id=device_id,
         )
 
         watcher_summary = None
@@ -379,4 +391,6 @@ def run_task_wrapper(
             suppress_reason="worker_superseded_after_exception",
         )
     finally:
+        if coordinator is not None:
+            coordinator.deregister_job(job_id)
         state.release(job_id, fencing_token, device_id, local_worker_token=local_worker_token)

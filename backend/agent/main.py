@@ -59,6 +59,8 @@ else:
     from .host_registry import auto_register_host, get_host_info, load_required_host_id
     from .job_runner import JobRunnerState, run_task_wrapper
     from .lease_renewer import LeaseRenewer
+    from .operation_scheduler import OperationScheduler
+    from .coordinator import HostRunCoordinator
     from .mq.producer import StepTraceWriter
     from .outbox_drainer import OutboxDrainThread
     from .registry.local_db import LocalDB
@@ -761,6 +763,10 @@ def main() -> None:
     )
     heartbeat_thread.start()
 
+    # ADR-0026 Step 5b: start the per-host coordinator (reports
+    # coordinator heartbeats + per-job execution_state to control plane).
+    coordinator.start()
+
     # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处清理外部状态）
     def _on_lease_lost(jid: int, device_id: Optional[int]) -> None:
         try:
@@ -788,6 +794,7 @@ def main() -> None:
         agent_instance_id=agent_instance_id,
         on_lease_lost=_on_lease_lost,
         host_id=host_id,
+        coordinator=coordinator,
     )
     lease_renewer.start()
 
@@ -880,9 +887,20 @@ def main() -> None:
     )
     step_trace_uploader.start()
 
-    # Create thread pool for parallel task execution
+    # ADR-0026 Step 5b: thread pool sized for ALL devices the host manages
+    # (up to ~50), NOT permit-limited. Concurrent script/ADB operations are
+    # gated by the OperationScheduler; distinct device jobs share the pool
+    # and wait for their turn.
+    max_workers = int(os.getenv("MAX_CONCURRENT_TASKS", "50"))
     executor = ThreadPoolExecutor(
-        max_workers=max_concurrent_tasks, thread_name_prefix="task-worker"
+        max_workers=max_workers, thread_name_prefix="task-worker"
+    )
+    # Host-global OperationScheduler — ALL jobs on this host share it.
+    # The permit cap gates only instantaneous script/ADB operations.
+    operation_scheduler = OperationScheduler()
+    # Per-host Coordinator reports coordinator heartbeats + job execution_state.
+    coordinator = HostRunCoordinator(
+        api_url, host_id, agent_instance_id, agent_secret=agent_secret,
     )
     job_runner_state = JobRunnerState(
         active_jobs_lock=_active_jobs_lock,
@@ -942,9 +960,12 @@ def main() -> None:
                 with _active_jobs_lock:
                     active_count = len(_active_job_ids)
 
+                # ADR-0026 Step 5b: claim capacity = free healthy devices only.
+                # MAX_CONCURRENT_TASKS no longer restricts concurrent RUNNING
+                # jobs — the OperationScheduler independently limits script
+                # execution concurrency. All admitted devices can be RUNNING.
                 heartbeat_effective = heartbeat_thread.effective_slots
-                max_by_env = max(0, max_concurrent_tasks - active_count)
-                available_slots = min(max_by_env, heartbeat_effective)
+                available_slots = heartbeat_effective
 
                 logger.info("main_loop_tick active=%d slots=%d", active_count, available_slots)
 
@@ -994,6 +1015,8 @@ def main() -> None:
                             local_worker_token,
                         )
 
+                        # ADR-0026 Step 5b: register with coordinator
+                        coordinator.register_job(job["id"])
                         try:
                             executor.submit(
                                 run_task_wrapper,
@@ -1006,6 +1029,8 @@ def main() -> None:
                                 script_registry,
                                 local_db,
                                 patrol_checkpoint_store,
+                                operation_scheduler=operation_scheduler,
+                                coordinator=coordinator,
                             )
                         except Exception:
                             logger.exception("submit_failed job=%d device=%s", job["id"], device_id)
@@ -1024,6 +1049,8 @@ def main() -> None:
             _shutdown_event.wait(poll_interval)
     finally:
         logger.info("agent_shutting_down, waiting for active tasks to finish...")
+        coordinator.stop()
+        operation_scheduler.shutdown()
         executor.shutdown(wait=True, cancel_futures=False)
         # Flush step traces via HTTP before shutdown
         try:

@@ -10,7 +10,7 @@ import logging
 import os
 import threading
 import time
-from typing import Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 import requests
 
@@ -32,6 +32,7 @@ class LeaseRenewer:
         agent_instance_id: str = "",  # ADR-0019 Phase 3a
         on_lease_lost: Optional[Callable[[int, Optional[int]], None]] = None,  # Phase 3b
         host_id: str = "",
+        coordinator: Any = None,  # ADR-0026 Step 5b: per-job execution_state snapshots
     ):
         self._api_url = api_url
         self._jobs_lock = active_jobs_lock
@@ -48,6 +49,7 @@ class LeaseRenewer:
         self._agent_instance_id = agent_instance_id
         self._on_lease_lost = on_lease_lost
         self._host_id = host_id
+        self._coordinator = coordinator  # ADR-0026 Step 5b
         # One batch request renews the whole host per tick (P0 scale reduction).
         # Chunked so a large host stays under the backend's per-request cap.
         self._batch_chunk = max(int(os.getenv("AGENT_LEASE_EXTEND_BATCH_CHUNK", "100")), 1)
@@ -249,6 +251,18 @@ class LeaseRenewer:
                 ]
             if not leases:
                 continue
+            # ADR-0026 Step 5b: enrich with per-job signals from coordinator
+            if self._coordinator is not None:
+                for item in leases:
+                    jv = self._coordinator.register_job(item["job_id"])
+                    snap = jv.snapshot()
+                    if snap.get("execution_state"):
+                        item["execution_state"] = snap["execution_state"]
+                        item["progress_marker"] = {}
+                        if snap.get("last_progress_at"):
+                            item["progress_marker"]["last_progress_at"] = snap[
+                                "last_progress_at"
+                            ]
             sent_tokens = {item["job_id"]: item["fencing_token"] for item in leases}
 
             try:
