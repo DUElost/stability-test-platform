@@ -63,6 +63,27 @@ async def _after_process(ctx: dict) -> None:
     record_saq_task(task_name, status, duration)
 
 
+def _on_worker_task_done(task: "asyncio.Task") -> None:
+    """SAQ worker task exited — revoke admission-pump readiness (ADR-0026
+    Step 4.1 hardening review).
+
+    An unexpectedly dead worker means claimed PRECHECK runs can still be
+    recovered by the reaper, but V2 prepare must stop minting NEW QUEUED runs
+    that nothing will admit. Graceful stop also lands here (unmark is
+    idempotent; the lifespan shutdown already unmarked first).
+    """
+    try:
+        from backend.core.admission_queue import mark_queue_pump_ready
+        mark_queue_pump_ready(False)
+    except Exception:
+        logger.debug("pump_ready_revoke_failed", exc_info=True)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("saq_worker_task_died — %s", exc)
+
+
 async def verify_redis_connectivity(
     redis_url: str | None = None,
     *,
@@ -125,6 +146,7 @@ async def start_saq_worker() -> None:
         after_process=_after_process,
     )
     _worker_task = asyncio.create_task(_worker.start(), name="saq-worker")
+    _worker_task.add_done_callback(_on_worker_task_done)
     logger.info(
         "saq_worker_started concurrency=%d queue=%s",
         SAQ_CONCURRENCY,

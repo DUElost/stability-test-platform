@@ -607,7 +607,7 @@ class TestAdmissionTaskEndToEnd:
             "backend.services.precheck.verify.gather_verify", new=fake_gather,
         ), patch(
             "backend.services.precheck.sync.push_mismatched_scripts",
-            return_value=(False, "ssh_timeout"),  # push FAILS (network)
+            return_value=(False, "ssh_exception: connection timed out"),
         ):
             asyncio.run(plan_admission_task({}, plan_run_id=pr.id, attempt_id=attempt))
 
@@ -617,6 +617,45 @@ class TestAdmissionTaskEndToEnd:
         assert pr.queue_reason == "DEVICE_BUSY"
         blockers = pr.run_context["queue_blockers"]
         assert any(b.get("reason") == "script_sync_failed" for b in blockers)
+
+    @pytest.mark.parametrize("config_error", [
+        "no_ssh_credentials",
+        "host_missing_ip",
+        "ssh_security_config_error: bad known_hosts",
+    ])
+    def test_sync_push_config_error_fails_fatal(
+        self, db_session, step4_fixture, config_error,
+    ):
+        """Hardening (post-4.1 review): deterministic push config faults must
+        FAIL fast — requeueing can never conjure SSH credentials or a missing
+        local script. Only transient SSH/network faults requeue."""
+        import asyncio
+        from backend.services.admission_pump import plan_admission_task
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        claimed = claim_queued_plan_runs(db_session)
+        attempt = claimed[0][1]
+        db_session.expire_all()
+
+        async def fake_gather(host_ids, expected):
+            return {
+                hid: (False, [{"ok": False, "name": "check_device"}], "sha_mismatch")
+                for hid in host_ids
+            }
+
+        with patch(
+            "backend.services.precheck.verify.gather_verify", new=fake_gather,
+        ), patch(
+            "backend.services.precheck.sync.push_mismatched_scripts",
+            return_value=(False, config_error),
+        ):
+            asyncio.run(plan_admission_task({}, plan_run_id=pr.id, attempt_id=attempt))
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "FAILED"
+        assert pr.result_summary["reason"] == "script_sync_config_error"
 
     def test_agent_offline_at_reverify_requeues_not_fails(
         self, db_session, step4_fixture,

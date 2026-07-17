@@ -307,6 +307,24 @@ class _FatalAdmission(Exception):
         super().__init__(reason)
 
 
+# push_mismatched_scripts error codes that are DETERMINISTIC config faults
+# (retrying can never help) rather than transient SSH/network errors. Matched
+# against the returned error string's prefix. Everything else (ssh_exception,
+# ssh_timeout, SFTP failures, …) is treated as transient → requeue.
+_FATAL_PUSH_ERROR_PREFIXES = (
+    "host_not_found",
+    "host_missing_ip",
+    "no_ssh_credentials",
+    "ssh_security_config_error",
+    "cannot map nfs_path",
+    "local file not found",
+)
+
+
+def _is_fatal_push_error(err: Optional[str]) -> bool:
+    return bool(err) and err.startswith(_FATAL_PUSH_ERROR_PREFIXES)
+
+
 async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
     """Script sha256 verify (+ one hot-update sync retry on mismatch).
 
@@ -358,11 +376,19 @@ async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
             return out
 
         push_results = await asyncio.to_thread(_push_all)
-        # SSH/network failure during the push is a transient infra fault, not a
-        # script contract failure — requeue, don't FAIL (reviewer, Step 4.1).
-        push_failed = [
+        # Split push failures (Step 4.1 hardening review): deterministic
+        # config faults are fatal — no SSH creds / missing local script /
+        # host gone cannot heal by requeueing. Transient SSH/network faults
+        # requeue as before.
+        push_fatal = [
+            {"host_id": hid, "reason": "script_sync_config_error", "error": err}
+            for hid, (ok, err) in push_results.items()
+            if not ok and _is_fatal_push_error(err)
+        ]
+        push_transient = [
             {"host_id": hid, "reason": "script_sync_failed", "error": err}
-            for hid, (ok, err) in push_results.items() if not ok
+            for hid, (ok, err) in push_results.items()
+            if not ok and not _is_fatal_push_error(err)
         ]
         retry_hosts = [hid for hid, (ok, _err) in push_results.items() if ok]
         still_mismatched: list[str] = []
@@ -381,10 +407,14 @@ async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
                 else:
                     still_mismatched.append(hid)
 
-        if push_failed:
-            # Retryable infra faults take priority over a fatal verdict — the
-            # sync never actually completed on these hosts.
-            raise _RetryableAdmission("DEVICE_BUSY", unreachable + push_failed)
+        # Deterministic config error fails fast — requeueing cannot fix it.
+        if push_fatal:
+            raise _FatalAdmission("script_sync_config_error", {"hosts": push_fatal})
+
+        if push_transient:
+            # Retryable infra faults take priority over a fatal mismatch
+            # verdict — the sync never actually completed on these hosts.
+            raise _RetryableAdmission("DEVICE_BUSY", unreachable + push_transient)
 
         # FATAL only when the sync SUCCEEDED and reverify still reports a real
         # sha mismatch (a genuine script contract failure).

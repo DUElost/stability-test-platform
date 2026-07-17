@@ -308,3 +308,41 @@ async def test_start_saq_worker_recreates_queue_after_stopped_worker(monkeypatch
 
     old_queue.disconnect.assert_awaited_once()
     fake_queue.connect.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# ADR-0026 Step 4.1 hardening: worker death revokes admission-pump readiness
+# ---------------------------------------------------------------------------
+
+
+def test_worker_task_done_revokes_pump_ready():
+    """If the SAQ worker task dies, the admission pump must stop being 'ready'
+    so V2 prepare stops minting QUEUED runs nothing will admit."""
+    import backend.core.admission_queue as aq
+    from backend.tasks.saq_worker import _on_worker_task_done
+
+    aq.mark_queue_pump_ready(True)
+    assert aq.is_queue_pump_ready() is True
+
+    dead = MagicMock()
+    dead.cancelled.return_value = False
+    dead.exception.return_value = RuntimeError("worker crashed")
+
+    _on_worker_task_done(dead)
+    assert aq.is_queue_pump_ready() is False
+    aq.mark_queue_pump_ready(False)
+
+
+def test_worker_task_cancelled_still_revokes_ready():
+    """Graceful stop (cancelled task) also unmarks — idempotent with the
+    lifespan shutdown that already unmarked."""
+    import backend.core.admission_queue as aq
+    from backend.tasks.saq_worker import _on_worker_task_done
+
+    aq.mark_queue_pump_ready(True)
+    cancelled = MagicMock()
+    cancelled.cancelled.return_value = True
+
+    _on_worker_task_done(cancelled)
+    assert aq.is_queue_pump_ready() is False
+    cancelled.exception.assert_not_called()
