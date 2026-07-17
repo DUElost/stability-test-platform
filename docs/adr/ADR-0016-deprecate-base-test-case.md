@@ -1,5 +1,5 @@
 # ADR-0016: 废弃 BaseTestCase，以 Pipeline Action 体系为唯一执行模型
-- 状态：Accepted
+- 状态：Accepted（已完成，2026-06-12：`test_framework.py` 已删除）
 - 优先级：P0
 - 目标里程碑：M2
 - 日期：2026-03-10

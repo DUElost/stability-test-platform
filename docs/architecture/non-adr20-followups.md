@@ -6,13 +6,24 @@ implementation spec.
 
 ## Route Split Boundary
 
-`backend/api/routes/agent_api.py` is still a broad route module. Keep URL
-compatibility and move handlers by runtime concern when this debt is picked up:
+**Tracking:** [#60](https://github.com/DUElost/stability-test-platform/issues/60)
+（tech-debt：建议拆分、非目标、择机时机与验收标准）。
 
-- `agent_claims.py`: claim, pending compatibility, recovery sync.
-- `agent_runtime.py`: heartbeat, complete, extend lock, job status, step status.
-- `agent_ingest.py`: batch step traces and log signals.
-- `agent_control.py`: backpressure and control-plane endpoints.
+**Status (2026-07-17 verified):** `backend/api/routes/agent_api.py` is still a
+single broad module (~2420 lines, 15 HTTP handlers). No `agent_claims.py` /
+`agent_runtime.py` / `agent_ingest.py` / `agent_control.py` split exists yet.
+URL paths under `/agent/...` remain unchanged; this debt is about module
+ownership only.
+
+Keep URL compatibility and move handlers by runtime concern when this debt is
+picked up:
+
+| Target module | Current handlers (path → function) |
+|---|---|
+| `agent_claims.py` | `POST /jobs/claim` → `claim_jobs`; `GET /jobs/pending` → `get_pending_jobs`; `POST /recovery/sync` → `recovery_sync` |
+| `agent_runtime.py` | `POST /heartbeat` → `agent_heartbeat`; `POST /jobs/{id}/heartbeat` → `job_heartbeat`; `POST /jobs/{id}/complete` → `complete_job`; `POST /jobs/{id}/status` → `update_job_status`; `POST /jobs/{id}/extend_lock` → `extend_job_lock`; `POST /leases/extend-batch` → `extend_leases_batch`; `POST /jobs/{id}/steps/{step_id}/status` → `update_job_step_status`; `POST /jobs/{id}/patrol-heartbeat` → `patrol_heartbeat` |
+| `agent_ingest.py` | `POST /steps` → `upload_step_traces`; `POST /log-signals` → `ingest_log_signals`; `POST /jobs/{id}/artifacts` → `ingest_artifact` |
+| `agent_control.py` | `GET /{host_id}/archive-status` → `get_archive_status` (+ any future backpressure / control-plane-only endpoints) |
 
 Before splitting, extract shared schemas and helpers into a local package such
 as `backend/api/routes/agent/` so route modules do not import each other.
@@ -30,12 +41,10 @@ shape.
 
 ## Grep Checks
 
-Use these commands to find remaining boundary debt:
-
-```powershell
-rg -n "response_model=.*ApiResponse|return ok\\(|return err\\(" backend/api/routes
-rg -n "HTTPException\\(|detail=\\{|detail=\\[" backend/api/routes
-rg -n "@router\\.(get|post|put|patch|delete)" backend/api/routes/agent_api.py
+```bash
+rg -n 'response_model=.*ApiResponse|return ok\(|return err\(' backend/api/routes
+rg -n 'HTTPException\(|detail=\{|detail=\[' backend/api/routes
+rg -n '@router\.(get|post|put|patch|delete)' backend/api/routes/agent_api.py
 ```
 
 P2 remains deferred until route ownership and external contract tests are ready
