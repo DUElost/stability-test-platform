@@ -140,12 +140,12 @@ class OperationScheduler:
             raise PermitDenied("scheduler shut down during wait")
 
         # Check cancellation flag (set by cancel_device during wait).
+        # cancel_device pops the waiter WITHOUT giving it a slot (held was
+        # not incremented), so the cancelled path must NOT decrement held.
         with self._lock:
             cancelled = device_id in self._cancelled
             if cancelled:
                 self._cancelled.discard(device_id)
-                self._held = max(0, self._held - 1)
-                self._wake_one_locked()
         if cancelled:
             raise PermitDenied(f"permit cancelled for device {device_id}")
 

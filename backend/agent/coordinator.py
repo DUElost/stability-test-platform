@@ -88,11 +88,13 @@ class HostRunCoordinator:
         host_id: str,
         agent_instance_id: str,
         agent_secret: str = "",
+        local_db: Any = None,
     ) -> None:
         self._api_url = api_url
         self._host_id = host_id
         self._agent_instance_id = agent_instance_id
         self._agent_secret = agent_secret
+        self._local_db = local_db
         self._interval = float(os.getenv("COORDINATOR_HEARTBEAT_INTERVAL", "30"))
         self._lock = threading.Lock()
         self._plan_run_hosts: Dict[int, PlanRunHostView] = {}  # keyed by host_row_id
@@ -106,13 +108,41 @@ class HostRunCoordinator:
         if self._thread is not None and self._thread.is_alive():
             return
         self._stop_event.clear()
-        # Bump epoch for every PlanRunHost — this is a new process instance.
+        # Restore persisted epochs and bump for this process instance.
+        self._restore_epochs()
         with self._lock:
             for v in self._plan_run_hosts.values():
                 v.bump_epoch()
+        self._persist_epochs()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="coordinator")
         self._thread.start()
         logger.info("coordinator_started host=%s", self._host_id)
+
+    def _epoch_key(self, prh_id: int) -> str:
+        return f"coord_epoch:{self._host_id}:{prh_id}"
+
+    def _restore_epochs(self) -> None:
+        if self._local_db is None:
+            return
+        for prh_id, view in list(self._plan_run_hosts.items()):
+            try:
+                raw = self._local_db.get_state(self._epoch_key(prh_id), "1")
+                epoch = int(raw)
+            except (ValueError, TypeError):
+                epoch = 1
+            with view._lock:
+                view._epoch = epoch
+
+    def _persist_epochs(self) -> None:
+        if self._local_db is None:
+            return
+        for prh_id, view in self._plan_run_hosts.items():
+            try:
+                self._local_db.set_state(
+                    self._epoch_key(prh_id), str(view.epoch)
+                )
+            except Exception:
+                logger.debug("coord_epoch_persist_failed prh=%d", prh_id)
 
     def stop(self) -> None:
         self._stop_event.set()

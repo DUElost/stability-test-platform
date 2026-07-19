@@ -436,7 +436,6 @@ def run_recovery_sync_if_needed(
 
 def main() -> None:
     api_url = os.getenv("API_URL", "http://127.0.0.1:8000")
-    max_concurrent_tasks = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 
     # 确保运行时目录存在
     ensure_dirs()
@@ -763,8 +762,15 @@ def main() -> None:
     )
     heartbeat_thread.start()
 
-    # ADR-0026 Step 5b: start the per-host coordinator (reports
-    # coordinator heartbeats + per-job execution_state to control plane).
+    # ADR-0026 Step 5b: create host-global scheduler + coordinator BEFORE
+    # any component that references them (LeaseRenewer, claim loop, etc.).
+    operation_scheduler = OperationScheduler()
+    coordinator = HostRunCoordinator(
+        api_url, host_id, agent_instance_id, agent_secret=agent_secret,
+        local_db=local_db,
+    )
+    # Start the per-host coordinator heartbeat (reports coordinator
+    # heartbeats + per-job execution_state to control plane).
     coordinator.start()
 
     # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处清理外部状态）
@@ -891,16 +897,11 @@ def main() -> None:
     # (up to ~50), NOT permit-limited. Concurrent script/ADB operations are
     # gated by the OperationScheduler; distinct device jobs share the pool
     # and wait for their turn.
-    max_workers = int(os.getenv("MAX_CONCURRENT_TASKS", "50"))
+    # ADR-0026 Step 5b: independent pool for admitted jobs (no longer
+    # permit‑limited — the OperationScheduler gates concurrency separately).
+    max_workers = int(os.getenv("STP_JOB_WORKER_POOL_SIZE", "50"))
     executor = ThreadPoolExecutor(
         max_workers=max_workers, thread_name_prefix="task-worker"
-    )
-    # Host-global OperationScheduler — ALL jobs on this host share it.
-    # The permit cap gates only instantaneous script/ADB operations.
-    operation_scheduler = OperationScheduler()
-    # Per-host Coordinator reports coordinator heartbeats + job execution_state.
-    coordinator = HostRunCoordinator(
-        api_url, host_id, agent_instance_id, agent_secret=agent_secret,
     )
     job_runner_state = JobRunnerState(
         active_jobs_lock=_active_jobs_lock,
@@ -1015,8 +1016,12 @@ def main() -> None:
                             local_worker_token,
                         )
 
-                        # ADR-0026 Step 5b: register with coordinator
+                        # ADR-0026 Step 5b: register job + PlanRunHost with coordinator
                         coordinator.register_job(job["id"])
+                        prh_id = job.get("plan_run_host_id")
+                        plan_run_id = job.get("plan_run_id")
+                        if prh_id and plan_run_id:
+                            coordinator.register_plan_run_host(prh_id, plan_run_id)
                         try:
                             executor.submit(
                                 run_task_wrapper,

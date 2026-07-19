@@ -721,7 +721,10 @@ class PipelineEngine:
 
 
 
-            success = self._run_step_with_retry(phase, step)
+            # ADR-0026 Step 5b: gate execution through the per-host
+            # OperationScheduler. Falls back to the legacy path when no
+            # scheduler is available (old Agents, tests without a scheduler).
+            success = self._run_step_with_permit(phase, step)
 
             if not success:
 

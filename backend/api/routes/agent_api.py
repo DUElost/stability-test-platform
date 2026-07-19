@@ -222,6 +222,9 @@ class JobOut(BaseModel):
     # Agent 解析见 backend/agent/watcher/policy.py WatcherPolicy.from_job
     watcher_policy: Optional[Dict[str, Any]] = None
     fencing_token: str  # ADR-0019 Phase 2b: 必填，来自 DeviceLease.fencing_token
+    # ADR-0026 Step 5b: the PlanRunHost row id the Agent's Coordinator needs
+    # to identify which PlanRunHost projection this job belongs to.
+    plan_run_host_id: Optional[int] = None
 
 
 class JobStatusUpdate(BaseModel):
@@ -615,6 +618,21 @@ async def claim_jobs(
     # Enrich response: device_serial + watcher_policy(from Plan)
     serial_map, watcher_policy_map = await _enrich_job_metadata(db, claimed)
 
+    # ADR-0026 Step 5b: resolve PlanRunHost rows so the Agent's Coordinator
+    # knows which host-group projection to update.
+    prh_by_key: Dict[tuple[int, str], int] = {}
+    plan_run_ids = {j.plan_run_id for j in claimed if j.plan_run_id}
+    if plan_run_ids:
+        from backend.models.plan_run import PlanRunHost as _PRH2
+        prh_rows = (await db.execute(
+            select(_PRH2.plan_run_id, _PRH2.host_id, _PRH2.id)
+            .where(
+                _PRH2.plan_run_id.in_(plan_run_ids),
+                _PRH2.host_id == payload.host_id,
+            )
+        )).all()
+        prh_by_key = {(r.plan_run_id, r.host_id): r.id for r in prh_rows}
+
     return ok([
         JobOut(
             id=j.id, plan_run_id=j.plan_run_id,
@@ -623,6 +641,7 @@ async def claim_jobs(
             host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
             watcher_policy=watcher_policy_map.get(j.id),
             fencing_token=fencing_token_map[j.id],
+            plan_run_host_id=prh_by_key.get((j.plan_run_id, j.host_id)),
         )
         for j in claimed
     ])
@@ -1563,6 +1582,15 @@ async def coordinator_heartbeat(
             continue
         row = await db.get(_PRH, prh_id)
         if row is None:
+            continue
+        # Ownership validation: the PlanRunHost row must belong to THIS host
+        # AND the requesting agent_instance (Step 5b收口).
+        if row.host_id != payload.host_id:
+            logger.warning(
+                "coord_hb_host_mismatch prh=%d claimed=%s actual=%s",
+                prh_id, payload.host_id, row.host_id,
+            )
+            stale_host_ids.append(prh_id)
             continue
         if row.coordinator_epoch > payload.coordinator_epoch:
             stale_host_ids.append(prh_id)
