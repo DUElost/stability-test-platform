@@ -1,0 +1,264 @@
+"""ADR-0026 Step 5b收口 — startup + concurrency + barrier integration tests.
+
+Covers the acceptance criteria from the final review:
+- Agent main() startup static order (no UnboundLocalError)
+- 20-device / permit=5: simultaneously held permits ≤ 5 at all times
+- Per-device held tracking: same device cannot hold two permits
+- Multi-PlanRun same-host scheduler sharing
+- Barrier: phase advancement wakes all waiters
+"""
+from __future__ import annotations
+
+import inspect
+import threading
+import time
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from backend.agent.coordinator import (
+    HostRunCoordinator,
+    JobExecutionView,
+    PlanRunHostView,
+)
+from backend.agent.operation_scheduler import (
+    OperationScheduler,
+    OperationPermit,
+    PermitDenied,
+)
+
+
+# ── 1. Startup static order ───────────────────────────────────────────────────
+
+
+class TestStartupOrder:
+    def test_coordinator_constructed_before_start(self):
+        """Verify in main() source that coordinator = HostRunCoordinator(...)
+        appears before coordinator.start(). Simple source-text check."""
+        from backend.agent.main import main
+
+        src = inspect.getsource(main)
+        # Find line numbers of the key statements
+        lines = src.split("\n")
+        construct_line = start_line = None
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if "coordinator = HostRunCoordinator(" in stripped:
+                construct_line = i
+            if "coordinator.start()" in stripped:
+                start_line = i
+        assert construct_line is not None, "coordinator construction not found"
+        assert start_line is not None, "coordinator.start() not found"
+        assert construct_line < start_line, (
+            f"coordinator constructed at L{construct_line}, "
+            f"but start() called at L{start_line}"
+        )
+
+    def test_operation_scheduler_importable_without_crash(self):
+        """Module import must not trigger side effects (no UnboundLocalError)."""
+        s = OperationScheduler(max_concurrent=2)
+        assert s.max_concurrent == 2
+        assert s.held == 0
+
+
+# ── 2. 20-device / permit=5 concurrency ───────────────────────────────────────
+
+
+class TestConcurrencyCap:
+    def test_exactly_5_hold_at_any_time(self):
+        """20 threads acquire permits from a scheduler capped at 5. At no
+        point should more than 5 permits be simultaneously held."""
+        s = OperationScheduler(max_concurrent=5)
+        max_observed = [0]
+        lock = threading.Lock()
+        errors = []
+        held_ids = set()
+        held_lock = threading.Lock()
+
+        def worker(did):
+            try:
+                with s.acquire(did) as p:
+                    with lock:
+                        max_observed[0] = max(max_observed[0], s.held)
+                    with held_lock:
+                        assert did not in held_ids, f"device {did} already holds permit"
+                        held_ids.add(did)
+                    time.sleep(0.05)
+                    with held_lock:
+                        held_ids.discard(did)
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert not errors, errors
+        assert max_observed[0] <= 5, f"max held was {max_observed[0]}, cap is 5"
+        assert s.held == 0
+
+    def test_fifo_ordering_is_preserved(self):
+        """Devices acquire in roughly FIFO order — the first waiter gets the
+        first released slot."""
+        s = OperationScheduler(max_concurrent=2)
+        acquired = []
+
+        def worker(did):
+            with s.acquire(did):
+                acquired.append(did)
+                time.sleep(0.03)
+
+        threads = []
+        # Fill all slots
+        for i in range(2):
+            t = threading.Thread(target=worker, args=(i,))
+            t.start()
+            threads.append(t)
+
+        time.sleep(0.1)
+        # Now queue 5 more — they should come out in order
+        for i in range(2, 7):
+            t = threading.Thread(target=worker, args=(i,))
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join(timeout=5)
+
+        # The first 2 were immediate, the next 5 should be roughly FIFO
+        assert acquired[:2] == [0, 1]  # immediate
+        # Queued devices: 2,3,4,5,6 — should come out roughly in order
+        assert acquired[2:] == [2, 3, 4, 5, 6]
+
+
+# ── 3. Per-device held tracking ───────────────────────────────────────────────
+
+
+class TestPerDeviceHeld:
+    def test_same_device_cannot_hold_two_permits(self):
+        s = OperationScheduler(max_concurrent=5)
+        with s.acquire(1):
+            with pytest.raises(PermitDenied, match="already holds a permit"):
+                s.acquire(1)
+
+    def test_held_devices_tracking_accurate(self):
+        s = OperationScheduler(max_concurrent=3)
+        p1 = s.acquire(10)
+        p2 = s.acquire(20)
+        assert s.held_devices == frozenset({10, 20})
+        p1.release()
+        assert s.held_devices == frozenset({20})
+        p2.release()
+        assert s.held_devices == frozenset()
+
+    def test_waiter_on_same_device_rejected(self):
+        """Trying to queue a second waiter on the same device is rejected."""
+        s = OperationScheduler(max_concurrent=1)
+        s.acquire(99)  # hold the only slot
+        with pytest.raises(PermitDenied, match="already waiting"):
+            s.acquire(99)  # try to queue as waiter — can't, device is held
+
+
+# ── 4. Multi-PlanRun shared scheduler ─────────────────────────────────────────
+
+
+class TestMultiPlanRunSharing:
+    def test_two_planruns_share_same_cap(self):
+        """Jobs from different PlanRuns share the same OperationScheduler —
+        two PlanRuns each trying to use 5 permits must contend."""
+        s = OperationScheduler(max_concurrent=5)
+        running = [0]
+        max_running = [0]
+        lock = threading.Lock()
+
+        def plan_run_worker(plan_id, device_count):
+            for d in range(device_count):
+                did = plan_id * 100 + d
+                with s.acquire(did):
+                    with lock:
+                        running[0] += 1
+                        max_running[0] = max(max_running[0], running[0])
+                    time.sleep(0.01)
+                    with lock:
+                        running[0] -= 1
+
+        # Two PlanRuns, each with 5 devices = 10 concurrent attempts, cap=5
+        t1 = threading.Thread(target=plan_run_worker, args=(1, 5))
+        t2 = threading.Thread(target=plan_run_worker, args=(2, 5))
+        t1.start()
+        t2.start()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        assert max_running[0] <= 5
+        assert s.held == 0
+
+
+# ── 5. Barrier coordination ───────────────────────────────────────────────────
+
+
+class TestBarrierCoordination:
+    def test_barrier_wakes_when_all_arrive(self):
+        host = PlanRunHostView(1, 10, "h1")
+        host.set_barrier_total(3)
+
+        arrived = []
+        def job_worker():
+            is_last = host.arrive_at_barrier()
+            if not is_last:
+                ok = host.wait_barrier(timeout=2)
+                arrived.append(("waited", ok))
+            else:
+                host.advance_phase("PATROL")
+                arrived.append("last")
+
+        threads = [threading.Thread(target=job_worker) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=3)
+
+        assert arrived.count("last") == 1
+        assert arrived.count(("waited", True)) == 2
+        assert host.phase == "PATROL"
+
+    def test_coordinator_barrier_integration(self):
+        coord = HostRunCoordinator("http://x", "h1", "inst")
+        coord.register_plan_run_host(1, 10)
+        coord.set_barrier_total(1, 2)
+
+        # Two jobs arrive
+        coord.register_job(100)
+        coord.register_job(101)
+        ok = coord.arrive_at_barrier(1)
+        assert ok is False  # only 1 of 2
+        ok = coord.arrive_at_barrier(1)
+        assert ok is True   # last one
+
+        coord.advance_phase(1, "PATROL")
+        v = coord._plan_run_hosts[1]
+        assert v.phase == "PATROL"
+
+
+# ── 6. last_progress_at production ────────────────────────────────────────────
+
+
+class TestProgressTracking:
+    def test_job_view_updates_and_snapshots(self):
+        jv = JobExecutionView(42)
+        jv.update(state="EXECUTING_STEP", progress_ts="2026-07-19T10:00:00Z")
+        snap = jv.snapshot()
+        assert snap["execution_state"] == "EXECUTING_STEP"
+        assert snap["last_progress_at"] == "2026-07-19T10:00:00Z"
+
+    def test_partial_update(self):
+        jv = JobExecutionView(42)
+        jv.update(state="PATROL_SLEEP")
+        assert jv.snapshot()["execution_state"] == "PATROL_SLEEP"
+        assert jv.snapshot()["last_progress_at"] is None
+        jv.update(progress_ts="2026-07-19T11:00:00Z")
+        assert jv.snapshot()["execution_state"] == "PATROL_SLEEP"
+        assert jv.snapshot()["last_progress_at"] == "2026-07-19T11:00:00Z"

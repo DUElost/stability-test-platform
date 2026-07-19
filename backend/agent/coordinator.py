@@ -33,8 +33,13 @@ class PlanRunHostView:
         self.plan_run_id = plan_run_id
         self.host_id = host_id
         self._lock = threading.Lock()
-        self.phase: Optional[str] = None  # INIT / PATROL / TEARDOWN / BARRIER_WAIT
-        self._epoch: int = 1  # incremented on Agent restart
+        self.phase: str = "INIT"   # INIT → PATROL → TEARDOWN
+        self._epoch: int = 1       # incremented on Agent restart
+        # Barrier: how many jobs on this PlanRunHost and how many have
+        # reached the current phase boundary. Reset on phase advance.
+        self.barrier_total: int = 0
+        self.barrier_arrived: int = 0
+        self._barrier_event = threading.Event()
 
     @property
     def epoch(self) -> int:
@@ -48,6 +53,33 @@ class PlanRunHostView:
 
     def to_payload(self) -> dict:
         return {"id": self.id, "plan_run_id": self.plan_run_id, "host_id": self.host_id}
+
+    def set_barrier_total(self, total: int) -> None:
+        with self._lock:
+            self.barrier_total = total
+            self.barrier_arrived = 0
+            self._barrier_event.clear()
+
+    def arrive_at_barrier(self) -> bool:
+        """Atomically increment arrived count. Returns True if this is the
+        LAST arrival (phase can advance), False otherwise."""
+        with self._lock:
+            self.barrier_arrived += 1
+            if self.barrier_arrived >= self.barrier_total:
+                self._barrier_event.set()
+                return True
+            return False
+
+    def wait_barrier(self, timeout: float | None = None) -> bool:
+        """Block until all jobs have arrived. Returns True on phase advance,
+        False on timeout."""
+        return self._barrier_event.wait(timeout=timeout)
+
+    def advance_phase(self, next_phase: str) -> None:
+        with self._lock:
+            self.phase = next_phase
+            self.barrier_arrived = 0
+            self._barrier_event.clear()
 
 
 class JobExecutionView:
@@ -163,7 +195,38 @@ class HostRunCoordinator:
         with self._lock:
             self._plan_run_hosts.pop(host_row_id, None)
 
-    def register_job(self, job_id: int) -> JobExecutionView:
+    def set_barrier_total(self, host_row_id: int, total: int) -> None:
+        """Called when all jobs for a PlanRunHost are admitted — sets the
+        barrier count for phase advancement."""
+        with self._lock:
+            v = self._plan_run_hosts.get(host_row_id)
+        if v is not None:
+            v.set_barrier_total(total)
+
+    def arrive_at_barrier(self, host_row_id: int) -> bool:
+        """One job has finished the current phase. Returns True if this is
+        the LAST job (caller should advance phase)."""
+        with self._lock:
+            v = self._plan_run_hosts.get(host_row_id)
+        if v is None:
+            return False
+        return v.arrive_at_barrier()
+
+    def wait_barrier(self, host_row_id: int, timeout: float | None = None) -> bool:
+        """Block until all jobs on this PlanRunHost have arrived at the
+        barrier (phase can advance)."""
+        with self._lock:
+            v = self._plan_run_hosts.get(host_row_id)
+        if v is None:
+            return True  # no host to wait on — proceed
+        return v.wait_barrier(timeout=timeout)
+
+    def advance_phase(self, host_row_id: int, next_phase: str) -> None:
+        with self._lock:
+            v = self._plan_run_hosts.get(host_row_id)
+        if v is None:
+            return
+        v.advance_phase(next_phase)
         with self._lock:
             if job_id not in self._job_views:
                 self._job_views[job_id] = JobExecutionView(job_id)

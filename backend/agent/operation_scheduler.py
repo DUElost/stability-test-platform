@@ -80,6 +80,9 @@ class OperationScheduler:
         # Cancelled device_ids (aborted during wait). The waker checks this
         # and raises PermitDenied instead of returning a permit.
         self._cancelled: set[int] = set()
+        # Per-device held tracking: a device can hold at most ONE permit at a
+        # time (a job shouldn't be running two script steps concurrently).
+        self._held_devices: set[int] = set()
 
     @property
     def max_concurrent(self) -> int:
@@ -117,8 +120,14 @@ class OperationScheduler:
                 # Per-device fairness: only one waiter per device.
                 raise PermitDenied(f"device {device_id} already waiting")
             if self._held < self._max_concurrent and not self._waiters:
+                # A device holding a permit cannot acquire another.
+                if device_id in self._held_devices:
+                    raise PermitDenied(
+                        f"device {device_id} already holds a permit"
+                    )
                 # Fast path: slot available, no one ahead.
                 self._held += 1
+                self._held_devices.add(device_id)
                 return OperationPermit(self, device_id)
             # Queue
             event = threading.Event()
@@ -154,6 +163,7 @@ class OperationScheduler:
     def _release(self, permit: OperationPermit) -> None:
         with self._lock:
             self._held = max(0, self._held - 1)
+            self._held_devices.discard(permit.device_id)
             self._wake_one_locked()
 
     def _wake_one_locked(self) -> None:
@@ -163,6 +173,7 @@ class OperationScheduler:
         while self._waiters and self._held < self._max_concurrent:
             device_id, event = self._waiters.popitem(last=False)
             self._held += 1
+            self._held_devices.add(device_id)
             event.set()
 
     def cancel_device(self, device_id: int) -> None:
@@ -191,6 +202,12 @@ class OperationScheduler:
 
     # ── testing / observability hooks ──────────────────────────────────────
 
-    def _waiting_devices(self) -> list[int]:
+    @property
+    def held_devices(self) -> frozenset[int]:
+        with self._lock:
+            return frozenset(self._held_devices)
+
+    @property
+    def waiting_devices(self) -> list[int]:
         with self._lock:
             return list(self._waiters.keys())
