@@ -2,19 +2,26 @@
 
 After Phase 4, this module only writes step_trace to SQLite WAL.
 HTTP upload is delegated to StepTraceUploader.
-The log_rate_limit API is retained for SocketIO control command compatibility.
+
+ADR-0026 P2-2: ``send_log`` forwards to ``AgentSocketIOClient`` (batched +
+rate-limited) when bound; otherwise remains a no-op.
 """
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from backend.agent.registry.local_db import LocalDB
 
 logger = logging.getLogger(__name__)
+
+_STEP_LOG_STREAM = os.getenv("STP_STEP_LOG_STREAM", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 
 
 class StepTraceWriter:
@@ -31,6 +38,13 @@ class StepTraceWriter:
         self._log_count = 0
         self._rate_window_start = time.monotonic()
         self._lock = threading.Lock()
+        self._sio_client: Optional[Any] = None
+
+    def bind_sio_client(self, sio_client: Any) -> None:
+        """Attach SocketIO client for real-time step_log streaming (P2-2)."""
+        self._sio_client = sio_client
+        if self._log_rate_limit is not None and hasattr(sio_client, "set_log_rate_limit"):
+            sio_client.set_log_rate_limit(self._log_rate_limit)
 
     @property
     def connected(self) -> bool:
@@ -42,6 +56,8 @@ class StepTraceWriter:
             self._log_rate_limit = limit
             self._log_count = 0
             self._rate_window_start = time.monotonic()
+        if self._sio_client is not None and hasattr(self._sio_client, "set_log_rate_limit"):
+            self._sio_client.set_log_rate_limit(limit)
         action = f"{limit} msg/s" if limit is not None else "unlimited"
         logger.info("log_rate_limit: %s", action)
 
@@ -90,11 +106,23 @@ class StepTraceWriter:
         tag: str,
         message: str,
     ) -> Optional[str]:
-        """No-op: log streaming now handled by SocketIO sio_client."""
-        return None
+        """Forward to SocketIO batcher when streaming enabled and client bound."""
+        del device_id  # reserved for future device-scoped rooms
+        if not _STEP_LOG_STREAM or self._sio_client is None:
+            return None
+        try:
+            ok = self._sio_client.send_log(job_id, tag, level, message)
+            return "ok" if ok else None
+        except Exception as e:
+            logger.debug("sio_send_log_failed: %s", e)
+            return None
 
     def close(self) -> None:
-        pass
+        if self._sio_client is not None and hasattr(self._sio_client, "flush_logs"):
+            try:
+                self._sio_client.flush_logs()
+            except Exception:
+                logger.debug("sio_flush_logs_on_close_failed", exc_info=True)
 
 
 def _utcnow() -> str:

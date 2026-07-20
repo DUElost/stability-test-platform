@@ -51,6 +51,7 @@ class HeartbeatThread:
         # ADR-0025 Sprint 2: 运行日志归档可观测指标（→ extra['archive']）
         get_archive_metrics: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
         on_devices_reconnected: Optional[Callable[[List[str]], None]] = None,
+        on_log_rate_limit: Optional[Callable[[Optional[int]], None]] = None,
     ):
         self._api_url = api_url
         self._host_id = host_id
@@ -73,6 +74,7 @@ class HeartbeatThread:
         self._get_outbox_counts = get_outbox_counts
         self._get_archive_metrics = get_archive_metrics
         self._on_devices_reconnected = on_devices_reconnected
+        self._on_log_rate_limit = on_log_rate_limit
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
@@ -247,10 +249,9 @@ class HeartbeatThread:
         # ADR-0026 P0: close the backpressure loop — honour server interval hint.
         if isinstance(response, dict):
             hint = response.get("heartbeat_interval_seconds")
-            if hint is None:
-                bp = response.get("backpressure")
-                if isinstance(bp, dict):
-                    hint = bp.get("heartbeat_interval_seconds")
+            bp = response.get("backpressure")
+            if hint is None and isinstance(bp, dict):
+                hint = bp.get("heartbeat_interval_seconds")
             if isinstance(hint, (int, float)) and not isinstance(hint, bool):
                 suggested = float(hint)
                 clamped = max(
@@ -263,6 +264,26 @@ class HeartbeatThread:
                         self._poll_interval, clamped,
                     )
                     self._poll_interval = clamped
+            # ADR-0026 P2-2: honour log_rate_limit from backpressure hint.
+            if isinstance(bp, dict) and "log_rate_limit" in bp:
+                raw_limit = bp.get("log_rate_limit")
+                limit: Optional[int]
+                if raw_limit is None or raw_limit == "":
+                    limit = None
+                else:
+                    try:
+                        limit = int(raw_limit)
+                    except (TypeError, ValueError):
+                        limit = None
+                if self._on_log_rate_limit is not None:
+                    try:
+                        self._on_log_rate_limit(limit)
+                    except Exception as exc:
+                        logger.warning("log_rate_limit_callback_failed: %s", exc)
+                elif self._sio_client is not None and hasattr(
+                    self._sio_client, "set_log_rate_limit"
+                ):
+                    self._sio_client.set_log_rate_limit(limit)
 
         if response and self._pending_reconnected_serials and self._on_devices_reconnected:
             serials = list(self._pending_reconnected_serials)

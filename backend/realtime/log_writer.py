@@ -38,13 +38,30 @@ async def append_log_line(
     step_id: str = "",
 ) -> None:
     """Append a single log line to the job's console.log file."""
+    await append_log_lines(
+        job_id,
+        [{"msg": line, "level": level, "ts": ts, "step_id": step_id}],
+    )
+
+
+async def append_log_lines(job_id: int, lines: list[dict]) -> None:
+    """Append multiple log lines in one lock/write (ADR-0026 P2-2 batch path)."""
+    if not lines:
+        return
     path = _log_path(job_id)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    prefix = f"{ts} [{level}]" if ts else f"[{level}]"
-    if step_id:
-        prefix = f"{prefix} [{step_id}]"
-    formatted = f"{prefix} {line}\n"
+    chunks: list[str] = []
+    for item in lines:
+        level = item.get("level", "INFO") or "INFO"
+        ts = item.get("ts", "") or ""
+        step_id = item.get("step_id", "") or ""
+        msg = item.get("msg", "") or ""
+        prefix = f"{ts} [{level}]" if ts else f"[{level}]"
+        if step_id:
+            prefix = f"{prefix} [{step_id}]"
+        chunks.append(f"{prefix} {msg}\n")
+    formatted = "".join(chunks)
 
     lock = _get_lock(job_id)
     async with lock:

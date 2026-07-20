@@ -21,9 +21,10 @@
 | `STP_ALLOW_REGISTER` | 公开注册；生产默认关闭 |
 | `STP_METRICS_AUTH_REQUIRED` | `/metrics` 鉴权（建议生产 `1`） |
 | `STP_ENABLE_INPROCESS_SAQ` | `1`=进程内 SAQ Worker；`0`=仅 producer（enqueue），需外部 worker 同队列消费（ADR-0026 P0） |
-| `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | O(1) 计数器对账 sweep 周期（默认 300） |
 | `DEVICE_SNAPSHOT_INTERVAL` | 心跳硬件字段降采样间隔秒（默认 30） |
 | `STP_HEARTBEAT_INTERVAL_BASE` / `_MIN` / `_MAX` | 控制面建议 Agent 心跳周期（随在线设备数缓增） |
+| `STP_LOG_RATE_LIMIT_BASE` / `_MIN` | 控制面建议每 host `step_log` 行速率（随设备数收紧；ADR-0026 P2-2） |
+| `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | O(1) 计数器对账 sweep 周期（默认 300） |
 | `STP_SCRIPT_ROOT` | 脚本扫描根；**开发必须**设为 `<repo>/backend/agent/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | 扫描机 ≠ 运行机时 Agent 侧脚本根 |
 | `STP_NFS_ROOT` / `STP_AEE_NFS_ROOT` | 共享存储（方案 C：汇总/dedup，不含运行日志唯一副本） |
@@ -69,6 +70,8 @@
 | `ADB_PATH` / `ANDROID_ADB_SERVER_PORT` | WSL 联调端口须 `5039` |
 | `STP_AEE_LOCAL_ROOT` | HDD AEE（默认 `/mnt/hdd/aee_events`） |
 | `STP_WATCHER_ENABLED` | Watcher 子系统开关（默认 `true`） |
+| `STP_STEP_LOG_STREAM` | `1`=pipeline 日志经 SocketIO 批推送；`0`=保持 no-op（ADR-0026 P2-2） |
+| `STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS` | step_log 批大小与定时 flush（默认 50 / 200） |
 | `STP_AEE_CIFS_ROOT` / `STP_AEE_NFS_ROOT` | 15.4 上送 / dedup 共享根（按部署） |
 
 热更新会附带控制面 `pipeline_schema.json` 与 Agent `VERSION`（code revision）。
