@@ -498,6 +498,26 @@ class TestRunPlanEndpointEnqueues:
         assert kwargs["plan_run_id"] == data["id"]
         assert kwargs["key"] == f"precheck:{data['id']}"
 
+    def test_run_plan_stores_optional_note_in_run_context(
+        self, client, auth_headers, db_session, gate_chain
+    ):
+        plan_id = gate_chain["plan"].id
+        device_ids = [gate_chain["device_a"].id]
+
+        with patch("backend.api.routes.plans.enqueue_sync"):
+            resp = client.post(
+                f"/api/v1/plans/{plan_id}/run",
+                json={"device_ids": device_ids, "note": "  sprint4 smoke  "},
+                headers=auth_headers,
+            )
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()["data"]
+        assert data["run_context"]["note"] == "sprint4 smoke"
+        pr = db_session.get(PlanRun, data["id"])
+        assert pr is not None
+        assert pr.run_context["note"] == "sprint4 smoke"
+
     def test_run_plan_returns_503_when_enqueue_unavailable(
         self, client, auth_headers, db_session, gate_chain,
     ):

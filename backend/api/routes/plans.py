@@ -133,6 +133,8 @@ class PlanRunTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     device_ids: List[int] = Field(min_length=1)
+    # Optional operator note stored in PlanRun.run_context["note"] (no DB column).
+    note: Optional[str] = Field(default=None, max_length=500)
 
     @field_validator("device_ids")
     @classmethod
@@ -142,6 +144,14 @@ class PlanRunTrigger(BaseModel):
         if len(value) != len(set(value)):
             raise ValueError("device_ids must be unique")
         return value
+
+    @field_validator("note")
+    @classmethod
+    def normalize_note(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
 
 
 class PlanRunOut(BaseModel):
@@ -649,6 +659,10 @@ def run_plan(
       3. Return the PlanRun row immediately.  The frontend can navigate to
          the PlanRun detail page and watch ``run_context.precheck`` evolve.
     """
+    run_context: dict = {"dispatch_state": initial_dispatch_state()}
+    if payload.note:
+        run_context["note"] = payload.note
+
     try:
         pr = prepare_plan_run(
             plan_id=plan_id,
@@ -656,7 +670,7 @@ def run_plan(
             triggered_by=current_user.username if current_user else "api",
             db=db,
             run_type="MANUAL",
-            run_context={"dispatch_state": initial_dispatch_state()},
+            run_context=run_context,
         )
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=e.detail())
