@@ -119,12 +119,13 @@ class OperationScheduler:
             if device_id in self._waiters:
                 # Per-device fairness: only one waiter per device.
                 raise PermitDenied(f"device {device_id} already waiting")
+            # Must reject before enqueue — otherwise a device that already
+            # holds the only slot waits forever for itself to release.
+            if device_id in self._held_devices:
+                raise PermitDenied(
+                    f"device {device_id} already holds a permit"
+                )
             if self._held < self._max_concurrent and not self._waiters:
-                # A device holding a permit cannot acquire another.
-                if device_id in self._held_devices:
-                    raise PermitDenied(
-                        f"device {device_id} already holds a permit"
-                    )
                 # Fast path: slot available, no one ahead.
                 self._held += 1
                 self._held_devices.add(device_id)

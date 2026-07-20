@@ -47,8 +47,34 @@ class TestOperationScheduler:
         s.acquire(1)  # hold the only slot
 
         # Second job on the SAME device must raise immediately
-        with pytest.raises(PermitDenied, match="already waiting"):
+        # (before enqueue — otherwise it waits forever for itself).
+        with pytest.raises(PermitDenied, match="already holds a permit"):
             s.acquire(1)
+
+    def test_already_waiting_rejected(self):
+        s = OperationScheduler(max_concurrent=1)
+        s.acquire(1)  # fill cap so device 2 must queue
+
+        started = threading.Event()
+        result = []
+
+        def waiter():
+            started.set()
+            try:
+                s.acquire(2)
+            except PermitDenied as exc:
+                result.append(str(exc))
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        assert started.wait(timeout=2)
+        time.sleep(0.1)  # ensure device 2 is queued
+        with pytest.raises(PermitDenied, match="already waiting"):
+            s.acquire(2)
+        s.cancel_device(2)
+        t.join(timeout=2)
+        assert not t.is_alive()
+        assert result and "cancelled" in result[0]
 
     def test_cancel_device_wakes_waiter(self):
         s = OperationScheduler(max_concurrent=1)
