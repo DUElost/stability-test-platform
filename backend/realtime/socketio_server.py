@@ -57,10 +57,18 @@ def _now_iso() -> str:
 
 
 def create_sio_server() -> socketio.AsyncServer:
-    """Create and configure the SocketIO AsyncServer singleton."""
+    """Create and configure the SocketIO AsyncServer singleton.
+
+    ADR-0027 P3-2: when ``STP_SOCKETIO_REDIS_ADAPTER=1``, attach
+    ``AsyncRedisManager`` so room emits fan out across control-plane
+    processes. Default remains in-memory (single-process).
+    """
     global _sio
 
-    sio = socketio.AsyncServer(
+    from backend.realtime.socketio_redis import build_socketio_client_manager
+
+    client_manager = build_socketio_client_manager()
+    sio_kwargs: Dict[str, Any] = dict(
         async_mode="asgi",
         cors_allowed_origins="*",
         logger=False,
@@ -69,6 +77,10 @@ def create_sio_server() -> socketio.AsyncServer:
         ping_interval=25,
         max_http_buffer_size=1_000_000,
     )
+    if client_manager is not None:
+        sio_kwargs["client_manager"] = client_manager
+
+    sio = socketio.AsyncServer(**sio_kwargs)
 
     _register_agent_namespace(sio)
     _register_dashboard_namespace(sio)
@@ -355,6 +367,10 @@ async def call_agent_rpc(
     Internally uses ``sio.call(event, data, to=sid, ...)`` which relies on
     the SocketIO ack mechanism.  The agent's handler must ``return`` the
     response value for it to be auto-forwarded as the ack payload.
+
+    Multi-instance note (ADR-0027 P3-2): sid lookup is **process-local**.
+    Redis adapter fans out room emits, but RPC still requires the Agent
+    WebSocket to land on this process (sticky sessions at the LB).
 
     Raises:
         RuntimeError: if SocketIO has not been initialised.

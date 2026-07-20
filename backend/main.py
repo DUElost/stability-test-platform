@@ -266,10 +266,13 @@ async def health_check():
     try:
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+        from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
+
         payload: dict = {
             "status": "healthy",
             "saq_ready": is_saq_ready(),
             "saq_inprocess_worker": inprocess_saq,
+            "socketio_redis_adapter": socketio_redis_adapter_enabled(),
         }
         return {"data": payload, "error": None}
     except Exception:
