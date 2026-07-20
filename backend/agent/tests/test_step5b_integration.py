@@ -101,37 +101,34 @@ class TestConcurrencyCap:
         assert s.held == 0
 
     def test_fifo_ordering_is_preserved(self):
-        """Devices acquire in roughly FIFO order — the first waiter gets the
-        first released slot."""
-        s = OperationScheduler(max_concurrent=2)
-        acquired = []
+        """Queued devices are woken in enqueue order (FIFO)."""
+        s = OperationScheduler(max_concurrent=1)
+        holder = s.acquire(0)
+        acquired: list[int] = []
 
-        def worker(did):
+        def worker(did: int) -> None:
             with s.acquire(did):
                 acquired.append(did)
-                time.sleep(0.03)
 
         threads = []
-        # Fill all slots
-        for i in range(2):
+        # Enqueue one-by-one and wait until each is actually in the queue,
+        # so thread-start races cannot reorder waiters.
+        for i in range(1, 6):
             t = threading.Thread(target=worker, args=(i,))
             t.start()
+            deadline = time.time() + 2
+            while i not in s.waiting_devices and time.time() < deadline:
+                time.sleep(0.005)
+            assert i in s.waiting_devices, f"device {i} never queued"
             threads.append(t)
 
-        time.sleep(0.1)
-        # Now queue 5 more — they should come out in order
-        for i in range(2, 7):
-            t = threading.Thread(target=worker, args=(i,))
-            t.start()
-            threads.append(t)
-
+        holder.release()
         for t in threads:
             t.join(timeout=5)
+            assert not t.is_alive()
 
-        # The first 2 were immediate, the next 5 should be roughly FIFO
-        assert acquired[:2] == [0, 1]  # immediate
-        # Queued devices: 2,3,4,5,6 — should come out roughly in order
-        assert acquired[2:] == [2, 3, 4, 5, 6]
+        assert acquired == [1, 2, 3, 4, 5]
+        assert s.held == 0
 
 
 # ── 3. Per-device held tracking ───────────────────────────────────────────────
@@ -155,11 +152,11 @@ class TestPerDeviceHeld:
         assert s.held_devices == frozenset()
 
     def test_waiter_on_same_device_rejected(self):
-        """Trying to queue a second waiter on the same device is rejected."""
+        """Same device already holding a permit is rejected before enqueue."""
         s = OperationScheduler(max_concurrent=1)
         s.acquire(99)  # hold the only slot
-        with pytest.raises(PermitDenied, match="already waiting"):
-            s.acquire(99)  # try to queue as waiter — can't, device is held
+        with pytest.raises(PermitDenied, match="already holds a permit"):
+            s.acquire(99)  # cannot queue behind itself while holding
 
 
 # ── 4. Multi-PlanRun shared scheduler ─────────────────────────────────────────

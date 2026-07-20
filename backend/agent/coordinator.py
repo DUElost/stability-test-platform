@@ -227,6 +227,8 @@ class HostRunCoordinator:
         if v is None:
             return
         v.advance_phase(next_phase)
+
+    def register_job(self, job_id: int) -> JobExecutionView:
         with self._lock:
             if job_id not in self._job_views:
                 self._job_views[job_id] = JobExecutionView(job_id)
