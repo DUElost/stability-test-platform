@@ -136,36 +136,60 @@ class AgentNamespace(socketio.AsyncNamespace):
         logger.info("agent_sio_disconnected sid=%s host_id=%s", sid, host_id)
 
     async def on_step_log(self, sid: str, data: dict):
-        """Agent emits step_log → broadcast to dashboard subscribers + persist to file."""
-        job_id = data.get("job_id")
+        """Agent emits step_log → broadcast to dashboard subscribers + persist to file.
+
+        ADR-0026 P2-2: accepts both legacy single-line payloads and batched
+        ``lines: [{step_id, seq, level, ts, msg}, ...]``.
+        """
+        job_id = data.get("job_id") or data.get("run_id")
         if not job_id:
             return
 
-        log_payload = {
-            "type": "STEP_LOG",
-            "payload": {
+        run_id = data.get("run_id", job_id)
+        raw_lines = data.get("lines")
+        if isinstance(raw_lines, list) and raw_lines:
+            lines = [
+                {
+                    "step_id": item.get("step_id", ""),
+                    "seq": item.get("seq"),
+                    "level": item.get("level", "INFO"),
+                    "ts": item.get("ts", ""),
+                    "msg": item.get("msg", ""),
+                }
+                for item in raw_lines
+                if isinstance(item, dict)
+            ]
+        else:
+            lines = [{
                 "step_id": data.get("step_id", ""),
                 "seq": data.get("seq"),
                 "level": data.get("level", "INFO"),
                 "ts": data.get("ts", ""),
                 "msg": data.get("msg", ""),
-            },
-            "timestamp": _now_iso(),
-        }
+            }]
+
+        if not lines:
+            return
 
         sio = get_sio()
-        await sio.emit("step_log", log_payload, namespace="/dashboard", room=f"job:{job_id}")
-        await sio.emit("step_log", log_payload, namespace="/dashboard", room=f"run:{data.get('run_id', job_id)}")
+        for line in lines:
+            log_payload = {
+                "type": "STEP_LOG",
+                "payload": {
+                    "step_id": line["step_id"],
+                    "seq": line["seq"],
+                    "level": line["level"],
+                    "ts": line["ts"],
+                    "msg": line["msg"],
+                },
+                "timestamp": _now_iso(),
+            }
+            await sio.emit("step_log", log_payload, namespace="/dashboard", room=f"job:{job_id}")
+            await sio.emit("step_log", log_payload, namespace="/dashboard", room=f"run:{run_id}")
 
         try:
-            from backend.realtime.log_writer import append_log_line
-            await append_log_line(
-                job_id=int(job_id),
-                line=data.get("msg", ""),
-                level=data.get("level", "INFO"),
-                ts=data.get("ts", ""),
-                step_id=data.get("step_id", ""),
-            )
+            from backend.realtime.log_writer import append_log_lines
+            await append_log_lines(job_id=int(job_id), lines=lines)
         except Exception:
             logger.debug("log_writer_append_failed job_id=%s", job_id, exc_info=True)
 

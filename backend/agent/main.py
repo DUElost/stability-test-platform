@@ -617,6 +617,8 @@ def main() -> None:
 
     # Step trace local writer (Redis XADD removed in Phase 4; HTTP upload via StepTraceUploader)
     mq_producer = StepTraceWriter("", host_id, local_db=local_db)
+    # ADR-0026 P2-2: wire pipeline _MQStepLogger → SocketIO batched step_log
+    mq_producer.bind_sio_client(sio_client)
 
     # Assigned after the executor is created; the control closure also handles
     # commands received during the small startup window.
@@ -764,6 +766,8 @@ def main() -> None:
             if _execute_recovery_actions is not None
             else False
         ),
+        # ADR-0026 P2-2: apply server log_rate_limit hint to SocketIO batcher
+        on_log_rate_limit=mq_producer.set_log_rate_limit,
     )
     heartbeat_thread.start()
 

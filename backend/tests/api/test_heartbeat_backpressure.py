@@ -23,6 +23,16 @@ def test_suggested_heartbeat_interval_scales_with_fleet(monkeypatch):
     assert _suggested_heartbeat_interval(400) == 60  # clamped
 
 
+def test_suggested_log_rate_limit_scales_with_fleet(monkeypatch):
+    from backend.api.routes.heartbeat import _suggested_log_rate_limit
+
+    monkeypatch.setattr("backend.api.routes.heartbeat.LOG_RATE_LIMIT_BASE", 200)
+    monkeypatch.setattr("backend.api.routes.heartbeat.LOG_RATE_LIMIT_MIN", 20)
+    assert _suggested_log_rate_limit(0) == 200
+    assert _suggested_log_rate_limit(25) == 180
+    assert _suggested_log_rate_limit(1000) == 20
+
+
 def test_hardware_snapshot_downsample_gate(monkeypatch):
     monkeypatch.setattr("backend.api.routes.heartbeat.SNAPSHOT_INTERVAL_SECONDS", 30)
     now = datetime(2026, 7, 20, 12, 0, 0, tzinfo=timezone.utc)

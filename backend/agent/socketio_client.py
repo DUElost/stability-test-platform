@@ -52,10 +52,15 @@ class AgentSocketIOClient:
     Drop-in replacement for the legacy WebSocket client. The public API
     (connect, disconnect, send_log, send_step_update, send_heartbeat,
     connected property) is unchanged so callers need no modifications.
+
+    ADR-0026 P2-2: ``send_log`` batches lines (size/time flush) and applies
+    optional ``log_rate_limit`` backpressure before emit.
     """
 
     MAX_BUFFER = _env_int("WS_BUFFER_SIZE", 1000)
     MAX_RECONNECT_DELAY = _env_float("WS_RECONNECT_MAX_DELAY", 30.0)
+    LOG_BATCH_MAX_LINES = _env_int("STP_LOG_BATCH_MAX_LINES", 50)
+    LOG_BATCH_FLUSH_MS = _env_int("STP_LOG_BATCH_FLUSH_MS", 200)
 
     def __init__(self, api_url: str, host_id: int | str, agent_secret: str = ""):
         self._api_url = api_url
@@ -70,6 +75,13 @@ class AgentSocketIOClient:
         self._control_handler: Optional[Any] = None
         # 审计 Agent #5: buffer 溢出丢弃计数,_emit/_replay_buffer prepend 路径共享。
         self._dropped_count = 0
+        # ADR-0026 P2-2: per-job log batches + rate limit
+        self._log_batches: Dict[int, list] = {}
+        self._log_flush_timer: Optional[threading.Timer] = None
+        self._log_rate_limit: Optional[int] = None
+        self._log_rate_count = 0
+        self._log_rate_window_start = time.monotonic()
+        self._log_rate_dropped = 0
 
     @property
     def connected(self) -> bool:
@@ -173,6 +185,7 @@ class AgentSocketIOClient:
 
     def disconnect(self):
         """Gracefully close the SocketIO connection and stop reconnect loop."""
+        self.flush_logs()
         self._stop_event.set()
         self._connected = False
         if self._sio:
@@ -314,17 +327,96 @@ class AgentSocketIOClient:
         else:
             return self._emit(msg_type or "message", message)
 
+    def set_log_rate_limit(self, limit: Optional[int]) -> None:
+        """Max log lines accepted per second (None = unlimited). Excess dropped."""
+        with self._lock:
+            self._log_rate_limit = limit
+            self._log_rate_count = 0
+            self._log_rate_window_start = time.monotonic()
+        action = f"{limit} lines/s" if limit is not None else "unlimited"
+        logger.info("sio_log_rate_limit: %s", action)
+
     def send_log(self, run_id: int, step_id: int | str, level: str, msg: str) -> bool:
-        """Send a log line message."""
-        return self._emit("step_log", {
-            "run_id": run_id,
-            "job_id": run_id,
-            "step_id": step_id,
-            "seq": self._next_seq(run_id),
-            "level": level,
-            "ts": datetime.now(timezone.utc).isoformat() + "Z",
-            "msg": msg,
-        })
+        """Queue a log line; flush by batch size / timer (ADR-0026 P2-2)."""
+        should_flush = False
+        with self._lock:
+            if not self._allow_log_locked():
+                self._log_rate_dropped += 1
+                if self._log_rate_dropped == 1 or self._log_rate_dropped % 100 == 0:
+                    logger.warning(
+                        "sio_log_rate_dropped count=%d limit=%s",
+                        self._log_rate_dropped, self._log_rate_limit,
+                    )
+                return False
+            seq = self._seq_counters.get(run_id, 0) + 1
+            self._seq_counters[run_id] = seq
+            line = {
+                "step_id": step_id,
+                "seq": seq,
+                "level": level,
+                "ts": datetime.now(timezone.utc).isoformat() + "Z",
+                "msg": msg,
+            }
+            batch = self._log_batches.setdefault(int(run_id), [])
+            batch.append(line)
+            if len(batch) >= max(1, self.LOG_BATCH_MAX_LINES):
+                should_flush = True
+            elif self._log_flush_timer is None:
+                delay = max(1, self.LOG_BATCH_FLUSH_MS) / 1000.0
+                self._log_flush_timer = threading.Timer(delay, self._flush_logs_timer)
+                self._log_flush_timer.daemon = True
+                self._log_flush_timer.start()
+        if should_flush:
+            return self.flush_logs(run_id=int(run_id))
+        return True
+
+    def _allow_log_locked(self) -> bool:
+        """Token-bucket style 1s window. Caller must hold ``_lock``."""
+        limit = self._log_rate_limit
+        if limit is None:
+            return True
+        if limit <= 0:
+            return False
+        now = time.monotonic()
+        if now - self._log_rate_window_start >= 1.0:
+            self._log_rate_window_start = now
+            self._log_rate_count = 0
+        if self._log_rate_count >= limit:
+            return False
+        self._log_rate_count += 1
+        return True
+
+    def _flush_logs_timer(self) -> None:
+        with self._lock:
+            self._log_flush_timer = None
+        self.flush_logs()
+
+    def flush_logs(self, run_id: Optional[int] = None) -> bool:
+        """Flush pending log batches (all jobs, or one job)."""
+        with self._lock:
+            if self._log_flush_timer is not None and run_id is None:
+                try:
+                    self._log_flush_timer.cancel()
+                except Exception:
+                    pass
+                self._log_flush_timer = None
+            if run_id is None:
+                pending = self._log_batches
+                self._log_batches = {}
+            else:
+                lines = self._log_batches.pop(int(run_id), [])
+                pending = {int(run_id): lines} if lines else {}
+        ok = True
+        for jid, lines in pending.items():
+            if not lines:
+                continue
+            if not self._emit("step_log", {
+                "run_id": jid,
+                "job_id": jid,
+                "lines": lines,
+            }):
+                ok = False
+        return ok
 
     def send_step_update(self, run_id: int, step_id: int | str, status: str, **kwargs) -> bool:
         """Send a step status update."""

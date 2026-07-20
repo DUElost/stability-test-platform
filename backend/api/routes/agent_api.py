@@ -810,13 +810,20 @@ async def agent_heartbeat(
     backpressure = await _get_backpressure()
     # Light agent heartbeat: scale interval with online healthy device count
     # (same contract as /api/v1/heartbeat — ADR-0026 P0).
-    from backend.api.routes.heartbeat import _suggested_heartbeat_interval
+    from backend.api.routes.heartbeat import (
+        _suggested_heartbeat_interval,
+        _suggested_log_rate_limit,
+    )
     suggested_interval = _suggested_heartbeat_interval(online_healthy)
+    suggested_log_rate = (
+        backpressure if backpressure is not None
+        else _suggested_log_rate_limit(online_healthy)
+    )
     from backend.services.agent_version_gate import resolve_agent_min_version
     return ok(HeartbeatResponse(
         script_catalog_outdated=scripts_outdated,
         backpressure=BackpressureInfo(
-            log_rate_limit=backpressure,
+            log_rate_limit=suggested_log_rate,
             heartbeat_interval_seconds=suggested_interval,
         ),
         capacity={

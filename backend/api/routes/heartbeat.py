@@ -26,6 +26,9 @@ SNAPSHOT_INTERVAL_SECONDS = int(os.getenv("DEVICE_SNAPSHOT_INTERVAL", "30"))
 HEARTBEAT_INTERVAL_MIN = int(os.getenv("STP_HEARTBEAT_INTERVAL_MIN", "15"))
 HEARTBEAT_INTERVAL_MAX = int(os.getenv("STP_HEARTBEAT_INTERVAL_MAX", "60"))
 HEARTBEAT_INTERVAL_BASE = int(os.getenv("STP_HEARTBEAT_INTERVAL_BASE", "20"))
+# ADR-0026 P2-2: 建议每 host 日志行速率上限（lines/s）；随设备数收紧
+LOG_RATE_LIMIT_BASE = int(os.getenv("STP_LOG_RATE_LIMIT_BASE", "200"))
+LOG_RATE_LIMIT_MIN = int(os.getenv("STP_LOG_RATE_LIMIT_MIN", "20"))
 
 
 def _suggested_heartbeat_interval(online_healthy: int) -> int:
@@ -33,6 +36,13 @@ def _suggested_heartbeat_interval(online_healthy: int) -> int:
     # ~+1s per 10 healthy devices, clamped.
     scaled = HEARTBEAT_INTERVAL_BASE + max(0, online_healthy) // 10
     return max(HEARTBEAT_INTERVAL_MIN, min(HEARTBEAT_INTERVAL_MAX, scaled))
+
+
+def _suggested_log_rate_limit(online_healthy: int) -> int:
+    """Tighten per-host step_log rate as fleet grows (ADR-0026 P2-2)."""
+    # -10 lines/s per 10 healthy devices, floor at LOG_RATE_LIMIT_MIN.
+    scaled = LOG_RATE_LIMIT_BASE - (max(0, online_healthy) // 10) * 10
+    return max(LOG_RATE_LIMIT_MIN, scaled)
 
 
 def _should_write_hardware_snapshot(device: Device, now: datetime) -> bool:
@@ -418,6 +428,7 @@ def _process_heartbeat_with_db(
     from backend.services.agent_version_gate import resolve_agent_min_version
 
     suggested_interval = _suggested_heartbeat_interval(online_healthy_count)
+    suggested_log_rate = _suggested_log_rate_limit(online_healthy_count)
     return {
         "ok": True,
         "host_id": host.id,
@@ -428,9 +439,9 @@ def _process_heartbeat_with_db(
             "online_healthy_devices": online_healthy_count,
         },
         "agent_min_version": resolve_agent_min_version(),
-        # ADR-0026 P0: heartbeat backpressure / interval hint for Agent
+        # ADR-0026 P0/P2-2: heartbeat + log-rate backpressure hints for Agent
         "backpressure": {
-            "log_rate_limit": None,
+            "log_rate_limit": suggested_log_rate,
             "heartbeat_interval_seconds": suggested_interval,
         },
         "heartbeat_interval_seconds": suggested_interval,
