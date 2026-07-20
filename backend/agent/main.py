@@ -774,6 +774,8 @@ def main() -> None:
     # ADR-0026 Step 5b: create host-global scheduler + coordinator BEFORE
     # any component that references them (LeaseRenewer, claim loop, etc.).
     operation_scheduler = OperationScheduler()
+    # Late-bind: HeartbeatThread starts before scheduler exists.
+    heartbeat_thread._get_operation_stats = operation_scheduler.concurrency_snapshot
     coordinator = HostRunCoordinator(
         api_url, host_id, agent_instance_id, agent_secret=agent_secret,
         local_db=local_db,

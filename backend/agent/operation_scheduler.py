@@ -105,6 +105,21 @@ class OperationScheduler:
         with self._lock:
             return self._held
 
+    @property
+    def waiter_count(self) -> int:
+        with self._lock:
+            return len(self._waiters)
+
+    def concurrency_snapshot(self) -> dict[str, int]:
+        """Observability snapshot for heartbeat /metrics bridge."""
+        with self._lock:
+            return {
+                "held": self._held,
+                "max": self._max_concurrent,
+                "waiting": len(self._waiters),
+                "held_devices": len(self._held_devices),
+            }
+
     def set_max_concurrent(self, n: int) -> None:
         """Hot-adjust the cap. Shrinking does NOT preempt held permits —
         only new waiters are gated. Growing may wake pending waiters."""

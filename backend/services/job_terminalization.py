@@ -18,12 +18,14 @@ a terminal job status (``complete_job`` already short-circuits replays).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
+from backend.core.metrics import record_plan_run_aggregation_duration
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun, PlanRunHost
@@ -107,7 +109,11 @@ async def on_job_terminal(
 
     total = int(run.total_job_count or 0)
     if total > 0:
+        t0 = time.perf_counter()
         applied = apply_plan_run_aggregation_from_counters(run)
+        record_plan_run_aggregation_duration(
+            time.perf_counter() - t0, "counters",
+        )
         if applied:
             from backend.services.plan_chain_trigger import trigger_next_plan
             from backend.services.dedup_scan import (
@@ -120,7 +126,11 @@ async def on_job_terminal(
         return applied, run.status if applied else None
 
     jobs = await _load_jobs()
+    t0 = time.perf_counter()
     applied = apply_plan_run_aggregation(run, jobs)
+    record_plan_run_aggregation_duration(
+        time.perf_counter() - t0, "full_scan",
+    )
     if applied:
         from backend.services.plan_chain_trigger import trigger_next_plan
         from backend.services.dedup_scan import (
@@ -170,7 +180,11 @@ def on_job_terminal_sync(
 
     total = int(run.total_job_count or 0)
     if total > 0:
+        t0 = time.perf_counter()
         applied = apply_plan_run_aggregation_from_counters(run)
+        record_plan_run_aggregation_duration(
+            time.perf_counter() - t0, "counters",
+        )
         if applied:
             from backend.services.plan_chain_trigger import trigger_next_plan_sync
             from backend.services.dedup_scan import (
@@ -187,7 +201,11 @@ def on_job_terminal_sync(
         .filter(JobInstance.plan_run_id == run.id)
         .all()
     )
+    t0 = time.perf_counter()
     applied = apply_plan_run_aggregation(run, jobs)
+    record_plan_run_aggregation_duration(
+        time.perf_counter() - t0, "full_scan",
+    )
     if applied:
         from backend.services.plan_chain_trigger import trigger_next_plan_sync
         from backend.services.dedup_scan import (
