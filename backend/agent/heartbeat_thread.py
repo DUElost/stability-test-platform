@@ -75,6 +75,8 @@ class HeartbeatThread:
         self._get_archive_metrics = get_archive_metrics
         self._on_devices_reconnected = on_devices_reconnected
         self._on_log_rate_limit = on_log_rate_limit
+        # Late-bound by main after OperationScheduler is constructed.
+        self._get_operation_stats: Optional[Callable[[], Optional[Dict[str, Any]]]] = None
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._latest_devices: List[Dict[str, Any]] = []
@@ -201,6 +203,14 @@ class HeartbeatThread:
                     system_stats["archive"] = archive_metrics
             except Exception as exc:
                 logger.debug("archive_metrics_failed: %s", exc)
+        # ADR-0026 P0: OperationScheduler concurrency → extra.operations
+        if self._get_operation_stats:
+            try:
+                ops = self._get_operation_stats()
+                if ops:
+                    system_stats["operations"] = ops
+            except Exception as exc:
+                logger.debug("operation_stats_failed: %s", exc)
         mount_status = check_mounts(self._mount_points)
 
         active_count = self._get_active_job_count() if self._get_active_job_count else 0

@@ -35,13 +35,17 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.audit import record_audit
 from backend.core.database import SessionLocal
+from backend.core.metrics import (
+    record_admission_queue_latency,
+    set_admission_queue_depth,
+)
 from backend.models.enums import PlanRunStatus
 from backend.models.plan_run import PlanRun, PlanRunHost, PlanRunTargetDevice
 from backend.services.plan_dispatcher_core import (
@@ -153,6 +157,16 @@ def pump_admission_tick() -> dict[str, int]:
         return summary
 
     with SessionLocal() as db:
+        try:
+            queued = db.execute(
+                select(func.count())
+                .select_from(PlanRun)
+                .where(PlanRun.status == PlanRunStatus.QUEUED.value)
+            ).scalar_one()
+            set_admission_queue_depth(int(queued or 0))
+        except Exception:
+            logger.debug("admission_queue_depth_metric_failed", exc_info=True)
+
         claimed = claim_queued_plan_runs(db)
         summary["claimed"] = len(claimed)
 
@@ -476,7 +490,7 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     targets = db.execute(
         select(PlanRunTargetDevice)
         .where(PlanRunTargetDevice.plan_run_id == run_id)
-        .order_by(PlanRunTargetDevice.device_id)
+        .order_by(PlanRunTargetDevice.sort_order, PlanRunTargetDevice.device_id)
     ).scalars().all()
     if not targets:
         db.rollback()
@@ -550,6 +564,11 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     pr.queue_reason = None
     pr.next_admission_at = None
     pr.precheck_started_at = None
+    if pr.enqueued_at is not None:
+        enqueued = pr.enqueued_at
+        if enqueued.tzinfo is None:
+            enqueued = enqueued.replace(tzinfo=timezone.utc)
+        record_admission_queue_latency((now - enqueued).total_seconds())
     db.commit()
     logger.info(
         "plan_run_admitted plan_run=%d jobs=%d hosts=%d",

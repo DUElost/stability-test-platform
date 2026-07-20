@@ -6,7 +6,7 @@ Exposes key metrics for monitoring and alerting.
 
 import functools
 import time
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 
 # Try to import prometheus_client, fallback to mock if not available
 try:
@@ -409,6 +409,64 @@ agent_outbox_pending = Gauge(
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
 # ============================================================================
+# ADR-0026 P0 / P2 scale metrics (queue / renew / aggregation / concurrency)
+# ============================================================================
+
+admission_queue_latency_seconds = Histogram(
+    'stability_admission_queue_latency_seconds',
+    'Wall time from PlanRun.enqueued_at to PRECHECK→RUNNING admission',
+    buckets=[0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+admission_queue_depth = Gauge(
+    'stability_admission_queue_depth',
+    'Number of PlanRuns currently in QUEUED status',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+lease_extend_batch_total = Counter(
+    'stability_lease_extend_batch_total',
+    'Total lease extend-batch item outcomes',
+    ['outcome'],  # renewed | job_not_running | lease_missing | stale_token
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+lease_extend_batch_size = Histogram(
+    'stability_lease_extend_batch_size',
+    'Number of lease items per extend-batch request',
+    buckets=[1, 5, 10, 25, 50, 100, 200, 500],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+plan_run_aggregation_duration_seconds = Histogram(
+    'stability_plan_run_aggregation_duration_seconds',
+    'Duration of PlanRun terminal aggregation inside job_terminalization',
+    ['path'],  # counters | full_scan
+    buckets=[0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+plan_run_devices_query_duration_seconds = Histogram(
+    'stability_plan_run_devices_query_duration_seconds',
+    'Wall time of GET /plan-runs/{id}/devices matrix endpoint',
+    buckets=[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+host_operation_slots_held = Gauge(
+    'stability_host_operation_slots_held',
+    'OperationScheduler permits currently held (Agent-reported)',
+    ['host_id'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+host_operation_slots_max = Gauge(
+    'stability_host_operation_slots_max',
+    'OperationScheduler max_concurrent_operations (Agent-reported)',
+    ['host_id'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+host_operation_waiters = Gauge(
+    'stability_host_operation_waiters',
+    'OperationScheduler waiters queued for a permit (Agent-reported)',
+    ['host_id'],
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
+# ============================================================================
 # Build Info
 # ============================================================================
 
@@ -613,6 +671,90 @@ def record_agent_outbox_pending(host_id: str, outbox_type: str, count: int):
         host_id=str(host_id),
         type=outbox_type,
     ).set(max(0, int(count)))
+
+
+def record_admission_queue_latency(seconds: float):
+    """Record PlanRun queue wait (enqueued_at → admitted)."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return
+    if value < 0:
+        return
+    admission_queue_latency_seconds.observe(value)
+
+
+def set_admission_queue_depth(depth: int):
+    """Set current QUEUED PlanRun count."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        admission_queue_depth.set(max(0, int(depth)))
+    except (TypeError, ValueError):
+        return
+
+
+def record_lease_extend_batch(outcomes: Dict[str, int], batch_size: int):
+    """Record extend-batch item outcomes and request size."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        lease_extend_batch_size.observe(max(0, int(batch_size)))
+    except (TypeError, ValueError):
+        pass
+    for outcome, count in (outcomes or {}).items():
+        try:
+            n = int(count)
+        except (TypeError, ValueError):
+            continue
+        if n <= 0:
+            continue
+        lease_extend_batch_total.labels(outcome=str(outcome)[:64]).inc(n)
+
+
+def record_plan_run_aggregation_duration(seconds: float, path: str):
+    """Record terminalization aggregation duration (counters | full_scan)."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return
+    if value < 0:
+        return
+    plan_run_aggregation_duration_seconds.labels(
+        path=(path or "unknown")[:32],
+    ).observe(value)
+
+
+def record_plan_run_devices_query_duration(seconds: float):
+    """Record device-matrix endpoint wall time."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return
+    if value < 0:
+        return
+    plan_run_devices_query_duration_seconds.observe(value)
+
+
+def record_host_operation_concurrency(
+    host_id: str, *, held: int, max_slots: int, waiting: int,
+):
+    """Update per-host OperationScheduler concurrency gauges from heartbeat."""
+    if not PROMETHEUS_AVAILABLE:
+        return
+    hid = str(host_id or "unknown")
+    try:
+        host_operation_slots_held.labels(host_id=hid).set(max(0, int(held)))
+        host_operation_slots_max.labels(host_id=hid).set(max(0, int(max_slots)))
+        host_operation_waiters.labels(host_id=hid).set(max(0, int(waiting)))
+    except (TypeError, ValueError):
+        return
 
 
 def get_metrics_response():

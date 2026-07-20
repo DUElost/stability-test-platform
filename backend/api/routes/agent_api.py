@@ -25,6 +25,7 @@ from backend.core.database import get_async_db
 from backend.core.metrics import (
     claim_lease_failed_total,
     post_completion_enqueue_failed_total,
+    record_lease_extend_batch,
     record_log_signal_ingested,
     record_patrol_heartbeat,
     record_reconciler_skip_unchanged,
@@ -1583,6 +1584,11 @@ async def extend_leases_batch(
                 results.append(_ExtendBatchItemOut(job_id=jid, status="lease_missing"))
         else:
             results.append(_ExtendBatchItemOut(job_id=jid, status=state))
+
+    outcome_counts: Dict[str, int] = {}
+    for item in results:
+        outcome_counts[item.status] = outcome_counts.get(item.status, 0) + 1
+    record_lease_extend_batch(outcome_counts, len(results))
 
     return ok(_ExtendBatchOut(results=results))
 

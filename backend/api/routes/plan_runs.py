@@ -6,6 +6,7 @@ Provides PlanRun list/detail/jobs/summary endpoints.
 from __future__ import annotations
 
 import logging
+import time
 from copy import deepcopy
 from collections import defaultdict
 from pathlib import Path
@@ -17,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
@@ -35,9 +36,12 @@ from backend.core.aee_metadata import (
 )
 from backend.core.audit import record_audit
 from backend.core.database import get_db
-from backend.core.metrics import record_patrol_manual_action
+from backend.core.metrics import (
+    record_patrol_manual_action,
+    record_plan_run_devices_query_duration,
+)
 from backend.models.audit import AuditLog
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, PlanRunStatus
+from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.core.job_timeout_config import (
@@ -1863,57 +1867,64 @@ def get_plan_run_devices(
     by_status / by_host facet 始终基于"未过滤"的全集计算,
     便于前端筛选 chip 同时显示总数和当前数。
     """
+    t0 = time.perf_counter()
+    try:
+        return _get_plan_run_devices_impl(
+            run_id=run_id, status=status, host_id=host_id, db=db,
+        )
+    finally:
+        record_plan_run_devices_query_duration(time.perf_counter() - t0)
+
+
+def _get_plan_run_devices_impl(
+    *,
+    run_id: int,
+    status: Optional[str],
+    host_id: Optional[str],
+    db: Session,
+):
     _require_plan_run(db, run_id)
-    jobs = db.execute(
-        select(JobInstance).where(JobInstance.plan_run_id == run_id)
-    ).scalars().all()
-    if not jobs:
+    # ADR-0026 P2-3: single JOIN for jobs + device + host + ACTIVE JOB lease
+    # (was 4 sequential SELECTs; matters at ~1000 devices / PlanRun).
+    joined = db.execute(
+        select(
+            JobInstance,
+            Device,
+            Host.status.label("host_status"),
+            DeviceLease.job_id.label("lease_job_id"),
+        )
+        .select_from(JobInstance)
+        .outerjoin(Device, Device.id == JobInstance.device_id)
+        .outerjoin(Host, Host.id == JobInstance.host_id)
+        .outerjoin(
+            DeviceLease,
+            and_(
+                DeviceLease.device_id == JobInstance.device_id,
+                DeviceLease.status == LeaseStatus.ACTIVE.value,
+                DeviceLease.lease_type == LeaseType.JOB.value,
+            ),
+        )
+        .where(JobInstance.plan_run_id == run_id)
+        .order_by(JobInstance.device_id.asc(), JobInstance.id.asc())
+    ).all()
+    if not joined:
         return ok(PlanRunDevicesOut(
             plan_run_id=run_id, total=0,
             by_status={"all": 0}, by_host={}, devices=[],
         ))
-
-    # device 元数据
-    device_ids = list({j.device_id for j in jobs})
-    device_meta: dict[int, Device] = {}
-    host_status_by_id: dict[str, str] = {}
-    if device_ids:
-        rows = db.execute(
-            select(Device).where(Device.id.in_(device_ids))
-        ).scalars().all()
-        device_meta = {d.id: d for d in rows}
-        host_ids = list({d.host_id for d in rows if d.host_id})
-        if host_ids:
-            host_rows = db.execute(
-                select(Host.id, Host.status).where(Host.id.in_(host_ids))
-            ).all()
-            host_status_by_id = {r.id: r.status for r in host_rows}
-
-    active_lease_by_device: dict[int, int] = {}
-    if device_ids:
-        lease_rows = db.execute(
-            select(DeviceLease.device_id, DeviceLease.job_id).where(
-                DeviceLease.device_id.in_(device_ids),
-                DeviceLease.status == LeaseStatus.ACTIVE.value,
-            )
-        ).all()
-        active_lease_by_device = {r.device_id: r.job_id for r in lease_rows if r.job_id}
 
     now = datetime.now(timezone.utc)
     items: list[DeviceMatrixItem] = []
     by_status: dict[str, int] = {"all": 0}
     by_host: dict[str, int] = {}
 
-    for j in jobs:
-        dev = device_meta.get(j.device_id)
+    for j, dev, host_st, lease_job_id in joined:
         serial = dev.serial if dev else None
         model = dev.model if dev else None
-        host_st = host_status_by_id.get(j.host_id) if j.host_id else None
         ui = _ui_status_for_job(j, now, dev, host_st)
         cur_stage = _current_stage_for_job(j)
         pending_deadline = _pending_claim_deadline(j)
         heartbeat_deadline = _running_heartbeat_deadline(j)
-        lease_job_id = active_lease_by_device.get(j.device_id)
         busy_reason, busy_lease_job_id = _derive_busy_reason(dev, host_st, lease_job_id)
         items.append(DeviceMatrixItem(
             device_id=j.device_id,

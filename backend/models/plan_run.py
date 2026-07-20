@@ -103,10 +103,13 @@ class PlanRun(Base):
             unique=True,
             postgresql_where=text("parent_plan_run_id IS NOT NULL"),
         ),
-        # ADR-0026: queue-pump dequeue scan (partial — QUEUED rows are few)
+        # ADR-0026 P2-3: match pump ORDER BY priority DESC, enqueued_at ASC
+        # (partial — QUEUED rows are few; next_admission_at is a filter, not sort).
         Index(
             "idx_plan_run_admission_queue",
-            "priority", "next_admission_at", "enqueued_at",
+            "priority",
+            "enqueued_at",
+            postgresql_ops={"priority": "DESC", "enqueued_at": "ASC"},
             postgresql_where=text("status = 'QUEUED'"),
         ),
     )
@@ -194,4 +197,6 @@ class PlanRunTargetDevice(Base):
         ),
         Index("idx_prtd_device", "device_id"),
         Index("idx_prtd_plan_run_host", "plan_run_host_id"),
+        # ADR-0026 P2-3: ordered target-device scan at admission (sort_order).
+        Index("idx_prtd_plan_run_sort", "plan_run_id", "sort_order"),
     )

@@ -13,7 +13,10 @@ from backend.core.database import get_db
 from backend.models.host import Host, Device
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import LeaseStatus
-from backend.core.metrics import record_agent_outbox_pending
+from backend.core.metrics import (
+    record_agent_outbox_pending,
+    record_host_operation_concurrency,
+)
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
 
@@ -265,6 +268,19 @@ def _process_heartbeat_with_db(
         try:
             record_agent_outbox_pending(
                 host.id, "log_signal", int(extra["log_signal_outbox_pending"]),
+            )
+        except (TypeError, ValueError):
+            pass
+
+    # ADR-0026 P0: per-host OperationScheduler concurrency (Agent-reported).
+    ops = extra.get("operations") if isinstance(extra, dict) else None
+    if isinstance(ops, dict):
+        try:
+            record_host_operation_concurrency(
+                host.id,
+                held=int(ops.get("held", 0) or 0),
+                max_slots=int(ops.get("max", 0) or 0),
+                waiting=int(ops.get("waiting", 0) or 0),
             )
         except (TypeError, ValueError):
             pass
