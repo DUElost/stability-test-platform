@@ -280,7 +280,9 @@ class HeartbeatRequest(BaseModel):
 
 
 class BackpressureInfo(BaseModel):
-    log_rate_limit: Optional[int]
+    log_rate_limit: Optional[int] = None
+    # ADR-0026 P0: suggested Agent poll interval (seconds)
+    heartbeat_interval_seconds: Optional[int] = None
 
 
 class HeartbeatResponse(BaseModel):
@@ -288,7 +290,7 @@ class HeartbeatResponse(BaseModel):
     backpressure: BackpressureInfo
     capacity: Optional[Dict[str, Any]] = None  # ADR-0019 Phase 1
     agent_min_version: str = ""  # SemVer floor; Agent refuses to run if below
-
+    heartbeat_interval_seconds: Optional[int] = None
 
 # ── ADR-0019 Phase 3a: Recovery Sync models ──────────────────────────────────
 
@@ -806,14 +808,22 @@ async def agent_heartbeat(
     await db.commit()
 
     backpressure = await _get_backpressure()
+    # Light agent heartbeat: scale interval with online healthy device count
+    # (same contract as /api/v1/heartbeat — ADR-0026 P0).
+    from backend.api.routes.heartbeat import _suggested_heartbeat_interval
+    suggested_interval = _suggested_heartbeat_interval(online_healthy)
     from backend.services.agent_version_gate import resolve_agent_min_version
     return ok(HeartbeatResponse(
         script_catalog_outdated=scripts_outdated,
-        backpressure=BackpressureInfo(log_rate_limit=backpressure),
+        backpressure=BackpressureInfo(
+            log_rate_limit=backpressure,
+            heartbeat_interval_seconds=suggested_interval,
+        ),
         capacity={
             "online_healthy_devices": online_healthy,
         },
         agent_min_version=resolve_agent_min_version(),
+        heartbeat_interval_seconds=suggested_interval,
     ))
 
 

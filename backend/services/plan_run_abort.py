@@ -44,6 +44,7 @@ from backend.core.job_timeout_config import ABORT_ACK_GRACE_SECONDS
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
+from backend.services.job_terminalization import on_job_terminal_sync
 from backend.services.plan_run_aggregation import apply_plan_run_aggregation
 from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
 from backend.services.state_machine import PlanRunStateMachine
@@ -199,20 +200,20 @@ def abort_plan_run(
             if job.status in (JobStatus.PENDING.value, JobStatus.RUNNING.value)
         ]
         now = datetime.now(timezone.utc)
-        for job in active_jobs:
-            if job.status == JobStatus.PENDING.value:
-                from backend.services.state_machine import JobStateMachine
-                JobStateMachine.transition(job, JobStatus.ABORTED, reason)
-                job.ended_at = now
-                aborted_jobs.append(job.id)
-            else:
-                # RUNNING remains the authoritative state until the Agent has
-                # killed the process tree and ACKed ABORTED via /complete.
-                abort_requested_jobs.append(job.id)
-                if job.host_id:
-                    abort_hosts.add(job.host_id)
-                    abort_jobs_by_host[job.host_id].append(job.id)
-        # Mark abort_requested so reconciler / aggregator know this is intentional.
+        # Mark abort_requested BEFORE terminalizing PENDING jobs so O(1)
+        # aggregation (when the last job lands) sees the abort override.
+        pending_to_abort = [
+            job for job in active_jobs if job.status == JobStatus.PENDING.value
+        ]
+        running_to_signal = [
+            job for job in active_jobs if job.status != JobStatus.PENDING.value
+        ]
+        for job in running_to_signal:
+            abort_requested_jobs.append(job.id)
+            if job.host_id:
+                abort_hosts.add(job.host_id)
+                abort_jobs_by_host[job.host_id].append(job.id)
+
         run_ctx["abort_requested"] = {
             "at": now.isoformat(),
             "reason": reason,
@@ -220,9 +221,23 @@ def abort_plan_run(
             "deadline_at": (
                 now + timedelta(seconds=ABORT_ACK_GRACE_SECONDS)
             ).isoformat(),
-            "requested_job_ids": abort_requested_jobs,
+            "requested_job_ids": list(abort_requested_jobs),
             "acknowledged_job_ids": [],
         }
+        pr.run_context = run_ctx
+        flag_modified(pr, "run_context")
+
+        for job in pending_to_abort:
+            from backend.services.state_machine import JobStateMachine
+            JobStateMachine.transition(job, JobStatus.ABORTED, reason)
+            job.ended_at = now
+            aborted_jobs.append(job.id)
+            # ADR-0026 §6: PENDING→ABORTED is a real terminalization —
+            # bump O(1) counters via the single entry (run already locked).
+            on_job_terminal_sync(job, db, run=pr)
+
+        # Refresh requested_job_ids only (pending jobs are already terminal).
+        run_ctx["abort_requested"]["requested_job_ids"] = list(abort_requested_jobs)
         pr.run_context = run_ctx
         flag_modified(pr, "run_context")
 
@@ -232,7 +247,10 @@ def abort_plan_run(
         )
         if not has_active_jobs:
             if all_jobs:
-                apply_plan_run_aggregation(pr, all_jobs)
+                # Counters already bumped for inline ABORTs; if the run did not
+                # yet converge (e.g. total_job_count==0 legacy), fall back.
+                if pr.status not in _TERMINAL_PLAN_RUN_STATUSES:
+                    apply_plan_run_aggregation(pr, all_jobs)
             else:
                 PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason=reason)
                 pr.ended_at = now

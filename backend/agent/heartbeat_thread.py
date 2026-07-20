@@ -4,6 +4,7 @@
 """
 
 import logging
+import os
 import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -57,6 +58,9 @@ class HeartbeatThread:
         self._mount_points = mount_points
         self._host_info = host_info
         self._poll_interval = poll_interval
+        self._base_poll_interval = float(poll_interval)
+        self._min_poll_interval = float(os.getenv("STP_HEARTBEAT_INTERVAL_MIN", "10"))
+        self._max_poll_interval = float(os.getenv("STP_HEARTBEAT_INTERVAL_MAX", "120"))
         self._sio_client = sio_client
         self._catalog_versions = catalog_versions
         self._on_scripts_outdated = on_scripts_outdated
@@ -239,6 +243,26 @@ class HeartbeatThread:
                 self._on_scripts_outdated()
             except Exception as exc:
                 logger.warning("script_catalog_refresh_failed: %s", exc)
+
+        # ADR-0026 P0: close the backpressure loop — honour server interval hint.
+        if isinstance(response, dict):
+            hint = response.get("heartbeat_interval_seconds")
+            if hint is None:
+                bp = response.get("backpressure")
+                if isinstance(bp, dict):
+                    hint = bp.get("heartbeat_interval_seconds")
+            if isinstance(hint, (int, float)) and not isinstance(hint, bool):
+                suggested = float(hint)
+                clamped = max(
+                    self._min_poll_interval,
+                    min(self._max_poll_interval, suggested),
+                )
+                if abs(clamped - self._poll_interval) >= 0.5:
+                    logger.info(
+                        "heartbeat_interval_adjusted from=%.1f to=%.1f",
+                        self._poll_interval, clamped,
+                    )
+                    self._poll_interval = clamped
 
         if response and self._pending_reconnected_serials and self._on_devices_reconnected:
             serials = list(self._pending_reconnected_serials)

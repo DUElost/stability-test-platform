@@ -60,6 +60,8 @@ from backend.tasks.saq_worker import (
     is_saq_ready,
     start_saq_worker,
     stop_saq_worker,
+    stop_saq_producer,
+    init_saq_producer,
     verify_redis_connectivity,
 )
 
@@ -129,44 +131,45 @@ async def lifespan(app: FastAPI):
         logger.info("apscheduler_started")
 
         # SAQ async task queue (post-completion, notifications, control commands)
-        # Controlled by STP_ENABLE_INPROCESS_SAQ — disable in production when
-        # you want to run SAQ as a standalone worker process instead of
-        # in-process (avoids orphan jobs on hot-reload).
+        # ADR-0026 P0: producer is always initialised when Redis is reachable.
+        # ``STP_ENABLE_INPROCESS_SAQ=0`` skips only the in-process worker so an
+        # external worker can drain the same Redis queue without paralysing
+        # enqueue / admission pump.
         ENABLE_INPROCESS_SAQ = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
         skip_infra = (
             os.getenv("STP_SKIP_INFRA_CHECK", "0") == "1"
             and os.getenv("ENV", "").strip().lower() != "production"
         )
-        if ENABLE_INPROCESS_SAQ:
-            if skip_infra:
-                logger.warning(
-                    "infra_check_skipped_by_env STP_SKIP_INFRA_CHECK=1 "
-                    "(Redis PING + in-process SAQ skipped)"
-                )
-            else:
-                try:
-                    await verify_redis_connectivity(redis_url)
-                    logger.info("redis_ping_ok url=%s", redis_url)
-                except RuntimeError as exc:
-                    logger.error("redis_unreachable — %s", exc)
-                    raise
-                try:
-                    await start_saq_worker()
-                except Exception as exc:
-                    logger.error("saq_worker_start_failed — %s", exc)
-                    raise RuntimeError(f"SAQ worker failed to start: {exc}") from exc
-                # ADR-0026 Step 4.1: pump readiness requires BOTH the pump
-                # schedule (registered above) AND a live SAQ executor —
-                # otherwise prepare could mint QUEUED runs that only churn
-                # QUEUED↔PRECHECK with nothing to admit them.
-                from backend.core.admission_queue import mark_queue_pump_ready
-                mark_queue_pump_ready(True)
+        if skip_infra:
+            logger.warning(
+                "infra_check_skipped_by_env STP_SKIP_INFRA_CHECK=1 "
+                "(Redis PING + SAQ producer/worker skipped)"
+            )
         else:
-            # No in-process SAQ → no admission executor in this process; the
-            # pump stays unready (V2 prepare stays legacy; the pump tick
-            # short-circuits). Revisit when the SAQ producer/worker split
-            # lands (ADR-0026 落地顺序 P0 剩余项).
-            logger.warning("saq_worker_disabled_by_env")
+            try:
+                await verify_redis_connectivity(redis_url)
+                logger.info("redis_ping_ok url=%s", redis_url)
+            except RuntimeError as exc:
+                logger.error("redis_unreachable — %s", exc)
+                raise
+            try:
+                if ENABLE_INPROCESS_SAQ:
+                    await start_saq_worker()
+                else:
+                    await init_saq_producer()
+                    logger.warning(
+                        "saq_inprocess_worker_disabled — producer ready; "
+                        "expect an external SAQ worker on queue=%s",
+                        os.getenv("SAQ_QUEUE_NAME", "stp"),
+                    )
+            except Exception as exc:
+                logger.error("saq_start_failed — %s", exc)
+                raise RuntimeError(f"SAQ failed to start: {exc}") from exc
+            # Pump readiness: live in-process worker OR external-worker mode
+            # with a connected producer (ADR-0026 P0 producer/worker split).
+            from backend.core.admission_queue import mark_queue_pump_ready
+            if is_saq_ready():
+                mark_queue_pump_ready(True)
 
     yield
 
@@ -181,7 +184,10 @@ async def lifespan(app: FastAPI):
         # 新的 V2 QUEUED 产生却无人准入。
         from backend.core.admission_queue import mark_queue_pump_ready
         mark_queue_pump_ready(False)
-        await stop_saq_worker()
+        if os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1":
+            await stop_saq_worker()
+        else:
+            await stop_saq_producer()
         if scheduler is not None:
             await scheduler.__aexit__(None, None, None)
             logger.info("apscheduler_stopped")
@@ -257,13 +263,14 @@ def root():
 @_fastapi_app.get("/health")
 async def health_check():
     inprocess_saq = os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1"
-    saq_ready: bool | None = is_saq_ready() if inprocess_saq else None
     try:
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        payload: dict = {"status": "healthy"}
-        if inprocess_saq:
-            payload["saq_ready"] = saq_ready
+        payload: dict = {
+            "status": "healthy",
+            "saq_ready": is_saq_ready(),
+            "saq_inprocess_worker": inprocess_saq,
+        }
         return {"data": payload, "error": None}
     except Exception:
         return JSONResponse(status_code=503, content={"data": None, "error": {"code": "DB_UNAVAILABLE", "message": "database disconnected"}})

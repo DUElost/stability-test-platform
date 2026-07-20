@@ -1,37 +1,11 @@
 """Synchronous plan-run aggregation for use in sync contexts (recycler thread)."""
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models.job import JobInstance
-from backend.models.plan_run import PlanRun
-from backend.services.plan_run_aggregation import apply_plan_run_aggregation
-from backend.services.plan_chain_trigger import trigger_next_plan_sync
+from backend.services import job_terminalization as _terminalization
 
 
 def plan_aggregator_sync(job: JobInstance, db: Session) -> None:
     """Aggregate a PlanRun after a child JobInstance reaches terminal state."""
-    # Why: 与 async aggregator 走同一份锁契约,recycler 多线程或与 abort 并发都不能丢更新。
-    #      FOR NO KEY UPDATE 而非 FOR UPDATE —— 与 FK 触发的 FOR KEY SHARE 兼容,避免与
-    #      complete_job 的 job UPDATE autoflush 形成死锁(见 aggregator.py 注释)。
-    run = db.execute(
-        select(PlanRun)
-        .where(PlanRun.id == job.plan_run_id)
-        .with_for_update(key_share=True)
-    ).scalar_one_or_none()
-    if run is None:
-        return
-
-    jobs = (
-        db.query(JobInstance)
-        .filter(JobInstance.plan_run_id == run.id)
-        .all()
-    )
-
-    applied = apply_plan_run_aggregation(run, jobs)
-    if applied:
-        trigger_next_plan_sync(run, db)
-        # ADR-0025 Sprint 4: PlanRun 终态统一触发归档-2 scan + merge
-        from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
-        if should_trigger_dedup(run.status):
-            enqueue_dedup_terminal_sync(run.id)
+    _terminalization.on_job_terminal_sync(job, db)

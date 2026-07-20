@@ -46,49 +46,34 @@ def test_apply_plan_run_aggregation_uses_single_status_rule():
 
 
 @pytest.mark.asyncio
-async def test_async_plan_aggregator_delegates_to_shared_rule():
+async def test_async_plan_aggregator_delegates_to_terminalization():
     from backend.services.aggregator import PlanAggregator
 
     terminal_job = SimpleNamespace(plan_run_id=10)
-    run = SimpleNamespace(id=10, status="RUNNING")
-    jobs = [_job(JobStatus.COMPLETED)]
-
-    run_result = MagicMock()
-    run_result.scalar_one_or_none.return_value = run
-    jobs_result = MagicMock()
-    jobs_result.scalars.return_value.all.return_value = jobs
-
     db = MagicMock()
-    db.execute = AsyncMock(side_effect=[run_result, jobs_result])
 
-    with patch("backend.services.aggregator.apply_plan_run_aggregation") as mock_apply:
-        mock_apply.return_value = False
+    with patch(
+        "backend.services.job_terminalization.on_job_terminal",
+        new_callable=AsyncMock,
+    ) as mock_term:
+        mock_term.return_value = (False, None)
         await PlanAggregator.on_job_terminal(terminal_job, db)
 
-    mock_apply.assert_called_once_with(run, jobs)
+    mock_term.assert_awaited_once_with(terminal_job, db)
 
 
-def test_sync_plan_aggregator_delegates_to_shared_rule():
+def test_sync_plan_aggregator_delegates_to_terminalization():
     from backend.services.aggregator_sync import plan_aggregator_sync
 
     terminal_job = SimpleNamespace(plan_run_id=11)
-    run = SimpleNamespace(id=11, status="RUNNING")
-    jobs = [_job(JobStatus.COMPLETED)]
-
-    run_result = MagicMock()
-    run_result.scalar_one_or_none.return_value = run
-
-    query = MagicMock()
-    query.filter.return_value.all.return_value = jobs
-
     db = MagicMock()
-    db.execute.return_value = run_result
-    db.query.return_value = query
 
-    with patch("backend.services.aggregator_sync.apply_plan_run_aggregation") as mock_apply:
+    with patch(
+        "backend.services.job_terminalization.on_job_terminal_sync",
+    ) as mock_term:
         plan_aggregator_sync(terminal_job, db)
 
-    mock_apply.assert_called_once_with(run, jobs)
+    mock_term.assert_called_once_with(terminal_job, db)
 
 
 # ── v3 §P4: abort → FAILED override ─────────────────────────────────────────

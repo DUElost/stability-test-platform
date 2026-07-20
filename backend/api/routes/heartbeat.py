@@ -20,8 +20,29 @@ from backend.api.routes.auth import verify_agent_secret
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
 logger = logging.getLogger(__name__)
 
-# 心跳快照降采样间隔（秒）：减少数据库写入压力
+# 心跳快照降采样间隔（秒）：减少硬件字段数据库写入压力
 SNAPSHOT_INTERVAL_SECONDS = int(os.getenv("DEVICE_SNAPSHOT_INTERVAL", "30"))
+# 建议 Agent 心跳周期（秒）；随在线设备数缓增，闭环 backpressure
+HEARTBEAT_INTERVAL_MIN = int(os.getenv("STP_HEARTBEAT_INTERVAL_MIN", "15"))
+HEARTBEAT_INTERVAL_MAX = int(os.getenv("STP_HEARTBEAT_INTERVAL_MAX", "60"))
+HEARTBEAT_INTERVAL_BASE = int(os.getenv("STP_HEARTBEAT_INTERVAL_BASE", "20"))
+
+
+def _suggested_heartbeat_interval(online_healthy: int) -> int:
+    """Scale poll interval with fleet size (ADR-0026 P0 heartbeat 减负)."""
+    # ~+1s per 10 healthy devices, clamped.
+    scaled = HEARTBEAT_INTERVAL_BASE + max(0, online_healthy) // 10
+    return max(HEARTBEAT_INTERVAL_MIN, min(HEARTBEAT_INTERVAL_MAX, scaled))
+
+
+def _should_write_hardware_snapshot(device: Device, now: datetime) -> bool:
+    """True when hardware metrics may be persisted (downsampling gate)."""
+    prev = device.hardware_updated_at
+    if prev is None:
+        return True
+    if prev.tzinfo is None:
+        prev = prev.replace(tzinfo=timezone.utc)
+    return (now - prev).total_seconds() >= SNAPSHOT_INTERVAL_SECONDS
 
 
 def _is_auto_register_sentinel(host_id: str) -> bool:
@@ -315,24 +336,30 @@ def _process_heartbeat_with_db(
 
             logger.info(f"device_adb_update: serial={serial}, adb_state={device.adb_state}, adb_connected={device.adb_connected}, network_latency={dev_data.get('network_latency')}")
 
-            # Update hardware info
-            hardware_updated = False
-            hardware_updated |= _update_if_not_none(device, "battery_level", dev_data.get("battery_level"))
-            hardware_updated |= _update_if_not_none(device, "battery_temp", dev_data.get("battery_temp"))
-            hardware_updated |= _update_if_not_none(device, "temperature", dev_data.get("temperature"))
-            hardware_updated |= _update_if_not_none(device, "wifi_rssi", dev_data.get("wifi_rssi"))
-            hardware_updated |= _update_if_not_none(device, "wifi_ssid", dev_data.get("wifi_ssid"))
-            hardware_updated |= _update_if_not_none(device, "network_latency", dev_data.get("network_latency"))
-            _update_if_not_none(device, "build_display_id", dev_data.get("build_display_id"))
-            if hardware_updated:
-                device.hardware_updated_at = now
+            # Update hardware info (downsampled — connectivity always updates)
+            write_hw = _should_write_hardware_snapshot(device, now)
+            if write_hw:
+                hardware_updated = False
+                hardware_updated |= _update_if_not_none(device, "battery_level", dev_data.get("battery_level"))
+                hardware_updated |= _update_if_not_none(device, "battery_temp", dev_data.get("battery_temp"))
+                hardware_updated |= _update_if_not_none(device, "temperature", dev_data.get("temperature"))
+                hardware_updated |= _update_if_not_none(device, "wifi_rssi", dev_data.get("wifi_rssi"))
+                hardware_updated |= _update_if_not_none(device, "wifi_ssid", dev_data.get("wifi_ssid"))
+                hardware_updated |= _update_if_not_none(device, "network_latency", dev_data.get("network_latency"))
+                _update_if_not_none(device, "build_display_id", dev_data.get("build_display_id"))
+                if hardware_updated:
+                    device.hardware_updated_at = now
 
-            # Update system resources
-            _update_if_not_none(device, "cpu_usage", dev_data.get("cpu_usage"))
-            _update_if_not_none(device, "mem_total", dev_data.get("mem_total"))
-            _update_if_not_none(device, "mem_used", dev_data.get("mem_used"))
-            _update_if_not_none(device, "disk_total", dev_data.get("disk_total"))
-            _update_if_not_none(device, "disk_used", dev_data.get("disk_used"))
+                # Update system resources (same downsample window)
+                _update_if_not_none(device, "cpu_usage", dev_data.get("cpu_usage"))
+                _update_if_not_none(device, "mem_total", dev_data.get("mem_total"))
+                _update_if_not_none(device, "mem_used", dev_data.get("mem_used"))
+                _update_if_not_none(device, "disk_total", dev_data.get("disk_total"))
+                _update_if_not_none(device, "disk_used", dev_data.get("disk_used"))
+            else:
+                # Still accept build_display_id when first seen empty
+                if not device.build_display_id:
+                    _update_if_not_none(device, "build_display_id", dev_data.get("build_display_id"))
 
             # Update last_seen
             device.last_seen = now
@@ -390,6 +417,7 @@ def _process_heartbeat_with_db(
 
     from backend.services.agent_version_gate import resolve_agent_min_version
 
+    suggested_interval = _suggested_heartbeat_interval(online_healthy_count)
     return {
         "ok": True,
         "host_id": host.id,
@@ -400,4 +428,10 @@ def _process_heartbeat_with_db(
             "online_healthy_devices": online_healthy_count,
         },
         "agent_min_version": resolve_agent_min_version(),
+        # ADR-0026 P0: heartbeat backpressure / interval hint for Agent
+        "backpressure": {
+            "log_rate_limit": None,
+            "heartbeat_interval_seconds": suggested_interval,
+        },
+        "heartbeat_interval_seconds": suggested_interval,
     }, ws_device_updates

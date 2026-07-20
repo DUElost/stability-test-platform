@@ -42,7 +42,9 @@ REDIS_PING_TIMEOUT = float(os.getenv("REDIS_PING_TIMEOUT", "3.0"))
 def get_queue() -> Queue:
     """Return the SAQ Queue singleton.  Raises if not initialised."""
     if _queue is None:
-        raise RuntimeError("SAQ queue not initialised — call start_saq_worker first")
+        raise RuntimeError(
+            "SAQ queue not initialised — call init_saq_producer or start_saq_worker first"
+        )
     return _queue
 
 
@@ -101,13 +103,60 @@ async def verify_redis_connectivity(
         await client.aclose()
 
 
+def is_saq_producer_ready() -> bool:
+    """True when the SAQ queue singleton is connected (enqueue path usable)."""
+    return _queue is not None and _loop is not None
+
+
 def is_saq_ready() -> bool:
-    """True when in-process SAQ queue is connected and worker task is alive."""
-    return (
-        _queue is not None
-        and _worker_task is not None
-        and not _worker_task.done()
-    )
+    """True when enqueue is usable for admission / background tasks.
+
+    - In-process worker mode (``STP_ENABLE_INPROCESS_SAQ=1``): queue connected
+      **and** worker task alive.
+    - External-worker mode (``STP_ENABLE_INPROCESS_SAQ=0``): producer connected
+      is enough — an external process drains the same Redis queue.
+    """
+    if not is_saq_producer_ready():
+        return False
+    if os.getenv("STP_ENABLE_INPROCESS_SAQ", "1") == "1":
+        return _worker_task is not None and not _worker_task.done()
+    return True
+
+
+async def init_saq_producer() -> None:
+    """Connect the SAQ queue without starting an in-process worker.
+
+    ADR-0026 P0: allows ``STP_ENABLE_INPROCESS_SAQ=0`` so enqueue / admission
+    pump keep working while an external SAQ worker drains Redis.
+    Idempotent when the queue is already connected.
+    """
+    global _queue, _loop
+
+    if _queue is not None:
+        if _loop is None:
+            _loop = asyncio.get_running_loop()
+        logger.info("saq_producer_start_skip already_connected")
+        return
+
+    _loop = asyncio.get_running_loop()
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    _queue = Queue.from_url(redis_url, name=SAQ_QUEUE_NAME)
+    await _queue.connect()
+    logger.info("saq_producer_started queue=%s", SAQ_QUEUE_NAME)
+
+
+async def stop_saq_producer() -> None:
+    """Disconnect the SAQ queue (producer-only / external-worker shutdown)."""
+    global _queue, _loop
+
+    if _queue is not None:
+        try:
+            await _queue.disconnect()
+        except Exception:
+            logger.debug("saq_producer_disconnect_error", exc_info=True)
+        _queue = None
+    _loop = None
+    logger.info("saq_producer_stopped")
 
 
 async def start_saq_worker() -> None:
@@ -123,6 +172,7 @@ async def start_saq_worker() -> None:
         logger.info("saq_worker_start_skip already_running")
         return
 
+    # Drop a stale queue/worker so reconnect is clean (crash restart path).
     if _queue is not None:
         try:
             await _queue.disconnect()
@@ -131,12 +181,9 @@ async def start_saq_worker() -> None:
         _queue = None
     _worker = None
     _worker_task = None
+    _loop = None
 
-    _loop = asyncio.get_running_loop()
-
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    _queue = Queue.from_url(redis_url, name=SAQ_QUEUE_NAME)
-    await _queue.connect()
+    await init_saq_producer()
 
     _worker = Worker(
         _queue,
@@ -150,8 +197,7 @@ async def start_saq_worker() -> None:
     # ADR-0026 Step 5a.1: SAQ worker is the admission executor — mark the pump
     # ready every time this worker starts (first boot + health-supervisor
     # restart). Idempotent with the main.py lifespan call; the done-callback
-    # above unmarks it on exit. This is the SINGLE lifecycle contract: a live
-    # SAQ worker is the admission pump's readiness signal.
+    # above unmarks it on exit.
     try:
         from backend.core.admission_queue import mark_queue_pump_ready
         mark_queue_pump_ready(True)
