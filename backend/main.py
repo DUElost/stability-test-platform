@@ -113,6 +113,10 @@ async def lifespan(app: FastAPI):
             decode_responses=True,
         )
 
+        from backend.realtime.agent_sid_registry import configure_agent_sid_registry
+
+        configure_agent_sid_registry(redis_client)
+
         capture_main_loop()
         init_build_info(version="2.0.0", commit="unknown")
 
@@ -266,6 +270,7 @@ async def health_check():
     try:
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+        from backend.realtime.agent_sid_registry import agent_sid_registry_enabled
         from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
 
         payload: dict = {
@@ -273,6 +278,7 @@ async def health_check():
             "saq_ready": is_saq_ready(),
             "saq_inprocess_worker": inprocess_saq,
             "socketio_redis_adapter": socketio_redis_adapter_enabled(),
+            "agent_sid_registry": agent_sid_registry_enabled(),
         }
         return {"data": payload, "error": None}
     except Exception:

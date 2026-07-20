@@ -188,7 +188,7 @@ Redis 从 "三流合一的 Streams" 简化为 "控制指令 Pub/Sub + SAQ 任务
 1. **ADR-0017 双通道原则**：HTTP 是权威写入路径，SocketIO 是展示路径。禁止 SocketIO handler 直接推进状态机。
 2. **ADR-0017 Outbox 幂等**：Agent 侧 outbox + drain 机制不变，409 冲突语义不变。
 3. **ADR-0017 Post-completion 幂等**：`post_processed_at` 检查不变，无论由 SAQ 还是补偿路径触发。
-4. **ADR-0002 单进程约束**：APScheduler、SAQ worker、SocketIO server 均运行在 FastAPI 进程内，不引入额外独立进程。
+4. **ADR-0002 单进程约束（经 ADR-0027 条件放宽）**：默认仍推荐 APScheduler、SAQ worker、SocketIO 同驻单一 FastAPI 进程。正式多实例仅在启用 ADR-0027 守卫时允许（leader election + SocketIO Redis adapter + Agent sid registry）；未启用时禁止假设多 worker 安全。
 5. **ADR-0014 Pipeline 引擎**：Agent 侧 `pipeline_engine.py` 的 stages 执行模型完全保留，不受本次变更影响。
 6. **设备锁租约**：claim/lock/extend_lock 路径完全保留，不经过 SAQ 异步化。
 
@@ -265,10 +265,11 @@ socket.io-client@^4.7.0
 
 ## 关联 ADR
 
-- **Supersedes 部分 ADR-0002**：后台线程/异步任务的启动方式由 APScheduler + SAQ 接管，但单进程约束保留
+- **Supersedes 部分 ADR-0002**：后台线程/异步任务的启动方式由 APScheduler + SAQ 接管；单进程为默认，多实例守卫见 ADR-0027
 - **Supersedes 部分 ADR-0006**：WebSocket 实现由 python-socketio 替代，但 REST + WS 分工原则保留
 - **兼容 ADR-0017**：所有护栏条款不变
 - **推进 ADR-0011**：SAQ 内置监控 + SocketIO 连接指标为可观测性落地提供基础
+- **经 ADR-0027 修订（2026-07-20）**：不变量 4 条件放宽——启用 leader election + Redis adapter + Agent sid registry 后允许控制面多实例
 
 ## 落地与后续动作
 

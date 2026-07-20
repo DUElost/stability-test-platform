@@ -57,21 +57,67 @@ COUNTER_RECONCILE_INTERVAL = int(
 
 MISFIRE_GRACE = timedelta(seconds=60)
 
+# ADR-0027 P3-3: singleton jobs that must not multi-run across control-plane
+# instances. ``admission_pump`` / ``counter_reconcile`` keep *internal*
+# leadership (already tested) — do not wrap them again (nested advisory
+# locks on different DB sessions would deadlock the tick).
+SINGLETON_SCHEDULE_IDS: frozenset[str] = frozenset({
+    "recycler",
+    "session_watchdog",
+    "device_lease_reconciler",
+    "cron_check",
+    "retention_cleanup",
+    "precheck_reaper",
+    "plan_chain_reconciler",
+    "revoked_token_cleanup",
+    "auto_archive_sweep",
+})
 
-def _instrumented(job_name: str, func: Callable) -> Callable:
-    """Wrap a scheduler job function with Prometheus timing/counting.
+
+def _with_leadership(job_name: str, func: Callable) -> Callable:
+    """Skip the tick when this process is not the elected scheduler leader."""
+    if asyncio.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def async_guard(*args, **kwargs):
+            from backend.core.leader_election import hold_scheduler_leadership
+
+            with hold_scheduler_leadership(job_name) as is_leader:
+                if not is_leader:
+                    logger.debug("scheduler_job_skipped_not_leader job=%s", job_name)
+                    return {"skipped_not_leader": 1}
+                return await func(*args, **kwargs)
+
+        return async_guard
+
+    @functools.wraps(func)
+    def sync_guard(*args, **kwargs):
+        from backend.core.leader_election import hold_scheduler_leadership
+
+        with hold_scheduler_leadership(job_name) as is_leader:
+            if not is_leader:
+                logger.debug("scheduler_job_skipped_not_leader job=%s", job_name)
+                return {"skipped_not_leader": 1}
+            return func(*args, **kwargs)
+
+    return sync_guard
+
+
+def _instrumented(job_name: str, func: Callable, *, singleton: bool = False) -> Callable:
+    """Wrap a scheduler job with optional leadership + Prometheus timing.
 
     Preserves sync/async nature: sync jobs stay sync (APScheduler runs them
     in a thread pool), async jobs stay async (run on the event loop).
     Mixing these up causes deadlocks — sync functions that call
     ``enqueue_sync`` must NOT run on the event loop.
     """
-    if asyncio.iscoroutinefunction(func):
-        @functools.wraps(func)
+    target = _with_leadership(job_name, func) if singleton else func
+
+    if asyncio.iscoroutinefunction(target):
+        @functools.wraps(target)
         async def async_wrapper(*args, **kwargs):
             t0 = time.monotonic()
             try:
-                result = await func(*args, **kwargs)
+                result = await target(*args, **kwargs)
                 record_apscheduler_job(job_name, "success", time.monotonic() - t0)
                 return result
             except Exception:
@@ -79,11 +125,11 @@ def _instrumented(job_name: str, func: Callable) -> Callable:
                 raise
         return async_wrapper
     else:
-        @functools.wraps(func)
+        @functools.wraps(target)
         def sync_wrapper(*args, **kwargs):
             t0 = time.monotonic()
             try:
-                result = func(*args, **kwargs)
+                result = target(*args, **kwargs)
                 record_apscheduler_job(job_name, "success", time.monotonic() - t0)
                 return result
             except Exception:
@@ -132,7 +178,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     from backend.tasks.session_watchdog import session_watchdog_once
 
     await scheduler.add_schedule(
-        _instrumented("recycler", recycle_once),
+        _instrumented("recycler", recycle_once, singleton=True),
         IntervalTrigger(seconds=RECYCLER_INTERVAL),
         id="recycler",
         misfire_grace_time=MISFIRE_GRACE,
@@ -141,7 +187,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     logger.info("schedule_registered id=recycler interval=%ds", RECYCLER_INTERVAL)
 
     await scheduler.add_schedule(
-        _instrumented("session_watchdog", session_watchdog_once),
+        _instrumented("session_watchdog", session_watchdog_once, singleton=True),
         IntervalTrigger(seconds=WATCHDOG_INTERVAL),
         id="session_watchdog",
         misfire_grace_time=MISFIRE_GRACE,
@@ -150,7 +196,9 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     logger.info("schedule_registered id=session_watchdog interval=%ds", WATCHDOG_INTERVAL)
 
     await scheduler.add_schedule(
-        _instrumented("device_lease_reconciler", device_lease_reconcile_once),
+        _instrumented(
+            "device_lease_reconciler", device_lease_reconcile_once, singleton=True
+        ),
         IntervalTrigger(seconds=RECONCILER_INTERVAL),
         id="device_lease_reconciler",
         misfire_grace_time=MISFIRE_GRACE,
@@ -159,7 +207,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     logger.info("schedule_registered id=device_lease_reconciler interval=%ds", RECONCILER_INTERVAL)
 
     await scheduler.add_schedule(
-        _instrumented("cron_check", check_and_fire_schedules),
+        _instrumented("cron_check", check_and_fire_schedules, singleton=True),
         IntervalTrigger(seconds=int(CRON_POLL_INTERVAL)),
         id="cron_check",
         misfire_grace_time=MISFIRE_GRACE,
@@ -168,7 +216,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     logger.info("schedule_registered id=cron_check interval=%ds", int(CRON_POLL_INTERVAL))
 
     await scheduler.add_schedule(
-        _instrumented("retention_cleanup", run_retention_cleanup),
+        _instrumented("retention_cleanup", run_retention_cleanup, singleton=True),
         IntervalTrigger(seconds=RETENTION_CLEANUP_INTERVAL),
         id="retention_cleanup",
         misfire_grace_time=timedelta(minutes=10),
@@ -191,7 +239,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     from backend.scheduler.precheck_reaper import precheck_reaper_job
 
     await scheduler.add_schedule(
-        _instrumented("precheck_reaper", precheck_reaper_job),
+        _instrumented("precheck_reaper", precheck_reaper_job, singleton=True),
         IntervalTrigger(seconds=PRECHECK_REAPER_INTERVAL),
         id="precheck_reaper",
         misfire_grace_time=MISFIRE_GRACE,
@@ -205,7 +253,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     from backend.scheduler.plan_chain_reconciler import reconcile_plan_chains
 
     await scheduler.add_schedule(
-        _instrumented("plan_chain_reconciler", reconcile_plan_chains),
+        _instrumented("plan_chain_reconciler", reconcile_plan_chains, singleton=True),
         IntervalTrigger(seconds=CHAIN_RECONCILER_INTERVAL),
         id="plan_chain_reconciler",
         misfire_grace_time=MISFIRE_GRACE,
@@ -219,7 +267,11 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     from backend.scheduler.revoked_token_cleanup import cleanup_revoked_refresh_tokens_job
 
     await scheduler.add_schedule(
-        _instrumented("revoked_token_cleanup", cleanup_revoked_refresh_tokens_job),
+        _instrumented(
+            "revoked_token_cleanup",
+            cleanup_revoked_refresh_tokens_job,
+            singleton=True,
+        ),
         IntervalTrigger(seconds=REVOKED_TOKEN_CLEANUP_INTERVAL),
         id="revoked_token_cleanup",
         misfire_grace_time=timedelta(minutes=30),
@@ -233,7 +285,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     from backend.scheduler.cron_scheduler import auto_archive_sweep
 
     await scheduler.add_schedule(
-        _instrumented("auto_archive_sweep", auto_archive_sweep),
+        _instrumented("auto_archive_sweep", auto_archive_sweep, singleton=True),
         IntervalTrigger(seconds=AUTO_ARCHIVE_INTERVAL),
         id="auto_archive_sweep",
         misfire_grace_time=MISFIRE_GRACE,
