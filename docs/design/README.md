@@ -13,6 +13,6 @@
 | [05-data-model.md](./05-data-model.md) | PostgreSQL ORM、Agent SQLite |
 | [06-realtime-and-background.md](./06-realtime-and-background.md) | SocketIO、APScheduler、SAQ |
 | [2026-plan-c-storage-and-access.md](./2026-plan-c-storage-and-access.md) | ADR-0025 方案 C 存储与访问 |
-| [2026-07-plan-execute-page-improvements.md](./2026-07-plan-execute-page-improvements.md) | Plan 执行页分页、复跑、容量/占用可见性改造 |
+| [2026-07-plan-execute-page-improvements.md](./2026-07-plan-execute-page-improvements.md) | Plan 执行页：Phase 1–6 + 走查债项迭代 A/B/C（§7 v2） |
 
 返回：[文档中心](../README.md) · [DOC-MAP](../DOC-MAP.md)
