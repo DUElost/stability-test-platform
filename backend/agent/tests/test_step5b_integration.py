@@ -266,27 +266,35 @@ class TestProgressTracking:
 
 class TestEpochBumpOnReregister:
     def test_restart_bumps_persisted_epoch(self):
-        """register_plan_run_host on a re-registered host after restart
-        must restore the persisted epoch and bump by 1."""
+        """register_plan_run_host must restore → bump → persist across
+        successive Agent process restarts (5→6→7)."""
         from unittest.mock import MagicMock
 
+        store: dict[str, str] = {}
         local_db = MagicMock()
-        local_db.get_state.return_value = "5"  # previous instance persisted 5
-        persisted = {}
+        local_db.get_state.side_effect = (
+            lambda key, default="1": store.get(key, default)
+        )
+        local_db.set_state.side_effect = (
+            lambda key, value: store.__setitem__(key, value)
+        )
+        # Previous instance left epoch 5 on disk.
+        store["coord_epoch:h2:1"] = "5"
 
-        def fake_set_state(key, value):
-            persisted[key] = value
-
-        local_db.set_state.side_effect = fake_set_state
-
-        coord = HostRunCoordinator(
+        c1 = HostRunCoordinator(
             "http://x", "h2", "i2", local_db=local_db,
         )
-        v = coord.register_plan_run_host(1, 10)
-        # Restored 5 + bumped 1 = 6
-        assert v.epoch == 6, f"expected epoch 6, got {v.epoch}"
-        # Verify it was persisted after bump
-        assert any("coord_epoch:h2:1" in k for k in persisted), str(persisted)
+        v1 = c1.register_plan_run_host(1, 10)
+        assert v1.epoch == 6, f"expected epoch 6, got {v1.epoch}"
+        assert store["coord_epoch:h2:1"] == "6"
+
+        # Second restart: restore 6, bump to 7.
+        c2 = HostRunCoordinator(
+            "http://x", "h2", "i3", local_db=local_db,
+        )
+        v2 = c2.register_plan_run_host(1, 10)
+        assert v2.epoch == 7, f"expected epoch 7, got {v2.epoch}"
+        assert store["coord_epoch:h2:1"] == "7"
 
 
 class TestCoordinatorTickSendsPost:
@@ -423,4 +431,93 @@ class TestAbortPermitSemantics:
         t.join(timeout=3)
         assert not t.is_alive()
         p.release()
+        assert s.held == 0
+
+    def test_cancel_after_promote_via_coordinator_releases_slot(self):
+        """WAITING_EXECUTION_SLOT + promoted handoff → cancel releases cap."""
+        import threading, time
+
+        in_post_wake = threading.Event()
+        allow_finish = threading.Event()
+
+        class PausingEvent(threading.Event):
+            def wait(self, timeout=None):
+                ok = super().wait(timeout=timeout)
+                if ok:
+                    in_post_wake.set()
+                    assert allow_finish.wait(timeout=5)
+                return ok
+
+        s = OperationScheduler(max_concurrent=1, event_factory=PausingEvent)
+        coord = HostRunCoordinator("http://x", "h-prom", "inst")
+        coord.set_scheduler(s)
+        jv = coord.register_job(300)
+        jv.update(state="WAITING_EXECUTION_SLOT")
+        coord.register_job_device(300, 40)
+
+        holder = s.acquire(99)
+        result = []
+
+        def waiter():
+            try:
+                permit = s.acquire(40, timeout=5)
+                result.append("got")
+                permit.release()
+            except PermitDenied:
+                result.append("denied")
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        time.sleep(0.15)
+        holder.release()
+        assert in_post_wake.wait(timeout=2)
+        assert s.held == 1
+
+        coord.cancel_waiting_job(300)
+        allow_finish.set()
+        t.join(timeout=3)
+
+        assert result == ["denied"]
+        assert s.held == 0
+        assert 40 not in s.held_devices
+
+    def test_lease_lost_cleanup_before_cancel(self):
+        """lease-lost must drop active_job_ids before cancel_waiting_job,
+        mirroring main._on_lease_lost order so PermitDenied does not retry."""
+        s = OperationScheduler(max_concurrent=1)
+        coord = HostRunCoordinator("http://x", "h-ll", "inst")
+        coord.set_scheduler(s)
+        jv = coord.register_job(400)
+        jv.update(state="WAITING_EXECUTION_SLOT")
+        coord.register_job_device(400, 55)
+
+        active_job_ids = {400}
+        holder = s.acquire(99)
+        denied_then_aborted = []
+
+        def waiter():
+            while True:
+                try:
+                    perm = s.acquire(55, timeout=1)
+                except PermitDenied:
+                    # Same predicate as JobRunnerState.is_aborted after cleanup
+                    if 400 not in active_job_ids:
+                        denied_then_aborted.append("ok")
+                        return
+                    continue
+                else:
+                    perm.release()
+                    denied_then_aborted.append("got")
+                    return
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        time.sleep(0.15)
+
+        # Correct lease-lost order: cleanup first, then cancel
+        active_job_ids.discard(400)
+        coord.cancel_waiting_job(400)
+        t.join(timeout=3)
+        assert denied_then_aborted == ["ok"]
+        holder.release()
         assert s.held == 0

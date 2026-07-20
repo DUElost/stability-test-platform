@@ -782,8 +782,9 @@ def main() -> None:
 
     # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处清理外部状态）
     def _on_lease_lost(jid: int, device_id: Optional[int]) -> None:
-        # ADR-0026 Step 5b: wake any permit waiter for this job
-        coordinator.cancel_waiting_job(jid)
+        # ADR-0026 Step 5b: cleanup FIRST so _is_aborted() (job not in
+        # active_job_ids) is True before cancel wakes the permit waiter.
+        # Reversing this order lets the waiter retry acquire after PermitDenied.
         try:
             _cleanup_after_lease_lost(
                 job_id=jid,
@@ -799,6 +800,7 @@ def main() -> None:
                 "job_id": jid,
                 "reason": "external_cleanup_exception",
             })
+        coordinator.cancel_waiting_job(jid)
 
     # 启动 lease 续租器
     lease_renewer = LeaseRenewer(

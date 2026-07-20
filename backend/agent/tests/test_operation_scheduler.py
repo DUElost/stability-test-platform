@@ -94,6 +94,69 @@ class TestOperationScheduler:
         t.join(timeout=2)
         assert result == ["denied"]
 
+    def test_cancel_after_promote_releases_slot(self):
+        """Promote → cancel before acquire returns → slot must be released.
+
+        Reproduces the Path-2 window: waiter is in _held_devices /
+        _pending_handoff but has not yet received OperationPermit.
+        """
+        in_post_wake = threading.Event()
+        allow_finish = threading.Event()
+
+        class PausingEvent(threading.Event):
+            def wait(self, timeout=None):
+                ok = super().wait(timeout=timeout)
+                if ok:
+                    in_post_wake.set()
+                    assert allow_finish.wait(timeout=5)
+                return ok
+
+        s = OperationScheduler(max_concurrent=1, event_factory=PausingEvent)
+        holder = s.acquire(1)
+
+        result = []
+
+        def waiter():
+            try:
+                permit = s.acquire(40, timeout=5)
+                result.append("got")
+                permit.release()
+            except PermitDenied:
+                result.append("denied")
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        time.sleep(0.15)
+        assert 40 in s.waiting_devices
+
+        holder.release()  # promotes 40 into _pending_handoff
+        assert in_post_wake.wait(timeout=2)
+        assert s.held == 1
+        assert 40 in s.held_devices
+
+        s.cancel_device(40)
+        allow_finish.set()
+        t.join(timeout=3)
+
+        assert result == ["denied"]
+        assert s.held == 0
+        assert 40 not in s.held_devices
+        # Cap still usable
+        p = s.acquire(50, timeout=1)
+        assert s.held == 1
+        p.release()
+
+    def test_cancel_while_holding_is_noop(self):
+        """cancel_device after acquire returned must not release the slot."""
+        s = OperationScheduler(max_concurrent=1)
+        p = s.acquire(10)
+        assert s.held == 1
+        s.cancel_device(10)  # handoff complete — no-op
+        assert s.held == 1
+        assert 10 in s.held_devices
+        p.release()
+        assert s.held == 0
+
     def test_shutdown_wakes_all(self):
         s = OperationScheduler(max_concurrent=1)
         s.acquire(1)

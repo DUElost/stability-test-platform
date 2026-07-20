@@ -63,7 +63,12 @@ class OperationScheduler:
     """Per-host singleton; a single instance gate-keeps ALL concurrent script
     operations on this host regardless of which PlanRun or Job owns them."""
 
-    def __init__(self, max_concurrent: int | None = None) -> None:
+    def __init__(
+        self,
+        max_concurrent: int | None = None,
+        *,
+        event_factory: type | None = None,
+    ) -> None:
         self._max_concurrent = (
             max_concurrent
             if max_concurrent is not None
@@ -83,6 +88,13 @@ class OperationScheduler:
         # Per-device held tracking: a device can hold at most ONE permit at a
         # time (a job shouldn't be running two script steps concurrently).
         self._held_devices: set[int] = set()
+        # Devices promoted by _wake_one_locked whose acquire() has not yet
+        # returned the OperationPermit to the caller. cancel_device must
+        # release these slots; once handoff completes, abort must not.
+        self._pending_handoff: set[int] = set()
+        # Test seam: inject a custom Event class to pause between wake and
+        # the cancelled check (cancel-after-promote coverage).
+        self._event_factory = event_factory or threading.Event
 
     @property
     def max_concurrent(self) -> int:
@@ -131,7 +143,7 @@ class OperationScheduler:
                 self._held_devices.add(device_id)
                 return OperationPermit(self, device_id)
             # Queue
-            event = threading.Event()
+            event = self._event_factory()
             self._waiters[device_id] = event
 
         # Wait outside the lock so releases can wake us.
@@ -158,12 +170,20 @@ class OperationScheduler:
             raise PermitDenied("scheduler shut down during wait")
 
         # Check cancellation flag (set by cancel_device during wait).
-        # cancel_device pops the waiter WITHOUT giving it a slot (held was
-        # not incremented), so the cancelled path must NOT decrement held.
+        # - Still queued when cancelled: slot was never consumed.
+        # - Promoted then cancelled (in _pending_handoff): slot was consumed
+        #   by _wake_one_locked — release it before denying.
         with self._lock:
             cancelled = device_id in self._cancelled
             if cancelled:
                 self._cancelled.discard(device_id)
+                if device_id in self._pending_handoff:
+                    self._pending_handoff.discard(device_id)
+                    self._held = max(0, self._held - 1)
+                    self._held_devices.discard(device_id)
+                    self._wake_one_locked()
+            else:
+                self._pending_handoff.discard(device_id)
         if cancelled:
             raise PermitDenied(f"permit cancelled for device {device_id}")
 
@@ -183,16 +203,25 @@ class OperationScheduler:
             device_id, event = self._waiters.popitem(last=False)
             self._held += 1
             self._held_devices.add(device_id)
+            self._pending_handoff.add(device_id)
             event.set()
 
     def cancel_device(self, device_id: int) -> None:
-        """Abort one WAITING job. Idempotent. Does NOT touch a device
-        that already holds a permit (callers must only cancel waiters —
-        an executing step is aborted through the pipeline's signal path,
-        not by releasing its permit)."""
+        """Abort one WAITING job. Idempotent.
+
+        Two waiter states:
+        - Still in ``_waiters``: wake without a slot (held never incremented).
+        - Already promoted (``_pending_handoff``): mark cancelled; ``acquire``
+          releases the slot when it observes the flag.
+
+        Does NOT touch a device that already received its ``OperationPermit``
+        (handoff complete). Executing steps abort via the pipeline signal path.
+        """
         with self._lock:
-            self._cancelled.add(device_id)
             event = self._waiters.pop(device_id, None)
+            if event is not None or device_id in self._pending_handoff:
+                self._cancelled.add(device_id)
+            # else: already holding / unknown — no-op
         if event is not None:
             event.set()
 
