@@ -1545,8 +1545,9 @@ class _CoordinatorHeartbeatJob(BaseModel):
 class _CoordinatorHeartbeatIn(BaseModel):
     host_id: str
     agent_instance_id: str
-    coordinator_epoch: int  # monotonic per PlanRunHost, Agent increments on restart
-    plan_run_hosts: List[dict]  # [{plan_run_id, host_id}]
+    # coordinator_epoch is now inside each plan_run_hosts entry (Step 5b收口 #10).
+    # A single top-level epoch would incorrectly share one epoch across hosts.
+    plan_run_hosts: List[dict]  # [{id, plan_run_id, host_id, coordinator_epoch}]
     jobs: List[_CoordinatorHeartbeatJob] = []
 
 
@@ -1578,6 +1579,7 @@ async def coordinator_heartbeat(
         prh_id = entry.get("id")
         pr_id = entry.get("plan_run_id")
         hid = entry.get("host_id")
+        reported_epoch = entry.get("coordinator_epoch", 0)
         if not prh_id or not pr_id or not hid:
             continue
         row = await db.get(_PRH, prh_id)
@@ -1592,18 +1594,26 @@ async def coordinator_heartbeat(
             )
             stale_host_ids.append(prh_id)
             continue
-        if row.coordinator_epoch > payload.coordinator_epoch:
+        if row.coordinator_epoch > reported_epoch:
             stale_host_ids.append(prh_id)
             continue
-        row.coordinator_epoch = payload.coordinator_epoch
+        row.coordinator_epoch = max(row.coordinator_epoch, reported_epoch)
         row.coordinator_heartbeat_at = now
 
     for j in payload.jobs:
         reported = j.execution_state
         state_val = reported if reported in _VALID_EXECUTION_STATES else None
-        values: dict[str, Any] = {"updated_at": now, "last_execution_heartbeat_at": now}
+        # ADR-0026 §3 (Step 5b收口 #3): heartbeat clock discipline.
+        # Coordinator heartbeat proves the Agent PROCESS is alive — this is
+        # the correct clock for WAITING_*/PATROL_SLEEP (legally idle states).
+        # EXECUTING_STEP must have its execution heartbeat refreshed ONLY by
+        # the executing process itself (extend-batch), NEVER by a 30s
+        # per-host heartbeat — otherwise a stuck step gets eternal life.
+        values: dict[str, Any] = {"updated_at": now}
         if state_val is not None:
             values["execution_state"] = state_val
+        if state_val in ("WAITING_EXECUTION_SLOT", "PATROL_SLEEP", "WAITING_BARRIER"):
+            values["last_execution_heartbeat_at"] = now
         ts = _parse_progress_ts(j.last_progress_at)
         if ts is not None:
             values["last_progress_at"] = ts
@@ -1623,6 +1633,9 @@ async def coordinator_heartbeat(
         accepted=len(stale_host_ids) == 0,
         stale_plan_run_host_ids=stale_host_ids,
     ))
+
+
+@router.post("/jobs/{job_id}/steps/{step_id}/status", response_model=ApiResponse[dict])
 async def update_job_step_status(
     job_id: int,
     step_id: str,

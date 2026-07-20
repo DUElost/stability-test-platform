@@ -771,10 +771,17 @@ class PipelineEngine:
 
 
     def _update_execution_state(self, state: str, progress_ts: Optional[str] = None) -> None:
-        """ADR-0026 Step 5b: persist execution_state via coordinator (thread-safe)."""
+        """ADR-0026 Step 5b: persist execution_state via coordinator (thread-safe).
+
+        When progress_ts is not provided, significant state transitions
+        (EXECUTING_STEP, PATROL_SLEEP) automatically record the current UTC
+        time as a business-progress marker (invariant ③, last_progress_at).
+        """
         coord = getattr(self, "_coordinator", None)
         if coord is None:
             return
+        if progress_ts is None and state in ("EXECUTING_STEP", "PATROL_SLEEP"):
+            progress_ts = datetime.now(timezone.utc).isoformat()
         jv = coord.register_job(self._run_id)
         if jv is not None:
             jv.update(state=state, progress_ts=progress_ts)
@@ -799,11 +806,18 @@ class PipelineEngine:
         self._update_execution_state("WAITING_EXECUTION_SLOT")
         permit = None
         try:
-            try:
-                permit = scheduler.acquire(device_id)
-            except PermitDenied:
-                self._logger.warning("permit_denied step=%s job=%d", step.get("step_id"), self._run_id)
-                return False
+            # Loop with finite timeout so abort/lease-lost can interrupt the
+            # wait (cancel_device wakes the waiter with PermitDenied).
+            while True:
+                try:
+                    permit = scheduler.acquire(device_id, timeout=5)
+                    break
+                except PermitDenied:
+                    if self._is_lock_lost() or self._canceled:
+                        return False
+                    # timeout — check abort signals and retry
+                    if self._is_aborted is not None and self._is_aborted():
+                        return False
             self._update_execution_state("EXECUTING_STEP")
             return self._run_step_with_retry(phase, step)
         finally:

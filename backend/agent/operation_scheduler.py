@@ -141,10 +141,18 @@ class OperationScheduler:
         # before the event is set).  If this is a spurious wake we just
         # return the permit — the waker already consumed the slot.
         if not signaled:
-            # Timeout — remove ourselves from the queue and clean up.
-            with self._lock:
-                self._waiters.pop(device_id, None)
-            raise PermitDenied(f"permit wait timed out after {timeout}s")
+            # Timeout. The waiter may have been promoted by _wake_one_locked
+            # between the wait() timing out and this code running. If the
+            # event IS set at this point, we were promoted — return the
+            # permit instead of raising (slot is already consumed).
+            if event.is_set():
+                # Slot was consumed by the promoter; don't double-decrement.
+                pass
+            else:
+                # Genuine timeout — remove from queue, no slot consumed.
+                with self._lock:
+                    self._waiters.pop(device_id, None)
+                raise PermitDenied(f"permit wait timed out after {timeout}s")
 
         if self._shutdown:
             raise PermitDenied("scheduler shut down during wait")

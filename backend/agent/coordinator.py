@@ -58,7 +58,7 @@ class PlanRunHostView:
         with self._lock:
             self.barrier_total = total
             self.barrier_arrived = 0
-            self._barrier_event.clear()
+            self._barrier_event = threading.Event()  # fresh event per phase
 
     def arrive_at_barrier(self) -> bool:
         """Atomically increment arrived count. Returns True if this is the
@@ -71,15 +71,18 @@ class PlanRunHostView:
             return False
 
     def wait_barrier(self, timeout: float | None = None) -> bool:
-        """Block until all jobs have arrived. Returns True on phase advance,
-        False on timeout."""
-        return self._barrier_event.wait(timeout=timeout)
+        """Block until all jobs have arrived at the current phase barrier."""
+        # Snapshot the event under lock so late-arriving waiters see the new
+        # event, not the one that was just set+replaced by advance_phase.
+        with self._lock:
+            ev = self._barrier_event
+        return ev.wait(timeout=timeout)
 
     def advance_phase(self, next_phase: str) -> None:
         with self._lock:
             self.phase = next_phase
             self.barrier_arrived = 0
-            self._barrier_event.clear()
+            self._barrier_event = threading.Event()  # fresh event for next phase
 
 
 class JobExecutionView:
@@ -131,6 +134,8 @@ class HostRunCoordinator:
         self._lock = threading.Lock()
         self._plan_run_hosts: Dict[int, PlanRunHostView] = {}  # keyed by host_row_id
         self._job_views: Dict[int, JobExecutionView] = {}  # keyed by job_id
+        self._job_devices: Dict[int, int] = {}  # job_id → device_id for abort
+        self._scheduler: Any = None  # set via set_scheduler()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
@@ -186,10 +191,23 @@ class HostRunCoordinator:
     def register_plan_run_host(self, host_row_id: int, plan_run_id: int) -> PlanRunHostView:
         with self._lock:
             if host_row_id not in self._plan_run_hosts:
-                self._plan_run_hosts[host_row_id] = PlanRunHostView(
-                    host_row_id, plan_run_id, self._host_id,
-                )
+                v = PlanRunHostView(host_row_id, plan_run_id, self._host_id)
+                # Restore persisted epoch on first registration — a previous
+                # Agent instance may have persisted a higher epoch.
+                self._restore_one_epoch(v)
+                self._plan_run_hosts[host_row_id] = v
             return self._plan_run_hosts[host_row_id]
+
+    def _restore_one_epoch(self, view: PlanRunHostView) -> None:
+        if self._local_db is None:
+            return
+        try:
+            raw = self._local_db.get_state(self._epoch_key(view.id), "1")
+            epoch = int(raw)
+        except (ValueError, TypeError):
+            epoch = 1
+        with view._lock:
+            view._epoch = epoch
 
     def deregister_plan_run_host(self, host_row_id: int) -> None:
         with self._lock:
@@ -234,11 +252,29 @@ class HostRunCoordinator:
                 self._job_views[job_id] = JobExecutionView(job_id)
             return self._job_views[job_id]
 
+    def register_job_device(self, job_id: int, device_id: int) -> None:
+        """Map job→device for abort/cancel targeting."""
+        with self._lock:
+            self._job_devices[job_id] = device_id
+
     def deregister_job(self, job_id: int) -> None:
         with self._lock:
             self._job_views.pop(job_id, None)
+            self._job_devices.pop(job_id, None)
 
-    # ── heartbeat loop ─────────────────────────────────────────────────────
+    def set_scheduler(self, scheduler: Any) -> None:
+        self._scheduler = scheduler
+
+    def cancel_waiting_job(self, job_id: int) -> None:
+        """Abort/lease-lost: cancel a job waiting on the scheduler permit."""
+        scheduler = getattr(self, "_scheduler", None)
+        if scheduler is None:
+            return
+        with self._lock:
+            device_id = self._job_devices.get(job_id)
+        if device_id is not None:
+            scheduler.cancel_device(device_id)
+            logger.info("coordinator_cancelled_job job=%d device=%d", job_id, device_id)
 
     def _loop(self) -> None:
         while not self._stop_event.wait(self._interval):
@@ -249,13 +285,16 @@ class HostRunCoordinator:
 
     def _tick(self) -> None:
         headers = {"X-Agent-Secret": self._agent_secret} if self._agent_secret else {}
-        epoch: int
         host_entries: list[dict]
         job_entries: list[dict]
+        per_host_epoch: dict[int, int]
 
         with self._lock:
-            epoch = next(iter(self._plan_run_hosts.values())).epoch if self._plan_run_hosts else 1
-            host_entries = [v.to_payload() for v in self._plan_run_hosts.values()]
+            per_host_epoch = {prh_id: v.epoch for prh_id, v in self._plan_run_hosts.items()}
+            host_entries = [
+                {**v.to_payload(), "coordinator_epoch": v.epoch}
+                for v in self._plan_run_hosts.values()
+            ]
             job_entries = [
                 {
                     "job_id": jv.job_id,
@@ -263,6 +302,11 @@ class HostRunCoordinator:
                 }
                 for jv in self._job_views.values()
             ]
+
+        # Send one heartbeat per unique (plan_run_id, host_id, epoch).
+        # Each PlanRunHost has its own monotonic epoch.
+        if not host_entries:
+            return
 
         try:
             resp = requests.post(

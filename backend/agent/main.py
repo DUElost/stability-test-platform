@@ -769,12 +769,16 @@ def main() -> None:
         api_url, host_id, agent_instance_id, agent_secret=agent_secret,
         local_db=local_db,
     )
+    # ADR-0026 Step 5b: wire scheduler to coordinator for abort/cancel
+    coordinator.set_scheduler(operation_scheduler)
     # Start the per-host coordinator heartbeat (reports coordinator
     # heartbeats + per-job execution_state to control plane).
     coordinator.start()
 
     # ADR-0019 Phase 3b: lease 丢失回调（409 时 LeaseRenewer 内部已清理，此处清理外部状态）
     def _on_lease_lost(jid: int, device_id: Optional[int]) -> None:
+        # ADR-0026 Step 5b: wake any permit waiter for this job
+        coordinator.cancel_waiting_job(jid)
         try:
             _cleanup_after_lease_lost(
                 job_id=jid,
@@ -920,6 +924,8 @@ def main() -> None:
 
     def _resume_recovered_job_impl(job_payload: dict) -> None:
         job_payload.setdefault("agent_instance_id", agent_instance_id)
+        # ADR-0026 Step 5b: recovered jobs must also go through the
+        # scheduler and coordinator, not bypass them.
         executor.submit(
             run_task_wrapper,
             job_payload,
@@ -931,6 +937,8 @@ def main() -> None:
             script_registry,
             local_db,
             patrol_checkpoint_store,
+            operation_scheduler=operation_scheduler,
+            coordinator=coordinator,
         )
 
     _resume_recovered_job = _resume_recovered_job_impl
@@ -1018,6 +1026,9 @@ def main() -> None:
 
                         # ADR-0026 Step 5b: register job + PlanRunHost with coordinator
                         coordinator.register_job(job["id"])
+                        if device_id:
+                            coordinator.register_job_device(
+                                job["id"], device_id)
                         prh_id = job.get("plan_run_host_id")
                         plan_run_id = job.get("plan_run_id")
                         if prh_id and plan_run_id:
