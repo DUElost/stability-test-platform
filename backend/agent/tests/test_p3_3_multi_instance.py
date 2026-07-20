@@ -229,3 +229,29 @@ async def test_call_agent_rpc_no_adapter_still_requires_local(monkeypatch):
 
     with pytest.raises(sio_mod.AgentNotConnectedError):
         await sio_mod.call_agent_rpc("7", "ping", {})
+
+
+@pytest.mark.asyncio
+async def test_call_agent_rpc_registry_miss_fails_fast(monkeypatch):
+    """Adapter + registry on, no owner → immediate AgentNotConnectedError."""
+    import backend.realtime.socketio_server as sio_mod
+
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setenv("STP_SOCKETIO_REDIS_ADAPTER", "1")
+    monkeypatch.setenv("STP_AGENT_SID_REGISTRY", "1")
+
+    class FakeRedis:
+        async def get(self, key):
+            return None
+
+    reg.configure_agent_sid_registry(FakeRedis())
+    ns = MagicMock()
+    ns.get_sid.return_value = None
+    sio = MagicMock()
+    sio.call = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(sio_mod, "get_sio", lambda: sio)
+    monkeypatch.setattr(sio_mod, "get_agent_namespace", lambda: ns)
+
+    with pytest.raises(sio_mod.AgentNotConnectedError):
+        await sio_mod.call_agent_rpc("7", "ping", {})
+    sio.call.assert_not_awaited()

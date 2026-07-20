@@ -142,16 +142,17 @@ class AgentNamespace(socketio.AsyncNamespace):
 
     async def on_disconnect(self, sid: str):
         async with self.session(sid) as session:
-            host_id = session.get("host_id", "?")
-        async with self._lock:
-            tracked_sid = self._host_to_sid.get(str(host_id))
-            if tracked_sid == sid:
-                self._host_to_sid.pop(str(host_id), None)
-        from backend.realtime.agent_sid_registry import unregister_agent_owner
+            host_id = session.get("host_id")
+        if host_id:
+            async with self._lock:
+                tracked_sid = self._host_to_sid.get(str(host_id))
+                if tracked_sid == sid:
+                    self._host_to_sid.pop(str(host_id), None)
+            from backend.realtime.agent_sid_registry import unregister_agent_owner
 
-        await unregister_agent_owner(str(host_id), sid)
+            await unregister_agent_owner(str(host_id), sid)
         record_socketio_connection("/agent", False)
-        logger.info("agent_sio_disconnected sid=%s host_id=%s", sid, host_id)
+        logger.info("agent_sio_disconnected sid=%s host_id=%s", sid, host_id or "?")
 
     async def on_step_log(self, sid: str, data: dict):
         """Agent emits step_log → broadcast to dashboard subscribers + persist to file.
