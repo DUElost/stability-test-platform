@@ -140,9 +140,10 @@ def pump_admission_tick() -> dict[str, int]:
     PRECHECK until the reaper (reviewer, Step 4.1). Confirmed failure requeues
     immediately.
 
-    When the SAQ producer is not ready (worker not started, e.g.
-    STP_ENABLE_INPROCESS_SAQ=0), the tick short-circuits WITHOUT claiming —
-    claiming without an executor would just churn QUEUED↔PRECHECK.
+    When SAQ is not ready (``is_saq_ready()`` false), the tick short-circuits
+    WITHOUT claiming — claiming without an executor would churn QUEUED↔PRECHECK.
+    With ``STP_ENABLE_INPROCESS_SAQ=0``, producer-only mode still counts as ready
+    so an external worker can drain the same Redis queue.
     """
     from backend.tasks.saq_worker import enqueue_sync, is_saq_ready
 
