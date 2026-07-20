@@ -134,6 +134,9 @@ class AgentNamespace(socketio.AsyncNamespace):
             self._host_to_sid[str(host_id)] = sid
 
         await self.enter_room(sid, f"agent:{host_id}")
+        from backend.realtime.agent_sid_registry import register_agent_owner
+
+        await register_agent_owner(str(host_id), sid)
         record_socketio_connection("/agent", True)
         logger.info("agent_sio_connected sid=%s host_id=%s", sid, host_id)
 
@@ -144,6 +147,9 @@ class AgentNamespace(socketio.AsyncNamespace):
             tracked_sid = self._host_to_sid.get(str(host_id))
             if tracked_sid == sid:
                 self._host_to_sid.pop(str(host_id), None)
+        from backend.realtime.agent_sid_registry import unregister_agent_owner
+
+        await unregister_agent_owner(str(host_id), sid)
         record_socketio_connection("/agent", False)
         logger.info("agent_sio_disconnected sid=%s host_id=%s", sid, host_id)
 
@@ -364,13 +370,16 @@ async def call_agent_rpc(
 ) -> dict:
     """Invoke an RPC on a connected agent and await its ack response.
 
-    Internally uses ``sio.call(event, data, to=sid, ...)`` which relies on
-    the SocketIO ack mechanism.  The agent's handler must ``return`` the
+    Internally uses ``sio.call(event, data, ...)`` which relies on the
+    SocketIO ack mechanism.  The agent's handler must ``return`` the
     response value for it to be auto-forwarded as the ack payload.
 
-    Multi-instance note (ADR-0027 P3-2): sid lookup is **process-local**.
-    Redis adapter fans out room emits, but RPC still requires the Agent
-    WebSocket to land on this process (sticky sessions at the LB).
+    Routing (ADR-0027 P3-3):
+    - Prefer process-local ``host_id → sid`` when the Agent is on this
+      process.
+    - Otherwise, with Redis adapter (+ optional sid registry), call via
+      room ``agent:{host_id}`` so the owning instance delivers the RPC —
+      LB sticky is no longer required when those flags are on.
 
     Raises:
         RuntimeError: if SocketIO has not been initialised.
@@ -380,17 +389,29 @@ async def call_agent_rpc(
     sio = get_sio()
     ns = get_agent_namespace()
     sid = ns.get_sid(host_id)
-    if not sid:
-        raise AgentNotConnectedError(str(host_id))
+    call_kwargs: Dict[str, Any] = {
+        "namespace": "/agent",
+        "timeout": timeout,
+    }
+    if sid:
+        call_kwargs["to"] = sid
+    else:
+        from backend.realtime.agent_sid_registry import (
+            agent_sid_registry_enabled,
+            lookup_agent_owner,
+        )
+        from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
+
+        if not socketio_redis_adapter_enabled():
+            raise AgentNotConnectedError(str(host_id))
+        if agent_sid_registry_enabled():
+            owner = await lookup_agent_owner(host_id)
+            if owner is None:
+                raise AgentNotConnectedError(str(host_id))
+        call_kwargs["room"] = f"agent:{host_id}"
 
     try:
-        ack = await sio.call(
-            event,
-            data,
-            to=sid,
-            namespace="/agent",
-            timeout=timeout,
-        )
+        ack = await sio.call(event, data, **call_kwargs)
     except asyncio.TimeoutError as exc:
         raise AgentRpcError(
             f"agent rpc '{event}' to host '{host_id}' timed out after {timeout}s"

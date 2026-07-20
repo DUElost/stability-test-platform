@@ -20,6 +20,8 @@ class TestHealthSaqReady:
             assert data["data"]["saq_ready"] is False
             assert data["data"]["saq_inprocess_worker"] is True
             assert "socketio_redis_adapter" in data["data"]
+            assert "agent_sid_registry" in data["data"]
+            assert data["data"]["agent_sid_registry"] is False
 
     def test_health_includes_saq_ready_when_inprocess_disabled(self, client, monkeypatch):
         """ADR-0026 P0: producer-only mode still reports saq_ready (enqueue health)."""

@@ -5,12 +5,11 @@ When multiple control-plane processes share rooms (dashboard broadcasts,
 ``AsyncRedisManager``. Single-process deployments leave the flag off and
 keep the in-memory manager (zero Redis pub/sub overhead).
 
-Limits (honest):
+Limits:
 - Room fan-out works across instances once the adapter is on.
-- ``call_agent_rpc`` still resolves ``host_id → sid`` from the **local**
-  ``AgentNamespace`` map; multi-instance Agent RPC requires sticky
-  sessions (or a later shared sid registry). Control emits via
-  ``room=agent:{host_id}`` are already cross-process safe.
+- With ADR-0027 P3-3 ``agent_sid_registry`` + room-targeted
+  ``call_agent_rpc``, Agent RPC no longer requires LB sticky when the
+  adapter (and registry, default-follows-adapter) are enabled.
 """
 
 from __future__ import annotations

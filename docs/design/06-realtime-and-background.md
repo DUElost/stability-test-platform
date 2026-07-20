@@ -23,7 +23,7 @@ Frontend ◄──SocketIO /dashboard──┘
 **鉴权**：`AGENT_SECRET`；生产必配。  
 **Legacy**：`/ws/agent/{id}` 等为 deprecated stub。
 
-**多实例（ADR-0027 P3-2）**：`STP_SOCKETIO_REDIS_ADAPTER=1` 时 `create_sio_server` 挂载 `AsyncRedisManager`，dashboard / `agent:{host_id}` room 跨进程 fan-out。`call_agent_rpc` 仍依赖本进程 sid 映射 → LB 须 sticky。
+**多实例（ADR-0027）**：`STP_SOCKETIO_REDIS_ADAPTER=1` 时挂载 `AsyncRedisManager`（dashboard / `agent:{host_id}` room 跨进程）。P3-3：`STP_AGENT_SID_REGISTRY`（默认跟随 adapter）登记 `host_id` owner；`call_agent_rpc` 本地 sid 未命中时走 room 投递，**不再要求 LB sticky**。
 
 ---
 
@@ -49,7 +49,7 @@ Frontend ◄──SocketIO /dashboard──┘
 | Device lease reconciler | `device_lease_reconciler.py` | 租约一致性 |
 | Revoked token cleanup | `revoked_token_cleanup.py` | 24h refresh 黑名单 |
 
-**约束**：默认单进程后端。admission pump / counter reconcile 已有 leader election（ADR-0027 P3-1）；其余 job 多实例仍会重复调度，正式多实例见 P3-3。
+**约束**：默认单进程后端。ADR-0027 P3-3：除 `saq_queue_depth_poll` 外，全部 singleton job 经 leader election（`admission_pump` / `counter_reconcile` 为函数内 leadership，其余经 `_instrumented(..., singleton=True)`）。
 
 ---
 
