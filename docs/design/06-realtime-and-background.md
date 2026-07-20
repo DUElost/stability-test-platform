@@ -23,6 +23,8 @@ Frontend ◄──SocketIO /dashboard──┘
 **鉴权**：`AGENT_SECRET`；生产必配。  
 **Legacy**：`/ws/agent/{id}` 等为 deprecated stub。
 
+**多实例（ADR-0027 P3-2）**：`STP_SOCKETIO_REDIS_ADAPTER=1` 时 `create_sio_server` 挂载 `AsyncRedisManager`，dashboard / `agent:{host_id}` room 跨进程 fan-out。`call_agent_rpc` 仍依赖本进程 sid 映射 → LB 须 sticky。
+
 ---
 
 ## 2. 日志持久化
@@ -47,7 +49,7 @@ Frontend ◄──SocketIO /dashboard──┘
 | Device lease reconciler | `device_lease_reconciler.py` | 租约一致性 |
 | Revoked token cleanup | `revoked_token_cleanup.py` | 24h refresh 黑名单 |
 
-**约束**：单进程后端；多实例会重复调度（ADR-0025 D1 推迟水平扩展）。
+**约束**：默认单进程后端。admission pump / counter reconcile 已有 leader election（ADR-0027 P3-1）；其余 job 多实例仍会重复调度，正式多实例见 P3-3。
 
 ---
 

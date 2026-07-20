@@ -19,6 +19,7 @@ class TestHealthSaqReady:
         if response.status_code == 200:
             assert data["data"]["saq_ready"] is False
             assert data["data"]["saq_inprocess_worker"] is True
+            assert "socketio_redis_adapter" in data["data"]
 
     def test_health_includes_saq_ready_when_inprocess_disabled(self, client, monkeypatch):
         """ADR-0026 P0: producer-only mode still reports saq_ready (enqueue health)."""

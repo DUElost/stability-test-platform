@@ -75,7 +75,7 @@
 | [ADR-0024](./ADR-0024-browser-session-security-hardening.md) | 浏览器 Web 会话安全化（HttpOnly Cookie + CSRF + refresh 黑名单 + 可观测） | Accepted | P0 | M3.2 | 已实现（2026-05-21） |
 | [ADR-0025](./ADR-0025-phase4-architecture-alignment.md) | Phase 4 架构对齐（方案 C：存储三级 + Agent 归档闭环） | Accepted | P2 | M4 | 已实现（Sprint 1–4，见 [DOC-MAP](../DOC-MAP.md) / acceptance） |
 | [ADR-0026](./ADR-0026-plan-execution-scaling.md) | 大规模化测试计划执行架构（PlanRun 准入队列 + 四层调度 + 控制面减负） | Accepted | P0 | M5 | P0–P2 已收口（含 Step 5b / barrier / terminalization / step_log 批量化 / 索引与指标）；待定清单 v1 已回填；P3 → ADR-0027 |
-| [ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md) | 控制面水平扩展（Leader Election + 多实例预备） | Proposed | P2 | M6 | P3-1 advisory-lock leader election 已接线 admission_pump / counter_reconcile |
+| [ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md) | 控制面水平扩展（Leader Election + 多实例预备） | Proposed | P2 | M6 | P3-1 leader election + P3-2 SocketIO Redis adapter（opt-in）；P3-3 全量多实例未开 |
 
 ## Proposed 里程碑看板（2026 上半年）
 
