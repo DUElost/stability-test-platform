@@ -52,8 +52,10 @@
   - *已知剩余缺口*：批量端点镜像了单点端点的保活语义——续租成功仍顺带刷 `job.updated_at`（`agent_api.py:1421-1428`，单点为 `:1208`）兼作 RUNNING 保活，续租与保活仍耦合（见缺口④）；`execution_state` / `progress_marker` 只收不落库。
   - *P1 目标*：三信号拆列落库（不变量③），续租请求承载三份语义（§5）。
 - **心跳减负（P0 已收口）**：权威设备心跳仍走 `/api/v1/heartbeat`；两端点返回 `heartbeat_interval_seconds`，Agent 钳位采纳；硬件字段按 `DEVICE_SNAPSHOT_INTERVAL` 降采样。轻量 `/api/v1/agent/heartbeat` 已带同契约，供后续双通道收敛。
+- **真实指标（P0 已收口）**：queue-latency / extend-batch 成功率 / 聚合耗时 / per-host OperationScheduler 并发度 / 设备矩阵查询耗时，均已挂 Prometheus。
 - **实时日志（P2-2 已收口）**：`_MQStepLogger` → `StepTraceWriter.send_log` → `AgentSocketIOClient` 按批（`STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS`）emit `step_log`；心跳 `backpressure.log_rate_limit` + control `backpressure` 命令闭环；`STP_STEP_LOG_STREAM=0` 可回退为 no-op。
 - **SAQ producer/worker（P0 已拆）**：`init_saq_producer` 与 `start_saq_worker` 解耦；`STP_ENABLE_INPROCESS_SAQ=0` 时 producer 仍可 enqueue，外部 worker 同队列消费。
+- **索引（P2-3 已收口）**：`idx_plan_run_admission_queue` 对齐 pump `priority DESC, enqueued_at ASC`；`idx_prtd_plan_run_sort`。
 
 ### 缺口④：三个独立存活信号被混用于单个 `job.updated_at`
 
