@@ -270,6 +270,11 @@ async def health_check():
     try:
         async with async_engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
+        from backend.core.admission_queue import (
+            admission_queue_enabled,
+            admission_queue_flag_enabled,
+            is_queue_pump_ready,
+        )
         from backend.realtime.agent_sid_registry import agent_sid_registry_enabled
         from backend.realtime.socketio_redis import socketio_redis_adapter_enabled
 
@@ -279,6 +284,9 @@ async def health_check():
             "saq_inprocess_worker": inprocess_saq,
             "socketio_redis_adapter": socketio_redis_adapter_enabled(),
             "agent_sid_registry": agent_sid_registry_enabled(),
+            "admission_queue_flag": admission_queue_flag_enabled(),
+            "admission_queue_pump_ready": is_queue_pump_ready(),
+            "admission_queue_enabled": admission_queue_enabled(),
         }
         return {"data": payload, "error": None}
     except Exception:
