@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plan Execute V2 — 静态预览索引</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topnav">
+      <div class="brand">STP · Plan Execute V2</div>
+      <span class="pill on">静态预览</span>
+      <span class="pill">不动代码 · 仅设计确认</span>
+      <div class="spacer"></div>
+      <span class="hint">对齐设计令牌 · 冲刺 A / A+ / B</span>
+    </div>
+
+    <div class="page-title">
+      <div>
+        <h1>执行页 UI/UX 改版预览</h1>
+        <p>从「四步表单向导」→「选机工作台 + 发起驾驶舱」。以下为可交互线框，供确认信息架构与主交互。</p>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>设计结论一览：</strong>
+      第 2 步（选机）默认矩阵墙；顶栏指挥条替代四张等宽向导卡；发起态用全宽驾驶舱替代瘦 Dialog。
+      三态路径：<span class="wire">Plan → 选机 → 发起</span>（原「数量与版本确认」并入顶栏实时 chip）。
+    </div>
+
+    <div class="gallery">
+      <a class="card-link" href="01-workspace-matrix.html">
+        <h3>① 选机工作台 · 矩阵主视图</h3>
+        <p>节点轨 + 密集方块墙 + 筛选 chips + 已选 Minimap（点格定位 / hover ✕ 移除）+ 顶栏摘要。可点选、Shift 连选。</p>
+        <span class="tag">冲刺 A · 必看</span>
+      </a>
+      <a class="card-link" href="02-workspace-table.html">
+        <h3>①′ 选机工作台 · 表格辅视图</h3>
+        <p>同一工作台切到表格模式：50/页、就绪徽章、与矩阵共享选择集语言。用于对照「旧主路径」。</p>
+        <span class="tag">冲刺 A · 对照</span>
+      </a>
+      <a class="card-link" href="03-dispatch-cockpit.html">
+        <h3>②③ 发起驾驶舱</h3>
+        <p>按节点容量表、历史墙钟参考、近 3 次执行、疑似重复黄警、参数 ⓘ。替代当前 PreviewDialog。</p>
+        <span class="tag">冲刺 B + A+</span>
+      </a>
+      <a class="card-link" href="00-plan-select.html">
+        <h3>⓪ Plan 选择态</h3>
+        <p>紧凑 Plan 选择器 + stage 分组步骤列表 + 近 3 次执行内联。进入工作台前的轻量态。</p>
+        <span class="tag">三态 · 入口</span>
+      </a>
+    </div>
+
+    <div class="footer-note">
+      <p><strong>色板约定：</strong>绿=就绪 · 斜纹黄=阻塞 · 蓝=占用 · 灰=离线 · 深描边+角点=已选（不另造色）。</p>
+      <p><strong>明确不做（本预览亦未画）：</strong>精确「明早 9 点开跑」时钟、物理机架坐标墙、暗色主题、步骤级历史均时。</p>
+      <p>文件目录：<span class="wire">docs/design/mockups/plan-execute-v2/</span></p>
+    </div>
+  </div>
+</body>
+</html>

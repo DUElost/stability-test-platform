@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>③ 发起驾驶舱 · Plan Execute UX</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="preview-banner">
+    <div>
+      <strong>状态 2 · 发起驾驶舱</strong>
+      <span class="badge-note">替换瘦 PreviewDialog · 不算精确「明早 9 点开跑」</span>
+    </div>
+    <nav>
+      <a href="index.html">总览</a>
+      <a href="00-compare.html">现状对照</a>
+      <a href="01-plan.html">① 选 Plan</a>
+      <a href="02-workbench.html">② 选机工作台 ★</a>
+      <a class="active" href="03-cockpit.html">③ 发起驾驶舱</a>
+    </nav>
+  </div>
+
+  <div class="app">
+    <aside class="rail" aria-hidden="true">
+      <div class="logo"></div>
+      <div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div>
+    </aside>
+    <div class="main">
+      <div class="topbar">
+        <div>控制平面 / <strong>执行 Plan</strong></div>
+        <div><span class="kbd">Esc</span> 可关（示意）</div>
+      </div>
+      <div class="content">
+        <h1 class="page-title">执行 Plan</h1>
+        <p class="page-sub">发起前确认容量、近期执行与参数语义</p>
+
+        <div class="command-bar">
+          <div class="command-meta">
+            <span class="plan-name">周五回归 · ELA 稳定性</span>
+            <span class="sep"></span>
+            <span class="stat"><b>22</b> 台 / <b>3</b> 节点</span>
+            <span class="sep"></span>
+            <span class="pill pill-ok">1 版本 · 一致 ✓</span>
+            <span class="pill pill-ok">22 台就绪</span>
+          </div>
+          <div class="steps-mini">
+            <span class="s done">1 Plan</span> →
+            <span class="s done">2 选机</span> →
+            <span class="s on">3 发起</span>
+          </div>
+        </div>
+
+        <div class="warn-banner">
+          <span style="font-size:18px;line-height:1;">⚠</span>
+          <div>
+            <div style="font-weight:700;">疑似重复发起</div>
+            <div style="margin-top:2px;color:#92400e;">
+              同 Plan 在 18 分钟前已发起 PlanRun #1842，设备集重叠约 86%（19/22）。
+              若非刻意并行，请先确认是否仍要发起。此警示<strong>不阻断</strong>提交。
+            </div>
+          </div>
+        </div>
+
+        <div class="cockpit-grid">
+          <div class="card" style="padding:0;overflow:hidden;">
+            <div class="panel-hd">
+              <span>按节点派发计划</span>
+              <span class="pill pill-warn">B 架 8 台将排队</span>
+            </div>
+            <table class="data">
+              <thead>
+                <tr>
+                  <th>节点</th>
+                  <th>本次选中</th>
+                  <th>剩余槽位</th>
+                  <th>预估</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="font-weight:600;">A 架 · lab-a</td>
+                  <td>8</td>
+                  <td>16</td>
+                  <td><span class="pill pill-ok">立即执行</span></td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;">B 架 · lab-b</td>
+                  <td>14</td>
+                  <td>6</td>
+                  <td><span class="pill pill-warn">6 立即 · 8 排队</span></td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;">C 架 · lab-c</td>
+                  <td>0</td>
+                  <td>20</td>
+                  <td><span class="pill pill-muted">未选</span></td>
+                </tr>
+                <tr>
+                  <td style="font-weight:600;">D 架 · lab-d</td>
+                  <td>0</td>
+                  <td>8</td>
+                  <td><span class="pill pill-muted">未选</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="padding:12px 14px;font-size:12px;color:var(--muted-fg);border-top:1px solid var(--border);line-height:1.55;">
+              「排队」= 超过该节点当前 <code>effective_slots</code> 的选中量，与 ADR-0026 PlanRun 级 QUEUED 准入不是同一层语义。
+              本面板<strong>不计算</strong>精确开跑时刻。
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div class="card" style="padding:14px;">
+              <div style="font-size:13px;font-weight:600;margin-bottom:8px;">时长参考（整次墙钟）</div>
+              <div style="font-size:28px;font-weight:800;letter-spacing:-0.02em;">~ 11.4 h</div>
+              <div style="font-size:12px;color:var(--muted-fg);margin-top:4px;line-height:1.5;">
+                基于该 Plan 近 8 次成功 PlanRun 的 <code>started_at → updated_at</code> 均值。
+                长稳任务可能达天级，仅作量级参考，非 ETA。
+              </div>
+            </div>
+
+            <div class="card" style="padding:14px;">
+              <div style="font-size:13px;font-weight:600;margin-bottom:8px;">近 3 次执行</div>
+              <div class="recent-run">
+                <div>
+                  <div style="font-weight:600;">#1842 · 今天 09:12</div>
+                  <div style="color:var(--muted-fg);">28 台 · 与本次重叠高</div>
+                </div>
+                <span class="pill pill-ok">SUCCESS</span>
+              </div>
+              <div class="recent-run">
+                <div>
+                  <div style="font-weight:600;">#1831 · 昨天 22:40</div>
+                  <div style="color:var(--muted-fg);">30 台</div>
+                </div>
+                <span class="pill pill-warn">PARTIAL</span>
+              </div>
+              <div class="recent-run">
+                <div>
+                  <div style="font-weight:600;">#1810 · 周五 18:05</div>
+                  <div style="color:var(--muted-fg);">24 台</div>
+                </div>
+                <span class="pill pill-ok">SUCCESS</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;padding:14px;">
+          <div style="font-size:13px;font-weight:600;margin-bottom:4px;">运行参数（只读 · 来自 Plan）</div>
+          <div class="param-row">
+            <span>失败阈值 <span class="info-i" title="达到阈值后停止继续派发；已完成步骤结果保留">ⓘ</span></span>
+            <b>10%</b>
+          </div>
+          <div class="param-row">
+            <span>巡检周期 <span class="info-i" title="patrol 阶段两次巡检的间隔秒数">ⓘ</span></span>
+            <b>3600 s</b>
+          </div>
+          <div class="param-row">
+            <span>超时 <span class="info-i" title="整个 PlanRun 超时后中止；已完成步骤结果保留">ⓘ</span></span>
+            <b>172800 s（48h）</b>
+          </div>
+          <div class="param-row" style="align-items:flex-start;">
+            <span style="padding-top:6px;">备注</span>
+            <textarea rows="2" style="flex:1;max-width:480px;border:1px solid var(--border);border-radius:8px;padding:8px;font:inherit;font-size:13px;" placeholder="可选：本轮目的 / 关联单号…"></textarea>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;padding:12px 14px;">
+          <div style="font-size:12px;font-weight:600;margin-bottom:8px;">版本分布（原第 2 步核对，已并入）</div>
+          <table class="data">
+            <thead>
+              <tr><th>节点</th><th>型号</th><th>版本</th><th>数量</th><th>就绪</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>A 架</td><td>ELA</td><td>V104</td><td>8</td><td class="text-success" style="color:#15803d;">8/8</td></tr>
+              <tr><td>B 架</td><td>ELA</td><td>V104</td><td>14</td><td style="color:#15803d;">14/14</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="footer-bar">
+          <a class="btn" href="02-workbench.html">← 返回选机</a>
+          <div style="font-size:12px;color:var(--muted-fg);">预检通过 · 可发起</div>
+          <button type="button" class="btn btn-primary" id="confirmBtn">确认发起 PlanRun</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById("confirmBtn").addEventListener("click", () => {
+      const btn = document.getElementById("confirmBtn");
+      btn.textContent = "已模拟发起 ✓";
+      btn.disabled = true;
+      btn.style.opacity = "0.85";
+    });
+  </script>
+</body>
+</html>

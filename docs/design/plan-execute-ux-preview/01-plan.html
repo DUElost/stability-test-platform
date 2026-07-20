@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>① 选 Plan · Plan Execute UX</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="preview-banner">
+    <div><strong>状态 0 · 选 Plan</strong> <span class="badge-note">顶栏摘要已出现；近 3 次内联</span></div>
+    <nav>
+      <a href="index.html">总览</a>
+      <a href="00-compare.html">现状对照</a>
+      <a class="active" href="01-plan.html">① 选 Plan</a>
+      <a href="02-workbench.html">② 选机工作台 ★</a>
+      <a href="03-cockpit.html">③ 发起驾驶舱</a>
+    </nav>
+  </div>
+
+  <div class="app">
+    <aside class="rail" aria-hidden="true">
+      <div class="logo"></div>
+      <div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div>
+    </aside>
+    <div class="main">
+      <div class="topbar">
+        <div>控制平面 / <strong>执行 Plan</strong></div>
+        <div>预览稿 · 非生产</div>
+      </div>
+      <div class="content">
+        <h1 class="page-title">执行 Plan</h1>
+        <p class="page-sub">选择已保存的 Plan 和目标样机，创建 PlanRun</p>
+
+        <!-- Command bar: empty-ish until plan chosen; shows after selection -->
+        <div class="command-bar">
+          <div class="command-meta">
+            <span class="plan-name">周五回归 · ELA 稳定性</span>
+            <span class="sep"></span>
+            <span class="stat">步骤 <b>6</b>（init 1 · patrol 4 · teardown 1）</span>
+            <span class="sep"></span>
+            <span class="pill pill-muted">样机未选</span>
+            <span class="pill pill-muted">版本 —</span>
+          </div>
+          <div class="steps-mini">
+            <span class="s on">1 Plan</span> →
+            <span class="s">2 选机</span> →
+            <span class="s">3 发起</span>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:12px;">
+          <div class="card" style="padding:14px;">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px;">Plan 配置</div>
+            <input type="search" placeholder="搜索 Plan 名称" style="width:100%;height:34px;border:1px solid var(--border);border-radius:8px;padding:0 10px;font:inherit;font-size:13px;margin-bottom:8px;" />
+            <select style="width:100%;height:36px;border:1px solid var(--border);border-radius:8px;padding:0 10px;font:inherit;font-size:13px;">
+              <option>周五回归 · ELA 稳定性（6 步骤）</option>
+              <option>夜间 Monkey · 全量池</option>
+              <option>冷启动基线 · V104</option>
+            </select>
+            <p style="font-size:12px;color:var(--muted-fg);margin:10px 0 0;line-height:1.5;">
+              长稳巡检 + AEE 采集；失败阈值 10%，超时 48h。
+            </p>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
+              <div style="background:var(--muted);border-radius:8px;padding:10px;">
+                <div style="font-size:11px;color:var(--muted-fg);">失败阈值 <span class="info-i" title="达到阈值后停止继续派发新步骤，已完成步骤结果保留">ⓘ</span></div>
+                <div style="font-weight:700;margin-top:2px;">10%</div>
+              </div>
+              <div style="background:var(--muted);border-radius:8px;padding:10px;">
+                <div style="font-size:11px;color:var(--muted-fg);">巡检周期 <span class="info-i" title="patrol 阶段两次巡检之间的间隔">ⓘ</span></div>
+                <div style="font-weight:700;margin-top:2px;">3600s</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="padding:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <div style="font-size:13px;font-weight:600;">近 3 次执行</div>
+              <span class="pill pill-info">可点击跳转</span>
+            </div>
+            <div class="recent-run">
+              <div>
+                <div style="font-weight:600;">#1842 · 成功</div>
+                <div style="color:var(--muted-fg);">今天 09:12 · 28 台</div>
+              </div>
+              <span class="pill pill-ok">SUCCESS</span>
+            </div>
+            <div class="recent-run">
+              <div>
+                <div style="font-weight:600;">#1831 · 部分失败</div>
+                <div style="color:var(--muted-fg);">昨天 22:40 · 30 台</div>
+              </div>
+              <span class="pill pill-warn">PARTIAL</span>
+            </div>
+            <div class="recent-run">
+              <div>
+                <div style="font-weight:600;">#1810 · 成功</div>
+                <div style="color:var(--muted-fg);">周五 18:05 · 24 台</div>
+              </div>
+              <span class="pill pill-ok">SUCCESS</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:12px;padding:0;overflow:hidden;">
+          <div class="panel-hd">
+            <span>执行步骤 · 按 stage 分组</span>
+            <span class="pill pill-muted">⑫ 提案项</span>
+          </div>
+          <div style="padding:8px 12px;">
+            <div style="font-size:11px;font-weight:700;color:var(--muted-fg);margin:6px 0;">INIT</div>
+            <div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:13px;">
+              <span class="pill pill-info">init</span>
+              <span style="font-weight:600;">push_config</span>
+              <span style="color:var(--muted-fg);font-family:var(--mono);font-size:11px;">script:push_config@3</span>
+            </div>
+            <div style="font-size:11px;font-weight:700;color:var(--muted-fg);margin:10px 0 6px;">PATROL</div>
+            <div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:13px;">
+              <span class="pill" style="background:#ede9fe;color:#6d28d9;">patrol</span>
+              <span style="font-weight:600;">monkey_stability</span>
+              <span style="color:var(--muted-fg);font-family:var(--mono);font-size:11px;">script:monkey@12</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;font-size:13px;">
+              <span class="pill" style="background:#ede9fe;color:#6d28d9;">patrol</span>
+              <span style="font-weight:600;">collect_aee</span>
+              <span style="color:var(--muted-fg);font-family:var(--mono);font-size:11px;">script:collect_aee@5</span>
+            </div>
+            <div style="font-size:11px;font-weight:700;color:var(--muted-fg);margin:10px 0 6px;">TEARDOWN</div>
+            <div style="display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;font-size:13px;">
+              <span class="pill pill-muted">teardown</span>
+              <span style="font-weight:600;">cleanup</span>
+              <span style="color:var(--muted-fg);font-family:var(--mono);font-size:11px;">script:cleanup@2</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-bar">
+          <span style="font-size:12px;color:var(--muted-fg);">提示：选好 Plan 后进入选机工作台；近 3 次用于判断「这 Plan 最近稳不稳」。</span>
+          <a class="btn btn-primary" href="02-workbench.html">下一步：选机 →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

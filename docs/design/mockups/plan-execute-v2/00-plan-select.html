@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>⓪ Plan 选择态 — Plan Execute V2</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topnav">
+      <a href="index.html">← 索引</a>
+      <div class="brand">⓪ Plan 选择</div>
+      <span class="pill on">三态 · 入口</span>
+      <div class="spacer"></div>
+      <a class="btn sm" href="01-workspace-matrix.html">下一步：选机工作台 →</a>
+    </div>
+
+    <div class="page-title">
+      <div>
+        <h1>执行测试计划</h1>
+        <p>轻量入口：选 Plan、扫一眼结构与近期表现，再进入选机工作台。</p>
+      </div>
+    </div>
+
+    <div class="command-bar">
+      <div>
+        <div class="path">
+          <span class="step active">1 Plan · 未选</span>
+          <span style="color:var(--muted-fg)">→</span>
+          <span class="step">2 选机</span>
+          <span style="color:var(--muted-fg)">→</span>
+          <span class="step">3 发起</span>
+        </div>
+        <div class="meta">
+          <span class="chip">选择 Plan 后显示摘要</span>
+        </div>
+      </div>
+      <div class="cta">
+        <button class="btn primary" disabled>进入选机</button>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1.1fr 0.9fr;gap:12px">
+      <div class="panel">
+        <div class="panel-hd">选择测试计划</div>
+        <div class="panel-bd">
+          <input id="planSearch" placeholder="搜索 Plan 名称…" style="width:100%;height:36px;border:1px solid var(--border);border-radius:8px;padding:0 12px;margin-bottom:10px;font-size:13px" />
+          <div id="planList"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-hd">
+          <span>Plan 详情</span>
+          <span class="chip" style="font-weight:500">选中后展示</span>
+        </div>
+        <div class="panel-bd" id="planDetail">
+          <div style="color:var(--muted-fg);font-size:13px;padding:24px 8px;text-align:center">从左侧选择一个 Plan</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const plans = [
+      { id: 12, name: '周五回归 · ELA 长稳', steps: 6, interval: '30m', timeout: '12h', thr: '5%',
+        recent: [
+          { id: 8841, t: '今天 14:22', st: 'RUNNING', n: 28 },
+          { id: 8810, t: '今天 09:05', st: 'SUCCEEDED', n: 30 },
+          { id: 8766, t: '周五 18:40', st: 'FAILED', n: 30 },
+        ],
+        stages: [
+          { stage: 'init', name: '刷机校验 / 清环境' },
+          { stage: 'init', name: '推包 + 授权' },
+          { stage: 'patrol', name: 'Monkey 巡检' },
+          { stage: 'patrol', name: '日志采集心跳' },
+          { stage: 'teardown', name: '拉取 AEE 归档' },
+          { stage: 'teardown', name: '清理临时目录' },
+        ]},
+      { id: 8, name: 'Smoke · 开机稳定性', steps: 3, interval: '—', timeout: '2h', thr: '10%',
+        recent: [
+          { id: 8830, t: '昨天 21:10', st: 'SUCCEEDED', n: 8 },
+          { id: 8799, t: '昨天 11:02', st: 'SUCCEEDED', n: 8 },
+          { id: 8701, t: '周三 16:18', st: 'CANCELLED', n: 4 },
+        ],
+        stages: [
+          { stage: 'init', name: '设备就绪检查' },
+          { stage: 'patrol', name: '开关机循环' },
+          { stage: 'teardown', name: '收集 bugreport' },
+        ]},
+      { id: 21, name: 'Camera ANR 专项', steps: 4, interval: '15m', timeout: '6h', thr: '5%',
+        recent: [
+          { id: 8822, t: '今天 11:40', st: 'SUCCEEDED', n: 12 },
+          { id: 8801, t: '周日 20:00', st: 'SUCCEEDED', n: 12 },
+          { id: 8750, t: '周六 09:30', st: 'FAILED', n: 12 },
+        ],
+        stages: [
+          { stage: 'init', name: '相机权限预置' },
+          { stage: 'patrol', name: '拍照录像压力' },
+          { stage: 'patrol', name: 'ANR 监测' },
+          { stage: 'teardown', name: '导出 traces' },
+        ]},
+    ];
+
+    const list = document.getElementById('planList');
+    const detail = document.getElementById('planDetail');
+    let selected = null;
+
+    function renderList(q = '') {
+      const items = plans.filter(p => p.name.toLowerCase().includes(q.toLowerCase()));
+      list.innerHTML = items.map(p => `
+        <div class="node-item ${selected?.id === p.id ? 'on' : ''}" data-id="${p.id}" style="margin-bottom:6px">
+          <div class="row"><span class="name">${p.name}</span><span class="sub">#${p.id}</span></div>
+          <div class="sub">${p.steps} 步 · 巡检 ${p.interval} · 超时 ${p.timeout}</div>
+        </div>`).join('');
+      list.querySelectorAll('.node-item').forEach(el => {
+        el.onclick = () => { selected = plans.find(p => p.id === +el.dataset.id); renderList(document.getElementById('planSearch').value); renderDetail(); };
+      });
+    }
+
+    function renderDetail() {
+      const bar = document.querySelector('.command-bar');
+      if (!selected) {
+        detail.innerHTML = '<div style="color:var(--muted-fg);font-size:13px;padding:24px 8px;text-align:center">从左侧选择一个 Plan</div>';
+        bar.querySelector('.btn.primary').disabled = true;
+        bar.querySelector('.path').innerHTML = `<span class="step active">1 Plan · 未选</span><span style="color:var(--muted-fg)">→</span><span class="step">2 选机</span><span style="color:var(--muted-fg)">→</span><span class="step">3 发起</span>`;
+        bar.querySelector('.meta').innerHTML = `<span class="chip">选择 Plan 后显示摘要</span>`;
+        return;
+      }
+      bar.querySelector('.btn.primary').disabled = false;
+      bar.querySelector('.btn.primary').onclick = () => location.href = '01-workspace-matrix.html';
+      bar.querySelector('.path').innerHTML = `<span class="step done">1 Plan · ${selected.name}</span><span style="color:var(--muted-fg)">→</span><span class="step">2 选机</span><span style="color:var(--muted-fg)">→</span><span class="step">3 发起</span>`;
+      bar.querySelector('.meta').innerHTML = `<span class="chip">${selected.steps} 步</span><span class="chip">超时 ${selected.timeout}</span><span class="chip">失败阈值 ${selected.thr}</span>`;
+
+      detail.innerHTML = `
+        <div style="font-size:15px;font-weight:700;margin-bottom:4px">${selected.name}</div>
+        <div style="font-size:12px;color:var(--muted-fg);margin-bottom:14px">#${selected.id} · 参数只读（改参回 Plan 编辑页）</div>
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px">步骤结构 <span style="font-weight:500;color:var(--muted-fg)">（⑫ stage 徽标）</span></div>
+        <div class="stage" style="margin-bottom:16px">
+          ${selected.stages.map(s => `<div class="stage-row"><span class="stage-tag ${s.stage}">${s.stage}</span><span>${s.name}</span></div>`).join('')}
+        </div>
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px">近 3 次执行 <span style="font-weight:500;color:var(--muted-fg)">（③）</span></div>
+        ${selected.recent.map(r => `
+          <div class="recent-run">
+            <div>
+              <div style="font-weight:600">PlanRun #${r.id}</div>
+              <div style="color:var(--muted-fg)">${r.t} · ${r.n} 台</div>
+            </div>
+            <span class="badge ${r.st === 'SUCCEEDED' ? 'ready' : r.st === 'FAILED' ? 'blocked' : r.st === 'RUNNING' ? 'busy' : 'offline'}">${r.st}</span>
+          </div>`).join('')}
+      `;
+    }
+
+    document.getElementById('planSearch').oninput = (e) => renderList(e.target.value);
+    renderList();
+  </script>
+</body>
+</html>

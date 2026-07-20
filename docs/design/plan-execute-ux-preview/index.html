@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plan Execute UX 预览 · 总览</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.0.0/chinese-simplified-400.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="preview-banner">
+    <div>
+      <strong>STP · 执行 Plan</strong> UI/UX 静态预览（不动业务代码）
+      <span class="badge-note"> · 对齐 ADR-0026 / 冲刺 A→B 方向</span>
+    </div>
+    <nav>
+      <a class="active" href="index.html">总览</a>
+      <a href="00-compare.html">现状对照</a>
+      <a href="01-plan.html">① 选 Plan</a>
+      <a href="02-workbench.html">② 选机工作台 ★</a>
+      <a href="03-cockpit.html">③ 发起驾驶舱</a>
+    </nav>
+  </div>
+
+  <div class="hub">
+    <h1>选机工作台 + 发起驾驶舱</h1>
+    <p class="lead">
+      把「四步表单向导」收成更贴工程师心智的流程：<b>Plan → 选机 → 发起</b>。
+      第 2 步默认矩阵主舞台（≈30px 格），表格为辅；发起前用全宽驾驶舱替代瘦 Dialog。
+      下列四页可点交互原型，用于评审信息架构与视觉语言——非最终像素稿。
+    </p>
+
+    <div class="hub-grid">
+      <a class="hub-card" href="00-compare.html">
+        <div class="tag">对照</div>
+        <h3>现状 vs 提案</h3>
+        <p>四卡向导 → 顶栏指挥条；表翻页 → 矩阵分带；瘦预览框 → 容量驾驶舱。</p>
+      </a>
+      <a class="hub-card" href="01-plan.html">
+        <div class="tag">状态 0</div>
+        <h3>紧凑选 Plan</h3>
+        <p>Plan 选择器 + stage 分组步骤 + 近 3 次执行入口；向导卡变为顶栏摘要。</p>
+      </a>
+      <a class="hub-card" href="02-workbench.html">
+        <div class="tag">状态 1 · 主战场</div>
+        <h3>选机工作台（矩阵）</h3>
+        <p>节点轨 · 密集方块墙 · 快捷 chips · 已选 Minimap；可点击/Shift 连选/悬浮卡。</p>
+      </a>
+      <a class="hub-card" href="03-cockpit.html">
+        <div class="tag">状态 2</div>
+        <h3>发起驾驶舱</h3>
+        <p>按节点槽位表 · 历史墙钟参考 · 疑似重复黄警 · 参数 ⓘ 解释。</p>
+      </a>
+    </div>
+
+    <div class="card" style="margin-top:20px;padding:16px 18px;">
+      <h3 style="margin:0 0 8px;font-size:14px;">本轮建议验收关注点</h3>
+      <ul style="margin:0;padding-left:18px;font-size:13px;color:var(--muted-fg);line-height:1.75;">
+        <li>矩阵是否应<strong>默认开启</strong>（表为辅），还是双视图平权？</li>
+        <li>向导是否接受压成 <strong>3 态</strong>（合并原「数量与版本确认」到顶栏实时 chip）？</li>
+        <li>色板：就绪 / 阻塞(斜纹) / 占用 / 离线 + 选中描边——色弱可读性是否够？</li>
+        <li>发起驾驶舱：只做「超槽位将排队」+ 整次耗时参考，<strong>不算精确开跑时刻</strong>——文案是否接受？</li>
+        <li>Minimap：点格 = 定位高亮；hover ✕ 才移除——是否符合直觉？</li>
+      </ul>
+    </div>
+
+    <p style="margin-top:18px;font-size:12px;color:var(--muted-fg);">
+      路径：<code>docs/design/plan-execute-ux-preview/</code>
+      · 本地打开可用浏览器直接预览，或 <code>python3 -m http.server</code> 在该目录起静态服务。
+    </p>
+  </div>
+</body>
+</html>

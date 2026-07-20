@@ -68,7 +68,8 @@ operations/README.md → production-minimum-deployment-checklist.md
 | [`05-data-model.md`](./design/05-data-model.md) | ORM 与表关系 |
 | [`06-realtime-and-background.md`](./design/06-realtime-and-background.md) | SocketIO、APScheduler、SAQ |
 | [`2026-plan-c-storage-and-access.md`](./design/2026-plan-c-storage-and-access.md) | 方案 C 存储与访问 |
-| [`2026-07-plan-execute-page-improvements.md`](./design/2026-07-plan-execute-page-improvements.md) | Plan 执行页改造（分页/复跑/容量占用 + 选择持久化/防误触/预检前置等 §7 v2） |
+| [`2026-07-plan-execute-page-improvements.md`](./design/2026-07-plan-execute-page-improvements.md) | Plan 执行页：Phase1–6 + §7 已落地；**§8 V2 选机工作台/驾驶舱实现方案** |
+| [`design/mockups/plan-execute-v2/`](./design/mockups/plan-execute-v2/) | Plan Execute V2 静态预览（§8 视觉基准） |
 
 ---
 
