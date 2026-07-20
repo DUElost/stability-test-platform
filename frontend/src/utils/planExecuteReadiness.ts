@@ -8,6 +8,7 @@ export interface ReadinessDevice {
   adb_connected?: boolean | null;
   adb_state?: string | null;
   build_display_id?: string | null;
+  tags?: string[] | null;
 }
 
 export interface ReadinessHost {
@@ -15,6 +16,93 @@ export interface ReadinessHost {
   name?: string | null;
   ip?: string | null;
   status: string;
+}
+
+export interface CapacityOverflowHost {
+  id: string | number;
+  name?: string | null;
+  ip?: string | null;
+  capacity?: {
+    effective_slots?: number;
+    available_slots?: number;
+    active_jobs?: number;
+    active_devices?: number;
+    online_healthy_devices?: number;
+  } | null;
+}
+
+export interface CapacityOverflowWarning {
+  hostId: string;
+  hostLabel: string;
+  selected: number;
+  effectiveSlots: number;
+  message: string;
+}
+
+export interface NodeSortEntry {
+  id: string;
+  label: string;
+}
+
+function parseIpv4(value: string): number[] | null {
+  const match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value.trim());
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3]), Number(match[4])];
+}
+
+/**
+ * 节点侧栏固定排序：IPv4 按八位组数值序，IP 优先于非 IP 名称，
+ * 非 IP 之间按 numeric localeCompare，unassigned 恒置底。
+ * 避免设备列表轮询刷新导致侧栏顺序漂移。
+ */
+export function compareNodeEntries(a: NodeSortEntry, b: NodeSortEntry): number {
+  const aUnassigned = a.id === 'unassigned';
+  const bUnassigned = b.id === 'unassigned';
+  if (aUnassigned !== bUnassigned) return aUnassigned ? 1 : -1;
+  const aIp = parseIpv4(a.label);
+  const bIp = parseIpv4(b.label);
+  if (aIp && bIp) {
+    for (let i = 0; i < 4; i += 1) {
+      if (aIp[i] !== bIp[i]) return aIp[i] - bIp[i];
+    }
+    return 0;
+  }
+  if (aIp) return -1;
+  if (bIp) return 1;
+  return a.label.localeCompare(b.label, undefined, { numeric: true });
+}
+
+/**
+ * 按节点对比「本次选中数 vs effective_slots（剩余可派发槽位）」。
+ * effective_slots 缺失时不告警，避免心跳未到/过期导致误报。
+ */
+export function evaluateCapacityOverflow(
+  selectedDevices: ReadinessDevice[],
+  hosts: CapacityOverflowHost[],
+): CapacityOverflowWarning[] {
+  const hostMap = new Map(hosts.map(host => [String(host.id), host]));
+  const counts = new Map<string, number>();
+  for (const device of selectedDevices) {
+    const hostId = String(device.host_id ?? 'unassigned');
+    if (hostId === 'unassigned') continue;
+    counts.set(hostId, (counts.get(hostId) ?? 0) + 1);
+  }
+  const warnings: CapacityOverflowWarning[] = [];
+  for (const [hostId, selected] of counts) {
+    const host = hostMap.get(hostId);
+    const slots = host?.capacity?.effective_slots;
+    if (typeof slots !== 'number' || !Number.isFinite(slots)) continue;
+    if (selected <= slots) continue;
+    const hostLabel = host?.ip || host?.name || hostId;
+    warnings.push({
+      hostId,
+      hostLabel,
+      selected,
+      effectiveSlots: slots,
+      message: `节点 ${hostLabel} 本次选中 ${selected} 台，超出剩余可派发槽位 ${slots} 个，将排队执行`,
+    });
+  }
+  return warnings;
 }
 
 export function evaluateDeviceReadiness(devices: ReadinessDevice[], hosts: ReadinessHost[]) {

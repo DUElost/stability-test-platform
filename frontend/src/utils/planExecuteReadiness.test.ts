@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateDeviceReadiness } from './planExecuteReadiness';
+import {
+  compareNodeEntries,
+  evaluateCapacityOverflow,
+  evaluateDeviceReadiness,
+} from './planExecuteReadiness';
 
 describe('evaluateDeviceReadiness', () => {
   it('checks runtime blockers from platform state', () => {
@@ -30,5 +34,94 @@ describe('evaluateDeviceReadiness', () => {
   it('reports missing version information', () => {
     const result = evaluateDeviceReadiness([{ id: 1, serial: 'A', status: 'ONLINE' }], []);
     expect(result.warnings).toContain('部分设备缺少版本信息');
+  });
+});
+
+describe('evaluateCapacityOverflow', () => {
+  it('warns when selected count exceeds effective_slots', () => {
+    const warnings = evaluateCapacityOverflow(
+      [
+        { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'C', host_id: 'h1', status: 'ONLINE' },
+      ],
+      [{ id: 'h1', ip: '172.21.8.143', capacity: { effective_slots: 2, active_jobs: 1 } }],
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].selected).toBe(3);
+    expect(warnings[0].effectiveSlots).toBe(2);
+    expect(warnings[0].message).toContain('超出剩余可派发槽位 2 个');
+  });
+
+  it('does not warn when selected equals effective_slots', () => {
+    const warnings = evaluateCapacityOverflow(
+      [
+        { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE' },
+      ],
+      [{ id: 'h1', ip: '172.21.8.143', capacity: { effective_slots: 2 } }],
+    );
+    expect(warnings).toEqual([]);
+  });
+
+  it('skips hosts with missing effective_slots to avoid false alarms', () => {
+    const warnings = evaluateCapacityOverflow(
+      [
+        { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE' },
+      ],
+      [{ id: 'h1', ip: '172.21.8.143', capacity: { active_jobs: 3 } }],
+    );
+    expect(warnings).toEqual([]);
+  });
+
+  it('ignores unassigned devices and evaluates per host', () => {
+    const warnings = evaluateCapacityOverflow(
+      [
+        { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'C', host_id: null, status: 'ONLINE' },
+        { id: 4, serial: 'D', host_id: 'h2', status: 'ONLINE' },
+      ],
+      [
+        { id: 'h1', name: 'node-a', capacity: { effective_slots: 1 } },
+        { id: 'h2', name: 'node-b', capacity: { effective_slots: 5 } },
+      ],
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].hostId).toBe('h1');
+    expect(warnings[0].hostLabel).toBe('node-a');
+  });
+});
+
+describe('compareNodeEntries', () => {
+  it('sorts IPv4 labels numerically by octet', () => {
+    const nodes = [
+      { id: 'h3', label: '172.21.9.124' },
+      { id: 'h1', label: '172.21.8.103' },
+      { id: 'h2', label: '172.21.9.6' },
+    ];
+    expect(nodes.sort(compareNodeEntries).map(n => n.label)).toEqual([
+      '172.21.8.103',
+      '172.21.9.6',
+      '172.21.9.124',
+    ]);
+  });
+
+  it('keeps unassigned last and IPs before non-IP names', () => {
+    const nodes = [
+      { id: 'unassigned', label: '未分配节点' },
+      { id: 'h2', label: 'lab-node' },
+      { id: 'h1', label: '172.21.8.103' },
+    ];
+    expect(nodes.sort(compareNodeEntries).map(n => n.id)).toEqual(['h1', 'h2', 'unassigned']);
+  });
+
+  it('falls back to numeric localeCompare for non-IP labels', () => {
+    const nodes = [
+      { id: 'h2', label: 'node-10' },
+      { id: 'h1', label: 'node-2' },
+    ];
+    expect(nodes.sort(compareNodeEntries).map(n => n.label)).toEqual(['node-2', 'node-10']);
   });
 });
