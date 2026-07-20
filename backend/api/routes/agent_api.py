@@ -1333,10 +1333,8 @@ def _parse_progress_ts(raw: Any) -> Optional[datetime]:
 class _ExtendBatchItemIn(BaseModel):
     job_id: int
     fencing_token: str
-    # P1 forward-compat (invariant ③, three independent signals): execution_state
-    # + progress_marker ride along on the same renewal request so the Agent wire
-    # contract is stable now. The backing JobInstance columns land in P1; until
-    # then these are accepted and ignored (no second Agent migration needed).
+    # ADR-0026 invariant ③: execution_state + progress_marker ride on the same
+    # renewal request and are persisted on successful CAS (see extend_leases_batch).
     # progress_marker is a structured snapshot (e.g. {"patrol_cycle_index": N,
     # "last_progress_at": "..."}), so it is typed as an open dict, not a string.
     execution_state: Optional[str] = None
@@ -1514,15 +1512,16 @@ async def extend_leases_batch(
             new_expires=new_expires,
         )
         if renewed_ids:
-            # ADR-0026 invariant ③ (three independent signals), Step 5a:
-            # a confirmed renewal is simultaneously
-            #   - the legacy keepalive (updated_at — recycler fallback clock)
-            #   - executor-liveness proof (last_execution_heartbeat_at — the
-            #     request arrived from the live Agent process)
-            #   - optionally the reported execution_state sub-state and a
-            #     business-progress timestamp from progress_marker.
-            # RUNNING guard on every write: never bump liveness anchors of a
-            # job that reached a terminal state after the lease CAS above.
+            # ADR-0026 invariant ③ (three independent signals):
+            #   - lease row CAS above = 租约存活
+            #   - EXECUTING_STEP / legacy (null state): request arrival proves
+            #     executor process alive → last_execution_heartbeat_at
+            #   - WAITING_* / PATROL_SLEEP: Coordinator heartbeat owns the
+            #     waiting clock — lease renew must NOT refresh those anchors
+            #     (otherwise a dead coordinator is masked by LeaseRenewer).
+            #   - progress_marker.last_progress_at → last_progress_at (below)
+            # Legacy dual-write of updated_at only when execution_state is
+            # absent (old Agents); known sub-states no longer bump updated_at.
             item_by_job = {it.job_id: it for it in items}
             by_state: Dict[Optional[str], list[int]] = {}
             for jid in renewed_ids:
@@ -1530,13 +1529,26 @@ async def extend_leases_batch(
                 state_val = reported if reported in _VALID_EXECUTION_STATES else None
                 by_state.setdefault(state_val, []).append(jid)
 
+            _waiting = {
+                "WAITING_EXECUTION_SLOT", "PATROL_SLEEP", "WAITING_BARRIER",
+            }
             for state_val, ids in by_state.items():
-                values: Dict[str, Any] = {
-                    "updated_at": now,
-                    "last_execution_heartbeat_at": now,
-                }
+                values: Dict[str, Any] = {}
                 if state_val is not None:
                     values["execution_state"] = state_val
+                if state_val in _waiting:
+                    # State only — waiting liveness is PlanRunHost.coordinator_*.
+                    # Pin updated_at to itself so Column.onupdate cannot refresh
+                    # the legacy fallback clock via LeaseRenewer.
+                    values["updated_at"] = JobInstance.updated_at
+                elif state_val == "EXECUTING_STEP":
+                    values["last_execution_heartbeat_at"] = now
+                    values["updated_at"] = JobInstance.updated_at
+                else:
+                    # Legacy Agent (no / unknown state): keep dual-write so
+                    # recycler fallback on updated_at still works.
+                    values["last_execution_heartbeat_at"] = now
+                    values["updated_at"] = now
                 await db.execute(
                     update(JobInstance)
                     .where(
@@ -1666,20 +1678,28 @@ async def coordinator_heartbeat(
     for j in payload.jobs:
         reported = j.execution_state
         state_val = reported if reported in _VALID_EXECUTION_STATES else None
-        # ADR-0026 §3 (Step 5b收口 #3): heartbeat clock discipline.
-        # Coordinator heartbeat proves the Agent PROCESS is alive — this is
-        # the correct clock for WAITING_*/PATROL_SLEEP (legally idle states).
-        # EXECUTING_STEP must have its execution heartbeat refreshed ONLY by
-        # the executing process itself (extend-batch), NEVER by a 30s
-        # per-host heartbeat — otherwise a stuck step gets eternal life.
-        values: dict[str, Any] = {"updated_at": now}
+        # ADR-0026 §3 clock discipline:
+        # - WAITING_*/PATROL_SLEEP: refresh waiting clock (and never EXECUTING).
+        # - EXECUTING_STEP: persist state only — execution hb comes from
+        #   extend-batch; do NOT bump updated_at (legacy fallback) or the
+        #   stuck-step would get eternal life via recycler fallback.
+        # - Unknown/null state: dual-write updated_at for legacy Agents.
+        values: dict[str, Any] = {}
         if state_val is not None:
             values["execution_state"] = state_val
         if state_val in ("WAITING_EXECUTION_SLOT", "PATROL_SLEEP", "WAITING_BARRIER"):
             values["last_execution_heartbeat_at"] = now
+            # Pin so Column.onupdate does not refresh legacy updated_at.
+            values["updated_at"] = JobInstance.updated_at
+        elif state_val == "EXECUTING_STEP":
+            values["updated_at"] = JobInstance.updated_at
+        else:
+            values["updated_at"] = now
         ts = _parse_progress_ts(j.last_progress_at)
         if ts is not None:
             values["last_progress_at"] = ts
+        if not values:
+            continue
         await db.execute(
             update(JobInstance)
             .where(

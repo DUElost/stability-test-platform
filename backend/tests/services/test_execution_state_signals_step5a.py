@@ -111,9 +111,38 @@ class TestBatchRenewalSignalIngestion:
         try:
             job = db.get(JobInstance, signal_fixture["job"].id)
             assert job.execution_state == "PATROL_SLEEP"
-            assert job.last_execution_heartbeat_at is not None
+            # WAITING_*/PATROL_SLEEP: lease renew must NOT refresh execution hb
+            # (coordinator owns that clock).
+            assert job.last_execution_heartbeat_at is None
             assert job.last_progress_at is not None
             assert job.last_progress_at.isoformat().startswith("2026-07-16T08:00:00")
+        finally:
+            db.close()
+
+    @pytest.mark.asyncio
+    async def test_executing_step_renewal_bumps_execution_hb_not_updated_at(
+        self, db_session, signal_fixture,
+    ):
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, signal_fixture["job"].id)
+            stale = datetime(2020, 1, 1, tzinfo=timezone.utc)
+            job.updated_at = stale
+            db.commit()
+        finally:
+            db.close()
+
+        result = await self._renew(
+            signal_fixture, execution_state="EXECUTING_STEP",
+        )
+        assert result.data.results[0].status == "renewed"
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, signal_fixture["job"].id)
+            assert job.execution_state == "EXECUTING_STEP"
+            assert job.last_execution_heartbeat_at is not None
+            assert job.updated_at.replace(tzinfo=timezone.utc) == stale
         finally:
             db.close()
 
@@ -141,6 +170,7 @@ class TestBatchRenewalSignalIngestion:
             assert job.execution_state is None
             assert job.last_progress_at is None
             assert job.last_execution_heartbeat_at is not None
+            assert job.updated_at is not None  # legacy dual-write
         finally:
             db.close()
 
