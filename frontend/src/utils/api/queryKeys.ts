@@ -27,6 +27,11 @@ export const hostKeys = {
   detail: (id: string | number) => ['host', String(id)] as const,
 } as const;
 
+/** Bulk active-job occupancy (GET /jobs/active-by-device). */
+export const jobKeys = {
+  activeByDevice: () => ['jobs', 'active-by-device'] as const,
+} as const;
+
 export const deviceKeys = {
   list: () => ['devices'] as const,
   /** 全量设备（fetchAllDevices 分页拉全）— PlanExecutePage 等需要完整设备视图的页面用。 */

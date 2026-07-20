@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,15 +26,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { PaginationBar } from '@/components/ui/pagination-bar';
 import { useToast } from '@/hooks/useToast';
 import { usePagination } from '@/hooks/usePagination';
 import { api, ApiError, fetchAllDevices, fetchHostList, type HostActiveJob, type PlanRunPreview } from '@/utils/api';
-import { deviceKeys, hostKeys, planKeys } from '@/utils/api/queryKeys';
+import { deviceKeys, hostKeys, jobKeys, planKeys } from '@/utils/api/queryKeys';
 import { formatDurationSeconds } from '@/utils/format';
-import { Play, Smartphone, AlertCircle, Eye, ExternalLink, RefreshCw, Layers3, Trash2, ChevronLeft, ChevronRight, Check, ChevronDown, Loader2 } from 'lucide-react';
+import { Play, Smartphone, AlertCircle, Eye, ExternalLink, RefreshCw, Layers3, Trash2, ChevronLeft, ChevronRight, Check, ChevronDown, Loader2, X } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 import { TEXT } from '@/design-system/tokens';
@@ -274,29 +280,19 @@ export default function PlanExecutePage() {
     queryFn: () => fetchHostList(0, 200),
   });
 
-  // B1b 前端兜底：全部节点视图并行拉各 host 的 active_jobs；节点钻取只拉当前节点
-  const occupancyHostIds = useMemo(() => {
-    if (deviceHostFilter === 'unassigned') return [] as string[];
-    if (deviceHostFilter !== 'all') return [deviceHostFilter];
-    return (hostsList ?? []).map(host => String(host.id));
-  }, [deviceHostFilter, hostsList]);
-
-  const occupancyQueries = useQueries({
-    queries: occupancyHostIds.map(hostId => ({
-      queryKey: hostKeys.detail(hostId),
-      queryFn: () => api.hosts.get(hostId),
-      refetchInterval: 20_000,
-    })),
+  // B1b：一次拉取全平台占用（独立 /jobs 路由，避免 hosts/{id} N+1）
+  const { data: activeJobsByDevice } = useQuery({
+    queryKey: jobKeys.activeByDevice(),
+    queryFn: () => api.jobs.activeByDevice(),
+    refetchInterval: 20_000,
   });
   const occupancyByDeviceId = useMemo(() => {
     const map = new Map<number, HostActiveJob>();
-    for (const query of occupancyQueries) {
-      for (const job of query.data?.active_jobs ?? []) {
-        map.set(job.device_id, job);
-      }
+    for (const job of activeJobsByDevice ?? []) {
+      map.set(job.device_id, job);
     }
     return map;
-  }, [occupancyQueries]);
+  }, [activeJobsByDevice]);
 
   const {
     data: devicesResp,
@@ -1086,32 +1082,69 @@ export default function PlanExecutePage() {
                         </div>
                         <div className="flex gap-3 text-xs">
                           <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-success" />已选就绪</span>
-                          <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-sm bg-destructive" />已选阻塞</span>
+                          <span className="inline-flex items-center gap-1">
+                            <i
+                              className="inline-block h-2.5 w-2.5 rounded-sm border border-destructive bg-destructive"
+                              style={{
+                                backgroundImage:
+                                  'repeating-linear-gradient(45deg, transparent, transparent 1px, rgba(255,255,255,0.55) 1px, rgba(255,255,255,0.55) 2px)',
+                              }}
+                            />
+                            已选阻塞（斜纹 / ✕）
+                          </span>
                         </div>
                       </div>
                       {selectedDevices.length === 0 ? (
                         <div className={cn('flex min-h-20 items-center justify-center text-xs', TEXT.subtitle)}>尚未选择样机</div>
                       ) : (
-                        <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(28px, 1fr))' }}>
-                          {selectedDevices.map((device: DeviceSummary) => {
-                            const row = readinessByDeviceId.get(device.id);
-                            const blocked = row && !row.ready;
-                            const host = hostMap.get(String(device.host_id));
-                            return (
-                              <button
-                                key={device.id}
-                                type="button"
-                                aria-label={`已选设备方块 ${device.id}`}
-                                title={`${device.serial} · ${host?.ip || host?.name || device.host_id || '节点未知'} · ${device.model || '型号未知'} · ${device.build_display_id || '版本未知'}`}
-                                onClick={() => removeDeviceIds([device.id])}
-                                className={cn(
-                                  'aspect-square rounded-sm border transition-transform hover:scale-110 hover:ring-2 hover:ring-primary/40',
-                                  blocked ? 'border-destructive bg-destructive' : 'border-success bg-success',
-                                )}
-                              />
-                            );
-                          })}
-                        </div>
+                        <TooltipProvider delayDuration={200}>
+                          <div className="grid gap-1" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(28px, 1fr))' }}>
+                            {selectedDevices.map((device: DeviceSummary) => {
+                              const row = readinessByDeviceId.get(device.id);
+                              const blocked = Boolean(row && !row.ready);
+                              const host = hostMap.get(String(device.host_id));
+                              const hostLabel = host?.ip || host?.name || device.host_id || '节点未知';
+                              return (
+                                <Tooltip key={device.id}>
+                                  <TooltipTrigger asChild>
+                                    <button
+                                      type="button"
+                                      aria-label={`已选设备方块 ${device.id}${blocked ? ' 阻塞' : ''}`}
+                                      onClick={() => removeDeviceIds([device.id])}
+                                      className={cn(
+                                        'relative flex aspect-square items-center justify-center overflow-hidden rounded-sm border transition-transform hover:scale-110 hover:ring-2 hover:ring-primary/40',
+                                        blocked ? 'border-destructive bg-destructive' : 'border-success bg-success',
+                                      )}
+                                    >
+                                      {blocked && (
+                                        <>
+                                          <span
+                                            aria-hidden
+                                            className="pointer-events-none absolute inset-0 opacity-70"
+                                            style={{
+                                              backgroundImage:
+                                                'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.45) 2px, rgba(255,255,255,0.45) 4px)',
+                                            }}
+                                          />
+                                          <X className="relative h-3 w-3 text-primary-foreground drop-shadow" strokeWidth={3} aria-hidden />
+                                        </>
+                                      )}
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="top" className="max-w-xs space-y-0.5 bg-popover text-popover-foreground">
+                                    <div className="font-mono text-xs font-medium">{device.serial}</div>
+                                    <div className="text-[11px]">节点：{hostLabel}</div>
+                                    <div className="text-[11px]">型号：{device.model || '—'}</div>
+                                    <div className="text-[11px]">版本：{device.build_display_id || '—'}</div>
+                                    {blocked && row?.reasons?.[0] ? (
+                                      <div className="text-[11px] text-destructive">阻塞：{row.reasons[0]}</div>
+                                    ) : null}
+                                  </TooltipContent>
+                                </Tooltip>
+                              );
+                            })}
+                          </div>
+                        </TooltipProvider>
                       )}
                     </div>
                     <div className="overflow-x-auto rounded-lg border">

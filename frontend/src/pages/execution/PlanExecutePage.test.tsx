@@ -53,6 +53,9 @@ vi.mock('@/utils/api', async (importOriginal) => {
         list: vi.fn(),
         get: vi.fn(),
       },
+      jobs: {
+        activeByDevice: vi.fn().mockResolvedValue([]),
+      },
     },
   };
 });
@@ -75,6 +78,7 @@ function renderPage({
   initialEntry = '/execution/plan-execute?plan=7',
   hosts = [],
   hostDetail = { id: 'h1', status: 'ONLINE', active_jobs: [] },
+  activeJobs = undefined as any[] | undefined,
   getHost,
 }: {
   plans?: any[];
@@ -84,6 +88,7 @@ function renderPage({
   initialEntry?: string;
   hosts?: any[];
   hostDetail?: any;
+  activeJobs?: any[];
   getHost?: (id: string) => any | Promise<any>;
 } = {}) {
   const queryClient = new QueryClient({
@@ -106,6 +111,10 @@ function renderPage({
   } else {
     (api.hosts.get as any).mockResolvedValue(hostDetail);
   }
+  const derivedActiveJobs =
+    activeJobs ??
+    (Array.isArray(hostDetail?.active_jobs) ? hostDetail.active_jobs : []);
+  (api.jobs.activeByDevice as any).mockResolvedValue(derivedActiveJobs);
   (api.planRuns.retryDispatch as any).mockResolvedValue({ plan_run_id: 88, status: 'RUNNING' });
 
   return render(
@@ -327,7 +336,7 @@ describe('PlanExecutePage', () => {
     expect(occupancyLink).toHaveAttribute('href', '/execution/plan-runs/55');
   });
 
-  it('shows occupancy links in all-nodes view via parallel host detail fetch', async () => {
+  it('shows occupancy links in all-nodes view via active-by-device API', async () => {
     renderPage({
       hosts: [
         { id: 'h1', ip: '172.21.8.143', status: 'ONLINE' },
@@ -337,12 +346,7 @@ describe('PlanExecutePage', () => {
         { id: 1, serial: 'DEV-FREE', host_id: 'h1', status: 'ONLINE' },
         { id: 2, serial: 'DEV-BUSY', host_id: 'h2', status: 'BUSY' },
       ],
-      getHost: (id: string) => {
-        if (id === 'h2') {
-          return { id: 'h2', status: 'ONLINE', active_jobs: [{ id: 11, device_id: 2, plan_run_id: 77, status: 'RUNNING' }] };
-        }
-        return { id, status: 'ONLINE', active_jobs: [] };
-      },
+      activeJobs: [{ id: 11, device_id: 2, plan_run_id: 77, status: 'RUNNING' }],
     });
 
     await goToDeviceStep();
@@ -501,6 +505,25 @@ describe('PlanExecutePage', () => {
       expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
     });
     expect(screen.getByLabelText(/DEV-1/)).toBeChecked();
+  });
+
+  it('marks blocked minimap tiles with pattern legend and blocked aria-label', async () => {
+    renderPage({
+      hosts: [{ id: 'h1', ip: '172.21.8.143', status: 'OFFLINE' }],
+      devices: [{
+        id: 1,
+        serial: 'DEV-BLOCK',
+        host_id: 'h1',
+        status: 'ONLINE',
+        adb_connected: false,
+        adb_state: 'offline',
+      }],
+    });
+
+    await goToDeviceStep();
+    fireEvent.click(await screen.findByLabelText(/DEV-BLOCK/));
+    expect(screen.getByText(/已选阻塞（斜纹/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /已选设备方块 1 阻塞/ })).toBeInTheDocument();
   });
 
   it('merges device and job counts in preview dialog', async () => {

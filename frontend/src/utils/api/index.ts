@@ -7,6 +7,7 @@ export {
 } from './client';
 export { auth } from './auth';
 export { hosts, heartbeat, hotUpdate, agentInstall, fetchHostList, coerceHostList } from './hosts';
+export { jobs } from './jobs';
 export { devices, fetchAllDevices } from './devices';
 export { logs } from './logs';
 export { pipeline } from './pipeline';
@@ -45,6 +46,7 @@ export type {
 
 import { auth } from './auth';
 import { hosts, heartbeat, hotUpdate, agentInstall } from './hosts';
+import { jobs } from './jobs';
 import { devices } from './devices';
 import { logs } from './logs';
 import { pipeline } from './pipeline';
@@ -59,6 +61,7 @@ import { runs } from './runs';
 export const api = {
   auth,
   hosts,
+  jobs,
   heartbeat,
   hotUpdate,
   agentInstall,
