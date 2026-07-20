@@ -182,6 +182,24 @@ async def _build_recovery_job_payload(
         dispatch_host_watcher_admin_states=dispatch_host_watcher_admin_states,
     )
 
+    plan_run_host_id = None
+    plan_run_host_total_job_count = None
+    if job.plan_run_id is not None and job.host_id:
+        from backend.models.plan_run import PlanRunHost as _PRH
+        prh = (
+            await db.execute(
+                select(_PRH).where(
+                    _PRH.plan_run_id == job.plan_run_id,
+                    _PRH.host_id == job.host_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if prh is not None:
+            plan_run_host_id = prh.id
+            plan_run_host_total_job_count = int(
+                prh.total_job_count or prh.device_count or 0
+            )
+
     return {
         "id": job.id,
         "plan_run_id": job.plan_run_id,
@@ -197,6 +215,9 @@ async def _build_recovery_job_payload(
         # resume payload — without it a recovered PATROL_SLEEP job would be
         # judged with the EXECUTING_STEP clock and vice versa.
         "execution_state": job.execution_state,
+        # ADR-0026 barrier: recovered jobs still need PRH identity + peer count.
+        "plan_run_host_id": plan_run_host_id,
+        "plan_run_host_total_job_count": plan_run_host_total_job_count,
     }
 
 
@@ -225,6 +246,9 @@ class JobOut(BaseModel):
     # ADR-0026 Step 5b: the PlanRunHost row id the Agent's Coordinator needs
     # to identify which PlanRunHost projection this job belongs to.
     plan_run_host_id: Optional[int] = None
+    # ADR-0026 barrier: expected peer count on this PlanRunHost (INIT→PATROL).
+    # Prefer total_job_count; fall back to device_count at claim time.
+    plan_run_host_total_job_count: Optional[int] = None
 
 
 class JobStatusUpdate(BaseModel):
@@ -620,31 +644,47 @@ async def claim_jobs(
 
     # ADR-0026 Step 5b: resolve PlanRunHost rows so the Agent's Coordinator
     # knows which host-group projection to update.
-    prh_by_key: Dict[tuple[int, str], int] = {}
+    prh_by_key: Dict[tuple[int, str], tuple[int, int]] = {}
     plan_run_ids = {j.plan_run_id for j in claimed if j.plan_run_id}
     if plan_run_ids:
         from backend.models.plan_run import PlanRunHost as _PRH2
         prh_rows = (await db.execute(
-            select(_PRH2.plan_run_id, _PRH2.host_id, _PRH2.id)
+            select(
+                _PRH2.plan_run_id,
+                _PRH2.host_id,
+                _PRH2.id,
+                _PRH2.total_job_count,
+                _PRH2.device_count,
+            )
             .where(
                 _PRH2.plan_run_id.in_(plan_run_ids),
                 _PRH2.host_id == payload.host_id,
             )
         )).all()
-        prh_by_key = {(r.plan_run_id, r.host_id): r.id for r in prh_rows}
+        prh_by_key = {
+            (r.plan_run_id, r.host_id): (
+                r.id,
+                int(r.total_job_count or r.device_count or 0),
+            )
+            for r in prh_rows
+        }
 
-    return ok([
-        JobOut(
-            id=j.id, plan_run_id=j.plan_run_id,
-            plan_id=j.plan_id, device_id=j.device_id,
-            device_serial=serial_map.get(j.device_id),
-            host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
-            watcher_policy=watcher_policy_map.get(j.id),
-            fencing_token=fencing_token_map[j.id],
-            plan_run_host_id=prh_by_key.get((j.plan_run_id, j.host_id)),
+    out: list = []
+    for j in claimed:
+        prh_info = prh_by_key.get((j.plan_run_id, j.host_id))
+        out.append(
+            JobOut(
+                id=j.id, plan_run_id=j.plan_run_id,
+                plan_id=j.plan_id, device_id=j.device_id,
+                device_serial=serial_map.get(j.device_id),
+                host_id=j.host_id, status=j.status, pipeline_def=j.pipeline_def,
+                watcher_policy=watcher_policy_map.get(j.id),
+                fencing_token=fencing_token_map[j.id],
+                plan_run_host_id=prh_info[0] if prh_info else None,
+                plan_run_host_total_job_count=prh_info[1] if prh_info else None,
+            )
         )
-        for j in claimed
-    ])
+    return ok(out)
 
 
 @router.post("/jobs/{job_id}/status", response_model=ApiResponse[dict])

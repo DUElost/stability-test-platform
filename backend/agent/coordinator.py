@@ -36,10 +36,12 @@ class PlanRunHostView:
         self.phase: str = "INIT"   # INIT → PATROL → TEARDOWN
         self._epoch: int = 1       # incremented on Agent restart
         # Barrier: how many jobs on this PlanRunHost and how many have
-        # reached the current phase boundary. Reset on phase advance.
+        # reached the current phase boundary. Armed per destination phase;
+        # advance_phase does NOT reset — late waiters still see satisfied.
         self.barrier_total: int = 0
         self.barrier_arrived: int = 0
         self._barrier_event = threading.Event()
+        self._armed_for_phase: Optional[str] = None
 
     @property
     def epoch(self) -> int:
@@ -54,35 +56,60 @@ class PlanRunHostView:
     def to_payload(self) -> dict:
         return {"id": self.id, "plan_run_id": self.plan_run_id, "host_id": self.host_id}
 
-    def set_barrier_total(self, total: int) -> None:
+    def set_barrier_total(
+        self, total: int, *, for_phase: Optional[str] = None
+    ) -> None:
+        """Arm a fresh barrier for ``for_phase`` (destination phase name).
+
+        Idempotent when already armed for the same ``for_phase`` so every job
+        can call this before arrive without resetting mid-flight counts.
+        Without ``for_phase`` (test/legacy), always re-arms.
+        """
         with self._lock:
+            if (
+                for_phase is not None
+                and self._armed_for_phase == for_phase
+            ):
+                return
+            if for_phase is not None:
+                self._armed_for_phase = for_phase
             self.barrier_total = total
             self.barrier_arrived = 0
-            self._barrier_event = threading.Event()  # fresh event per phase
+            self._barrier_event = threading.Event()
 
     def arrive_at_barrier(self) -> bool:
         """Atomically increment arrived count. Returns True if this is the
         LAST arrival (phase can advance), False otherwise."""
         with self._lock:
             self.barrier_arrived += 1
-            if self.barrier_arrived >= self.barrier_total:
+            if self.barrier_total > 0 and self.barrier_arrived >= self.barrier_total:
                 self._barrier_event.set()
                 return True
             return False
 
     def wait_barrier(self, timeout: float | None = None) -> bool:
-        """Block until all jobs have arrived at the current phase barrier."""
-        # Snapshot the event under lock so late-arriving waiters see the new
-        # event, not the one that was just set+replaced by advance_phase.
+        """Block until all jobs have arrived at the current phase barrier.
+
+        Late callers (arrive→wait raced with last arriver's advance) still
+        succeed: if the barrier is already satisfied we return True without
+        waiting on a replaced event.
+        """
         with self._lock:
+            if (
+                self.barrier_total > 0
+                and self.barrier_arrived >= self.barrier_total
+            ):
+                return True
             ev = self._barrier_event
         return ev.wait(timeout=timeout)
 
     def advance_phase(self, next_phase: str) -> None:
+        """Record the new host phase. Does not reset barrier state so waiters
+        that have not yet entered ``wait_barrier`` still observe satisfaction.
+        The next sync arms a fresh barrier via ``set_barrier_total(for_phase=...)``.
+        """
         with self._lock:
             self.phase = next_phase
-            self.barrier_arrived = 0
-            self._barrier_event = threading.Event()  # fresh event for next phase
 
 
 class JobExecutionView:
@@ -225,13 +252,18 @@ class HostRunCoordinator:
         with self._lock:
             self._plan_run_hosts.pop(host_row_id, None)
 
-    def set_barrier_total(self, host_row_id: int, total: int) -> None:
-        """Called when all jobs for a PlanRunHost are admitted — sets the
-        barrier count for phase advancement."""
+    def set_barrier_total(
+        self,
+        host_row_id: int,
+        total: int,
+        *,
+        for_phase: Optional[str] = None,
+    ) -> None:
+        """Arm the PlanRunHost barrier (idempotent per ``for_phase``)."""
         with self._lock:
             v = self._plan_run_hosts.get(host_row_id)
         if v is not None:
-            v.set_barrier_total(total)
+            v.set_barrier_total(total, for_phase=for_phase)
 
     def arrive_at_barrier(self, host_row_id: int) -> bool:
         """One job has finished the current phase. Returns True if this is

@@ -222,6 +222,33 @@ class TestBarrierCoordination:
         assert arrived.count(("waited", True)) == 2
         assert host.phase == "PATROL"
 
+    def test_late_waiter_after_advance_still_succeeds(self):
+        """arrive → (last advances) → wait must not hang on a replaced event."""
+        host = PlanRunHostView(1, 10, "h1")
+        host.set_barrier_total(2, for_phase="PATROL")
+
+        # First job arrives but does not wait yet.
+        assert host.arrive_at_barrier() is False
+        # Second (last) arrives and advances immediately.
+        assert host.arrive_at_barrier() is True
+        host.advance_phase("PATROL")
+
+        # Late wait after advance must observe already-satisfied barrier.
+        assert host.wait_barrier(timeout=0.5) is True
+        assert host.phase == "PATROL"
+
+    def test_arm_barrier_idempotent_per_phase(self):
+        host = PlanRunHostView(1, 10, "h1")
+        host.set_barrier_total(3, for_phase="PATROL")
+        host.arrive_at_barrier()
+        # Re-arm same phase must not reset mid-flight arrivals.
+        host.set_barrier_total(3, for_phase="PATROL")
+        assert host.barrier_arrived == 1
+        # New destination phase re-arms fresh.
+        host.set_barrier_total(3, for_phase="TEARDOWN")
+        assert host.barrier_arrived == 0
+        assert host._armed_for_phase == "TEARDOWN"
+
     def test_coordinator_barrier_integration(self):
         coord = HostRunCoordinator("http://x", "h1", "inst")
         coord.register_plan_run_host(1, 10)
@@ -238,6 +265,8 @@ class TestBarrierCoordination:
         coord.advance_phase(1, "PATROL")
         v = coord._plan_run_hosts[1]
         assert v.phase == "PATROL"
+        # Late waiter still succeeds after advance.
+        assert coord.wait_barrier(1, timeout=0.5) is True
 
 
 # ── 6. last_progress_at production ────────────────────────────────────────────

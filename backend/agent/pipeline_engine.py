@@ -274,6 +274,9 @@ class PipelineEngine:
         operation_scheduler: Any = None,
         coordinator: Any = None,
         device_id: Optional[int] = None,
+        # ADR-0026 barrier: PlanRunHost id + expected peer count (INIT→PATROL)
+        plan_run_host_id: Optional[int] = None,
+        barrier_total: Optional[int] = None,
 
     ):
 
@@ -288,6 +291,10 @@ class PipelineEngine:
         self._scheduler = operation_scheduler
 
         self._coordinator = coordinator
+
+        self._plan_run_host_id = plan_run_host_id
+
+        self._barrier_total = int(barrier_total or 0)
 
         self._log_dir = log_dir
 
@@ -785,6 +792,82 @@ class PipelineEngine:
         jv = coord.register_job(self._run_id)
         if jv is not None:
             jv.update(state=state, progress_ts=progress_ts)
+
+    def _barrier_enabled(self) -> bool:
+        """INIT→PATROL barrier needs coordinator + PRH + at least 2 peers."""
+        if self._coordinator is None or self._plan_run_host_id is None:
+            return False
+        if self._barrier_total < 2:
+            return False
+        # Opt-out for emergency rollback; default on.
+        return os.getenv("STP_PHASE_BARRIER_ENABLED", "1") not in (
+            "0", "false", "False", "no", "NO",
+        )
+
+    def _arrive_phase_barrier(self, next_phase: str) -> bool:
+        """Count this job toward the phase barrier; advance if last.
+
+        Used by init-failure / abort paths so peers are not stuck waiting
+        for a job that will not enter the next phase. Returns True when
+        this caller was the last arrival (phase already advanced).
+        """
+        if not self._barrier_enabled():
+            return False
+        coord = self._coordinator
+        prh_id = self._plan_run_host_id
+        assert coord is not None and prh_id is not None
+        coord.set_barrier_total(
+            prh_id, self._barrier_total, for_phase=next_phase,
+        )
+        is_last = coord.arrive_at_barrier(prh_id)
+        if is_last:
+            coord.advance_phase(prh_id, next_phase)
+            logger.info(
+                "barrier_last_arriver run=%d prh=%s → %s",
+                self._run_id, prh_id, next_phase,
+            )
+        return is_last
+
+    def _await_phase_barrier(self, next_phase: str) -> bool:
+        """Block until all PlanRunHost peers reach this phase boundary.
+
+        Sets WAITING_BARRIER while waiting (Coordinator heartbeat clock).
+        Returns False on abort / lease-lost / timeout.
+        """
+        if not self._barrier_enabled():
+            return True
+        if self._is_lock_lost() or self._canceled:
+            # Count toward barrier so peers are not stuck on an aborted job.
+            self._arrive_phase_barrier(next_phase)
+            return False
+
+        self._update_execution_state("WAITING_BARRIER")
+        is_last = self._arrive_phase_barrier(next_phase)
+        if is_last:
+            return not (self._is_lock_lost() or self._canceled)
+
+        timeout = float(os.getenv("STP_BARRIER_TIMEOUT_SECONDS", "600"))
+        deadline = time.monotonic() + timeout
+        coord = self._coordinator
+        prh_id = self._plan_run_host_id
+        assert coord is not None and prh_id is not None
+
+        while True:
+            if self._is_lock_lost() or self._canceled:
+                return False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                logger.error(
+                    "barrier_timeout run=%d prh=%s next=%s timeout=%.0fs",
+                    self._run_id, prh_id, next_phase, timeout,
+                )
+                return False
+            if coord.wait_barrier(prh_id, timeout=min(5.0, remaining)):
+                logger.info(
+                    "barrier_released run=%d prh=%s → %s",
+                    self._run_id, prh_id, next_phase,
+                )
+                return not (self._is_lock_lost() or self._canceled)
 
     def _run_step_with_permit(self, phase: str, step: dict) -> bool:
         """ADR-0026 Step 5b: wrap step execution with OperationScheduler permit.
@@ -1513,6 +1596,10 @@ class PipelineEngine:
 
                 logger.error("[Lifecycle] run=%d — init failed: %s", self._run_id, init_result.error_message)
 
+                # Still count toward INIT→PATROL barrier so peers are not
+                # stuck waiting for a job that will skip patrol.
+                self._arrive_phase_barrier("PATROL")
+
                 # Do NOT return here — fall through to finally for teardown,
 
                 # then to the unified exit block for MQ status + artifact.
@@ -1521,21 +1608,42 @@ class PipelineEngine:
 
             elif patrol_def:
 
-                # ── Phase 2: Patrol loop (only if init succeeded) ──
+                # ADR-0026: align all PlanRunHost devices before patrol so
+                # long-run waves share a common start (INIT→PATROL barrier).
+                # Patrol-checkpoint resume already passed this boundary — skip.
+                if skip_init:
+                    barrier_ok = True
+                else:
+                    barrier_ok = self._await_phase_barrier("PATROL")
 
-                # ADR-0022: per-cycle aggregate via patrol_heartbeat_uploader,
+                if not barrier_ok:
 
-                # exponential backoff on consecutive failure, manual_action
+                    termination_reason = "abort"
 
-                # observation for runtime intervention.
+                    lifecycle_error = "phase barrier aborted or timed out"
 
-                termination_reason, lifecycle_error = self._run_patrol_loop(
+                    logger.error(
+                        "[Lifecycle] run=%d — INIT→PATROL barrier failed",
+                        self._run_id,
+                    )
 
-                    patrol_def, timeout_seconds, init_completed_at=time.time(),
+                else:
 
-                    resume=patrol_resume,
+                    # ── Phase 2: Patrol loop (only if init succeeded) ──
 
-                )
+                    # ADR-0022: per-cycle aggregate via patrol_heartbeat_uploader,
+
+                    # exponential backoff on consecutive failure, manual_action
+
+                    # observation for runtime intervention.
+
+                    termination_reason, lifecycle_error = self._run_patrol_loop(
+
+                        patrol_def, timeout_seconds, init_completed_at=time.time(),
+
+                        resume=patrol_resume,
+
+                    )
 
 
 
