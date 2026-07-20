@@ -39,7 +39,26 @@ def reconcile_plan_run_counters_once(
     lookback_hours: int | None = None,
     batch_size: int | None = None,
 ) -> dict:
-    """Reconcile up to *batch_size* PlanRuns; return summary counters."""
+    """Reconcile up to *batch_size* PlanRuns; return summary counters.
+
+    ADR-0027 P3-1: only the elected scheduler leader runs the sweep.
+    """
+    from backend.core.leader_election import hold_scheduler_leadership
+
+    with hold_scheduler_leadership("counter_reconcile") as is_leader:
+        if not is_leader:
+            return {"scanned": 0, "drifted": 0, "fixed": 0, "skipped_not_leader": 1}
+        return _reconcile_plan_run_counters_body(
+            lookback_hours=lookback_hours,
+            batch_size=batch_size,
+        )
+
+
+def _reconcile_plan_run_counters_body(
+    *,
+    lookback_hours: int | None = None,
+    batch_size: int | None = None,
+) -> dict:
     lookback = (
         COUNTER_RECONCILE_LOOKBACK_HOURS if lookback_hours is None else lookback_hours
     )

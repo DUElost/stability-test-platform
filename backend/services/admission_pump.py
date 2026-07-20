@@ -148,10 +148,27 @@ def pump_admission_tick() -> dict[str, int]:
     WITHOUT claiming — claiming without an executor would churn QUEUED↔PRECHECK.
     With ``STP_ENABLE_INPROCESS_SAQ=0``, producer-only mode still counts as ready
     so an external worker can drain the same Redis queue.
+
+    ADR-0027 P3-1: under multi-instance control planes only the elected leader
+    runs this tick (Postgres advisory lock). Non-leaders return a zero summary.
     """
+    from backend.core.leader_election import hold_scheduler_leadership
     from backend.tasks.saq_worker import enqueue_sync, is_saq_ready
 
-    summary = {"claimed": 0, "enqueued": 0, "requeued_on_enqueue_failure": 0}
+    summary = {
+        "claimed": 0,
+        "enqueued": 0,
+        "requeued_on_enqueue_failure": 0,
+        "skipped_not_leader": 0,
+    }
+    with hold_scheduler_leadership("admission_pump") as is_leader:
+        if not is_leader:
+            summary["skipped_not_leader"] = 1
+            return summary
+        return _pump_admission_tick_body(summary, enqueue_sync, is_saq_ready)
+
+
+def _pump_admission_tick_body(summary, enqueue_sync, is_saq_ready) -> dict[str, int]:
     if not is_saq_ready():
         logger.debug("admission_pump_skip_saq_not_ready")
         return summary

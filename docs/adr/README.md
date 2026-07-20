@@ -74,7 +74,8 @@
 | [ADR-0023](./ADR-0023-script-traceability.md) | 脚本溯源与 sha256 契约 | Accepted | P1 | M3 | 已实现 |
 | [ADR-0024](./ADR-0024-browser-session-security-hardening.md) | 浏览器 Web 会话安全化（HttpOnly Cookie + CSRF + refresh 黑名单 + 可观测） | Accepted | P0 | M3.2 | 已实现（2026-05-21） |
 | [ADR-0025](./ADR-0025-phase4-architecture-alignment.md) | Phase 4 架构对齐（方案 C：存储三级 + Agent 归档闭环） | Accepted | P2 | M4 | 已实现（Sprint 1–4，见 [DOC-MAP](../DOC-MAP.md) / acceptance） |
-| [ADR-0026](./ADR-0026-plan-execution-scaling.md) | 大规模化测试计划执行架构（PlanRun 准入队列 + 四层调度 + 控制面减负） | Accepted | P0 | M5（待定） | 预扩展/重构（P0 止血已落地 `64608a9`：批量续租 CAS + B4 双口径校验与物化兜底；2026-07-16 批准，P1 按 schema→状态机/flag→pump→Agent scheduler 顺序推进） |
+| [ADR-0026](./ADR-0026-plan-execution-scaling.md) | 大规模化测试计划执行架构（PlanRun 准入队列 + 四层调度 + 控制面减负） | Accepted | P0 | M5 | P0–P2 已收口（含 Step 5b / barrier / terminalization / step_log 批量化 / 索引与指标）；待定清单 v1 已回填；P3 → ADR-0027 |
+| [ADR-0027](./ADR-0027-control-plane-horizontal-scaling.md) | 控制面水平扩展（Leader Election + 多实例预备） | Proposed | P2 | M6 | P3-1 advisory-lock leader election 已接线 admission_pump / counter_reconcile |
 
 ## Proposed 里程碑看板（2026 上半年）
 
@@ -84,7 +85,8 @@
 | M2 | 2026-04-15 | ADR-0011（仍 Proposed）；ADR-0010 已由 ADR-0020 取代；ADR-0013/0014/0016/0018 已落地 |
 | M3 | 2026-05-15 | ADR-0012（第 2-3 层）, ADR-0019, ADR-0020, ADR-0021–0023 |
 | M4 | 2026-06+ | ADR-0025（方案 C Sprint 1–4）；PRD/设计/验收见 [`docs/DOC-MAP.md`](../DOC-MAP.md) |
-| M5 | 待定 | ADR-0026（60+ host / 1000+ device 规模化执行，P0 止血已先行落地） |
+| M5 | 2026-07 | ADR-0026 P0–P2（规模化执行正确性 + 控制面减负） |
+| M6 | 待定 | ADR-0027（控制面水平扩展；重启条件见 ADR-0025 D1） |
 
 ## 维护约定
 

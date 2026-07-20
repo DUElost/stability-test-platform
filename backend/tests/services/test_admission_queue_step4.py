@@ -468,7 +468,12 @@ class TestPumpTick:
         ), patch("backend.tasks.saq_worker.enqueue_sync") as mock_enq:
             summary = pump_admission_tick()
 
-        assert summary == {"claimed": 0, "enqueued": 0, "requeued_on_enqueue_failure": 0}
+        assert summary == {
+            "claimed": 0,
+            "enqueued": 0,
+            "requeued_on_enqueue_failure": 0,
+            "skipped_not_leader": 0,
+        }
         mock_enq.assert_not_called()
         db_session.expire_all()
         assert db_session.get(PlanRun, pr.id).status == "QUEUED"
@@ -496,7 +501,12 @@ class TestPumpTick:
     def test_tick_noop_when_queue_empty(self, db_session, _saq_ready):
         with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enq:
             summary = pump_admission_tick()
-        assert summary == {"claimed": 0, "enqueued": 0, "requeued_on_enqueue_failure": 0}
+        assert summary == {
+            "claimed": 0,
+            "enqueued": 0,
+            "requeued_on_enqueue_failure": 0,
+            "skipped_not_leader": 0,
+        }
         mock_enq.assert_not_called()
 
 
