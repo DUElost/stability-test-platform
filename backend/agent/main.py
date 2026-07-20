@@ -644,13 +644,15 @@ def main() -> None:
             else:
                 job_ids = []
             for job_id in job_ids:
-                # ADR-0026 Step 5b: cancel any permit waiter before
-                # signalling abort to the pipeline.
-                coordinator.cancel_waiting_job(job_id)
+                # ADR-0026 Step 5b: signal abort FIRST so _is_aborted()
+                # returns True, THEN cancel the permit waiter. If cancel
+                # fires first, the waiter sees PermitDenied before the
+                # abort flag is set, retries, and re-acquires the permit.
                 if job_runner_state is not None:
                     requested = job_runner_state.request_abort(job_id)
                 else:
                     requested = False
+                coordinator.cancel_waiting_job(job_id)
                 logger.info(
                     "control_abort job_id=%s requested=%s", job_id, requested,
                 )

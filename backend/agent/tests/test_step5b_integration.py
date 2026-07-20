@@ -323,3 +323,104 @@ class TestCoordinatorTickSendsPost:
         # No top-level coordinator_epoch (that would be NameError-prone)
         assert "coordinator_epoch" not in body
         assert body["host_id"] == "h-tick"
+
+
+# ── 7. Abort semantics ────────────────────────────────────────────────────────
+
+
+class TestAbortPermitSemantics:
+    def test_abort_while_holding_does_not_release_permit(self):
+        """Abort a job that is EXECUTING_STEP (holding a permit) — the
+        cancel must be a no-op. The concurrency cap must survive."""
+        import threading, time
+        from unittest.mock import MagicMock, patch
+
+        from backend.agent.operation_scheduler import OperationScheduler
+        from backend.agent.coordinator import HostRunCoordinator
+
+        s = OperationScheduler(max_concurrent=2)
+        coord = HostRunCoordinator("http://x", "h1", "i1")
+        coord.set_scheduler(s)
+        # Job 100 is EXECUTING_STEP on device 10
+        jv = coord.register_job(100)
+        jv.update(state="EXECUTING_STEP")
+        coord.register_job_device(100, 10)
+
+        # Fill slots — device 10 is one of them
+        p1 = s.acquire(10)
+        p2 = s.acquire(20)
+        assert s.held == 2
+
+        # Abort job 100 — but it's EXECUTING_STEP, not WAITING
+        coord.cancel_waiting_job(100)
+
+        # Slot count unchanged — cancel was a no-op
+        assert s.held == 2
+        assert 10 in s.held_devices
+        p1.release()
+        p2.release()
+
+    def test_cancel_while_waiting_denies_permit(self):
+        """cancel_device fires on a still-queued waiter → PermitDenied."""
+        import threading, time
+
+        s = OperationScheduler(max_concurrent=1)
+        s.acquire(99)  # hold the only slot
+        denied = []
+
+        def waiter():
+            try:
+                s.acquire(42, timeout=5)
+            except PermitDenied:
+                denied.append(1)
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        time.sleep(0.15)  # waiter is queued
+        s.cancel_device(42)  # cancel while still waiting
+        t.join(timeout=3)
+        assert denied == [1]
+        assert s.held == 1  # holder still holds, waiter never got a slot
+        assert 42 not in s.held_devices
+
+    def test_abort_order_request_then_cancel(self):
+        """request_abort sets _canceled before cancel_waiting_job fires.
+        When the waiter sees PermitDenied, _is_aborted() is already True,
+        so _run_step_with_permit returns False instead of retrying."""
+        import threading, time
+        from unittest.mock import MagicMock
+
+        s = OperationScheduler(max_concurrent=1)
+        coord = HostRunCoordinator("http://x", "h-ord", "inst")
+        coord.set_scheduler(s)
+        jv = coord.register_job(200)
+        jv.update(state="WAITING_EXECUTION_SLOT")
+        coord.register_job_device(200, 77)
+
+        # Hold the only slot
+        p = s.acquire(99)
+        # Simulate the abort handler: request_abort FIRST, then cancel
+        _canceled = [False]
+
+        def waiter():
+            while True:
+                try:
+                    perm = s.acquire(77, timeout=1)
+                except PermitDenied:
+                    if _canceled[0]:
+                        return  # abort confirmed, stop
+                    continue  # retry
+                else:
+                    perm.release()
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        time.sleep(0.15)
+
+        # Correct order: mark aborted FIRST, THEN cancel
+        _canceled[0] = True
+        coord.cancel_waiting_job(200)
+        t.join(timeout=3)
+        assert not t.is_alive()
+        p.release()
+        assert s.held == 0

@@ -278,15 +278,26 @@ class HostRunCoordinator:
         self._scheduler = scheduler
 
     def cancel_waiting_job(self, job_id: int) -> None:
-        """Abort/lease-lost: cancel a job waiting on the scheduler permit."""
+        """Abort/lease-lost: cancel a job WAITING for the scheduler permit.
+
+        Only cancels jobs in WAITING_EXECUTION_SLOT — a job already
+        holding a permit (EXECUTING_STEP) is aborted through the
+        pipeline's signal path, not by releasing its permit (that would
+        corrupt the concurrency cap).
+        """
         scheduler = getattr(self, "_scheduler", None)
         if scheduler is None:
             return
         with self._lock:
+            jv = self._job_views.get(job_id)
             device_id = self._job_devices.get(job_id)
-        if device_id is not None:
-            scheduler.cancel_device(device_id)
-            logger.info("coordinator_cancelled_job job=%d device=%d", job_id, device_id)
+        if jv is None or device_id is None:
+            return
+        # Only cancel waiters — never touch a held permit.
+        if jv.execution_state != "WAITING_EXECUTION_SLOT":
+            return
+        scheduler.cancel_device(device_id)
+        logger.info("coordinator_cancelled_job job=%d device=%d", job_id, device_id)
 
     def _loop(self) -> None:
         while not self._stop_event.wait(self._interval):

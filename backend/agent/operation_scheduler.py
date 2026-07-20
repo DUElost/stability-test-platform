@@ -186,27 +186,15 @@ class OperationScheduler:
             event.set()
 
     def cancel_device(self, device_id: int) -> None:
-        """Abort one waiting job (abort/cancellation). Idempotent.
-
-        Two paths:
-        - Still waiting: pop from waiters, set cancelled flag, wake event.
-          Waiter checks flag → raises PermitDenied (no slot consumed).
-        - Already promoted (race with _wake_one_locked): device is in
-          _held_devices but the thread hasn't woken yet. Release the slot
-          and set cancelled flag so the thread raises PermitDenied.
-        """
+        """Abort one WAITING job. Idempotent. Does NOT touch a device
+        that already holds a permit (callers must only cancel waiters —
+        an executing step is aborted through the pipeline's signal path,
+        not by releasing its permit)."""
         with self._lock:
             self._cancelled.add(device_id)
-            # Path 1: still in waiters queue
             event = self._waiters.pop(device_id, None)
-            if event is not None:
-                event.set()
-                return
-            # Path 2: already promoted — release the consumed slot
-            if device_id in self._held_devices:
-                self._held_devices.discard(device_id)
-                self._held = max(0, self._held - 1)
-                self._wake_one_locked()
+        if event is not None:
+            event.set()
 
     def shutdown(self) -> None:
         """Wake every waiter with a shutdown signal. Idempotent."""
