@@ -166,6 +166,14 @@ export default function PlanRunHero({
             ? `${Math.round(run.failure_threshold * 100)}%`
             : '—'}
         </span>
+        {typeof run?.run_context?.note === 'string' && run.run_context.note.trim() ? (
+          <>
+            <span>执行备注</span>
+            <span className={cn('font-medium break-words', TEXT.heading)} title={run.run_context.note}>
+              {run.run_context.note}
+            </span>
+          </>
+        ) : null}
       </div>
 
       {/* ADR-0026: 准入队列信息条(仅 QUEUED/PRECHECK) */}

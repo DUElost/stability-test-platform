@@ -54,7 +54,7 @@ const navGroups: NavGroup[] = [
     label: '测试编排',
     items: [
       { path: '/orchestration/plans', label: 'Plan 管理', icon: FileBox },
-      { path: '/execution/plan-execute', label: '触发执行', icon: Rocket },
+      { path: '/execution/plan-execute', label: '执行 Plan', icon: Rocket },
       { path: '/execution/plan-runs', label: '执行记录', icon: ListTodo },
     ],
   },

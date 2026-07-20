@@ -26,6 +26,10 @@ export interface Host {
     active_jobs: number;
     active_devices: number;
     online_healthy_devices: number;
+    /** 空闲设备槽位（未叠加健康门限） */
+    available_slots?: number;
+    /** 剩余可派发槽位（= min(available_slots, health_limit)，心跳数据） */
+    effective_slots?: number;
   };
   health?: {
     status: 'HEALTHY' | 'DEGRADED' | 'UNSCHEDULABLE';
@@ -833,6 +837,8 @@ export interface PlanRun {
 
 export interface PlanRunCreate {
   device_ids: number[];
+  /** Optional operator note → PlanRun.run_context.note */
+  note?: string;
 }
 
 export interface PlanRunPreview {
@@ -928,6 +934,8 @@ export interface PlanRunContext {
   dispatch_state?: PlanDispatchState | null;
   dispatch_device_ids?: number[];
   abort_requested?: PlanRunAbortRequest;
+  /** Optional operator note from plan-execute (no dedicated DB column). */
+  note?: string;
   [key: string]: unknown;
 }
 

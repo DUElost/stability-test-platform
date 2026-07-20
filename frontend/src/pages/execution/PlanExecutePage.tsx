@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,22 +19,34 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { PaginationBar } from '@/components/ui/pagination-bar';
 import { useToast } from '@/hooks/useToast';
 import { usePagination } from '@/hooks/usePagination';
-import { api, ApiError, fetchAllDevices, fetchHostList, type PlanRunPreview } from '@/utils/api';
+import { api, ApiError, fetchAllDevices, fetchHostList, type HostActiveJob, type PlanRunPreview } from '@/utils/api';
 import { deviceKeys, hostKeys, planKeys } from '@/utils/api/queryKeys';
 import { formatDurationSeconds } from '@/utils/format';
-import { Play, Smartphone, AlertCircle, Eye, ExternalLink, RefreshCw, Layers3, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Play, Smartphone, AlertCircle, Eye, ExternalLink, RefreshCw, Layers3, Trash2, ChevronLeft, ChevronRight, Check, ChevronDown, Loader2 } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { evaluateDeviceReadiness, type ReadinessDevice } from '@/utils/planExecuteReadiness';
+import {
+  compareNodeEntries,
+  evaluateCapacityOverflow,
+  evaluateDeviceReadiness,
+  type ReadinessDevice,
+} from '@/utils/planExecuteReadiness';
 import { PlanExecuteWizardNav, WIZARD_STEPS } from '@/components/execution/PlanExecuteWizardNav';
 
 type DeviceSummary = ReadinessDevice;
@@ -49,6 +61,54 @@ function formatFailureThreshold(threshold: number | null | undefined): string {
   return `${Math.round(threshold * 100)}%`;
 }
 
+const DRAFT_KEY = 'stp.planExecute.draft.v1';
+
+interface PlanExecuteDraft {
+  planId: number | null;
+  deviceIds: number[];
+  currentStep: number;
+  deviceFilter: string;
+  deviceVersionFilter: string;
+  deviceHostFilter: string;
+  deviceModelFilter: string;
+  deviceTagFilter: string[];
+}
+
+function loadPlanExecuteDraft(): PlanExecuteDraft | null {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PlanExecuteDraft> | null;
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    return {
+      planId: typeof parsed.planId === 'number' ? parsed.planId : null,
+      deviceIds: Array.isArray(parsed.deviceIds)
+        ? parsed.deviceIds.filter((id): id is number => Number.isInteger(id) && id > 0)
+        : [],
+      currentStep: Number.isInteger(parsed.currentStep)
+        ? Math.min(Math.max(Number(parsed.currentStep), 0), WIZARD_STEPS.length - 1)
+        : 0,
+      deviceFilter: typeof parsed.deviceFilter === 'string' ? parsed.deviceFilter : '',
+      deviceVersionFilter: typeof parsed.deviceVersionFilter === 'string' ? parsed.deviceVersionFilter : 'all',
+      deviceHostFilter: typeof parsed.deviceHostFilter === 'string' ? parsed.deviceHostFilter : 'all',
+      deviceModelFilter: typeof parsed.deviceModelFilter === 'string' ? parsed.deviceModelFilter : 'all',
+      deviceTagFilter: Array.isArray(parsed.deviceTagFilter)
+        ? parsed.deviceTagFilter.filter((tag): tag is string => typeof tag === 'string')
+        : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function removePlanExecuteDraft() {
+  try {
+    sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 function PreviewDialog({
   open,
   preview,
@@ -56,6 +116,7 @@ function PreviewDialog({
   failureThreshold,
   patrolIntervalSeconds,
   timeoutSeconds,
+  note = '',
   groups,
   devices,
   onClose,
@@ -67,6 +128,7 @@ function PreviewDialog({
   failureThreshold: number | null | undefined;
   patrolIntervalSeconds: number | null | undefined;
   timeoutSeconds: number | null | undefined;
+  note?: string;
   groups: Array<{ key: string; hostLabel: string; model: string; version: string; total: number; ready: number }>;
   devices: DeviceSummary[];
   onClose: () => void;
@@ -101,6 +163,12 @@ function PreviewDialog({
             <span className="text-muted-foreground">超时</span>
             <span className="font-medium">{formatDurationSeconds(timeoutSeconds, 'precise', '未设置')}</span>
           </div>
+          {note.trim() ? (
+            <div className="rounded-lg border px-3 py-2">
+              <div className="text-muted-foreground">执行备注</div>
+              <div className="mt-1 whitespace-pre-wrap break-words">{note.trim()}</div>
+            </div>
+          ) : null}
           <div className="rounded-lg border">
             <div className="border-b px-3 py-2 font-medium">节点 / 型号 / 版本分布</div>
             <div className="max-h-40 divide-y overflow-auto">
@@ -136,8 +204,17 @@ export default function PlanExecutePage() {
   const navigate = useNavigate();
   const toast = useToast();
   const [searchParams] = useSearchParams();
+  // 草稿（sessionStorage）只在挂载时读取一次；恢复消费在下方单入口 effect 完成
+  const draftRef = useRef<PlanExecuteDraft | null | undefined>(undefined);
+  if (draftRef.current === undefined) draftRef.current = loadPlanExecuteDraft();
+  // 清除草稿后置位，阻止防抖中的写入把草稿写回
+  const suppressDraftWriteRef = useRef(false);
+  const draftConsumedRef = useRef(false);
+
+  const urlPlanId = searchParams.get('plan') ? Number(searchParams.get('plan')) : null;
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(
-    searchParams.get('plan') ? Number(searchParams.get('plan')) : null,
+    // 规则：?plan= 与草稿不一致时以 URL 为准；设备集仍由草稿恢复
+    urlPlanId ?? draftRef.current?.planId ?? null,
   );
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
   const [currentStep, setCurrentStep] = useState(0);
@@ -146,14 +223,20 @@ export default function PlanExecutePage() {
   // 复跑预填（?devices=1,2,3，来自 PlanRun 详情「复跑」）：只消费一次
   const prefillDevicesRef = useRef<string | null>(searchParams.get('devices'));
 
-  const [deviceFilter, setDeviceFilter] = useState('');
-  const [deviceVersionFilter, setDeviceVersionFilter] = useState('all');
-  const [deviceHostFilter, setDeviceHostFilter] = useState('all');
-  const [deviceModelFilter, setDeviceModelFilter] = useState('all');
+  // 严格整份忽略草稿：?devices= 复跑路径下筛选器不继承草稿（仅无 URL 设备参数时恢复）
+  const hasUrlDevices = prefillDevicesRef.current != null;
+  const [deviceFilter, setDeviceFilter] = useState(() => (hasUrlDevices ? '' : draftRef.current?.deviceFilter ?? ''));
+  const [deviceVersionFilter, setDeviceVersionFilter] = useState(() => (hasUrlDevices ? 'all' : draftRef.current?.deviceVersionFilter ?? 'all'));
+  const [deviceHostFilter, setDeviceHostFilter] = useState(() => (hasUrlDevices ? 'all' : draftRef.current?.deviceHostFilter ?? 'all'));
+  const [deviceModelFilter, setDeviceModelFilter] = useState(() => (hasUrlDevices ? 'all' : draftRef.current?.deviceModelFilter ?? 'all'));
+  const [deviceTagFilter, setDeviceTagFilter] = useState<string[]>(() => (hasUrlDevices ? [] : draftRef.current?.deviceTagFilter ?? []));
 
   const [preview, setPreview] = useState<PlanRunPreview | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [runNote, setRunNote] = useState('');
   const [retryingDispatch, setRetryingDispatch] = useState(false);
   const [dispatchFailure, setDispatchFailure] = useState<{
     planRunId: number;
@@ -191,17 +274,29 @@ export default function PlanExecutePage() {
     queryFn: () => fetchHostList(0, 200),
   });
 
-  // 选中节点的占用明细（active_jobs 仅 GET /hosts/{id} 返回）
-  const { data: selectedHostDetail } = useQuery({
-    queryKey: hostKeys.detail(deviceHostFilter),
-    queryFn: () => api.hosts.get(deviceHostFilter),
-    enabled: deviceHostFilter !== 'all' && deviceHostFilter !== 'unassigned',
-    refetchInterval: 20_000,
+  // B1b 前端兜底：全部节点视图并行拉各 host 的 active_jobs；节点钻取只拉当前节点
+  const occupancyHostIds = useMemo(() => {
+    if (deviceHostFilter === 'unassigned') return [] as string[];
+    if (deviceHostFilter !== 'all') return [deviceHostFilter];
+    return (hostsList ?? []).map(host => String(host.id));
+  }, [deviceHostFilter, hostsList]);
+
+  const occupancyQueries = useQueries({
+    queries: occupancyHostIds.map(hostId => ({
+      queryKey: hostKeys.detail(hostId),
+      queryFn: () => api.hosts.get(hostId),
+      refetchInterval: 20_000,
+    })),
   });
-  const occupancyByDeviceId = useMemo(
-    () => new Map((selectedHostDetail?.active_jobs ?? []).map(job => [job.device_id, job])),
-    [selectedHostDetail],
-  );
+  const occupancyByDeviceId = useMemo(() => {
+    const map = new Map<number, HostActiveJob>();
+    for (const query of occupancyQueries) {
+      for (const job of query.data?.active_jobs ?? []) {
+        map.set(job.device_id, job);
+      }
+    }
+    return map;
+  }, [occupancyQueries]);
 
   const {
     data: devicesResp,
@@ -218,6 +313,20 @@ export default function PlanExecutePage() {
   const selectedPlan = plans?.find(p => p.id === selectedPlanId);
   const executableStepCount =
     selectedPlan?.steps?.filter((step) => step.enabled !== false).length ?? 0;
+
+  const { data: scriptsList } = useQuery({
+    queryKey: ['scripts', 'active'],
+    queryFn: () => api.scripts.list(true),
+    enabled: currentStep === 0 && selectedPlanId != null,
+    staleTime: 60_000,
+  });
+  const scriptParamsByKey = useMemo(() => {
+    const map = new Map<string, Record<string, unknown>>();
+    for (const script of scriptsList ?? []) {
+      map.set(`${script.name}@${script.version}`, script.default_params ?? {});
+    }
+    return map;
+  }, [scriptsList]);
 
   const filteredPlans = useMemo(() => {
     const keyword = planSearch.trim().toLowerCase();
@@ -256,6 +365,11 @@ export default function PlanExecutePage() {
     () => Array.from(new Set(devicesInHostScope.map((device: DeviceSummary) => device.model).filter(Boolean) as string[])).sort(),
     [devicesInHostScope],
   );
+  // 标签选项与版本/型号一致，随节点范围收窄
+  const tagOptions = useMemo(
+    () => Array.from(new Set(devicesInHostScope.flatMap((device: DeviceSummary) => device.tags ?? []))).sort(),
+    [devicesInHostScope],
+  );
   const hostOptions = useMemo(() => Array.from(new Map(allDevices.map((device: DeviceSummary) => {
     const id = String(device.host_id ?? 'unassigned');
     const host = hostMap.get(id);
@@ -277,7 +391,7 @@ export default function PlanExecutePage() {
       healthStatus: host?.health?.status ?? null,
       healthReasons: host?.health?.reasons ?? [],
     };
-  }), [allDevices, hostMap, hostOptions, selectedDeviceIds]);
+  }).sort(compareNodeEntries), [allDevices, hostMap, hostOptions, selectedDeviceIds]);
   const visibleNodeSummaries = useMemo(() => {
     const keyword = nodeSearch.trim().toLowerCase();
     if (!keyword) return nodeSummaries;
@@ -298,6 +412,11 @@ export default function PlanExecutePage() {
     hostIds.forEach(id => { total += hostMap.get(id)?.capacity?.active_jobs ?? 0; });
     return total;
   }, [hostMap, selectedDevices]);
+  // 容量超限：本次选中数 > effective_slots（剩余可派发）；槽位缺失不告警
+  const capacityOverflowWarnings = useMemo(
+    () => evaluateCapacityOverflow(selectedDevices, hostsList ?? []),
+    [hostsList, selectedDevices],
+  );
   const selectedGroups = useMemo(() => {
     const groups = new Map<string, { key: string; hostLabel: string; model: string; version: string; total: number; ready: number; ids: number[] }>();
     for (const row of readinessResult.rows) {
@@ -324,13 +443,21 @@ export default function PlanExecutePage() {
   ).filter((d: DeviceSummary) =>
     (deviceVersionFilter === 'all' || d.build_display_id === deviceVersionFilter)
     && (deviceHostFilter === 'all' || String(d.host_id ?? 'unassigned') === deviceHostFilter)
-    && (deviceModelFilter === 'all' || d.model === deviceModelFilter),
+    && (deviceModelFilter === 'all' || d.model === deviceModelFilter)
+    && (deviceTagFilter.length === 0 || (d.tags ?? []).some(tag => deviceTagFilter.includes(tag))),
   );
   const filteredAvailableIds = filteredDevices.filter(isSchedulable).map((device: DeviceSummary) => device.id);
   const allFilteredSelected = filteredAvailableIds.length > 0 && filteredAvailableIds.every(id => selectedDeviceIds.has(id));
   const pagedDevices = useMemo(
     () => filteredDevices.slice(deviceSkip, deviceSkip + devicePageSize),
     [filteredDevices, deviceSkip, devicePageSize],
+  );
+  // 预检前置可见：当前页设备在勾选前即计算 readiness，阻塞原因直接内联展示
+  const pageReadinessByDeviceId = useMemo(
+    () => new Map(
+      evaluateDeviceReadiness(pagedDevices, hostsList ?? []).rows.map(row => [row.device.id, row]),
+    ),
+    [pagedDevices, hostsList],
   );
 
   useEffect(() => {
@@ -339,7 +466,7 @@ export default function PlanExecutePage() {
 
   useEffect(() => {
     goToDevicePage(1);
-  }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, goToDevicePage]);
+  }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, goToDevicePage]);
 
   useEffect(() => {
     setSelectedDeviceIds(prev => {
@@ -355,32 +482,93 @@ export default function PlanExecutePage() {
     });
   }, [schedulableDeviceIds, allDevices, toast]);
 
-  // 复跑预填：设备与 Plan 首次加载完成后执行一次，恢复上次执行的设备集
+  // 选择恢复单入口（设备与 Plan 首次加载完成后执行一次）：
+  // 1. URL 含 devices（复跑）→ 走预填，忽略草稿，与草稿恢复互斥
+  // 2. URL 仅含 plan → URL Plan 为准（state 初始化已处理），设备集仍从草稿恢复
+  // 3. 无 URL 参数 → 整体读草稿
   useEffect(() => {
     if (devLoading || plansLoading) return;
+
+    const restoreIds = (wantedIds: number[], lostLabel: (count: number, shown: string, more: boolean) => string) => {
+      const byId = new Map(allDevices.map((device: DeviceSummary) => [device.id, device]));
+      const restored: number[] = [];
+      const lost: string[] = [];
+      for (const id of wantedIds) {
+        const device = byId.get(id);
+        if (device && isSchedulable(device)) restored.push(id);
+        else lost.push(device?.serial ?? `#${id}`);
+      }
+      if (lost.length > 0) {
+        const shown = lost.slice(0, 5).join('、');
+        toast.info(lostLabel(lost.length, shown, lost.length > 5));
+      }
+      return restored;
+    };
+
+    // 复跑预填（?devices=1,2,3）：URL 优先
     const raw = prefillDevicesRef.current;
-    if (raw == null) return;
-    prefillDevicesRef.current = null;
-    const wantedIds = [...new Set(
-      raw.split(',').map(Number).filter(n => Number.isInteger(n) && n > 0),
-    )];
-    if (wantedIds.length === 0) return;
-    const byId = new Map(allDevices.map((device: DeviceSummary) => [device.id, device]));
-    const restored: number[] = [];
-    const lost: string[] = [];
-    for (const id of wantedIds) {
-      const device = byId.get(id);
-      if (device && isSchedulable(device)) restored.push(id);
-      else lost.push(device?.serial ?? `#${id}`);
+    if (raw != null) {
+      prefillDevicesRef.current = null;
+      draftConsumedRef.current = true;
+      const wantedIds = [...new Set(
+        raw.split(',').map(Number).filter(n => Number.isInteger(n) && n > 0),
+      )];
+      if (wantedIds.length === 0) return;
+      const restored = restoreIds(
+        wantedIds,
+        (count, shown, more) => `上次执行的样机中 ${count} 台本次不可用：${shown}${more ? ' 等' : ''}`,
+      );
+      if (restored.length === 0) return;
+      setSelectedDeviceIds(new Set(restored));
+      if (selectedPlan && executableStepCount > 0) setCurrentStep(2);
+      return;
     }
-    if (lost.length > 0) {
-      const shown = lost.slice(0, 5).join('、');
-      toast.info(`上次执行的样机中 ${lost.length} 台本次不可用：${shown}${lost.length > 5 ? ' 等' : ''}`);
+
+    // 草稿恢复
+    if (draftConsumedRef.current) return;
+    draftConsumedRef.current = true;
+    const draft = draftRef.current ?? null;
+    if (!draft) return;
+    const restored = restoreIds(
+      draft.deviceIds,
+      (count, shown, more) => `草稿中 ${count} 台样机当前不可用，已移除：${shown}${more ? ' 等' : ''}`,
+    );
+    if (restored.length > 0) {
+      setSelectedDeviceIds(new Set(restored));
+      if (selectedPlan && executableStepCount > 0 && draft.currentStep > 0) setCurrentStep(draft.currentStep);
+    } else if (draft.currentStep === 1 && selectedPlan && executableStepCount > 0) {
+      setCurrentStep(1);
     }
-    if (restored.length === 0) return;
-    setSelectedDeviceIds(new Set(restored));
-    if (selectedPlan && executableStepCount > 0) setCurrentStep(2);
   }, [devLoading, plansLoading, allDevices, selectedPlan, executableStepCount, toast]);
+
+  // 草稿写入（防抖 300ms）；清除后置位 suppress，防止写回
+  useEffect(() => {
+    if (suppressDraftWriteRef.current) return;
+    const timer = setTimeout(() => {
+      if (suppressDraftWriteRef.current) return;
+      const draft: PlanExecuteDraft = {
+        planId: selectedPlanId,
+        deviceIds: Array.from(selectedDeviceIds),
+        currentStep,
+        deviceFilter,
+        deviceVersionFilter,
+        deviceHostFilter,
+        deviceModelFilter,
+        deviceTagFilter,
+      };
+      try {
+        sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+      } catch {
+        /* 忽略配额/隐私模式异常 */
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [selectedPlanId, selectedDeviceIds, currentStep, deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter]);
+
+  const clearDraft = () => {
+    suppressDraftWriteRef.current = true;
+    removePlanExecuteDraft();
+  };
 
   // 步骤 ≥2 时若已无选中样机，退回样机选择
   useEffect(() => {
@@ -417,11 +605,19 @@ export default function PlanExecutePage() {
       });
     }
   };
-  const removeDeviceIds = (ids: number[]) => setSelectedDeviceIds(prev => {
-    const next = new Set(prev);
-    ids.forEach(id => next.delete(id));
-    return next;
-  });
+  // 移除样机（Minimap 方块 / 版本确认分组 / 移除阻塞）统一走撤销通道
+  const removeDeviceIds = (ids: number[]) => {
+    if (ids.length === 0) return;
+    setSelectedDeviceIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.delete(id));
+      return next;
+    });
+    toast.action(`已移除 ${ids.length} 台样机`, {
+      label: '撤销',
+      onClick: () => setSelectedDeviceIds(prev => new Set([...prev, ...ids])),
+    });
+  };
 
   const handlePreview = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -433,6 +629,7 @@ export default function PlanExecutePage() {
     if (selectedSchedulableDeviceIds.length === 0) { toast.error('请至少选择一台设备'); return; }
     if (!readinessResult.passed) { toast.error('测试准备检查未通过'); return; }
 
+    setPreviewing(true);
     try {
       const frozenDeviceIds = [...selectedSchedulableDeviceIds];
       const p = await api.plans.previewRun(selectedPlanId, {
@@ -459,6 +656,8 @@ export default function PlanExecutePage() {
       setShowPreview(true);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : '预览失败');
+    } finally {
+      setPreviewing(false);
     }
   };
 
@@ -466,10 +665,13 @@ export default function PlanExecutePage() {
     if (!selectedPlanId || !preview || preview.total_steps === 0) return;
     setSubmitting(true);
     try {
+      const trimmedNote = runNote.trim();
       const run = await api.plans.run(selectedPlanId, {
         device_ids: [...preview.device_ids],
+        ...(trimmedNote ? { note: trimmedNote } : {}),
       });
       toast.success('Plan 已发起执行');
+      clearDraft();
       setShowPreview(false);
       navigate(`/execution/plan-runs/${run.id}`);
     } catch (err: unknown) {
@@ -524,14 +726,36 @@ export default function PlanExecutePage() {
         failureThreshold={selectedPlan?.failure_threshold}
         patrolIntervalSeconds={selectedPlan?.patrol_interval_seconds}
         timeoutSeconds={selectedPlan?.timeout_seconds}
+        note={runNote}
         groups={selectedGroups}
         devices={selectedDevices}
         onClose={() => setShowPreview(false)}
         onConfirm={handleConfirm}
       />
 
-      <PageHeader title="Plan 执行" subtitle="选择已保存的 Plan 和目标设备，创建 PlanRun" />
+      <PageHeader title="执行 Plan" subtitle="选择已保存的 Plan 和目标样机，创建 PlanRun" />
       <PlanExecuteWizardNav currentStep={currentStep} onStepChange={handleStepChange} />
+
+      <Dialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>清空已选样机</DialogTitle>
+            <DialogDescription>将移除本次已选的 {selectedDevices.length} 台样机，此操作不可撤销。</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowClearConfirm(false)}>取消</Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setSelectedDeviceIds(new Set());
+                setShowClearConfirm(false);
+              }}
+            >
+              确认清空
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {dispatchFailure && (
         <ErrorState
@@ -620,18 +844,41 @@ export default function PlanExecutePage() {
                   </div>
                   <div className="rounded-lg border">
                     <div className="border-b px-3 py-2 text-sm font-medium">执行步骤</div>
-                    <div className="divide-y">
-                      {selectedPlan.steps?.map((step, index) => (
-                        <div
-                          key={step.id ?? step.step_key}
-                          className={cn('grid grid-cols-[32px_80px_1fr_auto] items-center gap-2 px-3 py-2 text-xs', step.enabled === false && 'opacity-50')}
-                        >
-                          <span>{index + 1}</span>
-                          <span>{step.stage}</span>
-                          <span className="truncate">{step.script_name} · {step.script_version}</span>
-                          <span>{step.enabled === false ? '停用' : '启用'}</span>
-                        </div>
-                      ))}
+                    <div className="max-h-72 divide-y overflow-y-auto">
+                      {selectedPlan.steps?.map((step, index) => {
+                        const paramsKey = step.script_name && step.script_version
+                          ? `${step.script_name}@${step.script_version}`
+                          : '';
+                        const defaultParams = paramsKey ? scriptParamsByKey.get(paramsKey) : undefined;
+                        const paramsJson = defaultParams && Object.keys(defaultParams).length > 0
+                          ? JSON.stringify(defaultParams, null, 2)
+                          : null;
+                        return (
+                          <details
+                            key={step.id ?? step.step_key}
+                            className={cn(step.enabled === false && 'opacity-50')}
+                          >
+                            <summary className="grid cursor-pointer grid-cols-[32px_80px_1fr_auto] items-center gap-2 px-3 py-2 text-xs">
+                              <span>{index + 1}</span>
+                              <span>{step.stage}</span>
+                              <span className="truncate">{step.script_name} · {step.script_version}</span>
+                              <span>{step.enabled === false ? '停用' : '启用'}</span>
+                            </summary>
+                            <div className="border-t bg-muted/30 px-3 py-2">
+                              <div className={cn('mb-1 text-[11px]', TEXT.subtitle)}>default_params（只读）</div>
+                              {paramsJson ? (
+                                <pre className="max-h-40 overflow-auto rounded border bg-background p-2 font-mono text-[11px] leading-5">
+                                  {paramsJson}
+                                </pre>
+                              ) : (
+                                <div className={cn('text-[11px]', TEXT.subtitle)}>
+                                  {paramsKey ? '该脚本版本无 default_params 或尚未加载' : '步骤缺少脚本引用'}
+                                </div>
+                              )}
+                            </div>
+                          </details>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
@@ -658,7 +905,7 @@ export default function PlanExecutePage() {
             <CardHeader>
               <CardTitle className="text-base">
                 <div className="flex items-center justify-between">
-                  <span>设备编排</span>
+                  <span>样机选择</span>
                 </div>
               </CardTitle>
             </CardHeader>
@@ -780,6 +1027,49 @@ export default function PlanExecutePage() {
                           {modelOptions.map(value => <SelectItem key={value} value={value}>{value}</SelectItem>)}
                         </SelectContent>
                       </Select>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button type="button" variant="outline" className="w-40 justify-between font-normal">
+                            <span className="truncate">
+                              {deviceTagFilter.length === 0
+                                ? '全部标签'
+                                : deviceTagFilter.length === 1
+                                  ? deviceTagFilter[0]
+                                  : `已选 ${deviceTagFilter.length} 个标签`}
+                            </span>
+                            <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="w-48">
+                          <DropdownMenuItem onSelect={() => setDeviceTagFilter([])}>
+                            <span className="mr-2 inline-flex w-4 justify-center">
+                              {deviceTagFilter.length === 0 && <Check className="h-4 w-4" />}
+                            </span>
+                            全部标签
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {tagOptions.map(tag => {
+                            const active = deviceTagFilter.includes(tag);
+                            return (
+                              <DropdownMenuItem
+                                key={tag}
+                                onSelect={(event) => {
+                                  event.preventDefault();
+                                  setDeviceTagFilter(prev => (active ? prev.filter(t => t !== tag) : [...prev, tag]));
+                                }}
+                              >
+                                <span className="mr-2 inline-flex w-4 justify-center">
+                                  {active && <Check className="h-4 w-4" />}
+                                </span>
+                                <span className="truncate">{tag}</span>
+                              </DropdownMenuItem>
+                            );
+                          })}
+                          {tagOptions.length === 0 && (
+                            <DropdownMenuItem disabled>暂无标签</DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                       <Button type="button" variant="outline" onClick={toggleAll}>
                         {allFilteredSelected
                           ? `取消选择筛选结果 (${filteredAvailableIds.length})`
@@ -813,7 +1103,7 @@ export default function PlanExecutePage() {
                                 type="button"
                                 aria-label={`已选设备方块 ${device.id}`}
                                 title={`${device.serial} · ${host?.ip || host?.name || device.host_id || '节点未知'} · ${device.model || '型号未知'} · ${device.build_display_id || '版本未知'}`}
-                                onClick={() => toggleDevice(device)}
+                                onClick={() => removeDeviceIds([device.id])}
                                 className={cn(
                                   'aspect-square rounded-sm border transition-transform hover:scale-110 hover:ring-2 hover:ring-primary/40',
                                   blocked ? 'border-destructive bg-destructive' : 'border-success bg-success',
@@ -825,11 +1115,12 @@ export default function PlanExecutePage() {
                       )}
                     </div>
                     <div className="overflow-x-auto rounded-lg border">
-                      <table className="w-full min-w-[680px] text-sm">
+                      <table className="w-full min-w-[800px] text-sm">
                         <thead className="bg-muted/95 text-left text-xs">
                           <tr>
                             <th className="w-10 px-3 py-2" />
                             <th className="px-3 py-2">Serial</th>
+                            <th className="px-3 py-2">节点</th>
                             <th className="px-3 py-2">型号</th>
                             <th className="px-3 py-2">版本</th>
                             <th className="px-3 py-2">状态</th>
@@ -839,8 +1130,11 @@ export default function PlanExecutePage() {
                         <tbody className="divide-y">
                           {pagedDevices.map((device: DeviceSummary) => {
                             const disabled = !isSchedulable(device);
-                            const row = readinessByDeviceId.get(device.id);
+                            const row = readinessByDeviceId.get(device.id) ?? pageReadinessByDeviceId.get(device.id);
                             const occupancy = occupancyByDeviceId.get(device.id);
+                            const hostId = String(device.host_id ?? 'unassigned');
+                            const host = hostMap.get(hostId);
+                            const hostLabel = host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
                             return (
                               <tr
                                 key={device.id}
@@ -857,6 +1151,7 @@ export default function PlanExecutePage() {
                                   />
                                 </td>
                                 <td className="px-3 py-2 font-mono text-xs">{device.serial}</td>
+                                <td className="px-3 py-2 font-mono text-xs">{hostLabel}</td>
                                 <td className="px-3 py-2">{device.model || '—'}</td>
                                 <td className="px-3 py-2">{device.build_display_id || '—'}</td>
                                 <td className="px-3 py-2"><StatusBadge kind="device" status={device.status} size="sm" /></td>
@@ -912,7 +1207,7 @@ export default function PlanExecutePage() {
               {selectedGroups.length === 0 ? (
                 <EmptyState
                   title="尚未选择样机"
-                  description="请返回“样机选择”，按节点选择测试设备"
+                  description="请返回“样机选择”，按节点选择测试样机"
                   icon={<Smartphone className="h-10 w-10" />}
                 />
               ) : (
@@ -1010,11 +1305,7 @@ export default function PlanExecutePage() {
                   <div className="mt-1 font-medium">{executableStepCount} 个启用步骤</div>
                 </div>
                 <div className="rounded-lg border p-3">
-                  <div className={cn('text-xs', TEXT.subtitle)}>失败阈值</div>
-                  <div className="mt-1 font-medium">{formatFailureThreshold(selectedPlan?.failure_threshold)}</div>
-                </div>
-                <div className="rounded-lg border p-3">
-                  <div className={cn('text-xs', TEXT.subtitle)}>测试设备</div>
+                  <div className={cn('text-xs', TEXT.subtitle)}>测试样机</div>
                   <div className="mt-1 font-medium">{selectedDevices.length} 台 / {readinessResult.byHost.length} 节点</div>
                 </div>
                 <div className="rounded-lg border p-3">
@@ -1022,13 +1313,35 @@ export default function PlanExecutePage() {
                   <div className="mt-1 font-medium">
                     {formatDurationSeconds(selectedPlan?.patrol_interval_seconds, 'precise', '未设置')}
                   </div>
+                  <div className={cn('mt-1 text-[11px]', TEXT.subtitle)}>继承 Plan，本次不可覆盖</div>
                 </div>
                 <div className="rounded-lg border p-3">
                   <div className={cn('text-xs', TEXT.subtitle)}>超时</div>
                   <div className="mt-1 font-medium">
                     {formatDurationSeconds(selectedPlan?.timeout_seconds, 'precise', '未设置')}
                   </div>
+                  <div className={cn('mt-1 text-[11px]', TEXT.subtitle)}>继承 Plan，本次不可覆盖</div>
                 </div>
+                <div className="rounded-lg border p-3">
+                  <div className={cn('text-xs', TEXT.subtitle)}>失败阈值</div>
+                  <div className="mt-1 font-medium">{formatFailureThreshold(selectedPlan?.failure_threshold)}</div>
+                  <div className={cn('mt-1 text-[11px]', TEXT.subtitle)}>继承 Plan，本次不可覆盖</div>
+                </div>
+              </div>
+              <div className="rounded-lg border p-3">
+                <label htmlFor="plan-execute-note" className={cn('text-xs font-medium', TEXT.subtitle)}>
+                  执行备注（选填）
+                </label>
+                <textarea
+                  id="plan-execute-note"
+                  value={runNote}
+                  onChange={(e) => setRunNote(e.target.value.slice(0, 500))}
+                  rows={2}
+                  maxLength={500}
+                  placeholder="记录本次发起目的、批次或关注点"
+                  className="mt-2 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                <div className={cn('mt-1 text-right text-[11px]', TEXT.subtitle)}>{runNote.length}/500</div>
               </div>
               <div className="rounded-lg border">
                 <div className="border-b px-3 py-2 text-sm font-medium">前置执行检查</div>
@@ -1057,6 +1370,14 @@ export default function PlanExecutePage() {
                   </div>
                 </div>
               </div>
+              {capacityOverflowWarnings.length > 0 && (
+                <div className="space-y-1 rounded-lg bg-warning/10 px-3 py-2 text-sm text-warning">
+                  {capacityOverflowWarnings.map(warning => (
+                    <div key={warning.hostId}>{warning.message}</div>
+                  ))}
+                  <div className={cn('text-xs', TEXT.subtitle)}>心跳数据，仅供参考 · 不阻塞发起</div>
+                </div>
+              )}
               {readinessResult.blockedCount > 0 && (
                 <Button type="button" variant="outline" onClick={() => removeDeviceIds(readinessResult.blockedDeviceIds)}>
                   <Trash2 className="mr-2 h-4 w-4" />移除全部阻塞设备
@@ -1067,25 +1388,46 @@ export default function PlanExecutePage() {
         )}
 
         <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border bg-background/95 p-3 shadow-lg backdrop-blur sm:flex-row sm:items-center">
-          <div className="flex-1 text-sm">
-            <span className="font-medium">已选 {selectedDevices.length} 台</span>
-            <span className="mx-2 text-muted-foreground">|</span>
-            <span className="text-success">{readinessResult.readyCount} 台就绪</span>
-            <span className="mx-2 text-muted-foreground">|</span>
-            <span className={readinessResult.blockedCount ? 'text-destructive' : TEXT.subtitle}>
-              {readinessResult.blockedCount} 台阻塞
-            </span>
-          </div>
-          {readinessResult.blockedCount > 0 && (
+          {currentStep >= 1 ? (
+            <div className="flex-1 text-sm">
+              <span className="font-medium">已选 {selectedDevices.length} 台</span>
+              <span className="mx-2 text-muted-foreground">|</span>
+              <span className="text-success">{readinessResult.readyCount} 台就绪</span>
+              <span className="mx-2 text-muted-foreground">|</span>
+              <span className={readinessResult.blockedCount ? 'text-destructive' : TEXT.subtitle}>
+                {readinessResult.blockedCount} 台阻塞
+              </span>
+              {capacityOverflowWarnings.length > 0 && (
+                <>
+                  <span className="mx-2 text-muted-foreground">|</span>
+                  <span className="text-warning" title={capacityOverflowWarnings.map(w => w.message).join('；')}>
+                    {capacityOverflowWarnings.length} 个节点超选（心跳参考）
+                  </span>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1" />
+          )}
+          {currentStep >= 1 && readinessResult.blockedCount > 0 && (
             <Button type="button" variant="outline" onClick={() => removeDeviceIds(readinessResult.blockedDeviceIds)}>
               <Trash2 className="mr-1.5 h-4 w-4" />移除阻塞设备
             </Button>
           )}
-          {selectedDevices.length > 0 && (
-            <Button type="button" variant="ghost" onClick={() => setSelectedDeviceIds(new Set())}>清空选择</Button>
+          {currentStep >= 1 && selectedDevices.length > 0 && (
+            <Button type="button" variant="ghost" onClick={() => setShowClearConfirm(true)}>清空选择</Button>
           )}
           {currentStep === 0 ? (
-            <Button type="button" variant="outline" onClick={() => navigate('/orchestration/plans')}>取消</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                clearDraft();
+                navigate('/orchestration/plans');
+              }}
+            >
+              取消
+            </Button>
           ) : (
             <Button type="button" variant="outline" onClick={() => handleStepChange(currentStep - 1)}>
               <ChevronLeft className="mr-1.5 h-4 w-4" />上一步
@@ -1106,9 +1448,10 @@ export default function PlanExecutePage() {
           ) : (
             <Button
               type="submit"
-              disabled={!selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed}
+              disabled={previewing || !selectedPlanId || executableStepCount === 0 || selectedSchedulableDeviceIds.length === 0 || !readinessResult.passed}
             >
-              <Eye className="mr-2 h-4 w-4" />预览并发起
+              {previewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Eye className="mr-2 h-4 w-4" />}
+              {previewing ? '预览中...' : '预览并发起'}
             </Button>
           )}
         </div>
