@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>②③ 发起驾驶舱 — Plan Execute V2</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topnav">
+      <a href="index.html">← 索引</a>
+      <div class="brand">②③ 发起驾驶舱</div>
+      <span class="pill on">全宽面板</span>
+      <span class="pill">替代 PreviewDialog</span>
+      <div class="spacer"></div>
+      <a class="btn sm" href="01-workspace-matrix.html">← 返回选机</a>
+    </div>
+
+    <div class="page-title">
+      <div>
+        <h1>发起前确认</h1>
+        <p>容量驾驶舱 + 近期执行感知。不承诺精确开跑时钟（挂 ADR-0026 QUEUED UI）。</p>
+      </div>
+    </div>
+
+    <div class="command-bar">
+      <div>
+        <div class="path">
+          <span class="step done">1 Plan · 周五回归 · ELA 长稳</span>
+          <span style="color:var(--muted-fg)">→</span>
+          <span class="step done">2 选机 · 22 台</span>
+          <span style="color:var(--muted-fg)">→</span>
+          <span class="step active">3 发起</span>
+        </div>
+        <div class="meta">
+          <span class="chip ok">22 台 / 3 节点</span>
+          <span class="chip ok">1 版本 · V104 ✓</span>
+          <span class="chip ok">预检通过</span>
+        </div>
+      </div>
+      <div class="cta">
+        <a class="btn" href="01-workspace-matrix.html">返回修改</a>
+        <button class="btn primary" type="button" id="confirmBtn">确认发起</button>
+      </div>
+    </div>
+
+    <div class="warn-banner">
+      <div style="font-size:18px;line-height:1">⚠</div>
+      <div>
+        <strong>疑似重复发起（③）</strong>
+        近 30 分钟内已有同 Plan、设备集高度重叠的执行：
+        <a href="#">PlanRun #8841</a>（今天 14:22 · RUNNING · 28 台，重叠约 18 台）。
+        黄警不阻断，请确认是否仍要发起。
+      </div>
+    </div>
+
+    <div class="stat-row">
+      <div class="stat">
+        <div class="l">本次设备</div>
+        <div class="v">22</div>
+        <div class="s">跨 3 节点</div>
+      </div>
+      <div class="stat">
+        <div class="l">可立即消化</div>
+        <div class="v">14</div>
+        <div class="s">按剩余槽位合计</div>
+      </div>
+      <div class="stat">
+        <div class="l">将排队</div>
+        <div class="v" style="color:hsl(38 80% 40%)">8</div>
+        <div class="s">B 架超选（增强 B4）</div>
+      </div>
+      <div class="stat">
+        <div class="l">历史墙钟参考</div>
+        <div class="v" style="font-size:18px">~11.4h</div>
+        <div class="s">近 5 次整次均值 · 长稳可能为天级</div>
+      </div>
+    </div>
+
+    <div class="cockpit-shell">
+      <div class="panel">
+        <div class="panel-hd">按节点派发计划</div>
+        <div class="panel-bd">
+          <table class="table host-table">
+            <thead>
+              <tr>
+                <th>节点</th>
+                <th>本次选中</th>
+                <th>剩余槽位</th>
+                <th>预估</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>A架 · host-a</strong><div style="font-size:11px;color:var(--muted-fg)">HEALTHY</div></td>
+                <td>8</td>
+                <td>8</td>
+                <td class="cap-ok">全部立即执行</td>
+              </tr>
+              <tr>
+                <td><strong>B架 · host-b</strong><div style="font-size:11px;color:var(--muted-fg)">DEGRADED · 磁盘偏高</div></td>
+                <td>10</td>
+                <td>2</td>
+                <td class="cap-over">2 立即 · 8 将排队</td>
+              </tr>
+              <tr>
+                <td><strong>C架 · host-c</strong><div style="font-size:11px;color:var(--muted-fg)">HEALTHY</div></td>
+                <td>4</td>
+                <td>6</td>
+                <td class="cap-ok">全部立即执行</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--muted);font-size:12px;color:var(--muted-fg);line-height:1.5">
+            「将排队」= 超过该 host 当前 <span class="wire">effective_slots</span> 的选中量提示（与现网 B4 一致）。
+            <strong>不是</strong> PlanRun 级 QUEUED 准入，也<strong>算不出</strong>「明早 9 点开跑」。
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="panel">
+          <div class="panel-hd">近 3 次执行</div>
+          <div class="panel-bd">
+            <div class="recent-run">
+              <div>
+                <div style="font-weight:600">PlanRun #8841</div>
+                <div style="color:var(--muted-fg)">今天 14:22 · 28 台</div>
+              </div>
+              <span class="badge busy">RUNNING</span>
+            </div>
+            <div class="recent-run">
+              <div>
+                <div style="font-weight:600">PlanRun #8810</div>
+                <div style="color:var(--muted-fg)">今天 09:05 · 30 台 · 墙钟 10.8h</div>
+              </div>
+              <span class="badge ready">SUCCEEDED</span>
+            </div>
+            <div class="recent-run">
+              <div>
+                <div style="font-weight:600">PlanRun #8766</div>
+                <div style="color:var(--muted-fg)">周五 18:40 · 30 台 · 墙钟 12.1h</div>
+              </div>
+              <span class="badge blocked">FAILED</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-hd">参数与检查单</div>
+          <div class="panel-bd">
+            <div class="param-row">
+              <span>巡检周期 <span class="info" data-tip="到达周期后触发下一轮巡检脚本；过短会打满 Agent 槽位。">ⓘ</span></span>
+              <strong>30 分钟</strong>
+            </div>
+            <div class="param-row">
+              <span>超时 <span class="info" data-tip="整个 PlanRun 超时后中止；已完成的步骤结果保留。">ⓘ</span></span>
+              <strong>12 小时</strong>
+            </div>
+            <div class="param-row">
+              <span>失败阈值 <span class="info" data-tip="失败 Job 占比超过阈值时标记 PlanRun 失败；未设置时默认 5%。">ⓘ</span></span>
+              <strong>5%</strong>
+            </div>
+            <ul class="check-list" style="margin-top:8px">
+              <li><span class="mark">✓</span><span>版本一致（V104）</span></li>
+              <li><span class="mark">✓</span><span>就绪预检通过（0 阻塞）</span></li>
+              <li><span class="mark warn">!</span><span>B 架 8 台将排队（不阻断）</span></li>
+              <li><span class="mark warn">!</span><span>疑似与 #8841 重复（不阻断）</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer-note">
+      确认发起后冻结设备集合并创建 PlanRun（行为与现网一致）。本页仅为布局/文案预览。
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script>
+    document.getElementById('confirmBtn').onclick = () => {
+      const t = document.getElementById('toast');
+      t.textContent = '示意：将调用 preview → trigger（未接真实 API）';
+      t.classList.add('show');
+      setTimeout(() => t.classList.remove('show'), 2000);
+    };
+  </script>
+</body>
+</html>

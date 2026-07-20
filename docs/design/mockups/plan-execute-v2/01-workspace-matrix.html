@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>① 选机工作台 · 矩阵 — Plan Execute V2</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topnav">
+      <a href="index.html">← 索引</a>
+      <div class="brand">① 选机工作台</div>
+      <span class="pill on">矩阵主视图</span>
+      <span class="pill">可点选 / Shift 连选</span>
+      <div class="spacer"></div>
+      <a class="btn sm" href="02-workspace-table.html">切到表格预览</a>
+      <a class="btn sm primary" href="03-dispatch-cockpit.html">预览发起 →</a>
+    </div>
+
+    <div class="page-title">
+      <div>
+        <h1>执行测试计划</h1>
+        <p>中区 = 筛选结果候选池（非仅已选）。按节点分带；无机架坐标，不承诺物理墙。</p>
+      </div>
+    </div>
+
+    <div class="command-bar">
+      <div>
+        <div class="path">
+          <span class="step done">1 Plan · 周五回归 · ELA 长稳</span>
+          <span style="color:var(--muted-fg)">→</span>
+          <span class="step active">2 选机</span>
+          <span style="color:var(--muted-fg)">→</span>
+          <span class="step">3 发起</span>
+        </div>
+        <div class="meta" id="cmdMeta">
+          <span class="chip ok" id="selChip">已选 0 台 / 0 节点</span>
+          <span class="chip ok">1 版本 · 一致 ✓</span>
+          <span class="chip">预检 —</span>
+        </div>
+      </div>
+      <div class="cta">
+        <button class="btn ghost sm" type="button" id="btnClear">清空选择</button>
+        <a class="btn primary" href="03-dispatch-cockpit.html" id="btnNext">预览发起</a>
+      </div>
+    </div>
+
+    <div class="workspace">
+      <!-- Node rail -->
+      <aside class="panel">
+        <div class="panel-hd">节点</div>
+        <div class="panel-bd" id="nodeRail"></div>
+      </aside>
+
+      <!-- Stage -->
+      <section class="panel">
+        <div class="filter-bar">
+          <div class="seg" id="viewSeg">
+            <button type="button" class="on" data-view="matrix">矩阵</button>
+            <button type="button" data-view="table">表格</button>
+          </div>
+          <input id="q" placeholder="搜索 serial…" />
+          <label class="toggle"><input type="checkbox" id="readyOnly" /> 仅显示就绪</label>
+          <button class="btn sm" type="button" id="selectReady">全选就绪</button>
+          <span style="flex:1"></span>
+          <span class="chip" id="filterCount">筛选 0</span>
+        </div>
+        <div class="quick-chips" id="quickChips">
+          <span style="font-size:11px;color:var(--muted-fg);align-self:center">快捷：</span>
+        </div>
+        <div class="quick-chips" id="activeFilters" style="padding-top:4px;padding-bottom:4px"></div>
+        <div class="matrix-wrap" id="stage"></div>
+        <div class="legend">
+          <span><i class="swatch ready"></i>就绪</span>
+          <span><i class="swatch blocked"></i>阻塞</span>
+          <span><i class="swatch busy"></i>占用</span>
+          <span><i class="swatch offline"></i>离线</span>
+          <span><i class="swatch selected"></i>已选</span>
+          <span style="margin-left:auto">点击切换 · Shift+点击范围连选 · hover 看详情</span>
+        </div>
+      </section>
+
+      <!-- Selected -->
+      <aside class="panel">
+        <div class="panel-hd">
+          <span>已选集</span>
+          <span class="chip" id="mmCount">0</span>
+        </div>
+        <div class="panel-bd">
+          <div style="font-size:11px;color:var(--muted-fg);margin-bottom:8px">
+            点方块 = 定位高亮 · hover 右上 ✕ 才移除（⑧）
+          </div>
+          <div class="minimap"><div class="grid" id="minimap"></div></div>
+          <div class="tools">
+            <button class="btn sm" type="button" id="copySerials">复制 serials</button>
+            <button class="btn sm" type="button" id="dlCsv">下载 CSV</button>
+            <button class="btn sm" type="button" id="savePreset">存为方案</button>
+          </div>
+          <div class="presets">
+            <div style="font-size:12px;font-weight:600;margin:12px 0 6px">我的方案（⑥）</div>
+            <div class="item" data-preset="ela30"><span>周五回归 · ELA 30 台</span><span style="color:var(--muted-fg)">应用</span></div>
+            <div class="item" data-preset="smoke8"><span>Smoke 开机 8 台</span><span style="color:var(--muted-fg)">应用</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="hover-card" id="hoverCard"></div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const HOSTS = [
+      { id: 'all', name: '全部节点', health: 'ok', slots: '—' },
+      { id: 'A', name: 'A架 · host-a', health: 'ok', slots: '4/12' },
+      { id: 'B', name: 'B架 · host-b', health: 'warn', slots: '10/12' },
+      { id: 'C', name: 'C架 · host-c', health: 'ok', slots: '2/8' },
+      { id: 'D', name: 'D架 · host-d', health: 'bad', slots: '0/8' },
+    ];
+    const STATUSES = ['ready', 'ready', 'ready', 'ready', 'ready', 'blocked', 'busy', 'offline'];
+    const MODELS = ['ELA', 'ELA', 'ELA', 'X200', 'X200', 'Pro'];
+    const VERSIONS = ['V104', 'V104', 'V104', 'V103', 'V105'];
+
+    // Deterministic pseudo devices (~180 for preview density)
+    const devices = [];
+    let n = 0;
+    for (const h of HOSTS.filter(x => x.id !== 'all')) {
+      const count = h.id === 'A' ? 48 : h.id === 'B' ? 56 : h.id === 'C' ? 40 : 36;
+      for (let i = 0; i < count; i++) {
+        const st = STATUSES[(n * 7 + i * 3) % STATUSES.length];
+        devices.push({
+          id: ++n,
+          serial: `${h.id}${String(10000 + i).slice(1)}`,
+          host: h.id,
+          hostLabel: h.name,
+          model: MODELS[(n + i) % MODELS.length],
+          version: VERSIONS[(n * 2 + i) % VERSIONS.length],
+          status: st,
+        });
+      }
+    }
+
+    const state = {
+      host: 'all',
+      selected: new Set([3, 5, 8, 12, 15, 22, 31, 44, 55, 67, 80, 91, 102, 110, 125, 140, 155, 168]),
+      readyOnly: false,
+      q: '',
+      versionChip: null,
+      modelChip: null,
+      view: 'matrix',
+      lastIdx: null,
+    };
+
+    const toast = (msg) => {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(toast._t);
+      toast._t = setTimeout(() => el.classList.remove('show'), 1800);
+    };
+
+    function filtered() {
+      return devices.filter(d => {
+        if (state.host !== 'all' && d.host !== state.host) return false;
+        if (state.readyOnly && d.status !== 'ready') return false;
+        if (state.versionChip && d.version !== state.versionChip) return false;
+        if (state.modelChip && d.model !== state.modelChip) return false;
+        if (state.q && !d.serial.toLowerCase().includes(state.q.toLowerCase())) return false;
+        return true;
+      });
+    }
+
+    function renderNodes() {
+      const rail = document.getElementById('nodeRail');
+      rail.innerHTML = HOSTS.map(h => {
+        const count = h.id === 'all' ? devices.length : devices.filter(d => d.host === h.id).length;
+        const sel = [...state.selected].filter(id => {
+          const d = devices.find(x => x.id === id);
+          return d && (h.id === 'all' || d.host === h.id);
+        }).length;
+        return `<div class="node-item ${state.host === h.id ? 'on' : ''}" data-host="${h.id}">
+          <div class="row"><span class="name">${h.name}</span><span class="dot ${h.health}"></span></div>
+          <div class="row sub"><span>${count} 台 · 已选 ${sel}</span><span>槽 ${h.slots}</span></div>
+        </div>`;
+      }).join('');
+      rail.querySelectorAll('.node-item').forEach(el => {
+        el.onclick = () => { state.host = el.dataset.host; render(); };
+      });
+    }
+
+    function renderChips() {
+      const pool = state.host === 'all' ? devices : devices.filter(d => d.host === state.host);
+      const versions = [...new Set(pool.map(d => d.version))].slice(0, 5);
+      const models = [...new Set(pool.map(d => d.model))].slice(0, 4);
+      const qc = document.getElementById('quickChips');
+      qc.innerHTML = `<span style="font-size:11px;color:var(--muted-fg);align-self:center">快捷：</span>` +
+        versions.map(v => `<span class="chip ${state.versionChip === v ? 'active' : ''}" data-v="${v}">${v}</span>`).join('') +
+        models.map(m => `<span class="chip ${state.modelChip === m ? 'active' : ''}" data-m="${m}">${m}</span>`).join('');
+      qc.querySelectorAll('[data-v]').forEach(el => el.onclick = () => {
+        state.versionChip = state.versionChip === el.dataset.v ? null : el.dataset.v;
+        render();
+      });
+      qc.querySelectorAll('[data-m]').forEach(el => el.onclick = () => {
+        state.modelChip = state.modelChip === el.dataset.m ? null : el.dataset.m;
+        render();
+      });
+
+      const af = document.getElementById('activeFilters');
+      const chips = [];
+      if (state.versionChip) chips.push(`<span class="chip filter">版本:${state.versionChip} <span class="x" data-clear="v">✕</span></span>`);
+      if (state.modelChip) chips.push(`<span class="chip filter">型号:${state.modelChip} <span class="x" data-clear="m">✕</span></span>`);
+      if (state.readyOnly) chips.push(`<span class="chip filter">仅就绪 <span class="x" data-clear="r">✕</span></span>`);
+      if (state.host !== 'all') chips.push(`<span class="chip filter">节点:${state.host}架 <span class="x" data-clear="h">✕</span></span>`);
+      af.innerHTML = chips.length ? chips.join('') : `<span style="font-size:11px;color:var(--muted-fg)">无激活筛选 · URL 可序列化分享（⑤）</span>`;
+      af.querySelectorAll('[data-clear]').forEach(el => el.onclick = (e) => {
+        e.stopPropagation();
+        const k = el.dataset.clear;
+        if (k === 'v') state.versionChip = null;
+        if (k === 'm') state.modelChip = null;
+        if (k === 'r') { state.readyOnly = false; document.getElementById('readyOnly').checked = false; }
+        if (k === 'h') state.host = 'all';
+        render();
+      });
+    }
+
+    function renderMatrix(list) {
+      const byHost = {};
+      list.forEach(d => { (byHost[d.host] ||= []).push(d); });
+      const order = ['A', 'B', 'C', 'D'].filter(h => byHost[h]);
+      return order.map(h => {
+        const cells = byHost[h].map((d, idx) => {
+          const globalIdx = list.indexOf(d);
+          return `<div class="cell ${d.status} ${state.selected.has(d.id) ? 'selected' : ''}"
+            data-id="${d.id}" data-idx="${globalIdx}" title="${d.serial}"></div>`;
+        }).join('');
+        return `<div class="band" data-band="${h}">
+          <div class="band-hd"><strong>${HOSTS.find(x => x.id === h).name}</strong>
+            <span>${byHost[h].length} 台可见</span>
+            <span>已选 ${byHost[h].filter(d => state.selected.has(d.id)).length}</span>
+          </div>
+          <div class="grid">${cells}</div>
+        </div>`;
+      }).join('') || `<div style="padding:40px;text-align:center;color:var(--muted-fg)">无匹配设备</div>`;
+    }
+
+    function renderTable(list) {
+      const page = list.slice(0, 50);
+      return `<div style="overflow:auto;max-height:520px"><table class="table">
+        <thead><tr><th></th><th>Serial</th><th>节点</th><th>型号</th><th>版本</th><th>预检</th></tr></thead>
+        <tbody>
+          ${page.map(d => `<tr data-id="${d.id}" class="${state.selected.has(d.id) ? 'hl' : ''}">
+            <td><input type="checkbox" ${state.selected.has(d.id) ? 'checked' : ''} data-id="${d.id}" /></td>
+            <td style="font-family:var(--mono)">${d.serial}</td>
+            <td>${d.host}架</td><td>${d.model}</td><td>${d.version}</td>
+            <td><span class="badge ${d.status}">${({ready:'就绪',blocked:'阻塞',busy:'占用',offline:'离线'})[d.status]}</span></td>
+          </tr>`).join('')}
+        </tbody></table>
+        <div style="padding:8px 12px;font-size:12px;color:var(--muted-fg)">显示前 50 / 共 ${list.length}（预览示意）</div>
+      </div>`;
+    }
+
+    function bindCells(list) {
+      const card = document.getElementById('hoverCard');
+      document.querySelectorAll('.cell').forEach(el => {
+        el.onmouseenter = (e) => {
+          const d = devices.find(x => x.id === +el.dataset.id);
+          if (!d) return;
+          card.innerHTML = `<div class="t">${d.serial}</div>
+            <div class="r"><span>节点</span><span>${d.hostLabel}</span></div>
+            <div class="r"><span>型号</span><span>${d.model}</span></div>
+            <div class="r"><span>版本</span><span>${d.version}</span></div>
+            <div class="r"><span>状态</span><span>${d.status}</span></div>`;
+          card.classList.add('show');
+          moveCard(e);
+        };
+        el.onmousemove = moveCard;
+        el.onmouseleave = () => card.classList.remove('show');
+        el.onclick = (e) => {
+          const id = +el.dataset.id;
+          const idx = +el.dataset.idx;
+          if (e.shiftKey && state.lastIdx != null) {
+            const [a, b] = [state.lastIdx, idx].sort((x, y) => x - y);
+            for (let i = a; i <= b; i++) state.selected.add(list[i].id);
+          } else {
+            if (state.selected.has(id)) state.selected.delete(id);
+            else state.selected.add(id);
+          }
+          state.lastIdx = idx;
+          render();
+        };
+      });
+      function moveCard(e) {
+        card.style.left = Math.min(e.clientX + 14, window.innerWidth - 220) + 'px';
+        card.style.top = Math.min(e.clientY + 14, window.innerHeight - 120) + 'px';
+      }
+      document.querySelectorAll('.table input[type=checkbox]').forEach(el => {
+        el.onchange = () => {
+          const id = +el.dataset.id;
+          if (el.checked) state.selected.add(id); else state.selected.delete(id);
+          render();
+        };
+      });
+    }
+
+    function renderMinimap() {
+      const mm = document.getElementById('minimap');
+      const selected = devices.filter(d => state.selected.has(d.id));
+      mm.innerHTML = selected.map(d => `
+        <div class="mm-cell" data-id="${d.id}" title="${d.serial}">
+          <span class="rm" data-rm="${d.id}">×</span>
+        </div>`).join('') || `<div style="font-size:12px;color:var(--muted-fg)">尚未选择样机</div>`;
+      mm.querySelectorAll('.mm-cell').forEach(el => {
+        el.onclick = (e) => {
+          if (e.target.classList.contains('rm')) return;
+          const id = +el.dataset.id;
+          // locate & flash
+          const cell = document.querySelector(`.cell[data-id="${id}"], tr[data-id="${id}"]`);
+          if (cell) {
+            cell.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            cell.classList.remove('flash'); void cell.offsetWidth; cell.classList.add('flash');
+            toast(`定位 ${devices.find(d => d.id === id).serial}`);
+          } else {
+            toast('当前筛选下不可见，已切换到全部节点');
+            state.host = 'all'; state.readyOnly = false; state.versionChip = null; state.modelChip = null;
+            document.getElementById('readyOnly').checked = false;
+            render();
+            setTimeout(() => {
+              const c = document.querySelector(`.cell[data-id="${id}"]`);
+              if (c) { c.scrollIntoView({ behavior: 'smooth', block: 'center' }); c.classList.add('flash'); }
+            }, 50);
+          }
+        };
+      });
+      mm.querySelectorAll('.rm').forEach(el => {
+        el.onclick = (e) => {
+          e.stopPropagation();
+          const id = +el.dataset.rm;
+          state.selected.delete(id);
+          toast(`已移除 · 可撤销（示意）`);
+          render();
+        };
+      });
+    }
+
+    function renderMeta(list) {
+      const sel = devices.filter(d => state.selected.has(d.id));
+      const hosts = new Set(sel.map(d => d.host));
+      const versions = new Set(sel.map(d => d.version).filter(Boolean));
+      const blocked = sel.filter(d => d.status !== 'ready').length;
+      document.getElementById('selChip').textContent = `已选 ${sel.length} 台 / ${hosts.size} 节点`;
+      document.getElementById('cmdMeta').innerHTML = `
+        <span class="chip ok">已选 ${sel.length} 台 / ${hosts.size} 节点</span>
+        <span class="chip ${versions.size <= 1 ? 'ok' : 'bad'}">${versions.size || 0} 版本 · ${versions.size <= 1 ? '一致 ✓' : '冲突'}</span>
+        <span class="chip ${blocked === 0 && sel.length ? 'ok' : blocked ? 'bad' : ''}">预检 ${sel.length ? (blocked === 0 ? '通过' : blocked + ' 阻塞') : '—'}</span>`;
+      document.getElementById('mmCount').textContent = sel.length;
+      document.getElementById('filterCount').textContent = `筛选 ${list.length}`;
+      document.getElementById('btnNext').style.opacity = sel.length ? 1 : 0.5;
+    }
+
+    function render() {
+      const list = filtered();
+      renderNodes();
+      renderChips();
+      const stage = document.getElementById('stage');
+      stage.innerHTML = state.view === 'matrix' ? renderMatrix(list) : renderTable(list);
+      bindCells(list);
+      renderMinimap();
+      renderMeta(list);
+    }
+
+    document.getElementById('readyOnly').onchange = (e) => { state.readyOnly = e.target.checked; render(); };
+    document.getElementById('q').oninput = (e) => { state.q = e.target.value; render(); };
+    document.getElementById('selectReady').onclick = () => {
+      filtered().filter(d => d.status === 'ready').forEach(d => state.selected.add(d.id));
+      toast('已全选当前筛选下的就绪设备');
+      render();
+    };
+    document.getElementById('btnClear').onclick = () => { state.selected.clear(); render(); };
+    document.getElementById('viewSeg').onclick = (e) => {
+      const btn = e.target.closest('button');
+      if (!btn) return;
+      state.view = btn.dataset.view;
+      [...document.getElementById('viewSeg').children].forEach(b => b.classList.toggle('on', b === btn));
+      if (state.view === 'table') location.href = '02-workspace-table.html';
+      else render();
+    };
+    document.getElementById('copySerials').onclick = () => {
+      const s = devices.filter(d => state.selected.has(d.id)).map(d => d.serial).join('\n');
+      navigator.clipboard?.writeText(s);
+      toast(`已复制 ${state.selected.size} 个 serial`);
+    };
+    document.getElementById('dlCsv').onclick = () => toast('CSV 下载示意：serial,节点,型号,版本');
+    document.getElementById('savePreset').onclick = () => toast('已保存方案到 localStorage（示意）');
+    document.querySelectorAll('[data-preset]').forEach(el => {
+      el.onclick = () => {
+        state.selected = new Set(el.dataset.preset === 'ela30'
+          ? devices.filter(d => d.model === 'ELA' && d.status === 'ready').slice(0, 30).map(d => d.id)
+          : devices.filter(d => d.status === 'ready').slice(0, 8).map(d => d.id));
+        toast(`已应用方案（与可调度集求交）`);
+        render();
+      };
+    });
+
+    render();
+  </script>
+</body>
+</html>

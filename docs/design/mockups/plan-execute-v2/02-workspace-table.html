@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>①′ 选机工作台 · 表格 — Plan Execute V2</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="topnav">
+      <a href="index.html">← 索引</a>
+      <div class="brand">①′ 选机工作台</div>
+      <span class="pill on">表格辅视图</span>
+      <div class="spacer"></div>
+      <a class="btn sm" href="01-workspace-matrix.html">← 矩阵主视图</a>
+      <a class="btn sm primary" href="03-dispatch-cockpit.html">预览发起 →</a>
+    </div>
+
+    <div class="page-title">
+      <div>
+        <h1>执行测试计划</h1>
+        <p>表格保留作明细核对；默认仍推荐矩阵。选择集、色板、顶栏摘要与矩阵共用。</p>
+      </div>
+    </div>
+
+    <div class="command-bar">
+      <div>
+        <div class="path">
+          <span class="step done">1 Plan · 周五回归 · ELA 长稳</span>
+          <span style="color:var(--muted-fg)">→</span>
+          <span class="step active">2 选机</span>
+          <span style="color:var(--muted-fg)">→</span>
+          <span class="step">3 发起</span>
+        </div>
+        <div class="meta">
+          <span class="chip ok">已选 22 台 / 3 节点</span>
+          <span class="chip ok">1 版本 · 一致 ✓</span>
+          <span class="chip ok">预检 通过</span>
+        </div>
+      </div>
+      <div class="cta">
+        <a class="btn primary" href="03-dispatch-cockpit.html">预览发起</a>
+      </div>
+    </div>
+
+    <div class="workspace">
+      <aside class="panel">
+        <div class="panel-hd">节点</div>
+        <div class="panel-bd">
+          <div class="node-item on"><div class="row"><span class="name">全部节点</span><span class="dot ok"></span></div><div class="row sub"><span>180 台 · 已选 22</span></div></div>
+          <div class="node-item"><div class="row"><span class="name">A架 · host-a</span><span class="dot ok"></span></div><div class="row sub"><span>48 台</span><span>槽 4/12</span></div></div>
+          <div class="node-item"><div class="row"><span class="name">B架 · host-b</span><span class="dot warn"></span></div><div class="row sub"><span>56 台</span><span>槽 10/12</span></div></div>
+          <div class="node-item"><div class="row"><span class="name">C架 · host-c</span><span class="dot ok"></span></div><div class="row sub"><span>40 台</span><span>槽 2/8</span></div></div>
+        </div>
+      </aside>
+
+      <section class="panel">
+        <div class="filter-bar">
+          <div class="seg">
+            <a class="btn sm" href="01-workspace-matrix.html" style="border:0;border-radius:0;height:32px">矩阵</a>
+            <button type="button" class="on">表格</button>
+          </div>
+          <input placeholder="搜索 serial…" value="" />
+          <label class="toggle"><input type="checkbox" /> 仅显示就绪</label>
+          <button class="btn sm" type="button">全选就绪</button>
+          <span style="flex:1"></span>
+          <span class="chip">第 1/4 页 · 50/页</span>
+        </div>
+        <div class="quick-chips">
+          <span style="font-size:11px;color:var(--muted-fg);align-self:center">快捷：</span>
+          <span class="chip active">V104</span>
+          <span class="chip">V103</span>
+          <span class="chip">ELA</span>
+          <span class="chip">X200</span>
+        </div>
+        <div class="quick-chips" style="padding-bottom:8px">
+          <span class="chip filter">版本:V104 <span class="x">✕</span></span>
+        </div>
+        <div style="overflow:auto;max-height:520px">
+          <table class="table" id="tbl">
+            <thead>
+              <tr><th style="width:36px"></th><th>Serial</th><th>节点</th><th>型号</th><th>版本</th><th>预检</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div style="padding:10px 12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:12px;color:var(--muted-fg)">
+          <span>显示 1–50 / 筛选 128</span>
+          <span>← 上一页 · 下一页 →</span>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="panel-hd"><span>已选集</span><span class="chip">22</span></div>
+        <div class="panel-bd">
+          <div style="font-size:11px;color:var(--muted-fg);margin-bottom:8px">点方块滚动到表行并高亮闪烁</div>
+          <div class="minimap"><div class="grid" id="mm"></div></div>
+          <div class="tools">
+            <button class="btn sm" type="button">复制 serials</button>
+            <button class="btn sm" type="button">下载 CSV</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    const rows = [];
+    const statuses = ['ready','ready','ready','ready','blocked','busy','offline','ready'];
+    for (let i = 0; i < 50; i++) {
+      const host = ['A','B','C'][i % 3];
+      rows.push({
+        serial: `${host}${String(10000 + i).slice(1)}`,
+        host, model: i % 4 === 0 ? 'X200' : 'ELA', version: 'V104',
+        status: statuses[i % statuses.length],
+        selected: i < 22 && statuses[i % statuses.length] === 'ready',
+      });
+    }
+    const tb = document.querySelector('#tbl tbody');
+    tb.innerHTML = rows.map((r, i) => `<tr class="${r.selected ? 'hl' : ''}" id="row-${i}">
+      <td><input type="checkbox" ${r.selected ? 'checked' : ''} /></td>
+      <td style="font-family:var(--mono)">${r.serial}</td>
+      <td>${r.host}架</td><td>${r.model}</td><td>${r.version}</td>
+      <td><span class="badge ${r.status}">${({ready:'就绪',blocked:'阻塞',busy:'占用',offline:'离线'})[r.status]}</span></td>
+    </tr>`).join('');
+
+    const mm = document.getElementById('mm');
+    const selected = rows.filter(r => r.selected);
+    mm.innerHTML = selected.map((r, i) => `<div class="mm-cell" data-i="${i}" title="${r.serial}"><span class="rm">×</span></div>`).join('');
+    mm.querySelectorAll('.mm-cell').forEach((el, i) => {
+      el.onclick = (e) => {
+        if (e.target.classList.contains('rm')) { el.remove(); return; }
+        const row = document.getElementById('row-' + i);
+        if (row) {
+          row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          row.classList.remove('hl'); void row.offsetWidth; row.classList.add('hl');
+        }
+      };
+    });
+  </script>
+</body>
+</html>

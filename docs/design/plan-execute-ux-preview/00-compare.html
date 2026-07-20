@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>现状对照 · Plan Execute UX</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="preview-banner">
+    <div><strong>现状对照</strong> <span class="badge-note">信息架构线框，非像素还原现状页</span></div>
+    <nav>
+      <a href="index.html">总览</a>
+      <a class="active" href="00-compare.html">现状对照</a>
+      <a href="01-plan.html">① 选 Plan</a>
+      <a href="02-workbench.html">② 选机工作台 ★</a>
+      <a href="03-cockpit.html">③ 发起驾驶舱</a>
+    </nav>
+  </div>
+
+  <div class="hub">
+    <h1>信息架构对照</h1>
+    <p class="lead">左侧贴近当前「四卡向导 + 表 50/页」；右侧为提案「指挥条 + 工作台 + 驾驶舱」。</p>
+
+    <div class="compare">
+      <div class="card col">
+        <h3>现状 · 四步表单向导</h3>
+        <ul>
+          <li>四张等宽向导卡占首屏，产出摘要弱</li>
+          <li>选机以表格为主，50 行/页，百台需反复翻页</li>
+          <li>已选 Minimap 仅展示已选；点格 = 移除</li>
+          <li>第 3 步静态摘要 + 瘦 PreviewDialog</li>
+          <li>容量黄字（B4）有，但发起前缺少「按节点槽位」总览</li>
+        </ul>
+        <div class="wire">
+          <div class="box">PageHeader · 执行 Plan</div>
+          <div class="row">
+            <div class="box">①计划</div>
+            <div class="box">②样机</div>
+            <div class="box">③数量版本</div>
+            <div class="box">④确认</div>
+          </div>
+          <div class="box" style="height:72px;display:flex;align-items:center;justify-content:center;">表格 50/页 · checkbox 圈选</div>
+          <div class="box">底栏 · 下一步 / 预览发起 → Dialog</div>
+        </div>
+      </div>
+
+      <div class="card col">
+        <h3>提案 · 工作台 + 驾驶舱</h3>
+        <ul>
+          <li>顶栏指挥条：Plan 名 / 台数·节点 / 版本一致 / 预检 / CTA</li>
+          <li>选机默认矩阵分带（按节点），一眼扫候选池</li>
+          <li>Minimap：定位高亮；✕ 才移除</li>
+          <li>发起 = 全宽驾驶舱（槽位表 + 近 3 次 + 防重复）</li>
+          <li>步骤 0→1→2 三态；版本一致性用实时 chip</li>
+        </ul>
+        <div class="wire">
+          <div class="box hi">指挥条 · Plan · 22台/3节点 · 1版本✓ · 预览发起</div>
+          <div class="row">
+            <div class="box">节点轨</div>
+            <div class="box hi">矩阵候选墙 · 主舞台</div>
+            <div class="box">已选 Minimap</div>
+          </div>
+          <div class="box">底栏工具 · 导出 / 方案 / 仅就绪 / 全选就绪</div>
+          <div class="box hi">发起驾驶舱（替换 Dialog）</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;padding:14px 16px;">
+      <h3 style="margin:0 0 8px;font-size:14px;">色板（表 / 矩阵 / Minimap 统一）</h3>
+      <div class="legend" style="font-size:13px;">
+        <span><i class="swatch ready"></i>就绪</span>
+        <span><i class="swatch blocked"></i>阻塞（斜纹）</span>
+        <span><i class="swatch busy"></i>占用</span>
+        <span><i class="swatch offline"></i>离线</span>
+        <span><i class="swatch selected"></i>选中（描边+角点，不另造色）</span>
+      </div>
+      <p style="margin:10px 0 0;font-size:12px;color:var(--muted-fg);">
+        注意：此色板表达<strong>派发就绪态</strong>，不要复用 PlanRun 详情的 job 终态色。
+      </p>
+    </div>
+
+    <p style="margin-top:16px;">
+      <a class="btn btn-primary" href="02-workbench.html">打开主预览：选机工作台 →</a>
+    </p>
+  </div>
+</body>
+</html>

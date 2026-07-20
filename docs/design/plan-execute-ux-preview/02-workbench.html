@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>② 选机工作台 · Plan Execute UX</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="preview-banner">
+    <div>
+      <strong>状态 1 · 选机工作台</strong>
+      <span class="badge-note">点击方块切换 · Shift 连选 · hover 看卡 · Minimap 点定位 / ✕ 移除</span>
+    </div>
+    <nav>
+      <a href="index.html">总览</a>
+      <a href="00-compare.html">现状对照</a>
+      <a href="01-plan.html">① 选 Plan</a>
+      <a class="active" href="02-workbench.html">② 选机工作台 ★</a>
+      <a href="03-cockpit.html">③ 发起驾驶舱</a>
+    </nav>
+  </div>
+
+  <div class="app">
+    <aside class="rail" aria-hidden="true">
+      <div class="logo"></div>
+      <div class="dot"></div><div class="dot active"></div><div class="dot"></div><div class="dot"></div>
+    </aside>
+    <div class="main">
+      <div class="topbar">
+        <div>控制平面 / <strong>执行 Plan</strong></div>
+        <div><span class="kbd">Ctrl</span>+<span class="kbd">A</span> 全选筛选 · <span class="kbd">Enter</span> 下一步</div>
+      </div>
+      <div class="content">
+        <h1 class="page-title">执行 Plan</h1>
+        <p class="page-sub">矩阵为主舞台 · 表格为辅 · 已选在右侧 Minimap</p>
+
+        <div class="command-bar">
+          <div class="command-meta">
+            <span class="plan-name">周五回归 · ELA 稳定性</span>
+            <span class="sep"></span>
+            <span class="stat" id="cmdSelected"><b>0</b> 台 / <b>0</b> 节点</span>
+            <span class="sep"></span>
+            <span class="pill pill-ok" id="cmdVersion">1 版本 · 一致 ✓</span>
+            <span class="pill pill-ok" id="cmdReady">预检 —</span>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <div class="steps-mini">
+              <span class="s done">1 Plan</span> →
+              <span class="s on">2 选机</span> →
+              <span class="s">3 发起</span>
+            </div>
+            <a class="btn btn-primary" href="03-cockpit.html">预览发起</a>
+          </div>
+        </div>
+
+        <div class="workbench">
+          <!-- Node rail -->
+          <div class="panel">
+            <div class="panel-hd">节点</div>
+            <div class="panel-bd" id="nodeRail" style="padding:6px;"></div>
+          </div>
+
+          <!-- Matrix stage -->
+          <div class="panel" style="min-height:520px;">
+            <div class="panel-hd">
+              <span>候选设备 <span style="font-weight:500;color:var(--muted-fg);font-size:12px;" id="filterCount"></span></span>
+              <div class="seg" id="viewSeg">
+                <button type="button" class="active" data-view="matrix">矩阵</button>
+                <button type="button" data-view="table">表格</button>
+              </div>
+            </div>
+
+            <div class="filter-bar">
+              <input type="search" id="q" placeholder="serial / 型号…" />
+              <span class="chip active" data-chip="ver:V104">V104</span>
+              <span class="chip" data-chip="ver:V103">V103</span>
+              <span class="chip" data-chip="model:ELA">ELA</span>
+              <span class="chip" data-chip="model:ELP">ELP</span>
+              <label class="toggle"><input type="checkbox" id="onlyReady" /> 仅显示就绪</label>
+              <button type="button" class="btn btn-sm" id="btnSelectReady">全选就绪</button>
+              <button type="button" class="btn btn-sm" id="btnClear">清空已选</button>
+            </div>
+            <div class="filter-bar" style="border-bottom:0;padding-top:0;background:#fff;" id="activeFilters">
+              <span style="font-size:11px;color:var(--muted-fg);">激活筛选：</span>
+              <span class="chip filter">版本:V104 <span class="x">✕</span></span>
+            </div>
+
+            <div class="matrix-wrap" id="matrixView"></div>
+            <div id="tableView" style="display:none;overflow:auto;flex:1;">
+              <table class="data">
+                <thead>
+                  <tr>
+                    <th style="width:36px;"></th>
+                    <th>Serial</th>
+                    <th>节点</th>
+                    <th>型号</th>
+                    <th>版本</th>
+                    <th>状态</th>
+                  </tr>
+                </thead>
+                <tbody id="tableBody"></tbody>
+              </table>
+            </div>
+
+            <div style="padding:8px 12px;border-top:1px solid var(--border);">
+              <div class="legend">
+                <span><i class="swatch ready"></i>就绪</span>
+                <span><i class="swatch blocked"></i>阻塞</span>
+                <span><i class="swatch busy"></i>占用</span>
+                <span><i class="swatch offline"></i>离线</span>
+                <span><i class="swatch selected"></i>选中</span>
+                <span style="margin-left:auto;">无机架坐标时按<strong>节点分带</strong>排序</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Selected minimap -->
+          <div class="panel panel-selected">
+            <div class="panel-hd">
+              <span>已选 <span id="selCount">0</span></span>
+              <div style="display:flex;gap:4px;">
+                <button type="button" class="btn btn-sm" title="复制 serials">复制</button>
+                <button type="button" class="btn btn-sm" title="下载 CSV">CSV</button>
+              </div>
+            </div>
+            <div class="panel-bd">
+              <div style="font-size:11px;color:var(--muted-fg);margin-bottom:8px;">
+                点方块 = 定位高亮；悬停右上角 ✕ 移除
+              </div>
+              <div class="minimap" id="minimap"></div>
+              <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+                <div style="font-size:12px;font-weight:600;margin-bottom:6px;">我的方案</div>
+                <button type="button" class="btn btn-sm" style="width:100%;margin-bottom:6px;">保存为方案…</button>
+                <div class="chip" style="width:100%;justify-content:space-between;margin-bottom:4px;">
+                  周五回归-ELA 30 台 <span class="x">✕</span>
+                </div>
+                <div class="chip" style="width:100%;justify-content:space-between;">
+                  夜间冒烟-8 台 <span class="x">✕</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-bar">
+          <a class="btn" href="01-plan.html">← 上一步</a>
+          <div style="font-size:12px;color:var(--muted-fg);" id="capacityHint">槽位提示将在发起驾驶舱展开</div>
+          <a class="btn btn-primary" href="03-cockpit.html">下一步：发起驾驶舱 →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="hover-card" id="hoverCard"></div>
+
+  <script>
+    const HOSTS = [
+      { id: "A", name: "A 架 · lab-a", slots: 16 },
+      { id: "B", name: "B 架 · lab-b", slots: 12 },
+      { id: "C", name: "C 架 · lab-c", slots: 20 },
+      { id: "D", name: "D 架 · lab-d", slots: 8 },
+    ];
+    const STATUSES = ["ready", "ready", "ready", "ready", "ready", "blocked", "busy", "offline"];
+    const MODELS = ["ELA", "ELA", "ELA", "ELP"];
+    const VERSIONS = ["V104", "V104", "V104", "V103"];
+
+    /** @type {{id:number,serial:string,host:string,model:string,version:string,status:string}[]} */
+    const devices = [];
+    let n = 1;
+    HOSTS.forEach((h, hi) => {
+      const count = [48, 36, 52, 24][hi];
+      for (let i = 0; i < count; i++) {
+        const status = STATUSES[(n + i * 3) % STATUSES.length];
+        devices.push({
+          id: n,
+          serial: `R3${h.id}${String(1000 + n).slice(-4)}`,
+          host: h.id,
+          model: MODELS[(n + i) % MODELS.length],
+          version: VERSIONS[(n + i * 2) % VERSIONS.length],
+          status,
+        });
+        n++;
+      }
+    });
+
+    const selected = new Set();
+    let activeHost = "all";
+    let lastClickedIndex = null;
+    let onlyReady = false;
+    let chipVer = "V104";
+    let chipModel = null;
+
+    const el = (id) => document.getElementById(id);
+    const hoverCard = el("hoverCard");
+
+    function filtered() {
+      return devices.filter((d) => {
+        if (activeHost !== "all" && d.host !== activeHost) return false;
+        if (chipVer && d.version !== chipVer) return false;
+        if (chipModel && d.model !== chipModel) return false;
+        if (onlyReady && d.status !== "ready") return false;
+        const q = el("q").value.trim().toLowerCase();
+        if (q && !(`${d.serial} ${d.model}`.toLowerCase().includes(q))) return false;
+        return true;
+      });
+    }
+
+    function statusLabel(s) {
+      return { ready: "就绪", blocked: "阻塞", busy: "占用", offline: "离线" }[s] || s;
+    }
+
+    function updateCommand() {
+      const sels = devices.filter((d) => selected.has(d.id));
+      const hosts = new Set(sels.map((d) => d.host));
+      const vers = new Set(sels.map((d) => d.version));
+      el("cmdSelected").innerHTML = `<b>${sels.length}</b> 台 / <b>${hosts.size}</b> 节点`;
+      el("selCount").textContent = String(sels.length);
+      if (sels.length === 0) {
+        el("cmdVersion").className = "pill pill-muted";
+        el("cmdVersion").textContent = "版本 —";
+        el("cmdReady").className = "pill pill-muted";
+        el("cmdReady").textContent = "预检 —";
+      } else {
+        const ok = vers.size <= 1;
+        el("cmdVersion").className = ok ? "pill pill-ok" : "pill pill-bad";
+        el("cmdVersion").textContent = ok ? `${vers.size} 版本 · 一致 ✓` : `${vers.size} 版本 · 冲突`;
+        const blocked = sels.filter((d) => d.status !== "ready").length;
+        el("cmdReady").className = blocked ? "pill pill-bad" : "pill pill-ok";
+        el("cmdReady").textContent = blocked ? `${blocked} 台阻塞` : `${sels.length} 台就绪`;
+      }
+      // crude capacity hint
+      let over = 0;
+      HOSTS.forEach((h) => {
+        const c = sels.filter((d) => d.host === h.id).length;
+        if (c > h.slots) over += c - h.slots;
+      });
+      el("capacityHint").textContent = over
+        ? `有 ${over} 台将超槽位排队（详见发起驾驶舱）`
+        : "当前选中未超节点槽位（示意）";
+    }
+
+    function renderNodes() {
+      const rail = el("nodeRail");
+      const allSel = devices.filter((d) => selected.has(d.id)).length;
+      let html = `<div class="node-item ${activeHost === "all" ? "active" : ""}" data-host="all">
+        <span class="name">全部节点</span>
+        <span class="meta"><span>${devices.length} 台</span><span>已选 ${allSel}</span></span>
+      </div>`;
+      HOSTS.forEach((h) => {
+        const total = devices.filter((d) => d.host === h.id).length;
+        const avail = devices.filter((d) => d.host === h.id && d.status === "ready").length;
+        const sel = devices.filter((d) => d.host === h.id && selected.has(d.id)).length;
+        html += `<div class="node-item ${activeHost === h.id ? "active" : ""}" data-host="${h.id}">
+          <span class="name">${h.name}</span>
+          <span class="meta"><span>槽 ${h.slots} · 就绪 ${avail}/${total}</span><span>${sel}</span></span>
+        </div>`;
+      });
+      rail.innerHTML = html;
+      rail.querySelectorAll(".node-item").forEach((node) => {
+        node.addEventListener("click", () => {
+          activeHost = node.getAttribute("data-host");
+          render();
+        });
+      });
+    }
+
+    function showHover(d, evt) {
+      hoverCard.innerHTML = `
+        <div class="serial">${d.serial}</div>
+        <div class="row"><span>节点</span><b>${HOSTS.find((h) => h.id === d.host).name}</b></div>
+        <div class="row"><span>型号</span><b>${d.model}</b></div>
+        <div class="row"><span>版本</span><b>${d.version}</b></div>
+        <div class="row"><span>状态</span><b>${statusLabel(d.status)}</b></div>`;
+      hoverCard.classList.add("show");
+      const x = Math.min(evt.clientX + 14, window.innerWidth - 230);
+      const y = Math.min(evt.clientY + 14, window.innerHeight - 120);
+      hoverCard.style.left = x + "px";
+      hoverCard.style.top = y + "px";
+    }
+
+    function hideHover() {
+      hoverCard.classList.remove("show");
+    }
+
+    function toggleRange(list, fromIdx, toIdx) {
+      const a = Math.min(fromIdx, toIdx);
+      const b = Math.max(fromIdx, toIdx);
+      for (let i = a; i <= b; i++) selected.add(list[i].id);
+    }
+
+    function onTileClick(d, idx, list, evt) {
+      if (evt.shiftKey && lastClickedIndex != null) {
+        toggleRange(list, lastClickedIndex, idx);
+      } else {
+        if (selected.has(d.id)) selected.delete(d.id);
+        else selected.add(d.id);
+      }
+      lastClickedIndex = idx;
+      render();
+    }
+
+    function renderMatrix() {
+      const list = filtered();
+      el("filterCount").textContent = `· 筛选 ${list.length} / 全量 ${devices.length}`;
+      const wrap = el("matrixView");
+      const byHost = new Map();
+      list.forEach((d) => {
+        if (!byHost.has(d.host)) byHost.set(d.host, []);
+        byHost.get(d.host).push(d);
+      });
+      let html = "";
+      for (const h of HOSTS) {
+        const arr = byHost.get(h.id);
+        if (!arr || !arr.length) continue;
+        html += `<div class="host-band" data-band="${h.id}">
+          <div class="host-band-hd">
+            <span class="h">${h.name}</span>
+            <span class="m">${arr.length} 台 · 剩余槽位示意 ${h.slots}</span>
+          </div>
+          <div class="matrix">`;
+        arr.forEach((d) => {
+          const globalIdx = list.indexOf(d);
+          html += `<button type="button" class="tile ${d.status} ${selected.has(d.id) ? "selected" : ""}"
+            data-id="${d.id}" data-idx="${globalIdx}"
+            aria-label="${d.serial} ${statusLabel(d.status)}"></button>`;
+        });
+        html += `</div></div>`;
+      }
+      if (!list.length) html = `<div style="padding:40px;text-align:center;color:var(--muted-fg);font-size:13px;">无匹配设备</div>`;
+      wrap.innerHTML = html;
+      wrap.querySelectorAll(".tile").forEach((tile) => {
+        const id = Number(tile.getAttribute("data-id"));
+        const idx = Number(tile.getAttribute("data-idx"));
+        const d = devices.find((x) => x.id === id);
+        tile.addEventListener("click", (e) => onTileClick(d, idx, list, e));
+        tile.addEventListener("mouseenter", (e) => showHover(d, e));
+        tile.addEventListener("mousemove", (e) => showHover(d, e));
+        tile.addEventListener("mouseleave", hideHover);
+      });
+    }
+
+    function renderTable() {
+      const list = filtered();
+      el("tableBody").innerHTML = list
+        .map(
+          (d) => `<tr data-id="${d.id}">
+          <td><input type="checkbox" ${selected.has(d.id) ? "checked" : ""} data-id="${d.id}" /></td>
+          <td style="font-family:var(--mono);font-size:12px;">${d.serial}</td>
+          <td>${d.host} 架</td>
+          <td>${d.model}</td>
+          <td>${d.version}</td>
+          <td>${statusLabel(d.status)}</td>
+        </tr>`
+        )
+        .join("");
+      el("tableBody").querySelectorAll("input[type=checkbox]").forEach((cb) => {
+        cb.addEventListener("change", () => {
+          const id = Number(cb.getAttribute("data-id"));
+          if (cb.checked) selected.add(id);
+          else selected.delete(id);
+          render(false);
+        });
+      });
+    }
+
+    function renderMinimap() {
+      const sels = devices.filter((d) => selected.has(d.id));
+      el("minimap").innerHTML = sels
+        .map(
+          (d) => `<div class="mini ${d.status === "ready" ? "ready" : "blocked"}" data-id="${d.id}" title="${d.serial}">
+          <span class="rm" data-rm="${d.id}">✕</span>
+        </div>`
+        )
+        .join("");
+      el("minimap").querySelectorAll(".mini").forEach((m) => {
+        const id = Number(m.getAttribute("data-id"));
+        m.addEventListener("click", (e) => {
+          if (e.target.classList.contains("rm")) return;
+          // locate + flash in matrix
+          const tile = document.querySelector(`.tile[data-id="${id}"]`);
+          if (tile) {
+            tile.scrollIntoView({ block: "center", behavior: "smooth" });
+            tile.classList.add("flash");
+            setTimeout(() => tile.classList.remove("flash"), 900);
+          }
+        });
+      });
+      el("minimap").querySelectorAll(".rm").forEach((rm) => {
+        rm.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selected.delete(Number(rm.getAttribute("data-rm")));
+          render();
+        });
+      });
+    }
+
+    function render(full = true) {
+      if (full) {
+        renderNodes();
+        renderMatrix();
+        renderTable();
+      } else {
+        renderNodes();
+        renderMinimap();
+        updateCommand();
+        // sync matrix selected class cheaply
+        document.querySelectorAll(".tile").forEach((t) => {
+          const id = Number(t.getAttribute("data-id"));
+          t.classList.toggle("selected", selected.has(id));
+        });
+        return;
+      }
+      renderMinimap();
+      updateCommand();
+    }
+
+    // chips
+    document.querySelectorAll("[data-chip]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const v = chip.getAttribute("data-chip");
+        if (v.startsWith("ver:")) {
+          chipVer = chipVer === v.slice(4) ? null : v.slice(4);
+          document.querySelectorAll("[data-chip^=ver]").forEach((c) => c.classList.toggle("active", c.getAttribute("data-chip") === "ver:" + chipVer));
+        } else {
+          chipModel = chipModel === v.slice(6) ? null : v.slice(6);
+          document.querySelectorAll("[data-chip^=model]").forEach((c) => c.classList.toggle("active", c.getAttribute("data-chip") === "model:" + chipModel));
+        }
+        const af = el("activeFilters");
+        const parts = [];
+        if (chipVer) parts.push(`<span class="chip filter">版本:${chipVer} <span class="x">✕</span></span>`);
+        if (chipModel) parts.push(`<span class="chip filter">型号:${chipModel} <span class="x">✕</span></span>`);
+        if (onlyReady) parts.push(`<span class="chip filter">仅就绪 <span class="x">✕</span></span>`);
+        af.innerHTML = `<span style="font-size:11px;color:var(--muted-fg);">激活筛选：</span>` + (parts.join("") || `<span style="font-size:12px;color:var(--muted-fg);">无</span>`);
+        render();
+      });
+    });
+
+    el("onlyReady").addEventListener("change", (e) => {
+      onlyReady = e.target.checked;
+      render();
+    });
+    el("q").addEventListener("input", () => render());
+    el("btnSelectReady").addEventListener("click", () => {
+      filtered().forEach((d) => {
+        if (d.status === "ready") selected.add(d.id);
+      });
+      render();
+    });
+    el("btnClear").addEventListener("click", () => {
+      selected.clear();
+      render();
+    });
+
+    el("viewSeg").querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        el("viewSeg").querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const v = btn.getAttribute("data-view");
+        el("matrixView").style.display = v === "matrix" ? "block" : "none";
+        el("tableView").style.display = v === "table" ? "block" : "none";
+      });
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        const t = e.target;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+        e.preventDefault();
+        filtered().forEach((d) => selected.add(d.id));
+        render();
+      }
+    });
+
+    // preselect a slice so the page looks "lived-in"
+    filtered()
+      .filter((d) => d.status === "ready")
+      .slice(0, 22)
+      .forEach((d) => selected.add(d.id));
+
+    render();
+  </script>
+</body>
+</html>

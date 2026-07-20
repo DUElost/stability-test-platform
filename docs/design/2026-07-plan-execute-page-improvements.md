@@ -1,13 +1,14 @@
 # 技术设计：Plan 执行页（/execution/plan-execute）改造
 
 - **状态**：Living（随各 Phase / 迭代实施演进）
-- **日期**：2026-07-17（§7 续篇 2026-07-20）
-- **关联**：[ADR-0026](../adr/ADR-0026-plan-execution-scaling.md)（60 节点/1000 台目标规模）、[`03-frontend.md`](./03-frontend.md)
+- **日期**：2026-07-17（§7 续篇 2026-07-20；§8 V2 实现方案 2026-07-20）
+- **关联**：[ADR-0026](../adr/ADR-0026-plan-execution-scaling.md)（60 节点/1000 台目标规模）、[`03-frontend.md`](./03-frontend.md)、静态预览 [`mockups/plan-execute-v2/`](./mockups/plan-execute-v2/)
 - **范围**：
-  - Phase 1–6：以前端为主（分页拉全、复跑、容量/占用、全部节点等）
-  - §7 迭代 A/B/C：走查债项续篇；含轻量后端（`GET /jobs/active-by-device`、`PlanRunTrigger.note` → `run_context.note`）
-  - 仍不含 ADR-0026 V2 准入队列 UI；**不做** run 级巡检/超时覆盖（见 §4 / §7 C2）
-
+  - Phase 1–6：以前端为主（分页拉全、复跑、容量/占用、全部节点等）— **已落地**
+  - §7 迭代 A/B/C：走查债项续篇；含轻量后端（`GET /jobs/active-by-device`、`PlanRunTrigger.note` → `run_context.note`）— **已落地**
+  - **§8 Plan Execute V2**：选机工作台 + 发起驾驶舱（对照已确认静态 mockup 实现）— **待实现**
+  - 仍不含 ADR-0026 V2 准入队列 UI；**不做** run 级巡检/超时覆盖（见 §4 / §7 C2 / §8.3）
+    
 ---
 
 ## 1. 背景与问题清单
@@ -116,6 +117,7 @@
 | 2026-07-17 | 初版：评审问题清单 + 六阶段改造方案 |
 | 2026-07-17 | Phase 1-6 全部落地。实现细节：Phase 4 将 `deviceHostFilter` 默认值设为 `'all'`（进入样机选择即渲染跨节点设备表，「全部节点」为侧栏首项）；设备表分页 50/页（`PaginationBar`）。验证：受影响 3 测试文件 37 例 + 全量 319 例通过，`type-check`/`build` 干净 |
 | 2026-07-20 | 补入真实环境走查债项 **修复计划 v2**（§7）；修订文首范围与 §4（后端轻量接口 + C1/C2 降级）。迭代 A/B/C 已落地；C2 维持不可 run 级覆盖。真实环境回归：`walk-regress-a.mjs` 15/15（刷新恢复、侧栏排序、清空确认、占用 PlanRun 链接） |
+| 2026-07-20 | 新增 **§8 Plan Execute V2 实现方案**（选机工作台 + 发起驾驶舱）；视觉基准 `mockups/plan-execute-v2/`；冲刺 A / A+ / B 待实现 |
 
 ## 7. 迭代 A/B/C — 修复计划 v2（走查债项）
 
@@ -179,3 +181,251 @@
 - 设备表列排序（Serial / 型号 / 版本 / 节点）；版本号省略号 + 悬浮全文
 - Plan 下拉按 `updated_at` 倒序 +「最近执行」分组
 - 步骤列表超过 ~8 行时内部滚动
+
+> §7.6 小项可并入 §8 冲刺穿插，避免双清单；实现时优先跟 V2 组件一起改，勿另开平行 backlog。
+
+---
+
+## 8. Plan Execute V2 — 选机工作台 + 发起驾驶舱（实现方案）
+
+- **状态**：Approved for implementation（静态预览已确认）
+- **日期**：2026-07-20
+- **视觉基准**：[`docs/design/mockups/plan-execute-v2/`](./mockups/plan-execute-v2/)（`index.html` + `00`–`03`）
+- **前提**：Phase 1–6 + §7 A/B/C 已在现网；本轮是信息架构与空间利用率大改，**接受大范围前端改动**，仍以纯前端 + 现有 API 为主（无迁移、无生产库试跑）。
+
+### 8.1 目标与成功标准
+
+| 目标 | 成功标准 |
+|------|----------|
+| 百～千台圈选不再翻页点 checkbox | 筛选结果默认渲染为矩阵墙；1000 候选格可流畅滚选；Shift 连选正确 |
+| 打开页心智 =「圈机 → 确认能开跑」 | 三态路径 `Plan → 选机 → 发起`；选机舞台占主视区；顶栏指挥条一眼见产出 |
+| 发起前有容量与协作信心 | 驾驶舱按节点展示选中/槽位/将排队；近 3 次 + 疑似重复黄警（不阻断） |
+| 与已交付能力增量兼容 | B2 预检、B4 容量黄字、C4 hover 卡、A1 草稿、`?plan=&devices=` 行为保留并扩展 |
+
+### 8.2 信息架构（对照 mockup）
+
+**从「四张等宽向导卡」→「顶栏指挥条 + 两区三态」**：
+
+| 态 | Mockup | 职责 | 相对现状 |
+|----|--------|------|----------|
+| **0 Plan** | `00-plan-select.html` | 紧凑 Plan 选择 + stage 分组步骤（⑫）+ 近 3 次内联（③） | 替换 step0 大卡；保留搜索选 Plan |
+| **1 选机** | `01-workspace-matrix.html`（主）/ `02-workspace-table.html`（辅） | 左节点轨 · 中候选池舞台 · 右已选集 | **默认矩阵**；原 step2「数量与版本确认」**合并进顶栏实时 chip** |
+| **2 发起** | `03-dispatch-cockpit.html` | 全宽驾驶舱（非瘦 Dialog） | 替换 step3 卡片 + `PreviewDialog` |
+
+顶栏指挥条（⑦ 升级）常驻三态：路径 crumbs、产出 chips（已选台数/节点、版本一致、预检通过率）、主 CTA。
+
+**步骤索引迁移**（草稿 / URL / 内部 state）：
+
+| 旧 `currentStep` | 新 `phase` | 说明 |
+|------------------|------------|------|
+| 0 | `plan` | 不变 |
+| 1 | `select` | 不变语义 |
+| 2 | → 并入 `select` | 恢复草稿时若 `currentStep===2` 映射为 `select`，版本核对改实时 chip |
+| 3 | `dispatch` | 发起驾驶舱 |
+
+草稿 key 升为 `stp.planExecute.draft.v2`（读 v1 时迁移字段后写回 v2；成功发起 / step0 取消仍清除）。URL 恢复优先级保持：**`devices` > `plan` > 草稿**；新增 `view=matrix|table`（缺省 `matrix`）写入草稿与 query。
+
+### 8.3 明确不做（本轮）
+
+- 精确「明早 9 点开跑」/ PlanRun 级 QUEUED 准入 UI（挂 ADR-0026）
+- 无坐标的「物理机架墙」；矩阵按 **节点分带 + 稳定排序** 即可
+- run 级巡检/超时/失败阈值覆盖（§7 C2 维持）
+- 暗色主题（全 App 令牌 RFC，单独立项）
+- 步骤级历史均时（需 `step_trace` 聚合 API，后端项）
+- 后端 `host_id` 设备过滤 / 懒加载（仍客户端全量，`fetchAllDevices`）
+
+### 8.4 色板与交互语言（三视图统一）
+
+选机矩阵 / 表格预检列 / 已选 Minimap **共用同一套状态色**（勿复用 PlanRun 详情 `DEVICE_UI_STATUS`）：
+
+| 状态 | 视觉 | 数据来源 |
+|------|------|----------|
+| 就绪 | 绿底 | `evaluateDeviceReadiness` 通过且可调度 |
+| 阻塞 | 斜纹黄 + ✕（延续 C4） | readiness 阻塞原因 |
+| 占用 | 蓝 | `active-by-device` / BUSY |
+| 离线 | 灰 | `OFFLINE` / 不可调度 |
+| 已选 | 深描边 + 角点（**不另造填充色**） | `selectedDeviceIds` |
+
+**Minimap（⑧）**：点方块 = **定位高亮**（表模式滚到行并闪烁；矩阵模式高亮对应候选格）；仅 hover 右上 ✕ = 移除（保留 5s 撤销 toast）。
+
+**矩阵交互（①）**：点击切换选中；Shift+点击范围连选（依赖稳定排序索引）；Ctrl/⌘+点击多点切换；hover 悬浮卡复用 C4 字段（serial / 节点 / 型号 / 版本 / 状态）。
+
+### 8.5 组件拆分与文件落点
+
+现状 `PlanExecutePage.tsx` ≈ 1500 行，随冲刺 A 拆出编排层：
+
+```
+frontend/src/
+  pages/execution/PlanExecutePage.tsx          # 编排：数据查询、草稿/URL、phase 切换、发起
+  components/execution/plan-execute/
+    ExecuteCommandBar.tsx                      # 顶栏指挥条
+    PlanSelectPhase.tsx                        # 态 0
+    DeviceWorkspace.tsx                        # 态 1 三栏壳
+    DeviceNodeRail.tsx                         # 左节点轨（复用现侧栏排序/健康/槽位）
+    DeviceFilterBar.tsx                        # 筛选 + 快捷 chips + 仅就绪 + 视图切换
+    DeviceMatrix.tsx                           # ① 虚拟滚动矩阵墙
+    DeviceTablePane.tsx                        # 现有表抽取（辅视图）
+    SelectedTray.tsx                           # 右栏：Minimap + 导出 + presets
+    SelectedMinimap.tsx                        # ⑧ 重定义点击
+    DispatchCockpit.tsx                        # 态 2 驾驶舱（替 PreviewDialog）
+    RecentPlanRunsInline.tsx                   # ③ 近 3 次
+    planExecuteSelection.ts                    # 选择/Shift 连选/稳定排序纯函数
+    planExecuteFilters.ts                      # 筛选 + URL query 序列化
+    planExecutePresets.ts                      # ⑥ localStorage presets
+    planExecuteDuplicate.ts                    # ③ 重叠检测
+    planExecuteWallClock.ts                    # ② 历史墙钟均值
+    types.ts                                   # phase / tile status 等本地类型
+  utils/planExecuteReadiness.ts                # 已有；容量溢出可扩展「按节点立即/排队数」
+```
+
+样式：优先复用 design-system tokens / 现有 `STATUS_BG_COLORS`；矩阵格尺寸约 **28–32px**，节点分带标题条与 mockup 对齐即可，不强制搬运静态 CSS 全文。
+
+**虚拟滚动**：优先 `@tanstack/react-virtual`（若仓库未用则可轻量自研 windowing；验收以 1000 格无卡死为准）。矩阵按「节点分带 → 带内稳定序」展平为虚拟行（每行 N 格），避免单列 1000 个 DOM。
+
+### 8.6 冲刺拆分与实现顺序
+
+#### 冲刺 A · 选机工作台（优先，约 3–4d）
+
+| ID | 项 | 实现要点 | 验收 |
+|----|----|----------|------|
+| **A0** | 壳重构 | `phase` 三态；`ExecuteCommandBar`；旧四卡 `PlanExecuteWizardNav` 降级/删除；step2 合并 | 三态可切换；旧草稿 step2→select |
+| **A1** | `DeviceMatrix` | 渲**筛选结果候选池**；节点分带；色板 §8.4；虚拟滚动；点击/Shift | 1000 格流畅；与选择集双向同步 |
+| **A2** | 表/矩阵切换 | `view` state + URL `view=` + 草稿；共享 `selectedDeviceIds` / 筛选 | 切换不丢选中与筛选 |
+| **A3** | 快捷圈选 ④ | 版本/型号 top-N chips；「仅显示就绪」；「全选就绪」（跳过阻塞） | 一点即滤；全选就绪不含阻塞 |
+| **A4** | 顶栏摘要 ⑦ | chips：已选台/节点、版本一致/冲突、预检通过率；CTA「预览发起」 | 不点开子区也能扫全貌 |
+
+**建议提交切片**：`A0` 可先 PR（表仍主视图）→ `A1+A2` → `A3+A4`。
+
+#### 冲刺 A+ · 协作防呆（约 1–1.5d，强烈建议同迭代或紧跟）
+
+| ID | 项 | 实现要点 | 验收 |
+|----|----|----------|------|
+| **A+1** | 近 3 次 ③ | `api.planRuns.list(0, 3, planId)`；态 0 与驾驶舱复用 `RecentPlanRunsInline`；点击 → `/execution/plan-runs/:id` | 选 Plan 后可见时间/状态/设备数 |
+| **A+2** | 疑似重复 | 近 30min 同 `plan_id`；设备重叠率（见 §8.7）；驾驶舱顶黄警，**不阻断**确认发起 | 重叠达阈值出警；可点开对照 Run |
+
+#### 冲刺 B · 发起驾驶舱（约 2d）
+
+| ID | 项 | 实现要点 | 验收 |
+|----|----|----------|------|
+| **B1** | `DispatchCockpit` | 替 `PreviewDialog`；全宽面板；保留备注 C1、只读参数 C2、「编辑 Plan」 | 发起路径不回退瘦 Dialog |
+| **B2** | 按节点派发表 | 选中数 / `effective_slots` /「全部立即」或「N 立即 · M 将排队」；文案写明 = B4 增强，非准入 ETA | 超选节点黄字；缺槽位字段不估 |
+| **B3** | 墙钟参考 | 近 ≤5 次终态 Run 的 `started_at→ended_at` 均值；标注「整次耗时参考，长稳可能为天级」；样本不足显示「暂无」 | 不展示虚构开跑时钟 |
+| **B4** | 参数 ⓘ ⑨ | 巡检/超时/失败阈值旁 Tooltip（工程师语义） | hover 可读后果说明 |
+
+#### 穿插小项（可随 A/B 带上）
+
+| ID | 项 | 成本 | 要点 |
+|----|----|------|------|
+| **P1** | 筛选 Chips + URL 化 ⑤ | ~1d | 激活条件可单独 ✕；query 序列化（version/model/tag/ready/q/host/view）；与 A1 恢复规则写进 `planExecuteFilters.ts` |
+| **P2** | Minimap ⑧ | 0.5–1d | 定位 vs 删除分离；矩阵模式高亮格 |
+| **P3** | 导出 ⑪ | 0.25d | 复制 serials；CSV（serial/节点/型号/版本） |
+| **P4** | Presets ⑥ | ~1d | `localStorage`；应用 = 与可调度集求交 + toast 丢失数 |
+| **P5** | 键盘 ⑩ | 0.5d | Enter=当前态主 CTA；Ctrl/⌘+A=全选**当前筛选结果**（`preventDefault`，焦点限舞台）；Esc 关弹层（Radix） |
+| **P6** | 步骤 stage 徽标 ⑫ | 0.5d | 态 0 步骤按 init/patrol/teardown 分组 + 彩色徽标 |
+| **P7** | §7.6 列排序等 | 可选 | 并进表格辅视图，不单独立项 |
+
+### 8.7 关键算法与 API 契约
+
+**稳定排序（Shift 连选基线）**：`host`（侧栏同序：IPv4 数值 / unassigned 置底）→ `serial` 大小写不敏感 → `id`。筛选/节点切换后重算索引；`lastClickedIndex` 仅对**当前 filtered 列表**有效。
+
+**全选就绪**：`filteredDevices.filter(d => readiness(d).ok && isSchedulable(d))` 全部加入选择集（不清除筛选外已选，除非产品改为「替换」——默认 **并入**，与现「全选筛选结果」一致）。
+
+**疑似重复（A+2）**：
+
+1. `planRuns.list(0, 10, planId)`，取 `started_at` 在 30min 内的 runs。
+2. 设备集：优先 `run_context.dispatch_device_ids`；列表若剥离该字段，则对候选 run **按需 `get(id)`**（最多 3 次），仍无则降级为「同 Plan + 近 30min + device_count 接近（±20%）」弱提示文案。
+3. 重叠率 = `|交集| / |本次选中|`；阈值建议 **≥ 0.5 且交集 ≥ 3** 触发黄警（常量放 `planExecuteDuplicate.ts`，可测）。
+
+**墙钟均值（B3）**：仅 `SUCCESS | PARTIAL_SUCCESS | FAILED | DEGRADED` 且存在 `ended_at`；`duration = ended_at - started_at`；去掉非正样本；均值用简单算术平均即可。
+
+**容量行（B2）**：扩展 `evaluateCapacityOverflow` 或旁路纯函数，返回每节点 `{ selected, slots, immediate, queued }`，其中 `immediate = min(selected, slots)`，`queued = max(0, selected - slots)`；`slots` 缺失则该行不显示排队估。
+
+**现有 API（无需新后端）**：
+
+| 用途 | API |
+|------|-----|
+| 设备/节点/占用/预检 | 现有 `fetchAllDevices` / `fetchHostList` / `jobs.active-by-device` / `evaluateDeviceReadiness` |
+| 近 N 次 / 墙钟 / 重复 | `planRuns.list(..., planId)` + 必要时 `planRuns.get` |
+| 预览/发起 | 现有 preview + `PlanRunCreate`（含 `note`） |
+
+### 8.8 状态、URL、草稿字段（v2）
+
+```ts
+// 概念模型（实现时可放 plan-execute/types.ts）
+type ExecutePhase = 'plan' | 'select' | 'dispatch';
+type DeviceViewMode = 'matrix' | 'table';
+
+interface PlanExecuteDraftV2 {
+  planId: number | null;
+  deviceIds: number[];
+  phase: ExecutePhase;           // 由旧 currentStep 迁移
+  view: DeviceViewMode;          // 默认 matrix
+  deviceFilter: string;          // serial q
+  deviceVersionFilter: string;
+  deviceHostFilter: string;      // 'all' | hostId
+  deviceModelFilter: string;
+  deviceTagFilter: string[];
+  readyOnly?: boolean;
+}
+```
+
+URL query（P1 完整落地；A 至少支持 `plan` / `devices` / `view`）：
+
+| 参数 | 含义 |
+|------|------|
+| `plan` | Plan id（已有） |
+| `devices` | 逗号分隔 id（已有） |
+| `view` | `matrix` \| `table` |
+| `host` | 节点过滤 |
+| `q` | serial 搜索 |
+| `version` / `model` / `tags` | 筛选 |
+| `ready` | `1` = 仅就绪 |
+
+### 8.9 测试与验证
+
+**单测（随切片补）**：
+
+- `planExecuteSelection`：稳定序、Shift 范围、并入/切换
+- `planExecuteFilters`：URL ↔ state 往返
+- `planExecuteDuplicate`：阈值边界、缺 `dispatch_device_ids` 降级
+- `planExecuteWallClock`：空样本 / 缺 `ended_at` / 均值
+- `DeviceMatrix`：点击选中、Shift、与 controlled `selectedIds` 同步（jsdom + 小号 fixture）
+- `PlanExecutePage`：phase 迁移、view URL、全选就绪、驾驶舱黄警渲染（mock list/get）
+
+**命令顺序**（AGENTS.md）：
+
+1. `cd frontend && npx vitest run src/pages/execution/PlanExecutePage.test.tsx src/components/execution/plan-execute/`
+2. `cd frontend && npx tsc --noEmit && npm run build`
+3. 无后端变更则不必跑 `backend/tests/`；禁止把 `TEST_DATABASE_URL` 指本机 `stp_dev`
+
+**手工 / 真实环境**：
+
+- 1000 候选（或实验室全量）矩阵滚选 + Shift 跨分带
+- 表↔矩阵切换选中不丢；F5 草稿恢复；`?plan=&devices=&view=matrix` 分享链接
+- 超槽位节点驾驶舱「将排队」；30min 内复跑同批出黄警
+- 色弱：阻塞斜纹在矩阵/Minimap 仍可辨
+
+### 8.10 风险与缓解
+
+| 风险 | 缓解 |
+|------|------|
+| 页面大改回归四步旧路径 | 分 PR；A0 先通三态+表；矩阵独立可关（`view=table`） |
+| 虚拟列表 + hover 卡定位飘移 | portal 卡 + 基于虚拟 index 的 device id 绑定，禁止只认 DOM 顺序 |
+| 列表 API 无 `dispatch_device_ids` | A+2 降级路径单测锁住；勿静默当「无重复」 |
+| 长稳墙钟达「数天」误导 | UI 强制副文案；样本 &lt; 2 不展示均值 |
+| `PlanExecutePage` 冲突难合 | 组件拆分后页面只编排；避免在 1500 行文件继续堆 JSX |
+
+### 8.11 交付检查清单（DoD）
+
+- [ ] 静态 mockup 三态在实现中可逐屏对照（允许 token/间距差，交互语义一致）
+- [ ] 默认进入选机即为矩阵；1000 格验收通过
+- [ ] 顶栏摘要与驾驶舱容量表可用
+- [ ] 近 3 次 + 疑似重复（或弱降级）可用
+- [ ] 草稿 v2 / URL 规则文档化且单测覆盖迁移
+- [ ] vitest + tsc + build 通过；关键路径真实环境走查
+
+### 8.12 修订记录
+
+| 日期 | 变更 |
+|------|------|
+| 2026-07-20 | §8 初版：对照 `mockups/plan-execute-v2` 的实现方案（冲刺 A / A+ / B + 穿插）；确认三态 IA、非目标、组件落点、API/算法与验收 |
