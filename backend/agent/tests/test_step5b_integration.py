@@ -259,3 +259,67 @@ class TestProgressTracking:
         jv.update(progress_ts="2026-07-19T11:00:00Z")
         assert jv.snapshot()["execution_state"] == "PATROL_SLEEP"
         assert jv.snapshot()["last_progress_at"] == "2026-07-19T11:00:00Z"
+
+
+# ── 6. Coordinator _tick sends real POST ──────────────────────────────────────
+
+
+class TestEpochBumpOnReregister:
+    def test_restart_bumps_persisted_epoch(self):
+        """register_plan_run_host on a re-registered host after restart
+        must restore the persisted epoch and bump by 1."""
+        from unittest.mock import MagicMock
+
+        local_db = MagicMock()
+        local_db.get_state.return_value = "5"  # previous instance persisted 5
+        persisted = {}
+
+        def fake_set_state(key, value):
+            persisted[key] = value
+
+        local_db.set_state.side_effect = fake_set_state
+
+        coord = HostRunCoordinator(
+            "http://x", "h2", "i2", local_db=local_db,
+        )
+        v = coord.register_plan_run_host(1, 10)
+        # Restored 5 + bumped 1 = 6
+        assert v.epoch == 6, f"expected epoch 6, got {v.epoch}"
+        # Verify it was persisted after bump
+        assert any("coord_epoch:h2:1" in k for k in persisted), str(persisted)
+
+
+class TestCoordinatorTickSendsPost:
+    def test_tick_makes_http_post_with_per_host_epoch(self):
+        """Verify _tick does NOT throw NameError and the POST body has
+        per-host-entry coordinator_epoch (not a dangling top-level key)."""
+        coord = HostRunCoordinator("http://127.0.0.1:1", "h-tick", "inst")
+        coord.register_plan_run_host(1, 10)
+        # Give the PRH a known epoch
+        with coord._plan_run_hosts[1]._lock:
+            coord._plan_run_hosts[1]._epoch = 7
+        coord.register_job(100)
+
+        post_called = []
+        post_body = []
+
+        def fake_post(url, **kwargs):
+            post_called.append(url)
+            post_body.append(kwargs.get("json", {}))
+            resp = MagicMock()
+            resp.raise_for_status.return_value = None
+            resp.json.return_value = {
+                "data": {"accepted": True, "stale_plan_run_host_ids": []}
+            }
+            return resp
+
+        with patch("requests.post", side_effect=fake_post):
+            coord._tick()
+
+        assert len(post_called) == 1, f"POST not called; body={post_body}"
+        body = post_body[0]
+        # Per-host entry carries coordinator_epoch
+        assert body["plan_run_hosts"][0]["coordinator_epoch"] == 7
+        # No top-level coordinator_epoch (that would be NameError-prone)
+        assert "coordinator_epoch" not in body
+        assert body["host_id"] == "h-tick"

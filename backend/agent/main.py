@@ -644,6 +644,9 @@ def main() -> None:
             else:
                 job_ids = []
             for job_id in job_ids:
+                # ADR-0026 Step 5b: cancel any permit waiter before
+                # signalling abort to the pipeline.
+                coordinator.cancel_waiting_job(job_id)
                 if job_runner_state is not None:
                     requested = job_runner_state.request_abort(job_id)
                 else:
@@ -924,8 +927,16 @@ def main() -> None:
 
     def _resume_recovered_job_impl(job_payload: dict) -> None:
         job_payload.setdefault("agent_instance_id", agent_instance_id)
-        # ADR-0026 Step 5b: recovered jobs must also go through the
-        # scheduler and coordinator, not bypass them.
+        # ADR-0026 Step 5b: recovered jobs go through scheduler/coordinator.
+        jid = job_payload.get("id")
+        did = job_payload.get("device_id")
+        if jid and did:
+            coordinator.register_job(jid)
+            coordinator.register_job_device(jid, did)
+        prh_id = job_payload.get("plan_run_host_id")
+        plan_run_id = job_payload.get("plan_run_id")
+        if prh_id and plan_run_id:
+            coordinator.register_plan_run_host(prh_id, plan_run_id)
         executor.submit(
             run_task_wrapper,
             job_payload,

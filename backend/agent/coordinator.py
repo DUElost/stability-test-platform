@@ -192,9 +192,11 @@ class HostRunCoordinator:
         with self._lock:
             if host_row_id not in self._plan_run_hosts:
                 v = PlanRunHostView(host_row_id, plan_run_id, self._host_id)
-                # Restore persisted epoch on first registration — a previous
-                # Agent instance may have persisted a higher epoch.
+                # Restore persisted epoch then bump — a new Agent process
+                # instance must always report epoch+1 to fence the old one.
                 self._restore_one_epoch(v)
+                v.bump_epoch()
+                self._persist_one_epoch(v)
                 self._plan_run_hosts[host_row_id] = v
             return self._plan_run_hosts[host_row_id]
 
@@ -208,6 +210,16 @@ class HostRunCoordinator:
             epoch = 1
         with view._lock:
             view._epoch = epoch
+
+    def _persist_one_epoch(self, view: PlanRunHostView) -> None:
+        if self._local_db is None:
+            return
+        try:
+            self._local_db.set_state(
+                self._epoch_key(view.id), str(view.epoch)
+            )
+        except Exception:
+            logger.debug("coord_epoch_persist_failed prh=%d", view.id)
 
     def deregister_plan_run_host(self, host_row_id: int) -> None:
         with self._lock:
@@ -314,7 +326,6 @@ class HostRunCoordinator:
                 json={
                     "host_id": self._host_id,
                     "agent_instance_id": self._agent_instance_id,
-                    "coordinator_epoch": epoch,
                     "plan_run_hosts": host_entries,
                     "jobs": job_entries,
                 },
