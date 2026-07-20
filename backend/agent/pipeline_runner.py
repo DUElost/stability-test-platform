@@ -32,6 +32,8 @@ def execute_pipeline_run(
     operation_scheduler: Any = None,
     coordinator: Any = None,
     device_id: Optional[int] = None,
+    plan_run_host_id: Optional[int] = None,
+    barrier_total: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Execute one claimed job through PipelineEngine and normalize its result."""
     log_dir = get_run_log_dir(run_id)
@@ -65,6 +67,8 @@ def execute_pipeline_run(
         operation_scheduler=operation_scheduler,
         coordinator=coordinator,
         device_id=device_id,
+        plan_run_host_id=plan_run_host_id,
+        barrier_total=barrier_total,
     )
 
     if patrol_cycle_checkpoint_store is not None:

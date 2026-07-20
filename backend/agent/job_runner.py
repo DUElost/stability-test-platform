@@ -327,6 +327,8 @@ def run_task_wrapper(
             operation_scheduler=operation_scheduler,
             coordinator=coordinator,
             device_id=device_id,
+            plan_run_host_id=run.get("plan_run_host_id"),
+            barrier_total=run.get("plan_run_host_total_job_count"),
         )
 
         watcher_summary = None
