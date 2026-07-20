@@ -18,8 +18,10 @@ class TestHealthSaqReady:
         data = response.json()
         if response.status_code == 200:
             assert data["data"]["saq_ready"] is False
+            assert data["data"]["saq_inprocess_worker"] is True
 
-    def test_health_omits_saq_ready_when_inprocess_disabled(self, client, monkeypatch):
+    def test_health_includes_saq_ready_when_inprocess_disabled(self, client, monkeypatch):
+        """ADR-0026 P0: producer-only mode still reports saq_ready (enqueue health)."""
         monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "0")
         monkeypatch.setattr(main_mod, "is_saq_ready", lambda: True)
 
@@ -27,7 +29,8 @@ class TestHealthSaqReady:
         assert response.status_code in (200, 503)
         data = response.json()
         if response.status_code == 200:
-            assert "saq_ready" not in data["data"]
+            assert data["data"]["saq_ready"] is True
+            assert data["data"]["saq_inprocess_worker"] is False
 
 
 @pytest.mark.asyncio

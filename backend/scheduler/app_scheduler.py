@@ -50,6 +50,11 @@ AUTO_ARCHIVE_INTERVAL = int(os.getenv("AUTO_ARCHIVE_POLL_INTERVAL_SECONDS", "120
 # ADR-0026 Step 4: admission queue pump interval
 ADMISSION_PUMP_INTERVAL = int(os.getenv("STP_ADMISSION_PUMP_INTERVAL_SECONDS", "5"))
 
+# ADR-0026 §6: O(1) counter drift self-heal
+COUNTER_RECONCILE_INTERVAL = int(
+    os.getenv("STP_COUNTER_RECONCILE_INTERVAL_SECONDS", "300")
+)
+
 MISFIRE_GRACE = timedelta(seconds=60)
 
 
@@ -241,10 +246,9 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     # drain-only mode (prepare stops creating new QUEUED runs, the pump keeps
     # admitting existing ones until the queue is empty — reviewer boundary #5).
     # An idle tick is one indexed no-op query; the tick itself short-circuits
-    # while the SAQ producer is down. Pump READINESS is deliberately NOT
-    # marked here — main.py marks it only after the SAQ worker start succeeds
-    # (Step 4.1: a pump without an executor must not let prepare create
-    # QUEUED runs that would just churn).
+    # while the SAQ producer is down. Pump READINESS is marked in main.py after
+    # producer (+ optional in-process worker) start succeeds (ADR-0026 P0:
+    # STP_ENABLE_INPROCESS_SAQ=0 keeps producer alive for external workers).
     from backend.services.admission_pump import pump_admission_tick
 
     await scheduler.add_schedule(
@@ -255,3 +259,18 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=admission_pump interval=%ds", ADMISSION_PUMP_INTERVAL)
+
+    # ADR-0026 §6: low-frequency counter reconciliation (self-heal drift)
+    from backend.scheduler.counter_reconciler import reconcile_plan_run_counters_once
+
+    await scheduler.add_schedule(
+        _instrumented("counter_reconcile", reconcile_plan_run_counters_once),
+        IntervalTrigger(seconds=COUNTER_RECONCILE_INTERVAL),
+        id="counter_reconcile",
+        misfire_grace_time=MISFIRE_GRACE,
+        conflict_policy=ConflictPolicy.replace,
+    )
+    logger.info(
+        "schedule_registered id=counter_reconcile interval=%ds",
+        COUNTER_RECONCILE_INTERVAL,
+    )

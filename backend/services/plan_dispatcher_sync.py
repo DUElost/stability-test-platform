@@ -856,6 +856,11 @@ def materialize_jobs_and_allocations(
     db.flush()  # single flush assigns every job.id (and trips the unique index)
     job_device_pairs = {job.id: job.device_id for job in jobs}
 
+    # ADR-0026 §6: O(1) aggregation needs total_job_count at materialization.
+    # Admission pump also writes this (same value); legacy dispatch relied on
+    # the fallback full-job scan until P2 — set it here for both paths.
+    pr.total_job_count = len(jobs)
+
     if wifi_allocations:
         # Preload the pools once instead of per-device SELECTs.
         pool_ids = {wifi_allocations[did]["pool_id"] for did in wifi_allocations}

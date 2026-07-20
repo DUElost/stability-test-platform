@@ -20,7 +20,10 @@
 | `CORS_ORIGINS` | 前端 Origin 白名单（须与浏览器访问地址完全一致） |
 | `STP_ALLOW_REGISTER` | 公开注册；生产默认关闭 |
 | `STP_METRICS_AUTH_REQUIRED` | `/metrics` 鉴权（建议生产 `1`） |
-| `STP_ENABLE_INPROCESS_SAQ` | 进程内 SAQ Worker（单实例部署常用） |
+| `STP_ENABLE_INPROCESS_SAQ` | `1`=进程内 SAQ Worker；`0`=仅 producer（enqueue），需外部 worker 同队列消费（ADR-0026 P0） |
+| `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | O(1) 计数器对账 sweep 周期（默认 300） |
+| `DEVICE_SNAPSHOT_INTERVAL` | 心跳硬件字段降采样间隔秒（默认 30） |
+| `STP_HEARTBEAT_INTERVAL_BASE` / `_MIN` / `_MAX` | 控制面建议 Agent 心跳周期（随在线设备数缓增） |
 | `STP_SCRIPT_ROOT` | 脚本扫描根；**开发必须**设为 `<repo>/backend/agent/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | 扫描机 ≠ 运行机时 Agent 侧脚本根 |
 | `STP_NFS_ROOT` / `STP_AEE_NFS_ROOT` | 共享存储（方案 C：汇总/dedup，不含运行日志唯一副本） |

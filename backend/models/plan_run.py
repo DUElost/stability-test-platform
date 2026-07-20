@@ -70,8 +70,8 @@ class PlanRun(Base):
 
     # ── ADR-0026 §6: O(1) terminal-aggregation counters ──
     # failed = failed_only semantics (excludes aborted), aligned with
-    # plan_run_aggregation.py. Maintained by the single terminalization
-    # service once it lands; until then they stay at their defaults.
+    # plan_run_aggregation.py. Maintained by job_terminalization
+    # (on_job_terminal / on_job_terminal_sync) + counter_reconcile sweep.
     total_job_count     = Column(Integer, nullable=False, default=0, server_default="0")
     terminal_job_count  = Column(Integer, nullable=False, default=0, server_default="0")
     completed_job_count = Column(Integer, nullable=False, default=0, server_default="0")

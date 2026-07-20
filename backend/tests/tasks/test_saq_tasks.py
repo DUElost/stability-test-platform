@@ -192,17 +192,51 @@ async def test_enqueue_sync_required_waits_and_raises_on_enqueue_failure():
 # ---------------------------------------------------------------------------
 
 
-def test_get_queue_raises_when_uninitialised():
-    """get_queue raises RuntimeError before start_saq_worker."""
+@pytest.mark.asyncio
+async def test_init_saq_producer_without_worker(monkeypatch):
+    """ADR-0026 P0: producer connects without starting an in-process worker."""
     import backend.tasks.saq_worker as mod
 
-    original = mod._queue
+    fake_queue = MagicMock()
+    fake_queue.connect = AsyncMock()
+    monkeypatch.setattr(mod.Queue, "from_url", lambda *args, **kwargs: fake_queue)
+    monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "0")
+
+    original_queue = mod._queue
+    original_loop = mod._loop
+    original_worker_task = mod._worker_task
     try:
         mod._queue = None
-        with pytest.raises(RuntimeError, match="not initialised"):
-            mod.get_queue()
+        mod._loop = None
+        mod._worker_task = None
+        await mod.init_saq_producer()
+        assert mod.is_saq_producer_ready() is True
+        assert mod.is_saq_ready() is True  # external-worker mode
+        assert mod._worker_task is None
+        fake_queue.connect.assert_awaited_once()
     finally:
-        mod._queue = original
+        mod._queue = original_queue
+        mod._loop = original_loop
+        mod._worker_task = original_worker_task
+
+
+def test_is_saq_ready_requires_worker_when_inprocess(monkeypatch):
+    import backend.tasks.saq_worker as mod
+
+    monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "1")
+    original_queue = mod._queue
+    original_loop = mod._loop
+    original_worker_task = mod._worker_task
+    try:
+        mod._queue = MagicMock()
+        mod._loop = MagicMock()
+        mod._worker_task = None
+        assert mod.is_saq_producer_ready() is True
+        assert mod.is_saq_ready() is False
+    finally:
+        mod._queue = original_queue
+        mod._loop = original_loop
+        mod._worker_task = original_worker_task
 
 
 @pytest.mark.asyncio
