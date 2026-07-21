@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildCapacityPlan,
+  buildDeviceReadinessRows,
   compareNodeEntries,
   evaluateCapacityOverflow,
   evaluateDeviceReadiness,
+  summarizeDeviceReadiness,
 } from './planExecuteReadiness';
 
 describe('evaluateDeviceReadiness', () => {
@@ -35,6 +37,22 @@ describe('evaluateDeviceReadiness', () => {
   it('reports missing version information', () => {
     const result = evaluateDeviceReadiness([{ id: 1, serial: 'A', status: 'ONLINE' }], []);
     expect(result.warnings).toContain('部分设备缺少版本信息');
+  });
+
+  it('reuses precomputed rows for subset summaries', () => {
+    const devices = [
+      { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE', adb_connected: true, adb_state: 'device', build_display_id: 'v1' },
+      { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE', adb_connected: false, adb_state: 'offline', build_display_id: 'v2' },
+    ];
+    const hosts = [{ id: 'h1', name: 'node-1', status: 'ONLINE' }];
+    const rows = buildDeviceReadinessRows(devices, hosts);
+    const rowsByDeviceId = new Map(rows.map((row) => [row.device.id, row]));
+    const subset = summarizeDeviceReadiness([devices[0]], rowsByDeviceId);
+    expect(subset.readyCount).toBe(1);
+    expect(subset.passed).toBe(true);
+    const full = summarizeDeviceReadiness(devices, rowsByDeviceId);
+    expect(full.readyCount).toBe(1);
+    expect(full.passed).toBe(false);
   });
 });
 

@@ -1233,10 +1233,10 @@ describe('PlanExecutePage', () => {
     });
     const list = await screen.findByTestId('plan-execute-plan-layout');
     await waitFor(() => {
+      expect(screen.getByTestId('plan-select-recent-group')).toBeInTheDocument();
       const names = Array.from(list.querySelectorAll('button'))
         .map((el) => el.textContent ?? '')
         .filter((t) => t.includes('Plan'));
-      // 最近执行的 Nightly 应排在按 updated_at 更「新」的 Smoke 之前
       const nightlyIdx = names.findIndex((t) => t.includes('Nightly Plan'));
       const smokeIdx = names.findIndex((t) => t.includes('Smoke Plan'));
       expect(nightlyIdx).toBeGreaterThanOrEqual(0);

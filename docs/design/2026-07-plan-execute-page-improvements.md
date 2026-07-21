@@ -417,12 +417,25 @@ URL query（P1 完整落地；A 至少支持 `plan` / `devices` / `view`）：
 
 ### 8.11 交付检查清单（DoD）
 
-- [ ] 静态 mockup 三态在实现中可逐屏对照（允许 token/间距差，交互语义一致）
-- [ ] 默认进入选机即为矩阵；1000 格验收通过
-- [ ] 顶栏摘要与驾驶舱容量表可用
-- [ ] 近 3 次 + 疑似重复（或弱降级）可用
-- [ ] 草稿 v2 / URL 规则文档化且单测覆盖迁移
-- [ ] vitest + tsc + build 通过；关键路径真实环境走查
+- [x] 静态 mockup 三态在实现中可逐屏对照（允许 token/间距差，交互语义一致）
+- [ ] 默认进入选机即为矩阵；1000 格验收通过（代码已支持，待真实环境走查）
+- [x] 顶栏摘要与驾驶舱容量表可用
+- [x] 近 3 次 + 疑似重复（或弱降级）可用
+- [x] 草稿 v2 / URL 规则文档化且单测覆盖迁移
+- [x] vitest + tsc + build 通过；关键路径真实环境走查（自动化部分；千台手工走查仍待实验室）
+
+### 8.13 审查修复（2026-07-21）
+
+| 优先级 | 项 | 状态 |
+|--------|-----|------|
+| P0-2 | Minimap 嵌套可点击元素（a11y） | 已修复：`SelectedMinimap` 定位/移除拆为 sibling buttons |
+| P1-1 | `evaluateDeviceReadiness` 单次全量计算 | 已修复：`buildDeviceReadinessRows` + `summarizeDeviceReadiness` |
+| P1-2 | Plan「最近执行」视觉分组 | 已修复：`PlanSelectPhase` 渲染 recent / all 分区 |
+| P1-3 | 矩阵定位双滚动 | 已修复：`DeviceMatrix` 仅 `scrollToIndex` |
+| P2-1 | 草稿 hook 抽取 | 已修复：`useInitialPlanExecuteDraft` + `usePlanExecuteDraftWriter` |
+| P2-2 | `DeviceMatrix` 交互单测 | 已修复：`DeviceMatrix.test.tsx`（`applyMatrixSelection`） |
+| P2-4 | 草稿挂载读取 | 已修复：`useState` 惰性初始化替代渲染期 ref |
+| P3 | 暗色主题 / 右栏虚拟化 / tableSort URL | 仍另项 |
 
 ### 8.12 修订记录
 
@@ -432,3 +445,4 @@ URL query（P1 完整落地；A 至少支持 `plan` / `devices` / `view`）：
 | 2026-07-21 | §8 冲刺 A / A+ / B / P1–P6 落地：三态工作台、矩阵选机、驾驶舱、近 3 次与防重复、Chips+URL、Minimap 定位、导出、presets、键盘、stage 徽标；P7 / 矩阵虚拟滚动 / 暗色主题仍另项 |
 | 2026-07-21 | §8 P7 + 矩阵虚拟滚动：表列排序/版本悬浮、Plan「最近执行」分组、`@tanstack/react-virtual` 节点分带虚拟行；暗色主题仍另项 |
 | 2026-07-21 | 全 App 暗色主题落地（`ThemeProvider` / `ThemeToggle` / FOUC 脚本 / `.dark` 令牌抬升）；§8.3 该项关闭 |
+| 2026-07-21 | §8.13 审查修复：readiness 单次计算、Plan 最近执行分区 UI、矩阵单滚动、Minimap a11y、草稿 hooks |

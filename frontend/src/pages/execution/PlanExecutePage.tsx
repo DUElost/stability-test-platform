@@ -24,8 +24,9 @@ import { ErrorState } from '@/components/ui/error-state';
 import {
   compareNodeEntries,
   buildCapacityPlan,
+  buildDeviceReadinessRows,
   evaluateCapacityOverflow,
-  evaluateDeviceReadiness,
+  summarizeDeviceReadiness,
   type ReadinessDevice,
 } from '@/utils/planExecuteReadiness';
 import { ExecuteCommandBar } from '@/components/execution/plan-execute/ExecuteCommandBar';
@@ -38,10 +39,9 @@ import { DispatchCockpit } from '@/components/execution/plan-execute/DispatchCoc
 import { PlanSelectPhase } from '@/components/execution/plan-execute/PlanSelectPhase';
 import { SelectedDevicesRail } from '@/components/execution/plan-execute/SelectedDevicesRail';
 import {
-  loadPlanExecuteDraft,
-  removePlanExecuteDraft,
-  savePlanExecuteDraft,
-} from '@/components/execution/plan-execute/draft';
+  useInitialPlanExecuteDraft,
+  usePlanExecuteDraftWriter,
+} from '@/components/execution/plan-execute/usePlanExecuteDraft';
 import {
   extractDispatchDeviceIds,
   findDuplicateMatch,
@@ -74,7 +74,6 @@ import {
   type PlanExecutePreset,
 } from '@/components/execution/plan-execute/planExecutePresets';
 import { sortDevicesStable } from '@/components/execution/plan-execute/planExecuteSelection';
-import { groupPlansForSelect } from '@/components/execution/plan-execute/planExecutePlanOptions';
 import {
   sortDevicesByColumn,
   type DeviceTableSort,
@@ -100,12 +99,8 @@ export default function PlanExecutePage() {
   const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   // 草稿（sessionStorage）只在挂载时读取一次；恢复消费在下方单入口 effect 完成
-  const draftRef = useRef<PlanExecuteDraftV2 | null | undefined>(undefined);
-  if (draftRef.current === undefined) draftRef.current = loadPlanExecuteDraft();
+  const initialDraft = useInitialPlanExecuteDraft();
   const lastClickedIndexRef = useRef<number | null>(null);
-  // 清除草稿后置位，阻止防抖中的写入把草稿写回
-  const suppressDraftWriteRef = useRef(false);
-  const draftConsumedRef = useRef(false);
   const pendingLocateIdRef = useRef<number | null>(null);
   const highlightClearTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -116,7 +111,7 @@ export default function PlanExecutePage() {
   const urlPlanId = searchParams.get('plan') ? Number(searchParams.get('plan')) : null;
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(
     // 规则：?plan= 与草稿不一致时以 URL 为准；设备集仍由草稿恢复
-    urlPlanId ?? draftRef.current?.planId ?? null,
+    urlPlanId ?? initialDraft?.planId ?? null,
   );
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<number>>(new Set());
   const [phase, setPhase] = useState<ExecutePhase>('plan');
@@ -132,29 +127,54 @@ export default function PlanExecutePage() {
   const [view, setView] = useState<DeviceViewMode>(() => (
     searchParams.has('view')
       ? parseViewParam(searchParams.get('view'))
-      : (hasUrlDevices ? 'matrix' : draftRef.current?.view ?? 'matrix')
+      : (hasUrlDevices ? 'matrix' : initialDraft?.view ?? 'matrix')
   ));
   const [readyOnly, setReadyOnly] = useState(() => (
-    hasUrlFilters ? urlFilterState.readyOnly : (hasUrlDevices ? false : Boolean(draftRef.current?.readyOnly))
+    hasUrlFilters ? urlFilterState.readyOnly : (hasUrlDevices ? false : Boolean(initialDraft?.readyOnly))
   ));
   const [deviceFilter, setDeviceFilter] = useState(() => (
-    hasUrlFilters ? urlFilterState.q : (hasUrlDevices ? '' : draftRef.current?.deviceFilter ?? '')
+    hasUrlFilters ? urlFilterState.q : (hasUrlDevices ? '' : initialDraft?.deviceFilter ?? '')
   ));
   const [deviceVersionFilter, setDeviceVersionFilter] = useState(() => (
-    hasUrlFilters ? urlFilterState.version : (hasUrlDevices ? 'all' : draftRef.current?.deviceVersionFilter ?? 'all')
+    hasUrlFilters ? urlFilterState.version : (hasUrlDevices ? 'all' : initialDraft?.deviceVersionFilter ?? 'all')
   ));
   const [deviceHostFilter, setDeviceHostFilter] = useState(() => (
-    hasUrlFilters ? urlFilterState.host : (hasUrlDevices ? 'all' : draftRef.current?.deviceHostFilter ?? 'all')
+    hasUrlFilters ? urlFilterState.host : (hasUrlDevices ? 'all' : initialDraft?.deviceHostFilter ?? 'all')
   ));
   const [deviceModelFilter, setDeviceModelFilter] = useState(() => (
-    hasUrlFilters ? urlFilterState.model : (hasUrlDevices ? 'all' : draftRef.current?.deviceModelFilter ?? 'all')
+    hasUrlFilters ? urlFilterState.model : (hasUrlDevices ? 'all' : initialDraft?.deviceModelFilter ?? 'all')
   ));
   const [deviceTagFilter, setDeviceTagFilter] = useState<string[]>(() => (
-    hasUrlFilters ? urlFilterState.tags : (hasUrlDevices ? [] : draftRef.current?.deviceTagFilter ?? [])
+    hasUrlFilters ? urlFilterState.tags : (hasUrlDevices ? [] : initialDraft?.deviceTagFilter ?? [])
   ));
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [presets, setPresets] = useState<PlanExecutePreset[]>(() => loadPresets());
   const [tableSort, setTableSort] = useState<DeviceTableSort | null>(null);
+
+  const draftSnapshot = useMemo<PlanExecuteDraftV2>(() => ({
+    planId: selectedPlanId,
+    deviceIds: Array.from(selectedDeviceIds),
+    phase,
+    view,
+    deviceFilter,
+    deviceVersionFilter,
+    deviceHostFilter,
+    deviceModelFilter,
+    deviceTagFilter,
+    readyOnly,
+  }), [
+    selectedPlanId,
+    selectedDeviceIds,
+    phase,
+    view,
+    deviceFilter,
+    deviceVersionFilter,
+    deviceHostFilter,
+    deviceModelFilter,
+    deviceTagFilter,
+    readyOnly,
+  ]);
+  const { draftConsumedRef, clearDraft } = usePlanExecuteDraftWriter({ draft: draftSnapshot });
 
   const [preview, setPreview] = useState<PlanRunPreview | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -258,18 +278,6 @@ export default function PlanExecutePage() {
     staleTime: 60_000,
   });
 
-  const orderedPlans = useMemo(() => {
-    const groups = groupPlansForSelect(plans ?? [], recentExecutedRuns, '', 5);
-    const seen = new Set<number>();
-    const out = [];
-    for (const p of [...groups.recent, ...groups.all]) {
-      if (seen.has(p.id)) continue;
-      seen.add(p.id);
-      out.push(p);
-    }
-    return out;
-  }, [plans, recentExecutedRuns]);
-
   const selectedDeviceIdsKey = useMemo(
     () => Array.from(selectedDeviceIds).sort((a, b) => a - b).join(','),
     [selectedDeviceIds],
@@ -366,13 +374,13 @@ export default function PlanExecutePage() {
     if (!keyword) return nodeSummaries;
     return nodeSummaries.filter(node => node.label.toLowerCase().includes(keyword) || node.id.toLowerCase().includes(keyword));
   }, [nodeSearch, nodeSummaries]);
+  const deviceReadinessByDeviceId = useMemo(() => {
+    const rows = buildDeviceReadinessRows(allDevices, hostsList ?? []);
+    return new Map(rows.map((row) => [row.device.id, row]));
+  }, [allDevices, hostsList]);
   const readinessResult = useMemo(
-    () => evaluateDeviceReadiness(selectedDevices, hostsList ?? []),
-    [hostsList, selectedDevices],
-  );
-  const readinessByDeviceId = useMemo(
-    () => new Map(readinessResult.rows.map(row => [row.device.id, row])),
-    [readinessResult.rows],
+    () => summarizeDeviceReadiness(selectedDevices, deviceReadinessByDeviceId),
+    [selectedDevices, deviceReadinessByDeviceId],
   );
   // 所选节点当前活跃任务合计（heartbeat capacity，信息参考，不阻塞发起）
   const selectedHostActiveJobs = useMemo(() => {
@@ -406,12 +414,7 @@ export default function PlanExecutePage() {
     && (deviceModelFilter === 'all' || d.model === deviceModelFilter)
     && (deviceTagFilter.length === 0 || (d.tags ?? []).some(tag => deviceTagFilter.includes(tag))),
   );
-  const poolReadinessByDeviceId = useMemo(
-    () => new Map(
-      evaluateDeviceReadiness(baseFilteredDevices, hostsList ?? []).rows.map(row => [row.device.id, row]),
-    ),
-    [baseFilteredDevices, hostsList],
-  );
+  const poolReadinessByDeviceId = deviceReadinessByDeviceId;
   const filteredDevices = useMemo(() => {
     const list = readyOnly
       ? baseFilteredDevices.filter((d) => isSchedulable(d) && Boolean(poolReadinessByDeviceId.get(d.id)?.ready))
@@ -436,13 +439,7 @@ export default function PlanExecutePage() {
     () => filteredDevices.slice(deviceSkip, deviceSkip + devicePageSize),
     [filteredDevices, deviceSkip, devicePageSize],
   );
-  // 预检前置可见：当前页设备在勾选前即计算 readiness，阻塞原因直接内联展示
-  const pageReadinessByDeviceId = useMemo(
-    () => new Map(
-      evaluateDeviceReadiness(pagedDevices, hostsList ?? []).rows.map(row => [row.device.id, row]),
-    ),
-    [pagedDevices, hostsList],
-  );
+  const pageReadinessByDeviceId = deviceReadinessByDeviceId;
 
   useEffect(() => {
     setDeviceTotal(filteredDevices.length);
@@ -513,7 +510,7 @@ export default function PlanExecutePage() {
     // 草稿恢复
     if (draftConsumedRef.current) return;
     draftConsumedRef.current = true;
-    const draft = draftRef.current ?? null;
+    const draft = initialDraft;
     if (!draft) return;
     const restored = restoreIds(
       draft.deviceIds,
@@ -527,29 +524,7 @@ export default function PlanExecutePage() {
     } else if (draft.phase === 'select' && selectedPlan && executableStepCount > 0) {
       setPhase('select');
     }
-  }, [devLoading, plansLoading, allDevices, selectedPlan, executableStepCount, toast]);
-
-  // 草稿写入（防抖 300ms）；清除后置位 suppress，防止写回
-  useEffect(() => {
-    if (suppressDraftWriteRef.current) return;
-    const timer = setTimeout(() => {
-      if (suppressDraftWriteRef.current) return;
-      const draft: PlanExecuteDraftV2 = {
-        planId: selectedPlanId,
-        deviceIds: Array.from(selectedDeviceIds),
-        phase,
-        view,
-        deviceFilter,
-        deviceVersionFilter,
-        deviceHostFilter,
-        deviceModelFilter,
-        deviceTagFilter,
-        readyOnly,
-      };
-      savePlanExecuteDraft(draft);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [selectedPlanId, selectedDeviceIds, phase, view, deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly]);
+  }, [devLoading, plansLoading, allDevices, selectedPlan, executableStepCount, toast, initialDraft]);
 
   // 筛选 / 视图写入 URL（replace，保留 plan/devices）；与草稿并行
   useEffect(() => {
@@ -566,11 +541,6 @@ export default function PlanExecutePage() {
       return next.toString() === prev.toString() ? prev : next;
     }, { replace: true });
   }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly, view, setSearchParams]);
-
-  const clearDraft = () => {
-    suppressDraftWriteRef.current = true;
-    removePlanExecuteDraft();
-  };
 
   // 步骤 ≥2 时若已无选中样机，退回样机选择
   useEffect(() => {
@@ -1103,7 +1073,8 @@ export default function PlanExecutePage() {
       >
         {phase === 'plan' && (
           <PlanSelectPhase
-            plans={orderedPlans}
+            plans={plans ?? []}
+            recentExecutedRuns={recentExecutedRuns}
             plansLoading={plansLoading}
             plansError={Boolean(plansError)}
             plansErrorMessage={(plansQueryError as Error)?.message}
@@ -1216,7 +1187,7 @@ export default function PlanExecutePage() {
                           devices={pagedDevices}
                           selectedIds={selectedDeviceIds}
                           hostMap={hostMap}
-                          readinessByDeviceId={readinessByDeviceId}
+                          readinessByDeviceId={deviceReadinessByDeviceId}
                           pageReadinessByDeviceId={pageReadinessByDeviceId}
                           occupancyByDeviceId={occupancyByDeviceId}
                           highlightId={highlightId}
@@ -1278,7 +1249,7 @@ export default function PlanExecutePage() {
                 selectedRail={
                   <SelectedDevicesRail
                     devices={selectedDevices}
-                    readinessByDeviceId={readinessByDeviceId}
+                    readinessByDeviceId={deviceReadinessByDeviceId}
                     hostMap={hostMap}
                     highlightId={highlightId}
                     presets={presets}

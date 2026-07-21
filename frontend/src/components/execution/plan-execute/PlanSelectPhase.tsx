@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
@@ -7,11 +8,13 @@ import { cn } from '@/lib/utils';
 import { formatDurationSeconds } from '@/utils/format';
 import type { Plan, PlanRun } from '@/utils/api';
 import { AlertCircle } from 'lucide-react';
+import { groupPlansForSelect } from './planExecutePlanOptions';
 import { PlanStepList } from './PlanStepList';
 import { RecentPlanRunsInline } from './RecentPlanRunsInline';
 
 interface PlanSelectPhaseProps {
   plans: Plan[];
+  recentExecutedRuns: PlanRun[];
   plansLoading: boolean;
   plansError: boolean;
   plansErrorMessage?: string;
@@ -29,9 +32,43 @@ interface PlanSelectPhaseProps {
   formatFailureThreshold: (threshold: number | null | undefined) => string;
 }
 
+function PlanListButton({
+  plan,
+  active,
+  onSelect,
+}: {
+  plan: Plan;
+  active: boolean;
+  onSelect: (planId: number) => void;
+}) {
+  const steps = plan.steps?.length ?? 0;
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(plan.id)}
+      className={cn(
+        'w-full rounded-lg border px-3 py-2.5 text-left transition-colors',
+        active ? 'border-primary/40 bg-primary/10' : 'border-transparent hover:bg-muted',
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold">{plan.name}</span>
+        <span className={cn('shrink-0 text-xs', TEXT.subtitle)}>#{plan.id}</span>
+      </div>
+      <div className={cn('mt-1 text-xs', TEXT.subtitle)}>
+        {steps} 步 · 巡检{' '}
+        {formatDurationSeconds(plan.patrol_interval_seconds, 'compact', '—')}
+        {' · 超时 '}
+        {formatDurationSeconds(plan.timeout_seconds, 'compact', '—')}
+      </div>
+    </button>
+  );
+}
+
 /** 态 0：左 Plan 列表 + 右详情（对齐 mockup 00-plan-select）。 */
 export function PlanSelectPhase({
   plans,
+  recentExecutedRuns,
   plansLoading,
   plansError,
   plansErrorMessage,
@@ -48,10 +85,11 @@ export function PlanSelectPhase({
   onOpenRun,
   formatFailureThreshold,
 }: PlanSelectPhaseProps) {
-  const keyword = planSearch.trim().toLowerCase();
-  const filtered = keyword
-    ? plans.filter((p) => p.name.toLowerCase().includes(keyword))
-    : plans;
+  const { recent, all } = useMemo(
+    () => groupPlansForSelect(plans, recentExecutedRuns, planSearch, 5),
+    [plans, recentExecutedRuns, planSearch],
+  );
+  const hasPlans = recent.length > 0 || all.length > 0;
 
   return (
     <div
@@ -78,35 +116,43 @@ export function PlanSelectPhase({
                 className="h-9 shrink-0"
               />
               <div className="min-h-0 flex-1 space-y-1 overflow-auto">
-                {filtered.length === 0 ? (
+                {!hasPlans ? (
                   <div className={cn('px-3 py-8 text-center text-sm', TEXT.subtitle)}>无匹配 Plan</div>
                 ) : (
-                  filtered.map((plan) => {
-                    const active = selectedPlanId === plan.id;
-                    const steps = plan.steps?.length ?? 0;
-                    return (
-                      <button
-                        key={plan.id}
-                        type="button"
-                        onClick={() => onSelectPlan(plan.id)}
-                        className={cn(
-                          'w-full rounded-lg border px-3 py-2.5 text-left transition-colors',
-                          active ? 'border-primary/40 bg-primary/10' : 'border-transparent hover:bg-muted',
+                  <>
+                    {recent.length > 0 && (
+                      <div className="space-y-1" data-testid="plan-select-recent-group">
+                        <div className={cn('px-2 pb-0.5 text-[11px] font-medium', TEXT.subtitle)}>
+                          最近执行
+                        </div>
+                        {recent.map((plan) => (
+                          <PlanListButton
+                            key={plan.id}
+                            plan={plan}
+                            active={selectedPlanId === plan.id}
+                            onSelect={onSelectPlan}
+                          />
+                        ))}
+                      </div>
+                    )}
+                    {all.length > 0 && (
+                      <div className="space-y-1" data-testid="plan-select-all-group">
+                        {recent.length > 0 && (
+                          <div className={cn('px-2 pt-2 pb-0.5 text-[11px] font-medium', TEXT.subtitle)}>
+                            全部 Plan
+                          </div>
                         )}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-sm font-semibold">{plan.name}</span>
-                          <span className={cn('shrink-0 text-xs', TEXT.subtitle)}>#{plan.id}</span>
-                        </div>
-                        <div className={cn('mt-1 text-xs', TEXT.subtitle)}>
-                          {steps} 步 · 巡检{' '}
-                          {formatDurationSeconds(plan.patrol_interval_seconds, 'compact', '—')}
-                          {' · 超时 '}
-                          {formatDurationSeconds(plan.timeout_seconds, 'compact', '—')}
-                        </div>
-                      </button>
-                    );
-                  })
+                        {all.map((plan) => (
+                          <PlanListButton
+                            key={plan.id}
+                            plan={plan}
+                            active={selectedPlanId === plan.id}
+                            onSelect={onSelectPlan}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </>

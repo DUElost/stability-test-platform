@@ -131,8 +131,6 @@ export function DeviceMatrix({
     if (rowIndex >= 0) {
       rowVirtualizer.scrollToIndex(rowIndex, { align: 'center' });
     }
-    const el = document.querySelector(`[data-matrix-device-id="${highlightId}"]`);
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [highlightId, rows, rowVirtualizer]);
 
   if (ordered.length === 0) {

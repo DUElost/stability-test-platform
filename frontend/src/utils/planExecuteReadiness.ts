@@ -155,9 +155,19 @@ export function buildCapacityPlan(
   ));
 }
 
-export function evaluateDeviceReadiness(devices: ReadinessDevice[], hosts: ReadinessHost[]) {
+export interface DeviceReadinessRow {
+  device: ReadinessDevice;
+  host: ReadinessHost | undefined;
+  reasons: string[];
+  ready: boolean;
+}
+
+export function buildDeviceReadinessRows(
+  devices: ReadinessDevice[],
+  hosts: ReadinessHost[],
+): DeviceReadinessRow[] {
   const hostMap = new Map(hosts.map(host => [String(host.id), host]));
-  const rows = devices.map(device => {
+  return devices.map(device => {
     const reasons: string[] = [];
     const host = device.host_id != null ? hostMap.get(String(device.host_id)) : undefined;
     if (device.schedulable === false || (typeof device.schedulable !== 'boolean' && device.status !== 'ONLINE')) reasons.push('设备不可调度');
@@ -165,6 +175,15 @@ export function evaluateDeviceReadiness(devices: ReadinessDevice[], hosts: Readi
     if (host && host.status !== 'ONLINE') reasons.push('节点离线');
     return { device, host, reasons, ready: reasons.length === 0 };
   });
+}
+
+export function summarizeDeviceReadiness(
+  devices: ReadinessDevice[],
+  rowsByDeviceId: Map<number, DeviceReadinessRow>,
+) {
+  const rows = devices
+    .map((device) => rowsByDeviceId.get(device.id))
+    .filter((row): row is DeviceReadinessRow => row != null);
   const byHost = new Map<string, { label: string; total: number; ready: number }>();
   rows.forEach(row => {
     const key = String(row.device.host_id ?? 'unassigned');
@@ -184,6 +203,12 @@ export function evaluateDeviceReadiness(devices: ReadinessDevice[], hosts: Readi
       ...((new Set(devices.map(device => device.model).filter(Boolean))).size > 1 ? ['已选设备包含多个型号'] : []),
       ...(devices.some(device => !device.build_display_id) ? ['部分设备缺少版本信息'] : []),
     ],
-    passed: devices.length > 0 && rows.every(row => row.ready),
+    passed: devices.length > 0 && rows.length === devices.length && rows.every(row => row.ready),
   };
+}
+
+export function evaluateDeviceReadiness(devices: ReadinessDevice[], hosts: ReadinessHost[]) {
+  const rows = buildDeviceReadinessRows(devices, hosts);
+  const rowsByDeviceId = new Map(rows.map(row => [row.device.id, row]));
+  return summarizeDeviceReadiness(devices, rowsByDeviceId);
 }

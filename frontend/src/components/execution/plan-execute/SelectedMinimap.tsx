@@ -94,30 +94,31 @@ export function SelectedMinimap({
           return (
             <Tooltip key={device.id}>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  data-minimap-device-id={device.id}
-                  aria-label={`定位已选设备 ${device.id}${blocked ? ' 阻塞' : ''}`}
-                  onClick={() => onLocate(device.id)}
-                  className={cn(
-                    'group relative flex aspect-square items-center justify-center overflow-visible rounded-sm border transition-transform hover:z-10 hover:scale-110 hover:ring-2 hover:ring-primary/40',
-                    blocked ? 'border-destructive bg-destructive' : 'border-success bg-success',
-                    flash && 'animate-pulse ring-2 ring-primary',
-                  )}
-                >
-                  {blocked && (
-                    <span
-                      aria-hidden
-                      className="pointer-events-none absolute inset-0 overflow-hidden rounded-sm opacity-70"
-                      style={{
-                        backgroundImage:
-                          'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.45) 2px, rgba(255,255,255,0.45) 4px)',
-                      }}
-                    />
-                  )}
-                  <span
-                    role="button"
-                    tabIndex={0}
+                <div className="group relative aspect-square">
+                  <button
+                    type="button"
+                    data-minimap-device-id={device.id}
+                    aria-label={`定位已选设备 ${device.id}${blocked ? ' 阻塞' : ''}`}
+                    onClick={() => onLocate(device.id)}
+                    className={cn(
+                      'flex h-full w-full items-center justify-center overflow-hidden rounded-sm border transition-transform hover:z-10 hover:scale-110 hover:ring-2 hover:ring-primary/40',
+                      blocked ? 'border-destructive bg-destructive' : 'border-success bg-success',
+                      flash && 'animate-pulse ring-2 ring-primary',
+                    )}
+                  >
+                    {blocked && (
+                      <span
+                        aria-hidden
+                        className="pointer-events-none absolute inset-0 overflow-hidden rounded-sm opacity-70"
+                        style={{
+                          backgroundImage:
+                            'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.45) 2px, rgba(255,255,255,0.45) 4px)',
+                        }}
+                      />
+                    )}
+                  </button>
+                  <button
+                    type="button"
                     aria-label={`移除已选设备 ${device.id}`}
                     className="absolute -right-1 -top-1 z-20 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-destructive text-primary-foreground opacity-0 shadow transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                     onClick={(event) => {
@@ -125,17 +126,10 @@ export function SelectedMinimap({
                       event.stopPropagation();
                       onRemove(device.id);
                     }}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        onRemove(device.id);
-                      }
-                    }}
                   >
                     <X className="h-2.5 w-2.5" strokeWidth={3} aria-hidden />
-                  </span>
-                </button>
+                  </button>
+                </div>
               </TooltipTrigger>
               <TooltipContent side="top" className="max-w-xs space-y-0.5 bg-popover text-popover-foreground">
                 <div className="font-mono text-xs font-medium">{device.serial}</div>
