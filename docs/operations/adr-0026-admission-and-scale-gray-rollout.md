@@ -128,3 +128,16 @@ STP_AGENT_SID_REGISTRY=0
 - **不要**把 `STP_PLAN_ADMISSION_QUEUE_ENABLED` 默认改成 `1`（须压测签字后再改 `.env.example` 默认并写 ADR 修订记录）
 - **不要**在未开 Redis adapter 时水平扩展 SocketIO
 - **待定参数**（permit / aging / barrier 超时）改默认前重跑 `backend/core/adr0026_params.py` 不变量套件
+
+---
+
+## 4. 灰度实测记录（internal）
+
+| 日期 | 项 | 结果 |
+|------|----|------|
+| 2026-07-21 | `/health` 开准入 | `admission_queue_flag/pump_ready/enabled` 三者 true |
+| 2026-07-21 | API 冒烟（首次） | `POST /plans/5/run` → `QUEUED`，但 pump 报 `EnqueueSyncError: cannot synchronously enqueue plan_admission_task from the event loop`；根因：APScheduler 4 `AsyncScheduler` 默认 `async` executor 在事件循环上跑 sync tick |
+| 2026-07-21 | 修复 | `create_scheduler` 默认 `threadpool`；async job 按 `_job_executor_for` 选 `async`/`threadpool` |
+| 2026-07-21 | API 冒烟（修复后） | PlanRun `27`：`QUEUED`→`RUNNING` ≤5s，jobs=1；abort 可终态。证据：`/tmp/adr0026-admission-smoke.json` |
+| 2026-07-21 | 参数套件 / 仿真 | `test_adr0026_params` 7 passed；permit 仿真 5–60 device / cap=3–8 见 `/tmp/adr0026-param-sim.json`；**保持 v1 默认**（permit=5 等），未改 `.env.example` |
+| 2026-07-21 | 多实例决策 | **暂不开**：仅 1 个 uvicorn；Redis adapter / sid registry 均为 false；待 ≥2 控制面进程 + sticky 验证窗口后再开 `STP_SOCKETIO_REDIS_ADAPTER` |

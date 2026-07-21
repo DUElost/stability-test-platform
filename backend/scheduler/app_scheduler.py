@@ -17,7 +17,7 @@ import time
 from datetime import timedelta
 from typing import Callable
 
-from apscheduler import AsyncScheduler, ConflictPolicy
+from apscheduler import AsyncScheduler, ConflictPolicy, TaskDefaults
 from apscheduler.triggers.interval import IntervalTrigger
 
 from backend.core.metrics import (
@@ -144,8 +144,20 @@ def create_scheduler() -> AsyncScheduler:
     The caller must use it as an ``async with`` context manager (or call
     ``__aenter__`` / ``__aexit__`` manually) and then invoke
     ``register_schedules`` + ``start_in_background``.
+
+    Default executor is ``threadpool`` so sync ticks (admission pump, recycler,
+    precheck reaper, …) can call ``enqueue_sync(..., required=True)`` without
+    hitting the event-loop deadlock path in ``saq_worker.enqueue_sync``.
+    Truly async jobs must pass ``job_executor="async"`` at ``add_schedule``.
     """
-    return AsyncScheduler()
+    return AsyncScheduler(
+        task_defaults=TaskDefaults(job_executor="threadpool"),
+    )
+
+
+def _job_executor_for(func: Callable) -> str:
+    """Pick APScheduler executor: async coroutines stay on the loop."""
+    return "async" if asyncio.iscoroutinefunction(func) else "threadpool"
 
 
 async def _poll_saq_queue_depth() -> None:
@@ -177,73 +189,76 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     from backend.scheduler.device_lease_reconciler import device_lease_reconcile_once
     from backend.tasks.session_watchdog import session_watchdog_once
 
-    await scheduler.add_schedule(
+    async def _add(
+        func: Callable,
+        trigger: IntervalTrigger,
+        *,
+        id: str,
+        misfire_grace_time=MISFIRE_GRACE,
+    ) -> None:
+        await scheduler.add_schedule(
+            func,
+            trigger,
+            id=id,
+            job_executor=_job_executor_for(func),
+            misfire_grace_time=misfire_grace_time,
+            conflict_policy=ConflictPolicy.replace,
+        )
+
+    await _add(
         _instrumented("recycler", recycle_once, singleton=True),
         IntervalTrigger(seconds=RECYCLER_INTERVAL),
         id="recycler",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=recycler interval=%ds", RECYCLER_INTERVAL)
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented("session_watchdog", session_watchdog_once, singleton=True),
         IntervalTrigger(seconds=WATCHDOG_INTERVAL),
         id="session_watchdog",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=session_watchdog interval=%ds", WATCHDOG_INTERVAL)
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented(
             "device_lease_reconciler", device_lease_reconcile_once, singleton=True
         ),
         IntervalTrigger(seconds=RECONCILER_INTERVAL),
         id="device_lease_reconciler",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=device_lease_reconciler interval=%ds", RECONCILER_INTERVAL)
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented("cron_check", check_and_fire_schedules, singleton=True),
         IntervalTrigger(seconds=int(CRON_POLL_INTERVAL)),
         id="cron_check",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=cron_check interval=%ds", int(CRON_POLL_INTERVAL))
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented("retention_cleanup", run_retention_cleanup, singleton=True),
         IntervalTrigger(seconds=RETENTION_CLEANUP_INTERVAL),
         id="retention_cleanup",
         misfire_grace_time=timedelta(minutes=10),
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info(
         "schedule_registered id=retention_cleanup interval=%ds",
         RETENTION_CLEANUP_INTERVAL,
     )
 
-    await scheduler.add_schedule(
+    await _add(
         _poll_saq_queue_depth,
         IntervalTrigger(seconds=QUEUE_DEPTH_INTERVAL),
         id="saq_queue_depth_poll",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=saq_queue_depth_poll interval=%ds", QUEUE_DEPTH_INTERVAL)
 
     from backend.scheduler.precheck_reaper import precheck_reaper_job
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented("precheck_reaper", precheck_reaper_job, singleton=True),
         IntervalTrigger(seconds=PRECHECK_REAPER_INTERVAL),
         id="precheck_reaper",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info(
         "schedule_registered id=precheck_reaper interval=%ds",
@@ -252,12 +267,10 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
 
     from backend.scheduler.plan_chain_reconciler import reconcile_plan_chains
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented("plan_chain_reconciler", reconcile_plan_chains, singleton=True),
         IntervalTrigger(seconds=CHAIN_RECONCILER_INTERVAL),
         id="plan_chain_reconciler",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info(
         "schedule_registered id=plan_chain_reconciler interval=%ds",
@@ -266,7 +279,7 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
 
     from backend.scheduler.revoked_token_cleanup import cleanup_revoked_refresh_tokens_job
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented(
             "revoked_token_cleanup",
             cleanup_revoked_refresh_tokens_job,
@@ -275,7 +288,6 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
         IntervalTrigger(seconds=REVOKED_TOKEN_CLEANUP_INTERVAL),
         id="revoked_token_cleanup",
         misfire_grace_time=timedelta(minutes=30),
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info(
         "schedule_registered id=revoked_token_cleanup interval=%ds",
@@ -284,12 +296,10 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
 
     from backend.scheduler.cron_scheduler import auto_archive_sweep
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented("auto_archive_sweep", auto_archive_sweep, singleton=True),
         IntervalTrigger(seconds=AUTO_ARCHIVE_INTERVAL),
         id="auto_archive_sweep",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=auto_archive_sweep interval=%ds", AUTO_ARCHIVE_INTERVAL)
 
@@ -303,24 +313,20 @@ async def register_schedules(scheduler: AsyncScheduler) -> None:
     # STP_ENABLE_INPROCESS_SAQ=0 keeps producer alive for external workers).
     from backend.services.admission_pump import pump_admission_tick
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented("admission_pump", pump_admission_tick),
         IntervalTrigger(seconds=ADMISSION_PUMP_INTERVAL),
         id="admission_pump",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info("schedule_registered id=admission_pump interval=%ds", ADMISSION_PUMP_INTERVAL)
 
     # ADR-0026 §6: low-frequency counter reconciliation (self-heal drift)
     from backend.scheduler.counter_reconciler import reconcile_plan_run_counters_once
 
-    await scheduler.add_schedule(
+    await _add(
         _instrumented("counter_reconcile", reconcile_plan_run_counters_once),
         IntervalTrigger(seconds=COUNTER_RECONCILE_INTERVAL),
         id="counter_reconcile",
-        misfire_grace_time=MISFIRE_GRACE,
-        conflict_policy=ConflictPolicy.replace,
     )
     logger.info(
         "schedule_registered id=counter_reconcile interval=%ds",
