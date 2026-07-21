@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -79,6 +80,13 @@ export function DeviceFilterBar({
   activeFilterChips,
   onClearFilterChip,
 }: DeviceFilterBarProps) {
+  const [tagSearch, setTagSearch] = useState('');
+  const filteredTagOptions = useMemo(() => {
+    const keyword = tagSearch.trim().toLowerCase();
+    if (!keyword) return tagOptions;
+    return tagOptions.filter((tag) => tag.toLowerCase().includes(keyword));
+  }, [tagOptions, tagSearch]);
+
   return (
     <div className="shrink-0" data-testid="device-filter-bar">
       <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2.5">
@@ -190,15 +198,23 @@ export function DeviceFilterBar({
                 <ChevronDown className="ml-1 h-3.5 w-3.5 shrink-0 opacity-50" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onSelect={() => onTagFilterChange([])}>
+            <DropdownMenuContent align="end" className="w-52">
+              <div className="p-2 pb-1" onKeyDown={(event) => event.stopPropagation()}>
+                <Input
+                  className="h-8 text-xs"
+                  placeholder="搜索标签…"
+                  value={tagSearch}
+                  onChange={(event) => setTagSearch(event.target.value)}
+                />
+              </div>
+              <DropdownMenuItem onSelect={() => { setTagSearch(''); onTagFilterChange([]); }}>
                 <span className="mr-2 inline-flex w-4 justify-center">
                   {deviceTagFilter.length === 0 && <Check className="h-4 w-4" />}
                 </span>
                 全部标签
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              {tagOptions.map((tag) => {
+              {filteredTagOptions.map((tag) => {
                 const active = deviceTagFilter.includes(tag);
                 return (
                   <DropdownMenuItem
@@ -219,8 +235,8 @@ export function DeviceFilterBar({
                   </DropdownMenuItem>
                 );
               })}
-              {tagOptions.length === 0 && (
-                <DropdownMenuItem disabled>暂无标签</DropdownMenuItem>
+              {filteredTagOptions.length === 0 && (
+                <DropdownMenuItem disabled>{tagOptions.length === 0 ? '暂无标签' : '无匹配标签'}</DropdownMenuItem>
               )}
             </DropdownMenuContent>
           </DropdownMenu>

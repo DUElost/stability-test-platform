@@ -3,6 +3,7 @@ import {
   isEditableKeyboardTarget,
   isModKey,
   shouldHandleEnterPrimary,
+  shouldHandleEscapePhaseBack,
   shouldHandleSelectAllShortcut,
 } from './planExecuteKeyboard';
 
@@ -48,6 +49,20 @@ describe('planExecuteKeyboard', () => {
       keyEvent('a', { ctrlKey: true, target: document.createElement('input') }),
       { phase: 'select', workspace },
     )).toBe(false);
+
+    workspace.remove();
+  });
+
+  it('handles Escape to go back a phase when focus is in workspace', () => {
+    const workspace = document.createElement('div');
+    const inner = document.createElement('div');
+    workspace.appendChild(inner);
+    document.body.appendChild(workspace);
+    inner.focus();
+
+    expect(shouldHandleEscapePhaseBack(keyEvent('Escape', { target: inner }), { workspace })).toBe(true);
+    expect(shouldHandleEscapePhaseBack(keyEvent('Escape'), { hasOpenOverlay: true, workspace })).toBe(false);
+    expect(shouldHandleEscapePhaseBack(keyEvent('Escape', { target: document.createElement('input') }), { workspace })).toBe(false);
 
     workspace.remove();
   });

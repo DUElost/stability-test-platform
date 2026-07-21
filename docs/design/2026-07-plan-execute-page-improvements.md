@@ -435,7 +435,11 @@ URL query（P1 完整落地；A 至少支持 `plan` / `devices` / `view`）：
 | P2-1 | 草稿 hook 抽取 | 已修复：`useInitialPlanExecuteDraft` + `usePlanExecuteDraftWriter` |
 | P2-2 | `DeviceMatrix` 交互单测 | 已修复：`DeviceMatrix.test.tsx`（`applyMatrixSelection`） |
 | P2-4 | 草稿挂载读取 | 已修复：`useState` 惰性初始化替代渲染期 ref |
-| P3 | 暗色主题 / 右栏虚拟化 / tableSort URL | 仍另项 |
+| P3-1 | 暗色主题硬编码色 | 已修复：矩阵/Minimap 使用 `--background`/`--foreground` token |
+| P3-2 | 已选集 Minimap 虚拟化 | 已修复：`>80` 台启用 `@tanstack/react-virtual` 行网格 |
+| P3-3 | `tableSort` URL + 草稿 | 已修复：`sort=serial:asc` query + draft `tableSort` |
+| P3-4 | 标签下拉搜索 | 已修复：`DeviceFilterBar` 标签菜单内搜索框 |
+| P3-5 | Esc 退回上一步 | 已修复：`dispatch→select→plan` |
 
 ### 8.12 修订记录
 
@@ -446,3 +450,4 @@ URL query（P1 完整落地；A 至少支持 `plan` / `devices` / `view`）：
 | 2026-07-21 | §8 P7 + 矩阵虚拟滚动：表列排序/版本悬浮、Plan「最近执行」分组、`@tanstack/react-virtual` 节点分带虚拟行；暗色主题仍另项 |
 | 2026-07-21 | 全 App 暗色主题落地（`ThemeProvider` / `ThemeToggle` / FOUC 脚本 / `.dark` 令牌抬升）；§8.3 该项关闭 |
 | 2026-07-21 | §8.13 审查修复：readiness 单次计算、Plan 最近执行分区 UI、矩阵单滚动、Minimap a11y、草稿 hooks |
+| 2026-07-21 | §8 P3：tableSort URL/草稿、标签搜索、Esc 退回、Minimap 虚拟化、暗色 token 对齐 |

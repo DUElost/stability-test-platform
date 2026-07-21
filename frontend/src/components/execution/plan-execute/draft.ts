@@ -33,6 +33,7 @@ function normalizeDraft(parsed: Partial<PlanExecuteDraftV2> & { currentStep?: nu
       ? parsed.deviceTagFilter.filter((tag): tag is string => typeof tag === 'string')
       : [],
     readyOnly: Boolean(parsed.readyOnly),
+    tableSort: typeof parsed.tableSort === 'string' ? parsed.tableSort : null,
   };
 }
 

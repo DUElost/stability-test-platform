@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatTableSortParam,
+  parseTableSortParam,
   sortDevicesByColumn,
   toggleDeviceTableSort,
 } from './planExecuteTableSort';
@@ -22,6 +24,13 @@ function device(partial: Partial<ReadinessDevice> & { id: number; serial: string
 }
 
 describe('planExecuteTableSort', () => {
+  it('parses and formats URL sort param', () => {
+    expect(parseTableSortParam('serial:asc')).toEqual({ key: 'serial', dir: 'asc' });
+    expect(parseTableSortParam('bad')).toBeNull();
+    expect(formatTableSortParam({ key: 'host', dir: 'desc' })).toBe('host:desc');
+    expect(formatTableSortParam(null)).toBeNull();
+  });
+
   it('toggles direction on same key and resets on new key', () => {
     expect(toggleDeviceTableSort(null, 'serial')).toEqual({ key: 'serial', dir: 'asc' });
     expect(toggleDeviceTableSort({ key: 'serial', dir: 'asc' }, 'serial')).toEqual({

@@ -64,7 +64,9 @@ import {
 } from '@/components/execution/plan-execute/planExecuteFilters';
 import {
   shouldHandleEnterPrimary,
+  shouldHandleEscapePhaseBack,
   shouldHandleSelectAllShortcut,
+  hasOpenOverlay,
 } from '@/components/execution/plan-execute/planExecuteKeyboard';
 import {
   addPreset,
@@ -76,6 +78,8 @@ import {
 import { sortDevicesStable } from '@/components/execution/plan-execute/planExecuteSelection';
 import {
   sortDevicesByColumn,
+  parseTableSortParam,
+  formatTableSortParam,
   type DeviceTableSort,
 } from '@/components/execution/plan-execute/planExecuteTableSort';
 import { estimatePlanWallClock } from '@/components/execution/plan-execute/planExecuteWallClock';
@@ -149,7 +153,11 @@ export default function PlanExecutePage() {
   ));
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [presets, setPresets] = useState<PlanExecutePreset[]>(() => loadPresets());
-  const [tableSort, setTableSort] = useState<DeviceTableSort | null>(null);
+  const [tableSort, setTableSort] = useState<DeviceTableSort | null>(() => {
+    const fromUrl = parseTableSortParam(searchParams.get('sort'));
+    if (fromUrl) return fromUrl;
+    return parseTableSortParam(initialDraft?.tableSort ?? null);
+  });
 
   const draftSnapshot = useMemo<PlanExecuteDraftV2>(() => ({
     planId: selectedPlanId,
@@ -162,6 +170,7 @@ export default function PlanExecutePage() {
     deviceModelFilter,
     deviceTagFilter,
     readyOnly,
+    tableSort: formatTableSortParam(tableSort),
   }), [
     selectedPlanId,
     selectedDeviceIds,
@@ -173,6 +182,7 @@ export default function PlanExecutePage() {
     deviceModelFilter,
     deviceTagFilter,
     readyOnly,
+    tableSort,
   ]);
   const { draftConsumedRef, clearDraft } = usePlanExecuteDraftWriter({ draft: draftSnapshot });
 
@@ -518,6 +528,10 @@ export default function PlanExecutePage() {
     );
     if (draft.view && !searchParams.has('view')) setView(draft.view);
     if (!hasFilterQueryParams(searchParams) && draft.readyOnly) setReadyOnly(Boolean(draft.readyOnly));
+    if (!searchParams.has('sort') && draft.tableSort) {
+      const restoredSort = parseTableSortParam(draft.tableSort);
+      if (restoredSort) setTableSort(restoredSort);
+    }
     if (restored.length > 0) {
       setSelectedDeviceIds(new Set(restored));
       if (selectedPlan && executableStepCount > 0 && draft.phase !== 'plan') setPhase(draft.phase);
@@ -538,9 +552,12 @@ export default function PlanExecutePage() {
         readyOnly,
         view,
       });
+      const sortParam = formatTableSortParam(tableSort);
+      if (sortParam) next.set('sort', sortParam);
+      else next.delete('sort');
       return next.toString() === prev.toString() ? prev : next;
     }, { replace: true });
-  }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly, view, setSearchParams]);
+  }, [deviceFilter, deviceVersionFilter, deviceHostFilter, deviceModelFilter, deviceTagFilter, readyOnly, view, tableSort, setSearchParams]);
 
   // 步骤 ≥2 时若已无选中样机，退回样机选择
   useEffect(() => {
@@ -885,8 +902,7 @@ export default function PlanExecutePage() {
   // P5：Enter = 主 CTA；Ctrl/⌘+A = 全选当前筛选结果（限选机舞台）
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const hasOpenDialog = showClearConfirm
-        || Boolean(document.querySelector('[role="dialog"][data-state="open"]'));
+      const hasOpenOverlayUi = showClearConfirm || hasOpenOverlay();
 
       if (shouldHandleSelectAllShortcut(event, {
         phase,
@@ -897,14 +913,25 @@ export default function PlanExecutePage() {
         return;
       }
 
-      if (shouldHandleEnterPrimary(event, { hasOpenDialog })) {
+      if (shouldHandleEnterPrimary(event, { hasOpenDialog: hasOpenOverlayUi })) {
         event.preventDefault();
         primaryActionRef.current();
+        return;
+      }
+
+      if (shouldHandleEscapePhaseBack(event, { hasOpenOverlay: hasOpenOverlayUi, workspace: workspaceRef.current })) {
+        if (phase === 'dispatch') {
+          event.preventDefault();
+          handlePhaseChange('select');
+        } else if (phase === 'select') {
+          event.preventDefault();
+          handlePhaseChange('plan');
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [phase, showClearConfirm]);
+  }, [phase, showClearConfirm, handlePhaseChange]);
 
   return (
     <PageContainer

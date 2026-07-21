@@ -12,6 +12,15 @@ export function isModKey(event: Pick<KeyboardEvent, 'metaKey' | 'ctrlKey'>): boo
   return event.metaKey || event.ctrlKey;
 }
 
+/** Radix dialog / menu / select overlays that should consume Escape first. */
+export function hasOpenOverlay(root: ParentNode = document): boolean {
+  return Boolean(
+    root.querySelector('[role="dialog"][data-state="open"]')
+    || root.querySelector('[role="menu"][data-state="open"]')
+    || root.querySelector('[role="listbox"][data-state="open"]'),
+  );
+}
+
 /**
  * Whether Ctrl/⌘+A should select all filtered devices.
  * Requires select phase + focus inside the workspace (or body when nothing focused).
@@ -41,5 +50,19 @@ export function shouldHandleEnterPrimary(
   if (opts.hasOpenDialog) return false;
   // Buttons already handle Enter natively — avoid double-fire
   if (event.target instanceof HTMLButtonElement) return false;
+  return true;
+}
+
+/** Escape returns to the previous phase when focus is in the workspace and no overlay is open. */
+export function shouldHandleEscapePhaseBack(
+  event: KeyboardEvent,
+  opts: { hasOpenOverlay?: boolean; workspace?: HTMLElement | null } = {},
+): boolean {
+  if (event.key !== 'Escape') return false;
+  if (isEditableKeyboardTarget(event.target)) return false;
+  if (opts.hasOpenOverlay) return false;
+  if (!opts.workspace) return false;
+  const active = document.activeElement;
+  if (active && active !== document.body && !opts.workspace.contains(active)) return false;
   return true;
 }

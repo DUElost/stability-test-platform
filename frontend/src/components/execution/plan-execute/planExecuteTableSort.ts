@@ -5,9 +5,25 @@ import { compareDevicesStable } from './planExecuteSelection';
 export type DeviceSortKey = 'serial' | 'host' | 'model' | 'version';
 export type SortDir = 'asc' | 'desc';
 
+export const DEVICE_SORT_KEYS: DeviceSortKey[] = ['serial', 'host', 'model', 'version'];
+
 export interface DeviceTableSort {
   key: DeviceSortKey;
   dir: SortDir;
+}
+
+/** URL query `sort=serial:asc` */
+export function parseTableSortParam(raw: string | null | undefined): DeviceTableSort | null {
+  if (!raw) return null;
+  const [key, dir] = raw.split(':');
+  if (!DEVICE_SORT_KEYS.includes(key as DeviceSortKey)) return null;
+  if (dir !== 'asc' && dir !== 'desc') return null;
+  return { key: key as DeviceSortKey, dir };
+}
+
+export function formatTableSortParam(sort: DeviceTableSort | null | undefined): string | null {
+  if (!sort) return null;
+  return `${sort.key}:${sort.dir}`;
 }
 
 function hostLabel(device: ReadinessDevice, hostMap: HostLabelLookup): string {

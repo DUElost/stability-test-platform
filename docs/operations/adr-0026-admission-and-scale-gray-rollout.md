@@ -141,3 +141,7 @@ STP_AGENT_SID_REGISTRY=0
 | 2026-07-21 | API 冒烟（修复后） | PlanRun `27`：`QUEUED`→`RUNNING` ≤5s，jobs=1；abort 可终态。证据：`/tmp/adr0026-admission-smoke.json` |
 | 2026-07-21 | 参数套件 / 仿真 | `test_adr0026_params` 7 passed；permit 仿真 5–60 device / cap=3–8 见 `/tmp/adr0026-param-sim.json`；**保持 v1 默认**（permit=5 等），未改 `.env.example` |
 | 2026-07-21 | 多实例决策 | **暂不开**：仅 1 个 uvicorn；Redis adapter / sid registry 均为 false；待 ≥2 控制面进程 + sticky 验证窗口后再开 `STP_SOCKETIO_REDIS_ADAPTER` |
+| 2026-07-21 | API 冒烟（复测） | `/health` 三者 true；空闲 PlanRun `33`：`QUEUED`→`RUNNING` **1.02s**；BUSY 竞争 PlanRun `29` 观察窗内保持 `QUEUED`、未 FAILED；QUEUED abort 可终态；3 路并发 PlanRun `30–32` 均 ≤2s 入场。证据：`/tmp/adr0026-smoke-pressure-20260721.json`、`/tmp/adr0026-idle-recheck.json` |
+| 2026-07-21 | 冒烟异常观测 | PlanRun `28` 首票入场 **34s**：`queue_blockers=admission_enqueue_failed`，日志 `SAQ not running — cannot enqueue plan_admission_task`，命中 `ADMISSION_RETRY_BACKOFF_SECONDS=30` 后成功；属 SAQ 瞬时未就绪 + 退避，非排队语义错误 |
+| 2026-07-21 | 参数套件（复测） | `test_adr0026_params` 7 passed；仿真 max mean wait=12.3s ≪ coord timeout 300s；**仍保持 v1 默认**。证据：`/tmp/adr0026-param-sim-20260721.json` |
+| 2026-07-21 | 小规模压测结论 | 当前实机 ≈14 ONLINE / 8 BUSY、单控制面；API 侧小并发准入通过。**不能替代** 44→60→100 host 阶梯；多实例仍暂缓 |

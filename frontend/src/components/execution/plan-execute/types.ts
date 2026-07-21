@@ -13,6 +13,8 @@ export interface PlanExecuteDraftV2 {
   deviceModelFilter: string;
   deviceTagFilter: string[];
   readyOnly?: boolean;
+  /** Serialized `key:dir`, e.g. `serial:asc` */
+  tableSort?: string | null;
 }
 
 export const EXECUTE_PHASES: Array<{ id: ExecutePhase; title: string; description: string }> = [

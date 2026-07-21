@@ -39,6 +39,7 @@ export function usePlanExecuteDraftWriter({ draft }: UsePlanExecuteDraftWriterOp
     draft.deviceModelFilter,
     draft.deviceTagFilter,
     draft.readyOnly,
+    draft.tableSort,
     draft,
   ]);
 
