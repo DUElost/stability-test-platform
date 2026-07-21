@@ -22,6 +22,11 @@ export interface CapacityOverflowHost {
   id: string | number;
   name?: string | null;
   ip?: string | null;
+  status?: string;
+  health?: {
+    status?: string | null;
+    reasons?: string[];
+  } | null;
   capacity?: {
     effective_slots?: number;
     available_slots?: number;
@@ -37,6 +42,17 @@ export interface CapacityOverflowWarning {
   selected: number;
   effectiveSlots: number;
   message: string;
+}
+
+export interface CapacityPlanRow {
+  hostId: string;
+  hostLabel: string;
+  selected: number;
+  effectiveSlots: number | null;
+  immediate: number | null;
+  queued: number | null;
+  healthStatus: string | null;
+  healthReasons: string[];
 }
 
 export interface NodeSortEntry {
@@ -103,6 +119,40 @@ export function evaluateCapacityOverflow(
     });
   }
   return warnings;
+}
+
+export function buildCapacityPlan(
+  selectedDevices: ReadinessDevice[],
+  hosts: CapacityOverflowHost[],
+): CapacityPlanRow[] {
+  const hostMap = new Map(hosts.map(host => [String(host.id), host]));
+  const counts = new Map<string, number>();
+  for (const device of selectedDevices) {
+    const hostId = String(device.host_id ?? 'unassigned');
+    counts.set(hostId, (counts.get(hostId) ?? 0) + 1);
+  }
+
+  return Array.from(counts, ([hostId, selected]) => {
+    const host = hostMap.get(hostId);
+    const rawSlots = host?.capacity?.effective_slots;
+    const effectiveSlots = typeof rawSlots === 'number' && Number.isFinite(rawSlots)
+      ? Math.max(0, Math.floor(rawSlots))
+      : null;
+    const hostLabel = host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
+    return {
+      hostId,
+      hostLabel,
+      selected,
+      effectiveSlots,
+      immediate: effectiveSlots == null ? null : Math.min(selected, effectiveSlots),
+      queued: effectiveSlots == null ? null : Math.max(0, selected - effectiveSlots),
+      healthStatus: host?.health?.status ?? host?.status ?? null,
+      healthReasons: host?.health?.reasons ?? [],
+    };
+  }).sort((a, b) => compareNodeEntries(
+    { id: a.hostId, label: a.hostLabel },
+    { id: b.hostId, label: b.hostLabel },
+  ));
 }
 
 export function evaluateDeviceReadiness(devices: ReadinessDevice[], hosts: ReadinessHost[]) {

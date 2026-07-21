@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildCapacityPlan,
   compareNodeEntries,
   evaluateCapacityOverflow,
   evaluateDeviceReadiness,
@@ -91,6 +92,38 @@ describe('evaluateCapacityOverflow', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0].hostId).toBe('h1');
     expect(warnings[0].hostLabel).toBe('node-a');
+  });
+});
+
+describe('buildCapacityPlan', () => {
+  it('calculates immediate and queued counts for every selected host', () => {
+    const rows = buildCapacityPlan(
+      [
+        { id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'B', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'C', host_id: 'h2', status: 'ONLINE' },
+      ],
+      [
+        { id: 'h1', ip: '172.21.8.10', capacity: { effective_slots: 1 } },
+        { id: 'h2', ip: '172.21.8.11', capacity: { effective_slots: 3 } },
+      ],
+    );
+
+    expect(rows[0]).toMatchObject({ hostId: 'h1', selected: 2, immediate: 1, queued: 1 });
+    expect(rows[1]).toMatchObject({ hostId: 'h2', selected: 1, immediate: 1, queued: 0 });
+  });
+
+  it('keeps missing capacity explicit instead of estimating a queue', () => {
+    const rows = buildCapacityPlan(
+      [{ id: 1, serial: 'A', host_id: 'h1', status: 'ONLINE' }],
+      [{ id: 'h1', name: 'node-a', capacity: { active_jobs: 2 } }],
+    );
+
+    expect(rows[0]).toMatchObject({
+      effectiveSlots: null,
+      immediate: null,
+      queued: null,
+    });
   });
 });
 

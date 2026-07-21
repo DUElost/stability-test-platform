@@ -6,7 +6,7 @@
 - **范围**：
   - Phase 1–6：以前端为主（分页拉全、复跑、容量/占用、全部节点等）— **已落地**
   - §7 迭代 A/B/C：走查债项续篇；含轻量后端（`GET /jobs/active-by-device`、`PlanRunTrigger.note` → `run_context.note`）— **已落地**
-  - **§8 Plan Execute V2**：选机工作台 + 发起驾驶舱（对照已确认静态 mockup 实现）— **待实现**
+  - **§8 Plan Execute V2**：选机工作台 + 发起驾驶舱（对照已确认静态 mockup 实现）— **A / A+ / B / P1–P6 已落地**；P7 可选、矩阵虚拟滚动与暗色主题仍另项
   - 仍不含 ADR-0026 V2 准入队列 UI；**不做** run 级巡检/超时覆盖（见 §4 / §7 C2 / §8.3）
     
 ---
@@ -316,13 +316,13 @@ frontend/src/
 
 | ID | 项 | 成本 | 要点 |
 |----|----|------|------|
-| **P1** | 筛选 Chips + URL 化 ⑤ | ~1d | 激活条件可单独 ✕；query 序列化（version/model/tag/ready/q/host/view）；与 A1 恢复规则写进 `planExecuteFilters.ts` |
-| **P2** | Minimap ⑧ | 0.5–1d | 定位 vs 删除分离；矩阵模式高亮格 |
-| **P3** | 导出 ⑪ | 0.25d | 复制 serials；CSV（serial/节点/型号/版本） |
-| **P4** | Presets ⑥ | ~1d | `localStorage`；应用 = 与可调度集求交 + toast 丢失数 |
-| **P5** | 键盘 ⑩ | 0.5d | Enter=当前态主 CTA；Ctrl/⌘+A=全选**当前筛选结果**（`preventDefault`，焦点限舞台）；Esc 关弹层（Radix） |
-| **P6** | 步骤 stage 徽标 ⑫ | 0.5d | 态 0 步骤按 init/patrol/teardown 分组 + 彩色徽标 |
-| **P7** | §7.6 列排序等 | 可选 | 并进表格辅视图，不单独立项 |
+| **P1** | 筛选 Chips + URL 化 ⑤ | ~1d | ✅ 激活条件可单独 ✕；query 序列化（version/model/tag/ready/q/host/view）；与 A1 恢复规则写进 `planExecuteFilters.ts` |
+| **P2** | Minimap ⑧ | 0.5–1d | ✅ 定位 vs 删除分离；矩阵模式高亮格（`SelectedMinimap`） |
+| **P3** | 导出 ⑪ | 0.25d | ✅ 复制 serials；CSV（serial/节点/型号/版本） |
+| **P4** | Presets ⑥ | ~1d | ✅ `localStorage`；应用 = 与可调度集求交 + toast 丢失数 |
+| **P5** | 键盘 ⑩ | 0.5d | ✅ Enter=当前态主 CTA；Ctrl/⌘+A=全选**当前筛选结果**（`preventDefault`，焦点限舞台）；Esc 关弹层（Radix） |
+| **P6** | 步骤 stage 徽标 ⑫ | 0.5d | ✅ 态 0 步骤按 init/patrol/teardown 分组 + 彩色徽标 |
+| **P7** | §7.6 列排序等 | 可选 | 并进表格辅视图，不单独立项（仍可选） |
 
 ### 8.7 关键算法与 API 契约
 
@@ -429,3 +429,4 @@ URL query（P1 完整落地；A 至少支持 `plan` / `devices` / `view`）：
 | 日期 | 变更 |
 |------|------|
 | 2026-07-20 | §8 初版：对照 `mockups/plan-execute-v2` 的实现方案（冲刺 A / A+ / B + 穿插）；确认三态 IA、非目标、组件落点、API/算法与验收 |
+| 2026-07-21 | §8 冲刺 A / A+ / B / P1–P6 落地：三态工作台、矩阵选机、驾驶舱、近 3 次与防重复、Chips+URL、Minimap 定位、导出、presets、键盘、stage 徽标；P7 / 矩阵虚拟滚动 / 暗色主题仍另项 |

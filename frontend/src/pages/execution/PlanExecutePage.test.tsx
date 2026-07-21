@@ -41,6 +41,8 @@ vi.mock('@/utils/api', async (importOriginal) => {
         run: vi.fn(),
       },
       planRuns: {
+        list: vi.fn().mockResolvedValue([]),
+        get: vi.fn(),
         retryDispatch: vi.fn(),
       },
       scripts: {
@@ -127,10 +129,10 @@ function renderPage({
 }
 
 async function goToDeviceStep() {
-  // 等 plans query 落定（选中 Plan 概览卡渲染后）再点步骤条，
-  // 否则 handleStepChange 守卫（executableStepCount === 0）会把向导弹回第 0 步
+  // 等 plans query 落定后再进选机；默认切到表格以覆盖占用列/预检文案等既有断言。
   await screen.findByText(/启用步骤/);
   fireEvent.click(screen.getByRole('button', { name: /先定位节点/ }));
+  fireEvent.click(await screen.findByRole('button', { name: '表格' }));
 }
 
 function selectFirstNode() {
@@ -142,6 +144,9 @@ describe('PlanExecutePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
+    localStorage.clear();
+    (api.planRuns.list as any).mockResolvedValue([]);
+    (api.planRuns.get as any).mockReset();
   });
 
   it('disables BUSY devices and excludes them from available count', async () => {
@@ -213,7 +218,7 @@ describe('PlanExecutePage', () => {
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
 
-    expect(screen.queryByRole('button', { name: /预览并发起/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /生成执行预览/ })).not.toBeInTheDocument();
     expect(await screen.findByText(/没有已启用步骤/)).toBeInTheDocument();
     expect(api.plans.previewRun).not.toHaveBeenCalled();
   });
@@ -229,8 +234,8 @@ describe('PlanExecutePage', () => {
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
-    fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
-    await screen.findByText('确认执行');
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    await screen.findByText(/预览已生成并冻结 1 台设备/);
 
     fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
 
@@ -261,7 +266,7 @@ describe('PlanExecutePage', () => {
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
-    fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     fireEvent.click(await screen.findByRole('button', { name: /确认发起/ }));
 
     expect(await screen.findByText('PlanRun #91 派发失败')).toBeInTheDocument();
@@ -280,8 +285,8 @@ describe('PlanExecutePage', () => {
       ],
     });
 
-    // 恢复 1 台可调度样机后自动跳到「数量与版本确认」
-    expect(await screen.findByText('节点数量与版本一致性确认')).toBeInTheDocument();
+    // 恢复 1 台可调度样机后自动跳到选机工作台
+    expect(await screen.findByText('已选样机 Minimap')).toBeInTheDocument();
     expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
     expect(mocks.toast.info).toHaveBeenCalledWith(
       expect.stringContaining('DEV-2'),
@@ -380,10 +385,9 @@ describe('PlanExecutePage', () => {
     fireEvent.click(await screen.findByLabelText(/DEV-B/));
     expect(await screen.findByText(/1 个节点超选/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /确认节点与版本/ }));
-    fireEvent.click(await screen.findByRole('button', { name: /进入执行前确认/ }));
-    expect(await screen.findByText(/超出剩余可派发槽位 1 个/)).toBeInTheDocument();
-    expect(screen.getByText(/心跳数据，仅供参考/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /进入发起确认/ }));
+    expect(await screen.findByText(/1 立即 · 1 将排队/)).toBeInTheDocument();
+    expect(screen.getByText(/不是 PlanRun 级 QUEUED 准入/)).toBeInTheDocument();
   });
 
   it('does not warn when effective_slots is missing', async () => {
@@ -454,8 +458,9 @@ describe('PlanExecutePage', () => {
     expect(screen.getAllByText('未设置（按默认 5% 生效）').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('1h 0m')).toBeInTheDocument();
     expect(screen.getByText('2m 5s')).toBeInTheDocument();
-    // C2 降级：run 级覆盖不可行，只读展示 + 跳编辑 Plan
-    expect(screen.getAllByText('继承 Plan，本次不可覆盖').length).toBeGreaterThanOrEqual(3);
+    expect(screen.getByRole('button', { name: '巡检周期说明' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '超时说明' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '失败阈值说明' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: '编辑 Plan' }));
     expect(mocks.navigate).toHaveBeenCalledWith('/orchestration/plans/7');
@@ -468,8 +473,8 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /数量与版本/ }));
-    expect(await screen.findByText('节点数量与版本一致性确认')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /进入发起确认/ }));
+    expect(await screen.findByTestId('dispatch-cockpit')).toBeInTheDocument();
 
     // 清空选择需二次确认
     fireEvent.click(screen.getByRole('button', { name: '清空选择' }));
@@ -482,7 +487,7 @@ describe('PlanExecutePage', () => {
     expect(mocks.toast.info).toHaveBeenCalledWith('已无选中样机，已返回样机选择');
   });
 
-  it('offers undo when removing a device from the minimap', async () => {
+  it('offers undo when removing a device via minimap hover remove control', async () => {
     renderPage({
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
@@ -491,7 +496,7 @@ describe('PlanExecutePage', () => {
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /已选设备方块 1/ }));
+    fireEvent.click(screen.getByRole('button', { name: '移除已选设备 1' }));
     expect(screen.getByText(/已选 0 台/)).toBeInTheDocument();
     expect(mocks.toast.action).toHaveBeenCalledWith(
       '已移除 1 台样机',
@@ -507,7 +512,28 @@ describe('PlanExecutePage', () => {
     expect(screen.getByLabelText(/DEV-1/)).toBeChecked();
   });
 
-  it('marks blocked minimap tiles with pattern legend and blocked aria-label', async () => {
+  it('locates a selected device from minimap without removing it', async () => {
+    renderPage({
+      devices: [
+        { id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE', build_display_id: 'V104' },
+        { id: 2, serial: 'DEV-2', host_id: 'h1', status: 'ONLINE', build_display_id: 'V103' },
+      ],
+    });
+
+    await goToDeviceStep();
+    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(screen.getByRole('button', { name: '版本:V103' }));
+    expect(screen.getByTestId('active-filter-chips')).toHaveTextContent('版本:V103');
+
+    fireEvent.click(screen.getByRole('button', { name: /定位已选设备 1/ }));
+    await waitFor(() => {
+      expect(mocks.toast.info).toHaveBeenCalledWith('已清除筛选以定位该样机');
+    });
+    expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /定位已选设备 1/ })).toBeInTheDocument();
+  });
+
+  it('marks blocked minimap tiles with pattern legend and locate aria-label', async () => {
     renderPage({
       hosts: [{ id: 'h1', ip: '172.21.8.143', status: 'OFFLINE' }],
       devices: [{
@@ -523,10 +549,57 @@ describe('PlanExecutePage', () => {
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-BLOCK/));
     expect(screen.getByText(/已选阻塞（斜纹/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /已选设备方块 1 阻塞/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /定位已选设备 1 阻塞/ })).toBeInTheDocument();
   });
 
-  it('merges device and job counts in preview dialog', async () => {
+  it('serializes active filters into URL and clears via chips', async () => {
+    renderPage({
+      devices: [
+        { id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE', build_display_id: 'V104', model: 'ELA', tags: ['回归'] },
+        { id: 2, serial: 'DEV-2', host_id: 'h1', status: 'ONLINE', build_display_id: 'V103', model: 'X200' },
+      ],
+      hosts: [{ id: 'h1', ip: '10.0.0.1', status: 'ONLINE' }],
+      initialEntry: '/execution/plan-execute?plan=7&version=V104&ready=1&view=matrix',
+    });
+
+    await goToDeviceStep();
+    const chips = await screen.findByTestId('active-filter-chips');
+    expect(chips).toHaveTextContent('版本:V104');
+    expect(chips).toHaveTextContent('仅就绪');
+
+    fireEvent.click(screen.getByRole('button', { name: '清除筛选 版本:V104' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('active-filter-chips')).not.toHaveTextContent('版本:V104');
+    });
+    expect(screen.getByTestId('active-filter-chips')).toHaveTextContent('仅就绪');
+  });
+
+  it('copies selected serials to clipboard', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    renderPage({
+      devices: [
+        { id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'DEV-2', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(await screen.findByLabelText(/DEV-2/));
+    fireEvent.click(screen.getByRole('button', { name: /复制 serials/ }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('DEV-1\nDEV-2');
+    });
+    expect(mocks.toast.success).toHaveBeenCalledWith('已复制 2 个 serial');
+  });
+
+  it('keeps preview confirmation inline without reopening a dialog', async () => {
     renderPage({
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
@@ -534,11 +607,11 @@ describe('PlanExecutePage', () => {
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
-    fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
 
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('设备数（= Job 数）')).toBeInTheDocument();
-    expect(within(dialog).queryByText('Job 数')).not.toBeInTheDocument();
+    expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /确认发起/ })).toBeEnabled();
   });
 
   it('hides device counters on the plan step and shows them from device step', async () => {
@@ -582,30 +655,32 @@ describe('PlanExecutePage', () => {
     });
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /数量与版本/ }));
-    expect(await screen.findByText('节点数量与版本一致性确认')).toBeInTheDocument();
+    expect(await screen.findByText(/已选 1 台/)).toBeInTheDocument();
 
-    // 等防抖写入落盘
+    // 等防抖写入落盘（停在选机态）
     await waitFor(() => {
-      const raw = sessionStorage.getItem('stp.planExecute.draft.v1');
+      const raw = sessionStorage.getItem('stp.planExecute.draft.v2');
       expect(raw).toBeTruthy();
-      expect(JSON.parse(raw as string).deviceIds).toEqual([1]);
+      const draft = JSON.parse(raw as string);
+      expect(draft.deviceIds).toEqual([1]);
+      expect(draft.phase).toBe('select');
     });
     first.unmount();
 
     renderPage({
       devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
     });
-    // 设备集与步骤均恢复：直接进入「数量与版本确认」且计数为 1
-    expect(await screen.findByText('节点数量与版本一致性确认')).toBeInTheDocument();
+    // 设备集与步骤均恢复：直接进入选机工作台且计数为 1
+    expect(await screen.findByText('已选样机 Minimap')).toBeInTheDocument();
     expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
   });
 
   it('prefers URL devices over the draft and overwrites it', async () => {
-    sessionStorage.setItem('stp.planExecute.draft.v1', JSON.stringify({
+    sessionStorage.setItem('stp.planExecute.draft.v2', JSON.stringify({
       planId: 7,
       deviceIds: [2],
-      currentStep: 1,
+      phase: 'select',
+      view: 'table',
       deviceFilter: '',
       deviceVersionFilter: 'all',
       deviceHostFilter: 'all',
@@ -619,21 +694,22 @@ describe('PlanExecutePage', () => {
       ],
     });
 
-    // URL 预填生效：仅 DEV-1 被恢复并跳到版本确认
-    expect(await screen.findByText('节点数量与版本一致性确认')).toBeInTheDocument();
+    // URL 预填生效：仅 DEV-1 被恢复并跳到选机工作台
+    expect(await screen.findByText('已选样机 Minimap')).toBeInTheDocument();
     expect(screen.getByText(/已选 1 台/)).toBeInTheDocument();
 
-    // 回到样机选择核对：DEV-1 选中、DEV-2 未选（草稿 [2] 被忽略）
-    fireEvent.click(screen.getByRole('button', { name: /先定位节点/ }));
+    // 切到表格核对：DEV-1 选中、DEV-2 未选（草稿 [2] 被忽略）
+    fireEvent.click(screen.getByRole('button', { name: '表格' }));
     expect(await screen.findByLabelText(/DEV-1/)).toBeChecked();
     expect(screen.getByLabelText(/DEV-2/)).not.toBeChecked();
   });
 
   it('keeps URL plan authoritative while restoring draft devices', async () => {
-    sessionStorage.setItem('stp.planExecute.draft.v1', JSON.stringify({
+    sessionStorage.setItem('stp.planExecute.draft.v2', JSON.stringify({
       planId: 99,
       deviceIds: [1],
-      currentStep: 1,
+      phase: 'select',
+      view: 'table',
       deviceFilter: '',
       deviceVersionFilter: 'all',
       deviceHostFilter: 'all',
@@ -658,12 +734,12 @@ describe('PlanExecutePage', () => {
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
-    fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
-    await screen.findByText('确认执行');
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    await screen.findByText(/预览已生成并冻结 1 台设备/);
     fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
 
     await waitFor(() => expect(api.plans.run).toHaveBeenCalled());
-    expect(sessionStorage.getItem('stp.planExecute.draft.v1')).toBeNull();
+    expect(sessionStorage.getItem('stp.planExecute.draft.v2')).toBeNull();
   });
 
   it('keeps the draft when dispatch fails with 503', async () => {
@@ -679,16 +755,16 @@ describe('PlanExecutePage', () => {
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     // 等防抖写入落盘后再发起
     await waitFor(() => {
-      const raw = sessionStorage.getItem('stp.planExecute.draft.v1');
+      const raw = sessionStorage.getItem('stp.planExecute.draft.v2');
       expect(raw).toBeTruthy();
       expect(JSON.parse(raw as string).deviceIds).toEqual([1]);
     });
     fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
-    fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     fireEvent.click(await screen.findByRole('button', { name: /确认发起/ }));
 
     expect(await screen.findByText('PlanRun #91 派发失败')).toBeInTheDocument();
-    const raw = sessionStorage.getItem('stp.planExecute.draft.v1');
+    const raw = sessionStorage.getItem('stp.planExecute.draft.v2');
     expect(raw).toBeTruthy();
     expect(JSON.parse(raw as string).deviceIds).toEqual([1]);
   });
@@ -776,8 +852,9 @@ describe('PlanExecutePage', () => {
     const note = await screen.findByLabelText(/执行备注/);
     fireEvent.change(note, { target: { value: '  sprint4 smoke  ' } });
 
-    fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
-    expect(await screen.findByText('sprint4 smoke')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
+    expect(note).toHaveValue('  sprint4 smoke  ');
 
     fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
     await waitFor(() => {
@@ -802,7 +879,7 @@ describe('PlanExecutePage', () => {
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
     fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
-    fireEvent.click(screen.getByRole('button', { name: /预览并发起/ }));
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
 
     expect(await screen.findByRole('button', { name: /预览中/ })).toBeDisabled();
     resolvePreview({
@@ -812,7 +889,7 @@ describe('PlanExecutePage', () => {
       total_steps: 1,
       device_ids: [1],
     });
-    expect(await screen.findByText('确认执行')).toBeInTheDocument();
+    expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
   });
 
   it('expands step rows to show script default_params', async () => {
@@ -849,5 +926,217 @@ describe('PlanExecutePage', () => {
     fireEvent.click(screen.getByText(/check_device · 1\.0\.0/));
     expect(await screen.findByText(/"timeout": 30/)).toBeInTheDocument();
     expect(screen.getByText(/"retries": 1/)).toBeInTheDocument();
+  });
+
+  it('shows recent plan runs after selecting a plan', async () => {
+    const startedAt = new Date().toISOString();
+    (api.planRuns.list as any).mockResolvedValue([
+      {
+        id: 8841,
+        plan_id: 7,
+        status: 'RUNNING',
+        failure_threshold: 0.05,
+        run_type: 'MANUAL',
+        started_at: startedAt,
+        run_context: { dispatch_device_ids: [1, 2, 3] },
+      },
+      {
+        id: 8810,
+        plan_id: 7,
+        status: 'SUCCESS',
+        failure_threshold: 0.05,
+        run_type: 'MANUAL',
+        started_at: startedAt,
+        result_summary: { total: 30 },
+      },
+    ]);
+    renderPage({ initialEntry: '/execution/plan-execute?plan=7' });
+
+    expect(await screen.findByTestId('recent-plan-runs-inline')).toBeInTheDocument();
+    expect(screen.getByTestId('recent-plan-run-8841')).toHaveTextContent('3 台');
+    expect(screen.getByTestId('recent-plan-run-8810')).toHaveTextContent('30 台');
+
+    fireEvent.click(screen.getByTestId('recent-plan-run-8841'));
+    expect(mocks.navigate).toHaveBeenCalledWith('/execution/plan-runs/8841');
+  });
+
+  it('keeps duplicate warning visible after inline preview without blocking confirm', async () => {
+    const startedAt = new Date().toISOString();
+    (api.planRuns.list as any).mockResolvedValue([
+      {
+        id: 9001,
+        plan_id: 7,
+        status: 'RUNNING',
+        failure_threshold: 0.05,
+        run_type: 'MANUAL',
+        started_at: startedAt,
+        run_context: { dispatch_device_ids: [1, 2, 3, 9] },
+      },
+    ]);
+    renderPage({
+      devices: [
+        { id: 1, serial: 'D1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'D2', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'D3', host_id: 'h1', status: 'ONLINE' },
+        { id: 4, serial: 'D4', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    for (const serial of ['D1', 'D2', 'D3', 'D4']) {
+      fireEvent.click(await screen.findByLabelText(new RegExp(serial)));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+
+    expect(await screen.findByTestId('duplicate-launch-banner')).toHaveTextContent('疑似重复发起');
+    expect(screen.getByTestId('duplicate-launch-banner')).toHaveTextContent('#9001');
+
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    expect(await screen.findByText(/预览已生成并冻结 4 台设备/)).toBeInTheDocument();
+    const banners = screen.getAllByTestId('duplicate-launch-banner');
+    expect(banners).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /确认发起/ })).toBeEnabled();
+  });
+
+  it('fetches plan run detail when list lacks dispatch_device_ids and shows weak tip otherwise', async () => {
+    const startedAt = new Date().toISOString();
+    (api.planRuns.list as any).mockResolvedValue([
+      {
+        id: 9100,
+        plan_id: 7,
+        status: 'RUNNING',
+        failure_threshold: 0.05,
+        run_type: 'MANUAL',
+        started_at: startedAt,
+        result_summary: { total: 4 },
+      },
+    ]);
+    (api.planRuns.get as any).mockResolvedValue({
+      id: 9100,
+      plan_id: 7,
+      status: 'RUNNING',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      started_at: startedAt,
+      result_summary: { total: 4 },
+    });
+    renderPage({
+      devices: [
+        { id: 1, serial: 'D1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'D2', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'D3', host_id: 'h1', status: 'ONLINE' },
+        { id: 4, serial: 'D4', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    for (const serial of ['D1', 'D2', 'D3', 'D4']) {
+      fireEvent.click(await screen.findByLabelText(new RegExp(serial)));
+    }
+    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+
+    expect(await screen.findByTestId('duplicate-launch-banner')).toHaveTextContent('设备数接近');
+    await waitFor(() => expect(api.planRuns.get).toHaveBeenCalledWith(9100));
+  });
+
+  it('groups plan steps by stage with colored badges', async () => {
+    renderPage({
+      plans: [{
+        id: 7,
+        name: 'Smoke Plan',
+        description: null,
+        steps: [
+          { id: 1, step_key: 'a', script_name: 'init_a', script_version: '1.0.0', stage: 'init', enabled: true, sort_order: 1 },
+          { id: 2, step_key: 'b', script_name: 'patrol_b', script_version: '1.0.0', stage: 'patrol', enabled: true, sort_order: 1 },
+          { id: 3, step_key: 'c', script_name: 'tear_c', script_version: '1.0.0', stage: 'teardown', enabled: true, sort_order: 1 },
+        ],
+        failure_threshold: 0.05,
+      }],
+      initialEntry: '/execution/plan-execute?plan=7',
+    });
+
+    const list = await screen.findByTestId('plan-step-list');
+    expect(within(list).getByText('init')).toBeInTheDocument();
+    expect(within(list).getByText('patrol')).toBeInTheDocument();
+    expect(within(list).getByText('teardown')).toBeInTheDocument();
+    expect(within(list).getByText(/init_a · 1\.0\.0/)).toBeInTheDocument();
+  });
+
+  it('saves a named selection preset from current selection', async () => {
+    renderPage({
+      devices: [
+        { id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'DEV-2', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(screen.getByLabelText(/DEV-2/));
+
+    fireEvent.click(screen.getByRole('button', { name: /存为方案/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByPlaceholderText(/周五回归/), {
+      target: { value: '周五回归 · ELA' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }));
+
+    expect(mocks.toast.success).toHaveBeenCalledWith(expect.stringContaining('已保存方案「周五回归 · ELA」'));
+    expect(screen.getByText('周五回归 · ELA')).toBeInTheDocument();
+  });
+
+  it('applies preset intersection and skips unschedulable devices', async () => {
+    const { PRESETS_STORAGE_KEY } = await import('@/components/execution/plan-execute/planExecutePresets');
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify([{
+      id: 'p1',
+      name: 'Smoke 8',
+      deviceIds: [1, 2, 99],
+      createdAt: '2026-07-21T00:00:00Z',
+    }]));
+
+    renderPage({
+      devices: [
+        { id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'DEV-2', host_id: 'h1', status: 'ONLINE' },
+      ],
+    });
+
+    await goToDeviceStep();
+    expect(await screen.findByText('Smoke 8')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '应用' }));
+
+    expect(mocks.toast.info).toHaveBeenCalledWith(expect.stringContaining('1 台已失效并跳过'));
+    expect(screen.getByLabelText(/DEV-1/)).toBeChecked();
+    expect(screen.getByLabelText(/DEV-2/)).toBeChecked();
+  });
+
+  it('selects all filtered devices with Ctrl/Meta+A in select phase', async () => {
+    renderPage({
+      devices: [
+        { id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' },
+        { id: 2, serial: 'DEV-2', host_id: 'h1', status: 'ONLINE' },
+        { id: 3, serial: 'DEV-BUSY', host_id: 'h1', status: 'BUSY' },
+      ],
+    });
+
+    await goToDeviceStep();
+    const workspace = document.querySelector('[data-plan-execute-workspace]');
+    expect(workspace).toBeTruthy();
+    // 节点搜索框有 autoFocus；先 blur，否则 Ctrl+A 会留给输入框
+    (document.activeElement as HTMLElement | null)?.blur?.();
+
+    fireEvent.keyDown(window, { key: 'a', ctrlKey: true });
+    expect(screen.getByLabelText(/DEV-1/)).toBeChecked();
+    expect(screen.getByLabelText(/DEV-2/)).toBeChecked();
+    expect(screen.getByLabelText(/DEV-BUSY/)).toBeDisabled();
+  });
+
+  it('advances with Enter from plan phase when primary is enabled', async () => {
+    renderPage({
+      devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+    });
+    await screen.findByText(/启用步骤/);
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(await screen.findByText('样机选择')).toBeInTheDocument();
   });
 });
