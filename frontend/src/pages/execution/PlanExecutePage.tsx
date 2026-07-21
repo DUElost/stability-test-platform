@@ -7,10 +7,18 @@ import { Input } from '@/components/ui/input';
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import {
   Dialog,
   DialogContent,
@@ -27,7 +35,7 @@ import { usePagination } from '@/hooks/usePagination';
 import { api, ApiError, fetchAllDevices, fetchHostList, type HostActiveJob, type PlanRunPreview } from '@/utils/api';
 import { deviceKeys, hostKeys, jobKeys, planKeys, planRunKeys } from '@/utils/api/queryKeys';
 import { formatDurationSeconds } from '@/utils/format';
-import { Smartphone, AlertCircle, ExternalLink, RefreshCw, Layers3, Trash2, ChevronLeft } from 'lucide-react';
+import { Smartphone, AlertCircle, ExternalLink, RefreshCw, Layers3, Trash2, ChevronLeft, ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 import { TEXT } from '@/design-system/tokens';
@@ -86,6 +94,12 @@ import {
   type PlanExecutePreset,
 } from '@/components/execution/plan-execute/planExecutePresets';
 import { sortDevicesStable } from '@/components/execution/plan-execute/planExecuteSelection';
+import { groupPlansForSelect } from '@/components/execution/plan-execute/planExecutePlanOptions';
+import {
+  sortDevicesByColumn,
+  toggleDeviceTableSort,
+  type DeviceTableSort,
+} from '@/components/execution/plan-execute/planExecuteTableSort';
 import { estimatePlanWallClock } from '@/components/execution/plan-execute/planExecuteWallClock';
 import { isSchedulable } from '@/components/execution/plan-execute/tileStatus';
 import {
@@ -161,6 +175,7 @@ export default function PlanExecutePage() {
   ));
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [presets, setPresets] = useState<PlanExecutePreset[]>(() => loadPresets());
+  const [tableSort, setTableSort] = useState<DeviceTableSort | null>(null);
 
   const [preview, setPreview] = useState<PlanRunPreview | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -258,6 +273,12 @@ export default function PlanExecutePage() {
     staleTime: 30_000,
   });
 
+  const { data: recentExecutedRuns = [] } = useQuery({
+    queryKey: [...planRunKeys.list(), { recentForSelect: true, limit: 30 }],
+    queryFn: () => api.planRuns.list(0, 30),
+    staleTime: 60_000,
+  });
+
   const selectedDeviceIdsKey = useMemo(
     () => Array.from(selectedDeviceIds).sort((a, b) => a - b).join(','),
     [selectedDeviceIds],
@@ -291,11 +312,10 @@ export default function PlanExecutePage() {
     staleTime: 15_000,
   });
 
-  const filteredPlans = useMemo(() => {
-    const keyword = planSearch.trim().toLowerCase();
-    if (!keyword) return plans ?? [];
-    return (plans ?? []).filter(p => p.name.toLowerCase().includes(keyword));
-  }, [plans, planSearch]);
+  const planSelectGroups = useMemo(
+    () => groupPlansForSelect(plans ?? [], recentExecutedRuns, planSearch, 5),
+    [plans, recentExecutedRuns, planSearch],
+  );
 
   const allDevices = useMemo(() => devicesResp ?? [], [devicesResp]);
 
@@ -410,8 +430,11 @@ export default function PlanExecutePage() {
     const list = readyOnly
       ? baseFilteredDevices.filter((d) => isSchedulable(d) && Boolean(poolReadinessByDeviceId.get(d.id)?.ready))
       : baseFilteredDevices;
+    if (view === 'table' && tableSort) {
+      return sortDevicesByColumn(list, tableSort, hostMap);
+    }
     return sortDevicesStable(list, hostMap);
-  }, [baseFilteredDevices, readyOnly, poolReadinessByDeviceId, hostMap]);
+  }, [baseFilteredDevices, readyOnly, poolReadinessByDeviceId, hostMap, view, tableSort]);
   const filteredAvailableIds = filteredDevices.filter(isSchedulable).map((device: DeviceSummary) => device.id);
   const readyFilteredIds = filteredDevices
     .filter((d) => isSchedulable(d) && Boolean(poolReadinessByDeviceId.get(d.id)?.ready))
@@ -1063,11 +1086,28 @@ export default function PlanExecutePage() {
                       <SelectValue placeholder="— 请选择 Plan —" />
                     </SelectTrigger>
                     <SelectContent>
-                      {filteredPlans.map(p => (
-                        <SelectItem key={p.id} value={String(p.id)}>
-                          {p.name}{p.steps?.length ? ` (${p.steps.length} 步骤)` : ''}
-                        </SelectItem>
-                      ))}
+                      {planSelectGroups.recent.length > 0 && (
+                        <SelectGroup>
+                          <SelectLabel>最近执行</SelectLabel>
+                          {planSelectGroups.recent.map((p) => (
+                            <SelectItem key={`recent-${p.id}`} value={String(p.id)}>
+                              {p.name}{p.steps?.length ? ` (${p.steps.length} 步骤)` : ''}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      )}
+                      {(planSelectGroups.all.length > 0 || planSelectGroups.recent.length === 0) && (
+                        <SelectGroup>
+                          <SelectLabel>
+                            {planSelectGroups.recent.length > 0 ? '全部 Plan（按更新倒序）' : 'Plan（按更新倒序）'}
+                          </SelectLabel>
+                          {planSelectGroups.all.map((p) => (
+                            <SelectItem key={`all-${p.id}`} value={String(p.id)}>
+                              {p.name}{p.steps?.length ? ` (${p.steps.length} 步骤)` : ''}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      )}
                     </SelectContent>
                   </Select>
                 </>
@@ -1300,10 +1340,28 @@ export default function PlanExecutePage() {
                         <thead className="bg-muted/95 text-left text-xs">
                           <tr>
                             <th className="w-10 px-3 py-2" />
-                            <th className="px-3 py-2">Serial</th>
-                            <th className="px-3 py-2">节点</th>
-                            <th className="px-3 py-2">型号</th>
-                            <th className="px-3 py-2">版本</th>
+                            {([
+                              ['serial', 'Serial'],
+                              ['host', '节点'],
+                              ['model', '型号'],
+                              ['version', '版本'],
+                            ] as const).map(([key, label]) => {
+                              const active = tableSort?.key === key;
+                              const Icon = !active ? ArrowUpDown : tableSort?.dir === 'asc' ? ArrowUp : ArrowDown;
+                              return (
+                                <th key={key} className="px-3 py-2">
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1 font-medium hover:text-foreground"
+                                    onClick={() => setTableSort((prev) => toggleDeviceTableSort(prev, key))}
+                                    aria-label={`按${label}排序`}
+                                  >
+                                    {label}
+                                    <Icon className={cn('h-3.5 w-3.5', active ? 'text-foreground' : 'text-muted-foreground')} />
+                                  </button>
+                                </th>
+                              );
+                            })}
                             <th className="px-3 py-2">状态</th>
                             <th className="px-3 py-2">预检 / 占用</th>
                           </tr>
@@ -1316,6 +1374,7 @@ export default function PlanExecutePage() {
                             const hostId = String(device.host_id ?? 'unassigned');
                             const host = hostMap.get(hostId);
                             const hostLabel = host?.ip || host?.name || (hostId === 'unassigned' ? '未分配节点' : hostId);
+                            const versionText = device.build_display_id || '—';
                             return (
                               <tr
                                 key={device.id}
@@ -1338,7 +1397,20 @@ export default function PlanExecutePage() {
                                 <td className="px-3 py-2 font-mono text-xs">{device.serial}</td>
                                 <td className="px-3 py-2 font-mono text-xs">{hostLabel}</td>
                                 <td className="px-3 py-2">{device.model || '—'}</td>
-                                <td className="px-3 py-2">{device.build_display_id || '—'}</td>
+                                <td className="max-w-[10rem] px-3 py-2">
+                                  <TooltipProvider delayDuration={200}>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <span className="block truncate font-mono text-xs" title={versionText}>
+                                          {versionText}
+                                        </span>
+                                      </TooltipTrigger>
+                                      <TooltipContent className="max-w-sm break-all font-mono text-xs">
+                                        {versionText}
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                </td>
                                 <td className="px-3 py-2"><StatusBadge kind="device" status={device.status} size="sm" /></td>
                                 <td className={cn('px-3 py-2 text-xs', row?.ready ? 'text-success' : row ? 'text-destructive' : TEXT.subtitle)}>
                                   {occupancy?.plan_run_id != null ? (

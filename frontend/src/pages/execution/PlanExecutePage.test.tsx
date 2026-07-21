@@ -1139,4 +1139,63 @@ describe('PlanExecutePage', () => {
     fireEvent.keyDown(window, { key: 'Enter' });
     expect(await screen.findByText('样机选择')).toBeInTheDocument();
   });
+
+  it('sorts table rows by serial when header is clicked', async () => {
+    renderPage({
+      hosts: [
+        { id: 'h1', ip: '10.0.0.1', name: 'rack-a', status: 'ONLINE' },
+      ],
+      devices: [
+        { id: 2, serial: 'ZZZ-2', host_id: 'h1', status: 'ONLINE', model: 'M', build_display_id: 'V2' },
+        { id: 1, serial: 'AAA-1', host_id: 'h1', status: 'ONLINE', model: 'M', build_display_id: 'V1' },
+      ],
+    });
+    await goToDeviceStep();
+    fireEvent.click(screen.getByRole('button', { name: '按Serial排序' }));
+    const rows = screen.getAllByRole('row').slice(1);
+    expect(within(rows[0]).getByText('AAA-1')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('ZZZ-2')).toBeInTheDocument();
+  });
+
+  it('groups recently executed plans ahead in the plan select options', async () => {
+    (api.planRuns.list as any).mockImplementation(async (_skip: number, _limit: number, planId?: number) => {
+      if (planId == null) {
+        return [
+          { id: 501, plan_id: 9, started_at: '2026-07-20T12:00:00Z', status: 'COMPLETED' },
+        ];
+      }
+      return [];
+    });
+    renderPage({
+      plans: [
+        {
+          id: 7,
+          name: 'Smoke Plan',
+          description: null,
+          steps: [{ step_key: 'check_device' }],
+          failure_threshold: 0.05,
+          updated_at: '2026-07-01T00:00:00Z',
+        },
+        {
+          id: 9,
+          name: 'Nightly Plan',
+          description: null,
+          steps: [{ step_key: 'patrol' }],
+          failure_threshold: 0.05,
+          updated_at: '2026-06-01T00:00:00Z',
+        },
+      ],
+      initialEntry: '/execution/plan-execute',
+    });
+    await screen.findByRole('combobox');
+    await waitFor(() => {
+      const values = Array.from(
+        document.querySelectorAll('select[aria-hidden="true"] option'),
+      )
+        .map((el) => (el as HTMLOptionElement).value)
+        .filter(Boolean);
+      // 最近执行的 Nightly(9) 应排在按 updated_at 更「新」的 Smoke(7) 之前
+      expect(values).toEqual(['9', '7']);
+    });
+  });
 });
