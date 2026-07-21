@@ -5,18 +5,21 @@ import { Toaster } from './components/ui/Toaster';
 import { ConfirmProvider } from './hooks/useConfirm';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { HeaderSlotProvider } from './contexts/HeaderSlotContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 
 const App: React.FC = () => {
   return (
     <ErrorBoundary>
-      <QueryProvider>
-        <ConfirmProvider>
-          <HeaderSlotProvider>
-            <AppRouter />
-          </HeaderSlotProvider>
-        </ConfirmProvider>
-        <Toaster />
-      </QueryProvider>
+      <ThemeProvider>
+        <QueryProvider>
+          <ConfirmProvider>
+            <HeaderSlotProvider>
+              <AppRouter />
+            </HeaderSlotProvider>
+          </ConfirmProvider>
+          <Toaster />
+        </QueryProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 };
