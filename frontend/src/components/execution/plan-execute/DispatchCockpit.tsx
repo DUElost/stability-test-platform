@@ -140,7 +140,7 @@ export function DispatchCockpit({
           </div>
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">按节点派发计划</CardTitle>

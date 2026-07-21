@@ -17,6 +17,8 @@ import type { PlanExecutePreset } from './planExecutePresets';
 interface SelectionPresetsProps {
   presets: PlanExecutePreset[];
   selectedCount: number;
+  /** 嵌入右栏时去掉外框，标题更紧凑。 */
+  embedded?: boolean;
   onSave: (name: string) => void;
   onApply: (preset: PlanExecutePreset) => void;
   onDelete: (presetId: string) => void;
@@ -25,6 +27,7 @@ interface SelectionPresetsProps {
 export function SelectionPresets({
   presets,
   selectedCount,
+  embedded = false,
   onSave,
   onApply,
   onDelete,
@@ -51,13 +54,19 @@ export function SelectionPresets({
   };
 
   return (
-    <div className="rounded-lg border p-3" data-testid="selection-presets">
+    <div
+      className={cn(!embedded && 'rounded-lg border p-3', embedded && 'border-t pt-3')}
+      data-testid="selection-presets"
+      data-embedded={embedded ? 'true' : undefined}
+    >
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <div className="text-sm font-medium">我的选机方案</div>
-          <div className={cn('text-xs', TEXT.subtitle)}>
-            个人常用组合（localStorage）· 应用时与可调度集求交
-          </div>
+          <div className="text-sm font-medium">{embedded ? '我的方案' : '我的选机方案'}</div>
+          {!embedded && (
+            <div className={cn('text-xs', TEXT.subtitle)}>
+              个人常用组合（localStorage）· 应用时与可调度集求交
+            </div>
+          )}
         </div>
         <Button
           type="button"

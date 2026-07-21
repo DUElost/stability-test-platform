@@ -30,7 +30,7 @@ body {
 a { color: var(--primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
-.shell { max-width: 1440px; margin: 0 auto; padding: 16px 20px 40px; }
+.shell { width: 100%; max-width: none; margin: 0; padding: 12px 16px 24px; box-sizing: border-box; }
 .topnav {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-bottom: 16px; padding: 10px 14px;
@@ -97,9 +97,9 @@ a:hover { text-decoration: underline; }
 /* Workspace layout */
 .workspace {
   display: grid;
-  grid-template-columns: 200px 1fr 280px;
+  grid-template-columns: 200px minmax(0, 1fr) 280px;
   gap: 12px;
-  min-height: 640px;
+  min-height: calc(100vh - 220px);
 }
 @media (max-width: 1100px) {
   .workspace { grid-template-columns: 1fr; }

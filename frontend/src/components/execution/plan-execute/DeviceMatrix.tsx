@@ -10,16 +10,15 @@ import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import type { HostActiveJob } from '@/utils/api';
 import type { ReadinessDevice } from '@/utils/planExecuteReadiness';
-import { X } from 'lucide-react';
 import { rangeSelectIds, sortDevicesStable } from './planExecuteSelection';
 import { isSchedulable, resolveDeviceTileStatus } from './tileStatus';
 import type { DeviceTileStatus } from './types';
 
 const TILE_CLS: Record<DeviceTileStatus, string> = {
-  ready: 'bg-success/80 border-success',
-  blocked: 'border-warning bg-warning/70',
-  busy: 'bg-primary/55 border-primary',
-  offline: 'bg-muted border-muted-foreground/30',
+  ready: 'border-transparent bg-success/75',
+  blocked: 'border-transparent bg-warning/55',
+  busy: 'border-transparent bg-primary/55',
+  offline: 'border-transparent bg-muted-foreground/25',
 };
 
 const TILE_PX = 32;
@@ -40,6 +39,8 @@ interface DeviceMatrixProps {
   highlightId?: number | null;
   onToggle: (device: ReadinessDevice, event: { shiftKey: boolean }) => void;
   lastClickedIndexRef: React.MutableRefObject<number | null>;
+  /** 填满父级高度（选机工作台舞台）；默认仍可独立使用。 */
+  className?: string;
 }
 
 export function buildMatrixVirtualRows(
@@ -84,6 +85,7 @@ export function DeviceMatrix({
   highlightId,
   onToggle,
   lastClickedIndexRef,
+  className,
 }: DeviceMatrixProps) {
   const ordered = useMemo(() => sortDevicesStable(devices, hostMap), [devices, hostMap]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -143,20 +145,10 @@ export function DeviceMatrix({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="flex max-h-[min(70vh,720px)] flex-col" data-testid="device-matrix">
-        <div className="flex flex-wrap gap-3 border-b px-3 py-2 text-xs">
-          <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm bg-success/80" />就绪</span>
-          <span className="inline-flex items-center gap-1">
-            <i
-              className="inline-block h-2.5 w-2.5 rounded-sm border border-warning bg-warning/70"
-              style={{ backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 1px, rgba(255,255,255,0.55) 1px, rgba(255,255,255,0.55) 2px)' }}
-            />
-            阻塞
-          </span>
-          <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm bg-primary/55" />占用</span>
-          <span className="inline-flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-sm bg-muted" />离线</span>
-          <span className={TEXT.subtitle}>点击切换 · Shift 连选</span>
-        </div>
+      <div
+        className={cn('flex h-full min-h-[280px] flex-col', className)}
+        data-testid="device-matrix"
+      >
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3">
           <div
             className="relative w-full"
@@ -181,7 +173,14 @@ export function DeviceMatrix({
                       </span>
                     </div>
                   ) : (
-                    <div className="flex flex-wrap gap-1 pb-1">
+                    <div
+                      className="pb-1"
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: `repeat(${cols}, ${TILE_PX}px)`,
+                        gap: TILE_GAP,
+                      }}
+                    >
                       {row.devices.map((device) => {
                         const readiness = readinessByDeviceId.get(device.id);
                         const occupancy = occupancyByDeviceId.get(device.id);
@@ -211,28 +210,28 @@ export function DeviceMatrix({
                                   lastClickedIndexRef.current = idx;
                                 }}
                                 className={cn(
-                                  'relative h-8 w-8 shrink-0 overflow-hidden rounded-sm border transition-transform hover:z-10 hover:scale-110',
+                                  'relative aspect-square overflow-hidden rounded-[5px] border-2 transition-transform hover:z-10 hover:scale-110 hover:shadow-md',
                                   TILE_CLS[status],
-                                  selected && 'ring-2 ring-foreground ring-offset-1 ring-offset-background',
-                                  flash && 'animate-pulse ring-2 ring-primary',
+                                  selected && 'border-foreground shadow-[inset_0_0_0_1px_#fff]',
+                                  flash && 'animate-pulse outline outline-2 outline-offset-1 outline-primary',
                                   !canSelect && 'cursor-not-allowed opacity-60',
                                 )}
                               >
                                 {status === 'blocked' && (
-                                  <>
-                                    <span
-                                      aria-hidden
-                                      className="pointer-events-none absolute inset-0 opacity-70"
-                                      style={{
-                                        backgroundImage:
-                                          'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.45) 2px, rgba(255,255,255,0.45) 4px)',
-                                      }}
-                                    />
-                                    <X className="relative mx-auto h-3 w-3 text-primary-foreground drop-shadow" strokeWidth={3} aria-hidden />
-                                  </>
+                                  <span
+                                    aria-hidden
+                                    className="pointer-events-none absolute inset-0"
+                                    style={{
+                                      backgroundImage:
+                                        'repeating-linear-gradient(-45deg, hsl(38 92% 50% / 0.55), hsl(38 92% 50% / 0.55) 3px, hsl(38 92% 70% / 0.35) 3px, hsl(38 92% 70% / 0.35) 6px)',
+                                    }}
+                                  />
                                 )}
                                 {selected && (
-                                  <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-foreground" aria-hidden />
+                                  <span
+                                    className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_0_1px_hsl(222_84%_15%)]"
+                                    aria-hidden
+                                  />
                                 )}
                               </button>
                             </TooltipTrigger>

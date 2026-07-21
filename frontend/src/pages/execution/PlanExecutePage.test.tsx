@@ -131,7 +131,7 @@ function renderPage({
 async function goToDeviceStep() {
   // 等 plans query 落定后再进选机；默认切到表格以覆盖占用列/预检文案等既有断言。
   await screen.findByText(/启用步骤/);
-  fireEvent.click(screen.getByRole('button', { name: /先定位节点/ }));
+  fireEvent.click(screen.getByRole('button', { name: /进入选机/ }));
   fireEvent.click(await screen.findByRole('button', { name: '表格' }));
 }
 
@@ -147,6 +147,21 @@ describe('PlanExecutePage', () => {
     localStorage.clear();
     (api.planRuns.list as any).mockResolvedValue([]);
     (api.planRuns.get as any).mockReset();
+  });
+
+  it('keeps the page title and view-specific subtitle visible in selection phase', async () => {
+    renderPage({
+      devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+    });
+
+    await screen.findByText(/启用步骤/);
+    fireEvent.click(screen.getByRole('button', { name: /进入选机/ }));
+
+    expect(screen.getByRole('heading', { name: '执行测试计划' })).toBeInTheDocument();
+    expect(screen.getByText(/中区展示筛选结果候选池/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '表格' }));
+    expect(screen.getByText(/表格用于明细核对/)).toBeInTheDocument();
   });
 
   it('disables BUSY devices and excludes them from available count', async () => {
@@ -233,7 +248,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     await screen.findByText(/预览已生成并冻结 1 台设备/);
 
@@ -265,7 +280,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     fireEvent.click(await screen.findByRole('button', { name: /确认发起/ }));
 
@@ -302,14 +317,14 @@ describe('PlanExecutePage', () => {
       devices: [{ id: 2, serial: 'DEV-2', host_id: 'h1', status: 'BUSY' }],
     });
 
-    expect(await screen.findByText(/Plan 配置/)).toBeInTheDocument();
+    expect(await screen.findByText('选择测试计划')).toBeInTheDocument();
     await waitFor(() => {
       expect(mocks.toast.info).toHaveBeenCalledWith(expect.stringContaining('DEV-2'));
     });
     // 第 0 步不显示设备计数；进入样机选择后计数为 0
-    expect(screen.queryByText('已选 0 台')).not.toBeInTheDocument();
+    expect(screen.queryByText(/已选 0 台/)).not.toBeInTheDocument();
     await goToDeviceStep();
-    expect(await screen.findByText('已选 0 台')).toBeInTheDocument();
+    expect(await screen.findByText(/已选 0 台/)).toBeInTheDocument();
   });
 
   it('surfaces host capacity and per-device occupancy for the selected node', async () => {
@@ -385,7 +400,7 @@ describe('PlanExecutePage', () => {
     fireEvent.click(await screen.findByLabelText(/DEV-B/));
     expect(await screen.findByText(/1 个节点超选/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /进入发起确认/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     expect(await screen.findByText(/1 立即 · 1 将排队/)).toBeInTheDocument();
     expect(screen.getByText(/不是 PlanRun 级 QUEUED 准入/)).toBeInTheDocument();
   });
@@ -426,7 +441,7 @@ describe('PlanExecutePage', () => {
     expect(screen.getByLabelText(/B-1/)).toBeInTheDocument();
     expect(screen.queryByText('请先从左侧选择一个节点')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /全选筛选结果 \(2\)/ }));
+    fireEvent.click(screen.getByRole('button', { name: /全选筛选 \(2\)/ }));
     expect(screen.getByText(/已选 2 \/ 2 台可用/)).toBeInTheDocument();
     expect(screen.getByLabelText(/A-1/)).toBeChecked();
     expect(screen.getByLabelText(/B-1/)).toBeChecked();
@@ -452,7 +467,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     expect(await screen.findByRole('button', { name: '编辑 Plan' })).toBeInTheDocument();
     expect(screen.getAllByText('未设置（按默认 5% 生效）').length).toBeGreaterThanOrEqual(1);
@@ -473,7 +488,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /进入发起确认/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     expect(await screen.findByTestId('dispatch-cockpit')).toBeInTheDocument();
 
     // 清空选择需二次确认
@@ -522,7 +537,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: '版本:V103' }));
+    fireEvent.click(screen.getByRole('button', { name: 'V103' }));
     expect(screen.getByTestId('active-filter-chips')).toHaveTextContent('版本:V103');
 
     fireEvent.click(screen.getByRole('button', { name: /定位已选设备 1/ }));
@@ -606,7 +621,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
 
     expect(await screen.findByText(/预览已生成并冻结 1 台设备/)).toBeInTheDocument();
@@ -620,11 +635,11 @@ describe('PlanExecutePage', () => {
     });
 
     await screen.findByText(/启用步骤/);
-    expect(screen.queryByText('已选 0 台')).not.toBeInTheDocument();
+    expect(screen.queryByText(/已选 0 台/)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '清空选择' })).not.toBeInTheDocument();
 
     await goToDeviceStep();
-    expect(await screen.findByText('已选 0 台')).toBeInTheDocument();
+    expect(await screen.findByText(/已选 0 台/)).toBeInTheDocument();
   });
 
   it('sorts node sidebar by numeric IP with unassigned last', async () => {
@@ -723,7 +738,7 @@ describe('PlanExecutePage', () => {
     // 恢复后直接落在样机选择且 DEV-1 选中（跳转守卫要求 plan=7 有效）
     expect(await screen.findByLabelText(/DEV-1/)).toBeChecked();
     // 回到计划配置确认 URL plan=7 生效（草稿 planId=99 被忽略）
-    fireEvent.click(screen.getByRole('button', { name: /选择并核对测试计划/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Plan ·/ }));
     expect(await screen.findByText(/启用步骤/)).toBeInTheDocument();
   });
 
@@ -733,7 +748,7 @@ describe('PlanExecutePage', () => {
     });
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     await screen.findByText(/预览已生成并冻结 1 台设备/);
     fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
@@ -759,7 +774,7 @@ describe('PlanExecutePage', () => {
       expect(raw).toBeTruthy();
       expect(JSON.parse(raw as string).deviceIds).toEqual([1]);
     });
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
     fireEvent.click(await screen.findByRole('button', { name: /确认发起/ }));
 
@@ -821,7 +836,7 @@ describe('PlanExecutePage', () => {
     expect(screen.queryByLabelText(/DEV-SMOKE/)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/DEV-NONE/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/DEV-REG/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /全选筛选结果 \(1\)/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /全选筛选 \(1\)/ })).toBeInTheDocument();
   });
 
   it('matches serial search case-insensitively', async () => {
@@ -833,7 +848,7 @@ describe('PlanExecutePage', () => {
     });
 
     await goToDeviceStep();
-    const search = await screen.findByPlaceholderText('搜索 Serial / 型号');
+    const search = await screen.findByPlaceholderText('搜索 serial…');
     fireEvent.change(search, { target: { value: 'abc' } });
 
     expect(await screen.findByLabelText(/AbC-123/)).toBeInTheDocument();
@@ -847,7 +862,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     const note = await screen.findByLabelText(/执行备注/);
     fireEvent.change(note, { target: { value: '  sprint4 smoke  ' } });
@@ -878,7 +893,7 @@ describe('PlanExecutePage', () => {
 
     await goToDeviceStep();
     fireEvent.click(await screen.findByLabelText(/DEV-1/));
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
     fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
 
     expect(await screen.findByRole('button', { name: /预览中/ })).toBeDisabled();
@@ -986,7 +1001,7 @@ describe('PlanExecutePage', () => {
     for (const serial of ['D1', 'D2', 'D3', 'D4']) {
       fireEvent.click(await screen.findByLabelText(new RegExp(serial)));
     }
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     expect(await screen.findByTestId('duplicate-launch-banner')).toHaveTextContent('疑似重复发起');
     expect(screen.getByTestId('duplicate-launch-banner')).toHaveTextContent('#9001');
@@ -1033,7 +1048,7 @@ describe('PlanExecutePage', () => {
     for (const serial of ['D1', 'D2', 'D3', 'D4']) {
       fireEvent.click(await screen.findByLabelText(new RegExp(serial)));
     }
-    fireEvent.click(screen.getByRole('button', { name: /前置项、参数/ }));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
 
     expect(await screen.findByTestId('duplicate-launch-banner')).toHaveTextContent('设备数接近');
     await waitFor(() => expect(api.planRuns.get).toHaveBeenCalledWith(9100));
@@ -1110,6 +1125,36 @@ describe('PlanExecutePage', () => {
     expect(screen.getByLabelText(/DEV-2/)).toBeChecked();
   });
 
+  it('renders select workspace as three-column shell (node | stage | selected)', async () => {
+    renderPage({
+      devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+    });
+
+    await goToDeviceStep();
+
+    const layout = document.querySelector('[data-plan-execute-layout="three-column"]');
+    expect(layout).toBeTruthy();
+    expect(screen.getByTestId('plan-execute-node-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('plan-execute-stage')).toBeInTheDocument();
+    expect(screen.getByTestId('selected-devices-rail')).toBeInTheDocument();
+    expect(screen.getByText('已选集')).toBeInTheDocument();
+    expect(screen.getByText('已选样机 Minimap')).toBeInTheDocument();
+  });
+
+  it('uses full-bleed workspace shell in select phase (no side gutter clamp)', async () => {
+    const { container } = renderPage({
+      devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+    });
+    await goToDeviceStep();
+    const page = container.firstElementChild as HTMLElement | null;
+    expect(page?.className ?? '').toMatch(/\bw-full\b/);
+    expect(page?.className ?? '').not.toMatch(/max-w-7xl/);
+    expect(page?.className ?? '').not.toMatch(/mx-auto/);
+    expect(page?.className ?? '').toMatch(/overflow-hidden/);
+    expect(screen.getByTestId('device-workspace')).toBeInTheDocument();
+    expect(screen.getByTestId('execute-command-bar')).toHaveAttribute('data-compact', 'true');
+  });
+
   it('selects all filtered devices with Ctrl/Meta+A in select phase', async () => {
     renderPage({
       devices: [
@@ -1122,7 +1167,6 @@ describe('PlanExecutePage', () => {
     await goToDeviceStep();
     const workspace = document.querySelector('[data-plan-execute-workspace]');
     expect(workspace).toBeTruthy();
-    // 节点搜索框有 autoFocus；先 blur，否则 Ctrl+A 会留给输入框
     (document.activeElement as HTMLElement | null)?.blur?.();
 
     fireEvent.keyDown(window, { key: 'a', ctrlKey: true });
@@ -1137,7 +1181,7 @@ describe('PlanExecutePage', () => {
     });
     await screen.findByText(/启用步骤/);
     fireEvent.keyDown(window, { key: 'Enter' });
-    expect(await screen.findByText('样机选择')).toBeInTheDocument();
+    expect(await screen.findByLabelText('样机选择')).toBeInTheDocument();
   });
 
   it('sorts table rows by serial when header is clicked', async () => {
@@ -1157,7 +1201,7 @@ describe('PlanExecutePage', () => {
     expect(within(rows[1]).getByText('ZZZ-2')).toBeInTheDocument();
   });
 
-  it('groups recently executed plans ahead in the plan select options', async () => {
+  it('groups recently executed plans ahead in the plan list', async () => {
     (api.planRuns.list as any).mockImplementation(async (_skip: number, _limit: number, planId?: number) => {
       if (planId == null) {
         return [
@@ -1187,15 +1231,17 @@ describe('PlanExecutePage', () => {
       ],
       initialEntry: '/execution/plan-execute',
     });
-    await screen.findByRole('combobox');
+    const list = await screen.findByTestId('plan-execute-plan-layout');
     await waitFor(() => {
-      const values = Array.from(
-        document.querySelectorAll('select[aria-hidden="true"] option'),
-      )
-        .map((el) => (el as HTMLOptionElement).value)
-        .filter(Boolean);
-      // 最近执行的 Nightly(9) 应排在按 updated_at 更「新」的 Smoke(7) 之前
-      expect(values).toEqual(['9', '7']);
+      const names = Array.from(list.querySelectorAll('button'))
+        .map((el) => el.textContent ?? '')
+        .filter((t) => t.includes('Plan'));
+      // 最近执行的 Nightly 应排在按 updated_at 更「新」的 Smoke 之前
+      const nightlyIdx = names.findIndex((t) => t.includes('Nightly Plan'));
+      const smokeIdx = names.findIndex((t) => t.includes('Smoke Plan'));
+      expect(nightlyIdx).toBeGreaterThanOrEqual(0);
+      expect(smokeIdx).toBeGreaterThanOrEqual(0);
+      expect(nightlyIdx).toBeLessThan(smokeIdx);
     });
   });
 });
