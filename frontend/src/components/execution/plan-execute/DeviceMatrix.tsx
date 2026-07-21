@@ -212,7 +212,8 @@ export function DeviceMatrix({
                                 className={cn(
                                   'relative aspect-square overflow-hidden rounded-[5px] border-2 transition-transform hover:z-10 hover:scale-110 hover:shadow-md',
                                   TILE_CLS[status],
-                                  selected && 'border-foreground shadow-[inset_0_0_0_1px_#fff]',
+                                  selected &&
+                                    'border-foreground shadow-[inset_0_0_0_1px_hsl(var(--background))]',
                                   flash && 'animate-pulse outline outline-2 outline-offset-1 outline-primary',
                                   !canSelect && 'cursor-not-allowed opacity-60',
                                 )}
@@ -229,7 +230,7 @@ export function DeviceMatrix({
                                 )}
                                 {selected && (
                                   <span
-                                    className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_0_1px_hsl(222_84%_15%)]"
+                                    className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-background shadow-[0_0_0_1px_hsl(var(--foreground)/0.55)]"
                                     aria-hidden
                                   />
                                 )}

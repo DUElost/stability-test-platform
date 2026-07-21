@@ -118,6 +118,18 @@ frontend/src/
 - **服务端状态**：TanStack Query（`useQuery` / `useMutation`）  
 - **会话**：`useAuthSession` → `GET /auth/me`  
 - **本地 UI 状态**：组件 `useState`；无全局 Redux
+- **外观主题**：`ThemeProvider`（`contexts/ThemeContext.tsx`）— `light` / `dark` / `system`，`localStorage` 键 `stp.theme`；`index.html` 内联脚本防 FOUC；顶栏 / 登录页 `ThemeToggle` 循环切换。令牌见 `index.css` `:root` / `.dark`，组件优先用 `design-system/tokens`
+
+### 6.1 暗色主题（全 App）
+
+| 项 | 约定 |
+|----|------|
+| 切换入口 | 顶栏 `ThemeToggle`（图标）；登录页同组件（图标+文案） |
+| 循环顺序 | `light` → `dark` → `system` → `light` |
+| DOM | `<html class="dark">` + `style.color-scheme`；Tailwind `darkMode: ["class"]` |
+| Toast | `Toaster` 跟随 `resolvedTheme`（Sonner `theme` prop） |
+| 禁止 | 新代码硬编码 `gray-*` / `slate-*` / `blue-500` 等；图表用 `hsl(var(--…))` 或 `CHART_COLORS` |
+| 验收 | 登录页 / AppShell / Plan Execute 三态在深色下层次可读；刷新无浅色闪屏；跟随系统切 OS 偏好即时生效 |
 
 ---
 

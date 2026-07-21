@@ -6,7 +6,7 @@
 - **范围**：
   - Phase 1–6：以前端为主（分页拉全、复跑、容量/占用、全部节点等）— **已落地**
   - §7 迭代 A/B/C：走查债项续篇；含轻量后端（`GET /jobs/active-by-device`、`PlanRunTrigger.note` → `run_context.note`）— **已落地**
-  - **§8 Plan Execute V2**：选机工作台 + 发起驾驶舱（对照已确认静态 mockup 实现）— **A / A+ / B / P1–P7 已落地**；矩阵虚拟滚动已落地；暗色主题仍另项
+  - **§8 Plan Execute V2**：选机工作台 + 发起驾驶舱（对照已确认静态 mockup 实现）— **A / A+ / B / P1–P7 已落地**；矩阵虚拟滚动已落地；三栏全宽壳已对齐；暗色主题见全 App 主题（`ThemeProvider`）
   - 仍不含 ADR-0026 V2 准入队列 UI；**不做** run 级巡检/超时覆盖（见 §4 / §7 C2 / §8.3）
     
 ---
@@ -230,7 +230,7 @@
 - 精确「明早 9 点开跑」/ PlanRun 级 QUEUED 准入 UI（挂 ADR-0026）
 - 无坐标的「物理机架墙」；矩阵按 **节点分带 + 稳定排序** 即可
 - run 级巡检/超时/失败阈值覆盖（§7 C2 维持）
-- 暗色主题（全 App 令牌 RFC，单独立项）
+- ~~暗色主题（全 App 令牌 RFC）~~ → **已另项落地**：`ThemeProvider` + `.dark`（见 [`03-frontend.md`](./03-frontend.md) §6）
 - 步骤级历史均时（需 `step_trace` 聚合 API，后端项）
 - 后端 `host_id` 设备过滤 / 懒加载（仍客户端全量，`fetchAllDevices`）
 
@@ -431,3 +431,4 @@ URL query（P1 完整落地；A 至少支持 `plan` / `devices` / `view`）：
 | 2026-07-20 | §8 初版：对照 `mockups/plan-execute-v2` 的实现方案（冲刺 A / A+ / B + 穿插）；确认三态 IA、非目标、组件落点、API/算法与验收 |
 | 2026-07-21 | §8 冲刺 A / A+ / B / P1–P6 落地：三态工作台、矩阵选机、驾驶舱、近 3 次与防重复、Chips+URL、Minimap 定位、导出、presets、键盘、stage 徽标；P7 / 矩阵虚拟滚动 / 暗色主题仍另项 |
 | 2026-07-21 | §8 P7 + 矩阵虚拟滚动：表列排序/版本悬浮、Plan「最近执行」分组、`@tanstack/react-virtual` 节点分带虚拟行；暗色主题仍另项 |
+| 2026-07-21 | 全 App 暗色主题落地（`ThemeProvider` / `ThemeToggle` / FOUC 脚本 / `.dark` 令牌抬升）；§8.3 该项关闭 |

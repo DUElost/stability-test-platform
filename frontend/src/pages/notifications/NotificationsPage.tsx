@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { api, NotificationChannel, AlertRule } from '@/utils/api';
 import { notificationKeys } from '@/utils/api/queryKeys';
 import { Card } from '@/components/ui/card';
@@ -44,7 +45,26 @@ export default function NotificationsPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
   const qc = useQueryClient();
-  const [tab, setTab] = useState<TabKey>('channels');
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<TabKey>((searchParams.get('tab') as TabKey) || 'channels');
+  const [tabAutoDetected, setTabAutoDetected] = useState(false);
+
+  const logsCountQ = useQuery({
+    queryKey: ['notification-logs-count'],
+    queryFn: async () => {
+      const resp = await api.notifications.listLogs(0, 1);
+      return resp.total;
+    },
+    staleTime: 60000,
+  });
+  const hasLogs = (logsCountQ.data ?? 0) > 0;
+
+  useEffect(() => {
+    if (!tabAutoDetected && !searchParams.get('tab') && hasLogs) {
+      setTab('logs');
+      setTabAutoDetected(true);
+    }
+  }, [hasLogs, tabAutoDetected, searchParams]);
 
   // Channel form
   const [showChannelForm, setShowChannelForm] = useState(false);
@@ -493,9 +513,9 @@ const SEVERITY_ICON_MAP: Record<string, typeof Info> = {
 };
 
 const SEVERITY_COLOR_MAP: Record<string, string> = {
-  critical: 'text-red-500',
-  warning: 'text-amber-500',
-  info: 'text-blue-500',
+  critical: 'text-destructive',
+  warning: 'text-warning',
+  info: 'text-info',
 };
 
 const SOURCE_LABEL_MAP: Record<string, string> = {
@@ -546,7 +566,7 @@ function NotificationLogsTab() {
             {logs.map((log) => {
               const Icon = SEVERITY_ICON_MAP[log.severity] ?? Info;
               return (
-                <Card key={log.id} className={cn('p-4', !log.read && 'border-blue-300 dark:border-blue-800')}>
+                <Card key={log.id} className={cn('p-4', !log.read && 'border-primary/40 bg-primary/5')}>
                   <div className="flex gap-3">
                     <Icon className={cn('w-5 h-5 mt-0.5 shrink-0', SEVERITY_COLOR_MAP[log.severity])} />
                     <div className="flex-1 min-w-0">
@@ -559,7 +579,7 @@ function NotificationLogsTab() {
                           {log.event_type}
                         </span>
                         {!log.read && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500 text-white">未读</span>
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary text-primary-foreground">未读</span>
                         )}
                       </div>
                       {log.message && (

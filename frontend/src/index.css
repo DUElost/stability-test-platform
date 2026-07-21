@@ -35,31 +35,33 @@
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 217 91% 60%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
+    /* 画布略深、卡片略抬升，实验室弱光下层次更清晰 */
+    --background: 222 28% 8%;
+    --foreground: 210 40% 96%;
+    --card: 222 24% 11%;
+    --card-foreground: 210 40% 96%;
+    --popover: 222 24% 11%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 217 91% 62%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 20% 16%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 18% 15%;
+    --muted-foreground: 215 16% 68%;
+    --accent: 217 20% 16%;
+    --accent-foreground: 210 40% 96%;
+    /* 文字可读性优先（/10 背景用法仍成立） */
+    --destructive: 0 72% 58%;
     --destructive-foreground: 210 40% 98%;
-    --warning: 38 92% 50%;
-    --warning-foreground: 210 40% 98%;
-    --success: 142 71% 45%;
-    --success-foreground: 210 40% 98%;
-    --info: 199 89% 48%;
-    --info-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 224.3 76.3% 48%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 222 47% 11%;
+    --success: 142 65% 48%;
+    --success-foreground: 222 47% 11%;
+    --info: 199 85% 55%;
+    --info-foreground: 222 47% 11%;
+    --border: 217 16% 20%;
+    --input: 217 16% 20%;
+    --ring: 217 91% 55%;
   }
 }
 

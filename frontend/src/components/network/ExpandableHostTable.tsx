@@ -511,7 +511,7 @@ export function ExpandableHostTable({
                                   ? 'Agent 曾安装成功，当前离线 — 可重新安装'
                                   : '尚未检测到 Agent 安装记录'
                               }
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-amber-600 bg-amber-500/10 hover:bg-amber-500/20 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-warning bg-warning/10 hover:bg-warning/20 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                             >
                               {isInstalling?.(host.id)
                                 ? '安装中...'

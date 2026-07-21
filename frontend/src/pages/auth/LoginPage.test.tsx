@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import LoginPage from './LoginPage';
+import { ThemeProvider } from '@/contexts/ThemeContext';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -44,12 +45,29 @@ vi.mock('@/components/QueryProvider', () => ({
 describe('LoginPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        onchange: null,
+      })),
+    );
   });
 
   it('clears cached queries before navigating after successful login', async () => {
     mocks.login.mockResolvedValue({ ok: true });
 
-    render(<LoginPage />);
+    render(
+      <ThemeProvider>
+        <LoginPage />
+      </ThemeProvider>,
+    );
 
     fireEvent.change(screen.getByLabelText('用户名'), {
       target: { value: 'alice' },

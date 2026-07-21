@@ -8,6 +8,7 @@ import { clearAppQueryCache } from '@/components/QueryProvider';
 import { api } from '@/utils/api';
 import { SURFACE, TEXT } from '@/design-system/tokens';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
+import { ThemeToggle } from '@/components/ui/ThemeToggle';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -34,6 +35,9 @@ export default function LoginPage() {
 
   return (
     <div className={`min-h-screen flex items-center justify-center p-4 ${SURFACE.page}`}>
+      <div className="absolute right-4 top-4">
+        <ThemeToggle showLabel />
+      </div>
       <Card className="w-full max-w-md">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">

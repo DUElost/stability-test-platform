@@ -14,9 +14,9 @@ const SEVERITY_ICON = {
 } as const;
 
 const SEVERITY_COLOR = {
-  critical: 'text-red-500',
-  warning: 'text-amber-500',
-  info: 'text-blue-500',
+  critical: 'text-destructive',
+  warning: 'text-warning',
+  info: 'text-info',
 } as const;
 
 const SOURCE_LABEL = {
@@ -80,7 +80,7 @@ export function NotificationBell() {
       >
         <Bell className="w-5 h-5" />
         {unread > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-white bg-red-500 rounded-full">
+          <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-bold text-destructive-foreground bg-destructive rounded-full">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
@@ -120,7 +120,7 @@ export function NotificationBell() {
                     className={cn(
                       'flex gap-3 px-4 py-3 border-b last:border-b-0 transition-colors',
                       BORDER.default,
-                      !log.read && 'bg-blue-50/50 dark:bg-blue-950/20',
+                      !log.read && 'bg-primary/5',
                       INTERACTIVE.hover,
                     )}
                   >
@@ -139,7 +139,7 @@ export function NotificationBell() {
                         {log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : ''}
                       </span>
                     </div>
-                    {!log.read && <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0 mt-1.5" />}
+                    {!log.read && <div className="w-2 h-2 rounded-full bg-primary shrink-0 mt-1.5" />}
                   </div>
                 );
               })
@@ -147,7 +147,7 @@ export function NotificationBell() {
           </div>
 
           <a
-            href="/notifications"
+            href="/notifications?tab=logs"
             onClick={() => setOpen(false)}
             className={cn(
               'block text-center py-2.5 text-xs border-t transition-colors',
