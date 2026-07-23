@@ -183,47 +183,6 @@ class TestPlanRunOutCarriesRunContext:
         validated = PrecheckSummary.model_validate(body["run_context"]["precheck"])
         assert validated.hosts["host-101"].scripts[0].name == "check_device"
 
-
-class TestJobExecutionStateObservability:
-    def test_plan_run_job_apis_return_execution_clocks(
-        self,
-        client,
-        auth_headers,
-        db_session,
-        sample_running_job,
-    ):
-        execution_heartbeat_at = datetime(
-            2026, 7, 23, 10, 11, 12, tzinfo=timezone.utc,
-        )
-        progress_at = datetime(
-            2026, 7, 23, 10, 12, 13, tzinfo=timezone.utc,
-        )
-        sample_running_job.execution_state = "WAITING_EXECUTION_SLOT"
-        sample_running_job.last_execution_heartbeat_at = execution_heartbeat_at
-        sample_running_job.last_progress_at = progress_at
-        db_session.commit()
-
-        detail_response = client.get(
-            f"/api/v1/plan-runs/{sample_running_job.plan_run_id}",
-            headers=auth_headers,
-        )
-        assert detail_response.status_code == 200, detail_response.text
-        detail_job = detail_response.json()["data"]["jobs"][0]
-
-        jobs_response = client.get(
-            f"/api/v1/plan-runs/{sample_running_job.plan_run_id}/jobs",
-            headers=auth_headers,
-        )
-        assert jobs_response.status_code == 200, jobs_response.text
-        listed_job = jobs_response.json()["data"][0]
-
-        for job in (detail_job, listed_job):
-            assert job["execution_state"] == "WAITING_EXECUTION_SLOT"
-            assert job["last_execution_heartbeat_at"] == execution_heartbeat_at.isoformat()
-            assert job["last_progress_at"] == progress_at.isoformat()
-
-
-class TestPlanRunOutCarriesRunContextContinued:
     def test_list_plan_runs_includes_run_context(self, client, auth_headers, db_session):
         plan = _create_minimal_plan(db_session)
         pr = PlanRun(
@@ -299,3 +258,42 @@ class TestPlanRunOutCarriesRunContextContinued:
         resp = client.get("/api/v1/plan-runs?status=PENDING", headers=auth_headers)
 
         assert resp.status_code == 422, resp.text
+
+
+class TestJobExecutionStateObservability:
+    def test_plan_run_job_apis_return_execution_clocks(
+        self,
+        client,
+        auth_headers,
+        db_session,
+        sample_running_job,
+    ):
+        execution_heartbeat_at = datetime(
+            2026, 7, 23, 10, 11, 12, tzinfo=timezone.utc,
+        )
+        progress_at = datetime(
+            2026, 7, 23, 10, 12, 13, tzinfo=timezone.utc,
+        )
+        sample_running_job.execution_state = "WAITING_EXECUTION_SLOT"
+        sample_running_job.last_execution_heartbeat_at = execution_heartbeat_at
+        sample_running_job.last_progress_at = progress_at
+        db_session.commit()
+
+        detail_response = client.get(
+            f"/api/v1/plan-runs/{sample_running_job.plan_run_id}",
+            headers=auth_headers,
+        )
+        assert detail_response.status_code == 200, detail_response.text
+        detail_job = detail_response.json()["data"]["jobs"][0]
+
+        jobs_response = client.get(
+            f"/api/v1/plan-runs/{sample_running_job.plan_run_id}/jobs",
+            headers=auth_headers,
+        )
+        assert jobs_response.status_code == 200, jobs_response.text
+        listed_job = jobs_response.json()["data"][0]
+
+        for job in (detail_job, listed_job):
+            assert job["execution_state"] == "WAITING_EXECUTION_SLOT"
+            assert job["last_execution_heartbeat_at"] == execution_heartbeat_at.isoformat()
+            assert job["last_progress_at"] == progress_at.isoformat()
