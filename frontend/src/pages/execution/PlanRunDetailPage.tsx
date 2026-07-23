@@ -29,7 +29,7 @@ import {
 import { ALERT_BANNER, SURFACE, TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { ErrorState } from '@/components/ui/error-state';
-import { normalizeWatcherTimeScope } from '@/hooks/plan-run/planRunDetailUtils';
+import { normalizeWatcherTimeScope, shouldShowDispatchGate, normalizeDispatchStateForRun } from '@/hooks/plan-run/planRunDetailUtils';
 import { usePlanRunDetailData } from '@/hooks/plan-run/usePlanRunDetailData';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 import { api } from '@/utils/api';
@@ -188,7 +188,10 @@ export default function PlanRunDetailPage() {
   }
 
   const precheck = runQ.data?.run_context?.precheck ?? null;
-  const dispatchStateRaw = runQ.data?.run_context?.dispatch_state ?? null;
+  const dispatchStateRaw = normalizeDispatchStateForRun(
+    runQ.data,
+    runQ.data?.run_context?.dispatch_state ?? null,
+  );
   const resultSummary = runQ.data?.result_summary;
   const admissionDispatchFailed =
     runQ.data?.status === 'FAILED' &&
@@ -207,11 +210,7 @@ export default function PlanRunDetailPage() {
   const dispatchFailed =
     dispatchState?.status === 'failed' || admissionDispatchFailed;
   const gateFailed = precheck?.phase === 'failed' || dispatchFailed;
-  const showDispatchGate =
-    Boolean(precheck) ||
-    dispatchFailed ||
-    runQ.data?.status === 'QUEUED' ||
-    runQ.data?.status === 'PRECHECK';
+  const showDispatchGate = shouldShowDispatchGate(runQ.data);
   const showDiag = diagOpen || gateFailed;
 
   return (

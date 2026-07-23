@@ -1,4 +1,4 @@
-import type { DeviceMatrixItem, PlanRun, WatcherTimeScope } from '@/utils/api/types';
+import type { DeviceMatrixItem, PlanDispatchState, PlanRun, WatcherTimeScope } from '@/utils/api/types';
 import { isPlanRunTerminal } from '@/components/plan-run/planRunStatus';
 
 export const GATE_ACTIVE_REFETCH_MS = 3_000;
@@ -25,6 +25,46 @@ const WATCHER_TIME_SCOPE_MAP: Record<string, WatcherTimeScope> = {
 export function normalizeWatcherTimeScope(value: string | null): WatcherTimeScope {
   if (!value) return 'all';
   return WATCHER_TIME_SCOPE_MAP[value] ?? 'all';
+}
+
+/** Backfill V2 runs that reached RUNNING before dispatch_state was completed. */
+export function normalizeDispatchStateForRun(
+  run: PlanRun | undefined,
+  dispatchState: PlanDispatchState | null | undefined,
+): PlanDispatchState | null {
+  if (!run || !dispatchState) return dispatchState ?? null;
+  if (
+    run.status === 'RUNNING' &&
+    !run.run_context?.precheck &&
+    dispatchState.status === 'queued'
+  ) {
+    return { ...dispatchState, status: 'completed' };
+  }
+  return dispatchState;
+}
+
+export function shouldShowDispatchGate(run: PlanRun | undefined): boolean {
+  if (!run) return false;
+
+  if (run.status === 'QUEUED' || run.status === 'PRECHECK') {
+    return true;
+  }
+
+  const summary = run.result_summary;
+  const admissionFailed =
+    run.status === 'FAILED' &&
+    (summary?.dispatch_failed === true || summary?.precheck_failed === true);
+  const dispatchState = normalizeDispatchStateForRun(run, run.run_context?.dispatch_state);
+  const dispatchFailed =
+    dispatchState?.status === 'failed' || admissionFailed;
+
+  if (dispatchFailed) return true;
+  if (run.run_context?.precheck) return true;
+
+  // V2 admission path: no precheck blob; dispatch_state is the gate contract.
+  if (run.status === 'RUNNING' && dispatchState) return true;
+
+  return false;
 }
 
 export function isDispatchGateActive(run: PlanRun | undefined): boolean {

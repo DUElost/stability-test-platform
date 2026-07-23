@@ -578,6 +578,8 @@ class TestAdmissionTaskEndToEnd:
         db_session.expire_all()
         pr = db_session.get(PlanRun, pr.id)
         assert pr.status == "RUNNING"
+        assert pr.run_context["dispatch_state"]["status"] == "completed"
+        assert pr.run_context["dispatch_state"]["completed_at"] is not None
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id).count() == 2
 

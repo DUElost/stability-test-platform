@@ -125,6 +125,14 @@ def claim_queued_plan_runs(db: Session, *, batch: int | None = None) -> list[tup
         pr.admission_attempt_id = attempt_id
         if pr.admission_token is None:
             pr.admission_token = uuid.uuid4().hex
+        run_ctx = dict(pr.run_context or {})
+        dispatch_state = dict(run_ctx.get("dispatch_state") or {})
+        dispatch_state["status"] = "running"
+        if not dispatch_state.get("started_at"):
+            dispatch_state["started_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+        run_ctx["dispatch_state"] = dispatch_state
+        pr.run_context = run_ctx
+        flag_modified(pr, "run_context")
         claimed.append((pr.id, attempt_id))
     if claimed:
         db.commit()
@@ -636,6 +644,16 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     pr.queue_reason = None
     pr.next_admission_at = None
     pr.precheck_started_at = None
+    run_ctx = dict(pr.run_context or {})
+    dispatch_state = dict(run_ctx.get("dispatch_state") or {})
+    dispatch_state["status"] = "completed"
+    if not dispatch_state.get("started_at"):
+        dispatch_state["started_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    dispatch_state["completed_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    dispatch_state["last_error"] = None
+    run_ctx["dispatch_state"] = dispatch_state
+    pr.run_context = run_ctx
+    flag_modified(pr, "run_context")
     if pr.enqueued_at is not None:
         enqueued = pr.enqueued_at
         if enqueued.tzinfo is None:

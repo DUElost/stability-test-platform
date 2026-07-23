@@ -818,6 +818,34 @@ describe('PlanRunDetailPage', () => {
     expect(screen.queryByTestId('dispatch-gate-retry-button')).not.toBeInTheDocument();
   });
 
+  it('keeps dispatch gate visible for RUNNING V2 runs without precheck blob', async () => {
+    mocks.getRun.mockResolvedValueOnce({
+      id: 96,
+      plan_id: 7,
+      status: 'RUNNING',
+      failure_threshold: 0.05,
+      run_type: 'MANUAL',
+      triggered_by: 'tester@local',
+      started_at: '2026-07-23T08:00:00Z',
+      ended_at: null,
+      run_context: {
+        dispatch_state: {
+          status: 'queued',
+          enqueued_at: '2026-07-23T08:00:00Z',
+          started_at: '2026-07-23T08:00:05Z',
+          completed_at: null,
+          last_error: null,
+        },
+      },
+    });
+
+    renderPage();
+
+    const gate = await screen.findByTestId('dispatch-gate-card');
+    expect(gate).toHaveTextContent('派发完成');
+    expect(screen.queryByTestId('precheck-row')).not.toBeInTheDocument();
+  });
+
   it('keeps an open drawer synchronized with the latest device query object', async () => {
     mocks.getDevices
       .mockResolvedValueOnce({

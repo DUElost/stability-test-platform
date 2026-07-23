@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { isJobStuck } from './planRunDetailUtils';
-import type { DeviceMatrixItem } from '@/utils/api/types';
+import {
+  isJobStuck,
+  normalizeDispatchStateForRun,
+  shouldShowDispatchGate,
+} from './planRunDetailUtils';
+import type { DeviceMatrixItem, PlanRun } from '@/utils/api/types';
 
 function runningDevice(overrides: Partial<DeviceMatrixItem> = {}): DeviceMatrixItem {
   return {
@@ -33,5 +37,53 @@ describe('isJobStuck backend projections', () => {
       heartbeat_deadline_at: '2026-07-13T07:59:59Z',
       last_heartbeat_at: '2026-07-13T07:59:50Z',
     }), now)).toBe(true);
+  });
+});
+
+describe('shouldShowDispatchGate', () => {
+  const baseDispatch = {
+    status: 'queued' as const,
+    enqueued_at: '2026-07-23T08:00:00Z',
+    started_at: null,
+    completed_at: null,
+    last_error: null,
+    requeue_attempts: 0,
+    enqueue_key: null,
+  };
+
+  it('shows gate for RUNNING V2 runs with dispatch_state only', () => {
+    const run = {
+      id: 96,
+      status: 'RUNNING',
+      run_context: { dispatch_state: baseDispatch },
+    } as PlanRun;
+    expect(shouldShowDispatchGate(run)).toBe(true);
+  });
+
+  it('hides gate for terminal SUCCESS without precheck', () => {
+    const run = {
+      id: 12,
+      status: 'SUCCESS',
+      run_context: null,
+    } as PlanRun;
+    expect(shouldShowDispatchGate(run)).toBe(false);
+  });
+});
+
+describe('normalizeDispatchStateForRun', () => {
+  it('treats stale queued dispatch_state as completed on RUNNING V2 runs', () => {
+    const run = {
+      id: 96,
+      status: 'RUNNING',
+      run_context: {
+        dispatch_state: {
+          status: 'queued',
+          enqueued_at: '2026-07-23T08:00:00Z',
+        },
+      },
+    } as PlanRun;
+    expect(normalizeDispatchStateForRun(run, run.run_context?.dispatch_state)?.status).toBe(
+      'completed',
+    );
   });
 });

@@ -91,7 +91,12 @@ export default function DispatchGateCard({
 }: Props & { nowMs?: number }) {
   const dispatchOnly = !precheck;
   const gate: PrecheckState = precheck ?? {
-    phase: dispatchState?.status === 'failed' ? 'failed' : 'verifying',
+    phase:
+      dispatchState?.status === 'failed'
+        ? 'failed'
+        : dispatchState?.status === 'completed'
+          ? 'ready'
+          : 'verifying',
     started_at: dispatchState?.started_at ?? dispatchState?.enqueued_at ?? '',
     completed_at: dispatchState?.completed_at,
     hosts: {},
@@ -108,8 +113,8 @@ export default function DispatchGateCard({
   const totalHosts = hostEntries.length;
   const isCompactReady =
     !isTerminal &&
-    gate.phase === 'ready' &&
-    dispatchState?.status === 'completed';
+    dispatchState?.status === 'completed' &&
+    (gate.phase === 'ready' || dispatchOnly);
   const showStaleBanner = isGateStale(dispatchState, precheck, isTerminal, nowMs);
   const staleElapsedSec = Math.floor(gateElapsedSeconds(dispatchState, precheck, nowMs) ?? 0);
   const canRetryDispatch =
