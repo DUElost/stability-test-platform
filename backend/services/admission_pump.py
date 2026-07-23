@@ -363,6 +363,34 @@ def _is_fatal_push_error(err: Optional[str]) -> bool:
     )
 
 
+def _mismatched_entries_for_push(
+    verify_results: list[dict],
+    expected: list[dict],
+) -> list[dict]:
+    """Map Agent ``verify_scripts`` rows to expected manifest rows for SFTP push.
+
+    Agent ack entries carry ``name``/``version``/sha fields only — ``nfs_path``
+    lives on the control-plane manifest (``expected_scripts_for_run``).  Legacy
+    precheck already joined on name before ``push_mismatched_scripts``; the
+    admission pump must do the same.
+    """
+    by_name = {es["name"]: es for es in expected}
+    entries: list[dict] = []
+    seen: set[str] = set()
+    for row in verify_results:
+        if row.get("ok"):
+            continue
+        name = row.get("name")
+        if not isinstance(name, str) or not name or name in seen:
+            continue
+        manifest = by_name.get(name)
+        if manifest is None:
+            continue
+        seen.add(name)
+        entries.append(manifest)
+    return entries
+
+
 async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
     """Script sha256 verify (+ one hot-update sync retry on mismatch).
 
@@ -398,11 +426,31 @@ async def _verify_scripts_phase(run_id: int, host_ids: list[str]) -> None:
         for hid, (ok, _res, err) in results.items()
         if not ok and _is_unreachable(err)
     ]
-    mismatched_hosts = {
-        hid: [r for r in res if not r.get("ok")]
-        for hid, (ok, res, err) in results.items()
-        if not ok and err == "sha_mismatch"
-    }
+    mismatched_hosts: dict[str, list[dict]] = {}
+    unmapped_hosts: list[str] = []
+    for hid, (ok, res, err) in results.items():
+        if ok or err != "sha_mismatch":
+            continue
+        entries = _mismatched_entries_for_push(res, expected)
+        if entries:
+            mismatched_hosts[hid] = entries
+        elif any(not r.get("ok") for r in res):
+            unmapped_hosts.append(hid)
+
+    if unmapped_hosts:
+        raise _FatalAdmission(
+            "script_sync_config_error",
+            {
+                "hosts": [
+                    {
+                        "host_id": hid,
+                        "reason": "no_mismatched_entries",
+                        "error": "no_mismatched_entries",
+                    }
+                    for hid in unmapped_hosts
+                ],
+            },
+        )
 
     if mismatched_hosts:
         # One sync-and-reverify round, mirroring the legacy gate's healing.

@@ -33,6 +33,7 @@ from backend.models.script import Script
 from backend.services.admission_pump import (
     _FatalAdmission,
     _RetryableAdmission,
+    _mismatched_entries_for_push,
     admission_transaction,
     claim_queued_plan_runs,
     fail_plan_run_admission,
@@ -513,6 +514,48 @@ class TestPumpTick:
 # ── Full async task path (verify mocked) ──────────────────────────────────────
 
 
+class TestMismatchedEntriesForPush:
+    def test_maps_agent_verify_rows_to_expected_manifest(self):
+        expected = [
+            {
+                "name": "monkey_resource_push",
+                "version": "1.0.0",
+                "sha256": "deadbeef",
+                "nfs_path": "/opt/stability-test-agent/agent/scripts/monkey_resource_push/v1.0.0/monkey_resource_push.py",
+            },
+        ]
+        verify_rows = [
+            {
+                "name": "monkey_resource_push",
+                "version": "1.0.0",
+                "ok": False,
+                "expected_sha": "deadbeef",
+                "actual_sha": "bad",
+            },
+        ]
+
+        entries = _mismatched_entries_for_push(verify_rows, expected)
+
+        assert len(entries) == 1
+        assert entries[0]["nfs_path"] == expected[0]["nfs_path"]
+
+    def test_skips_ok_rows_and_unknown_names(self):
+        expected = [
+            {
+                "name": "check_device",
+                "version": "1.0.0",
+                "sha256": "abc",
+                "nfs_path": "/opt/stability-test-agent/agent/scripts/check_device/v1.0.0/check_device.py",
+            },
+        ]
+        verify_rows = [
+            {"name": "check_device", "ok": True},
+            {"name": "missing_script", "ok": False},
+        ]
+
+        assert _mismatched_entries_for_push(verify_rows, expected) == []
+
+
 class TestAdmissionTaskEndToEnd:
     def test_verify_ok_then_running(self, db_session, step4_fixture):
         import asyncio
@@ -562,6 +605,44 @@ class TestAdmissionTaskEndToEnd:
         assert pr.queue_reason == "DEVICE_BUSY"
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id).count() == 0
+
+    def test_script_mismatch_push_receives_manifest_nfs_path(
+        self, db_session, step4_fixture,
+    ):
+        """Agent verify ack rows lack nfs_path; admission must join expected manifest."""
+        import asyncio
+        from backend.services.admission_pump import plan_admission_task
+
+        f = step4_fixture
+        pr = _queued_run(db_session, f, [f["d1"].id])
+        claimed = claim_queued_plan_runs(db_session)
+        attempt = claimed[0][1]
+        db_session.expire_all()
+
+        pushed: dict[str, list[dict]] = {}
+
+        def capture_push(hid, bad, db):
+            pushed[hid] = bad
+            return (True, None)
+
+        async def fake_gather(host_ids, expected):
+            return {
+                hid: (False, [{"ok": False, "name": "check_device"}], "sha_mismatch")
+                for hid in host_ids
+            }
+
+        with patch(
+            "backend.services.precheck.verify.gather_verify", new=fake_gather,
+        ), patch(
+            "backend.services.precheck.sync.push_mismatched_scripts",
+            side_effect=capture_push,
+        ):
+            asyncio.run(plan_admission_task({}, plan_run_id=pr.id, attempt_id=attempt))
+
+        assert pushed
+        for entries in pushed.values():
+            assert entries
+            assert entries[0]["nfs_path"] == "/s/check_device.py"
 
     def test_script_mismatch_after_sync_fails_fatal(self, db_session, step4_fixture):
         """FATAL only when sync SUCCEEDED and reverify still reports a real
