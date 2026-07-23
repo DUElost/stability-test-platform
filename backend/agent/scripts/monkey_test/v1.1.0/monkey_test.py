@@ -16,7 +16,7 @@ STP_STEP_PARAMS:
     "push_resources": true,       // 推送 /sdcard/resource/ 媒体资源
     "blacklist": true,            // 使用黑名单
     "need_nohup": true,           // nohup 启动
-    "aimonkey_dir": "/opt/stability-test-agent/resources/aimonkey/AIMonkeyTest_20260317"
+    "aimonkey_dir": "/opt/stability-test-agent/agent/resources/aimonkey/AIMonkeyTest_20260317"
 }
 
 输出 (stdout):
@@ -32,22 +32,17 @@ from pathlib import Path
 
 from _adb import adb_path, adb_shell, device_serial, output_result, params
 
+_AGENT_ROOT = Path(__file__).resolve().parents[3]
+if str(_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_AGENT_ROOT))
+
+from aimonkey_paths import resolve_aimonkey_bundle_dir  # noqa: E402
+
 
 # ── 资源解析 ──
 
 def _resolve_aimonkey_dir(cfg: dict) -> Path:
-    explicit = cfg.get("aimonkey_dir", "")
-    if explicit and Path(explicit).is_dir():
-        return Path(explicit)
-
-    # 从脚本位置反推 agent 安装根目录
-    script_dir = Path(__file__).resolve().parent  # v1.0.0/
-    install_root = script_dir.parents[3]  # scripts/monkey_test/v1.0.0/ → agent root
-    resource_dir = install_root / "resources" / "aimonkey" / "AIMonkeyTest_20260317"
-    if resource_dir.is_dir():
-        return resource_dir
-
-    return resource_dir  # 返回默认路径，后续检查
+    return resolve_aimonkey_bundle_dir(cfg)
 
 
 def _run_adb(serial: str, args: list[str], timeout: int = 30) -> tuple[int, str, str]:

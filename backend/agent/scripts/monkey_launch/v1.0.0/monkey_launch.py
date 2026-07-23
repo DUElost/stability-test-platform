@@ -10,7 +10,7 @@
 
 STP_STEP_PARAMS 结构:
 {
-    "aimonkey_dir": "/opt/stability-test-agent/resources/aimonkey/AIMonkeyTest_20260317",
+    "aimonkey_dir": "/opt/stability-test-agent/agent/resources/aimonkey/AIMonkeyTest_20260317",
     "need_nohup": true,
     "push_resources": true,
     "sleep_mode": false,
@@ -28,44 +28,19 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional
 
 from _adb import adb_path, device_serial, output_result, params
 
+_AGENT_ROOT = Path(__file__).resolve().parents[3]
+if str(_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_AGENT_ROOT))
 
-def _resolve_from_resource_root(resource_root: Path) -> Optional[Path]:
-    root = resource_root.expanduser().resolve()
-    if (root / "MonkeyTest.py").is_file():
-        return root
-
-    bundled_dir = root / "AIMonkeyTest_20260317"
-    if bundled_dir.is_dir():
-        return bundled_dir
-
-    return None
+from aimonkey_paths import resolve_aimonkey_bundle_dir  # noqa: E402
 
 
 def _resolve_aimonkey_dir(cfg: dict) -> Path:
-    """Resolve AIMonkeyTest directory from config or default location."""
-    explicit = cfg.get("aimonkey_dir", "")
-    if explicit and Path(explicit).is_dir():
-        return Path(explicit).resolve()
-
-    env_resource_root = os.environ.get("AIMONKEY_RESOURCE_DIR", "").strip()
-    if env_resource_root:
-        resource_root = Path(env_resource_root)
-        resolved = _resolve_from_resource_root(resource_root)
-        if resolved:
-            return resolved
-        return resource_root.expanduser().resolve() / "AIMonkeyTest_20260317"
-
-    script_dir = Path(__file__).resolve().parent  # v1.0.0/
-    install_root = script_dir.parents[3]
-    resource_root = install_root / "resources" / "aimonkey"
-    resolved = _resolve_from_resource_root(resource_root)
-    if resolved:
-        return resolved
-    return resource_root / "AIMonkeyTest_20260317"
+    """Resolve AIMonkeyTest directory from config or hot-update default."""
+    return resolve_aimonkey_bundle_dir(cfg)
 
 
 def _load_monkey_test(aimonkey_dir: Path):

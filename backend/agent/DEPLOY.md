@@ -92,7 +92,7 @@ sudo bash install_agent.sh
 
 安装脚本交互提示：
 - **API_URL**：WSL 环境直接回车（自动检测使用 `127.0.0.1`）；远程主机输入中心服务器 IP
-- **HOST_ID**：直接回车使用建议值，或输入 `auto` 自动注册
+- **HOST_ID**：直接回车使用建议值（默认按本机 IPv4 生成，如 `172.21.9.6` → `172-21-9-6`），或输入 `auto` 自动注册
 
 安装脚本将自动完成：
 - 创建安装目录 `/opt/stability-test-agent`
@@ -117,8 +117,8 @@ sudo nano /opt/stability-test-agent/.env
 # - WSL 环境（同机开发联调）：使用 127.0.0.1（安装脚本自动检测并设置）
 API_URL=http://172.21.10.5:8000
 
-# 主机 ID（生产/预发布默认使用固定 hosts.id）
-HOST_ID=12
+# 主机 ID（推荐 IPv4 点转横杠，须与后端 hosts.id 一致）
+HOST_ID=172-21-9-6
 AUTO_REGISTER_HOST=false
 
 # 心跳间隔（秒）

@@ -9,7 +9,7 @@
 STP_STEP_PARAMS:
 {
     "push_resources": true,
-    "aimonkey_dir": "/opt/stability-test-agent/resources/aimonkey/AIMonkeyTest_20260317"
+    "aimonkey_dir": "/opt/stability-test-agent/agent/resources/aimonkey/AIMonkeyTest_20260317"
 }
 
 输出 (stdout):
@@ -24,17 +24,15 @@ from pathlib import Path
 
 from _adb import adb_path, device_serial, output_result, params
 
+_AGENT_ROOT = Path(__file__).resolve().parents[3]
+if str(_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_AGENT_ROOT))
+
+from aimonkey_paths import resolve_aimonkey_bundle_dir  # noqa: E402
+
 
 def _resolve_aimonkey_dir(cfg: dict) -> Path:
-    explicit = cfg.get("aimonkey_dir", "")
-    if explicit and Path(explicit).is_dir():
-        return Path(explicit)
-    script_dir = Path(__file__).resolve().parent
-    install_root = script_dir.parents[3]
-    resource_dir = install_root / "resources" / "aimonkey" / "AIMonkeyTest_20260317"
-    if resource_dir.is_dir():
-        return resource_dir
-    return resource_dir
+    return resolve_aimonkey_bundle_dir(cfg)
 
 
 def _run_adb(serial: str, args: list[str], timeout: int = 30) -> tuple[int, str, str]:

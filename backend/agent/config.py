@@ -37,13 +37,15 @@ def _resolve_base_dir() -> Path:
 
 BASE_DIR: Path = _resolve_base_dir()
 
+# Agent 源码根（热更新落盘目录；与 BASE_DIR 在部署模式下不同）
+AGENT_DIR: Path = Path(__file__).resolve().parent
+
 # 日志目录
 LOG_DIR: Path = BASE_DIR / "logs"
 RUN_LOG_DIR: Path = LOG_DIR / "runs"
 
-# 资源目录
+# 资源目录（install_agent.sh 遗留的 $INSTALL_DIR/resources；AIMonkey 以 AGENT_DIR 为准）
 RESOURCE_DIR: Path = BASE_DIR / "resources"
-AIMONKEY_RESOURCE_DIR: Path = RESOURCE_DIR / "aimonkey"
 
 def get_run_log_dir(run_id: int) -> str:
     """返回指定 run_id 的日志目录路径"""
@@ -51,19 +53,15 @@ def get_run_log_dir(run_id: int) -> str:
 
 
 def get_aimonkey_resource_dir() -> str:
-    """返回 AIMONKEY 资源目录路径。
+    """返回 AIMONKEY 资源根目录（热更新路径 ``agent/resources/aimonkey``）。"""
+    from .aimonkey_paths import get_aimonkey_resource_root
 
-    优先级:
-      1. AIMONKEY_RESOURCE_DIR 环境变量
-      2. 配置常量 AIMONKEY_RESOURCE_DIR
-    """
-    env_dir = os.environ.get("AIMONKEY_RESOURCE_DIR")
-    if env_dir:
-        return env_dir
-    return str(AIMONKEY_RESOURCE_DIR)
+    return str(get_aimonkey_resource_root())
 
 
 def ensure_dirs() -> None:
     """确保关键目录存在"""
-    for d in (LOG_DIR, RUN_LOG_DIR, RESOURCE_DIR):
+    from .aimonkey_paths import get_aimonkey_resource_root
+
+    for d in (LOG_DIR, RUN_LOG_DIR, RESOURCE_DIR, get_aimonkey_resource_root()):
         d.mkdir(parents=True, exist_ok=True)
