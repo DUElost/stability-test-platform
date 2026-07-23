@@ -32,7 +32,7 @@ class TestCreateHost:
         assert data["ssh_user"] == "root"
         assert data["status"] == "OFFLINE"
         assert data["watcher_admin_active"] is True
-        assert "id" in data
+        assert data["id"] == "192-168-1-200"
 
     def test_create_host_duplicate_name(self, client, sample_host, admin_headers):
         """Test creating host with duplicate name fails"""

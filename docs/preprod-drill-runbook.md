@@ -126,7 +126,7 @@ sudo ./install_agent.sh
 sudo cp /opt/stability-test-agent/.env /opt/stability-test-agent/.env.bak.$(date +%F-%H%M%S) || true
 sudo tee /opt/stability-test-agent/.env > /dev/null << EOF
 API_URL=$CONTROL_BASE_URL
-HOST_ID=<填写与后端 hosts.id 对齐的正整数>
+HOST_ID=<填写与后端 hosts.id 对齐的 ID，推荐如 172-21-9-6>
 AUTO_REGISTER_HOST=false
 AGENT_SECRET=<填写与控制平面 AGENT_SECRET 一致的值>
 POLL_INTERVAL=10

@@ -2,14 +2,14 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import logging
 import os
-import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from backend.core.database import get_db
+from backend.core.host_identity import allocate_host_id
 from backend.models.host import Host, Device
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import LeaseStatus
@@ -63,9 +63,12 @@ def _is_auto_register_sentinel(host_id: str) -> bool:
     return str(host_id).strip() == "0"
 
 
-def _allocate_host_id() -> str:
-    """为自动注册主机生成新的唯一 Host ID。"""
-    return f"auto-{uuid.uuid4().hex[:12]}"
+def _allocate_host_id(ip: Optional[str], db: Session) -> str:
+    """为自动注册主机生成可读 Host ID（IPv4 → 点转横杠，如 172-21-9-6）。"""
+    return allocate_host_id(
+        ip,
+        exists=lambda candidate: db.get(Host, candidate) is not None,
+    )
 
 
 def _sync_host_identity(host: Host, host_info: Dict[str, Any]) -> None:
@@ -185,7 +188,7 @@ def _process_heartbeat_with_db(
             )
 
         if not host:
-            host_id = _allocate_host_id() if is_auto_register else str(payload.host_id)
+            host_id = _allocate_host_id(ip, db) if is_auto_register else str(payload.host_id)
             host_name = ip or f"Host-{host_id}"
 
             host = Host(

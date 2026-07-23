@@ -108,6 +108,8 @@ class TestHeartbeat:
         assert first_host_id != "0"
         assert second_host_id != "0"
         assert first_host_id != second_host_id
+        assert first_host_id == "198-18-0-1"
+        assert second_host_id == "172-21-10-36"
 
     def test_heartbeat_updates_existing_host_ip_from_payload(self, client, sample_host, db_session):
         """Test heartbeat refreshes displayed host IP when agent reports a new address"""

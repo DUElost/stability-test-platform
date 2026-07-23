@@ -173,32 +173,75 @@ fi
 # 7. 创建 .env 文件
 echo_info "创建配置文件..."
 
-# 函数：获取下一个可用的 HOST_ID
+# 函数：基于节点 IPv4 生成可读 HOST_ID（172.21.9.6 → 172-21-9-6）
+# 若该 ID 被其他 IP 占用则追加短后缀；同 IP 复用已有 ID。
+# 无可用 IPv4 时回退 auto-<hex>。
 generate_unique_host_id() {
     local api_url="$1"
-    local default_id="$2"
+    local ip_addr="$2"
 
-    # 如果无法连接 API，使用基于 MAC 地址的哈希生成唯一 ID
-    if ! curl -s "$api_url/api/v1/hosts" > /dev/null 2>&1; then
-        # 使用 MAC 地址生成唯一 ID (1-10000 范围)
-        local mac_hash=$(cat /sys/class/net/*/address 2>/dev/null | head -1 | sha256sum | cut -c1-8)
-        local id=$((1 + 0x$mac_hash % 9999))
-        echo "$id"
+    local base_id=""
+    if [[ "$ip_addr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        base_id="${ip_addr//./-}"
+    fi
+
+    if [ -z "$base_id" ]; then
+        echo "auto-$(head -c 6 /dev/urandom | xxd -p 2>/dev/null || date +%s)"
         return
     fi
 
-    # 从 API 获取已存在的主机列表，找到最大 ID + 1
-    local max_id=$(curl -s "$api_url/api/v1/hosts" 2>/dev/null | python3 -c "
-import sys, json
-try:
-    hosts = json.load(sys.stdin)
-    ids = [h.get('id', 0) for h in hosts]
-    print(max(ids) + 1 if ids else 1)
-except:
-    print('$default_id')
-" 2>/dev/null || echo "$default_id")
+    # 无法连 API 时直接用 IP 派生 ID
+    if ! curl -s --max-time 3 "$api_url/api/v1/hosts" > /dev/null 2>&1; then
+        echo "$base_id"
+        return
+    fi
 
-    echo "$max_id"
+    local candidate
+    candidate=$(curl -s --max-time 5 "$api_url/api/v1/hosts" 2>/dev/null | python3 -c '
+import json, sys, uuid
+base = sys.argv[1]
+ip_addr = sys.argv[2]
+try:
+    payload = json.load(sys.stdin)
+    if isinstance(payload, list):
+        hosts = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        hosts = payload["items"]
+    else:
+        raise ValueError("unexpected hosts response")
+except Exception:
+    print(base)
+    raise SystemExit(0)
+
+# 平台预创建 / 旧库存主机应沿用数据库中的真实 ID，不能把同一 IP
+# 误判为冲突后生成随机后缀，否则 Agent claim/socket 身份会与 DB 脱节。
+for host in hosts:
+    if not isinstance(host, dict):
+        continue
+    existing_ip = str(host.get("ip") or host.get("ip_address") or "").strip()
+    existing_id = str(host.get("id") or "").strip()
+    if existing_ip == ip_addr and existing_id:
+        print(existing_id)
+        raise SystemExit(0)
+
+taken = {
+    str(host.get("id", ""))
+    for host in hosts
+    if isinstance(host, dict)
+}
+if base not in taken:
+    print(base)
+else:
+    for _ in range(8):
+        alt = f"{base}-{uuid.uuid4().hex[:4]}"
+        if alt not in taken:
+            print(alt)
+            break
+    else:
+        print(f"auto-{uuid.uuid4().hex[:12]}")
+' "$base_id" "$ip_addr" 2>/dev/null || echo "$base_id")
+
+    echo "$candidate"
 }
 
 # 提示用户输入 API_URL
@@ -218,7 +261,7 @@ HOSTNAME=$(hostname)
 IP_ADDR=$(hostname -I | awk '{print $1}')
 
 # 生成唯一的 HOST_ID
-DEFAULT_HOST_ID=$(generate_unique_host_id "$API_URL" "1")
+DEFAULT_HOST_ID=$(generate_unique_host_id "$API_URL" "$IP_ADDR")
 
 echo_info "检测到以下主机信息:"
 echo_info "  主机名: $HOSTNAME"
@@ -246,8 +289,8 @@ ADB_PATH=adb
 LOG_LEVEL=INFO
 AGENT_SECRET=${AGENT_SECRET:-}
 
-# AIMONKEY 资源目录（包含 aim, aim.jar 等文件）
-# AIMONKEY_RESOURCE_DIR=$INSTALL_DIR/resources/aimonkey
+# AIMONKEY 资源目录（热更新路径，与 agent/resources/aimonkey 一致）
+# AIMONKEY_RESOURCE_DIR=$INSTALL_DIR/agent/resources/aimonkey
 EOF
     echo_info "配置文件已创建: $INSTALL_DIR/.env"
 else
@@ -346,12 +389,26 @@ echo ""
 existing_hosts=$(curl -s "$API_URL/api/v1/hosts" 2>/dev/null | python3 -c "
 import sys, json
 try:
-    hosts = json.load(sys.stdin)
-    same_id = [h for h in hosts if h.get('id') == $HOST_ID]
-    print(len(same_id))
-except:
+    payload = json.load(sys.stdin)
+    if isinstance(payload, list):
+        hosts = payload
+    elif isinstance(payload, dict) and isinstance(payload.get('items'), list):
+        hosts = payload['items']
+    else:
+        hosts = []
+    target = sys.argv[1]
+    current_ip = sys.argv[2]
+    conflicts = []
+    for host in hosts:
+        if not isinstance(host, dict) or str(host.get('id', '')) != target:
+            continue
+        existing_ip = str(host.get('ip') or host.get('ip_address') or '').strip()
+        if not existing_ip or existing_ip != current_ip:
+            conflicts.append(host)
+    print(len(conflicts))
+except Exception:
     print('0')
-" 2>/dev/null || echo "0")
+" "$HOST_ID" "$IP_ADDR" 2>/dev/null || echo "0")
 
 if [ "$existing_hosts" -gt 0 ] 2>/dev/null; then
     echo_warn "警告: HOST_ID=$HOST_ID 可能已被其他主机使用"

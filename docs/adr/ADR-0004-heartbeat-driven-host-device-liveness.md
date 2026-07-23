@@ -50,7 +50,7 @@ Legacy `heartbeat_monitor`（`backend/tasks/heartbeat_monitor.py`）仍保留用
 - ✅ 心跳接入、设备数据回传、离线判定与通知
 - ✅ 会话看门狗接管心跳超时检测，与 heartbeat_monitor 互斥
 - ✅ Host 超时联动 Job 状态转换（RUNNING → UNKNOWN → FAILED）
-- ~~后续：引入 Agent 注册握手，降低手工维护 `HOST_ID` 的操作风险~~ → ✅ 已实现：`HOST_ID=AUTO` 或 `AUTO_REGISTER_HOST=true` 触发自动注册（`backend/agent/host_registry.py`），后端通过 heartbeat `host_id=0` 哨兵值感知并分配 `auto-{uuid}` ID
+- ~~后续：引入 Agent 注册握手，降低手工维护 `HOST_ID` 的操作风险~~ → ✅ 已实现：`HOST_ID=AUTO` 或 `AUTO_REGISTER_HOST=true` 触发自动注册（`backend/agent/host_registry.py`），后端通过 heartbeat `host_id=0` 哨兵值感知并按上报 IPv4 分配可读 ID（如 `172.21.9.6` → `172-21-9-6`；冲突时追加短后缀；无可用 IPv4 时回退 `auto-{hex}`）
 
 ## 关联实现/文档
 

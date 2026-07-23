@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 import logging
 import os
 import time
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +10,7 @@ from typing import Any, List, Union
 
 from backend.core.audit import record_audit
 from backend.core.database import get_db
+from backend.core.host_identity import allocate_host_id
 from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.core.ssh_security import (
     SshSecurityConfigError,
@@ -195,7 +195,10 @@ router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
 @router.post("", response_model=HostOut)
 def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin), request: Request = None):
-    host_id = str(uuid.uuid4())
+    host_id = allocate_host_id(
+        payload.ip,
+        exists=lambda candidate: db.get(Host, candidate) is not None,
+    )
     try:
         encrypted_password = encrypt_ssh_password(payload.ssh_password) or None
     except SshSecurityConfigError as exc:
@@ -687,6 +690,7 @@ def host_hot_update(
             "ip": host.ip,
             "ok": bool(result.get("ok")),
             "deps_refreshed": bool(result.get("deps_refreshed")),
+            "env_keys_synced": result.get("env_keys_synced", []),
             "code_version": result.get("code_version", ""),
             "duration_ms": result.get("duration_ms"),
             "message": result.get("message", ""),
@@ -708,6 +712,7 @@ def host_hot_update(
         "message": result["message"],
         "duration_ms": result.get("duration_ms"),
         "deps_refreshed": result.get("deps_refreshed", False),
+        "env_keys_synced": result.get("env_keys_synced", []),
         "code_version": result.get("code_version", ""),
         "abort_summary": aborted_summary,
     }

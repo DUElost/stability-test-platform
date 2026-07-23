@@ -477,7 +477,7 @@ def main() -> None:
                 },
             )
             logger.error(
-                "Set HOST_ID to a positive integer, or set AUTO_REGISTER_HOST=true to auto-register"
+                "Set HOST_ID to an IP-derived id (e.g. 172-21-9-6), or set AUTO_REGISTER_HOST=true to auto-register"
             )
             raise SystemExit(2)
 
