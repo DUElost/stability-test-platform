@@ -11,6 +11,11 @@ import { TEXT } from '@/design-system/tokens';
 import { cn } from '@/lib/utils';
 import { Copy, Download, X } from 'lucide-react';
 import type { ReadinessDevice } from '@/utils/planExecuteReadiness';
+import {
+  defaultMinimapColumns,
+  measureMinimapColumns,
+  MINIMAP_TILE_GAP,
+} from './minimapGrid';
 
 /** 超过此数量时启用虚拟行滚动（右栏大选集）。 */
 export const MINIMAP_VIRTUAL_THRESHOLD = 80;
@@ -145,8 +150,8 @@ function MinimapGridStatic({
 
   return (
     <div
-      className="grid gap-1"
-      style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${tileMin}px, 1fr))` }}
+      className="grid w-full min-w-0 gap-1"
+      style={{ gridTemplateColumns: `repeat(auto-fill, ${tileMin}px)` }}
       data-testid="selected-minimap-grid"
     >
       {devices.map(renderTile)}
@@ -168,21 +173,21 @@ function MinimapGridVirtual({
 >) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const tileMin = embedded ? 22 : 28;
-  const [cols, setCols] = useState(6);
+  const [cols, setCols] = useState(() => defaultMinimapColumns(Boolean(embedded), tileMin));
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const measure = () => {
-      const width = el.clientWidth - 4;
-      const next = Math.max(1, Math.floor(width / (tileMin + 4)));
+      const next = measureMinimapColumns(el.clientWidth, tileMin, MINIMAP_TILE_GAP);
+      if (next <= 0) return;
       setCols((prev) => (prev === next ? prev : next));
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [tileMin]);
+  }, [embedded, tileMin]);
 
   const renderTile = (device: ReadinessDevice) => {
     const row = readinessByDeviceId.get(device.id);
@@ -214,7 +219,7 @@ function MinimapGridVirtual({
   return (
     <div
       ref={scrollRef}
-      className="max-h-52 min-h-20 overflow-y-auto"
+      className="max-h-52 min-h-20 w-full min-w-0 overflow-y-auto"
       data-testid="selected-minimap-grid"
       data-virtual="true"
     >
@@ -225,11 +230,13 @@ function MinimapGridVirtual({
           return (
             <div
               key={virtualRow.key}
-              className="absolute left-0 top-0 grid w-full gap-1"
+              className="absolute left-0 top-0 w-full"
               style={{
                 height: `${virtualRow.size}px`,
                 transform: `translateY(${virtualRow.start}px)`,
-                gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                display: 'grid',
+                gridTemplateColumns: `repeat(${cols}, ${tileMin}px)`,
+                gap: MINIMAP_TILE_GAP,
               }}
             >
               {rowDevices.map(renderTile)}
@@ -341,7 +348,7 @@ export function SelectedMinimap({
 
   if (embedded) {
     return (
-      <div data-testid="selected-minimap" data-embedded="true">
+      <div className="w-full min-w-0" data-testid="selected-minimap" data-embedded="true">
         <span className="sr-only">已选样机 Minimap</span>
         <div className="mb-2">
           <MinimapLegend compact />
