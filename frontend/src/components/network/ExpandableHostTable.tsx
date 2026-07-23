@@ -156,14 +156,24 @@ export function ExpandableHostTable({
   onSelectionChange,
 }: ExpandableHostTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
+  const [statusFilter, setStatusFilter] = useState<'all' | HostTableData['status']>('all');
   const selectable = !!onSelectionChange;
   const selectAllRef = useRef<HTMLInputElement>(null);
-  const selectedCount = selectedIds?.size ?? 0;
+
+  const filteredHosts = useMemo(() => {
+    if (statusFilter === 'all') return hosts;
+    return hosts.filter((host) => host.status === statusFilter);
+  }, [hosts, statusFilter]);
+
+  const filteredIds = useMemo(() => filteredHosts.map((host) => host.id), [filteredHosts]);
+  const selectedFilteredCount = filteredIds.filter((id) => selectedIds?.has(id)).length;
+  const allFilteredSelected = filteredIds.length > 0 && selectedFilteredCount === filteredIds.length;
+  const someFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
 
   useEffect(() => {
     if (!selectAllRef.current) return;
-    selectAllRef.current.indeterminate = selectedCount > 0 && selectedCount < hosts.length;
-  }, [hosts.length, selectedCount]);
+    selectAllRef.current.indeterminate = someFilteredSelected;
+  }, [someFilteredSelected]);
 
   const toggleSelect = (id: string | number, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -175,10 +185,14 @@ export function ExpandableHostTable({
 
   const toggleAll = () => {
     if (!onSelectionChange || !selectedIds) return;
-    if (selectedIds.size === hosts.length) {
-      onSelectionChange(new Set());
+    if (allFilteredSelected) {
+      const next = new Set(selectedIds);
+      filteredIds.forEach((id) => next.delete(id));
+      onSelectionChange(next);
     } else {
-      onSelectionChange(new Set(hosts.map(h => h.id)));
+      const next = new Set(selectedIds);
+      filteredIds.forEach((id) => next.add(id));
+      onSelectionChange(next);
     }
   };
 
@@ -208,9 +222,18 @@ export function ExpandableHostTable({
   return (
     <TooltipProvider>
       <div className="space-y-4">
-        {/* Summary Stats - 简洁版本 */}
+        {/* Summary Stats - 点击筛选，对齐设备页 */}
         <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-          <div className="bg-card rounded-lg border border-border p-3 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setStatusFilter('all')}
+            aria-pressed={statusFilter === 'all'}
+            aria-label="筛选全部主机"
+            className={cn(
+              'bg-card rounded-lg border p-3 flex items-center gap-3 text-left transition-all',
+              statusFilter === 'all' ? 'border-muted-foreground shadow-sm' : 'border-border',
+            )}
+          >
             <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
               <Server className="w-5 h-5 text-muted-foreground" />
             </div>
@@ -223,8 +246,19 @@ export function ExpandableHostTable({
                 </div>
               )}
             </div>
-          </div>
-          <div className="bg-card rounded-lg border border-success/30 p-3 flex items-center gap-3">
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ONLINE')}
+            aria-pressed={statusFilter === 'ONLINE'}
+            aria-label="筛选在线主机"
+            className={cn(
+              'bg-card rounded-lg border p-3 flex items-center gap-3 text-left transition-all',
+              statusFilter === 'ONLINE'
+                ? 'border-success shadow-md bg-success/5'
+                : 'border-success/30 hover:border-success/40 hover:bg-success/5',
+            )}
+          >
             <div className="w-10 h-10 rounded-lg bg-success/10 flex items-center justify-center">
               <CheckCircle2 className="w-5 h-5 text-success" />
             </div>
@@ -232,8 +266,19 @@ export function ExpandableHostTable({
               <div className="text-xl font-semibold text-success">{stats.online}</div>
               <div className="text-xs text-muted-foreground">在线</div>
             </div>
-          </div>
-          <div className="bg-card rounded-lg border border-warning/30 p-3 flex items-center gap-3">
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('DEGRADED')}
+            aria-pressed={statusFilter === 'DEGRADED'}
+            aria-label="筛选告警主机"
+            className={cn(
+              'bg-card rounded-lg border p-3 flex items-center gap-3 text-left transition-all',
+              statusFilter === 'DEGRADED'
+                ? 'border-warning shadow-md bg-warning/5'
+                : 'border-warning/30 hover:border-warning/40 hover:bg-warning/5',
+            )}
+          >
             <div className="w-10 h-10 rounded-lg bg-warning/10 flex items-center justify-center">
               <AlertTriangle className="w-5 h-5 text-warning" />
             </div>
@@ -241,8 +286,17 @@ export function ExpandableHostTable({
               <div className="text-xl font-semibold text-warning">{stats.degraded}</div>
               <div className="text-xs text-muted-foreground">告警</div>
             </div>
-          </div>
-          <div className="bg-card rounded-lg border border-border p-3 flex items-center gap-3">
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter('OFFLINE')}
+            aria-pressed={statusFilter === 'OFFLINE'}
+            aria-label="筛选离线主机"
+            className={cn(
+              'bg-card rounded-lg border p-3 flex items-center gap-3 text-left transition-all',
+              statusFilter === 'OFFLINE' ? 'border-muted-foreground shadow-sm' : 'border-border hover:bg-muted/30',
+            )}
+          >
             <div className="w-10 h-10 rounded-lg bg-muted/50 flex items-center justify-center">
               <Activity className="w-5 h-5 text-muted-foreground" />
             </div>
@@ -250,7 +304,7 @@ export function ExpandableHostTable({
               <div className="text-xl font-semibold text-muted-foreground">{stats.offline}</div>
               <div className="text-xs text-muted-foreground">离线</div>
             </div>
-          </div>
+          </button>
         </div>
 
         {/* Table */}
@@ -263,7 +317,7 @@ export function ExpandableHostTable({
                     <input
                       ref={selectAllRef}
                       type="checkbox"
-                      checked={selectedCount === hosts.length && hosts.length > 0}
+                      checked={allFilteredSelected}
                       onChange={toggleAll}
                       aria-label="选择全部主机"
                       className="h-4 w-4 rounded border-border accent-primary"
@@ -284,7 +338,7 @@ export function ExpandableHostTable({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {hosts.map((host) => {
+              {filteredHosts.map((host) => {
                 const isExpanded = expandedRows.has(host.id);
 
                 return (
@@ -790,6 +844,12 @@ export function ExpandableHostTable({
             </TableBody>
           </Table>
         </div>
+
+        {filteredHosts.length === 0 && (
+          <div className="text-center py-8 text-muted-foreground text-sm">
+            {hosts.length === 0 ? '暂无主机' : '没有符合当前筛选条件的主机'}
+          </div>
+        )}
       </div>
     </TooltipProvider>
   );

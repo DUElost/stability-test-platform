@@ -70,10 +70,12 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground antialiased font-sans;
+    /* Avoid Tailwind `antialiased`: on Linux/Chromium it disables subpixel
+       AA and makes Noto Sans SC (esp. Variable) look soft/grey on dense tables. */
+    @apply bg-background text-foreground font-sans;
     margin: 0;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    -webkit-font-smoothing: auto;
+    -moz-osx-font-smoothing: auto;
   }
   code {
     @apply font-mono;

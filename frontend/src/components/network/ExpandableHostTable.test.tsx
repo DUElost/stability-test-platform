@@ -107,4 +107,48 @@ describe('ExpandableHostTable', () => {
       'selected',
     );
   });
+
+  it('filters hosts when summary status cards are clicked', () => {
+    const offlineHost: HostTableData = {
+      ...host,
+      id: 2,
+      name: '上海执行机-02',
+      ip: '172.21.8.32',
+      status: 'OFFLINE',
+      agent_installed: false,
+      resources: undefined,
+    };
+    const degradedHost: HostTableData = {
+      ...host,
+      id: 3,
+      name: '上海执行机-03',
+      ip: '172.21.8.33',
+      status: 'DEGRADED',
+    };
+    render(<ExpandableHostTable hosts={[host, offlineHost, degradedHost]} />);
+
+    expect(screen.getByText('上海执行机-01')).toBeInTheDocument();
+    expect(screen.getByText('上海执行机-02')).toBeInTheDocument();
+    expect(screen.getByText('上海执行机-03')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '筛选在线主机' }));
+    expect(screen.getByText('上海执行机-01')).toBeInTheDocument();
+    expect(screen.queryByText('上海执行机-02')).not.toBeInTheDocument();
+    expect(screen.queryByText('上海执行机-03')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '筛选在线主机' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: '筛选告警主机' }));
+    expect(screen.queryByText('上海执行机-01')).not.toBeInTheDocument();
+    expect(screen.getByText('上海执行机-03')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '筛选离线主机' }));
+    expect(screen.getByText('上海执行机-02')).toBeInTheDocument();
+    expect(screen.queryByText('上海执行机-03')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '筛选全部主机' }));
+    expect(screen.getByText('上海执行机-01')).toBeInTheDocument();
+    expect(screen.getByText('上海执行机-02')).toBeInTheDocument();
+    expect(screen.getByText('上海执行机-03')).toBeInTheDocument();
+  });
+
 });

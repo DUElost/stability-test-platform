@@ -81,4 +81,65 @@ describe('ExpandableDeviceTable', () => {
     expect(screen.getByText('+1')).toBeInTheDocument();
     expect(screen.getByRole('table')).toHaveClass('min-w-[1420px]');
   });
+
+  it('filters by model, version, and host dropdowns', async () => {
+    const onFilteredDevicesChange = vi.fn();
+    const multiDevices = [
+      ...devices,
+      {
+        ...devices[0],
+        id: 2,
+        serial: 'SERIAL-2',
+        model: 'Model B',
+        build_display_id: 'build-b',
+        host_id: 10,
+        host_name: '172.21.9.116',
+      },
+      {
+        ...devices[0],
+        id: 3,
+        serial: 'SERIAL-3',
+        model: 'Model A',
+        build_display_id: 'build-a',
+        host_id: 10,
+        host_name: '172.21.9.116',
+      },
+    ];
+    render(
+      <ExpandableDeviceTable
+        devices={multiDevices}
+        onFilteredDevicesChange={onFilteredDevicesChange}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole('combobox', { name: '按所属主机筛选' }), {
+      target: { value: '10' },
+    });
+    await waitFor(() => {
+      const latest = onFilteredDevicesChange.mock.calls[
+        onFilteredDevicesChange.mock.calls.length - 1
+      ]?.[0] as typeof multiDevices;
+      expect(latest.map((d) => d.id)).toEqual([2, 3]);
+    });
+
+    fireEvent.change(screen.getByRole('combobox', { name: '按设备筛选' }), {
+      target: { value: 'Model A' },
+    });
+    await waitFor(() => {
+      const latest = onFilteredDevicesChange.mock.calls[
+        onFilteredDevicesChange.mock.calls.length - 1
+      ]?.[0] as typeof multiDevices;
+      expect(latest.map((d) => d.id)).toEqual([3]);
+    });
+
+    fireEvent.change(screen.getByRole('combobox', { name: '按版本筛选' }), {
+      target: { value: 'build-b' },
+    });
+    await waitFor(() => {
+      const latest = onFilteredDevicesChange.mock.calls[
+        onFilteredDevicesChange.mock.calls.length - 1
+      ]?.[0] as typeof multiDevices;
+      expect(latest).toEqual([]);
+    });
+  });
 });

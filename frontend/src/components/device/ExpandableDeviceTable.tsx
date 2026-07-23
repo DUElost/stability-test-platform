@@ -70,6 +70,10 @@ interface ExpandableDeviceTableProps {
   onFilteredDevicesChange?: (devices: DeviceTableData[]) => void;
 }
 
+function hostFilterKey(device: DeviceTableData): string {
+  return device.host_id != null ? String(device.host_id) : 'unassigned';
+}
+
 export function ExpandableDeviceTable({
   devices,
   onViewMetrics,
@@ -79,6 +83,9 @@ export function ExpandableDeviceTable({
 }: ExpandableDeviceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [modelFilter, setModelFilter] = useState('all');
+  const [versionFilter, setVersionFilter] = useState('all');
+  const [hostFilter, setHostFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const selectPageRef = useRef<HTMLInputElement>(null);
@@ -87,6 +94,53 @@ export function ExpandableDeviceTable({
 
   // 防抖搜索，减少不必要的过滤计算
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
+
+  const hostOptions = useMemo(() => {
+    const byKey = new Map<string, string>();
+    for (const device of devices) {
+      const key = hostFilterKey(device);
+      if (byKey.has(key)) continue;
+      byKey.set(key, device.host_name?.trim() || (key === 'unassigned' ? '未分配' : key));
+    }
+    return Array.from(byKey.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
+  }, [devices]);
+
+  const devicesInHostScope = useMemo(
+    () => devices.filter((device) => hostFilter === 'all' || hostFilterKey(device) === hostFilter),
+    [devices, hostFilter],
+  );
+
+  const modelOptions = useMemo(
+    () => Array.from(new Set(devicesInHostScope.map((device) => device.model).filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b, 'zh-CN'),
+    ),
+    [devicesInHostScope],
+  );
+
+  const versionOptions = useMemo(
+    () => Array.from(
+      new Set(
+        devicesInHostScope
+          .map((device) => device.build_display_id)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    ).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [devicesInHostScope],
+  );
+
+  useEffect(() => {
+    if (modelFilter !== 'all' && !modelOptions.includes(modelFilter)) {
+      setModelFilter('all');
+    }
+  }, [modelFilter, modelOptions]);
+
+  useEffect(() => {
+    if (versionFilter !== 'all' && !versionOptions.includes(versionFilter)) {
+      setVersionFilter('all');
+    }
+  }, [versionFilter, versionOptions]);
 
   const toggleRow = (id: number) => {
     const newExpanded = new Set(expandedRows);
@@ -101,23 +155,27 @@ export function ExpandableDeviceTable({
   const filteredDevices = useMemo(() => {
     return devices.filter(device => {
       if (statusFilter !== 'all' && device.status !== statusFilter) return false;
+      if (hostFilter !== 'all' && hostFilterKey(device) !== hostFilter) return false;
+      if (modelFilter !== 'all' && device.model !== modelFilter) return false;
+      if (versionFilter !== 'all' && device.build_display_id !== versionFilter) return false;
       if (debouncedSearch) {
         const query = debouncedSearch.toLowerCase();
         return (
           device.model?.toLowerCase().includes(query) ||
           device.serial.toLowerCase().includes(query) ||
+          device.build_display_id?.toLowerCase().includes(query) ||
           device.host_name?.toLowerCase().includes(query) ||
           device.tags?.some((tag) => tag.toLowerCase().includes(query))
         );
       }
       return true;
     });
-  }, [devices, statusFilter, debouncedSearch]);
+  }, [devices, statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
 
   // Reset to page 1 when filter or search changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [statusFilter, debouncedSearch]);
+  }, [statusFilter, hostFilter, modelFilter, versionFilter, debouncedSearch]);
 
   const totalPages = Math.ceil(filteredDevices.length / pageSize);
   const paginatedDevices = filteredDevices.slice(
@@ -251,19 +309,54 @@ export function ExpandableDeviceTable({
         </button>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none', TEXT.subtitle)} />
-        <input
-          id="device-search"
-          name="device-search"
-          aria-label="搜索设备"
-          type="text"
-          placeholder="搜索设备序列号/型号/主机/标签..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className={cn('w-full pl-9', FORM.inputSm)}
-        />
+      {/* Search + dropdown filters */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="relative min-w-0 flex-1 sm:max-w-md">
+          <Search className={cn('absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none', TEXT.subtitle)} />
+          <input
+            id="device-search"
+            name="device-search"
+            aria-label="搜索设备"
+            type="text"
+            placeholder="搜索设备序列号/型号/版本/主机/标签..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className={cn('w-full pl-9', FORM.inputSm)}
+          />
+        </div>
+        <select
+          value={modelFilter}
+          onChange={(e) => setModelFilter(e.target.value)}
+          className={cn(FORM.select, 'h-9 w-full sm:w-40')}
+          aria-label="按设备筛选"
+        >
+          <option value="all">全部设备</option>
+          {modelOptions.map((model) => (
+            <option key={model} value={model}>{model}</option>
+          ))}
+        </select>
+        <select
+          value={versionFilter}
+          onChange={(e) => setVersionFilter(e.target.value)}
+          className={cn(FORM.select, 'h-9 w-full sm:w-48')}
+          aria-label="按版本筛选"
+        >
+          <option value="all">全部版本</option>
+          {versionOptions.map((version) => (
+            <option key={version} value={version}>{version}</option>
+          ))}
+        </select>
+        <select
+          value={hostFilter}
+          onChange={(e) => setHostFilter(e.target.value)}
+          className={cn(FORM.select, 'h-9 w-full sm:w-48')}
+          aria-label="按所属主机筛选"
+        >
+          <option value="all">全部主机</option>
+          {hostOptions.map((host) => (
+            <option key={host.value} value={host.value}>{host.label}</option>
+          ))}
+        </select>
       </div>
 
       {/* Table */}
