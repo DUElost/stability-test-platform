@@ -11,6 +11,9 @@ import backend.main as main_mod
 class TestHealthSaqReady:
     def test_health_includes_saq_ready_when_inprocess_enabled(self, client, monkeypatch):
         monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "1")
+        # Production shells may export STP_PLAN_ADMISSION_QUEUE_ENABLED=1;
+        # keep this assertion independent of the host env.
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
         monkeypatch.setattr(main_mod, "is_saq_ready", lambda: False)
 
         response = client.get("/health")
@@ -31,6 +34,7 @@ class TestHealthSaqReady:
     def test_health_includes_saq_ready_when_inprocess_disabled(self, client, monkeypatch):
         """ADR-0026 P0: producer-only mode still reports saq_ready (enqueue health)."""
         monkeypatch.setenv("STP_ENABLE_INPROCESS_SAQ", "0")
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
         monkeypatch.setattr(main_mod, "is_saq_ready", lambda: True)
 
         response = client.get("/health")

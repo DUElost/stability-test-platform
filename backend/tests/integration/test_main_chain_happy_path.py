@@ -54,12 +54,16 @@ class TestManualDispatchHappyPath:
             run_context={"dispatch_state": initial_dispatch_state()},
         )
         assert pr.run_context["dispatch_state"]["status"] == "queued"
+        assert pr.status == "QUEUED"
         assert (
             db_session.query(JobInstance)
             .filter(JobInstance.plan_run_id == pr.id)
             .count()
             == 0
         )
+
+        pr.status = "RUNNING"
+        db_session.commit()
 
         async def _fake_call(host_id, event, data, *, timeout=10.0):
             return _ack_ok(host_id, gate_chain["script"].content_sha256)
@@ -88,54 +92,68 @@ class TestManualDispatchHappyPath:
 
 
 class TestChainScheduleDispatchHappyPath:
-    """CHAIN / SCHEDULE: dispatch_plan_sync runs gate inline."""
+    """CHAIN / SCHEDULE: dispatch_plan_sync returns QUEUED for pump admission."""
 
     @pytest.mark.parametrize("run_type", ["CHAIN", "SCHEDULE"])
-    def test_sync_dispatch_runs_gate(self, db_session, gate_chain, run_type):
-        async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, gate_chain["script"].content_sha256)
-
-        with patch(
-            "backend.services.precheck.verify.call_agent_rpc",
-            side_effect=_fake_call,
-        ):
-            pr = dispatch_plan_sync(
-                plan_id=gate_chain["plan"].id,
-                device_ids=[gate_chain["device_a"].id, gate_chain["device_b"].id],
-                triggered_by="integration-test",
-                db=db_session,
-                run_type=run_type,
-            )
+    def test_sync_dispatch_returns_queued(self, db_session, gate_chain, run_type):
+        pr = dispatch_plan_sync(
+            plan_id=gate_chain["plan"].id,
+            device_ids=[gate_chain["device_a"].id, gate_chain["device_b"].id],
+            triggered_by="integration-test",
+            db=db_session,
+            run_type=run_type,
+        )
 
         assert pr.run_type == run_type
-        assert pr.run_context["precheck"]["phase"] == "ready"
-        assert pr.run_context["dispatch_state"]["status"] == "completed"
+        assert pr.status == "QUEUED"
         jobs = (
             db_session.query(JobInstance)
             .filter(JobInstance.plan_run_id == pr.id)
             .count()
         )
-        assert jobs == 2
+        assert jobs == 0
 
 
 class TestJobCompleteAggregationPath:
     """Gate → materialised jobs → terminal job → PlanRun aggregation."""
 
     def test_complete_job_aggregates_plan_run_success(self, db_session, gate_chain):
-        async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, gate_chain["script"].content_sha256)
+        from backend.services.admission_pump import (
+            claim_queued_plan_runs,
+            plan_admission_task,
+        )
+
+        pr = dispatch_plan_sync(
+            plan_id=gate_chain["plan"].id,
+            device_ids=[gate_chain["device_a"].id],
+            triggered_by="integration-test",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        assert pr.status == "QUEUED"
+
+        claimed = claim_queued_plan_runs(db_session)
+        attempt = next(a for rid, a in claimed if rid == pr.id)
+        db_session.expire_all()
+
+        async def fake_gather(host_ids, expected):
+            return {
+                hid: (True, [{"ok": True}], None)
+                for hid in host_ids
+            }
 
         with patch(
-            "backend.services.precheck.verify.call_agent_rpc",
-            side_effect=_fake_call,
+            "backend.services.precheck.verify.gather_verify", new=fake_gather,
         ):
-            pr = dispatch_plan_sync(
-                plan_id=gate_chain["plan"].id,
-                device_ids=[gate_chain["device_a"].id],
-                triggered_by="integration-test",
-                db=db_session,
-                run_type="MANUAL",
+            asyncio.run(
+                plan_admission_task(
+                    {}, plan_run_id=pr.id, attempt_id=attempt,
+                ),
             )
+
+        db_session.expire_all()
+        pr = db_session.get(PlanRun, pr.id)
+        assert pr.status == "RUNNING"
 
         jobs = (
             db_session.query(JobInstance)
@@ -164,43 +182,27 @@ class TestJobCompleteAggregationPath:
 
 
 class TestMainChainApiRunEndpoint:
-    """HTTP POST /plans/{id}/run + inline gate (sync DB); claim/complete via service layer above."""
+    """HTTP POST /plans/{id}/run returns QUEUED; pump admits asynchronously."""
 
-    def test_run_endpoint_inline_gate_materialises_pending_job(
+    def test_run_endpoint_returns_queued_without_jobs(
         self, client, auth_headers, db_session, gate_chain
     ):
         plan_id = gate_chain["plan"].id
         device_ids = [gate_chain["device_a"].id]
 
-        async def _fake_call(host_id_arg, event, data, *, timeout=10.0):
-            return _ack_ok(host_id_arg, gate_chain["script"].content_sha256)
-
-        def _run_gate_inline(*_args, **kwargs):
-            plan_run_id = kwargs["plan_run_id"]
-            with patch(
-                "backend.services.precheck.verify.call_agent_rpc",
-                side_effect=_fake_call,
-            ):
-                asyncio.run(_drive_dispatch_gate(plan_run_id, db=db_session))
-
-        with patch(
-            "backend.api.routes.plans.enqueue_sync",
-            side_effect=_run_gate_inline,
-        ):
-            resp = client.post(
-                f"/api/v1/plans/{plan_id}/run",
-                json={"device_ids": device_ids},
-                headers=auth_headers,
-            )
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": device_ids},
+            headers=auth_headers,
+        )
 
         assert resp.status_code == 200, resp.text
-        plan_run_id = resp.json()["data"]["id"]
-        db_session.expire_all()
+        data = resp.json()["data"]
+        assert data["status"] == "QUEUED"
+        plan_run_id = data["id"]
         jobs = (
             db_session.query(JobInstance)
             .filter(JobInstance.plan_run_id == plan_run_id)
-            .all()
+            .count()
         )
-        assert len(jobs) == 1
-        assert jobs[0].status == JobStatus.PENDING.value
-        assert jobs[0].host_id == gate_chain["host_a"].id
+        assert jobs == 0

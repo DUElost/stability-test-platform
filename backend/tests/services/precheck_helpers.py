@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from backend.models.plan_run import PlanRun
-from backend.services.plan_dispatcher_sync import prepare_plan_run
+from backend.services.plan_dispatcher_sync import initial_dispatch_state, prepare_plan_run
 
 
 def ack_ok(host_id: str, expected_sha: str) -> dict:
@@ -45,10 +47,18 @@ def ack_drift(host_id: str, expected_sha: str) -> dict:
 
 
 def prepare_two_host_run(db_session, gate_chain) -> PlanRun:
-    return prepare_plan_run(
+    """RUNNING PlanRun with snapshot — for legacy dispatch-gate unit tests."""
+    pr = prepare_plan_run(
         plan_id=gate_chain["plan"].id,
         device_ids=[gate_chain["device_a"].id, gate_chain["device_b"].id],
         triggered_by="testuser",
         db=db_session,
         run_type="MANUAL",
+        run_context={"dispatch_state": initial_dispatch_state()},
     )
+    now = datetime.now(timezone.utc)
+    pr.status = "RUNNING"
+    pr.started_at = now
+    db_session.commit()
+    db_session.refresh(pr)
+    return pr

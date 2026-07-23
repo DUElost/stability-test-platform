@@ -16,28 +16,28 @@ from backend.services.aggregator_sync import plan_aggregator_sync
 from backend.services.plan_chain_trigger import trigger_next_plan_sync
 from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_dispatcher_sync import dispatch_plan_sync
-from backend.services.precheck.runner import precheck_and_dispatch_task
+from backend.services.admission_pump import claim_queued_plan_runs, plan_admission_task
 
 pytestmark = pytest.mark.integration
 
 
-def _ack_ok(host_id: str, expected_sha: str) -> dict:
-    return {
-        "host_id": host_id,
-        "agent_version": "test",
-        "results": [
-            {
-                "name": "check_device",
-                "version": "1.0.0",
-                "expected_sha": expected_sha,
-                "actual_sha": expected_sha,
-                "exists": True,
-                "ok": True,
-                "error": None,
-            }
-        ],
-        "checked_at": "2026-05-07T10:00:00Z",
-    }
+def _admit_plan_run(db_session, plan_run_id: int) -> None:
+    claimed = claim_queued_plan_runs(db_session)
+    attempt = next(a for rid, a in claimed if rid == plan_run_id)
+    db_session.expire_all()
+
+    async def fake_gather(host_ids, expected):
+        return {hid: (True, [{"ok": True}], None) for hid in host_ids}
+
+    with patch(
+        "backend.services.precheck.verify.gather_verify", new=fake_gather,
+    ):
+        asyncio.run(
+            plan_admission_task(
+                {}, plan_run_id=plan_run_id, attempt_id=attempt,
+            ),
+        )
+    db_session.expire_all()
 
 
 def _seed_chain_plans(db_session, gate_chain):
@@ -77,77 +77,55 @@ def _complete_parent_and_aggregate(db_session, parent_run):
 
 
 class TestPlanChainDispatchE2E:
-    def test_parent_success_triggers_child_plan_run_with_gate(
+    def test_parent_success_triggers_queued_child_plan_run(
         self, db_session, gate_chain,
     ):
         parent_plan, child_plan = _seed_chain_plans(db_session, gate_chain)
 
-        async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, gate_chain["script"].content_sha256)
+        parent_run = dispatch_plan_sync(
+            plan_id=parent_plan.id,
+            device_ids=[gate_chain["device_a"].id],
+            triggered_by="integration-test",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        assert parent_run.status == "QUEUED"
+        _admit_plan_run(db_session, parent_run.id)
+        _complete_parent_and_aggregate(db_session, parent_run)
 
-        enqueued: list[tuple[str, dict]] = []
-        with patch(
-            "backend.services.precheck.verify.call_agent_rpc",
-            side_effect=_fake_call,
-        ), patch(
-            "backend.services.plan_chain_trigger.enqueue_sync",
-            side_effect=lambda task, **kwargs: enqueued.append((task, kwargs)),
-        ):
-            parent_run = dispatch_plan_sync(
-                plan_id=parent_plan.id,
-                device_ids=[gate_chain["device_a"].id],
-                triggered_by="integration-test",
-                db=db_session,
-                run_type="MANUAL",
-            )
-            _complete_parent_and_aggregate(db_session, parent_run)
-            assert enqueued[0][0] == "precheck_and_dispatch_task"
-            asyncio.run(
-                precheck_and_dispatch_task(
-                    {}, plan_run_id=enqueued[0][1]["plan_run_id"],
-                ),
-            )
+        child_run = trigger_next_plan_sync(
+            db_session.get(PlanRun, parent_run.id), db_session,
+        )
 
         db_session.expire_all()
         parent_refreshed = db_session.get(PlanRun, parent_run.id)
         assert parent_refreshed.status == "SUCCESS"
         assert parent_refreshed.next_plan_triggered is True
 
-        child_run = (
-            db_session.query(PlanRun)
-            .filter(PlanRun.parent_plan_run_id == parent_run.id)
-            .filter(PlanRun.plan_id == child_plan.id)
-            .one()
-        )
+        assert child_run is not None
+        assert child_run.plan_id == child_plan.id
         assert child_run.run_type == "CHAIN"
-        assert child_run.run_context["precheck"]["phase"] == "ready"
-        assert child_run.run_context["dispatch_state"]["status"] == "completed"
-        child_jobs = (
+        assert child_run.status == "QUEUED"
+        assert (
             db_session.query(JobInstance)
             .filter(JobInstance.plan_run_id == child_run.id)
             .count()
+            == 0
         )
-        assert child_jobs == 1
 
     def test_chain_dispatch_failure_rolls_back_next_plan_triggered(
         self, db_session, gate_chain,
     ):
         parent_plan, _child_plan = _seed_chain_plans(db_session, gate_chain)
 
-        async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return _ack_ok(host_id, gate_chain["script"].content_sha256)
-
-        with patch(
-            "backend.services.precheck.verify.call_agent_rpc",
-            side_effect=_fake_call,
-        ):
-            parent_run = dispatch_plan_sync(
-                plan_id=parent_plan.id,
-                device_ids=[gate_chain["device_a"].id],
-                triggered_by="integration-test",
-                db=db_session,
-                run_type="MANUAL",
-            )
+        parent_run = dispatch_plan_sync(
+            plan_id=parent_plan.id,
+            device_ids=[gate_chain["device_a"].id],
+            triggered_by="integration-test",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        _admit_plan_run(db_session, parent_run.id)
 
         parent_refreshed = db_session.get(PlanRun, parent_run.id)
         parent_refreshed.status = "SUCCESS"

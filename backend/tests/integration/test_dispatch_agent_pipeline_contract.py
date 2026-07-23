@@ -1,13 +1,14 @@
 """#47 — 跨层契约测试：dispatcher 真实落库的 pipeline_def 必须能被 agent
 PipelineEngine 正确解析执行。
 
-Plan 组装 → dispatch_plan_sync → JobInstance.pipeline_def 是唯一事实源
+Plan 组装 → dispatch_plan_sync → admission → JobInstance.pipeline_def 是唯一事实源
 (见 CLAUDE.md「Plan 无 lifecycle 列」)；agent 侧 PipelineEngine.execute 是
 唯一消费者。此前两侧只各自有单元测试，从未有测试证明"dispatcher 产出的真实
 JSON 真的能喂给 PipelineEngine 跑通"——本文件补上这条链路断言。
 """
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,8 +17,11 @@ import pytest
 from backend.agent.pipeline_engine import PipelineEngine
 from backend.models.enums import HostStatus
 from backend.models.host import Device, Host
+from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
+from backend.models.plan_run import PlanRun
 from backend.models.script import Script
+from backend.services.admission_pump import claim_queued_plan_runs, plan_admission_task
 from backend.services.plan_dispatcher_sync import dispatch_plan_sync
 
 
@@ -38,25 +42,6 @@ class _FakeScriptRegistry:
             nfs_path=self._path,
             content_sha256="c" * 64,
         )
-
-
-async def _fake_gate_rpc(host_id: str, event: str, data: dict, *, timeout: float = 10.0):
-    return {
-        "host_id": host_id,
-        "agent_version": "test",
-        "results": [
-            {
-                "name": "check_device",
-                "version": "1.0.0",
-                "expected_sha": "abc",
-                "actual_sha": "abc",
-                "exists": True,
-                "ok": True,
-                "error": None,
-            }
-        ],
-        "checked_at": "2026-05-07T10:00:00Z",
-    }
 
 
 @pytest.fixture
@@ -93,18 +78,33 @@ def test_dispatcher_pipeline_def_is_executable_by_agent_pipeline_engine(
 ):
     plan, device, host = _dispatch_fixture
 
+    pr = dispatch_plan_sync(
+        plan_id=plan.id,
+        device_ids=[device.id],
+        triggered_by="pytest-contract",
+        db=db_session,
+    )
+    assert pr.status == "QUEUED"
+
+    claimed = claim_queued_plan_runs(db_session)
+    attempt = next(a for rid, a in claimed if rid == pr.id)
+
+    async def fake_gather(host_ids, expected):
+        return {hid: (True, [{"ok": True}], None) for hid in host_ids}
+
     with patch(
-        "backend.services.precheck.verify.call_agent_rpc",
-        side_effect=_fake_gate_rpc,
+        "backend.services.precheck.verify.gather_verify", new=fake_gather,
     ):
-        pr = dispatch_plan_sync(
-            plan_id=plan.id,
-            device_ids=[device.id],
-            triggered_by="pytest-contract",
-            db=db_session,
+        asyncio.run(
+            plan_admission_task(
+                {}, plan_run_id=pr.id, attempt_id=attempt,
+            ),
         )
 
-    from backend.models.job import JobInstance
+    db_session.expire_all()
+    pr = db_session.get(PlanRun, pr.id)
+    assert pr.status == "RUNNING"
+
     job = (
         db_session.query(JobInstance)
         .filter(JobInstance.plan_run_id == pr.id)

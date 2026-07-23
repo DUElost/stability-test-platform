@@ -417,7 +417,8 @@ class TestFailFastSyncDispatch:
             plan_id=plan.id, device_ids=[device.id],
             triggered_by="test", db=db_session,
         )
-        assert pr.status == "RUNNING"  # prepare 成功
+        pr.status = "RUNNING"
+        db_session.commit()
 
         # 模拟时间窗内脚本被失活
         script.is_active = False

@@ -1,16 +1,15 @@
-"""ADR-0026 P1 step 3 — V2 prepare snapshot + legacy gate分流.
+"""ADR-0026 P1 step 3 — V2 prepare snapshot (sole dispatch path).
 
 Reviewer boundaries covered:
-1. Validation semantics split — fatal (not_found/no_host/config) reject 400;
-   retryable (busy/offline) create QUEUED with queue_reason (cross-PlanRun
-   queuing finally exists).
-2. V2 never drives the legacy gate — MANUAL skips the SAQ enqueue,
-   SCHEDULE/CHAIN skips the inline gate; the pump (Step 4) owns admission.
+1. Validation semantics — fatal (not_found/no_host/config) reject 400;
+   retryable (busy/offline) create QUEUED with queue_reason.
+2. V2 never drives the legacy gate — MANUAL / SCHEDULE / CHAIN return
+   QUEUED; the pump owns admission.
 3. Atomic snapshot: PlanRun + PlanRunHost + PlanRunTargetDevice in one
    transaction; duplicate device ids deduplicated.
 4. Deterministic ordering (sorted device ids → sort_order) and time
    semantics (enqueued_at set once; started_at holds a compat value).
-5. flag=0 stays legacy byte-for-byte (no snapshot rows, RUNNING + gate).
+5. flag=0 or pump-not-ready rejects prepare (no legacy RUNNING fallback).
 """
 from __future__ import annotations
 
@@ -285,35 +284,28 @@ class TestQueuedPrepare:
 
 
 class TestLegacyGateBypass:
-    def test_dispatch_plan_sync_skips_inline_gate(self, db_session, step3_fixture):
+    def test_dispatch_plan_sync_returns_queued(self, db_session, step3_fixture):
         f = step3_fixture
-        with patch(
-            "backend.services.plan_dispatcher_sync._run_dispatch_gate_sync"
-        ) as mock_gate:
-            pr = dispatch_plan_sync(
-                plan_id=f["plan"].id, device_ids=[f["d1"].id],
-                triggered_by="pytest", db=db_session, run_type="SCHEDULE",
-            )
+        pr = dispatch_plan_sync(
+            plan_id=f["plan"].id, device_ids=[f["d1"].id],
+            triggered_by="pytest", db=db_session, run_type="SCHEDULE",
+        )
         assert pr.status == "QUEUED"
-        mock_gate.assert_not_called()
 
-    def test_manual_route_skips_saq_enqueue(
+    def test_manual_route_returns_queued(
         self, client, auth_headers, db_session, step3_fixture,
     ):
         f = step3_fixture
-        with patch("backend.api.routes.plans.enqueue_sync") as mock_enq:
-            resp = client.post(
-                f"/api/v1/plans/{f['plan'].id}/run",
-                json={"device_ids": [f["d1"].id]},
-                headers=auth_headers,
-            )
+        resp = client.post(
+            f"/api/v1/plans/{f['plan'].id}/run",
+            json={"device_ids": [f["d1"].id]},
+            headers=auth_headers,
+        )
         assert resp.status_code == 200, resp.text
         assert resp.json()["data"]["status"] == "QUEUED"
-        mock_enq.assert_not_called()
 
-    def test_chain_trigger_skips_saq_enqueue(self, db_session, step3_fixture):
-        """CHAIN path: V2 child lands QUEUED with snapshot rows; the legacy
-        SAQ gate is not enqueued (the pump owns admission)."""
+    def test_chain_trigger_returns_queued_child(self, db_session, step3_fixture):
+        """CHAIN path: child lands QUEUED with snapshot rows for pump admission."""
         from backend.services.plan_chain_trigger import trigger_next_plan_sync
 
         f = step3_fixture
@@ -340,65 +332,52 @@ class TestLegacyGateBypass:
         ))
         db_session.commit()
 
-        with patch("backend.services.plan_chain_trigger.enqueue_sync") as mock_enq:
-            child = trigger_next_plan_sync(parent, db_session)
+        child = trigger_next_plan_sync(parent, db_session)
 
         assert child is not None
         assert child.status == "QUEUED"
         assert child.run_type == "CHAIN"
         assert child.parent_plan_run_id == parent.id
-        mock_enq.assert_not_called()
         assert db_session.query(PlanRunTargetDevice).filter(
             PlanRunTargetDevice.plan_run_id == child.id).count() == 1
 
 
-# ── Boundary 5: flag=0 legacy path untouched ─────────────────────────────────
+# ── Admission prerequisites ───────────────────────────────────────────────────
 
 
-class TestFlagOffLegacyPath:
-    def test_prepare_stays_running_without_snapshot_rows(
-        self, db_session, step3_fixture, monkeypatch,
-    ):
-        monkeypatch.delenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", raising=False)
+class TestAdmissionPrerequisites:
+    def test_flag_off_rejects_prepare(self, db_session, step3_fixture, monkeypatch):
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
         admission_queue.mark_queue_pump_ready(False)
 
         f = step3_fixture
-        pr = prepare_plan_run(
-            plan_id=f["plan"].id, device_ids=[f["d1"].id],
-            triggered_by="pytest", db=db_session, run_type="MANUAL",
-        )
-        assert pr.status == "RUNNING"
-        assert pr.enqueued_at is None
-        assert db_session.query(PlanRunHost).count() == 0
-        assert db_session.query(PlanRunTargetDevice).count() == 0
-
-    def test_busy_device_still_rejects_400_legacy(
-        self, db_session, step3_fixture, monkeypatch,
-    ):
-        monkeypatch.delenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", raising=False)
-        admission_queue.mark_queue_pump_ready(False)
-
-        f = step3_fixture
-        _attach_lease(db_session, f["d1"].id, "aq3-h1")
-        with pytest.raises(PlanDispatchError) as exc:
+        with pytest.raises(PlanDispatchError, match="disabled"):
             prepare_plan_run(
                 plan_id=f["plan"].id, device_ids=[f["d1"].id],
                 triggered_by="pytest", db=db_session, run_type="MANUAL",
             )
-        assert exc.value.detail()["unavailable_devices"][0]["reason"] == "active_lease"
 
-    def test_flag_without_pump_stays_legacy(
+    def test_pump_not_ready_rejects_prepare(
         self, db_session, step3_fixture, monkeypatch,
     ):
-        """Reviewer boundary #5: flag set but pump absent → legacy (never
-        strand a QUEUED run nobody will admit)."""
         monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
         admission_queue.mark_queue_pump_ready(False)
 
         f = step3_fixture
+        with pytest.raises(PlanDispatchError, match="pump is not ready"):
+            prepare_plan_run(
+                plan_id=f["plan"].id, device_ids=[f["d1"].id],
+                triggered_by="pytest", db=db_session, run_type="MANUAL",
+            )
+
+    def test_busy_device_queues_when_admission_ready(
+        self, db_session, step3_fixture,
+    ):
+        f = step3_fixture
+        _attach_lease(db_session, f["d1"].id, "aq3-h1")
         pr = prepare_plan_run(
             plan_id=f["plan"].id, device_ids=[f["d1"].id],
             triggered_by="pytest", db=db_session, run_type="MANUAL",
         )
-        assert pr.status == "RUNNING"
-        assert db_session.query(PlanRunTargetDevice).count() == 0
+        assert pr.status == "QUEUED"
+        assert pr.queue_reason is not None

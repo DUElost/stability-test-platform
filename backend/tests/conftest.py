@@ -156,6 +156,17 @@ def dispose_async_engine_between_tests():
     loop.run_until_complete(async_engine.dispose())
 
 
+@pytest.fixture(autouse=True)
+def _default_admission_queue(monkeypatch):
+    """Admission queue is the sole dispatch path — enable flag + pump in tests."""
+    import backend.core.admission_queue as admission_queue
+
+    monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
+    admission_queue.mark_queue_pump_ready(True)
+    yield
+    admission_queue.mark_queue_pump_ready(False)
+
+
 @pytest.fixture
 def client(db_session):
     """Create FastAPI test client with test database"""

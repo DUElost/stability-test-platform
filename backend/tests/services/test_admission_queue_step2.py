@@ -1,15 +1,12 @@
-"""ADR-0026 P1 step 2 — state machine dual-track + feature flag + V2 plumbing.
+"""ADR-0026 P1 step 2 — state machine + feature flag + V2 plumbing.
 
-Acceptance criteria covered here (reviewer-specified):
-- legal/illegal transition matrix for QUEUED/PRECHECK + dual-track FAILED
+Acceptance criteria covered here:
+- legal/illegal transition matrix for QUEUED/PRECHECK + FAILED retry
 - feature gate: env flag alone is NOT enough (pump must register)
-- FAILED retry: flag=0 → RUNNING (legacy), flag=1+pump → QUEUED
+- FAILED retry → QUEUED (admission queue only; legacy path removed)
 - QUEUED/PRECHECK abort → FAILED directly, no job recycling
 - PRECHECK stale → QUEUED with backoff/attempt bookkeeping; exhausted → FAILED
-- flag=0 produces no QUEUED/PRECHECK data (prepare stays RUNNING)
-
-The rest of the criteria are covered by the untouched legacy suites running
-green (flag=0 byte-for-byte behavior).
+- flag=0 or pump-not-ready blocks prepare (no legacy RUNNING fallback)
 """
 from __future__ import annotations
 
@@ -45,8 +42,7 @@ class TestAdmissionTransitionMatrix:
         ("PRECHECK", PlanRunStatus.QUEUED),
         ("PRECHECK", PlanRunStatus.RUNNING),
         ("PRECHECK", PlanRunStatus.FAILED),
-        ("FAILED", PlanRunStatus.RUNNING),   # legacy retry (dual-track)
-        ("FAILED", PlanRunStatus.QUEUED),    # V2 retry (dual-track)
+        ("FAILED", PlanRunStatus.QUEUED),
     ])
     def test_legal(self, src, dst):
         run = _run(src)
@@ -62,6 +58,7 @@ class TestAdmissionTransitionMatrix:
         ("SUCCESS", PlanRunStatus.QUEUED),
         ("PARTIAL_SUCCESS", PlanRunStatus.QUEUED),
         ("DEGRADED", PlanRunStatus.QUEUED),
+        ("FAILED", PlanRunStatus.RUNNING),        # legacy retry removed
     ])
     def test_illegal(self, src, dst):
         run = _run(src)
@@ -87,13 +84,16 @@ def _reset_pump_state():
 
 
 class TestAdmissionQueueGate:
-    def test_default_off(self, monkeypatch):
+    def test_flag_defaults_on(self, monkeypatch):
         monkeypatch.delenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", raising=False)
-        assert admission_queue.admission_queue_enabled() is False
+        assert admission_queue.admission_queue_flag_enabled() is True
+
+    def test_flag_off_disables(self, monkeypatch):
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
+        assert admission_queue.admission_queue_flag_enabled() is False
 
     def test_flag_alone_is_not_enough(self, monkeypatch, caplog):
-        """Reviewer-required protection: env flag on + pump not registered →
-        disabled, with an explicit warning (never silently strand QUEUED)."""
+        """Env flag on + pump not registered → disabled, with warning."""
         import logging
         caplog.set_level(logging.WARNING)
         monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
@@ -109,7 +109,7 @@ class TestAdmissionQueueGate:
         assert admission_queue.admission_queue_enabled() is True
 
     def test_pump_alone_is_not_enough(self, monkeypatch):
-        monkeypatch.delenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", raising=False)
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
         admission_queue.mark_queue_pump_ready()
         assert admission_queue.admission_queue_enabled() is False
 
@@ -139,53 +139,50 @@ def failed_dispatch_run(db_session):
     return pr
 
 
-# ── Retry dual path ───────────────────────────────────────────────────────────
+# ── Retry (admission queue only) ─────────────────────────────────────────────
 
 
-class TestRetryDualPath:
-    def test_flag_off_retry_goes_running(self, db_session, failed_dispatch_run, monkeypatch):
-        from backend.services.precheck.runner import retry_plan_run_dispatch
-        monkeypatch.delenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", raising=False)
-
-        with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enq:
-            result = retry_plan_run_dispatch(
-                failed_dispatch_run.id, db_session, triggered_by="pytest",
-            )
-        assert result["status"] == "RUNNING"
-        db_session.refresh(failed_dispatch_run)
-        assert failed_dispatch_run.status == "RUNNING"
-        mock_enq.assert_called_once()  # legacy path re-enqueues the SAQ gate
-
-    def test_flag_on_retry_goes_queued(self, db_session, failed_dispatch_run, monkeypatch):
+class TestRetryAdmissionQueue:
+    def test_retry_goes_queued(self, db_session, failed_dispatch_run, monkeypatch):
         from backend.services.precheck.runner import retry_plan_run_dispatch
         monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
         admission_queue.mark_queue_pump_ready()
 
-        with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enq:
-            result = retry_plan_run_dispatch(
-                failed_dispatch_run.id, db_session, triggered_by="pytest",
-            )
+        result = retry_plan_run_dispatch(
+            failed_dispatch_run.id, db_session, triggered_by="pytest",
+        )
         assert result["status"] == "QUEUED"
         db_session.refresh(failed_dispatch_run)
         assert failed_dispatch_run.status == "QUEUED"
-        # queue bookkeeping written; execution clock untouched until admission
         assert failed_dispatch_run.enqueued_at is not None
         assert failed_dispatch_run.ended_at is None
-        assert failed_dispatch_run.queue_reason is None
-        # V2 does NOT drive the legacy SAQ gate — the pump owns admission
-        mock_enq.assert_not_called()
+        assert failed_dispatch_run.run_context.get("precheck") is None
 
-    def test_flag_on_without_pump_stays_legacy(self, db_session, failed_dispatch_run, monkeypatch):
-        """Env flag set but pump not registered → legacy RUNNING path."""
-        from backend.services.precheck.runner import retry_plan_run_dispatch
-        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
-        # pump NOT marked ready (autouse fixture reset it)
+    def test_flag_off_retry_rejected(self, db_session, failed_dispatch_run, monkeypatch):
+        from backend.services.precheck.runner import (
+            PlanRunDispatchRetryError,
+            retry_plan_run_dispatch,
+        )
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
 
-        with patch("backend.tasks.saq_worker.enqueue_sync"):
-            result = retry_plan_run_dispatch(
+        with pytest.raises(PlanRunDispatchRetryError, match="disabled"):
+            retry_plan_run_dispatch(
                 failed_dispatch_run.id, db_session, triggered_by="pytest",
             )
-        assert result["status"] == "RUNNING"
+
+    def test_pump_not_ready_retry_rejected(
+        self, db_session, failed_dispatch_run, monkeypatch,
+    ):
+        from backend.services.precheck.runner import (
+            PlanRunDispatchRetryError,
+            retry_plan_run_dispatch,
+        )
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
+
+        with pytest.raises(PlanRunDispatchRetryError, match="not ready"):
+            retry_plan_run_dispatch(
+                failed_dispatch_run.id, db_session, triggered_by="pytest",
+            )
 
 
 # ── Abort on QUEUED / PRECHECK ────────────────────────────────────────────────
@@ -200,7 +197,7 @@ class TestAdmissionAbort:
         from backend.services.plan_run_abort import abort_plan_run
 
         pr = failed_dispatch_run
-        pr.status = status  # direct write: simulate flag=1 runtime state
+        pr.status = status  # direct write: simulate admission runtime state
         db_session.commit()
 
         result = abort_plan_run(
@@ -250,7 +247,6 @@ class TestAdmissionReaper:
         assert pr.next_admission_at is not None
         assert pr.precheck_started_at is None
         assert pr.admission_attempt_id is None
-        # aging basis preserved — enqueued_at NOT reset on requeue
         assert pr.enqueued_at == original_enqueued_at
         assert pr.run_context["admission_requeue_attempts"] == 1
 
@@ -286,18 +282,19 @@ class TestAdmissionReaper:
         assert summary == {"checked": 0, "requeued": 0, "failed": 0}
 
 
-# ── flag=0 produces no admission-queue data ──────────────────────────────────
+# ── prepare prerequisites ─────────────────────────────────────────────────────
 
 
-class TestFlagOffProducesNoQueueData:
-    def test_prepare_still_creates_running(self, db_session, monkeypatch):
-        """flag=0: prepare_plan_run keeps building RUNNING directly, and no
-        QUEUED/PRECHECK rows appear anywhere."""
+class TestPrepareRequiresAdmissionQueue:
+    def test_flag_off_rejects_prepare(self, db_session, monkeypatch):
         from backend.models.plan import PlanStep
         from backend.models.script import Script
-        from backend.services.plan_dispatcher_sync import prepare_plan_run
+        from backend.services.plan_dispatcher_sync import (
+            PlanDispatchError,
+            prepare_plan_run,
+        )
 
-        monkeypatch.delenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", raising=False)
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
 
         plan = Plan(name="aq-flagoff")
         host = Host(id="aq-h2", hostname="aq-h2", status="ONLINE")
@@ -316,11 +313,41 @@ class TestFlagOffProducesNoQueueData:
         ))
         db_session.commit()
 
-        pr = prepare_plan_run(
-            plan_id=plan.id, device_ids=[dev.id],
-            triggered_by="pytest", db=db_session, run_type="MANUAL",
+        with pytest.raises(PlanDispatchError, match="disabled"):
+            prepare_plan_run(
+                plan_id=plan.id, device_ids=[dev.id],
+                triggered_by="pytest", db=db_session, run_type="MANUAL",
+            )
+
+    def test_pump_not_ready_rejects_prepare(self, db_session, monkeypatch):
+        from backend.models.plan import PlanStep
+        from backend.models.script import Script
+        from backend.services.plan_dispatcher_sync import (
+            PlanDispatchError,
+            prepare_plan_run,
         )
-        assert pr.status == "RUNNING"
-        assert db_session.query(PlanRun).filter(
-            PlanRun.status.in_(["QUEUED", "PRECHECK"])
-        ).count() == 0
+
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "1")
+
+        plan = Plan(name="aq-nopump")
+        host = Host(id="aq-h3", hostname="aq-h3", status="ONLINE")
+        script = Script(
+            name="noop2", script_type="python", version="1.0.0",
+            nfs_path="/s/noop2.py", content_sha256="x", default_params={},
+        )
+        db_session.add_all([plan, host, script])
+        db_session.flush()
+        dev = Device(serial="aq-d3", host_id="aq-h3", status="ONLINE")
+        db_session.add(dev)
+        db_session.add(PlanStep(
+            plan_id=plan.id, step_key="s", script_name="noop2",
+            script_version="1.0.0", stage="init", sort_order=0,
+            timeout_seconds=30, retry=0,
+        ))
+        db_session.commit()
+
+        with pytest.raises(PlanDispatchError, match="pump is not ready"):
+            prepare_plan_run(
+                plan_id=plan.id, device_ids=[dev.id],
+                triggered_by="pytest", db=db_session, run_type="MANUAL",
+            )

@@ -17,7 +17,6 @@ from backend.models.script import Script
 from backend.services.plan_dispatcher_sync import prepare_plan_run
 from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_precheck import _drive_dispatch_gate
-from backend.tasks.saq_worker import EnqueueSyncError
 from backend.tests.services.precheck_helpers import (
     ack_drift,
     ack_ok,
@@ -419,6 +418,7 @@ class TestDispatchDeviceIdsToctou:
             db=db_session,
             run_type="MANUAL",
         )
+        pr.status = "RUNNING"
         run_ctx = dict(pr.run_context or {})
         run_ctx["dispatch_device_ids"] = [
             gate_chain["device_a"].id,
@@ -454,6 +454,8 @@ class TestDispatchDeviceIdsToctou:
             db=db_session,
             run_type="MANUAL",
         )
+        pr.status = "RUNNING"
+        db_session.commit()
         gate_chain["device_a"].host_id = None
         db_session.commit()
 
@@ -462,41 +464,32 @@ class TestDispatchDeviceIdsToctou:
 
 
 # ---------------------------------------------------------------------------
-# /plans/{id}/run endpoint integration: enqueues without dispatching
+# /plans/{id}/run endpoint integration: returns QUEUED for pump admission
 # ---------------------------------------------------------------------------
 
 
 class TestRunPlanEndpointEnqueues:
-    def test_run_plan_creates_plan_run_and_enqueues(
+    def test_run_plan_creates_queued_plan_run(
         self, client, auth_headers, db_session, gate_chain
     ):
         plan_id = gate_chain["plan"].id
         device_ids = [gate_chain["device_a"].id]
 
-        with patch("backend.api.routes.plans.enqueue_sync") as enq:
-            resp = client.post(
-                f"/api/v1/plans/{plan_id}/run",
-                json={"device_ids": device_ids},
-                headers=auth_headers,
-            )
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": device_ids},
+            headers=auth_headers,
+        )
 
         assert resp.status_code == 200, resp.text
         data = resp.json()["data"]
-        assert data["status"] == "RUNNING"
+        assert data["status"] == "QUEUED"
         assert data["run_type"] == "MANUAL"
         assert data["run_context"]["dispatch_device_ids"] == device_ids
-        # No JobInstances yet — gate hasn't run.
         jobs = db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == data["id"]
         ).count()
         assert jobs == 0
-
-        enq.assert_called_once()
-        kwargs = enq.call_args.kwargs
-        assert enq.call_args.args[0] == "precheck_and_dispatch_task"
-        assert enq.call_args.kwargs["required"] is True
-        assert kwargs["plan_run_id"] == data["id"]
-        assert kwargs["key"] == f"precheck:{data['id']}"
 
     def test_run_plan_stores_optional_note_in_run_context(
         self, client, auth_headers, db_session, gate_chain
@@ -504,12 +497,11 @@ class TestRunPlanEndpointEnqueues:
         plan_id = gate_chain["plan"].id
         device_ids = [gate_chain["device_a"].id]
 
-        with patch("backend.api.routes.plans.enqueue_sync"):
-            resp = client.post(
-                f"/api/v1/plans/{plan_id}/run",
-                json={"device_ids": device_ids, "note": "  sprint4 smoke  "},
-                headers=auth_headers,
-            )
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": device_ids, "note": "  sprint4 smoke  "},
+            headers=auth_headers,
+        )
 
         assert resp.status_code == 200, resp.text
         data = resp.json()["data"]
@@ -518,29 +510,25 @@ class TestRunPlanEndpointEnqueues:
         assert pr is not None
         assert pr.run_context["note"] == "sprint4 smoke"
 
-    def test_run_plan_returns_503_when_enqueue_unavailable(
-        self, client, auth_headers, db_session, gate_chain,
+    def test_run_plan_returns_400_when_pump_not_ready(
+        self, client, auth_headers, db_session, gate_chain, monkeypatch,
     ):
+        import backend.core.admission_queue as admission_queue
+
         plan_id = gate_chain["plan"].id
         device_ids = [gate_chain["device_a"].id]
+        admission_queue.mark_queue_pump_ready(False)
 
-        with patch(
-            "backend.api.routes.plans.enqueue_sync",
-            side_effect=EnqueueSyncError("SAQ not running"),
-        ):
-            resp = client.post(
-                f"/api/v1/plans/{plan_id}/run",
-                json={"device_ids": device_ids},
-                headers=auth_headers,
-            )
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": device_ids},
+            headers=auth_headers,
+        )
 
-        assert resp.status_code == 503, resp.text
+        assert resp.status_code == 400, resp.text
         detail = resp.json()["detail"]
-        assert detail["code"] == "DISPATCH_QUEUE_UNAVAILABLE"
-        plan_run_id = detail["plan_run_id"]
-        pr = db_session.get(PlanRun, plan_run_id)
-        assert pr.status == "FAILED"
-        assert pr.result_summary["reason"] == "dispatch_queue_unavailable"
+        message = detail["message"] if isinstance(detail, dict) else detail
+        assert "pump is not ready" in message
 
 
 # ---------------------------------------------------------------------------
@@ -555,12 +543,11 @@ class TestDispatchStatePersistence:
         plan_id = gate_chain["plan"].id
         device_ids = [gate_chain["device_a"].id]
 
-        with patch("backend.api.routes.plans.enqueue_sync"):
-            resp = client.post(
-                f"/api/v1/plans/{plan_id}/run",
-                json={"device_ids": device_ids},
-                headers=auth_headers,
-            )
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": device_ids},
+            headers=auth_headers,
+        )
 
         assert resp.status_code == 200, resp.text
         plan_run_id = resp.json()["data"]["id"]
@@ -569,7 +556,7 @@ class TestDispatchStatePersistence:
         assert pr is not None
 
         state = pr.run_context["dispatch_state"]
-        assert state["enqueue_key"] == f"precheck:{plan_run_id}"
+        assert state["enqueue_key"] is None
         assert state["requeue_attempts"] == 0
         assert state["status"] == "queued"
         assert state["enqueued_at"] is not None
@@ -799,55 +786,40 @@ class TestPrecheckSocketBroadcast:
 
 
 class TestChainScheduleDispatchGate:
-    def test_dispatch_plan_sync_runs_precheck_gate(self, db_session, gate_chain):
+    def test_dispatch_plan_sync_returns_queued(self, db_session, gate_chain):
         from backend.services.plan_dispatcher_sync import dispatch_plan_sync
 
-        async def _fake_call(host_id, event, data, *, timeout=10.0):
-            return ack_ok(host_id, "aabbcc11")
-
-        with patch(
-            "backend.services.precheck.verify.call_agent_rpc",
-            side_effect=_fake_call,
-        ):
-            pr = dispatch_plan_sync(
-                plan_id=gate_chain["plan"].id,
-                device_ids=[gate_chain["device_a"].id],
-                triggered_by="chain-test",
-                db=db_session,
-                run_type="CHAIN",
-                run_context={"triggered_from_plan_run_id": 99},
-            )
+        pr = dispatch_plan_sync(
+            plan_id=gate_chain["plan"].id,
+            device_ids=[gate_chain["device_a"].id],
+            triggered_by="chain-test",
+            db=db_session,
+            run_type="CHAIN",
+            run_context={"triggered_from_plan_run_id": 99},
+        )
 
         assert pr.run_type == "CHAIN"
-        assert pr.run_context["precheck"]["phase"] == "ready"
-        assert pr.run_context["dispatch_state"]["status"] == "completed"
+        assert pr.status == "QUEUED"
         assert (
             db_session.query(JobInstance)
             .filter(JobInstance.plan_run_id == pr.id)
             .count()
-            == 1
+            == 0
         )
 
-    def test_dispatch_plan_sync_gate_failure_raises(self, db_session, gate_chain):
-        from backend.realtime.socketio_server import AgentNotConnectedError
+    def test_dispatch_plan_sync_returns_queued_on_offline_host(self, db_session, gate_chain):
         from backend.services.plan_dispatcher_sync import dispatch_plan_sync
 
-        async def _fake_call(host_id, event, data, *, timeout=10.0):
-            raise AgentNotConnectedError(host_id)
+        pr = dispatch_plan_sync(
+            plan_id=gate_chain["plan"].id,
+            device_ids=[gate_chain["device_a"].id],
+            triggered_by="schedule-test",
+            db=db_session,
+            run_type="SCHEDULE",
+        )
+        assert pr.status == "QUEUED"
 
-        with patch(
-            "backend.services.precheck.verify.call_agent_rpc",
-            side_effect=_fake_call,
-        ), pytest.raises(PlanDispatchError, match="dispatch gate failed"):
-            dispatch_plan_sync(
-                plan_id=gate_chain["plan"].id,
-                device_ids=[gate_chain["device_a"].id],
-                triggered_by="schedule-test",
-                db=db_session,
-                run_type="SCHEDULE",
-            )
-
-    def test_dispatch_plan_sync_mixed_watcher_failure_raises_structured_detail(
+    def test_dispatch_plan_sync_queues_mixed_watcher_hosts(
         self, db_session, gate_chain
     ):
         from backend.services.plan_dispatcher_sync import dispatch_plan_sync
@@ -856,16 +828,11 @@ class TestChainScheduleDispatchGate:
         gate_chain["host_b"].watcher_admin_active = False
         db_session.commit()
 
-        with pytest.raises(PlanDispatchError) as excinfo:
-            dispatch_plan_sync(
-                plan_id=gate_chain["plan"].id,
-                device_ids=[gate_chain["device_a"].id, gate_chain["device_b"].id],
-                triggered_by="chain-test",
-                db=db_session,
-                run_type="CHAIN",
-            )
-
-        detail = excinfo.value.detail()
-        assert detail["code"] == "MIXED_WATCHER_ACTIVITY"
-        assert detail["inactive_host_ids"] == ["h-B"]
-        assert "watch激活与不激活的节点不能同时在一个计划中" in detail["message"]
+        pr = dispatch_plan_sync(
+            plan_id=gate_chain["plan"].id,
+            device_ids=[gate_chain["device_a"].id, gate_chain["device_b"].id],
+            triggered_by="chain-test",
+            db=db_session,
+            run_type="CHAIN",
+        )
+        assert pr.status == "QUEUED"

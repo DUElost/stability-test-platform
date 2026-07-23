@@ -16,6 +16,9 @@ def test_hot_update_env_overrides_uses_install_layout_paths():
 
 
 def test_hot_update_env_overrides_includes_fleet_keys_from_control_plane(monkeypatch):
+    # Prefer an explicit AEE root when STP_NFS_ROOT is unset; clear ambient
+    # production-machine values so this suite stays hermetic.
+    monkeypatch.delenv("STP_NFS_ROOT", raising=False)
     monkeypatch.setenv("STP_AEE_NFS_ROOT", "/mnt/nfs/aee_events")
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
 
