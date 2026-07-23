@@ -1622,13 +1622,21 @@ class _CoordinatorHeartbeatIn(BaseModel):
     agent_instance_id: str
     # coordinator_epoch is now inside each plan_run_hosts entry (Step 5b收口 #10).
     # A single top-level epoch would incorrectly share one epoch across hosts.
-    plan_run_hosts: List[dict]  # [{id, plan_run_id, host_id, coordinator_epoch}]
+    plan_run_hosts: List[dict]  # [{id, plan_run_id, host_id, coordinator_epoch, phase}]
     jobs: List[_CoordinatorHeartbeatJob] = []
 
 
 class _CoordinatorHeartbeatOut(BaseModel):
     accepted: bool
     stale_plan_run_host_ids: List[int] = []  # epoch was already higher → Agent must reconcile
+
+
+_VALID_COORDINATOR_PHASES = {
+    "INIT",
+    "BARRIER_WAIT",
+    "PATROL",
+    "TEARDOWN",
+}
 
 
 @router.post("/coordinator-heartbeat", response_model=ApiResponse[_CoordinatorHeartbeatOut])
@@ -1674,6 +1682,9 @@ async def coordinator_heartbeat(
             continue
         row.coordinator_epoch = max(row.coordinator_epoch, reported_epoch)
         row.coordinator_heartbeat_at = now
+        reported_phase = entry.get("phase")
+        if reported_phase in _VALID_COORDINATOR_PHASES:
+            row.phase = reported_phase
 
     for j in payload.jobs:
         reported = j.execution_state

@@ -9,12 +9,49 @@ from pydantic import ValidationError
 from backend.api.routes.agent_api import (
     JobStatusUpdate,
     StepTraceIn,
+    _CoordinatorHeartbeatIn,
     _StepStatusIn,
+    coordinator_heartbeat,
     update_job_status,
     update_job_step_status,
     upload_step_traces,
 )
 from backend.models.enums import JobStatus
+
+
+@pytest.mark.asyncio
+async def test_coordinator_heartbeat_persists_valid_plan_run_host_phase():
+    row = MagicMock()
+    row.host_id = "host-1"
+    row.coordinator_epoch = 2
+    row.phase = None
+
+    db = MagicMock()
+    db.get = AsyncMock(return_value=row)
+    db.execute = AsyncMock()
+    db.commit = AsyncMock()
+
+    result = await coordinator_heartbeat(
+        payload=_CoordinatorHeartbeatIn(
+            host_id="host-1",
+            agent_instance_id="agent-1",
+            plan_run_hosts=[{
+                "id": 11,
+                "plan_run_id": 22,
+                "host_id": "host-1",
+                "coordinator_epoch": 2,
+                "phase": "PATROL",
+            }],
+            jobs=[],
+        ),
+        db=db,
+        _=None,
+    )
+
+    assert result.data.accepted is True
+    assert row.phase == "PATROL"
+    assert row.coordinator_heartbeat_at is not None
+    db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

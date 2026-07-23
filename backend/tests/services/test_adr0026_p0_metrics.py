@@ -41,6 +41,10 @@ def test_operation_scheduler_concurrency_snapshot():
     assert snap["max"] == 3
     assert snap["waiting"] == 0
     assert snap["held_devices"] == 2
+    assert snap["peak_held"] == 2
+    assert snap["peak_waiting"] == 0
+    assert snap["acquired_total"] == 2
+    assert snap["queued_total"] == 0
     assert s.waiter_count == 0
     p1.release()
     p2.release()

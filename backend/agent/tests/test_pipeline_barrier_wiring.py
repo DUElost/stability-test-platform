@@ -7,6 +7,7 @@ import time
 from types import SimpleNamespace
 
 from backend.agent.coordinator import HostRunCoordinator
+from backend.agent.operation_scheduler import OperationScheduler
 from backend.agent.pipeline_engine import PipelineEngine
 
 
@@ -236,3 +237,75 @@ def test_pipeline_barrier_disabled_when_total_lt_2(tmp_path):
         }
     })
     assert result.success is True
+
+
+def test_single_device_barrier_skip_still_advances_host_phase():
+    """Skipping a one-peer barrier must still publish the destination phase."""
+    coord = HostRunCoordinator("http://x", "h1", "inst")
+    coord.register_plan_run_host(1, 10)
+    engine = PipelineEngine(
+        adb=SimpleNamespace(adb_path="adb"),
+        serial="SOLO",
+        run_id=8,
+        coordinator=coord,
+        plan_run_host_id=1,
+        barrier_total=1,
+        api_url=None,
+    )
+
+    assert engine._await_phase_barrier("PATROL") is True
+    assert coord._plan_run_hosts[1].phase == "PATROL"
+
+
+def test_patrol_steps_share_operation_scheduler_and_expose_waiters(tmp_path):
+    """Six patrol operations contend for the host-global cap of five."""
+    slow = _write_script(
+        tmp_path / "slow.py",
+        "import time\ntime.sleep(0.3)\nprint('ok')\n",
+    )
+    registry = FakeScriptRegistry(slow)
+    scheduler = OperationScheduler(max_concurrent=5)
+    coord = HostRunCoordinator("http://x", "h1", "inst")
+
+    step = {
+        "step_id": "patrol_slow",
+        "action": "script:slow",
+        "version": "1.0.0",
+        "params": {},
+        "timeout_seconds": 5,
+    }
+    results = [None] * 6
+
+    def worker(idx: int) -> None:
+        engine = PipelineEngine(
+            adb=SimpleNamespace(adb_path="adb"),
+            serial=f"SER{idx}",
+            run_id=200 + idx,
+            script_registry=registry,
+            operation_scheduler=scheduler,
+            coordinator=coord,
+            device_id=300 + idx,
+            api_url=None,
+        )
+        results[idx] = engine._run_patrol_cycle_steps([step])
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(6)]
+    for thread in threads:
+        thread.start()
+
+    max_held = 0
+    max_waiting = 0
+    deadline = time.monotonic() + 5
+    while any(thread.is_alive() for thread in threads) and time.monotonic() < deadline:
+        max_held = max(max_held, scheduler.held)
+        max_waiting = max(max_waiting, scheduler.waiter_count)
+        time.sleep(0.005)
+
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert results == [(1, 0, None)] * 6
+    assert max_held == 5
+    assert max_waiting >= 1
+    assert scheduler.held == 0

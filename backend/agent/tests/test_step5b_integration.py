@@ -357,6 +357,7 @@ class TestCoordinatorTickSendsPost:
         body = post_body[0]
         # Per-host entry carries coordinator_epoch
         assert body["plan_run_hosts"][0]["coordinator_epoch"] == 7
+        assert body["plan_run_hosts"][0]["phase"] == "INIT"
         # No top-level coordinator_epoch (that would be NameError-prone)
         assert "coordinator_epoch" not in body
         assert body["host_id"] == "h-tick"

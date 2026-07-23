@@ -241,13 +241,15 @@ def test_monkey_launch_resolves_aimonkey_from_env_resource_root(tmp_path, monkey
 
 
 def test_monkey_launch_resolves_aimonkey_from_install_resource_root(tmp_path, monkeypatch):
+    import aimonkey_paths
+
     install_root = tmp_path / "stability-test-agent"
-    script_dir = install_root / "agent" / "scripts" / "monkey_launch" / "v1.0.0"
-    script_path = script_dir / "monkey_launch.py"
-    aimonkey_dir = install_root / "resources" / "aimonkey" / "AIMonkeyTest_20260317"
+    agent_dir = install_root / "agent"
+    aimonkey_dir = agent_dir / "resources" / "aimonkey" / "AIMonkeyTest_20260317"
     aimonkey_dir.mkdir(parents=True)
+    (aimonkey_dir / "MonkeyTest.py").write_text("# fixture\n", encoding="utf-8")
     monkeypatch.delenv("AIMONKEY_RESOURCE_DIR", raising=False)
 
     module = _load_monkey_launch("v1.0.0")
-    monkeypatch.setattr(module, "__file__", str(script_path))
+    monkeypatch.setattr(aimonkey_paths, "AGENT_DIR", agent_dir)
     assert module._resolve_aimonkey_dir({}) == aimonkey_dir

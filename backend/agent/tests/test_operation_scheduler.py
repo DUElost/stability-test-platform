@@ -11,6 +11,35 @@ from backend.agent.operation_scheduler import (
 
 
 class TestOperationScheduler:
+    def test_snapshot_retains_short_lived_contention_high_water_marks(self):
+        s = OperationScheduler(max_concurrent=1)
+        holder = s.acquire(1)
+        acquired = []
+
+        def waiter():
+            permit = s.acquire(2, timeout=2)
+            acquired.append(permit)
+
+        thread = threading.Thread(target=waiter)
+        thread.start()
+        deadline = time.time() + 1
+        while s.waiter_count == 0 and time.time() < deadline:
+            time.sleep(0.005)
+        assert s.waiter_count == 1
+
+        holder.release()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        acquired[0].release()
+
+        snap = s.concurrency_snapshot()
+        assert snap["held"] == 0
+        assert snap["waiting"] == 0
+        assert snap["peak_held"] == 1
+        assert snap["peak_waiting"] == 1
+        assert snap["acquired_total"] == 2
+        assert snap["queued_total"] == 1
+
     def test_acquire_up_to_cap(self):
         s = OperationScheduler(max_concurrent=2)
         p1 = s.acquire(1)

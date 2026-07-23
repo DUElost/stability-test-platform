@@ -54,7 +54,13 @@ class PlanRunHostView:
             return self._epoch
 
     def to_payload(self) -> dict:
-        return {"id": self.id, "plan_run_id": self.plan_run_id, "host_id": self.host_id}
+        with self._lock:
+            return {
+                "id": self.id,
+                "plan_run_id": self.plan_run_id,
+                "host_id": self.host_id,
+                "phase": self.phase,
+            }
 
     def set_barrier_total(
         self, total: int, *, for_phase: Optional[str] = None
@@ -76,6 +82,7 @@ class PlanRunHostView:
             self.barrier_total = total
             self.barrier_arrived = 0
             self._barrier_event = threading.Event()
+            self.phase = "BARRIER_WAIT"
 
     def arrive_at_barrier(self) -> bool:
         """Atomically increment arrived count. Returns True if this is the

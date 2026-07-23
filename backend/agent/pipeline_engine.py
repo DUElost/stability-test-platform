@@ -28,6 +28,8 @@ import threading
 
 import time
 
+from pathlib import Path
+
 from dataclasses import dataclass, field
 
 from datetime import datetime, timedelta, timezone
@@ -835,6 +837,13 @@ class PipelineEngine:
         Returns False on abort / lease-lost / timeout.
         """
         if not self._barrier_enabled():
+            # A single-device PlanRunHost (or an emergency barrier rollback)
+            # has no peers to wait for, but the host-level phase still crossed
+            # the INIT -> PATROL boundary and must be reported accordingly.
+            if self._coordinator is not None and self._plan_run_host_id is not None:
+                self._coordinator.advance_phase(
+                    self._plan_run_host_id, next_phase,
+                )
             return True
         if self._is_lock_lost() or self._canceled:
             # Count toward barrier so peers are not stuck on an aborted job.
@@ -869,7 +878,13 @@ class PipelineEngine:
                 )
                 return not (self._is_lock_lost() or self._canceled)
 
-    def _run_step_with_permit(self, phase: str, step: dict) -> bool:
+    def _run_step_with_permit(
+        self,
+        phase: str,
+        step: dict,
+        *,
+        suppress_success_trace: bool = False,
+    ) -> bool:
         """ADR-0026 Step 5b: wrap step execution with OperationScheduler permit.
 
         Sets WAITING_EXECUTION_SLOT while waiting for the permit, EXECUTING_STEP
@@ -878,11 +893,19 @@ class PipelineEngine:
         Falls back to the legacy path when no scheduler is available."""
         scheduler = getattr(self, "_scheduler", None)
         if scheduler is None:
-            return self._run_step_with_retry(phase, step)
+            return self._run_step_with_retry(
+                phase,
+                step,
+                suppress_success_trace=suppress_success_trace,
+            )
 
         device_id = self._device_id
         if device_id is None:
-            return self._run_step_with_retry(phase, step)
+            return self._run_step_with_retry(
+                phase,
+                step,
+                suppress_success_trace=suppress_success_trace,
+            )
 
         from .operation_scheduler import PermitDenied
 
@@ -902,13 +925,23 @@ class PipelineEngine:
                     if self._is_aborted is not None and self._is_aborted():
                         return False
             self._update_execution_state("EXECUTING_STEP")
-            return self._run_step_with_retry(phase, step)
+            return self._run_step_with_retry(
+                phase,
+                step,
+                suppress_success_trace=suppress_success_trace,
+            )
         finally:
             if permit is not None:
                 permit.release()
                 self._update_execution_state("PATROL_SLEEP" if phase == "patrol" else None)
 
-    def _run_step_with_retry(self, phase: str, step: dict) -> bool:
+    def _run_step_with_retry(
+        self,
+        phase: str,
+        step: dict,
+        *,
+        suppress_success_trace: bool = False,
+    ) -> bool:
 
         """Execute a step with retry logic. Returns True on success."""
 
@@ -916,7 +949,12 @@ class PipelineEngine:
 
         for attempt in range(max_retry + 1):
 
-            result = self._execute_step(phase, step, retry_attempt=attempt)
+            result = self._execute_step(
+                phase,
+                step,
+                retry_attempt=attempt,
+                suppress_success_trace=suppress_success_trace,
+            )
 
             if result.success:
 
@@ -1251,6 +1289,17 @@ class PipelineEngine:
             from .config import BASE_DIR
             env["STP_AGENT_INSTALL_DIR"] = str(BASE_DIR)
         except Exception:
+            pass
+
+        try:
+            agent_dir = str(Path(entry.nfs_path).resolve().parents[3])
+            existing_py_path = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                agent_dir
+                if not existing_py_path
+                else f"{agent_dir}{os.pathsep}{existing_py_path}"
+            )
+        except (IndexError, ValueError):
             pass
 
 
@@ -1612,6 +1661,13 @@ class PipelineEngine:
                 # long-run waves share a common start (INIT→PATROL barrier).
                 # Patrol-checkpoint resume already passed this boundary — skip.
                 if skip_init:
+                    if (
+                        self._coordinator is not None
+                        and self._plan_run_host_id is not None
+                    ):
+                        self._coordinator.advance_phase(
+                            self._plan_run_host_id, "PATROL",
+                        )
                     barrier_ok = True
                 else:
                     barrier_ok = self._await_phase_barrier("PATROL")
@@ -1840,6 +1896,11 @@ class PipelineEngine:
         pending_manual_action_ack: Optional[str] = None
 
         _LEASE_REVERIFY_INTERVAL = 300
+
+        # The INIT→PATROL barrier is behind us. Publish a non-stale patrol
+        # state even when the patrol definition has no steps; real operations
+        # replace it with WAITING_EXECUTION_SLOT / EXECUTING_STEP while held.
+        self._update_execution_state("PATROL_SLEEP")
 
 
 
@@ -2294,7 +2355,11 @@ class PipelineEngine:
 
             try:
 
-                result = self._execute_step("patrol", step, suppress_success_trace=True)
+                step_succeeded = self._run_step_with_permit(
+                    "patrol",
+                    step,
+                    suppress_success_trace=True,
+                )
 
             except Exception as exc:
 
@@ -2310,7 +2375,7 @@ class PipelineEngine:
 
 
 
-            if result.success:
+            if step_succeeded:
 
                 success += 1
 

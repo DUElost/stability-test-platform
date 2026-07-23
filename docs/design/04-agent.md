@@ -116,7 +116,7 @@ DeviceLogWatcher
 | 变量 | 说明 |
 |------|------|
 | `API_URL` | 控制面地址 |
-| `HOST_ID` | 与 DB `host.id` 一致 |
+| `HOST_ID` | 与 DB `host.id` 一致（推荐 IPv4 点转横杠，如 `172-21-9-6`） |
 | `AGENT_SECRET` | SocketIO 认证（生产必设） |
 | `STP_WATCHER_ENABLED` | Watcher 总开关 |
 | `STP_AEE_LOCAL_ROOT` | HDD AEE 根（默认 `/mnt/hdd/aee_events`） |

@@ -75,6 +75,10 @@ class OperationScheduler:
             else _DEFAULT_MAX_CONCURRENT_OPERATIONS
         )
         self._held: int = 0
+        self._peak_held: int = 0
+        self._peak_waiting: int = 0
+        self._acquired_total: int = 0
+        self._queued_total: int = 0
         self._lock = threading.Lock()
         # OrderedDict as a FIFO with O(1) membership + ordered iteration.
         # Key = device_id, value = threading.Event.  Per-device fairness:
@@ -118,6 +122,10 @@ class OperationScheduler:
                 "max": self._max_concurrent,
                 "waiting": len(self._waiters),
                 "held_devices": len(self._held_devices),
+                "peak_held": self._peak_held,
+                "peak_waiting": self._peak_waiting,
+                "acquired_total": self._acquired_total,
+                "queued_total": self._queued_total,
             }
 
     def set_max_concurrent(self, n: int) -> None:
@@ -156,10 +164,14 @@ class OperationScheduler:
                 # Fast path: slot available, no one ahead.
                 self._held += 1
                 self._held_devices.add(device_id)
+                self._acquired_total += 1
+                self._peak_held = max(self._peak_held, self._held)
                 return OperationPermit(self, device_id)
             # Queue
             event = self._event_factory()
             self._waiters[device_id] = event
+            self._queued_total += 1
+            self._peak_waiting = max(self._peak_waiting, len(self._waiters))
 
         # Wait outside the lock so releases can wake us.
         assert event is not None
@@ -219,6 +231,8 @@ class OperationScheduler:
             self._held += 1
             self._held_devices.add(device_id)
             self._pending_handoff.add(device_id)
+            self._acquired_total += 1
+            self._peak_held = max(self._peak_held, self._held)
             event.set()
 
     def cancel_device(self, device_id: int) -> None:
