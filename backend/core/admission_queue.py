@@ -1,16 +1,11 @@
-"""ADR-0026 admission-queue feature gate (P1 step 2).
+"""ADR-0026 admission queue — sole dispatch path (legacy precheck gate removed).
 
-Two conditions gate every writer of QUEUED/PRECHECK:
+Production dispatch always flows: ``prepare_plan_run`` → ``QUEUED`` → pump →
+``PRECHECK`` → ``plan_admission_task`` → ``RUNNING``.
 
-1. ``STP_PLAN_ADMISSION_QUEUE_ENABLED=1`` — operator intent (default off).
-2. The queue pump has registered via :func:`mark_queue_pump_ready` — the
-   component that drains QUEUED does not exist until P1 step 4; without this
-   gate an eagerly-set env flag would silently strand PlanRuns in QUEUED
-   forever (reviewer-required protection).
-
-``admission_queue_enabled()`` is the ONLY predicate production code may use
-to decide whether to produce QUEUED/PRECHECK. The env flag alone
-(:func:`admission_queue_flag_enabled`) is exposed for observability/tests.
+``STP_PLAN_ADMISSION_QUEUE_ENABLED=0`` is rejected at prepare time (no legacy
+fallback).  The pump must register via :func:`mark_queue_pump_ready` before
+any PlanRun can be created.
 """
 
 from __future__ import annotations
@@ -27,8 +22,8 @@ _warned_pump_not_ready = False
 
 
 def admission_queue_flag_enabled() -> bool:
-    """Operator env flag only — NOT sufficient to produce QUEUED/PRECHECK."""
-    return os.getenv(_FLAG_ENV, "0") == "1"
+    """Operator env flag (default on). ``0`` disables dispatch entirely."""
+    return os.getenv(_FLAG_ENV, "1") == "1"
 
 
 def is_queue_pump_ready() -> bool:
@@ -36,11 +31,7 @@ def is_queue_pump_ready() -> bool:
 
 
 def mark_queue_pump_ready(ready: bool = True) -> None:
-    """Called by the queue pump when it starts (P1 step 4) / by tests.
-
-    Resets the one-shot warning in both directions: after a pump goes away,
-    the next flag-on/pump-absent check should warn again.
-    """
+    """Called by the queue pump when it starts / by tests."""
     global _queue_pump_ready, _warned_pump_not_ready
     _queue_pump_ready = ready
     _warned_pump_not_ready = False
@@ -49,22 +40,16 @@ def mark_queue_pump_ready(ready: bool = True) -> None:
 
 
 def admission_queue_enabled() -> bool:
-    """True only when the env flag is on AND the queue pump is registered.
-
-    A PlanRun put into QUEUED with no pump running would never be admitted,
-    so flag-on/pump-absent deliberately resolves to False (with a one-shot
-    warning) instead of half-enabling the path.
-    """
+    """True when admission dispatch is allowed (flag on AND pump registered)."""
     global _warned_pump_not_ready
     if not admission_queue_flag_enabled():
         return False
     if not _queue_pump_ready:
         if not _warned_pump_not_ready:
             logger.warning(
-                "admission_queue_flag_set_but_pump_not_ready — "
-                "%s=1 has no effect until the queue pump registers "
-                "(P1 step 4); legacy dispatch path stays active",
-                _FLAG_ENV,
+                "admission_queue_pump_not_ready — dispatch blocked until the "
+                "queue pump registers; check APScheduler /health "
+                "admission_queue_pump_ready",
             )
             _warned_pump_not_ready = True
         return False

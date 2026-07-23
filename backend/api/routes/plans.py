@@ -14,17 +14,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES
 from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
-from backend.models.enums import PlanRunStatus
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
-from backend.services.state_machine import PlanRunStateMachine
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     dispatch_plan_sync,
@@ -32,7 +29,6 @@ from backend.services.plan_dispatcher_sync import (
     prepare_plan_run,
     preview_plan_dispatch_sync,
 )
-from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["plans"])
@@ -649,15 +645,10 @@ def run_plan(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """ADR-0021: MANUAL dispatch goes through the precheck gate.
+    """ADR-0026 — MANUAL dispatch via admission queue.
 
-    Steps:
-      1. ``prepare_plan_run`` — create PlanRun row + plan_snapshot synchronously,
-         status=RUNNING, run_context.dispatch_device_ids set.
-      2. Enqueue SAQ task ``precheck_and_dispatch`` with the new plan_run_id;
-         it verifies / syncs / re-verifies / dispatches asynchronously.
-      3. Return the PlanRun row immediately.  The frontend can navigate to
-         the PlanRun detail page and watch ``run_context.precheck`` evolve.
+    ``prepare_plan_run`` creates a ``QUEUED`` PlanRun; the admission pump
+    verifies, syncs, and materialises jobs asynchronously.
     """
     run_context: dict = {"dispatch_state": initial_dispatch_state()}
     if payload.note:
@@ -675,74 +666,11 @@ def run_plan(
     except PlanDispatchError as e:
         raise HTTPException(status_code=400, detail=e.detail())
 
-    # ADR-0026 Step 3: V2 prepare queued the run — return immediately. The
-    # queue pump (Step 4) owns admission; enqueueing the legacy SAQ gate here
-    # would create dual ownership (reviewer boundary #2).
-    if pr.status == PlanRunStatus.QUEUED.value:
-        logger.info(
-            "manual_dispatch_queued plan=%d plan_run=%d devices=%d by=%s",
-            plan_id, pr.id, len(payload.device_ids),
-            current_user.username if current_user else "api",
-        )
-        return ok(PlanRunOut(
-            id=pr.id, plan_id=pr.plan_id, status=pr.status,
-            failure_threshold=pr.failure_threshold, run_type=pr.run_type,
-            triggered_by=pr.triggered_by, started_at=pr.started_at,
-            ended_at=pr.ended_at, result_summary=pr.result_summary,
-            run_context=pr.run_context, plan_snapshot=pr.plan_snapshot,
-            parent_plan_run_id=pr.parent_plan_run_id,
-            root_plan_run_id=pr.root_plan_run_id,
-            chain_index=pr.chain_index or 0,
-            next_plan_triggered=bool(pr.next_plan_triggered),
-        ))
-
-    assert pr.run_context["dispatch_state"]["enqueue_key"] == f"precheck:{pr.id}"
-
-    try:
-        enqueue_sync(
-            "precheck_and_dispatch_task",
-            key=f"precheck:{pr.id}",
-            timeout=600,
-            retries=1,
-            required=True,
-            plan_run_id=pr.id,
-        )
-    except EnqueueSyncError as exc:
-        now = datetime.now(timezone.utc)
-        PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="dispatch_queue_unavailable")
-        pr.ended_at = now
-        run_ctx = dict(pr.run_context or {})
-        dispatch_state = dict(run_ctx.get("dispatch_state") or {})
-        dispatch_state["status"] = "failed"
-        dispatch_state["last_error"] = str(exc)
-        dispatch_state["completed_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
-        run_ctx["dispatch_state"] = dispatch_state
-        pr.run_context = run_ctx
-        pr.result_summary = {
-            "precheck_failed": True,
-            "reason": "dispatch_queue_unavailable",
-            "error": str(exc),
-        }
-        flag_modified(pr, "run_context")
-        db.commit()
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "DISPATCH_QUEUE_UNAVAILABLE",
-                "message": (
-                    "Dispatch queue is unavailable; plan run marked FAILED. "
-                    "Ensure Redis and in-process SAQ worker are running."
-                ),
-                "plan_run_id": pr.id,
-            },
-        ) from exc
-
     logger.info(
-        "manual_dispatch_enqueued plan=%d plan_run=%d devices=%d by=%s",
+        "manual_dispatch_queued plan=%d plan_run=%d devices=%d by=%s",
         plan_id, pr.id, len(payload.device_ids),
         current_user.username if current_user else "api",
     )
-
     return ok(PlanRunOut(
         id=pr.id, plan_id=pr.plan_id, status=pr.status,
         failure_threshold=pr.failure_threshold, run_type=pr.run_type,

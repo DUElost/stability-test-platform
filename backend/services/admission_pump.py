@@ -16,9 +16,8 @@ Ownership chain (single owner at every stage, reviewer boundary):
     Only non-retryable errors (device deleted / no host / script contract
     failure after sync retry) settle FAILED.
 
-Drain semantics (reviewer boundary #5): the pump admits existing QUEUED runs
-regardless of the env flag — turning the flag off stops NEW V2 runs at
-prepare (admission_queue_enabled gates creation) while the pump keeps
+Drain semantics: the pump admits existing QUEUED runs regardless of the env
+flag — turning the flag off blocks NEW runs at prepare while the pump keeps
 draining until the queue is empty. Forced stop = explicit per-run abort
 (QUEUED abort → FAILED with audit, step 2), never silent.
 
@@ -308,7 +307,15 @@ def fail_plan_run_admission(
         "reason": reason,
         **(detail or {}),
     }
+    run_ctx = dict(pr.run_context or {})
+    dispatch_state = dict(run_ctx.get("dispatch_state") or {})
+    dispatch_state["status"] = "failed"
+    dispatch_state["last_error"] = reason
+    dispatch_state["completed_at"] = now.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    run_ctx["dispatch_state"] = dispatch_state
+    pr.run_context = run_ctx
     flag_modified(pr, "result_summary")
+    flag_modified(pr, "run_context")
     record_audit(
         db,
         action="plan_admission_failed",

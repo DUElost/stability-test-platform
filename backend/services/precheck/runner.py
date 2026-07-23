@@ -360,91 +360,53 @@ def retry_plan_run_dispatch(
             f"plan run not eligible for dispatch retry (status={pr.status})"
         )
 
-    # ── ADR-0026 V2 retry (flag=1 AND queue pump ready): FAILED → QUEUED ────
-    # The run re-enters the admission queue instead of re-running the legacy
-    # SAQ gate; the pump owns admission from here. Unreachable until the pump
-    # registers (backend.core.admission_queue gate), so flag=0 behavior below
-    # is byte-for-byte the legacy path.
-    from backend.core.admission_queue import admission_queue_enabled
+    # V2-only retry: re-enter the admission queue (legacy SAQ gate removed).
+    from backend.core.admission_queue import (
+        admission_queue_flag_enabled,
+        is_queue_pump_ready,
+    )
+    from backend.services.plan_dispatcher_sync import initial_dispatch_state
 
-    if was_failed and admission_queue_enabled():
-        now = datetime.now(timezone.utc)
-        PlanRunStateMachine.transition(pr, PlanRunStatus.QUEUED, reason="dispatch_retry_v2")
-        retry_history = list(run_ctx.get("dispatch_attempt_history") or [])
-        retry_history.append({
-            "at": now.isoformat(),
-            "triggered_by": triggered_by,
-            "result_summary": summary,
-            "precheck": precheck,
-            "dispatch_state": dispatch_state,
-            "mode": "admission_queue",
-        })
-        run_ctx["dispatch_attempt_history"] = retry_history
-        pr.ended_at = None
-        pr.result_summary = None
-        pr.queue_reason = None
-        pr.next_admission_at = None
-        pr.admission_attempt_id = None
-        pr.precheck_started_at = None
-        # Aging basis: first QUEUED entry. started_at stays untouched here —
-        # the admission transaction resets it when the run actually starts
-        # (queue wait must not count as execution time).
-        if pr.enqueued_at is None:
-            pr.enqueued_at = now
-        pr.run_context = run_ctx
-        flag_modified(pr, "run_context")
-        record_audit(
-            db,
-            action="plan_dispatch_retry_requested",
-            resource_type="plan_run",
-            resource_id=run_id,
-            details={
-                "triggered_by": triggered_by,
-                "attempt": len(retry_history),
-                "previous_result": summary,
-                "mode": "admission_queue",
-            },
-            username=triggered_by,
+    if not admission_queue_flag_enabled():
+        raise PlanRunDispatchRetryError(
+            "admission queue disabled (STP_PLAN_ADMISSION_QUEUE_ENABLED=0)",
         )
-        db.commit()
-        logger.info(
-            "plan_run_dispatch_retry_queued plan_run=%d triggered_by=%s",
-            run_id, triggered_by,
+    if not is_queue_pump_ready():
+        raise PlanRunDispatchRetryError(
+            "admission queue pump is not ready",
         )
-        return {
-            "plan_run_id": run_id,
-            "status": PlanRunStatus.QUEUED.value,
-            "dispatch_state": None,
-        }
 
-    if was_failed:
-        PlanRunStateMachine.transition(pr, PlanRunStatus.RUNNING, reason="dispatch_retry")
-    # else: pr.status is already RUNNING (precheck phase failed but the
-    # top-level status was never flipped) — this is an idempotent reset, not
-    # a real transition, so it intentionally bypasses the state machine.
+    now = datetime.now(timezone.utc)
+    if pr.status == PlanRunStatus.RUNNING.value:
+        PlanRunStateMachine.transition(
+            pr, PlanRunStatus.FAILED, reason="dispatch_retry_reset",
+        )
+    if pr.status == PlanRunStatus.FAILED.value:
+        PlanRunStateMachine.transition(pr, PlanRunStatus.QUEUED, reason="dispatch_retry")
+
     retry_history = list(run_ctx.get("dispatch_attempt_history") or [])
     retry_history.append({
-        "at": datetime.now(timezone.utc).isoformat(),
+        "at": now.isoformat(),
         "triggered_by": triggered_by,
         "result_summary": summary,
         "precheck": precheck,
         "dispatch_state": dispatch_state,
+        "mode": "admission_queue",
     })
     run_ctx["dispatch_attempt_history"] = retry_history
-    pr.ended_at = None
-    pr.result_summary = None
-
-    new_dispatch = initial_dispatch_state()
-    new_dispatch["requeue_attempts"] = (
+    run_ctx.pop("precheck", None)
+    run_ctx["dispatch_state"] = initial_dispatch_state()
+    run_ctx["dispatch_state"]["requeue_attempts"] = (
         int(dispatch_state.get("requeue_attempts") or 0) + 1
     )
-    new_dispatch["enqueue_key"] = f"precheck:{run_id}"
-    run_ctx["dispatch_state"] = new_dispatch
-    run_ctx["dispatch_host_watcher_admin_states"] = (
-        snapshot_dispatch_host_watcher_admin_states(
-            db, list(run_ctx.get("dispatch_device_ids") or [])
-        )
-    )
+    pr.ended_at = None
+    pr.result_summary = None
+    pr.queue_reason = None
+    pr.next_admission_at = None
+    pr.admission_attempt_id = None
+    pr.precheck_started_at = None
+    if pr.enqueued_at is None:
+        pr.enqueued_at = now
     pr.run_context = run_ctx
     flag_modified(pr, "run_context")
     record_audit(
@@ -456,63 +418,19 @@ def retry_plan_run_dispatch(
             "triggered_by": triggered_by,
             "attempt": len(retry_history),
             "previous_result": summary,
+            "mode": "admission_queue",
         },
         username=triggered_by,
     )
     db.commit()
-
-    initialise_precheck_state(run_id, db)
-
-    try:
-        enqueue_sync(
-            "precheck_and_dispatch_task",
-            key=f"precheck:{run_id}",
-            timeout=600,
-            retries=1,
-            required=True,
-            plan_run_id=run_id,
-        )
-    except EnqueueSyncError as exc:
-        now = datetime.now(timezone.utc)
-        pr = db.get(PlanRun, run_id)
-        if pr is not None:
-            PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="dispatch_queue_unavailable")
-            pr.ended_at = now
-            run_ctx = dict(pr.run_context or {})
-            dispatch_state = dict(run_ctx.get("dispatch_state") or {})
-            dispatch_state["status"] = "failed"
-            dispatch_state["last_error"] = str(exc)
-            dispatch_state["completed_at"] = utc_iso()
-            run_ctx["dispatch_state"] = dispatch_state
-            pr.run_context = run_ctx
-            pr.result_summary = {
-                "precheck_failed": True,
-                "reason": "dispatch_queue_unavailable",
-                "error": str(exc),
-            }
-            flag_modified(pr, "run_context")
-            record_audit(
-                db,
-                action="plan_dispatch_retry_enqueue_failed",
-                resource_type="plan_run",
-                resource_id=run_id,
-                details={"triggered_by": triggered_by, "error": str(exc)},
-                username=triggered_by,
-            )
-            db.commit()
-        raise PlanRunDispatchRetryError(
-            f"dispatch queue unavailable: {exc}"
-        ) from exc
-
     logger.info(
-        "plan_run_dispatch_retry plan_run=%d triggered_by=%s",
-        run_id,
-        triggered_by,
+        "plan_run_dispatch_retry_queued plan_run=%d triggered_by=%s",
+        run_id, triggered_by,
     )
     return {
         "plan_run_id": run_id,
-        "status": "RUNNING",
-        "dispatch_state": new_dispatch,
+        "status": PlanRunStatus.QUEUED.value,
+        "dispatch_state": run_ctx["dispatch_state"],
     }
 
 

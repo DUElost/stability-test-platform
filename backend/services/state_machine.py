@@ -61,11 +61,8 @@ PLAN_RUN_VALID_TRANSITIONS: dict[PlanRunStatus, set[PlanRunStatus]] = {
         PlanRunStatus.PARTIAL_SUCCESS,
         PlanRunStatus.FAILED,
     },
-    # 迁移期双轨(ADR-0026 评审口径):
-    #   FAILED → RUNNING  legacy 人工重试(flag=0,precheck/runner.py retry 直建 RUNNING)
-    #   FAILED → QUEUED   V2 人工重试(flag=1,回准入队列走 pump)
-    # legacy 派发路径下线后移除 FAILED → RUNNING。
-    PlanRunStatus.FAILED: {PlanRunStatus.RUNNING, PlanRunStatus.QUEUED},
+    # V2-only retry (admission queue).
+    PlanRunStatus.FAILED: {PlanRunStatus.QUEUED},
     PlanRunStatus.SUCCESS:         set(),
     PlanRunStatus.PARTIAL_SUCCESS: set(),
     PlanRunStatus.DEGRADED:        set(),

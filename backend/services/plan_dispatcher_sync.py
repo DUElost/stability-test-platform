@@ -361,13 +361,6 @@ def initial_dispatch_state() -> dict:
     }
 
 
-def _run_dispatch_gate_sync(plan_run_id: int, db: Session) -> None:
-    """Run the ADR-0021 dispatch gate inline (CHAIN / SCHEDULE sync paths)."""
-    from backend.services.plan_precheck import _drive_dispatch_gate
-
-    asyncio.run(_drive_dispatch_gate(plan_run_id, db=db))
-
-
 def prepare_plan_run(
     plan_id: int,
     device_ids: list[int],
@@ -381,48 +374,45 @@ def prepare_plan_run(
     chain_index: int | None = None,
     commit: bool = True,
 ) -> PlanRun:
-    """ADR-0021 C3 — Stage 1 of dispatch: create PlanRun + plan_snapshot only.
+    """ADR-0026 — Stage 1 of dispatch: create QUEUED PlanRun + snapshot rows.
 
-    The dispatch gate (precheck) runs against this PlanRun, then on success
-    invokes :func:`complete_plan_run_dispatch` to materialise JobInstance rows
-    and resource allocations.
-
-    ``device_ids`` is captured into ``run_context['dispatch_device_ids']`` so
-    the gate can recover them without re-validating against API state.
+    The admission queue pump owns script verify/sync and job materialization.
+    ``device_ids`` are captured into ``plan_run_target_device`` and
+    ``run_context.dispatch_device_ids``.
     """
+    from backend.core.admission_queue import (
+        admission_queue_flag_enabled,
+        is_queue_pump_ready,
+    )
+
+    if not admission_queue_flag_enabled():
+        raise PlanDispatchError(
+            "Admission queue is disabled (STP_PLAN_ADMISSION_QUEUE_ENABLED=0); "
+            "legacy inline precheck dispatch has been removed",
+        )
+    if not is_queue_pump_ready():
+        raise PlanDispatchError(
+            "Admission queue pump is not ready; restart the backend and verify "
+            "/health reports admission_queue_pump_ready=true",
+        )
+
     plan = db.get(Plan, plan_id)
     if plan is None:
         raise PlanDispatchError(f"Plan {plan_id} not found")
 
-    # ── ADR-0026 Step 3: dispatch-mode fork ───────────────────────────────
-    # V2 (flag AND pump ready): retryable device states (busy/offline) queue
-    # instead of rejecting; only fatal config errors 400 at prepare.
-    # Legacy: strict full rejection, byte-for-byte unchanged.
-    from backend.core.admission_queue import admission_queue_enabled
-    use_admission_queue = admission_queue_enabled()
+    if not device_ids:
+        raise PlanDispatchError("device_ids must not be empty")
 
-    queue_blockers: list[dict] = []
-    device_host_map: dict[int, str] = {}
-    if use_admission_queue:
-        if not device_ids:
-            raise PlanDispatchError("device_ids must not be empty")
-        unavailable, device_host_map = _classify_dispatch_devices_sync(db, device_ids)
-        fatal = [e for e in unavailable if e["reason"] in _FATAL_DISPATCH_REASONS]
-        if fatal:
-            # not_found / no_host are configuration errors, not scheduling
-            # states — reject with only the fatal entries (busy devices are
-            # NOT an error in queue mode).
-            raise PlanDispatchError(
-                f"Dispatch rejected: {len(fatal)} device(s) unavailable",
-                unavailable_devices=fatal,
-            )
-        queue_blockers = [
-            e for e in unavailable if e["reason"] not in _FATAL_DISPATCH_REASONS
-        ]
-    else:
-        # #8: device 可用性快照校验 — 早返回避免创建落空 PlanRun。complete 阶段会再做一次
-        # TOCTOU 兜底,但用户期望的是 400,不是落 FAILED 的 PlanRun。
-        _validate_dispatch_devices_sync(db, device_ids)
+    unavailable, device_host_map = _classify_dispatch_devices_sync(db, device_ids)
+    fatal = [e for e in unavailable if e["reason"] in _FATAL_DISPATCH_REASONS]
+    if fatal:
+        raise PlanDispatchError(
+            f"Dispatch rejected: {len(fatal)} device(s) unavailable",
+            unavailable_devices=fatal,
+        )
+    queue_blockers = [
+        e for e in unavailable if e["reason"] not in _FATAL_DISPATCH_REASONS
+    ]
 
     steps = db.execute(
         select(PlanStep)
@@ -460,68 +450,22 @@ def prepare_plan_run(
     effective_threshold = plan.failure_threshold
     plan_snapshot = _build_plan_snapshot(plan, steps, metadata, effective_threshold)
 
-    if use_admission_queue:
-        return _prepare_queued_plan_run(
-            db=db,
-            plan=plan,
-            device_ids=device_ids,
-            device_host_map=device_host_map,
-            queue_blockers=queue_blockers,
-            plan_snapshot=plan_snapshot,
-            effective_threshold=effective_threshold,
-            triggered_by=triggered_by,
-            run_type=run_type,
-            run_context=run_context,
-            parent_plan_run_id=parent_plan_run_id,
-            root_plan_run_id=root_plan_run_id,
-            chain_index=chain_index,
-            commit=commit,
-        )
-
-    merged_run_ctx = dict(run_context or {})
-    # IH1: dispatch_device_ids is critical — plan_precheck.py L101-105 explicitly
-    # asserts this list is non-empty.  Keep this line exactly as it was.
-    merged_run_ctx.setdefault("dispatch_device_ids", list(device_ids))
-    merged_run_ctx["dispatch_host_watcher_admin_states"] = (
-        snapshot_dispatch_host_watcher_admin_states(db, device_ids)
-    )
-
-    pr = PlanRun(
-        plan_id=plan.id,
-        status="RUNNING",
-        failure_threshold=effective_threshold,
+    return _prepare_queued_plan_run(
+        db=db,
+        plan=plan,
+        device_ids=device_ids,
+        device_host_map=device_host_map,
+        queue_blockers=queue_blockers,
         plan_snapshot=plan_snapshot,
-        run_type=run_type,
-        run_context=merged_run_ctx,
+        effective_threshold=effective_threshold,
         triggered_by=triggered_by,
+        run_type=run_type,
+        run_context=run_context,
         parent_plan_run_id=parent_plan_run_id,
         root_plan_run_id=root_plan_run_id,
-        chain_index=chain_index or 0,
-        started_at=datetime.now(timezone.utc),
+        chain_index=chain_index,
+        commit=commit,
     )
-    db.add(pr)
-    db.flush()
-
-    # Backfill dispatch_state.enqueue_key now that plan_run.id is assigned.
-    # The dispatcher gate and precheck_reaper both use this key to look up
-    # the SAQ job state.  Without it, orphan detection cannot correlate
-    # PlanRun rows with their SAQ precheck jobs.
-    dispatch_state = merged_run_ctx.get("dispatch_state")
-    if dispatch_state:
-        dispatch_state["enqueue_key"] = f"precheck:{pr.id}"
-        pr.run_context = {**merged_run_ctx, "dispatch_state": dispatch_state}
-        flag_modified(pr, "run_context")
-
-    if commit:
-        db.commit()
-        db.refresh(pr)
-    else:
-        db.flush()
-    logger.info(
-        "plan_run_prepared plan=%d plan_run=%d devices=%d type=%s",
-        plan_id, pr.id, len(device_ids), run_type,
-    )
-    return pr
 
 
 def _prepare_queued_plan_run(
@@ -945,12 +889,10 @@ def dispatch_plan_sync(
     root_plan_run_id: int | None = None,
     chain_index: int | None = None,
 ) -> PlanRun:
-    """ADR-0020/0021 — Sync dispatch via the dispatch gate (verify → sync → dispatch).
+    """ADR-0026 — Sync prepare for SCHEDULE / CHAIN trigger paths.
 
-    Used by SCHEDULE (cron) and CHAIN trigger paths.  Runs the gate inline so
-    callers observe a fully materialised PlanRun (or a raised
-    :class:`PlanDispatchError` on gate failure).  MANUAL goes through
-    :func:`prepare_plan_run` + the SAQ ``precheck_and_dispatch`` task instead.
+    Creates a ``QUEUED`` PlanRun; the admission pump materialises jobs
+    asynchronously.  Callers receive the queued row immediately.
     """
     merged_run_ctx = dict(run_context or {})
     if not merged_run_ctx.get("dispatch_state"):
@@ -968,24 +910,11 @@ def dispatch_plan_sync(
         chain_index=chain_index,
     )
 
-    # ADR-0026 Step 3: V2 prepare queued the run — the queue pump (Step 4) is
-    # the sole owner of admission from here. Driving the legacy inline gate
-    # would create dual ownership (reviewer boundary #2).
-    if pr.status == PlanRunStatus.QUEUED.value:
-        return pr
-
-    _run_dispatch_gate_sync(pr.id, db)
-    db.refresh(pr)
-
-    if pr.status == "FAILED":
-        summary = pr.result_summary or {}
-        reason = summary.get("reason") or "dispatch_gate_failed"
+    if pr.status != PlanRunStatus.QUEUED.value:
         raise PlanDispatchError(
-            f"PlanRun {pr.id}: dispatch gate failed: {reason}",
-            missing_scripts=summary.get("missing_scripts"),
-            mixed_watcher_inactive_host_ids=summary.get("inactive_host_ids"),
+            f"Unexpected plan_run status after prepare: {pr.status} "
+            f"(expected QUEUED)",
         )
-
     return pr
 
 
