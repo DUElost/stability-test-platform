@@ -248,7 +248,7 @@ sudo ./install_agent.sh
 # cp backend/agent/.env.example /opt/stability-test-agent/.env
 # 指向 Nginx 对外入口；不要指向 backend loopback 端口 127.0.0.1:8000
 API_URL=https://<控制平面域名或IP>
-HOST_ID=<唯一且非0的整数>
+HOST_ID=<唯一 ID，推荐 IPv4 点转横杠，如 172-21-9-6>
 AUTO_REGISTER_HOST=false
 AGENT_SECRET=<与控制平面 .env.backend 中 AGENT_SECRET 一致>
 POLL_INTERVAL=10
@@ -258,7 +258,7 @@ LOG_LEVEL=INFO
 ```
 
 注意：
-- `HOST_ID` 是逻辑主机标识，不是 IP。
+- `HOST_ID` 是逻辑主机主键；新建主机推荐由节点 IPv4 派生（`172.21.9.6` → `172-21-9-6`），须全局唯一且固定。
 - 同一 `HOST_ID` 不可被多台 Agent 复用。
 - 不可使用 `HOST_ID=0`。
 - `HOST_ID` 必须与后端数据库中的 `hosts.id` 对齐，否则会出现“心跳正常但拉不到任务”。

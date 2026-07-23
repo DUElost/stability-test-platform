@@ -69,7 +69,7 @@
 | 变量 | 说明 |
 |------|------|
 | `API_URL` | 控制平面地址 |
-| `HOST_ID` | 须与 DB `host.id` 对齐（不可为 `0`） |
+| `HOST_ID` | 须与 DB `host.id` 对齐（不可为 `0`；推荐 `172.21.9.6` → `172-21-9-6`） |
 | `AGENT_SECRET` | 与控制平面一致 |
 | `POLL_INTERVAL` | claim 轮询间隔（秒） |
 | `ADB_PATH` / `ANDROID_ADB_SERVER_PORT` | WSL 联调端口须 `5039` |
@@ -79,7 +79,8 @@
 | `STP_LOG_BATCH_MAX_LINES` / `STP_LOG_BATCH_FLUSH_MS` | step_log 批大小与定时 flush（默认 50 / 200） |
 | `STP_AEE_CIFS_ROOT` / `STP_AEE_NFS_ROOT` | 15.4 上送 / dedup 共享根（按部署） |
 
-热更新会附带控制面 `pipeline_schema.json` 与 Agent `VERSION`（code revision）。
+热更新会附带控制面 `pipeline_schema.json` 与 Agent `VERSION`（code revision）。  
+热更新还会**行级合并**舰队级 `.env` 键（安装布局路径 + 控制面 `backend/.env` 中非空的 `STP_*` 等）；`HOST_ID`、`API_URL`、`ANDROID_ADB_SERVER_PORT` 等 per-host 键不同步。见 [`../operations/agent-version-and-hot-update.md`](../operations/agent-version-and-hot-update.md)。
 
 ---
 

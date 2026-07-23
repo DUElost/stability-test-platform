@@ -34,6 +34,20 @@ Host UI（`ExpandableHostTable`）展示协议版本、code sync 徽章与相对
 - `stp_schemas/pipeline_schema.json`（安装到 `$INSTALL_DIR/schemas/`）  
 - 成功后可写 `agent/VERSION`；`host.extra.agent_code_deployed*` 记部署修订  
 
+**`.env` 白名单合并**（每次热更新自动执行，不全量覆盖）：
+
+**不同步（每台机器独有，热更新绝不改写）**：`HOST_ID`、`API_URL`、`ANDROID_ADB_SERVER_PORT`、`ADB_PATH`、`MOUNT_POINTS`、`AGENT_SECRET`（仅 `sync_agent_secret=true` 时单独更新）等。完整列表见 `backend/services/agent_env_sync.py` 的 `PROTECTED_ENV_KEYS`。
+
+**批量同步**：
+
+| 类别 | 键 | 值来源 |
+|------|-----|--------|
+| 安装布局 | `AGENT_INSTALL_DIR`、`AIMONKEY_RESOURCE_DIR`、`LOG_DIR`、`PYTHONPATH` | `$INSTALL_DIR` 派生 |
+| 舰队默认 | `STP_AEE_NFS_ROOT`、`STP_DEDUP_*`、`LOG_LEVEL`、`PIP_INDEX_URL` 等 | 控制面进程环境（backend `.env`）非空时下发 |
+
+实现：`backend/services/agent_env_sync.py`（allowlist + 行级 merge）。  
+响应字段 `env_keys_synced` 列出本次已对齐的键。
+
 UI：主机管理页单机「热更新」；浮动批量栏仅允许 **选中一台 ONLINE** 主机触发热更新（批量安装仍支持多台）。  
 CLI：`backend/scripts/batch_hot_update.py`、`tools/ansible/playbooks/update_agent.yml`。
 
