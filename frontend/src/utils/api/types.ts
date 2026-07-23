@@ -851,6 +851,13 @@ export interface PlanRunPreview {
   lifecycle: PipelineLifecycle;
 }
 
+/** ADR-0026 §3: RUNNING job sub-state for permit/barrier/patrol observability. */
+export type JobExecutionState =
+  | 'WAITING_BARRIER'
+  | 'WAITING_EXECUTION_SLOT'
+  | 'EXECUTING_STEP'
+  | 'PATROL_SLEEP';
+
 export interface PlanJobInstance {
   id: number;
   plan_run_id?: number | null;
@@ -860,6 +867,9 @@ export interface PlanJobInstance {
   host_id?: string | null;
   status: JobStatus;
   status_reason?: string | null;
+  execution_state?: JobExecutionState | null;
+  last_execution_heartbeat_at?: string | null;
+  last_progress_at?: string | null;
   started_at?: string | null;
   ended_at?: string | null;
   created_at?: string | null;

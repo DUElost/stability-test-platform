@@ -125,6 +125,10 @@ class JobInstanceOut(BaseModel):
     host_id: Optional[str] = None
     status: str
     status_reason: Optional[str] = None
+    # ADR-0026 §3: sub-state for recycler clocks / permit+barrier observability.
+    execution_state: Optional[str] = None
+    last_execution_heartbeat_at: Optional[str] = None
+    last_progress_at: Optional[str] = None
     started_at: Optional[str] = None
     ended_at: Optional[str] = None
     created_at: Optional[str] = None
@@ -277,6 +281,9 @@ def _job_out(job: JobInstance, traces: list, device_serial: str | None = None) -
         device_id=job.device_id, device_serial=device_serial,
         host_id=job.host_id, status=job.status,
         status_reason=job.status_reason,
+        execution_state=job.execution_state,
+        last_execution_heartbeat_at=_iso(job.last_execution_heartbeat_at),
+        last_progress_at=_iso(job.last_progress_at),
         started_at=_iso(job.started_at),
         ended_at=_iso(job.ended_at),
         created_at=_iso(job.created_at),
