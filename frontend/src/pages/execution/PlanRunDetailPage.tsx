@@ -188,10 +188,30 @@ export default function PlanRunDetailPage() {
   }
 
   const precheck = runQ.data?.run_context?.precheck ?? null;
-  const dispatchState = runQ.data?.run_context?.dispatch_state ?? null;
-  const dispatchFailed = dispatchState?.status === 'failed';
-  const gateFailed =
-    precheck?.phase === 'failed' || dispatchFailed;
+  const dispatchStateRaw = runQ.data?.run_context?.dispatch_state ?? null;
+  const resultSummary = runQ.data?.result_summary;
+  const admissionDispatchFailed =
+    runQ.data?.status === 'FAILED' &&
+    (resultSummary?.dispatch_failed === true ||
+      resultSummary?.precheck_failed === true);
+  const dispatchState =
+    dispatchStateRaw?.status === 'failed' || !admissionDispatchFailed
+      ? dispatchStateRaw
+      : {
+          ...dispatchStateRaw,
+          status: 'failed' as const,
+          last_error: String(
+            resultSummary?.reason ?? resultSummary?.error ?? 'dispatch_failed',
+          ),
+        };
+  const dispatchFailed =
+    dispatchState?.status === 'failed' || admissionDispatchFailed;
+  const gateFailed = precheck?.phase === 'failed' || dispatchFailed;
+  const showDispatchGate =
+    Boolean(precheck) ||
+    dispatchFailed ||
+    runQ.data?.status === 'QUEUED' ||
+    runQ.data?.status === 'PRECHECK';
   const showDiag = diagOpen || gateFailed;
 
   return (
@@ -311,7 +331,7 @@ export default function PlanRunDetailPage() {
               isError={timelineQ.isError}
             />
 
-            {(precheck || dispatchFailed) && (
+            {showDispatchGate && (
               <section data-testid="dispatch-gate-section" className="space-y-2">
                 {precheck && (
                   <PrecheckSummaryRow

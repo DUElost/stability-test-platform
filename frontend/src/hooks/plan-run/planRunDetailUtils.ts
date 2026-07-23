@@ -28,7 +28,19 @@ export function normalizeWatcherTimeScope(value: string | null): WatcherTimeScop
 }
 
 export function isDispatchGateActive(run: PlanRun | undefined): boolean {
-  if (!run || run.status !== 'RUNNING') return false;
+  if (!run) return false;
+
+  if (run.status === 'QUEUED' || run.status === 'PRECHECK') {
+    return true;
+  }
+
+  if (run.status !== 'RUNNING') {
+    const summary = run.result_summary;
+    return (
+      run.status === 'FAILED' &&
+      (summary?.dispatch_failed === true || summary?.precheck_failed === true)
+    );
+  }
 
   const precheck = run.run_context?.precheck;
   const dispatch = run.run_context?.dispatch_state;
