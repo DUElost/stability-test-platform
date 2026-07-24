@@ -320,9 +320,8 @@ def retry_plan_run_dispatch(
     *,
     triggered_by: str,
 ) -> dict:
-    """Reset a failed precheck PlanRun and re-enqueue the dispatch gate."""
+    """Reset a failed dispatch and return it to the admission queue."""
     from backend.models.job import JobInstance
-    from backend.tasks.saq_worker import EnqueueSyncError, enqueue_sync
 
     pr = db.get(PlanRun, run_id)
     if pr is None:
@@ -394,6 +393,11 @@ def retry_plan_run_dispatch(
         "mode": "admission_queue",
     })
     run_ctx["dispatch_attempt_history"] = retry_history
+    run_ctx["dispatch_host_watcher_admin_states"] = (
+        snapshot_dispatch_host_watcher_admin_states(
+            db, list(run_ctx["dispatch_device_ids"]),
+        )
+    )
     run_ctx.pop("precheck", None)
     run_ctx["dispatch_state"] = initial_dispatch_state()
     run_ctx["dispatch_state"]["requeue_attempts"] = (

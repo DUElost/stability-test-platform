@@ -46,6 +46,7 @@ from backend.core.metrics import (
     set_admission_queue_depth,
 )
 from backend.models.enums import PlanRunStatus
+from backend.models.host import Device, Host
 from backend.models.plan_run import PlanRun, PlanRunHost, PlanRunTargetDevice
 from backend.services.plan_dispatcher_core import (
     PlanDispatchError,
@@ -71,6 +72,50 @@ ADMISSION_AGING_MAX_BOOST = int(os.getenv("STP_ADMISSION_AGING_MAX_BOOST", "5"))
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _lock_admission_resources(
+    db: Session, host_ids: list[str], device_ids: list[int],
+) -> dict[str, dict]:
+    """Lock the mutable dispatch resources before the final re-verification.
+
+    Heartbeat updates Host before its Device rows, so the lock order here is
+    Host (stable id order) then Device (stable id order), avoiding a
+    Host↔Device deadlock while preventing a host migration/status update from
+    landing between verification and Job materialization.
+    """
+    if host_ids:
+        db.execute(
+            select(Host)
+            .where(Host.id.in_(sorted(set(host_ids))))
+            .order_by(Host.id)
+            .with_for_update()
+        ).scalars().all()
+    if device_ids:
+        db.execute(
+            select(Device)
+            .where(Device.id.in_(sorted(set(device_ids))))
+            .order_by(Device.id)
+            .with_for_update()
+        ).scalars().all()
+
+    rows = db.execute(
+        select(Host.id, Host.extra)
+        .where(Host.id.in_(sorted(set(host_ids))))
+    ).all() if host_ids else []
+    return {row.id: (row.extra if isinstance(row.extra, dict) else {}) for row in rows}
+
+
+def _operation_cap_from_host_extra(extra: dict) -> int | None:
+    """Extract a heartbeat-reported OperationScheduler cap for audit only."""
+    operations = extra.get("operations")
+    if not isinstance(operations, dict):
+        return None
+    try:
+        value = int(operations.get("max", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 # ── Pump tick: claim QUEUED → PRECHECK ────────────────────────────────────────
@@ -537,11 +582,12 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     """The single short transaction that admits a PlanRun (all hosts as one
     unit). Returns True when the run reached RUNNING.
 
-    Lock order (deadlock-safe across concurrent admissions):
+    Lock order (deadlock-safe across heartbeat/admission updates):
       1. PlanRun row FOR UPDATE (ownership CAS on attempt_id)
       2. all PlanRunHost rows FOR UPDATE, ORDER BY host_id
-      3. target devices re-verified WITHOUT device-row locks — the
-         uq_job_active_per_device index is the admission arbiter (ADR §4).
+      3. Host rows FOR UPDATE, ORDER BY host_id
+      4. target Device rows FOR UPDATE, ORDER BY device_id
+      5. target devices re-verified while those locks are held
     """
     pr = db.execute(
         select(PlanRun).where(PlanRun.id == run_id).with_for_update()
@@ -577,6 +623,8 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
         raise _FatalAdmission("snapshot_missing_targets")
 
     device_ids = [t.device_id for t in targets]
+    host_ids = [h.host_id for h in host_rows]
+    host_extra_by_id = _lock_admission_resources(db, host_ids, device_ids)
 
     # Final re-verification of EVERY target device (all-or-nothing admission).
     unavailable, device_host_map = _classify_dispatch_devices_sync(db, device_ids)
@@ -636,6 +684,9 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
     for h in host_rows:
         h.status = "ADMITTED"
         h.admitted_at = now
+        h.admission_batch_size_snapshot = _operation_cap_from_host_extra(
+            host_extra_by_id.get(h.host_id, {})
+        )
         h.total_job_count = per_host.get(h.host_id, 0)
 
     PlanRunStateMachine.transition(pr, PlanRunStatus.RUNNING, reason="admitted")

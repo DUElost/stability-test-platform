@@ -482,7 +482,7 @@ def retry_plan_run_dispatch_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Re-enqueue the dispatch gate after a precheck / sync failure."""
+    """Return a failed precheck / dispatch run to the admission queue."""
     try:
         summary = retry_plan_run_dispatch(
             run_id,

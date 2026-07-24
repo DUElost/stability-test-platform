@@ -124,7 +124,7 @@ class PlanRunHost(Base):
     admission_batch_size_snapshot) are enabled after admission
     (PRECHECK→RUNNING) and stay NULL/default while QUEUED.
 
-    Schema only in P1 step 1 — no code path writes rows yet.
+    Created by ``prepare_plan_run`` and activated by the admission transaction.
     """
     __tablename__ = "plan_run_host"
 
@@ -173,7 +173,7 @@ class PlanRunTargetDevice(Base):
     admission join, host grouping, device-migration audit via
     ``host_id_snapshot``, and 1000-device set queries.
 
-    Schema only in P1 step 1 — no code path writes rows yet.
+    Created by ``prepare_plan_run`` as the immutable admission target snapshot.
     """
     __tablename__ = "plan_run_target_device"
 
