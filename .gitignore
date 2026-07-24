@@ -1,4 +1,5 @@
 .ace-tool/
+opencode.json
 .cursor/*
 !.cursor/rules/
 !.cursor/rules/**

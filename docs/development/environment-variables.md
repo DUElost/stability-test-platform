@@ -29,7 +29,7 @@
 | `STP_HEARTBEAT_INTERVAL_BASE` / `_MIN` / `_MAX` | 控制面建议 Agent 心跳周期（随在线设备数缓增） |
 | `STP_LOG_RATE_LIMIT_BASE` / `_MIN` | 控制面建议每 host `step_log` 行速率（随设备数收紧；ADR-0026 P2-2） |
 | `STP_COUNTER_RECONCILE_INTERVAL_SECONDS` | O(1) 计数器对账 sweep 周期（默认 300） |
-| `STP_PLAN_ADMISSION_QUEUE_ENABLED` | `1`=V2 准入队列；默认 `0`。灰度见 [`../operations/adr-0026-admission-and-scale-gray-rollout.md`](../operations/adr-0026-admission-and-scale-gray-rollout.md)；`/health` 暴露 `admission_queue_*` |
+| `STP_PLAN_ADMISSION_QUEUE_ENABLED` | `1`=V2 准入队列；默认 `1`。设为 `0` 会停用新派发（不会恢复已移除的 legacy inline dispatch）；存量 QUEUED 仍 drain。灰度见 [`../operations/adr-0026-admission-and-scale-gray-rollout.md`](../operations/adr-0026-admission-and-scale-gray-rollout.md)；`/health` 暴露 `admission_queue_*` |
 | `STP_SCRIPT_ROOT` | 脚本扫描根；**开发必须**设为 `<repo>/backend/agent/scripts` |
 | `STP_SCRIPT_RUNTIME_ROOT` | 扫描机 ≠ 运行机时 Agent 侧脚本根 |
 | `STP_NFS_ROOT` / `STP_AEE_NFS_ROOT` | 共享存储（方案 C：汇总/dedup，不含运行日志唯一副本） |

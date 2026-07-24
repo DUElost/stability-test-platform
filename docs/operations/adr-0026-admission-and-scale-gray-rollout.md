@@ -1,7 +1,7 @@
 # ADR-0026 / 0027 灰度 Runbook（准入队列 + 多实例）
 
 > **目的**：把已合入 `main` 的代码能力按可控阶梯打开，而不是一次性改默认值。  
-> **默认仍关**：`STP_PLAN_ADMISSION_QUEUE_ENABLED=0`、`STP_SOCKETIO_REDIS_ADAPTER=0`。  
+> **当前默认**：`STP_PLAN_ADMISSION_QUEUE_ENABLED=1`；多实例相关的 `STP_SOCKETIO_REDIS_ADAPTER=0` 仍保持关闭。
 > **配套**：[`ADR-0026`](../adr/ADR-0026-plan-execution-scaling.md) 待定清单；[`ADR-0027`](../adr/ADR-0027-control-plane-horizontal-scaling.md)。
 
 ---
@@ -33,7 +33,7 @@ Prometheus（已有）：queue-latency、extend-batch 成功率、aggregation、
 - [ ] Agent 已含 Step 5b（Coordinator 心跳 + OperationScheduler）
 - [ ] barrier 接线已在 `main`（`STP_PHASE_BARRIER_ENABLED` 默认可保持开）
 - [ ] `/health` 显示 `admission_queue_pump_ready=true`（进程已起 pump）
-- [ ] 准备回滚：把 env 改回 `0` 并重启控制面（存量 QUEUED 仍会被 drain-only 消化）
+- [ ] 准备停用新派发：把 env 改为 `0` 并重启控制面（这会拒绝新的派发请求；存量 QUEUED 仍由 pump drain-only 消化）
 
 ### 1.2 开启
 
@@ -77,7 +77,7 @@ STP_PLAN_ADMISSION_QUEUE_ENABLED=0
 # 重启控制面
 ```
 
-新派发回到 legacy「点了就跑」；已在 QUEUED 的由 pump drain-only 消化，不会静默搁置。
+此开关**不会回退到 legacy inline dispatch**：当前 legacy 双轨已移除，新的派发请求会被拒绝并提示重新开启准入队列；已在 QUEUED 的由 pump drain-only 消化，不会静默搁置。需要恢复派发时，将开关改回 `1` 并重启控制面。
 
 ---
 
@@ -125,7 +125,7 @@ STP_AGENT_SID_REGISTRY=0
 
 ## 3. 不要在本 Runbook 里改的东西
 
-- **不要**把 `STP_PLAN_ADMISSION_QUEUE_ENABLED` 默认改成 `1`（须压测签字后再改 `.env.example` 默认并写 ADR 修订记录）
+- **不要**把 `STP_PLAN_ADMISSION_QUEUE_ENABLED` 改回 legacy 语义：当前默认 `1`，设为 `0` 只会停止新派发，不能恢复已移除的 inline dispatch；改动前须保留存量 QUEUED drain 观察窗口
 - **不要**在未开 Redis adapter 时水平扩展 SocketIO
 - **待定参数**（permit / aging / barrier 超时）改默认前重跑 `backend/core/adr0026_params.py` 不变量套件
 
@@ -153,6 +153,9 @@ STP_AGENT_SID_REGISTRY=0
 | 2026-07-22 | Barrier 实机异常 | 12/12 job 进入 `WAITING_BARRIER` 后 **未推进 PATROL**（`plan_run_host.phase` 仍 null，观察 ≥45s）；属 INIT→PATROL barrier 接线实机缺陷，需另开修复。与「长跑并行」正交，但阻塞 patrol 阶段 permit 风暴观测 |
 | 2026-07-22 | 多实例 | **仍暂缓**（单 uvicorn；Redis adapter / sid registry=false） |
 | 2026-07-22 | 复测准入冒烟 | `/health` 三者 true；idle PlanRun `QUEUED→RUNNING` ≤5s；BUSY→`QUEUED`+`DEVICE_BUSY` 未 FAILED；QUEUED abort → **FAILED**（合同如此，非 CANCELLED）；7 host 并发入场全过。证据：`/tmp/adr0026-validation-20260722c.json` |
+| 2026-07-23 | PostgreSQL 集成回归 | 隔离 testcontainers PostgreSQL：`1162 passed, 17 skipped`；Agent：`759 passed`；compileall、git diff --check、frontend type-check/build 均通过 |
+| 2026-07-23 | 当前库存与运行态 | `BEGIN READ ONLY` 统计：host `20 ONLINE/20`，2 分钟心跳 `20/20`；device `90`（`52 ONLINE / 35 BUSY / 1 OFFLINE / 2 ERROR`）；活跃 PlanRun `1 RUNNING`、Job `35 RUNNING`。未达 44 首档，禁止实机阶梯长跑 |
+| 2026-07-23 | 多实例前置检查 | `/health`：`saq_ready=true`、准入三项 true；`socketio_redis_adapter=false`、`agent_sid_registry=false`；systemd 仅运行单个 uvicorn:8000，当前生产多实例灰度不执行 |
 | 2026-07-22 | 阶梯 | ONLINE host **仍=20** → `below_44_current_20`；无法宣称 44/60/100 |
 | 2026-07-22 | 窗口指标（复测） | queue-latency / extend-batch / aggregation 有增量；dense SQL 窗 **UNKNOWN=0** |
 | 2026-07-22 | 单 host 并行（SQL） | PlanRun79：10 device → `RUNNING` 并发 → **并行 PASS**。证据：`/tmp/adr0026-metrics-sql-probe.json` |
@@ -168,6 +171,15 @@ STP_AGENT_SID_REGISTRY=0
 | 2026-07-22 | Barrier + permit 收口复测 | 修复后 PlanRun92（host `172-21-9-131`，14 devices）：`QUEUED→RUNNING=4.09s`；14/14 完成 cycle 1 并进入 `PATROL`，PRH `phase=PATROL`；`peak_held=5`、`peak_waiting=9`、`acquired_total=42`、`queued_total=32`；UNKNOWN=0。证据：`/tmp/adr0026-barrier-permit-closeout-20260722.json` |
 | 2026-07-22 | 收口清理 | PlanRun92 为有意中止，最终 run status=`FAILED`（现有 abort 合同）；14/14 jobs=`ABORTED`、`terminal_job_count=14`、UNKNOWN=0，6.04s 内完成清理。该状态不计作业务失败样本。 |
 | 2026-07-22 | 当前验收判定 | **Staging 准入冒烟通过；单 host 长跑并行通过；瞬时脚本/ADB 串行 cap=5 已有 live 竞争证据；Barrier 已通过。44→60→100 仍因库存阻塞（20 ONLINE host / 41 ONLINE device）；多实例仍因单 uvicorn + adapter/registry=false 暂缓。** |
+| 2026-07-23 | 44-device 灰度 | PlanRun97，11 host / 44 device：排队延迟 **2.70s**；44/44 进入 RUNNING，全部 host ADMITTED，Barrier 推进到 PATROL，FAILED/UNKNOWN=0；观察完成后显式 abort，44/44 ABORTED。 |
+| 2026-07-23 | 60-device 灰度 | PlanRun98，11 host / 60 device：排队延迟 **4.39s**；60/60 进入 RUNNING/PATROL_SLEEP，FAILED/UNKNOWN=0；截止收口时 50 COMPLETED / 10 ABORTED。 |
+| 2026-07-23 | 全量 device 灰度 | PlanRun99，11 host / 87 device（当时 ONLINE 库存上限）：排队延迟 **4.58s**；约 5m17s 自然完成，PlanRun=SUCCESS，87/87 COMPLETED，failed=0、unknown=0、pass_rate=1.0。 |
+| 2026-07-23 | 阶梯口径 | 上述结果验证的是 **44→60→87 device**，不是 host。平台注册 host 仅 20 个，且只有 11 个 host 挂有 ONLINE device，因此 **44→60→100 host 仍未完成，不得宣称 host-scale 验收通过**。 |
+| 2026-07-23 | 最终库存 / 清理 | 生产库 `BEGIN READ ONLY` 复核：host `20 ONLINE/20`、2 分钟心跳 `20/20`；device `90`（`87 ONLINE / 1 OFFLINE / 2 ERROR`），11 host 有 ONLINE device；活跃 PlanRun=0、活跃 Job=0。 |
+| 2026-07-23 | 隔离双实例选主 | 两个重叠进程竞争同名 PostgreSQL advisory lock，结果严格为 `[false, true]`，仅一个 leader。临时双实例 `/health` 均为 `saq_ready/socketio_redis_adapter/agent_sid_registry/admission_queue_enabled=true`。 |
+| 2026-07-23 | Redis/Socket.IO 跨实例 | Agent→实例 `18001`、Dashboard→实例 `18002`：`step_log` 经 Redis 跨实例送达；write-only Redis manager 发出的 `reload_config` 反向送达 Agent。owner key 连接时存在（TTL=120s），断开后删除。生产仍为单 uvicorn:8000，adapter/registry=false，未改变生产拓扑。 |
+| 2026-07-23 | 空库迁移基线修复 | 补齐 legacy 基线表、旧外键清理、并行分支 merge 收口及 psycopg3 JSONB 参数转换；全新 PostgreSQL 16 从 `<base>` 连续 `alembic upgrade head` 成功，二次升级 no-op，关键 enum/索引/seed 均通过。基于该迁移 Schema 的后端回归：`1175 passed, 4 skipped`。CI 已增加空库迁移步骤。 |
+| 2026-07-23 | 生产 Alembic 升级 | 升级前 revision=`g2h3i4j5k6l7`、活跃 PlanRun/Job=0；使用 `lock_timeout=5s`、`statement_timeout=60s` 执行 `upgrade head`，成功到 `h3i4j5k6l7m8`。`idx_plan_run_admission_queue` 已更新，`idx_prtd_plan_run_sort` 已创建，所有索引 valid/ready；再次升级为 no-op，平台健康正常。 |
 
 ## 5. 2026-07-22 收口判定与后续门槛
 
@@ -189,3 +201,17 @@ STP_AGENT_SID_REGISTRY=0
 - Frontend：`npx tsc --noEmit` 与 `npm run build`：通过。
 - 控制面指标用例（隔离 Docker PostgreSQL）：`5 passed`（仅 1 个现有 Starlette/httpx deprecation warning）。
 - 现场证据：`/tmp/adr0026-barrier-permit-closeout-20260722.json`；准入/指标历史证据仍见本表前述路径。
+
+## 6. 2026-07-23 最终判定
+
+| 能力 | 判定 | 证据 / 边界 |
+|------|------|-------------|
+| ADR-0026 准入、Barrier、host-global permit | **通过** | PostgreSQL 回归 `1162 passed, 17 skipped`；Agent `759 passed`；44/60/87-device 实机阶梯均无 FAILED/UNKNOWN，87-device 全量自然 SUCCESS |
+| PostgreSQL singleton leader election | **通过（隔离双实例）** | 重叠进程同名锁结果 `[false, true]` |
+| Redis Socket.IO fan-out + Agent owner registry | **通过（隔离双实例）** | `18001 ↔ Redis ↔ 18002` 正向日志、反向 control 均通过；owner 登记与断连清理通过 |
+| 44→60→100 host 规模 | **未完成：库存阻塞** | 仅 20 个 ONLINE host，且仅 11 个 host 有 ONLINE device；已完成的是 44→60→87 device 替代压力窗 |
+| 生产多实例部署 | **未开启** | 生产仍为单 uvicorn:8000，`socketio_redis_adapter=false`、`agent_sid_registry=false`；本轮只验证多实例代码路径，不改变生产拓扑 |
+| 空库 Alembic 基线 | **通过** | PostgreSQL 16 空库 `<base>→head` 与二次 no-op 均通过；CI 已固定执行；迁移 Schema 上 `1175 passed, 4 skipped` |
+| 生产 Alembic revision | **通过** | `g2h3i4j5k6l7→h3i4j5k6l7m8 (head)`；目标索引 valid/ready，平台健康正常 |
+
+最终结论：ADR-0026 当前可用库存范围内的运行时落地、Alembic 空库基线与 ADR-0027 多实例前置能力已完成验证；唯一不能关闭的规模门槛是 **44→60→100 host**，需要补足真实 host 库存后重新执行，不能用 device 数量替代。
