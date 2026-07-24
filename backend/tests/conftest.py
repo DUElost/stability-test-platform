@@ -85,9 +85,9 @@ from backend.main import fastapi_app as app
 def engine():
     """Create a test database engine"""
     engine = create_engine(TEST_DATABASE_URL, future=True, pool_pre_ping=True)
-    # alembic 链路从 001_add_device_monitoring 起就假设 devices 表已存在,
-    # 无法在空库上 `alembic upgrade head`。测试库统一用 ORM 视角建表;
-    # 真正的迁移健康单独通过本地 dev DB / 预生产校验。
+    # CI first runs `alembic upgrade head` against this empty PostgreSQL DB.
+    # create_all remains as a cheap local/testcontainers bootstrap, not as a
+    # substitute for migration-chain validation.
     Base.metadata.create_all(bind=engine)
     yield engine
     try:

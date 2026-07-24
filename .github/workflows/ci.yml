@@ -38,6 +38,9 @@ jobs:
         run: pip install -r backend/requirements.txt
       - name: Compile check
         run: python -m compileall backend/ -q
+      - name: Migrate empty PostgreSQL database
+        working-directory: backend
+        run: python -m alembic upgrade head
       - name: Run backend tests
         run: python -m pytest backend/tests/ -v
       - name: Main-chain integration smoke
