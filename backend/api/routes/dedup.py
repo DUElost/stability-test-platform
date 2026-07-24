@@ -386,10 +386,11 @@ async def reload_agent_config(
     host_id: str,
     _user: User = Depends(get_current_active_user),
 ):
-    """远程触发 Agent 重新读取 env 并 reconfigure ScanRunner / UploadManager。
+    """远程触发 Agent 重新读取 env 并刷新运行时配置。
 
     用于 Agent 启动后修改 .env 但不重启进程的场景（热更新配置）。
-    Agent 收到 reload_config 后调用 configure(force=True) 重读 STP_DEDUP_* / STP_AEE_*。
+    Agent 收到 reload_config 后重载安装目录 .env，并刷新 ScanRunner、
+    UploadManager 和 host-global OperationScheduler。
     """
     from backend.realtime.socketio_server import emit_agent_control
 
