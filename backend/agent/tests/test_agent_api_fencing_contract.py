@@ -23,6 +23,7 @@ from backend.models.enums import JobStatus
 async def test_coordinator_heartbeat_persists_valid_plan_run_host_phase():
     row = MagicMock()
     row.host_id = "host-1"
+    row.plan_run_id = 22
     row.coordinator_epoch = 2
     row.phase = None
 
@@ -52,6 +53,44 @@ async def test_coordinator_heartbeat_persists_valid_plan_run_host_phase():
     assert row.phase == "PATROL"
     assert row.coordinator_heartbeat_at is not None
     db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_heartbeat_rejects_old_agent_instance():
+    host = MagicMock()
+    host.last_agent_instance_id = "new-agent"
+    row = MagicMock()
+    row.host_id = "host-1"
+    row.coordinator_epoch = 4
+    row.phase = None
+
+    db = MagicMock()
+    db.get = AsyncMock(side_effect=[host, row])
+    db.execute = AsyncMock()
+    db.commit = AsyncMock()
+
+    result = await coordinator_heartbeat(
+        payload=_CoordinatorHeartbeatIn(
+            host_id="host-1",
+            agent_instance_id="old-agent",
+            plan_run_hosts=[{
+                "id": 11,
+                "plan_run_id": 22,
+                "host_id": "host-1",
+                "coordinator_epoch": 99,
+                "phase": "PATROL",
+            }],
+            jobs=[{"job_id": 101, "execution_state": "EXECUTING_STEP"}],
+        ),
+        db=db,
+        _=None,
+    )
+
+    assert result.data.accepted is False
+    assert result.data.agent_instance_stale is True
+    assert result.data.stale_plan_run_host_ids == [11]
+    assert result.data.current_coordinator_epochs == {11: 4}
+    assert row.phase is None
 
 
 @pytest.mark.asyncio

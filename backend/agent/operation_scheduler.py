@@ -26,13 +26,43 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MAX_CONCURRENT_OPERATIONS = int(
-    os.getenv("STP_MAX_CONCURRENT_OPERATIONS", "5")
-)
+_DEFAULT_MAX_CONCURRENT_OPERATIONS = 5
+
+
+def configured_max_concurrent_operations() -> int:
+    """Read the host-global operation cap from the current environment.
+
+    This is intentionally evaluated at construction/reload time rather than
+    only at module import so the Agent control-plane reload command can apply
+    a changed ``STP_MAX_CONCURRENT_OPERATIONS`` without restarting workers.
+    """
+    raw = os.getenv("STP_MAX_CONCURRENT_OPERATIONS", str(_DEFAULT_MAX_CONCURRENT_OPERATIONS))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "invalid_max_concurrent_operations raw=%r default=%d",
+            raw,
+            _DEFAULT_MAX_CONCURRENT_OPERATIONS,
+        )
+        value = _DEFAULT_MAX_CONCURRENT_OPERATIONS
+    return max(value, 1)
 
 
 class PermitDenied(Exception):
-    """Raised when a waiter is cancelled (abort) or the scheduler shuts down."""
+    """Base class for a permit request that cannot be granted."""
+
+
+class PermitWaitTimeout(PermitDenied):
+    """The caller may retry after checking abort/lease state."""
+
+
+class PermitCancelled(PermitDenied):
+    """The waiting job was explicitly cancelled or aborted."""
+
+
+class SchedulerShutdown(PermitDenied):
+    """The Agent is shutting down; callers must stop retrying immediately."""
 
 
 class OperationPermit:
@@ -72,7 +102,7 @@ class OperationScheduler:
         self._max_concurrent = (
             max_concurrent
             if max_concurrent is not None
-            else _DEFAULT_MAX_CONCURRENT_OPERATIONS
+            else configured_max_concurrent_operations()
         )
         self._held: int = 0
         self._peak_held: int = 0
@@ -136,6 +166,12 @@ class OperationScheduler:
             if self._held < self._max_concurrent:
                 self._wake_one_locked()
 
+    def reload_from_env(self) -> int:
+        """Apply the current environment cap and return the effective value."""
+        value = configured_max_concurrent_operations()
+        self.set_max_concurrent(value)
+        return value
+
     def acquire(self, device_id: int, timeout: float | None = None) -> OperationPermit:
         """Block until a permit is available or timeout / abort / shutdown.
 
@@ -146,11 +182,13 @@ class OperationScheduler:
         Per-device fairness: ``cancel_device(device_id)`` only wakes that
         specific waiter; ``shutdown()`` wakes all.
         """
-        if self._shutdown:
-            raise PermitDenied("scheduler shut down")
-
         event: threading.Event | None = None
         with self._lock:
+            # Check under the same lock used by shutdown(); otherwise a
+            # shutdown between the initial check and enqueue could leave a
+            # waiter behind with no future waker.
+            if self._shutdown:
+                raise SchedulerShutdown("scheduler shut down")
             if device_id in self._waiters:
                 # Per-device fairness: only one waiter per device.
                 raise PermitDenied(f"device {device_id} already waiting")
@@ -176,43 +214,45 @@ class OperationScheduler:
         # Wait outside the lock so releases can wake us.
         assert event is not None
         signaled = event.wait(timeout=timeout)
-        # The waker has already accounted for the slot (held incremented
-        # before the event is set).  If this is a spurious wake we just
-        # return the permit — the waker already consumed the slot.
+        # The waker accounts for a slot before setting the event. Resolve the
+        # timeout/promote/cancel race under the scheduler lock; an event.is_set
+        # check outside the lock could miss a concurrent promotion and leak
+        # the reserved slot.
+        timed_out = False
         if not signaled:
-            # Timeout. The waiter may have been promoted by _wake_one_locked
-            # between the wait() timing out and this code running. If the
-            # event IS set at this point, we were promoted — return the
-            # permit instead of raising (slot is already consumed).
-            if event.is_set():
-                # Slot was consumed by the promoter; don't double-decrement.
-                pass
-            else:
-                # Genuine timeout — remove from queue, no slot consumed.
-                with self._lock:
+            with self._lock:
+                if (
+                    device_id not in self._pending_handoff
+                    and device_id not in self._cancelled
+                    and not self._shutdown
+                ):
                     self._waiters.pop(device_id, None)
-                raise PermitDenied(f"permit wait timed out after {timeout}s")
+                    timed_out = True
+        if timed_out:
+            raise PermitWaitTimeout(f"permit wait timed out after {timeout}s")
 
-        if self._shutdown:
-            raise PermitDenied("scheduler shut down during wait")
-
-        # Check cancellation flag (set by cancel_device during wait).
-        # - Still queued when cancelled: slot was never consumed.
-        # - Promoted then cancelled (in _pending_handoff): slot was consumed
-        #   by _wake_one_locked — release it before denying.
+        shutdown = False
+        cancelled = False
         with self._lock:
-            cancelled = device_id in self._cancelled
-            if cancelled:
-                self._cancelled.discard(device_id)
-                if device_id in self._pending_handoff:
-                    self._pending_handoff.discard(device_id)
-                    self._held = max(0, self._held - 1)
-                    self._held_devices.discard(device_id)
-                    self._wake_one_locked()
+            if self._shutdown:
+                self._release_pending_handoff_locked(device_id)
+                shutdown = True
             else:
-                self._pending_handoff.discard(device_id)
+                # Check cancellation flag (set by cancel_device during wait).
+                # - Still queued when cancelled: slot was never consumed.
+                # - Promoted then cancelled: release the reserved slot.
+                cancelled = device_id in self._cancelled
+                if cancelled:
+                    self._cancelled.discard(device_id)
+                    if device_id in self._pending_handoff:
+                        self._release_pending_handoff_locked(device_id)
+                        self._wake_one_locked()
+                else:
+                    self._pending_handoff.discard(device_id)
+        if shutdown:
+            raise SchedulerShutdown("scheduler shut down during wait")
         if cancelled:
-            raise PermitDenied(f"permit cancelled for device {device_id}")
+            raise PermitCancelled(f"permit cancelled for device {device_id}")
 
         return OperationPermit(self, device_id)
 
@@ -221,6 +261,14 @@ class OperationScheduler:
             self._held = max(0, self._held - 1)
             self._held_devices.discard(permit.device_id)
             self._wake_one_locked()
+
+    def _release_pending_handoff_locked(self, device_id: int) -> None:
+        """Release a slot reserved for a waiter that never took ownership."""
+        if device_id not in self._pending_handoff:
+            return
+        self._pending_handoff.discard(device_id)
+        self._held = max(0, self._held - 1)
+        self._held_devices.discard(device_id)
 
     def _wake_one_locked(self) -> None:
         """Caller holds self._lock. Promote the oldest waiter if slots available."""

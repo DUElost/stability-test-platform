@@ -53,6 +53,12 @@ class PlanRunHostView:
             self._epoch += 1
             return self._epoch
 
+    def rebase_epoch(self, stored_epoch: int) -> int:
+        """Move above a control-plane epoch returned after a stale heartbeat."""
+        with self._lock:
+            self._epoch = max(self._epoch, int(stored_epoch)) + 1
+            return self._epoch
+
     def to_payload(self) -> dict:
         with self._lock:
             return {
@@ -384,11 +390,56 @@ class HostRunCoordinator:
             )
             resp.raise_for_status()
             data = resp.json().get("data", {})
+            if data.get("agent_instance_stale"):
+                self._fence_stale_agent_instance()
+                return
             stale = data.get("stale_plan_run_host_ids") or []
             if stale:
-                logger.warning(
-                    "coordinator_stale_epoch host=%s stale_hosts=%s",
-                    self._host_id, stale,
+                self._reconcile_stale_plan_run_hosts(
+                    stale,
+                    data.get("current_coordinator_epochs") or {},
                 )
         except Exception as exc:
             logger.debug("coordinator_heartbeat_failed host=%s: %s", self._host_id, exc)
+
+    def _fence_stale_agent_instance(self) -> None:
+        """Stop stale coordination and wake all workers waiting for permits."""
+        self._stop_event.set()
+        scheduler = self._scheduler
+        if scheduler is not None:
+            scheduler.shutdown()
+        logger.error(
+            "coordinator_agent_instance_fenced host=%s instance=%s",
+            self._host_id, self._agent_instance_id,
+        )
+
+    def _reconcile_stale_plan_run_hosts(
+        self, stale_ids: list[int], current_epochs: dict,
+    ) -> None:
+        """Rebase local epochs or drop projections deleted by the control plane."""
+        with self._lock:
+            for raw_id in stale_ids:
+                try:
+                    prh_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                view = self._plan_run_hosts.get(prh_id)
+                if view is None:
+                    continue
+                raw_epoch = current_epochs.get(raw_id, current_epochs.get(str(prh_id)))
+                if raw_epoch is None:
+                    self._plan_run_hosts.pop(prh_id, None)
+                    logger.warning(
+                        "coordinator_stale_projection_removed host=%s prh=%d",
+                        self._host_id, prh_id,
+                    )
+                    continue
+                try:
+                    next_epoch = view.rebase_epoch(int(raw_epoch))
+                except (TypeError, ValueError):
+                    continue
+                self._persist_one_epoch(view)
+                logger.warning(
+                    "coordinator_stale_epoch_rebased host=%s prh=%d epoch=%d",
+                    self._host_id, prh_id, next_epoch,
+                )

@@ -10,6 +10,7 @@ Covers the acceptance criteria from the final review:
 from __future__ import annotations
 
 import inspect
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -60,6 +61,15 @@ class TestStartupOrder:
         s = OperationScheduler(max_concurrent=2)
         assert s.max_concurrent == 2
         assert s.held == 0
+
+    def test_runtime_env_reload_overrides_hot_settings(self, tmp_path, monkeypatch):
+        from backend.agent.main import _reload_runtime_env
+
+        env_file = tmp_path / ".env"
+        env_file.write_text("STP_MAX_CONCURRENT_OPERATIONS=9\n", encoding="ascii")
+        monkeypatch.setenv("STP_MAX_CONCURRENT_OPERATIONS", "2")
+        assert _reload_runtime_env(env_file) is True
+        assert os.environ["STP_MAX_CONCURRENT_OPERATIONS"] == "9"
 
 
 # ── 2. 20-device / permit=5 concurrency ───────────────────────────────────────
@@ -363,10 +373,43 @@ class TestCoordinatorTickSendsPost:
         assert body["host_id"] == "h-tick"
 
 
+def test_coordinator_rebases_stale_epoch_from_control_plane():
+    coord = HostRunCoordinator("http://x", "h-rebase", "inst")
+    view = coord.register_plan_run_host(7, 70)
+    original = view.epoch
+    coord._reconcile_stale_plan_run_hosts([7], {7: original + 4})
+    assert view.epoch == original + 5
+
+
+def test_coordinator_fences_stale_agent_instance():
+    scheduler = OperationScheduler(max_concurrent=1)
+    coord = HostRunCoordinator("http://x", "h-fence", "inst")
+    coord.set_scheduler(scheduler)
+    coord._fence_stale_agent_instance()
+    assert coord._stop_event.is_set()
+    with pytest.raises(PermitDenied):
+        scheduler.acquire(1)
+
+
 # ── 7. Abort semantics ────────────────────────────────────────────────────────
 
 
 class TestAbortPermitSemantics:
+    def test_scheduler_shutdown_does_not_spin_pipeline_waiter(self):
+        """Scheduler shutdown is terminal; the pipeline must not retry it."""
+        from backend.agent.pipeline_engine import PipelineEngine
+
+        scheduler = OperationScheduler(max_concurrent=1)
+        scheduler.shutdown()
+        engine = PipelineEngine.__new__(PipelineEngine)
+        engine._scheduler = scheduler
+        engine._device_id = 42
+        engine._canceled = False
+        engine._is_aborted = lambda: False
+        engine._is_lock_lost = lambda: False
+        engine._update_execution_state = lambda _state: None
+        assert engine._run_step_with_permit("init", {}) is False
+
     def test_abort_while_holding_does_not_release_permit(self):
         """Abort a job that is EXECUTING_STEP (holding a permit) — the
         cancel must be a no-op. The concurrency cap must survive."""

@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 # 自动加载 .env 文件（支持手动运行时读取配置）
@@ -403,6 +404,23 @@ def _version_lt(a: str, b: str) -> bool:
     return parts_a < parts_b
 
 
+def _reload_runtime_env(env_file: Path | None = None) -> bool:
+    """Reload the Agent EnvironmentFile for runtime-reconfigurable settings."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        logger.warning("control_reload_config_dotenv_unavailable")
+        return False
+
+    path = env_file or (BASE_DIR / ".env")
+    if not path.is_file():
+        logger.warning("control_reload_config_env_missing path=%s", path)
+        return False
+    loaded = bool(load_dotenv(path, override=True))
+    logger.info("control_reload_config_env_loaded path=%s loaded=%s", path, loaded)
+    return loaded
+
+
 def run_recovery_sync_if_needed(
     local_db: Any,
     api_url: str,
@@ -701,13 +719,16 @@ def main() -> None:
             ).start()
             logger.info("control_upload_events_triggered plan_run=%d dirs=%d", plan_run_id, len(event_dir_names))
         elif command == "reload_config":
+            env_reloaded = _reload_runtime_env()
             ScanRunner.instance().configure(force=True)
             UploadManager.instance().configure(force=True)
+            operation_cap = operation_scheduler.reload_from_env()
             runner_ok = ScanRunner.instance().is_configured()
             uploader_ok = UploadManager.instance().is_configured()
             logger.info(
-                "control_reload_config_done scan_runner=%s upload_manager=%s",
-                runner_ok, uploader_ok,
+                "control_reload_config_done env_reloaded=%s scan_runner=%s upload_manager=%s "
+                "max_concurrent_operations=%d",
+                env_reloaded, runner_ok, uploader_ok, operation_cap,
             )
         else:
             logger.warning("unknown_control_command: %s", command)

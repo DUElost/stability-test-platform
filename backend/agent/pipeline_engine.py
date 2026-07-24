@@ -907,7 +907,7 @@ class PipelineEngine:
                 suppress_success_trace=suppress_success_trace,
             )
 
-        from .operation_scheduler import PermitDenied
+        from .operation_scheduler import PermitDenied, PermitWaitTimeout
 
         self._update_execution_state("WAITING_EXECUTION_SLOT")
         permit = None
@@ -918,12 +918,17 @@ class PipelineEngine:
                 try:
                     permit = scheduler.acquire(device_id, timeout=5)
                     break
-                except PermitDenied:
+                except PermitWaitTimeout:
                     if self._is_lock_lost() or self._canceled:
                         return False
                     # timeout — check abort signals and retry
                     if self._is_aborted is not None and self._is_aborted():
                         return False
+                except PermitDenied:
+                    # Cancellation and scheduler shutdown are terminal for
+                    # this worker. Retrying either condition can spin forever
+                    # during Agent shutdown or re-acquire an aborted job.
+                    return False
             self._update_execution_state("EXECUTING_STEP")
             return self._run_step_with_retry(
                 phase,

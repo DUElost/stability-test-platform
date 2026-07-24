@@ -7,6 +7,7 @@ import pytest
 from backend.agent.operation_scheduler import (
     OperationScheduler,
     PermitDenied,
+    SchedulerShutdown,
 )
 
 
@@ -205,6 +206,18 @@ class TestOperationScheduler:
         for t in threads:
             t.join(timeout=3)
         assert sum(results) == 2
+
+    def test_shutdown_has_terminal_reason(self):
+        s = OperationScheduler(max_concurrent=1)
+        s.shutdown()
+        with pytest.raises(SchedulerShutdown):
+            s.acquire(1)
+
+    def test_reload_from_env_applies_new_cap(self, monkeypatch):
+        s = OperationScheduler(max_concurrent=1)
+        monkeypatch.setenv("STP_MAX_CONCURRENT_OPERATIONS", "7")
+        assert s.reload_from_env() == 7
+        assert s.max_concurrent == 7
 
     def test_hot_adjust_up_wakes_waiter(self):
         s = OperationScheduler(max_concurrent=1)
