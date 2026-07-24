@@ -140,7 +140,7 @@ def upgrade() -> None:
                 " content_sha256, param_schema, default_params, is_active, "
                 " description, created_at, updated_at) "
                 "VALUES (:name, :display, :cat, :stype, :ver, :nfs, "
-                " :sha, :pschema::jsonb, :dparams::jsonb, true, "
+                " :sha, CAST(:pschema AS jsonb), CAST(:dparams AS jsonb), true, "
                 " :desc, :now, :now)"
             ),
             {
@@ -161,8 +161,8 @@ def upgrade() -> None:
         # v1.0.1 already exists (scan ran first) — just backfill
         conn.execute(
             text(
-                "UPDATE script SET default_params = :dparams::jsonb, "
-                " param_schema = :pschema::jsonb, updated_at = :now "
+                "UPDATE script SET default_params = CAST(:dparams AS jsonb), "
+                " param_schema = CAST(:pschema AS jsonb), updated_at = :now "
                 "WHERE name = :name AND version = :ver"
             ),
             {
@@ -177,7 +177,7 @@ def upgrade() -> None:
     # ── 2. Backfill param_schema on v1.0.0 (read-only reference) ──────────
     conn.execute(
         text(
-            "UPDATE script SET param_schema = :pschema::jsonb, updated_at = :now "
+            "UPDATE script SET param_schema = CAST(:pschema AS jsonb), updated_at = :now "
             "WHERE name = 'flash_firmware' AND version = '1.0.0'"
         ),
         {"pschema": json.dumps(PARAM_SCHEMA), "now": now},

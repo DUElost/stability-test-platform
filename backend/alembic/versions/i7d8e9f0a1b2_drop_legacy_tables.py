@@ -56,6 +56,23 @@ def _table_exists(name: str) -> bool:
 
 
 def upgrade() -> None:
+    # Some databases still have the b0f805bf6cee-era task_schedules FKs.
+    # Drop only references to tables retired by this revision; otherwise
+    # PostgreSQL correctly refuses to drop task_templates/tools.  The FK to
+    # devices is intentionally retained because that legacy table survives.
+    if _table_exists("task_schedules"):
+        bind = op.get_bind()
+        for foreign_key in inspect(bind).get_foreign_keys("task_schedules"):
+            if foreign_key.get("referred_table") not in LEGACY_TABLES_ORDERED:
+                continue
+            constraint_name = foreign_key.get("name")
+            if constraint_name:
+                op.drop_constraint(
+                    constraint_name,
+                    "task_schedules",
+                    type_="foreignkey",
+                )
+
     for table in LEGACY_TABLES_ORDERED:
         if _table_exists(table):
             op.drop_table(table)
