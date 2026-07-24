@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from backend.core.database import SessionLocal
 from backend.models.device_lease import DeviceLease
@@ -27,6 +28,14 @@ from backend.models.enums import (
 from backend.models.host import Device, Host
 from backend.models.plan import Plan, PlanStep
 from backend.models.script import Script
+from backend.services.admission_pump import (
+    _FatalAdmission,
+    _RetryableAdmission,
+    admission_transaction,
+    claim_queued_plan_runs,
+    fail_plan_run_admission,
+    requeue_plan_run,
+)
 from backend.services.plan_dispatcher_core import PlanDispatchError
 from backend.services.plan_dispatcher_sync import (
     AllocationError,
@@ -339,35 +348,32 @@ class TestValidateDispatchDevicesSync:
 
 
 class TestPrepareAndCompleteIntegration:
-    def test_prepare_rejects_active_lease_before_creating_plan_run(
+    def test_prepare_queues_active_lease_with_blocker_detail(
         self, db_session, dispatch_fixture
     ):
-        """关键不变量:校验失败时 PlanRun 行不能创建,否则前端会看到鬼魂 PlanRun。"""
+        """可重试设备竞争必须进入队列，而不是同步拒绝。"""
         from backend.models.plan_run import PlanRun
         dev = dispatch_fixture["device"]
         _attach_active_lease(db_session, dev.id, dispatch_fixture["host"].id)
 
         baseline = db_session.query(PlanRun).count()
-        with pytest.raises(PlanDispatchError) as exc:
-            prepare_plan_run(
-                plan_id=dispatch_fixture["plan"].id,
-                device_ids=[dev.id],
-                triggered_by="pytest",
-                db=db_session,
-                run_type="MANUAL",
-            )
-        assert exc.value.detail()["code"] == "DEVICES_UNAVAILABLE"
-        assert db_session.query(PlanRun).count() == baseline
+        pr = prepare_plan_run(
+            plan_id=dispatch_fixture["plan"].id,
+            device_ids=[dev.id],
+            triggered_by="pytest",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        assert pr.status == "QUEUED"
+        assert pr.queue_reason == "DEVICE_BUSY"
+        assert pr.run_context["queue_blockers"][0]["reason"] == "active_lease"
+        assert db_session.query(PlanRun).count() == baseline + 1
 
-    def test_complete_falls_to_failed_when_lease_arrives_during_window(
+    def test_admission_requeues_when_lease_arrives_after_prepare(
         self, db_session, dispatch_fixture
     ):
-        """TOCTOU:prepare 通过、device 在 prepare→complete 窗口被占。complete 不能
-        创建 Job(会卡死),应落 FAILED + 审计,与 ADR-0023 missing_scripts 同路径。
-        """
-        from backend.core.audit import AuditLog
+        """prepare 后出现的租约竞争必须整单回队且不物化 Job。"""
         from backend.models.job import JobInstance
-        from backend.models.plan_run import PlanRun
 
         dev = dispatch_fixture["device"]
 
@@ -378,38 +384,40 @@ class TestPrepareAndCompleteIntegration:
             db=db_session,
             run_type="MANUAL",
         )
-        assert pr.status == "RUNNING"
+        assert pr.status == "QUEUED"
+        claimed = claim_queued_plan_runs(db_session)
+        assert len(claimed) == 1
+        attempt = claimed[0][1]
 
-        # 模拟 race:prepare 通过后,另一处给 device 上 ACTIVE lease
+        # 模拟 race:prepare 通过后、最终 admission 复查前出现 ACTIVE lease。
         _attach_active_lease(db_session, dev.id, dispatch_fixture["host"].id)
 
-        complete_plan_run_dispatch(pr.id, db=db_session)
+        with pytest.raises(_RetryableAdmission) as exc:
+            admission_transaction(db_session, pr.id, attempt)
+        assert exc.value.queue_reason == "DEVICE_BUSY"
+        assert exc.value.blockers[0]["reason"] == "active_lease"
+        assert requeue_plan_run(
+            db_session,
+            pr.id,
+            attempt,
+            queue_reason=exc.value.queue_reason,
+            blockers=exc.value.blockers,
+        ) is True
         db_session.refresh(pr)
 
-        assert pr.status == "FAILED"
-        assert pr.result_summary["dispatch_failed"] is True
-        assert pr.result_summary["unavailable_devices"][0]["reason"] == "active_lease"
-        # complete 不应创建任何 Job
+        assert pr.status == "QUEUED"
+        assert pr.queue_reason == "DEVICE_BUSY"
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id
         ).count() == 0
-        # 审计行写入
-        from sqlalchemy import select
-        audit = db_session.execute(
-            select(AuditLog)
-            .where(AuditLog.action == "plan_dispatch_failed")
-            .where(AuditLog.resource_id == str(pr.id))
-        ).scalars().first()
-        assert audit is not None
-        assert audit.details["reason"] == "devices_unavailable_at_dispatch"
 
-    def test_postgresql_concurrent_materialization_race_settles_loser(
+    def test_postgresql_concurrent_admission_serializes_same_device(
         self, db_session, dispatch_fixture,
     ):
-        """B4 终局竞态:两个 PlanRun 同设备、双事务同时通过 complete 阶段复查,
-        竞争 INSERT。败者撞 uq_job_active_per_device,必须:回滚本次全部物化、
-        落结构化 FAILED(reason=device_conflict_at_materialization),不得抛出
-        未处理 IntegrityError(否则 SAQ 重试死循环、PlanRun 悬挂)。
+        """两个 admission 争用同一设备时，一方运行，另一方完整回队。
+
+        Host/Device 行锁让第二个事务在第一方提交后重新复查，因此不会靠
+        唯一索引异常决定胜负，也不会留下部分物化。
         """
         from backend.models.job import JobInstance
         from backend.models.plan_run import PlanRun
@@ -425,24 +433,33 @@ class TestPrepareAndCompleteIntegration:
                 run_type="MANUAL",
             )
             runs.append(pr.id)
-        # 注:第二个 prepare 能通过是因为第一个 run 尚未物化 Job(gate 异步),
-        # 这正是 B4 的真实生产序列。
+
+        attempts = dict(claim_queued_plan_runs(db_session, batch=2))
+        assert set(attempts) == set(runs)
 
         barrier = threading.Barrier(2)
         errors: list[Exception] = []
 
-        def materialize(run_id: int):
+        def admit(run_id: int):
             db = SessionLocal()
             try:
                 barrier.wait(timeout=5)
-                complete_plan_run_dispatch(run_id, db=db)
+                admission_transaction(db, run_id, attempts[run_id])
+            except _RetryableAdmission as exc:
+                requeue_plan_run(
+                    db,
+                    run_id,
+                    attempts[run_id],
+                    queue_reason=exc.queue_reason,
+                    blockers=exc.blockers,
+                )
             except Exception as exc:
                 errors.append(exc)
             finally:
                 db.close()
 
         threads = [
-            threading.Thread(target=materialize, args=(rid,)) for rid in runs
+            threading.Thread(target=admit, args=(rid,)) for rid in runs
         ]
         for t in threads:
             t.start()
@@ -450,7 +467,6 @@ class TestPrepareAndCompleteIntegration:
             t.join(timeout=15)
 
         assert all(not t.is_alive() for t in threads)
-        # 关键断言 1:IntegrityError 不允许逃逸
         assert errors == [], f"unhandled exceptions escaped: {errors}"
 
         db_session.expire_all()
@@ -459,25 +475,15 @@ class TestPrepareAndCompleteIntegration:
             pr = db_session.get(PlanRun, rid)
             statuses[rid] = pr.status
 
-        # 关键断言 2:恰好一胜一败。
-        # 败者两种合法路径:复查看见胜者已提交的 PENDING → devices_unavailable;
-        # 或双双通过复查后 INSERT 撞索引 → device_conflict_at_materialization。
         winner_ids = [rid for rid, s in statuses.items() if s == "RUNNING"]
-        loser_ids = [rid for rid, s in statuses.items() if s == "FAILED"]
+        loser_ids = [rid for rid, s in statuses.items() if s == "QUEUED"]
         assert len(winner_ids) == 1, f"expected one winner, got {statuses}"
         assert len(loser_ids) == 1, f"expected one loser, got {statuses}"
 
         loser = db_session.get(PlanRun, loser_ids[0])
-        assert loser.result_summary["dispatch_failed"] is True
-        # 败者两种合法收敛,summary 形态不同:
-        #   - INSERT 撞索引 → {"reason": "device_conflict_at_materialization"}
-        #   - 复查看见胜者已提交的 PENDING → {"unavailable_devices": [...]}(无 reason 键)
-        assert (
-            loser.result_summary.get("reason") == "device_conflict_at_materialization"
-            or "unavailable_devices" in loser.result_summary
-        ), f"unexpected loser summary: {loser.result_summary}"
+        assert loser.queue_reason == "DEVICE_BUSY"
+        assert loser.run_context["queue_blockers"][0]["reason"] == "active_job"
 
-        # 关键断言 3:胜者恰好 1 个 Job;败者 0 个(物化整体回滚,无残留)。
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == winner_ids[0]
         ).count() == 1
@@ -485,78 +491,10 @@ class TestPrepareAndCompleteIntegration:
             JobInstance.plan_run_id == loser_ids[0]
         ).count() == 0
 
-    def test_materialization_integrity_error_settles_structured_failed(
+    def test_admission_integrity_error_requeues_without_partial_jobs(
         self, db_session, dispatch_fixture,
     ):
-        """确定性覆盖 IntegrityError 分支(并发测试里该分支依赖时序):
-        绕过复查直接撞 uq_job_active_per_device,断言 handler 全行为——
-        回滚、FAILED、result_summary、审计,且不抛出。
-        """
-        from backend.core.audit import AuditLog
-        from backend.models.job import JobInstance
-        from backend.models.plan_run import PlanRun
-        from sqlalchemy import select
-
-        dev = dispatch_fixture["device"]
-
-        # 胜者:已物化的 PENDING job 占住唯一索引
-        winner = prepare_plan_run(
-            plan_id=dispatch_fixture["plan"].id,
-            device_ids=[dev.id],
-            triggered_by="pytest",
-            db=db_session,
-            run_type="MANUAL",
-        )
-        complete_plan_run_dispatch(winner.id, db=db_session)
-        assert db_session.query(JobInstance).filter(
-            JobInstance.plan_run_id == winner.id
-        ).count() == 1
-
-        # 败者:prepare 会被 active_job 校验拦住,所以直接手工造 PlanRun,
-        # 再 patch 掉复查,强制走到 INSERT 撞索引 —— 模拟"双双通过复查"时序。
-        loser = PlanRun(
-            plan_id=dispatch_fixture["plan"].id,
-            status="RUNNING",
-            failure_threshold=0.1,
-            plan_snapshot=winner.plan_snapshot,
-            run_type="MANUAL",
-            run_context={"dispatch_device_ids": [dev.id]},
-            triggered_by="pytest",
-        )
-        db_session.add(loser)
-        db_session.commit()
-
-        with patch(
-            "backend.services.plan_dispatcher_sync._validate_dispatch_devices_sync",
-            lambda _db, _ids: None,
-        ):
-            # 不得抛出 IntegrityError
-            complete_plan_run_dispatch(loser.id, db=db_session)
-
-        db_session.expire_all()
-        loser = db_session.get(PlanRun, loser.id)
-        assert loser.status == "FAILED"
-        assert loser.result_summary["dispatch_failed"] is True
-        assert loser.result_summary["reason"] == "device_conflict_at_materialization"
-        # 败者零残留
-        assert db_session.query(JobInstance).filter(
-            JobInstance.plan_run_id == loser.id
-        ).count() == 0
-        # 胜者不受影响
-        assert db_session.query(JobInstance).filter(
-            JobInstance.plan_run_id == winner.id
-        ).count() == 1
-        # 审计行
-        audit = db_session.execute(
-            select(AuditLog)
-            .where(AuditLog.action == "plan_dispatch_failed")
-            .where(AuditLog.resource_id == str(loser.id))
-        ).scalars().first()
-        assert audit is not None
-        assert audit.details["reason"] == "device_conflict_at_materialization"
-
-    def test_complete_succeeds_for_clean_device(self, db_session, dispatch_fixture):
-        """Happy path 回归:无变动时 complete 正常创建 Job。"""
+        """唯一索引最后防线命中时必须回队，且不留下部分 Job。"""
         from backend.models.job import JobInstance
 
         dev = dispatch_fixture["device"]
@@ -567,7 +505,45 @@ class TestPrepareAndCompleteIntegration:
             db=db_session,
             run_type="MANUAL",
         )
-        complete_plan_run_dispatch(pr.id, db=db_session)
+        attempt = claim_queued_plan_runs(db_session)[0][1]
+
+        with patch(
+            "backend.services.admission_pump.materialize_jobs_and_allocations",
+            side_effect=IntegrityError(
+                "INSERT INTO job_instance",
+                {},
+                Exception("duplicate key violates uq_job_active_per_device"),
+            ),
+        ):
+            with pytest.raises(_RetryableAdmission) as exc:
+                admission_transaction(db_session, pr.id, attempt)
+        assert exc.value.queue_reason == "DEVICE_BUSY"
+        assert exc.value.blockers == [{"reason": "device_claimed_concurrently"}]
+        assert requeue_plan_run(
+            db_session,
+            pr.id,
+            attempt,
+            queue_reason=exc.value.queue_reason,
+            blockers=exc.value.blockers,
+        ) is True
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0
+
+    def test_admission_succeeds_for_clean_device(self, db_session, dispatch_fixture):
+        """Happy path: admission 原子切到 RUNNING 并创建 Job。"""
+        from backend.models.job import JobInstance
+
+        dev = dispatch_fixture["device"]
+        pr = prepare_plan_run(
+            plan_id=dispatch_fixture["plan"].id,
+            device_ids=[dev.id],
+            triggered_by="pytest",
+            db=db_session,
+            run_type="MANUAL",
+        )
+        attempt = claim_queued_plan_runs(db_session)[0][1]
+        assert admission_transaction(db_session, pr.id, attempt) is True
         db_session.refresh(pr)
 
         jobs = db_session.query(JobInstance).filter(
@@ -695,12 +671,11 @@ class TestPrepareAndCompleteIntegration:
         assert len(jobs) <= 1
         assert all(job.status == JobStatus.ABORTED.value for job in jobs)
 
-    def test_complete_fails_when_device_loses_host_at_complete(
+    def test_admission_fails_when_device_loses_host_after_prepare(
         self, db_session, dispatch_fixture, monkeypatch,
     ):
-        """Race: device host_id cleared after prepare → complete must FAILED, not warn-only."""
+        """设备从快照 host 脱离属于不可重试配置错误。"""
         from backend.models.job import JobInstance
-        from unittest.mock import patch
 
         dev = dispatch_fixture["device"]
         pr = prepare_plan_run(
@@ -710,30 +685,35 @@ class TestPrepareAndCompleteIntegration:
             db=db_session,
             run_type="MANUAL",
         )
-        # Simulate TOCTOU race: validate passed at prepare, host_id cleared before host map read.
+        attempt = claim_queued_plan_runs(db_session)[0][1]
         dev.host_id = None
         db_session.commit()
-        with patch(
-            "backend.services.plan_dispatcher_sync._validate_dispatch_devices_sync",
-            lambda _db, _ids: None,
-        ):
-            complete_plan_run_dispatch(pr.id, db=db_session)
+
+        with pytest.raises(_FatalAdmission) as exc:
+            admission_transaction(db_session, pr.id, attempt)
+        assert exc.value.reason == "devices_unavailable_at_admission"
+        assert fail_plan_run_admission(
+            db_session,
+            pr.id,
+            attempt,
+            reason=exc.value.reason,
+            detail=exc.value.detail,
+        ) is True
         db_session.refresh(pr)
 
         assert pr.status == "FAILED"
         assert pr.result_summary["dispatch_failed"] is True
-        assert pr.result_summary["reason"] == "devices_without_host"
-        assert dev.id in pr.result_summary["orphan_device_ids"]
+        assert pr.result_summary["reason"] == "devices_unavailable_at_admission"
+        assert pr.result_summary["unavailable_devices"][0]["reason"] == "no_host"
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id
         ).count() == 0
 
-    def test_complete_fails_when_wifi_pool_unavailable(
+    def test_admission_requeues_when_wifi_pool_unavailable(
         self, db_session, dispatch_fixture
     ):
-        """connect_wifi plan must fail dispatch when no WiFi pool exists."""
+        """WiFi 容量不足是可恢复资源竞争，PlanRun 应回队。"""
         from backend.models.job import JobInstance
-        from backend.models.plan_run import PlanRun
 
         wifi_script = Script(
             name="connect_wifi",
@@ -766,12 +746,21 @@ class TestPrepareAndCompleteIntegration:
             db=db_session,
             run_type="MANUAL",
         )
-        complete_plan_run_dispatch(pr.id, db=db_session)
+        attempt = claim_queued_plan_runs(db_session)[0][1]
+        with pytest.raises(_RetryableAdmission) as exc:
+            admission_transaction(db_session, pr.id, attempt)
+        assert exc.value.queue_reason == "RESOURCE_BUSY"
+        assert requeue_plan_run(
+            db_session,
+            pr.id,
+            attempt,
+            queue_reason=exc.value.queue_reason,
+            blockers=exc.value.blockers,
+        ) is True
         db_session.refresh(pr)
 
-        assert pr.status == "FAILED"
-        assert pr.result_summary["dispatch_failed"] is True
-        assert pr.result_summary["reason"] == "wifi_allocation_failed"
+        assert pr.status == "QUEUED"
+        assert pr.queue_reason == "RESOURCE_BUSY"
         assert db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id
         ).count() == 0
@@ -901,7 +890,7 @@ class TestPlanDispatchErrorUnavailableDevices:
 
 
 class TestRunPlanEndpointStructured400:
-    def test_run_plan_returns_400_with_unavailable_devices_detail(
+    def test_run_plan_queues_offline_device_with_blocker_detail(
         self, client, auth_headers, db_session, dispatch_fixture
     ):
         dev = dispatch_fixture["device"]
@@ -913,12 +902,11 @@ class TestRunPlanEndpointStructured400:
             json={"device_ids": [dev.id]},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
-        detail = resp.json()["detail"]
-        assert isinstance(detail, dict)
-        assert detail["code"] == "DEVICES_UNAVAILABLE"
-        assert detail["unavailable_devices"][0]["id"] == dev.id
-        assert detail["unavailable_devices"][0]["reason"] == "device_offline"
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["status"] == "QUEUED"
+        assert data["run_context"]["queue_blockers"][0]["id"] == dev.id
+        assert data["run_context"]["queue_blockers"][0]["reason"] == "device_offline"
 
     def test_run_plan_returns_400_for_unknown_device(
         self, client, auth_headers, db_session, dispatch_fixture
@@ -933,7 +921,7 @@ class TestRunPlanEndpointStructured400:
         assert detail["code"] == "DEVICES_UNAVAILABLE"
         assert detail["unavailable_devices"][0]["reason"] == "not_found"
 
-    def test_run_plan_returns_400_with_active_lease(
+    def test_run_plan_queues_active_lease_with_blocker_detail(
         self, client, auth_headers, db_session, dispatch_fixture
     ):
         dev = dispatch_fixture["device"]
@@ -944,10 +932,10 @@ class TestRunPlanEndpointStructured400:
             json={"device_ids": [dev.id]},
             headers=auth_headers,
         )
-        assert resp.status_code == 400
-        detail = resp.json()["detail"]
-        assert detail["code"] == "DEVICES_UNAVAILABLE"
-        assert detail["unavailable_devices"][0]["reason"] == "active_lease"
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["status"] == "QUEUED"
+        assert data["run_context"]["queue_blockers"][0]["reason"] == "active_lease"
 
     def test_preview_does_not_reject_offline_device(
         self, client, auth_headers, db_session, dispatch_fixture

@@ -47,7 +47,7 @@ def failed_precheck_run(db_session, sample_plan):
     return pr
 
 
-def test_retry_dispatch_re_enqueues_gate(
+def test_retry_dispatch_returns_run_to_admission_queue(
     client, auth_headers, db_session, failed_precheck_run, sample_device,
 ):
     """Failed precheck PlanRun can be reset and re-enqueued."""
@@ -56,15 +56,9 @@ def test_retry_dispatch_re_enqueues_gate(
     flag_modified(failed_precheck_run, "run_context")
     db_session.commit()
 
-    enqueue_calls = []
-
     with patch(
         "backend.tasks.saq_worker.enqueue_sync",
-        side_effect=lambda *args, **kwargs: enqueue_calls.append(kwargs),
-    ), patch(
-        "backend.services.precheck.state.initialise_precheck_state",
-        return_value={"phase": "verifying", "hosts": {}, "errors": []},
-    ):
+    ) as legacy_enqueue:
         resp = client.post(
             f"/api/v1/plan-runs/{run_id}/retry-dispatch",
             headers=auth_headers,
@@ -73,13 +67,11 @@ def test_retry_dispatch_re_enqueues_gate(
     assert resp.status_code == 200
     body = resp.json()["data"]
     assert body["plan_run_id"] == run_id
-    assert body["status"] == "RUNNING"
-    assert len(enqueue_calls) == 1
-    assert enqueue_calls[0]["key"] == f"precheck:{run_id}"
-    assert enqueue_calls[0]["retries"] == 1
+    assert body["status"] == "QUEUED"
+    legacy_enqueue.assert_not_called()
 
     db_session.refresh(failed_precheck_run)
-    assert failed_precheck_run.status == "RUNNING"
+    assert failed_precheck_run.status == "QUEUED"
     assert failed_precheck_run.result_summary is None
 
 
@@ -96,17 +88,10 @@ def test_retry_dispatch_refreshes_watcher_admin_snapshot_for_new_dispatch(
     sample_host.watcher_admin_active = False
     db_session.commit()
 
-    with patch(
-        "backend.tasks.saq_worker.enqueue_sync",
-        return_value=None,
-    ), patch(
-        "backend.services.precheck.state.initialise_precheck_state",
-        return_value={"phase": "verifying", "hosts": {}, "errors": []},
-    ):
-        resp = client.post(
-            f"/api/v1/plan-runs/{failed_precheck_run.id}/retry-dispatch",
-            headers=auth_headers,
-        )
+    resp = client.post(
+        f"/api/v1/plan-runs/{failed_precheck_run.id}/retry-dispatch",
+        headers=auth_headers,
+    )
 
     assert resp.status_code == 200
     db_session.refresh(failed_precheck_run)

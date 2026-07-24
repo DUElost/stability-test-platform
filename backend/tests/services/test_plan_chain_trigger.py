@@ -61,7 +61,7 @@ def _seed_successful_parent_run(db_session, sample_device, sample_host):
 
 
 class TestPlanChainTriggerRollback:
-    def test_child_row_and_parent_flag_commit_before_gate_enqueue(
+    def test_child_row_and_parent_flag_commit_before_admission(
         self, db_session, sample_device, sample_host, sample_script,
     ):
         parent = _seed_successful_parent_run(
@@ -84,10 +84,7 @@ class TestPlanChainTriggerRollback:
         )
         db_session.commit()
 
-        with patch(
-            "backend.services.plan_chain_trigger.enqueue_sync",
-        ) as enqueue:
-            child = trigger_next_plan_sync(parent, db_session)
+        child = trigger_next_plan_sync(parent, db_session)
 
         assert child is not None
         db_session.expire_all()
@@ -95,16 +92,15 @@ class TestPlanChainTriggerRollback:
         stored_child = db_session.get(PlanRun, child.id)
         assert stored_parent.next_plan_triggered is True
         assert stored_child.parent_plan_run_id == parent.id
-        assert stored_child.run_context["dispatch_state"]["enqueue_key"] == (
-            f"precheck:{stored_child.id}"
-        )
+        assert stored_child.status == "QUEUED"
+        assert stored_child.run_context["dispatch_state"]["status"] == "queued"
+        assert stored_child.run_context["dispatch_state"]["enqueue_key"] is None
         assert (
             db_session.query(JobInstance)
             .filter(JobInstance.plan_run_id == stored_child.id)
             .count()
             == 0
         )
-        enqueue.assert_called_once()
 
     def test_dispatch_failure_rolls_back_next_plan_triggered(
         self, db_session, sample_device, sample_host,
@@ -421,11 +417,9 @@ class TestPlanChainLegacySnapshotFallback:
         db_session.commit()
         db_session.refresh(pr)
 
-        with patch(
-            "backend.services.plan_chain_trigger.enqueue_sync",
-        ):
-            child = trigger_next_plan_sync(pr, db_session)
+        child = trigger_next_plan_sync(pr, db_session)
 
         assert child is not None
         assert child.plan_id == child_plan.id
         assert child.parent_plan_run_id == pr.id
+        assert child.status == "QUEUED"

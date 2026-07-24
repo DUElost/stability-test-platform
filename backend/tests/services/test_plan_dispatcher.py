@@ -16,6 +16,10 @@ from backend.services.plan_dispatcher_sync import (
     dispatch_plan_sync,
     preview_plan_dispatch_sync,
 )
+from backend.services.admission_pump import (
+    admission_transaction,
+    claim_queued_plan_runs,
+)
 
 
 # ── Pure-unit tests ─────────────────────────────────────────────────────
@@ -156,23 +160,21 @@ def _mock_gate_rpc(host_id: str, expected_sha: str = "abc"):
 
 
 class TestDispatchPlan:
-    def test_dispatch_creates_plan_run_and_jobs(self, db_session, _plan_fixture):
+    def test_dispatch_queues_then_admission_creates_jobs(
+        self, db_session, _plan_fixture,
+    ):
         plan, device, host = _plan_fixture
 
-        with patch(
-            "backend.services.precheck.verify.call_agent_rpc",
-            side_effect=_mock_gate_rpc("h-disp"),
-        ):
-            pr = dispatch_plan_sync(
-                plan_id=plan.id,
-                device_ids=[device.id],
-                triggered_by="test",
-                db=db_session,
-            )
+        pr = dispatch_plan_sync(
+            plan_id=plan.id,
+            device_ids=[device.id],
+            triggered_by="test",
+            db=db_session,
+        )
 
         assert pr.id is not None
         assert pr.plan_id == plan.id
-        assert pr.status == "RUNNING"
+        assert pr.status == "QUEUED"
         assert pr.run_type == "MANUAL"
         assert pr.failure_threshold == plan.failure_threshold
         assert pr.plan_snapshot["plan"]["id"] == plan.id
@@ -184,10 +186,21 @@ class TestDispatchPlan:
         ]
         assert pr.plan_snapshot["steps"][0]["default_params"] == {"timeout": 30}
         assert "lifecycle" not in pr.plan_snapshot
-        assert pr.run_context["precheck"]["phase"] == "ready"
-        assert pr.run_context["dispatch_state"]["status"] == "completed"
+        assert pr.run_context["dispatch_state"]["status"] == "queued"
 
         from backend.models.job import JobInstance
+        assert db_session.query(JobInstance).filter(
+            JobInstance.plan_run_id == pr.id
+        ).count() == 0
+
+        claimed = claim_queued_plan_runs(db_session)
+        assert len(claimed) == 1
+        assert claimed[0][0] == pr.id
+        assert admission_transaction(db_session, pr.id, claimed[0][1]) is True
+
+        db_session.refresh(pr)
+        assert pr.status == "RUNNING"
+        assert pr.run_context["dispatch_state"]["status"] == "completed"
         jobs = db_session.query(JobInstance).filter(
             JobInstance.plan_run_id == pr.id
         ).all()

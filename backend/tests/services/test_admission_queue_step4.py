@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 import backend.core.admission_queue as admission_queue
 from backend.models.device_lease import DeviceLease
@@ -54,8 +55,14 @@ def _v2_enabled(monkeypatch):
 @pytest.fixture
 def step4_fixture(db_session):
     plan = Plan(name="aq-step4")
-    h1 = Host(id="aq4-h1", hostname="aq4-h1", status=HostStatus.ONLINE.value)
-    h2 = Host(id="aq4-h2", hostname="aq4-h2", status=HostStatus.ONLINE.value)
+    h1 = Host(
+        id="aq4-h1", hostname="aq4-h1", status=HostStatus.ONLINE.value,
+        extra={"operations": {"max": 5}},
+    )
+    h2 = Host(
+        id="aq4-h2", hostname="aq4-h2", status=HostStatus.ONLINE.value,
+        extra={"operations": {"max": 7}},
+    )
     script = Script(
         name="check_device", script_type="python", version="1.0.0",
         nfs_path="/s/check_device.py", content_sha256="abc",
@@ -189,6 +196,7 @@ class TestAdmissionTransaction:
             ("ADMITTED", 2), ("ADMITTED", 1),
         ]
         assert all(h.admitted_at is not None for h in hosts)
+        assert [h.admission_batch_size_snapshot for h in hosts] == [5, 7]
 
     def test_busy_device_requeues_whole_run(self, db_session, step4_fixture):
         """All-or-nothing: ONE busy device on h2 requeues the run — h1's two
@@ -262,40 +270,23 @@ class TestAdmissionTransaction:
             JobInstance.plan_run_id == pr.id).count() == 0
 
     def test_unique_index_race_requeues(self, db_session, step4_fixture):
-        """Concurrent legacy materialization between re-verify and INSERT →
-        uq_job_active_per_device IntegrityError → requeue, never FAILED."""
+        """Defensive unique-index failure still requeues instead of FAILED.
+
+        Device FOR UPDATE now serializes real concurrent materialization before
+        INSERT. Inject the database error directly to retain coverage for the
+        final unique-index safety net without deadlocking on the Device FK.
+        """
         f = step4_fixture
         pr = _queued_run(db_session, f, [f["d1"].id])
         attempt = self._claim(db_session, pr)
 
-        # Competitor PlanRun committed up-front (visible to the race session).
-        other = PlanRun(
-            plan_id=f["plan"].id, status="RUNNING", failure_threshold=0.05,
-            plan_snapshot={}, run_type="MANUAL",
-        )
-        db_session.add(other)
-        db_session.commit()
-        other_id, plan_id, dev_id = other.id, f["plan"].id, f["d1"].id
-
-        def classify_then_inject(db, device_ids):
-            from backend.services.plan_dispatcher_sync import (
-                _classify_dispatch_devices_sync as impl,
-            )
-            result = impl(db, device_ids)
-            # competitor claims the device AFTER our re-verify, BEFORE our INSERT
-            from backend.core.database import SessionLocal
-            with SessionLocal() as race_db:
-                race_db.add(JobInstance(
-                    plan_run_id=other_id, plan_id=plan_id, device_id=dev_id,
-                    host_id="aq4-h1", status=JobStatus.PENDING.value,
-                    pipeline_def={"lifecycle": {"init": [], "teardown": []}},
-                ))
-                race_db.commit()
-            return result
-
         with patch(
-            "backend.services.admission_pump._classify_dispatch_devices_sync",
-            side_effect=classify_then_inject,
+            "backend.services.admission_pump.materialize_jobs_and_allocations",
+            side_effect=IntegrityError(
+                "INSERT INTO job_instance",
+                {},
+                Exception("duplicate key violates uq_job_active_per_device"),
+            ),
         ):
             with pytest.raises(_RetryableAdmission) as exc:
                 admission_transaction(db_session, pr.id, attempt)
@@ -487,7 +478,7 @@ class TestPumpTick:
         f = step4_fixture
         pr = _queued_run(db_session, f, [f["d1"].id])  # created while flag on
 
-        monkeypatch.delenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", raising=False)
+        monkeypatch.setenv("STP_PLAN_ADMISSION_QUEUE_ENABLED", "0")
 
         with patch(
             "backend.tasks.saq_worker.enqueue_sync", return_value=True,

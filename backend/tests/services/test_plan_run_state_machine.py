@@ -40,10 +40,10 @@ def test_running_cannot_transition_to_degraded():
     assert run.status == PlanRunStatus.RUNNING.value
 
 
-def test_failed_can_retry_back_to_running():
+def test_failed_can_retry_back_to_queued():
     run = _run(PlanRunStatus.FAILED)
-    PlanRunStateMachine.transition(run, PlanRunStatus.RUNNING, reason="dispatch_retry")
-    assert run.status == PlanRunStatus.RUNNING.value
+    PlanRunStateMachine.transition(run, PlanRunStatus.QUEUED, reason="dispatch_retry")
+    assert run.status == PlanRunStatus.QUEUED.value
 
 
 @pytest.mark.parametrize(
