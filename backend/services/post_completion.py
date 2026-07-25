@@ -66,6 +66,24 @@ def run_post_completion(job_id: int, db: Session) -> bool:
         job.post_processed_at = datetime.now(timezone.utc)
         db.commit()
         logger.info("post_completion: job %d report persisted", job_id)
+
+        # RISK_HIGH only when AEE/ANR aggregation reaches S (once per PlanRun).
+        try:
+            from backend.services.plan_run_aggregation import maybe_notify_risk_high
+
+            risk_summary = report_dict.get("risk_summary")
+            if not isinstance(risk_summary, dict) and hasattr(report, "risk_summary"):
+                risk_summary = report.risk_summary
+            maybe_notify_risk_high(
+                db,
+                plan_run_id=job.plan_run_id,
+                risk_summary=risk_summary if isinstance(risk_summary, dict) else None,
+            )
+        except Exception:
+            logger.exception(
+                "post_completion: risk_high notification failed for job %d", job_id,
+            )
+
         return True
 
     except Exception:

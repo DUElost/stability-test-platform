@@ -376,3 +376,198 @@ def test_aggregation_run_context_none_treated_as_no_abort():
 
         assert run.status == PlanRunStatus.SUCCESS.value, f"ctx={ctx!r}"
         assert run.result_summary["abort_requested"] is False, f"ctx={ctx!r}"
+
+
+# ── PlanRun-level terminal notifications ─────────────────────────────────────
+
+
+def test_finalize_notifies_run_completed_on_success():
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=301,
+        plan_id=9,
+        status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.5,
+        ended_at=None,
+        result_summary=None,
+    )
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.COMPLETED)]
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify:
+        assert apply_plan_run_aggregation(run, jobs) is True
+
+    notify.assert_called_once()
+    event_type, context = notify.call_args[0]
+    assert event_type == "RUN_COMPLETED"
+    assert context["run_id"] == 301
+    assert context["plan_id"] == 9
+    assert context["task_type"] == "plan"
+    assert "2/2 completed" in context["error_message"]
+
+
+def test_finalize_notifies_run_failed_on_threshold_breach():
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=302,
+        plan_id=9,
+        status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.0,
+        ended_at=None,
+        result_summary=None,
+    )
+    jobs = [_job(JobStatus.COMPLETED), _job(JobStatus.FAILED)]
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify:
+        assert apply_plan_run_aggregation(run, jobs) is True
+
+    event_type, context = notify.call_args[0]
+    assert event_type == "RUN_FAILED"
+    assert run.status == PlanRunStatus.FAILED.value
+    assert context["run_id"] == 302
+
+
+def test_finalize_notifies_run_completed_on_partial_success():
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=303,
+        plan_id=9,
+        status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.5,
+        ended_at=None,
+        result_summary=None,
+    )
+    jobs = [
+        _job(JobStatus.COMPLETED),
+        _job(JobStatus.FAILED),
+        _job(JobStatus.COMPLETED),
+    ]
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify:
+        assert apply_plan_run_aggregation(run, jobs) is True
+
+    event_type, context = notify.call_args[0]
+    assert event_type == "RUN_COMPLETED"
+    assert run.status == PlanRunStatus.PARTIAL_SUCCESS.value
+    assert context["run_id"] == 303
+
+
+def test_empty_job_set_notifies_run_failed():
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=304,
+        plan_id=9,
+        status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.5,
+        ended_at=None,
+        result_summary=None,
+    )
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify:
+        assert apply_plan_run_aggregation(run, []) is True
+
+    event_type, context = notify.call_args[0]
+    assert event_type == "RUN_FAILED"
+    assert run.status == PlanRunStatus.FAILED.value
+    assert "no jobs" in context["error_message"]
+
+
+def test_terminal_notification_failure_does_not_block_aggregation():
+    from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+
+    run = SimpleNamespace(
+        id=305,
+        plan_id=9,
+        status=PlanRunStatus.RUNNING.value,
+        failure_threshold=0.5,
+        ended_at=None,
+        result_summary=None,
+    )
+    jobs = [_job(JobStatus.COMPLETED)]
+
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+        side_effect=RuntimeError("notify boom"),
+    ):
+        assert apply_plan_run_aggregation(run, jobs) is True
+
+    assert run.status == PlanRunStatus.SUCCESS.value
+
+
+def test_notify_plan_run_terminal_public_helper_maps_status_string():
+    from backend.services.plan_run_aggregation import notify_plan_run_terminal
+
+    run = SimpleNamespace(id=401, plan_id=7)
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify:
+        notify_plan_run_terminal(
+            run,
+            new_status="FAILED",
+            error_message="admission_failed: device_host_drift",
+        )
+
+    event_type, context = notify.call_args[0]
+    assert event_type == "RUN_FAILED"
+    assert context["run_id"] == 401
+    assert context["plan_id"] == 7
+    assert "admission_failed" in context["error_message"]
+
+
+def test_maybe_notify_risk_high_skips_non_s_levels():
+    from backend.services.plan_run_aggregation import maybe_notify_risk_high
+
+    db = MagicMock()
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify:
+        assert maybe_notify_risk_high(
+            db, plan_run_id=10, risk_summary={"risk_level": "A"},
+        ) is False
+        assert maybe_notify_risk_high(
+            db, plan_run_id=10, risk_summary={"risk_level": "B"},
+        ) is False
+        assert maybe_notify_risk_high(db, plan_run_id=None, risk_summary={"risk_level": "S"}) is False
+        assert maybe_notify_risk_high(db, plan_run_id=10, risk_summary=None) is False
+    notify.assert_not_called()
+    db.execute.assert_not_called()
+
+
+def test_maybe_notify_risk_high_emits_once_for_level_s():
+    from backend.services.plan_run_aggregation import maybe_notify_risk_high
+
+    pr = SimpleNamespace(id=77, plan_id=3, run_context={})
+    db = MagicMock()
+    db.execute.return_value.scalar_one_or_none.return_value = pr
+
+    risk = {
+        "risk_level": "S",
+        "counts": {"by_type": {"SWT": 1, "ANR": 2}, "by_severity": {"S": 1}},
+    }
+    with patch(
+        "backend.services.notification_service.dispatch_notification_async",
+    ) as notify:
+        assert maybe_notify_risk_high(db, plan_run_id=77, risk_summary=risk) is True
+        # second call should no-op after marker written
+        assert maybe_notify_risk_high(db, plan_run_id=77, risk_summary=risk) is False
+
+    notify.assert_called_once()
+    event_type, context = notify.call_args[0]
+    assert event_type == "RISK_HIGH"
+    assert context["run_id"] == 77
+    assert context["plan_id"] == 3
+    assert context["risk_level"] == "S"
+    assert "risk_level=S" in context["risk_summary"]
+    assert pr.run_context["risk_high_notified"]["risk_level"] == "S"
+    db.commit.assert_called()

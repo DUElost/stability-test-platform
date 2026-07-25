@@ -379,6 +379,12 @@ def fail_plan_run_admission(
     )
     db.commit()
     logger.warning("admission_failed plan_run=%d reason=%s", run_id, reason)
+    from backend.services.plan_run_aggregation import notify_plan_run_terminal
+    notify_plan_run_terminal(
+        pr,
+        new_status=PlanRunStatus.FAILED,
+        error_message=f"admission_failed: {reason}",
+    )
     return True
 
 

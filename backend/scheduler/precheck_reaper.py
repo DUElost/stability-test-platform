@@ -117,6 +117,12 @@ def _fail_plan_run(pr: PlanRun, db: Session, reason: str) -> None:
     )
     db.commit()
     logger.warning("precheck_reaper_failed plan_run=%d reason=%s", pr.id, reason)
+    from backend.services.plan_run_aggregation import notify_plan_run_terminal
+    notify_plan_run_terminal(
+        pr,
+        new_status=PlanRunStatus.FAILED,
+        error_message=f"precheck_reaper: {reason}",
+    )
 
 
 def _patch_dispatch_state(pr: PlanRun, db: Session, **patch: Any) -> None:
@@ -345,6 +351,12 @@ def reconcile_stale_precheck_v2(db: Session | None = None) -> dict[str, int]:
                 summary["failed"] += 1
                 logger.warning(
                     "admission_reaper_failed plan_run=%d attempts=%d", pr.id, attempts,
+                )
+                from backend.services.plan_run_aggregation import notify_plan_run_terminal
+                notify_plan_run_terminal(
+                    pr,
+                    new_status=PlanRunStatus.FAILED,
+                    error_message="precheck_reaper: admission_requeue_exhausted",
                 )
                 continue
 

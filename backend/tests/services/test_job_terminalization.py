@@ -32,16 +32,20 @@ def _run(**kwargs):
 
 def test_aggregation_from_counters_success():
     run = _run(
+        id=1,
+        plan_id=1,
         total_job_count=3,
         terminal_job_count=3,
         completed_job_count=3,
     )
     with patch("backend.services.plan_run_aggregation.PlanRunStateMachine") as sm, \
-         patch("backend.services.plan_run_aggregation.record_plan_run_terminal"):
+         patch("backend.services.plan_run_aggregation.record_plan_run_terminal"), \
+         patch("backend.services.notification_service.dispatch_notification_async") as notify:
         assert apply_plan_run_aggregation_from_counters(run) is True
         sm.transition.assert_called_once()
         assert run.result_summary["completed"] == 3
         assert run.result_summary["failed_only"] == 0
+        assert notify.call_args[0][0] == "RUN_COMPLETED"
 
 
 def test_aggregation_from_counters_waits_until_all_terminal():
@@ -51,21 +55,25 @@ def test_aggregation_from_counters_waits_until_all_terminal():
 
 def test_aggregation_from_counters_abort_override():
     run = _run(
+        id=2,
+        plan_id=1,
         total_job_count=2,
         terminal_job_count=2,
         completed_job_count=2,
         run_context={"abort_requested": {"reason": "user"}},
     )
     with patch("backend.services.plan_run_aggregation.PlanRunStateMachine") as sm, \
-         patch("backend.services.plan_run_aggregation.record_plan_run_terminal"):
+         patch("backend.services.plan_run_aggregation.record_plan_run_terminal"), \
+         patch("backend.services.notification_service.dispatch_notification_async") as notify:
         assert apply_plan_run_aggregation_from_counters(run) is True
         assert sm.transition.call_args[0][1] == PlanRunStatus.FAILED
+        assert notify.call_args[0][0] == "RUN_FAILED"
 
 
 def test_on_job_terminal_sync_bumps_and_aggregates():
     from backend.services.job_terminalization import on_job_terminal_sync
 
-    run = _run(total_job_count=2, id=10)
+    run = _run(total_job_count=2, id=10, plan_id=1)
     job1 = SimpleNamespace(
         id=1, plan_run_id=10, host_id=None, status=JobStatus.COMPLETED.value,
     )
@@ -86,6 +94,8 @@ def test_on_job_terminal_sync_bumps_and_aggregates():
         side_effect=_transition,
     ), patch(
         "backend.services.plan_run_aggregation.record_plan_run_terminal",
+    ), patch(
+        "backend.services.notification_service.dispatch_notification_async",
     ):
         applied1, _ = on_job_terminal_sync(job1, db, run=run)
         assert applied1 is False

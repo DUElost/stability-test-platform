@@ -45,7 +45,10 @@ from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.job_terminalization import on_job_terminal_sync
-from backend.services.plan_run_aggregation import apply_plan_run_aggregation
+from backend.services.plan_run_aggregation import (
+    apply_plan_run_aggregation,
+    notify_plan_run_terminal,
+)
 from backend.services.dedup_scan import should_trigger_dedup, enqueue_dedup_terminal_sync
 from backend.services.state_machine import PlanRunStateMachine
 
@@ -165,6 +168,11 @@ def abort_plan_run(
             logger.info(
                 "plan_run_abort_admission_queue plan_run=%d phase=%s", plan_run_id, phase,
             )
+            notify_plan_run_terminal(
+                pr,
+                new_status=PlanRunStatus.FAILED,
+                error_message=f"aborted ({reason}): phase={phase}",
+            )
             return {
                 "plan_run_id": plan_run_id,
                 "status": PlanRunStatus.FAILED.value,
@@ -186,6 +194,9 @@ def abort_plan_run(
     abort_jobs_by_host: dict[str, list[int]] = defaultdict(list)
     abort_hosts: set[str] = set()
     released_leases = 0
+    # Aggregation / on_job_terminal already notify; only direct FAILED
+    # transitions in this function should emit once more.
+    direct_failed_notify = False
 
     if not in_precheck:
         all_jobs = (
@@ -249,6 +260,7 @@ def abort_plan_run(
             if all_jobs:
                 # Counters already bumped for inline ABORTs; if the run did not
                 # yet converge (e.g. total_job_count==0 legacy), fall back.
+                # Aggregation notifies when it terminalizes.
                 if pr.status not in _TERMINAL_PLAN_RUN_STATUSES:
                     apply_plan_run_aggregation(pr, all_jobs)
             else:
@@ -259,6 +271,7 @@ def abort_plan_run(
                     "reason": reason,
                     "empty_run": True,
                 }
+                direct_failed_notify = True
     # In-precheck path: no jobs to release; we close the PlanRun directly.
     now_iso = datetime.now(timezone.utc).isoformat()
     if in_precheck:
@@ -274,6 +287,7 @@ def abort_plan_run(
             "reason": reason,
             "aborted": True,
         }
+        direct_failed_notify = True
 
     pr.run_context = run_ctx
     flag_modified(pr, "run_context")
@@ -296,6 +310,15 @@ def abort_plan_run(
         username=audit_username,
     )
     db.commit()
+
+    if direct_failed_notify:
+        notify_plan_run_terminal(
+            pr,
+            new_status=PlanRunStatus.FAILED,
+            error_message=(
+                f"aborted ({reason}): {len(aborted_jobs)} jobs terminated"
+            ),
+        )
 
     # Non-blocking control delivery.  The lease remains ACTIVE until the Agent
     # acknowledges termination, so a lost command cannot make the device
