@@ -26,14 +26,14 @@ def main() -> None:
         )
     except subprocess.TimeoutExpired:
         output_result(False, error_message=f"Device {serial} unreachable: timeout")
-        return
+        sys.exit(1)
     except Exception as exc:
         output_result(False, error_message=f"Device {serial} unreachable: {exc}")
-        return
+        sys.exit(1)
 
     if "test" not in (result.stdout or ""):
         output_result(False, error_message=f"Device {serial} check failed: unexpected output")
-        return
+        sys.exit(1)
 
     if args.get("expect_root"):
         root_check = subprocess.run(
@@ -42,7 +42,7 @@ def main() -> None:
         )
         if (root_check.stdout or "").strip() != "0":
             output_result(False, error_message=f"Device {serial} has no root access")
-            return
+            sys.exit(1)
 
     output_result(True, serial=serial, skipped=False)
 

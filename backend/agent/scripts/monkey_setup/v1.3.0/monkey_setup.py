@@ -268,7 +268,7 @@ def main() -> None:
     unknown = [s for s in step_names if s not in STEPS]
     if unknown:
         output_result(False, error_message=f"Unknown steps: {unknown}")
-        return
+        sys.exit(1)
 
     t0 = time.time()
     results = {}
@@ -299,6 +299,7 @@ def main() -> None:
             steps=results,
             total_duration_s=duration,
         )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

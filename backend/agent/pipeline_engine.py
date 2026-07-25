@@ -751,13 +751,30 @@ class PipelineEngine:
 
                 step_id = step.get("step_id", "unknown")
 
+                detail = (getattr(self, "_last_step_error", "") or "").strip()
+
+                # Prefer a short human-readable snippet from script JSON / stderr.
+                if detail.startswith("{") and '"error_message"' in detail:
+                    try:
+                        parsed = json.loads(detail)
+                        if isinstance(parsed, dict) and parsed.get("error_message"):
+                            detail = str(parsed["error_message"]).strip()
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if len(detail) > 500:
+                    detail = detail[:500] + "…"
+
+                error_message = f"step failed in {phase}: {step_id}"
+                if detail:
+                    error_message = f"{error_message}: {detail}"
+
                 return StepResult(
 
                     success=False,
 
                     exit_code=1,
 
-                    error_message=f"step failed in {phase}: {step_id}",
+                    error_message=error_message,
 
                 )
 
@@ -951,6 +968,7 @@ class PipelineEngine:
         """Execute a step with retry logic. Returns True on success."""
 
         max_retry = step.get("retry", 0)
+        self._last_step_error = ""
 
         for attempt in range(max_retry + 1):
 
@@ -963,7 +981,14 @@ class PipelineEngine:
 
             if result.success:
 
+                self._last_step_error = ""
                 return True
+
+            self._last_step_error = (
+                result.error_message
+                or (result.output or "")[:2000]
+                or ""
+            )
 
             if self._is_lock_lost() or self._canceled:
 
@@ -1414,6 +1439,18 @@ class PipelineEngine:
                 payload = {}
 
 
+
+        # Scripts that print {"success": false} but forget sys.exit(1) must
+        # still fail the step — otherwise init continues past real errors.
+        if isinstance(payload, dict) and payload.get("success") is False:
+            err = payload.get("error_message") or payload.get("error") or "script reported success=false"
+            return StepResult(
+                success=False,
+                exit_code=proc.returncode if proc.returncode != 0 else 1,
+                error_message=str(err)[:2000],
+                output=_truncate_step_output(combined_output),
+                metrics=payload.get("metrics", {}) or {},
+            )
 
         return StepResult(
 

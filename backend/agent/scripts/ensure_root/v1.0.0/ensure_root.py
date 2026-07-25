@@ -50,10 +50,11 @@ def main() -> None:
         except Exception as exc:
             if attempt == max_attempts:
                 output_result(False, error_message=f"adb root failed after {max_attempts} attempts: {exc}")
-                return
+                sys.exit(1)
             time.sleep(2)
 
     output_result(False, error_message=f"Root access not granted after {max_attempts} attempts")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
