@@ -21,6 +21,8 @@ from backend.models.enums import JobStatus
 
 @pytest.mark.asyncio
 async def test_coordinator_heartbeat_persists_valid_plan_run_host_phase():
+    host = MagicMock()
+    host.last_agent_instance_id = "agent-1"
     row = MagicMock()
     row.host_id = "host-1"
     row.plan_run_id = 22
@@ -28,7 +30,7 @@ async def test_coordinator_heartbeat_persists_valid_plan_run_host_phase():
     row.phase = None
 
     db = MagicMock()
-    db.get = AsyncMock(return_value=row)
+    db.get = AsyncMock(side_effect=[host, row])
     db.execute = AsyncMock()
     db.commit = AsyncMock()
 
@@ -50,6 +52,7 @@ async def test_coordinator_heartbeat_persists_valid_plan_run_host_phase():
     )
 
     assert result.data.accepted is True
+    assert result.data.agent_instance_stale is False
     assert row.phase == "PATROL"
     assert row.coordinator_heartbeat_at is not None
     db.commit.assert_awaited_once()

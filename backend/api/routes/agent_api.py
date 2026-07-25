@@ -1629,6 +1629,8 @@ class _CoordinatorHeartbeatIn(BaseModel):
 class _CoordinatorHeartbeatOut(BaseModel):
     accepted: bool
     stale_plan_run_host_ids: List[int] = []  # epoch was already higher → Agent must reconcile
+    agent_instance_stale: bool = False  # host already bound to a newer agent instance
+    current_coordinator_epochs: Dict[int, int] = {}  # prh_id → control-plane epoch
 
 
 _VALID_COORDINATOR_PHASES = {
@@ -1647,6 +1649,8 @@ async def coordinator_heartbeat(
 ):
     """ADR-0026 Step 5b: per-host Coordinator liveness + per-job state sync.
 
+    - Rejects heartbeats from a superseded ``agent_instance_id`` (host already
+      bound to a newer Agent process) so the old Coordinator self-fences.
     - Bumps coordinator_heartbeat_at for every PlanRunHost in the payload
       where coordinator_epoch >= stored epoch (epoch fencing).
     - Persists execution_state + last_progress_at for every listed job
@@ -1654,10 +1658,40 @@ async def coordinator_heartbeat(
     - Returns which PlanRunHost rows were stale (higher epoch already seen)
       so the Agent can reconcile (terminate that Coordinator instance).
     """
+    from backend.models.host import Host
     from backend.models.plan_run import PlanRunHost as _PRH
 
     now = datetime.now(timezone.utc)
     stale_host_ids: list[int] = []
+    current_epochs: dict[int, int] = {}
+
+    # Agent-instance fencing: a restarted Agent claims a new instance id via
+    # host heartbeat; an old Coordinator process must not rewrite projections.
+    host = await db.get(Host, payload.host_id)
+    if host is not None:
+        stored_instance = (host.last_agent_instance_id or "").strip()
+        reported_instance = (payload.agent_instance_id or "").strip()
+        if stored_instance and reported_instance and stored_instance != reported_instance:
+            for entry in payload.plan_run_hosts:
+                prh_id = entry.get("id")
+                if not prh_id:
+                    continue
+                row = await db.get(_PRH, prh_id)
+                if row is None:
+                    continue
+                stale_host_ids.append(int(prh_id))
+                current_epochs[int(prh_id)] = int(row.coordinator_epoch or 0)
+            logger.warning(
+                "coord_hb_agent_instance_stale host=%s stored=%s reported=%s prh=%s",
+                payload.host_id, stored_instance, reported_instance, stale_host_ids,
+            )
+            return ok(_CoordinatorHeartbeatOut(
+                accepted=False,
+                agent_instance_stale=True,
+                stale_plan_run_host_ids=stale_host_ids,
+                current_coordinator_epochs=current_epochs,
+            ))
+
     for entry in payload.plan_run_hosts:
         prh_id = entry.get("id")
         pr_id = entry.get("plan_run_id")
@@ -1676,9 +1710,11 @@ async def coordinator_heartbeat(
                 prh_id, payload.host_id, row.host_id,
             )
             stale_host_ids.append(prh_id)
+            current_epochs[int(prh_id)] = int(row.coordinator_epoch or 0)
             continue
         if row.coordinator_epoch > reported_epoch:
             stale_host_ids.append(prh_id)
+            current_epochs[int(prh_id)] = int(row.coordinator_epoch or 0)
             continue
         row.coordinator_epoch = max(row.coordinator_epoch, reported_epoch)
         row.coordinator_heartbeat_at = now
@@ -1726,6 +1762,7 @@ async def coordinator_heartbeat(
     return ok(_CoordinatorHeartbeatOut(
         accepted=len(stale_host_ids) == 0,
         stale_plan_run_host_ids=stale_host_ids,
+        current_coordinator_epochs=current_epochs,
     ))
 
 
