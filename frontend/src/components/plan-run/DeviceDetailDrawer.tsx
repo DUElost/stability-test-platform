@@ -162,13 +162,14 @@ export default function DeviceDetailDrawer({
                     device.ui_status === 'failed'
                       ? 'text-destructive font-semibold'
                       : 'text-warning font-semibold',
-                  ] as [string, string, boolean, string]]
+                    true,
+                  ] as KvRow]
                 : []),
               ...(device.grace_remaining_seconds != null
-                ? [['Grace 剩余', `${device.grace_remaining_seconds}s`, false] as [string, string, boolean]]
+                ? [['Grace 剩余', `${device.grace_remaining_seconds}s`, false] as KvRow]
                 : []),
               ...(device.pending_claim_remaining_seconds != null
-                ? [['认领 SLA 剩余', `${device.pending_claim_remaining_seconds}s`, false] as [string, string, boolean]]
+                ? [['认领 SLA 剩余', `${device.pending_claim_remaining_seconds}s`, false] as KvRow]
                 : []),
               ...(device.busy_reason
                 ? [[
@@ -176,10 +177,10 @@ export default function DeviceDetailDrawer({
                     busyReasonLabel(device.busy_reason),
                     false,
                     'text-warning font-semibold',
-                  ] as [string, string, boolean, string]]
+                  ] as KvRow]
                 : []),
               ...(device.busy_lease_job_id != null
-                ? [['占用 Job', `#${device.busy_lease_job_id}`, false] as [string, string, boolean]]
+                ? [['占用 Job', `#${device.busy_lease_job_id}`, false] as KvRow]
                 : []),
               ['巡检周期', `#${device.patrol_cycle_count}`, false],
               ['周期成功 / 失败', `${device.patrol_success_cycle_count} / ${device.patrol_failed_cycle_count}`, false],
@@ -306,20 +307,31 @@ export default function DeviceDetailDrawer({
   );
 }
 
-function KvList({ rows }: { rows: Array<[string, string, boolean, string?]> }) {
+/** [label, value, mono, extraCls?, wrapFull?] — wrapFull disables ellipsis truncation */
+type KvRow = [string, string, boolean, string?, boolean?];
+
+function KvList({ rows }: { rows: KvRow[] }) {
   return (
     <dl className="divide-y rounded-lg border">
-      {rows.map(([k, v, mono, extraCls]) => (
-        <div key={k} className="flex items-center justify-between px-3 py-1.5 text-xs">
-          <dt className={cn(TEXT.subtitle, extraCls || '')}>{k}</dt>
+      {rows.map(([k, v, mono, extraCls, wrapFull]) => (
+        <div
+          key={k}
+          className={cn(
+            'flex justify-between gap-3 px-3 py-1.5 text-xs',
+            wrapFull ? 'items-start' : 'items-center',
+          )}
+        >
+          <dt className={cn('shrink-0', TEXT.subtitle, extraCls || '')}>{k}</dt>
           <dd
+            data-testid={k === '状态原因' ? 'device-drawer-status-reason' : undefined}
             className={cn(
-              'max-w-[60%] text-right truncate',
+              'max-w-[70%] text-right',
+              wrapFull ? 'whitespace-pre-wrap break-words' : 'truncate',
               TEXT.body,
               mono && 'font-mono',
               extraCls || '',
             )}
-            title={v}
+            title={wrapFull ? undefined : v}
           >
             {v}
           </dd>

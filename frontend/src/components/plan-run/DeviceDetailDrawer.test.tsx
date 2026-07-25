@@ -80,6 +80,27 @@ describe('DeviceDetailDrawer — status_reason 展示', () => {
     expect(value.className).toMatch(/font-semibold/);
   });
 
+  it('shows full status_reason without ellipsis truncation', () => {
+    const longReason =
+      'lifecycle init failed: step failed in init: monkey_resource_push — Device 6R0A57SSAE7000320 not reachable';
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          ui_status: 'failed',
+          job_status: 'FAILED',
+          current_stage: 'failed',
+          status_reason: longReason,
+        })}
+        {...handlers}
+      />,
+    );
+    const value = screen.getByTestId('device-drawer-status-reason');
+    expect(value).toHaveTextContent(longReason);
+    expect(value.className).toMatch(/whitespace-pre-wrap/);
+    expect(value.className).toMatch(/break-words/);
+    expect(value.className).not.toMatch(/\btruncate\b/);
+  });
+
   it('renders 状态原因 row in amber when device is in non-failed state (e.g. backoff)', () => {
     const device = makeDevice({
       ui_status: 'backoff',
