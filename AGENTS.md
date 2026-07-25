@@ -165,3 +165,16 @@ Backend: `compileall backend/` → `pytest backend/tests/` (PostgreSQL service).
 - **ADR-0025**: [`docs/adr/ADR-0025-phase4-architecture-alignment.md`](docs/adr/ADR-0025-phase4-architecture-alignment.md) — Plan C architecture.
 - **Pipeline timing**: [`docs/design/06-realtime-and-background.md`](docs/design/06-realtime-and-background.md) §9 — scan/upload/merge sequence + five-trigger table.
 - **Acceptance**: [`docs/acceptance/`](docs/acceptance/) — Sprint 2/3/4 matrices + real-device verification template.
+
+## Production access (for ad-hoc diagnostics)
+
+> 这些是**只读运维凭据源**，用于 SSH/控制面诊断；写操作仍需走 PR 流程。所有路径已 `chmod 0600`/`0700`，泄露风险低。
+
+| 用途 | 凭据源 | 使用 |
+|------|--------|------|
+| SSH 到 20 台 Agent host | `/home/debian13/hosts.ini` (`[android]` 段 IP + `[android:vars]` 的 `ansible_user=android ansible_password=123`) | `ssh android@<ip>`，`sudo -n` 免密可提权到 root。opencode 本机 `~/.ssh/id_ed25519` 已 ssh-copy-id 到 20 台 host，免密 SSH 已通。 |
+| Backend DB（生产 `stp` 库）| `backend/.env` 的 `DATABASE_URL=...@127.0.0.1:5432/stp`；用户名 `stp`、密码 `ndFtVecU_...` | 用 `/home/debian13/stability-test-platform/venv/bin/python`（含 sqlalchemy 2.0）+ `psycopg` 3 直连。**只读 SELECT 优先**，写须有迁移/PR。 |
+| 控制面 admin token | `.env.backend` 的 `STP_ADMIN_USER=stp-admin` / `STP_ADMIN_PASSWORD=...`；并需用 `backend/.env` 的 `AGENT_SECRET` 头 `X-Agent-Secret` 绕 CSRF（前端 cookie session 才认 Origin/Referer） | `curl -H "X-Agent-Secret: <AGENT_SECRET>" -F "username=stp-admin&password=<ADMIN_PASS>" http://127.0.0.1:8000/api/v1/auth/token` → `Authorization: Bearer <token>` 调用任意 `/api/v1/...` 路由。 |
+| Agent `.env` 错配修复历史 | 20 台 host `STP_AEE_LOCAL_ROOT` 曾错配为 `/home/debian13/...`（android 用户无权写 `/home/debian13`）→ AEE Reconciler 100% 启动崩溃。已于 2026-07-25 改为 `/home/android/aee-local` / `/home/android/aee-nfs`，全部重启生效。详见 #72 + `docs/operations/adr-0026-admission-and-scale-gray-rollout.md`。|
+
+**安全约束**：不要把上面任何一个具体密码 / token 直接填到 commit 文件 / log 输出 / PR diff；AGENTS.md 仅文档化「在哪里能找到」，不复制明文。`backend/.env`、`backend/agent/.env`、`/home/debian13/hosts.ini`、`.env.backend`、`opencode.json` 都已在 `.gitignore`。
