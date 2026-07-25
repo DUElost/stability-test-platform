@@ -120,7 +120,21 @@ def process_device_logs(
         folder_name=folder_name,
         serial=serial,
     )
-    base_output_dir.mkdir(parents=True, exist_ok=True)
+    # #78 子任务 3:不可写的 local_root 显式返回 errors 项,而非抛 PermissionError。
+    # 避免 #72 现场(11M 行 PermissionError 日志 + tick 死循环)再次发生。
+    # 上层 reconciler._run() 的 try/except + 连续错误上限会感知本 errors
+    # 并自我关闭(不再每 tick 抛异常累计万条 ERROR)。
+    try:
+        base_output_dir.mkdir(parents=True, exist_ok=True)
+    except (PermissionError, OSError) as exc:
+        result.errors.append(
+            f"local_root_not_writable:{root}:{type(exc).__name__}:{exc}"
+        )
+        logger.warning(
+            "process_device_logs_local_root_not_writable serial=%s job=%d root=%s err=%s",
+            serial, job_id, root, exc,
+        )
+        return result
 
     whitelist = cfg.whitelist or set()
     pending_key_prefix = f"{cfg.state_key_prefix}:{serial}"

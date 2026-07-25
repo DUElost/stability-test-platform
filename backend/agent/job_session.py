@@ -286,7 +286,12 @@ class JobSession:
                 adb_path=self._manager.get_dep("adb_path") or "adb",
                 local_root=local_root,
             )
-            self._reconciler.start()
+            started = self._reconciler.start()
+            if not started:
+                # #78 子任务 2:理论上 start() 总返回 True(preflight 软 hint 不阻塞),
+                # 这里保留极保守分支以备未来将 preflight 改为 hard gate 时使用。
+                self._reconciler = None
+                raise RuntimeError("aee_reconciler_preflight_failed")
             logger.info(
                 "aee_reconciler_active job_id=%d serial=%s host=%s",
                 self._job_id, self._serial, self._host_id,
@@ -300,6 +305,7 @@ class JobSession:
             # C-3: reconciler 启动失败时必须回滚 watcher 的 emit 抑制,否则
             # AEE/VENDOR_AEE 既不由 reconciler emit、又被 watcher 关闭 →
             # 崩溃信号静默丢失。恢复 inotifyd 直接 emit 兜底。
+            # #78 子任务 2:start() 返回 False(preflight 拒绝)同样走这段回滚。
             try:
                 if self._handle is not None and self._handle.impl is not None:
                     self._handle.impl.set_aee_reconciler_active(False)
