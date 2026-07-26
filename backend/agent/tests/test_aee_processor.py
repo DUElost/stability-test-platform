@@ -16,7 +16,11 @@ from backend.agent.aee.db_history import (
     state_key,
 )
 from backend.agent.aee.folder_name import get_aee_log_folder_name
-from backend.agent.aee.processor import ProcessConfig, process_device_logs
+from backend.agent.aee.processor import (
+    ProcessConfig,
+    _iter_pending_tasks_newest_first,
+    process_device_logs,
+)
 from backend.agent.aee.paths import resolve_device_output_dir
 from backend.agent.aee.timestamp import format_timestamp_for_filename, parse_timestamp
 
@@ -794,3 +798,62 @@ def test_process_device_logs_local_root_not_writable_returns_error(monkeypatch):
     assert any(
         name in err_str for name in ("PermissionError", "OSError", "FileNotFoundError")
     )
+
+
+# ---------------------------------------------------------------------------
+# #88: pending 队列排序必须容忍混合时区(aware/naive)
+# ---------------------------------------------------------------------------
+
+
+def _pending(**ts_by_key):
+    return {k: {"timestamp": v} for k, v in ts_by_key.items()}
+
+
+def test_pending_sort_tolerates_mixed_aware_and_naive():
+    """#88 回归:同一 db_history 里 CST 行(aware)与未知时区行(naive)混排。
+
+    直接拿 parse_timestamp 返回值排序会抛
+    `TypeError: can't compare offset-naive and offset-aware datetimes`,
+    冒出 process_device_logs 中断整轮 → runtime AEE 不 emit;叠加 reconciler
+    的连续 tick 错误上限,还会让 reconciler 自我关闭。
+    """
+    pending = _pending(
+        cst="Fri Jul 17 13:41:47 CST 2026",       # aware (+8)
+        unknown_tz="Fri Jul 17 13:45:00 XYZ 2026",  # naive(时区不认识)
+    )
+    ordered = _iter_pending_tasks_newest_first(pending)
+    assert {k for k, _ in ordered} == {"cst", "unknown_tz"}
+
+
+def test_pending_sort_all_timestamp_flavours():
+    """CST / 无时区 / 未知时区 / ISO / 非法 / 空 六种混在一起都不能炸。"""
+    pending = _pending(
+        cst="Fri Jul 17 13:41:47 CST 2026",
+        unknown_tz="Fri Jul 17 13:45:00 XYZ 2026",
+        no_tz="Fri Jul 17 13:50:00 2026",
+        iso="2026-07-17 13:55:00.000",
+        garbage="not-a-timestamp",
+        empty="",
+    )
+    ordered = _iter_pending_tasks_newest_first(pending)
+    assert len(ordered) == 6
+
+    keys = [k for k, _ in ordered]
+    # 可解析的排在不可解析的前面(newest-first,不可解析垫底)
+    assert set(keys[:4]) == {"cst", "unknown_tz", "no_tz", "iso"}
+    assert set(keys[4:]) == {"garbage", "empty"}
+
+
+def test_pending_sort_orders_by_device_wall_clock():
+    """排序依据是设备墙钟先后 —— aware 的 CST 不应因换算而错位。"""
+    pending = _pending(
+        older="Fri Jul 17 10:00:00 CST 2026",
+        newer="Fri Jul 17 20:00:00 2026",
+    )
+    assert [k for k, _ in _iter_pending_tasks_newest_first(pending)] == ["newer", "older"]
+
+
+def test_pending_sort_all_unparseable_does_not_raise():
+    """全部不可解析时(key 均为 (False, datetime.min))也不能抛。"""
+    pending = _pending(a="garbage", b="", c="also-garbage")
+    assert len(_iter_pending_tasks_newest_first(pending)) == 3

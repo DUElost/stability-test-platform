@@ -740,7 +740,8 @@ class AeeDbHistoryReconciler:
             if detected_at.tzinfo is None:
                 detected_at = detected_at.replace(tzinfo=timezone.utc)
 
-            # 设备自报时间换算成 UTC 后另存,便于排查设备时钟漂移
+            # 设备自报时间换算成真实 UTC 后另存,便于排查设备时钟漂移。
+            # 无时区信息时 to_utc 返回 None(不猜),见 timestamp.to_utc 文档。
             aee_ts_utc = to_utc(parse_timestamp(aee_ts))
 
             extra: Dict[str, Any] = {
@@ -754,8 +755,9 @@ class AeeDbHistoryReconciler:
                 "raw_event_type": raw_event_type,
                 "package_name": pkg_name,
                 "aee_ts": aee_ts,
-                # #88:设备自报时间的 UTC 换算值(设备未给时区时按 UTC 处理)。
-                # 与 detected_at 的差值即设备时钟漂移,可用于排查。
+                # #88:设备自报时间换算出的**真实** UTC;设备没给时区(或时区
+                # 缩写不认识)时为 None —— 此时无从换算,不做 UTC 假设。
+                # 非 None 时,与 detected_at 的差值即设备时钟漂移,可用于排查。
                 "aee_ts_utc": aee_ts_utc.isoformat() if aee_ts_utc else None,
                 "nfs_path": str(output_subdir) if output_subdir else None,
                 "pull_source": "reconciler",

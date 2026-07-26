@@ -73,15 +73,16 @@ def parse_timestamp(timestamp_field_str: str) -> Optional[datetime]:
 
 
 def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
-    """把 `parse_timestamp` 的产物换算为 UTC。
+    """把 `parse_timestamp` 的产物换算为**真实** UTC。
 
-    naive(设备未给时区)时**不猜**,直接标记为 UTC —— 与历史行为一致,避免
-    对无时区信息的输入引入静默偏移。
+    只处理带时区的输入。naive(设备没给时区 / 时区缩写不认识)时返回 None —
+    此时无从得知真实 UTC,直接盖上 `+00:00` 只是把「未知」伪装成「已知」,
+    会让 `aee_ts_utc` 与 detected_at 的差值不再等于设备时钟漂移。
+
+    调用方要区分「无时区信息」和「换算结果」时,判 None 即可。
     """
-    if dt is None:
+    if dt is None or dt.tzinfo is None:
         return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
 
 

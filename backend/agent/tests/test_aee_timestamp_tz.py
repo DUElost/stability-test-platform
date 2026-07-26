@@ -70,10 +70,20 @@ class TestToUtc:
         utc = to_utc(parse_timestamp("Fri Jul 17 13:41:47 CST 2026"))
         assert utc == datetime(2026, 7, 17, 5, 41, 47, tzinfo=timezone.utc)
 
-    def test_naive_input_is_marked_utc_without_shifting(self):
-        """无时区信息时不猜偏移,保持历史行为。"""
-        utc = to_utc(parse_timestamp("Fri Jul 17 13:41:47 2026"))
-        assert utc == datetime(2026, 7, 17, 13, 41, 47, tzinfo=timezone.utc)
+    def test_naive_input_returns_none_instead_of_guessing_utc(self):
+        """#88 复审:设备没给时区时无从得知真实 UTC —— 返回 None,不能盖 +00:00。
+
+        盖上 UTC 只是把「未知」伪装成「已知」,会让 aee_ts_utc 与 detected_at
+        的差值不再等于设备时钟漂移。
+        """
+        assert to_utc(parse_timestamp("Fri Jul 17 13:41:47 2026")) is None
+
+    def test_unknown_timezone_returns_none(self):
+        """时区缩写不认识时同理 —— 不猜。"""
+        assert to_utc(parse_timestamp("Fri Jul 17 13:41:47 XYZ 2026")) is None
+
+    def test_iso_format_without_tz_returns_none(self):
+        assert to_utc(parse_timestamp("2026-07-17 13:41:47")) is None
 
     def test_none_passes_through(self):
         assert to_utc(None) is None

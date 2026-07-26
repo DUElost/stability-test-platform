@@ -1150,3 +1150,25 @@ def test_unparseable_device_ts_does_not_break_emit(monkeypatch):
     assert rec.tick_once() == 1
     assert emitter.calls[0]["extra"]["aee_ts_utc"] is None
     assert emitter.calls[0]["detected_at"].tzinfo is not None
+
+
+def test_aee_ts_utc_is_none_when_timezone_unknown(monkeypatch):
+    """#88 复审:设备时间戳无时区/时区不认识时,aee_ts_utc 必须是 None。
+
+    不能盖上 +00:00 —— 那会让「aee_ts_utc 与 detected_at 的差 = 设备时钟
+    漂移」这个用法失效(把未知当成已知)。
+    """
+    for ts in ("Fri Jul 17 13:41:47 2026", "Fri Jul 17 13:41:47 XYZ 2026"):
+        emitter = _FakeEmitter()
+        monkeypatch.setattr(
+            "backend.agent.aee.reconciler.process_device_logs",
+            _fake_pdl_factory(_skewed_payload(ts)),
+        )
+        rec = AeeDbHistoryReconciler(
+            signal_emitter=emitter, state_store=_MemStore(), serial="SX",
+            job_id=906, host_id="HOST", baseline_snapshot_enabled=False,
+        )
+        rec.tick_once()
+        extra = emitter.calls[0]["extra"]
+        assert extra["aee_ts"] == ts, "设备原始字符串必须原样保留"
+        assert extra["aee_ts_utc"] is None, f"ts={ts!r} 不该被假设为 UTC"
