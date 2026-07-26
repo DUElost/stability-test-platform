@@ -18,6 +18,7 @@ import json
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -1048,3 +1049,104 @@ def test_start_emits_info_log_when_local_root_not_writable(caplog, monkeypatch, 
         )
     finally:
         rec.stop(timeout=0.5)
+
+
+# ---------------------------------------------------------------------------
+# #88: runtime 信号的 detected_at 必须来自服务端时钟
+# ---------------------------------------------------------------------------
+
+
+def _skewed_payload(device_ts: str):
+    """构造一条设备时钟严重漂移的 runtime 条目(生产实测漂移 3~9 天)。"""
+    return [{
+        "line": f"/data/aee_exp/db.01.NE,Native (NE),pkg,_,_,_,_,_,com.android.settings,{device_ts}",
+        "parsed": {
+            "db_path": "/data/aee_exp/db.01.NE",
+            "pkg_name": "com.android.settings",
+            "timestamp": device_ts,
+            "event_type": "CRASH",
+            "raw_event_type": "Native (NE)",
+            "event_subtype": "NE",
+        },
+        "aee_type": "aee_exp",
+        "output_subdir": Path("/mnt/hdd/aee_events/x/SX/aee_exp/db.01.NE"),
+    }]
+
+
+def test_runtime_detected_at_uses_server_clock_not_device_clock(monkeypatch):
+    """#88 回归:设备时钟漂移 9 天时,detected_at 仍须贴近服务端 now。
+
+    原实现 runtime 路径退回设备时钟 → detected_at 落到 PlanRun 时间窗口外 →
+    watcher-summary 的 `detected_at BETWEEN` 静默过滤掉,运行期新崩溃在仪表盘
+    上完全不可见。
+    """
+    emitter = _FakeEmitter()
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        _fake_pdl_factory(_skewed_payload("Fri Jul 17 13:41:47 CST 2026")),
+    )
+
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter, state_store=_MemStore(), serial="SX",
+        job_id=902, host_id="HOST", baseline_snapshot_enabled=False,
+    )
+    before = datetime.now(timezone.utc)
+    assert rec.tick_once() == 1
+    after = datetime.now(timezone.utc)
+
+    detected_at = emitter.calls[0]["detected_at"]
+    assert detected_at.tzinfo is not None
+    assert before <= detected_at <= after, (
+        f"detected_at={detected_at} 不在本次 tick 的服务端时间区间内 — "
+        "说明又退回用设备时钟了(#88 回归)"
+    )
+
+
+def test_runtime_entry_origin_still_runtime(monkeypatch):
+    """detected_at 改用服务端时钟后,origin 分类语义不能跟着变。"""
+    emitter = _FakeEmitter()
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        _fake_pdl_factory(_skewed_payload("Fri Jul 17 13:41:47 CST 2026")),
+    )
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter, state_store=_MemStore(), serial="SX",
+        job_id=903, host_id="HOST", baseline_snapshot_enabled=False,
+    )
+    rec.tick_once()
+    assert emitter.calls[0]["extra"]["entry_origin"] == "runtime"
+
+
+def test_device_clock_preserved_in_extra_for_diagnosis(monkeypatch):
+    """设备原始时间不能丢 — aee_ts 原样保留,aee_ts_utc 给出换算值。"""
+    emitter = _FakeEmitter()
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        _fake_pdl_factory(_skewed_payload("Fri Jul 17 13:41:47 CST 2026")),
+    )
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter, state_store=_MemStore(), serial="SX",
+        job_id=904, host_id="HOST", baseline_snapshot_enabled=False,
+    )
+    rec.tick_once()
+
+    extra = emitter.calls[0]["extra"]
+    assert extra["aee_ts"] == "Fri Jul 17 13:41:47 CST 2026"
+    # CST(+8) 的 13:41:47 真实 UTC 是 05:41:47
+    assert extra["aee_ts_utc"] == "2026-07-17T05:41:47+00:00"
+
+
+def test_unparseable_device_ts_does_not_break_emit(monkeypatch):
+    """设备时间戳无法解析时仍要 emit,aee_ts_utc 置 None。"""
+    emitter = _FakeEmitter()
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.process_device_logs",
+        _fake_pdl_factory(_skewed_payload("garbage-timestamp")),
+    )
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=emitter, state_store=_MemStore(), serial="SX",
+        job_id=905, host_id="HOST", baseline_snapshot_enabled=False,
+    )
+    assert rec.tick_once() == 1
+    assert emitter.calls[0]["extra"]["aee_ts_utc"] is None
+    assert emitter.calls[0]["detected_at"].tzinfo is not None

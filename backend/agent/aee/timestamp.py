@@ -3,11 +3,54 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+# #88:db_history 的时间戳带设备本地时区名(`Fri Jul 17 13:41:47 CST 2026`)。
+# 原实现用 `(?:\s+\S+)?` 把该 token 匹配掉但**不解析**,调用方再直接盖上
+# UTC,导致恒定 +8 小时偏差。这里显式识别常见时区名。
+#
+# 注意 CST 有歧义(China Standard Time +8 / US Central Standard Time -6)。
+# 本项目设备均为国内市场 MTK/展锐机型,按 +8 解析;真要支持多地域需改为
+# 由设备 `persist.sys.timezone` 显式下发,而不是猜时区缩写。
+_TZ_OFFSET_HOURS: dict[str, int] = {
+    "UTC": 0,
+    "GMT": 0,
+    "Z": 0,
+    "CST": 8,
+    "CT": 8,
+    "HKT": 8,
+    "SGT": 8,
+    "JST": 9,
+    "KST": 9,
+}
+
+_TS_RE = re.compile(
+    r"^(?:\w{3}\s+)?(?P<mon>\w{3})\s+(?P<day>\d{1,2})\s+"
+    r"(?P<time>\d{2}:\d{2}:\d{2})(?:\s+(?P<tz>\S+))?\s+(?P<year>\d{4})$"
+)
+
+
+def _tzinfo_for(token: Optional[str]) -> Optional[timezone]:
+    """把时区缩写解析为 tzinfo;无法识别返回 None(调用方保持 naive)。"""
+    if not token:
+        return None
+    hours = _TZ_OFFSET_HOURS.get(token.strip().upper())
+    if hours is None:
+        return None
+    return timezone(timedelta(hours=hours))
 
 
 def parse_timestamp(timestamp_field_str: str) -> Optional[datetime]:
+    """解析 db_history 时间戳。
+
+    识别出时区缩写时返回 **aware** datetime(墙钟字段保持设备本地值,仅附加
+    tzinfo);无时区信息时返回 naive datetime(与历史行为一致)。
+
+    墙钟字段不做换算 —— `format_timestamp_for_filename` 依赖它生成与设备
+    侧一致的事件目录名,换算会导致路径漂移。需要真 UTC 的调用方请用
+    `to_utc()`。
+    """
     try:
         cleaned_str = timestamp_field_str.strip().split("@", 1)[-1].strip()
         for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
@@ -15,19 +58,38 @@ def parse_timestamp(timestamp_field_str: str) -> Optional[datetime]:
                 return datetime.strptime(cleaned_str, fmt)
             except ValueError:
                 continue
-        match = re.match(
-            r"^(?:\w{3}\s+)?(?P<mon>\w{3})\s+(?P<day>\d{1,2})\s+(?P<time>\d{2}:\d{2}:\d{2})(?:\s+\S+)?\s+(?P<year>\d{4})$",
-            cleaned_str,
-        )
+        match = _TS_RE.match(cleaned_str)
         if match:
             dt_str = (
                 f"{match.group('mon')} {match.group('day')} "
                 f"{match.group('time')} {match.group('year')}"
             )
-            return datetime.strptime(dt_str, "%b %d %H:%M:%S %Y")
+            parsed = datetime.strptime(dt_str, "%b %d %H:%M:%S %Y")
+            tzinfo = _tzinfo_for(match.group("tz"))
+            return parsed.replace(tzinfo=tzinfo) if tzinfo else parsed
     except (ValueError, AttributeError):
         pass
     return None
+
+
+def to_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """把 `parse_timestamp` 的产物换算为 UTC。
+
+    naive(设备未给时区)时**不猜**,直接标记为 UTC —— 与历史行为一致,避免
+    对无时区信息的输入引入静默偏移。
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def as_device_local_naive(dt: Optional[datetime]) -> Optional[datetime]:
+    """取设备本地墙钟(丢弃 tzinfo),用于与设备侧文件名时间戳比较。"""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
 
 
 def format_timestamp_for_filename(timestamp_field_str: str) -> str:

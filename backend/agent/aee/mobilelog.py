@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from .paths import resolve_mobilelog_subdir
-from .timestamp import parse_mobilelog_filename_to_datetime, parse_timestamp
+from .timestamp import (
+    as_device_local_naive,
+    parse_mobilelog_filename_to_datetime,
+    parse_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +51,10 @@ def export_correlated_mobilelogs(
     mobilelog 落在 output_dir/mobilelog/(或 correlated_mobilelogs/,由 env 控制)。
     """
     metrics = {"matched": 0, "pulled": 0, "files_selected": 0}
-    aee_dt = parse_timestamp(aee_ts_str)
+    # #88:parse_timestamp 现在识别得出时区时会返回 aware datetime,而
+    # mobilelog 文件名时间戳是设备本地墙钟(naive)。两边必须同为 naive 才
+    # 能比较,否则 `f["timestamp"] > aee_dt` 抛 TypeError。
+    aee_dt = as_device_local_naive(parse_timestamp(aee_ts_str))
     if not aee_dt:
         logger.warning("mobilelog_skip_unparseable_ts ts=%s", aee_ts_str)
         return metrics

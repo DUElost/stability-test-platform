@@ -59,7 +59,7 @@ from .db_history import load_processed_lines, save_processed_lines, state_key
 from .paths import get_aee_local_root
 from .processor import ProcessConfig, process_device_logs
 from .state_migration import WATCHER_AEE_STATE_PREFIX
-from .timestamp import parse_timestamp
+from .timestamp import parse_timestamp, to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -724,11 +724,24 @@ class AeeDbHistoryReconciler:
             entry_origin: str = str(payload.get("entry_origin") or "") or "runtime"
             output_subdir = payload.get("output_subdir")
 
+            # #88:detected_at 是「控制面观测到该信号的时刻」,必须来自服务端
+            # 时钟 —— 设备时钟不可信(实测生产机漂移 3~9 天),且 db_history 的
+            # 时区缩写解析后仍可能与真实 UTC 有出入。
+            #
+            # 原实现只有 baseline 路径传 detected_at_override,runtime 路径退回
+            # 设备时钟,导致 runtime 信号的 detected_at 落到 PlanRun 时间窗口
+            # 之外,被 watcher-summary 的 `detected_at BETWEEN ...` 静默过滤 →
+            # 运行期间新产生的崩溃在仪表盘上完全不可见。
+            #
+            # 设备侧原始时间仍完整保留在 extra.aee_ts / aee_ts_utc,不丢信息。
             detected_at = payload.get("detected_at_override")
             if not isinstance(detected_at, datetime):
-                detected_at = parse_timestamp(aee_ts) or datetime.now(timezone.utc)
+                detected_at = datetime.now(timezone.utc)
             if detected_at.tzinfo is None:
                 detected_at = detected_at.replace(tzinfo=timezone.utc)
+
+            # 设备自报时间换算成 UTC 后另存,便于排查设备时钟漂移
+            aee_ts_utc = to_utc(parse_timestamp(aee_ts))
 
             extra: Dict[str, Any] = {
                 # §2.2 schema_version 2:演进兼容标记。mobilelog_pulled /
@@ -741,6 +754,9 @@ class AeeDbHistoryReconciler:
                 "raw_event_type": raw_event_type,
                 "package_name": pkg_name,
                 "aee_ts": aee_ts,
+                # #88:设备自报时间的 UTC 换算值(设备未给时区时按 UTC 处理)。
+                # 与 detected_at 的差值即设备时钟漂移,可用于排查。
+                "aee_ts_utc": aee_ts_utc.isoformat() if aee_ts_utc else None,
                 "nfs_path": str(output_subdir) if output_subdir else None,
                 "pull_source": "reconciler",
                 "entry_origin": entry_origin,
