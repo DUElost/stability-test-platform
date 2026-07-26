@@ -38,6 +38,48 @@ while IFS= read -r file; do
   diff_text=$(git diff --cached --unified=0 -- "$file" || true)
   [ -z "$diff_text" ] && continue
 
+  # ── 检查 1:文件整体空行率 ────────────────────────────────────────────
+  #
+  # 必须放在最前面。下面的"新增行占比"只看单次 diff:一旦某个文件已经被
+  # 污染到 ~50%,后续每次改动的新增行也维持在 ~50%,永远够不到 60% 阈值 ——
+  # backend/agent/pipeline_engine.py 就是这样带着 1294/2644 的空行活了十几
+  # 个提交。这里看的是**暂存后文件的最终形态**,污染文件只要被 touch 就拦,
+  # 倒逼一次性清理。
+  #
+  # 曾经这段写在 `inserted < THRESHOLD_MIN_LINES && continue` 之后,于是改
+  # 一两行的小提交会整段跳过 —— "只要被 touch 就拦"根本没实现。
+  case "$file" in
+    *.py|*.ts|*.tsx|*.js|*.jsx|*.sh)
+      staged_content=$(git show ":$file" 2>/dev/null || true)
+      if [ -n "$staged_content" ]; then
+        total_lines=$(printf '%s\n' "$staged_content" | wc -l)
+        # 小文件空行率波动大,不判
+        if [ "$total_lines" -ge 200 ]; then
+          blank_lines=$(printf '%s\n' "$staged_content" | grep -cE '^[[:space:]]*$' || true)
+          file_ratio=$(( blank_lines * 100 / total_lines ))
+          if [ "$file_ratio" -ge "$THRESHOLD_FILE_RATIO" ]; then
+            echo "[BLOCK] $file"
+            echo "        文件整体空行率 $blank_lines/$total_lines = ${file_ratio}%"
+            echo "        疑似逐行空行注入污染。清理:"
+            echo "          python tools/dev/collapse-blank-pollution.py '$file'"
+            echo "        (该脚本仅动空行,并以 AST 比对保证语义不变)"
+            failed=1
+          fi
+        fi
+      fi
+      ;;
+  esac
+
+  # ── 检查 2:CRLF 混入 LF 文件 → 注入差异源 ────────────────────────────
+  # 同样必须在 min-lines 早退之前:CRLF 往往就是一两行的改动带进来的。
+  if printf '%s\n' "$diff_text" | grep -qE $'\r$'; then
+    echo "[BLOCK] $file: CRLF byte found in staged diff (file should be LF-only)"
+    echo "        Run: tools/dev/normalize-eol.sh '$file'"
+    failed=1
+  fi
+
+  # ── 检查 3:单次 diff 的新增空行占比 ──────────────────────────────────
+  #
   # 新增行 = 以 + 开头但不是 +++ 文件头
   # 注意:不能用 '^\+[^+]' — 那会把"单独 +"(=纯空行污染信号)排除掉,
   # 导致 inserted=0 / blanks 永远 ≥ inserted,本来要拦截的污染漏过。
@@ -45,54 +87,19 @@ while IFS= read -r file; do
   # 纯空行新增(只含空白字符,含单独的 "+" 行)
   blanks=$(printf '%s\n' "$diff_text" | grep -cE '^\+[[:space:]]*$' || true)
 
-  [ "$inserted" -lt "$THRESHOLD_MIN_LINES" ] && continue
-  [ "$inserted" -eq 0 ] && continue
-
-  ratio=$(( blanks * 100 / inserted ))
-  if [ "$ratio" -ge "$THRESHOLD_RATIO" ]; then
-    echo "[BLOCK] $file"
-    echo "        $blanks/$inserted = ${ratio}% pure blank-line insertions"
-    echo "        Likely IDE/plugin pollution. Inspect: git diff --cached -- $file"
-    failed=1
-  elif [ "$ratio" -ge 40 ] && [ "$inserted" -ge 100 ]; then
-    echo "[WARN ] $file: ${ratio}% blank-line insertions (>=40% over 100 lines)"
-    warnings=$((warnings + 1))
-  fi
-
-  # 额外检测:CRLF 混入 LF 文件 → 注入差异源
-  if printf '%s\n' "$diff_text" | grep -qE $'\r$'; then
-    echo "[BLOCK] $file: CRLF byte found in staged diff (file should be LF-only)"
-    echo "        Run: tools/dev/normalize-eol.sh '$file'"
-    failed=1
-  fi
-
-  # ── 文件整体空行率 ──────────────────────────────────────────────────
-  #
-  # 为什么需要这条:上面的"新增行占比"只看单次 diff。一旦某个文件已经
-  # 被污染到 ~50%,后续每次改动的新增行也维持在 ~50%,永远够不到 60%
-  # 阈值 —— backend/agent/pipeline_engine.py 就是这样带着 1294/2644 的
-  # 空行活了十几个提交。这里改看**暂存后文件的最终形态**,污染文件只要
-  # 被 touch 就会被拦下,倒逼一次性清理。
-  case "$file" in
-    *.py|*.ts|*.tsx|*.js|*.jsx|*.sh) ;;
-    *) continue ;;
-  esac
-
-  staged_content=$(git show ":$file" 2>/dev/null || true)
-  [ -z "$staged_content" ] && continue
-
-  total_lines=$(printf '%s\n' "$staged_content" | wc -l)
-  [ "$total_lines" -lt 200 ] && continue    # 小文件空行率波动大,不判
-
-  blank_lines=$(printf '%s\n' "$staged_content" | grep -cE '^[[:space:]]*$' || true)
-  file_ratio=$(( blank_lines * 100 / total_lines ))
-  if [ "$file_ratio" -ge "$THRESHOLD_FILE_RATIO" ]; then
-    echo "[BLOCK] $file"
-    echo "        文件整体空行率 $blank_lines/$total_lines = ${file_ratio}%"
-    echo "        疑似逐行空行注入污染。清理:"
-    echo "          python tools/dev/collapse-blank-pollution.py '$file'"
-    echo "        (该脚本仅动空行,并以 AST 比对保证语义不变)"
-    failed=1
+  # 小改动的占比没有统计意义 —— 用 if 包住而非 continue,否则会连带跳过
+  # 后面所有检查(这正是上面那两条注释记录的坑)。
+  if [ "$inserted" -ge "$THRESHOLD_MIN_LINES" ]; then
+    ratio=$(( blanks * 100 / inserted ))
+    if [ "$ratio" -ge "$THRESHOLD_RATIO" ]; then
+      echo "[BLOCK] $file"
+      echo "        $blanks/$inserted = ${ratio}% pure blank-line insertions"
+      echo "        Likely IDE/plugin pollution. Inspect: git diff --cached -- $file"
+      failed=1
+    elif [ "$ratio" -ge 40 ] && [ "$inserted" -ge 100 ]; then
+      echo "[WARN ] $file: ${ratio}% blank-line insertions (>=40% over 100 lines)"
+      warnings=$((warnings + 1))
+    fi
   fi
 done <<< "$staged"
 

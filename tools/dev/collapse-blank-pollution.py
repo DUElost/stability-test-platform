@@ -105,7 +105,10 @@ def blank_ratio(src: str) -> tuple[int, int, int]:
 
 
 def process(path: Path, *, check_only: bool, force: bool = False) -> tuple[bool, str]:
-    src = path.read_text(encoding="utf-8")
+    try:
+        src = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as exc:
+        return False, f"跳过(无法读取): {exc}"
     if not src.strip():
         return False, "空文件"
 
@@ -115,6 +118,14 @@ def process(path: Path, *, check_only: bool, force: bool = False) -> tuple[bool,
             return False, f"跳过(仅 {total} 行,短文件空行率波动大)"
         if ratio < POLLUTION_RATIO:
             return False, f"未超阈({ratio}% < {POLLUTION_RATIO}%),判定为正常文件"
+
+    # 非 Python 文件:只做检测,不做改写。
+    # 收敛规则依赖 AST 比对来保证语义不变,而 .ts/.tsx 没有等价的廉价校验 ——
+    # 与其冒险重写,不如报出来让人处理(检测本身与语言无关,就是空行率)。
+    if path.suffix != ".py":
+        if check_only:
+            return True, f"空行率 {ratio}%({blanks}/{total})—— 疑似污染,需人工清理"
+        return False, f"空行率 {ratio}% 但非 .py,本工具不改写非 Python 文件"
 
     try:
         before = ast.dump(ast.parse(src))
