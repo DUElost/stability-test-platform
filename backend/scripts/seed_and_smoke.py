@@ -675,7 +675,7 @@ def main() -> None:
         if args.no_wait:
             step("--no-wait 模式")
             info(f"plan_id={plan_id}  plan_run_id={plan_run_id}")
-            info(f"后续查询：")
+            info("后续查询：")
             info(f"  GET {args.backend}/api/v1/plan-runs/{plan_run_id}")
             info(f"  GET {args.backend}/api/v1/plan-runs/{plan_run_id}/jobs")
             info(f"  GET {args.backend}/api/v1/plan-runs/{plan_run_id}/summary")

@@ -23,8 +23,8 @@ if __name__ == "__main__" and __package__ is None:
     # 直接运行时的导入路径处理
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from agent.adb_wrapper import AdbWrapper
-    from agent.api_client import complete_run, fetch_pending_jobs, sync_recovery
-    from agent.aee.paths import get_aee_local_root, get_aee_nfs_root
+    from agent.api_client import fetch_pending_jobs, sync_recovery
+    from agent.aee.paths import get_aee_local_root
     from agent.aee.state_migration import migrate_legacy_aee_state_keys
     from agent.artifact_uploader import ArtifactUploader
     from agent.config import BASE_DIR, ensure_dirs
@@ -47,8 +47,8 @@ if __name__ == "__main__" and __package__ is None:
     from agent.socketio_client import AgentSocketIOClient
 else:
     from .adb_wrapper import AdbWrapper
-    from .api_client import complete_run, fetch_pending_jobs, sync_recovery
-    from .aee.paths import get_aee_local_root, get_aee_nfs_root
+    from .api_client import fetch_pending_jobs, sync_recovery
+    from .aee.paths import get_aee_local_root
     from .aee.state_migration import migrate_legacy_aee_state_keys
     from .artifact_uploader import ArtifactUploader
     from .config import BASE_DIR, ensure_dirs

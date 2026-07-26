@@ -10,7 +10,6 @@ Output (stdout):
     {"success": true/false, "error_message": "...", "metrics": {"uninstalled": int, "logs_cleared": int, "properties_set": int}}
 """
 
-import sys
 from _adb import adb_shell, device_serial, output_result, params
 
 

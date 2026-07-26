@@ -8,10 +8,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import jwt
-import pytest
 
 from backend.core.security import (
-    ACCESS_COOKIE_NAME,
     ALGORITHM,
     REFRESH_COOKIE_NAME,
     REFRESH_TOKEN_EXPIRE_DAYS,

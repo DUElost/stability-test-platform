@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from backend.agent.pipeline_engine import PipelineEngine, StepResult
 from backend.agent.registry.patrol_checkpoint_store import (

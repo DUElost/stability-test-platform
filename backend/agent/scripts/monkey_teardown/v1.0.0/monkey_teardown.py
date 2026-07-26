@@ -24,15 +24,12 @@ STP_STEP_PARAMS 结构:
     {"success": true/false, "metrics": {...}}
 """
 
-import json
 import os
-import shutil
 import subprocess
-import sys
 import time
 from pathlib import Path
 
-from _adb import adb_path, adb_shell, adb_shell_quiet, device_serial, output_result, params
+from _adb import adb_path, adb_shell, device_serial, output_result, params
 
 
 def _pull_dir(serial: str, device_path: str, local_dir: Path):

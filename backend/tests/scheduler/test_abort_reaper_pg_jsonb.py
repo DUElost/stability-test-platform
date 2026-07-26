@@ -5,7 +5,6 @@ This test does NOT require a database — it only checks SQL compilation.
 
 from __future__ import annotations
 
-import pytest
 
 
 def test_abort_reaper_query_uses_pg_jsonb_operators_not_json_extract():

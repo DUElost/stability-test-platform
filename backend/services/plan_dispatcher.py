@@ -12,33 +12,25 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from copy import deepcopy
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
-from backend.models.resource_pool import ResourcePool
 from backend.models.script import Script
-from backend.services.resource_pool import (
-    AllocationError,
-    allocate_devices,
-    create_allocations,
-)
 from backend.services.plan_dispatcher_core import (
     PlanDispatchError,
     build_lifecycle_from_steps as _build_lifecycle_from_steps,
-    build_plan_snapshot as _build_plan_snapshot,
     build_preview as _build_preview,
     check_legacy_aee_script_refs as _check_legacy_aee_script_refs,
     check_script_keys_complete as _check_script_keys_complete,
-    inject_wifi_params as _inject_wifi_params,
-    iter_lifecycle_steps as _iter_lifecycle_steps,
     script_defaults as _script_defaults,
+    # 本模块内部不用,但 sync/async 两个 dispatcher 必须共享同一份实现,
+    # 由 test_sync_and_async_dispatchers_reexport_shared_core_helpers 做同一性
+    # 断言。是**刻意的再导出**,不是死代码 —— 勿删。
+    build_plan_snapshot as _build_plan_snapshot,  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)

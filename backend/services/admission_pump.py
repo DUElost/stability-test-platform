@@ -49,7 +49,6 @@ from backend.models.enums import PlanRunStatus
 from backend.models.host import Device, Host
 from backend.models.plan_run import PlanRun, PlanRunHost, PlanRunTargetDevice
 from backend.services.plan_dispatcher_core import (
-    PlanDispatchError,
     build_lifecycle_from_snapshot as _build_lifecycle_from_snapshot,
 )
 from backend.services.plan_dispatcher_sync import (

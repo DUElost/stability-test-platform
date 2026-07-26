@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 
 from backend.models.job import JobInstance, JobLogSignal, StepTrace
-from backend.models.plan import Plan, PlanStep
+from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 
 

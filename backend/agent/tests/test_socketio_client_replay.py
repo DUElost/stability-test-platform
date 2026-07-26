@@ -13,7 +13,6 @@ from __future__ import annotations
 from collections import deque
 from unittest.mock import MagicMock
 
-import pytest
 
 from backend.agent.socketio_client import AgentSocketIOClient
 

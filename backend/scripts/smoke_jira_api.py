@@ -1,7 +1,6 @@
 """Smoke test POST /api/v1/jira/runs after backend STP_JIRA_* config."""
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time

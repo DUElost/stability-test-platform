@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import cast
 from sqlalchemy.dialects.postgresql import JSONB as PG_JSONB
 from sqlalchemy.orm import Session
-from typing import Any, List, Optional, Union
+from typing import List, Optional, Union
 
 from backend.core.database import get_db
 from backend.core.audit import record_audit

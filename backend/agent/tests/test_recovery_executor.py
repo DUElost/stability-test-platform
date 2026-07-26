@@ -5,7 +5,6 @@ from __future__ import annotations
 import threading
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 import backend.agent.main as agent_main
 from backend.agent.main import (

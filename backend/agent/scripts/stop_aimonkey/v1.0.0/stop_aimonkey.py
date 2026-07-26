@@ -22,14 +22,10 @@ Output (stdout):
     {"success": true/false, "metrics": {"killed_pids": [...], "errors": [...]}}
 """
 
-import json
-import os
 import subprocess
-import sys
 import time
-from pathlib import Path
 
-from _adb import adb_path, adb_shell, adb_shell_quiet, device_serial, output_result, params
+from _adb import adb_path, adb_shell, device_serial, output_result, params
 
 
 def _ps_grep(serial: str, patterns: list[str], timeout: int = 10) -> list[dict]:

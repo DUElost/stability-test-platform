@@ -40,7 +40,6 @@ from backend.models.enums import JobStatus, LeaseType
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan_run import PlanRun
 from backend.services.lease_manager import release_lease_sync
-from backend.services.state_machine import JobStateMachine, InvalidTransitionError
 
 logger = logging.getLogger(__name__)
 

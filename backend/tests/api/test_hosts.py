@@ -3,7 +3,7 @@ Tests for hosts API routes
 """
 import pytest
 from cryptography.fernet import Fernet
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import uuid4
 
 

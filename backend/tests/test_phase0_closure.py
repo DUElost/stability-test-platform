@@ -37,7 +37,6 @@ Scenarios covered
    - Parses detail dict, handles missing fields, survives malformed body.
 """
 
-import json
 import os
 import signal
 import sqlite3

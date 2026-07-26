@@ -36,6 +36,7 @@ interface StatusEntry {
 export type StatusBadgeKind =
   | "device"
   | "device-ui"
+  | "device-link"
   | "host"
   | "job"
   | "plan-run"
@@ -62,6 +63,14 @@ const DEVICE_UI: Record<string, StatusEntry> = {
   UNKNOWN: { label: "已断开", variant: "warning", Icon: AlertTriangle },
   BACKOFF: { label: "退避", variant: "warning", Icon: Clock },
   PENDING: { label: "等待", variant: "secondary", Icon: PauseCircle },
+};
+
+const DEVICE_LINK: Record<string, StatusEntry> = {
+  ONLINE: { label: "在线", variant: "success", Icon: CheckCircle2 },
+  OFFLINE: { label: "离线", variant: "secondary", Icon: PowerOff },
+  ADB_ERROR: { label: "ADB 异常", variant: "destructive", Icon: AlertTriangle },
+  HOST_OFFLINE: { label: "Host 离线", variant: "destructive", Icon: PowerOff },
+  UNKNOWN: { label: "未知", variant: "secondary", Icon: HelpCircle },
 };
 
 const HOST: Record<string, StatusEntry> = {
@@ -121,6 +130,7 @@ const PRECHECK_HOST: Record<string, StatusEntry> = {
 const REGISTRY: Record<StatusBadgeKind, Record<string, StatusEntry>> = {
   device: DEVICE,
   "device-ui": DEVICE_UI,
+  "device-link": DEVICE_LINK,
   host: HOST,
   job: JOB,
   "plan-run": PLAN_RUN,

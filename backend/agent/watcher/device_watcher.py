@@ -29,7 +29,7 @@ Worker（替换 manager.py 的 stub capability="stub"）。
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 

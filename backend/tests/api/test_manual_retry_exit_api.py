@@ -46,7 +46,13 @@ def manual_chain(db_session):
         extra={},
         last_heartbeat=datetime.now(timezone.utc),
     )
-    dev = Device(serial="dev-manual-1", host_id="h-manual", status="BUSY")
+    dev = Device(
+        serial="dev-manual-1",
+        host_id="h-manual",
+        status="BUSY",
+        adb_connected=True,
+        adb_state="device",
+    )
     plan = Plan(name="manual-plan", failure_threshold=0.05)
     db_session.add_all([host, dev, plan])
     db_session.commit()
@@ -160,6 +166,63 @@ class TestManualRetry:
         )
         assert resp.status_code == 409
         assert "must be running" in resp.json()["detail"].lower()
+
+    def test_manual_retry_disconnected_device_returns_409(
+        self, client, auth_headers, db_session, manual_chain,
+    ):
+        from backend.models.enums import DeviceStatus
+
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        dev = manual_chain["device"]
+        dev.status = DeviceStatus.OFFLINE.value
+        dev.adb_connected = False
+        dev.adb_state = "offline"
+        db_session.commit()
+
+        job = _make_job(
+            db_session, pr.id, plan.id, dev.id,
+            streak=3,
+        )
+        resp = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-retry",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409
+        assert "not reachable" in resp.json()["detail"].lower()
+
+        db_session.expire_all()
+        refreshed = db_session.get(JobInstance, job.id)
+        assert refreshed.manual_action is None
+
+    def test_manual_retry_unauthorized_adb_returns_409(
+        self, client, auth_headers, db_session, manual_chain,
+    ):
+        """adb_state=unauthorized 但 adb_connected=True 时仍须拦。
+
+        Agent 侧 collect_device_info 会把两者一并置位,这里刻意拆开,
+        确保门禁不依赖那个隐式字段配对约定。
+        """
+        from backend.models.enums import DeviceStatus
+
+        plan = manual_chain["plan"]
+        pr = manual_chain["plan_run"]
+        dev = manual_chain["device"]
+        dev.status = DeviceStatus.ONLINE.value
+        dev.adb_connected = True
+        dev.adb_state = "unauthorized"
+        db_session.commit()
+
+        job = _make_job(db_session, pr.id, plan.id, dev.id, streak=3)
+        resp = client.post(
+            f"/api/v1/plan-runs/{pr.id}/jobs/{job.id}/manual-retry",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 409
+        assert "not reachable" in resp.json()["detail"].lower()
+
+        db_session.expire_all()
+        assert db_session.get(JobInstance, job.id).manual_action is None
 
     def test_manual_retry_wrong_plan_run_returns_404(
         self, client, auth_headers, db_session, manual_chain,

@@ -10,7 +10,6 @@ import pytest
 from backend.core.job_timeout_config import DISPATCHED_TIMEOUT_SECONDS
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
-from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.scheduler import recycler
 

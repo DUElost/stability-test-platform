@@ -188,7 +188,7 @@ def main() -> None:
     if stage2.returncode != 0:
         die(f"create dry-run 退出码 {stage2.returncode}")
 
-    print(f"\n[PASS] create --dry-run 完成（1 条，未写 Jira 库）")
+    print("\n[PASS] create --dry-run 完成（1 条，未写 Jira 库）")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from backend.models.enums import JobStatus, PlanRunStatus
 from backend.services.plan_run_aggregation import (

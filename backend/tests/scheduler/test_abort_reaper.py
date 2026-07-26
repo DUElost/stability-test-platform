@@ -17,8 +17,6 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.orm.attributes import flag_modified
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL", "").startswith("postgresql"),

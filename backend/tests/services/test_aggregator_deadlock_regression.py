@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 pytestmark = pytest.mark.skipif(
     os.getenv("DATABASE_URL", "").startswith("sqlite"),

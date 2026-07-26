@@ -21,18 +21,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List
 from unittest.mock import MagicMock
 
 import pytest
 
 from backend.agent.registry.local_db import LocalDB
-from backend.agent.watcher.device_watcher import DeviceLogWatcher, WatcherStats
+from backend.agent.watcher.device_watcher import WatcherStats
 from backend.agent.watcher.exceptions import WatcherStartError
 from backend.agent.watcher.manager import LogWatcherManager
 from backend.agent.watcher.policy import OnUnavailableAction, WatcherPolicy
 from backend.agent.watcher.sources import (
-    CapabilityProber,
     ProbeResult,
     WatcherCapability,
 )

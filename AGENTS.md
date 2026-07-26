@@ -10,8 +10,34 @@
 | Agent tests | `pytest backend/agent/tests/` (no PG required, runs fast) |
 | Frontend tests | `cd frontend && npx vitest run` (or `npx vitest run path/to/test.tsx` for single file) |
 | TypeScript | `cd frontend && npx tsc --noEmit` |
+| Frontend lint | `cd frontend && npm run lint` (`npm run lint:fix` 自动修) |
+| Backend lint | `ruff check backend/ tools/ scripts/` (`--fix` 自动修) |
 | Migrations | `cd backend && python -m alembic upgrade head` |
 | Agent (dev) | `python -m backend.agent.main` (set `API_URL` env first) |
+
+**依赖清单**（后端三份，各有分工）：
+
+| 文件 | 内容 | 谁用 |
+|------|------|------|
+| `backend/requirements.txt` | 仅运行时 | Dockerfile.backend（生产镜像） |
+| `backend/requirements-dev.txt` | `-r requirements.txt` + pytest/testcontainers/ruff | CI、本地开发 |
+| `backend/requirements.lock` | 全量精确版本 + hash | 可复现构建校验 |
+
+本地装开发环境用 `pip install -r backend/requirements-dev.txt`。改了
+`requirements.txt` 后**必须重新生成 lock**，命令见该文件抬头（须在 py3.11
+下生成，CI 与镜像都是 3.11）。测试/lint 依赖不要加进 `requirements.txt`——
+生产镜像带着 pytest 既浪费体积也是无谓的攻击面。
+
+**Lint 现状**：2026-07 首次接入，CI 里 `continue-on-error`（不阻塞）。存量
+ESLint 105 warning / ruff 81 finding（原 343，`--fix` 已收敛掉 262 个未使用
+导入）。收敛完成后把 `continue-on-error` 摘掉。ruff 暂未开 `UP`(pyupgrade)
+族——全量 2239 处纯风格改写（`Optional[X]`→`X | None` 882、`Dict`→`dict`
+633 等），会淹没 F/B 的真实信号，与缺陷无关。
+
+**空行注入污染**：编辑器插件会逐行插空行，一次污染后每次 diff 都虚胖一倍。
+检测/清理：`python tools/dev/collapse-blank-pollution.py [--check] <file.py>`
+（先按文件整体空行率判定是否被污染，只动空行，并以 AST 比对保证语义不变）。
+CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksPath .githooks`。
 
 **start-backend.bat** runs `alembic upgrade head` then uvicorn. Set `STP_BACKEND_RELOAD=1` for hot reload (default off — real device safety).
 
@@ -59,7 +85,7 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 
 ## Architecture
 
-- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — combined ASGI mount in `backend/main.py:196`.
+- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — combined ASGI mount in `backend/main.py:207`.
 - **Frontend pages** are `React.lazy()` loaded via `frontend/src/router/index.tsx`.
 - **API client** modules in `frontend/src/utils/api/` (`planRuns.ts`, `hosts.ts`, `plans.ts`, etc.).
 - **ADR-0020**: Plan/PlanStep replaced Workflow/TaskTemplate. No `plan.lifecycle` column — lifecycle composed from `PlanStep` rows + `patrol_interval_seconds`/`timeout_seconds` at dispatch time.

@@ -580,7 +580,6 @@ async def broadcast_report_ready(run_id: int, task_id: int) -> None:
 
 
 # Thread-safe synchronous emit bridge (for recycler and other sync callers)
-import asyncio
 
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 

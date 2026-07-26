@@ -17,12 +17,38 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, select, text
 from sqlalchemy.orm import Session
 
 from backend.api.response import ApiResponse, ok
 from backend.api.routes.auth import get_current_active_user, User
+from backend.api.schemas.plan_run import (
+    AeeBreakdownOut,
+    AeeDashboardSectionOut,
+    ChainNodeOut,
+    DeviceMatrixItem,
+    EventOut,
+    JobInstanceOut,
+    JobManualActionIn,
+    JobManualActionOut,
+    PackageRankingOut,
+    PackageStatOut,
+    PackageSubtypeCountOut,
+    PlanChainOut,
+    PlanRunAbortIn,
+    PlanRunDevicesOut,
+    PlanRunEventsOut,
+    PlanRunOut,
+    PlanRunTimelineOut,
+    StageOut,
+    StageStepOut,
+    StepTraceOut,
+    SubtypeDistributionOut,
+    WatcherAgentOpsMetrics,
+    WatcherArchiveOut,
+    WatcherCategoryOut,
+    WatcherSummaryOut,
+)
 from backend.core.artifact_paths import (
     ArtifactPathError,
     ArtifactPathNotFoundError,
@@ -98,70 +124,6 @@ _SUBTYPE_FIXED_ORDER = [
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
-
-class StepTraceOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    job_id: int
-    step_id: str
-    stage: str
-    event_type: str
-    status: str
-    output: Optional[str] = None
-    error_message: Optional[str] = None
-    original_ts: str
-    created_at: str
-
-
-class JobInstanceOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    plan_run_id: Optional[int] = None
-    plan_id: Optional[int] = None
-    device_id: int
-    device_serial: Optional[str] = None
-    host_id: Optional[str] = None
-    status: str
-    status_reason: Optional[str] = None
-    # ADR-0026 §3: sub-state for recycler clocks / permit+barrier observability.
-    execution_state: Optional[str] = None
-    last_execution_heartbeat_at: Optional[str] = None
-    last_progress_at: Optional[str] = None
-    started_at: Optional[str] = None
-    ended_at: Optional[str] = None
-    created_at: Optional[str] = None
-    step_traces: list[StepTraceOut] = []
-
-
-class PlanRunOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: int
-    plan_id: int
-    status: str
-    failure_threshold: float
-    run_type: str
-    triggered_by: Optional[str] = None
-    started_at: str
-    ended_at: Optional[str] = None
-    result_summary: Optional[dict] = None
-    # ADR-0021: dispatch gate progress lives under run_context.precheck.
-    run_context: Optional[dict] = None
-    plan_snapshot: Optional[dict] = None
-    parent_plan_run_id: Optional[int] = None
-    root_plan_run_id: Optional[int] = None
-    chain_index: int = 0
-    next_plan_triggered: bool = False
-    plan_name: Optional[str] = None
-    capabilities: Optional[dict] = None
-    jobs: list[JobInstanceOut] = []
-    # ── ADR-0026: admission-queue observability (NULL for legacy runs) ──
-    queue_reason: Optional[str] = None
-    enqueued_at: Optional[str] = None
-    next_admission_at: Optional[str] = None
-    priority: int = 0
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -378,10 +340,6 @@ def list_plan_run_jobs(
 # ── Abort ────────────────────────────────────────────────────────────────
 
 
-class PlanRunAbortIn(BaseModel):
-    reason: Optional[str] = None
-
-
 @router.post(
     "/plan-runs/{run_id}/abort", response_model=ApiResponse[dict]
 )
@@ -505,20 +463,6 @@ def retry_plan_run_dispatch_endpoint(
 _MANUAL_ACTION_JOB_STATUSES = {JobStatus.RUNNING.value}
 
 
-class JobManualActionIn(BaseModel):
-    reason: Optional[str] = None
-
-
-class JobManualActionOut(BaseModel):
-    job_id: int
-    plan_run_id: int
-    action: str          # 'manual_retry' | 'manual_exit'
-    status: str          # job status after the action
-    manual_action: Optional[str] = None
-    next_retry_at: Optional[str] = None
-    current_failure_streak: int = 0
-
-
 def _load_job_in_run(db: Session, run_id: int, job_id: int) -> JobInstance:
     job = db.get(JobInstance, job_id)
     if job is None or job.plan_run_id != run_id:
@@ -582,6 +526,20 @@ def manual_retry_job(
         raise HTTPException(
             status_code=409,
             detail=f"job must be RUNNING for manual retry; current status is {job.status}",
+        )
+
+    device = db.get(Device, job.device_id) if job.device_id else None
+    host_status: str | None = None
+    if job.host_id:
+        host_row = db.get(Host, job.host_id)
+        host_status = host_row.status if host_row else None
+    if _device_currently_disconnected(device, host_status):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "device ADB is not reachable; manual retry cannot restore "
+                "connection — check USB or reboot the device"
+            ),
         )
 
     # Why: 同向 manual_action 已等待 Agent 消费时,重复点击不再二次写 audit / emit / counter。
@@ -808,27 +766,6 @@ def _aware(ts: datetime | None) -> datetime | None:
 
 # ── Endpoint 1: GET /plan-runs/{id}/chain ────────────────────────────────
 
-class ChainNodeOut(BaseModel):
-    plan_id: int
-    plan_name: Optional[str] = None
-    plan_run_id: Optional[int] = None
-    status: str                        # PlanRun.status 或 'pending'(尚未触发)
-    chain_index: int
-    started_at: Optional[str] = None
-    ended_at: Optional[str] = None
-    duration_seconds: Optional[float] = None
-    failure_threshold: float
-    pass_rate: Optional[float] = None  # 来自 PlanRun.result_summary
-    is_current: bool = False
-    is_blocked: bool = False
-    block_reason: Optional[str] = None
-
-
-class PlanChainOut(BaseModel):
-    plan_run_id: int
-    root_plan_run_id: int
-    nodes: list[ChainNodeOut]
-
 
 def _chain_node_from_run(pr: PlanRun, plan_name: Optional[str], is_current: bool) -> ChainNodeOut:
     summary = pr.result_summary or {}
@@ -944,45 +881,6 @@ def get_plan_run_chain(
 
 
 # ── Endpoint 2: GET /plan-runs/{id}/timeline ─────────────────────────────
-
-class StageStepOut(BaseModel):
-    step_key: str
-    script_name: str
-    stage: str
-    sort_order: int
-    device_total: int                  # = PlanRun jobs 总数
-    device_succeeded: int              # event_type=COMPLETED + status=COMPLETED
-    device_failed: int                 # event_type=FAILED or status=FAILED
-    device_skipped: int = 0            # v3: event_type=COMPLETED + status=SKIPPED
-    device_running: int                # = max(0, total - succeeded - failed - skipped)
-
-
-class StageOut(BaseModel):
-    stage: str                         # init / patrol / teardown
-    status: str                        # pending / running / completed / failed / skipped
-    started_at: Optional[str] = None
-    ended_at: Optional[str] = None
-    duration_seconds: Optional[float] = None
-    device_total: int
-    device_succeeded: int = 0
-    device_failed: int = 0
-    device_skipped: int = 0            # v3: summed from steps
-    # patrol 专属(从 JobInstance.patrol_*_cycle_count 聚合)
-    patrol_cycle_index: Optional[int] = None
-    patrol_active_devices: Optional[int] = None
-    patrol_interval_seconds: Optional[int] = None
-    steps: list[StageStepOut] = []
-
-
-class PlanRunTimelineOut(BaseModel):
-    plan_run_id: int
-    current_stage: str                 # init / patrol / teardown / done / pending
-    stages: list[StageOut]
-    aborted_job_count: int = 0         # v3: ABORTED jobs 计数 (顶层 banner 用)
-    triggered_at: str
-    triggered_by: Optional[str] = None
-    run_type: str
-    plan_name: Optional[str] = None
 
 
 def _stage_status_from_steps(
@@ -1279,25 +1177,6 @@ def get_plan_run_timeline(
 
 
 # ── Endpoint 3: GET /plan-runs/{id}/events ───────────────────────────────
-
-class EventOut(BaseModel):
-    ts: str
-    stage: str                         # init/patrol/teardown/system/trigger
-    severity: str                      # ok/info/warn/err
-    category: str                      # step / log_signal / audit / system / trigger
-    title: str
-    description: str = ""
-    job_id: Optional[int] = None
-    device_id: Optional[int] = None
-    device_serial: Optional[str] = None
-    ref: Optional[dict] = None         # {type, id} — 用于跳转 step_trace / log_signal
-
-
-class PlanRunEventsOut(BaseModel):
-    plan_run_id: int
-    events: list[EventOut]
-    total: int                         # 当前过滤条件下的总数(facets 后)
-    facets: dict                       # {by_stage: {...}, by_severity: {...}}
 
 
 def _log_signal_severity(category: str) -> str:
@@ -1676,59 +1555,69 @@ def get_plan_run_events(
 
 # ── Endpoint 4: GET /plan-runs/{id}/devices ──────────────────────────────
 
-class DeviceMatrixItem(BaseModel):
-    device_id: int
-    device_serial: Optional[str] = None
-    device_model: Optional[str] = None
-    host_id: Optional[str] = None
-    job_id: int
-    job_status: str
-    ui_status: str                     # completed/running/failed/aborted/risk/backoff/pending/unknown
-    current_stage: str
-    current_step: Optional[str] = None
-    patrol_cycle_count: int = 0
-    patrol_success_cycle_count: int = 0
-    patrol_failed_cycle_count: int = 0
-    current_failure_streak: int = 0
-    next_retry_at: Optional[str] = None
-    manual_action: Optional[str] = None
-    log_signal_count: int = 0
-    last_heartbeat_at: Optional[str] = None
-    started_at: Optional[str] = None
-    created_at: Optional[str] = None
-    ended_at: Optional[str] = None
-    status_reason: Optional[str] = None   # ADR-0021: pending_timeout / agent never claimed / etc.
-    grace_remaining_seconds: Optional[int] = None
-    pending_claim_remaining_seconds: Optional[int] = None
-    pending_claim_deadline_at: Optional[str] = None
-    heartbeat_deadline_at: Optional[str] = None
-    is_stuck: bool = False
-    busy_reason: Optional[str] = None
-    busy_lease_job_id: Optional[int] = None
-    capabilities: Optional[dict] = None
+
+# ADB 通道不可用的状态。比 `_adb_state_excluded`(派发认领预筛)多一个
+# `unauthorized`:该设备物理在线、可被认领口径讨论,但 shell 必然失败,
+# 对「能否立即重试」而言等同断连。两者刻意不合并 —— 认领预筛的口径由
+# dispatcher 决定,不应被 UI 语义反向绑架。
+_ADB_LINK_ERROR_STATES = frozenset({"offline", "unknown", "unauthorized"})
 
 
-class PlanRunDevicesOut(BaseModel):
-    plan_run_id: int
-    total: int
-    by_status: dict                    # {all/completed/running/failed/unknown/backoff/pending: int}
-    by_host: dict                      # {host_id: int}
-    devices: list[DeviceMatrixItem]
+def _derive_device_link_status(
+    device: Device | None,
+    host_status: str | None,
+) -> str:
+    """设备 ADB / Host 可达性 — 与 Job 执行状态正交。
+
+    这是断连语义的**唯一事实源**;`_device_currently_disconnected` 由它派生。
+    """
+    if device is None:
+        return "unknown"
+    if host_status == HostStatus.OFFLINE.value:
+        return "host_offline"
+    if (device.adb_state or "device").lower() in _ADB_LINK_ERROR_STATES:
+        return "adb_error"
+    if not device.adb_connected or device.status == DeviceStatus.OFFLINE.value:
+        return "offline"
+    return "online"
 
 
 def _device_currently_disconnected(
     device: Device | None,
     host_status: str | None,
 ) -> bool:
+    """manual retry / ui_status 的断连门禁。
+
+    Why: 必须与 `_derive_device_link_status` 同源。两处各自判 adb_state 时,
+         `unauthorized` 会被前者判成 adb_error、被后者放行,导致抽屉同时渲染
+         「设备 ADB 不可达」警告条和「立即重试」按钮,且 POST 真的执行。
+         当前 Agent 的 `collect_device_info` 会在 adb_state≠device 时一并把
+         adb_connected 置 False(device_discovery.py:122),所以线上暂被兜住 ——
+         但那是隐式字段配对约定,不该由两份判定规则各自假设。
+    """
     if device is None:
         return False
-    if host_status == HostStatus.OFFLINE.value:
-        return True
-    if _adb_state_excluded(device.adb_state):
-        return True
-    if not device.adb_connected or device.status == DeviceStatus.OFFLINE.value:
-        return True
-    return False
+    return _derive_device_link_status(device, host_status) != "online"
+
+
+def _job_exec_status_for_job(j: JobInstance, now: datetime) -> str:
+    s = j.status
+    if s == JobStatus.COMPLETED.value:
+        return "completed"
+    if s == JobStatus.ABORTED.value:
+        return "aborted"
+    if s in _FAILED_JOB_STATUSES:
+        return "failed"
+    if s == JobStatus.PENDING.value:
+        return "pending"
+    if s == JobStatus.UNKNOWN.value:
+        return "unknown"
+    if (j.manual_action or "") == "EXIT_REQUESTED":
+        return "backoff"
+    nrt = _aware(j.next_retry_at)
+    if nrt and nrt > now:
+        return "backoff"
+    return "running"
 
 
 def _ui_status_for_job(
@@ -1863,7 +1752,8 @@ def _derive_busy_reason(
 @router.get("/plan-runs/{run_id}/devices", response_model=ApiResponse[PlanRunDevicesOut])
 def get_plan_run_devices(
     run_id: int,
-    status: Optional[str] = Query(None, description="ui_status 过滤(可选)"),
+    status: Optional[str] = Query(None, description="job_exec_status 过滤(可选)"),
+    link_status: Optional[str] = Query(None, description="device_link_status 过滤(可选)"),
     host_id: Optional[str] = Query(None, description="host_id 过滤(可选)"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
@@ -1871,13 +1761,17 @@ def get_plan_run_devices(
     """ADR-0021/ADR-0022 C5a₂: 设备执行矩阵 — 每台设备一行,
     包含 patrol 心跳聚合、退避状态、watcher 异常计数。
 
-    by_status / by_host facet 始终基于"未过滤"的全集计算,
+    「连接」与「执行」是两个正交维度,各有一组 facet:
+    `by_status` 基于 `job_exec_status`(纯 Job 投影,不掺设备连接),
+    `by_link_status` 基于 `device_link_status`(ADB / Host 可达性)。
+    两组 facet 与 `by_host` 一样始终基于"未过滤"全集计算,
     便于前端筛选 chip 同时显示总数和当前数。
     """
     t0 = time.perf_counter()
     try:
         return _get_plan_run_devices_impl(
-            run_id=run_id, status=status, host_id=host_id, db=db,
+            run_id=run_id, status=status, link_status=link_status,
+            host_id=host_id, db=db,
         )
     finally:
         record_plan_run_devices_query_duration(time.perf_counter() - t0)
@@ -1889,6 +1783,7 @@ def _get_plan_run_devices_impl(
     status: Optional[str],
     host_id: Optional[str],
     db: Session,
+    link_status: Optional[str] = None,
 ):
     _require_plan_run(db, run_id)
     # ADR-0026 P2-3: single JOIN for jobs + device + host + ACTIVE JOB lease
@@ -1917,12 +1812,14 @@ def _get_plan_run_devices_impl(
     if not joined:
         return ok(PlanRunDevicesOut(
             plan_run_id=run_id, total=0,
-            by_status={"all": 0}, by_host={}, devices=[],
+            by_status={"all": 0}, by_link_status={"all": 0},
+            by_host={}, devices=[],
         ))
 
     now = datetime.now(timezone.utc)
     items: list[DeviceMatrixItem] = []
     by_status: dict[str, int] = {"all": 0}
+    by_link_status: dict[str, int] = {"all": 0}
     by_host: dict[str, int] = {}
 
     for j, dev, host_st, lease_job_id in joined:
@@ -1933,6 +1830,12 @@ def _get_plan_run_devices_impl(
         pending_deadline = _pending_claim_deadline(j)
         heartbeat_deadline = _running_heartbeat_deadline(j)
         busy_reason, busy_lease_job_id = _derive_busy_reason(dev, host_st, lease_job_id)
+        link = _derive_device_link_status(dev, host_st)
+        exec_status = _job_exec_status_for_job(j, now)
+        disconnected = _device_currently_disconnected(dev, host_st)
+        manual_retry_allowed = (
+            j.status == JobStatus.RUNNING.value and not disconnected
+        )
         items.append(DeviceMatrixItem(
             device_id=j.device_id,
             device_serial=serial,
@@ -1962,9 +1865,18 @@ def _get_plan_run_devices_impl(
             is_stuck=bool(heartbeat_deadline and now >= heartbeat_deadline),
             busy_reason=busy_reason,
             busy_lease_job_id=busy_lease_job_id,
+            device_link_status=link,
+            job_exec_status=exec_status,
+            adb_state=dev.adb_state if dev else None,
+            adb_connected=dev.adb_connected if dev else None,
             capabilities={
-                "manual_retry": j.status == JobStatus.RUNNING.value,
+                "manual_retry": manual_retry_allowed,
                 "manual_exit": j.status == JobStatus.RUNNING.value,
+                "manual_retry_blocked_reason": (
+                    "device_disconnected"
+                    if j.status == JobStatus.RUNNING.value and disconnected
+                    else None
+                ),
                 "open_report": j.status in {
                     JobStatus.COMPLETED.value,
                     JobStatus.FAILED.value,
@@ -1973,14 +1885,18 @@ def _get_plan_run_devices_impl(
             },
         ))
         by_status["all"] += 1
-        by_status[ui] = by_status.get(ui, 0) + 1
+        by_status[exec_status] = by_status.get(exec_status, 0) + 1
+        by_link_status["all"] += 1
+        by_link_status[link] = by_link_status.get(link, 0) + 1
         if j.host_id:
             by_host[j.host_id] = by_host.get(j.host_id, 0) + 1
 
     # 过滤(facets 已经基于全集)
     filtered = items
     if status and status.lower() != "all":
-        filtered = [d for d in filtered if d.ui_status == status.lower()]
+        filtered = [d for d in filtered if d.job_exec_status == status.lower()]
+    if link_status and link_status.lower() != "all":
+        filtered = [d for d in filtered if d.device_link_status == link_status.lower()]
     if host_id and host_id.lower() != "all":
         filtered = [d for d in filtered if d.host_id == host_id]
 
@@ -1988,6 +1904,7 @@ def _get_plan_run_devices_impl(
         plan_run_id=run_id,
         total=len(items),
         by_status=by_status,
+        by_link_status=by_link_status,
         by_host=by_host,
         devices=filtered,
     ))
@@ -1995,105 +1912,11 @@ def _get_plan_run_devices_impl(
 
 # ── Endpoint 5: GET /plan-runs/{id}/watcher-summary ──────────────────────
 
-class WatcherCategoryOut(BaseModel):
-    category: str
-    count: int
-    affected_device_count: int
-    trend_change: int                  # 当前窗口 - 上一窗口同长度
-    latest_device_serial: Optional[str] = None
-    latest_detected_at: Optional[str] = None
-
 
 # M0/PR #2: AEE 细分聚合(crash / vendor_crash / anr 互斥 + by_package)
 # 数据来源:JobLogSignal.extra (JSONB);仅当 source='reconciler' 的 signal
 # 携带完整 extra 字段(event_type/package_name/aee_ts/nfs_path/pull_source);
 # 旧 inotifyd 路径 signal 没有 extra,自动落入 unknown 桶。
-class PackageStatOut(BaseModel):
-    package_name: str                 # 空/缺失统一归 "unknown"
-    crash_count: int                  # category=AEE 且 event_type=CRASH(按 nfs_path 去重)
-    vendor_crash_count: int           # category=VENDOR_AEE 同条件
-    anr_count: int                    # category=ANR OR extra.event_type='ANR'
-    latest_detected_at: Optional[str] = None
-
-
-class AeeBreakdownOut(BaseModel):
-    crash_count: int                  # COUNT(DISTINCT extra->>'nfs_path') under AEE+CRASH
-    vendor_crash_count: int           # 同上,VENDOR_AEE+CRASH(与 crash_count 互斥)
-    anr_count: int                    # COUNT(DISTINCT extra->>'nfs_path') under ANR
-    packages: list[str]               # distinct package_name(已合并 unknown 桶)
-    by_package: list[PackageStatOut]  # 按 crash + vendor_crash + anr 总数降序
-
-
-class PackageSubtypeCountOut(BaseModel):
-    subtype: str
-    count: int
-
-
-class SubtypeDistributionOut(BaseModel):
-    subtype: str
-    group: str
-    count: int
-    share: float
-
-
-class PackageRankingOut(BaseModel):
-    package_name: str
-    total_count: int
-    affected_device_count: int
-    latest_detected_at: Optional[str] = None
-    subtype_breakdown: list[PackageSubtypeCountOut] = []
-
-
-class AeeDashboardSectionOut(BaseModel):
-    total_events: int = 0
-    affected_device_count: int = 0
-    top_package_name: Optional[str] = None
-    top_subtype: Optional[str] = None
-    subtype_distribution: list[SubtypeDistributionOut] = []
-    package_ranking: list[PackageRankingOut] = []
-
-
-class WatcherAgentOpsMetrics(BaseModel):
-    pruned_total: int = 0
-    local_disk_usage_pct: Optional[float] = None
-    spill_cycles: int = 0
-    spilled_total: int = 0
-
-class WatcherArchiveOut(BaseModel):
-    ops_metrics: WatcherAgentOpsMetrics = Field(default_factory=WatcherAgentOpsMetrics)
-    scan_status: Optional[str] = None
-    scan_triggered_at: Optional[str] = None
-    archived_jobs: int = 0
-    pending_jobs: int = 0
-    failed_jobs: int = 0
-
-
-class WatcherSummaryOut(BaseModel):
-    plan_run_id: int
-    window_minutes: Optional[int] = None
-    time_scope: str = "all"
-    window_start_at: str
-    window_end_at: str
-    categories: list[WatcherCategoryOut]
-    total: int
-    affected_device_count: int
-    total_devices: int
-    abnormal_rate: float               # affected_device_count / total_devices
-    threshold: float
-    exceeded: bool
-    supports_origin_split: bool = False
-    current_run: AeeDashboardSectionOut = AeeDashboardSectionOut()
-    preexisting: AeeDashboardSectionOut = AeeDashboardSectionOut()
-    # M0/PR #2: AEE 细分(reconciler signal 才会填充);无关联 Job 时 None
-    aee_breakdown: Optional[AeeBreakdownOut] = None
-    # M0/C-6 (§2.4 #5): 该 PlanRun 下 Job 的 watcher 能力快照(取最"降级"的一档)。
-    #   来源:JobInstance.watcher_capability 列(由 Agent 在 complete/heartbeat 回填的
-    #   JobSession.summary.watcher_capability)。无可靠来源时为 None;
-    #   前端在 'unavailable' 时显示「Watcher 不可用」徽章(watcher 未正常启动,
-    #   AEE reconciler 可能未运行,勿当作有 reconciler 兜底)。
-    watcher_capability: Optional[str] = None
-    # ADR-0025 Sprint 3: 运行日志归档状态（控制面按需拉取聚合）；无关联 Job 时 None
-    archive: Optional[WatcherArchiveOut] = None
 
 
 @router.get(

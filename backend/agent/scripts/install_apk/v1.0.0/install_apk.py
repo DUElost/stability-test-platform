@@ -12,8 +12,7 @@ Output (stdout):
 
 import os
 import subprocess
-import sys
-from _adb import adb_path, adb_shell, device_serial, output_result, params
+from _adb import adb_path, device_serial, output_result, params
 
 
 def _resolve_path(path: str) -> str:

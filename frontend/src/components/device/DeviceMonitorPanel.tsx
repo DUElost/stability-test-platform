@@ -153,9 +153,10 @@ export function DeviceMonitorPanel({
     })
     .sort((a, b) => {
       switch (sortBy) {
-        case 'status':
+        case 'status': {
           const statusOrder = { error: 0, testing: 1, idle: 2, offline: 3 };
           return statusOrder[a.status] - statusOrder[b.status];
+        }
         case 'name':
           return (a.model || '').localeCompare(b.model || '');
         case 'lastSeen':

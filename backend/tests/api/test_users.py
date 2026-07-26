@@ -1,5 +1,4 @@
 """Tests for users API routes"""
-import pytest
 
 
 class TestListUsers:

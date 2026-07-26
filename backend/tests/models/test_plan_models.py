@@ -3,13 +3,9 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from backend.models.enums import DeviceStatus, HostStatus, JobStatus
-from backend.models.host import Device, Host
-from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_migration_audit import PlanMigrationAudit
 from backend.models.plan_run import PlanRun
-from backend.models.script import Script
 
 
 class TestPlanModel:

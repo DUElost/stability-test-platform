@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 
-import pytest
 
 
 def test_production_defaults(monkeypatch):

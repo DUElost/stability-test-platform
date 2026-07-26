@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path

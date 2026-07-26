@@ -11,10 +11,8 @@ Output (stdout):
     {"success": true/false, "skipped": bool, "error_message": "...", "metrics": {"ssid": "..."}}
 """
 
-import json
 import subprocess
-import sys
-from _adb import adb_path, adb_shell, adb_shell_quiet, device_serial, output_result, params
+from _adb import adb_shell, adb_shell_quiet, device_serial, output_result, params
 
 
 def _is_connected(serial: str, ssid: str) -> bool:

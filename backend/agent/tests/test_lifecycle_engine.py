@@ -8,13 +8,11 @@ Covers verification tasks 7.1–7.4:
   7.4 — stop_process by process_name in teardown context
 """
 
-import json
-import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from backend.agent.pipeline_engine import PipelineEngine, StepContext, StepResult
+from backend.agent.pipeline_engine import PipelineEngine, StepResult
 
 
 # ---------------------------------------------------------------------------

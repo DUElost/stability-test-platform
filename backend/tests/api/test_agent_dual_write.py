@@ -23,7 +23,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from sqlalchemy import select
 
 pytestmark = pytest.mark.skipif(
@@ -55,7 +55,7 @@ from backend.api.routes.agent_api import (
 from backend.core.database import AsyncSessionLocal, SessionLocal
 from backend.models.audit import AuditLog
 from backend.models.device_lease import DeviceLease
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan, PlanStep

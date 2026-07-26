@@ -8,11 +8,10 @@ table and freed when the referencing JobInstance completes.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, Sequence
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from backend.models.enums import JobStatus
 from backend.models.job import JobInstance

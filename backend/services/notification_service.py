@@ -12,7 +12,7 @@ import os
 import smtplib
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import requests
 from sqlalchemy.orm import joinedload

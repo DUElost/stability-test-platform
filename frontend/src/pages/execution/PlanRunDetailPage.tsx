@@ -33,7 +33,7 @@ import { normalizeWatcherTimeScope, shouldShowDispatchGate, normalizeDispatchSta
 import { usePlanRunDetailData } from '@/hooks/plan-run/usePlanRunDetailData';
 import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 import { api } from '@/utils/api';
-import type { DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
+import type { DeviceLinkStatus, DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
 
 export default function PlanRunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -43,6 +43,7 @@ export default function PlanRunDetailPage() {
 
   const [searchParams, setSearchParams] = useSearchParams();
   const deviceStatusFilter = (searchParams.get('status') ?? 'all') as DeviceUiStatus | 'all';
+  const deviceLinkFilter = (searchParams.get('link') ?? 'all') as DeviceLinkStatus | 'all';
   const deviceHostFilter = searchParams.get('host') ?? 'all';
   const watcherTimeScope = normalizeWatcherTimeScope(
     searchParams.get('scope') ?? searchParams.get('window'),
@@ -63,6 +64,10 @@ export default function PlanRunDetailPage() {
   );
   const setDeviceStatusFilter = useCallback(
     (s: DeviceUiStatus | 'all') => updateParam('status', s, s === 'all'),
+    [updateParam],
+  );
+  const setDeviceLinkFilter = useCallback(
+    (s: DeviceLinkStatus | 'all') => updateParam('link', s, s === 'all'),
     [updateParam],
   );
   const setDeviceHostFilter = useCallback(
@@ -98,6 +103,7 @@ export default function PlanRunDetailPage() {
     planName,
   } = usePlanRunDetailData(id, {
     deviceStatusFilter,
+    deviceLinkFilter,
     deviceHostFilter,
     watcherTimeScope,
   });
@@ -302,8 +308,10 @@ export default function PlanRunDetailPage() {
               isLoading={devicesQ.isLoading}
               isError={devicesQ.isError}
               statusFilter={deviceStatusFilter}
+              linkFilter={deviceLinkFilter}
               hostFilter={deviceHostFilter}
               onStatusFilterChange={setDeviceStatusFilter}
+              onLinkFilterChange={setDeviceLinkFilter}
               onHostFilterChange={setDeviceHostFilter}
               onSelectDevice={(device) => setSelectedJobId(device.job_id)}
             />

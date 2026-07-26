@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
@@ -24,7 +24,6 @@ from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
-    dispatch_plan_sync,
     initial_dispatch_state,
     prepare_plan_run,
     preview_plan_dispatch_sync,

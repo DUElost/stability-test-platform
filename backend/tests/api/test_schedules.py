@@ -1,6 +1,4 @@
 """Tests for schedules API routes — ADR-0020 (Plan-based)."""
-import pytest
-from datetime import datetime, timezone
 
 from backend.models.plan import Plan
 from backend.models.plan import PlanStep

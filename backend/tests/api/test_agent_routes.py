@@ -24,7 +24,7 @@ from backend.api.routes.agent_api import (
     update_job_step_status,
 )
 from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
-from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType, PlanRunStatus
+from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.device_lease import DeviceLease
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance, StepTrace

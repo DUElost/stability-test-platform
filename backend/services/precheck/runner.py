@@ -364,7 +364,6 @@ def retry_plan_run_dispatch(
         admission_queue_flag_enabled,
         is_queue_pump_ready,
     )
-    from backend.services.plan_dispatcher_sync import initial_dispatch_state
 
     if not admission_queue_flag_enabled():
         raise PlanRunDispatchRetryError(

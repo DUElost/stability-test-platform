@@ -24,6 +24,10 @@ import { ALERT_BANNER, DRAWER, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { api } from '@/utils/api';
 import type { DeviceMatrixItem, DeviceUiStatus } from '@/utils/api/types';
+import {
+  DEVICE_LINK_STATUS,
+  isDeviceLinkReachable,
+} from '@/components/plan-run/deviceLinkStatus';
 
 interface Props {
   device: DeviceMatrixItem | null;
@@ -85,9 +89,22 @@ export default function DeviceDetailDrawer({
   const isTerminal = TERMINAL_DEVICE.includes(device.ui_status);
   const exitRequested = device.manual_action === 'EXIT_REQUESTED';
   const retryRequested = device.manual_action === 'RETRY_NOW';
-  const canManualRetry = device.capabilities
-    ? device.capabilities.manual_retry === true
-    : !isTerminal;
+  const linkStatus = device.device_link_status;
+  const execStatus = (device.job_exec_status ?? device.ui_status) as DeviceUiStatus;
+  const linkReachable =
+    linkStatus == null || isDeviceLinkReachable(linkStatus);
+  // Why: 「设备不可达」必须只有一处判定并直接否决 canManualRetry。
+  //      两者各自算时,unauthorized 会让 capabilities 放行、link 判 adb_error,
+  //      于是警告条和「立即重试」按钮同时渲染,点下去后端还真执行。
+  const retryBlockedByDevice =
+    device.job_status === 'RUNNING' &&
+    (device.capabilities?.manual_retry_blocked_reason === 'device_disconnected' ||
+      !linkReachable);
+  const canManualRetry =
+    !retryBlockedByDevice &&
+    (device.capabilities
+      ? device.capabilities.manual_retry === true
+      : !isTerminal && linkReachable);
   const canManualExit = device.capabilities
     ? device.capabilities.manual_exit === true
     : !isTerminal;
@@ -137,23 +154,48 @@ export default function DeviceDetailDrawer({
         <div className="flex-1 overflow-y-auto px-4 py-3 text-sm">
           <div
             data-testid="device-drawer-status-pill"
-            className="mb-3 inline-flex items-center gap-1.5"
+            className="mb-3 flex flex-wrap items-center gap-1.5"
           >
             <StatusBadge
-              kind="device-ui"
-              status={device.ui_status}
+              kind="device-link"
+              status={linkStatus ?? 'unknown'}
               size="sm"
-              spin={device.ui_status === 'running'}
+            />
+            <StatusBadge
+              kind="device-ui"
+              status={execStatus}
+              size="sm"
+              spin={execStatus === 'running'}
             />
             <span className={cn('text-xs font-semibold', TEXT.subtitle)}>
               · {device.current_stage.toUpperCase()}
             </span>
           </div>
 
+          {retryBlockedByDevice && (
+            <div
+              className={cn('mb-3 rounded-lg border-l-4 border-info px-3 py-2 text-xs', ALERT_BANNER.warning)}
+              data-testid="device-drawer-offline-hint"
+            >
+              <div className="font-semibold">设备 ADB 不可达</div>
+              <p className="mt-0.5 opacity-90">
+                {DEVICE_LINK_STATUS[linkStatus ?? 'unknown']?.hint ??
+                  '立即重试无法恢复 ADB 连接，请先检查 USB 或重启设备。'}
+              </p>
+            </div>
+          )}
+
           <KvList
             rows={[
               ['当前步骤', device.current_step || '—', true],
               ['Job 状态', device.job_status, false],
+              ...(device.adb_state || device.adb_connected != null
+                ? [[
+                    'ADB',
+                    `${device.adb_connected ? 'connected' : 'disconnected'} · ${device.adb_state || '—'}`,
+                    false,
+                  ] as KvRow]
+                : []),
               ...(device.status_reason
                 ? [[
                     '状态原因',
@@ -222,7 +264,7 @@ export default function DeviceDetailDrawer({
 
         {/* Footer — actions */}
         <footer className="grid grid-cols-2 gap-2 border-t bg-muted/50 px-4 py-3">
-          {canManualRetry && (
+          {canManualRetry ? (
             <Button
               variant="outline"
               size="sm"
@@ -237,7 +279,7 @@ export default function DeviceDetailDrawer({
               )}
               立即重试
             </Button>
-          )}
+          ) : null}
           {canManualExit && (
             <Button
               variant="outline"
@@ -280,6 +322,7 @@ export default function DeviceDetailDrawer({
               {confirmOpen === 'retry' ? '立即重试该设备?' : '退出该设备?'}
             </AlertDialogTitle>
             <AlertDialogDescription>
+              {/* 断连时按钮已被 canManualRetry 否决,不会走到 retry 分支 */}
               {confirmOpen === 'retry'
                 ? '将清除该设备的退避等待并请求 Agent 在下一次心跳重新执行 patrol;不会重置 current_failure_streak,以保留诊断信息。'
                 : '请求 Agent 在下一次心跳跳过剩余 patrol 并 abort 该 Job(不执行 teardown)。设备会回到资源池,该设备不会再产出 patrol 数据。'}

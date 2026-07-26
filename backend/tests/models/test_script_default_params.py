@@ -1,7 +1,5 @@
 """ADR-0020 — Script.default_params tests."""
 
-import pytest
-from sqlalchemy.exc import IntegrityError
 
 from backend.models.script import Script
 

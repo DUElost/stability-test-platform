@@ -4,7 +4,7 @@ Task Schedules API — CRUD + toggle + run-now for Plan-based cron scheduling.
 """
 
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session

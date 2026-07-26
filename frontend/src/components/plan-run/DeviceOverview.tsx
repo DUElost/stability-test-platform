@@ -7,19 +7,23 @@ import { cn } from '@/lib/utils';
 import DeviceFilterBar from './DeviceFilterBar';
 import SectionHeader from './SectionHeader';
 import type {
+  DeviceLinkStatus,
   DeviceMatrixItem,
   DeviceUiStatus,
   PlanRunDevicesPayload,
 } from '@/utils/api/types';
 import { DEVICE_UI_STATUS } from './deviceUiStatus';
+import { DEVICE_LINK_STATUS } from './deviceLinkStatus';
 
 interface Props {
   data: PlanRunDevicesPayload | undefined;
   isLoading?: boolean;
   isError?: boolean;
   statusFilter?: DeviceUiStatus | 'all';
+  linkFilter?: DeviceLinkStatus | 'all';
   hostFilter?: string | 'all';
   onStatusFilterChange?: (s: DeviceUiStatus | 'all') => void;
+  onLinkFilterChange?: (s: DeviceLinkStatus | 'all') => void;
   onHostFilterChange?: (h: string | 'all') => void;
   onSelectDevice?: (device: DeviceMatrixItem) => void;
   /** Controlled view mode; falls back to internal state when omitted. */
@@ -64,8 +68,19 @@ function fmtRelative(ts: string | null | undefined, now = Date.now()): string {
   return `${Math.round(past / 3600)}h 前`;
 }
 
-function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
-  if (d.ui_status === 'unknown') {
+/**
+ * 连接维度的提示语。作为**前缀**拼到执行维度提示之前，而不是早退取代它 ——
+ * 断连设备恰恰是最需要看到 grace 倒计时 / 认领 SLA 的那一批。
+ */
+function linkTooltipPrefix(d: DeviceMatrixItem): string | undefined {
+  const link = d.device_link_status;
+  if (!link || link === 'online') return undefined;
+  return DEVICE_LINK_STATUS[link]?.hint ?? '设备不可达';
+}
+
+function execTooltip(d: DeviceMatrixItem, now: number): string | undefined {
+  const exec = d.job_exec_status ?? d.ui_status;
+  if (exec === 'unknown') {
     const grace = d.grace_remaining_seconds;
     if (grace != null && grace > 0) {
       const prefix = d.status_reason || 'Job 已断开';
@@ -78,7 +93,7 @@ function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
     return 'Job 已断开（UNKNOWN），grace 窗口内等待 recovery 或 reconciler 自动失败';
   }
   if (d.status_reason) return d.status_reason;
-  if (d.ui_status === 'pending') {
+  if (exec === 'pending') {
     if (d.pending_claim_remaining_seconds != null) {
       return d.pending_claim_remaining_seconds > 0
         ? `等待 Agent 认领；剩余 ${d.pending_claim_remaining_seconds}s`
@@ -104,13 +119,20 @@ function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
     }
     return '等待 Agent 认领；超时未认领将自动失败（120s SLA）';
   }
-  if (d.ui_status === 'backoff' && d.next_retry_at) {
+  if (exec === 'backoff' && d.next_retry_at) {
     return `退避中，${fmtRelative(d.next_retry_at, now)}重试`;
   }
-  if (d.ui_status === 'running' && d.last_heartbeat_at) {
+  if (exec === 'running' && d.last_heartbeat_at) {
     return `最近 patrol 心跳：${fmtRelative(d.last_heartbeat_at, now)}`;
   }
   return undefined;
+}
+
+function statusTooltip(d: DeviceMatrixItem, now: number): string | undefined {
+  const link = linkTooltipPrefix(d);
+  const exec = execTooltip(d, now);
+  if (link && exec) return `${link} — ${exec}`;
+  return link ?? exec;
 }
 
 // ── DeviceGrid (minimap view) ────────────────────────────────────────────
@@ -135,7 +157,15 @@ function DeviceGrid({
         style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(24px, 1fr))' }}
       >
         {devices.map((d) => {
-          const label = `${d.device_serial || `Device #${d.device_id}`} — ${DEVICE_UI_STATUS[d.ui_status].label}`;
+          // 方块着色跟随「执行」维度,与筛选 chip / 表格执行列同源;
+          // 连接维度另行拼进 label,避免两处口径打架。
+          const exec = d.job_exec_status ?? d.ui_status;
+          const link = d.device_link_status;
+          const linkSuffix =
+            link && link !== 'online' ? ` · ${DEVICE_LINK_STATUS[link].label}` : '';
+          const label =
+            `${d.device_serial || `Device #${d.device_id}`} — ` +
+            `${DEVICE_UI_STATUS[exec].label}${linkSuffix}`;
           return (
             <button
               key={d.job_id}
@@ -144,7 +174,7 @@ function DeviceGrid({
               onClick={() => onSelect?.(d)}
               aria-label={label}
               title={label}
-              className={`aspect-square rounded-sm border border-transparent transition-transform hover:scale-[1.12] hover:ring-2 hover:ring-primary/45 hover:z-10 ${DEVICE_UI_STATUS[d.ui_status].cellCls}`}
+              className={`aspect-square rounded-sm border border-transparent transition-transform hover:scale-[1.12] hover:ring-2 hover:ring-primary/45 hover:z-10 ${DEVICE_UI_STATUS[exec].cellCls}`}
             />
           );
         })}
@@ -190,7 +220,8 @@ function DeviceTable({
           <tr>
             <th className="px-3 py-2 text-left">Serial</th>
             <th className="px-2 py-2 text-left">Host</th>
-            <th className="px-2 py-2 text-left">状态</th>
+            <th className="px-2 py-2 text-left">连接</th>
+            <th className="px-2 py-2 text-left">执行</th>
             <th className="px-2 py-2 text-left">等待/占用</th>
             <th className="px-2 py-2 text-left">阶段</th>
             <th className="px-2 py-2 text-left">当前步骤</th>
@@ -246,10 +277,19 @@ function DeviceTable({
                 <td className="px-2 py-2">
                   <span title={statusTooltip(d, now)}>
                     <StatusBadge
-                      kind="device-ui"
-                      status={d.ui_status}
+                      kind="device-link"
+                      status={d.device_link_status ?? 'unknown'}
                       size="sm"
-                      spin={d.ui_status === 'running'}
+                    />
+                  </span>
+                </td>
+                <td className="px-2 py-2">
+                  <span title={statusTooltip(d, now)}>
+                    <StatusBadge
+                      kind="device-ui"
+                      status={d.job_exec_status ?? d.ui_status}
+                      size="sm"
+                      spin={(d.job_exec_status ?? d.ui_status) === 'running'}
                     />
                   </span>
                 </td>
@@ -305,8 +345,10 @@ export default function DeviceOverview({
   isLoading = false,
   isError = false,
   statusFilter = 'all',
+  linkFilter = 'all',
   hostFilter = 'all',
   onStatusFilterChange,
+  onLinkFilterChange,
   onHostFilterChange,
   onSelectDevice,
   viewMode: controlledViewMode,
@@ -325,6 +367,7 @@ export default function DeviceOverview({
   const total = data?.total ?? 0;
   const devices = data?.devices ?? [];
   const byStatus = data?.by_status ?? { all: 0 };
+  const byLinkStatus = data?.by_link_status;
   const byHost = data?.by_host ?? {};
 
   const hosts = useMemo(
@@ -379,10 +422,13 @@ export default function DeviceOverview({
       <div className={PANEL.root}>
         <DeviceFilterBar
           byStatus={byStatus}
+          byLinkStatus={byLinkStatus}
           byHost={byHost}
           statusFilter={statusFilter}
+          linkFilter={linkFilter}
           hostFilter={hostFilter}
           onStatusFilterChange={onStatusFilterChange ?? (() => {})}
+          onLinkFilterChange={onLinkFilterChange}
           onHostFilterChange={onHostFilterChange ?? (() => {})}
         />
 

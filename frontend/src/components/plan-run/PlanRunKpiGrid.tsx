@@ -38,15 +38,27 @@ function Cell({
 
 export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: Props) {
   const byStatus = devices?.by_status ?? {};
+  const byLinkStatus = devices?.by_link_status;
   const total = devices?.total ?? 0;
   const running = byStatus.running ?? 0;
   const completed = byStatus.completed ?? 0;
   const failed = byStatus.failed ?? 0;
   const unknown = byStatus.unknown ?? 0;
   const backoff = byStatus.backoff ?? 0;
+  // 执行维度:Job 失联(lease/心跳超时)+ 退避。by_status 现在只投影 Job 状态,
+  // 不再掺设备连接 —— 设备断连要看下面的 linkAbnormal。
   const disconnectedAndBackoff = unknown + backoff;
   const disconnectedTone: KpiTone =
     unknown > 0 ? 'info' : disconnectedAndBackoff > 0 ? 'warning' : 'default';
+
+  // 连接维度:非 online 的一律算异常。用「总数 - online」而非枚举各异常态,
+  // 这样后端将来新增 link 状态时前端不会漏计。
+  // 老后端不返回 by_link_status:那时 by_status 还是基于 ui_status,
+  // 其 unknown 恰好表示断连,拿它兜底。
+  const linkAbnormal = byLinkStatus
+    ? Math.max(0, (byLinkStatus.all ?? total) - (byLinkStatus.online ?? 0))
+    : unknown;
+  const linkTone: KpiTone = linkAbnormal > 0 ? 'warning' : 'default';
 
   const stageLabel =
     currentStage === 'init'
@@ -77,10 +89,20 @@ export default function PlanRunKpiGrid({ devices, currentStage, patrolCycle }: P
         />
         <Cell
           value={disconnectedAndBackoff}
-          label="已断开/退避"
+          label="Job 失联/退避"
           tone={disconnectedTone}
           testId="kpi-disconnected-backoff"
         />
+        {/* 连接维度与上面的执行维度正交,同一台设备可能同时计入两处,
+            所以横跨整行单独呈现,避免读成「又一个执行状态」。 */}
+        <div className="col-span-2">
+          <Cell
+            value={linkAbnormal}
+            label="设备连接异常"
+            tone={linkTone}
+            testId="kpi-link-abnormal"
+          />
+        </div>
       </div>
     </div>
   );

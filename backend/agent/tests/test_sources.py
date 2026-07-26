@@ -22,7 +22,6 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from dataclasses import dataclass
 from typing import Any, List, Optional
 from unittest.mock import MagicMock, patch
 
@@ -33,7 +32,6 @@ from backend.agent.watcher.sources import (
     DEFAULT_EVENT_MASK,
     CapabilityProber,
     InotifydSource,
-    ProbeResult,
     WatcherCapability,
     WatcherEvent,
 )

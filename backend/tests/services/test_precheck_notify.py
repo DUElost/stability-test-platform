@@ -9,7 +9,6 @@ import pytest
 
 from backend.services.precheck.notify import (
     NotifyPayload,
-    PRECHECK_NOTIFY_DEBOUNCE_SECONDS,
     emit_dispatch_gate_invalidation,
     reset_notify_debounce_state,
 )

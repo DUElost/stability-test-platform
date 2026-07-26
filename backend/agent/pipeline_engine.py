@@ -9,7 +9,6 @@ init -> patrol loop -> teardown.
 """
 
 
-
 import hashlib
 
 import json
@@ -38,7 +37,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 logger = logging.getLogger(__name__)
-
 
 
 _MAX_STEP_OUTPUT_CHARS = 64 * 1024
@@ -76,7 +74,6 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
     """
     if proc.poll() is not None:
         return
-
     if _IS_WINDOWS:
         try:
             subprocess.run(
@@ -92,27 +89,23 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
             except Exception:
                 pass
         return
-
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
         return
     except Exception:
         pgid = proc.pid
-
     try:
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         return
     except Exception:
         logger.exception("killpg_sigterm_failed pgid=%d", pgid)
-
     try:
         proc.wait(timeout=grace_seconds)
         return
     except subprocess.TimeoutExpired:
         pass
-
     try:
         os.killpg(pgid, _SIGKILL)
     except ProcessLookupError:
@@ -120,70 +113,40 @@ def _terminate_process_tree(proc: subprocess.Popen, *, grace_seconds: float = 2.
     except Exception:
         logger.exception("killpg_sigkill_failed pgid=%d", pgid)
         return
-
     try:
         proc.wait(timeout=grace_seconds)
     except subprocess.TimeoutExpired:
         logger.error("process_tree_did_not_exit_after_sigkill pgid=%d", pgid)
 
 
-
-
-
 def _truncate_step_output(value: str) -> str:
-
     if len(value) <= _MAX_STEP_OUTPUT_CHARS:
-
         return value
-
     return value[:_MAX_STEP_OUTPUT_CHARS] + "\n[truncated]"
-
-
-
 
 
 @dataclass
 
 class StepContext:
-
     """Context passed to each action function."""
 
-
-
     adb: Any  # AdbWrapper instance
-
     serial: str
-
     params: dict
-
     run_id: int
-
     step_id: int
-
     logger: Any  # StepLogger instance
-
     # Shared metrics store for cross-step data passing (e.g., PID from start_process)
-
     shared: dict = field(default_factory=dict)
-
     # LocalDB instance for cross-run persistent state (e.g., watcher AEE dedup state)
-
     local_db: Any = None
-
     log_dir: str = ""
-
     adb_path: str = ""
-
     nfs_root: str = ""
-
     phase: str = ""
 
-
-
     @property
-
     def job_id(self) -> int:
-
         """Alias for run_id — new code should use ctx.job_id.
 
 
@@ -195,83 +158,45 @@ class StepContext:
         PR may rename the field once all consumers migrate.
 
         """
-
         return self.run_id
-
-
-
 
 
 @dataclass
 
 class StepResult:
-
     """Result returned by each action function."""
 
-
-
     success: bool
-
     exit_code: int = 0
-
     error_message: str = ""
-
     metrics: dict = field(default_factory=dict)
-
     artifact: Optional[dict] = None
-
     output: str = ""
-
     metadata: dict = field(default_factory=dict)
-
     skipped: bool = False
-
     skip_reason: str = ""
 
 
-
-
-
 class PipelineEngine:
-
     """Executes a pipeline definition: phase-serial, intra-phase parallel."""
 
-
-
     def __init__(
-
         self,
-
         adb,
-
         serial: str,
-
         run_id: int,
-
         log_dir: Optional[str] = None,
-
         mq_producer=None,
-
         script_registry=None,
-
         local_db=None,
-
         api_url: Optional[str] = None,
-
         agent_secret: str = "",
-
         nfs_root: Optional[str] = None,
-
         is_aborted: Optional[Callable[[], bool]] = None,
-
         fencing_token: Optional[str] = None,
-
         patrol_heartbeat_uploader=None,  # ADR-0022
-
         watcher_capability: Optional[str] = None,
-
         patrol_cycle_checkpoint_store=None,
-
         # ADR-0026 Step 5b: per-host scheduler + per-job state reporting
         operation_scheduler: Any = None,
         coordinator: Any = None,
@@ -279,351 +204,179 @@ class PipelineEngine:
         # ADR-0026 barrier: PlanRunHost id + expected peer count (INIT→PATROL)
         plan_run_host_id: Optional[int] = None,
         barrier_total: Optional[int] = None,
-
     ):
-
         self._adb = adb
-
         self._serial = serial
-
         self._run_id = run_id
-
         self._device_id = device_id
-
         self._scheduler = operation_scheduler
-
         self._coordinator = coordinator
-
         self._plan_run_host_id = plan_run_host_id
-
         self._barrier_total = int(barrier_total or 0)
-
         self._log_dir = log_dir
-
         self._mq = mq_producer
-
         self._script_registry = script_registry
-
         self._local_db = local_db
-
         self._api_url = api_url
-
         self._agent_secret = agent_secret
-
         self._adb_path = getattr(adb, "adb_path", os.getenv("ADB_PATH", "adb"))
-
         self._nfs_root = nfs_root if nfs_root is not None else os.getenv("STP_NFS_ROOT", "")
-
         self._is_aborted = is_aborted
-
         self._fencing_token = fencing_token or ""  # ADR-0019 Phase 2b
-
         self._patrol_heartbeat = patrol_heartbeat_uploader  # ADR-0022
-
         self._watcher_capability = watcher_capability or None
-
         self._patrol_cycle_checkpoint_store = patrol_cycle_checkpoint_store
-
         self._patrol_cycle_checkpoint: Optional[dict] = None
-
         self._patrol_cycle_resume: bool = False
-
         self._shared: dict = {}
-
         self._canceled = False
-
         self._process_lock = threading.Lock()
-
         self._active_process: Optional[subprocess.Popen] = None
-
         self._patrol_cycle_index = 0
 
-
-
     def set_patrol_cycle_resume(self, checkpoint: dict) -> None:
-
         """Restore patrol loop from a persisted checkpoint (agent crash recovery)."""
-
         self._patrol_cycle_checkpoint = checkpoint
-
         self._patrol_cycle_resume = True
 
-
-
     def clear_patrol_cycle_checkpoint(self) -> None:
-
         self._patrol_cycle_checkpoint = None
-
         self._patrol_cycle_resume = False
-
         self._drop_patrol_cycle_checkpoint_row()
 
-
-
     def _persist_patrol_cycle_checkpoint(self, payload: dict) -> None:
-
         store = self._patrol_cycle_checkpoint_store
-
         if store is None:
-
             return
-
         try:
-
             store.save(str(self._run_id), payload)
-
         except Exception as exc:
-
             from .registry.patrol_checkpoint_store import (
-
                 PatrolCycleCheckpointStoreRecoverableError,
-
             )
-
             if isinstance(exc, PatrolCycleCheckpointStoreRecoverableError):
-
                 logger.warning(
-
                     "patrol_checkpoint_save_failed job_id=%s: %s",
-
                     self._run_id,
-
                     exc,
-
                 )
-
             else:
-
                 raise
-
-
 
     def _drop_patrol_cycle_checkpoint_row(self) -> None:
-
         store = self._patrol_cycle_checkpoint_store
-
         if store is None:
-
             return
-
         try:
-
             store.drop(str(self._run_id))
-
         except Exception as exc:
-
             from .registry.patrol_checkpoint_store import (
-
                 PatrolCycleCheckpointStoreRecoverableError,
-
             )
-
             if isinstance(exc, PatrolCycleCheckpointStoreRecoverableError):
-
                 logger.warning(
-
                     "patrol_checkpoint_drop_failed job_id=%s: %s",
-
                     self._run_id,
-
                     exc,
-
                 )
-
             else:
-
                 raise
 
-
-
     def cancel(self):
-
         """Signal cancellation and terminate the running script process tree."""
-
         self._canceled = True
-
         with self._process_lock:
-
             proc = self._active_process
-
         if proc is not None:
-
             _terminate_process_tree(proc)
 
-
-
     def _set_active_process(
-
         self, proc: subprocess.Popen, *, allow_after_cancel: bool = False
-
     ) -> None:
-
         if not hasattr(self, "_process_lock"):
-
             self._process_lock = threading.Lock()
-
             self._active_process = None
-
         with self._process_lock:
-
             self._active_process = proc
-
             should_terminate = (
                 getattr(self, "_canceled", False) and not allow_after_cancel
             )
-
         if should_terminate:
-
             _terminate_process_tree(proc)
 
-
-
     def _clear_active_process(self, proc: subprocess.Popen) -> None:
-
         if not hasattr(self, "_process_lock"):
-
             return
-
         with self._process_lock:
-
             if self._active_process is proc:
-
                 self._active_process = None
 
-
-
     def execute(self, pipeline_def: dict) -> StepResult:
-
         """Execute the full lifecycle pipeline."""
-
         # Verify device lock is held before executing
-
         lock_err = self._verify_device_lease()
-
         if lock_err:
-
             return lock_err
 
-
-
         if "stages" in pipeline_def:
-
             return StepResult(
-
                 success=False,
-
                 exit_code=1,
-
                 error_message="stages format is not supported; use 'lifecycle'",
-
             )
-
-
 
         if "phases" in pipeline_def:
-
             return StepResult(
-
                 success=False,
-
                 exit_code=1,
-
                 error_message="legacy phases format is not supported; use 'lifecycle'",
-
             )
 
-
-
         if "lifecycle" in pipeline_def:
-
             return self._execute_lifecycle(pipeline_def)
 
-
-
         return StepResult(
-
             success=False,
-
             exit_code=1,
-
             error_message="pipeline_def must contain 'lifecycle'",
-
         )
 
-
-
     def _verify_device_lease(self) -> Optional[StepResult]:
-
         """Verify device lease via extend_lock endpoint. Returns StepResult on failure, None on success."""
-
         if not self._api_url:
-
             return None  # No API URL configured — skip verification (dev mode)
-
-
 
         import requests
 
-
-
         url = f"{self._api_url}/api/v1/agent/jobs/{self._run_id}/extend_lock"
-
         headers = {}
-
         if self._agent_secret:
-
             headers["X-Agent-Secret"] = self._agent_secret
-
         retry_delays = [1, 2, 4]  # exponential backoff
 
-
-
         for attempt, delay in enumerate(retry_delays, 1):
-
             try:
-
                 resp = requests.post(
-
                     url, json={"fencing_token": self._fencing_token}, headers=headers, timeout=10,
-
                 )
-
                 if resp.status_code == 409:
-
                     logger.error("device_lease_not_held run=%d — aborting pipeline", self._run_id)
-
                     return StepResult(
-
                         success=False,
-
                         exit_code=1,
-
                         error_message="device_lease_not_held",
-
                     )
-
                 if resp.status_code == 401:
-
                     logger.error("lock_verify_auth_failed run=%d status=401", self._run_id)
-
                     return StepResult(
-
                         success=False,
-
                         exit_code=1,
-
                         error_message="lock_verify_auth_failed",
-
                     )
-
                 resp.raise_for_status()
-
                 logger.debug("lock_verified run=%d", self._run_id)
-
                 return None  # Lock verified
-
             except requests.HTTPError:
-
                 # 审计 #2: 5xx 视为瞬态,进入重试;其它 4xx (非 409/401) 视为契约错误立即 fail。
                 # Why: 服务端瞬断会让 long-running patrol 立刻 abort,代价过大。
                 # How to apply: 与 _extend_lock 同口径退避;最终耗尽再返回失败。
@@ -641,54 +394,31 @@ class PipelineEngine:
                         exit_code=1,
                         error_message=f"lock_verification_http_{status_code}",
                     )
-
                 logger.error("lock_verification_failed run=%d status=%s", self._run_id, status_code)
-
                 return StepResult(
-
                     success=False,
-
                     exit_code=1,
-
                     error_message=f"lock_verification_http_{status_code}",
-
                 )
-
             except requests.RequestException as e:
-
                 logger.warning("lock_verify_attempt_%d_failed run=%d: %s", attempt, self._run_id, e)
-
                 if attempt < len(retry_delays):
-
                     time.sleep(delay)
 
-
-
         logger.error("lock_verification_unreachable run=%d", self._run_id)
-
         return StepResult(
-
             success=False,
-
             exit_code=1,
-
             error_message="lock_verification_unreachable",
-
         )
 
-
-
     def _run_with_timeout(
-
         self, action_fn: Callable, ctx: StepContext, timeout: int
-
     ) -> StepResult:
-
         """Run an action that performs its own timeout cleanup.
 
 
         """
-
         del timeout
         result = action_fn(ctx)
         if result is None:
@@ -697,62 +427,34 @@ class PipelineEngine:
             )
         return result
 
-
-
-
     # ==================================================================
-
     # Lifecycle step execution
-
     # ==================================================================
-
-
 
     def _run_lifecycle_steps(self, phase: str, steps: List[dict]) -> StepResult:
-
         """Execute one lifecycle phase without terminal side effects."""
-
         for step in steps or []:
-
             # Check for lock lost (LeaseRenewer removed us from active set)
-
             if self._is_lock_lost() or self._canceled:
-
                 return StepResult(
-
                     success=False,
-
                     exit_code=1,
-
                     error_message="device_lease_lost",
-
                 )
-
-
 
             # ADR-0026 Step 5b: gate execution through the per-host
             # OperationScheduler. Falls back to the legacy path when no
             # scheduler is available (old Agents, tests without a scheduler).
             success = self._run_step_with_permit(phase, step)
-
             if not success:
-
                 if self._is_lock_lost() or self._canceled:
-
                     return StepResult(
-
                         success=False,
-
                         exit_code=1,
-
                         error_message="job_aborted",
-
                     )
-
                 step_id = step.get("step_id", "unknown")
-
                 detail = (getattr(self, "_last_step_error", "") or "").strip()
-
                 # Prefer a short human-readable snippet from script JSON / stderr.
                 if detail.startswith("{") and '"error_message"' in detail:
                     try:
@@ -763,38 +465,22 @@ class PipelineEngine:
                         pass
                 if len(detail) > 500:
                     detail = detail[:500] + "…"
-
                 error_message = f"step failed in {phase}: {step_id}"
                 if detail:
                     error_message = f"{error_message}: {detail}"
-
                 return StepResult(
-
                     success=False,
-
                     exit_code=1,
-
                     error_message=error_message,
-
                 )
-
-
 
         return StepResult(success=True)
 
-
-
     def _is_lock_lost(self) -> bool:
-
         """Check if the run has been aborted (e.g. LeaseRenewer received 409)."""
-
         if self._is_aborted is not None:
-
             return self._is_aborted()
-
         return False
-
-
 
     def _update_execution_state(self, state: str, progress_ts: Optional[str] = None) -> None:
         """ADR-0026 Step 5b: persist execution_state via coordinator (thread-safe).
@@ -811,7 +497,6 @@ class PipelineEngine:
         jv = coord.register_job(self._run_id)
         if jv is not None:
             jv.update(state=state, progress_ts=progress_ts)
-
     def _barrier_enabled(self) -> bool:
         """INIT→PATROL barrier needs coordinator + PRH + at least 2 peers."""
         if self._coordinator is None or self._plan_run_host_id is None:
@@ -822,7 +507,6 @@ class PipelineEngine:
         return os.getenv("STP_PHASE_BARRIER_ENABLED", "1") not in (
             "0", "false", "False", "no", "NO",
         )
-
     def _arrive_phase_barrier(self, next_phase: str) -> bool:
         """Count this job toward the phase barrier; advance if last.
 
@@ -846,7 +530,6 @@ class PipelineEngine:
                 self._run_id, prh_id, next_phase,
             )
         return is_last
-
     def _await_phase_barrier(self, next_phase: str) -> bool:
         """Block until all PlanRunHost peers reach this phase boundary.
 
@@ -866,18 +549,15 @@ class PipelineEngine:
             # Count toward barrier so peers are not stuck on an aborted job.
             self._arrive_phase_barrier(next_phase)
             return False
-
         self._update_execution_state("WAITING_BARRIER")
         is_last = self._arrive_phase_barrier(next_phase)
         if is_last:
             return not (self._is_lock_lost() or self._canceled)
-
         timeout = float(os.getenv("STP_BARRIER_TIMEOUT_SECONDS", "600"))
         deadline = time.monotonic() + timeout
         coord = self._coordinator
         prh_id = self._plan_run_host_id
         assert coord is not None and prh_id is not None
-
         while True:
             if self._is_lock_lost() or self._canceled:
                 return False
@@ -894,7 +574,6 @@ class PipelineEngine:
                     self._run_id, prh_id, next_phase,
                 )
                 return not (self._is_lock_lost() or self._canceled)
-
     def _run_step_with_permit(
         self,
         phase: str,
@@ -915,7 +594,6 @@ class PipelineEngine:
                 step,
                 suppress_success_trace=suppress_success_trace,
             )
-
         device_id = self._device_id
         if device_id is None:
             return self._run_step_with_retry(
@@ -923,9 +601,7 @@ class PipelineEngine:
                 step,
                 suppress_success_trace=suppress_success_trace,
             )
-
         from .operation_scheduler import PermitDenied, PermitWaitTimeout
-
         self._update_execution_state("WAITING_EXECUTION_SLOT")
         permit = None
         try:
@@ -956,7 +632,6 @@ class PipelineEngine:
             if permit is not None:
                 permit.release()
                 self._update_execution_state("PATROL_SLEEP" if phase == "patrol" else None)
-
     def _run_step_with_retry(
         self,
         phase: str,
@@ -964,72 +639,44 @@ class PipelineEngine:
         *,
         suppress_success_trace: bool = False,
     ) -> bool:
-
         """Execute a step with retry logic. Returns True on success."""
-
         max_retry = step.get("retry", 0)
         self._last_step_error = ""
-
         for attempt in range(max_retry + 1):
-
             result = self._execute_step(
                 phase,
                 step,
                 retry_attempt=attempt,
                 suppress_success_trace=suppress_success_trace,
             )
-
             if result.success:
-
                 self._last_step_error = ""
                 return True
-
             self._last_step_error = (
                 result.error_message
                 or (result.output or "")[:2000]
                 or ""
             )
-
             if self._is_lock_lost() or self._canceled:
-
                 return False
-
             if attempt < max_retry:
-
                 sleep_remaining = 5.0 * (attempt + 1)
-
                 while sleep_remaining > 0:
-
                     chunk = min(0.5, sleep_remaining)
-
                     time.sleep(chunk)
-
                     sleep_remaining -= chunk
-
                     if self._is_lock_lost() or self._canceled:
-
                         return False
-
         return False
 
-
-
     def _execute_step(
-
         self,
-
         phase: str,
-
         step: dict,
-
         *,
-
         suppress_success_trace: bool = False,
-
         retry_attempt: int = 0,
-
     ) -> StepResult:
-
         """Execute a single lifecycle step. Reports STARTED/COMPLETED/FAILED via MQ.
 
 
@@ -1041,286 +688,149 @@ class PipelineEngine:
         per-cycle volume blow-up.  Failure / SKIPPED traces are always written.
 
         """
-
         step_id = step.get("step_id", "unknown")
-
         action = step.get("action", "")
-
         params = step.get("params", {})
-
         timeout = step.get("timeout_seconds", step.get("timeout", 300))
 
-
-
         if step.get("enabled") is False:
-
             result = StepResult(success=True, skipped=True, skip_reason="step disabled")
-
             # Always trace SKIPPED — meaningful signal even in patrol.
-
             self._report_step_trace_mq(
-
                 step_id,
-
                 phase,
-
                 "COMPLETED",
-
                 "SKIPPED",
-
                 output=result.skip_reason,
-
                 retry_attempt=retry_attempt,
-
             )
-
             return result
 
-
-
         if not suppress_success_trace:
-
             self._report_step_trace_mq(
-
                 step_id, phase, "STARTED", "RUNNING",
-
                 retry_attempt=retry_attempt,
-
             )
-
-
 
         log_file = None
-
         if self._log_dir:
-
             import re
 
-
-
             safe = re.sub(r"[^\w\-]", "_", step_id)
-
             log_file = os.path.join(self._log_dir, f"{phase}_{safe}.log")
 
-
-
         ctx = StepContext(
-
             adb=self._adb,
-
             serial=self._serial,
-
             params=params,
-
             run_id=self._run_id,
-
             step_id=0,
-
             logger=self._make_mq_logger(step_id, log_file),
-
             shared=self._shared,
-
             local_db=self._local_db,
-
             log_dir=self._log_dir or "",
-
             adb_path=self._adb_path or "",
-
             nfs_root=self._nfs_root or "",
-
             phase=phase,
-
         )
-
-
 
         try:
-
             action_fn = self._resolve_action(action, step)
-
             if action_fn is None:
-
                 result = StepResult(
-
                     success=False,
-
                     exit_code=1,
-
                     error_message=f"Unsupported action: {action}; only script:<name> is supported",
-
                 )
-
             else:
-
                 result = self._run_with_timeout(action_fn, ctx, timeout)
-
         except Exception as e:
-
             result = StepResult(success=False, exit_code=1, error_message=str(e))
 
-
-
         event_type = "COMPLETED" if result.success else "FAILED"
-
         status = "SKIPPED" if result.success and result.skipped else (
-
             "COMPLETED" if result.success else "FAILED"
-
         )
-
-
 
         # ADR-0022: skip COMPLETED trace for patrol-success path; FAILED always traces.
-
         skip_completion_trace = (
-
             suppress_success_trace
-
             and result.success
-
             and not result.skipped  # SKIPPED still traces (rare, meaningful)
-
         )
-
         if not skip_completion_trace:
-
             self._report_step_trace_mq(
-
                 step_id,
-
                 phase,
-
                 event_type,
-
                 status,
-
                 output=result.skip_reason if result.skipped else (result.output or None),
-
                 error_message=result.error_message if not result.success else None,
-
                 retry_attempt=retry_attempt,
-
             )
 
-
-
         # Store metrics in shared context (mirrors legacy _execute_step behavior)
-
         if result.metrics:
-
             self._shared[step_id] = result.metrics
-
-
 
         return result
 
-
-
     def _resolve_action(self, action: str, step: dict) -> Optional[Callable]:
-
         """Resolve supported lifecycle actions."""
-
         if action.startswith("script:"):
-
             return lambda ctx: self._run_script_action(ctx, step)
-
-
 
         return None
 
-
-
     def _run_script_action(self, ctx: StepContext, step: dict) -> StepResult:
-
         """Execute a script:<name> action through ScriptRegistry metadata."""
-
         if self._script_registry is None:
-
             return StepResult(
-
                 success=False,
-
                 exit_code=1,
-
                 error_message="ScriptRegistry not available — cannot execute script: action",
-
             )
-
-
 
         action = step.get("action", "")
-
         name = action.split(":", 1)[1]
-
         version = step.get("version", "")
 
-
-
         try:
-
             entry = self._script_registry.resolve(name, version)
-
         except Exception as exc:
-
             return StepResult(success=False, exit_code=1, error_message=str(exc))
 
-
-
         runners = {
-
             "python": [sys.executable, entry.nfs_path],
-
             "shell": ["bash", entry.nfs_path],
-
         }
-
         cmd = runners.get(entry.script_type)
-
         if cmd is None:
-
             return StepResult(
-
                 success=False,
-
                 exit_code=1,
-
                 error_message=f"Unsupported script_type: {entry.script_type}",
-
             )
 
-
-
         env = os.environ.copy()
-
         env.update({
-
             "STP_DEVICE_SERIAL": ctx.serial,
-
             "STP_ADB_PATH": ctx.adb_path or self._adb_path or "",
-
             "STP_LOG_DIR": ctx.log_dir or "",
-
             "STP_STEP_PARAMS": json.dumps(ctx.params or {}, ensure_ascii=False),
-
             "STP_NFS_ROOT": ctx.nfs_root or self._nfs_root or "",
-
             "STP_JOB_ID": str(ctx.job_id),
-
             "STP_SHARED_METRICS": json.dumps(self._shared, ensure_ascii=False),
-
         })
-
         if self._local_db is not None:
             db_path = getattr(self._local_db, "_db_path", None)
             if db_path:
                 env["STP_AGENT_STATE_DB"] = str(db_path)
-
         try:
             from .config import BASE_DIR
             env["STP_AGENT_INSTALL_DIR"] = str(BASE_DIR)
         except Exception:
             pass
-
         try:
             agent_dir = str(Path(entry.nfs_path).resolve().parents[3])
             existing_py_path = env.get("PYTHONPATH", "")
@@ -1332,113 +842,59 @@ class PipelineEngine:
         except (IndexError, ValueError):
             pass
 
-
-
         timeout_seconds = step.get("timeout_seconds", step.get("timeout", 300))
-
         try:
-
             proc = subprocess.Popen(
-
                 cmd,
-
                 env=env,
-
                 stdout=subprocess.PIPE,
-
                 stderr=subprocess.PIPE,
-
                 text=True,
-
                 cwd=os.path.dirname(entry.nfs_path) or None,
-
                 **_popen_isolation_kwargs(),
-
             )
-
             self._set_active_process(
-
                 proc,
-
                 allow_after_cancel=(ctx.phase == "teardown"),
-
             )
-
             try:
-
                 try:
-
                     stdout, stderr = proc.communicate(timeout=timeout_seconds)
-
                 except subprocess.TimeoutExpired:
-
                     _terminate_process_tree(proc)
-
                     stdout, stderr = proc.communicate()
-
                     combined_output = "\n".join(
                         part for part in ((stdout or "").strip(), (stderr or "").strip()) if part
                     )
-
                     return StepResult(
-
                         success=False,
-
                         exit_code=124,
-
                         error_message="script timeout",
-
                         output=_truncate_step_output(combined_output),
-
                     )
-
             finally:
-
                 self._clear_active_process(proc)
-
         except Exception as exc:
-
             return StepResult(success=False, exit_code=1, error_message=str(exc))
-
         stdout = stdout or ""
-
         stderr = stderr or ""
-
         combined_output = "\n".join(part for part in (stdout.strip(), stderr.strip()) if part)
 
-
-
         if proc.returncode != 0:
-
             return StepResult(
-
                 success=False,
-
                 exit_code=proc.returncode,
-
                 error_message=(stderr or stdout or "")[:2000],
-
                 output=_truncate_step_output(combined_output),
-
             )
 
-
-
         payload = {}
-
         clean_stdout = stdout.strip()
-
         if clean_stdout:
-
             try:
-
                 payload = json.loads(clean_stdout)
-
             except json.JSONDecodeError:
-
                 payload = {}
-
-
 
         # Scripts that print {"success": false} but forget sys.exit(1) must
         # still fail the step — otherwise init continues past real errors.
@@ -1451,128 +907,69 @@ class PipelineEngine:
                 output=_truncate_step_output(combined_output),
                 metrics=payload.get("metrics", {}) or {},
             )
-
         return StepResult(
-
             success=True,
-
             metrics=payload.get("metrics", {}) if isinstance(payload, dict) else {},
-
             skipped=bool(payload.get("skipped")) if isinstance(payload, dict) else False,
-
             skip_reason=payload.get("skip_reason", "") if isinstance(payload, dict) else "",
-
             output=_truncate_step_output(combined_output),
-
         )
 
-
-
     # ------------------------------------------------------------------
-
     # MQ reporting helpers
-
     # ------------------------------------------------------------------
-
-
 
     def _report_step_trace_mq(
-
         self,
-
         step_id: str,
-
         stage: str,
-
         event_type: str,
-
         status: str,
-
         output: Optional[str] = None,
-
         error_message: Optional[str] = None,
-
         retry_attempt: int = 0,
-
     ) -> None:
-
         """Send step_trace via MQ (local_db → StepTraceUploader HTTP batch)."""
-
         if self._mq and self._mq.connected:
-
             cycle_index = self._patrol_cycle_index if stage == "patrol" else 0
-
             trace_key = (
                 f"{self._run_id}\0{self._fencing_token}\0{stage}\0{step_id}\0"
                 f"{event_type}\0retry={retry_attempt}\0cycle={cycle_index}"
             )
-
             trace_event_id = hashlib.sha256(
                 trace_key.encode("utf-8")
             ).hexdigest()
-
             self._mq.send_step_trace(
-
                 job_id=self._run_id,
-
                 step_id=step_id,
-
                 stage=stage,
-
                 event_type=event_type,
-
                 status=status,
-
                 output=output,
-
                 error_message=error_message,
-
                 fencing_token=self._fencing_token,
-
                 trace_event_id=trace_event_id,
-
             )
 
-
-
     def _report_job_status_mq(self, status: str, reason: str = "") -> None:
-
         """Send job_status event via MQ."""
-
         if self._mq and self._mq.connected:
-
             self._mq.send_job_status(self._run_id, status, reason)
 
-
-
     def _make_mq_logger(self, step_id: str, log_file: Optional[str] = None):
-
         """Create a logger that writes to MQ and a local file."""
-
         return _MQStepLogger(
-
             mq_producer=self._mq,
-
             run_id=self._run_id,
-
             step_id_str=step_id,
-
             log_file=log_file,
-
         )
 
-
-
     # ==================================================================
-
     # Lifecycle execution (init → patrol loop → teardown)
-
     # ==================================================================
-
-
 
     def _execute_lifecycle(self, pipeline_def: dict) -> StepResult:
-
         """Execute a lifecycle pipeline: init → patrol_loop → teardown (best-effort).
 
 
@@ -1592,113 +989,60 @@ class PipelineEngine:
         terminal MQ status, log archiving, and final StepResult construction.
 
         """
-
         lifecycle = pipeline_def["lifecycle"]
-
         timeout_seconds = lifecycle.get("timeout_seconds", 0)
-
         init_def = lifecycle["init"]
-
         patrol_def = lifecycle.get("patrol")
-
         teardown_def = lifecycle["teardown"]
 
-
-
         # Replace {log_dir} / {run_id} placeholders in all sub-pipelines
-
         if self._log_dir:
-
             raw = json.dumps(lifecycle)
-
             raw = raw.replace("{log_dir}", self._log_dir.replace("\\", "/"))
-
             raw = raw.replace("{run_id}", str(self._run_id))
-
             lifecycle = json.loads(raw)
-
             init_def = lifecycle["init"]
-
             patrol_def = lifecycle.get("patrol")
-
             teardown_def = lifecycle["teardown"]
 
-
-
         termination_reason = "completed"
-
         lifecycle_error = ""
-
         teardown_result = None
 
-
-
         patrol_resume: Optional[dict] = None
-
         skip_init = False
-
         if self._patrol_cycle_resume and self._patrol_cycle_checkpoint is not None:
-
             patrol_resume = self._patrol_cycle_checkpoint
-
             skip_init = True
 
-
-
         try:
-
             # ── Phase 1: Init ──
-
             if skip_init:
-
                 logger.info(
-
                     "[Lifecycle] run=%d — skipping init (patrol checkpoint resume)",
-
                     self._run_id,
-
                 )
-
                 init_result = StepResult(success=True, exit_code=0)
-
             else:
-
                 self._report_job_status_mq("INIT_RUNNING")
-
                 logger.info("[Lifecycle] run=%d — executing init", self._run_id)
 
-
-
                 init_result = self._run_lifecycle_steps("init", init_def)
-
             if not init_result.success:
-
                 # Distinguish lock_lost (abort) from genuine init failure
-
                 if init_result.error_message in ("device_lease_lost", "job_aborted"):
-
                     termination_reason = "abort"
-
                 else:
-
                     termination_reason = "init_failure"
-
                 lifecycle_error = f"lifecycle init failed: {init_result.error_message}"
-
                 logger.error("[Lifecycle] run=%d — init failed: %s", self._run_id, init_result.error_message)
-
                 # Still count toward INIT→PATROL barrier so peers are not
                 # stuck waiting for a job that will skip patrol.
                 self._arrive_phase_barrier("PATROL")
-
                 # Do NOT return here — fall through to finally for teardown,
-
                 # then to the unified exit block for MQ status + artifact.
 
-
-
             elif patrol_def:
-
                 # ADR-0026: align all PlanRunHost devices before patrol so
                 # long-run waves share a common start (INIT→PATROL barrier).
                 # Patrol-checkpoint resume already passed this boundary — skip.
@@ -1713,158 +1057,83 @@ class PipelineEngine:
                     barrier_ok = True
                 else:
                     barrier_ok = self._await_phase_barrier("PATROL")
-
                 if not barrier_ok:
-
                     termination_reason = "abort"
-
                     lifecycle_error = "phase barrier aborted or timed out"
-
                     logger.error(
                         "[Lifecycle] run=%d — INIT→PATROL barrier failed",
                         self._run_id,
                     )
-
                 else:
-
                     # ── Phase 2: Patrol loop (only if init succeeded) ──
-
                     # ADR-0022: per-cycle aggregate via patrol_heartbeat_uploader,
-
                     # exponential backoff on consecutive failure, manual_action
-
                     # observation for runtime intervention.
-
                     termination_reason, lifecycle_error = self._run_patrol_loop(
-
                         patrol_def, timeout_seconds, init_completed_at=time.time(),
-
                         resume=patrol_resume,
-
                     )
 
-
-
         finally:
-
             # ── Phase 3: Teardown (best-effort) ──
-
             # ADR-0022 BO4: manual_exit skips teardown entirely; the device
-
             # is reclaimed via lease release + the next Plan's init re-checks.
-
             if termination_reason == "manual_exit":
-
                 logger.info(
-
                     "[Lifecycle] run=%d — manual_exit: skipping teardown (ADR-0022 BO4)",
-
                     self._run_id,
-
                 )
-
                 teardown_result = None
-
             else:
-
                 self._report_job_status_mq("TEARDOWN_RUNNING", reason=f"termination_reason={termination_reason}")
-
                 logger.info("[Lifecycle] run=%d — executing teardown (reason: %s)", self._run_id, termination_reason)
-
                 teardown_result = self._execute_teardown_best_effort(teardown_def)
 
-
-
         # ── Unified exit: terminal MQ + artifact + StepResult ──
-
         success = termination_reason in ("completed", "timeout")
 
-
-
         # Map termination_reason to MQ terminal status
-
         if success:
-
             mq_status = "COMPLETED"
-
         elif termination_reason in ("abort", "manual_exit"):
-
             mq_status = "ABORTED"
-
         else:
-
             mq_status = "FAILED"
 
-
-
         self._report_job_status_mq(
-
             mq_status,
-
             reason=f"termination_reason={termination_reason}",
-
         )
-
-
 
         # Merge teardown metadata into final result
-
         final_metadata = {"termination_reason": termination_reason}
-
         if teardown_result is None:
-
             # ADR-0022 BO4: manual_exit explicitly skipped teardown
-
             final_metadata["teardown_status"] = "SKIPPED"
-
         elif isinstance(teardown_result.metadata, dict):
-
             final_metadata["teardown_status"] = teardown_result.metadata.get("teardown_status", "UNKNOWN")
 
-
-
         return StepResult(
-
             success=success,
-
             exit_code=0 if success else 1,
-
             error_message="" if success else (lifecycle_error or f"lifecycle ended: {termination_reason}"),
-
             artifact=None,
-
             metadata=final_metadata,
-
         )
 
-
-
     # ==================================================================
-
     # ADR-0022: Patrol loop with heartbeat aggregation + backoff +
-
     #           manual_action observation
-
     # ==================================================================
-
-
 
     def _run_patrol_loop(
-
         self,
-
         patrol_def: dict,
-
         timeout_seconds: int,
-
         *,
-
         init_completed_at: float,
-
         resume: Optional[dict] = None,
-
     ) -> Tuple[str, str]:
-
         """Execute the patrol stage with ADR-0022 semantics.
 
 
@@ -1908,457 +1177,242 @@ class PipelineEngine:
              treating manual_exit identically to abort).
 
         """
-
         from .patrol_heartbeat_uploader import compute_backoff_seconds
 
-
-
         interval = patrol_def.get("interval_seconds", 300)
-
         backoff_policy = patrol_def.get("backoff_policy") or {}
-
         backoff_base = float(backoff_policy.get("base_seconds", 60.0))
-
         backoff_growth = float(backoff_policy.get("growth_factor", 2.0))
-
         backoff_max = float(backoff_policy.get("max_interval_seconds", 3600.0))
 
-
-
         steps = patrol_def.get("steps", [])
-
         iteration = 0
-
         failure_streak = 0
-
         last_lease_verify = 0.0
-
         last_observed_action: Optional[str] = None
-
         pending_manual_action_ack: Optional[str] = None
-
         _LEASE_REVERIFY_INTERVAL = 300
-
         # The INIT→PATROL barrier is behind us. Publish a non-stale patrol
         # state even when the patrol definition has no steps; real operations
         # replace it with WAITING_EXECUTION_SLOT / EXECUTING_STEP while held.
         self._update_execution_state("PATROL_SLEEP")
 
-
-
         if resume:
-
             iteration = int(resume.get("cycle", 0))
-
             failure_streak = int(resume.get("failure_streak", 0))
-
             last_observed_action = resume.get("last_observed_action")
-
             pending_manual_action_ack = (
                 resume.get("pending_manual_action_ack")
                 or last_observed_action
             )
-
             logger.info(
-
                 "[Lifecycle] run=%d — resuming patrol from cycle=%d streak=%d",
-
                 self._run_id,
-
                 iteration,
-
                 failure_streak,
-
             )
 
-
-
         def _accept_heartbeat_ack(
-
             ack: Any, observed_sent: Optional[str]
-
         ) -> bool:
-
             """Update manual-action state; return True for JOB_NOT_RUNNING."""
-
             nonlocal last_observed_action, pending_manual_action_ack
-
             if not isinstance(ack, dict):
-
                 return False
-
             if ack.get("_job_not_running"):
-
                 self._canceled = True
-
                 return True
-
             # A structured response proves the observed value reached the
             # server. Until this point it must remain pending across cycles.
             if observed_sent:
-
                 pending_manual_action_ack = None
-
             action = ack.get("manual_action") or None
-
             if action:
-
                 last_observed_action = action
-
                 pending_manual_action_ack = action
-
             return False
 
-
-
         def _poll_patrol_control(
-
             *, current_step: Optional[str], next_retry_at: Optional[datetime]
-
         ) -> bool:
-
             if self._patrol_heartbeat is None:
-
                 return False
-
             poll = getattr(self._patrol_heartbeat, "poll_control", None)
-
             if not callable(poll):
-
                 return False
-
             observed_sent = pending_manual_action_ack
-
             ack = poll(
-
                 job_id=self._run_id,
-
                 fencing_token=self._fencing_token,
-
                 cycle_index=iteration,
-
                 current_step=current_step,
-
                 current_failure_streak=failure_streak,
-
                 next_retry_at=next_retry_at,
-
                 watcher_capability=self._watcher_capability,
-
                 manual_action_observed=observed_sent,
-
             )
-
             return _accept_heartbeat_ack(ack, observed_sent)
 
-
-
         def _end_patrol(reason: str, err: str = "") -> Tuple[str, str]:
-
             self._drop_patrol_cycle_checkpoint_row()
-
             return reason, err
 
-
-
         self._report_job_status_mq("PATROL_RUNNING")
-
         termination_reason = "completed"
-
         lifecycle_error = ""
 
-
-
         while True:
-
             # ── Termination checks before each cycle ──
-
             if self._is_lock_lost() or self._canceled:
-
                 logger.info("[Lifecycle] run=%d — abort detected, ending patrol loop", self._run_id)
-
                 return _end_patrol("abort", "")
-
-
 
             if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
-
                 logger.info("[Lifecycle] run=%d — timeout reached (%ds), ending patrol loop", self._run_id, timeout_seconds)
-
                 return _end_patrol("timeout", "")
 
-
-
             if last_observed_action == "EXIT_REQUESTED":
-
                 logger.info("[Lifecycle] run=%d — manual EXIT_REQUESTED observed, ending patrol", self._run_id)
-
                 _poll_patrol_control(current_step=None, next_retry_at=None)
-
                 return _end_patrol("manual_exit", "")
 
-
-
             # Periodic lease re-verification: defense-in-depth
-
             if time.time() - last_lease_verify > _LEASE_REVERIFY_INTERVAL:
-
                 lock_err = self._verify_device_lease()
-
                 if lock_err:
-
                     logger.error("[Lifecycle] run=%d — lease lost during patrol", self._run_id)
-
                     return _end_patrol("abort", f"lease re-verification failed: {lock_err.error_message}")
-
                 last_lease_verify = time.time()
 
-
-
             iteration += 1
-
             self._patrol_cycle_index = iteration
-
             logger.info("[Lifecycle] run=%d — [Patrol #%d] starting (streak=%d)", self._run_id, iteration, failure_streak)
 
-
-
             # ── Run all steps best-effort, collect success/failure aggregate ──
-
             success_count, failed_count, last_failed_step = self._run_patrol_cycle_steps(steps)
 
-
-
             # If lease was lost mid-cycle, _run_patrol_cycle_steps surfaces it
-
             # via the canceled flag; check explicitly.
-
             if self._is_lock_lost() or self._canceled:
-
                 return _end_patrol("abort", "")
 
-
-
             had_failure = failed_count > 0
-
             if had_failure:
-
                 failure_streak += 1
-
                 next_sleep = compute_backoff_seconds(
-
                     failure_streak,
-
                     base_seconds=backoff_base,
-
                     growth_factor=backoff_growth,
-
                     max_seconds=backoff_max,
-
                 )
-
                 logger.warning(
-
                     "[Lifecycle] run=%d — [Patrol #%d] %d/%d steps failed (last=%s), backoff=%.0fs streak=%d",
-
                     self._run_id, iteration, failed_count, success_count + failed_count,
-
                     last_failed_step or "?", next_sleep, failure_streak,
-
                 )
-
             else:
-
                 failure_streak = 0
-
                 next_sleep = float(interval)
 
-
-
             # Compute next_retry_at for server-side display
-
             next_retry_dt = (
-
                 datetime.now(timezone.utc) + timedelta(seconds=int(next_sleep))
-
                 if next_sleep > 0 else None
-
             )
-
-
 
             # ── Send heartbeat (best-effort) and observe manual_action ──
-
             current_step_for_ui = last_failed_step or (steps[-1].get("step_id") if steps else None)
-
             ack = None
-
             if self._patrol_heartbeat is not None:
-
                 observed_sent = pending_manual_action_ack
-
                 ack = self._patrol_heartbeat.send(
-
                     job_id=self._run_id,
-
                     fencing_token=self._fencing_token,
-
                     cycle_index=iteration,
-
                     success_delta=1 if success_count > 0 and not had_failure else 0,
-
                     failed_delta=1 if had_failure else 0,
-
                     current_step=current_step_for_ui,
-
                     current_failure_streak=failure_streak,
-
                     next_retry_at=next_retry_dt if had_failure else None,
-
                     watcher_capability=self._watcher_capability,
-
                     manual_action_observed=observed_sent,
-
                 )
-
                 if _accept_heartbeat_ack(ack, observed_sent):
-
                     logger.warning(
-
                         "[Lifecycle] run=%d — patrol heartbeat rejected JOB_NOT_RUNNING, stopping patrol",
-
                         self._run_id,
-
                     )
-
                     return _end_patrol("abort", "job_not_running")
 
-
-
             # ── Status MQ update for live UI ──
-
             time_elapsed = time.time() - init_completed_at
-
             time_remaining = max(0, timeout_seconds - time_elapsed) if timeout_seconds > 0 else -1
-
             self._report_job_status_mq(
-
                 "PATROL_RUNNING",
-
                 reason=(
-
                     f"iteration={iteration} next_in={int(next_sleep)}s "
-
                     f"remaining={int(time_remaining)}s streak={failure_streak}"
-
                 ),
-
             )
 
-
-
             self._persist_patrol_cycle_checkpoint({
-
                 "cycle": iteration,
-
                 "failure_streak": failure_streak,
-
                 "last_failed_step_id": last_failed_step,
-
                 "last_observed_action": last_observed_action,
-
                 "pending_manual_action_ack": pending_manual_action_ack,
-
             })
 
-
-
             # ── Sleep until next cycle, breakable by abort/manual_action ──
-
             if last_observed_action == "EXIT_REQUESTED":
-
                 logger.info("[Lifecycle] run=%d — manual EXIT_REQUESTED observed post-cycle, ending patrol", self._run_id)
-
                 if _poll_patrol_control(
                     current_step=current_step_for_ui,
                     next_retry_at=next_retry_dt if had_failure else None,
                 ):
                     return _end_patrol("abort", "job_not_running")
-
                 return _end_patrol("manual_exit", "")
-
             if last_observed_action == "RETRY_NOW":
-
                 # Skip sleep; loop immediately
-
                 logger.info("[Lifecycle] run=%d — manual RETRY_NOW observed, skipping backoff sleep", self._run_id)
-
                 last_observed_action = None
-
                 continue
 
-
-
             sleep_remaining = next_sleep
-
             retry_requested = False
-
             while sleep_remaining > 0:
-
                 chunk = min(sleep_remaining, 5.0)
-
                 time.sleep(chunk)
-
                 sleep_remaining -= chunk
-
                 if self._is_lock_lost() or self._canceled:
-
                     return _end_patrol("abort", "")
-
                 if timeout_seconds > 0 and (time.time() - init_completed_at) >= timeout_seconds:
-
                     logger.info("[Lifecycle] run=%d — timeout reached during sleep", self._run_id)
-
                     return _end_patrol("timeout", "")
-
                 if had_failure:
-
                     if _poll_patrol_control(
                         current_step=current_step_for_ui,
                         next_retry_at=next_retry_dt,
                     ):
                         return _end_patrol("abort", "job_not_running")
-
                     if last_observed_action == "EXIT_REQUESTED":
-
                         _poll_patrol_control(
                             current_step=current_step_for_ui,
                             next_retry_at=next_retry_dt,
                         )
-
                         return _end_patrol("manual_exit", "")
-
                     if last_observed_action == "RETRY_NOW":
-
                         logger.info(
                             "[Lifecycle] run=%d — manual RETRY_NOW observed during backoff",
                             self._run_id,
                         )
-
                         last_observed_action = None
-
                         retry_requested = True
-
                         break
-
             if retry_requested:
-
                 continue
 
-
-
     def _run_patrol_cycle_steps(self, steps: List[dict]) -> Tuple[int, int, Optional[str]]:
-
         """ADR-0022: best-effort execution of one patrol cycle.
 
 
@@ -2376,65 +1430,37 @@ class PipelineEngine:
         outer loop terminates promptly without finishing the cycle.
 
         """
-
         success = 0
-
         failed = 0
-
         last_failed: Optional[str] = None
-
         for step in steps or []:
-
             if self._is_lock_lost():
-
                 self._canceled = True
-
                 return success, failed, last_failed
 
-
-
             step_id = step.get("step_id", "unknown")
-
             try:
-
                 step_succeeded = self._run_step_with_permit(
                     "patrol",
                     step,
                     suppress_success_trace=True,
                 )
-
             except Exception as exc:
-
                 # Defensive: _execute_step already catches; this is paranoia.
-
                 logger.warning("[Patrol] step %s exception: %s", step_id, exc)
-
                 failed += 1
-
                 last_failed = step_id
-
                 continue
 
-
-
             if step_succeeded:
-
                 success += 1
-
             else:
-
                 failed += 1
-
                 last_failed = step_id
-
-
 
         return success, failed, last_failed
 
-
-
     def _execute_teardown_best_effort(self, teardown_def: List[dict]) -> StepResult:
-
         """Execute teardown with best-effort semantics: each step runs independently.
 
 
@@ -2448,197 +1474,99 @@ class PipelineEngine:
         - "FAILED" — all steps failed
 
         """
-
         total_steps = 0
-
         failed_steps = 0
-
         errors = []
 
-
-
         for step in teardown_def or []:
-
             total_steps += 1
-
             step_id = step.get("step_id", "unknown")
-
             try:
-
                 result = self._execute_step("teardown", step)
-
                 if not result.success:
-
                     failed_steps += 1
-
                     errors.append(f"{step_id}: {result.error_message}")
-
                     logger.warning("[Teardown] step '%s' failed: %s", step_id, result.error_message)
-
             except Exception as e:
-
                 failed_steps += 1
-
                 errors.append(f"{step_id}: {e}")
-
                 logger.warning("[Teardown] step '%s' exception: %s", step_id, e)
 
-
-
         if failed_steps > 0:
-
             logger.warning(
-
                 "[Teardown] %d/%d steps failed: %s",
-
                 failed_steps, total_steps, "; ".join(errors),
-
             )
 
-
-
         # Determine teardown status: SUCCESS / DEGRADED / FAILED
-
         if failed_steps == 0:
-
             teardown_status = "SUCCESS"
-
         elif failed_steps < total_steps:
-
             teardown_status = "DEGRADED"
-
         else:
-
             teardown_status = "FAILED"
 
-
-
         return StepResult(
-
             success=(total_steps == 0 or failed_steps < total_steps),  # DEGRADED still counts as success
-
             exit_code=0 if failed_steps == 0 else 1,
-
             error_message=f"teardown: {failed_steps}/{total_steps} steps failed" if failed_steps > 0 else "",
-
             metadata={"teardown_status": teardown_status},
-
         )
 
-
-
-
-
     def drain_workers(self, grace_seconds: int = 5) -> None:
-
         """Compatibility no-op: step timeouts now kill the child process inline."""
-
         del grace_seconds
 
 
-
-
-
 class _MQStepLogger:
-
     """Lightweight logger that sends lines via MQ and writes to local file."""
 
-
-
     def __init__(
-
         self,
-
         mq_producer,
-
         run_id: int,
-
         step_id_str: str,
-
         log_file: Optional[str] = None,
-
     ):
-
         self._mq = mq_producer
-
         self._run_id = run_id
-
         self._step_id = step_id_str
-
         self._log_file = log_file
-
         if log_file:
-
             try:
-
                 os.makedirs(os.path.dirname(log_file), exist_ok=True)
-
             except Exception:
-
                 pass
-
-
 
     def _write(self, message: str, level: str) -> None:
-
         if self._mq and self._mq.connected:
-
             self._mq.send_log(
-
                 job_id=self._run_id,
-
                 device_id=0,
-
                 level=level,
-
                 tag=self._step_id,
-
                 message=message,
-
             )
 
-
-
         if self._log_file:
-
             try:
-
                 ts = datetime.now(timezone.utc).isoformat() + "Z"
-
                 with open(self._log_file, "a", encoding="utf-8") as f:
-
                     f.write(f"{ts} [{level}] {message}\n")
-
             except Exception:
-
                 pass
 
-
-
     def info(self, message: str) -> None:
-
         self._write(message, "INFO")
 
-
-
     def warn(self, message: str) -> None:
-
         self._write(message, "WARN")
 
-
-
     def error(self, message: str) -> None:
-
         self._write(message, "ERROR")
 
-
-
     def debug(self, message: str) -> None:
-
         self._write(message, "DEBUG")
 
-
-
     def log(self, message: str, level: str = "INFO") -> None:
-
         self._write(message, level)

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 from pathlib import Path
 
 import httpx
@@ -128,7 +127,7 @@ def probe_backend(base: str) -> dict:
 
 def main() -> None:
     env = load_env(ENV_FILE)
-    print(f"=== Stage A audit ===")
+    print("=== Stage A audit ===")
     print(f"env_file: {ENV_FILE} ({'found' if env else 'missing/empty'})")
     print(f"backend:  {BACKEND}\n")
 

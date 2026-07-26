@@ -22,7 +22,6 @@ import logging
 import os
 import threading
 from collections import OrderedDict
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

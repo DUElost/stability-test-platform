@@ -5,79 +5,49 @@ import subprocess
 import sys
 from pathlib import Path
 
-from sqlalchemy import create_engine, text
 from testcontainers.postgres import PostgresContainer
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = REPO_ROOT / "backend"
 
+# ADR-0020 之前、status 列还是 VARCHAR 的那个版本
+_PRE_STATUS_ENUM_REVISION = "l2m3n4o5p6q7"
+
 
 def _normalize_database_url(database_url: str) -> str:
     return database_url.replace("postgresql+psycopg2://", "postgresql+psycopg://", 1)
 
 
-def _prepare_pre_status_enum_schema(database_url: str) -> None:
-    engine = create_engine(database_url, future=True)
-    with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
-        conn.execute(text("INSERT INTO alembic_version (version_num) VALUES ('l2m3n4o5p6q7')"))
-
-        conn.execute(
-            text(
-                """
-                CREATE TABLE plan_run (
-                    id INTEGER PRIMARY KEY,
-                    status VARCHAR(32) NOT NULL DEFAULT 'RUNNING'
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE TABLE job_instance (
-                    id INTEGER PRIMARY KEY,
-                    plan_run_id INTEGER,
-                    device_id INTEGER,
-                    status VARCHAR(32) NOT NULL DEFAULT 'PENDING'
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                CREATE UNIQUE INDEX uq_job_active_per_device
-                    ON job_instance (device_id)
-                 WHERE status IN ('PENDING', 'RUNNING', 'UNKNOWN')
-                """
-            )
-        )
-    engine.dispose()
+def _alembic(env: dict, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", str(BACKEND_DIR / "alembic.ini"), *args],
+        cwd=BACKEND_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
 
 def test_alembic_upgrade_head_succeeds_from_pre_status_enum_schema():
+    """从 pre-status-enum 版本(l2m3n4o5p6q7)升到 head 必须成功。
+
+    起点用 `alembic upgrade l2m3n4o5p6q7` 真实回放到那个版本,而不是手写
+    一份简化 schema —— 手写版只建了 plan_run / job_instance,漏掉了 host,
+    于是 w1x2y3z4a5b6 往 host 加列时炸在 UndefinedTable。真实库在该版本上
+    是有 host 的,所以那是 fixture 不完整,不是迁移有问题。回放还有个好处:
+    以后新增迁移不必再回来手工补表。
+    """
     with PostgresContainer("postgres:16") as postgres:
         env = os.environ.copy()
         env["DATABASE_URL"] = _normalize_database_url(postgres.get_connection_url())
-        _prepare_pre_status_enum_schema(env["DATABASE_URL"])
 
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "alembic",
-                "-c",
-                str(BACKEND_DIR / "alembic.ini"),
-                "upgrade",
-                "head",
-            ],
-            cwd=BACKEND_DIR,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
+        to_baseline = _alembic(env, "upgrade", _PRE_STATUS_ENUM_REVISION)
+        assert to_baseline.returncode == 0, (
+            f"回放到 {_PRE_STATUS_ENUM_REVISION} 失败:\n{to_baseline.stderr}"
         )
+
+        result = _alembic(env, "upgrade", "head")
 
     assert result.returncode == 0, result.stderr

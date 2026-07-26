@@ -12,7 +12,6 @@ Control-plane half (Agent-side production of these signals lands in 5b):
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest

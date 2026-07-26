@@ -22,20 +22,16 @@ Output (stdout):
     {"success": true/false, "monkey_pid": "12345", "watchdog_pid": "...", "metrics": {...}}
 """
 
-import json
-import os
 import subprocess
-import sys
 import time
-from pathlib import Path
 
-from _adb import adb_path, adb_shell, adb_shell_quiet, device_serial, output_result, params
+from _adb import adb_path, adb_shell, device_serial, output_result, params
 
 
 def _ps_grep(serial: str, pattern: str, timeout: int = 10) -> list[dict]:
     """Search for processes matching pattern, return list of {pid, name, line}."""
     result = subprocess.run(
-        [adb_path(), "-s", serial, "shell", f"ps -ef"],
+        [adb_path(), "-s", serial, "shell", "ps -ef"],
         capture_output=True, text=True, timeout=timeout,
     )
     matches = []

@@ -22,19 +22,16 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy.exc
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 
 from backend.core.database import AsyncSessionLocal
 from backend.core.metrics import (
     reconciler_runs,
     reconciler_actions,
-    expired_active_leases_gauge,
-    unknown_jobs_gauge,
 )
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import JobStatus, LeaseStatus, LeaseType
-from backend.models.host import Device
 from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.aggregator import PlanAggregator

@@ -35,7 +35,8 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install -r backend/requirements.txt
+        # dev 清单包含运行时依赖 + pytest / testcontainers
+        run: pip install -r backend/requirements-dev.txt
       - name: Compile check
         run: python -m compileall backend/ -q
       - name: Migrate empty PostgreSQL database
@@ -53,6 +54,10 @@ jobs:
           -v
       - name: Run agent tests
         run: python -m pytest backend/agent/tests/ -v
+      # 根 tests/ 也在 pytest.ini 的 testpaths 里(迁移升级 + 部署脚本契约),
+      # 此前从未在 CI 跑过。test_repo_layout.py 现在会守住这条对应关系。
+      - name: Run repo-level tests
+        run: python -m pytest tests/ -v
 
   frontend-check:
     runs-on: ubuntu-latest
@@ -73,6 +78,52 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  # Lint —— 报告性质,暂不阻塞合入。
+  #
+  # 本仓在 2026-07 之前从未跑过 lint,存量:ESLint 105 warning、
+  # ruff 338 finding(其中 244 是未使用导入,可 --fix 自动收敛)。
+  # 先让信号在 PR 上可见,存量清完后把 continue-on-error 摘掉,
+  # 并把 ESLint 的 --max-warnings 降到 0。
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Install ruff
+        # 版本随 requirements-dev.txt 走,避免 CI 与本地报出不同结果
+        run: pip install "$(grep -E '^ruff' backend/requirements-dev.txt)"
+      - name: Ruff
+        run: ruff check backend/ tools/ scripts/
+        continue-on-error: true
+
+      # 这条**阻塞**:不是风格建议,是二值门禁,且当前全仓已清零。
+      # pre-commit 钩子需开发者手动 `git config core.hooksPath .githooks`
+      # 才生效 —— pipeline_engine.py 当年就是这么漏进来的,CI 侧兜底。
+      # 前端也要扫:历史上撞坏 diff 的 PlanEditPage.tsx 就是 .tsx
+      # (见 .gitattributes 与 README「EOL 与污染防御」)。非 .py 只检测不改写。
+      - name: 空行注入污染检查
+        run: |
+          find backend tools scripts frontend/src -type f \
+            \( -name '*.py' -o -name '*.ts' -o -name '*.tsx' \
+               -o -name '*.js' -o -name '*.jsx' \) \
+            -not -path '*/resources/*' -not -path '*/__pycache__/*' \
+            -not -path '*/node_modules/*' \
+            | xargs python tools/dev/collapse-blank-pollution.py --check -q
 
   docker-build:
     runs-on: ubuntu-latest

@@ -13,7 +13,6 @@ pass can retry, and ``result_summary.chain_dispatch_failed`` records the error.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
