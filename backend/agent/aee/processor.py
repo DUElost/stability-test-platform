@@ -6,6 +6,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -31,7 +32,11 @@ from .paths import (
     resolve_device_output_dir,
     resolve_mobilelog_subdir,
 )
-from .timestamp import format_timestamp_for_filename, parse_timestamp
+from .timestamp import (
+    as_device_local_naive,
+    format_timestamp_for_filename,
+    parse_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -425,14 +430,22 @@ def _iter_pending_tasks_newest_first(
     pending_tasks: Dict[str, Dict[str, Any]],
 ) -> List[Tuple[str, Dict[str, Any]]]:
     # Prefer newer AEE rows so fresh runtime crashes are not starved by old backlog.
-    return sorted(
-        pending_tasks.items(),
-        key=lambda item: (
-            parse_timestamp(str(item[1].get("timestamp") or "")) is not None,
-            parse_timestamp(str(item[1].get("timestamp") or "")),
-        ),
-        reverse=True,
-    )
+    #
+    # #88:parse_timestamp 对带时区的行返回 aware、对无时区/不认识的时区返回
+    # naive。同一个 db_history 里两种混在一起时,直接拿返回值排序会抛
+    # TypeError: can't compare offset-naive and offset-aware datetimes,
+    # 冒出 process_device_logs 中断整轮 → runtime AEE 不 emit;叠加
+    # reconciler 的连续 tick 错误上限,连续若干轮后还会让 reconciler 自关闭。
+    #
+    # 这里统一降到设备墙钟 naive:排序只需要「设备自己认为的先后」,而
+    # db_history 同属一台设备,墙钟可比且与原行为一致。
+    def _sort_key(item: Tuple[str, Dict[str, Any]]):
+        parsed = as_device_local_naive(
+            parse_timestamp(str(item[1].get("timestamp") or ""))
+        )
+        return (parsed is not None, parsed or datetime.min)
+
+    return sorted(pending_tasks.items(), key=_sort_key, reverse=True)
 
 
 def _cleanup_dir(path: Path) -> None:
