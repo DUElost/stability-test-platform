@@ -6,6 +6,8 @@ import os
 import subprocess
 from typing import Dict, List, Any, Optional, Tuple
 
+from .device_platform import PLATFORM_UNKNOWN, detect_device_platform
+
 logger = logging.getLogger(__name__)
 
 _STATIC_DEVICE_SERIALS_ENV = "STP_STATIC_DEVICE_SERIALS"
@@ -106,6 +108,7 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
             "temperature": None,
             "network_latency": None,
             "build_display_id": None,
+            "platform": PLATFORM_UNKNOWN,
         }
 
     info = {
@@ -117,6 +120,7 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
         "temperature": None,
         "network_latency": None,
         "build_display_id": None,
+        "platform": PLATFORM_UNKNOWN,
     }
 
     if raw_adb_state and raw_adb_state != "device":
@@ -174,6 +178,9 @@ def collect_device_info(adb_path: str, serial: str, raw_adb_state: str = "device
             info["build_display_id"] = result.stdout.strip()
     except Exception as e:
         logger.warning(f"build_display_id_failed: {serial}, error={e}")
+
+    # 采集 SoC 平台 (#73) — 结果按 serial 缓存,只有首次探测真正走 adb
+    info["platform"] = detect_device_platform(adb_path, serial)
 
     # 采集网络延迟 (主目标 223.5.5.5, 备用 8.8.8.8)
     latency = _ping_with_fallback(adb_path, serial, "223.5.5.5", fallback="8.8.8.8")

@@ -336,6 +336,7 @@ def _process_heartbeat_with_db(
                     serial=serial,
                     host_id=host.id,
                     model=dev_data.get("model"),
+                    platform=dev_data.get("platform"),
                 )
                 db.add(device)
                 db.flush()
@@ -353,6 +354,14 @@ def _process_heartbeat_with_db(
             device.host_id = host.id
             if dev_data.get("model") is not None:
                 device.model = dev_data.get("model")
+
+            # #73: SoC 平台。Agent 探测失败时上报 UNKNOWN — 不能让它覆盖
+            # 已判定出的 MTK/UNISOC/QCOM(adb 抖动一次就把结论抹掉)。
+            reported_platform = dev_data.get("platform")
+            if reported_platform and (
+                reported_platform != "UNKNOWN" or not device.platform
+            ):
+                device.platform = reported_platform
 
             # Update ADB connection state
             device.adb_state = dev_data.get("adb_state", "unknown")
