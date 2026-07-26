@@ -74,10 +74,42 @@ def test_lock_generated_for_ci_python_version():
     跨版本生成的 hash 集可能在目标环境装不上(不同 Python 版本会解析出
     不同的 wheel 组合)。
     """
-    head = _LOCK.read_text(encoding="utf-8")[:600]
+    # 扫整个抬头注释区,而不是固定字节数 —— 抬头说明长度会变
+    head_lines = []
+    for line in _LOCK.read_text(encoding="utf-8").splitlines():
+        if line.strip() and not line.startswith("#"):
+            break
+        head_lines.append(line)
+    head = "\n".join(head_lines)
     assert "with Python 3.11" in head, (
         "requirements.lock 不是用 Python 3.11 生成的。重新生成命令见该文件抬头。"
     )
+
+
+def test_lock_digest_matches_requirements():
+    """lock 必须记录 requirements.txt 的内容摘要,且与当前内容一致。
+
+    这是最要紧的一条:下面按包名的集合比对**看不见版本与 extras 的漂移**。
+    `fastapi>=0.104` 改成 `fastapi==999.0`、`uvicorn[standard]` 掉成
+    `uvicorn`,包名都没变 —— 集合比对全绿,而 CI 装的是新约束、Docker 装的
+    是旧 lock,测试与生产的依赖就此分叉。
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_REPO_ROOT / "tools" / "dev" / "requirements_digest.py"),
+            str(_REQUIREMENTS),
+            str(_LOCK),
+            "--check",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_lock_covers_every_declared_requirement():
