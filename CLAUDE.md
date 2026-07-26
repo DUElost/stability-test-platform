@@ -6,11 +6,11 @@
 
 ## 架构不变量
 
-- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — 合并 ASGI 挂载（`backend/main.py:195-196`）
+- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — 合并 ASGI 挂载（`backend/main.py:207`）
 - **Plan 无 lifecycle 列**：由 PlanStep 行 + `patrol_interval_seconds`/`timeout_seconds` 在 dispatcher 阶段组装为 `pipeline_def.lifecycle`（唯一事实源）
 - **Redis 仅做 SAQ broker**，不存业务数据
 - **Production guard**：`ENV=production` 时强制 `AUTH_COOKIE_SECURE=1` + `AUTH_COOKIE_SAMESITE ∈ {lax,strict}` + `STP_CSRF_ENABLED` 开启，否则 `RuntimeError`（ADR-0024）
-- **Pipeline 仅接受 `lifecycle` 顶层键**：`stages`/`phases` 格式被拒绝（`backend/agent/pipeline_engine.py:431-473`）
+- **Pipeline 仅接受 `lifecycle` 顶层键**：`stages`/`phases` 格式被拒绝（`backend/agent/pipeline_engine.py:325-332`）
 - **唯一 action 类型** `script:<name>`：`builtin:<name>` / `tool:<id>` / `shell:<command>` 已删除
 
 ---
