@@ -1065,10 +1065,20 @@ export type DeviceUiStatus =
   | 'backoff'
   | 'pending';
 
+/** Device ADB / host reachability — orthogonal to job execution state. */
+export type DeviceLinkStatus =
+  | 'online'
+  | 'offline'
+  | 'adb_error'
+  | 'host_offline'
+  | 'unknown';
+
 export interface JobActionCapabilities {
   manual_retry: boolean;
   manual_exit: boolean;
   open_report?: boolean;
+  /** Present when manual_retry is false for a RUNNING job due to device disconnect. */
+  manual_retry_blocked_reason?: 'device_disconnected' | null;
 }
 
 export interface DeviceMatrixItem {
@@ -1079,6 +1089,16 @@ export interface DeviceMatrixItem {
   job_id: number;
   job_status: JobStatus;
   ui_status: DeviceUiStatus;
+  /**
+   * Job execution projection independent of device link (patrol/backoff/etc.).
+   * Prefer this over `ui_status` for the 执行 dimension — `ui_status` blends in
+   * device reachability and is kept only for backward compatibility.
+   */
+  job_exec_status?: DeviceUiStatus;
+  /** Device ADB / host reachability for manual-retry gating and display. */
+  device_link_status?: DeviceLinkStatus;
+  adb_state?: string | null;
+  adb_connected?: boolean | null;
   current_stage: 'init' | 'patrol' | 'teardown' | 'done' | 'pending' | 'failed' | 'aborted' | 'unknown';
   current_step?: string | null;
   patrol_cycle_count: number;
@@ -1115,7 +1135,10 @@ export interface DeviceMatrixItem {
 export interface PlanRunDevicesPayload {
   plan_run_id: number;
   total: number;
-  by_status: Record<string, number>;     // includes 'all'
+  /** Facet over `job_exec_status` (执行维度). Includes 'all'. */
+  by_status: Record<string, number>;
+  /** Facet over `device_link_status` (连接维度). Includes 'all'. */
+  by_link_status?: Record<string, number>;
   by_host: Record<string, number>;
   devices: DeviceMatrixItem[];
 }

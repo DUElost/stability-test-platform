@@ -584,6 +584,20 @@ def manual_retry_job(
             detail=f"job must be RUNNING for manual retry; current status is {job.status}",
         )
 
+    device = db.get(Device, job.device_id) if job.device_id else None
+    host_status: str | None = None
+    if job.host_id:
+        host_row = db.get(Host, job.host_id)
+        host_status = host_row.status if host_row else None
+    if _device_currently_disconnected(device, host_status):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "device ADB is not reachable; manual retry cannot restore "
+                "connection — check USB or reboot the device"
+            ),
+        )
+
     # Why: 同向 manual_action 已等待 Agent 消费时,重复点击不再二次写 audit / emit / counter。
     #      合法语义:用户连点 N 次 retry,后端只该留 1 条审计 + 1 次 emit;EXIT_REQUESTED 切到
     #      RETRY_NOW 是真正的意图变更,不在此处短路。
@@ -1705,30 +1719,86 @@ class DeviceMatrixItem(BaseModel):
     is_stuck: bool = False
     busy_reason: Optional[str] = None
     busy_lease_job_id: Optional[int] = None
+    device_link_status: str = "unknown"   # online | offline | adb_error | host_offline | unknown
+    job_exec_status: str = "unknown"      # running | backoff | pending | completed | failed | aborted | unknown
+    adb_state: Optional[str] = None
+    adb_connected: Optional[bool] = None
     capabilities: Optional[dict] = None
 
 
 class PlanRunDevicesOut(BaseModel):
     plan_run_id: int
     total: int
-    by_status: dict                    # {all/completed/running/failed/unknown/backoff/pending: int}
+    # Job 执行投影(与设备连接正交):{all/completed/running/failed/unknown/backoff/pending/aborted: int}
+    by_status: dict
+    # 设备 ADB / Host 可达性:{all/online/offline/adb_error/host_offline/unknown: int}
+    by_link_status: dict = {}
     by_host: dict                      # {host_id: int}
     devices: list[DeviceMatrixItem]
+
+
+# ADB 通道不可用的状态。比 `_adb_state_excluded`(派发认领预筛)多一个
+# `unauthorized`:该设备物理在线、可被认领口径讨论,但 shell 必然失败,
+# 对「能否立即重试」而言等同断连。两者刻意不合并 —— 认领预筛的口径由
+# dispatcher 决定,不应被 UI 语义反向绑架。
+_ADB_LINK_ERROR_STATES = frozenset({"offline", "unknown", "unauthorized"})
+
+
+def _derive_device_link_status(
+    device: Device | None,
+    host_status: str | None,
+) -> str:
+    """设备 ADB / Host 可达性 — 与 Job 执行状态正交。
+
+    这是断连语义的**唯一事实源**;`_device_currently_disconnected` 由它派生。
+    """
+    if device is None:
+        return "unknown"
+    if host_status == HostStatus.OFFLINE.value:
+        return "host_offline"
+    if (device.adb_state or "device").lower() in _ADB_LINK_ERROR_STATES:
+        return "adb_error"
+    if not device.adb_connected or device.status == DeviceStatus.OFFLINE.value:
+        return "offline"
+    return "online"
 
 
 def _device_currently_disconnected(
     device: Device | None,
     host_status: str | None,
 ) -> bool:
+    """manual retry / ui_status 的断连门禁。
+
+    Why: 必须与 `_derive_device_link_status` 同源。两处各自判 adb_state 时,
+         `unauthorized` 会被前者判成 adb_error、被后者放行,导致抽屉同时渲染
+         「设备 ADB 不可达」警告条和「立即重试」按钮,且 POST 真的执行。
+         当前 Agent 的 `collect_device_info` 会在 adb_state≠device 时一并把
+         adb_connected 置 False(device_discovery.py:122),所以线上暂被兜住 ——
+         但那是隐式字段配对约定,不该由两份判定规则各自假设。
+    """
     if device is None:
         return False
-    if host_status == HostStatus.OFFLINE.value:
-        return True
-    if _adb_state_excluded(device.adb_state):
-        return True
-    if not device.adb_connected or device.status == DeviceStatus.OFFLINE.value:
-        return True
-    return False
+    return _derive_device_link_status(device, host_status) != "online"
+
+
+def _job_exec_status_for_job(j: JobInstance, now: datetime) -> str:
+    s = j.status
+    if s == JobStatus.COMPLETED.value:
+        return "completed"
+    if s == JobStatus.ABORTED.value:
+        return "aborted"
+    if s in _FAILED_JOB_STATUSES:
+        return "failed"
+    if s == JobStatus.PENDING.value:
+        return "pending"
+    if s == JobStatus.UNKNOWN.value:
+        return "unknown"
+    if (j.manual_action or "") == "EXIT_REQUESTED":
+        return "backoff"
+    nrt = _aware(j.next_retry_at)
+    if nrt and nrt > now:
+        return "backoff"
+    return "running"
 
 
 def _ui_status_for_job(
@@ -1863,7 +1933,8 @@ def _derive_busy_reason(
 @router.get("/plan-runs/{run_id}/devices", response_model=ApiResponse[PlanRunDevicesOut])
 def get_plan_run_devices(
     run_id: int,
-    status: Optional[str] = Query(None, description="ui_status 过滤(可选)"),
+    status: Optional[str] = Query(None, description="job_exec_status 过滤(可选)"),
+    link_status: Optional[str] = Query(None, description="device_link_status 过滤(可选)"),
     host_id: Optional[str] = Query(None, description="host_id 过滤(可选)"),
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
@@ -1871,13 +1942,17 @@ def get_plan_run_devices(
     """ADR-0021/ADR-0022 C5a₂: 设备执行矩阵 — 每台设备一行,
     包含 patrol 心跳聚合、退避状态、watcher 异常计数。
 
-    by_status / by_host facet 始终基于"未过滤"的全集计算,
+    「连接」与「执行」是两个正交维度,各有一组 facet:
+    `by_status` 基于 `job_exec_status`(纯 Job 投影,不掺设备连接),
+    `by_link_status` 基于 `device_link_status`(ADB / Host 可达性)。
+    两组 facet 与 `by_host` 一样始终基于"未过滤"全集计算,
     便于前端筛选 chip 同时显示总数和当前数。
     """
     t0 = time.perf_counter()
     try:
         return _get_plan_run_devices_impl(
-            run_id=run_id, status=status, host_id=host_id, db=db,
+            run_id=run_id, status=status, link_status=link_status,
+            host_id=host_id, db=db,
         )
     finally:
         record_plan_run_devices_query_duration(time.perf_counter() - t0)
@@ -1889,6 +1964,7 @@ def _get_plan_run_devices_impl(
     status: Optional[str],
     host_id: Optional[str],
     db: Session,
+    link_status: Optional[str] = None,
 ):
     _require_plan_run(db, run_id)
     # ADR-0026 P2-3: single JOIN for jobs + device + host + ACTIVE JOB lease
@@ -1917,12 +1993,14 @@ def _get_plan_run_devices_impl(
     if not joined:
         return ok(PlanRunDevicesOut(
             plan_run_id=run_id, total=0,
-            by_status={"all": 0}, by_host={}, devices=[],
+            by_status={"all": 0}, by_link_status={"all": 0},
+            by_host={}, devices=[],
         ))
 
     now = datetime.now(timezone.utc)
     items: list[DeviceMatrixItem] = []
     by_status: dict[str, int] = {"all": 0}
+    by_link_status: dict[str, int] = {"all": 0}
     by_host: dict[str, int] = {}
 
     for j, dev, host_st, lease_job_id in joined:
@@ -1933,6 +2011,12 @@ def _get_plan_run_devices_impl(
         pending_deadline = _pending_claim_deadline(j)
         heartbeat_deadline = _running_heartbeat_deadline(j)
         busy_reason, busy_lease_job_id = _derive_busy_reason(dev, host_st, lease_job_id)
+        link = _derive_device_link_status(dev, host_st)
+        exec_status = _job_exec_status_for_job(j, now)
+        disconnected = _device_currently_disconnected(dev, host_st)
+        manual_retry_allowed = (
+            j.status == JobStatus.RUNNING.value and not disconnected
+        )
         items.append(DeviceMatrixItem(
             device_id=j.device_id,
             device_serial=serial,
@@ -1962,9 +2046,18 @@ def _get_plan_run_devices_impl(
             is_stuck=bool(heartbeat_deadline and now >= heartbeat_deadline),
             busy_reason=busy_reason,
             busy_lease_job_id=busy_lease_job_id,
+            device_link_status=link,
+            job_exec_status=exec_status,
+            adb_state=dev.adb_state if dev else None,
+            adb_connected=dev.adb_connected if dev else None,
             capabilities={
-                "manual_retry": j.status == JobStatus.RUNNING.value,
+                "manual_retry": manual_retry_allowed,
                 "manual_exit": j.status == JobStatus.RUNNING.value,
+                "manual_retry_blocked_reason": (
+                    "device_disconnected"
+                    if j.status == JobStatus.RUNNING.value and disconnected
+                    else None
+                ),
                 "open_report": j.status in {
                     JobStatus.COMPLETED.value,
                     JobStatus.FAILED.value,
@@ -1973,14 +2066,18 @@ def _get_plan_run_devices_impl(
             },
         ))
         by_status["all"] += 1
-        by_status[ui] = by_status.get(ui, 0) + 1
+        by_status[exec_status] = by_status.get(exec_status, 0) + 1
+        by_link_status["all"] += 1
+        by_link_status[link] = by_link_status.get(link, 0) + 1
         if j.host_id:
             by_host[j.host_id] = by_host.get(j.host_id, 0) + 1
 
     # 过滤(facets 已经基于全集)
     filtered = items
     if status and status.lower() != "all":
-        filtered = [d for d in filtered if d.ui_status == status.lower()]
+        filtered = [d for d in filtered if d.job_exec_status == status.lower()]
+    if link_status and link_status.lower() != "all":
+        filtered = [d for d in filtered if d.device_link_status == link_status.lower()]
     if host_id and host_id.lower() != "all":
         filtered = [d for d in filtered if d.host_id == host_id]
 
@@ -1988,6 +2085,7 @@ def _get_plan_run_devices_impl(
         plan_run_id=run_id,
         total=len(items),
         by_status=by_status,
+        by_link_status=by_link_status,
         by_host=by_host,
         devices=filtered,
     ))

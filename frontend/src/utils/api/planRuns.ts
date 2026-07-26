@@ -18,6 +18,7 @@ import type {
   EventStage,
   EventSeverity,
   DeviceUiStatus,
+  DeviceLinkStatus,
   CrashDetailEntry,
 } from './types';
 
@@ -29,7 +30,10 @@ export interface ListPlanRunEventsParams {
 }
 
 export interface ListPlanRunDevicesParams {
+  /** 执行维度 — 过滤 `job_exec_status`。 */
   status?: DeviceUiStatus | 'all';
+  /** 连接维度 — 过滤 `device_link_status`。与 `status` 正交，可叠加。 */
+  link_status?: DeviceLinkStatus | 'all';
   host_id?: string | 'all';
 }
 

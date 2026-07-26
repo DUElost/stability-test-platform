@@ -385,3 +385,65 @@ describe('DeviceOverview', () => {
     expect(screen.getByTestId('device-row-3001')).toBeInTheDocument();
   });
 });
+
+// ── 连接 / 执行 双维度 ────────────────────────────────────────────────────
+
+/** 断连设备:link=offline、job 仍 RUNNING、UNKNOWN 且处于 grace 窗口内。 */
+const disconnectedFixture: PlanRunDevicesPayload = {
+  plan_run_id: 12,
+  total: 1,
+  by_status: { all: 1, unknown: 1 },
+  by_link_status: { all: 1, offline: 1 },
+  by_host: { 'host-101': 1 },
+  devices: [
+    {
+      ...fixture.devices[0],
+      job_id: 4001,
+      device_serial: 'DEV-OFF',
+      job_status: 'UNKNOWN',
+      ui_status: 'unknown',
+      job_exec_status: 'unknown',
+      device_link_status: 'offline',
+      grace_remaining_seconds: 180,
+      status_reason: 'lease_expired',
+    },
+  ],
+};
+
+describe('DeviceOverview — 连接/执行 双维度', () => {
+  it('tooltip 同时保留连接提示与 grace 倒计时，而非只显示连接提示', () => {
+    const { container } = render(
+      <DeviceOverview data={disconnectedFixture} viewMode="table" />,
+    );
+    const tooltips = Array.from(container.querySelectorAll('[title]'))
+      .map((el) => el.getAttribute('title') ?? '');
+    // 早退版本会把 grace 倒计时整个吞掉 —— 断连设备恰恰最需要它
+    const combined = tooltips.find((t) => t.includes('grace 剩余 180s'));
+    expect(combined).toBeDefined();
+    expect(combined).toContain('请检查 USB');
+  });
+
+  it('minimap 方块按执行维度着色，连接状态拼进 label', () => {
+    render(<DeviceOverview data={disconnectedFixture} />);
+    const label = screen.getByTestId('minimap-cell-4001').getAttribute('aria-label') ?? '';
+    expect(label).toContain('DEV-OFF');
+    expect(label).toContain('已断开');   // 执行维度 unknown
+    expect(label).toContain('离线');     // 连接维度 offline
+  });
+
+  it('渲染连接维度 chip 组并把选择回传父组件', () => {
+    const onLink = vi.fn();
+    render(
+      <DeviceOverview data={disconnectedFixture} onLinkFilterChange={onLink} />,
+    );
+    expect(screen.getByTestId('device-link-filter-offline')).toHaveTextContent('1');
+    fireEvent.click(screen.getByTestId('device-link-filter-offline'));
+    expect(onLink).toHaveBeenCalledWith('offline');
+  });
+
+  it('后端未返回 by_link_status 时不渲染连接 chip 组', () => {
+    render(<DeviceOverview data={fixture} onLinkFilterChange={vi.fn()} />);
+    expect(screen.queryByTestId('device-link-filter-offline')).not.toBeInTheDocument();
+    expect(screen.getByTestId('device-status-filter-running')).toBeInTheDocument();
+  });
+});

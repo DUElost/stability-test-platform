@@ -31,6 +31,8 @@ function makeDevice(overrides: Partial<DeviceMatrixItem> = {}): DeviceMatrixItem
     job_id: 3001,
     job_status: 'RUNNING',
     ui_status: 'running',
+    job_exec_status: 'running',
+    device_link_status: 'online',
     current_stage: 'patrol',
     current_step: 'monkey_check',
     patrol_cycle_count: 12,
@@ -119,14 +121,44 @@ describe('DeviceDetailDrawer — status_reason 展示', () => {
 });
 
 describe('DeviceDetailDrawer — SLA / BUSY 展示', () => {
-  it('renders 已断开 status pill for unknown devices', () => {
+  it('renders device link + job exec status pills', () => {
     render_(
       <DeviceDetailDrawer
-        device={makeDevice({ grace_remaining_seconds: 240, ui_status: 'unknown' })}
+        device={makeDevice({
+          grace_remaining_seconds: 240,
+          ui_status: 'unknown',
+          job_exec_status: 'unknown',
+          device_link_status: 'online',
+        })}
         {...handlers}
       />,
     );
-    expect(screen.getByTestId('device-drawer-status-pill')).toHaveTextContent('已断开');
+    const pill = screen.getByTestId('device-drawer-status-pill');
+    expect(pill).toHaveTextContent('在线');
+    expect(pill).toHaveTextContent('已断开');
+  });
+
+  it('shows offline hint and hides retry when device ADB is unreachable', () => {
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          ui_status: 'unknown',
+          job_exec_status: 'backoff',
+          device_link_status: 'offline',
+          adb_connected: false,
+          adb_state: 'offline',
+          capabilities: {
+            manual_retry: false,
+            manual_exit: true,
+            manual_retry_blocked_reason: 'device_disconnected',
+          },
+        })}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByTestId('device-drawer-offline-hint')).toBeInTheDocument();
+    expect(screen.queryByTestId('device-drawer-retry-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('device-drawer-exit-btn')).toBeInTheDocument();
   });
 
   it('renders Grace 剩余 when grace_remaining_seconds is set', () => {
@@ -231,5 +263,31 @@ describe('DeviceDetailDrawer — a11y / 键盘', () => {
     fireEvent.click(screen.getByTestId('device-drawer-retry-btn'));
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('link 不可达时否决 capabilities.manual_retry，警告条与按钮不并存', () => {
+    // 回归:unauthorized 曾让后端 capabilities 放行、前端 link 判 adb_error,
+    // 结果「设备 ADB 不可达」警告条和「立即重试」按钮同时渲染。
+    render_(
+      <DeviceDetailDrawer
+        device={makeDevice({
+          job_status: 'RUNNING',
+          ui_status: 'running',
+          job_exec_status: 'running',
+          device_link_status: 'adb_error',
+          adb_connected: true,
+          adb_state: 'unauthorized',
+          capabilities: {
+            manual_retry: true,          // 旧后端/口径漂移下会是 true
+            manual_exit: true,
+            manual_retry_blocked_reason: null,
+          },
+        })}
+        {...handlers}
+      />,
+    );
+    expect(screen.getByTestId('device-drawer-offline-hint')).toBeInTheDocument();
+    expect(screen.queryByTestId('device-drawer-retry-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('device-drawer-exit-btn')).toBeInTheDocument();
   });
 });

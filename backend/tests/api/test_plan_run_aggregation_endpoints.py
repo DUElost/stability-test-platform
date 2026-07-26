@@ -907,7 +907,72 @@ class TestDevicesEndpoint:
         by_serial = {d["device_serial"]: d for d in data["devices"]}
         unknown = by_serial["dev-aa-02"]
         assert unknown["ui_status"] == "unknown"
-        assert data["by_status"].get("unknown") == 1
+        assert unknown["device_link_status"] == "adb_error"
+        assert unknown["job_exec_status"] == "running"
+        assert unknown["capabilities"]["manual_retry"] is False
+        assert unknown["capabilities"]["manual_retry_blocked_reason"] == "device_disconnected"
+        # 两组 facet 正交:执行维度 Job 仍在 running,连接维度才是 adb_error。
+        # (dev-bb-01 fixture 本就是 adb_state=offline,故 adb_error 计 2)
+        assert data["by_status"].get("running") == 1
+        assert data["by_status"].get("unknown") is None
+        assert data["by_link_status"].get("adb_error") == 2
+
+    def test_devices_unauthorized_adb_blocks_manual_retry(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        """unauthorized 设备:link 与断连门禁必须同源。
+
+        Why: 曾经 `_derive_device_link_status` 判 adb_error 而
+             `_device_currently_disconnected` 放行,抽屉会同时渲染
+             「ADB 不可达」警告条和「立即重试」按钮。这里刻意让
+             adb_connected 保持 True(绕开 Agent 侧的字段配对),
+             确保门禁不依赖那个隐式约定。
+        """
+        from backend.models.enums import DeviceStatus
+
+        dev = chain_setup["device_running"]
+        dev.status = DeviceStatus.ONLINE.value
+        dev.adb_connected = True
+        dev.adb_state = "unauthorized"
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices", headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        item = {d["device_serial"]: d for d in data["devices"]}["dev-aa-02"]
+        assert item["device_link_status"] == "adb_error"
+        assert item["capabilities"]["manual_retry"] is False
+        assert item["capabilities"]["manual_retry_blocked_reason"] == "device_disconnected"
+        assert item["ui_status"] == "unknown"
+
+    def test_devices_link_status_filter_and_facets(
+        self, client, auth_headers, db_session, chain_setup,
+    ):
+        from backend.models.enums import DeviceStatus
+
+        dev = chain_setup["device_running"]
+        dev.status = DeviceStatus.OFFLINE.value
+        dev.adb_connected = False
+        dev.adb_state = "offline"
+        db_session.commit()
+
+        cur_run = chain_setup["current_run"]
+        resp = client.get(
+            f"/api/v1/plan-runs/{cur_run.id}/devices?link_status=adb_error",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        returned = data["devices"]
+        assert returned, "link_status 过滤不应返回空集"
+        assert all(d["device_link_status"] == "adb_error" for d in returned)
+        # facet 基于全集、不受过滤影响,且与过滤结果条数自洽
+        assert data["by_link_status"]["all"] == data["total"]
+        assert data["by_link_status"]["adb_error"] == len(returned)
+        assert len(returned) < data["total"], "过滤应真的收窄结果集"
 
     def test_devices_unknown_job_with_online_device_stays_unknown(
         self, client, auth_headers, db_session, chain_setup,

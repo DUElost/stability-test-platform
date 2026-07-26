@@ -11,16 +11,27 @@ import {
 import { api } from '@/utils/api';
 import { dedupKeys, planRunKeys } from '@/utils/api/queryKeys';
 import { SOCKET_MESSAGE_TYPES } from '@/utils/socketEvents';
-import type { ChainDispatchFailed, DeviceUiStatus, WatcherTimeScope } from '@/utils/api/types';
+import type {
+  ChainDispatchFailed,
+  DeviceLinkStatus,
+  DeviceUiStatus,
+  WatcherTimeScope,
+} from '@/utils/api/types';
 
 interface Filters {
   deviceStatusFilter: DeviceUiStatus | 'all';
+  deviceLinkFilter: DeviceLinkStatus | 'all';
   deviceHostFilter: string;
   watcherTimeScope: WatcherTimeScope;
 }
 
 export function usePlanRunDetailData(id: number, filters: Filters) {
-  const { deviceStatusFilter, deviceHostFilter, watcherTimeScope } = filters;
+  const {
+    deviceStatusFilter,
+    deviceLinkFilter,
+    deviceHostFilter,
+    watcherTimeScope,
+  } = filters;
   const qc = useQueryClient();
   const toast = useToast();
   const watcherSignalTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -43,10 +54,13 @@ export function usePlanRunDetailData(id: number, filters: Filters) {
   });
 
   const devicesQ = useQuery({
-    queryKey: planRunKeys.devices(id, deviceStatusFilter, deviceHostFilter),
+    queryKey: planRunKeys.devices(
+      id, deviceStatusFilter, deviceHostFilter, deviceLinkFilter,
+    ),
     queryFn: () =>
       api.planRuns.getDevices(id, {
         status: deviceStatusFilter,
+        link_status: deviceLinkFilter,
         host_id: deviceHostFilter,
       }),
     enabled: !!id,

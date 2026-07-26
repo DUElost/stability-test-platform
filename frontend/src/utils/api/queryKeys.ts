@@ -41,8 +41,12 @@ export const deviceKeys = {
 export const planRunKeys = {
   detail: (id: number) => ['plan-run', id] as const,
   timeline: (id: number) => ['plan-run-timeline', id] as const,
-  devices: (id: number, status?: string, hostId?: number | string | null) =>
-    ['plan-run-devices', id, status, hostId] as const,
+  devices: (
+    id: number,
+    status?: string,
+    hostId?: number | string | null,
+    linkStatus?: string,
+  ) => ['plan-run-devices', id, status, hostId, linkStatus] as const,
   /** Partial key — invalidates all device queries for a PlanRun. */
   devicesByRun: (id: number) => ['plan-run-devices', id] as const,
   watcher: (id: number, scope?: string) => ['plan-run-watcher', id, scope] as const,
