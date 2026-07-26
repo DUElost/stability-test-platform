@@ -49,7 +49,7 @@ from backend.core.agent_secret import (
 )
 from backend.core.cors import get_cors_allowed_origins, get_cors_config
 from backend.core.csrf import CSRFOriginMiddleware, is_csrf_enabled
-from backend.core.database import async_engine, engine
+from backend.core.database import async_engine
 from backend.core.limiter import RateLimitMiddleware
 from backend.core.metrics import init_build_info
 from backend.core.security import validate_production_auth_cookie_settings

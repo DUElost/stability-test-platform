@@ -3,7 +3,6 @@ Agent 测试脚本 - 用于验证设备发现和上报流程
 """
 import os
 import sys
-import time
 import logging
 import requests
 

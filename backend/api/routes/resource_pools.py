@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from backend.api.response import ApiResponse
 from backend.api.routes.auth import require_admin, User
 from backend.core.audit import record_audit_async
 from backend.core.database import get_async_db
-from backend.models.resource_pool import ResourceAllocation, ResourcePool
+from backend.models.resource_pool import ResourcePool
 from backend.services.resource_pool import get_pool_load_summary
 
 router = APIRouter(prefix="/api/v1/resource-pools", tags=["resource-pools"])

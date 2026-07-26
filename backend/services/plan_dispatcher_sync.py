@@ -5,13 +5,12 @@ Sync counterpart of ``plan_dispatcher.py`` for use with sync FastAPI endpoints.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified

@@ -13,10 +13,10 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
-from sqlalchemy import bindparam, case, func, or_, select, tuple_, update
+from sqlalchemy import bindparam, case, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.response import ApiResponse, err, ok
+from backend.api.response import ApiResponse, ok
 from backend.api.error_helpers import raise_api_http_error
 from backend.core.agent_secret import AgentSecretNotConfiguredError, require_agent_secret
 from backend.core.audit import record_audit_async
@@ -36,7 +36,6 @@ from backend.models.host import Device, Host
 from backend.models.device_lease import DeviceLease
 from backend.models.job import JobArtifact, JobInstance, JobLogSignal, StepTrace
 from backend.api.routes.auth import get_current_active_user
-from backend.models.plan import Plan
 from backend.models.plan_run import PlanRun
 from backend.realtime.socketio_server import broadcast_plan_run_status, broadcast_run_job_update
 from backend.services.aggregator import PlanAggregator
@@ -558,7 +557,6 @@ async def _resume_expired_lease_for_recovery(
     Does NOT use extend_lease() — this is the ONLY place that refreshes
     an expired lease, and only under the validated recovery preconditions.
     """
-    from backend.models.host import Device
 
     # Re-check under row lock
     if lease.status != LeaseStatus.ACTIVE.value:
@@ -2042,7 +2040,6 @@ async def ingest_log_signals(
     副作用：按本批实际新插入数累加 job_instance.log_signal_count。
     契约：字段校验见 backend.agent.watcher.contracts.validate_log_signal
     """
-    from sqlalchemy import func
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     from backend.agent.watcher.contracts import ContractViolation, validate_log_signal

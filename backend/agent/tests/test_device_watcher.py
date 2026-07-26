@@ -15,10 +15,8 @@
 
 from __future__ import annotations
 
-import threading
 import time
-from typing import List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 

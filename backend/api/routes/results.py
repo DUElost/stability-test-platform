@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import ProgrammingError
@@ -18,7 +18,6 @@ from backend.core.database import get_db
 from backend.core.legacy_aee import hidden_legacy_plan_ids
 from backend.models.job import JobInstance, StepTrace
 from backend.models.plan import Plan
-from backend.models.plan_run import PlanRun
 
 router = APIRouter(prefix="/api/v1/results", tags=["results"])
 

@@ -21,7 +21,6 @@ across two hosts so that:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import pytest
 
@@ -1921,7 +1920,6 @@ class TestWatcherSummaryEndpoint:
         self, client, auth_headers, chain_setup, db_session, monkeypatch,
     ):
         """POST /plan-runs/{id}/archive -> 200, triggered_hosts 含该 run 的 ONLINE host。"""
-        import asyncio
 
         cur_run = chain_setup["current_run"]
         host_ids = {

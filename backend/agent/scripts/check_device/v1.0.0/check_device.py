@@ -9,7 +9,6 @@ Output (stdout):
     {"success": true/false, "error_message": "..."}
 """
 
-import json
 import subprocess
 import sys
 from _adb import adb_path, device_serial, output_result, params

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from backend.services.agent_version_gate import (
     agent_version_gate_enabled,

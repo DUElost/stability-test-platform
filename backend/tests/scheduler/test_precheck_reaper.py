@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy.orm.attributes import flag_modified
 
 from backend.models.job import JobInstance
 from backend.models.plan import Plan
@@ -161,7 +160,6 @@ def test_reaper_reenqueues_missing_precheck_once(db_session):
 
 def test_reaper_enqueue_failure_does_not_bump_requeue_attempts(db_session):
     """EnqueueSyncError must not silently drop — leave row for next reaper pass."""
-    from datetime import datetime, timezone
 
     run_ctx = {
         "dispatch_device_ids": [2429],

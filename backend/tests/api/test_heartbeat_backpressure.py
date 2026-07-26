@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-import pytest
 
 from backend.api.routes.heartbeat import (
     _should_write_hardware_snapshot,

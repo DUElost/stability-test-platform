@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from backend.api.routes.dedup import resolve_vendor_tool, build_jira_argv
 

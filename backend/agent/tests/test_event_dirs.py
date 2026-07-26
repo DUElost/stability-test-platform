@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from backend.agent.aee.event_dirs import (
     event_dir_basename_from_path,

@@ -39,7 +39,7 @@ import sys
 import time
 from pathlib import Path
 
-from _adb import adb_path, adb_shell, adb_shell_quiet, device_serial, output_result, params
+from _adb import adb_path, adb_shell_quiet, device_serial, output_result, params
 
 _AGENT_ROOT = Path(__file__).resolve().parents[3]
 if str(_AGENT_ROOT) not in sys.path:
@@ -204,7 +204,7 @@ def main():
             inserted = True
 
         module = _load_monkey_test(aimonkey_dir)
-        MonkeyTest = getattr(module, "MonkeyTest")
+        MonkeyTest = module.MonkeyTest
         runner = MonkeyTest(need_nohup, push_resources, sleep_mode, blacklist)
 
         # ── Start monkey ──
@@ -220,7 +220,7 @@ def main():
             watchdog = args.get("watchdog_script", "MonkeyTest.sh")
 
             # Phase 1: Admission check — verify monkey started
-            print(f"[STP_MONITOR] Admission check: verifying monkey process...", flush=True)
+            print("[STP_MONITOR] Admission check: verifying monkey process...", flush=True)
             admission_deadline = time.time() + 30
             monkey_confirmed = False
             while time.time() < admission_deadline:

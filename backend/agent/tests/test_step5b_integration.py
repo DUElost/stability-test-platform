@@ -13,7 +13,6 @@ import inspect
 import os
 import threading
 import time
-from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -25,7 +24,6 @@ from backend.agent.coordinator import (
 )
 from backend.agent.operation_scheduler import (
     OperationScheduler,
-    OperationPermit,
     PermitDenied,
 )
 
@@ -413,8 +411,6 @@ class TestAbortPermitSemantics:
     def test_abort_while_holding_does_not_release_permit(self):
         """Abort a job that is EXECUTING_STEP (holding a permit) — the
         cancel must be a no-op. The concurrency cap must survive."""
-        import threading, time
-        from unittest.mock import MagicMock, patch
 
         from backend.agent.operation_scheduler import OperationScheduler
         from backend.agent.coordinator import HostRunCoordinator
@@ -469,7 +465,6 @@ class TestAbortPermitSemantics:
         When the waiter sees PermitDenied, _is_aborted() is already True,
         so _run_step_with_permit returns False instead of retrying."""
         import threading, time
-        from unittest.mock import MagicMock
 
         s = OperationScheduler(max_concurrent=1)
         coord = HostRunCoordinator("http://x", "h-ord", "inst")

@@ -1,11 +1,10 @@
 import socket
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import paramiko
 from paramiko.ssh_exception import AuthenticationException, SSHException
 
-from .error_handler import RetryConfig
 
 
 def verify_ssh(

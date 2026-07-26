@@ -12,7 +12,7 @@ Output (stdout):
 import subprocess
 import sys
 import time
-from _adb import adb_path, adb_shell, device_serial, output_result, params
+from _adb import adb_path, device_serial, output_result, params
 
 
 def _is_root(serial: str) -> bool:

@@ -5,7 +5,6 @@ Exposes key metrics for monitoring and alerting.
 """
 
 import functools
-import time
 from typing import Callable, Dict, Optional
 
 # Try to import prometheus_client, fallback to mock if not available
@@ -510,7 +509,7 @@ def count_exceptions(metric: Counter, exception_type: type = Exception):
         def wrapper(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
-            except exception_type as e:
+            except exception_type:
                 if PROMETHEUS_AVAILABLE:
                     metric.inc()
                 raise

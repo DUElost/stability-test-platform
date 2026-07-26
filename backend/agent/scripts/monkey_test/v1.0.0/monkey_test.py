@@ -23,14 +23,13 @@ STP_STEP_PARAMS:
     {"success": true/false, "error_message": "...", "metrics": {...}}
 """
 
-import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from _adb import adb_path, adb_shell, device_serial, output_result, params
+from _adb import adb_path, device_serial, output_result, params
 
 _AGENT_ROOT = Path(__file__).resolve().parents[3]
 if str(_AGENT_ROOT) not in sys.path:
@@ -120,7 +119,7 @@ def main():
     local_aimwd = aimonkey_dir / "aimwd"
     if local_aimwd.is_dir():
         if not _push_file(serial, str(local_aimwd), "/data/local/tmp/"):
-            errors.append(f"push failed: aimwd")
+            errors.append("push failed: aimwd")
 
     # 推送 aimonkey.apk → monkey.apk
     local_apk = str(aimonkey_dir / "aimonkey.apk")

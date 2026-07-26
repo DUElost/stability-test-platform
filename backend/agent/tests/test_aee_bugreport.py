@@ -11,7 +11,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import pytest
 
 from backend.agent.aee import bugreport as br
 

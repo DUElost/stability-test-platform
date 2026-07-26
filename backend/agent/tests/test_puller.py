@@ -19,19 +19,15 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
-from unittest.mock import MagicMock
+from typing import Any, Dict, List, Optional, Tuple
 
-import pytest
 
-from backend.agent.watcher.puller import LogPuller, PullerStats
+from backend.agent.watcher.puller import LogPuller
 from backend.agent.watcher.sources import WatcherEvent
 
 
@@ -584,7 +580,6 @@ def test_aee_pull_triggers_bugreport_with_mapped_crash_event_type(tmp_path, monk
         captured.update(kw)
         return True
 
-    import backend.agent.watcher.puller as puller_mod
     # _maybe_export_bugreport 内部 lazy import,需 patch aee.bugreport 模块对象
     from backend.agent.aee import bugreport as bugreport_mod
     monkeypatch.setattr(bugreport_mod, "export_bugreport_for_timestamp", fake_export)

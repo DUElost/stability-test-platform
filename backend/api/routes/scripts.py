@@ -280,7 +280,7 @@ def scan_scripts(
 ):
     try:
         result = scan_script_root(db, _script_root(), _script_runtime_root())
-    except FileNotFoundError as exc:
+    except FileNotFoundError:
         raise_api_http_error(
             status_code=400,
             code="SCRIPT_ROOT_NOT_FOUND",

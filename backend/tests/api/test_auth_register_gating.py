@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 
 def test_register_allowed_by_default_in_non_production(client, monkeypatch):

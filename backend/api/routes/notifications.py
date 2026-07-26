@@ -4,7 +4,6 @@ Notifications API — CRUD for channels and alert rules.
 """
 
 import logging
-from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -20,7 +19,7 @@ from backend.api.schemas import (
 )
 from backend.core.database import get_db
 from backend.core.audit import record_audit
-from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel, NotificationLog, NotificationSource
+from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel, NotificationLog
 from backend.api.routes.auth import (
     get_current_active_user,
     require_admin,

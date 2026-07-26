@@ -3,7 +3,6 @@
 max_concurrent_jobs removed — capacity is now gated by free device count and health only.
 """
 
-import pytest
 
 from backend.agent.capacity_reporter import compute_capacity
 

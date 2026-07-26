@@ -19,8 +19,8 @@ from typing import Any, Dict, List
 
 import pytest
 
-from backend.agent.job_session import JobSession, JobStartupError, JobSessionSummary
-from backend.agent.watcher import LogWatcherManager, WatcherStartError
+from backend.agent.job_session import JobSession, JobStartupError
+from backend.agent.watcher import WatcherStartError
 from backend.agent.watcher.manager import WatcherHandle
 from backend.agent.watcher.policy import OnUnavailableAction, WatcherPolicy
 

@@ -10,7 +10,6 @@ Checks performed:
   3. No legacy model imports sneak into new-model modules
 """
 
-import ast
 import re
 import sys
 from pathlib import Path

@@ -1,7 +1,5 @@
 """Plan dispatcher unit tests — ADR-0020."""
 
-import asyncio
-from unittest.mock import patch
 
 import pytest
 

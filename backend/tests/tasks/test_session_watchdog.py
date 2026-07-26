@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from backend.core.database import AsyncSessionLocal, SessionLocal, async_engine
+from backend.core.database import SessionLocal, async_engine
 from backend.models.device_lease import DeviceLease
 from backend.models.enums import HostStatus, JobStatus, LeaseStatus, LeaseType
 from backend.models.host import Device, Host

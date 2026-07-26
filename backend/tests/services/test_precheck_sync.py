@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from backend.models.host import Host
 from backend.services.host_updater import _AGENT_SOURCE_DIR

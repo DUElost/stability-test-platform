@@ -1,7 +1,5 @@
 import logging
-import uuid
 
-import pytest
 
 from backend.agent.identity import generate_agent_instance_id, read_boot_id
 

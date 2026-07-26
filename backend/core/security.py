@@ -3,7 +3,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
-from typing import Optional, Union
+from typing import Optional
 
 import jwt
 from jwt import InvalidTokenError

@@ -8,7 +8,6 @@ import threading
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 from backend.agent.lease_renewer import LeaseRenewer

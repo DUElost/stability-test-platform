@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 class OnUnavailableAction(str, Enum):

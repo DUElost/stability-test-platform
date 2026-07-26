@@ -19,7 +19,6 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 from _adb import adb_path, adb_push, adb_shell, device_serial, output_result, params
 
 

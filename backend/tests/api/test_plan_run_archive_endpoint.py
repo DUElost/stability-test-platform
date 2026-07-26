@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
 
 from backend.models.enums import HostStatus, JobStatus
 from backend.models.host import Device, Host

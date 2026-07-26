@@ -6,7 +6,6 @@
 import logging
 import os
 import threading
-import time
 from typing import Any, Callable, Dict, List, Optional
 
 from . import device_discovery

@@ -7,7 +7,6 @@ refresh 端点在 decode_token 之后用 PK lookup 判断;过期行由 APSchedul
 """
 from __future__ import annotations
 
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Index, String
 

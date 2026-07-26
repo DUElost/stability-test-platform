@@ -1,8 +1,8 @@
 """Rate limiting middleware for API protection."""
 import time
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
-from fastapi import HTTPException, Request, status
+from fastapi import Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 

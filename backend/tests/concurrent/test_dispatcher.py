@@ -8,7 +8,6 @@ removed as part of the ADR-0008 dual-track ORM merge.
 Concurrent dispatch tests for `services/dispatcher.py` are tracked as future work.
 """
 
-import pytest
 from datetime import datetime, timedelta, timezone
 
 

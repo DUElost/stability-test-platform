@@ -28,7 +28,7 @@ from backend.models.enums import DeviceStatus, HostStatus, JobStatus, LeaseStatu
 from backend.models.host import Device, Host
 from backend.models.job import JobInstance
 from backend.models.plan import Plan, PlanStep
-from backend.models.plan_run import PlanRun, PlanRunHost, PlanRunTargetDevice
+from backend.models.plan_run import PlanRun, PlanRunHost
 from backend.models.resource_pool import ResourcePool
 from backend.models.script import Script
 from backend.services.admission_pump import (

@@ -17,7 +17,6 @@ import signal
 import subprocess
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from backend.agent import pipeline_engine
 from backend.agent.pipeline_engine import (

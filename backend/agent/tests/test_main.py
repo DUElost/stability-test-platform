@@ -1,18 +1,23 @@
 import sys
-import threading
 import time
 import unittest
 import sqlite3
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 try:
-    from backend.agent.main import complete_run, HeartbeatThread
+    # complete_run 住在 api_client;main.py 只是碰巧把它 import 进了命名空间。
+    # 本测试 patch 的是全局 requests.post,不依赖 main 的命名空间,所以直接
+    # 从真正的定义处导入 —— 否则 main.py 里那行「未使用」的 import 会被
+    # lint 清掉,测试随之崩塌(2026-07 就这么炸过一次)。
+    from backend.agent.api_client import complete_run
+    from backend.agent.main import HeartbeatThread
 except ModuleNotFoundError:
-    from agent.main import complete_run, HeartbeatThread
+    from agent.api_client import complete_run
+    from agent.main import HeartbeatThread
 
 
 class TestAgentMain(unittest.TestCase):

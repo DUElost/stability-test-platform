@@ -5,7 +5,6 @@ Validates that:
 - Broadcast helpers emit via SocketIO with correct event/namespace/room
 """
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest

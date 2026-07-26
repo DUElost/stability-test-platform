@@ -8,10 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from backend.models.enums import HostStatus, JobStatus
-from backend.models.host import Device, Host
+from backend.models.enums import JobStatus
 from backend.models.job import JobInstance
-from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
 from backend.services.plan_dispatcher_sync import prepare_plan_run

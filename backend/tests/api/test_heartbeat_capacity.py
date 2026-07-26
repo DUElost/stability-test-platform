@@ -4,7 +4,6 @@ Verifies backward compatibility: old heartbeat without capacity field
 still works, and new capacity field is accepted.
 """
 
-import pytest
 
 
 class TestHeartbeatCapacityBackwardCompat:

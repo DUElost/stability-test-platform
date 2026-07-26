@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import time
 from datetime import datetime
 from typing import Any, Optional
@@ -25,9 +24,7 @@ from typing import Any, Optional
 # Reuse seed_and_smoke helpers (same directory).
 from seed_and_smoke import (  # noqa: E402
     APIClient,
-    DEFAULT_BACKEND,
     DEFAULT_PLAN_NAME,
-    DEFAULT_SMOKE_ORIGIN,
     PASSING_STATUSES,
     PLAN_PAYLOAD,
     TERMINAL_STATUSES,

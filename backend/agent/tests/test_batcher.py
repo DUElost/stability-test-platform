@@ -18,7 +18,6 @@ import time
 from datetime import datetime, timezone
 from typing import List
 
-import pytest
 
 from backend.agent.watcher.batcher import (
     DEFAULT_IMMEDIATE_CATEGORIES,

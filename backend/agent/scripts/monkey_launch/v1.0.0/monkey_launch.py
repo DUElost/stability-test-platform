@@ -23,13 +23,12 @@ STP_STEP_PARAMS 结构:
 """
 
 import importlib.util
-import json
 import os
 import sys
 import time
 from pathlib import Path
 
-from _adb import adb_path, device_serial, output_result, params
+from _adb import device_serial, output_result, params
 
 _AGENT_ROOT = Path(__file__).resolve().parents[3]
 if str(_AGENT_ROOT) not in sys.path:
@@ -104,7 +103,7 @@ def main():
             inserted = True
 
         module = _load_monkey_test(aimonkey_dir)
-        MonkeyTest = getattr(module, "MonkeyTest")
+        MonkeyTest = module.MonkeyTest
         runner = MonkeyTest(need_nohup, push_resources, sleep_mode, blacklist)
 
         t0 = time.time()

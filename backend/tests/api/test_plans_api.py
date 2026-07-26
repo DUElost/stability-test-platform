@@ -187,7 +187,6 @@ class TestPlanCRUD:
         # 审计 #8: plans.py update/delete 必须拒绝非 owner 非 admin。
         from backend.core.security import create_access_token
         from backend.models.user import User
-        from backend.tests.conftest import db_session  # type: ignore[attr-defined]
 
         name = _uniq("plan")
         create = client.post("/api/v1/plans", json={

@@ -15,7 +15,7 @@ import os
 import sqlite3
 import sys
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -114,7 +114,6 @@ def connect_postgres(url: str):
     """连接 PostgreSQL 数据库"""
     try:
         import psycopg2
-        from psycopg2.extras import execute_batch
         return psycopg2.connect(url)
     except ImportError:
         print("Error: psycopg2 not installed. Run: pip install psycopg2-binary")
@@ -150,7 +149,7 @@ def migrate_table(
     print(f"  Source rows: {source_count}")
 
     if source_count == 0:
-        print(f"  Skipping empty table")
+        print("  Skipping empty table")
         return 0, 0
 
     if dry_run:
