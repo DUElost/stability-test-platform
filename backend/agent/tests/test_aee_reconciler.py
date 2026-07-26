@@ -915,3 +915,140 @@ def test_env_overrides_intervals(monkeypatch):
     assert rec._baseline == 30.0
     assert rec._burst == 5.0
     assert rec._burst_rounds == 8
+
+
+# ----------------------------------------------------------------------
+# #78 子任务 2 / #72 现场修复:
+#   - Reconciler 连续 tick 错误超阈值自我关闭 + emit rollback signal
+#   - start() 在 local_root 不可写时 INFO log 警告但仍启动(软 hint)
+#   - process_device_logs.infra.mkdir 不可写转 result.errors 不抛异常
+# ----------------------------------------------------------------------
+
+def test_run_self_stops_after_consecutive_tick_errors(monkeypatch, tmp_path):
+    """连续 tick_once 抛异常达阈值 → reconciler 自我关闭 + emit rollback。
+
+    防 #72 现场:_run() try/except 死循环吞 PermissionError 到 11M 行日志。
+    """
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_MAX_TICK_ERRORS", "3")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("STP_WATCHER_AEE_LOCAL_ROOT", str(tmp_path))
+
+    fake = _FakeEmitter()
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=fake,
+        state_store=_MemStore(),
+        serial="SX",
+        job_id=2001,
+        host_id="HOST",
+        local_root=tmp_path,             # 可写 → preflight 通过
+        baseline_snapshot_enabled=False,
+        shell_fn=lambda cmd, timeout: None,
+    )
+
+    # tick_once 改成永远抛异常 → 触发 self-stop 路径
+    def _always_fail():
+        raise RuntimeError("simulated_tick_failure")
+    rec.tick_once = _always_fail  # type: ignore[assignment]
+
+    started = rec.start()
+    assert started is True
+
+    # 等线程自我关闭(连续 3 次错误后 _stop_evt.set(),线程应退出)
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        if rec._thread is not None and not rec._thread.is_alive():
+            break
+        time.sleep(0.01)
+
+    assert rec._thread is not None
+    assert not rec._thread.is_alive(), "连续错误超阈值后线程应自我关闭"
+    assert rec._consecutive_tick_errors >= 3
+    assert rec.stats.tick_errors >= 3
+    # 至少有一条 rollback signal 通过 emitter
+    rollback_calls = [
+        c for c in fake.calls
+        if c.get("source") == "reconciler_rollback"
+        and c.get("extra", {}).get("event_type") == "RECONCILER_ROLLBACK"
+    ]
+    assert len(rollback_calls) >= 1, (
+        f"应有 rollback 信号被 emit,实际 calls={fake.calls!r}"
+    )
+
+
+def test_run_resets_consecutive_error_count_on_success(monkeypatch, tmp_path):
+    """tick_once 成功一次 → 连续错误计数清零,下次连续错误从 0 重新累计。"""
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_MAX_TICK_ERRORS", "5")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS", "0.05")
+    monkeypatch.setenv("STP_WATCHER_AEE_LOCAL_ROOT", str(tmp_path))
+
+    state = {"fail_remaining": 2, "tick_count": 0}
+
+    fake = _FakeEmitter()
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=fake,
+        state_store=_MemStore(),
+        serial="SX",
+        job_id=2002,
+        host_id="HOST",
+        local_root=tmp_path,
+        baseline_snapshot_enabled=False,
+        shell_fn=lambda cmd, timeout: None,
+    )
+
+    def _fail_then_succeed():
+        state["tick_count"] += 1
+        if state["fail_remaining"] > 0:
+            state["fail_remaining"] -= 1
+            raise RuntimeError("transient_fail")
+        # 成功路径 — 不抛异常,tick_errors 不增
+        return 0
+    rec.tick_once = _fail_then_succeed  # type: ignore[assignment]
+
+    rec.start()
+    # 等 ≥4 次 tick (2 失败 + ≥2 成功) 完成
+    deadline = time.time() + 2.0
+    while time.time() < deadline and state["tick_count"] < 4:
+        time.sleep(0.01)
+    rec.stop(timeout=1.0)
+
+    assert state["tick_count"] >= 4
+    assert rec._consecutive_tick_errors == 0, (
+        f"成功后连续错误计数应已重置为 0,实际={rec._consecutive_tick_errors}"
+    )
+    assert rec.stats.tick_errors >= 2     # 2 次失败被计数
+
+
+def test_start_emits_info_log_when_local_root_not_writable(caplog, monkeypatch, tmp_path):
+    """local_root 不可写时 start() 仍启动但 INFO log 警告(软 hint 非硬 gate)。"""
+    # 用一个 root 用户必拒写的路径(非 root CI 沙箱标准有效)
+    forbidden = Path("/proc/forbidden_stp_test_root")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_INTERVAL_SECONDS", "0.5")
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_BURST_INTERVAL_SECONDS", "30")
+
+    rec = AeeDbHistoryReconciler(
+        signal_emitter=_FakeEmitter(),
+        state_store=_MemStore(),
+        serial="SX",
+        job_id=2003,
+        host_id="HOST",
+        local_root=forbidden,
+        baseline_snapshot_enabled=False,
+        shell_fn=lambda cmd, timeout: None,
+    )
+    import logging
+    with caplog.at_level(logging.INFO, logger="backend.agent.aee.reconciler"):
+        started = rec.start()
+    try:
+        assert started is True, "preflight 软 hint,不阻塞 start"
+        # 必须出现 INFO log 警告(搜索 caplog 记录)
+        warning_records = [
+            r for r in caplog.records
+            if "aee_reconciler_local_root_not_writable" in r.getMessage()
+        ]
+        assert warning_records, (
+            f"应有 local_root_not_writable 的 INFO log,records={caplog.records!r}"
+        )
+    finally:
+        rec.stop(timeout=0.5)

@@ -308,6 +308,39 @@ fi
 
 chmod 640 "$INSTALL_DIR/.env"
 
+# 7.5 STP_AEE_LOCAL_ROOT 静态守门（#78 子任务 3）
+# 防止 #72 类 .env 错配（路径指向 android 用户无权写的目录）安装上线；
+# 校验目标：路径非空 + 父目录可写 + 子目录可创建 + adb 拉取可写入。
+# 失败则警告但不强制中止安装（运维可手动修复 .env 后重启 Agent）。
+AEE_LOCAL_ROOT="$(grep -E '^STP_AEE_LOCAL_ROOT=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '\"' || true)"
+if [ -z "$AEE_LOCAL_ROOT" ]; then
+    echo_warn "STP_AEE_LOCAL_ROOT 未配置 — AEE Reconciler 主路径不会启动（仅 inotifyd 兜底）"
+    echo_warn "  ADR-0025 设计需该路径指向 1TB HDD 的可写目录；典型值：/mnt/hdd/aee_events 或 /data/hdd/aee_events"
+else
+    echo_info "校验 STP_AEE_LOCAL_ROOT=$AEE_LOCAL_ROOT 可写性 (#78 守门)"
+    PARENT_DIR="$(dirname "$AEE_LOCAL_ROOT")"
+    if [ ! -d "$PARENT_DIR" ]; then
+        echo_warn "  父目录 $PARENT_DIR 不存在 — 请先挂载 HDD 并 mkdir"
+    elif ! sudo -u "$USER" test -w "$PARENT_DIR"; then
+        echo_error "  父目录 $PARENT_DIR 不可写 (user=$USER) — AEE Reconciler 会启动崩溃 (#72 根因)"
+        echo_error "  排查：ls -ld $PARENT_DIR / mount | grep $PARENT_DIR"
+        echo_error "  修复后再 systemctl restart $SERVICE_NAME"
+    else
+        if ! sudo -u "$USER" mkdir -p "$AEE_LOCAL_ROOT" 2>/dev/null; then
+            echo_error "  $AEE_LOCAL_ROOT 创建失败 — 请检查权限/挂载状态"
+        else
+            PROBE_FILE="$AEE_LOCAL_ROOT/.install_probe_$$"
+            if sudo -u "$USER" touch "$PROBE_FILE" 2>/dev/null; then
+                sudo -u "$USER" rm -f "$PROBE_FILE"
+                echo_info "  STP_AEE_LOCAL_ROOT 可写性 OK"
+            else
+                echo_error "  $AEE_LOCAL_ROOT 不可写入 (user=$USER) — AEE Reconciler 会启动崩溃"
+                echo_error "  修复后再 systemctl restart $SERVICE_NAME"
+            fi
+        fi
+    fi
+fi
+
 # 8. 安装 systemd 服务
 echo_info "安装 systemd 服务..."
 if [ -f "$INSTALL_DIR/agent/stability-test-agent.service" ]; then

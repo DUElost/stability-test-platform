@@ -733,3 +733,64 @@ def test_get_aee_local_root_default_is_hdd(monkeypatch):
     monkeypatch.delenv("STP_WATCHER_NFS_BASE_DIR", raising=False)
     monkeypatch.delenv("STP_NFS_ROOT", raising=False)
     assert get_aee_local_root() == Path("/mnt/hdd/aee_events")
+
+
+# ----------------------------------------------------------------------
+# #78 子任务 3 / #72 现场修复:
+#   process_device_logs 在 local_root 不可写时把 PermissionError 转为
+#   result.errors 项并 return,而非上抛 — 让 reconciler._run() 的连续
+#   tick 错误上限接管自关闭,避免 11M 行 ERROR 日志死循环。
+# ----------------------------------------------------------------------
+
+def test_process_device_logs_local_root_not_writable_returns_error(monkeypatch):
+    """STP_AEE_LOCAL_ROOT 不可写 → result.errors 含 local_root_not_writable 项。"""
+    store = _MemStore()
+    # adb shell 桩:让 getprop 拿到合法 folder_name、cat 拿到 db_history 行
+    fake_history = (
+        "/data/aee_exp/db.00.NE,Native (NE),pid,pid,99,/data/vendor/core/,1,"
+        "SIGSEGV,com.example.app,2026-07-25 10:00:00"
+    )
+
+    def _shell(cmd: str, timeout: int = 30):
+        if "getprop" in cmd:
+            for key, val in {
+                "ro.product.name": "ELA-LX2",
+                "ro.build.display.id": "ELA-LX2-15-260701V104",
+                "ro.build.version.incremental": "0401",
+                "ro.build.version.release": "15",
+            }.items():
+                if key in cmd:
+                    return val
+        if "cat /data/aee_exp/db_history" in cmd:
+            return fake_history
+        return ""
+
+    def _pull(remote: str, local: str, timeout: int) -> bool:
+        return False
+
+    from backend.agent.aee import processor as proc_mod
+    monkeypatch.setattr(proc_mod, "make_adb_shell_fn", lambda s, a: lambda cmd, t: _shell(cmd, t))
+    monkeypatch.setattr(proc_mod, "make_adb_pull_fn", lambda s, a: _pull)
+
+    # /proc 下 root 用户也不可 mkdir → 触发 PermissionError → 转 result.errors
+    forbidden_root = Path("/proc/stp_forbidden_local_root_test")
+    cfg = ProcessConfig(export_mobilelog=False, export_bugreport=False)
+    r = process_device_logs(
+        serial="dev_ro",
+        job_id=42,
+        state_store=store,
+        config=cfg,
+        local_root=forbidden_root,
+    )
+
+    assert r.pulled == 0
+    assert any(
+        err.startswith("local_root_not_writable:") for err in r.errors
+    ), f"expected local_root_not_writable in errors, got {r.errors!r}"
+    # 错误项应记录 root 路径 + 异常类型(可接受 PermissionError / OSError / FileNotFoundError)
+    err_str = next(err for err in r.errors if err.startswith("local_root_not_writable:"))
+    assert str(forbidden_root) in err_str
+    # IOError 子类之一(PermissionError / FileNotFoundError / OSError 等)
+    assert any(
+        name in err_str for name in ("PermissionError", "OSError", "FileNotFoundError")
+    )

@@ -56,6 +56,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 from ..watcher.contracts import ContractViolation
 from .db_history import load_processed_lines, save_processed_lines, state_key
+from .paths import get_aee_local_root
 from .processor import ProcessConfig, process_device_logs
 from .state_migration import WATCHER_AEE_STATE_PREFIX
 from .timestamp import parse_timestamp
@@ -365,13 +366,38 @@ class AeeDbHistoryReconciler:
         # 设备当前已存在问题也要导出,并纳入当前 Job 的总览。
         # baseline snapshot 只在每个 Job 首轮执行一次。
         self._baseline_snapshot_done = not baseline_snapshot_enabled
+        # 连续 tick 失败上限:超过即自我关闭 + emit rollback signal。
+        # 防 #72 现场:STP_AEE_LOCAL_ROOT 不可写时 process_device_logs.mkdir
+        # 每 180s 抛 PermissionError → _run() try/except 死循环吞异常累计
+        # 上万条 ERROR,无上限时无声吞噬 1GB+ 日志空间且无明确自愈路径。
+        self._max_consecutive_tick_errors = _env_int(
+            "STP_WATCHER_AEE_RECONCILE_MAX_TICK_ERRORS", 10,
+        )
+        self._consecutive_tick_errors = 0
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
 
-    def start(self) -> None:
+    def start(self) -> bool:
+        """启动后台 reconciler 线程。返回 True 表示已启动。
+
+        #78 子任务 2:preflight 仅 INFO log 不可写 local_root,不阻止启动
+        (避免 #72 现场 race/挂载抖动误判、避免破坏默认 fallback 路径上的
+        现有测试用例)。真正的硬保护由 _run() 的连续 tick 错误上限自我关闭
+        机制提供:连续 N 次 tick_once 抛异常即 self_stop + emit rollback signal,
+        不再死循环吞异常到 11M 行日志。
+        """
         if self._started:
-            return
+            return True
+        # preflight(软性 hint,不阻塞):local_root 不可写时 INFO log 警告。
+        # 让调用方/运维感知,但仍启动 reconciler 让 self-stop 机制做最终判定。
+        root_for_preflight = self._local_root or get_aee_local_root()
+        if not self._is_local_root_writable(root_for_preflight):
+            logger.info(
+                "aee_reconciler_local_root_not_writable serial=%s job=%d root=%s "
+                "— starting anyway; self-stop will trigger if tick keeps failing",
+                self._serial, self._job_id, root_for_preflight,
+            )
         self._stop_evt.clear()
         self._thread = threading.Thread(
             target=self._run,
@@ -385,6 +411,7 @@ class AeeDbHistoryReconciler:
             self._serial, self._job_id, self._baseline, self._burst, self._burst_rounds,
             self._baseline_chunk_size,
         )
+        return True
 
     def stop(self, timeout: float = 5.0) -> ReconcilerStats:
         if not self._started:
@@ -404,6 +431,28 @@ class AeeDbHistoryReconciler:
             self._serial, self._job_id, self.stats.to_dict(),
         )
         return self.stats
+
+    @staticmethod
+    def _is_local_root_writable(root: Path) -> bool:
+        """local_root 可写性 preflight:能 mkdir 父链 + touch 测试文件即视为可写。
+
+        避免单纯 `os.access(root, W_OK)` 对不存在的目录(父链也不存在)误判
+        (POSIX access 对 ENOENT 返回 False,虽 parent 可建但 root 自身仍待创建)。
+        """
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            return False
+        except OSError:
+            return False
+        # 再用写测试 token 验证 root 自身可写(防挂载点 ro mount 等场景)
+        try:
+            probe = root / f".reconciler_probe_{os.getpid()}"
+            probe.mkdir(exist_ok=True)
+            probe.rmdir()
+            return True
+        except OSError:
+            return False
 
     # ------------------------------------------------------------------
     # 主循环 / 单次 tick(测试可直接调用)
@@ -426,11 +475,33 @@ class AeeDbHistoryReconciler:
                 self.tick_once()
             except Exception:
                 self.stats.tick_errors += 1
+                self._consecutive_tick_errors += 1
                 logger.exception(
                     "aee_reconciler_tick_unhandled serial=%s job=%d",
                     self._serial, self._job_id,
                 )
+                # #78 子任务 2:连续 tick 错误超阈值 → 自我关闭 + emit rollback。
+                # 不再死循环 180s tick 百万次(参见 #72 现场:tick_unhandled
+                # 累计逾万、agent_error.log 1.1GB、production 长期 0 emit)。
+                # 自我关闭后 JobSession 的 inotifyd 兜底路径(若 active)独立工作。
+                if (
+                    self._max_consecutive_tick_errors > 0
+                    and self._consecutive_tick_errors >= self._max_consecutive_tick_errors
+                ):
+                    logger.error(
+                        "aee_reconciler_emit_rollback serial=%s job=%d "
+                        "consecutive_errors=%d threshold=%d — self-stopping, "
+                        "inotifyd fallback path (if any) continues",
+                        self._serial, self._job_id,
+                        self._consecutive_tick_errors,
+                        self._max_consecutive_tick_errors,
+                    )
+                    self._emit_rollback_signal()
+                    self._stop_evt.set()
                 continue
+
+            # tick 成功 → 重置连续错误计数
+            self._consecutive_tick_errors = 0
 
             with self._state_lock:
                 # D2: burst 由"新行候选"驱动(实际新增 pull 或 db_history hash 变化),
@@ -701,6 +772,42 @@ class AeeDbHistoryReconciler:
             logger.exception(
                 "aee_reconciler_emit_failed serial=%s job=%d payload=%s",
                 self._serial, self._job_id, payload,
+            )
+
+    def _emit_rollback_signal(self) -> None:
+        """连续 tick 错误超阈值时 emit rollback 信号 + 兜底提示。
+
+        写一条 category='AEE' / event_type='RECONCILER_ROLLBACK' 的 log_signal,
+        让 AnomalyDashboard / WatcherSummaryCard 能展示「Reconciler 已自关闭」
+        状态(而不是默默消失)。emit 失败不阻塞 self-stop(只记 warning)。
+
+        #78 子任务 2(参见 #72 现场:11M 行日志 0 emit 的盲区)。
+        """
+        try:
+            self._emitter.emit(
+                category="AEE",
+                source="reconciler_rollback",
+                path_on_device="",
+                detected_at=datetime.now(timezone.utc),
+                artifact_uri=None,
+                extra={
+                    "schema_version": 2,
+                    "event_type": "RECONCILER_ROLLBACK",
+                    "event_subtype": "TICK_ERROR_THRESHOLD",
+                    "raw_event_type": "RECONCILER_ROLLBACK",
+                    "package_name": "_reconciler_",
+                    "aee_ts": datetime.now(timezone.utc).isoformat(),
+                    "nfs_path": None,
+                    "pull_source": "reconciler",
+                    "entry_origin": "rollback",
+                    "consecutive_errors": self._consecutive_tick_errors,
+                    "threshold": self._max_consecutive_tick_errors,
+                },
+            )
+        except Exception:
+            logger.warning(
+                "aee_reconciler_rollback_emit_failed serial=%s job=%d",
+                self._serial, self._job_id,
             )
 
 

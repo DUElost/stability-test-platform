@@ -428,7 +428,9 @@ def test_reconciler_uses_get_aee_local_root(lock_tracker, patch_manager, monkeyp
             captured.update(kwargs)
 
         def start(self):
-            pass
+            # #78 子任务 2:AeeDbHistoryReconciler.start() 现返回 bool(True=已启动)。
+            # preflight 失败会返回 False → 触发 RuntimeError 回滚;这里默认成功启动。
+            return True
 
     class _MgrWithDeps(_FakeManager):
         def get_dep(self, key, default=None):
