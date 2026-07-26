@@ -2,18 +2,16 @@
 
 ## Dev commands
 
-| What | Command |
-|------|---------|
-| Backend | `uvicorn backend.main:app --host 0.0.0.0 --port 8000` (add `--reload` for dev) |
-| Frontend | `cd frontend && npm run dev` (also: `npm run type-check`, `npm run build`) |
-| Backend tests | `pytest backend/tests/` (needs PostgreSQL or `ALLOW_SQLITE_TESTS=1`) |
-| Agent tests | `pytest backend/agent/tests/` (no PG required, runs fast) |
-| Frontend tests | `cd frontend && npx vitest run` (or `npx vitest run path/to/test.tsx` for single file) |
-| TypeScript | `cd frontend && npx tsc --noEmit` |
-| Frontend lint | `cd frontend && npm run lint` (`npm run lint:fix` 自动修) |
-| Backend lint | `ruff check backend/ tools/ scripts/` (`--fix` 自动修) |
-| Migrations | `cd backend && python -m alembic upgrade head` |
-| Agent (dev) | `python -m backend.agent.main` (set `API_URL` env first) |
+命令速查已迁出本文，按用途分散在：
+
+| 你要找 | 看这里 |
+|---|---|
+| 后端 / 前端 / Agent 启动、迁移 | [`docs/development/local-development.md`](docs/development/local-development.md) |
+| 测试（含 `./scripts/run_pytest.sh`、DB 前置、`python -m pytest` 的坑） | [`docs/development/testing.md`](docs/development/testing.md) |
+| Lint 实际调用参数 | `.github/workflows/ci.yml` §lint（`ruff check backend/ tools/ scripts/`）；规则取向见 `ruff.toml` 抬头注释 |
+| 前端 script 名 | `frontend/package.json` |
+
+本文只保留**推导不出来**的部分：依赖三件套分工、lint 现状与取舍、空行注入污染、生产机调试约束、Test quirks。
 
 **依赖清单**（后端三份，各有分工）：
 
@@ -83,70 +81,17 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 - Frontend tests use vitest + jsdom, `@/` path alias maps to `src/`.
 - WATCHER_SIGNAL invalidation is debounced 2s in `PlanRunDetailPage.tsx` — tests asserting refetch need `waitFor({ timeout: 4000 })`.
 
-## Architecture
+## scan/upload/merge 跨进程契约
 
-- **app** = `socketio.ASGIApp(sio_server, fastapi_app)` — combined ASGI mount in `backend/main.py:207`.
-- **Frontend pages** are `React.lazy()` loaded via `frontend/src/router/index.tsx`.
-- **API client** modules in `frontend/src/utils/api/` (`planRuns.ts`, `hosts.ts`, `plans.ts`, etc.).
-- **ADR-0020**: Plan/PlanStep replaced Workflow/TaskTemplate. No `plan.lifecycle` column — lifecycle composed from `PlanStep` rows + `patrol_interval_seconds`/`timeout_seconds` at dispatch time.
-- **ADR-0018**: Watcher subsystem gated by `STP_WATCHER_ENABLED` (default `true`). Agent inotifyd monitors device AEE/ANR directories → `job_log_signal` table → frontend `watcher-summary`.
-- **ADR-0025**: Plan C — Agent local scan + on-demand upload + control-plane merge. Scan tool is `start_log_scan.py` (external, deployed on 15.4 CIFS share). Three-phase archive: SSD→HDD→15.4 CIFS.
-- **Agent** runs on Linux hosts, connects Android devices via ADB. Two enrollment paths: `install_agent.sh` (systemd) or dev `python -m backend.agent.main`.
-- **SAQ pipeline** (Sprint 4): `scan_task` → `upload_task` → `merge_task` chain. `scan_task` polls NFS for all host artifacts before enqueuing follow-ups.
+以下规则的实现方在**控制面**，不在 `backend/agent/`，所以留在本文（始终加载）：
 
-## AEE crash detection chain (初筛选)
-
-两层互补，Reconciler 为主、inotifyd 为兜底：
-
-### 平台门禁（#73）
-
-AEE 是**联发科专有机制**，展锐/高通机型没有 `/data/aee_exp`。`JobSession` 在启动
-Reconciler 前先探测 `ro.soc.manufacturer`（回退 `ro.board.platform` 前缀）归一化为
-`MTK` / `UNISOC` / `QCOM` / `UNKNOWN`，只有命中 `STP_WATCHER_AEE_RECONCILE_PLATFORMS`
-（默认 `MTK`）才启动，否则记 `aee_reconciler_skipped_platform`。
-
-- 探测结果按 serial 进程内缓存，并随心跳写入 `device.platform`
-- `UNKNOWN` **恒放行** — adb 抖动导致的探测失败不该让 MTK 机型漏采崩溃信号
-- 生产实测（2026-07-26）：Z2581/Z2582 = UNISOC（`ums9230`），DAM-M500 / ELA-LX2 /
-  ELA-LX3 / MLD-LX3 = MTK（`mt6768`）
-
-### Reconciler（主路径，默认开）
-
-每 60s 基线周期（`STP_WATCHER_AEE_RECONCILE_ENABLED=true`，默认开启）：
-1. `adb shell cat /data/aee_exp/db_history` + `/data/vendor/aee_exp/db_history` → sha256 对比判断是否变化
-2. 新行 → `adb pull` 整目录到 Agent HDD
-3. 读 **`ZZ_INTERNAL`** 优先解析（CSV：parts[0]=exp_class, parts[7]=cur_process）
-4. 读 `__exp_main.txt` fallback
-5. `SignalEmitter.emit(source="reconciler")` → `extra={event_type, event_subtype, package_name, aee_ts, nfs_path}`
-
-日志标记：`aee_reconciler_emit`（DEBUG 级，含 `pkg=` / `subtype=`）
-
-### inotifyd（兜底路径）
-
-Reconciler 启动失败时自动回退：
-1. `adb shell inotifyd - /data/aee_exp:nwx /data/vendor/aee_exp:nwx` 实时监听
-2. 文件创建/写入 → `SignalEmitter.emit(source="inotifyd")`
-3. 不读 ZZ_INTERNAL，`extra` 为 NULL（仅提供计数）
-
-日志标记：`device_log_watcher_emit_fallback`（INFO 级，表示兜底激活）
-回退标记：`aee_reconciler_emit_rollback`（WARNING 级，表示 Reconciler 启动失败）
-
-### 监测目录
-
-仅 `/data/aee_exp` + `/data/vendor/aee_exp`（MTK 平台 `/data/aee_exp` 包含 ANR 信息，`/data/anr` 不再监测）。
-
-### 数据流
-
-```
-ZZ_INTERNAL / __exp_main.txt → SignalEmitter → local SQLite outbox
-  → POST /agent/log-signals → job_log_signal 表 (extra JSONB)
-  → Frontend watcher-summary (按 category/package 聚合)
-  → AnomalyDashboard (双饼图 + 包名榜) / WatcherSummaryCard (异常率进度条)
-```
-
-### 风险评级
-
-`aggregate_risk_summary_from_signals` 从 `job_log_signal.extra->>'event_subtype'` 聚合，按 `_RISK_RATING_RULES` 定级 S/A/B：
+- **Control-plane merge**（`backend/services/dedup_scan.py:run_merge_sync` / `build_merge_argv`）：跑在 backend、读 NFS `dedup/`。argv **不是固定的**：
+  - 先用 `scan_tool_supports_merge_files_list()` 跑一次 `start_log_scan.py -h` 探测能力（结果进程内缓存）。支持则写临时清单文件走 `-merge_files_list {listfile}`；
+  - 不支持才回退 `-merge_files {全部 org_files 展开}`，且此路径有 30000 字符的 argv 上限（`_WIN_MERGE_ARGV_CHAR_LIMIT`），超限直接 `RuntimeError` 要求升级扫描工具 —— **host 规模上来后回退路径会先撞这堵墙**。
+  - `-side` 由 `STP_DEDUP_SCAN_TAG` 决定：tag 含 `factory`（大小写不敏感）→ `-side factory`，否则 `-side shanghai`（默认）。
+- **SAQ 链**（`backend/tasks/saq_tasks.py:scan_task`）：`scan_task` → `upload_task` → `merge_task`；`scan_task` 会先轮询 NFS 上所有 host 的产物，齐了才 enqueue 后继。
+- **reload_config**（路由 `backend/api/routes/dedup.py` 的 `POST /api/v1/plan-runs/hosts/{host_id}/reload-config`）：经 `emit_agent_control` 下发 SocketIO `reload_config` 命令，让 Agent 重读安装目录 `.env` 并热刷新运行时配置，无需重启进程。Agent 侧实际刷新的三样见 `backend/agent/CLAUDE.md`。
+- **风险评级**（`backend/services/report_service.py:aggregate_risk_summary_from_signals`）：从 `job_log_signal.extra->>'event_subtype'` 聚合，按 `_RISK_RATING_RULES` 定级：
 
 | 级别 | 触发条件 |
 |------|---------|
@@ -154,15 +99,14 @@ ZZ_INTERNAL / __exp_main.txt → SignalEmitter → local SQLite outbox
 | **A**（高） | ANR ≥ 10 / JE ≥ 3 / NE ≥ 2 / Java ≥ 3 |
 | **B**（低） | 其余非零 |
 
-`count_dbg_process.py`（scan tool 目录下）独立统计工具，同样读 ZZ_INTERNAL，不与平台代码集成但解析逻辑对齐。
+**NFS 路径约定**（控制面与 Agent 共用）：`{STP_AEE_NFS_ROOT}/dedup/{run_id}/`（扫描报告）+ `devices/{run_id}/`（事件目录）+ `jira/{run_id}/`（extract 输出）。
 
-## Sprint 4 scan/upload/merge pipeline
+## Agent 子系统细则（按需加载）
 
-- **ScanRunner** (`backend/agent/scan_runner.py`): calls `start_log_scan.py -m 0 -d {hdd_root} -side {side} [-end]` — AEE_TNE mode (scans HDD, no external DB deps; NOT `-dedup_org`). Produces `Result_*_org.xls` on HDD.
-- **UploadManager** (`backend/agent/upload_manager.py`): copies `_org.xls` → NFS `dedup/{run_id}/`, event dirs → NFS `devices/{run_id}/`. Auto-discovery uses `iterdir()` + `YYYY-MM-DD_HH-MM-SS_*` regex (depth=1, no recursion).
-- **Control-plane merge** (`dedup_scan.py:run_merge_sync`): calls `start_log_scan.py -merge_files {a.xls} {b.xls} -side shanghai` — runs on backend, reads from NFS `dedup/`.
-- **NFS path convention**: `{STP_AEE_NFS_ROOT}/dedup/{run_id}/` (scan reports) + `devices/{run_id}/` (event dirs) + `jira/{run_id}/` (extract output).
-- **reload_config**: `POST /api/v1/plan-runs/hosts/{host_id}/reload-config` emits SocketIO command to re-read env vars without Agent restart. `ScanRunner`/`UploadManager` support `configure(force=True)`.
+纯 Agent 侧实现，只在改对应目录时加载：
+
+- **AEE 崩溃检测链**（Reconciler / inotifyd 双路径、ZZ_INTERNAL 解析、监测目录）→ `backend/agent/aee/CLAUDE.md`
+- **ScanRunner / UploadManager**（`start_log_scan.py` 的非显然参数、自动发现规则、`reload_config`）→ `backend/agent/CLAUDE.md`
 
 ## Key env vars
 
@@ -181,19 +125,13 @@ See `backend/.env.example` and `backend/agent/.env.example` for full list.
 
 ## Key conventions
 
-- Only `script:<name>` action type is supported in pipeline_def (see `CLAUDE.md` §Pipeline).
-- Script `default_params` are immutable after creation — `PUT` returns 422. New version via `POST /api/v1/scripts/{name}/versions`.
-- DB table names are singular (`device`, `host`, `plan`, `plan_run_artifact`).
-- `frontend/src/utils/api/types.ts` is the canonical frontend type source — keep in sync with backend Pydantic schemas.
-- WSL Agent needs `ANDROID_ADB_SERVER_PORT=5039`.
+> 主清单在根 `CLAUDE.md`，分散在三节：
+> §架构不变量（唯一 action 类型 `script:<name>`）、
+> §关键约定（`default_params` 不可变、表名单数、`types.ts` 权威源、`max_concurrent_jobs` 已删、Pydantic v2）、
+> §环境变量 + §开发陷阱（`ANDROID_ADB_SERVER_PORT=5039`）。此处只补它没有的：
+
 - Production Agent needs `AGENT_SECRET` env for SocketIO auth.
-- `host.max_concurrent_jobs` column removed (migration `q2r3s4t5u6v7w8`). Capacity = `min(MAX_CONCURRENT_TASKS - active, heartbeat effective_slots)`.
-- Pydantic v2 only — no `.dict()`/`parse_obj`/`from_orm`/`class Config`. Use `model_dump()`/`model_validate()`/`ConfigDict(from_attributes=True)`.
 - `ORMBaseModel` (`backend/api/schemas/base.py`) auto-serializes datetime to ISO-UTC via `field_serializer(when_used="json")`.
-
-## CI pipeline (`.github/workflows/ci.yml`)
-
-Backend: `compileall backend/` → `pytest backend/tests/` (PostgreSQL service). Frontend: `tsc --noEmit` → `npm run build`. Docker build after both pass.
 
 ## Documentation
 
