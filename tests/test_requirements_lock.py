@@ -10,6 +10,8 @@ lock 的实际安装可行性由 docker-build 保证:Dockerfile.backend 用
 """
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import re
 from pathlib import Path
 
@@ -18,6 +20,20 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _REQUIREMENTS = _REPO_ROOT / "backend" / "requirements.txt"
 _LOCK = _REPO_ROOT / "backend" / "requirements.lock"
+_DIGEST_TOOL = _REPO_ROOT / "tools" / "dev" / "requirements_digest.py"
+
+
+def _load_digest_module():
+    """按路径加载工具模块(文件名带下划线但不在包里)。"""
+    spec = importlib.util.spec_from_file_location("requirements_digest", _DIGEST_TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _digest_of(text: str) -> str:
+    entries = _load_digest_module().normalize(text)
+    return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
 
 
 def _normalize(name: str) -> str:
@@ -32,7 +48,7 @@ def _declared_names() -> set[str]:
         if not line or line.startswith("-"):
             continue
         # 去掉 extras 与版本约束:`psycopg[binary]>=3.1.0` → `psycopg`
-        names.add(_normalize(re.split(r"[<>=!~\[;]", line, 1)[0].strip()))
+        names.add(_normalize(re.split(r"[<>=!~\[;]", line, maxsplit=1)[0].strip()))
     return names
 
 
@@ -60,6 +76,65 @@ def _lock_direct_names() -> set[str]:
         elif stripped and not stripped.startswith("--hash") and not stripped.startswith("#"):
             in_via = False
     return direct
+
+
+# ── 摘要函数的直接单元测试 ──────────────────────────────────────────────
+#
+# 只断言"仓库当前文件能对上"是不够的 —— 那只覆盖了 happy path,
+# 摘要漏掉某类语义变化时它照样绿。下面直接喂构造输入验证行为。
+
+@pytest.mark.parametrize(
+    "before,after,label",
+    [
+        ("fastapi>=0.104.0,<1.0", "fastapi==999.0", "版本约束"),
+        ("uvicorn[standard]>=0.24.0", "uvicorn>=0.24.0", "extras 丢失"),
+        ("psycopg[binary]>=3.1.0", "psycopg[binary,pool]>=3.1.0", "extras 增加"),
+        ("redis[asyncio]>=5.0.0,<6.0", "redis[asyncio]>=5.0.0,<7.0", "上界放宽"),
+        (
+            "demo @ https://example.invalid/demo.whl#sha256=aaa",
+            "demo @ https://example.invalid/demo.whl#sha256=bbb",
+            "直接 URL 的 fragment",
+        ),
+        (
+            "pkg @ git+https://example.invalid/r.git#subdirectory=a",
+            "pkg @ git+https://example.invalid/r.git#subdirectory=b",
+            "VCS subdirectory",
+        ),
+        ('pkg>=1.0; python_version < "3.12"', 'pkg>=1.0; python_version < "3.13"', "环境标记"),
+    ],
+)
+def test_digest_detects_semantic_change(before: str, after: str, label: str):
+    assert _digest_of(before) != _digest_of(after), (
+        f"{label} 变化未改变摘要 —— lock 过期将无法被发现"
+    )
+
+
+@pytest.mark.parametrize(
+    "a,b,label",
+    [
+        ("fastapi>=1.0  # 尾随注释", "fastapi>=1.0", "尾随注释"),
+        ("fastapi>=1.0\n# 整行注释", "fastapi>=1.0", "整行注释"),
+        ("fastapi>=1.0\n\n\nrequests>=2.0", "fastapi>=1.0\nrequests>=2.0", "空行"),
+        ("fastapi>=1.0\nrequests>=2.0", "requests>=2.0\nfastapi>=1.0", "条目顺序"),
+        ("fastapi>=1.0   ", "fastapi>=1.0", "尾随空白"),
+    ],
+)
+def test_digest_ignores_non_semantic_change(a: str, b: str, label: str):
+    assert _digest_of(a) == _digest_of(b), f"{label} 不该改变摘要(会造成误报)"
+
+
+def test_digest_strips_comment_but_keeps_url_fragment():
+    """注释与 URL fragment 都含 `#`,判定规则必须与 pip 一致。
+
+    pip 的 COMMENT_RE 是 `(^|\\s+)#.*$` —— `#` 只有在行首或前接空白才是注释。
+    朴素的 `split("#")` 会把 whl 的 sha256 fragment 一并切掉。
+    """
+    normalize = _load_digest_module().normalize
+    assert normalize("pkg>=1.0  # c") == ["pkg>=1.0"]
+    assert normalize("# 整行") == []
+    url = "demo @ https://example.invalid/demo.whl#sha256=aaa"
+    assert normalize(url) == [url], "URL fragment 被误当成注释切掉了"
+    assert normalize(f"{url}  # 真注释") == [url]
 
 
 def test_lock_exists_and_is_hashed():

@@ -6,10 +6,15 @@
 守卫全绿,而 CI 装的是新约束、Docker 装的是旧 lock,测试与生产的依赖悄悄分叉。
 
 规范化规则(让无关改动不触发误报):
-  - 去掉注释与空行
-  - 去掉行内尾随注释
+  - 去掉空行与注释
   - 排序(条目顺序无语义)
-  - 其余**逐字节**保留:版本约束、extras、环境标记的任何变化都会改变摘要
+  - 其余**逐字节**保留:版本约束、extras、环境标记、直接 URL 的任何变化
+    都会改变摘要
+
+注释的判定与 pip 一致(`req_file.py` 的 `COMMENT_RE`):`#` 只有在行首、
+或前面是空白时才开始注释。直接用 `split("#")` 会把
+`pkg @ https://host/x.whl#sha256=...` 的 fragment 当注释切掉 ——
+换个 sha256 摘要却不变,正是这个校验要防的事。
 
 用法:
     python tools/dev/requirements_digest.py backend/requirements.txt
@@ -26,11 +31,16 @@ from pathlib import Path
 # 写进 lock 抬头的标记行
 DIGEST_MARKER = "# requirements-digest: sha256:"
 
+# 与 pip 的 req_file.COMMENT_RE 保持一致:`#` 必须在行首或前接空白才算注释。
+# 不能用 `split("#")` —— 那会切掉 PEP 508 直接 URL 的 fragment
+# (`pkg @ https://host/x.whl#sha256=...`),换个 sha256 摘要却不变。
+_COMMENT_RE = re.compile(r"(^|\s+)#.*$")
+
 
 def normalize(requirements_text: str) -> list[str]:
     entries = []
     for raw in requirements_text.splitlines():
-        line = raw.split("#", 1)[0].strip()
+        line = _COMMENT_RE.sub("", raw).strip()
         if line:
             entries.append(line)
     return sorted(entries)
