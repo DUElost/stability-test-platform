@@ -9,9 +9,12 @@ BaseModel 内联其中,而 backend/api/schemas/ 这个专门的包基本闲置�
 `backend__api__schemas__plan_run__PlanRunOut`。
 
 对本仓无影响 —— 前端类型是手写维护的 `frontend/src/utils/api/types.ts`
-(见 CLAUDE.md「前端类型权威源」),不从 OpenAPI 生成。若将来接入 OpenAPI
-代码生成,应先合并那两个 `PlanRunOut`,或给它们显式指定 `model_config`
-的 title 来固定 component 名。
+(见 CLAUDE.md「前端类型权威源」),不从 OpenAPI 生成。
+
+若将来接入 OpenAPI 代码生成:唯一可靠的办法是**合并或重命名**这两个模型 ——
+只要同名冲突还在,FastAPI 就会加模块路径前缀,component key 也就随文件位置
+浮动。设 `model_config` 的 title 没用(实测只改 schema 内部的 title 字段,
+key 仍是 `<module>__PlanRunOut`);曾在这里写过那个建议,以此更正。详见 #82。
 """
 from __future__ import annotations
 

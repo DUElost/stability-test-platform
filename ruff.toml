@@ -24,10 +24,14 @@ select = [
     "T20",    # 生产代码里的 print
 ]
 
-# UP(pyupgrade)暂不开:全量 1097 处,其中 UP006 `Dict`→`dict` 633、
-# UP035 deprecated-import 205、UP017 `datetime.utcnow()` 436。纯机械改写,
-# 与缺陷无关,开了会把 F/B 的真实信号淹没。UP017 值得单独立项 ——
-# 本仓大量做时区敏感的 deadline 运算,utcnow() 的 naive 返回值是隐患。
+# UP(pyupgrade)暂不开:全量 2239 处,其中 UP045 `Optional[X]`→`X | None` 882、
+# UP006 `Dict`→`dict` 633、UP017 `timezone.utc`→`datetime.UTC` 434、
+# UP035 deprecated-import 191。全是纯风格改写,与缺陷无关,开了会把 F/B 的
+# 真实信号淹没。
+#
+# 注:UP017 是 `datetime.timezone.utc` → `datetime.UTC` 的别名建议(3.11+),
+# **与 `datetime.utcnow()` 无关** —— 本仓 `.utcnow(` 调用数为 0,不存在
+# naive/aware 混用的隐患。曾经在这里写反过,以此更正。
 ignore = [
     "B008",   # FastAPI 的 Depends()/Query() 就是要在默认值里调用
 ]

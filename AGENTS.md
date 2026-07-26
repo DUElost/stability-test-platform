@@ -29,10 +29,10 @@
 生产镜像带着 pytest 既浪费体积也是无谓的攻击面。
 
 **Lint 现状**：2026-07 首次接入，CI 里 `continue-on-error`（不阻塞）。存量
-ESLint 105 warning / ruff 338 finding（244 是未使用导入，`--fix` 可自动收敛）。
-收敛完成后把 `continue-on-error` 摘掉。ruff 暂未开 `UP`(pyupgrade) 族——
-全量 1097 处纯机械改写，会淹没 F/B 的真实信号；其中 `UP017`
-(`datetime.utcnow()` 436 处) 值得单独立项，本仓大量做时区敏感的 deadline 运算。
+ESLint 105 warning / ruff 81 finding（原 343，`--fix` 已收敛掉 262 个未使用
+导入）。收敛完成后把 `continue-on-error` 摘掉。ruff 暂未开 `UP`(pyupgrade)
+族——全量 2239 处纯风格改写（`Optional[X]`→`X | None` 882、`Dict`→`dict`
+633 等），会淹没 F/B 的真实信号，与缺陷无关。
 
 **空行注入污染**：编辑器插件会逐行插空行，一次污染后每次 diff 都虚胖一倍。
 检测/清理：`python tools/dev/collapse-blank-pollution.py [--check] <file.py>`
