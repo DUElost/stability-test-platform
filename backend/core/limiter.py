@@ -7,22 +7,33 @@
   取最左侧仍可被伪造 —— 客户端自带 `X-Forwarded-For: fake`,经 nginx 后
   变成 `fake, <真实IP>`,最左侧就是攻击者写的值。
 
-  生产拓扑:uvicorn 只绑 127.0.0.1(systemd/docker-compose 均如此),
-  全部流量经 nginx 抵达,所以默认白名单 = loopback 即可覆盖,不会误伤。
-  如需在其它拓扑下部署(如独立 LB),用 STP_TRUSTED_PROXIES 覆盖。
+  默认白名单 = loopback,只覆盖 **systemd 部署**:那里 uvicorn 绑
+  127.0.0.1,nginx 同机反代,对端就是 127.0.0.1。
+
+  **其它拓扑必须显式配置 STP_TRUSTED_PROXIES**,默认值不够:
+  - docker-compose:容器内 uvicorn 绑 0.0.0.0,nginx 走 Docker 网络访问
+    `server:8000`,对端是 172.x 容器地址 → 不配的话 XFF 全被忽略,所有用户
+    挤进同一个桶、互相把对方限流掉。compose 文件里已设好。
+  - 独立 LB / 多层代理:把每一层的网段都列进来。
+  故意不把 172.16.0.0/12 塞进全局默认 —— 那会让任何部署在私有网段的
+  非代理主机都获得伪造 XFF 的能力。
 
 已知限制:本限流器是**进程内**的。多 worker / 多副本下实际限额 = 配置值 ×
-副本数。要精确需挪到 Redis(SAQ 已在用),见 #81 讨论。
+副本数。当前生产是 systemd 单进程 uvicorn(无 --workers),所以是准确的;
+一旦加 worker 会静默放宽 N 倍且没有告警。要精确需挪到 Redis,见 #91。
 """
 import ipaddress
 import logging
 import os
 import time
+from collections import OrderedDict
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+
+from backend.core.metrics import rate_limiter_evicted_total
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +41,14 @@ logger = logging.getLogger(__name__)
 RATE_LIMIT_REQUESTS = 300  # requests
 RATE_LIMIT_WINDOW = 60  # seconds
 
-# 同时跟踪的 IP 上限。超出后按最早活动时间淘汰 —— 防止(伪造或真实的)海量
-# 来源把字典撑爆;此前 _clean_old_requests 只清空列表、从不删 key。
+# 同时跟踪的 IP 上限。超出后按 LRU 淘汰 —— 防止(伪造或真实的)海量来源把
+# 字典撑爆;此前 _clean_old_requests 只清空列表、从不删 key。
 MAX_TRACKED_IPS = 20_000
+
+# 淘汰日志的最小间隔(秒)。满容量时每个新来源都会触发淘汰,逐条打日志等于
+# 把内存 DoS 换成日志 I/O DoS —— 精确计数交给
+# stability_rate_limiter_evicted_total 指标,日志只做低频提示。
+_EVICTION_LOG_INTERVAL_SECONDS = 60.0
 
 DEFAULT_TRUSTED_PROXIES = "127.0.0.1/32,::1/128"
 
@@ -114,7 +130,12 @@ class RateLimiter:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.max_tracked_ips = max_tracked_ips
-        self._storage: Dict[str, List[float]] = {}  # ip -> list of timestamps
+        # LRU 序:最近活动的排在末尾,淘汰从头部 popitem —— O(1)。
+        # 用普通 dict + 每次扫描/排序会让「满容量」本身变成攻击面:
+        # 攻击者持续轮换真实源地址,每个请求都触发一次 O(n log n)。
+        self._storage: "OrderedDict[str, List[float]]" = OrderedDict()
+        self._last_eviction_log = 0.0
+        self._evicted_since_log = 0
 
     def _clean_old_requests(self, ip: str, now: float) -> None:
         """Remove requests outside the time window.
@@ -133,23 +154,30 @@ class RateLimiter:
             del self._storage[ip]
 
     def _evict_if_needed(self, now: float) -> None:
-        if len(self._storage) < self.max_tracked_ips:
+        """腾出一个槽位。O(1):直接弹出 LRU 头部。
+
+        不在这里做「全表扫过期项」—— 那是 O(n),而满容量时每个新来源都会
+        走到这里。过期项由 `_clean_old_requests` 在各自被访问时回收,
+        或在此被 LRU 顺带淘汰(最久未活动的必然也是最可能过期的)。
+        """
+        evicted = 0
+        while len(self._storage) >= self.max_tracked_ips:
+            self._storage.popitem(last=False)
+            evicted += 1
+        if not evicted:
             return
-        cutoff = now - self.window_seconds
-        stale = [ip for ip, ts in self._storage.items() if not ts or ts[-1] <= cutoff]
-        for ip in stale:
-            self._storage.pop(ip, None)
-        if len(self._storage) < self.max_tracked_ips:
-            return
-        # 仍然超限:按最近活动时间淘汰最旧的一批,给新来源腾位置
-        overflow = len(self._storage) - self.max_tracked_ips + 1
-        oldest = sorted(self._storage.items(), key=lambda kv: kv[1][-1])[:overflow]
-        for ip, _ in oldest:
-            self._storage.pop(ip, None)
-        logger.warning(
-            "rate_limiter_evicted: tracked_ips=%d evicted=%d",
-            len(self._storage), len(oldest) + len(stale),
-        )
+
+        rate_limiter_evicted_total.inc(evicted)
+        self._evicted_since_log += evicted
+        # 日志限频:否则满容量下逐条打印,等于把内存 DoS 换成日志 I/O DoS
+        if now - self._last_eviction_log >= _EVICTION_LOG_INTERVAL_SECONDS:
+            logger.warning(
+                "rate_limiter_evicting: tracked_ips=%d evicted_since_last_log=%d "
+                "(高基数来源;若持续出现请检查是否遭遇伪造源地址攻击)",
+                len(self._storage), self._evicted_since_log,
+            )
+            self._last_eviction_log = now
+            self._evicted_since_log = 0
 
     def is_allowed(self, ip: str) -> Tuple[bool, int, int]:
         """Check if request is allowed.
@@ -163,6 +191,9 @@ class RateLimiter:
         if ip not in self._storage:
             self._evict_if_needed(now)
             self._storage[ip] = []
+        else:
+            # 移到末尾 = 标记为最近活动,淘汰才是 LRU 而非 FIFO
+            self._storage.move_to_end(ip)
 
         if len(self._storage[ip]) >= self.max_requests:
             reset_time = int(self._storage[ip][0] + self.window_seconds - now) if self._storage[ip] else 0
