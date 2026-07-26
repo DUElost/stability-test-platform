@@ -72,6 +72,18 @@ JWT_SECRET_KEY=test-secret python -m pytest backend/tests/path/to/test.py -q
 
 两层互补，Reconciler 为主、inotifyd 为兜底：
 
+### 平台门禁（#73）
+
+AEE 是**联发科专有机制**，展锐/高通机型没有 `/data/aee_exp`。`JobSession` 在启动
+Reconciler 前先探测 `ro.soc.manufacturer`（回退 `ro.board.platform` 前缀）归一化为
+`MTK` / `UNISOC` / `QCOM` / `UNKNOWN`，只有命中 `STP_WATCHER_AEE_RECONCILE_PLATFORMS`
+（默认 `MTK`）才启动，否则记 `aee_reconciler_skipped_platform`。
+
+- 探测结果按 serial 进程内缓存，并随心跳写入 `device.platform`
+- `UNKNOWN` **恒放行** — adb 抖动导致的探测失败不该让 MTK 机型漏采崩溃信号
+- 生产实测（2026-07-26）：Z2581/Z2582 = UNISOC（`ums9230`），DAM-M500 / ELA-LX2 /
+  ELA-LX3 / MLD-LX3 = MTK（`mt6768`）
+
 ### Reconciler（主路径，默认开）
 
 每 60s 基线周期（`STP_WATCHER_AEE_RECONCILE_ENABLED=true`，默认开启）：

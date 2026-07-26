@@ -463,3 +463,70 @@ class TestHeartbeat:
         assert response.status_code == 200
         data = response.json()
         assert data["devices_count"] == 0
+
+
+class TestHeartbeatDevicePlatform:
+    """#73: SoC 平台随心跳入库,用于 AEE(MTK 专有)门禁与按平台筛选。"""
+
+    def _post(self, client, host_id, serial, platform):
+        return client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": host_id,
+                "status": "ONLINE",
+                "devices": [
+                    {
+                        "serial": serial,
+                        "model": "TestModel",
+                        "adb_state": "device",
+                        "adb_connected": True,
+                        "platform": platform,
+                    }
+                ],
+            },
+        )
+
+    def test_platform_persisted_on_device_create(self, client, sample_host, db_session):
+        self._post(client, sample_host.id, "PLATFORM_NEW", "UNISOC")
+
+        device = db_session.query(Device).filter(Device.serial == "PLATFORM_NEW").first()
+        assert device.platform == "UNISOC"
+
+    def test_platform_updated_on_existing_device(self, client, sample_host, db_session):
+        self._post(client, sample_host.id, "PLATFORM_UPD", "UNKNOWN")
+        self._post(client, sample_host.id, "PLATFORM_UPD", "MTK")
+
+        db_session.expire_all()
+        device = db_session.query(Device).filter(Device.serial == "PLATFORM_UPD").first()
+        assert device.platform == "MTK", "首次判不出、后续判出时应写入确定值"
+
+    def test_unknown_does_not_overwrite_known_platform(self, client, sample_host, db_session):
+        """adb 抖动一次上报 UNKNOWN,不能把已判定的 MTK 抹掉。"""
+        self._post(client, sample_host.id, "PLATFORM_KEEP", "MTK")
+        self._post(client, sample_host.id, "PLATFORM_KEEP", "UNKNOWN")
+
+        db_session.expire_all()
+        device = db_session.query(Device).filter(Device.serial == "PLATFORM_KEEP").first()
+        assert device.platform == "MTK"
+
+    def test_missing_platform_field_is_tolerated(self, client, sample_host, db_session):
+        """老版本 Agent 不上报 platform — 不能因此 500 或写脏值。"""
+        response = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": sample_host.id,
+                "status": "ONLINE",
+                "devices": [
+                    {
+                        "serial": "PLATFORM_ABSENT",
+                        "model": "TestModel",
+                        "adb_state": "device",
+                        "adb_connected": True,
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 200
+        device = db_session.query(Device).filter(Device.serial == "PLATFORM_ABSENT").first()
+        assert device.platform is None

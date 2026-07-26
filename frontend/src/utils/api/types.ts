@@ -60,6 +60,8 @@ export interface Device {
   id: number;
   serial: string;
   model: string | null;
+  /** SoC platform (#73). Gates MTK-only subsystems such as the AEE Reconciler. */
+  platform?: 'MTK' | 'UNISOC' | 'QCOM' | 'UNKNOWN' | null;
   host_id: string | number | null;
   status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
   /** Authoritative backend admission decision. Legacy servers may omit it. */

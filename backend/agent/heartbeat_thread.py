@@ -145,6 +145,7 @@ class HeartbeatThread:
                     "temperature": info.get("temperature"),
                     "network_latency": info.get("network_latency"),
                     "build_display_id": info.get("build_display_id"),
+                    "platform": info.get("platform"),
                 }
                 devices_list.append(device_data)
                 previous_connected = self._last_adb_connected_by_serial.get(dev["serial"])

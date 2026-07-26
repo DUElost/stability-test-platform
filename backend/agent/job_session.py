@@ -240,13 +240,50 @@ class JobSession:
     # 私有
     # ------------------------------------------------------------------
 
+    def _platform_supports_aee(self) -> bool:
+        """#73: AEE 是联发科专有机制,展锐/高通机型无 /data/aee_exp。
+
+        非目标平台直接跳过 reconciler — 既省掉必然空跑的 baseline 轮次,
+        也让日志给出「平台不支持」而不是含糊的 no_active_watcher。
+
+        探测失败(UNKNOWN)默认放行:宁可让 MTK 机型在 adb 抖动时多跑一轮,
+        也不要因为一次探测失败而漏采崩溃信号。
+        """
+        try:
+            from .device_platform import PLATFORM_UNKNOWN, detect_device_platform
+        except Exception:
+            logger.exception("aee_platform_probe_import_failed job_id=%d", self._job_id)
+            return True
+
+        allowed_raw = os.environ.get("STP_WATCHER_AEE_RECONCILE_PLATFORMS", "MTK")
+        allowed = {p.strip().upper() for p in allowed_raw.split(",") if p.strip()}
+        # UNKNOWN 恒放行 — 见 docstring
+        allowed.add(PLATFORM_UNKNOWN)
+
+        try:
+            adb_path = self._manager.get_dep("adb_path") or "adb"
+        except Exception:
+            # manager 未提供依赖注入时退回默认 adb — 门禁不该因此炸掉 Job
+            adb_path = "adb"
+
+        platform = detect_device_platform(adb_path, self._serial)
+        if platform in allowed:
+            return True
+
+        logger.info(
+            "aee_reconciler_skipped_platform job_id=%d serial=%s platform=%s allowed=%s",
+            self._job_id, self._serial, platform, sorted(allowed),
+        )
+        return False
+
     def _maybe_start_aee_reconciler(self) -> None:
         """M0/PR #2: 灰度判定 → 启动 AeeDbHistoryReconciler。
 
         启动条件(全部满足):
           1. STP_WATCHER_AEE_RECONCILE_ENABLED 真值 + 命中 host 白名单(若设置)
-          2. WatcherHandle.impl 存在(DeviceLogWatcher 已 active,非 skipped/degraded)
-          3. WatcherHandle.capability 不是 skipped/unavailable
+          2. 设备 SoC 平台命中 STP_WATCHER_AEE_RECONCILE_PLATFORMS(#73,默认 MTK)
+          3. WatcherHandle.impl 存在(DeviceLogWatcher 已 active,非 skipped/degraded)
+          4. WatcherHandle.capability 不是 skipped/unavailable
 
         失败一律仅 WARN — 不阻 Job;reconciler 无法启动时 AEE/VENDOR_AEE
         会回到 watcher 直接 emit(self._handle.impl._aee_reconciler_active 也会为 False)。
@@ -259,6 +296,8 @@ class JobSession:
             return
 
         if not is_reconciler_enabled(self._host_id):
+            return
+        if not self._platform_supports_aee():
             return
         if self._handle is None or self._handle.impl is None:
             logger.info(

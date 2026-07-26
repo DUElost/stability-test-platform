@@ -17,6 +17,7 @@ class DeviceOut(ORMBaseModel):
     id: int
     serial: str
     model: Optional[str] = None
+    platform: Optional[str] = None  # #73: MTK / UNISOC / QCOM / UNKNOWN
     host_id: Optional[str] = None
     status: str
     last_seen: Optional[datetime] = None

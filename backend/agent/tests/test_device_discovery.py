@@ -61,7 +61,9 @@ def test_collect_device_info_success(adb_path: str, serial: str, completed_proce
         side_effect=[check_result, battery_result, build_result],
     ) as mock_run:
         with patch.object(device_module, "_ping_with_fallback", return_value=23.4) as mock_ping:
-            info = device_module.collect_device_info(adb_path, serial)
+            # #73: 平台探测走 device_platform 自己的 subprocess,这里独立打桩
+            with patch.object(device_module, "detect_device_platform", return_value="MTK"):
+                info = device_module.collect_device_info(adb_path, serial)
 
     assert info == {
         "serial": serial,
@@ -72,6 +74,7 @@ def test_collect_device_info_success(adb_path: str, serial: str, completed_proce
         "temperature": 35,
         "network_latency": 23.4,
         "build_display_id": "SP-L2-20260518",
+        "platform": "MTK",
     }
     assert mock_run.call_count == 3
     assert mock_run.call_args_list[0].args[0] == [adb_path, "-s", serial, "shell", "echo", "test"]
@@ -98,6 +101,8 @@ def test_collect_device_info_returns_early_when_adb_check_failed(adb_path: str, 
         "temperature": None,
         "network_latency": None,
         "build_display_id": None,
+        # 早退路径不探测平台 — 保持初始 UNKNOWN
+        "platform": "UNKNOWN",
     }
     mock_run.assert_called_once()
     mock_ping.assert_not_called()
@@ -117,6 +122,8 @@ def test_collect_device_info_short_circuits_on_unauthorized_raw_state(adb_path: 
         "temperature": None,
         "network_latency": None,
         "build_display_id": None,
+        # 短路路径不探测平台 — 保持初始 UNKNOWN
+        "platform": "UNKNOWN",
     }
     mock_run.assert_not_called()
 
