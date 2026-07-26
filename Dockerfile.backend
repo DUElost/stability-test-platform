@@ -2,6 +2,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 只装运行时依赖 —— requirements-dev.txt(pytest / testcontainers / ruff)
+# 刻意不进生产镜像
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

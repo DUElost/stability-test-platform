@@ -1,3 +1,10 @@
+# 控制面**运行时**依赖 —— 这份会被打进生产镜像(Dockerfile.backend)。
+#
+# 测试/开发用的包请放 requirements-dev.txt,不要加在这里:
+# 生产镜像里带着 pytest / testcontainers 既是体积浪费,也是无谓的攻击面。
+#
+# 版本仍是区间约束。真正的可复现构建靠 requirements.lock(见该文件抬头)。
+
 fastapi>=0.104.0,<1.0
 uvicorn[standard]>=0.24.0,<1.0
 sqlalchemy[asyncio]>=2.0.0,<3.0
@@ -32,9 +39,7 @@ jsonschema>=4.20.0,<5.0
 apscheduler>=4.0.0a5,<5.0
 saq[redis]>=0.12.0,<1.0
 python-socketio>=5.11.0,<6.0
-hypothesis>=6.0.0,<7.0
-pytest>=7.0.0,<9.0
-pytest-asyncio>=0.23.0,<1.0
+# backend/scripts/ 下的冒烟与审计脚本使用(随镜像分发)
 httpx>=0.25.0,<1.0
+# dedup 汇总 xls 解析
 xlrd>=2.0.1,<3.0
-testcontainers>=4.9.0,<5.0

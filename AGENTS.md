@@ -15,6 +15,19 @@
 | Migrations | `cd backend && python -m alembic upgrade head` |
 | Agent (dev) | `python -m backend.agent.main` (set `API_URL` env first) |
 
+**依赖清单**（后端三份，各有分工）：
+
+| 文件 | 内容 | 谁用 |
+|------|------|------|
+| `backend/requirements.txt` | 仅运行时 | Dockerfile.backend（生产镜像） |
+| `backend/requirements-dev.txt` | `-r requirements.txt` + pytest/testcontainers/ruff | CI、本地开发 |
+| `backend/requirements.lock` | 全量精确版本 + hash | 可复现构建校验 |
+
+本地装开发环境用 `pip install -r backend/requirements-dev.txt`。改了
+`requirements.txt` 后**必须重新生成 lock**，命令见该文件抬头（须在 py3.11
+下生成，CI 与镜像都是 3.11）。测试/lint 依赖不要加进 `requirements.txt`——
+生产镜像带着 pytest 既浪费体积也是无谓的攻击面。
+
 **Lint 现状**：2026-07 首次接入，CI 里 `continue-on-error`（不阻塞）。存量
 ESLint 105 warning / ruff 338 finding（244 是未使用导入，`--fix` 可自动收敛）。
 收敛完成后把 `continue-on-error` 摘掉。ruff 暂未开 `UP`(pyupgrade) 族——

@@ -1,0 +1,18 @@
+# 开发 / CI 依赖。生产镜像**不**安装这份(见 Dockerfile.backend)。
+#
+# 用法:
+#   pip install -r backend/requirements-dev.txt      # 含运行时依赖
+-r requirements.txt
+
+# ── 测试 ────────────────────────────────────────────────────────────────
+pytest>=7.0.0,<9.0
+pytest-asyncio>=0.23.0,<1.0
+# conftest.py 在未设 TEST_DATABASE_URL 时用它拉起临时 postgres:16 容器
+testcontainers>=4.9.0,<5.0
+
+# ── Lint ────────────────────────────────────────────────────────────────
+# 配置见仓库根 ruff.toml;CI 的 lint job 也装这个
+ruff>=0.16.0,<1.0
+
+# 注:原先这里还有 hypothesis。全仓 0 处引用,backend/tests/pbt/ 只有一个空的
+# __init__.py —— property-based testing 起了个头就没继续。等真要写 PBT 再加回。
