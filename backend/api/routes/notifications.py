@@ -21,7 +21,12 @@ from backend.api.schemas import (
 from backend.core.database import get_db
 from backend.core.audit import record_audit
 from backend.models.notification import AlertRule, ChannelType, EventType, NotificationChannel, NotificationLog, NotificationSource
-from backend.api.routes.auth import require_admin, User
+from backend.api.routes.auth import (
+    get_current_active_user,
+    require_admin,
+    User,
+    verify_agent_secret,
+)
 
 router = APIRouter(prefix="/api/v1/notifications", tags=["notifications"])
 logger = logging.getLogger(__name__)
@@ -296,6 +301,10 @@ def delete_rule(
 # ---------------------------------------------------------------------------
 # Notification logs (unified history: platform events + alertmanager alerts)
 # ---------------------------------------------------------------------------
+#
+# 鉴权口径:channels / rules 是运维配置 → require_admin;
+# logs 是通知铃铛的日常读写 → 普通登录用户即可,但**不能匿名** ——
+# 日志正文含 context(主机名/设备序列号/失败原因),属于内部信息。
 
 @router.get("/logs")
 def list_logs(
@@ -303,6 +312,7 @@ def list_logs(
     limit: int = Query(50, ge=1, le=200),
     unread_only: bool = Query(False),
     db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
 ):
     q = db.query(NotificationLog)
     if unread_only:
@@ -331,13 +341,20 @@ def list_logs(
 
 
 @router.get("/logs/unread-count")
-def unread_count(db: Session = Depends(get_db)):
+def unread_count(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     count = db.query(NotificationLog).filter(NotificationLog.read.is_(False)).count()
     return {"unread": count}
 
 
 @router.patch("/logs/{log_id}/read")
-def mark_read(log_id: int, db: Session = Depends(get_db)):
+def mark_read(
+    log_id: int,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     log = db.get(NotificationLog, log_id)
     if not log:
         raise HTTPException(status_code=404, detail="Notification log not found")
@@ -347,15 +364,35 @@ def mark_read(log_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/logs/read-all")
-def mark_all_read(db: Session = Depends(get_db)):
+def mark_all_read(
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_active_user),
+):
     db.query(NotificationLog).filter(NotificationLog.read.is_(False)).update({"read": True})
     db.commit()
     return {"ok": True}
 
 
 @router.post("/webhook")
-async def alertmanager_webhook(request: Request):
-    """Receive alertmanager webhook alerts and log them."""
+async def alertmanager_webhook(
+    request: Request,
+    _: bool = Depends(verify_agent_secret),
+):
+    """Receive alertmanager webhook alerts and log them.
+
+    鉴权走 `X-Agent-Secret`(server-to-server),不是浏览器会话。
+    这同时解开了一个死结:`CSRFOriginMiddleware` 对 /api/v1/ 下的非安全方法
+    要求 Origin/Referer 白名单,而 Alertmanager 两者都不发 —— 生产强制开启
+    CSRF(ADR-0024)时该端点必然 403。中间件对携带 `X-Agent-Secret` 的请求
+    放行,所以加上这道鉴权后端点才真正可用。
+
+    Alertmanager 侧对应配置(deploy/prometheus/alertmanager.yml):
+        webhook_configs:
+          - url: http://<control-plane>/api/v1/notifications/webhook
+            http_config:
+              headers:
+                X-Agent-Secret: <STP_AGENT_SECRET>
+    """
     body = await request.json()
     from backend.services.notification_service import receive_alertmanager_alert
     receive_alertmanager_alert(body)

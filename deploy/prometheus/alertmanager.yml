@@ -30,15 +30,25 @@ route:
 
 receivers:
   - name: "stability-platform-default"
-    # Option 1: DingTalk webhook
+    # Option 1: 回灌到控制面通知中心(平台内 UI 铃铛可见)
+    #   端点鉴权走 X-Agent-Secret;这同时是绕过 CSRFOriginMiddleware 的
+    #   唯一方式 —— Alertmanager 不发 Origin/Referer,生产强制开启 CSRF
+    #   (ADR-0024)时,不带该头的请求必然 403。
+    # webhook_configs:
+    #   - url: "http://<control-plane-host>:8000/api/v1/notifications/webhook"
+    #     send_resolved: true
+    #     http_config:
+    #       headers:
+    #         X-Agent-Secret: "<STP_AGENT_SECRET 与控制面一致>"
+    # Option 2: DingTalk webhook
     # webhook_configs:
     #   - url: "https://oapi.dingtalk.com/robot/send?access_token=YOUR_TOKEN"
-    # Option 2: Email
+    # Option 3: Email
     # email_configs:
     #   - to: "oncall@example.com"
     #     from: "alertmanager@example.com"
     #     smarthost: "smtp.example.com:587"
-    # Option 3: Fallback — log to file
+    # Option 4: Fallback — log to file
     webhook_configs:
       - url: "http://127.0.0.1:5001/alerts"
         send_resolved: true
