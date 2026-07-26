@@ -63,7 +63,11 @@ def _iter_test_files():
             if entry.is_dir():
                 if entry.name not in _SKIP_DIR_NAMES:
                     stack.append(entry)
-            elif entry.name.startswith("test_") and entry.suffix == ".py":
+            elif entry.suffix == ".py" and (
+                entry.name.startswith("test_") or entry.stem.endswith("_test")
+            ):
+                # 两种命名都收:pytest 默认 python_files = ["test_*.py", "*_test.py"],
+                # 本仓没有覆盖该配置。只查前缀式会漏掉后缀式的散落文件。
                 yield entry
 
 
@@ -137,8 +141,10 @@ def test_ci_workflow_runs_every_testpath():
     missing = []
     for root in _testpaths():
         rel = str(root.relative_to(_REPO_ROOT)).rstrip("/")
-        # 该 testpath 本身被调用,或其内某个文件被显式点名,都算覆盖
-        if not any(p == rel or p.startswith(rel + "/") for p in invoked):
+        # 必须是**整个目录**被传给 pytest。只点名目录内的个别文件不算覆盖 ——
+        # 那恰恰是「大部分用例静默不跑」的形态,而它看起来跟全量运行没区别。
+        # (`backend/tests` 覆盖 `backend/tests/`;`backend/tests/x.py` 不覆盖。)
+        if rel not in invoked:
             missing.append(rel)
 
     assert not missing, (
