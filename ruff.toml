@@ -1,0 +1,45 @@
+# Ruff 配置 —— 后端 lint。
+#
+# 现状:仓库此前从未跑过 Python lint。CI 里以 continue-on-error 方式运行
+# (见 .github/workflows/ci.yml),先让信号可见、不阻塞合入。
+#
+# 规则取向:只开"能指向真实缺陷"的族 —— pyflakes(F,未使用/未定义)、
+# bugbear 的一部分(B,可疑构造)、pyupgrade(UP)。纯格式族(E501 行宽、
+# 引号风格等)一律关掉:仓库没有 formatter,开了只会刷屏。
+
+target-version = "py311"
+line-length = 100
+
+extend-exclude = [
+    "backend/alembic/versions",        # 自动生成的迁移
+    "backend/agent/resources",         # 第三方随包工具(AIMonkey / flashtool)
+    "venv", "venv-wsl", ".venv",
+]
+
+[lint]
+select = [
+    "F",      # pyflakes —— 未使用导入/变量、未定义名字、f-string 缺占位符
+    "E9",     # 语法/IO 错误(E1/E2/E7 等格式族不开)
+    "B",      # flake8-bugbear —— 可变默认参数、循环里的闭包变量等真实陷阱
+    "T20",    # 生产代码里的 print
+]
+
+# UP(pyupgrade)暂不开:全量 1097 处,其中 UP006 `Dict`→`dict` 633、
+# UP035 deprecated-import 205、UP017 `datetime.utcnow()` 436。纯机械改写,
+# 与缺陷无关,开了会把 F/B 的真实信号淹没。UP017 值得单独立项 ——
+# 本仓大量做时区敏感的 deadline 运算,utcnow() 的 naive 返回值是隐患。
+ignore = [
+    "B008",   # FastAPI 的 Depends()/Query() 就是要在默认值里调用
+]
+
+[lint.per-file-ignores]
+# 测试:允许 print、允许未使用的 fixture 参数
+"backend/tests/**" = ["T20", "F811"]
+"backend/agent/tests/**" = ["T20", "F811"]
+"tests/**" = ["T20", "F811"]
+# 运维/冒烟脚本本来就靠 print 输出
+"backend/scripts/**" = ["T20"]
+"scripts/**" = ["T20"]
+"tools/**" = ["T20"]
+# Agent 侧脚本是投递到设备执行的独立程序,stdout 是其协议
+"backend/agent/scripts/**" = ["T20"]

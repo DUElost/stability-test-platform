@@ -74,6 +74,46 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+  # Lint —— 报告性质,暂不阻塞合入。
+  #
+  # 本仓在 2026-07 之前从未跑过 lint,存量:ESLint 105 warning、
+  # ruff 338 finding(其中 244 是未使用导入,可 --fix 自动收敛)。
+  # 先让信号在 PR 上可见,存量清完后把 continue-on-error 摘掉,
+  # 并把 ESLint 的 --max-warnings 降到 0。
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: ESLint
+        working-directory: frontend
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Install ruff
+        run: pip install ruff
+      - name: Ruff
+        run: ruff check backend/ tools/ scripts/
+        continue-on-error: true
+
+      # 这条**阻塞**:不是风格建议,是二值门禁,且当前全仓已清零。
+      # pre-commit 钩子需开发者手动 `git config core.hooksPath .githooks`
+      # 才生效 —— pipeline_engine.py 当年就是这么漏进来的,CI 侧兜底。
+      - name: 空行注入污染检查
+        run: |
+          find backend tools scripts -name '*.py' \
+            -not -path '*/resources/*' -not -path '*/__pycache__/*' \
+            | xargs python tools/dev/collapse-blank-pollution.py --check -q
+
   docker-build:
     runs-on: ubuntu-latest
     needs: [backend-test, frontend-check]
