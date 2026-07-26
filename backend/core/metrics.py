@@ -117,6 +117,11 @@ post_completion_enqueue_failed_total = Counter(
     'Total post_completion_task SAQ enqueue failures on job terminal',
 ) if PROMETHEUS_AVAILABLE else _MockMetric()
 
+rate_limiter_evicted_total = Counter(
+    'stability_rate_limiter_evicted_total',
+    'Total rate-limiter buckets evicted at capacity (high source cardinality signal)',
+) if PROMETHEUS_AVAILABLE else _MockMetric()
+
 device_lease_duration = Histogram(
     'stability_device_lease_duration_seconds',
     'Duration of device leases in seconds',

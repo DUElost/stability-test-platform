@@ -43,6 +43,13 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-stp}:${POSTGRES_PASSWORD:-change-me-local}@postgres:5432/${POSTGRES_DB:-stp_dev}
       REDIS_URL: redis://redis:6379/0
       CORS_ORIGINS: http://127.0.0.1:${DEV_FRONTEND_PORT:-15173},http://localhost:${DEV_FRONTEND_PORT:-15173}
+      # 限流的可信代理网段(#81)。这里的拓扑与 systemd 部署不同:容器内
+      # uvicorn 绑 0.0.0.0,frontend 的 nginx 走 Docker 网络访问 server:8000,
+      # 对端是 172.x 容器地址而非 127.0.0.1。不配的话 X-Forwarded-For 会被
+      # 一律忽略,所有用户挤进同一个桶、互相把对方限流掉。
+      # 172.16.0.0/12 覆盖 Compose 默认 bridge 网段;刻意不写进代码默认值 ——
+      # 那会让任何部署在私有网段的非代理主机都能伪造 XFF。
+      STP_TRUSTED_PROXIES: ${STP_TRUSTED_PROXIES:-127.0.0.1/32,::1/128,172.16.0.0/12}
       STP_ADMIN_USER: ${STP_ADMIN_USER:-admin}
       STP_ADMIN_PASSWORD: ${STP_ADMIN_PASSWORD:-admin123}
       STP_SCRIPT_ROOT: /app/backend/agent/scripts
