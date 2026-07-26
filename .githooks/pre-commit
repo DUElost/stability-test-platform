@@ -13,8 +13,9 @@
 
 set -e
 
-THRESHOLD_RATIO=60      # 纯空行占新增行比例(%)
-THRESHOLD_MIN_LINES=30  # 新增行数阈值,小于此值不判
+THRESHOLD_RATIO=60       # 单次 diff:纯空行占新增行比例(%)
+THRESHOLD_MIN_LINES=30   # 新增行数阈值,小于此值不判
+THRESHOLD_FILE_RATIO=35  # 文件整体空行率(%)。正常代码 8~15%,污染文件 ~50%
 failed=0
 warnings=0
 
@@ -62,6 +63,35 @@ while IFS= read -r file; do
   if printf '%s\n' "$diff_text" | grep -qE $'\r$'; then
     echo "[BLOCK] $file: CRLF byte found in staged diff (file should be LF-only)"
     echo "        Run: tools/dev/normalize-eol.sh '$file'"
+    failed=1
+  fi
+
+  # ── 文件整体空行率 ──────────────────────────────────────────────────
+  #
+  # 为什么需要这条:上面的"新增行占比"只看单次 diff。一旦某个文件已经
+  # 被污染到 ~50%,后续每次改动的新增行也维持在 ~50%,永远够不到 60%
+  # 阈值 —— backend/agent/pipeline_engine.py 就是这样带着 1294/2644 的
+  # 空行活了十几个提交。这里改看**暂存后文件的最终形态**,污染文件只要
+  # 被 touch 就会被拦下,倒逼一次性清理。
+  case "$file" in
+    *.py|*.ts|*.tsx|*.js|*.jsx|*.sh) ;;
+    *) continue ;;
+  esac
+
+  staged_content=$(git show ":$file" 2>/dev/null || true)
+  [ -z "$staged_content" ] && continue
+
+  total_lines=$(printf '%s\n' "$staged_content" | wc -l)
+  [ "$total_lines" -lt 200 ] && continue    # 小文件空行率波动大,不判
+
+  blank_lines=$(printf '%s\n' "$staged_content" | grep -cE '^[[:space:]]*$' || true)
+  file_ratio=$(( blank_lines * 100 / total_lines ))
+  if [ "$file_ratio" -ge "$THRESHOLD_FILE_RATIO" ]; then
+    echo "[BLOCK] $file"
+    echo "        文件整体空行率 $blank_lines/$total_lines = ${file_ratio}%"
+    echo "        疑似逐行空行注入污染。清理:"
+    echo "          python tools/dev/collapse-blank-pollution.py '$file'"
+    echo "        (该脚本仅动空行,并以 AST 比对保证语义不变)"
     failed=1
   fi
 done <<< "$staged"
