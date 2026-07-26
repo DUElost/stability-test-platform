@@ -3,9 +3,13 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # 只装运行时依赖 —— requirements-dev.txt(pytest / testcontainers / ruff)
-# 刻意不进生产镜像
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# 刻意不进生产镜像。
+#
+# 装的是 lock 而非 requirements.txt:后者是区间约束,同一份代码在不同时间
+# 构建会拿到不同的传递依赖版本。--require-hashes 同时保证下载物未被篡改。
+# 改依赖的流程:改 requirements.txt → 重新生成 lock(命令见 lock 抬头)。
+COPY backend/requirements.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 COPY backend/ backend/
 RUN useradd --system --create-home --home-dir /home/appuser appuser \

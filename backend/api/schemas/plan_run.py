@@ -3,7 +3,15 @@
 从 backend/api/routes/plan_runs.py 抽出 —— 该文件曾有 3151 行,其中 25 个
 BaseModel 内联其中,而 backend/api/schemas/ 这个专门的包基本闲置。
 
-注:类名与字段一律未改动,OpenAPI components 名称因此保持不变。
+类名与字段一律未改动,但 **OpenAPI component 名称变了**:`PlanRunOut` 在
+`routes/plans.py` 里还有一个同名、字段不同的定义,FastAPI 只能靠模块路径
+消歧,于是搬家后 key 从 `backend__api__routes__plan_runs__PlanRunOut` 变成
+`backend__api__schemas__plan_run__PlanRunOut`。
+
+对本仓无影响 —— 前端类型是手写维护的 `frontend/src/utils/api/types.ts`
+(见 CLAUDE.md「前端类型权威源」),不从 OpenAPI 生成。若将来接入 OpenAPI
+代码生成,应先合并那两个 `PlanRunOut`,或给它们显式指定 `model_config`
+的 title 来固定 component 名。
 """
 from __future__ import annotations
 
