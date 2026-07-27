@@ -45,7 +45,9 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 
 ## 方案 C 存储（ADR-0025）
 
-> 详见 @docs/design/2026-plan-c-storage-and-access.md
+详见：
+
+@docs/design/2026-plan-c-storage-and-access.md
 
 | 存储 | 用途 | 路径 |
 |------|------|------|
