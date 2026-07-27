@@ -23,6 +23,7 @@ from backend.agent.job_session import JobSession, JobStartupError
 from backend.agent.watcher import WatcherStartError
 from backend.agent.watcher.manager import WatcherHandle
 from backend.agent.watcher.policy import OnUnavailableAction, WatcherPolicy
+from backend.agent.aee.reconciler import ReconcilerStats
 
 
 # ----------------------------------------------------------------------
@@ -325,10 +326,16 @@ def test_to_complete_payload_shape(lock_tracker, patch_manager):
         "watcher_id", "watcher_started_at", "watcher_stopped_at",
         "watcher_capability", "log_signal_count", "watcher_stats",
         "reconciler_stats",
+        # #96：per-source 诊断拆分（log_signal_count = watcher + reconciler），
+        # 控制面 watcher_summary 是 Dict[str,Any]，未消费这两个键，仅为运维可观测。
+        "watcher_signal_count", "reconciler_signal_count",
     }
     assert set(payload.keys()) == expected_keys
     # M0/Task2: reconciler_stats 默认空 dict(未灰度开启 reconciler 时)
     assert payload["reconciler_stats"] == {}
+    # #96: 未启动 reconciler 时 per-source 拆分仍存在且为 0
+    assert payload["watcher_signal_count"] == 0
+    assert payload["reconciler_signal_count"] == 0
 
     # 时间字段为 ISO8601 字符串
     assert isinstance(payload["watcher_started_at"], str)
@@ -619,3 +626,121 @@ def test_platform_gate_precedes_watcher_check(lock_tracker, patch_manager, monke
         "handle.impl 为 None 时平台门禁仍应独立判定并拦下"
     )
     session.__exit__(None, None, None)
+
+
+def test_log_signal_count_includes_reconciler_emits(lock_tracker, patch_manager, monkeypatch, caplog):
+    """#96: log_signal_count 必须并入 reconciler 发射数，不能只剩 watcher 计数。
+
+    回归场景：之前 job_session_exited signals 只取 watcher.signals_emitted，
+    遗漏 reconciler_stats.signals_emitted —— 曾导致 9.124 真机验证时
+    `job_session_exited signals=0` 被误判为 reconciler 失效，实际 reconciler
+    在同一 Job 发了 2 条已落库。
+    """
+    import logging
+
+    # watcher stop 返回 handle，stats 里 signals_emitted=3（watcher 路径发了 3 条）
+    class _MgrStopWithSignals(_MgrWithAdb):
+        def stop(self, watcher_id: str, *, drain: bool = True, timeout: float = 5.0):
+            self.stopped.append(watcher_id)
+            handle = WatcherHandle(
+                watcher_id=watcher_id,
+                host_id="host-unittest",
+                serial="SERIAL-ABC",
+                job_id=101,
+                log_dir="/tmp/unittest",
+                policy=WatcherPolicy(),
+                capability=self.capability,
+                started_at=datetime(2026, 4, 18, 10, 0, 0, tzinfo=timezone.utc),
+                stopped_at=datetime(2026, 4, 18, 10, 0, 5, tzinfo=timezone.utc),
+            )
+            handle.stats["signals_emitted"] = 3
+            return handle
+
+    patch_manager(_MgrStopWithSignals(mode="ok", capability="inotifyd_root"))
+
+    # reconciler stop 返回 signals_emitted=2（reconciler 路径发了 2 条）
+    class _ReconcilerWithTwoSignals:
+        def __init__(self, **kwargs):
+            pass
+
+        def start(self):
+            return True
+
+        def stop(self, timeout: float = 5.0):
+            return ReconcilerStats(signals_emitted=2)
+
+    monkeypatch.setenv("STP_WATCHER_AEE_RECONCILE_ENABLED", "1")
+    monkeypatch.delenv("STP_WATCHER_AEE_RECONCILE_HOSTS", raising=False)
+    monkeypatch.setattr(
+        "backend.agent.device_platform.detect_device_platform",
+        lambda *a, **k: "MTK",
+    )
+    monkeypatch.setattr(
+        "backend.agent.aee.reconciler.AeeDbHistoryReconciler",
+        _ReconcilerWithTwoSignals,
+    )
+
+    session = JobSession(
+        job_payload=_make_payload(),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    session._handle.impl = _PlatformImpl()
+    # __enter__ 内第一次调 _maybe_start_aee_reconciler 时 impl 还没注入，
+    # 这里补一次（与现有平台门禁测试同构）让 reconciler 真正启动
+    session._maybe_start_aee_reconciler()
+    assert session._reconciler is not None, "reconciler 应已启动（MTK + impl 已就位）"
+
+    with caplog.at_level(logging.INFO, logger="backend.agent.job_session"):
+        session.__exit__(None, None, None)
+
+    summary = session.summary
+    # 核心：log_signal_count = watcher(3) + reconciler(2) = 5
+    assert summary.log_signal_count == 5, (
+        f"log_signal_count 应并入 reconciler（3+2=5），实际 {summary.log_signal_count}"
+    )
+    assert summary.watcher_signal_count == 3
+    assert summary.reconciler_signal_count == 2
+    assert summary.reconciler_stats["signals_emitted"] == 2
+
+    # to_complete_payload 同步带出 per-source 拆分
+    payload = summary.to_complete_payload()
+    assert payload["log_signal_count"] == 5
+    assert payload["watcher_signal_count"] == 3
+    assert payload["reconciler_signal_count"] == 2
+
+    # 日志行必须按来源拆开，避免再次出现裸 signals=0 误导
+    exited = [r for r in caplog.records if "job_session_exited" in r.getMessage()]
+    assert exited, "应记 job_session_exited 日志"
+    log_line = exited[0].getMessage()
+    assert "signals=5" in log_line
+    assert "watcher=3" in log_line
+    assert "reconciler=2" in log_line
+
+
+def test_log_signal_count_zero_when_reconciler_not_started(lock_tracker, patch_manager):
+    """#96 旁路：reconciler 未启动（如展锐）时 per-source 拆分仍存在且不崩。
+
+    watcher 单独发的信号照常计入 log_signal_count；reconciler 那一档为 0。
+    """
+    # 还原 _FakeManager.stop 默认（stats.signals_emitted=0）
+    patch_manager(_FakeManager(mode="ok", capability="stub"))
+
+    session = JobSession(
+        job_payload=_make_payload(),
+        host_id="host-unittest",
+        log_dir="/tmp/jobs/101",
+        lock_register=lock_tracker.reg_job,
+        lock_deregister=lock_tracker.dereg_job,
+    )
+    session.__enter__()
+    session.__exit__(None, None, None)
+
+    summary = session.summary
+    assert summary.watcher_signal_count == 0
+    assert summary.reconciler_signal_count == 0
+    assert summary.log_signal_count == 0
+    assert summary.reconciler_stats == {}

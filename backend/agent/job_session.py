@@ -58,6 +58,11 @@ class JobSessionSummary:
     watcher_stopped_at: Optional[datetime] = None
     watcher_capability: str = "unavailable"
     log_signal_count: int = 0
+    # #96：per-source 拆分（log_signal_count = watcher + reconciler），
+    # 便于诊断哪条路径没干活。控制面不改 schema，只读 log_signal_count；
+    # 这两个字段进 payload 仅为运维可观测，后端未消费也无害。
+    watcher_signal_count: int = 0
+    reconciler_signal_count: int = 0
     watcher_stats: Dict[str, int] = field(default_factory=dict)
     policy_snapshot: Dict[str, Any] = field(default_factory=dict)
     # M0/PR #2: AeeDbHistoryReconciler 运行期统计(灰度开启时回填)
@@ -71,6 +76,8 @@ class JobSessionSummary:
             "watcher_stopped_at": _iso(self.watcher_stopped_at),
             "watcher_capability": self.watcher_capability,
             "log_signal_count":   self.log_signal_count,
+            "watcher_signal_count":  self.watcher_signal_count,
+            "reconciler_signal_count": self.reconciler_signal_count,
             "watcher_stats":      self.watcher_stats,
             # M0/Task2: Agent 无独立 /metrics 暴露面,reconciler 进程内计数(尤其
             # ticks_skipped_unchanged)通过 complete 通道带出,由后端桥接到中心 /metrics。
@@ -183,6 +190,7 @@ class JobSession:
             self._reconciler = None
 
         # ---- Phase 1b: watcher 同步收尾 ----
+        w_sig = 0  # 先初始化：watcher 未启动 / stop 返回 None / stop 抛异常 三条路径都归零
         try:
             if self._handle is not None:
                 stopped = self._manager.stop(
@@ -193,18 +201,34 @@ class JobSession:
                 if stopped is not None:
                     self._summary.watcher_stopped_at = stopped.stopped_at
                     self._summary.watcher_stats = dict(stopped.stats)
-                    self._summary.log_signal_count = int(stopped.stats.get("signals_emitted", 0))
+                    # 防御性：仅当 stats 报告了非负整数才采纳（异常路径可能缺字段）
+                    w_sig = int(stopped.stats.get("signals_emitted", 0) or 0)
+                else:
+                    w_sig = 0
         except Exception as stop_exc:
             # 关键：Phase 1 的任何异常绝不阻塞 Phase 2
             logger.exception("watcher_stop_failed_in_phase1 job_id=%d: %s", self._job_id, stop_exc)
+            w_sig = 0
+
+        # reconciler.signals_emitted 已在 Phase 1a 写入 summary.reconciler_stats；
+        # 若 reconciler 未启动则该 dict 为空，取 0。
+        r_sig = int(self._summary.reconciler_stats.get("signals_emitted", 0) or 0)
+        # log_signal_count = watcher + reconciler —— #96：之前只取 watcher 计数,
+        # 遗漏 reconciler 发射的信号,曾导致 job_session_exited signals=0 误判 reconciler 失效。
+        # 控制面 /complete 把此值作 lower-bound 同步(只增不减),与 /log-signals 端点
+        # 的实插累加不冲突。
+        self._summary.log_signal_count = w_sig + r_sig
+        self._summary.watcher_signal_count = w_sig
+        self._summary.reconciler_signal_count = r_sig
 
         # ---- Phase 2: 锁释放（必定执行）----
         self._release_locks()
 
         logger.info(
-            "job_session_exited job_id=%d capability=%s signals=%d drain_timeout=%.1fs exc=%s",
+            "job_session_exited job_id=%d capability=%s signals=%d "
+            "(watcher=%d reconciler=%d) drain_timeout=%.1fs exc=%s",
             self._job_id, self._summary.watcher_capability,
-            self._summary.log_signal_count, drain_timeout,
+            self._summary.log_signal_count, w_sig, r_sig, drain_timeout,
             exc_type.__name__ if exc_type else None,
         )
         # 不吞异常 —— 让 pipeline 错误正常抛给调用方
