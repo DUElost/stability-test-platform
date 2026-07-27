@@ -48,6 +48,23 @@ def main() -> int:
             _require_contains(conf, "proxy_pass http://127.0.0.1:8000/socket.io/;", str(conf_path))
             _require_contains(conf, 'proxy_set_header Connection "upgrade";', str(conf_path))
             _require_contains(conf, "proxy_set_header Upgrade $http_upgrade;", str(conf_path))
+            _require_contains(conf, "location = /index.html", str(conf_path))
+            _require_contains(
+                conf,
+                'Cache-Control "no-cache, no-store, must-revalidate"',
+                str(conf_path),
+            )
+            _require_contains(conf, "location /assets/", str(conf_path))
+            _require_contains(conf, "try_files $uri =404;", str(conf_path))
+            _require_contains(
+                conf,
+                'Cache-Control "public, max-age=31536000, immutable"',
+                str(conf_path),
+            )
+            if 'Cache-Control "public, max-age=31536000, immutable" always' in conf:
+                raise AssertionError(
+                    f"Hashed asset 404s must not be cached as immutable in {conf_path}"
+                )
 
     except Exception as exc:
         print(f"FAILED: {exc}", file=sys.stderr)
