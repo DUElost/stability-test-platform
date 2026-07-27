@@ -1,7 +1,7 @@
 # 测试指南
 
 > **最后更新**：2026-07-15  
-> 命令速查：根目录 [`AGENTS.md`](../../AGENTS.md)
+> 本文即测试命令的权威位置。根目录 [`AGENTS.md`](../../AGENTS.md) §Test quirks 补充 fixture / 超时等非命令类陷阱。
 
 ---
 
