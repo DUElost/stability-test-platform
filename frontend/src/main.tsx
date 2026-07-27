@@ -5,6 +5,9 @@ import './index.css';
 import { registerAuthFailureHandler } from './utils/api';
 import { clearAppQueryCache } from './components/QueryProvider';
 import { disconnectDashSocket } from './hooks/useSocketIO';
+import { registerChunkLoadRecovery } from './utils/chunkLoadRecovery';
+
+registerChunkLoadRecovery();
 
 registerAuthFailureHandler(() => {
   clearAppQueryCache();

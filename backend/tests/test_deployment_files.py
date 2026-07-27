@@ -75,6 +75,23 @@ def test_control_plane_nginx_templates_proxy_health_endpoint():
         assert "proxy_pass http://127.0.0.1:8000/health;" in conf
 
 
+def test_nginx_templates_cache_hashed_assets_without_spa_fallback():
+    templates = (
+        ROOT / "deploy" / "control-plane" / "nginx" / "stability-platform.conf",
+        ROOT / "deploy" / "control-plane" / "nginx" / "stability-platform-https.conf",
+        ROOT / "deploy" / "nginx" / "frontend-docker.conf",
+    )
+
+    for template in templates:
+        conf = template.read_text(encoding="utf-8")
+        assert "location = /index.html" in conf
+        assert 'Cache-Control "no-cache, no-store, must-revalidate"' in conf
+        assert "location /assets/" in conf
+        assert 'Cache-Control "public, max-age=31536000, immutable"' in conf
+        assert 'Cache-Control "public, max-age=31536000, immutable" always' not in conf
+        assert "try_files $uri =404;" in conf
+
+
 def test_frontend_docker_nginx_targets_server_service():
     nginx_conf = (
         ROOT / "deploy" / "nginx" / "frontend-docker.conf"

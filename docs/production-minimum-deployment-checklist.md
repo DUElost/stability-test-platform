@@ -164,6 +164,16 @@ VITE_API_BASE_URL= npm run build
 Nginx 模板须同时反代 `/api/`、`/health` 与 `/socket.io/`（见 `deploy/control-plane/nginx/stability-platform.conf`
 与 Docker 版 `deploy/nginx/frontend-docker.conf`）。
 
+每次前端发布后检查缓存与 SPA 回退边界：`index.html` 必须禁止缓存；带内容
+hash 的 `/assets/` 可长期缓存；不存在的静态资源必须返回 404，不能回退成
+`index.html`，否则旧标签页会把 HTML 当 JavaScript 动态模块加载并崩溃。
+
+```bash
+curl -I http://<你的前端Origin>/index.html
+curl -I http://<你的前端Origin>/assets/definitely-missing.js
+# 前者应包含 Cache-Control: no-cache, no-store；后者应为 404。
+```
+
 部署自检（模板 + Stage A env/health/login/CSRF 探测）：
 
 ```bash
