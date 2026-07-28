@@ -98,3 +98,12 @@ python -m backend.scripts.migration.preflight_execution_protocol
 ```
 
 契约说明：[`../design/07-execution-protocol.md`](../design/07-execution-protocol.md)。
+
+---
+
+## 9. 事故复盘
+
+| 文档 | 用途 |
+|------|------|
+| [`incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md`](./incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md) | 172.21.9.126 硬挂根因、watchdog/EEE/BIOS/Agent restart 加固、其余 19 台 host BIOS 汇总 |
+
