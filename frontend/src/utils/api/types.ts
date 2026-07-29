@@ -390,6 +390,88 @@ export interface DashboardSummary {
   host_resources: DashboardHostResourcePoint[];
 }
 
+// ─── File server / NFS operations ───────────────────────────────────────────
+
+export interface FileServerMetricPoint {
+  timestamp: number;
+  value: number;
+}
+
+export interface FileServerOverview {
+  generated_at: string;
+  status: 'healthy' | 'warning' | 'critical';
+  server: {
+    hostname: string;
+    address: string;
+    cpu_count: number;
+    uptime_seconds: number | null;
+  };
+  storage: {
+    path: string;
+    source: string | null;
+    filesystem: string | null;
+    mounted: boolean;
+    backend_write_access: boolean;
+    total_bytes: number;
+    used_bytes: number;
+    available_bytes: number;
+    used_pct: number;
+    inode_total: number;
+    inode_used: number;
+    inode_available: number;
+    inode_used_pct: number;
+  };
+  system: {
+    cpu_usage_pct: number;
+    memory_usage_pct: number;
+    memory_total_bytes: number;
+    load1: number;
+    disk_read_bytes_per_second: number | null;
+    disk_write_bytes_per_second: number | null;
+    network_receive_bytes_per_second: number | null;
+    network_transmit_bytes_per_second: number | null;
+  };
+  nfs: {
+    service_ready: boolean;
+    exported: boolean;
+    export_targets: string[];
+    server_threads: number;
+    requests_per_second: number | null;
+    rpc_errors_per_second: number | null;
+    stale_file_handles_total: number;
+    connections_total: number;
+  };
+  agents: {
+    total: number;
+    mounted: number;
+    failed: number;
+    unreported: number;
+    items: Array<{
+      host_id: string;
+      ip: string | null;
+      status: string;
+      mounted: boolean | null;
+      last_heartbeat: string | null;
+    }>;
+  };
+  history: {
+    hours: number;
+    capacity_usage_pct: FileServerMetricPoint[];
+    cpu_usage_pct: FileServerMetricPoint[];
+    memory_usage_pct: FileServerMetricPoint[];
+    nfs_requests_per_second: FileServerMetricPoint[];
+  };
+  monitoring: {
+    prometheus_available: boolean;
+    error: string | null;
+  };
+  alerts: Array<{
+    severity: 'warning' | 'critical';
+    code: string;
+    message: string;
+  }>;
+}
+
 // ─── Phase 2: 成功率/失败率细分 ──────────────────────────────────────────────
 
 export interface HostFailureRateItem {

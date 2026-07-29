@@ -17,6 +17,7 @@ import {
   Code2,
   CalendarClock,
   BellRing,
+  HardDrive,
   Wifi,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -70,6 +71,7 @@ const navGroups: NavGroup[] = [
     items: [
       { path: '/hosts', label: '主机集群', icon: Server },
       { path: '/devices', label: '物理设备', icon: Smartphone },
+      { path: '/storage', label: '文件服务器', icon: HardDrive, adminOnly: true },
     ],
   },
   {
