@@ -209,9 +209,27 @@ STP_AGENT_SID_REGISTRY=0
 | ADR-0026 准入、Barrier、host-global permit | **通过** | PostgreSQL 回归 `1162 passed, 17 skipped`；Agent `759 passed`；44/60/87-device 实机阶梯均无 FAILED/UNKNOWN，87-device 全量自然 SUCCESS |
 | PostgreSQL singleton leader election | **通过（隔离双实例）** | 重叠进程同名锁结果 `[false, true]` |
 | Redis Socket.IO fan-out + Agent owner registry | **通过（隔离双实例）** | `18001 ↔ Redis ↔ 18002` 正向日志、反向 control 均通过；owner 登记与断连清理通过 |
-| 44→60→100 host 规模 | **未完成：库存阻塞** | 仅 20 个 ONLINE host，且仅 11 个 host 有 ONLINE device；已完成的是 44→60→87 device 替代压力窗 |
+| 44→60→100 host 规模 | **未完成：库存阻塞** | 仅 20 个 ONLINE host，且仅 11 个 host 有 ONLINE device；已完成的是 44→60→87 device 替代压力窗。**2026-07-30 起该门槛拆为 B1 / B2**，见 §6.1 |
 | 生产多实例部署 | **未开启** | 生产仍为单 uvicorn:8000，`socketio_redis_adapter=false`、`agent_sid_registry=false`；本轮只验证多实例代码路径，不改变生产拓扑 |
 | 空库 Alembic 基线 | **通过** | PostgreSQL 16 空库 `<base>→head` 与二次 no-op 均通过；CI 已固定执行；迁移 Schema 上 `1175 passed, 4 skipped` |
 | 生产 Alembic revision | **通过** | `g2h3i4j5k6l7→h3i4j5k6l7m8 (head)`；目标索引 valid/ready，平台健康正常 |
 
 最终结论：ADR-0026 当前可用库存范围内的运行时落地、Alembic 空库基线与 ADR-0027 多实例前置能力已完成验证；唯一不能关闭的规模门槛是 **44→60→100 host**，需要补足真实 host 库存后重新执行，不能用 device 数量替代。
+
+---
+
+## 6.1 门槛拆分（2026-07-30）
+
+§6 的「44→60→100 host」单条门槛已按 ADR-0026「门槛拆分」章节改为 **B1 / B2** 两条。权威定义在 ADR，本节只记录运维执行口径：
+
+| 门槛 | 设备 | 现状 | 下一步 |
+|------|------|------|--------|
+| **B1** host 调度维度 | 允许合成（`STP_STATIC_DEVICE_SERIALS` + 每实例独立 `AGENT_INSTALL_DIR`） | **未开始**。代码层复核认为可行，**无实机数据** | ① 单机 5 实例冒烟（内存 + 状态隔离）→ ② 44 / 60 / 100 host 逐档，每档记四项指标 |
+| **B2** device 执行维度 | 仅真机 | 已有 87-device 证据（PlanRun99 自然 SUCCESS，`pass_rate=1.0`） | 补足库存后按目标档位完整长跑 |
+
+**记录纪律（沿用 2026-07-23 §177 的纠正惯例）**：
+
+- B1 的每条证据**必须标注设备为合成**，例如 `44 host / 440 synthetic device`，不得写成 `44 host`
+- B1 单独通过时，结论必须同时写明 B2 未通过；**不得**简写为「host 阶梯已通过」
+- 只有 B1 与 B2 同时成立才可宣称 host-scale 整体验收通过
+- B1 观测窗内**禁止 Agent 热更新**：`AGENT_DIR` 不随 `AGENT_INSTALL_DIR` 变，多实例共享同一份代码，热更新会互相踩
