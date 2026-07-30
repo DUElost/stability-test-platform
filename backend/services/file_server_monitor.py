@@ -170,6 +170,30 @@ def _host_mount_summary(hosts: Iterable[Any]) -> dict[str, Any]:
     }
 
 
+def _server_address() -> str:
+    """本机对外地址。`STP_FILE_SERVER_ADDRESS` 未设时才回落到 DNS 解析。
+
+    **不能**写成 ``os.getenv(name, socket.gethostbyname(socket.gethostname()))``：
+    Python 默认参数是**立即求值**的，env 已设时那次 DNS 查询照样执行 —— 每个请求
+    白付一次阻塞解析，且主机名不可解析时抛 ``socket.gaierror`` 直接 500（整个
+    overview 就此报废，而它本该是个「监控别人是否健康」的页面）。
+
+    回落值本身也不可靠：Debian 默认 ``/etc/hosts`` 把主机名指向 ``127.0.1.1``，
+    页面会显示环回地址而非共享盘的真实地址。所以生产**必须显式配置**
+    ``STP_FILE_SERVER_ADDRESS``（见 backend/.env.example），这里的回落只保证
+    不炸、不保证有意义。
+    """
+    configured = os.getenv("STP_FILE_SERVER_ADDRESS", "").strip()
+    if configured:
+        return configured
+    hostname = socket.gethostname()
+    try:
+        return socket.gethostbyname(hostname)
+    except OSError:
+        # 主机名不在 /etc/hosts 且无 DNS —— 退回主机名本身，聊胜于 500
+        return hostname
+
+
 def _require_shared_root() -> Path:
     """STP_AEE_NFS_ROOT 解析与门禁。
 
@@ -316,7 +340,7 @@ def collect_file_server_overview(hosts: Iterable[Any], *, hours: int = 6) -> dic
         "status": status,
         "server": {
             "hostname": socket.gethostname(),
-            "address": os.getenv("STP_FILE_SERVER_ADDRESS", socket.gethostbyname(socket.gethostname())),
+            "address": _server_address(),
             "cpu_count": os.cpu_count() or 0,
             "uptime_seconds": uptime_seconds,
         },

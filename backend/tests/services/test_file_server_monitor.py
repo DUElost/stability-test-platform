@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -115,3 +116,43 @@ def test_block_device_normalizes_partition_names():
     assert monitor._block_device("/dev/sda1") == "sda"
     assert monitor._block_device("/dev/nvme0n1p2") == "nvme0n1"
     assert monitor._block_device("server:/share") is None
+
+
+def test_server_address_prefers_env_without_touching_dns(monkeypatch):
+    """env 已设时**完全不碰** DNS。
+
+    回归：原实现写作 ``os.getenv(name, socket.gethostbyname(...))``，Python 默认
+    参数立即求值，env 设了也照样解析一次 —— 每请求一次多余的阻塞查询。这里让
+    gethostbyname 直接爆炸，能返回说明它没被调用。
+    """
+    monkeypatch.setenv("STP_FILE_SERVER_ADDRESS", "172.21.8.202")
+
+    def _explode(_host):
+        raise AssertionError("env 已配置时不应触发 DNS 解析")
+
+    monkeypatch.setattr(monitor.socket, "gethostbyname", _explode)
+    assert monitor._server_address() == "172.21.8.202"
+
+
+def test_server_address_survives_unresolvable_hostname(monkeypatch):
+    """主机名无法解析时退回主机名本身，不抛异常。
+
+    回归：原实现会让 socket.gaierror 冒到 endpoint 变成 500 —— 一个「监控别人
+    是否健康」的页面因为自己的主机名没进 /etc/hosts 而整体不可用。
+    """
+    monkeypatch.delenv("STP_FILE_SERVER_ADDRESS", raising=False)
+    monkeypatch.setattr(monitor.socket, "gethostname", lambda: "no-such-host")
+    monkeypatch.setattr(
+        monitor.socket,
+        "gethostbyname",
+        lambda _host: (_ for _ in ()).throw(socket.gaierror("Name or service not known")),
+    )
+    assert monitor._server_address() == "no-such-host"
+
+
+def test_server_address_falls_back_to_resolved_ip(monkeypatch):
+    """env 未设且能解析时，用解析出的 IP。"""
+    monkeypatch.delenv("STP_FILE_SERVER_ADDRESS", raising=False)
+    monkeypatch.setattr(monitor.socket, "gethostname", lambda: "debian13")
+    monkeypatch.setattr(monitor.socket, "gethostbyname", lambda _host: "127.0.1.1")
+    assert monitor._server_address() == "127.0.1.1"
