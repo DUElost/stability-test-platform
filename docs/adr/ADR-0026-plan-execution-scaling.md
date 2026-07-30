@@ -465,6 +465,27 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 
 **分阶段压测**：沿用 ADR-0019 的阶梯思路（`docs/adr/ADR-0019-...:305` 的 3→10→44），扩展为 **44→60→100 host** 灰度，每档验证续租成功率、准入延迟、聚合耗时、误杀率后再进下一档。
 
+### 门槛拆分（2026-07-30 修订）
+
+上述单条阶梯把 **host 调度维度**与 **device 执行维度**捆在一起，后果是：已验证的执行能力（PlanRun99，87-device 自然 SUCCESS、`pass_rate=1.0`）被尚未验证的调度规模一起卡住，而调度规模恰好是**可以用合成设备严肃验证**的那一半。库存补足周期不可控，期间 host 维度的代码零施压——若 100 host 下控制面真有瓶颈（§缺口③ 点名的单进程载荷），不拆门槛等于选择晚几个月才知道。
+
+故拆为 **B1 / B2** 两条**各自独立、都严格**的门槛。拆分**不降低**任何一档的指标要求：
+
+| 门槛 | 验证范围 | 设备要求 | 通过标准 |
+|------|---------|---------|---------|
+| **B1** host 调度维度承载力 | 准入延迟、续租成功率、聚合耗时、recycler 误杀率（UNKNOWN/FAILED）、心跳吞吐、leader election、N 个 host-global `OperationScheduler` 实例并存 | **允许合成设备**（`STP_STATIC_DEVICE_SERIALS`，`backend/agent/device_discovery.py:13-25`）；每实例须以独立 `AGENT_INSTALL_DIR` 隔离状态 | 44 / 60 / 100 host 每档四项指标达标，且**证据中必须显式标注设备为合成** |
+| **B2** device 执行维度承载力 | 真实脚本执行、ADB 竞争、permit 在真实耗时下的排队 | **仅认真机**，不接受合成 | 按目标档位完整长跑，无 FAILED / UNKNOWN |
+
+> **B1 通过不构成 host-scale 整体验收。** 整体验收需 **B1 与 B2 同时成立**；任一条单独通过时，证据与结论都必须写明另一条尚未通过，**不得简写为「host 阶梯已通过」**。此措辞沿用 runbook 2026-07-23 对「44→60→87 device 被误读为 host 通过」的显式纠正惯例（`docs/operations/adr-0026-admission-and-scale-gray-rollout.md:177`）。
+
+**B1 的已知边界**（以下为代码层复核结论，**尚无实机数据**）：
+
+- `AGENT_INSTALL_DIR` 可覆盖 `BASE_DIR`（`backend/agent/config.py:21-23`），从而隔离单实例全部状态：`logs/`、`logs/runs/`、`resources/`、`agent_state.db`（`main.py:540`）、`patrol_checkpoint.db`（`main.py:544`）
+- `agent_instance_id` 为进程内 `uuid4().hex`（`identity.py:16-18`），天然唯一；`boot_id` 同机各实例相同，但只在同一 host 行内做 `previous_boot_id == payload.boot_id` 比较（`agent_api.py:2501`），不会跨 host 误判
+- `AGENT_DIR` 取源码目录、**不随 `AGENT_INSTALL_DIR` 变**（`config.py:41`）：多实例共享一份代码时热更新会互相踩，**B1 观测窗内禁止热更新**
+- 合成 host 的 `HOST_ID` 须通过 IP 派生格式校验（`load_required_host_id`，`main.py:484`），需分配一段不与真实 host 冲突的保留网段
+- **B1 的第一步是单机 5 实例冒烟**，确认内存占用与状态隔离成立后才扩到 100；若多实例隔离需要改代码，则本次拆分的性价比须重新评估
+
 ---
 
 ## 关联 ADR
@@ -482,7 +503,7 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 ## 待定清单（v1 默认已回填；灰度阶梯仍待运维压测）
 
 > **口径（2026-07-20）**：下列数值升格为 **v1 生产默认**，由代码 env 默认 + `backend/core/adr0026_params.py` 不变量套件 + OperationScheduler 竞争仿真共同锁定。  
-> **尚未替代** ADR「44→60→100 host」灰度阶梯；改默认前必须重跑不变量套件并在修订记录写明理由。
+> **尚未替代** ADR「44→60→100 host」灰度阶梯（2026-07-30 起拆为 **B1 host 调度维度** / **B2 device 执行维度**，见上文「门槛拆分」）；改默认前必须重跑不变量套件并在修订记录写明理由。
 
 | 项 | v1 默认 | 依据 | 灰度仍需确认 |
 |----|---------|------|--------------|
@@ -525,3 +546,4 @@ FAILED   → QUEUED             # 人工重试改走准入队列（评审收口�
 | 2026-07-20 | P3-3：全量 scheduler leadership + Agent sid registry / room RPC；见 ADR-0027 Accepted。 |
 | 2026-07-20 | 目标里程碑：**M5** = 本文 P0–P2 代码收口；P3 归 **M6**。 |
 | 2026-07-25 | **单实例承载量代码层自证**（host 阶梯挂为 `capacity:inventory-bound` issue）：87-device 实测 PlanRun99 自然 SUCCESS（`pass_rate=1.0`，无 FAILED/UNKNOWN）；`plan_aggregator` O(N²) 全量 SELECT 已收口为 O(1) 计数器读五列（`aggregator_sync.py:11` → `job_terminalization.on_job_terminal_sync`）；续租风暴收口为 extend-batch chunk=100（`lease_renewer.py:231`）；admission transaction 越窗升级已加 Host→Device 行锁（`admission_pump.py:_lock_admission_resources`）；permit 仿真 5–60 device mean_wait ≪ coordinator_timeout 300s。**潜在结构性瓶颈图**：① 准入 O(1)、续租 batch、聚合 O(1) 均不在 1000-device 单进程瓶颈；② OperationScheduler permit cap 待 100/200 device 仿真（issue `capacity:code-verified`）；③ terminalization 漂移源代码审查理论=0（所有终态入口经 `job_terminalization`：`/complete`、abort reaper `plan_run_abort.py:47`、recycler pending-timeout `recycler.py:374`、session_watchdog grace→FAILED `session_watchdog.py:91`），`counter_reconcile` 用作预防性 sweep。**host 阶梯阻塞不变**：当前 20 ONLINE host / 仅 11 host 有 ONLINE device，挂为 `capacity:inventory-bound` issue 持续跟踪；不替代为 device 数。 |
+| 2026-07-30 | **host-scale 门槛拆分为 B1 / B2**（见「门槛拆分」章节）。动机：单条门槛把可用合成设备验证的 host 调度维度与只能用真机的 device 执行维度捆在一起，库存周期内 host 维度零施压，§缺口③ 的控制面单进程载荷瓶颈无法提前暴露。**拆分不降低任何一档指标要求**，且显式规定「B1 通过不构成 host-scale 整体验收」。B1 依赖仓库已有的 `STP_STATIC_DEVICE_SERIALS`（`device_discovery.py:13-25`，原为无 adb 环境的 smoke 钩子），配合 `AGENT_INSTALL_DIR` 做单机多实例状态隔离——两者均为**代码层复核结论，尚无实机数据**；B1 第一步是单机 5 实例冒烟。已知边界：`AGENT_DIR` 不随 `AGENT_INSTALL_DIR` 变，多实例共享代码时禁止热更新。 |
