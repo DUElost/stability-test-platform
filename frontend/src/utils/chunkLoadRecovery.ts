@@ -5,9 +5,54 @@ export const CHUNK_RECOVERY_COOLDOWN_MS = 60_000;
 
 interface ChunkLoadRecoveryOptions {
   target?: Pick<EventTarget, 'addEventListener' | 'removeEventListener'>;
-  storage?: Pick<Storage, 'getItem' | 'setItem'>;
+  storage?: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
   now?: () => number;
   reload?: () => void;
+}
+
+const CHUNK_LOAD_ERROR_PATTERNS: readonly RegExp[] = [
+  /Failed to fetch dynamically imported module/i,
+  /Importing a module script failed/i,
+  /error loading dynamically imported module/i,
+];
+
+/**
+ * Heuristically determine whether an error raised from a lazy `import()` is a
+ * "deployment replaced my chunk" failure (HTTP 404 on a hashed asset) and not
+ * a real application bug. We match by message because browsers like Chrome,
+ * Firefox and Safari each word the failure differently and none expose a
+ * stable `code`. The `vite:preloadError` event payload carries the same
+ * underlying `Error` object, so this helper works for both paths.
+ */
+export function isChunkLoadError(error: unknown): boolean {
+  if (error === null || typeof error !== 'object' || !('message' in error)) {
+    return false;
+  }
+  const message = String((error as { message?: unknown }).message ?? '');
+  if (!message) {
+    return false;
+  }
+  return CHUNK_LOAD_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/**
+ * Reset the one-shot cooldown so that the next `vite:preloadError` can attempt
+ * an automatic reload again. The cooldown exists to stop *automatic* reload
+ * loops when the server itself is broken. When the user has taken an explicit
+ * action (clicked the "刷新页面" button in ErrorBoundary, or run a manual
+ * reload), they are signaling "I want to retry now" and must not be held off
+ * by a guard designed for an unattended loop.
+ */
+export function clearChunkRecoveryAttempt(
+  storage: Pick<Storage, 'removeItem'> = window.sessionStorage,
+): void {
+  try {
+    storage.removeItem(RECOVERY_ATTEMPT_KEY);
+  } catch {
+    // Without session storage support the cooldown cannot be enforced anyway,
+    // and registerChunkLoadRecovery already refuses to auto-reload. There is
+    // nothing else we can do here, so swallow.
+  }
 }
 
 /**
