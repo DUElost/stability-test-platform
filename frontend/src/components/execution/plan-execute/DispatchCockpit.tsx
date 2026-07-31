@@ -1,5 +1,5 @@
 import { CheckCircle2, Clock3, Info, Trash2 } from 'lucide-react';
-import type { PlanRun, PlanRunPreview } from '@/utils/api';
+import type { PlanRun, PlanRunPreview, ResourcePool } from '@/utils/api';
 import type { CapacityPlanRow, ReadinessDevice } from '@/utils/planExecuteReadiness';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -35,6 +35,11 @@ interface DispatchCockpitProps {
   recentRuns: PlanRun[];
   recentRunsLoading: boolean;
   duplicateMatch: DuplicateMatch | null;
+  /** Active wifi resource pools; empty = nothing configured yet. */
+  wifiPools: ResourcePool[];
+  /** null = 不连接（默认） */
+  wifiPoolId: number | null;
+  onWifiPoolChange: (poolId: number | null) => void;
   onNoteChange: (value: string) => void;
   onEditPlan: () => void;
   onOpenRun: (runId: number) => void;
@@ -80,6 +85,9 @@ export function DispatchCockpit({
   recentRuns,
   recentRunsLoading,
   duplicateMatch,
+  wifiPools,
+  wifiPoolId,
+  onWifiPoolChange,
   onNoteChange,
   onEditPlan,
   onOpenRun,
@@ -254,6 +262,48 @@ export function DispatchCockpit({
             </Card>
           </div>
         </div>
+
+        <Card>
+          <CardContent className="pt-5">
+            <div className={cn('text-xs font-medium', TEXT.subtitle)}>WiFi 连接（选填）</div>
+            <p className={cn('mt-1 text-[11px]', TEXT.subtitle)}>
+              仅本次执行生效。选择网络后，设备会在初始化阶段连接它；不选则跳过这一步。
+            </p>
+            <div className="mt-2 space-y-1.5" role="radiogroup" aria-label="WiFi 连接">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="plan-execute-wifi"
+                  value=""
+                  checked={wifiPoolId == null}
+                  onChange={() => onWifiPoolChange(null)}
+                />
+                <span>不连接（默认）</span>
+              </label>
+              {wifiPools.map((pool) => (
+                <label key={pool.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="plan-execute-wifi"
+                    value={pool.id}
+                    checked={wifiPoolId === pool.id}
+                    onChange={() => onWifiPoolChange(pool.id)}
+                  />
+                  <span>{pool.name}</span>
+                  {pool.config?.ssid && pool.config.ssid !== pool.name ? (
+                    <span className={cn('text-[11px]', TEXT.subtitle)}>({pool.config.ssid})</span>
+                  ) : null}
+                </label>
+              ))}
+            </div>
+            {wifiPools.length === 0 ? (
+              <p className={cn('mt-2 text-[11px]', TEXT.subtitle)}>
+                尚未配置任何 WiFi 网络。需要连接时，先在「资源池」页添加一个 wifi 类型的池
+                （名称 + wifi 名 + 密码）。
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
 
         <Card>
           <CardContent className="pt-5">

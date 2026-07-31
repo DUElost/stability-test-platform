@@ -841,6 +841,12 @@ export interface PlanRunCreate {
   device_ids: number[];
   /** Optional operator note → PlanRun.run_context.note */
   note?: string;
+  /**
+   * Per-execution WiFi choice → PlanRun.run_context.wifi_pool_id.
+   * Omit / null = do not connect (default). Credentials are never sent
+   * inline — pick a pre-configured wifi ResourcePool instead.
+   */
+  wifi_pool_id?: number | null;
 }
 
 export interface PlanRunPreview {

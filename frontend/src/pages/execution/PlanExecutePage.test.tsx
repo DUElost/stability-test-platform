@@ -58,6 +58,9 @@ vi.mock('@/utils/api', async (importOriginal) => {
       jobs: {
         activeByDevice: vi.fn().mockResolvedValue([]),
       },
+      resourcePools: {
+        list: vi.fn().mockResolvedValue([]),
+      },
     },
   };
 });
@@ -82,6 +85,7 @@ function renderPage({
   hostDetail = { id: 'h1', status: 'ONLINE', active_jobs: [] },
   activeJobs = undefined as any[] | undefined,
   getHost,
+  wifiPools = [] as any[],
 }: {
   plans?: any[];
   devices?: any[];
@@ -92,6 +96,7 @@ function renderPage({
   hostDetail?: any;
   activeJobs?: any[];
   getHost?: (id: string) => any | Promise<any>;
+  wifiPools?: any[];
 } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
@@ -118,6 +123,7 @@ function renderPage({
     (Array.isArray(hostDetail?.active_jobs) ? hostDetail.active_jobs : []);
   (api.jobs.activeByDevice as any).mockResolvedValue(derivedActiveJobs);
   (api.planRuns.retryDispatch as any).mockResolvedValue({ plan_run_id: 88, status: 'RUNNING' });
+  (api.resourcePools.list as any).mockResolvedValue(wifiPools);
 
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
@@ -612,6 +618,65 @@ describe('PlanExecutePage', () => {
       expect(writeText).toHaveBeenCalledWith('DEV-1\nDEV-2');
     });
     expect(mocks.toast.success).toHaveBeenCalledWith('已复制 2 个 serial');
+  });
+
+  // ── 执行时可选 WiFi ────────────────────────────────────────────────
+  // 需求：缺省不连接，但保留连接选项。凭据来自资源池，不在发起弹窗里明文填写。
+
+  const WIFI_POOLS = [
+    { id: 3, name: 'office-5G', resource_type: 'wifi', config: { ssid: 'office-5G' },
+      max_concurrent_devices: 50, host_group: null, is_active: true },
+    { id: 4, name: 'lab-test', resource_type: 'wifi', config: { ssid: 'lab-test-2.4G' },
+      max_concurrent_devices: 50, host_group: null, is_active: true },
+  ];
+
+  async function goToDispatchWithWifi(wifiPools: any[]) {
+    renderPage({
+      devices: [{ id: 1, serial: 'DEV-1', host_id: 'h1', status: 'ONLINE' }],
+      wifiPools,
+    });
+    await goToDeviceStep();
+    fireEvent.click(await screen.findByLabelText(/DEV-1/));
+    fireEvent.click(screen.getByRole('button', { name: /预览发起/ }));
+    await screen.findByTestId('dispatch-cockpit');
+  }
+
+  it('defaults to not connecting WiFi and omits wifi_pool_id from the run payload', async () => {
+    await goToDispatchWithWifi(WIFI_POOLS);
+
+    expect((await screen.findByLabelText(/不连接/)) as HTMLInputElement).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    await screen.findByText(/预览已生成并冻结 1 台设备/);
+    fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
+
+    await waitFor(() => expect(api.plans.run).toHaveBeenCalled());
+    expect((api.plans.run as any).mock.calls[0][1]).not.toHaveProperty('wifi_pool_id');
+  });
+
+  it('sends the chosen pool id when the operator picks a network', async () => {
+    await goToDispatchWithWifi(WIFI_POOLS);
+
+    fireEvent.click(await screen.findByLabelText(/lab-test/));
+    fireEvent.click(screen.getByRole('button', { name: /生成执行预览/ }));
+    await screen.findByText(/预览已生成并冻结 1 台设备/);
+    fireEvent.click(screen.getByRole('button', { name: /确认发起/ }));
+
+    await waitFor(() => expect(api.plans.run).toHaveBeenCalled());
+    expect((api.plans.run as any).mock.calls[0][1].wifi_pool_id).toBe(4);
+  });
+
+  it('never asks for a password in the dispatch form', async () => {
+    await goToDispatchWithWifi(WIFI_POOLS);
+    expect(screen.queryByLabelText(/密码/)).not.toBeInTheDocument();
+  });
+
+  it('points to the resource pool page when no wifi network is configured', async () => {
+    await goToDispatchWithWifi([]);
+
+    expect(await screen.findByLabelText(/不连接/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/office-5G/)).not.toBeInTheDocument();
+    expect(screen.getByText(/尚未配置任何 WiFi 网络/)).toBeInTheDocument();
   });
 
   it('keeps preview confirmation inline without reopening a dialog', async () => {

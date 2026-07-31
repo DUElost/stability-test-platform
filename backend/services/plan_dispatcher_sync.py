@@ -223,17 +223,29 @@ def _sync_allocate_devices(
     db: Session,
     device_ids: list[int],
     resource_type: str = "wifi",
+    pool_id: int | None = None,
 ) -> dict[int, tuple[ResourcePool, dict[str, Any]]]:
+    """Assign each device a resource pool, respecting per-pool concurrency.
+
+    ``pool_id`` restricts the choice to one specific pool — used when the
+    operator picked a WiFi network for this execution. Without it the caller
+    gets the legacy behaviour of load-balancing across every active pool.
+    """
+    query = select(ResourcePool).where(
+        ResourcePool.resource_type == resource_type,
+        ResourcePool.is_active.is_(True),
+    )
+    if pool_id is not None:
+        query = query.where(ResourcePool.id == pool_id)
     pools = db.execute(
-        select(ResourcePool).where(
-            ResourcePool.resource_type == resource_type,
-            ResourcePool.is_active.is_(True),
-        )
-        .order_by(ResourcePool.id)
-        .with_for_update()
+        query.order_by(ResourcePool.id).with_for_update()
     ).scalars().all()
 
     if not pools:
+        if pool_id is not None:
+            raise AllocationError(
+                f"{resource_type} resource pool {pool_id} is missing or inactive"
+            )
         raise AllocationError(f"No active {resource_type} resource pools")
 
     pool_ids = [p.id for p in pools]
@@ -758,6 +770,11 @@ def materialize_jobs_and_allocations(
     """Shared materializer: WiFi allocation (when the lifecycle needs it) + one
     PENDING JobInstance per device + resource allocation rows.
 
+    WiFi is allocated in two cases:
+      1. the lifecycle contains a ``connect_wifi`` step (pool chosen by load), or
+      2. the operator picked a WiFi network for this execution, recorded as
+         ``run_context["wifi_pool_id"]`` — then that pool specifically.
+
     Flushes but does NOT commit. Raises to the caller, whose policy differs:
       - AllocationError (pool full): legacy → FAILED; V2 admission → requeue
         (RESOURCE_BUSY, invariant ④).
@@ -765,14 +782,21 @@ def materialize_jobs_and_allocations(
         V2 admission → requeue (DEVICE_BUSY).
     """
     wifi_allocations: dict[int, dict] = {}
-    if any(
+    requested_pool_id = (pr.run_context or {}).get("wifi_pool_id")
+    needs_wifi = requested_pool_id is not None or any(
         "connect_wifi" in (step.get("action") or "")
         for _, step in _iter_lifecycle_steps({"lifecycle": lifecycle})
-    ):
-        assignments = _sync_allocate_devices(db, device_ids, resource_type="wifi")
+    )
+    if needs_wifi:
+        assignments = _sync_allocate_devices(
+            db, device_ids, resource_type="wifi", pool_id=requested_pool_id,
+        )
         for device_id, (_pool, alloc_params) in assignments.items():
             wifi_allocations[device_id] = alloc_params
-        logger.info("plan_dispatch_wifi_allocated: devices=%d", len(device_ids))
+        logger.info(
+            "plan_dispatch_wifi_allocated: devices=%d pool=%s",
+            len(device_ids), requested_pool_id if requested_pool_id is not None else "auto",
+        )
 
     now = datetime.now(timezone.utc)
     # Bulk materialization (reviewer, Step 4.1): build every JobInstance, then
