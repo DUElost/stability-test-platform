@@ -1,6 +1,6 @@
 # 2026-07-31 全平台派发中断复盘：脚本版本 sha 漂移
 
-> **状态**：已定位 + 修复能力已就位（本 PR），生产 re-baseline 待执行。
+> **状态**：已闭环（PR #109 合入 `9ec8e1f`，生产 re-baseline 已执行，派发恢复）。派发恢复后暴露的 WiFi SSID 配置缺口另见 §4，非本事故根因。
 > **影响范围**：**控制面全部 Plan 无法派发**。平台上仅有的 2 个 Plan（`Monkey专项-watcher-patrol`、`smoke-plan-001`）100% 在准入阶段 `script_verify_failed`，持续时间自 2026-07-23 首次脚本改动起（最严重的一批自 07-26 `ef8808e` 起）。无数据损坏，无设备侧影响。
 > **关联**：[ADR-0020](../adr/ADR-0020-plan-step-one-shot-migration.md)（脚本目录契约）、Epic #107（20 台 host 全流程打通）。
 > **区别于**：[9.126 硬挂事故](./incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md)、[#93 AEE Reconciler 崩溃](./adr-0026-admission-and-scale-gray-rollout.md) —— 三者根因互不相同。
@@ -122,11 +122,97 @@ monkey_test v1.1.0     push_resources v1.0.0  stop_aimonkey v1.0.0
 
 ### 3.3 生产 re-baseline 执行记录
 
-> 待执行后回填：执行时刻、`rebaselined[]` 明细、Plan 2 重新派发结果。
+**执行时刻**：2026-07-31 13:52–13:57 CST（PR #109 合入 `9ec8e1f` 后）
+
+前置检查：在途 PlanRun = 0、在途 Job = 0（守卫放行）；`stability-backend.service` 重启加载新代码，`/health` 的 `saq_ready` / `admission_queue_flag` / `admission_queue_pump_ready` / `admission_queue_enabled` 均 true。
+
+干跑（普通 `scan`，不带 force）：`created=1 skipped=9 deactivated=0 conflicts=18` —— 与事故前的漂移扫描完全吻合。`created=1` 是 `cb56edd` 新增的 `aee_signal_trigger`，此前从未入库。
+
+`force_rebaseline=true` 执行结果：**重锚 18 个版本，`conflicts` 归零**。
+
+| 脚本 | 版本 | old sha | new sha |
+|------|------|---------|---------|
+| `check_device` | v1.0.0 | `12627fc7b` | `7d46e7229` |
+| `clean_env` | v1.0.0 | `b837ef686` | `56c9989fb` |
+| `connect_wifi` | v1.0.0 | `09ffef00f` | `abc30ee4d` |
+| `ensure_root` | v1.0.0 | `7e28db943` | `2bdca06e4` |
+| `fill_storage` | v1.0.0 | `28f56777e` | `fa49d826a` |
+| `install_apk` | v1.0.0 | `0fa252cc6` | `ce4a0d7d7` |
+| `monkey_check` | v1.0.0 | `40d22c435` | `f34e1f76c` |
+| `monkey_launch` | v1.0.0 | `e8d02e036` | `9562a8ad1` |
+| `monkey_launch` | v4.0.0 | `7d01d7475` | `0a8984f06` |
+| `monkey_setup` | v1.0.0 | `4752a2e65` | `48fa87d90` |
+| `monkey_setup` | v1.1.0 | `da3bf18ad` | `8aaf5d96d` |
+| `monkey_setup` | v1.2.0 | `c208f8cd1` | `ccedac15a` |
+| `monkey_setup` | v1.3.0 | `1de8b0121` | `9f36e129c` |
+| `monkey_teardown` | v1.0.0 | `dde7eda3c` | `e2a19d968` |
+| `monkey_test` | v1.0.0 | `d4d6d490d` | `50e9f2229` |
+| `monkey_test` | v1.1.0 | `d4d6d490d` | `50e9f2229` |
+| `push_resources` | v1.0.0 | `abe5d74a2` | `f89df98ab` |
+| `stop_aimonkey` | v1.0.0 | `e29b95353` | `ebb0a753b` |
+
+复扫确认稳定：`created=0 skipped=28 conflicts=0 rebaselined=0`。
+
+**派发恢复验证** —— PlanRun 109（Plan 2，单设备 44 @ `172-21-9-132`）：
+
+| 指标 | 事故中（PlanRun 108） | 修复后（PlanRun 109） |
+|------|----------------------|----------------------|
+| `dispatch` | `failed` | **`completed`** |
+| `last_error` | `script_verify_failed` | **`None`** |
+| `total_job_count` | `0`（准入即拒） | **`1`** |
+| pipeline 执行 | 未开始 | `check_device` → `ensure_root` **通过**，停在 `monkey_setup` |
+
+`script_verify_failed` 已消除，派发链路恢复。PlanRun 109 最终仍 FAILED，但**根因不同**，见 §4。
 
 ---
 
-## 4. 复盘要点
+## 4. 派发恢复后暴露的下一个断点：WiFi SSID 未配置
+
+PlanRun 109 的失败原因：
+
+```
+lifecycle init failed: step failed in init:
+  monkey_setup: Step 'wifi' failed: No SSID configured
+```
+
+这是被派发中断**掩盖了的既有配置缺口**，与 sha 漂移无关。
+
+`monkey_setup` 的 `step_wifi` 取 SSID 有两条来源：`cfg["ssid"]`（即 `default_params.wifi.ssid`）或环境变量 `STP_WIFI_SSID`。实测三条可能的供给路径**全部为空**：
+
+| 供给路径 | 现状 |
+|----------|------|
+| `script.default_params` | `monkey_setup` v1.0.0–v1.3.0 **全部是 `{}`**；`plan_step` 表无 `params` 列，参数完全来自 `default_params` |
+| 平台 ResourcePool 注入 | `inject_wifi_params` **只改 action 含 `connect_wifi` 的步骤**，且仅当 lifecycle 里存在该步骤时才分配。Plan 2 没有 `connect_wifi` 步骤 → 完全不触发 |
+| Agent 环境变量 | 抽查 `9.132` / `9.93` / `9.131`，`/opt/stability-test-agent/.env` 里 **一条 `STP_WIFI_*` 都没有** |
+
+生产库里 `resource_pool` / `resource_allocation` **两张表都存在**（`resource_pool.config` 存 `{ssid, password}`，`max_concurrent_devices` 控并发），`/api/v1/resource-pools` 的 CRUD 路由也齐全 —— **机制是建好的，只是 0 行、从未配置过任何 WiFi 池**。
+
+设备侧实况（device 44 @ 9.132）：`Wifi is enabled` 但 `Wifi is not connected` —— 这一步确实有活要干，不是可以跳过的空转。
+
+另一处关键事实：`monkey_setup` v1.0.0 与 v1.3.0 **全文只差一行**，就是缺省步骤表：
+
+```python
+v1.0.0:  step_names = args.get("steps", ["wifi", "root", "push", "install", "fill", "clean"])
+v1.3.0:  step_names = args.get("steps", ["root", "push", "install", "clean"])
+```
+
+v1.3.0 已经不含 `wifi`（同时也去掉了 `fill`），而 Plan 2 指的是 v1.0.0。
+
+可选处置（需业务侧确认 Monkey 测试是否必须联网）：
+
+| 方案 | 动作 | 代价 |
+|------|------|------|
+| A. 配 Agent 环境变量 | 20 台 `.env` 加 `STP_WIFI_SSID` / `STP_WIFI_PASSWORD`，`reload_config` 热刷新 | 需要真实 SSID/密码；凭据散落在 20 台 host，且无法按执行选择 |
+| B. 新建 `monkey_setup` 版本 | 缺省步骤表去掉 `wifi` | 仅当测试永不需要联网才成立；无法按执行选择 |
+| C. 走资源池正道 | 配置 WiFi `resource_pool` + 执行时选池 | 机制已建好（表 + CRUD 路由 + 分配 + 并发上限），只需接通「执行时可选」这一段 |
+
+> `default_params` 对已存在版本 422 不可变，方案 B 必须 `POST /api/v1/scripts/{name}/versions` 新建版本。
+
+**业务侧结论（2026-07-31）**：WiFi 连接应当**在计划执行前可选**，并非必须连接，但要保留连接选项 —— 即方案 C 的方向。落地设计见 §7。
+
+---
+
+## 5. 复盘要点
 
 | # | 要点 |
 |---|------|
@@ -138,7 +224,7 @@ monkey_test v1.1.0     push_resources v1.0.0  stop_aimonkey v1.0.0
 
 ---
 
-## 5. 遗留项
+## 6. 遗留项
 
 | 项 | 说明 |
 |----|------|
