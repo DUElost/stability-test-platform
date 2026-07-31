@@ -89,6 +89,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 脚本版本不可变门禁要跟 base ref 做三点 diff,浅克隆拿不到 merge-base
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -124,6 +127,15 @@ jobs:
             -not -path '*/resources/*' -not -path '*/__pycache__/*' \
             -not -path '*/node_modules/*' \
             | xargs python tools/dev/collapse-blank-pollution.py --check -q
+
+      # 这条也**阻塞**:ADR-0020 规定已发布的脚本版本目录内容不可变。
+      # 2026-07-31 生产事故就是 ef8808e 的 `ruff --fix` 原地改写了这些目录,
+      # 导致 18/27 行 script 的 DB sha 与磁盘永久对不上、全平台派发中断。
+      # ruff.toml 已把该目录加进 extend-exclude,这条是兜底(手改同样拦)。
+      - name: 脚本版本不可变检查(ADR-0020)
+        run: |
+          python tools/dev/check-script-version-immutability.py \
+            --base "origin/${{ github.base_ref || github.ref_name }}"
 
   docker-build:
     runs-on: ubuntu-latest

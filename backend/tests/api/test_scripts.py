@@ -191,6 +191,82 @@ def test_script_scan_registers_conflicts_and_deactivates_missing(
     assert inactive_list.json()["data"] == []
 
 
+def _scan_single_script(client, tmp_path, monkeypatch, admin_headers):
+    """Register one script, then edit it in place so the next scan conflicts."""
+    root = tmp_path / "scripts"
+    version_dir = root / "connect_wifi" / "v1.0.0"
+    version_dir.mkdir(parents=True)
+    entry = version_dir / "connect_wifi.sh"
+    entry.write_text("#!/usr/bin/env bash\necho wifi\n", encoding="utf-8")
+    monkeypatch.setenv("STP_SCRIPT_ROOT", str(root))
+
+    created = client.post("/api/v1/scripts/scan", headers=admin_headers)
+    assert created.status_code == 200
+    assert created.json()["data"]["created"] == 1
+
+    entry.write_text("#!/usr/bin/env bash\necho changed\n", encoding="utf-8")
+    return entry
+
+
+def test_script_scan_force_rebaseline_reanchors_conflicting_checksum(
+    client, tmp_path, monkeypatch, admin_headers
+):
+    _scan_single_script(client, tmp_path, monkeypatch, admin_headers)
+
+    # Without the flag the row stays frozen — repeated scans keep conflicting,
+    # which is exactly how a repo-wide in-place edit permanently breaks
+    # precheck's expected-sha lookup.
+    for _ in range(2):
+        plain = client.post("/api/v1/scripts/scan", headers=admin_headers)
+        assert plain.status_code == 200
+        assert plain.json()["data"]["conflicts"] == [
+            {"name": "connect_wifi", "version": "1.0.0"}
+        ]
+        assert plain.json()["data"]["rebaselined"] == []
+
+    forced = client.post(
+        "/api/v1/scripts/scan",
+        params={"force_rebaseline": True},
+        headers=admin_headers,
+    )
+    assert forced.status_code == 200
+    data = forced.json()["data"]
+    assert data["conflicts"] == []
+    assert len(data["rebaselined"]) == 1
+    entry_result = data["rebaselined"][0]
+    assert entry_result["name"] == "connect_wifi"
+    assert entry_result["version"] == "1.0.0"
+    assert entry_result["old_sha256"] != entry_result["new_sha256"]
+
+    # DB now matches disk: a plain scan is a clean skip.
+    after = client.post("/api/v1/scripts/scan", headers=admin_headers)
+    assert after.status_code == 200
+    assert after.json()["data"]["skipped"] == 1
+    assert after.json()["data"]["conflicts"] == []
+
+
+def test_script_scan_force_rebaseline_refused_while_plan_run_in_flight(
+    client, tmp_path, monkeypatch, admin_headers, sample_plan_run
+):
+    _scan_single_script(client, tmp_path, monkeypatch, admin_headers)
+    assert sample_plan_run.status == "RUNNING"
+
+    refused = client.post(
+        "/api/v1/scripts/scan",
+        params={"force_rebaseline": True},
+        headers=admin_headers,
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "PLAN_RUN_IN_FLIGHT"
+
+    # The plain scan path stays available while runs are in flight.
+    plain = client.post("/api/v1/scripts/scan", headers=admin_headers)
+    assert plain.status_code == 200
+    assert plain.json()["data"]["conflicts"] == [
+        {"name": "connect_wifi", "version": "1.0.0"}
+    ]
+
+
 def test_script_scan_maps_source_root_to_agent_runtime_root(
     client, tmp_path, monkeypatch, admin_headers, auth_headers
 ):

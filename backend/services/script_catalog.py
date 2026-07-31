@@ -23,6 +23,7 @@ class ScriptScanResult:
     skipped: int = 0
     deactivated: int = 0
     conflicts: List[Dict[str, str]] = field(default_factory=list)
+    rebaselined: List[Dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -30,6 +31,7 @@ class ScriptScanResult:
             "skipped": self.skipped,
             "deactivated": self.deactivated,
             "conflicts": self.conflicts,
+            "rebaselined": self.rebaselined,
         }
 
 
@@ -105,7 +107,28 @@ def _runtime_path(root: Path, entry: Path, runtime_root: str | None) -> str:
     return str(PurePosixPath(normalized_root, *relative_parts))
 
 
-def scan_script_root(db: Session, root: str | Path, runtime_root: str | None = None) -> ScriptScanResult:
+def scan_script_root(
+    db: Session,
+    root: str | Path,
+    runtime_root: str | None = None,
+    *,
+    force_rebaseline: bool = False,
+) -> ScriptScanResult:
+    """Scan ``root`` and reconcile the ``script`` table.
+
+    Normal mode implements the ADR-0020 contract: a version whose on-disk
+    sha256 no longer matches the stored one is reported under ``conflicts``
+    and the row is left untouched — publishing changed content requires a new
+    version directory.
+
+    ``force_rebaseline=True`` is the explicit operator escape hatch for the
+    case where that contract has *already* been broken upstream (e.g. a
+    repo-wide mechanical rewrite edited published version directories in
+    place). It re-anchors ``content_sha256``/``nfs_path`` to what is on disk
+    and reports the affected versions under ``rebaselined``. This trades away
+    the "a given version always means the same bytes" guarantee, so callers
+    must gate it on admin auth and on there being no in-flight PlanRun.
+    """
     root_path = Path(root).resolve()
     if not root_path.exists() or not root_path.is_dir():
         raise FileNotFoundError(f"script root not found: {root_path}")
@@ -142,7 +165,19 @@ def scan_script_root(db: Session, root: str | Path, runtime_root: str | None = N
             continue
 
         if existing.content_sha256 != content_sha256:
-            result.conflicts.append({"name": name, "version": version})
+            if not force_rebaseline:
+                result.conflicts.append({"name": name, "version": version})
+                continue
+            result.rebaselined.append({
+                "name": name,
+                "version": version,
+                "old_sha256": existing.content_sha256 or "",
+                "new_sha256": content_sha256,
+            })
+            existing.content_sha256 = content_sha256
+            existing.nfs_path = _runtime_path(root_path, entry, runtime_root)
+            existing.is_active = True
+            existing.updated_at = now
             continue
 
         if not existing.is_active:

@@ -13,6 +13,12 @@ line-length = 100
 extend-exclude = [
     "backend/alembic/versions",        # 自动生成的迁移
     "backend/agent/resources",         # 第三方随包工具(AIMonkey / flashtool)
+    # ADR-0020:已发布的脚本版本目录内容不可变 —— DB 的 content_sha256 是扫描
+    # 那一刻的快照,原地改写会让 precheck 期望值与磁盘永久对不上,引用该脚本的
+    # Plan 全部 script_verify_failed(2026-07-31 生产事故,根因是 ef8808e 的
+    # `ruff --fix` 全仓清理动了这些目录)。要改就新建版本目录。
+    # 门禁:tools/dev/check-script-version-immutability.py
+    "backend/agent/scripts",
     "venv", "venv-wsl", ".venv",
 ]
 
