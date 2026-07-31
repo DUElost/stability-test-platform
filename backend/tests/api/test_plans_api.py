@@ -560,3 +560,111 @@ class TestPlanDispatchFailFast:
             "scripts": ["scan_aee:1.0.0"],
         }
         assert db_session.query(PlanRun).filter(PlanRun.plan_id == plan_id).count() == 0
+
+
+# ── 执行前可选 WiFi（资源池方案）────────────────────────────────────────
+
+
+class TestPlanRunWifiChoice:
+    """WiFi 连接是**执行时**的选择：不传 = 不连接；传 pool_id = 用该网络。
+
+    校验放在路由层而不是等准入泵：否则选错网络要等 PlanRun 已经 QUEUED
+    之后才以 AllocationError 暴露，操作员看到的是一个失败的 run 而不是一次
+    被拒绝的提交。
+    """
+
+    @staticmethod
+    def _create_plan(client, auth_headers) -> int:
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("wifi"), "steps": _minimal_steps(),
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        return resp.json()["data"]["id"]
+
+    @staticmethod
+    def _make_pool(db_session, *, resource_type="wifi", is_active=True):
+        from backend.models.resource_pool import ResourcePool
+        pool = ResourcePool(
+            name=_uniq("pool"), resource_type=resource_type,
+            config={"ssid": "office-5G", "password": "pw"},
+            max_concurrent_devices=50, is_active=is_active,
+        )
+        db_session.add(pool)
+        db_session.commit()
+        return pool
+
+    def test_omitting_wifi_pool_id_leaves_run_context_clean(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        plan_id = self._create_plan(client, auth_headers)
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id]},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert "wifi_pool_id" not in (resp.json()["data"]["run_context"] or {})
+
+    def test_valid_pool_is_recorded_in_run_context(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        plan_id = self._create_plan(client, auth_headers)
+        pool = self._make_pool(db_session)
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id], "wifi_pool_id": pool.id},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["data"]["run_context"]["wifi_pool_id"] == pool.id
+
+    def test_unknown_pool_is_rejected_without_creating_a_plan_run(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        from backend.models.plan_run import PlanRun
+
+        plan_id = self._create_plan(client, auth_headers)
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id], "wifi_pool_id": 987654},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400, resp.text
+        assert "987654" in resp.json()["detail"]
+        assert db_session.query(PlanRun).filter(PlanRun.plan_id == plan_id).count() == 0
+
+    def test_inactive_pool_is_rejected(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        plan_id = self._create_plan(client, auth_headers)
+        pool = self._make_pool(db_session, is_active=False)
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id], "wifi_pool_id": pool.id},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400, resp.text
+
+    def test_non_wifi_pool_is_rejected(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        """别的资源类型的池不能拿来当 WiFi 用。"""
+        plan_id = self._create_plan(client, auth_headers)
+        pool = self._make_pool(db_session, resource_type="sim-card")
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id], "wifi_pool_id": pool.id},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400, resp.text
+
+    def test_preview_rejects_invalid_pool_too(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        plan_id = self._create_plan(client, auth_headers)
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run/preview",
+            json={"device_ids": [sample_device.id], "wifi_pool_id": 987654},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400, resp.text

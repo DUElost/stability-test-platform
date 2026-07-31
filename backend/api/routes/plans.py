@@ -22,6 +22,7 @@ from backend.core.database import get_db
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
+from backend.models.resource_pool import ResourcePool
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     initial_dispatch_state,
@@ -130,6 +131,11 @@ class PlanRunTrigger(BaseModel):
     device_ids: List[int] = Field(min_length=1)
     # Optional operator note stored in PlanRun.run_context["note"] (no DB column).
     note: Optional[str] = Field(default=None, max_length=500)
+    # Optional per-execution WiFi choice. ``None`` = do not connect (default).
+    # Credentials are NOT accepted inline — the operator picks a pre-configured
+    # ``resource_pool`` (resource_type='wifi'), so ssid/password live in exactly
+    # one place instead of being copied into every run's stored payload.
+    wifi_pool_id: Optional[int] = Field(default=None, gt=0)
 
     @field_validator("device_ids")
     @classmethod
@@ -619,6 +625,20 @@ def delete_plan(
 
 # ── Dispatch ─────────────────────────────────────────────────────────────
 
+def _require_active_wifi_pool(db: Session, pool_id: int) -> None:
+    """Reject the run up front if the chosen WiFi pool is gone or disabled.
+
+    Without this the mistake would only surface inside the admission pump as an
+    ``AllocationError``, i.e. after the PlanRun is already QUEUED.
+    """
+    pool = db.get(ResourcePool, pool_id)
+    if pool is None or pool.resource_type != "wifi" or not pool.is_active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"wifi_pool_id {pool_id} is not an active wifi resource pool",
+        )
+
+
 @router.post("/plans/{plan_id}/run/preview", response_model=ApiResponse[dict])
 def preview_plan_run(
     plan_id: int,
@@ -626,6 +646,8 @@ def preview_plan_run(
     db: Session = Depends(get_db),
     _current_user: User = Depends(get_current_active_user),
 ):
+    if payload.wifi_pool_id is not None:
+        _require_active_wifi_pool(db, payload.wifi_pool_id)
     try:
         preview = preview_plan_dispatch_sync(
             plan_id=plan_id,
@@ -652,6 +674,9 @@ def run_plan(
     run_context: dict = {"dispatch_state": initial_dispatch_state()}
     if payload.note:
         run_context["note"] = payload.note
+    if payload.wifi_pool_id is not None:
+        _require_active_wifi_pool(db, payload.wifi_pool_id)
+        run_context["wifi_pool_id"] = payload.wifi_pool_id
 
     try:
         pr = prepare_plan_run(

@@ -283,18 +283,41 @@ def iter_lifecycle_steps(pipeline: dict):
 
 
 def inject_wifi_params(pipeline: dict, wifi_params: dict | None) -> dict:
+    """Push the allocated WiFi credentials into the steps that consume them.
+
+    This is the one place where step params are NOT purely ``default_params``
+    (ADR-0020). Two shapes exist because the two scripts read WiFi differently:
+
+    - ``connect_wifi`` takes ``ssid``/``password`` at the top level of params.
+    - ``monkey_setup`` runs WiFi as a sub-step and reads ``params.wifi.ssid``.
+      Its v2.0.0+ skips that sub-step when no ssid is present, which is what
+      makes "connect WiFi" an opt-in choice per execution rather than a
+      hard requirement.
+
+    Existing values win — a plan that hardcodes an ssid is left alone.
+    """
     if not wifi_params or not wifi_params.get("ssid"):
         return pipeline
+    ssid = wifi_params["ssid"]
+    password = wifi_params.get("password", "")
     for _, step in iter_lifecycle_steps(pipeline):
         action = step.get("action", "")
-        if "connect_wifi" not in action:
-            continue
-        params = dict(step.get("params") or {})
-        if not params.get("ssid"):
-            params["ssid"] = wifi_params["ssid"]
-        if not params.get("password"):
-            params["password"] = wifi_params.get("password", "")
-        step["params"] = params
+        if "connect_wifi" in action:
+            params = dict(step.get("params") or {})
+            if not params.get("ssid"):
+                params["ssid"] = ssid
+            if not params.get("password"):
+                params["password"] = password
+            step["params"] = params
+        elif "monkey_setup" in action:
+            params = dict(step.get("params") or {})
+            wifi_cfg = dict(params.get("wifi") or {})
+            if not wifi_cfg.get("ssid"):
+                wifi_cfg["ssid"] = ssid
+            if not wifi_cfg.get("password"):
+                wifi_cfg["password"] = password
+            params["wifi"] = wifi_cfg
+            step["params"] = params
     return pipeline
 
 

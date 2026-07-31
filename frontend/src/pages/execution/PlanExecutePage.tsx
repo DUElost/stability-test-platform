@@ -191,6 +191,8 @@ export default function PlanExecutePage() {
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [runNote, setRunNote] = useState('');
+  // 执行时的 WiFi 选择：null = 不连接（默认）。只带 pool_id，凭据留在资源池。
+  const [wifiPoolId, setWifiPoolId] = useState<number | null>(null);
   const [retryingDispatch, setRetryingDispatch] = useState(false);
   const [dispatchFailure, setDispatchFailure] = useState<{
     planRunId: number;
@@ -227,6 +229,15 @@ export default function PlanExecutePage() {
     queryKey: hostKeys.list(),
     queryFn: () => fetchHostList(0, 200),
   });
+
+  const { data: wifiPoolList } = useQuery({
+    queryKey: ['resource-pools', 'wifi'],
+    queryFn: () => api.resourcePools.list('wifi'),
+  });
+  const wifiPools = useMemo(
+    () => (wifiPoolList ?? []).filter((pool) => pool.is_active),
+    [wifiPoolList],
+  );
 
   // B1b：一次拉取全平台占用（独立 /jobs 路由，避免 hosts/{id} N+1）
   const { data: activeJobsByDevice } = useQuery({
@@ -623,6 +634,7 @@ export default function PlanExecutePage() {
       const frozenDeviceIds = [...selectedSchedulableDeviceIds];
       const p = await api.plans.previewRun(selectedPlanId, {
         device_ids: frozenDeviceIds,
+        ...(wifiPoolId != null ? { wifi_pool_id: wifiPoolId } : {}),
       });
 
       if (p.total_steps === 0) {
@@ -658,6 +670,7 @@ export default function PlanExecutePage() {
       const run = await api.plans.run(selectedPlanId, {
         device_ids: [...preview.device_ids],
         ...(trimmedNote ? { note: trimmedNote } : {}),
+        ...(wifiPoolId != null ? { wifi_pool_id: wifiPoolId } : {}),
       });
       toast.success('Plan 已发起执行');
       clearDraft();
@@ -1313,6 +1326,9 @@ export default function PlanExecutePage() {
             recentRuns={recentPlanRuns}
             recentRunsLoading={recentPlanRunsLoading}
             duplicateMatch={duplicateMatch}
+            wifiPools={wifiPools}
+            wifiPoolId={wifiPoolId}
+            onWifiPoolChange={setWifiPoolId}
             onNoteChange={setRunNote}
             onEditPlan={() => navigate(`/orchestration/plans/${selectedPlanId}`)}
             onOpenRun={(runId) => navigate(`/execution/plan-runs/${runId}`)}
