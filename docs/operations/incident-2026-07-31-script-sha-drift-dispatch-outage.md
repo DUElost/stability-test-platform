@@ -185,19 +185,30 @@ lifecycle init failed: step failed in init:
 | 平台 ResourcePool 注入 | `inject_wifi_params` **只改 action 含 `connect_wifi` 的步骤**，且仅当 lifecycle 里存在该步骤时才分配。Plan 2 没有 `connect_wifi` 步骤 → 完全不触发 |
 | Agent 环境变量 | 抽查 `9.132` / `9.93` / `9.131`，`/opt/stability-test-agent/.env` 里 **一条 `STP_WIFI_*` 都没有** |
 
-生产库里也**不存在任何 wifi / pool / resource 表**，WiFi 资源池功能未落地。
+生产库里 `resource_pool` / `resource_allocation` **两张表都存在**（`resource_pool.config` 存 `{ssid, password}`，`max_concurrent_devices` 控并发），`/api/v1/resource-pools` 的 CRUD 路由也齐全 —— **机制是建好的，只是 0 行、从未配置过任何 WiFi 池**。
 
 设备侧实况（device 44 @ 9.132）：`Wifi is enabled` 但 `Wifi is not connected` —— 这一步确实有活要干，不是可以跳过的空转。
+
+另一处关键事实：`monkey_setup` v1.0.0 与 v1.3.0 **全文只差一行**，就是缺省步骤表：
+
+```python
+v1.0.0:  step_names = args.get("steps", ["wifi", "root", "push", "install", "fill", "clean"])
+v1.3.0:  step_names = args.get("steps", ["root", "push", "install", "clean"])
+```
+
+v1.3.0 已经不含 `wifi`（同时也去掉了 `fill`），而 Plan 2 指的是 v1.0.0。
 
 可选处置（需业务侧确认 Monkey 测试是否必须联网）：
 
 | 方案 | 动作 | 代价 |
 |------|------|------|
-| A. 配 Agent 环境变量 | 20 台 `.env` 加 `STP_WIFI_SSID` / `STP_WIFI_PASSWORD`，`reload_config` 热刷新 | 需要真实 SSID/密码；凭据散落在 20 台 host |
-| B. 新建 `monkey_setup` 版本 | `default_params={"steps":["root","push","install","fill","clean"]}` 跳过 wifi | 仅当测试不需要联网才成立；须改 Plan 2 的 step 版本引用 |
-| C. 走设计正道 | Plan 2 加 `connect_wifi` 步骤 + 落地 WiFi 资源池 | 资源池表结构未迁移，工作量最大 |
+| A. 配 Agent 环境变量 | 20 台 `.env` 加 `STP_WIFI_SSID` / `STP_WIFI_PASSWORD`，`reload_config` 热刷新 | 需要真实 SSID/密码；凭据散落在 20 台 host，且无法按执行选择 |
+| B. 新建 `monkey_setup` 版本 | 缺省步骤表去掉 `wifi` | 仅当测试永不需要联网才成立；无法按执行选择 |
+| C. 走资源池正道 | 配置 WiFi `resource_pool` + 执行时选池 | 机制已建好（表 + CRUD 路由 + 分配 + 并发上限），只需接通「执行时可选」这一段 |
 
 > `default_params` 对已存在版本 422 不可变，方案 B 必须 `POST /api/v1/scripts/{name}/versions` 新建版本。
+
+**业务侧结论（2026-07-31）**：WiFi 连接应当**在计划执行前可选**，并非必须连接，但要保留连接选项 —— 即方案 C 的方向。落地设计见 §7。
 
 ---
 
