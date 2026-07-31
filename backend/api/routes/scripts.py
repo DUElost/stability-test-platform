@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import distinct
 from sqlalchemy.exc import IntegrityError
@@ -22,7 +22,9 @@ from backend.core.agent_secret import AgentSecretNotConfiguredError, require_age
 from backend.core.audit import record_audit
 from backend.core.legacy_aee import LEGACY_AEE_SCRIPT_NAMES, hidden_legacy_plan_ids
 from backend.core.database import get_db
+from backend.models.enums import PlanRunStatus
 from backend.models.plan import PlanStep
+from backend.models.plan_run import PlanRun
 from backend.models.script import Script
 from backend.services.script_catalog import scan_script_root
 
@@ -31,6 +33,16 @@ router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
 
 _VALID_PARAM_TYPES = {"string", "integer", "boolean", "number"}
 _VALID_SCRIPT_TYPES = {"python", "shell"}
+
+# A rebaseline changes what precheck expects mid-flight, so it is refused while
+# any PlanRun still has work to do. Listed positively rather than as "not
+# terminal" so a newly added status defaults to *allowing* the scan instead of
+# silently blocking it forever.
+_IN_FLIGHT_PLAN_RUN_STATUSES = (
+    PlanRunStatus.RUNNING.value,
+    PlanRunStatus.QUEUED.value,
+    PlanRunStatus.PRECHECK.value,
+)
 
 
 def _validate_param_schema(schema: Dict[str, Any]) -> Optional[str]:
@@ -274,12 +286,42 @@ def list_script_categories(
 
 @router.post("/scan", response_model=ApiResponse[dict])
 def scan_scripts(
+    force_rebaseline: bool = Query(
+        False,
+        description=(
+            "Re-anchor stored content_sha256 to the on-disk bytes for versions "
+            "reported as conflicts. Escape hatch for published version "
+            "directories that were edited in place; refused while any PlanRun "
+            "is in flight."
+        ),
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_admin),
     request: Request = None,
 ):
+    if force_rebaseline:
+        in_flight = (
+            db.query(PlanRun.id)
+            .filter(PlanRun.status.in_(_IN_FLIGHT_PLAN_RUN_STATUSES))
+            .limit(1)
+            .first()
+        )
+        if in_flight is not None:
+            raise_api_http_error(
+                status_code=409,
+                code="PLAN_RUN_IN_FLIGHT",
+                message=(
+                    "cannot rebaseline script checksums while a PlanRun is in "
+                    "flight; wait for it to reach a terminal status"
+                ),
+            )
     try:
-        result = scan_script_root(db, _script_root(), _script_runtime_root())
+        result = scan_script_root(
+            db,
+            _script_root(),
+            _script_runtime_root(),
+            force_rebaseline=force_rebaseline,
+        )
     except FileNotFoundError:
         raise_api_http_error(
             status_code=400,
@@ -288,7 +330,7 @@ def scan_scripts(
         )
     record_audit(
         db,
-        action="scan",
+        action="scan_rebaseline" if force_rebaseline else "scan",
         resource_type="script_catalog",
         details=result.to_dict(),
         user_id=current_user.id,

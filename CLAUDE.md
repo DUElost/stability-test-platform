@@ -68,6 +68,8 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 - 一级 = 脚本名，二级 = v 开头版本号，入口 = 首个非 `_` 可识别文件
 - `_` 开头的辅助模块扫描时跳过
 - 扫描结果：created(INSERT) / skipped(sha256一致) / conflicts(sha256不一致,不动DB,须新建版本) / deactivated(磁盘无,标false)
+- **已发布版本目录的内容不可变**：`script.content_sha256` 是**扫描那一刻**的快照，也是 precheck 的期望值。原地改写 → conflicts 只记录不落库 → DB 期望值永久冻结 → 引用该脚本的 Plan 在准入阶段 `script_verify_failed`，**self-heal 推送也修不好**（推的是磁盘内容，对不上的是 DB）。CI 门禁 `tools/dev/check-script-version-immutability.py` 拦截（含 `_` 辅助模块——它们不计入 entry sha，改了连 conflicts 都不报）；`ruff.toml` 已把该目录加进 `extend-exclude`
+- 逃生阀 `POST /scripts/scan?force_rebaseline=true`：把 conflicts 的 sha 重锚到磁盘，返回 `rebaselined[]`。仅 admin，且有在途 PlanRun（RUNNING/QUEUED/PRECHECK）时返回 409。**只用于契约已被上游破坏的既成事实**，正常改脚本一律新建版本
 - WiFi 资源池注入是唯一打破「params 完全来自 default_params」的特例（`_inject_wifi_params` 对 `connect_wifi` 注入 `{ssid, password, pool_name, pool_id}`）
 - 完整链路：文件 → `POST /scripts/scan` → DB.script → PlanStep → dispatcher `deepcopy(default_params)` → `pipeline_def` → Agent `ScriptRegistry.resolve` → `subprocess.run` → stdout JSON → step_trace → JobStatus → aggregator
 

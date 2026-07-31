@@ -106,4 +106,5 @@ python -m backend.scripts.migration.preflight_execution_protocol
 | 文档 | 用途 |
 |------|------|
 | [`incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md`](./incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md) | 172.21.9.126 硬挂根因、watchdog/EEE/BIOS/Agent restart 加固、其余 19 台 host BIOS 汇总 |
+| [`incident-2026-07-31-script-sha-drift-dispatch-outage.md`](./incident-2026-07-31-script-sha-drift-dispatch-outage.md) | 脚本版本 sha 漂移致全平台派发中断：根因、`force_rebaseline` 逃生阀、ADR-0020 CI 门禁 |
 
