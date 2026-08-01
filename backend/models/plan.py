@@ -39,6 +39,11 @@ class Plan(Base):
     failure_threshold = Column(Float, nullable=False, default=0.05)
     patrol_interval_seconds = Column(Integer, nullable=True)
     timeout_seconds   = Column(Integer, nullable=True)
+    # INIT→PATROL barrier 预算。NULL = 沿用 STP_BARRIER_TIMEOUT_SECONDS / 600s。
+    # 这不是独立旋钮：只有先到者在等，所以它要覆盖同 host 的 init **落差**，
+    # 而 init 受 permit cap 串行化 ⇒ 约 (ceil(N/C)−1)×T。含长耗时前置步骤
+    # （自动刷机等）的 Plan 必须显式抬高，否则先做完的设备会被慢同伴连坐。
+    barrier_timeout_seconds = Column(Integer, nullable=True)
     auto_archive_interval_seconds = Column(Integer, nullable=True)
     next_plan_id      = Column(Integer, ForeignKey("plan.id"), nullable=True)
     watcher_policy    = Column(JSONB, nullable=True)
