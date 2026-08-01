@@ -547,3 +547,87 @@ class TestPlanRunPassRateTrend:
         today_point = next(p for p in points if p["date"] == now.date().isoformat())
         assert today_point["run_count"] == 1
         assert today_point["avg_pass_rate"] == 0.5
+
+
+class TestFileServerOverview:
+    """Endpoint /api/v1/stats/file-server — admin-only，未设共享根返回 503。"""
+
+    def test_requires_admin(self, client, auth_headers):
+        """非 admin 用户访问返回 403（与 dashboard-summary 等普通用户可用的端点区分）。"""
+        response = client.get("/api/v1/stats/file-server", headers=auth_headers)
+        assert response.status_code == 403
+
+    def test_returns_503_when_shared_root_unset(
+        self, client, admin_headers, monkeypatch,
+    ):
+        """STP_AEE_NFS_ROOT 未设时 endpoint 返回 503（非 500，非假数据）。
+
+        防止 file_server_monitor 盯错路径永远生成 STORAGE_NOT_MOUNTED 误报（评审 #4）。
+        patch stats 模块的本地引用（stats.py 走 `from ... import`，须改 stats 侧属性）。
+        """
+        from backend.api.routes import stats as stats_module
+
+        def _raise_root_not_set(_hosts, *, hours=6):
+            raise RuntimeError("STP_AEE_NFS_ROOT is not set")
+
+        monkeypatch.setattr(
+            stats_module, "collect_file_server_overview", _raise_root_not_set,
+        )
+        response = client.get("/api/v1/stats/file-server", headers=admin_headers)
+        assert response.status_code == 503
+        assert "STP_AEE_NFS_ROOT" in response.json()["detail"]
+
+    def test_returns_overview_for_admin(
+        self, client, admin_headers, monkeypatch,
+    ):
+        """admin 用户、共享根已配 → 200，schema 校验通过。"""
+        from backend.api.routes import stats as stats_module
+
+        overview = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "status": "healthy",
+            "server": {"hostname": "h", "address": "1.2.3.4", "cpu_count": 4, "uptime_seconds": 100.0},
+            "storage": {
+                "path": "/mnt/nfs/aee_events", "source": "/dev/sda1", "filesystem": "ext4",
+                "mounted": True, "backend_write_access": True,
+                "total_bytes": 100, "used_bytes": 10, "available_bytes": 90, "used_pct": 10.0,
+                "inode_total": 200, "inode_used": 20, "inode_available": 180, "inode_used_pct": 10.0,
+            },
+            "system": {
+                "cpu_usage_pct": 5.0, "memory_usage_pct": 40.0, "memory_total_bytes": 1024,
+                "load1": 0.5,
+                "disk_read_bytes_per_second": None,
+                "disk_write_bytes_per_second": None,
+                "network_receive_bytes_per_second": None,
+                "network_transmit_bytes_per_second": None,
+            },
+            "nfs": {
+                "service_ready": True, "exported": True, "export_targets": ["10.0.0.0/8"],
+                "server_threads": 16, "requests_per_second": 1.5,
+                "rpc_errors_per_second": 0.0, "stale_file_handles_total": 0, "connections_total": 5,
+            },
+            "agents": {
+                "total": 1, "mounted": 1, "failed": 0, "unreported": 0,
+                "items": [{
+                    "host_id": "h1", "ip": "10.0.0.1", "status": "ONLINE",
+                    "mounted": True, "last_heartbeat": "2026-07-28T00:00:00+00:00",
+                }],
+            },
+            "history": {
+                "hours": 6, "capacity_usage_pct": [], "cpu_usage_pct": [],
+                "memory_usage_pct": [], "nfs_requests_per_second": [],
+            },
+            "monitoring": {"prometheus_available": True, "error": None},
+            "alerts": [],
+        }
+        monkeypatch.setattr(
+            stats_module,
+            "collect_file_server_overview",
+            lambda _hosts, *, hours=6: overview,
+        )
+        response = client.get("/api/v1/stats/file-server", headers=admin_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "healthy"
+        assert data["storage"]["path"] == "/mnt/nfs/aee_events"
+        assert data["agents"]["mounted"] == 1

@@ -5,17 +5,21 @@ Stats API — time-series endpoints for Dashboard charts.
 
 import json
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
-from backend.api.routes.auth import get_current_active_user, User
+from backend.api.routes.auth import get_current_active_user, require_admin, User
+from backend.api.schemas.file_server import FileServerOverview
 from backend.core.database import get_db
 from backend.core.legacy_aee import hidden_legacy_plan_ids
+from backend.models.host import Host
+from backend.services.file_server_monitor import collect_file_server_overview
 
 router = APIRouter(prefix="/api/v1/stats", tags=["stats"])
 logger = logging.getLogger(__name__)
@@ -230,6 +234,36 @@ class DashboardSummaryResponse(BaseModel):
     devices: DashboardDeviceSummary
     alerts: DashboardAlertSummary
     host_resources: List[DashboardHostResourcePoint]
+
+
+@router.get("/file-server", response_model=FileServerOverview)
+def get_file_server_overview(
+    hours: int = Query(6, ge=1, le=24),
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(require_admin),
+):
+    """Return NFS capacity, node load, and active-Agent mount compliance.
+
+    未设 ``STP_AEE_NFS_ROOT`` → 503（非 500），避免误报 STORAGE_NOT_MOUNTED。
+    共享根是部署前置，与 ``backend/services/dedup_scan.py`` 同样依赖。
+    """
+    fresh_seconds = max(30, int(os.getenv("STP_FILE_SERVER_AGENT_FRESH_SECONDS", "180")))
+    active_since = datetime.now(timezone.utc) - timedelta(seconds=fresh_seconds)
+    active_hosts = (
+        db.query(Host)
+        .filter(
+            Host.status == "ONLINE",
+            Host.last_heartbeat.isnot(None),
+            Host.last_heartbeat >= active_since,
+        )
+        .all()
+    )
+    try:
+        overview = collect_file_server_overview(active_hosts, hours=hours)
+    except RuntimeError as exc:
+        logger.warning("file_server_endpoint_root_not_configured err=%s", exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return FileServerOverview.model_validate(overview)
 
 
 @router.get("/dashboard-summary", response_model=DashboardSummaryResponse)

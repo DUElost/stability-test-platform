@@ -24,6 +24,7 @@ const AuditLogPage = lazy(() => import('../pages/audit/AuditLogPage'));
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage'));
 const IssueTrackerPage = lazy(() => import('../pages/issues/IssueTrackerPage'));
 const ResourcesPage = lazy(() => import('../pages/resources/ResourcesPage'));
+const FileServerPage = lazy(() => import('../pages/storage/FileServerPage'));
 // ADR-0020 Plan 层页面
 const PlanListPage = lazy(() => import('../pages/orchestration/PlanListPage'));
 const PlanEditPage = lazy(() => import('../pages/orchestration/PlanEditPage'));
@@ -98,6 +99,7 @@ export default function AppRouter() {
               <Route path="notifications" element={<NotificationsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="audit" element={<AuditLogPage />} />
+              <Route path="storage" element={<FileServerPage />} />
             </Route>
 
             {/* ADR-0020 Plan 路由 */}
