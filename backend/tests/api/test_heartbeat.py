@@ -65,6 +65,76 @@ class TestHeartbeat:
         db_session.refresh(sample_host)
         assert sample_host.script_catalog_version == "new-script-version"
 
+    def test_heartbeat_not_outdated_when_agent_matches_the_server_catalog(
+        self, client, sample_host, db_session
+    ):
+        """对上服务端当前目录就不该再让 Agent 重拉。"""
+        from backend.services.script_catalog_version import compute_script_catalog_version
+
+        current = compute_script_catalog_version(db_session)
+        response = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": sample_host.id,
+                "status": "ONLINE",
+                "script_catalog_version": current,
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["script_catalog_outdated"] is False
+
+    def test_stale_agent_stays_outdated_across_repeated_heartbeats(
+        self, client, sample_host, db_session
+    ):
+        """旧逻辑的真正缺陷：它比的是「这个 Agent 上次报的值」。
+
+        于是同一个陈旧值连报两次，第二次就被判为「已同步」——控制面新发布的
+        脚本版本永远送不到运行中的 Agent，直到很久以后作业执行时才以
+        ``ScriptVersionMismatch`` 爆出来，而唯一的解法是手动重启每台 Agent。
+        """
+        stale = "stale-agent-digest"
+        for _ in range(2):
+            response = client.post(
+                "/api/v1/heartbeat",
+                json={
+                    "host_id": sample_host.id,
+                    "status": "ONLINE",
+                    "script_catalog_version": stale,
+                },
+            )
+            assert response.status_code == 200
+            assert response.json()["script_catalog_outdated"] is True
+
+    def test_publishing_a_script_version_makes_an_in_sync_agent_outdated(
+        self, client, sample_host, db_session
+    ):
+        from backend.models.script import Script
+        from backend.services.script_catalog_version import compute_script_catalog_version
+
+        in_sync = compute_script_catalog_version(db_session)
+        payload = {
+            "host_id": sample_host.id,
+            "status": "ONLINE",
+            "script_catalog_version": in_sync,
+        }
+        assert client.post("/api/v1/heartbeat", json=payload).json()[
+            "script_catalog_outdated"
+        ] is False
+
+        db_session.add(Script(
+            name="freshly_published", display_name="freshly_published",
+            category="device", script_type="python", version="2.0.0",
+            nfs_path="/s/freshly_published/v2.0.0/freshly_published.py",
+            content_sha256="sha-new", param_schema={}, default_params={},
+            is_active=True,
+        ))
+        db_session.commit()
+
+        # Agent 还没重拉，报的仍是旧摘要 —— 必须被判为过期。
+        assert client.post("/api/v1/heartbeat", json=payload).json()[
+            "script_catalog_outdated"
+        ] is True
+
     def test_heartbeat_creates_host_by_ip(self, client, sample_host):
         """Test heartbeat finds existing host by IP"""
         response = client.post(

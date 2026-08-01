@@ -19,6 +19,7 @@ from backend.core.metrics import (
 )
 from backend.api.schemas import HeartbeatIn
 from backend.api.routes.auth import verify_agent_secret
+from backend.services.script_catalog_version import compute_script_catalog_version
 
 router = APIRouter(prefix="/api/v1", tags=["heartbeat"])
 logger = logging.getLogger(__name__)
@@ -206,10 +207,14 @@ def _process_heartbeat_with_db(
     _sync_host_identity(host, host_info)
 
     # Update host status
-    script_catalog_outdated = (
-        bool(payload.script_catalog_version)
-        and bool(host.script_catalog_version)
-        and host.script_catalog_version != payload.script_catalog_version
+    # Compare the Agent's cached catalog against **the control plane's current
+    # one**, not against whatever this Agent reported last time. The old
+    # self-comparison could only ever fire when the Agent changed, so publishing
+    # a new script version never reached a running Agent — the mistake showed up
+    # much later as ScriptVersionMismatch at job execution time, curable only by
+    # manually restarting every Agent.
+    script_catalog_outdated = bool(payload.script_catalog_version) and (
+        payload.script_catalog_version != compute_script_catalog_version(db)
     )
 
     host.status = payload.status
