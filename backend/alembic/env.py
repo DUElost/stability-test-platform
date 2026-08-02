@@ -16,8 +16,32 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+
+def _resolve_database_url() -> str:
+    """Resolve the migration target, loudly, from a single source.
+
+    Delegates to :mod:`backend.core.env_source` so the rule ("ambient env, then
+    the repo-root ``.env.backend``, never ``backend/.env``, never a built-in
+    default") lives in exactly one place and is unit-testable. See that module
+    for why refusing to guess matters more than asserting the database name.
+    """
+    from backend.core.env_source import redact_url, resolve_database_url
+
+    url, source = resolve_database_url()
+    # Echo the target before connecting, password stripped. Landing on the
+    # wrong database should be visible in the log *before* any DDL runs.
+    # stderr 直写：此处早于 alembic 的 logging 配置，用 logger 会被吞掉。
+    sys.stderr.write(f"[alembic] target={redact_url(url)} (from {source})\n")
+    # 写回环境：get_metadata() 随后会 import backend.core.database，而那里
+    # 仍有 os.getenv("DATABASE_URL", "…@localhost:5432/stp") 的兜底默认 ——
+    # 不写回的话，从 .env.backend 解析出的目标只作用于 alembic 自己的连接，
+    # 被 import 的模块会各自建一个指向那个默认值（生产库名）的 engine。
+    os.environ["DATABASE_URL"] = url
+    return url
+
+
 # Override DB URL from environment (use psycopg sync driver for Alembic)
-_db_url = os.getenv("DATABASE_URL", "postgresql+psycopg://stp:password@localhost:5432/stp")
+_db_url = _resolve_database_url()
 _sync_url = _db_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
 config.set_main_option("sqlalchemy.url", _sync_url)
 
