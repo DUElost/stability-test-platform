@@ -791,6 +791,13 @@ export interface Plan {
   failure_threshold: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
+  /**
+   * INIT→PATROL barrier 预算（秒）。null = 沿用后端 600s。
+   * 不是独立旋钮：只有先到者在等，要覆盖同 host 的 init 落差
+   * ≈ (ceil(设备数 / permit_cap) − 1) × 单设备 init 耗时。
+   * 含自动刷机等长耗时前置步骤的计划必须抬高。
+   */
+  barrier_timeout_seconds?: number | null;
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
@@ -806,6 +813,13 @@ export interface PlanCreate {
   failure_threshold?: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
+  /**
+   * INIT→PATROL barrier 预算（秒）。null = 沿用后端 600s。
+   * 不是独立旋钮：只有先到者在等，要覆盖同 host 的 init 落差
+   * ≈ (ceil(设备数 / permit_cap) − 1) × 单设备 init 耗时。
+   * 含自动刷机等长耗时前置步骤的计划必须抬高。
+   */
+  barrier_timeout_seconds?: number | null;
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;
@@ -818,6 +832,13 @@ export interface PlanUpdate {
   failure_threshold?: number;
   patrol_interval_seconds?: number | null;
   timeout_seconds?: number | null;
+  /**
+   * INIT→PATROL barrier 预算（秒）。null = 沿用后端 600s。
+   * 不是独立旋钮：只有先到者在等，要覆盖同 host 的 init 落差
+   * ≈ (ceil(设备数 / permit_cap) − 1) × 单设备 init 耗时。
+   * 含自动刷机等长耗时前置步骤的计划必须抬高。
+   */
+  barrier_timeout_seconds?: number | null;
   auto_archive_interval_seconds?: number | null;
   next_plan_id?: number | null;
   watcher_policy?: WatcherPolicy | null;

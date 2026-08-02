@@ -49,6 +49,63 @@ _IS_WINDOWS = sys.platform == "win32"
 _SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
+# 步骤墙钟。这是**安全网**，不是完成判据：真正判断"还在不在推进"要靠进度信号
+# （#115），在那之前它是唯一能回收卡死步骤的机制。
+#
+# 缺省**保持 300s 不变**。不把它抬成 12h 是有意的：那会让每个从未配过
+# timeout_seconds 的步骤，在卡死后的回收时间从 5 分钟变成 12 小时 —— 直接加重
+# permit 饿死（cap=5 时一个卡死步骤吃掉该 host 1/5 的容量）。需要长墙钟的步骤
+# （自动刷机、结果收取）应当在 PlanStep 上**显式**配 12h，让代价可见。
+#
+# 0 = 不限。**在停滞判据落地前不要开**：执行心跳由 coordinator 独立线程发，
+# 脚本 hang 住时照常上报，控制面不会回收 permit，只能人工干预。
+_DEFAULT_STEP_WALL_CLOCK_SECONDS = 300
+
+
+def _resolve_step_wall_clock(step: Dict[str, Any]) -> Optional[float]:
+    """Outer wall-clock ceiling for one step, or ``None`` for unlimited.
+
+    Precedence: PlanStep ``timeout_seconds`` → ``STP_STEP_WALL_CLOCK_SECONDS``
+    (fleet-wide default) → 300s. Exactly ``0`` means no ceiling —
+    ``communicate(timeout=None)`` then blocks until the child exits.
+
+    Negatives fall back to the default rather than meaning "unlimited": a
+    negative here is far more likely a typo than an intent to disable the only
+    mechanism that can reclaim a wedged step.
+
+    NOTE ``0`` is currently only reachable via the env var — ``pipeline_schema``
+    keeps ``minimum: 1`` on the step's ``timeout_seconds``, so a PlanStep cannot
+    express it. That gate opens together with the stall criterion (#115).
+    """
+    raw = step.get("timeout_seconds", step.get("timeout"))
+    if raw is None:
+        env_raw = (os.getenv("STP_STEP_WALL_CLOCK_SECONDS") or "").strip()
+        if env_raw:
+            try:
+                raw = float(env_raw)
+            except ValueError:
+                logger.warning(
+                    "invalid_step_wall_clock raw=%r default=%d",
+                    env_raw, _DEFAULT_STEP_WALL_CLOCK_SECONDS,
+                )
+                raw = _DEFAULT_STEP_WALL_CLOCK_SECONDS
+        else:
+            raw = _DEFAULT_STEP_WALL_CLOCK_SECONDS
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return float(_DEFAULT_STEP_WALL_CLOCK_SECONDS)
+    if value == 0:
+        return None
+    if value < 0:
+        logger.warning(
+            "negative_step_wall_clock raw=%r default=%d (use 0 for unlimited)",
+            raw, _DEFAULT_STEP_WALL_CLOCK_SECONDS,
+        )
+        return float(_DEFAULT_STEP_WALL_CLOCK_SECONDS)
+    return value
+
+
 def _popen_isolation_kwargs() -> Dict[str, Any]:
     """#3: 跨平台 process group 隔离 — 让超时 kill 能覆盖孙进程。
 
@@ -530,6 +587,37 @@ class PipelineEngine:
                 self._run_id, prh_id, next_phase,
             )
         return is_last
+    def _resolve_barrier_timeout(self) -> float:
+        """INIT→PATROL barrier budget, in seconds.
+
+        Precedence: Plan-level ``lifecycle.barrier_timeout_seconds`` →
+        ``STP_BARRIER_TIMEOUT_SECONDS`` → 600.
+
+        This is **not** an independent knob. Only the *earlier* arrivers wait
+        (the last one returns immediately), so the budget has to cover the
+        init **spread** across the host — and init is serialized by the permit
+        cap, giving roughly::
+
+            required ≈ (ceil(N / C) − 1) × T
+
+        with N devices on the host, permit cap C, per-device init time T. At
+        N=23 / C=5 that is 4×T, so 600s only covers T ≤ 2.5 min. Anything
+        slower (flashing) needs this raised on the Plan.
+
+        #117 replaces the guesswork with a progress-aware barrier: extend
+        while any peer of the same PlanRunHost is demonstrably advancing, and
+        only time out when they are all stalled.
+        """
+        configured = getattr(self, "_barrier_timeout_seconds", None)
+        if configured is None:
+            configured = os.getenv("STP_BARRIER_TIMEOUT_SECONDS", "600")
+        try:
+            value = float(configured)
+        except (TypeError, ValueError):
+            logger.warning("invalid_barrier_timeout raw=%r default=600", configured)
+            return 600.0
+        return value if value > 0 else 600.0
+
     def _await_phase_barrier(self, next_phase: str) -> bool:
         """Block until all PlanRunHost peers reach this phase boundary.
 
@@ -553,7 +641,7 @@ class PipelineEngine:
         is_last = self._arrive_phase_barrier(next_phase)
         if is_last:
             return not (self._is_lock_lost() or self._canceled)
-        timeout = float(os.getenv("STP_BARRIER_TIMEOUT_SECONDS", "600"))
+        timeout = self._resolve_barrier_timeout()
         deadline = time.monotonic() + timeout
         coord = self._coordinator
         prh_id = self._plan_run_host_id
@@ -842,7 +930,7 @@ class PipelineEngine:
         except (IndexError, ValueError):
             pass
 
-        timeout_seconds = step.get("timeout_seconds", step.get("timeout", 300))
+        timeout_seconds = _resolve_step_wall_clock(step)
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -991,6 +1079,9 @@ class PipelineEngine:
         """
         lifecycle = pipeline_def["lifecycle"]
         timeout_seconds = lifecycle.get("timeout_seconds", 0)
+        # Plan 级 barrier 超时（#117）。必须在进 init 之前取好：等待方在
+        # _await_phase_barrier 里已经拿不到 lifecycle。
+        self._barrier_timeout_seconds = lifecycle.get("barrier_timeout_seconds")
         init_def = lifecycle["init"]
         patrol_def = lifecycle.get("patrol")
         teardown_def = lifecycle["teardown"]

@@ -211,6 +211,11 @@ def build_lifecycle_from_steps(
     if plan.timeout_seconds is not None:
         lifecycle["timeout_seconds"] = plan.timeout_seconds
 
+    # #117: barrier 预算随计划走。NULL 时不写入，Agent 侧回落到 env / 600s。
+    barrier_timeout = getattr(plan, "barrier_timeout_seconds", None)
+    if barrier_timeout is not None:
+        lifecycle["barrier_timeout_seconds"] = barrier_timeout
+
     return lifecycle
 
 
@@ -266,6 +271,10 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
     timeout_seconds = plan_data.get("timeout_seconds")
     if timeout_seconds is not None:
         lifecycle["timeout_seconds"] = timeout_seconds
+    # #117: 快照路径同样要带 barrier 预算，否则重放旧 PlanRun 会悄悄退回 600s。
+    barrier_timeout = plan_data.get("barrier_timeout_seconds")
+    if barrier_timeout is not None:
+        lifecycle["barrier_timeout_seconds"] = barrier_timeout
     return lifecycle
 
 
@@ -357,6 +366,7 @@ def build_plan_snapshot(
             "failure_threshold": failure_threshold,
             "patrol_interval_seconds": plan.patrol_interval_seconds,
             "timeout_seconds": plan.timeout_seconds,
+            "barrier_timeout_seconds": plan.barrier_timeout_seconds,
             "auto_archive_interval_seconds": plan.auto_archive_interval_seconds,
             "next_plan_id": plan.next_plan_id,
             "watcher_policy": plan.watcher_policy or {},
