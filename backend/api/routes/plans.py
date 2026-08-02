@@ -255,6 +255,7 @@ def _assemble_lifecycle_for_validation(
     steps: list[PlanStepIn],
     patrol_interval_seconds: int | None,
     timeout_seconds: int | None,
+    barrier_timeout_seconds: int | None = None,
 ) -> dict:
     """ADR-0020 §2：从 PlanStep 行 + 直列字段组装 lifecycle，仅用于 ``validate_pipeline_def``。
 
@@ -285,6 +286,8 @@ def _assemble_lifecycle_for_validation(
         }
     if timeout_seconds is not None:
         lifecycle["timeout_seconds"] = timeout_seconds
+    if barrier_timeout_seconds is not None:
+        lifecycle["barrier_timeout_seconds"] = barrier_timeout_seconds
     return lifecycle
 
 
@@ -292,6 +295,7 @@ def _validate_assembled_lifecycle(
     steps: list[PlanStepIn],
     patrol_interval_seconds: int | None,
     timeout_seconds: int | None,
+    barrier_timeout_seconds: int | None = None,
 ) -> None:
     """先组装、再用统一的 pipeline_validator 校验。"""
     has_patrol_steps = any(
@@ -310,7 +314,7 @@ def _validate_assembled_lifecycle(
             },
         )
     lifecycle = _assemble_lifecycle_for_validation(
-        steps, patrol_interval_seconds, timeout_seconds
+        steps, patrol_interval_seconds, timeout_seconds, barrier_timeout_seconds
     )
     is_valid, errors = validate_pipeline_def({"lifecycle": lifecycle})
     if not is_valid:
@@ -409,7 +413,8 @@ def create_plan(
 ):
     _validate_no_legacy_aee_scripts(payload.steps)
     _validate_assembled_lifecycle(
-        payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds
+        payload.steps, payload.patrol_interval_seconds, payload.timeout_seconds,
+        payload.barrier_timeout_seconds,
     )
     _validate_plan_dag(db, None, payload.next_plan_id)
     _validate_script_refs(db, payload.steps)
@@ -540,6 +545,7 @@ def update_plan(
             payload.steps,
             plan.patrol_interval_seconds,
             plan.timeout_seconds,
+            plan.barrier_timeout_seconds,
         )
         db.execute(text("DELETE FROM plan_step WHERE plan_id = :pid"), {"pid": plan_id})
         now = datetime.now(timezone.utc)
@@ -556,11 +562,13 @@ def update_plan(
                 enabled=s.enabled,
                 created_at=now,
             ))
-    elif {"patrol_interval_seconds", "timeout_seconds"} & fields_set:
+    elif {"patrol_interval_seconds", "timeout_seconds",
+          "barrier_timeout_seconds"} & fields_set:
         _validate_assembled_lifecycle(
             steps,
             plan.patrol_interval_seconds,
             plan.timeout_seconds,
+            plan.barrier_timeout_seconds,
         )
 
     db.commit()

@@ -8,6 +8,7 @@
 只会表现为「一批健康设备莫名其妙终止」，所以必须两条路径都测。
 """
 
+from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.services.plan_dispatcher_core import (
     build_lifecycle_from_steps,
@@ -116,3 +117,42 @@ class TestApiRoundTrip:
         """barrier 没有"不限"语义：0 会让先到者立刻超时并连坐失败。"""
         resp = self._create(client, auth_headers, barrier_timeout_seconds=0, tag="z")
         assert resp.status_code == 422
+
+
+class TestGeneratedLifecyclePassesSchema:
+    """**生成出来的 lifecycle 必须自己能过 schema。**
+
+    这一环最初漏掉了，结果是：字段一路串通、9 条串联用例全绿、CI 全绿，但
+    `pipeline_schema.json` 的 lifecycle 是 additionalProperties:false 且没有
+    这个键 —— 于是任何配了 barrier 预算的计划在 prepare 阶段
+    (`plan_dispatcher_sync` 调 validate_pipeline_def) 或到了 Agent
+    (`job_runner._validate_pipeline_def`) 直接被拒。
+
+    不是"可配但没生效"，是"配上就失败"。所以断言必须落在**校验器**上，
+    而不只是落在 dict 里有没有这个键。
+    """
+
+    def test_lifecycle_with_barrier_passes_validation(self):
+        lc = build_lifecycle_from_steps(
+            _plan(barrier_timeout_seconds=172800), [_step()], _META,
+        )
+        assert lc["barrier_timeout_seconds"] == 172800
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_snapshot_replayed_lifecycle_passes_validation(self):
+        snap = build_plan_snapshot(
+            _plan(barrier_timeout_seconds=7200), [_step()], _META, 0.05,
+        )
+        ok, errors = validate_pipeline_def(
+            {"lifecycle": build_lifecycle_from_snapshot(snap)}
+        )
+        assert ok, errors
+
+    def test_schema_still_rejects_genuinely_unknown_keys(self):
+        """加字段不能顺手把 additionalProperties 的保护也放开。"""
+        lc = build_lifecycle_from_steps(_plan(), [_step()], _META)
+        lc["totally_made_up"] = 1
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert not ok
+        assert any("totally_made_up" in e for e in errors)

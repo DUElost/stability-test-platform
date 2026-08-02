@@ -38,6 +38,15 @@ class TestStepWallClock:
         monkeypatch.setenv("STP_STEP_WALL_CLOCK_SECONDS", "43200")
         assert _resolve_step_wall_clock({"timeout_seconds": 60}) == 60
 
+    def test_negative_falls_back_instead_of_meaning_unlimited(self, monkeypatch):
+        """负数远更可能是笔误，而不是"想关掉唯一能回收卡死步骤的机制"。"""
+        monkeypatch.delenv("STP_STEP_WALL_CLOCK_SECONDS", raising=False)
+        assert _resolve_step_wall_clock({"timeout_seconds": -1}) == (
+            _DEFAULT_STEP_WALL_CLOCK_SECONDS
+        )
+        monkeypatch.setenv("STP_STEP_WALL_CLOCK_SECONDS", "-30")
+        assert _resolve_step_wall_clock({}) == _DEFAULT_STEP_WALL_CLOCK_SECONDS
+
     @pytest.mark.parametrize("source", ["step", "env"])
     def test_zero_means_unlimited(self, monkeypatch, source):
         """None → communicate(timeout=None) → 一直等到子进程退出。"""

@@ -66,8 +66,16 @@ def _resolve_step_wall_clock(step: Dict[str, Any]) -> Optional[float]:
     """Outer wall-clock ceiling for one step, or ``None`` for unlimited.
 
     Precedence: PlanStep ``timeout_seconds`` → ``STP_STEP_WALL_CLOCK_SECONDS``
-    (fleet-wide default) → 300s. ``0`` from either source means no ceiling —
+    (fleet-wide default) → 300s. Exactly ``0`` means no ceiling —
     ``communicate(timeout=None)`` then blocks until the child exits.
+
+    Negatives fall back to the default rather than meaning "unlimited": a
+    negative here is far more likely a typo than an intent to disable the only
+    mechanism that can reclaim a wedged step.
+
+    NOTE ``0`` is currently only reachable via the env var — ``pipeline_schema``
+    keeps ``minimum: 1`` on the step's ``timeout_seconds``, so a PlanStep cannot
+    express it. That gate opens together with the stall criterion (#115).
     """
     raw = step.get("timeout_seconds", step.get("timeout"))
     if raw is None:
@@ -87,7 +95,15 @@ def _resolve_step_wall_clock(step: Dict[str, Any]) -> Optional[float]:
         value = float(raw)
     except (TypeError, ValueError):
         return float(_DEFAULT_STEP_WALL_CLOCK_SECONDS)
-    return None if value <= 0 else value
+    if value == 0:
+        return None
+    if value < 0:
+        logger.warning(
+            "negative_step_wall_clock raw=%r default=%d (use 0 for unlimited)",
+            raw, _DEFAULT_STEP_WALL_CLOCK_SECONDS,
+        )
+        return float(_DEFAULT_STEP_WALL_CLOCK_SECONDS)
+    return value
 
 
 def _popen_isolation_kwargs() -> Dict[str, Any]:

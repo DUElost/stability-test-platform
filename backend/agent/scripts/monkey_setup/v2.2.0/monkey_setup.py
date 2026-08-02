@@ -1,14 +1,17 @@
 """复合设备初始化脚本：按序执行 WiFi / Root / 推送 / 安装 / 填充 / 清理。
 
-v2.2.0 相对 v2.1.0 的差异：**内层超时不再写死**。`push` / `fill` 原本把 600s /
-300s 硬编码在代码里 —— 对外不可见、不可配，运维在 UI 上看到 PlanStep 的
-`timeout_seconds` 会以为"还有余量"，实际被一个看不见的内层常数掐死。现在三个
-长耗时子步骤统一从 `STP_STEP_PARAMS.<step>.timeout_seconds` 取，缺省值不变。
-超时文案也标注了是**脚本内层**限制，避免与引擎级超时混淆。
+v2.2.0 相对 v2.1.0 的差异：**内层超时不再写死**。原本 `push` 的 tar 解包(600s)、
+`fill` 的 dd(300s)、以及 `_adb.adb_push` 的传输(120s 缺省)都硬编码在代码里 ——
+对外不可见、不可配，运维在 UI 上看到 PlanStep 的 `timeout_seconds` 会以为"还有
+余量"，实际被一个看不见的内层常数掐死。超时文案也标注了是**脚本内层**限制。
 
-    "push":    {"timeout_seconds": 600}   # tar 解包
-    "install": {"timeout_seconds": 120}   # pm install（v2.1.0 起就已可配）
-    "fill":    {"timeout_seconds": 300}   # dd 填充
+`push` 有两个独立的钟，别混：搬数据的是 `adb_push`，解包的是后面那条 tar。
+大 bundle 撞的是前者的 120s，不是后者的 600s。
+
+    "push":    {"timeout_seconds": 600,      # tar 解包
+                "push_timeout_seconds": 600} # adb push 传输(不设则跟随上一项)
+    "install": {"timeout_seconds": 120}      # pm install（v2.1.0 起就已可配）
+    "fill":    {"timeout_seconds": 300}      # dd 填充
 
 v2.1.0 相对 v2.0.0：**缺省步骤不再含 `fill`**（跟随 v1.3.0 的判断）。填充存储到
 60% 在百 GB 级 /data 上要写十几 GB，300s 根本不够；183 台实跑时它是绝大多数失败
@@ -159,8 +162,12 @@ def step_push(serial: str, cfg: dict) -> dict:
                 pass
 
         adb_shell(f"mkdir -p {remote_dir}", timeout=10)
-        adb_push(bundle, f"{remote_dir}/.stp_tmp_bundle.tar.gz")
-        adb_push(manifest_path, f"{remote_dir}/manifest.json")
+        # 真正搬数据的是 adb push，不是后面的 tar 解包。大 bundle 超过
+        # _adb.adb_push 的 120s 缺省很容易发生，所以它必须可配 —— 否则就是
+        # fill 的 300s 问题换个数字继续存在。
+        push_timeout = cfg.get("push_timeout_seconds", cfg.get("timeout_seconds", 600))
+        adb_push(bundle, f"{remote_dir}/.stp_tmp_bundle.tar.gz", timeout=push_timeout)
+        adb_push(manifest_path, f"{remote_dir}/manifest.json", timeout=push_timeout)
         adb_shell(
             f"cd {remote_dir} && tar xf .stp_tmp_bundle.tar.gz && "
             f"rm .stp_tmp_bundle.tar.gz && echo {expected_sha} > .stp_bundle_sha256",
@@ -171,13 +178,14 @@ def step_push(serial: str, cfg: dict) -> dict:
     files = cfg.get("files", [])
     if not files:
         return {"success": True, "skipped": True, "reason": "No files/bundle configured"}
+    push_timeout = cfg.get("push_timeout_seconds", cfg.get("timeout_seconds", 600))
     pushed = 0
     for f in files:
         local = _resolve_path(f.get("local", ""))
         remote = f.get("remote", "")
         if not local or not remote:
             continue
-        adb_push(local, remote)
+        adb_push(local, remote, timeout=push_timeout)
         if f.get("chmod"):
             adb_shell(f"chmod {f['chmod']} {remote}", timeout=10)
         pushed += 1
