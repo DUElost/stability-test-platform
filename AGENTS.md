@@ -43,7 +43,7 @@ CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksP
 
 ## 生产机调试约束
 
-部分部署机上 **本机 PostgreSQL 即生产库**（如 `backend/.env` 的 `DATABASE_URL=...@localhost:5432/stp_dev`），而 **Docker testcontainers 仅用于隔离测试**。在生产机上改代码时务必遵守：
+部分部署机上 **本机 PostgreSQL 即生产库**（生产 `DATABASE_URL` 在仓库根 `.env.backend`，指向 `stp`），而 **Docker testcontainers 仅用于隔离测试**。在生产机上改代码时务必遵守：
 
 | 场景 | 做法 |
 |------|------|
@@ -51,6 +51,13 @@ CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksP
 | 必须跑 `backend/tests/` | 使用 **Docker testcontainers**（`conftest.py` 自动起临时 `postgres:16` 容器），**不要**把 `TEST_DATABASE_URL` 指到 `stp_dev` 或任何生产库名 |
 | 迁移试验 | 禁止对生产库执行 `alembic upgrade` 试跑；在开发机/CI 或容器内验证 |
 | 手工 API 冒烟 | 可连生产控制面，但避免破坏性写操作 |
+
+> **env 源单一化（2026-08-01）**：生产唯一 env 源是仓库根 `.env.backend`。
+> `backend/main.py` 与 `backend/alembic/env.py` 都以它为准（ambient 环境变量仍最优先）；
+> `backend/.env` 降级为纯本地开发覆盖，已移除其中失效且指向 `stp_dev` 的 `DATABASE_URL`。
+> Alembic **不再有兜底默认** —— 此前那个默认值是 `stp:password@localhost:5432/stp`，
+> 直接点名生产库，只靠密码错才没连上。现在解析不到就报错，并在连接前把目标
+> （已脱敏）打到 stderr。
 
 **禁止示例**（会在生产数据上建表/清库/跑用例）：
 
@@ -149,8 +156,8 @@ See `backend/.env.example` and `backend/agent/.env.example` for full list.
 | 用途 | 凭据源 | 使用 |
 |------|--------|------|
 | SSH 到 20 台 Agent host | `/home/debian13/hosts.ini` (`[android]` 段 IP + `[android:vars]` 的 `ansible_user` / `ansible_password`) | `ssh android@<ip>`，`sudo -n` 免密可提权到 root。opencode 本机 `~/.ssh/id_ed25519` 已 ssh-copy-id 到 20 台 host，免密 SSH 已通。 |
-| Backend DB（生产 `stp` 库）| `backend/.env` 的 `DATABASE_URL` | 用 `/home/debian13/stability-test-platform/venv/bin/python`（含 sqlalchemy 2.0）+ `psycopg` 3 直连。**只读 SELECT 优先**，写须有迁移/PR。 |
-| 控制面 admin token | `.env.backend` 的 `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD`；并需用 `backend/.env` 的 `AGENT_SECRET` 头 `X-Agent-Secret` 绕 CSRF（前端 cookie session 才认 Origin/Referer） | `curl -H "X-Agent-Secret: <AGENT_SECRET>" -F "username=stp-admin&password=<ADMIN_PASS>" http://127.0.0.1:8000/api/v1/auth/token` → `Authorization: Bearer <token>` 调用任意 `/api/v1/...` 路由。 |
+| Backend DB（生产 `stp` 库）| **仓库根 `.env.backend`** 的 `DATABASE_URL`（systemd `EnvironmentFile`，唯一生产 env 源）。`backend/.env` 是本地开发覆盖，**不含** `DATABASE_URL`，别从那里找 | 用 `/home/debian13/stability-test-platform/venv/bin/python`（含 sqlalchemy 2.0）+ `psycopg` 3 直连。**只读 SELECT 优先**，写须有迁移/PR。 |
+| 控制面 admin token | **仓库根 `.env.backend`** 的 `STP_ADMIN_USER` / `STP_ADMIN_PASSWORD`；并需用**同一文件**的 `AGENT_SECRET` 头 `X-Agent-Secret` 绕 CSRF（前端 cookie session 才认 Origin/Referer）。`backend/.env` 里那个 `AGENT_SECRET` 是**陈旧值，控制面与 20 台 Agent 都不认**，照它操作会被拒 | `curl -H "X-Agent-Secret: <AGENT_SECRET>" -F "username=stp-admin&password=<ADMIN_PASS>" http://127.0.0.1:8000/api/v1/auth/token` → `Authorization: Bearer <token>` 调用任意 `/api/v1/...` 路由。 |
 | Agent `.env` 错配修复历史 | 20 台 host `STP_AEE_LOCAL_ROOT` 曾错配为 `/home/debian13/...`（android 用户无权写 `/home/debian13`）→ AEE Reconciler 100% 启动崩溃。已于 2026-07-25 改为 `/home/android/aee-local` / `/home/android/aee-nfs`，全部重启生效。详见 #72 + `docs/operations/adr-0026-admission-and-scale-gray-rollout.md`。|
 
 **安全约束**：不要把上面任何一个具体密码 / token 直接填到 commit 文件 / log 输出 / PR diff；AGENTS.md 仅文档化「在哪里能找到」，不复制明文。`backend/.env`、`backend/agent/.env`、`/home/debian13/hosts.ini`、`.env.backend`、`opencode.json` 都已在 `.gitignore`。

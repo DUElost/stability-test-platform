@@ -8,9 +8,20 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-# 加载 .env 文件（指定 backend 目录）
-env_path = Path(__file__).parent / ".env"
-load_dotenv(env_path)
+# env 加载顺序（三层都是 override=False，先到先得）：
+#   1. 进程已有的环境变量 —— systemd 的 EnvironmentFile 走这条，永远最优先
+#   2. 仓库根 .env.backend —— **生产唯一事实源**。显式加载它，使手工
+#      `uvicorn backend.main:app` 与 systemd 启动落到同一套配置
+#   3. backend/.env —— 仅供本地开发覆盖 1、2 都没提供的键
+#
+# 第 2 层是 2026-08-01 补的：此前只加载 backend/.env，而那份文件的
+# DATABASE_URL / JWT_SECRET_KEY / SSH_CREDENTIALS_FERNET_KEY / AGENT_SECRET /
+# REDIS_URL 都与生产不同。systemd 启动时靠 ambient 覆盖侥幸没出事，但任何
+# 手工启动都会静默落到另一套配置上（连不通的库、解不开的 SSH 凭据、
+# 对不上的会话）。
+_repo_root = Path(__file__).resolve().parent.parent
+load_dotenv(_repo_root / ".env.backend")
+load_dotenv(Path(__file__).parent / ".env")
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, Request
