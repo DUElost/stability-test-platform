@@ -222,4 +222,5 @@ def test_run_script_action_timeout_uses_terminate_process_tree(monkeypatch, tmp_
 
     assert result.success is False
     assert result.exit_code == 124
-    assert result.error_message == "script timeout"
+    # 文案带上是哪个钟、跑了多久（#115 阶段 1）——排查时要能区分总时长钟与停滞钟
+    assert result.error_message.startswith("script timeout after ")

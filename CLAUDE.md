@@ -21,6 +21,7 @@ Cursor IDE 按域规则见 `.cursor/rules/`（薄适配层，权威内容仍以�
 - **Redis 仅做 SAQ broker**，不存业务数据
 - **Production guard**：`ENV=production` 时强制 `AUTH_COOKIE_SECURE=1` + `AUTH_COOKIE_SAMESITE ∈ {lax,strict}` + `STP_CSRF_ENABLED` 开启，否则 `RuntimeError`（ADR-0024）
 - **Pipeline 仅接受 `lifecycle` 顶层键**：`stages`/`phases` 格式被拒绝（`backend/agent/pipeline_engine.py:325-332`）
+- **步骤两层钟**（#115 阶段 1，`pipeline_engine.py`）：总时长钟 `timeout_seconds`（缺省 300，安全网）+ 停滞钟 `stall_seconds`（**缺省 0=关闭**——全部脚本 `capture_output=True` 全程零输出，「任意输出=活」等于「全体判死」）。停滞钟只能**逐个 PlanStep 显式打开**，且脚本须先接入 `PROGRESS` 打戳（阶段 2）。`timeout_seconds=0`（不限）同理按步骤开门。完整协议见 `docs/design/2026-08-step-stall-detection.md`
 - **唯一 action 类型** `script:<name>`：`builtin:<name>` / `tool:<id>` / `shell:<command>` 已删除
 
 ---
