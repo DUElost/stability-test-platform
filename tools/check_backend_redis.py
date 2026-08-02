@@ -103,7 +103,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-file",
-        default="backend/.env",
+        # 生产唯一 env 源；backend/.env 的 REDIS_URL 是 db 1，生产是 db 0。
+        default=".env.backend",
         help="Path to the backend env file.",
     )
     return parser.parse_args()
