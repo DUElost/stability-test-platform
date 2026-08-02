@@ -1,10 +1,10 @@
 """Ansible 取 AGENT_SECRET 的兜底源必须是仓库根 .env.backend（#121）。
 
-2026-08-01 指纹比对（sha256 前 12 位）：
+2026-08-01 指纹比对（sha256 前 12 位，以下为示例指纹）：
 
-    运行中控制面    c688a87187ef
-    20 台 Agent     c688a87187ef
-    backend/.env    66992dc770c3   ← 没有任何人在用
+    运行中控制面    111111111111
+    20 台 Agent     111111111111
+    backend/.env    222222222222   ← 没有任何人在用
 
 而 Ansible 链此前正是从 backend/.env 兜底。跑一次 update_agent.yml 就会把
 那个没人认的密钥写进每台 Agent 的 .env（playbook 里 `line: "AGENT_SECRET=..."`），
@@ -54,10 +54,21 @@ def test_no_playbook_or_doc_still_points_at_backend_env():
         if path.suffix not in {".yml", ".yaml", ".md"} or not path.is_file():
             continue
         for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if "backend/.env" not in line:
+            stale_env_mention = (
+                "backend/.env" in line
+                or (
+                    "后端" in line
+                    and ".env" in line
+                    and ".env.backend" not in line
+                )
+            )
+            if not stale_env_mention:
                 continue
             # 允许「不要用 backend/.env」这类明确的反面说明
-            if "不要用" in line or "不是 backend/.env" in line or "没人认" in line:
+            if any(
+                marker in line
+                for marker in ("不要用", "不是", "没人认")
+            ):
                 continue
             offenders.append(f"{path.relative_to(REPO_ROOT)}:{i}: {line.strip()[:90]}")
     assert not offenders, "仍有指向 backend/.env 的说明:\n" + "\n".join(offenders)

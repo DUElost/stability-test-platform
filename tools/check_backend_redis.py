@@ -79,7 +79,7 @@ async def check_redis_or_explain(
                     "Redis preflight failed for {}.\n"
                     "Docker Redis is reachable via {}, so the current URL is likely "
                     "hitting Windows localhost IPv6 resolution (::1) first.\n"
-                    "Update REDIS_URL in backend\\.env to {} and retry.".format(
+                    "Update REDIS_URL in .env.backend to {} and retry.".format(
                         redis_url,
                         fallback_url,
                         fallback_url,
