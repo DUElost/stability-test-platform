@@ -6,10 +6,10 @@ v2.2.0 相对 v2.1.0 的差异：**内层超时不再写死**。原本 `push` �
 余量"，实际被一个看不见的内层常数掐死。超时文案也标注了是**脚本内层**限制。
 
 `push` 有两个独立的钟，别混：搬数据的是 `adb_push`，解包的是后面那条 tar。
-大 bundle 撞的是前者的 120s，不是后者的 600s。
+大 bundle 撞的是前者的 120s，不是后者的 600s。两者互不回落，各自保持原缺省。
 
     "push":    {"timeout_seconds": 600,      # tar 解包
-                "push_timeout_seconds": 600} # adb push 传输(不设则跟随上一项)
+                "push_timeout_seconds": 120} # adb push 传输
     "install": {"timeout_seconds": 120}      # pm install（v2.1.0 起就已可配）
     "fill":    {"timeout_seconds": 300}      # dd 填充
 
@@ -129,6 +129,28 @@ def step_root(serial: str, cfg: dict) -> dict:
     return {"success": False, "error": f"Root not granted after {max_attempts} attempts"}
 
 
+def _push_or_timeout(local: str, remote: str, timeout: int) -> dict | None:
+    """adb push，超时时返回一个指名**传输钟**的失败结果。
+
+    不能让它冒泡到 main 的通用 TimeoutExpired 处理 —— 那里只会说
+    "override via STP_STEP_PARAMS.push.timeout_seconds"，而 push 有两个独立
+    的钟：`timeout_seconds` 管 tar 解包，`push_timeout_seconds` 才管传输。
+    报错指错旋钮会让人调半天没反应。
+    """
+    try:
+        adb_push(local, remote, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {
+            "success": False,
+            "error": (
+                f"adb push timed out after {timeout}s: {local} -> {remote} "
+                f"(script-internal transfer limit; override via "
+                f"STP_STEP_PARAMS.push.push_timeout_seconds)"
+            ),
+        }
+    return None
+
+
 def step_push(serial: str, cfg: dict) -> dict:
     bundle = cfg.get("bundle")
     manifest_path = cfg.get("manifest")
@@ -165,9 +187,14 @@ def step_push(serial: str, cfg: dict) -> dict:
         # 真正搬数据的是 adb push，不是后面的 tar 解包。大 bundle 超过
         # _adb.adb_push 的 120s 缺省很容易发生，所以它必须可配 —— 否则就是
         # fill 的 300s 问题换个数字继续存在。
-        push_timeout = cfg.get("push_timeout_seconds", cfg.get("timeout_seconds", 600))
-        adb_push(bundle, f"{remote_dir}/.stp_tmp_bundle.tar.gz", timeout=push_timeout)
-        adb_push(manifest_path, f"{remote_dir}/manifest.json", timeout=push_timeout)
+        push_timeout = cfg.get("push_timeout_seconds", 120)
+        for src, dst in (
+            (bundle, f"{remote_dir}/.stp_tmp_bundle.tar.gz"),
+            (manifest_path, f"{remote_dir}/manifest.json"),
+        ):
+            failure = _push_or_timeout(src, dst, push_timeout)
+            if failure:
+                return failure
         adb_shell(
             f"cd {remote_dir} && tar xf .stp_tmp_bundle.tar.gz && "
             f"rm .stp_tmp_bundle.tar.gz && echo {expected_sha} > .stp_bundle_sha256",
@@ -178,14 +205,16 @@ def step_push(serial: str, cfg: dict) -> dict:
     files = cfg.get("files", [])
     if not files:
         return {"success": True, "skipped": True, "reason": "No files/bundle configured"}
-    push_timeout = cfg.get("push_timeout_seconds", cfg.get("timeout_seconds", 600))
+    push_timeout = cfg.get("push_timeout_seconds", 120)
     pushed = 0
     for f in files:
         local = _resolve_path(f.get("local", ""))
         remote = f.get("remote", "")
         if not local or not remote:
             continue
-        adb_push(local, remote, timeout=push_timeout)
+        failure = _push_or_timeout(local, remote, push_timeout)
+        if failure:
+            return failure
         if f.get("chmod"):
             adb_shell(f"chmod {f['chmod']} {remote}", timeout=10)
         pushed += 1
