@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.core.audit import record_audit
-from backend.models.enums import PlanRunStatus
+from backend.models.enums import JobStatus, PlanRunStatus
 from backend.models.host import Device
+from backend.models.job import JobInstance
 from backend.models.plan_run import PlanRun
 from backend.services.plan_dispatcher_sync import PlanDispatchError
 from backend.services.state_machine import PlanRunStateMachine
@@ -117,6 +118,29 @@ def update_dispatch_state(pr: PlanRun, db: Session, **patch: object) -> None:
 
 _update_dispatch_state = update_dispatch_state
 
+_ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+
+
+def plan_run_has_jobs(db: Session, plan_run_id: int) -> bool:
+    return (
+        db.query(JobInstance.id)
+        .filter(JobInstance.plan_run_id == plan_run_id)
+        .first()
+        is not None
+    )
+
+
+def host_has_active_jobs(db: Session, host_id: str) -> bool:
+    return (
+        db.query(JobInstance.id)
+        .filter(
+            JobInstance.host_id == host_id,
+            JobInstance.status.in_(_ACTIVE_JOB_STATUSES),
+        )
+        .first()
+        is not None
+    )
+
 
 def mark_precheck_failed(
     plan_run_id: int,
@@ -127,6 +151,22 @@ def mark_precheck_failed(
     code: str | None = None,
     inactive_host_ids: list[str] | None = None,
 ) -> None:
+    pr = db.get(PlanRun, plan_run_id)
+    if pr is None:
+        return
+    if pr.status != PlanRunStatus.RUNNING.value:
+        logger.info(
+            "precheck_failure_skip_non_running plan_run=%d status=%s error=%s",
+            plan_run_id, pr.status, error,
+        )
+        return
+    if plan_run_has_jobs(db, plan_run_id):
+        logger.warning(
+            "precheck_failure_skip_jobs_materialized plan_run=%d error=%s",
+            plan_run_id, error,
+        )
+        return
+
     precheck["phase"] = "failed"
     precheck["final_result"] = "failed"
     precheck["completed_at"] = utc_iso()
@@ -138,9 +178,6 @@ def mark_precheck_failed(
             "inactive_host_ids": list(inactive_host_ids or []),
         }
 
-    pr = db.get(PlanRun, plan_run_id)
-    if pr is None:
-        return
     run_ctx = dict(pr.run_context or {})
     run_ctx["precheck"] = precheck
     pr.run_context = run_ctx

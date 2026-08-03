@@ -37,10 +37,12 @@ from .idempotency import persist_dispatch_idempotency
 from .notify import emit_dispatch_gate_invalidation
 from .scripts import expected_scripts_for_run
 from .state import (
+    host_has_active_jobs,
     initial_precheck_state,
     initialise_precheck_state,
     mark_precheck_failed,
     persist_precheck,
+    plan_run_has_jobs,
     update_dispatch_state,
 )
 from .watcher import find_mixed_watcher_inactive_host_ids
@@ -68,6 +70,13 @@ async def drive_dispatch_gate(
             logger.info(
                 "precheck_skip_non_running plan_run=%d status=%s",
                 plan_run_id, pr.status,
+            )
+            gate_outcome = "skipped"
+            return
+        if plan_run_has_jobs(db, plan_run_id):
+            logger.info(
+                "precheck_skip_jobs_already_materialized plan_run=%d",
+                plan_run_id,
             )
             gate_outcome = "skipped"
             return
@@ -172,6 +181,21 @@ async def drive_dispatch_gate(
                     host_state["status"] = "synced"
                     host_state["error"] = None
                 else:
+                    if host_has_active_jobs(db, hid):
+                        err = (
+                            "lightweight_sync_failed_and_hot_update_blocked_by_active_jobs: "
+                            f"{err_sync}"
+                        )
+                        logger.warning(
+                            "precheck_hot_update_blocked_active_jobs host=%s error=%s",
+                            hid, err_sync,
+                        )
+                        sync_failures.append((hid, err))
+                        host_state["status"] = "failed"
+                        host_state["error"] = err
+                        persist_precheck(plan_run_id, precheck, db)
+                        continue
+
                     logger.warning(
                         "lightweight_sync_failed host=%s error=%s — falling back to hot-update",
                         hid, err_sync,
@@ -276,7 +300,11 @@ async def drive_dispatch_gate(
         logger.exception("precheck_unexpected_failure plan_run=%d", plan_run_id)
         try:
             pr = db.get(PlanRun, plan_run_id)
-            if pr is not None and pr.status == "RUNNING":
+            if (
+                pr is not None
+                and pr.status == "RUNNING"
+                and not plan_run_has_jobs(db, plan_run_id)
+            ):
                 run_ctx = dict(pr.run_context or {})
                 precheck = run_ctx.get("precheck") or initial_precheck_state([])
                 precheck["phase"] = "failed"
