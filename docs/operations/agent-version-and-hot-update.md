@@ -24,6 +24,13 @@ Host UI（`ExpandableHostTable`）展示协议版本、code sync 徽章与相对
 
 错误顺序：先升控制面并写死较高 `STP_AGENT_MIN_VERSION` → 旧 Agent claim **426**，PENDING 积压。
 
+> **⚠️ 下发文件 ≠ 生效（2026-08-04 实测）**：`pipeline_schema.json` 与脚本目录的更新
+> **必须重启 Agent 进程**才生效 —— `pipeline_validator._schema_cache` 是进程内缓存，
+> `reload_config` 不重载它；脚本目录通知（#112 的 catalog digest 对比）只覆盖脚本
+> 目录，**不覆盖** `schemas/`。2026-08-03 验证轮因此全量失败过一次
+> （`stall_seconds` 被旧 schema 拒）。热更新部署后务必 `systemctl restart stability-test-agent`。
+> 同理，手动 scp 下发 schema/脚本后也要重启，不能只发文件。
+
 ---
 
 ## 3. 热更新内容
