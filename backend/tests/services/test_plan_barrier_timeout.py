@@ -164,8 +164,10 @@ class TestGeneratedLifecyclePassesSchema:
 # 步骤都会带着 stall_seconds: null 被 schema 拒。
 
 
-def _step_with_stall(stall_seconds):
+def _step_with_stall(stall_seconds, *, stage="init", step_key="check_device"):
     s = _step()
+    s.stage = stage
+    s.step_key = step_key
     s.stall_seconds = stall_seconds
     return s
 
@@ -213,6 +215,38 @@ class TestStallSecondsPipeline:
         ok, errors = validate_pipeline_def({"lifecycle": lc})
         assert ok, errors
 
+    def test_patrol_stage_carries_stall_seconds(self):
+        lc = build_lifecycle_from_steps(
+            _plan(patrol_interval_seconds=60),
+            [
+                _step(),
+                _step_with_stall(300, stage="patrol", step_key="patrol_check"),
+            ],
+            _META,
+        )
+        assert "stall_seconds" not in lc["init"][0]
+        patrol_step = lc["patrol"]["steps"][0]
+        assert patrol_step["stall_seconds"] == 300
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_patrol_snapshot_round_trip_preserves_stall_seconds(self):
+        snap = build_plan_snapshot(
+            _plan(patrol_interval_seconds=60),
+            [
+                _step(),
+                _step_with_stall(300, stage="patrol", step_key="patrol_check"),
+            ],
+            _META,
+            0.05,
+        )
+        patrol_snap = next(s for s in snap["steps"] if s["stage"] == "patrol")
+        assert patrol_snap["stall_seconds"] == 300
+        lc = build_lifecycle_from_snapshot(snap)
+        assert lc["patrol"]["steps"][0]["stall_seconds"] == 300
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
 
 class TestStallSecondsApi:
     @staticmethod
@@ -257,6 +291,19 @@ class TestStallSecondsApi:
         }, headers=auth_headers)
         assert up.status_code == 200, up.text
         assert up.json()["data"]["steps"][0]["stall_seconds"] == 600
+
+    def test_update_can_clear_stall_seconds(self, client, auth_headers, sample_script):
+        plan_id = self._create(client, auth_headers, 120)["id"]
+        clr = client.put(f"/api/v1/plans/{plan_id}", json={
+            "steps": [{
+                "step_key": "check_device", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "timeout_seconds": 30, "stall_seconds": None,
+                "retry": 0, "enabled": True,
+            }],
+        }, headers=auth_headers)
+        assert clr.status_code == 200, clr.text
+        assert clr.json()["data"]["steps"][0]["stall_seconds"] is None
 
     def test_negative_stall_seconds_rejected(self, client, auth_headers, sample_script):
         resp = client.post("/api/v1/plans", json={
