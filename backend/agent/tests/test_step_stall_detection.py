@@ -101,21 +101,20 @@ class TestStallDetection:
         # 靠停滞钟死的，不是耗到总时长 —— wall_clock=None 本来就没有总时长
         assert time.monotonic() - started < 10
 
-    def test_steady_output_keeps_it_alive_past_the_stall_window(self):
-        """每 0.5s 一行、共 3s，停滞钟 2s —— 不该死。"""
+    def test_steady_progress_stamps_keep_it_alive_past_the_stall_window(self):
+        """每 0.5s 一戳 PROGRESS、共 3s，停滞钟 2s —— 不该死。"""
         proc = _spawn("""
-            import time
-            for _ in range(6):
-                print("tick", flush=True)
+            import sys, time
+            for i in range(6):
+                sys.stderr.write('PROGRESS {"seq": %d}\n' % i); sys.stderr.flush()
                 time.sleep(0.5)
             print('{"success": true}')
         """)
         outcome = _pump_process(proc, wall_clock=30, stall_seconds=2)
         assert outcome.reason is None, outcome.stderr
-        assert outcome.stdout.count("tick") == 6
 
     def test_output_then_silence_is_killed(self):
-        """先有输出再卡死 —— 停滞钟必须在最后一行之后开始算。"""
+        """先有输出再卡死 —— 停滞钟从最后一行之后开始算。"""
         proc = _spawn("""
             import time
             print("started", flush=True)
@@ -125,16 +124,22 @@ class TestStallDetection:
         assert outcome.reason == "stall"
         assert "started" in outcome.stdout
 
-    def test_stderr_output_also_counts_as_alive(self):
+    def test_plain_output_does_not_count_as_progress(self):
+        """**活锁场景**：持续打印普通日志、但从不打 PROGRESS 戳 —— 必须判死。
+
+        这正是停滞钟存在的意义：fastboot 无限重试、adb install 卡 90% 反复
+        重连打印日志，都会持续输出。若普通输出也算活，停滞钟就形同虚设。
+        """
         proc = _spawn("""
             import sys, time
             for _ in range(6):
-                sys.stderr.write("working\\n"); sys.stderr.flush()
+                sys.stderr.write("retrying...\\n"); sys.stderr.flush()
                 time.sleep(0.5)
+            sys.stderr.write("eventually done\\n")
         """)
         outcome = _pump_process(proc, wall_clock=30, stall_seconds=2)
-        assert outcome.reason is None
-        assert outcome.stderr.count("working") == 6
+        assert outcome.reason == "stall"
+        assert "retrying" in outcome.stderr
 
 
 class TestProgressStamps:
@@ -188,3 +193,17 @@ class TestReaderThreadsDoNotLeak:
         time.sleep(_POLL_INTERVAL_SECONDS)
         leaked = {t.name for t in threading.enumerate()} - before
         assert not {n for n in leaked if n.startswith("step-")}, leaked
+
+
+class TestProgressOnlyOnStderr:
+    def test_stdout_progress_looking_lines_are_not_swallowed(self):
+        """stdout 整份要过 json.loads，是既有结果契约 —— 哪怕内容以 PROGRESS 开头。
+
+        stdout reader 不识别 PROGRESS，全部原样进缓冲。
+        """
+        proc = _spawn("""
+            import json
+            print("PROGRESS " + json.dumps({"seq": 1}))
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
+        assert "PROGRESS" in outcome.stdout
