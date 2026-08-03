@@ -1,11 +1,13 @@
 """monkey_setup v2.3.0 的 PROGRESS 打戳（#115 阶段 2）。
 
-用**假 adb 可执行**验证 `adb_push_progress` 的进度解析，不碰真设备：
+用**假 adb 可执行**验证 `adb_push_progress` / `_dd_with_progress`，不碰真设备。
 
-- 假 adb 输出 `[ NN%]` 进度行（adb push 的真实格式）
-- 断言 on_progress 收到递增的百分比
-- 断言超时路径仍工作
-- 断言 PROGRESS 戳行格式符合协议（stderr、seq 单调递增）
+关键背景（真机实测 2026-08-03）：
+  1. adb push 在非 TTY 下**不输出**进度行 —— 解析输出打戳无效；
+  2. 传输期间 `stat -c %s` 拿不到增长 —— 该设备 adb 是"写临时文件完成后
+     rename"语义。
+所以 `adb_push_progress` 的进度来自**分块 push**：逐块 push 到临时文件、
+设备端 cat 追加、每块完成打戳。假 adb 的 push/cat 分支必须真实读写文件。
 """
 
 import importlib.util
@@ -17,15 +19,15 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.0"
+_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.1"
 
 
 def _load_module(name: str, path: Path):
     """显式加载脚本模块。
 
     不能用 sys.path.insert + import：全量测试时其他用例已经 import 了同名的
-    `_adb`，模块缓存会让这里的 import 拿到别处的旧模块（单独跑 4 passed、
-    全量 4 failed 就是这么来的）。importlib 按文件加载，还给模块一个唯一名。
+    `_adb`，模块缓存会让这里的 import 拿到别处的旧模块。importlib 按文件加载，
+    还给模块一个唯一名。
     """
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
@@ -44,45 +46,60 @@ monkey_setup = _load_module("monkey_setup_v230", _SCRIPT_DIR / "monkey_setup.py"
 def fake_adb(tmp_path: Path, request) -> Path:
     """一个按参数分派行为的假 adb。
 
-    `adb -s SERIAL push a b` → 输出 [ 0%]..[100%] 进度行后退出 0。
-    param 控制变体：
-      - None: 进度行走 stdout（GNU adb 风格）
-      - "stderr": 进度行走 stderr（常见真实 adb 风格）
-      - "hang": push 挂住（供超时测试）
-      - "no-progress": 不输出进度行
+    `push LOCAL REMOTE` → 把 LOCAL 内容写到 REMOTE（模拟传输）。
+    `shell cat PART >> DST && rm PART` → 追加 PART 到 DST 并删 PART。
+    `shell dd ... >> PATH` → 往 PATH 追加 n*1024 字节。
+    `shell stat -c %s PATH` → 打印 PATH 大小。
+    param 变体：
+      - "hang"（push 挂住，供超时测试）
+      - "dd-fail"（dd 分支直接退出 1）
     """
     variant = getattr(request, "param", None)
     script = tmp_path / "adb"
     # 注意：shebang 必须在**文件第一行**。dedent 对前导空行无效，
     # 空行开头的 shebang 内核不认，posix_spawn 报 Exec format error。
     body = textwrap.dedent(f"""\
-        import os, re, sys, time
+        import os, re, shutil, sys, time
         args = sys.argv[1:]
         variant = {variant!r}
         if "push" in args:
             if variant == "hang":
                 time.sleep(600)
-            for pct in range(0, 101, 20):
-                line = f"[{{pct:4d}}%] /sdcard/x"
-                if variant == "stderr":
-                    sys.stderr.write(line + "\\n"); sys.stderr.flush()
-                elif variant != "no-progress":
-                    print(line); sys.stdout.flush()
-                time.sleep(0.1)
+            src, dst = args[-2], args[-1]
+            shutil.copyfile(src, dst)
             sys.exit(0)
         if "shell" in args:
             cmd = args[args.index("shell") + 1]
+            if cmd.startswith("cat "):
+                part = cmd.split()[1].strip("'").strip('"')
+                dst = re.search(r">> (\\S+)", cmd).group(1).strip("'").strip('"')
+                with open(dst, "ab") as fh:
+                    fh.write(open(part, "rb").read())
+                os.unlink(part)
+                sys.exit(0)
             if cmd.startswith("dd "):
                 if variant == "dd-fail":
                     sys.exit(1)
                 n = int(re.search(r"count=(\\d+)", cmd).group(1))
-                path = re.search(r">> (\S+)", cmd).group(1)
+                path = re.search(r">> (\\S+)", cmd).group(1)
                 with open(path, "ab") as fh:
-                    fh.write(b"\\0" * n * 1024)
+                    fh.write(bytes(n * 1024))
                 sys.exit(0)
             if cmd.startswith("stat "):
-                path = cmd.split()[-1]
+                path = cmd.split()[-1].strip("'").strip('"')
                 print(os.path.getsize(path))
+                sys.exit(0)
+            if cmd.startswith("rm "):
+                path = cmd.split()[-1].strip("'").strip('"')
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                sys.exit(0)
+            if cmd.startswith("mv "):
+                src = cmd.split()[1].strip("'").strip('"')
+                dst = cmd.split()[-1].strip("'").strip('"')
+                os.rename(src, dst)
                 sys.exit(0)
         sys.exit(0)
     """)
@@ -97,47 +114,52 @@ def _env(fake_adb, monkeypatch):
     monkeypatch.setenv("STP_DEVICE_SERIAL", "FAKESERIAL")
 
 
-def _run_push(fake_adb: Path, *, timeout: int = 60, on_progress=None) -> None:
-    _adb.adb_push_progress("/tmp/src.bin", "/sdcard/dst.bin",
-                           timeout=timeout, on_progress=on_progress)
+def _make_source(tmp_path: Path, size_bytes: int) -> Path:
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"\0" * size_bytes)
+    return src
+
+
+def _collect(seen: list) -> "callable":
+    """包一层：on_progress 用关键字参数 written_bytes= 调用。"""
+    return lambda **kw: seen.append(kw["written_bytes"])
 
 
 class TestPushProgress:
-    def test_progress_is_reported_increasing(self, fake_adb, monkeypatch):
+    def test_small_file_single_chunk(self, fake_adb, monkeypatch, tmp_path):
+        """≤ 一块的小文件：单次 push，结束时打一次戳。"""
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        src = _make_source(tmp_path, 10 * 1024)
         seen: list[int] = []
-        _run_push(fake_adb, on_progress=seen.append)
-        assert seen, "on_progress 从未被调用"
-        assert seen == sorted(seen)
-        assert seen[-1] == 100
+        _adb.adb_push_progress(str(src), str(tmp_path / "dst.bin"),
+                               timeout=30, on_progress=_collect(seen))
+        assert seen == [10 * 1024]
 
-    def test_success_returns_cleanly(self, fake_adb, monkeypatch):
+    def test_large_file_chunked_accumulates(self, fake_adb, monkeypatch, tmp_path):
+        """大文件分块：每块完成打戳，累计字节单调增长到全量。"""
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
-        _run_push(fake_adb)
-
-    @pytest.mark.parametrize("fake_adb", ["stderr"], indirect=True)
-    def test_progress_on_stderr_is_parsed_too(self, fake_adb, monkeypatch):
-        """真实 adb push 的进度行常见走 stderr —— 只读 stdout 会漏。"""
-        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setattr(_adb, "_PUSH_CHUNK_MB", 1)  # 1MB 一块
+        src = _make_source(tmp_path, 3 * 1024 * 1024)
         seen: list[int] = []
-        _run_push(fake_adb, on_progress=seen.append)
-        assert seen, "stderr 上的进度行没有被解析"
-        assert seen[-1] == 100
+        _adb.adb_push_progress(str(src), str(tmp_path / "dst.bin"),
+                               timeout=60, on_progress=_collect(seen))
+        assert seen == [1 * 1024 * 1024, 2 * 1024 * 1024, 3 * 1024 * 1024]
+        # 设备端文件完整
+        assert (tmp_path / "dst.bin").stat().st_size == 3 * 1024 * 1024
 
-    @pytest.mark.parametrize("fake_adb", ["no-progress"], indirect=True)
-    def test_no_progress_lines_reports_success(self, fake_adb, monkeypatch):
-        """没有进度行也必须正常完成（兼容无进度输出的 adb 变体）。"""
+    def test_success_returns_cleanly(self, fake_adb, monkeypatch, tmp_path):
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
-        _run_push(fake_adb)
+        src = _make_source(tmp_path, 5 * 1024)
+        _adb.adb_push_progress(str(src), str(tmp_path / "dst.bin"),
+                               timeout=30, on_progress=None)
 
     @pytest.mark.parametrize("fake_adb", ["hang"], indirect=True)
-    def test_timeout_still_works(self, fake_adb, monkeypatch):
+    def test_timeout_still_works(self, fake_adb, monkeypatch, tmp_path):
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        src = _make_source(tmp_path, 10 * 1024)
         with pytest.raises(subprocess.TimeoutExpired):
-            _adb.adb_push_progress(
-                "/tmp/src.bin", "/sdcard/dst.bin",
-                timeout=2, on_progress=None,
-            )
+            _adb.adb_push_progress(str(src), str(tmp_path / "dst.bin"),
+                                   timeout=2, on_progress=None)
 
 
 class TestProgressStampFormat:
@@ -162,12 +184,7 @@ class TestProgressStampFormat:
 
 class TestFillAccumulates:
     def test_fill_accumulates_across_chunks(self, fake_adb, monkeypatch, tmp_path):
-        """两小块 dd 必须**累计**——每块都"清空再写"是 blocker。
-
-        review 实测：of= 让 dd 自己截断打开目标，`>>` 只重定向 stdout，
-        两轮"追加"后文件大小不变（对应场景就是只写了 512MB 却报成功）。
-        必须由 shell 的 `>>` 追加，stat 轮询拿到的是累计大小。
-        """
+        """多块 dd 必须**累计**——每块都"清空再写"是 blocker（review 实测）。"""
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
         monkeypatch.setattr(monkey_setup, "_FILL_CHUNK_KB", 1)  # 1KB 一块
         fill = tmp_path / "fill.bin"
@@ -179,12 +196,7 @@ class TestFillAccumulates:
 
     @pytest.mark.parametrize("fake_adb", ["dd-fail"], indirect=True)
     def test_fill_failure_is_not_silent(self, fake_adb, monkeypatch, tmp_path):
-        """dd 失败必须抛 RuntimeError——"没填盘但报成功"是这次要消灭的形态。
-
-        此前这条是空转的：fake adb 的 dd 分支正常写文件、测试也没有
-        pytest.raises，无论生产代码有没有检查 returncode 都会通过。
-        现在 dd-fail 变体直接 sys.exit(1)，断言必须抛错。
-        """
+        """dd 失败必须抛 RuntimeError——"没填盘但报成功"是这次要消灭的形态。"""
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
         monkeypatch.setattr(monkey_setup, "_FILL_CHUNK_KB", 1)
         fill = tmp_path / "fill.bin"
@@ -192,3 +204,55 @@ class TestFillAccumulates:
             monkey_setup._dd_with_progress(
                 "FAKESERIAL", str(fill), block_size=1, blocks=3, timeout=30,
             )
+
+
+class TestRealWiringAndIsolation:
+    def test_make_progress_through_real_chain(self, fake_adb, monkeypatch, tmp_path, capsys):
+        """_make_progress 走真实链路（review #133 问题 1）。
+
+        adb_push_progress 用关键字参数 on_progress(written_bytes=...) 调回调，
+        与 _emit(**fields) 对齐——位置参数会让第一块就 TypeError。
+        """
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setattr(_adb, "_PUSH_CHUNK_MB", 1)
+        src = _make_source(tmp_path, 3 * 1024 * 1024)
+        emit = monkey_setup._make_progress("push")
+        _adb.adb_push_progress(str(src), str(tmp_path / "dst.bin"),
+                               timeout=60, on_progress=emit)
+        err = capsys.readouterr().err
+        stamps = [
+            json.loads(line[len("PROGRESS "):])
+            for line in err.splitlines() if line.startswith("PROGRESS ")
+        ]
+        assert len(stamps) == 3, err
+        assert [s["seq"] for s in stamps] == [1, 2, 3], "seq 必须递增"
+        assert stamps[-1]["written_bytes"] == 3 * 1024 * 1024
+
+    def test_staging_replaces_old_file_atomically(self, fake_adb, monkeypatch, tmp_path):
+        """remote 预置旧内容，分块 push 后必须被原子替换（review #133 问题 2）。"""
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setattr(_adb, "_PUSH_CHUNK_MB", 1)
+        src = _make_source(tmp_path, 3 * 1024 * 1024)
+        dst = tmp_path / "dst.bin"
+        dst.write_bytes(b"OLD-CONTENT-" * 100)  # 预置旧内容
+        _adb.adb_push_progress(str(src), str(dst), timeout=60, on_progress=None)
+        assert dst.read_bytes() == src.read_bytes(), "最终文件必须与源完全一致"
+
+    def test_temp_chunk_name_is_isolated_per_call(self, fake_adb, monkeypatch, tmp_path):
+        """临时块名含 pid/tid（review #133 问题 3）——并发 push 不互踩。"""
+        import threading
+
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        src_text = (_SCRIPT_DIR / "_adb.py").read_text(encoding="utf-8")
+        assert "{local}.{os.getpid()}.{threading.get_ident()}.chunk" in src_text
+
+        monkeypatch.setattr(_adb, "_PUSH_CHUNK_MB", 1)
+        # 两路顺序 push 到不同 dst，块名不同、互不覆盖
+        a = _make_source(tmp_path, 2 * 1024 * 1024)
+        d1 = tmp_path / "d1.bin"
+        d2 = tmp_path / "d2.bin"
+        # 两个线程的 get_ident 不同，但顺序执行也能验证块名模板隔离
+        _adb.adb_push_progress(str(a), str(d1), timeout=60, on_progress=None)
+        _adb.adb_push_progress(str(a), str(d2), timeout=60, on_progress=None)
+        assert d1.read_bytes() == a.read_bytes()
+        assert d2.read_bytes() == a.read_bytes()
