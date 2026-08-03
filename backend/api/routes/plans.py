@@ -167,7 +167,7 @@ class PlanRunTrigger(BaseModel):
         return stripped or None
 
 
-class PlanRunOut(BaseModel):
+class PlanRunSummaryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -696,7 +696,7 @@ def preview_plan_run(
     return ok(preview)
 
 
-@router.post("/plans/{plan_id}/run", response_model=ApiResponse[PlanRunOut])
+@router.post("/plans/{plan_id}/run", response_model=ApiResponse[PlanRunSummaryOut])
 def run_plan(
     plan_id: int,
     payload: PlanRunTrigger,
@@ -732,7 +732,7 @@ def run_plan(
         plan_id, pr.id, len(payload.device_ids),
         current_user.username if current_user else "api",
     )
-    return ok(PlanRunOut(
+    return ok(PlanRunSummaryOut(
         id=pr.id, plan_id=pr.plan_id, status=pr.status,
         failure_threshold=pr.failure_threshold, run_type=pr.run_type,
         triggered_by=pr.triggered_by, started_at=pr.started_at,

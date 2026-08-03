@@ -1,4 +1,4 @@
-"""ADR-0021 — PlanRun.run_context.precheck schema + PlanRunOut wire format."""
+"""ADR-0021 — PlanRun.run_context.precheck schema + PlanRunDetailOut wire format."""
 
 from __future__ import annotations
 
@@ -90,7 +90,7 @@ class TestPrecheckSchema:
 
 
 # ---------------------------------------------------------------------------
-# PlanRunOut returns run_context.precheck verbatim
+# PlanRunDetailOut returns run_context.precheck verbatim
 # ---------------------------------------------------------------------------
 
 
@@ -109,7 +109,7 @@ def _create_minimal_plan(db_session) -> Plan:
     return plan
 
 
-class TestPlanRunOutCarriesRunContext:
+class TestPlanRunDetailOutCarriesRunContext:
     def test_get_plan_run_returns_run_context_precheck(
         self, client, auth_headers, db_session
     ):
