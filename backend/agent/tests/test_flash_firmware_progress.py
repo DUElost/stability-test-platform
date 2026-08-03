@@ -91,8 +91,10 @@ class TestPhaseStamps:
 
     @pytest.mark.parametrize("fake_flash_tool", ["silent"], indirect=True)
     def test_silent_flash_returns_cleanly(self, fake_flash_tool):
-        """无输出的 flash_tool：正常运行结束，不抛错。"""
-        assert _run(fake_flash_tool) == ""
+        """无输出的 flash_tool：正常运行结束，返回 (输出, rc=0)。"""
+        out, rc = _run(fake_flash_tool)
+        assert out == ""
+        assert rc == 0
 
     @pytest.mark.parametrize("fake_flash_tool", ["hang"], indirect=True)
     def test_timeout_kills_flash_tool(self, fake_flash_tool):

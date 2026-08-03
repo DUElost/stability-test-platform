@@ -105,7 +105,7 @@ def _run_flash_tool_with_progress(
     timeout: int,
     on_stage: "callable",
     on_percent: "callable",
-) -> str:
+) -> "tuple[str, int]":
     """Popen + 双 reader 线程跑 flash_tool，逐行喂给阶段/进度解析。
 
     不能用 subprocess.run(capture_output)：flash_tool 可能运行几十分钟，
@@ -176,7 +176,7 @@ def _run_flash_tool_with_progress(
     finally:
         for th in threads:
             th.join(timeout=2)
-    return "".join(collected)
+    return "".join(collected), proc.returncode
 
 
 def _wait_device_back(
@@ -442,7 +442,7 @@ def main() -> None:
         _emit_progress(seq, stage="reboot", target=args.get("reboot_target") or "bootloader")
 
     try:
-        output = _run_flash_tool_with_progress(
+        output, flash_rc = _run_flash_tool_with_progress(
             cmd,
             cwd=os.path.dirname(flash_tool_exe),
             env=subprocess_env,
@@ -487,7 +487,7 @@ def main() -> None:
     metrics = {
         "duration_seconds": duration,
         "lock_wait_seconds": lock_wait,
-        "exit_code": proc.returncode,
+        "exit_code": flash_rc,
         "command_argv": cmd,
         "da_file": da_file,
         "scatter_file": scatter_file,
@@ -497,9 +497,9 @@ def main() -> None:
         "stderr_tail": stderr[-500:],
     }
 
-    if proc.returncode != 0:
+    if flash_rc != 0:
         _output(False,
-                error_message=f"flash_tool exited {proc.returncode}: {(stderr or stdout)[:1500]}",
+                error_message=f"flash_tool exited {flash_rc}: {(stderr or stdout)[:1500]}",
                 metrics=metrics)
         return
 
