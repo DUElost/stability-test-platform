@@ -38,7 +38,7 @@ from backend.api.schemas.plan_run import (
     PlanRunAbortIn,
     PlanRunDevicesOut,
     PlanRunEventsOut,
-    PlanRunOut,
+    PlanRunDetailOut,
     PlanRunTimelineOut,
     StageOut,
     StageStepOut,
@@ -200,8 +200,8 @@ def _plan_run_capabilities(pr: PlanRun) -> dict:
     }
 
 
-def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_name: str | None = None) -> PlanRunOut:
-    return PlanRunOut(
+def _plan_run_out(pr: PlanRun, jobs: list[JobInstanceOut] | None = None, plan_name: str | None = None) -> PlanRunDetailOut:
+    return PlanRunDetailOut(
         id=pr.id,
         plan_id=pr.plan_id,
         status=pr.status,
@@ -255,7 +255,7 @@ def _job_out(job: JobInstance, traces: list, device_serial: str | None = None) -
 
 # ── Endpoints ────────────────────────────────────────────────────────────
 
-@router.get("/plan-runs", response_model=ApiResponse[list[PlanRunOut]])
+@router.get("/plan-runs", response_model=ApiResponse[list[PlanRunDetailOut]])
 def list_plan_runs(
     skip: int = 0,
     limit: int = 50,
@@ -280,7 +280,7 @@ def list_plan_runs(
     return ok([_plan_run_out(r, plan_name=plan_names.get(r.plan_id)) for r in runs])
 
 
-@router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunOut])
+@router.get("/plan-runs/{run_id}", response_model=ApiResponse[PlanRunDetailOut])
 def get_plan_run(
     run_id: int,
     db: Session = Depends(get_db),

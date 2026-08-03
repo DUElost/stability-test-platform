@@ -8,6 +8,9 @@ BaseModel 内联其中,而 backend/api/schemas/ 这个专门的包基本闲置�
 消歧,于是搬家后 key 从 `backend__api__routes__plan_runs__PlanRunOut` 变成
 `backend__api__schemas__plan_run__PlanRunOut`。
 
+#82 已解决:本模块的详情版改名 `PlanRunDetailOut`,`routes/plans.py` 的摘要版
+改名 `PlanRunSummaryOut`,component key 不再依赖模块路径。
+
 对本仓无影响 —— 前端类型是手写维护的 `frontend/src/utils/api/types.ts`
 (见 CLAUDE.md「前端类型权威源」),不从 OpenAPI 生成。
 
@@ -59,7 +62,7 @@ class JobInstanceOut(BaseModel):
     step_traces: list[StepTraceOut] = []
 
 
-class PlanRunOut(BaseModel):
+class PlanRunDetailOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -336,7 +339,7 @@ class WatcherSummaryOut(BaseModel):
 __all__ = [
     "StepTraceOut",
     "JobInstanceOut",
-    "PlanRunOut",
+    "PlanRunDetailOut",
     "PlanRunAbortIn",
     "JobManualActionIn",
     "JobManualActionOut",

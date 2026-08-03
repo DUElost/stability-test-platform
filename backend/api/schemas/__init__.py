@@ -28,7 +28,7 @@ from backend.api.schemas.jira_run import JiraRunOut
 from backend.api.schemas.plan_run import (
     StepTraceOut,
     JobInstanceOut,
-    PlanRunOut,
+    PlanRunDetailOut,
     PlanRunAbortIn,
     JobManualActionIn,
     JobManualActionOut,
@@ -65,7 +65,7 @@ from backend.api.schemas.plan_run_precheck import (
 __all__ = [
     "StepTraceOut",
     "JobInstanceOut",
-    "PlanRunOut",
+    "PlanRunDetailOut",
     "PlanRunAbortIn",
     "JobManualActionIn",
     "JobManualActionOut",
