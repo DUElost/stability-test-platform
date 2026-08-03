@@ -150,10 +150,6 @@ def _pump_lines(
     return collected
 
 
-# 分块 push 的块大小。见 adb_push_progress 的 docstring。
-_PUSH_CHUNK_MB = 64
-
-
 def adb_push_progress(
     local: str,
     remote: str,
@@ -162,59 +158,46 @@ def adb_push_progress(
 ) -> None:
     """adb push，带进度回调（#115 阶段 2）。
 
-    **真机实测（2026-08-03）**，两条路都不可靠：
-      1. adb push 在非 TTY 下**不输出** `[ NN%]` 进度行 —— 解析输出打戳无效；
-      2. 传输期间 `shell stat -c %s <remote>` 拿不到增长 —— 该设备 adb 是
-         "写临时文件完成后 rename" 语义，文件只在结束时出现。
+    阻塞 subprocess.run(capture_output) 会吞掉 adb push 的 `[ NN%]` 进度行 ——
+    而停滞判据是「只有 PROGRESS 戳才算活」，传输期间的戳必须来自这里。
 
-    所以进度改为**分块 push**：本地把文件切成 _PUSH_CHUNK_MB 的块，逐块
-    `adb push` 到临时文件、设备端 `cat` 追加，**每块完成打一次戳**。
-    块完成时间 ~10-20s（64MB USB），远小于 stall_seconds 的典型值。
-
-    小文件（≤ 一块）单次 push + 结束时打一次戳，不走分块路径。
+    实现：Popen + 双 reader 线程（stdout 与 stderr 都读 —— 真实 adb 的进度
+    行可能走任一流，常见是 stderr 带 \r），主线程轮询超时；超时杀整个进程组
+    并 wait 回收。两条流的进度行都解析，百分比变化回调 on_progress(pct)。
     """
-    total = os.path.getsize(local)
-    chunk_bytes = _PUSH_CHUNK_MB * 1024 * 1024
-    if total <= chunk_bytes:
-        adb_push(local, remote, timeout=timeout)
-        if on_progress is not None:
-            on_progress(total)
-        return
+    proc = subprocess.Popen(
+        [adb_path(), "-s", device_serial(), "push", local, remote],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        **_popen_kwargs(),
+    )
+    last_pct = -1
+    collected: list[str] = []
 
-    part = remote + ".part"
-    written = 0
-    with open(local, "rb") as fh:
-        while True:
-            chunk = fh.read(chunk_bytes)
-            if not chunk:
-                break
-            tmp_chunk = f"{local}.chunk"
-            with open(tmp_chunk, "wb") as tf:
-                tf.write(chunk)
-            try:
-                adb_push(tmp_chunk, part, timeout=timeout)
-                result = adb_shell_quiet(
-                    f"cat {_quote(part)} >> {_quote(remote)} && rm {_quote(part)}",
-                    timeout=60,
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        f"adb push append failed rc={result.returncode}: "
-                        f"{remote} ({result.stderr[:200]})"
-                    )
-            finally:
-                try:
-                    os.unlink(tmp_chunk)
-                except OSError:
-                    pass
-            written += len(chunk)
+    def _on_line(line: str) -> None:
+        nonlocal last_pct
+        m = _PUSH_PROGRESS_RE.search(line)
+        if not m:
+            return
+        pct = int(m.group(1))
+        if pct != last_pct:
+            last_pct = pct
             if on_progress is not None:
-                on_progress(written)
+                on_progress(pct)
 
-
-def _quote(path: str) -> str:
-    """POSIX shell 单引号转义，用于 adb shell 命令拼接。"""
-    return "'" + path.replace("'", "'\\''") + "'"
+    lines = _pump_lines(proc, timeout, on_line=_on_line)
+    collected.extend(lines)
+    if proc.poll() is None:
+        _terminate(proc)
+        raise subprocess.TimeoutExpired(
+            [str(proc.args)], timeout, output="".join(collected)
+        )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"adb push failed rc={proc.returncode}: {local} -> {remote} "
+            f"stderr={' '.join(collected)[-500:]}"
+        )
 
 
 def _progress_stamp(seq: int, **fields) -> str:
