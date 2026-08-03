@@ -356,6 +356,10 @@ def _mark_pending_timeout(db, job: JobInstance, now: datetime, reason: str) -> b
             status_reason=reason,
             ended_at=now,
             updated_at=now,
+            # #116: 本路径不经 JobStateMachine.transition，直接 SQL 写终态。
+            # PENDING 阶段 execution_state 理论恒为 NULL，这里防御性保持一致
+            # 的终态不变量：终态作业不留运行子状态。
+            execution_state=None,
         )
         .returning(JobInstance.id)
     ).first()

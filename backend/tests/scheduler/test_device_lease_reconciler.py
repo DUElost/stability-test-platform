@@ -227,6 +227,40 @@ async def test_reconciler_unknown_grace_releases_and_fails():
         _cleanup(host_id, device_id)
 
 
+@pytest.mark.asyncio(loop_scope="module")
+async def test_reconciler_unknown_grace_clears_execution_state():
+    """#116: UNKNOWN→FAILED 终态转换必须清 execution_state —— 残留的
+    WAITING_BARRIER 会污染不按 status 过滤的并发统计。"""
+    suffix = uuid4().hex[:8]
+    host_id = f"rc-host-c-{suffix}"
+    device_id = int(suffix[:8], 16) % 10_000_000
+    job_id = device_id + 1
+
+    _seed(host_id, device_id, job_id, JobStatus.UNKNOWN.value)
+    db = SessionLocal()
+    try:
+        job = db.get(JobInstance, job_id)
+        job.ended_at = datetime.now(timezone.utc) - timedelta(seconds=600)
+        job.execution_state = "WAITING_BARRIER"
+        db.commit()
+    finally:
+        db.close()
+    _add_expired_lease(device_id, job_id, host_id, status="ACTIVE")
+
+    try:
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as db:
+            unknown, failed, terminal = await _reconcile_expired_leases(db)
+            await db.commit()
+
+            assert failed == 1
+            job = await db.get(JobInstance, job_id)
+            assert job.status == JobStatus.FAILED.value
+            assert job.execution_state is None
+    finally:
+        _cleanup(host_id, device_id)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Reconciler D5: terminal job with lingering ACTIVE lease
 # ══════════════════════════════════════════════════════════════════════════════

@@ -114,7 +114,10 @@ class TestBatchRenewalSignalIngestion:
             # (coordinator owns that clock).
             assert job.last_execution_heartbeat_at is None
             assert job.last_progress_at is not None
-            assert job.last_progress_at.isoformat().startswith("2026-07-16T08:00:00")
+            # 比较时刻而非字符串前缀：timestamptz 按会话时区渲染（本机
+            # Asia/Shanghai 取回 16:00:00+08:00），aware datetime 相等比较
+            # 天然跨时区正确（#104）。
+            assert job.last_progress_at == datetime.fromisoformat(progress_ts)
         finally:
             db.close()
 
@@ -141,7 +144,8 @@ class TestBatchRenewalSignalIngestion:
             job = db.get(JobInstance, signal_fixture["job"].id)
             assert job.execution_state == "EXECUTING_STEP"
             assert job.last_execution_heartbeat_at is not None
-            assert job.updated_at.replace(tzinfo=timezone.utc) == stale
+            # 同上：直接比较时刻，不做字符串/时区表示层面的换算（#104）。
+            assert job.updated_at == stale
         finally:
             db.close()
 

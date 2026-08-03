@@ -39,6 +39,14 @@ class JobStateMachine:
             )
         job.status = new_status.value
         job.status_reason = reason
+        # #116: execution_state 只描述非终态运行子状态（WAITING_* /
+        # EXECUTING_STEP / PATROL_SLEEP）。进入终态时统一清理——否则
+        # FAILED/ABORTED 作业残留的 EXECUTING_STEP/WAITING_BARRIER 会污染
+        # 不按 status 过滤的并发/可观测性统计（2026-08-01 PlanRun 112 实测：
+        # FAILED EXECUTING_STEP 57 行）。统一收口在此，覆盖 /complete 与
+        # reconciler 的全部终态转换路径。
+        if new_status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
+            job.execution_state = None
         job.updated_at = datetime.now(timezone.utc)
 
 

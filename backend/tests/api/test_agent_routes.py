@@ -359,6 +359,48 @@ async def test_complete_job_maps_finished_to_completed():
 
 
 @pytest.mark.asyncio
+async def test_complete_job_clears_execution_state():
+    """#116: 终态写入必须清 execution_state —— 否则 FAILED/ABORTED 残留的
+    EXECUTING_STEP/WAITING_BARRIER 会污染不按 status 过滤的并发统计。"""
+    seed = _seed_job(status=JobStatus.RUNNING.value)
+    token = _setup_lease(seed)
+    try:
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            job.execution_state = "EXECUTING_STEP"
+            job.last_execution_heartbeat_at = datetime.now(timezone.utc)
+            db.commit()
+        finally:
+            db.close()
+
+        await async_engine.dispose()
+        async with AsyncSessionLocal() as async_db:
+            result = await complete_job(
+                job_id=seed["job_id"],
+                payload=_RunCompleteIn(
+                    update={"status": "FAILED", "exit_code": 1},
+                    fencing_token=token,
+                ),
+                db=async_db,
+                _=None,
+            )
+        assert result.error is None
+        assert result.data["status"] == JobStatus.FAILED.value
+
+        db = SessionLocal()
+        try:
+            job = db.get(JobInstance, seed["job_id"])
+            assert job is not None
+            assert job.status == JobStatus.FAILED.value
+            assert job.execution_state is None
+        finally:
+            db.close()
+    finally:
+        _cleanup_seed(seed)
+
+
+@pytest.mark.asyncio
 async def test_complete_job_persists_run_complete_snapshot():
     seed = _seed_job(status=JobStatus.RUNNING.value)
     token = _setup_lease(seed)
