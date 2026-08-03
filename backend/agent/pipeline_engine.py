@@ -137,6 +137,10 @@ _POLL_INTERVAL_SECONDS = 1.0
 # EOF，届时 reader 会永久阻塞在 readline()，绝不能让它挂住主线程。
 _READER_JOIN_TIMEOUT_SECONDS = 5.0
 
+# 单流捕获上限：超过后丢弃后续输出（仍继续读取避免管道阻塞），防止异常/
+# 失控输出把进程内存打爆（#123：MagicMock 流导致 reader 无限 append）。
+_MAX_CAPTURED_CHARS = 8 * 1024 * 1024
+
 
 def _resolve_step_stall_seconds(step: Dict[str, Any]) -> Optional[float]:
     """How long a step may make no progress before being killed, or ``None``.
@@ -207,23 +211,51 @@ def _pump_process(
     """
     stdout_lines: List[str] = []
     stderr_lines: List[str] = []
+    # 单流已捕获字符数 / 是否已告警——分别只被对应 reader 线程写。
+    sink_sizes = [0, 0]
+    truncated = [False, False]
     # Written by reader threads, read by the main thread while the child runs.
     # Safe because it is a *single* attribute store (atomic under CPython) —
     # keep it that way, a read-modify-write here would need a lock.
     state = {"last_progress": time.monotonic()}
 
-    def _reader(stream, sink: List[str]) -> None:
+    def _reader(
+        stream,
+        sink: List[str],
+        sink_index: int,
+        stream_name: str,
+        *,
+        progress_stream: bool,
+    ) -> None:
         try:
-            for line in iter(stream.readline, ""):
-                state["last_progress"] = time.monotonic()
-                if line.startswith(_PROGRESS_PREFIX):
+            while True:
+                line = stream.readline()
+                # 类型/EOF 护栏：非 str（如误配的 MagicMock 流）或空串即结束，
+                # 避免 reader 无限循环把 sink 打到无界（#123）。
+                if not isinstance(line, str) or not line:
+                    break
+                if progress_stream and line.startswith(_PROGRESS_PREFIX):
+                    # 只有 PROGRESS 行刷停滞钟 —— 普通输出不算"推进"。
+                    # 否则活锁(fastboot 无限重试、adb install 卡 90% 反复重连
+                    # 打印日志)会因持续输出而永远不被判停滞,停滞钟就形同虚设。
+                    state["last_progress"] = time.monotonic()
                     if on_progress is not None:
                         try:
                             on_progress()
                         except Exception:
                             logger.debug("progress_callback_error", exc_info=True)
                     continue  # 不入缓冲
+                if sink_sizes[sink_index] >= _MAX_CAPTURED_CHARS:
+                    if not truncated[sink_index]:
+                        truncated[sink_index] = True
+                        logger.warning(
+                            "step_output_capture_limit_reached stream=%s — 已捕获 %d 字符，丢弃后续输出",
+                            stream_name,
+                            _MAX_CAPTURED_CHARS,
+                        )
+                    continue
                 sink.append(line)
+                sink_sizes[sink_index] += len(line)
         except (ValueError, OSError):
             pass  # 管道在 terminate 时被关闭
         finally:
@@ -232,11 +264,23 @@ def _pump_process(
             except Exception:
                 pass
 
+    # stdout 完全不识别 PROGRESS：stdout 整份要过 json.loads 是既有结果契约，
+    # 任何出现在 stdout 的内容(哪怕是 PROGRESS 开头)都必须原样保留。
     threads = [
-        threading.Thread(target=_reader, args=(proc.stdout, stdout_lines),
-                         daemon=True, name="step-stdout"),
-        threading.Thread(target=_reader, args=(proc.stderr, stderr_lines),
-                         daemon=True, name="step-stderr"),
+        threading.Thread(
+            target=_reader,
+            args=(proc.stdout, stdout_lines, 0, "step-stdout"),
+            kwargs={"progress_stream": False},
+            daemon=True,
+            name="step-stdout",
+        ),
+        threading.Thread(
+            target=_reader,
+            args=(proc.stderr, stderr_lines, 1, "step-stderr"),
+            kwargs={"progress_stream": True},
+            daemon=True,
+            name="step-stderr",
+        ),
     ]
     for th in threads:
         th.start()

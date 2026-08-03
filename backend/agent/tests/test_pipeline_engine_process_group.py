@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import io
 import signal
 import subprocess
 from unittest.mock import MagicMock, patch
@@ -188,11 +189,10 @@ def test_run_script_action_timeout_uses_terminate_process_tree(monkeypatch, tmp_
     engine._local_db = None    # _run_script_action 注入 STP_AGENT_STATE_DB 时探测
 
     proc = MagicMock()
-    # communicate 第一次抛超时,第二次返回 ("", "")
-    proc.communicate.side_effect = [
-        subprocess.TimeoutExpired(cmd="x", timeout=1),
-        ("", ""),
-    ]
+    # _pump_process 的 reader 线程逐行读取 stdout/stderr；必须给空流，
+    # 否则 MagicMock.readline() 永不返回 ""，reader 无限循环把内存打爆（#123）。
+    proc.stdout = io.StringIO("")
+    proc.stderr = io.StringIO("")
     proc.returncode = -9
     proc.pid = 11111
     proc.poll.return_value = None
