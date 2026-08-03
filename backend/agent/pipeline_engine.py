@@ -49,8 +49,25 @@ _IS_WINDOWS = sys.platform == "win32"
 _SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
+# ── 两层钟（#115 阶段 1）─────────────────────────────────────────────
+#
+# 步骤墙钟(_resolve_step_wall_clock)：总时长上限，安全网。
+# 停滞钟(_resolve_step_stall_seconds)：多久没有推进算卡死，**缺省关闭**。
+#
+# 为什么停滞钟必须默认关：全部 17 个脚本的 adb_shell / adb_push /
+# subprocess.run 都用 capture_output=True，子进程输出被脚本吞掉、从不转发 ——
+# 实测 14 个脚本从头到尾零输出，另 3 个的唯一 print 就是末尾的 output_result。
+# 也就是说「任意输出=活」这条判据在当前脚本集上等价于「全体判死」：配一个
+# 120s 停滞钟会把 push(预算 600s)、fill(预算 300s) 连同将来的刷机步骤
+# 一起在 120s 杀掉，183 台同时。所以停滞钟只能**逐个 PlanStep 显式打开**，
+# 且该步骤的脚本必须先接入 PROGRESS 打戳(阶段 2)。
+#
+# 连带结论：`timeout_seconds=0`(不限) 的开门条件是**按步骤**的 ——
+# 只有「该步骤已接入打戳 且 显式开了停滞钟」时它才安全。没开停滞钟的步骤
+# 配 0，依然等于"卡死永远占住一个 permit"。
+
 # 步骤墙钟。这是**安全网**，不是完成判据：真正判断"还在不在推进"要靠进度信号
-# （#115），在那之前它是唯一能回收卡死步骤的机制。
+# （#115 阶段 2 的 PROGRESS 戳），在那之前它是唯一能回收卡死步骤的机制。
 #
 # 缺省**保持 300s 不变**。不把它抬成 12h 是有意的：那会让每个从未配过
 # timeout_seconds 的步骤，在卡死后的回收时间从 5 分钟变成 12 小时 —— 直接加重
@@ -104,6 +121,196 @@ def _resolve_step_wall_clock(step: Dict[str, Any]) -> Optional[float]:
         )
         return float(_DEFAULT_STEP_WALL_CLOCK_SECONDS)
     return value
+
+
+# 进度戳前缀（#115 阶段 2 协议）。脚本在长耗时操作期间自愿往 **stderr** 打
+#     PROGRESS {"seq": N, ...}
+# stdout 不能用 —— 它整份要过 json.loads，是既有结果契约。
+# seq 单调递增是唯一判据；语义字段仅供人读诊断。重复打同一句话时 seq 不涨，
+# 会被判停滞 —— 这是对的：那证明的是"进程还活着"，不是"还在推进"。
+_PROGRESS_PREFIX = "PROGRESS "
+
+# 主线程轮询间隔。停滞检测的实际精度因此是 stall_seconds ± _POLL_INTERVAL。
+_POLL_INTERVAL_SECONDS = 1.0
+
+# reader 线程 join 的上限。见 _pump_process：管道可能因孙进程持有写端而不
+# EOF，届时 reader 会永久阻塞在 readline()，绝不能让它挂住主线程。
+_READER_JOIN_TIMEOUT_SECONDS = 5.0
+
+# 单流捕获上限：超过后丢弃后续输出（仍继续读取避免管道阻塞），防止异常/
+# 失控输出把进程内存打爆（#123：MagicMock 流导致 reader 无限 append）。
+_MAX_CAPTURED_CHARS = 8 * 1024 * 1024
+
+
+def _resolve_step_stall_seconds(step: Dict[str, Any]) -> Optional[float]:
+    """How long a step may make no progress before being killed, or ``None``.
+
+    Precedence: PlanStep ``stall_seconds`` → ``STP_STEP_STALL_SECONDS`` → ``0``.
+    ``0`` (the default) means **disabled**, and that default is load-bearing:
+    every script in the catalog swallows its children's output
+    (``capture_output=True``), so "any output means alive" would kill all of
+    them. Enable per PlanStep, and only once that step's script emits
+    ``PROGRESS`` stamps.
+
+    Negatives fall back to disabled rather than to some positive value — a
+    negative here is a typo, and inventing a stall budget for a step nobody
+    opted in would kill healthy work.
+    """
+    raw = step.get("stall_seconds")
+    if raw is None:
+        env_raw = (os.getenv("STP_STEP_STALL_SECONDS") or "").strip()
+        raw = env_raw if env_raw else 0
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("invalid_step_stall_seconds raw=%r — stall detection disabled", raw)
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+class _PumpOutcome:
+    """Result of :func:`_pump_process` — why it stopped, and what it collected."""
+
+    __slots__ = ("stdout", "stderr", "reason", "elapsed")
+
+    def __init__(self, stdout: str, stderr: str, reason: Optional[str], elapsed: float):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.reason = reason  # None | "wall_clock" | "stall"
+        self.elapsed = elapsed
+
+
+def _pump_process(
+    proc: subprocess.Popen,
+    *,
+    wall_clock: Optional[float],
+    stall_seconds: Optional[float],
+    on_progress: Optional[Callable[[], None]] = None,
+) -> _PumpOutcome:
+    """Drain both pipes on reader threads while the main thread watches two clocks.
+
+    Why threads and not ``communicate()``: ``communicate`` only returns when the
+    child exits, so nothing can observe liveness while it runs. Why not
+    ``selectors``: it does not support pipes on Windows, and this engine still
+    ships a Windows branch (``_IS_WINDOWS``). Why not sequential ``readline()``
+    on the two pipes: whichever one you are not reading fills its 64 KiB kernel
+    buffer, the child blocks in ``write``, and both sides wait forever — which is
+    precisely the deadlock ``communicate()`` exists to avoid.
+
+    ``PROGRESS`` lines are recognised, used to reset the stall clock, and then
+    **dropped**: a 12 h step stamping every 5 s would otherwise push the real
+    error out of the 64 KiB display window.
+
+    The readers are daemons and are joined with a timeout because the pipe is
+    not guaranteed to reach EOF when the child dies — scripts shell out to
+    ``adb``, whose persistent server daemon can inherit the write end and hold
+    it open. A reader stuck in ``readline()`` must never block the step from
+    returning; losing a few trailing lines is the cheaper failure.
+    """
+    stdout_lines: List[str] = []
+    stderr_lines: List[str] = []
+    # 单流已捕获字符数 / 是否已告警——分别只被对应 reader 线程写。
+    sink_sizes = [0, 0]
+    truncated = [False, False]
+    # Written by reader threads, read by the main thread while the child runs.
+    # Safe because it is a *single* attribute store (atomic under CPython) —
+    # keep it that way, a read-modify-write here would need a lock.
+    state = {"last_progress": time.monotonic()}
+
+    def _reader(
+        stream,
+        sink: List[str],
+        sink_index: int,
+        stream_name: str,
+        *,
+        progress_stream: bool,
+    ) -> None:
+        try:
+            while True:
+                line = stream.readline()
+                # 类型/EOF 护栏：非 str（如误配的 MagicMock 流）或空串即结束，
+                # 避免 reader 无限循环把 sink 打到无界（#123）。
+                if not isinstance(line, str) or not line:
+                    break
+                if progress_stream and line.startswith(_PROGRESS_PREFIX):
+                    # 只有 PROGRESS 行刷停滞钟 —— 普通输出不算"推进"。
+                    # 否则活锁(fastboot 无限重试、adb install 卡 90% 反复重连
+                    # 打印日志)会因持续输出而永远不被判停滞,停滞钟就形同虚设。
+                    state["last_progress"] = time.monotonic()
+                    if on_progress is not None:
+                        try:
+                            on_progress()
+                        except Exception:
+                            logger.debug("progress_callback_error", exc_info=True)
+                    continue  # 不入缓冲
+                if sink_sizes[sink_index] >= _MAX_CAPTURED_CHARS:
+                    if not truncated[sink_index]:
+                        truncated[sink_index] = True
+                        logger.warning(
+                            "step_output_capture_limit_reached stream=%s — 已捕获 %d 字符，丢弃后续输出",
+                            stream_name,
+                            _MAX_CAPTURED_CHARS,
+                        )
+                    continue
+                sink.append(line)
+                sink_sizes[sink_index] += len(line)
+        except (ValueError, OSError):
+            pass  # 管道在 terminate 时被关闭
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    # stdout 完全不识别 PROGRESS：stdout 整份要过 json.loads 是既有结果契约，
+    # 任何出现在 stdout 的内容(哪怕是 PROGRESS 开头)都必须原样保留。
+    threads = [
+        threading.Thread(
+            target=_reader,
+            args=(proc.stdout, stdout_lines, 0, "step-stdout"),
+            kwargs={"progress_stream": False},
+            daemon=True,
+            name="step-stdout",
+        ),
+        threading.Thread(
+            target=_reader,
+            args=(proc.stderr, stderr_lines, 1, "step-stderr"),
+            kwargs={"progress_stream": True},
+            daemon=True,
+            name="step-stderr",
+        ),
+    ]
+    for th in threads:
+        th.start()
+
+    started = time.monotonic()
+    reason: Optional[str] = None
+    while proc.poll() is None:
+        now = time.monotonic()
+        if wall_clock is not None and (now - started) >= wall_clock:
+            reason = "wall_clock"
+            break
+        if stall_seconds is not None and (now - state["last_progress"]) >= stall_seconds:
+            reason = "stall"
+            break
+        time.sleep(_POLL_INTERVAL_SECONDS)
+
+    if reason is not None:
+        _terminate_process_tree(proc)
+    try:
+        proc.wait(timeout=_READER_JOIN_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        logger.warning("step_process_did_not_exit pid=%s", proc.pid)
+    for th in threads:
+        th.join(timeout=_READER_JOIN_TIMEOUT_SECONDS)
+        if th.is_alive():
+            logger.warning("step_reader_stuck thread=%s — 放弃它，已收到的行照常返回", th.name)
+
+    return _PumpOutcome(
+        "".join(stdout_lines), "".join(stderr_lines), reason, time.monotonic() - started,
+    )
 
 
 def _popen_isolation_kwargs() -> Dict[str, Any]:
@@ -931,6 +1138,7 @@ class PipelineEngine:
             pass
 
         timeout_seconds = _resolve_step_wall_clock(step)
+        stall_seconds = _resolve_step_stall_seconds(step)
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -946,20 +1154,32 @@ class PipelineEngine:
                 allow_after_cancel=(ctx.phase == "teardown"),
             )
             try:
-                try:
-                    stdout, stderr = proc.communicate(timeout=timeout_seconds)
-                except subprocess.TimeoutExpired:
-                    _terminate_process_tree(proc)
-                    stdout, stderr = proc.communicate()
+                outcome = _pump_process(
+                    proc,
+                    wall_clock=timeout_seconds,
+                    stall_seconds=stall_seconds,
+                    # 每收到一个 PROGRESS 戳就刷 last_progress_at，供 #117 的
+                    # progress-aware barrier 判断同 host 的 peer 是否还在推进。
+                    on_progress=lambda: self._update_execution_state("EXECUTING_STEP"),
+                )
+                if outcome.reason is not None:
                     combined_output = "\n".join(
-                        part for part in ((stdout or "").strip(), (stderr or "").strip()) if part
+                        part for part in (outcome.stdout.strip(), outcome.stderr.strip()) if part
                     )
+                    if outcome.reason == "stall":
+                        message = (
+                            f"script stalled after {stall_seconds:g}s of no progress "
+                            f"(elapsed {outcome.elapsed:.0f}s; step-level stall_seconds)"
+                        )
+                    else:
+                        message = f"script timeout after {timeout_seconds:g}s"
                     return StepResult(
                         success=False,
                         exit_code=124,
-                        error_message="script timeout",
+                        error_message=message,
                         output=_truncate_step_output(combined_output),
                     )
+                stdout, stderr = outcome.stdout, outcome.stderr
             finally:
                 self._clear_active_process(proc)
         except Exception as exc:
