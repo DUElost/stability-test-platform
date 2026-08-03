@@ -116,7 +116,10 @@ def _running_liveness_anchor(job, coord_hb: dict) -> tuple["datetime | None", in
       - Anything else (NULL execution_state — legacy agents, or signals not
         yet reported) → legacy updated_at clock, byte-for-byte the old rule.
     """
-    graded_timeout = running_heartbeat_timeout_seconds(job)
+    graded_timeout = running_heartbeat_timeout_seconds(
+        job,
+        patrol_stall_multiplier=PATROL_STALL_MULTIPLIER,
+    )
 
     if job.execution_state == "EXECUTING_STEP":
         exec_hb = _aware_dt(job.last_execution_heartbeat_at)
@@ -153,6 +156,15 @@ def _aware_dt(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _patrol_stall_anchor(job: JobInstance, base_anchor: datetime | None) -> datetime | None:
+    next_retry_at = _aware_dt(getattr(job, "next_retry_at", None))
+    if next_retry_at is not None and (
+        base_anchor is None or next_retry_at > base_anchor
+    ):
+        return next_retry_at
+    return base_anchor
 
 
 def _pg_json_path(base, *keys: str):
@@ -238,6 +250,10 @@ def _collect_patrol_stall_candidates_py(db, now: datetime) -> list[tuple[JobInst
         if anchor is None:
             continue
 
+        anchor = _patrol_stall_anchor(job, anchor)
+        if anchor is None:
+            continue
+
         threshold = interval * PATROL_STALL_MULTIPLIER
         age = (now - anchor).total_seconds()
         overdue = age - threshold
@@ -277,9 +293,19 @@ def _build_patrol_stall_candidates_stmt(now: datetime):
         (init_done.c.completed_steps >= init_step_count, init_done.c.init_completed_at),
         else_=None,
     )
+    effective_anchor_expr = case(
+        (
+            and_(
+                JobInstance.next_retry_at.isnot(None),
+                or_(anchor_expr.is_(None), JobInstance.next_retry_at > anchor_expr),
+            ),
+            JobInstance.next_retry_at,
+        ),
+        else_=anchor_expr,
+    )
     age_expr = func.extract(
         "epoch",
-        cast(literal(now.isoformat()), DateTime(timezone=True)) - anchor_expr,
+        cast(literal(now.isoformat()), DateTime(timezone=True)) - effective_anchor_expr,
     )
     overdue_expr = age_expr - (interval_expr * PATROL_STALL_MULTIPLIER)
 
@@ -295,7 +321,7 @@ def _build_patrol_stall_candidates_stmt(now: datetime):
             JobInstance.status == JobStatus.RUNNING.value,
             interval_expr.isnot(None),
             interval_expr > 0,
-            anchor_expr.isnot(None),
+            effective_anchor_expr.isnot(None),
             overdue_expr > 0,
             # ADR-0026 §3 (Step 5a.1): patrol stall only applies to PATROL_SLEEP
             # and legacy (NULL execution_state, pre-ADR agents); WAITING_* and
@@ -550,10 +576,14 @@ def _mark_patrol_stall(
     CAS 把「读 stale heartbeat → 决策 → 写 UPDATE」三步压成单条 SQL,在 DB 行级别消除竞态。
     """
     cutoff = now - timedelta(seconds=interval_seconds * PATROL_STALL_MULTIPLIER)
-    stale_guard = (
+    heartbeat_guard = (
         JobInstance.last_patrol_heartbeat_at.is_(None)
         if require_missing_heartbeat
         else JobInstance.last_patrol_heartbeat_at < cutoff
+    )
+    retry_guard = or_(
+        JobInstance.next_retry_at.is_(None),
+        JobInstance.next_retry_at < cutoff,
     )
     updated = db.execute(
         update(JobInstance)
@@ -561,7 +591,8 @@ def _mark_patrol_stall(
         .where(
             JobInstance.id == job.id,
             JobInstance.status == JobStatus.RUNNING.value,
-            stale_guard,
+            heartbeat_guard,
+            retry_guard,
         )
         .values(
             status=JobStatus.UNKNOWN.value,
