@@ -114,3 +114,4 @@ npx vitest run src/pages/execution/PlanRunDetailPage.test.tsx
 - 真机 ADB/NFS 不在默认 CI  
 - 控制面全量可能较慢；可按文件跑 `-x`  
 - E2E dedup extract 需共享存储环境  
+- **mock `subprocess.Popen` 必须补全 `stdout`/`stderr`（#123）**：`pipeline_engine._pump_process` 用 reader 线程逐行读流；未配置的 `MagicMock` 流会让 `readline()` 永不返回空串、reader 无限 append，内存以数百 MB/s 增长直至 OOM（曾导致整机冻结）。写法：`proc.stdout = io.StringIO(""); proc.stderr = io.StringIO("")`。整目录验证建议套内存上限：`systemd-run --user --scope -p MemoryMax=6G -p MemorySwapMax=0 -- venv/bin/python -m pytest backend/agent/tests/ -q`

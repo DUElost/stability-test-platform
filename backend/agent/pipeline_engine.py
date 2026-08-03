@@ -9,6 +9,8 @@ init -> patrol loop -> teardown.
 """
 
 
+import codecs
+
 import hashlib
 
 import json
@@ -16,6 +18,8 @@ import json
 import logging
 
 import os
+
+import select
 
 import signal
 
@@ -133,13 +137,46 @@ _PROGRESS_PREFIX = "PROGRESS "
 # 主线程轮询间隔。停滞检测的实际精度因此是 stall_seconds ± _POLL_INTERVAL。
 _POLL_INTERVAL_SECONDS = 1.0
 
-# reader 线程 join 的上限。见 _pump_process：管道可能因孙进程持有写端而不
-# EOF，届时 reader 会永久阻塞在 readline()，绝不能让它挂住主线程。
+# 轮询 reader 每次 select 的等待上限。它决定 stop 事件被察觉的延迟（≤ 0.2s），
+# 与 _POLL_INTERVAL_SECONDS（停滞/墙钟判定精度 ±1s）无关。
+_READER_POLL_INTERVAL_SECONDS = 0.2
+
+# 子进程退出后，主线程给 reader 排空管道缓冲的宽限。正常 EOF 是毫秒级；
+# 超过宽限仍不退出 = 有孙进程（如 adb server）脱离进程组并持有管道写端 ——
+# 此时用 stop 事件打断 POSIX 轮询 reader，而不是干等满 5s 再放弃
+# （那样每步多花 5s，且留下一个永久阻塞的线程）。
+_READER_DRAIN_GRACE_SECONDS = 1.0
+
+# reader 线程 join 的上限（proc.wait 与 stop 后二次 join 共用）。POSIX 轮询
+# reader 在 stop 后 ~0.2s 内退出，此值只是保险；Windows 阻塞 reader 无法被打
+# 断，超时后只能放弃（daemon 线程，随进程退出而消亡），绝不能让它挂住主线程。
 _READER_JOIN_TIMEOUT_SECONDS = 5.0
 
 # 单流捕获上限：超过后丢弃后续输出（仍继续读取避免管道阻塞），防止异常/
 # 失控输出把进程内存打爆（#123：MagicMock 流导致 reader 无限 append）。
 _MAX_CAPTURED_CHARS = 8 * 1024 * 1024
+
+
+# STP_STEP_STALL_SECONDS 是**全机开关**：一旦设置就作用于所有未在 PlanStep 上
+# 显式配置 stall_seconds 的步骤，绕过"逐个 PlanStep 显式打开"的灰度闸门。若
+# 脚本尚未接入 PROGRESS 打戳（阶段 2）就设置，等于 fleet 级误杀 —— 首次生效
+# 时告警一次。
+_env_stall_global_warned = False
+_env_stall_global_warned_lock = threading.Lock()
+
+
+def _warn_env_stall_global_once(raw: str) -> None:
+    global _env_stall_global_warned
+    with _env_stall_global_warned_lock:
+        if _env_stall_global_warned:
+            return
+        _env_stall_global_warned = True
+    logger.warning(
+        "STP_STEP_STALL_SECONDS=%s 全局启用停滞钟（作用于所有未显式配置的步骤）。"
+        "这是灰度后期开关：必须等全部相关脚本接入 PROGRESS 打戳（阶段 2）后才应"
+        "设置，否则会在 fleet 规模上误杀健康步骤",
+        raw,
+    )
 
 
 def _resolve_step_stall_seconds(step: Dict[str, Any]) -> Optional[float]:
@@ -157,6 +194,7 @@ def _resolve_step_stall_seconds(step: Dict[str, Any]) -> Optional[float]:
     opted in would kill healthy work.
     """
     raw = step.get("stall_seconds")
+    env_raw: Optional[str] = None
     if raw is None:
         env_raw = (os.getenv("STP_STEP_STALL_SECONDS") or "").strip()
         raw = env_raw if env_raw else 0
@@ -167,6 +205,8 @@ def _resolve_step_stall_seconds(step: Dict[str, Any]) -> Optional[float]:
         return None
     if value <= 0:
         return None
+    if env_raw is not None:
+        _warn_env_stall_global_once(env_raw)
     return value
 
 
@@ -180,6 +220,94 @@ class _PumpOutcome:
         self.stderr = stderr
         self.reason = reason  # None | "wall_clock" | "stall"
         self.elapsed = elapsed
+
+
+def _drain_stream(
+    stream: Any,
+    stop: threading.Event,
+    on_line: Callable[[str], None],
+) -> None:
+    """Line-drain *stream* until EOF, error, or *stop* is set.
+
+    POSIX: switch the underlying fd to non-blocking and poll it with ``select``
+    so *stop* can interrupt a reader whose pipe never reaches EOF (a grandchild
+    such as an adb server holds the write end open). Without this, every stuck
+    step would leave a daemon thread blocked in ``readline()`` forever, and a
+    long-lived agent would accumulate one (or two) per step.
+
+    Windows: pipes are not selectable, so fall back to blocking ``readline()``;
+    the main thread's join timeout then abandons the reader rather than hang
+    the step. That fallback thread lingers until process exit — the documented
+    residual cost on Windows only.
+    """
+    if _IS_WINDOWS:
+        _drain_blocking(stream, stop, on_line)
+        return
+    try:
+        fd = stream.fileno()
+        os.set_blocking(fd, False)
+    except (AttributeError, OSError, TypeError, ValueError):
+        # 不是真实 fd（如测试里的 io.StringIO / MagicMock 流）——走阻塞 readline。
+        _drain_blocking(stream, stop, on_line)
+        return
+    _drain_polling(fd, stream, stop, on_line)
+
+
+def _drain_blocking(
+    stream: Any,
+    stop: threading.Event,
+    on_line: Callable[[str], None],
+) -> None:
+    while not stop.is_set():
+        line = stream.readline()
+        # 类型/EOF 护栏：非 str（如误配的 MagicMock 流）或空串即结束，
+        # 避免 reader 无限循环把 sink 打到无界（#123）。
+        if not isinstance(line, str) or not line:
+            break
+        on_line(line)
+
+
+def _drain_polling(
+    fd: int,
+    stream: Any,
+    stop: threading.Event,
+    on_line: Callable[[str], None],
+) -> None:
+    """Non-blocking POSIX reader. Keeps ``readline()`` semantics:
+
+    - lines include their trailing ``\\n``; a partial final line at EOF is
+      handed over as-is
+    - ``\\r\\n`` and lone ``\\r`` are normalised to ``\\n`` (the existing
+      ``TextIOWrapper(newline=None)`` behaviour)
+    - decode errors use ``replace``: a broken byte no longer kills the whole
+      reader with ``UnicodeDecodeError`` (the old strict wrapper did)
+
+    The loop checks *stop* at least every ``_READER_POLL_INTERVAL_SECONDS``, so
+    the main thread can always reap it after ``stop.set()``.
+    """
+    decoder = codecs.getincrementaldecoder(stream.encoding or "utf-8")(errors="replace")
+    pending = ""
+    while not stop.is_set():
+        try:
+            ready, _, _ = select.select([fd], [], [], _READER_POLL_INTERVAL_SECONDS)
+        except (ValueError, OSError):
+            break  # fd 已被主线程关闭
+        if not ready:
+            continue
+        try:
+            chunk = os.read(fd, 65536)
+        except BlockingIOError:
+            continue
+        except OSError:
+            break
+        if not chunk:
+            break  # EOF
+        pending += decoder.decode(chunk).replace("\r\n", "\n").replace("\r", "\n")
+        while "\n" in pending:
+            line, pending = pending.split("\n", 1)
+            on_line(line + "\n")
+    if pending:
+        on_line(pending)
 
 
 def _pump_process(
@@ -203,11 +331,14 @@ def _pump_process(
     **dropped**: a 12 h step stamping every 5 s would otherwise push the real
     error out of the 64 KiB display window.
 
-    The readers are daemons and are joined with a timeout because the pipe is
-    not guaranteed to reach EOF when the child dies — scripts shell out to
-    ``adb``, whose persistent server daemon can inherit the write end and hold
-    it open. A reader stuck in ``readline()`` must never block the step from
-    returning; losing a few trailing lines is the cheaper failure.
+    The pipe is not guaranteed to reach EOF when the child dies — scripts shell
+    out to ``adb``, whose persistent server daemon can inherit the write end and
+    hold it open. On POSIX the readers poll non-blockingly and are interrupted
+    by a ``stop`` event, so a stuck pipe costs ~1 s and no lingering threads.
+    Windows pipes are not selectable: the fallback reader blocks in
+    ``readline()`` and is abandoned via join timeout — the step still returns
+    on time, losing only a few trailing lines (and leaving a daemon thread
+    until process exit).
     """
     stdout_lines: List[str] = []
     stderr_lines: List[str] = []
@@ -218,6 +349,38 @@ def _pump_process(
     # Safe because it is a *single* attribute store (atomic under CPython) —
     # keep it that way, a read-modify-write here would need a lock.
     state = {"last_progress": time.monotonic()}
+    stop = threading.Event()
+
+    def _handle_line(
+        line: str,
+        *,
+        sink: List[str],
+        sink_index: int,
+        stream_name: str,
+        progress_stream: bool,
+    ) -> None:
+        if progress_stream and line.startswith(_PROGRESS_PREFIX):
+            # 只有 PROGRESS 行刷停滞钟 —— 普通输出不算"推进"。
+            # 否则活锁(fastboot 无限重试、adb install 卡 90% 反复重连
+            # 打印日志)会因持续输出而永远不被判停滞,停滞钟就形同虚设。
+            state["last_progress"] = time.monotonic()
+            if on_progress is not None:
+                try:
+                    on_progress()
+                except Exception:
+                    logger.debug("progress_callback_error", exc_info=True)
+            return  # 不入缓冲
+        if sink_sizes[sink_index] >= _MAX_CAPTURED_CHARS:
+            if not truncated[sink_index]:
+                truncated[sink_index] = True
+                logger.warning(
+                    "step_output_capture_limit_reached stream=%s — 已捕获 %d 字符，丢弃后续输出",
+                    stream_name,
+                    _MAX_CAPTURED_CHARS,
+                )
+            return
+        sink.append(line)
+        sink_sizes[sink_index] += len(line)
 
     def _reader(
         stream,
@@ -228,34 +391,17 @@ def _pump_process(
         progress_stream: bool,
     ) -> None:
         try:
-            while True:
-                line = stream.readline()
-                # 类型/EOF 护栏：非 str（如误配的 MagicMock 流）或空串即结束，
-                # 避免 reader 无限循环把 sink 打到无界（#123）。
-                if not isinstance(line, str) or not line:
-                    break
-                if progress_stream and line.startswith(_PROGRESS_PREFIX):
-                    # 只有 PROGRESS 行刷停滞钟 —— 普通输出不算"推进"。
-                    # 否则活锁(fastboot 无限重试、adb install 卡 90% 反复重连
-                    # 打印日志)会因持续输出而永远不被判停滞,停滞钟就形同虚设。
-                    state["last_progress"] = time.monotonic()
-                    if on_progress is not None:
-                        try:
-                            on_progress()
-                        except Exception:
-                            logger.debug("progress_callback_error", exc_info=True)
-                    continue  # 不入缓冲
-                if sink_sizes[sink_index] >= _MAX_CAPTURED_CHARS:
-                    if not truncated[sink_index]:
-                        truncated[sink_index] = True
-                        logger.warning(
-                            "step_output_capture_limit_reached stream=%s — 已捕获 %d 字符，丢弃后续输出",
-                            stream_name,
-                            _MAX_CAPTURED_CHARS,
-                        )
-                    continue
-                sink.append(line)
-                sink_sizes[sink_index] += len(line)
+            _drain_stream(
+                stream,
+                stop,
+                lambda line: _handle_line(
+                    line,
+                    sink=sink,
+                    sink_index=sink_index,
+                    stream_name=stream_name,
+                    progress_stream=progress_stream,
+                ),
+            )
         except (ValueError, OSError):
             pass  # 管道在 terminate 时被关闭
         finally:
@@ -304,9 +450,25 @@ def _pump_process(
     except subprocess.TimeoutExpired:
         logger.warning("step_process_did_not_exit pid=%s", proc.pid)
     for th in threads:
-        th.join(timeout=_READER_JOIN_TIMEOUT_SECONDS)
-        if th.is_alive():
-            logger.warning("step_reader_stuck thread=%s — 放弃它，已收到的行照常返回", th.name)
+        th.join(timeout=_READER_DRAIN_GRACE_SECONDS)
+    stuck = [th for th in threads if th.is_alive()]
+    if stuck:
+        # 管道不 EOF：有孙进程（adb server 等）脱离进程组并持有写端。
+        # POSIX 轮询 reader 会在 ~0.2s 内响应 stop；Windows 阻塞 reader 无法
+        # 被打断，只能放弃（daemon 线程随进程退出消亡）。
+        stop.set()
+        for th in stuck:
+            th.join(timeout=_READER_JOIN_TIMEOUT_SECONDS)
+            if th.is_alive():
+                logger.warning(
+                    "step_reader_stuck thread=%s — 放弃它，已收到的行照常返回",
+                    th.name,
+                )
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     return _PumpOutcome(
         "".join(stdout_lines), "".join(stderr_lines), reason, time.monotonic() - started,

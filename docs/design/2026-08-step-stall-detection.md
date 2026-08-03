@@ -21,15 +21,19 @@
 所以：**`stall_seconds` 缺省 0 = 关闭**，只能逐个 PlanStep 显式打开，且前提是
 该步骤的脚本已接入 `PROGRESS` 打戳（阶段 2）。
 
+例外只有一个：`STP_STEP_STALL_SECONDS` 环境变量会**全机（fleet）启用**，作用于
+所有未显式配置的步骤，绕过逐个 PlanStep 的灰度闸门。它是**灰度后期开关**——
+必须等全部相关脚本接入打戳后才能设置，否则等于 183 台一起误杀。
+
 ## 2. 阶段 1 交付物
 
 引擎能力 + 测试，**零行为变更**：
 
 - `_resolve_step_stall_seconds(step)`：`PlanStep.stall_seconds` → `STP_STEP_STALL_SECONDS` → `0`（关闭）。沿用 `_resolve_step_wall_clock` 的解析链模式
 - `_pump_process`：双 reader 线程 + 主线程双钟
-  - reader A：`readline(stdout)` → 追加；识别 `PROGRESS ` 前缀 → **丢弃**并刷 `last_progress`
-  - reader B：`readline(stderr)` → 同样处理
-  - 主线程：`poll()` 轮询（间隔 1s），判总时长钟与停滞钟；触发后 `_terminate_process_tree` → `wait` → `join` 两个 reader（带超时）
+  - reader A（stdout）：**全量保留**，不识别 `PROGRESS` —— stdout 整份要过 `json.loads`，是既有结果契约
+  - reader B（stderr）：识别 `PROGRESS ` 前缀 → **丢弃**并刷 `last_progress`；普通输出只进缓冲、不刷钟
+  - 主线程：`poll()` 轮询（间隔 1s），判总时长钟与停滞钟；触发后 `_terminate_process_tree` → `wait` → `join` 两个 reader
 - `_run_script_action` 接入：超时文案区分钟 —— `script timeout after Ns`（总时长）vs `script stalled after Ns of no progress`（停滞）
 - 每收到 `PROGRESS` 行刷新 `last_progress_at`（经 `_update_execution_state`），供阶段 3 的 progress-aware barrier 使用
 
@@ -38,11 +42,14 @@
 | 坑 | 解法 |
 |---|---|
 | `communicate()` 期间无法观测存活 | 双 reader 线程；`selectors` 不支持 Windows 管道，顺序 `readline` 会因另一管道写满而双向死锁 |
-| 管道不 EOF | 脚本调 `adb`，其常驻 server 可能继承管道写端。reader 是 daemon 且 `join` 带 5s 超时；超时则放弃线程、用已收到的行返回。宁可丢几行输出，不能挂住主线程（permit 还握在手里） |
-| `PROGRESS` 行污染输出 | 识别即丢弃，不进任何缓冲。12h 步骤每 5s 一戳 = 8640 行，会把真正的报错挤出 64KiB 截断窗口 |
-| stdout JSON 契约 | stdout/stderr **分开缓冲**，stdout 全量重组 → `json.loads` 不受影响；截断只作用于 stderr（进 `error_message` / `output` 展示） |
+| 管道不 EOF | 脚本调 `adb`，其常驻 server 可能继承管道写端。POSIX reader 走非阻塞 + `select`，主线程在 1s 宽限后 `stop` 打断它（~0.2s 内退出，不留线程）；Windows 无 selectable pipe，退化为阻塞 `readline()` + join 超时放弃。宁可丢几行输出，不能挂住主线程（permit 还握在手里） |
+| `PROGRESS` 行污染输出 | 仅 stderr reader 识别即丢弃，不进任何缓冲。12h 步骤每 5s 一戳 = 8640 行，会把真正的报错挤出 64KiB 截断窗口 |
+| stdout JSON 契约 | stdout/stderr **分开缓冲**，stdout 全量重组 → `json.loads` 不受影响；8MiB 捕获兜底对两流都生效（超限丢弃、继续读），64KiB 展示截断作用于合并输出（`error_message` / `output`） |
 | `last_progress` 跨线程 | reader 写、主线程读。安全的前提是**单次属性赋值**（CPython 下原子）；不许写成读-改-写的复合操作 |
 | 测试自身被误杀 | 测试 spawn 必须带 `_popen_isolation_kwargs()`，否则 `killpg` 会把 pytest 自己 SIGTERM（实测 exit 143） |
+
+判定精度：墙钟与停滞钟都受主线程 1s 轮询影响，触发时间 ≈ 阈值 ±1s（原
+`communicate(timeout=…)` 的墙钟是准点触发，换成轮询后边界上最多晚 ~1s）。
 
 ## 3. `PROGRESS` 打戳协议（阶段 2 启用，阶段 1 已解析）
 

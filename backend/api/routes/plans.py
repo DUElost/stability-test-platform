@@ -59,6 +59,8 @@ class PlanStepIn(BaseModel):
     stage: str = Field(..., pattern="^(init|patrol|teardown)$")
     sort_order: int = 0
     timeout_seconds: Optional[int] = None
+    # 停滞钟（#115 阶段 1）：多久无 PROGRESS 戳算卡死。None/0 = 关闭。
+    stall_seconds: Optional[int] = Field(default=None, ge=0)
     retry: int = Field(default=0, ge=0, le=5)
     enabled: bool = True
 
@@ -111,6 +113,7 @@ class PlanStepOut(BaseModel):
     stage: str
     sort_order: int
     timeout_seconds: Optional[int] = None
+    stall_seconds: Optional[int] = None
     retry: int
     enabled: bool
 
@@ -288,6 +291,17 @@ def _assemble_lifecycle_for_validation(
         lifecycle["timeout_seconds"] = timeout_seconds
     if barrier_timeout_seconds is not None:
         lifecycle["barrier_timeout_seconds"] = barrier_timeout_seconds
+    # 停滞钟是逐步骤的,不配就整键不写 —— 否则 NULL 会让 schema 拒掉
+    for step_def in lifecycle.get("init", []) + lifecycle.get("teardown", []):
+        s = next((x for x in steps if x.step_key == step_def["step_id"]), None)
+        if s is not None and s.stall_seconds is not None:
+            step_def["stall_seconds"] = s.stall_seconds
+    patrol = lifecycle.get("patrol")
+    if patrol:
+        for step_def in patrol.get("steps", []):
+            s = next((x for x in steps if x.step_key == step_def["step_id"]), None)
+            if s is not None and s.stall_seconds is not None:
+                step_def["stall_seconds"] = s.stall_seconds
     return lifecycle
 
 
@@ -446,6 +460,7 @@ def create_plan(
             stage=s.stage,
             sort_order=s.sort_order,
             timeout_seconds=s.timeout_seconds,
+            stall_seconds=s.stall_seconds,
             retry=s.retry,
             enabled=s.enabled,
             created_at=now,
@@ -558,6 +573,7 @@ def update_plan(
                 stage=s.stage,
                 sort_order=s.sort_order,
                 timeout_seconds=s.timeout_seconds,
+                stall_seconds=s.stall_seconds,
                 retry=s.retry,
                 enabled=s.enabled,
                 created_at=now,

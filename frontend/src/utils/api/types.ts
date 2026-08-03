@@ -748,6 +748,8 @@ export interface PlanStep {
   stage: 'init' | 'patrol' | 'teardown';
   sort_order: number;
   timeout_seconds?: number | null;
+  /** 停滞钟（#115 阶段 1）：多久无 PROGRESS 戳算卡死。null/0 = 关闭。 */
+  stall_seconds?: number | null;
   retry: number;
   enabled: boolean;
 }
@@ -759,6 +761,7 @@ export interface PlanStepCreate {
   stage: 'init' | 'patrol' | 'teardown';
   sort_order?: number;
   timeout_seconds?: number | null;
+  stall_seconds?: number | null;
   retry?: number;
   enabled?: boolean;
 }
