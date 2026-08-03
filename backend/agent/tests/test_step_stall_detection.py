@@ -8,9 +8,11 @@
 当前脚本集上等价于「全体判死」—— 停滞钟必须缺省关闭，逐个 PlanStep 打开。
 """
 
+import logging
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 
 import pytest
@@ -55,6 +57,23 @@ class TestResolveStallSeconds:
     def test_env_provides_a_fleet_default(self, monkeypatch):
         monkeypatch.setenv("STP_STEP_STALL_SECONDS", "120")
         assert _resolve_step_stall_seconds({}) == 120.0
+
+    def test_env_global_enable_warns_once(self, monkeypatch, caplog):
+        """env 是全机开关，绕过逐个 PlanStep 的灰度闸门 —— 首次生效必须告警，
+        但不能每个步骤都刷一遍日志。"""
+        import backend.agent.pipeline_engine as pe
+
+        monkeypatch.setattr(pe, "_env_stall_global_warned", False)
+        monkeypatch.setenv("STP_STEP_STALL_SECONDS", "120")
+        with caplog.at_level(logging.WARNING, logger="backend.agent.pipeline_engine"):
+            assert pe._resolve_step_stall_seconds({}) == 120.0
+            assert pe._resolve_step_stall_seconds({}) == 120.0
+        warns = [
+            r.message
+            for r in caplog.records
+            if r.message.startswith("STP_STEP_STALL_SECONDS=")
+        ]
+        assert len(warns) == 1
 
     @pytest.mark.parametrize("value", [0, -1, "nonsense"])
     def test_zero_negative_and_garbage_all_disable(self, monkeypatch, value):
@@ -185,14 +204,80 @@ class TestProgressStamps:
 
 class TestReaderThreadsDoNotLeak:
     def test_threads_are_joined_after_kill(self):
-        import threading
-
         before = {t.name for t in threading.enumerate()}
         proc = _spawn("import time; time.sleep(60)")
         _pump_process(proc, wall_clock=1, stall_seconds=None)
         time.sleep(_POLL_INTERVAL_SECONDS)
         leaked = {t.name for t in threading.enumerate()} - before
         assert not {n for n in leaked if n.startswith("step-")}, leaked
+
+    def test_reader_interrupted_when_grandchild_holds_pipe_open(self):
+        """真实泄漏场景：孙进程 setsid 脱离进程组并持有管道写端（adb server 形态）。
+
+        修复前：reader 永久阻塞在 readline()，join 超时后留下 daemon 线程，
+        长驻 agent 每个卡死步骤 +1。修复后：POSIX 轮询 reader 必须被 stop
+        打断，步骤返回时不留 step-* 线程，已收到的行照常返回。
+        """
+        if sys.platform == "win32":
+            pytest.skip("Windows 管道不可 select，保留阻塞 reader 兜底")
+        before = {t.name for t in threading.enumerate()}
+        proc = _spawn("""
+            import os, sys, time
+            pid = os.fork()
+            if pid == 0:
+                os.setsid()       # 脱离进程组：killpg 扫不到
+                time.sleep(5)     # 期间一直持有 stdout/stderr 写端
+                os._exit(0)
+            print("done", flush=True)
+            os._exit(0)
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
+        assert outcome.stdout.strip() == "done"
+        time.sleep(0.5)
+        leaked = {t.name for t in threading.enumerate()} - before
+        assert not {n for n in leaked if n.startswith("step-")}, leaked
+
+
+class TestPollingReaderSemantics:
+    """POSIX 轮询 reader 必须保持 readline() 的既有语义（Windows 跳过）。"""
+
+    @pytest.fixture(autouse=True)
+    def _skip_on_windows(self):
+        if sys.platform == "win32":
+            pytest.skip("Windows 走阻塞 readline 兜底，不经轮询 reader")
+
+    def test_partial_final_line_is_preserved(self):
+        proc = _spawn('import sys; sys.stdout.write("no-newline-at-end")')
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
+        assert outcome.stdout == "no-newline-at-end"
+
+    def test_crlf_normalised_to_lf(self):
+        """TextIOWrapper(newline=None) 的既有行为：\\r\\n / 孤立 \\r → \\n。"""
+        proc = _spawn('import sys; sys.stdout.write("a\\r\\nb\\r\\nc")')
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
+        assert outcome.stdout == "a\nb\nc"
+
+    def test_crlf_progress_stamp_still_resets_stall_clock(self):
+        """\\r\\n 结尾的 PROGRESS 行必须同样被识别（dd status=progress 类输出）。"""
+        proc = _spawn("""
+            import sys, time
+            for i in range(4):
+                sys.stderr.write('PROGRESS {"seq": %d}\\r\\n' % i)
+                time.sleep(0.4)
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        assert outcome.reason is None
+
+    def test_invalid_utf8_does_not_kill_the_reader(self):
+        """旧 TextIOWrapper(strict) 遇到坏字节会炸掉整个 reader（丢输出/可能堵管道）；
+        轮询 reader 用 replace 解码，坏字节之后的内容照常送达。"""
+        proc = _spawn("""
+            import sys
+            sys.stdout.buffer.write(b"\\xff\\xfe")
+            sys.stdout.buffer.write(b"ok\\n")
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
+        assert outcome.stdout.endswith("ok\n")
 
 
 class TestProgressOnlyOnStderr:
