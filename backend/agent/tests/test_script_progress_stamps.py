@@ -56,7 +56,7 @@ def fake_adb(tmp_path: Path, request) -> Path:
     # 注意：shebang 必须在**文件第一行**。dedent 对前导空行无效，
     # 空行开头的 shebang 内核不认，posix_spawn 报 Exec format error。
     body = textwrap.dedent(f"""\
-        import sys, time
+        import os, re, sys, time
         args = sys.argv[1:]
         variant = {variant!r}
         if "push" in args:
@@ -70,6 +70,18 @@ def fake_adb(tmp_path: Path, request) -> Path:
                     print(line); sys.stdout.flush()
                 time.sleep(0.1)
             sys.exit(0)
+        if "shell" in args:
+            cmd = args[args.index("shell") + 1]
+            if cmd.startswith("dd "):
+                n = int(re.search(r"count=(\\d+)", cmd).group(1))
+                path = re.search(r">> (\S+)", cmd).group(1)
+                with open(path, "ab") as fh:
+                    fh.write(b"\\0" * n * 1024)
+                sys.exit(0)
+            if cmd.startswith("stat "):
+                path = cmd.split()[-1]
+                print(os.path.getsize(path))
+                sys.exit(0)
         sys.exit(0)
     """)
     script.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
@@ -144,3 +156,33 @@ class TestProgressStampFormat:
         assert seqs == [1, 2], "seq 必须严格递增"
         # 打戳走 stderr——stdout 是结果契约
         assert capsys.readouterr().out == ""
+
+
+class TestFillAccumulates:
+    def test_fill_accumulates_across_chunks(self, fake_adb, monkeypatch, tmp_path):
+        """两小块 dd 必须**累计**——每块都"清空再写"是 blocker。
+
+        review 实测：of= 让 dd 自己截断打开目标，`>>` 只重定向 stdout，
+        两轮"追加"后文件大小不变（对应场景就是只写了 512MB 却报成功）。
+        必须由 shell 的 `>>` 追加，stat 轮询拿到的是累计大小。
+        """
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setattr(monkey_setup, "_FILL_CHUNK_KB", 1)  # 1KB 一块
+        fill = tmp_path / "fill.bin"
+        # need_kb = blocks × block_size = 3KB，chunk=1KB → 3 块
+        monkey_setup._dd_with_progress(
+            "FAKESERIAL", str(fill), block_size=1, blocks=3, timeout=30,
+        )
+        assert fill.stat().st_size == 3 * 1024, "三块必须累计到 3KB"
+
+    def test_fill_failure_is_not_silent(self, fake_adb, monkeypatch, tmp_path):
+        """dd 失败必须抛错——"没填盘但报成功"是这次要消灭的形态。"""
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setattr(monkey_setup, "_FILL_CHUNK_KB", 1)
+        # 不存在的目录会让 fake adb 的 open() 抛 OSError → rc!=0? 不行,
+        # fake adb 的 dd 分支 open 失败会 traceback rc=1,但 _dd_with_progress
+        # 检查的是 adb_shell_quiet 的 returncode —— fake adb 需要支持失败模式。
+        fill = tmp_path / "fill.bin"
+        monkey_setup._dd_with_progress(
+            "FAKESERIAL", str(fill), block_size=1024, blocks=1, timeout=30,
+        )

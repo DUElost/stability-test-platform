@@ -313,6 +313,11 @@ def step_fill(serial: str, cfg: dict) -> dict:
     return {"success": True, "filled_kb": need_kb}
 
 
+# 每块 512MB：单次 dd 在 USB 上 ~5-30s，块级超时 120s 安全；
+# 39 块 × ~1s adb 开销 ≈ 40s 附加开销，可接受。测试会 monkeypatch 成小块。
+_FILL_CHUNK_KB = 512 * 1024
+
+
 def _dd_with_progress(
     serial: str,
     fill_path: str,
@@ -333,15 +338,14 @@ def _dd_with_progress(
     """
     progress = _make_progress("fill")
     need_kb = blocks * block_size
-    # 每块 512MB：单次 dd 在 USB 上 ~5-30s，块级超时 120s 安全；
-    # 39 块 × ~1s adb 开销 ≈ 40s 附加开销，可接受。
-    chunk_kb = 512 * 1024
     written_kb = 0
     while written_kb < need_kb:
-        n = min(chunk_kb, need_kb - written_kb)
+        n = min(_FILL_CHUNK_KB, need_kb - written_kb)
+        # **不要写 of=**：of= 让 dd 自己以截断方式打开目标，`>>` 只重定向 dd
+        # 的 stdout，对 of= 无效 —— 每块都会"清空再写"而不是追加（实测两轮
+        # 后文件还是 512KB）。必须让 dd 写到 stdout，由 shell 的 `>>` 追加。
         result = adb_shell_quiet(
-            f"dd if=/dev/zero of={fill_path} bs=1024 count={n} "
-            f">> {fill_path} 2>/dev/null",
+            f"dd if=/dev/zero bs=1024 count={n} >> {fill_path} 2>/dev/null",
             timeout=120,
         )
         if result.returncode != 0:
