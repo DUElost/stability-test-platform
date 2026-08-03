@@ -10,7 +10,7 @@
           - agent_secret | length >= 16
           - agent_secret != "REPLACE_WITH_VAULTED_SECRET_AT_LEAST_16_CHARS"
         fail_msg: >-
-          agent_secret 未注入或仍为占位值。请确认本地 backend/.env 中存在
+          agent_secret 未注入或仍为占位值。请确认仓库根 .env.backend 中存在
           AGENT_SECRET（至少 16 字符），或通过环境变量 AGENT_SECRET /
           vault_agent_secret 覆盖后重试。
 

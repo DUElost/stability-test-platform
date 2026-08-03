@@ -79,7 +79,7 @@ async def check_redis_or_explain(
                     "Redis preflight failed for {}.\n"
                     "Docker Redis is reachable via {}, so the current URL is likely "
                     "hitting Windows localhost IPv6 resolution (::1) first.\n"
-                    "Update REDIS_URL in backend\\.env to {} and retry.".format(
+                    "Update REDIS_URL in .env.backend to {} and retry.".format(
                         redis_url,
                         fallback_url,
                         fallback_url,
@@ -103,7 +103,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--env-file",
-        default="backend/.env",
+        # 生产唯一 env 源；backend/.env 的 REDIS_URL 是 db 1，生产是 db 0。
+        default=".env.backend",
         help="Path to the backend env file.",
     )
     return parser.parse_args()

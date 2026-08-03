@@ -10,7 +10,7 @@
 - 如仍使用 Windows / WSL 联调，可通过 WSL 兼容命令执行，但这不再是默认运维基线。
 - 使用 `tools/ansible/inventory.ini` 中的 `android` 账号连接目标主机。
 - `inventory.ini` 中的登录密码当前同时作为 sudo 密码使用。
-- `AGENT_SECRET` 必须与后端 `.env` 中的 `AGENT_SECRET` 保持一致。
+- `AGENT_SECRET` 必须与仓库根 `.env.backend` 中的 `AGENT_SECRET` 保持一致。
 
 ## 一次性环境准备
 
@@ -31,15 +31,17 @@ cp inventory.example.ini inventory.ini
 
 ### 2. 配置全局 AGENT_SECRET
 
-全部 Linux Agent 主机默认共用后端 `backend/.env` 中的 `AGENT_SECRET`。
-测试环境允许使用后端 `.env` 中的默认值；正式环境建议通过环境变量或 Vault 覆盖为真实值。
+全部 Linux Agent 主机默认共用**仓库根 `.env.backend`** 中的 `AGENT_SECRET`（systemd `EnvironmentFile`，生产唯一 env 源）。
+
+> **不要用 `backend/.env` 的那个。** 2026-08-01 实测两者不同，而控制面与全部 20 台 Agent 用的都是 `.env.backend` 那个；从 `backend/.env` 取会把一个没人认的密钥写进每台 Agent，导致集体 SocketIO 认证失败。
+测试环境允许使用仓库根 `.env.backend` 中的默认值；正式环境建议通过环境变量或 Vault 覆盖为真实值。
 `install_agent.yml` / `update_agent.yml` 会按以下顺序读取：
 
 1. 有效的 `vault_agent_secret`
 2. 当前 shell 环境变量 `AGENT_SECRET`
-3. 本仓库 `backend/.env` 中的 `AGENT_SECRET`
+3. 仓库根 `.env.backend` 中的 `AGENT_SECRET`
 
-通常本地测试环境无需额外配置，只要 `backend/.env` 已有有效 `AGENT_SECRET` 即可。
+通常本地测试环境无需额外配置，只要 `.env.backend` 已有有效 `AGENT_SECRET` 即可。
 如果要在正式环境覆盖，可使用环境变量：
 
 ```bash
@@ -258,9 +260,9 @@ ansible-playbook playbooks/update_agent.yml --limit agent_prod
 
 ### `agent_secret | length >= 16` 断言失败
 
-原因：未能从 `vault_agent_secret`、环境变量 `AGENT_SECRET` 或 `backend/.env` 读取到有效密钥，或密钥长度不足 16。
+原因：未能从 `vault_agent_secret`、环境变量 `AGENT_SECRET` 或仓库根 `.env.backend` 读取到有效密钥，或密钥长度不足 16。
 
-处理：确认 `backend/.env` 中存在有效 `AGENT_SECRET`，或执行前设置环境变量：
+处理：确认 `.env.backend` 中存在有效 `AGENT_SECRET`，或执行前设置环境变量：
 
 ```bash
 export AGENT_SECRET="<与后端一致且长度至少 16 的 AGENT_SECRET>"
@@ -274,7 +276,7 @@ export AGENT_SECRET="<与后端一致且长度至少 16 的 AGENT_SECRET>"
 REPLACE_WITH_VAULTED_SECRET_AT_LEAST_16_CHARS
 ```
 
-处理：删除占位覆盖值，或改为与后端一致的真实值。日常测试环境优先使用 `backend/.env`。
+处理：删除占位覆盖值，或改为与后端一致的真实值。日常测试环境优先使用 `.env.backend`。
 
 ### update_agent 因 health 失败回滚
 

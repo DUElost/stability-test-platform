@@ -28,20 +28,30 @@ agent_source_dir: "{{ playbook_dir }}/../../../backend/agent"
 # 优先级：-e agent_pip_index_url=... > 环境变量 STP_AGENT_PIP_INDEX_URL > 空。
 agent_pip_index_url: "{{ lookup('ansible.builtin.env', 'STP_AGENT_PIP_INDEX_URL') | default('', true) }}"
 
-# Agent-Backend 双向认证密钥，默认所有 Linux Agent 共用 Backend .env 中的 AGENT_SECRET。
-# 覆盖优先级：有效 vault_agent_secret > 本机环境变量 AGENT_SECRET > backend/.env。
+# Agent-Backend 双向认证密钥。
+# 覆盖优先级：有效 vault_agent_secret > 本机环境变量 AGENT_SECRET > 仓库根 .env.backend。
 # 这样测试环境无需手动传 vault，也避免把真实 secret 写入被 git 跟踪的文件。
+#
+# **兜底源必须是仓库根 .env.backend**（systemd EnvironmentFile，生产唯一 env 源），
+# 不是 backend/.env。2026-08-01 实测两者的 AGENT_SECRET 不同，而控制面与全部
+# 20 台 Agent 用的都是 .env.backend 那个 —— 从 backend/.env 兜底会把一个没人认的
+# 密钥写进每台 Agent 的 .env，导致它们集体 SocketIO 认证失败。
 agent_secret_placeholder_values:
   - ""
   - "REPLACE_WITH_VAULTED_SECRET_AT_LEAST_16_CHARS"
 
 agent_secret_from_vault: "{{ vault_agent_secret | default('', true) | trim }}"
 agent_secret_from_env: "{{ lookup('ansible.builtin.env', 'AGENT_SECRET') | default('', true) | trim }}"
-agent_secret_from_backend_env: >-
+# 锚定 playbook_dir 而不是 inventory_dir：真实 inventory 常放在仓库外
+# （如 /home/debian13/hosts.ini），那时 inventory_dir 相对路径会指到仓库外，
+# 兜底静默失效。playbook_dir 恒为 <repo>/tools/ansible/playbooks。
+# 需要时用 -e stp_repo_root=/path/to/repo 覆盖。
+stp_repo_root: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+agent_secret_from_env_backend: >-
   {{
     lookup(
       'ansible.builtin.ini',
-      'AGENT_SECRET type=properties file=' ~ inventory_dir ~ '/../../backend/.env',
+      'AGENT_SECRET type=properties file=' ~ stp_repo_root ~ '/.env.backend',
       errors='ignore'
     ) | default('', true) | trim
   }}
@@ -52,6 +62,6 @@ agent_secret: >-
     else (
       agent_secret_from_env
       if agent_secret_from_env not in agent_secret_placeholder_values
-      else agent_secret_from_backend_env
+      else agent_secret_from_env_backend
     )
   }}

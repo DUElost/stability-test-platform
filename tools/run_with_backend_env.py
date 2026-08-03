@@ -25,11 +25,15 @@ def build_subprocess_env(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a command with backend .env values overriding parent env."
+        description="Run a command with production env values overriding parent env."
     )
     parser.add_argument(
         "--env-file",
-        default="backend/.env",
+        # 生产唯一 env 源。此前默认 backend/.env —— 那是本地开发覆盖文件，
+        # 其 AGENT_SECRET / JWT_SECRET_KEY / SSH_CREDENTIALS_FERNET_KEY /
+        # REDIS_URL 与生产都不同，而本工具是 **override 父环境**的，
+        # 等于用陈旧值盖掉 systemd 注入的正确值。
+        default=".env.backend",
         help="Path to env file whose values should override parent env.",
     )
     parser.add_argument(
