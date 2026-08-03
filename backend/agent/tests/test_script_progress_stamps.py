@@ -73,6 +73,8 @@ def fake_adb(tmp_path: Path, request) -> Path:
         if "shell" in args:
             cmd = args[args.index("shell") + 1]
             if cmd.startswith("dd "):
+                if variant == "dd-fail":
+                    sys.exit(1)
                 n = int(re.search(r"count=(\\d+)", cmd).group(1))
                 path = re.search(r">> (\S+)", cmd).group(1)
                 with open(path, "ab") as fh:
@@ -175,14 +177,18 @@ class TestFillAccumulates:
         )
         assert fill.stat().st_size == 3 * 1024, "三块必须累计到 3KB"
 
+    @pytest.mark.parametrize("fake_adb", ["dd-fail"], indirect=True)
     def test_fill_failure_is_not_silent(self, fake_adb, monkeypatch, tmp_path):
-        """dd 失败必须抛错——"没填盘但报成功"是这次要消灭的形态。"""
+        """dd 失败必须抛 RuntimeError——"没填盘但报成功"是这次要消灭的形态。
+
+        此前这条是空转的：fake adb 的 dd 分支正常写文件、测试也没有
+        pytest.raises，无论生产代码有没有检查 returncode 都会通过。
+        现在 dd-fail 变体直接 sys.exit(1)，断言必须抛错。
+        """
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
         monkeypatch.setattr(monkey_setup, "_FILL_CHUNK_KB", 1)
-        # 不存在的目录会让 fake adb 的 open() 抛 OSError → rc!=0? 不行,
-        # fake adb 的 dd 分支 open 失败会 traceback rc=1,但 _dd_with_progress
-        # 检查的是 adb_shell_quiet 的 returncode —— fake adb 需要支持失败模式。
         fill = tmp_path / "fill.bin"
-        monkey_setup._dd_with_progress(
-            "FAKESERIAL", str(fill), block_size=1024, blocks=1, timeout=30,
-        )
+        with pytest.raises(RuntimeError):
+            monkey_setup._dd_with_progress(
+                "FAKESERIAL", str(fill), block_size=1, blocks=3, timeout=30,
+            )
