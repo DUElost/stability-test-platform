@@ -178,23 +178,35 @@ def adb_push_progress(
     if total <= chunk_bytes:
         adb_push(local, remote, timeout=timeout)
         if on_progress is not None:
-            on_progress(total)
+            # 关键字参数：与 _make_progress 的 _emit(**fields) 对齐（review #133
+            # 问题 1：位置参数会让真实链路第一块就 TypeError）
+            on_progress(written_bytes=total)
         return
 
-    part = remote + ".part"
+    # staging：分块先拼到 remote.stp_part，全部完成后 mv 原子替换最终路径。
+    # 直接 cat >> remote 会拼到已存在的旧文件（files 模式旧资源 / 上次失败
+    # 残留的 bundle 残片）——review #133 问题 2。
+    # 设备端两个文件：block(单块覆盖) + staging(累计追加)。cat A >> A 是
+    # 自追加死循环，绝不能把两者混成一个。
+    staging = remote + ".stp_part"
+    block = remote + ".stp_block"
+    adb_shell_quiet(f"rm -f {_quote(staging)} {_quote(block)}", timeout=10)
     written = 0
     with open(local, "rb") as fh:
         while True:
             chunk = fh.read(chunk_bytes)
             if not chunk:
                 break
-            tmp_chunk = f"{local}.chunk"
+            # 临时块名按调用隔离：同一 host 多设备并发 push 同一 NFS 文件时，
+            # 共享名会互相覆盖——review #133 问题 3。
+            tmp_chunk = f"{local}.{os.getpid()}.{threading.get_ident()}.chunk"
             with open(tmp_chunk, "wb") as tf:
                 tf.write(chunk)
             try:
-                adb_push(tmp_chunk, part, timeout=timeout)
+                adb_push(tmp_chunk, block, timeout=timeout)
                 result = adb_shell_quiet(
-                    f"cat {_quote(part)} >> {_quote(remote)} && rm {_quote(part)}",
+                    f"cat {_quote(block)} >> {_quote(staging)} && "
+                    f"rm {_quote(block)}",
                     timeout=60,
                 )
                 if result.returncode != 0:
@@ -209,7 +221,15 @@ def adb_push_progress(
                     pass
             written += len(chunk)
             if on_progress is not None:
-                on_progress(written)
+                on_progress(written_bytes=written)
+    result = adb_shell_quiet(
+        f"mv {_quote(staging)} {_quote(remote)}", timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"adb push finalize failed rc={result.returncode}: {remote} "
+            f"({result.stderr[:200]})"
+        )
 
 
 def _quote(path: str) -> str:

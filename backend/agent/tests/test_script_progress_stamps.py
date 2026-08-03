@@ -89,6 +89,18 @@ def fake_adb(tmp_path: Path, request) -> Path:
                 path = cmd.split()[-1].strip("'").strip('"')
                 print(os.path.getsize(path))
                 sys.exit(0)
+            if cmd.startswith("rm "):
+                path = cmd.split()[-1].strip("'").strip('"')
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                sys.exit(0)
+            if cmd.startswith("mv "):
+                src = cmd.split()[1].strip("'").strip('"')
+                dst = cmd.split()[-1].strip("'").strip('"')
+                os.rename(src, dst)
+                sys.exit(0)
         sys.exit(0)
     """)
     script.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
@@ -108,6 +120,11 @@ def _make_source(tmp_path: Path, size_bytes: int) -> Path:
     return src
 
 
+def _collect(seen: list) -> "callable":
+    """包一层：on_progress 用关键字参数 written_bytes= 调用。"""
+    return lambda **kw: seen.append(kw["written_bytes"])
+
+
 class TestPushProgress:
     def test_small_file_single_chunk(self, fake_adb, monkeypatch, tmp_path):
         """≤ 一块的小文件：单次 push，结束时打一次戳。"""
@@ -115,7 +132,7 @@ class TestPushProgress:
         src = _make_source(tmp_path, 10 * 1024)
         seen: list[int] = []
         _adb.adb_push_progress(str(src), str(tmp_path / "dst.bin"),
-                               timeout=30, on_progress=seen.append)
+                               timeout=30, on_progress=_collect(seen))
         assert seen == [10 * 1024]
 
     def test_large_file_chunked_accumulates(self, fake_adb, monkeypatch, tmp_path):
@@ -125,7 +142,7 @@ class TestPushProgress:
         src = _make_source(tmp_path, 3 * 1024 * 1024)
         seen: list[int] = []
         _adb.adb_push_progress(str(src), str(tmp_path / "dst.bin"),
-                               timeout=60, on_progress=seen.append)
+                               timeout=60, on_progress=_collect(seen))
         assert seen == [1 * 1024 * 1024, 2 * 1024 * 1024, 3 * 1024 * 1024]
         # 设备端文件完整
         assert (tmp_path / "dst.bin").stat().st_size == 3 * 1024 * 1024
@@ -187,3 +204,55 @@ class TestFillAccumulates:
             monkey_setup._dd_with_progress(
                 "FAKESERIAL", str(fill), block_size=1, blocks=3, timeout=30,
             )
+
+
+class TestRealWiringAndIsolation:
+    def test_make_progress_through_real_chain(self, fake_adb, monkeypatch, tmp_path, capsys):
+        """_make_progress 走真实链路（review #133 问题 1）。
+
+        adb_push_progress 用关键字参数 on_progress(written_bytes=...) 调回调，
+        与 _emit(**fields) 对齐——位置参数会让第一块就 TypeError。
+        """
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setattr(_adb, "_PUSH_CHUNK_MB", 1)
+        src = _make_source(tmp_path, 3 * 1024 * 1024)
+        emit = monkey_setup._make_progress("push")
+        _adb.adb_push_progress(str(src), str(tmp_path / "dst.bin"),
+                               timeout=60, on_progress=emit)
+        err = capsys.readouterr().err
+        stamps = [
+            json.loads(line[len("PROGRESS "):])
+            for line in err.splitlines() if line.startswith("PROGRESS ")
+        ]
+        assert len(stamps) == 3, err
+        assert [s["seq"] for s in stamps] == [1, 2, 3], "seq 必须递增"
+        assert stamps[-1]["written_bytes"] == 3 * 1024 * 1024
+
+    def test_staging_replaces_old_file_atomically(self, fake_adb, monkeypatch, tmp_path):
+        """remote 预置旧内容，分块 push 后必须被原子替换（review #133 问题 2）。"""
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setattr(_adb, "_PUSH_CHUNK_MB", 1)
+        src = _make_source(tmp_path, 3 * 1024 * 1024)
+        dst = tmp_path / "dst.bin"
+        dst.write_bytes(b"OLD-CONTENT-" * 100)  # 预置旧内容
+        _adb.adb_push_progress(str(src), str(dst), timeout=60, on_progress=None)
+        assert dst.read_bytes() == src.read_bytes(), "最终文件必须与源完全一致"
+
+    def test_temp_chunk_name_is_isolated_per_call(self, fake_adb, monkeypatch, tmp_path):
+        """临时块名含 pid/tid（review #133 问题 3）——并发 push 不互踩。"""
+        import threading
+
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        src_text = (_SCRIPT_DIR / "_adb.py").read_text(encoding="utf-8")
+        assert "{local}.{os.getpid()}.{threading.get_ident()}.chunk" in src_text
+
+        monkeypatch.setattr(_adb, "_PUSH_CHUNK_MB", 1)
+        # 两路顺序 push 到不同 dst，块名不同、互不覆盖
+        a = _make_source(tmp_path, 2 * 1024 * 1024)
+        d1 = tmp_path / "d1.bin"
+        d2 = tmp_path / "d2.bin"
+        # 两个线程的 get_ident 不同，但顺序执行也能验证块名模板隔离
+        _adb.adb_push_progress(str(a), str(d1), timeout=60, on_progress=None)
+        _adb.adb_push_progress(str(a), str(d2), timeout=60, on_progress=None)
+        assert d1.read_bytes() == a.read_bytes()
+        assert d2.read_bytes() == a.read_bytes()
