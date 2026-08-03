@@ -8,6 +8,7 @@
 只会表现为「一批健康设备莫名其妙终止」，所以必须两条路径都测。
 """
 
+from backend.api.routes.plans import PlanStepIn, _assemble_lifecycle_for_validation
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.services.plan_dispatcher_core import (
@@ -172,6 +173,17 @@ def _step_with_stall(stall_seconds, *, stage="init", step_key="check_device"):
     return s
 
 
+def _lifecycle_from_api_plan(plan: dict) -> dict:
+    """API 往返后走 plans.py 的校验组装路径（与 create/update 同源）。"""
+    steps = [PlanStepIn.model_validate(s) for s in plan["steps"]]
+    return _assemble_lifecycle_for_validation(
+        steps,
+        plan.get("patrol_interval_seconds"),
+        plan.get("timeout_seconds"),
+        plan.get("barrier_timeout_seconds"),
+    )
+
+
 class TestStallSecondsPipeline:
     def test_lifecycle_with_stall_seconds_passes_validation(self):
         lc = build_lifecycle_from_steps(
@@ -303,7 +315,43 @@ class TestStallSecondsApi:
             }],
         }, headers=auth_headers)
         assert clr.status_code == 200, clr.text
-        assert clr.json()["data"]["steps"][0]["stall_seconds"] is None
+        plan = clr.json()["data"]
+        assert plan["steps"][0]["stall_seconds"] is None
+        lc = _lifecycle_from_api_plan(plan)
+        assert "stall_seconds" not in lc["init"][0]
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_create_patrol_stall_seconds_via_api_validation_path(
+        self, client, auth_headers, sample_script,
+    ):
+        """patrol 的 stall_seconds 必须经 _assemble_lifecycle_for_validation 写入。"""
+        resp = client.post("/api/v1/plans", json={
+            "name": "stall-patrol-api",
+            "patrol_interval_seconds": 60,
+            "steps": [
+                {
+                    "step_key": "check_device", "script_name": "check_device",
+                    "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                    "timeout_seconds": 30, "retry": 0, "enabled": True,
+                },
+                {
+                    "step_key": "patrol_check", "script_name": "check_device",
+                    "script_version": "1.0.0", "stage": "patrol", "sort_order": 0,
+                    "timeout_seconds": 30, "stall_seconds": 300,
+                    "retry": 0, "enabled": True,
+                },
+            ],
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        plan = resp.json()["data"]
+        patrol_step = next(s for s in plan["steps"] if s["stage"] == "patrol")
+        assert patrol_step["stall_seconds"] == 300
+        lc = _lifecycle_from_api_plan(plan)
+        assert "stall_seconds" not in lc["init"][0]
+        assert lc["patrol"]["steps"][0]["stall_seconds"] == 300
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
 
     def test_negative_stall_seconds_rejected(self, client, auth_headers, sample_script):
         resp = client.post("/api/v1/plans", json={
