@@ -86,6 +86,10 @@ class PlanStep(Base):
     stage           = Column(String(32), nullable=False)
     sort_order      = Column(Integer, nullable=False, default=0)
     timeout_seconds = Column(Integer, nullable=True)
+    # 停滞钟（#115 阶段 1）：多久无 PROGRESS 戳算卡死。NULL/0 = 关闭（缺省）。
+    # 与 timeout_seconds 不同，0 是合法且有意义的（= 不启用）。启用的前提是
+    # 该步骤脚本已接入 PROGRESS 打戳（#115 阶段 2）。
+    stall_seconds   = Column(Integer, nullable=True)
     retry           = Column(Integer, nullable=False, default=0)
     enabled         = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at      = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))

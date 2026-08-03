@@ -188,6 +188,8 @@ def build_lifecycle_from_steps(
             "timeout_seconds": step.timeout_seconds,
             "retry": step.retry,
         }
+        if step.stall_seconds is not None:
+            step_def["stall_seconds"] = step.stall_seconds
 
         if step.stage in ("init", "teardown"):
             lifecycle[step.stage].append(step_def)
@@ -248,6 +250,9 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
             "timeout_seconds": step.get("timeout_seconds"),
             "retry": step.get("retry", 0),
         }
+        stall = step.get("stall_seconds")
+        if stall is not None:
+            step_def["stall_seconds"] = stall
         if stage == "patrol":
             patrol_steps.append(step_def)
         else:
@@ -393,6 +398,7 @@ def build_plan_snapshot(
                     .get("default_params", {})
                 ),
                 "timeout_seconds": step.timeout_seconds,
+                "stall_seconds": step.stall_seconds,
                 "retry": step.retry,
                 "enabled": step.enabled is not False,
                 "sort_order": step.sort_order,

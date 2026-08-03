@@ -156,3 +156,116 @@ class TestGeneratedLifecyclePassesSchema:
         ok, errors = validate_pipeline_def({"lifecycle": lc})
         assert not ok
         assert any("totally_made_up" in e for e in errors)
+
+
+# ── stall_seconds 管道（#115 阶段 1 修正）──────────────────────────────
+# 与 barrier 同族的坑：字段一路串通但 schema 没加 → 配上就校验失败。
+# 这里断言必须落在校验器上，且验证「NULL 不写入」——否则所有没配的现有
+# 步骤都会带着 stall_seconds: null 被 schema 拒。
+
+
+def _step_with_stall(stall_seconds):
+    s = _step()
+    s.stall_seconds = stall_seconds
+    return s
+
+
+class TestStallSecondsPipeline:
+    def test_lifecycle_with_stall_seconds_passes_validation(self):
+        lc = build_lifecycle_from_steps(
+            _plan(), [_step_with_stall(120)], _META,
+        )
+        step = lc["init"][0]
+        assert step["stall_seconds"] == 120
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_null_stall_seconds_is_not_written(self):
+        """没配的步骤不能带 stall_seconds: null —— schema 会拒（None 不是 integer）。"""
+        lc = build_lifecycle_from_steps(_plan(), [_step()], _META)
+        assert "stall_seconds" not in lc["init"][0]
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_snapshot_round_trip_preserves_stall_seconds(self):
+        snap = build_plan_snapshot(
+            _plan(), [_step_with_stall(600)], _META, 0.05,
+        )
+        assert snap["steps"][0]["stall_seconds"] == 600
+        lc = build_lifecycle_from_snapshot(snap)
+        assert lc["init"][0]["stall_seconds"] == 600
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_snapshot_without_stall_seconds_stays_absent(self):
+        snap = build_plan_snapshot(_plan(), [_step()], _META, 0.05)
+        assert snap["steps"][0].get("stall_seconds") is None
+        lc = build_lifecycle_from_snapshot(snap)
+        assert "stall_seconds" not in lc["init"][0]
+        assert validate_pipeline_def({"lifecycle": lc})[0]
+
+    def test_schema_accepts_zero_as_disabled(self):
+        """与 timeout_seconds 不同，0 是合法且有意义的（= 不启用）。"""
+        lc = build_lifecycle_from_steps(
+            _plan(), [_step_with_stall(0)], _META,
+        )
+        assert lc["init"][0]["stall_seconds"] == 0
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+
+class TestStallSecondsApi:
+    @staticmethod
+    def _create(client, headers, stall_seconds):
+        resp = client.post("/api/v1/plans", json={
+            "name": "stall-test",
+            "steps": [{
+                "step_key": "check_device", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "timeout_seconds": 30, "stall_seconds": stall_seconds,
+                "retry": 0, "enabled": True,
+            }],
+        }, headers=headers)
+        assert resp.status_code == 201, resp.text
+        return resp.json()["data"]
+
+    def test_create_and_read_back(self, client, auth_headers, sample_script):
+        plan = self._create(client, auth_headers, 120)
+        assert plan["steps"][0]["stall_seconds"] == 120
+
+    def test_omitted_defaults_to_null(self, client, auth_headers, sample_script):
+        resp = client.post("/api/v1/plans", json={
+            "name": "stall-null",
+            "steps": [{
+                "step_key": "check_device", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "timeout_seconds": 30, "retry": 0, "enabled": True,
+            }],
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["data"]["steps"][0]["stall_seconds"] is None
+
+    def test_update_preserves_stall_seconds(self, client, auth_headers, sample_script):
+        plan_id = self._create(client, auth_headers, 120)["id"]
+        up = client.put(f"/api/v1/plans/{plan_id}", json={
+            "steps": [{
+                "step_key": "check_device", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "timeout_seconds": 60, "stall_seconds": 600,
+                "retry": 0, "enabled": True,
+            }],
+        }, headers=auth_headers)
+        assert up.status_code == 200, up.text
+        assert up.json()["data"]["steps"][0]["stall_seconds"] == 600
+
+    def test_negative_stall_seconds_rejected(self, client, auth_headers, sample_script):
+        resp = client.post("/api/v1/plans", json={
+            "name": "stall-neg",
+            "steps": [{
+                "step_key": "check_device", "script_name": "check_device",
+                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "timeout_seconds": 30, "stall_seconds": -1,
+                "retry": 0, "enabled": True,
+            }],
+        }, headers=auth_headers)
+        assert resp.status_code == 422
