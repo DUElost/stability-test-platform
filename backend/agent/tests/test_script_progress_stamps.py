@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.0"
+_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.1"
 
 
 def _load_module(name: str, path: Path):
