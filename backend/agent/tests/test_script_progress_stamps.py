@@ -1,4 +1,4 @@
-"""monkey_setup v2.3.0 的 PROGRESS 打戳（#115 阶段 2）。
+"""monkey_setup v2.3.1 的 PROGRESS 打戳（#115 阶段 2 / #133）。
 
 用**假 adb 可执行**验证 `adb_push_progress` / `_dd_with_progress`，不碰真设备。
 
@@ -90,11 +90,12 @@ def fake_adb(tmp_path: Path, request) -> Path:
                 print(os.path.getsize(path))
                 sys.exit(0)
             if cmd.startswith("rm "):
-                path = cmd.split()[-1].strip("'").strip('"')
-                try:
-                    os.unlink(path)
-                except FileNotFoundError:
-                    pass
+                for token in cmd.split()[2:]:
+                    path = token.strip("'").strip('"')
+                    try:
+                        os.unlink(path)
+                    except FileNotFoundError:
+                        pass
                 sys.exit(0)
             if cmd.startswith("mv "):
                 src = cmd.split()[1].strip("'").strip('"')
