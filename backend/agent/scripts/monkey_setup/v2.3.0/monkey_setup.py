@@ -59,7 +59,6 @@ STP_STEP_PARAMS 结构:
 import hashlib
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -323,43 +322,41 @@ def _dd_with_progress(
 ) -> None:
     """dd 填盘，带 PROGRESS 戳（#115 阶段 2）。
 
-    dd status=progress 把已写字节数打到 stderr，格式形如
-        "12345678 bytes (12 MB, 11 MiB) copied, 3 s, 4.1 MB/s"
-    逐行解析，字节数增长时打戳 —— 否则填盘这种长耗时步骤在停滞判据下
-    会被判死（普通输出不算活）。
+    不用 dd status=progress：toybox dd 不一定支持该选项（review 指出，
+    测试用假 adb 没覆盖真机）。改为**分块 dd 追加写 + stat 轮询**：
+
+      - 每块 dd 是独立 adb shell 调用，`>>` 追加，`2>/dev/null` 关掉统计输出
+      - 每块都检查 returncode，失败立即返回失败 —— 绝不"没填盘但报成功"
+      - 每块完成后 stat 实际文件大小打戳（written_bytes 单调递增）
+
+    adb_shell_quiet 返回 CompletedProcess，能拿到 returncode。
     """
-    proc = subprocess.Popen(
-        [adb_path(), "-s", serial, "shell",
-         f"dd if=/dev/zero of={fill_path} bs={block_size}k count={blocks} "
-         f"status=progress 2>&1"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
     progress = _make_progress("fill")
-    pattern = re.compile(r"(\d+) bytes \(")
-    last_bytes = -1
-    try:
-        deadline = time.monotonic() + timeout
-        while proc.poll() is None:
-            if time.monotonic() >= deadline:
-                proc.kill()
-                proc.wait(timeout=10)
-                raise subprocess.TimeoutExpired(
-                    [str(proc.args)], timeout, output=""
-                )
-            line = proc.stdout.readline()
-            if not line:
-                time.sleep(0.5)
-                continue
-            m = pattern.search(line)
-            if m:
-                n = int(m.group(1))
-                if n != last_bytes:
-                    last_bytes = n
-                    progress(written_bytes=n)
-    finally:
-        proc.wait(timeout=10)
+    need_kb = blocks * block_size
+    # 每块 512MB：单次 dd 在 USB 上 ~5-30s，块级超时 120s 安全；
+    # 39 块 × ~1s adb 开销 ≈ 40s 附加开销，可接受。
+    chunk_kb = 512 * 1024
+    written_kb = 0
+    while written_kb < need_kb:
+        n = min(chunk_kb, need_kb - written_kb)
+        result = adb_shell_quiet(
+            f"dd if=/dev/zero of={fill_path} bs=1024 count={n} "
+            f">> {fill_path} 2>/dev/null",
+            timeout=120,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"dd fill failed rc={result.returncode} at {written_kb}KiB: "
+                f"{fill_path} ({result.stderr[:200]})"
+            )
+        written_kb += n
+        # stat 实际大小作为进度（诚实：dd 报成功但文件没涨也能被看见）
+        try:
+            st = adb_shell_quiet(f"stat -c %s {fill_path}", timeout=10)
+            if st.returncode == 0 and (st.stdout or "").strip().isdigit():
+                progress(written_bytes=int(st.stdout.strip()))
+        except Exception:
+            progress(written_kb=written_kb)
 
 
 def step_clean(serial: str, cfg: dict) -> dict:

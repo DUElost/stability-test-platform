@@ -45,43 +45,47 @@ def fake_adb(tmp_path: Path, request) -> Path:
     """一个按参数分派行为的假 adb。
 
     `adb -s SERIAL push a b` → 输出 [ 0%]..[100%] 进度行后退出 0。
-    hang=True 时 push 分支挂住（供超时测试）。
+    param 控制变体：
+      - None: 进度行走 stdout（GNU adb 风格）
+      - "stderr": 进度行走 stderr（常见真实 adb 风格）
+      - "hang": push 挂住（供超时测试）
+      - "no-progress": 不输出进度行
     """
-    hang = getattr(request, "param", False)
+    variant = getattr(request, "param", None)
     script = tmp_path / "adb"
     # 注意：shebang 必须在**文件第一行**。dedent 对前导空行无效，
     # 空行开头的 shebang 内核不认，posix_spawn 报 Exec format error。
-    script.write_text(
-        "#!/usr/bin/env python3\n"
-        + textwrap.dedent(f"""\
-            import sys, time
-            args = sys.argv[1:]
-            hang = {hang!r}
-            if "push" in args:
-                if hang:
-                    time.sleep(600)
-                for pct in range(0, 101, 20):
-                    print(f"[{{pct:4d}}%] /sdcard/x")
-                    sys.stdout.flush()
-                    time.sleep(0.1)
-                sys.exit(0)
+    body = textwrap.dedent(f"""\
+        import sys, time
+        args = sys.argv[1:]
+        variant = {variant!r}
+        if "push" in args:
+            if variant == "hang":
+                time.sleep(600)
+            for pct in range(0, 101, 20):
+                line = f"[{{pct:4d}}%] /sdcard/x"
+                if variant == "stderr":
+                    sys.stderr.write(line + "\\n"); sys.stderr.flush()
+                elif variant != "no-progress":
+                    print(line); sys.stdout.flush()
+                time.sleep(0.1)
             sys.exit(0)
-        """),
-        encoding="utf-8",
-    )
+        sys.exit(0)
+    """)
+    script.write_text("#!/usr/bin/env python3\n" + body, encoding="utf-8")
     script.chmod(0o755)
     return script
-
-
-def _run_push(fake_adb: Path, *, timeout: int = 60, on_progress=None) -> None:
-    _adb.adb_push_progress("/tmp/src.bin", "/sdcard/dst.bin",
-                           timeout=timeout, on_progress=on_progress)
 
 
 @pytest.fixture(autouse=True)
 def _env(fake_adb, monkeypatch):
     """adb 脚本需要 STP_DEVICE_SERIAL（device_serial() 未设会 sys.exit）。"""
     monkeypatch.setenv("STP_DEVICE_SERIAL", "FAKESERIAL")
+
+
+def _run_push(fake_adb: Path, *, timeout: int = 60, on_progress=None) -> None:
+    _adb.adb_push_progress("/tmp/src.bin", "/sdcard/dst.bin",
+                           timeout=timeout, on_progress=on_progress)
 
 
 class TestPushProgress:
@@ -97,7 +101,22 @@ class TestPushProgress:
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
         _run_push(fake_adb)
 
-    @pytest.mark.parametrize("fake_adb", [True], indirect=True)
+    @pytest.mark.parametrize("fake_adb", ["stderr"], indirect=True)
+    def test_progress_on_stderr_is_parsed_too(self, fake_adb, monkeypatch):
+        """真实 adb push 的进度行常见走 stderr —— 只读 stdout 会漏。"""
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        seen: list[int] = []
+        _run_push(fake_adb, on_progress=seen.append)
+        assert seen, "stderr 上的进度行没有被解析"
+        assert seen[-1] == 100
+
+    @pytest.mark.parametrize("fake_adb", ["no-progress"], indirect=True)
+    def test_no_progress_lines_reports_success(self, fake_adb, monkeypatch):
+        """没有进度行也必须正常完成（兼容无进度输出的 adb 变体）。"""
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        _run_push(fake_adb)
+
+    @pytest.mark.parametrize("fake_adb", ["hang"], indirect=True)
     def test_timeout_still_works(self, fake_adb, monkeypatch):
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
         with pytest.raises(subprocess.TimeoutExpired):
