@@ -130,7 +130,7 @@ def aggregate_risk_summary_from_signals(
     aee_entries = 0
     worst_level = _DEFAULT_RISK_LEVEL
 
-    for subtype, dedup_count, raw_count in rows:
+    for subtype, dedup_count, _raw_count in rows:
         count = int(dedup_count)
         by_type[subtype] = count
         events_total += count

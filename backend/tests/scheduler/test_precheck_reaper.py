@@ -42,7 +42,6 @@ def test_is_stale_iso_none():
 
 def test_is_stale_iso_fresh():
     # A timestamp from 5 seconds ago should not be stale against a 90s threshold.
-    fresh = "2026-05-10T07:09:44.728Z"
     # We can't easily test staleness without mocking time, but we can test
     # the None/parse cases.
     pass

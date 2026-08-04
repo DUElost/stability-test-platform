@@ -190,7 +190,7 @@ def test_enter_starts_watcher_and_records_summary(lock_tracker, patch_manager):
 
 def test_enter_watcher_fail_with_degraded_continues(lock_tracker, patch_manager):
     """DEGRADED（首发默认）：watcher 启动失败不抛异常，capability=unavailable，锁保留。"""
-    fake = patch_manager(_FakeManager(mode="fail_unavail"))
+    patch_manager(_FakeManager(mode="fail_unavail"))
 
     session = JobSession(
         job_payload=_make_payload(watcher_policy={"on_unavailable": "degraded"}),
@@ -308,7 +308,7 @@ def test_to_complete_payload_shape(lock_tracker, patch_manager):
     """summary.to_complete_payload 字段完整 + 可 JSON 序列化。"""
     import json
 
-    fake = patch_manager(_FakeManager(mode="ok", capability="stub"))
+    patch_manager(_FakeManager(mode="ok", capability="stub"))
 
     session = JobSession(
         job_payload=_make_payload(),

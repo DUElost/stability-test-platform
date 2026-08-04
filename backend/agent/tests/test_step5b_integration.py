@@ -86,7 +86,7 @@ class TestConcurrencyCap:
 
         def worker(did):
             try:
-                with s.acquire(did) as p:
+                with s.acquire(did):
                     with lock:
                         max_observed[0] = max(max_observed[0], s.held)
                     with held_lock:

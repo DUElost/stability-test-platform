@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from backend.services.run_console import RunConsole, RunKeyBusyError
+from backend.services.run_console import RunConsole, RunConsoleError, RunKeyBusyError
 
 
 @pytest.fixture(autouse=True)
@@ -143,7 +143,7 @@ def test_read_log_from_seq(tmp_path, emit_capture):
 def test_not_configured_raises(tmp_path):
     # 未 configure 直接 start 应报错
     rc = RunConsole.instance()
-    with pytest.raises(Exception):
+    with pytest.raises(RunConsoleError):
         rc.start(run_key="x", cmd=_py("print('x')"))
 
 

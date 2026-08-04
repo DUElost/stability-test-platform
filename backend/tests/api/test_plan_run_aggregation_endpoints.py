@@ -890,7 +890,6 @@ class TestDevicesEndpoint:
     ):
         from backend.models.enums import DeviceStatus
 
-        j2 = chain_setup["job_running"]
         dev = chain_setup["device_running"]
         dev.status = DeviceStatus.OFFLINE.value
         dev.adb_connected = False

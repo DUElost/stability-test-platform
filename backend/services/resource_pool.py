@@ -121,9 +121,6 @@ async def allocate_devices(
 
     pool_ids = [p.id for p in pools]
     loads = await _current_pool_loads(db, pool_ids)
-    existing = await _device_existing_pools(db, device_ids)
-
-    pool_objs = {p.id: p for p in pools}
     allocations: dict[int, tuple[ResourcePool, dict[str, Any]]] = {}
 
     for device_id in device_ids:

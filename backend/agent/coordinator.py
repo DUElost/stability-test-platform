@@ -375,10 +375,8 @@ class HostRunCoordinator:
         headers = {"X-Agent-Secret": self._agent_secret} if self._agent_secret else {}
         host_entries: list[dict]
         job_entries: list[dict]
-        per_host_epoch: dict[int, int]
 
         with self._lock:
-            per_host_epoch = {prh_id: v.epoch for prh_id, v in self._plan_run_hosts.items()}
             host_entries = [
                 {**v.to_payload(), "coordinator_epoch": v.epoch}
                 for v in self._plan_run_hosts.values()

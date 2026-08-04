@@ -126,8 +126,6 @@ def test_resume_restores_cycle_counter(mock_sleep, tmp_path):
 
     seen_iterations: list[int] = []
 
-    original = engine._run_patrol_cycle_steps
-
     def capture(*args, **kwargs):
         seen_iterations.append(engine._run_id)
         engine._canceled = True

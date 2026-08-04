@@ -200,7 +200,7 @@ def test_ttl_validation_warns_with_large_interval(monkeypatch, caplog):
 
     monkeypatch.setenv("AGENT_LOCK_RENEWAL_INTERVAL", "350")
 
-    r = _make_renewer()
+    _make_renewer()
     # The warning is logged during __init__ — check caplog
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     ttl_warnings = [r for r in warnings if "lease_renewal_interval_too_long" in r.message]

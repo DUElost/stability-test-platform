@@ -29,7 +29,6 @@ class TestHeartbeat:
 
     def test_heartbeat_existing_host(self, client, sample_host):
         """Test heartbeat updates existing host"""
-        original_heartbeat = sample_host.last_heartbeat
 
         response = client.post(
             "/api/v1/heartbeat",
@@ -43,6 +42,33 @@ class TestHeartbeat:
         data = response.json()
         assert data["ok"] is True
         assert data["host_id"] == sample_host.id
+
+    def test_heartbeat_ip_conflict_keeps_old_ip(self, client, sample_host, db_session):
+        """#101: host.ip 唯一后，上报被其他 host 占用的 IP 不覆盖、不 500。"""
+        from backend.models.host import Host
+
+        host_b = Host(
+            id="104",
+            hostname="test-host-104",
+            name="test-host-b",
+            ip="172.21.15.104",
+            ip_address="172.21.15.104",
+            status=HostStatus.ONLINE.value,
+        )
+        db_session.add(host_b)
+        db_session.commit()
+
+        response = client.post(
+            "/api/v1/heartbeat",
+            json={
+                "host_id": host_b.id,
+                "status": "ONLINE",
+                "host": {"ip": sample_host.ip},
+            },
+        )
+        assert response.status_code == 200, response.text
+        db_session.refresh(host_b)
+        assert host_b.ip == "172.21.15.104"  # 保留旧 IP，不被占用方覆盖
 
     def test_heartbeat_updates_script_catalog_version_and_reports_outdated(
         self, client, sample_host, db_session
@@ -482,7 +508,6 @@ class TestHeartbeat:
 
     def test_heartbeat_preserves_existing_device(self, client, sample_device):
         """Test heartbeat preserves existing device data"""
-        original_model = sample_device.model
 
         response = client.post(
             "/api/v1/heartbeat",

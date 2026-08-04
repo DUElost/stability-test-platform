@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from backend.services.script_catalog_version import (
     catalog_digest,
     compute_script_catalog_version,

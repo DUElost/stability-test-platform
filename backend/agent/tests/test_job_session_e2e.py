@@ -430,7 +430,7 @@ def test_e2e_exit_drain_flushes_pending_mobilelog_to_outbox(db, nfs_dir, lock_tr
             log_dir=str(nfs_dir / "jobs" / "1004"),
             lock_register=lock_tracker.reg_job,
             lock_deregister=lock_tracker.dereg_job,
-        ) as session:
+        ):
             # 等 inotifyd reader 把事件读进 batcher（但还没 flush）
             time.sleep(0.5)
             # exit 之前 outbox 应该是空的（batch 还没到 60s）

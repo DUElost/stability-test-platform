@@ -241,8 +241,6 @@ class TestRealWiringAndIsolation:
 
     def test_temp_chunk_name_is_isolated_per_call(self, fake_adb, monkeypatch, tmp_path):
         """临时块名含 pid/tid（review #133 问题 3）——并发 push 不互踩。"""
-        import threading
-
         monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
         src_text = (_SCRIPT_DIR / "_adb.py").read_text(encoding="utf-8")
         assert "{local}.{os.getpid()}.{threading.get_ident()}.chunk" in src_text

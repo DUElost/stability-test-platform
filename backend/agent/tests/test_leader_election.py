@@ -36,6 +36,9 @@ def test_election_enabled_sqlite_url_skips_lock(monkeypatch):
     # 必须 import 前 setenv(以前可以 import 后 setattr 覆盖默认值,现在没有默认值)。
     monkeypatch.setenv("DATABASE_URL", "sqlite:///tmp/stp-leader-test.db")
     import backend.core.database as db_mod
+    # 模块可能已被其它用例缓存（import 前 setenv 只对全新进程生效），
+    # 所以 import 后仍需 setattr 覆盖，保证 SQLite 分支被走到。
+    monkeypatch.setattr(db_mod, "DATABASE_URL", "sqlite:///tmp/stp-leader-test.db")
     assert leader_election_enabled() is True
     with hold_scheduler_leadership("admission_pump") as ok:
         assert ok is True

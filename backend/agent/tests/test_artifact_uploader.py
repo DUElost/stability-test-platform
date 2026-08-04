@@ -219,7 +219,6 @@ def test_submit_before_start_is_silently_dropped():
 
 def test_queue_full_drops_without_blocking():
     u = ArtifactUploader.instance()
-    sess = _FakeSession()
 
     # 让 worker 永远阻塞住，使 queue 一直满：session.post 卡在 event 上
     blocker = threading.Event()

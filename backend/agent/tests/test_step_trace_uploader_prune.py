@@ -52,7 +52,8 @@ class TestPruneAckedStepTraces:
         assert remaining == set(ids[-3:])
 
     def test_does_not_touch_unacked(self, local_db):
-        acked_ids = [_save_and_ack(local_db, job_id=1, step_id=f"s{i}") for i in range(5)]
+        for i in range(5):
+            _save_and_ack(local_db, job_id=1, step_id=f"s{i}")
         unacked_ids = [
             local_db.save_step_trace(
                 job_id=2, step_id=f"u{i}", stage="init",
