@@ -34,6 +34,8 @@ from backend.services.plan_dispatcher_core import (
     check_script_keys_complete as _check_script_keys_complete,
     inject_wifi_params as _inject_wifi_params,
     iter_lifecycle_steps as _iter_lifecycle_steps,
+    lifecycle_consumes_wifi as _lifecycle_consumes_wifi,
+    lifecycle_has_connect_wifi_step as _lifecycle_has_connect_wifi_step,
     script_defaults as _script_defaults,
     snapshot_dispatch_host_watcher_admin_states,
 )
@@ -783,9 +785,18 @@ def materialize_jobs_and_allocations(
     """
     wifi_allocations: dict[int, dict] = {}
     requested_pool_id = (pr.run_context or {}).get("wifi_pool_id")
-    needs_wifi = requested_pool_id is not None or any(
-        "connect_wifi" in (step.get("action") or "")
-        for _, step in _iter_lifecycle_steps({"lifecycle": lifecycle})
+    consumes_wifi = _lifecycle_consumes_wifi(lifecycle)
+    has_connect_wifi = _lifecycle_has_connect_wifi_step(lifecycle)
+    if requested_pool_id is not None and not consumes_wifi:
+        logger.warning(
+            "wifi_pool_id ignored — lifecycle has no WiFi consumer steps plan_run=%d",
+            pr.id,
+        )
+        requested_pool_id = None
+    # connect_wifi always allocates (auto-pick pool); monkey_setup only when the
+    # operator chose a pool for this execution.
+    needs_wifi = has_connect_wifi or (
+        requested_pool_id is not None and consumes_wifi
     )
     if needs_wifi:
         assignments = _sync_allocate_devices(

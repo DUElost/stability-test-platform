@@ -283,6 +283,45 @@ def build_lifecycle_from_snapshot(plan_snapshot: dict) -> dict:
     return lifecycle
 
 
+_WIFI_CONSUMER_SCRIPT_NAMES = frozenset({"connect_wifi", "monkey_setup"})
+
+
+def plan_steps_consumes_wifi(steps: list[PlanStep]) -> bool:
+    """True when any enabled step runs a script that can consume WiFi credentials."""
+    for step in steps:
+        if step.enabled is False:
+            continue
+        if step.script_name in _WIFI_CONSUMER_SCRIPT_NAMES:
+            return True
+    return False
+
+
+def plan_steps_has_connect_wifi(steps: list[PlanStep]) -> bool:
+    """True when any enabled step is the dedicated ``connect_wifi`` script."""
+    for step in steps:
+        if step.enabled is False:
+            continue
+        if step.script_name == "connect_wifi":
+            return True
+    return False
+
+
+def lifecycle_consumes_wifi(lifecycle: dict) -> bool:
+    """True when any lifecycle step action targets a WiFi-consuming script."""
+    for _, step in iter_lifecycle_steps({"lifecycle": lifecycle}):
+        action = step.get("action") or ""
+        if any(name in action for name in _WIFI_CONSUMER_SCRIPT_NAMES):
+            return True
+    return False
+
+
+def lifecycle_has_connect_wifi_step(lifecycle: dict) -> bool:
+    for _, step in iter_lifecycle_steps({"lifecycle": lifecycle}):
+        if "connect_wifi" in (step.get("action") or ""):
+            return True
+    return False
+
+
 def iter_lifecycle_steps(pipeline: dict):
     lifecycle = (pipeline or {}).get("lifecycle", {})
     for phase_name in ("init", "teardown"):

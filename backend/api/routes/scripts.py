@@ -27,6 +27,7 @@ from backend.models.plan import PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.script import Script
 from backend.services.script_catalog import scan_script_root
+from backend.services.script_catalog_version import invalidate_script_catalog_version_cache
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/scripts", tags=["scripts"])
@@ -409,6 +410,7 @@ def create_script(
             request=request,
         )
         db.commit()
+        invalidate_script_catalog_version_cache()
     except IntegrityError:
         db.rollback()
         raise HTTPException(
@@ -499,6 +501,14 @@ def update_script(
         request=request,
     )
     db.commit()
+    try:
+        from backend.services.script_catalog_version import (
+            invalidate_script_catalog_version_cache,
+        )
+
+        invalidate_script_catalog_version_cache()
+    except Exception:
+        pass
     db.refresh(script)
     return ok(_script_out(script))
 
@@ -584,6 +594,7 @@ def create_script_version(
             request=request,
         )
         db.commit()
+        invalidate_script_catalog_version_cache()
     except IntegrityError:
         db.rollback()
         raise HTTPException(
@@ -617,4 +628,5 @@ def deactivate_script(
         request=request,
     )
     db.commit()
+    invalidate_script_catalog_version_cache()
     return ok({"deactivated": script_id})

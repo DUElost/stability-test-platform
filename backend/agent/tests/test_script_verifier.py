@@ -111,7 +111,7 @@ def test_verify_scripts_payload_marks_mismatch_when_sha_diverges(script_dir: Pat
     assert r0["actual_sha"] is not None
     assert r0["actual_sha"] != "deadbeef" * 8
     assert r0["ok"] is False
-    assert r0["error"] is None
+    assert r0["error"] == "sha_mismatch"
 
 
 def test_verify_scripts_payload_marks_missing_file_with_error(tmp_path: Path):
@@ -164,7 +164,43 @@ def test_verify_scripts_payload_handles_multiple_entries(script_dir: Path):
 
     assert [r["ok"] for r in payload["results"]] == [True, False, False]
     assert [r["exists"] for r in payload["results"]] == [True, True, False]
+    assert payload["results"][1]["error"] == "sha_mismatch"
     assert payload["results"][2]["error"] == "file_missing_or_unreadable"
+
+
+def test_verify_scripts_payload_checks_support_files(script_dir: Path):
+    alpha = script_dir / "alpha" / "v1.0.0" / "alpha.py"
+    helper = script_dir / "alpha" / "v1.0.0" / "_adb.py"
+    helper.write_bytes(b"helper v1\n")
+    payload = verify_scripts_payload(
+        [
+            {
+                "name": "alpha",
+                "version": "v1.0.0",
+                "nfs_path": str(alpha),
+                "sha256": _sha256_of(alpha.read_bytes()),
+                "support_files": {"_adb.py": _sha256_of(helper.read_bytes())},
+            }
+        ],
+        host_id="host-support",
+    )
+    assert payload["results"][0]["ok"] is True
+
+    helper.write_bytes(b"helper v2\n")
+    payload_bad = verify_scripts_payload(
+        [
+            {
+                "name": "alpha",
+                "version": "v1.0.0",
+                "nfs_path": str(alpha),
+                "sha256": _sha256_of(alpha.read_bytes()),
+                "support_files": {"_adb.py": _sha256_of(b"helper v1\n")},
+            }
+        ],
+        host_id="host-support",
+    )
+    assert payload_bad["results"][0]["ok"] is False
+    assert payload_bad["results"][0]["error"] == "support_file_mismatch:_adb.py"
 
 
 def test_verify_scripts_payload_empty_input_yields_empty_results():

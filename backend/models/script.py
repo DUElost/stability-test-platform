@@ -17,6 +17,9 @@ class Script(Base):
     version = Column(String(32), nullable=False)
     nfs_path = Column(Text, nullable=False)
     content_sha256 = Column(String(64), nullable=False)
+    # ADR-0020: entry-file sha lives in content_sha256; companion modules in the
+    # same version directory (e.g. _adb.py) are tracked here for scan/verify.
+    support_files_manifest = Column(JSONB, nullable=False, default=dict, server_default="{}")
     param_schema = Column(JSONB, nullable=False, default=dict)
     default_params = Column(JSONB, nullable=False, default=dict, server_default="{}")
     is_active = Column(Boolean, nullable=False, default=True)

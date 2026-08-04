@@ -47,6 +47,22 @@ def hash_local_script_file(path: Optional[str]) -> Optional[str]:
         return None
 
 
+def _verify_support_files(
+    nfs_path: str,
+    support_files: dict,
+) -> tuple[bool, str | None]:
+    if not support_files:
+        return True, None
+    base_dir = os.path.dirname(nfs_path or "")
+    if not base_dir:
+        return False, "support_file_base_missing"
+    for fname, expected_sha in sorted(support_files.items()):
+        actual = hash_local_script_file(os.path.join(base_dir, fname))
+        if actual != expected_sha:
+            return False, f"support_file_mismatch:{fname}"
+    return True, None
+
+
 def verify_scripts_payload(
     expected: Iterable[dict],
     *,
@@ -68,7 +84,18 @@ def verify_scripts_payload(
 
         actual_sha = hash_local_script_file(nfs_path)
         exists = actual_sha is not None
-        ok = exists and actual_sha == expected_sha
+        support_files = entry.get("support_files") or {}
+        support_ok, support_err = _verify_support_files(nfs_path, support_files)
+        entry_ok = exists and actual_sha == expected_sha
+        ok = entry_ok and support_ok
+        if ok:
+            error = None
+        elif not exists:
+            error = "file_missing_or_unreadable"
+        elif not entry_ok:
+            error = "sha_mismatch"
+        else:
+            error = support_err
 
         results.append(
             {
@@ -78,7 +105,7 @@ def verify_scripts_payload(
                 "actual_sha": actual_sha,
                 "exists": exists,
                 "ok": ok,
-                "error": None if exists else "file_missing_or_unreadable",
+                "error": error,
             }
         )
 

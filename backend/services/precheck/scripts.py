@@ -23,6 +23,7 @@ def expected_scripts_for_run(plan_run: PlanRun, db: Session) -> list[dict]:
             Script.version,
             Script.content_sha256,
             Script.nfs_path,
+            Script.support_files_manifest,
         ).where(Script.is_active.is_(True))
     ).all()
     return [
@@ -31,6 +32,7 @@ def expected_scripts_for_run(plan_run: PlanRun, db: Session) -> list[dict]:
             "version": r.version,
             "sha256": r.content_sha256 or "",
             "nfs_path": r.nfs_path or "",
+            "support_files": dict(r.support_files_manifest or {}),
         }
         for r in rows
         if (r.name, r.version) in keys
