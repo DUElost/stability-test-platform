@@ -681,7 +681,8 @@ class TestTeardownPermit:
 
         engine, *_ = _make_engine()
         scheduler = MagicMock()
-        scheduler.acquire.return_value = MagicMock()  # permit
+        permit = MagicMock()
+        scheduler.acquire.return_value = permit
         engine._scheduler = scheduler
         engine._device_id = 1
         engine._execute_step = lambda phase, step, **kwargs: StepResult(success=True)
@@ -693,4 +694,7 @@ class TestTeardownPermit:
              "params": {}, "timeout_seconds": 5},
         ])
 
-        assert scheduler.acquire.called, "teardown 必须经过 permit acquire"
+        # 每个 teardown 步骤各 acquire 一次,且 permit 必须 release
+        assert scheduler.acquire.call_count == 2, "每步必须 acquire 一次"
+        assert permit.release.called, "permit 必须 release(不能拿锁不还)"
+        assert permit.release.call_count == 2
