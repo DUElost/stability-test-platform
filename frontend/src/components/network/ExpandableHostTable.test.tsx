@@ -45,7 +45,7 @@ describe('ExpandableHostTable', () => {
     expect(headers).not.toEqual(expect.arrayContaining(['IP地址', '设备数', '任务数', 'Watch状态']));
 
     expect(screen.getByText(host.name).closest('td')).toBe(screen.getByText(host.ip).closest('td'));
-    expect(screen.getByText('设备 6')).toBeInTheDocument();
+    expect(screen.getByText('在线 6')).toBeInTheDocument();
     expect(screen.getByText('任务 2')).toBeInTheDocument();
     expect(screen.getByText('1.4 @abc1234')).toBeInTheDocument();
     expect(screen.getByText('已对齐')).toBeInTheDocument();

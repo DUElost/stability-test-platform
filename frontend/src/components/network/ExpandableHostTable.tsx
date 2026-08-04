@@ -417,9 +417,9 @@ export function ExpandableHostTable({
                               'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',
                               (host.device_count || 0) > 0 ? 'bg-primary/10 text-primary' : 'bg-muted/50 text-muted-foreground'
                             )}
-                            title={host.claim_hint ?? '设备数'}
+                            title={host.claim_hint ?? '在线设备数'}
                           >
-                            设备 {host.device_count || 0}
+                            在线 {host.device_count || 0}
                           </span>
                           <span className={cn(
                             'inline-flex items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-medium',

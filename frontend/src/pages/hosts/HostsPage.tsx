@@ -12,7 +12,7 @@ import HostBulkActionBar from '@/components/host/HostBulkActionBar';
 import HostOperationPanel from '@/components/host/HostOperationPanel';
 import { api, coerceHostList, fetchHostList } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
-import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
+import { hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -38,12 +38,6 @@ export default function HostsPage() {
     refetchInterval: 10000,
   });
   const hosts = useMemo(() => coerceHostList(hostsData), [hostsData]);
-
-  const { data: devices } = useQuery({
-    queryKey: deviceKeys.list(),
-    queryFn: () => api.devices.list(0, 200).then(res => res.items),
-    refetchInterval: 10000,
-  });
 
   const createMutation = useMutation({
     mutationFn: (data: Parameters<typeof api.hosts.create>[0]) => api.hosts.create(data),
@@ -339,78 +333,25 @@ export default function HostsPage() {
     });
   };
 
-  // Calculate device count + claim exclusion hints per host
-  const hostDeviceStats = useMemo(() => {
-    const stats = new Map<
-      string | number,
-      {
-        total: number;
-        adbExcluded: number;
-        leaseBusy: number;
-        claimable: number;
-      }
-    >();
-    if (!devices) return stats;
-
-    const isAdbExcluded = (device: {
-      adb_connected?: boolean | null;
-      adb_state?: string | null;
-      status?: string;
-    }) =>
-      device.adb_connected === false ||
-      device.adb_state === 'offline' ||
-      device.adb_state === 'unknown' ||
-      device.status === 'OFFLINE';
-
-    devices.forEach((device: {
-      host_id?: string | number | null;
-      status?: string;
-      adb_connected?: boolean | null;
-      adb_state?: string | null;
-    }) => {
-      if (!device.host_id) return;
-      const cur = stats.get(device.host_id) ?? {
-        total: 0,
-        adbExcluded: 0,
-        leaseBusy: 0,
-        claimable: 0,
-      };
-      cur.total += 1;
-      if (isAdbExcluded(device)) {
-        cur.adbExcluded += 1;
-      } else if (device.status === 'BUSY') {
-        cur.leaseBusy += 1;
-      } else {
-        cur.claimable += 1;
-      }
-      stats.set(device.host_id, cur);
-    });
-    return stats;
-  }, [devices]);
-
-  const deviceCountMap = useMemo(() => {
-    const countMap = new Map<number | string, number>();
-    hostDeviceStats.forEach((v, hostId) => {
-      countMap.set(hostId, v.total);
-    });
-    return countMap;
-  }, [hostDeviceStats]);
-
   // Transform data for expandable table
   const tableData: HostTableData[] = useMemo(() => {
     if (!hosts) return [];
     return hosts.map((host: any) => {
       const extra = host.extra || {};
       const diskInfo = extra.disk_usage || {};
-      const devStats = hostDeviceStats.get(host.id);
+      const onlineDevices =
+        host.status === 'ONLINE'
+          ? (host.capacity?.online_healthy_devices ?? 0)
+          : 0;
       let claimHint: string | null = null;
-      if (devStats && devStats.total > 0) {
-        const parts = [`${devStats.claimable} 可认领`];
-        if (devStats.adbExcluded > 0) {
-          parts.push(`${devStats.adbExcluded} adb 离线排除`);
-        }
-        if (devStats.leaseBusy > 0) {
-          parts.push(`${devStats.leaseBusy} 租约占用`);
+      if (onlineDevices > 0 && host.status === 'ONLINE') {
+        const busy = host.capacity?.active_devices ?? 0;
+        const claimable =
+          host.capacity?.available_slots
+          ?? Math.max(0, onlineDevices - busy);
+        const parts = [`${claimable} 可认领`];
+        if (busy > 0) {
+          parts.push(`${busy} 租约占用`);
         }
         claimHint = parts.join(' · ');
       }
@@ -447,14 +388,14 @@ export default function HostsPage() {
               total_gb: info.total_gb,
             }))
           : [],
-        device_count: deviceCountMap.get(host.id) || 0,
+        device_count: onlineDevices,
         claim_hint: claimHint,
         active_tasks: host.capacity?.active_jobs ?? host.active_job_count ?? 0,
         health_status: host.health?.status,
         health_reasons: host.health?.reasons,
       };
     });
-  }, [hosts, deviceCountMap, hostDeviceStats]);
+  }, [hosts]);
 
   const bulkCounts = useMemo(() => {
     const selected = Array.from(selectedHostIds)

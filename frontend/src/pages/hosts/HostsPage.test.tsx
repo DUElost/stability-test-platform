@@ -93,6 +93,7 @@ vi.mock('../../components/network/ExpandableHostTable', () => ({
           <span>{h.name}</span>
           <span>{h.ip}</span>
           <span>{h.status}</span>
+          <span data-testid={`device-count-${h.id}`}>{h.device_count ?? 0}</span>
           <span>{h.watcher_admin_active !== false ? '已激活' : '未激活'}</span>
           {onWatcherAdminStateChange && (
             <button
@@ -132,7 +133,6 @@ describe('HostsPage', () => {
     vi.clearAllMocks();
     mockHostsList.mockResolvedValue({ items: [], total: 0 });
     const { api } = await import('../../utils/api');
-    (api.devices.list as any).mockResolvedValue({ items: [], total: 0 });
     (api.planRuns.list as any).mockResolvedValue([]);
   });
 
@@ -286,6 +286,34 @@ describe('HostsPage', () => {
 
     await screen.findByText('Worker-01');
     expect(api.planRuns.list).not.toHaveBeenCalled();
+  });
+
+  it('shows online device count from heartbeat capacity, not historical DB records', async () => {
+    mockHostsList.mockResolvedValue({
+      items: [
+        {
+          id: '172-21-8-87',
+          name: '172.21.8.87',
+          ip: '172.21.8.87',
+          status: 'ONLINE',
+          extra: {},
+          mount_status: {},
+          capacity: {
+            online_healthy_devices: 0,
+            active_devices: 0,
+            available_slots: 0,
+            active_jobs: 0,
+          },
+        },
+      ],
+      total: 1,
+    });
+
+    const HostsPage = (await import('./HostsPage')).default;
+    render(<HostsPage />, { wrapper: createWrapper() });
+
+    await screen.findByTestId('device-count-172-21-8-87');
+    expect(screen.getByTestId('device-count-172-21-8-87')).toHaveTextContent('0');
   });
 
   it('deactivates watcher admin state after confirmation', async () => {
