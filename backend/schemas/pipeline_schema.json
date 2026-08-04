@@ -49,6 +49,14 @@
         "stall_seconds": { "type": "integer", "minimum": 0 },
         "retry": { "type": "integer", "minimum": 0, "maximum": 10, "default": 0 },
         "enabled": { "type": "boolean", "default": true }
+      },
+      "if": {
+        "properties": { "timeout_seconds": { "const": 0 } },
+        "required": ["timeout_seconds"]
+      },
+      "then": {
+        "properties": { "stall_seconds": { "minimum": 1 } },
+        "required": ["stall_seconds"]
       }
     }
   }
