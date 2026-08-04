@@ -152,6 +152,13 @@ _READER_DRAIN_GRACE_SECONDS = 1.0
 # 断，超时后只能放弃（daemon 线程，随进程退出而消亡），绝不能让它挂住主线程。
 _READER_JOIN_TIMEOUT_SECONDS = 5.0
 
+# #117:barrier 判定 peer 是否还在推进的新鲜度阈值。EXECUTING_STEP 且
+# last_progress_at 距今小于此值 = 活(打戳步骤的戳在刷新);超过 = 视为停滞。
+# 与 STP_STEP_STALL_SECONDS 的建议值一致。
+_PEER_PROGRESS_STALE_SECONDS = float(
+    os.getenv("STP_BARRIER_PROGRESS_STALE_SECONDS", "120")
+)
+
 # 单流捕获上限：超过后丢弃后续输出（仍继续读取避免管道阻塞），防止异常/
 # 失控输出把进程内存打爆（#123：MagicMock 流导致 reader 无限 append）。
 _MAX_CAPTURED_CHARS = 8 * 1024 * 1024
@@ -920,7 +927,7 @@ class PipelineEngine:
             return
         if progress_ts is None and state in ("EXECUTING_STEP", "PATROL_SLEEP"):
             progress_ts = datetime.now(timezone.utc).isoformat()
-        jv = coord.register_job(self._run_id)
+        jv = coord.register_job(self._run_id, prh_id=self._plan_run_host_id)
         if jv is not None:
             jv.update(state=state, progress_ts=progress_ts)
     def _barrier_enabled(self) -> bool:
@@ -987,6 +994,40 @@ class PipelineEngine:
             return 600.0
         return value if value > 0 else 600.0
 
+    def _peers_are_progressing(self, coord) -> bool:
+        """同 PRH 是否有 peer 还在推进（#117 progress-aware barrier）。
+
+        判定表（review 约定）：
+          - WAITING_EXECUTION_SLOT → 活：在排队等槽位，是被 cap 限流，不是卡住
+          - EXECUTING_STEP 且 last_progress_at 新鲜 → 活：在干活，戳在刷新
+          - WAITING_BARRIER → 不算：它自己也在等，否则互相续期成死锁
+          - 其它 / 无 last_progress_at → 不算
+
+        失败倒向「不续期」——保守：宁可走 barrier_timeout_seconds 兜底，
+        不能无限等。
+        """
+        try:
+            for peer in coord.peers_of(self._run_id):
+                state = peer.execution_state
+                if state == "WAITING_EXECUTION_SLOT":
+                    return True
+                if state == "EXECUTING_STEP":
+                    raw = peer.last_progress_at
+                    if raw:
+                        try:
+                            ts = datetime.fromisoformat(raw)
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
+                            if (datetime.now(timezone.utc) - ts).total_seconds() < (
+                                _PEER_PROGRESS_STALE_SECONDS
+                            ):
+                                return True
+                        except ValueError:
+                            pass
+        except Exception:
+            logger.debug("peers_progress_check_error", exc_info=True)
+        return False
+
     def _await_phase_barrier(self, next_phase: str) -> bool:
         """Block until all PlanRunHost peers reach this phase boundary.
 
@@ -1018,6 +1059,10 @@ class PipelineEngine:
         while True:
             if self._is_lock_lost() or self._canceled:
                 return False
+            # #117:peer 还在推进就续期——barrier 因为同伴"还在干活"而超时
+            # 本身就是误判。只有所有 peer 都停滞才启动现有超时钟。
+            if self._peers_are_progressing(coord):
+                deadline = time.monotonic() + timeout
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 logger.error(
