@@ -2011,11 +2011,19 @@ class PipelineEngine:
             total_steps += 1
             step_id = step.get("step_id", "unknown")
             try:
-                result = self._execute_step("teardown", step)
-                if not result.success:
+                # #118:teardown 也走 permit——结果收取要读写 NFS/USB,
+                # 23 路并发会打满带宽;permit 串行保护与 init/patrol 一致。
+                # 无 scheduler 时回落 legacy 路径,行为不变。
+                ok = self._run_step_with_permit(
+                    "teardown", step, suppress_success_trace=False,
+                )
+                if not ok:
                     failed_steps += 1
-                    errors.append(f"{step_id}: {result.error_message}")
-                    logger.warning("[Teardown] step '%s' failed: %s", step_id, result.error_message)
+                    error_detail = getattr(self, "_last_step_error", "") or "failed"
+                    errors.append(f"{step_id}: {error_detail}")
+                    logger.warning(
+                        "[Teardown] step '%s' failed: %s", step_id, error_detail,
+                    )
             except Exception as e:
                 failed_steps += 1
                 errors.append(f"{step_id}: {e}")
