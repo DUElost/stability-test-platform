@@ -364,3 +364,63 @@ class TestStallSecondsApi:
             }],
         }, headers=auth_headers)
         assert resp.status_code == 422
+
+
+# ── 0=不限 按步骤开门（schema timeout_seconds minimum 1→0）────────────
+# 停滞判据落地（#115 阶段 1/2）+ 脚本打戳（v2.3.1 / flash v1.1.0）后，
+# 已接打戳 + 配了 stall_seconds 的步骤可以配 timeout_seconds=0（不限）。
+# schema 只放宽 step 级；lifecycle 级（plan 总时长）保持 minimum 1。
+
+
+def _step_with_timeout(t):
+    s = _step()
+    s.timeout_seconds = t
+    return s
+
+
+class TestStepTimeoutZero:
+    """0=不限 的开门条件是**可校验的**（schema if/then 条件门）：
+    timeout_seconds=0 必须同时配 stall_seconds > 0 —— 否则"卡死永远占槽位"。
+    """
+
+    @staticmethod
+    def _lc(stall_seconds):
+        s = _step_with_timeout(0)
+        if stall_seconds is not None:
+            s.stall_seconds = stall_seconds
+        return build_lifecycle_from_steps(_plan(), [s], _META)
+
+    def test_zero_without_stall_rejected(self):
+        """0 + 无 stall → 拒绝：没配停滞钟就开不限 = 卡死永远占槽位。"""
+        lc = self._lc(None)
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert not ok
+        assert any("stall_seconds" in e for e in errors)
+
+    def test_zero_with_stall_zero_rejected(self):
+        """0 + stall=0 → 拒绝：停滞钟配 0 等于没配。"""
+        lc = self._lc(0)
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert not ok
+        assert any("stall_seconds" in e for e in errors)
+
+    def test_zero_with_positive_stall_passes(self):
+        """0 + stall>0 → 通过：已接打戳 + 配了停滞钟的步骤才能开不限。"""
+        lc = self._lc(120)
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_positive_timeout_without_stall_still_passes(self):
+        """非 0 墙钟不受条件门约束——存量步骤不强制配停滞钟。"""
+        s = _step_with_timeout(300)
+        lc = build_lifecycle_from_steps(_plan(), [s], _META)
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_lifecycle_timeout_zero_still_rejected(self):
+        """plan 级总时长 0 没有意义——仍 minimum 1。"""
+        lc = build_lifecycle_from_steps(_plan(), [_step_with_timeout(30)], _META)
+        lc["timeout_seconds"] = 0
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert not ok
+        assert any("timeout_seconds" in e for e in errors)
