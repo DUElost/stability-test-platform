@@ -1557,6 +1557,17 @@ class PipelineEngine:
                 # Still count toward INIT→PATROL barrier so peers are not
                 # stuck waiting for a job that will skip patrol.
                 self._arrive_phase_barrier("PATROL")
+                # 单设备 host 没有 barrier 同伴（_barrier_enabled() False），
+                # advance 只发生在 _await_phase_barrier——而 init 失败不经过它，
+                # 于是控制面 host 阶段永远停在 INIT（实测 9-6）。失败也要推进。
+                if (
+                    self._coordinator is not None
+                    and self._plan_run_host_id is not None
+                    and not self._barrier_enabled()
+                ):
+                    self._coordinator.advance_phase(
+                        self._plan_run_host_id, "PATROL",
+                    )
                 # Do NOT return here — fall through to finally for teardown,
                 # then to the unified exit block for MQ status + artifact.
 

@@ -622,3 +622,53 @@ class TestTeardownBestEffort:
             engine._execute_lifecycle(pipeline_def)
 
         assert teardown_ran[0] is True
+
+
+class TestSingleDeviceInitFailurePhase:
+    """#151:单设备 init 失败也要推进 PRH phase（host 不再卡 INIT）。"""
+
+    def _engine_with_single_device(self):
+        from unittest.mock import MagicMock
+
+        engine, *_ = _make_engine()
+        coord = MagicMock()
+        # 不是最后到达者:advance 只能来自被测路径(barrier 计数在 mock 里
+        # 不推进,否则 MagicMock 的 truthy 返回值会让 _arrive_phase_barrier
+        # 误判 is_last 而提前 advance,测试就失去区分度)
+        coord.arrive_at_barrier.return_value = False
+        engine._coordinator = coord
+        engine._plan_run_host_id = 123
+        engine._barrier_total = 1  # 单设备:barrier 不启用
+        return engine, coord
+
+    def test_single_device_init_failure_advances_to_patrol(self):
+        """单设备 + init 失败 → advance_phase('PATROL') 必须被调。"""
+        engine, coord = self._engine_with_single_device()
+        engine._execute_step = lambda phase, step, **kw: StepResult(
+            success=False, error_message="ensure_root failed",
+        )
+
+        engine._execute_lifecycle(_minimal_lifecycle(
+            init_steps=[{"step_id": "s1", "action": "script:ensure_root",
+                         "version": "1.0.0", "params": {}, "timeout_seconds": 5}],
+            teardown_steps=[],
+        ))
+
+        coord.advance_phase.assert_called_with(123, "PATROL")
+
+    def test_multi_device_init_failure_does_not_advance_directly(self):
+        """多设备 + barrier 开启 → 不直调 advance（走 _arrive_phase_barrier 计数）。"""
+        engine, coord = self._engine_with_single_device()
+        engine._barrier_total = 5  # 多设备:barrier 启用
+        engine._execute_step = lambda phase, step, **kw: StepResult(
+            success=False, error_message="ensure_root failed",
+        )
+
+        engine._execute_lifecycle(_minimal_lifecycle(
+            init_steps=[{"step_id": "s1", "action": "script:ensure_root",
+                         "version": "1.0.0", "params": {}, "timeout_seconds": 5}],
+            teardown_steps=[],
+        ))
+
+        # 多设备时 init 失败不直调 advance(由 barrier 到达计数推进)
+        coord.advance_phase.assert_not_called()
