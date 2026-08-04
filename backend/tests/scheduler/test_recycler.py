@@ -55,6 +55,7 @@ def _seed_running_job(
     next_retry_at: datetime | None = None,
     patrol_cycle_count: int = 0,
     current_failure_streak: int = 0,
+    execution_state: str | None = None,
 ) -> dict:
     suffix = uuid4().hex[:8]
     host_id = f"recycler-host-{suffix}"
@@ -123,6 +124,7 @@ def _seed_running_job(
             next_retry_at=next_retry_at,
             patrol_cycle_count=patrol_cycle_count,
             current_failure_streak=current_failure_streak,
+            execution_state=execution_state,
         )
         db.add(job)
         db.flush()
@@ -516,7 +518,11 @@ def test_running_timeout_transitions_to_unknown(engine, monkeypatch):
     """Phase 4c: RUNNING timeout → UNKNOWN (not FAILED)."""
     now = datetime.now(timezone.utc)
     old_time = now - timedelta(seconds=recycler.RUNNING_HEARTBEAT_TIMEOUT_SECONDS + 60)
-    seed = _seed_running_job(started_at=old_time, updated_at=old_time)
+    seed = _seed_running_job(
+        started_at=old_time,
+        updated_at=old_time,
+        execution_state="EXECUTING_STEP",
+    )
 
     monkeypatch.setattr(recycler, "_fill_deferred_post_completions", lambda db, current: 0)
     monkeypatch.setattr(recycler, "_prune_steptrace_artifacts", lambda db, current: None)
@@ -532,6 +538,8 @@ def test_running_timeout_transitions_to_unknown(engine, monkeypatch):
                 f"RUNNING timeout must transition to UNKNOWN; got {job.status}"
             )
             assert job.ended_at is not None, "ended_at must be set"
+            # #146: UNKNOWN 行不留运行子状态，避免并发统计误判。
+            assert job.execution_state is None
         finally:
             db.close()
     finally:
@@ -747,6 +755,14 @@ def test_patrol_stall_transitions_running_to_unknown_when_overdue(engine, monkey
 
     now = datetime.now(timezone.utc)
     seed = _stale_running_seed(now, age_seconds=200)
+    # #146: seed 一个残留的 patrol 子状态，验证转换时被清空。
+    db = SessionLocal()
+    try:
+        job = db.get(JobInstance, seed["job_id"])
+        job.execution_state = "PATROL_SLEEP"
+        db.commit()
+    finally:
+        db.close()
     emits = _patch_recycler_neutrals(monkeypatch)
 
     before = recycler.recycler_timeouts.labels(timeout_type="patrol_stall")._value.get()
@@ -759,6 +775,7 @@ def test_patrol_stall_transitions_running_to_unknown_when_overdue(engine, monkey
             assert job is not None
             assert job.status == JobStatus.UNKNOWN.value
             assert job.ended_at is not None
+            assert job.execution_state is None
             assert "patrol_stall" in (job.status_reason or "")
 
             audit = (
