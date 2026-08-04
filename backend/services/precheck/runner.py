@@ -300,32 +300,46 @@ async def drive_dispatch_gate(
         logger.exception("precheck_unexpected_failure plan_run=%d", plan_run_id)
         try:
             pr = db.get(PlanRun, plan_run_id)
-            if (
-                pr is not None
-                and pr.status == "RUNNING"
-                and not plan_run_has_jobs(db, plan_run_id)
-            ):
-                run_ctx = dict(pr.run_context or {})
-                precheck = run_ctx.get("precheck") or initial_precheck_state([])
-                precheck["phase"] = "failed"
-                precheck["final_result"] = "failed"
-                precheck["completed_at"] = utc_iso()
-                precheck.setdefault("errors", []).append("unexpected_exception")
-                run_ctx["precheck"] = precheck
-                pr.run_context = run_ctx
-                PlanRunStateMachine.transition(pr, PlanRunStatus.FAILED, reason="unexpected_exception")
-                pr.ended_at = datetime.now(timezone.utc)
-                pr.result_summary = {
-                    "precheck_failed": True,
-                    "reason": "unexpected_exception",
-                }
-                flag_modified(pr, "run_context")
-                db.commit()
-                emit_dispatch_gate_invalidation(
-                    plan_run_id,
-                    phase="failed",
-                    dispatch_status="failed",
-                )
+            if pr is not None and pr.status == "RUNNING":
+                if plan_run_has_jobs(db, plan_run_id):
+                    update_dispatch_state(
+                        pr,
+                        db,
+                        status="completed",
+                        completed_at=utc_iso(),
+                        last_error="unexpected_exception_after_materialization",
+                    )
+                    flag_modified(pr, "run_context")
+                    db.commit()
+                    emit_dispatch_gate_invalidation(
+                        plan_run_id,
+                        phase="ready",
+                        dispatch_status="completed",
+                    )
+                elif not plan_run_has_jobs(db, plan_run_id):
+                    run_ctx = dict(pr.run_context or {})
+                    precheck = run_ctx.get("precheck") or initial_precheck_state([])
+                    precheck["phase"] = "failed"
+                    precheck["final_result"] = "failed"
+                    precheck["completed_at"] = utc_iso()
+                    precheck.setdefault("errors", []).append("unexpected_exception")
+                    run_ctx["precheck"] = precheck
+                    pr.run_context = run_ctx
+                    PlanRunStateMachine.transition(
+                        pr, PlanRunStatus.FAILED, reason="unexpected_exception",
+                    )
+                    pr.ended_at = datetime.now(timezone.utc)
+                    pr.result_summary = {
+                        "precheck_failed": True,
+                        "reason": "unexpected_exception",
+                    }
+                    flag_modified(pr, "run_context")
+                    db.commit()
+                    emit_dispatch_gate_invalidation(
+                        plan_run_id,
+                        phase="failed",
+                        dispatch_status="failed",
+                    )
         except Exception:
             logger.exception("precheck_failure_persist_error plan_run=%d", plan_run_id)
         raise

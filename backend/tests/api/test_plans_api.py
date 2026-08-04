@@ -582,6 +582,37 @@ class TestPlanRunWifiChoice:
         return resp.json()["data"]["id"]
 
     @staticmethod
+    def _create_monkey_setup_plan(client, auth_headers, db_session) -> int:
+        from backend.models.script import Script
+
+        db_session.add(Script(
+            name="monkey_setup",
+            display_name="monkey_setup",
+            category="device",
+            script_type="python",
+            version="2.0.0",
+            nfs_path="/s/monkey_setup/v2.0.0/monkey_setup.py",
+            content_sha256="a" * 64,
+            param_schema={},
+            default_params={},
+            is_active=True,
+        ))
+        db_session.commit()
+        resp = client.post("/api/v1/plans", json={
+            "name": _uniq("wifi-ms"),
+            "steps": [{
+                "step_key": "init_0",
+                "script_name": "monkey_setup",
+                "script_version": "2.0.0",
+                "stage": "init",
+                "sort_order": 0,
+                "timeout_seconds": 300,
+            }],
+        }, headers=auth_headers)
+        assert resp.status_code == 201, resp.text
+        return resp.json()["data"]["id"]
+
+    @staticmethod
     def _make_pool(db_session, *, resource_type="wifi", is_active=True):
         from backend.models.resource_pool import ResourcePool
         pool = ResourcePool(
@@ -608,7 +639,7 @@ class TestPlanRunWifiChoice:
     def test_valid_pool_is_recorded_in_run_context(
         self, client, auth_headers, db_session, sample_script, sample_device,
     ):
-        plan_id = self._create_plan(client, auth_headers)
+        plan_id = self._create_monkey_setup_plan(client, auth_headers, db_session)
         pool = self._make_pool(db_session)
         resp = client.post(
             f"/api/v1/plans/{plan_id}/run",
@@ -617,6 +648,32 @@ class TestPlanRunWifiChoice:
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["data"]["run_context"]["wifi_pool_id"] == pool.id
+
+    def test_wifi_pool_rejected_when_plan_has_no_wifi_consumer(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        plan_id = self._create_plan(client, auth_headers)
+        pool = self._make_pool(db_session)
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run",
+            json={"device_ids": [sample_device.id], "wifi_pool_id": pool.id},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400, resp.text
+        assert "wifi_pool_id requires" in resp.json()["detail"]
+
+    def test_preview_rejects_wifi_pool_without_consumer(
+        self, client, auth_headers, db_session, sample_script, sample_device,
+    ):
+        plan_id = self._create_plan(client, auth_headers)
+        pool = self._make_pool(db_session)
+        resp = client.post(
+            f"/api/v1/plans/{plan_id}/run/preview",
+            json={"device_ids": [sample_device.id], "wifi_pool_id": pool.id},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400, resp.text
+        assert "wifi_pool_id requires" in resp.json()["detail"]
 
     def test_unknown_pool_is_rejected_without_creating_a_plan_run(
         self, client, auth_headers, db_session, sample_script, sample_device,

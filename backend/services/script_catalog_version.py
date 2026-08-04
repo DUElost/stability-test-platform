@@ -23,6 +23,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import threading
+import time
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +37,30 @@ from backend.models.script import Script
 _ACTIVE_SCRIPTS = select(Script.name, Script.version, Script.content_sha256).where(
     Script.is_active.is_(True)
 )
+
+_cache_lock = threading.Lock()
+_cached_digest: str | None = None
+_cached_at: float = 0.0
+
+
+def _cache_ttl_seconds() -> float:
+    # Under pytest, disable caching unless a test explicitly opts in via env —
+    # otherwise a prior test's digest can leak into the next (cross-test pollution).
+    if os.getenv("TESTING") == "1" and "STP_SCRIPT_CATALOG_VERSION_CACHE_TTL" not in os.environ:
+        return 0.0
+    raw = (os.getenv("STP_SCRIPT_CATALOG_VERSION_CACHE_TTL") or "30").strip()
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 30.0
+
+
+def invalidate_script_catalog_version_cache() -> None:
+    """Drop the in-process digest cache (call after catalog mutations)."""
+    global _cached_digest, _cached_at
+    with _cache_lock:
+        _cached_digest = None
+        _cached_at = 0.0
 
 
 def catalog_digest(entries: list[tuple[str, str, str]]) -> str:
@@ -52,12 +79,55 @@ def _digest_rows(rows) -> str:
     ])
 
 
+def _register_script_catalog_cache_invalidation() -> None:
+    """Bust digest cache on any ORM mutation — tests and admin SQL paths included."""
+    from sqlalchemy import event
+
+    def _bust(*_args, **_kwargs) -> None:
+        invalidate_script_catalog_version_cache()
+
+    for hook in ("after_insert", "after_update", "after_delete"):
+        event.listen(Script, hook, _bust)
+
+
+_register_script_catalog_cache_invalidation()
+
+
+def _get_cached_or_compute(compute) -> str:
+    global _cached_digest, _cached_at
+    ttl = _cache_ttl_seconds()
+    if ttl <= 0:
+        return compute()
+    now = time.monotonic()
+    with _cache_lock:
+        if _cached_digest is not None and (now - _cached_at) < ttl:
+            return _cached_digest
+    digest = compute()
+    with _cache_lock:
+        _cached_digest = digest
+        _cached_at = time.monotonic()
+    return digest
+
+
 def compute_script_catalog_version(db: Session) -> str:
     """Digest of every active, non-legacy script row."""
-    return _digest_rows(db.execute(_ACTIVE_SCRIPTS).all())
+    return _get_cached_or_compute(
+        lambda: _digest_rows(db.execute(_ACTIVE_SCRIPTS).all())
+    )
 
 
 async def compute_script_catalog_version_async(db: AsyncSession) -> str:
     """Async twin of :func:`compute_script_catalog_version` (heartbeat path)."""
+    global _cached_digest, _cached_at
+    ttl = _cache_ttl_seconds()
+    now = time.monotonic()
+    with _cache_lock:
+        if ttl > 0 and _cached_digest is not None and (now - _cached_at) < ttl:
+            return _cached_digest
     result = await db.execute(_ACTIVE_SCRIPTS)
-    return _digest_rows(result.all())
+    digest = _digest_rows(result.all())
+    if ttl > 0:
+        with _cache_lock:
+            _cached_digest = digest
+            _cached_at = time.monotonic()
+    return digest

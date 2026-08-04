@@ -77,6 +77,24 @@ class TestInjectWifiParams:
         assert _step(pipeline)["params"] == {}
 
 
+class TestWifiAllocationGate:
+    def test_monkey_setup_without_pool_does_not_need_wifi(self):
+        from backend.services.plan_dispatcher_core import (
+            lifecycle_consumes_wifi,
+            lifecycle_has_connect_wifi_step,
+        )
+
+        pipeline = _pipeline("script:monkey_setup")
+        assert lifecycle_consumes_wifi(pipeline["lifecycle"]) is True
+        assert lifecycle_has_connect_wifi_step(pipeline["lifecycle"]) is False
+
+    def test_check_device_plan_does_not_consume_wifi(self):
+        from backend.services.plan_dispatcher_core import lifecycle_consumes_wifi
+
+        pipeline = _pipeline("script:check_device")
+        assert lifecycle_consumes_wifi(pipeline["lifecycle"]) is False
+
+
 class TestAllocateFromChosenPool:
     @pytest.fixture
     def two_pools(self, db_session):

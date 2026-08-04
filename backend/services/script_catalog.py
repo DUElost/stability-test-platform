@@ -82,6 +82,21 @@ def _pick_entry(version_dir: Path) -> tuple:
     return entry, detect_script_type(entry)
 
 
+def support_files_manifest(version_dir: Path, entry: Path) -> dict[str, str]:
+    """Map companion script filenames → sha256 (every script file except *entry*)."""
+    manifest: dict[str, str] = {}
+    entry_resolved = entry.resolve()
+    for path in sorted(version_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if path.resolve() == entry_resolved:
+            continue
+        if detect_script_type(path) is None:
+            continue
+        manifest[path.name] = sha256_file(path)
+    return manifest
+
+
 def _is_under_root(path: str, root: Path) -> bool:
     try:
         Path(path).resolve().relative_to(root)
@@ -144,6 +159,7 @@ def scan_script_root(
         key = (name, version)
         seen_keys.add(key)
         content_sha256 = sha256_file(entry)
+        support_manifest = support_files_manifest(entry.parent, entry)
         existing = existing_by_key.get(key)
 
         if existing is None:
@@ -155,6 +171,7 @@ def scan_script_root(
                 version=version,
                 nfs_path=_runtime_path(root_path, entry, runtime_root),
                 content_sha256=content_sha256,
+                support_files_manifest=support_manifest,
                 param_schema={},
                 default_params={},
                 is_active=True,
@@ -164,7 +181,22 @@ def scan_script_root(
             result.created += 1
             continue
 
-        if existing.content_sha256 != content_sha256:
+        stored_manifest = dict(existing.support_files_manifest or {})
+        entry_changed = existing.content_sha256 != content_sha256
+        support_changed = stored_manifest != support_manifest
+        if entry_changed or support_changed:
+            if (
+                not force_rebaseline
+                and not entry_changed
+                and not stored_manifest
+                and support_manifest
+            ):
+                # First scan after support-manifest tracking shipped: anchor
+                # companion modules without treating on-disk state as a conflict.
+                existing.support_files_manifest = support_manifest
+                existing.updated_at = now
+                result.skipped += 1
+                continue
             if not force_rebaseline:
                 result.conflicts.append({"name": name, "version": version})
                 continue
@@ -175,6 +207,7 @@ def scan_script_root(
                 "new_sha256": content_sha256,
             })
             existing.content_sha256 = content_sha256
+            existing.support_files_manifest = support_manifest
             existing.nfs_path = _runtime_path(root_path, entry, runtime_root)
             existing.is_active = True
             existing.updated_at = now
@@ -201,4 +234,12 @@ def scan_script_root(
         result.deactivated += 1
 
     db.commit()
+    try:
+        from backend.services.script_catalog_version import (
+            invalidate_script_catalog_version_cache,
+        )
+
+        invalidate_script_catalog_version_cache()
+    except Exception:
+        pass
     return result

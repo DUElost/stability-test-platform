@@ -23,6 +23,7 @@ from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
 from backend.models.plan_run import PlanRun
 from backend.models.resource_pool import ResourcePool
+from backend.services.plan_dispatcher_core import plan_steps_consumes_wifi
 from backend.services.plan_dispatcher_sync import (
     PlanDispatchError,
     initial_dispatch_state,
@@ -676,6 +677,24 @@ def _require_active_wifi_pool(db: Session, pool_id: int) -> None:
         )
 
 
+def _require_wifi_pool_matches_plan(db: Session, plan_id: int, pool_id: int) -> None:
+    """Reject wifi_pool_id when the Plan has no step that can consume WiFi."""
+    steps = (
+        db.query(PlanStep)
+        .filter(PlanStep.plan_id == plan_id)
+        .order_by(PlanStep.stage, PlanStep.sort_order)
+        .all()
+    )
+    if not plan_steps_consumes_wifi(steps):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "wifi_pool_id requires a plan step that consumes WiFi "
+                "(connect_wifi or monkey_setup)"
+            ),
+        )
+
+
 @router.post("/plans/{plan_id}/run/preview", response_model=ApiResponse[dict])
 def preview_plan_run(
     plan_id: int,
@@ -685,6 +704,7 @@ def preview_plan_run(
 ):
     if payload.wifi_pool_id is not None:
         _require_active_wifi_pool(db, payload.wifi_pool_id)
+        _require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
     try:
         preview = preview_plan_dispatch_sync(
             plan_id=plan_id,
@@ -713,6 +733,7 @@ def run_plan(
         run_context["note"] = payload.note
     if payload.wifi_pool_id is not None:
         _require_active_wifi_pool(db, payload.wifi_pool_id)
+        _require_wifi_pool_matches_plan(db, plan_id, payload.wifi_pool_id)
         run_context["wifi_pool_id"] = payload.wifi_pool_id
 
     try:

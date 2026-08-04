@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from backend.models.plan_run import PlanRun
 
 from . import utc_iso
-from .state import update_dispatch_state
+from .state import plan_run_has_jobs, update_dispatch_state
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,36 @@ def dispatch_complete(
 
     Returns Prometheus gate_outcome: ``failed`` | ``passed`` | ``synced_passed``.
     """
+    try:
+        return _dispatch_complete_inner(pr, db, out_of_sync_hosts=out_of_sync_hosts)
+    except Exception:
+        logger.exception(
+            "dispatch_complete_failed plan_run=%d — attempting repair",
+            pr.id,
+        )
+        if not plan_run_has_jobs(db, pr.id):
+            raise
+        update_dispatch_state(
+            pr,
+            db,
+            status="completed",
+            completed_at=utc_iso(),
+            last_error="dispatch_complete_failed_after_materialization",
+        )
+        db.commit()
+        logger.warning(
+            "dispatch_complete_repaired plan_run=%d jobs_materialized=true",
+            pr.id,
+        )
+        return "passed"
+
+
+def _dispatch_complete_inner(
+    pr: PlanRun,
+    db: Session,
+    *,
+    out_of_sync_hosts: list[str],
+) -> str:
     if pr.status == "FAILED":
         result_summary = pr.result_summary or {}
         missing = result_summary.get("missing_scripts") or []
