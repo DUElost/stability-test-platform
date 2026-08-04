@@ -10,10 +10,12 @@
 侥幸没出事；但任何手工启动或 CLI 都会静默落到另一套配置上 —— 连不通的库、
 解不开的 SSH 凭据、对不上的会话。
 
-更危险的是 ``alembic/env.py`` 与 ``core/database.py`` 的**兜底默认**都写死成
+更危险的是 ``alembic/env.py`` 与 ``core/database.py`` 曾有的**兜底默认**都写死成
 ``postgresql+psycopg://stp:password@localhost:5432/stp`` —— 直接点名**生产库**，
 只是密码是占位符。今天靠密码错拦住，但只要那个密码对上（或服务端放开 trust
-认证），干净 shell 里一条 ``alembic upgrade`` 就会静默改写生产库。
+认证），干净 shell 里一条 ``alembic upgrade`` 就会静默改写生产库。已全部改为
+走本模块的 :func:`resolve_database_url`（解析不到即 RuntimeError），
+**不再有指向生产库名的默认值**。
 
 所以这里**不提供任何兜底默认**：解析不到就报错。注意「断言库名必须是 stp」
 这类护栏对上面那个场景是无效的 —— 危险路径的默认值本来就叫 stp。

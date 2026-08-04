@@ -10,6 +10,8 @@
 值本来就叫 stp。所以真正的守卫是「解析不到就拒绝运行」。
 """
 
+import ast
+
 import pytest
 
 from backend.core.env_source import (
@@ -101,20 +103,24 @@ class TestAlembicEnvUsesTheSharedResolver:
         用 AST 找「真正作为 os.getenv 默认值的字符串」，不做文本匹配 ——
         否则文档里引用旧值做说明也会被误判。
         """
-        import ast
+        for rel in ("backend/alembic/env.py", "backend/core/database.py"):
+            src = (PRODUCTION_ENV_FILE.parent / rel).read_text(encoding="utf-8")
+            self._assert_no_default(src, rel)
 
-        src = (PRODUCTION_ENV_FILE.parent / "backend/alembic/env.py").read_text(
-            encoding="utf-8"
-        )
+    def _scan_getenv_defaults(self, node, offenders):
+        """若 node 是 os.getenv("DATABASE_URL", <默认值>) 调用,把默认值登记。"""
+        if not isinstance(node, ast.Call):
+            return
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+        if name != "getenv" or len(node.args) < 2:
+            return
+        key = node.args[0]
+        if isinstance(key, ast.Constant) and key.value == "DATABASE_URL":
+            offenders.append(ast.dump(node.args[1]))
+
+    def _assert_no_default(self, src, rel):
         offenders = []
         for node in ast.walk(ast.parse(src)):
-            if not isinstance(node, ast.Call):
-                continue
-            fn = node.func
-            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
-            if name != "getenv" or len(node.args) < 2:
-                continue
-            key = node.args[0]
-            if isinstance(key, ast.Constant) and key.value == "DATABASE_URL":
-                offenders.append(ast.dump(node.args[1]))
-        assert not offenders, f"alembic/env.py 仍有 DATABASE_URL 兜底默认: {offenders}"
+            self._scan_getenv_defaults(node, offenders)
+        assert not offenders, f"{rel} 仍有 DATABASE_URL 兜底默认: {offenders}"
