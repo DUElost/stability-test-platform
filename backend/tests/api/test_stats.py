@@ -312,7 +312,7 @@ class TestHostFailureRate:
             _make_device(db_session, sample_host.id, "HOST-RATE-3"),
         ]
         for status, device in zip(
-            ("COMPLETED", "FAILED", "FAILED"), devices,
+            ("COMPLETED", "FAILED", "FAILED"), devices, strict=True,
         ):
             db_session.add(JobInstance(
                 plan_run_id=plan_run.id,
@@ -430,14 +430,14 @@ class TestPlanSuccessRate:
         devices = [sample_device, second_device]
 
         # good_plan: 2/2 passed; bad_plan: 0/2 passed
-        for status, device in zip(("COMPLETED", "COMPLETED"), devices):
+        for status, device in zip(("COMPLETED", "COMPLETED"), devices, strict=True):
             db_session.add(JobInstance(
                 plan_run_id=good_run.id, plan_id=good_plan.id,
                 device_id=device.id, host_id=sample_host.id,
                 status=status, pipeline_def={"lifecycle": {"init": [], "teardown": []}},
                 started_at=now - timedelta(minutes=10), ended_at=now - timedelta(minutes=9),
             ))
-        for status, device in zip(("FAILED", "FAILED"), devices):
+        for status, device in zip(("FAILED", "FAILED"), devices, strict=True):
             db_session.add(JobInstance(
                 plan_run_id=bad_run.id, plan_id=bad_plan.id,
                 device_id=device.id, host_id=sample_host.id,
@@ -532,6 +532,7 @@ class TestPlanRunPassRateTrend:
         for status, device in zip(
             ("COMPLETED", "FAILED"),
             (sample_device, second_device),
+            strict=True,
         ):
             db_session.add(JobInstance(
                 plan_run_id=plan_run.id, plan_id=plan.id,

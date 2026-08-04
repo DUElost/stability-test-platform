@@ -165,7 +165,7 @@ async def query_runtime_logs(
         }
     except Exception as e:
         logger.warning("query_runtime_logs_failed: %s", e)
-        raise HTTPException(status_code=500, detail="failed to query runtime logs")
+        raise HTTPException(status_code=500, detail="failed to query runtime logs") from e
 
 
 # ── Agent SSH Log Query ───────────────────────────────────────────────────────

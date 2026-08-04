@@ -292,11 +292,11 @@ def enqueue_sync(
     if required and not on_main_loop:
         try:
             future = asyncio.run_coroutine_threadsafe(_do_enqueue(), _loop)
-        except RuntimeError:
+        except RuntimeError as exc:
             msg = f"event loop closed — cannot enqueue {task_name}"
             logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)
             if required:
-                raise EnqueueSyncError(msg)
+                raise EnqueueSyncError(msg) from exc
             return False
         try:
             future.result(timeout=SAQ_ENQUEUE_WAIT_TIMEOUT)
@@ -319,11 +319,11 @@ def enqueue_sync(
 
     try:
         _loop.call_soon_threadsafe(_loop.create_task, _do_enqueue_best_effort())
-    except RuntimeError:
+    except RuntimeError as exc:
         msg = f"event loop closed — cannot enqueue {task_name}"
         logger.warning("enqueue_sync: event loop closed — dropping %s", task_name)
         if required:
-            raise EnqueueSyncError(msg)
+            raise EnqueueSyncError(msg) from exc
         return False
     return True
 

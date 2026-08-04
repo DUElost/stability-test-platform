@@ -706,7 +706,7 @@ async def update_job_status(
     try:
         new_status = JobStatus(payload.status.upper())
     except ValueError:
-        raise HTTPException(status_code=400, detail=f"unknown status: {payload.status}")
+        raise HTTPException(status_code=400, detail=f"unknown status: {payload.status}") from None
 
     if new_status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.ABORTED}:
         raise_api_http_error(
@@ -1141,7 +1141,7 @@ async def complete_job(
                 "current_status": job.status,
                 "requested_status": target.value,
             },
-        )
+        ) from exc
 
     # 持久化一次性完成快照（log_summary + artifact），为新链路报告读取提供数据闭环。
     snapshot = {
@@ -1908,7 +1908,7 @@ async def patrol_heartbeat(
         try:
             next_retry_dt = datetime.fromisoformat(payload.next_retry_at.replace("Z", "+00:00"))
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"invalid next_retry_at: {payload.next_retry_at}")
+            raise HTTPException(status_code=400, detail=f"invalid next_retry_at: {payload.next_retry_at}") from None
 
     now = datetime.now(timezone.utc)
 
@@ -2058,7 +2058,7 @@ async def ingest_log_signals(
         try:
             validate_log_signal(envelope)
         except ContractViolation as exc:
-            raise HTTPException(status_code=400, detail=f"log_signal contract violation: {exc}")
+            raise HTTPException(status_code=400, detail=f"log_signal contract violation: {exc}") from exc
         job = await db.get(JobInstance, s.job_id)
         if job is None:
             raise HTTPException(status_code=404, detail=f"job {s.job_id} not found")
@@ -2078,7 +2078,7 @@ async def ingest_log_signals(
             raise HTTPException(
                 status_code=400,
                 detail=f"log_signal.detected_at invalid ISO8601: {s.detected_at}",
-            )
+            ) from None
 
         rows.append({
             "job_id":         s.job_id,

@@ -80,7 +80,7 @@ def resolve_host_devices(
     ids = [int(d["id"]) for d in on_host]
     serials = [d.get("serial", "?") for d in on_host]
     info(f"host {host_id} ip={host.get('ip')} status=ONLINE")
-    for did, serial in zip(ids, serials):
+    for did, serial in zip(ids, serials, strict=True):
         info(f"  device_id={did} serial={serial}")
     return ids
 

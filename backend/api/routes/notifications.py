@@ -161,7 +161,7 @@ def test_channel(
         return {"ok": True, "message": "Test notification sent"}
     except Exception as exc:
         logger.warning("test_channel_failed: channel_id=%s err=%s", channel_id, exc)
-        raise HTTPException(status_code=502, detail=f"Send failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"Send failed: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------

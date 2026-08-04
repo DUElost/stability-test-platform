@@ -117,7 +117,7 @@ class AgentNamespace(socketio.AsyncNamespace):
             expected = require_agent_secret()
         except AgentSecretNotConfiguredError:
             logger.warning("agent_sio_rejected sid=%s: AGENT_SECRET not configured", sid)
-            raise socketio.exceptions.ConnectionRefusedError("AGENT_SECRET not configured")
+            raise socketio.exceptions.ConnectionRefusedError("AGENT_SECRET not configured") from None
 
         if not secrets.compare_digest(provided_secret or "", expected):
             logger.warning("agent_sio_auth_failed sid=%s host_id=%s", sid, host_id)
@@ -316,7 +316,7 @@ class DashboardNamespace(socketio.AsyncNamespace):
                 except socketio.exceptions.ConnectionRefusedError:
                     raise
                 except Exception:
-                    raise socketio.exceptions.ConnectionRefusedError("Invalid token")
+                    raise socketio.exceptions.ConnectionRefusedError("Invalid token") from None
 
         record_socketio_connection("/dashboard", True)
         logger.info("dashboard_sio_connected sid=%s", sid)

@@ -201,6 +201,12 @@ def process_device_logs(
             line: str,
             parsed: Dict[str, Any],
             local_target_dir: Path,
+            aee_type=aee_type,
+            processed_lines=processed_lines,
+            processed_key=processed_key,
+            pending_tasks=pending_tasks,
+            pending_key=pending_key,
+            stop_requested=stop_requested,
         ) -> None:
             pending_tasks.pop(line, None)
             result.pulled += 1

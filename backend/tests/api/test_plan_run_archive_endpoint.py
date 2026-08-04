@@ -108,7 +108,7 @@ class TestArchivePlanRunLogsEndpoint:
         db_session.add_all(devices)
         db_session.commit()
 
-        for h, device in zip((online_host, offline_host), devices):
+        for h, device in zip((online_host, offline_host), devices, strict=True):
             db_session.add(JobInstance(
                 plan_run_id=sample_plan_run.id,
                 plan_id=sample_plan.id,

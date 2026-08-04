@@ -497,7 +497,7 @@ def main() -> None:
             logger.error(
                 "Set HOST_ID to an IP-derived id (e.g. 172-21-9-6), or set AUTO_REGISTER_HOST=true to auto-register"
             )
-            raise SystemExit(2)
+            raise SystemExit(2) from exc
 
     # 如果 host_id 为 None（自动注册模式），带重试地注册
     if host_id is None:
@@ -512,7 +512,7 @@ def main() -> None:
             except Exception as exc:
                 if max_retries and attempt >= max_retries:
                     logger.error("auto_register_failed after %d attempts: %s", attempt, exc)
-                    raise SystemExit(2)
+                    raise SystemExit(2) from exc
                 logger.warning(
                     "auto_register_retry attempt=%d delay=%.0fs error=%s",
                     attempt, retry_delay, exc,

@@ -37,7 +37,7 @@ async def gather_verify(
     coros = [verify_one_host(hid, expected) for hid in host_ids]
     results = await asyncio.gather(*coros, return_exceptions=True)
     out: dict[str, tuple[bool, list[dict], Optional[str]]] = {}
-    for hid, res in zip(host_ids, results):
+    for hid, res in zip(host_ids, results, strict=True):
         if isinstance(res, Exception):
             out[hid] = (False, [], f"verify_exception: {res}")
         else:

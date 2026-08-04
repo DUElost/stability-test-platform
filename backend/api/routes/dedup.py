@@ -226,9 +226,9 @@ async def start_jira_run(
             on_complete=_on_jira_run_complete,
         )
     except RunKeyBusyError:
-        raise HTTPException(status_code=409, detail=f"a {vendor} jira run is already in progress")
+        raise HTTPException(status_code=409, detail=f"a {vendor} jira run is already in progress") from None
     except RunConsoleError as exc:
-        raise HTTPException(status_code=500, detail=f"failed to start: {exc}")
+        raise HTTPException(status_code=500, detail=f"failed to start: {exc}") from exc
 
     # 持久化 jira_run 行（RUNNING 态）；失败仅记日志，不阻塞 run（历史记录缺失而已）
     try:
