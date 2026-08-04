@@ -368,8 +368,8 @@ def abort_plan_run_endpoint(
     except PlanRunAbortError as exc:
         msg = str(exc)
         if "not found" in msg:
-            raise HTTPException(status_code=404, detail=msg)
-        raise HTTPException(status_code=409, detail=msg)
+            raise HTTPException(status_code=404, detail=msg) from exc
+        raise HTTPException(status_code=409, detail=msg) from exc
     return ok(summary)
 
 
@@ -450,10 +450,10 @@ def retry_plan_run_dispatch_endpoint(
     except PlanRunDispatchRetryError as exc:
         msg = str(exc)
         if "not found" in msg:
-            raise HTTPException(status_code=404, detail=msg)
+            raise HTTPException(status_code=404, detail=msg) from exc
         if "queue unavailable" in msg:
-            raise HTTPException(status_code=503, detail=msg)
-        raise HTTPException(status_code=409, detail=msg)
+            raise HTTPException(status_code=503, detail=msg) from exc
+        raise HTTPException(status_code=409, detail=msg) from exc
     return ok(summary)
 
 

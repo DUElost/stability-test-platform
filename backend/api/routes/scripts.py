@@ -411,12 +411,12 @@ def create_script(
         )
         db.commit()
         invalidate_script_catalog_version_cache()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
             status_code=409,
             detail=f"script name/version already exists: {payload.name} {payload.version}",
-        )
+        ) from exc
     db.refresh(script)
     return ok(_script_out(script))
 
@@ -595,12 +595,12 @@ def create_script_version(
         )
         db.commit()
         invalidate_script_catalog_version_cache()
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
             status_code=409,
             detail=f"script version already exists: {name} {payload.version}",
-        )
+        ) from exc
     db.refresh(script)
     return ok(_script_out(script))
 

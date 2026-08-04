@@ -672,14 +672,14 @@ def admission_transaction(db: Session, run_id: int, attempt_id: str) -> bool:
         db.rollback()
         raise _RetryableAdmission(
             "RESOURCE_BUSY", [{"reason": "wifi_pool_full", "error": str(exc)}],
-        )
+        ) from exc
     except IntegrityError as exc:
         if "uq_job_active_per_device" not in str(exc.orig or exc):
             raise
         db.rollback()
         raise _RetryableAdmission(
             "DEVICE_BUSY", [{"reason": "device_claimed_concurrently"}],
-        )
+        ) from exc
 
     # Counters (O(1) aggregation basis) + per-host admission bookkeeping.
     per_host = {h.host_id: 0 for h in host_rows}

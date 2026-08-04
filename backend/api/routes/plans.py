@@ -712,7 +712,7 @@ def preview_plan_run(
             db=db,
         )
     except PlanDispatchError as e:
-        raise HTTPException(status_code=400, detail=e.detail())
+        raise HTTPException(status_code=400, detail=e.detail()) from e
     return ok(preview)
 
 
@@ -746,7 +746,7 @@ def run_plan(
             run_context=run_context,
         )
     except PlanDispatchError as e:
-        raise HTTPException(status_code=400, detail=e.detail())
+        raise HTTPException(status_code=400, detail=e.detail()) from e
 
     logger.info(
         "manual_dispatch_queued plan=%d plan_run=%d devices=%d by=%s",

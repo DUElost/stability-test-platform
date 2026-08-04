@@ -94,7 +94,7 @@ def _seed(
         db.flush()
 
         job_ids: list[int] = []
-        for device, status in zip(devices, job_statuses):
+        for device, status in zip(devices, job_statuses, strict=True):
             j = JobInstance(
                 plan_run_id=run.id, plan_id=plan.id,
                 device_id=device.id, host_id=host_id, status=status,

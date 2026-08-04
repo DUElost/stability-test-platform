@@ -242,7 +242,7 @@ async def test_concurrent_complete_job_four_way_no_deadlock():
 
         tasks = [
             _complete(jid, tok)
-            for jid, tok in zip(seed["job_ids"], seed["tokens"])
+            for jid, tok in zip(seed["job_ids"], seed["tokens"], strict=True)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

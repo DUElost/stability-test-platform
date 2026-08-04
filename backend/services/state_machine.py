@@ -32,7 +32,7 @@ class JobStateMachine:
         try:
             current = JobStatus(job.status)
         except ValueError:
-            raise InvalidTransitionError(f"Unknown job status '{job.status}' for job {job.id}")
+            raise InvalidTransitionError(f"Unknown job status '{job.status}' for job {job.id}") from None
         if new_status not in VALID_TRANSITIONS[current]:
             raise InvalidTransitionError(
                 f"Cannot transition {job.status} -> {new_status} for job {job.id}"
@@ -85,7 +85,7 @@ class PlanRunStateMachine:
         except ValueError:
             raise InvalidTransitionError(
                 f"Unknown plan_run status '{run.status}' for plan_run {getattr(run, 'id', '?')}"
-            )
+            ) from None
         if new_status not in PLAN_RUN_VALID_TRANSITIONS[current]:
             raise InvalidTransitionError(
                 f"Cannot transition {run.status} -> {new_status} for plan_run {getattr(run, 'id', '?')}"
