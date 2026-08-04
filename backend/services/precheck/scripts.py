@@ -26,17 +26,21 @@ def expected_scripts_for_run(plan_run: PlanRun, db: Session) -> list[dict]:
             Script.support_files_manifest,
         ).where(Script.is_active.is_(True))
     ).all()
-    return [
-        {
+    results: list[dict] = []
+    for r in rows:
+        if (r.name, r.version) not in keys:
+            continue
+        entry = {
             "name": r.name,
             "version": r.version,
             "sha256": r.content_sha256 or "",
             "nfs_path": r.nfs_path or "",
-            "support_files": dict(r.support_files_manifest or {}),
         }
-        for r in rows
-        if (r.name, r.version) in keys
-    ]
+        manifest = dict(r.support_files_manifest or {})
+        if manifest:
+            entry["support_files"] = manifest
+        results.append(entry)
+    return results
 
 
 _expected_scripts_for_run = expected_scripts_for_run

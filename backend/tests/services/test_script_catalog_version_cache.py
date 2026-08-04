@@ -62,6 +62,23 @@ class TestScriptCatalogVersionCache:
 
         assert db.execute.call_count == 2
 
+    def test_orm_insert_invalidates_cache(self, monkeypatch, db_session):
+        """Script row commits must bust cache (heartbeat outdated detection)."""
+        monkeypatch.setenv("STP_SCRIPT_CATALOG_VERSION_CACHE_TTL", "60")
+        from backend.models.script import Script
+
+        before = compute_script_catalog_version(db_session)
+        db_session.add(Script(
+            name="cache_bust_probe", display_name="cache_bust_probe",
+            category="device", script_type="python", version="1.0.0",
+            nfs_path="/s/cache_bust_probe/v1.0.0/cache_bust_probe.py",
+            content_sha256="sha-probe", param_schema={}, default_params={},
+            is_active=True,
+        ))
+        db_session.commit()
+        after = compute_script_catalog_version(db_session)
+        assert before != after
+
     def test_digest_unchanged_by_cache_layer(self):
         entries = [("s", "1.0.0", "sha")]
         assert catalog_digest(entries) == catalog_digest(entries)

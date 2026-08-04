@@ -75,6 +75,20 @@ def _digest_rows(rows) -> str:
     ])
 
 
+def _register_script_catalog_cache_invalidation() -> None:
+    """Bust digest cache on any ORM mutation — tests and admin SQL paths included."""
+    from sqlalchemy import event
+
+    def _bust(*_args, **_kwargs) -> None:
+        invalidate_script_catalog_version_cache()
+
+    for hook in ("after_insert", "after_update", "after_delete"):
+        event.listen(Script, hook, _bust)
+
+
+_register_script_catalog_cache_invalidation()
+
+
 def _get_cached_or_compute(compute) -> str:
     global _cached_digest, _cached_at
     ttl = _cache_ttl_seconds()
