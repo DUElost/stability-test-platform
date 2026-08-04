@@ -72,7 +72,13 @@ def _ensure_host_status_up_to_date(host: Host) -> bool:
         return True
     return False
 
-_ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+# 与 plan_dispatcher_sync.ACTIVE_JOB_STATUSES 保持一致：UNKNOWN grace 期内
+# 作业仍可能恢复（UNKNOWN→RUNNING），删除/热更新 gate 都应视为活跃（#134）。
+_ACTIVE_JOB_STATUSES = (
+    JobStatus.PENDING.value,
+    JobStatus.RUNNING.value,
+    JobStatus.UNKNOWN.value,
+)
 _AGENT_SECRET_PLACEHOLDER = "change-me-in-production"
 
 
