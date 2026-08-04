@@ -44,6 +44,10 @@ _cached_at: float = 0.0
 
 
 def _cache_ttl_seconds() -> float:
+    # Under pytest, disable caching unless a test explicitly opts in via env —
+    # otherwise a prior test's digest can leak into the next (cross-test pollution).
+    if os.getenv("TESTING") == "1" and "STP_SCRIPT_CATALOG_VERSION_CACHE_TTL" not in os.environ:
+        return 0.0
     raw = (os.getenv("STP_SCRIPT_CATALOG_VERSION_CACHE_TTL") or "30").strip()
     try:
         return max(0.0, float(raw))
