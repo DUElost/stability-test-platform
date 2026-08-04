@@ -12,8 +12,6 @@
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from backend.agent.coordinator import HostRunCoordinator
 from backend.agent.pipeline_engine import PipelineEngine
 
