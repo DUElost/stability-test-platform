@@ -104,3 +104,119 @@ class TestPeersAreProgressing:
         other = coord.register_job(2, prh_id=20)
         other.update(state="EXECUTING_STEP", progress_ts=_NOW.isoformat())
         assert not _Engine(1)._peers_are_progressing(coord)
+
+
+# ── _await_phase_barrier 集成：peer 推进续期 / 全体停滞超时（#117 review）──
+
+
+class _BarrierEngine(_Engine):
+    """构造一个可驱动 _await_phase_barrier 的最小引擎。
+
+    覆盖内部依赖：barrier 总启用、非最后到达、不锁丢失不取消。
+    """
+
+    def __init__(self, run_id: int, prh_id: int, timeout: float):
+        super().__init__(run_id)
+        self._plan_run_host_id = prh_id
+        self._barrier_timeout_seconds = timeout
+        self._coordinator = self  # peers_of / wait_barrier 指向自己
+        self._canceled = False
+        self._peers = []
+        self._wait_calls = 0
+        self._released = False
+
+    def _barrier_enabled(self):
+        return True
+
+    def _is_lock_lost(self):
+        return False
+
+    def _arrive_phase_barrier(self, next_phase):
+        return False  # 永远不是最后一个到达者
+
+    def _update_execution_state(self, state, progress_ts=None):
+        pass
+
+    def peers_of(self, job_id):
+        return self._peers
+
+    def wait_barrier(self, prh_id, timeout=None):
+        self._wait_calls += 1
+        return self._released
+
+    _peers_are_progressing = PipelineEngine._peers_are_progressing
+    _resolve_barrier_timeout = PipelineEngine._resolve_barrier_timeout
+    _await_phase_barrier = PipelineEngine._await_phase_barrier
+
+
+def _peer(coord, job_id, prh_id, state, progress_ts=None):
+    view = coord.register_job(job_id, prh_id=prh_id)
+    view.update(state=state, progress_ts=progress_ts)
+    return view
+
+
+class TestBarrierRenewal:
+    def test_peer_progressing_renews_past_original_timeout(self):
+        """peer 持续推进 → 原 timeout 到期后 barrier 仍在等待（续期生效）。"""
+        import threading
+        import time as _time
+
+        coord = _coord()
+        eng = _BarrierEngine(run_id=1, prh_id=10, timeout=0.2)
+        peer_view = _peer(coord, 2, 10, "EXECUTING_STEP", progress_ts=_NOW.isoformat())
+        eng._peers = [peer_view]
+
+        def _refresh():
+            coord.register_job(2, prh_id=10).update(
+                state="EXECUTING_STEP",
+                progress_ts=datetime.now(timezone.utc).isoformat(),
+            )
+
+        result: list = []
+
+        def _run():
+            result.append(eng._await_phase_barrier("PATROL"))
+
+        real_sleep = _time.sleep
+        _time.sleep = lambda s: real_sleep(0.001)
+        try:
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            # 0.5s > 原 timeout 0.2s：peer 在推进 → 线程必须还活着
+            for _ in range(50):
+                _refresh()  # 持续推进
+                _time.sleep(0.01)
+            assert thread.is_alive(), "推进中的 peer 不应让 barrier 超时"
+            # 释放 barrier,线程正常返回
+            eng._released = True
+            thread.join(timeout=2)
+            assert result == [True]
+        finally:
+            _time.sleep = real_sleep
+
+    def test_all_peers_stalled_times_out_with_original_timeout(self):
+        """所有 peer 停滞 → 按原 barrier_timeout 超时失败。"""
+        import threading
+        import time as _time
+
+        coord = _coord()
+        eng = _BarrierEngine(run_id=1, prh_id=10, timeout=0.2)
+        _peer(coord, 2, 10, "EXECUTING_STEP",
+              progress_ts=(_NOW - timedelta(seconds=300)).isoformat())
+
+        result: list = []
+
+        def _run():
+            result.append(eng._await_phase_barrier("PATROL"))
+
+        real_sleep = _time.sleep
+        _time.sleep = lambda s: real_sleep(0.001)
+        try:
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            thread.join(timeout=3)
+            assert not thread.is_alive(), "停滞 peer 应在原 timeout 后返回"
+            assert result == [False]
+            assert eng._wait_calls >= 1
+        finally:
+            _time.sleep = real_sleep
