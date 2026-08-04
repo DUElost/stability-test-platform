@@ -114,3 +114,43 @@ class TestStampFormat:
         assert [p["seq"] for p in payloads] == [1, 2]
         assert payloads[0]["stage"] == "reboot"
         assert payloads[1]["step"] == "flash"
+
+
+class TestHostLock:
+    def test_lock_wait_emits_progress_ticks(self, monkeypatch):
+        """锁被占用时轮询等待并打 tick——等待本身是可见进度(#142 review)。
+
+        阻塞 flock 期间无戳,permit cap=5 下等待中的设备会被停滞钟误杀。
+        """
+        import fcntl
+
+        import time as _time
+
+        holder = open(ff._LOCK_PATH, "w")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        ticks: list[int] = []
+
+        def _tick(waited: int) -> None:
+            ticks.append(waited)
+            if len(ticks) >= 3:
+                # 第 3 次 tick 时释放锁,让等待方拿到
+                fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+                holder.close()
+
+        orig_sleep = _time.sleep
+        _time.sleep = lambda s: 0.001
+        try:
+            fd = ff._acquire_host_lock(on_wait_tick=_tick)
+            assert len(ticks) >= 3, "锁等待期间必须打多个 tick"
+            assert ticks[-1] > 0, "tick 要带已等待秒数"
+        finally:
+            _time.sleep = orig_sleep
+            import os
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            try:
+                holder.close()
+            except Exception:
+                pass

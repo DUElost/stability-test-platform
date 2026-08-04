@@ -166,9 +166,14 @@ def _run_flash_tool_with_progress(
         while proc.poll() is None:
             if time.monotonic() >= deadline:
                 try:
-                    proc.kill()
-                except Exception:
+                    os.killpg(os.getpgid(proc.pid), 15)  # SIGTERM,杀整树
+                except ProcessLookupError:
                     pass
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
                 proc.wait(timeout=10)
                 raise subprocess.TimeoutExpired([str(cmd)], timeout)
             time.sleep(1)
@@ -269,12 +274,29 @@ def _scan_output_for_verdict(stdout: str, stderr: str):
     return False, "no pass token found"
 
 
-def _acquire_host_lock():
+def _acquire_host_lock(on_wait_tick: "callable | None" = None):
     if platform.system() == "Windows":
         return None
     import fcntl
+
     lock_fd = open(_LOCK_PATH, "w")
-    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+    # **轮询式等待**（#142 review）：flock(LOCK_EX) 阻塞期间不打任何戳，
+    # permit cap=5 下同一 host 多个设备进 flash 时，等待中的设备会被停滞钟
+    # 误杀。改 LOCK_NB 轮询 + 每 5s 打一次 stage="lock-wait" 戳——等待本身
+    # 也是可见的进度。
+    waited = 0
+    while True:
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except (IOError, OSError):
+            waited += 5
+            if on_wait_tick is not None:
+                try:
+                    on_wait_tick(waited)
+                except Exception:
+                    pass
+            time.sleep(5)
     return lock_fd
 
 
@@ -419,7 +441,11 @@ def main() -> None:
 
     started_at = time.time()
     try:
-        lock_fd = _acquire_host_lock()
+        lock_fd = _acquire_host_lock(
+            on_wait_tick=lambda waited: _emit_progress(
+                seq, stage="lock-wait", waited_seconds=waited,
+            )
+        )
     except OSError as exc:
         _output(False, error_message=f"lock setup failed: {exc}")
         return
@@ -470,8 +496,9 @@ def main() -> None:
     finally:
         _release_host_lock(lock_fd)
 
-    # flash_tool 退出后：等设备重新枚举（阶段，最长 60s），期间打戳
-    _wait_device_back(
+    # flash_tool 退出后：等设备重新枚举（最长 60s），期间打戳。
+    # 设备没回来**不判失败**——flash 成功但枚举慢是常态，记录字段供诊断。
+    reenumerated = _wait_device_back(
         serial=os.environ.get("STP_DEVICE_SERIAL", ""),
         adb_path=os.environ.get("STP_ADB_PATH", "adb"),
         timeout=60,
@@ -487,6 +514,7 @@ def main() -> None:
     metrics = {
         "duration_seconds": duration,
         "lock_wait_seconds": lock_wait,
+        "device_reenumerated": reenumerated,
         "exit_code": flash_rc,
         "command_argv": cmd,
         "da_file": da_file,
