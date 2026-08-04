@@ -364,3 +364,31 @@ class TestStallSecondsApi:
             }],
         }, headers=auth_headers)
         assert resp.status_code == 422
+
+
+# ── 0=不限 按步骤开门（schema timeout_seconds minimum 1→0）────────────
+# 停滞判据落地（#115 阶段 1/2）+ 脚本打戳（v2.3.1 / flash v1.1.0）后，
+# 已接打戳 + 配了 stall_seconds 的步骤可以配 timeout_seconds=0（不限）。
+# schema 只放宽 step 级；lifecycle 级（plan 总时长）保持 minimum 1。
+
+
+def _step_with_timeout(t):
+    s = _step()
+    s.timeout_seconds = t
+    return s
+
+
+class TestStepTimeoutZero:
+    def test_step_timeout_zero_passes_validation(self):
+        lc = build_lifecycle_from_steps(_plan(), [_step_with_timeout(0)], _META)
+        assert lc["init"][0]["timeout_seconds"] == 0
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert ok, errors
+
+    def test_lifecycle_timeout_zero_still_rejected(self):
+        """plan 级总时长 0 没有意义——仍 minimum 1。"""
+        lc = build_lifecycle_from_steps(_plan(), [_step_with_timeout(30)], _META)
+        lc["timeout_seconds"] = 0
+        ok, errors = validate_pipeline_def({"lifecycle": lc})
+        assert not ok
+        assert any("timeout_seconds" in e for e in errors)

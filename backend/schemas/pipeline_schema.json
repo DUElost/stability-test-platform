@@ -45,7 +45,7 @@
         "action": { "type": "string", "pattern": "^script:.+$" },
         "version": { "type": "string", "minLength": 1 },
         "params": { "type": "object", "default": {} },
-        "timeout_seconds": { "type": "integer", "minimum": 1 },
+        "timeout_seconds": { "type": "integer", "minimum": 0 },
         "stall_seconds": { "type": "integer", "minimum": 0 },
         "retry": { "type": "integer", "minimum": 0, "maximum": 10, "default": 0 },
         "enabled": { "type": "boolean", "default": true }
