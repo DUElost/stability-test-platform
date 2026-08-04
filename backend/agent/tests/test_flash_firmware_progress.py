@@ -154,3 +154,83 @@ class TestHostLock:
                 holder.close()
             except Exception:
                 pass
+
+
+class TestLockWaitRealWiring:
+    def test_lock_wait_emits_stamps_through_main_wiring(self, fake_flash_tool, monkeypatch, capsys):
+        """真实接线回归(#142 review)：锁占用时 tick 走 main 的 lambda,
+        seq 必须先于锁等待定义,否则 NameError 被吞、不打戳。
+
+        之前测试用自定义 _tick,没走 main 的 lambda,拦不住这个。
+        """
+        import fcntl
+        from unittest.mock import patch
+
+        # 占住锁
+        holder = open(ff._LOCK_PATH, "w")
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        tick_count: list[int] = []
+
+        def _wrap_main_tick(on_wait_tick):
+            """包装 main 的 tick：计数释放锁 + 转发给 main 的 lambda 打戳。"""
+
+            def _wrapped(waited: int) -> None:
+                tick_count.append(waited)
+                if len(tick_count) >= 3:
+                    fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+                    holder.close()
+                on_wait_tick(waited)  # 转发 → main 的 _emit_progress
+
+            return _wrapped
+
+        fw_dir = fake_flash_tool.parent
+        da = fw_dir / "da.bin"
+        scatter = fw_dir / "scatter.txt"
+        da.write_bytes(b"DA")
+        scatter.write_text("scatter", encoding="utf-8")
+
+        def _step_params():
+            return {
+                "firmware_dir": str(fw_dir), "da_file": "da.bin",
+                "scatter_file": "scatter.txt", "command": "firmware-upgrade",
+                "boot_mode": "auto", "reboot_to_flash": False, "timeout_seconds": 30,
+            }
+
+        import time as _time
+        orig_acquire = ff._acquire_host_lock  # patch 前保存,否则 side_effect 递归
+        orig_sleep = _time.sleep
+        _time.sleep = lambda s: 0.001
+        try:
+            with patch.object(ff, "_step_params", _step_params), \
+                 patch.object(ff, "_locate_flash_tool_dir", return_value=str(fw_dir)), \
+                 patch.object(ff, "_pick_flash_tool_exe", return_value=str(fake_flash_tool)), \
+                 patch.object(ff, "_resolve_firmware_dir", return_value=str(fw_dir)), \
+                 patch.object(ff, "_resolve_under",
+                              side_effect=lambda root, name: str(fw_dir / name)), \
+                 patch.object(ff, "_acquire_host_lock",
+                              side_effect=lambda on_wait_tick=None: orig_acquire(
+                                  on_wait_tick=(
+                                      _wrap_main_tick(on_wait_tick)
+                                      if on_wait_tick is not None else None
+                                  )
+                              )), \
+                 patch.object(ff, "_release_host_lock", return_value=None), \
+                 patch.object(ff, "_wait_device_back", return_value=True):
+                monkeypatch.setenv("STP_DEVICE_SERIAL", "FAKESERIAL")
+                monkeypatch.setenv("STP_ADB_PATH", "/bin/true")
+                ff.main()
+        finally:
+            _time.sleep = orig_sleep
+            try:
+                holder.close()
+            except Exception:
+                pass
+
+        err = capsys.readouterr().err
+        stamps = [
+            json.loads(line[len("PROGRESS "):])
+            for line in err.splitlines() if line.startswith("PROGRESS ")
+        ]
+        lock_stamps = [s for s in stamps if s.get("stage") == "lock-wait"]
+        assert lock_stamps, "锁等待期间必须出 stage=lock-wait 戳"
+        assert lock_stamps[0]["seq"] == 1, "seq 必须从 1 开始(锁等待最先打)"

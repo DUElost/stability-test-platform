@@ -440,6 +440,9 @@ def main() -> None:
     subprocess_env = _build_subprocess_env(os.path.dirname(flash_tool_exe))
 
     started_at = time.time()
+    # seq 必须先于锁等待定义：锁被占用时第一次 tick 就要打戳，
+    # 定义晚了会 NameError(被 _acquire_host_lock 的 except 吞掉 → 不打戳)。
+    seq: list[int] = [0]
     try:
         lock_fd = _acquire_host_lock(
             on_wait_tick=lambda waited: _emit_progress(
@@ -462,7 +465,6 @@ def main() -> None:
             wait_seconds=int(args.get("pre_reboot_wait_seconds", 5) or 0),
         )
 
-    seq: list[int] = [0]
     # reboot 进入 flash 模式本身是一个阶段（#134）
     if pre_reboot.get("attempted"):
         _emit_progress(seq, stage="reboot", target=args.get("reboot_target") or "bootloader")
