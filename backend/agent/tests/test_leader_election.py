@@ -32,9 +32,10 @@ def test_election_enabled_sqlite_url_skips_lock(monkeypatch):
     """Non-Postgres DATABASE_URL must not open a live connection."""
     monkeypatch.setenv("STP_SCHEDULER_LEADER_ELECTION", "1")
     monkeypatch.delenv("TESTING", raising=False)
+    # database.py 在 import 时 resolve_database_url()——无 env 会直接 RuntimeError。
+    # 必须 import 前 setenv(以前可以 import 后 setattr 覆盖默认值,现在没有默认值)。
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///tmp/stp-leader-test.db")
     import backend.core.database as db_mod
-
-    monkeypatch.setattr(db_mod, "DATABASE_URL", "sqlite:///tmp/stp-leader-test.db")
     assert leader_election_enabled() is True
     with hold_scheduler_leadership("admission_pump") as ok:
         assert ok is True

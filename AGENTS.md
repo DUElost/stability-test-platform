@@ -55,9 +55,10 @@ CI 有阻塞式门禁；本地钩子需一次性启用：`git config core.hooksP
 > **env 源单一化（2026-08-01）**：生产唯一 env 源是仓库根 `.env.backend`。
 > `backend/main.py` 与 `backend/alembic/env.py` 都以它为准（ambient 环境变量仍最优先）；
 > `backend/.env` 降级为纯本地开发覆盖，已移除其中失效且指向 `stp_dev` 的 `DATABASE_URL`。
-> Alembic **不再有兜底默认** —— 此前那个默认值是 `stp:password@localhost:5432/stp`，
-> 直接点名生产库，只靠密码错才没连上。现在解析不到就报错，并在连接前把目标
-> （已脱敏）打到 stderr。
+> Alembic 与 `core/database.py` **都不再有兜底默认** —— 此前那个默认值是
+> `stp:password@localhost:5432/stp`，直接点名生产库，只靠密码错才没连上。
+> 现在统一走 `backend/core/env_source.resolve_database_url`：解析不到就
+> RuntimeError；alembic 连接前还把目标（已脱敏）打到 stderr。
 
 **禁止示例**（会在生产数据上建表/清库/跑用例）：
 

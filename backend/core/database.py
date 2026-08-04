@@ -6,7 +6,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://stp:password@localhost:5432/stp")
+from backend.core.env_source import resolve_database_url
+
+# 唯一解析入口是 env_source：ambient env → 仓库根 .env.backend，**绝无兜底默认**。
+# 解析不到直接 RuntimeError——曾经这里的默认值是
+# `postgresql+asyncpg://stp:password@localhost:5432/stp`（直接点名生产库，
+# 只靠密码占位符侥幸没连上）。现在宁可拒绝启动，也不能猜。
+DATABASE_URL, _ = resolve_database_url()
 
 
 def is_sqlite_url(database_url: str) -> bool:
