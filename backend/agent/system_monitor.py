@@ -109,9 +109,6 @@ def get_network_connections() -> Dict[str, int]:
         连接统计字典
     """
     try:
-        with open('/proc/net/snmp', 'r') as f:
-            content = f.read()
-
         # 简单统计 TCP 连接数
         connections = 0
         try:

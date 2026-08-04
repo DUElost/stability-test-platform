@@ -150,7 +150,7 @@ class TestLifecycleE2EFlow:
 
         pipeline_def = _minimal_lifecycle(timeout_seconds=10, interval_seconds=5)
 
-        result = engine._execute_lifecycle(pipeline_def)
+        engine._execute_lifecycle(pipeline_def)
 
         # Verify order: init first, then at least one patrol, then teardown last
         assert execution_log[0] == "init:init_step", "Init must run first"

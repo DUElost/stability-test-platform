@@ -63,7 +63,6 @@ class TestHeartbeatThread(unittest.TestCase):
 
         # Track heartbeat call timestamps
         hb_timestamps = []
-        original_send = mock_send_hb.side_effect
 
         def track_heartbeat(*args, **kwargs):
             hb_timestamps.append(time.monotonic())

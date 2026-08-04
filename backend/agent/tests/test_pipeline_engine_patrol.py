@@ -93,7 +93,7 @@ class TestPatrolSuccessSuppression:
         # All steps succeed
         engine._execute_step = MagicMock(return_value=StepResult(success=True))
 
-        result = engine._execute_lifecycle(_patrol_pipeline(interval=0))
+        engine._execute_lifecycle(_patrol_pipeline(interval=0))
 
         # patrol ran at least once, all _execute_step calls used suppress_success_trace=True
         assert engine._execute_step.call_count >= 2

@@ -29,7 +29,6 @@ class TestHeartbeat:
 
     def test_heartbeat_existing_host(self, client, sample_host):
         """Test heartbeat updates existing host"""
-        original_heartbeat = sample_host.last_heartbeat
 
         response = client.post(
             "/api/v1/heartbeat",
@@ -482,7 +481,6 @@ class TestHeartbeat:
 
     def test_heartbeat_preserves_existing_device(self, client, sample_device):
         """Test heartbeat preserves existing device data"""
-        original_model = sample_device.model
 
         response = client.post(
             "/api/v1/heartbeat",

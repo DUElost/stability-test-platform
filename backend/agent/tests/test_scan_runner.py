@@ -175,7 +175,7 @@ def test_enqueue_fifo_preserves_distinct_plan_runs():
 
 
 def test_worker_runs_queued_job_after_active_scan():
-    r = _make_runner()
+    _make_runner()
     executed: list[tuple[int, bool]] = []
     gate = threading.Event()
 

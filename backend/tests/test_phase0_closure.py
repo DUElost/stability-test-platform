@@ -345,7 +345,7 @@ class TestDeferredPostCompletion:
             assert notif_calls[0][1]["event_type"] == "RUN_FAILED"
 
             # Second pass — same job re-enqueued (SAQ key dedup handles idempotency)
-            with patch("backend.tasks.saq_worker.enqueue_sync") as mock_enqueue2:
+            with patch("backend.tasks.saq_worker.enqueue_sync"):
                 filled2 = _fill_deferred_post_completions(db, datetime.now(timezone.utc))
             assert filled2 >= 1, "Orphan job re-enqueued (SAQ key dedup is the idempotency layer)"
 

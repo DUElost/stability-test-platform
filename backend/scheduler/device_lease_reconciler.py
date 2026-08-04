@@ -338,7 +338,7 @@ async def _reconcile_aborted_running_jobs(db) -> tuple[int, list[dict]]:
     unknown_count = 0
     broadcast_items: list[dict] = []
 
-    for candidate, pr in rows:
+    for candidate, _pr in rows:
         try:
             async with db.begin_nested():
                 job = (await db.execute(

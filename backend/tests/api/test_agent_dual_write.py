@@ -2930,7 +2930,6 @@ async def test_claim_filters_unhealthy_devices():
     """
     suffix = uuid4().hex[:8]
     host_id = f"cfilt-host-{suffix}"
-    now = datetime.now(timezone.utc)
 
     seed_bad = _seed_job(status=JobStatus.PENDING.value)
     seed_good = _seed_job(status=JobStatus.PENDING.value)

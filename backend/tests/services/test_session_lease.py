@@ -200,5 +200,4 @@ async def test_complete_job_releases_lock():
     async with AsyncSessionLocal() as db:
         await complete_job(seed["job_id"], payload, db)
 
-    d = _get_device(seed["device_id"])
     # Phase 6d: status/lease lifecycle managed entirely through device_leases.

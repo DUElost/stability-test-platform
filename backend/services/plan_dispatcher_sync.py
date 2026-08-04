@@ -709,10 +709,6 @@ def complete_plan_run_dispatch(
         )
         return
 
-    wifi_allocations: dict[int, dict] = {}
-    now = datetime.now(timezone.utc)
-    job_device_pairs: dict[int, int] = {}
-
     # B4 final-window guard: two dispatches can BOTH pass the revalidation above
     # (each in its own uncommitted transaction), then race the INSERTs — the
     # loser hits uq_job_active_per_device only at flush/commit. Without this
@@ -722,7 +718,7 @@ def complete_plan_run_dispatch(
     # Legacy policy: settle as structured FAILED. The V2 admission transaction
     # reuses the same materializer with requeue policy instead (invariant ④).
     try:
-        job_device_pairs = materialize_jobs_and_allocations(
+        materialize_jobs_and_allocations(
             db, pr, lifecycle, device_ids, device_host_map,
         )
         db.commit()

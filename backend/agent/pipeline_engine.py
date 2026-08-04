@@ -1787,8 +1787,6 @@ class PipelineEngine:
             return reason, err
 
         self._report_job_status_mq("PATROL_RUNNING")
-        termination_reason = "completed"
-        lifecycle_error = ""
 
         while True:
             # ── Termination checks before each cycle ──
