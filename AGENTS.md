@@ -26,9 +26,9 @@
 下生成，CI 与镜像都是 3.11）。测试/lint 依赖不要加进 `requirements.txt`——
 生产镜像带着 pytest 既浪费体积也是无谓的攻击面。
 
-**Lint 现状**：2026-07 首次接入，CI 里 `continue-on-error`（不阻塞）。存量
-ESLint 105 warning / ruff 81 finding（原 343，`--fix` 已收敛掉 262 个未使用
-导入）。收敛完成后把 `continue-on-error` 摘掉。ruff 暂未开 `UP`(pyupgrade)
+**Lint 现状**：2026-07 首次接入。ruff 已于 2026-08-04 清零（#155/#157），
+CI 的 ruff 步骤已改为阻塞；ESLint 仍有 105 warnings，暂不阻塞，待清零后
+启用 `--max-warnings 0` 再摘 `continue-on-error`。ruff 暂未开 `UP`(pyupgrade)
 族——全量 2239 处纯风格改写（`Optional[X]`→`X | None` 882、`Dict`→`dict`
 633 等），会淹没 F/B 的真实信号，与缺陷无关。
 
