@@ -199,8 +199,50 @@ def _host_to_out(h: Host, *, db: Session | None = None, host_key_trust: str | No
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
 
+def _find_host_identity_conflict(
+    db: Session,
+    *,
+    name: str | None,
+    ip: str | None,
+    exclude_id: str | None = None,
+) -> dict | None:
+    """#101: 预检 name/ip 是否被其他 host 占用，返回冲突详情（无冲突返回 None）。
+
+    显式预检比解析 IntegrityError 更友好：能指明冲突字段与被占用者。
+    IntegrityError 捕获仍保留作并发竞态兜底。
+    """
+    query = db.query(Host.id).filter(Host.id != exclude_id) if exclude_id else db.query(Host.id)
+    if name is not None:
+        owner = query.filter(Host.name == name).first()
+        if owner is not None:
+            return {"field": "name", "value": name, "host_id": owner.id}
+    if ip is not None:
+        owner = query.filter(Host.ip == ip).first()
+        if owner is not None:
+            return {"field": "ip", "value": ip, "host_id": owner.id}
+    return None
+
+
+def _identity_conflict_409(conflict: dict, *, action: str) -> HTTPException:
+    field_label = "主机名" if conflict["field"] == "name" else "IP"
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "HOST_IDENTITY_CONFLICT",
+            "action": action,
+            "field": conflict["field"],
+            "value": conflict["value"],
+            "conflicting_host_id": conflict["host_id"],
+            "message": f"{field_label}已被主机 {conflict['host_id']} 使用：{conflict['value']}",
+        },
+    )
+
+
 @router.post("", response_model=HostOut)
 def create_host(payload: HostCreate, db: Session = Depends(get_db), current_user: User = Depends(require_admin), request: Request = None):
+    conflict = _find_host_identity_conflict(db, name=payload.name, ip=payload.ip)
+    if conflict is not None:
+        raise _identity_conflict_409(conflict, action="create")
     host_id = allocate_host_id(
         payload.ip,
         exists=lambda candidate: db.get(Host, candidate) is not None,
@@ -304,6 +346,12 @@ def update_host(
     host = db.get(Host, host_id)
     if not host:
         raise HTTPException(status_code=404, detail="host not found")
+
+    conflict = _find_host_identity_conflict(
+        db, name=payload.name, ip=payload.ip, exclude_id=host.id,
+    )
+    if conflict is not None:
+        raise _identity_conflict_409(conflict, action="update")
 
     old_ip = host.ip
     old_port = host.ssh_port

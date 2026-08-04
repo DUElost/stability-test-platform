@@ -1,7 +1,6 @@
 """
 Tests for hosts API routes
 """
-import pytest
 from cryptography.fernet import Fernet
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -36,9 +35,54 @@ class TestCreateHost:
 
     def test_create_host_duplicate_name(self, client, sample_host, admin_headers):
         """Test creating host with duplicate name fails"""
-        # Skip this test as it causes database integrity error
-        # The API doesn't handle duplicate name gracefully
-        pytest.skip("API doesn't handle duplicate host names - causes IntegrityError")
+        response = client.post(
+            "/api/v1/hosts",
+            json={
+                "name": sample_host.name,
+                "ip": "192.168.1.203",
+                "ssh_port": 22,
+            },
+            headers=admin_headers,
+        )
+        assert response.status_code == 409, response.text
+        body = response.json()["detail"]
+        assert body["code"] == "HOST_IDENTITY_CONFLICT"
+        assert body["field"] == "name"
+        assert body["conflicting_host_id"] == sample_host.id
+
+    def test_create_host_duplicate_ip(self, client, sample_host, admin_headers):
+        """#101: 同一 IP 不能登记两行——重复 IP 必须 409。"""
+        response = client.post(
+            "/api/v1/hosts",
+            json={
+                "name": "another-name",
+                "ip": sample_host.ip,
+                "ssh_port": 22,
+            },
+            headers=admin_headers,
+        )
+        assert response.status_code == 409, response.text
+        body = response.json()["detail"]
+        assert body["code"] == "HOST_IDENTITY_CONFLICT"
+        assert body["field"] == "ip"
+        assert body["conflicting_host_id"] == sample_host.id
+
+    def test_update_host_ip_conflict(self, client, sample_host, sample_offline_host, admin_headers):
+        """#101: update 把 ip 改成其他 host 已占用的值必须 409。"""
+        response = client.put(
+            f"/api/v1/hosts/{sample_host.id}",
+            json={
+                "name": sample_host.name,
+                "ip": sample_offline_host.ip,
+                "ssh_port": 22,
+            },
+            headers=admin_headers,
+        )
+        assert response.status_code == 409, response.text
+        body = response.json()["detail"]
+        assert body["code"] == "HOST_IDENTITY_CONFLICT"
+        assert body["field"] == "ip"
+        assert body["conflicting_host_id"] == sample_offline_host.id
 
     def test_create_host_missing_name(self, client, admin_headers):
         """Test creating host without name fails"""

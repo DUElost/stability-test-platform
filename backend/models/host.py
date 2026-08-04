@@ -32,8 +32,10 @@ class Host(Base):
     created_at           = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # 迁移补齐字段
-    name          = Column(String(128), nullable=True)
-    ip            = Column(String(64), nullable=True)
+    # #101: name 与 hostname 恒同值（hostname 已唯一），显式化；ip 唯一防止
+    # 同一物理机登记两行导致心跳/容量/租约按 id 结算分叉。
+    name          = Column(String(128), nullable=True, unique=True)
+    ip            = Column(String(64), nullable=True, unique=True)
     ssh_port      = Column(Integer, default=22, nullable=True)
     ssh_user      = Column(String(64), nullable=True)
     ssh_auth_type = Column(String(32), default="password", nullable=True)

@@ -72,13 +72,28 @@ def _allocate_host_id(ip: Optional[str], db: Session) -> str:
     )
 
 
-def _sync_host_identity(host: Host, host_info: Dict[str, Any]) -> None:
+def _sync_host_identity(host: Host, host_info: Dict[str, Any], db: Session) -> None:
     """根据 agent 上报的主机信息刷新展示字段，避免页面显示旧 IP。"""
     ip = (host_info or {}).get("ip")
     if not ip:
         return
 
     previous_ip = host.ip or host.ip_address
+    if ip != previous_ip:
+        # #101: host.ip/name 唯一约束后，被其他 host 占用的 IP 不能直接写入，
+        # 否则 commit 时 IntegrityError 会让整个心跳 500。保留旧 IP 并告警，
+        # 由运维核对 host 归属（心跳仍按 host_id 继续）。
+        owner = (
+            db.query(Host.id)
+            .filter(Host.id != host.id, Host.ip == ip)
+            .first()
+        )
+        if owner is not None:
+            logger.warning(
+                "host_identity_ip_conflict host=%s ip=%s owner=%s — 保留旧 IP=%s",
+                host.id, ip, owner.id, previous_ip,
+            )
+            return
 
     host.ip = ip
     host.ip_address = ip
@@ -204,7 +219,7 @@ def _process_heartbeat_with_db(
             db.add(host)
             db.flush()
 
-    _sync_host_identity(host, host_info)
+    _sync_host_identity(host, host_info, db)
 
     # Update host status
     # Compare the Agent's cached catalog against **the control plane's current
