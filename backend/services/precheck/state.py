@@ -118,7 +118,13 @@ def update_dispatch_state(pr: PlanRun, db: Session, **patch: object) -> None:
 
 _update_dispatch_state = update_dispatch_state
 
-_ACTIVE_JOB_STATUSES = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+# 与 plan_dispatcher_sync.ACTIVE_JOB_STATUSES 保持一致：UNKNOWN grace 期内
+# 作业仍可能恢复（UNKNOWN→RUNNING），同样算活跃（#134）。
+_ACTIVE_JOB_STATUSES = (
+    JobStatus.PENDING.value,
+    JobStatus.RUNNING.value,
+    JobStatus.UNKNOWN.value,
+)
 
 
 def plan_run_has_jobs(db: Session, plan_run_id: int) -> bool:

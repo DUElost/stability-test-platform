@@ -520,6 +520,10 @@ def _mark_running_timeout(
             status_reason=reason,
             ended_at=now,
             updated_at=now,
+            # #146: UNKNOWN 是 grace/恢复期状态，非终态但也不该残留运行子状态
+            # （EXECUTING_STEP/PATROL_SLEEP 等）——否则不按 status 过滤的
+            # 并发统计会误判（与 #116 同族，发生在非终态）。
+            execution_state=None,
         )
         .returning(JobInstance.id)
     ).first()
@@ -599,6 +603,8 @@ def _mark_patrol_stall(
             status_reason=reason,
             ended_at=now,
             updated_at=now,
+            # #146: 同 _mark_running_timeout —— UNKNOWN 行不留运行子状态。
+            execution_state=None,
         )
         .returning(JobInstance.id)
     ).first()

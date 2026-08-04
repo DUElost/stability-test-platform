@@ -514,6 +514,28 @@ class TestHostHotUpdateSoftLock:
         assert len(body["detail"]["active_jobs"]) == 1
         mock_exec.assert_not_called()
 
+    def test_hot_update_with_unknown_grace_job_returns_409(
+        self, client, admin_headers, db_session, abort_chain
+    ):
+        """#134: UNKNOWN grace 期作业仍可能恢复，同样算活跃，禁止 hot-update。"""
+        plan = abort_chain["plan"]
+        pr = _make_plan_run(db_session, plan.id)
+        _make_job(
+            db_session, pr.id, plan.id,
+            abort_chain["dev1"].id, "h-abort",
+            status=JobStatus.UNKNOWN.value,
+        )
+
+        with patch("backend.api.routes.hosts.execute_hot_update") as mock_exec:
+            resp = client.post(
+                "/api/v1/hosts/h-abort/hot-update", headers=admin_headers,
+            )
+        assert resp.status_code == 409, resp.text
+        body = resp.json()
+        assert body["detail"]["code"] == "HOST_HAS_ACTIVE_JOBS"
+        assert len(body["detail"]["active_jobs"]) == 1
+        mock_exec.assert_not_called()
+
     def test_hot_update_masks_hidden_legacy_plan_id_in_active_job_summary(
         self, client, admin_headers, db_session, abort_chain
     ):
