@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -173,6 +173,9 @@ class HostRunCoordinator:
         self._plan_run_hosts: Dict[int, PlanRunHostView] = {}  # keyed by host_row_id
         self._job_views: Dict[int, JobExecutionView] = {}  # keyed by job_id
         self._job_devices: Dict[int, int] = {}  # job_id → device_id for abort
+        # job_id → plan_run_host_id（#117）。同一 PRH 的 job 是 barrier 的 peer；
+        # 没有它，同 host 多 PlanRun 时等待方会把别的 PlanRun 的活跃 job 当同伴。
+        self._job_prh: Dict[int, int] = {}
         self._scheduler: Any = None  # set via set_scheduler()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -301,11 +304,29 @@ class HostRunCoordinator:
             return
         v.advance_phase(next_phase)
 
-    def register_job(self, job_id: int) -> JobExecutionView:
+    def register_job(self, job_id: int, prh_id: Optional[int] = None) -> JobExecutionView:
         with self._lock:
             if job_id not in self._job_views:
                 self._job_views[job_id] = JobExecutionView(job_id)
+            if prh_id is not None:
+                self._job_prh[job_id] = prh_id
             return self._job_views[job_id]
+
+    def peers_of(self, job_id: int) -> List[JobExecutionView]:
+        """同一 PlanRunHost 的其他 job 视图（#117 progress-aware barrier）。
+
+        同 host 可能同时跑多个 PlanRun，barrier 等待方必须只把同 PRH 的 job
+        当同伴——否则会把别的 PlanRun 的活跃 job 当成 peer 而无限续期。
+        """
+        with self._lock:
+            prh_id = self._job_prh.get(job_id)
+            if prh_id is None:
+                return []
+            return [
+                view
+                for other_id, view in self._job_views.items()
+                if other_id != job_id and self._job_prh.get(other_id) == prh_id
+            ]
 
     def register_job_device(self, job_id: int, device_id: int) -> None:
         """Map job→device for abort/cancel targeting."""
@@ -316,6 +337,7 @@ class HostRunCoordinator:
         with self._lock:
             self._job_views.pop(job_id, None)
             self._job_devices.pop(job_id, None)
+            self._job_prh.pop(job_id, None)
 
     def set_scheduler(self, scheduler: Any) -> None:
         self._scheduler = scheduler
