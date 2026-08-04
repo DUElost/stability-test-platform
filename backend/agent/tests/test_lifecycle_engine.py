@@ -471,7 +471,7 @@ class TestTeardownBestEffort:
 
         executed_steps = []
 
-        def mock_execute_step(stage, step):
+        def mock_execute_step(stage, step, **kwargs):
             step_id = step.get("step_id", "unknown")
             executed_steps.append(step_id)
             # Simulate device disconnect: first step fails
@@ -500,7 +500,7 @@ class TestTeardownBestEffort:
         """When all teardown steps fail, status is FAILED."""
         engine, *_ = _make_engine()
 
-        def mock_execute_step(stage, step):
+        def mock_execute_step(stage, step, **kwargs):
             return StepResult(success=False, error_message="adb: device not found")
 
         engine._execute_step = mock_execute_step
@@ -519,7 +519,7 @@ class TestTeardownBestEffort:
         engine, *_ = _make_engine()
         executed = []
 
-        def mock_execute_step(stage, step):
+        def mock_execute_step(stage, step, **kwargs):
             step_id = step.get("step_id", "unknown")
             executed.append(step_id)
             if step_id == "exploding_step":
@@ -542,7 +542,7 @@ class TestTeardownBestEffort:
         """When all teardown steps succeed, status is SUCCESS."""
         engine, *_ = _make_engine()
 
-        engine._execute_step = lambda phase, step: StepResult(success=True)
+        engine._execute_step = lambda phase, step, **kwargs: StepResult(success=True)
 
         teardown_def = [
             {"step_id": "s1", "action": "script:check_device", "version": "1.0.0", "params": {}, "timeout_seconds": 5},
@@ -560,7 +560,7 @@ class TestTeardownBestEffort:
         engine, *_ = _make_engine()
         executed = []
 
-        def mock_execute_step(stage, step):
+        def mock_execute_step(stage, step, **kwargs):
             step_id = step.get("step_id", "unknown")
             executed.append(step_id)
             # Simulate: ADB-dependent steps fail, host-only steps succeed
@@ -672,3 +672,29 @@ class TestSingleDeviceInitFailurePhase:
 
         # 多设备时 init 失败不直调 advance(由 barrier 到达计数推进)
         coord.advance_phase.assert_not_called()
+class TestTeardownPermit:
+    def test_teardown_uses_permit_when_scheduler_present(self):
+        """#118:teardown 也走 permit——结果收取要读写 NFS/USB,
+        23 路并发会打满带宽;permit 串行保护与 init/patrol 一致。
+        """
+        from unittest.mock import MagicMock
+
+        engine, *_ = _make_engine()
+        scheduler = MagicMock()
+        permit = MagicMock()
+        scheduler.acquire.return_value = permit
+        engine._scheduler = scheduler
+        engine._device_id = 1
+        engine._execute_step = lambda phase, step, **kwargs: StepResult(success=True)
+
+        engine._execute_teardown_best_effort([
+            {"step_id": "s1", "action": "script:check_device", "version": "1.0.0",
+             "params": {}, "timeout_seconds": 5},
+            {"step_id": "s2", "action": "script:log_scan", "version": "1.0.0",
+             "params": {}, "timeout_seconds": 5},
+        ])
+
+        # 每个 teardown 步骤各 acquire 一次,且 permit 必须 release
+        assert scheduler.acquire.call_count == 2, "每步必须 acquire 一次"
+        assert permit.release.called, "permit 必须 release(不能拿锁不还)"
+        assert permit.release.call_count == 2
