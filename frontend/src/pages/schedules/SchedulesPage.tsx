@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, type TaskSchedule, type TaskScheduleCreatePayload, type Plan } from '@/utils/api';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
@@ -45,17 +45,17 @@ export default function SchedulesPage() {
   const [editing, setEditing] = useState<TaskSchedule | null>(null);
   const [form, setForm] = useState<ScheduleForm>(DEFAULT_FORM);
 
-  const loadSchedules = async () => {
+  const loadSchedules = useCallback(async () => {
     const res = await api.schedules.list(0, 200);
     setSchedules(res.items || []);
-  };
+  }, []);
 
-  const loadPlans = async () => {
+  const loadPlans = useCallback(async () => {
     const list = await api.plans.list(0, 200);
     setPlans(list || []);
-  };
+  }, []);
 
-  const loadAll = async () => {
+  const loadAll = useCallback(async () => {
     try {
       await Promise.all([loadSchedules(), loadPlans()]);
     } catch {
@@ -63,11 +63,11 @@ export default function SchedulesPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [loadSchedules, loadPlans, toast]);
 
   useEffect(() => {
     loadAll();
-  }, []);
+  }, [loadAll]);
 
   const handleSave = async () => {
     try {

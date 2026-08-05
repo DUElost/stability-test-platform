@@ -368,7 +368,7 @@ export default function DeviceOverview({
   const devices = data?.devices ?? [];
   const byStatus = data?.by_status ?? { all: 0 };
   const byLinkStatus = data?.by_link_status;
-  const byHost = data?.by_host ?? {};
+  const byHost = useMemo(() => data?.by_host ?? {}, [data?.by_host]);
 
   const hosts = useMemo(
     () => Object.keys(byHost).sort((a, b) => a.localeCompare(b)),

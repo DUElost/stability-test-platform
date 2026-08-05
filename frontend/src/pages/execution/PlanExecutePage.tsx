@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -549,7 +549,7 @@ export default function PlanExecutePage() {
     } else if (draft.phase === 'select' && selectedPlan && executableStepCount > 0) {
       setPhase('select');
     }
-  }, [devLoading, plansLoading, allDevices, selectedPlan, executableStepCount, toast, initialDraft]);
+  }, [devLoading, plansLoading, allDevices, selectedPlan, executableStepCount, toast, initialDraft, draftConsumedRef, searchParams]);
 
   // 筛选 / 视图写入 URL（replace，保留 plan/devices）；与草稿并行
   useEffect(() => {
@@ -706,7 +706,7 @@ export default function PlanExecutePage() {
     }
   };
 
-  const handlePhaseChange = (target: ExecutePhase) => {
+  const handlePhaseChange = useCallback((target: ExecutePhase) => {
     const targetIdx = phaseIndex(target);
     const currentIdx = phaseIndex(phase);
     if (targetIdx <= currentIdx) { setPhase(target); return; }
@@ -721,7 +721,7 @@ export default function PlanExecutePage() {
       return;
     }
     setPhase(target);
-  };
+  }, [phase, selectedPlanId, executableStepCount, selectedSchedulableDeviceIds, toast]);
 
   const handleMatrixToggle = (device: DeviceSummary, event: { shiftKey: boolean }) => {
     setSelectedDeviceIds((prev) =>
@@ -1339,4 +1339,3 @@ export default function PlanExecutePage() {
     </PageContainer>
   );
 }
-

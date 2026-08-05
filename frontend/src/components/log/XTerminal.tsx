@@ -207,6 +207,8 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
     const [searchQuery, setSearchQuery] = useState('');
     const [useRegex, setUseRegex] = useState(false);
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const onReadyRef = useRef(onReady);
+    onReadyRef.current = onReady;
 
     // Sync autoScroll state with ref for event callbacks
     useEffect(() => {
@@ -258,7 +260,7 @@ export const XTerminal = React.forwardRef<XTerminalHandle, XTerminalProps>(
       });
       resizeObserver.observe(containerRef.current);
 
-      onReady?.();
+      onReadyRef.current?.();
 
       return () => {
         clearTimeout(resizeTimer);
