@@ -27,10 +27,11 @@
 生产镜像带着 pytest 既浪费体积也是无谓的攻击面。
 
 **Lint 现状**：2026-07 首次接入。ruff 已于 2026-08-04 清零（#155/#157），
-CI 的 ruff 步骤已改为阻塞；ESLint 仍有 105 warnings，暂不阻塞，待清零后
-启用 `--max-warnings 0` 再摘 `continue-on-error`。ruff 暂未开 `UP`(pyupgrade)
-族——全量 2239 处纯风格改写（`Optional[X]`→`X | None` 882、`Dict`→`dict`
-633 等），会淹没 F/B 的真实信号，与缺陷无关。
+ESLint 已于 2026-08-05 清零（#159/#161/#162）；CI 的 ruff 与 ESLint
+（`--max-warnings 0`）均已改为阻塞，`continue-on-error` 已全部摘除。
+ruff 暂未开 `UP`(pyupgrade) 族——全量 2239 处纯风格改写
+（`Optional[X]`→`X | None` 882、`Dict`→`dict` 633 等），会淹没 F/B 的真实
+信号，与缺陷无关。
 
 **空行注入污染**：编辑器插件会逐行插空行，一次污染后每次 diff 都虚胖一倍。
 检测/清理：`python tools/dev/collapse-blank-pollution.py [--check] <file.py>`
