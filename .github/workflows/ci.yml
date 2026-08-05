@@ -79,12 +79,11 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-  # Lint —— 报告性质,暂不阻塞合入。
+  # Lint —— ruff 已阻塞;ESLint warnings 未清零前暂不阻塞。
   #
-  # 本仓在 2026-07 之前从未跑过 lint,存量:ESLint 105 warning、
-  # ruff 338 finding(其中 244 是未使用导入,可 --fix 自动收敛)。
-  # 先让信号在 PR 上可见,存量清完后把 continue-on-error 摘掉,
-  # 并把 ESLint 的 --max-warnings 降到 0。
+  # ruff 已于 2026-08-04 清零(#155/#157),本步骤 continue-on-error 已摘。
+  # ESLint 仍有 105 warnings,待清零后把 --max-warnings 降到 0 再摘
+  # continue-on-error。
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -112,7 +111,6 @@ jobs:
         run: pip install "$(grep -E '^ruff' backend/requirements-dev.txt)"
       - name: Ruff
         run: ruff check backend/ tools/ scripts/
-        continue-on-error: true
 
       # 这条**阻塞**:不是风格建议,是二值门禁,且当前全仓已清零。
       # pre-commit 钩子需开发者手动 `git config core.hooksPath .githooks`
