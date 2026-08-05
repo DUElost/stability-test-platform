@@ -1,4 +1,4 @@
-"""monkey_setup v2.3.2 的 PROGRESS 打戳（#115 阶段 2 / #133 / #138 / #139）。
+"""monkey_setup v2.3.3 的 PROGRESS 打戳（#115 阶段 2 / #133 / #138 / #139 / #140）。
 
 用**假 adb 可执行**验证 `adb_push_progress` / `_dd_with_progress`，不碰真设备。
 
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.2"
+_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.3"
 
 
 def _load_module(name: str, path: Path):
@@ -38,9 +38,9 @@ def _load_module(name: str, path: Path):
 
 
 # monkey_setup 模块级 `from _adb import ...`，必须先把 _adb 放进 sys.modules
-_adb = _load_module("_adb_v232", _SCRIPT_DIR / "_adb.py")
+_adb = _load_module("_adb_v233", _SCRIPT_DIR / "_adb.py")
 sys.modules["_adb"] = _adb
-monkey_setup = _load_module("monkey_setup_v232", _SCRIPT_DIR / "monkey_setup.py")
+monkey_setup = _load_module("monkey_setup_v233", _SCRIPT_DIR / "monkey_setup.py")
 
 
 @pytest.fixture
@@ -245,7 +245,9 @@ class TestTarProgress:
             json.loads(line[len("PROGRESS "):])
             for line in err.splitlines() if line.startswith("PROGRESS ")
         ]
-        tar_stamps = [s for s in stamps if s.get("phase")]
+        tar_stamps = [
+            s for s in stamps if s.get("phase") in ("tar_start", "tar", "tar_end")
+        ]
         phases = [s["phase"] for s in tar_stamps]
         assert phases[0] == "tar_start"
         assert "tar" in phases, "解包期间必须有周期心跳戳"
@@ -255,6 +257,53 @@ class TestTarProgress:
         assert len(set(seqs)) == len(seqs), "seq 不得重复"
         # 0.3s 解包 / 0.05s 间隔 → 至少 3 枚周期心跳
         assert sum(1 for p in phases if p == "tar") >= 3, phases
+
+
+class TestPrephaseProgress:
+    def test_main_emits_init_and_step_stamps(
+        self, fake_adb, monkeypatch, capsys
+    ):
+        """#140: 入口 init 戳 + 每个 step 的 start/end 戳，前置阶段不再无戳。"""
+        monkeypatch.setenv("STP_DEVICE_SERIAL", "FAKESERIAL")
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setenv(
+            "STP_STEP_PARAMS", json.dumps({"steps": ["wifi"]})
+        )
+        monkey_setup.main()
+        out = capsys.readouterr()
+        err = out.err
+        stamps = [
+            json.loads(line[len("PROGRESS "):])
+            for line in err.splitlines() if line.startswith("PROGRESS ")
+        ]
+        phases = [s.get("phase") for s in stamps]
+        assert phases[0] == "init", phases
+        assert "step:wifi:start" in phases, phases
+        assert "step:wifi:end" in phases, phases
+        seqs = [s["seq"] for s in stamps]
+        assert seqs == sorted(seqs) and len(set(seqs)) == len(seqs)
+        assert '"success": true' in out.out, out.out
+
+    def test_sha256_emits_periodic_stamps(self, monkeypatch, tmp_path, capsys):
+        """#140: 慢 NFS 上大文件 sha256 校验期间持续打戳。"""
+        monkeypatch.setattr(monkey_setup, "_SHA256_PROGRESS_BYTES", 1024 * 1024)
+        src = _make_source(tmp_path, 3 * 1024 * 1024)
+        emit = monkey_setup._make_progress("push")
+        digest = monkey_setup._sha256_file(str(src), on_progress=emit)
+        assert digest == hashlib.sha256(src.read_bytes()).hexdigest()
+        err = capsys.readouterr().err
+        stamps = [
+            json.loads(line[len("PROGRESS "):])
+            for line in err.splitlines() if line.startswith("PROGRESS ")
+        ]
+        sha_stamps = [s for s in stamps if s.get("phase") == "sha256"]
+        assert [s["bytes_hashed"] for s in sha_stamps] == [
+            1 * 1024 * 1024,
+            2 * 1024 * 1024,
+            3 * 1024 * 1024,
+            3 * 1024 * 1024,
+        ], sha_stamps
+        assert sha_stamps[-1]["done"] is True
 
 
 class TestFillAccumulates:
