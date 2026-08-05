@@ -255,8 +255,11 @@ interface ParamFormCardProps {
 function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFormCardProps) {
   const schema = matchedScript?.param_schema ?? {};
   const schemaKeys = Object.keys(schema);
-  const defaultParams = matchedScript?.default_params ?? {};
-  const stepParams = step.params ?? {};
+  const defaultParams = useMemo(
+    () => matchedScript?.default_params ?? {},
+    [matchedScript?.default_params],
+  );
+  const stepParams = useMemo(() => step.params ?? {}, [step.params]);
 
   /** Merge: step.params overrides default_params overrides schema.default */
   const resolvedValue = useCallback(

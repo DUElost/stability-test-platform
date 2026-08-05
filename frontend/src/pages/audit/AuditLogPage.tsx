@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { api } from '@/utils/api';
 import { Loader2, Shield } from 'lucide-react';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -36,7 +36,7 @@ export default function AuditLogPage() {
     end_time: '',
   });
 
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     if (filters.start_time && filters.end_time && filters.start_time > filters.end_time) return;
     setLoading(true);
     setError(null);
@@ -56,9 +56,9 @@ export default function AuditLogPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [page, filters]);
 
-  useEffect(() => { loadLogs(); }, [page, filters]);
+  useEffect(() => { loadLogs(); }, [loadLogs]);
 
   return (
     <PageContainer width="list">

@@ -133,7 +133,7 @@ export default function PlanRunDetailPage() {
     if (sessionStorage.getItem(finalArchivePromptedKey)) return;
     sessionStorage.setItem(finalArchivePromptedKey, '1');
     setFinalArchiveOpen(true);
-  }, [runQ.data?.status, finalArchivePromptedKey, finalArchiveReady]);
+  }, [runQ.data, finalArchivePromptedKey, finalArchiveReady]);
 
   const toggleLeftPanel = useCallback(() => setLeftPanelOpen((v) => !v), []);
 

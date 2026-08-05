@@ -75,15 +75,18 @@ export default function Dashboard() {
     online_rate: 0,
   };
 
-  const stats = summary?.devices ?? {
-    total: 0,
-    idle: 0,
-    testing: 0,
-    offline: 0,
-    error: 0,
-    low_battery: 0,
-    high_temp: 0,
-  };
+  const stats = useMemo(
+    () => summary?.devices ?? {
+      total: 0,
+      idle: 0,
+      testing: 0,
+      offline: 0,
+      error: 0,
+      low_battery: 0,
+      high_temp: 0,
+    },
+    [summary?.devices],
+  );
 
   const alerts = summary?.alerts ?? { total: 0, low_battery: 0, high_temp: 0, error: 0 };
   const alertsCount = alerts.total;
