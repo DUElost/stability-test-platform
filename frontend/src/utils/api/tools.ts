@@ -43,8 +43,8 @@ export const scripts = {
     version: string;
     nfs_path: string;
     content_sha256: string;
-    param_schema?: Record<string, any>;
-    default_params: Record<string, any>;
+    param_schema?: Record<string, unknown>;
+    default_params: Record<string, unknown>;
     description?: string;
   }) =>
     unwrapApiResponse<ScriptEntry>(apiClient.post(`/scripts/${name}/versions`, data)),

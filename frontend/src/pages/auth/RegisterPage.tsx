@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/useToast';
 import axios from 'axios';
+import { toApiError } from '@/utils/api';
 import { SURFACE, TEXT } from '@/design-system/tokens';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 
@@ -39,8 +40,8 @@ export default function RegisterPage() {
       // 注册成功，跳转到登录页
       toast.success('注册成功，请登录');
       navigate('/login');
-    } catch (err: any) {
-      setError(err.response?.data?.detail || '注册失败');
+    } catch (err: unknown) {
+      setError(toApiError(err).message);
     } finally {
       setLoading(false);
     }

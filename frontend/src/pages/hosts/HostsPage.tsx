@@ -10,7 +10,7 @@ import { AddHostModal } from './components/AddHostModal';
 import HostHotUpdateConfirmDialog from '@/components/host/HostHotUpdateConfirmDialog';
 import HostBulkActionBar from '@/components/host/HostBulkActionBar';
 import HostOperationPanel from '@/components/host/HostOperationPanel';
-import { api, coerceHostList, fetchHostList } from '@/utils/api';
+import { api, coerceHostList, fetchHostList, toApiError } from '@/utils/api';
 import type { Host } from '@/utils/api/types';
 import { hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,14 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { SKELETON_BLOCK, TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
 import { executeBulkHotUpdate, precheckBulkHotUpdate } from './bulkHotUpdate';
+
+function asNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
 
 export default function HostsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -51,8 +59,8 @@ export default function HostsPage() {
         );
       }
     },
-    onError: (error: any) => {
-      toast.error(`添加主机失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      toast.error(`添加主机失败: ${toApiError(error).message}`);
     },
   });
 
@@ -68,8 +76,8 @@ export default function HostsPage() {
         toast.info(`主机密钥自动信任失败（${host.host_key_trust}）`);
       }
     },
-    onError: (error: any) => {
-      toast.error(`更新主机失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      toast.error(`更新主机失败: ${toApiError(error).message}`);
     },
   });
 
@@ -79,8 +87,8 @@ export default function HostsPage() {
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       toast.success(`主机 ${hostId} 已删除`);
     },
-    onError: (error: any) => {
-      toast.error(`删除主机失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      toast.error(`删除主机失败: ${toApiError(error).message}`);
     },
   });
 
@@ -136,11 +144,9 @@ export default function HostsPage() {
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
     },
-    onError: (error: any, vars) => {
+    onError: (error: unknown, vars) => {
       toast.error(
-        `更新 Watch 状态失败: ${
-          error?.response?.data?.detail || error?.message || `host ${vars.hostId}`
-        }`,
+        `更新 Watch 状态失败: ${toApiError(error).message || `host ${vars.hostId}`}`,
       );
       setWatcherAdminUpdatingHostId(null);
     },
@@ -164,20 +170,16 @@ export default function HostsPage() {
       queryClient.invalidateQueries({ queryKey: hostKeys.list() });
       queryClient.invalidateQueries({ queryKey: ['host-detail', vars.hostId] });
     },
-    onError: (error: any, vars) => {
+    onError: (error: unknown, vars) => {
       // 409 with active_jobs surfaces here when the user (or our default
       // path) requested a hot-update without abort_running_jobs.  The dialog
       // itself prevents this by enforcing the toggle before enabling
       // confirm, but the mutation is still defensive for direct API misuse.
-      const detail = error?.response?.data?.detail;
-      if (
-        error?.response?.status === 409 &&
-        detail &&
-        typeof detail === 'object' &&
-        Array.isArray(detail.active_jobs)
-      ) {
+      const apiErr = toApiError(error);
+      const detail = apiErr.details;
+      if (apiErr.status === 409 && detail && Array.isArray(detail.active_jobs)) {
         toast.error(
-          `主机 ${vars.hostId} 仍有 ${detail.active_jobs.length} 个活跃 Job — 请勾选「中止并热更新」`,
+          `主机 ${vars.hostId} 仍有 ${(detail.active_jobs as unknown[]).length} 个活跃 Job — 请勾选「中止并热更新」`,
         );
         // Re-open the dialog so the user can opt into the abort path.
         setPendingHotUpdateHostId(vars.hostId);
@@ -187,11 +189,7 @@ export default function HostsPage() {
             : undefined,
         );
       } else {
-        toast.error(
-          `热更新失败: ${
-            typeof detail === 'string' ? detail : error?.message ?? '未知错误'
-          }`,
-        );
+        toast.error(`热更新失败: ${apiErr.message}`);
       }
       setHotUpdatingHostId(null);
     },
@@ -278,10 +276,8 @@ export default function HostsPage() {
     for (const id of Array.from(selectedHostIds)) {
       try {
         await api.hosts.delete(id);
-      } catch (error: any) {
-        toast.error(
-          `删除 ${id} 失败: ${error?.response?.data?.detail || error?.message || '未知错误'}`,
-        );
+      } catch (error: unknown) {
+        toast.error(`删除 ${id} 失败: ${toApiError(error).message}`);
       }
     }
     toast.success('批量删除已完成');
@@ -290,7 +286,7 @@ export default function HostsPage() {
   };
 
   const handleEdit = (host: HostTableData) => {
-    const full = hosts?.find((h: any) => h.id === host.id);
+    const full = hosts?.find((h) => h.id === host.id);
     if (full) setEditingHost(full);
   };
 
@@ -336,9 +332,11 @@ export default function HostsPage() {
   // Transform data for expandable table
   const tableData: HostTableData[] = useMemo(() => {
     if (!hosts) return [];
-    return hosts.map((host: any) => {
-      const extra = host.extra || {};
-      const diskInfo = extra.disk_usage || {};
+    return hosts.map((host) => {
+      const extra = host.extra && typeof host.extra === 'object'
+        ? host.extra as Record<string, unknown> : {};
+      const diskInfo = extra.disk_usage && typeof extra.disk_usage === 'object'
+        ? extra.disk_usage as Record<string, unknown> : {};
       const onlineDevices =
         host.status === 'ONLINE'
           ? (host.capacity?.online_healthy_devices ?? 0)
@@ -358,35 +356,41 @@ export default function HostsPage() {
 
       return {
         id: host.id,
-        name: host.name,
-        ip: host.ip,
+        name: host.name ?? '',
+        ip: host.ip ?? '',
         status: host.status,
         watcher_admin_active: host.watcher_admin_active !== false,
-        last_heartbeat: host.last_heartbeat,
+        last_heartbeat: host.last_heartbeat ?? undefined,
         agent_installed: Boolean(host.agent_installed),
-        agent_protocol_version: host.agent_protocol_version ?? host.extra?.agent_version ?? null,
+        agent_protocol_version:
+          host.agent_protocol_version ??
+          (typeof host.extra?.agent_version === 'string' ? host.extra.agent_version : null),
         agent_code_revision: host.agent_code_revision ?? null,
         expected_code_revision: host.expected_code_revision ?? null,
         agent_code_deployed: host.agent_code_deployed ?? null,
         agent_code_deployed_at: host.agent_code_deployed_at ?? null,
         agent_code_sync_status: host.agent_code_sync_status ?? 'unknown',
         resources: host.status === 'ONLINE' ? {
-          cpu_load: extra.cpu_load || 0,
-          cpu_cores: extra.cpu_cores,
-          ram_usage: extra.ram_usage || 0,
-          ram_total_gb: extra.ram_total_gb,
-          disk_usage: diskInfo.usage_percent || 0,
-          disk_total_gb: diskInfo.total_gb,
-          temperature: extra.temperature,
-          uptime_seconds: extra.uptime_seconds,
+          cpu_load: asNumber(extra.cpu_load),
+          cpu_cores: optionalNumber(extra.cpu_cores),
+          ram_usage: asNumber(extra.ram_usage),
+          ram_total_gb: optionalNumber(extra.ram_total_gb),
+          disk_usage: asNumber(diskInfo.usage_percent),
+          disk_total_gb: optionalNumber(diskInfo.total_gb),
+          temperature: optionalNumber(extra.temperature),
+          uptime_seconds: optionalNumber(extra.uptime_seconds),
         } : undefined,
         mount_status: host.mount_status
-          ? Object.entries(host.mount_status).map(([path, info]: [string, any]) => ({
-              path,
-              mounted: info.ok || info === true,
-              available_gb: info.available_gb,
-              total_gb: info.total_gb,
-            }))
+          ? Object.entries(host.mount_status).map(([path, info]: [string, unknown]) => {
+              const mount = typeof info === 'object' && info !== null
+                ? info as Record<string, unknown> : {};
+              return {
+                path,
+                mounted: mount.ok === true || info === true,
+                available_gb: typeof mount.available_gb === 'number' ? mount.available_gb : undefined,
+                total_gb: typeof mount.total_gb === 'number' ? mount.total_gb : undefined,
+              };
+            })
           : [],
         device_count: onlineDevices,
         claim_hint: claimHint,

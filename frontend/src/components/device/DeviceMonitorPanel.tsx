@@ -43,6 +43,11 @@ export interface MonitorDevice extends Device {
   last_seen?: string | null;
 }
 
+interface DeviceUpdateMessage {
+  type: string;
+  payload?: Partial<MonitorDevice> & { id: number };
+}
+
 interface DeviceMonitorPanelProps {
   devices: MonitorDevice[];
   onRefresh?: () => void;
@@ -94,12 +99,13 @@ export function DeviceMonitorPanel({
   useEffect(() => {
     if (lastMessage) {
       try {
-        const data = lastMessage as any;
-        if (data.type === 'DEVICE_UPDATE' && data.payload) {
+        const data = lastMessage as DeviceUpdateMessage;
+        const payload = data.payload;
+        if (data.type === 'DEVICE_UPDATE' && payload) {
           setDevices(prev => {
             const updated = prev.map(device => {
-              if (device.id === data.payload.id) {
-                return { ...device, ...data.payload, lastUpdate: new Date() };
+              if (device.id === payload.id) {
+                return { ...device, ...payload, lastUpdate: new Date() };
               }
               return device;
             });
@@ -160,7 +166,7 @@ export function DeviceMonitorPanel({
         case 'name':
           return (a.model || '').localeCompare(b.model || '');
         case 'lastSeen':
-          return ((b as any).last_seen || '').localeCompare((a as any).last_seen || '');
+          return (b.last_seen ?? '').localeCompare(a.last_seen ?? '');
         default:
           return 0;
       }
@@ -394,8 +400,8 @@ function DeviceListItem({
         )}
 
         <div className="text-xs text-muted-foreground">
-          {(device as any).last_seen
-            ? formatTimeLabel((device as { last_seen?: string }).last_seen ?? null)
+          {device.last_seen
+            ? formatTimeLabel(device.last_seen ?? null)
             : 'Never'}
         </div>
       </div>

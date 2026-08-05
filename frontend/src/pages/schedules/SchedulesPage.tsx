@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, type TaskSchedule, type TaskScheduleCreatePayload, type Plan } from '@/utils/api';
+import { api, toApiError, type TaskSchedule, type TaskScheduleCreatePayload, type Plan } from '@/utils/api';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { CronExpressionInput } from '@/components/schedule/CronExpressionInput';
@@ -103,8 +103,8 @@ export default function SchedulesPage() {
       setEditing(null);
       setForm(DEFAULT_FORM);
       await loadSchedules();
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || err.message || '保存失败');
+    } catch (err: unknown) {
+      toast.error(toApiError(err).message);
     }
   };
 
@@ -136,8 +136,8 @@ export default function SchedulesPage() {
       } else {
         toast.success('Plan 已触发');
       }
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || '执行失败');
+    } catch (err: unknown) {
+      toast.error(toApiError(err).message);
     }
   };
 

@@ -290,7 +290,7 @@ export function DispatchCockpit({
                     onChange={() => onWifiPoolChange(pool.id)}
                   />
                   <span>{pool.name}</span>
-                  {pool.config?.ssid && pool.config.ssid !== pool.name ? (
+                  {typeof pool.config?.ssid === 'string' && pool.config.ssid !== pool.name ? (
                     <span className={cn('text-[11px]', TEXT.subtitle)}>({pool.config.ssid})</span>
                   ) : null}
                 </label>

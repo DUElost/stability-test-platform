@@ -13,7 +13,7 @@ export const logs = {
     cursor?: string;
     limit?: number;
   }) => {
-    const reqParams: Record<string, any> = { ...params };
+    const reqParams: Record<string, unknown> = { ...params };
     if (params.job_ids && params.job_ids.length > 0) {
       reqParams.job_ids = params.job_ids.join(',');
     } else {
