@@ -24,6 +24,7 @@ SERVICE_NAME="stability-test-agent"
 USER="${AGENT_USER:-android}"
 GROUP="${AGENT_GROUP:-android}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+LOCK_FILE="/var/lock/${SERVICE_NAME}-install.lock"
 
 echo_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 echo_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
@@ -34,6 +35,17 @@ if [ "$EUID" -ne 0 ]; then
     echo_error "请使用 root 权限运行此脚本: sudo $0"
     exit 1
 fi
+
+# 单实例守卫（任务 #4）：同一时间只允许一个安装实例运行，
+# 防止并发执行相互覆盖 $INSTALL_DIR / systemd 服务文件 / sudoers。
+# flock 语义：fd 9 持锁到进程退出，Ctrl-C / 失败退出时自动释放。
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo_error "检测到另一个安装实例正在运行（$LOCK_FILE 被占用）"
+    echo_error "请等待其完成后重试，或用 'lsof $LOCK_FILE' 排查残留进程"
+    exit 1
+fi
+echo_info "获取安装锁成功（单实例守卫）"
 
 # 获取脚本所在目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
