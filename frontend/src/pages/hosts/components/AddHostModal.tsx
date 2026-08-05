@@ -70,7 +70,7 @@ export function AddHostModal({ isOpen, onClose, onSubmit, isSubmitting, editingH
       // 编辑模式且密码留空 → 不传 ssh_password（后端保持原密码）
       const payload: typeof formData = { ...formData };
       if (isEdit && !payload.ssh_password) {
-        const { ssh_password, ...rest } = payload;
+        const { ssh_password: _ssh_password, ...rest } = payload;
         onSubmit(rest);
       } else {
         onSubmit(payload);
