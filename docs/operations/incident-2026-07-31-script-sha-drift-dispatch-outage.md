@@ -3,7 +3,7 @@
 > **状态**：已闭环（PR #109 合入 `9ec8e1f`，生产 re-baseline 已执行，派发恢复）。派发恢复后暴露的 WiFi SSID 配置缺口另见 §4，非本事故根因。
 > **影响范围**：**控制面全部 Plan 无法派发**。平台上仅有的 2 个 Plan（`Monkey专项-watcher-patrol`、`smoke-plan-001`）100% 在准入阶段 `script_verify_failed`，持续时间自 2026-07-23 首次脚本改动起（最严重的一批自 07-26 `ef8808e` 起）。无数据损坏，无设备侧影响。
 > **关联**：[ADR-0020](../adr/ADR-0020-plan-step-one-shot-migration.md)（脚本目录契约）、Epic #107（20 台 host 全流程打通）。
-> **区别于**：[9.126 硬挂事故](./incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md)、[#93 AEE Reconciler 崩溃](./adr-0026-admission-and-scale-gray-rollout.md) —— 三者根因互不相同。
+> **区别于**：[9.126 硬挂事故](./incident-2026-07-28-host-9-126-hard-hang-and-bios-upgrade.md)、[8.87 xHCI USB 事故](./incident-2026-07-29-host-8-87-xhci-death-and-adb-outage.md)、[#93 AEE Reconciler 崩溃](./adr-0026-admission-and-scale-gray-rollout.md) —— 根因互不相同。
 
 ---
 
