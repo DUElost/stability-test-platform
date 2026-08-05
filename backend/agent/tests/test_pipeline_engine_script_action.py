@@ -225,6 +225,37 @@ def test_pipeline_engine_script_timeout_returns_124(tmp_path):
     assert result.exit_code == 124
 
 
+def test_pipeline_engine_script_stall_returns_125(tmp_path):
+    """#141: 停滞超时用独立退出码 125，与 wall_clock 的 124 可区分。"""
+    script = _write_script(
+        tmp_path / "silent_sleep.py",
+        "import time\ntime.sleep(30)\n",
+    )
+    engine = PipelineEngine(
+        adb=SimpleNamespace(adb_path=sys.executable),
+        serial="SERIAL001",
+        run_id=42,
+        script_registry=FakeScriptRegistry(script),
+    )
+
+    result = engine._execute_step(
+        "init",
+        {
+            "step_id": "silent_sleep",
+            "action": "script:silent_sleep",
+            "version": "1.0.0",
+            "params": {},
+            "timeout_seconds": 30,
+            "stall_seconds": 1,
+        },
+    )
+
+    assert result.success is False
+    assert result.exit_code == 125
+    assert "stalled" in result.error_message
+    assert result.metadata == {"timeout_kind": "stall"}
+
+
 def test_pipeline_engine_rejects_windows_batch_script_action():
     engine = PipelineEngine(
         adb=SimpleNamespace(adb_path="adb"),

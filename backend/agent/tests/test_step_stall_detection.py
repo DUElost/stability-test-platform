@@ -18,6 +18,7 @@ import time
 import pytest
 
 from backend.agent.pipeline_engine import (
+    _MAX_CAPTURED_CHARS,
     _POLL_INTERVAL_SECONDS,
     _popen_isolation_kwargs,
     _pump_process,
@@ -200,6 +201,42 @@ class TestProgressStamps:
         """)
         outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
         assert json.loads(outcome.stdout.strip())["metrics"]["steps"]["a"] == 1
+
+
+class TestProgressLeadingWhitespace:
+    def test_progress_with_leading_whitespace_resets_stall_clock(self):
+        """#147: PROGRESS 前带缩进/日志前缀时仍须刷新停滞钟并丢弃该行。"""
+        proc = _spawn("""
+            import sys, time
+            for i in range(4):
+                sys.stderr.write('  PROGRESS {"seq": %d}\\n' % i)
+                sys.stderr.flush()
+                time.sleep(0.4)
+        """)
+        outcome = _pump_process(proc, wall_clock=30, stall_seconds=1.5)
+        assert outcome.reason is None
+        assert "PROGRESS" not in outcome.stderr
+
+
+class TestCaptureLimit:
+    def test_output_over_8mib_is_truncated_without_deadlock(self, caplog):
+        """#147: 超过 8MiB 的单流捕获上限必须截断、继续读、进程正常退出。"""
+        proc = _spawn("""
+            import sys
+            line = "x" * 1023 + "\\n"
+            for _ in range(9000):
+                sys.stdout.write(line)
+        """)
+        with caplog.at_level(
+            logging.WARNING, logger="backend.agent.pipeline_engine"
+        ):
+            outcome = _pump_process(proc, wall_clock=30, stall_seconds=None)
+        assert proc.returncode == 0
+        assert len(outcome.stdout) <= _MAX_CAPTURED_CHARS
+        assert any(
+            "step_output_capture_limit_reached" in r.message
+            for r in caplog.records
+        )
 
 
 class TestReaderThreadsDoNotLeak:

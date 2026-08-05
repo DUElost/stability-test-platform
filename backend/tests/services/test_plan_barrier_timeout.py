@@ -8,6 +8,8 @@
 只会表现为「一批健康设备莫名其妙终止」，所以必须两条路径都测。
 """
 
+import pytest
+
 from backend.api.routes.plans import PlanStepIn, _assemble_lifecycle_for_validation
 from backend.core.pipeline_validator import validate_pipeline_def
 from backend.models.plan import Plan, PlanStep
@@ -39,6 +41,34 @@ def _step():
 
 _META = {("check_device", "1.0.0"): {"default_params": {}, "nfs_path": "/s/x.py",
                                      "param_schema": {}}}
+
+
+@pytest.fixture
+def progress_script(db_session):
+    """#136: 白名单脚本（monkey_setup v2.3.3），供 TestStallSecondsApi 使用。
+
+    stall_seconds>0 的 API 用例必须引用已接入 PROGRESS 打戳的版本，
+    否则会被 STALL_REQUIRES_PROGRESS_SCRIPT 422 拦下。
+    """
+    from backend.models.script import Script
+
+    row = db_session.query(Script).filter(
+        Script.name == "monkey_setup", Script.version == "v2.3.3",
+    ).first()
+    if row is None:
+        row = Script(
+            name="monkey_setup",
+            script_type="python",
+            version="v2.3.3",
+            nfs_path="/nfs/scripts/monkey_setup/v2.3.3",
+            content_sha256="2" * 64,
+            is_active=True,
+            default_params={},
+            param_schema={},
+        )
+        db_session.add(row)
+        db_session.commit()
+    return row
 
 
 class TestBuildLifecycle:
@@ -266,8 +296,8 @@ class TestStallSecondsApi:
         resp = client.post("/api/v1/plans", json={
             "name": "stall-test",
             "steps": [{
-                "step_key": "check_device", "script_name": "check_device",
-                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "step_key": "check_device", "script_name": "monkey_setup",
+                "script_version": "v2.3.3", "stage": "init", "sort_order": 0,
                 "timeout_seconds": 30, "stall_seconds": stall_seconds,
                 "retry": 0, "enabled": True,
             }],
@@ -275,7 +305,7 @@ class TestStallSecondsApi:
         assert resp.status_code == 201, resp.text
         return resp.json()["data"]
 
-    def test_create_and_read_back(self, client, auth_headers, sample_script):
+    def test_create_and_read_back(self, client, auth_headers, sample_script, progress_script):
         plan = self._create(client, auth_headers, 120)
         assert plan["steps"][0]["stall_seconds"] == 120
 
@@ -291,12 +321,14 @@ class TestStallSecondsApi:
         assert resp.status_code == 201, resp.text
         assert resp.json()["data"]["steps"][0]["stall_seconds"] is None
 
-    def test_update_preserves_stall_seconds(self, client, auth_headers, sample_script):
+    def test_update_preserves_stall_seconds(
+        self, client, auth_headers, sample_script, progress_script,
+    ):
         plan_id = self._create(client, auth_headers, 120)["id"]
         up = client.put(f"/api/v1/plans/{plan_id}", json={
             "steps": [{
-                "step_key": "check_device", "script_name": "check_device",
-                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "step_key": "check_device", "script_name": "monkey_setup",
+                "script_version": "v2.3.3", "stage": "init", "sort_order": 0,
                 "timeout_seconds": 60, "stall_seconds": 600,
                 "retry": 0, "enabled": True,
             }],
@@ -304,12 +336,14 @@ class TestStallSecondsApi:
         assert up.status_code == 200, up.text
         assert up.json()["data"]["steps"][0]["stall_seconds"] == 600
 
-    def test_update_can_clear_stall_seconds(self, client, auth_headers, sample_script):
+    def test_update_can_clear_stall_seconds(
+        self, client, auth_headers, sample_script, progress_script,
+    ):
         plan_id = self._create(client, auth_headers, 120)["id"]
         clr = client.put(f"/api/v1/plans/{plan_id}", json={
             "steps": [{
-                "step_key": "check_device", "script_name": "check_device",
-                "script_version": "1.0.0", "stage": "init", "sort_order": 0,
+                "step_key": "check_device", "script_name": "monkey_setup",
+                "script_version": "v2.3.3", "stage": "init", "sort_order": 0,
                 "timeout_seconds": 30, "stall_seconds": None,
                 "retry": 0, "enabled": True,
             }],
@@ -323,7 +357,7 @@ class TestStallSecondsApi:
         assert ok, errors
 
     def test_create_patrol_stall_seconds_via_api_validation_path(
-        self, client, auth_headers, sample_script,
+        self, client, auth_headers, sample_script, progress_script,
     ):
         """patrol 的 stall_seconds 必须经 _assemble_lifecycle_for_validation 写入。"""
         resp = client.post("/api/v1/plans", json={
@@ -336,8 +370,8 @@ class TestStallSecondsApi:
                     "timeout_seconds": 30, "retry": 0, "enabled": True,
                 },
                 {
-                    "step_key": "patrol_check", "script_name": "check_device",
-                    "script_version": "1.0.0", "stage": "patrol", "sort_order": 0,
+                    "step_key": "patrol_check", "script_name": "monkey_setup",
+                    "script_version": "v2.3.3", "stage": "patrol", "sort_order": 0,
                     "timeout_seconds": 30, "stall_seconds": 300,
                     "retry": 0, "enabled": True,
                 },

@@ -82,6 +82,11 @@ _SIGKILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 # 脚本 hang 住时照常上报，控制面不会回收 permit，只能人工干预。
 _DEFAULT_STEP_WALL_CLOCK_SECONDS = 300
 
+# 超时退出码（#141）：下游按 exit_code 区分两种超时。
+# 124 = 总时长（wall_clock）到顶；125 = 无 PROGRESS 推进（stall）。
+_EXIT_WALL_CLOCK_TIMEOUT = 124
+_EXIT_STALL_TIMEOUT = 125
+
 
 def _resolve_step_wall_clock(step: Dict[str, Any]) -> Optional[float]:
     """Outer wall-clock ceiling for one step, or ``None`` for unlimited.
@@ -366,7 +371,10 @@ def _pump_process(
         stream_name: str,
         progress_stream: bool,
     ) -> None:
-        if progress_stream and line.startswith(_PROGRESS_PREFIX):
+        # #147: PROGRESS 允许前导空白（缩进/日志前缀场景）。用 lstrip 后匹配，
+        # 避免脚本因一个前导空格而错过刷新停滞钟、在长静默段被误杀。
+        stripped = line.lstrip()
+        if progress_stream and stripped.startswith(_PROGRESS_PREFIX):
             # 只有 PROGRESS 行刷停滞钟 —— 普通输出不算"推进"。
             # 否则活锁(fastboot 无限重试、adb install 卡 90% 反复重连
             # 打印日志)会因持续输出而永远不被判停滞,停滞钟就形同虚设。
@@ -1382,9 +1390,14 @@ class PipelineEngine:
                         message = f"script timeout after {timeout_seconds:g}s"
                     return StepResult(
                         success=False,
-                        exit_code=124,
+                        exit_code=(
+                            _EXIT_STALL_TIMEOUT
+                            if outcome.reason == "stall"
+                            else _EXIT_WALL_CLOCK_TIMEOUT
+                        ),
                         error_message=message,
                         output=_truncate_step_output(combined_output),
+                        metadata={"timeout_kind": outcome.reason},
                     )
                 stdout, stderr = outcome.stdout, outcome.stderr
             finally:
