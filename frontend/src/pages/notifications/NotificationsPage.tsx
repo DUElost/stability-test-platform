@@ -132,7 +132,7 @@ export default function NotificationsPage() {
       setShowChannelForm(false);
       setEditingChannel(null);
       invalidateAll();
-    } catch (err) {
+    } catch {
       toast.error('保存失败');
     } finally {
       setActionLoading(false);
@@ -144,7 +144,7 @@ export default function NotificationsPage() {
     try {
       await api.notifications.deleteChannel(id);
       invalidateAll();
-    } catch (err) {
+    } catch {
       toast.error('删除失败');
     }
   };
@@ -191,7 +191,7 @@ export default function NotificationsPage() {
       setShowRuleForm(false);
       setEditingRule(null);
       invalidateAll();
-    } catch (err) {
+    } catch {
       toast.error('保存失败');
     } finally {
       setActionLoading(false);
@@ -203,7 +203,7 @@ export default function NotificationsPage() {
     try {
       await api.notifications.deleteRule(id);
       invalidateAll();
-    } catch (err) {
+    } catch {
       toast.error('删除失败');
     }
   };

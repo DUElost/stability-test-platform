@@ -56,7 +56,31 @@ export default tseslint.config(
       // Fast-Refresh 边界:组件文件里混导出非组件会静默破坏热更新
       'react-refresh/only-export-components': [
         'warn',
-        { allowConstantExport: true },
+        {
+          allowConstantExport: true,
+          // 这些 hooks/工具函数与组件同文件是刻意为之（context/hooks/ui 原语、
+          // 终端清理、矩阵选择工具等），显式允许以保留 fast refresh 对组件本身
+          // 的保护，而不是整个关闭规则。
+          allowExportNames: [
+            'createQueryClient',
+            'clearAppQueryCache',
+            'WIZARD_STEPS',
+            'buildMatrixVirtualRows',
+            'applyMatrixSelection',
+            'disposeAllTerminals',
+            'releaseTerminal',
+            'gateElapsedSeconds',
+            'isGateStale',
+            'badgeVariants',
+            'buttonVariants',
+            'resolveStatusEntry',
+            'useHeaderSlot',
+            'resolveTheme',
+            'applyResolvedTheme',
+            'useTheme',
+            'useConfirm',
+          ],
+        },
       ],
 
       // 纯风格项:交给人和 review,不由 linter 制造噪音
