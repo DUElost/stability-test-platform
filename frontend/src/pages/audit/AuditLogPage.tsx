@@ -16,7 +16,7 @@ interface AuditLogEntry {
   action: string;
   resource_type: string;
   resource_id?: number;
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   ip_address?: string;
   timestamp: string;
 }
@@ -47,7 +47,7 @@ export default function AuditLogPage() {
       if (filters.start_time) params.start_time = filters.start_time;
       if (filters.end_time) params.end_time = filters.end_time;
       const res = await api.audit.list(page * pageSize, pageSize, params);
-      setLogs(res.items);
+      setLogs(res.items as unknown as AuditLogEntry[]);
       setTotal(res.total);
     } catch {
       setError('加载失败，请检查网络连接或管理员权限');

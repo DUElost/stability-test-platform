@@ -20,8 +20,8 @@ export interface Host {
   status: 'ONLINE' | 'OFFLINE' | 'DEGRADED';
   watcher_admin_active?: boolean;
   last_heartbeat: string | null;
-  extra: Record<string, any>;
-  mount_status: Record<string, any>;
+  extra: Record<string, unknown>;
+  mount_status: Record<string, unknown>;
   capacity?: {
     active_jobs: number;
     active_devices: number;
@@ -68,7 +68,8 @@ export interface Device {
   schedulable?: boolean;
   last_seen: string | null;
   tags: string[];
-  extra?: Record<string, any>;
+  extra?: Record<string, unknown>;
+  current_task?: { name?: string } | null;
   adb_state?: string | null;
   adb_connected?: boolean | null;
   battery_level?: number | null;
@@ -90,8 +91,8 @@ export interface Task {
   name: string;
   type: string;
   template_id: number | null;
-  params: Record<string, any>;
-  pipeline_def?: Record<string, any> | null;
+  params: Record<string, unknown>;
+  pipeline_def?: Record<string, unknown> | null;
   target_device_id: number | null;
   status: 'PENDING' | 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELED';
   priority: number;
@@ -108,7 +109,7 @@ export interface RunStep {
   step_order: number;
   name: string;
   action: string;
-  params: Record<string, any>;
+  params: Record<string, unknown>;
   status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED' | 'CANCELED';
   started_at: string | null;
   finished_at: string | null;
@@ -200,7 +201,7 @@ export interface RunReport {
     host_id: number | null;
     status: string;
   } | null;
-  summary_metrics: Record<string, any>;
+  summary_metrics: Record<string, unknown>;
   risk_summary: RunRiskSummary | null;
   report_status?: string | null;
   alerts: RunRiskAlert[];
@@ -218,9 +219,9 @@ export interface JiraDraft {
   summary: string;
   description: string;
   labels: string[];
-  environment: Record<string, any>;
-  custom_fields: Record<string, any>;
-  extra: Record<string, any>;
+  environment: Record<string, unknown>;
+  custom_fields: Record<string, unknown>;
+  extra: Record<string, unknown>;
 }
 
 export interface JiraRunRecord {
@@ -246,7 +247,7 @@ export interface JiraRunRecord {
 export interface PipelineTemplate {
   name: string;
   description: string;
-  pipeline_def: Record<string, any>;
+  pipeline_def: Record<string, unknown>;
 }
 
 export interface AgentLogOut {
@@ -519,7 +520,7 @@ export interface NotificationChannel {
   id: number;
   name: string;
   type: 'WEBHOOK' | 'EMAIL' | 'DINGTALK';
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   enabled: boolean;
   created_at: string;
 }
@@ -530,7 +531,7 @@ export interface AlertRule {
   event_type: 'RUN_COMPLETED' | 'RUN_FAILED' | 'RISK_HIGH' | 'DEVICE_OFFLINE';
   channel_id: number;
   channel_name?: string;
-  filters: Record<string, any>;
+  filters: Record<string, unknown>;
   enabled: boolean;
   created_at: string;
 }
@@ -542,7 +543,7 @@ export interface NotificationLog {
   severity: 'info' | 'warning' | 'critical';
   title: string;
   message: string;
-  context: Record<string, any>;
+  context: Record<string, unknown>;
   read: boolean;
   created_at: string;
 }
@@ -635,8 +636,8 @@ export interface ScriptEntry {
   version: string;
   nfs_path: string;
   content_sha256: string;
-  param_schema: Record<string, any>;
-  default_params: Record<string, any>;
+  param_schema: Record<string, unknown>;
+  default_params: Record<string, unknown>;
   is_active: boolean;
   description?: string | null;
   created_at?: string;
@@ -649,7 +650,7 @@ export interface ActionTemplateEntry {
   description?: string | null;
   action: string;
   version?: string | null;
-  params: Record<string, any>;
+  params: Record<string, unknown>;
   timeout_seconds: number;
   retry: number;
   is_active: boolean;
@@ -662,7 +663,7 @@ export interface ActionTemplateCreatePayload {
   description?: string;
   action: string;
   version?: string | null;
-  params?: Record<string, any>;
+  params?: Record<string, unknown>;
   timeout_seconds?: number;
   retry?: number;
   is_active?: boolean;
@@ -673,7 +674,7 @@ export interface ActionTemplateUpdatePayload {
   description?: string;
   action?: string;
   version?: string | null;
-  params?: Record<string, any>;
+  params?: Record<string, unknown>;
   timeout_seconds?: number;
   retry?: number;
   is_active?: boolean;
@@ -683,7 +684,7 @@ export interface PipelineStep {
   step_id: string;
   action: string;
   version?: string;
-  params?: Record<string, any>;
+  params?: Record<string, unknown>;
   timeout_seconds: number;
   retry?: number;
   enabled?: boolean;
@@ -998,7 +999,7 @@ export interface PlanRunSummary {
   pass_rate: number;
   started_at?: string | null;
   ended_at?: string | null;
-  result_summary?: Record<string, any> | null;
+  result_summary?: Record<string, unknown> | null;
 }
 
 // ─── ADR-0021 dispatch gate precheck (PlanRun.run_context.precheck) ──────────
@@ -1411,7 +1412,7 @@ export interface ResourcePool {
   id: number;
   name: string;
   resource_type: string;
-  config: Record<string, any>;
+  config: Record<string, unknown>;
   max_concurrent_devices: number;
   host_group: string | null;
   is_active: boolean;
@@ -1424,7 +1425,7 @@ export interface ResourcePoolLoad extends ResourcePool {
 export interface ResourcePoolCreatePayload {
   name: string;
   resource_type?: string;
-  config?: Record<string, any>;
+  config?: Record<string, unknown>;
   max_concurrent_devices?: number;
   host_group?: string | null;
   is_active?: boolean;

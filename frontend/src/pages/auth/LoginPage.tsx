@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { AlertCircle } from 'lucide-react';
 import { clearAppQueryCache } from '@/components/QueryProvider';
-import { api } from '@/utils/api';
+import { api, toApiError } from '@/utils/api';
 import { SURFACE, TEXT } from '@/design-system/tokens';
 import { STATUS_BG_COLORS } from '@/design-system/colors';
 import { ThemeToggle } from '@/components/ui/ThemeToggle';
@@ -26,8 +26,8 @@ export default function LoginPage() {
       await api.auth.login(username, password);
       clearAppQueryCache();
       navigate('/');
-    } catch (err: any) {
-      setError(err.response?.data?.detail || '登录失败');
+    } catch (err: unknown) {
+      setError(toApiError(err).message);
     } finally {
       setLoading(false);
     }

@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AlertTriangle, X, ChevronRight } from 'lucide-react';
-import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip } from 'recharts';
+import { Cell, Pie, PieChart, ResponsiveContainer, Sector, Tooltip, type PieSectorDataItem } from 'recharts';
 import type {
   AeeDashboardSection,
   CrashDetailEntry,
@@ -369,10 +369,10 @@ const DonutChart = memo(function DonutChart({
     );
   }
 
-  const renderActiveShape = (props: any) => {
+  const renderActiveShape = (props: PieSectorDataItem) => {
     const {
-      cx, cy, innerRadius, outerRadius,
-      startAngle, endAngle, fill,
+      cx = 0, cy = 0, innerRadius = 0, outerRadius = 0,
+      startAngle = 0, endAngle = 0, fill = '',
     } = props;
     return (
       <Sector

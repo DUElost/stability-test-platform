@@ -23,6 +23,10 @@ const FORM_INITIAL = {
   host_group: '',
 };
 
+function configString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 export default function WifiPage() {
   const toast = useToast();
   const confirmDialog = useConfirm();
@@ -87,9 +91,9 @@ export default function WifiPage() {
     setForm({
       name: pool.name,
       resource_type: pool.resource_type,
-      config_ssid: pool.config?.ssid || '',
-      config_password: pool.config?.password || '',
-      config_router_ip: pool.config?.router_ip || '',
+      config_ssid: configString(pool.config?.ssid),
+      config_password: configString(pool.config?.password),
+      config_router_ip: configString(pool.config?.router_ip),
       max_concurrent_devices: pool.max_concurrent_devices,
       host_group: pool.host_group || '',
     });
@@ -261,7 +265,7 @@ export default function WifiPage() {
                             <span className={cn('rounded px-1.5 py-0.5 text-[10px]', STATUS_CHIP.muted)}>{pool.host_group}</span>
                           )}
                         </div>
-                        <div className={cn('mt-1 font-mono text-xs', TEXT.subtitle)}>{pool.config?.ssid || '-'}</div>
+                        <div className={cn('mt-1 font-mono text-xs', TEXT.subtitle)}>{configString(pool.config?.ssid) || '-'}</div>
                       </div>
                     </div>
 
@@ -283,7 +287,7 @@ export default function WifiPage() {
 
                     <div className={cn('mt-3 flex items-center gap-2 text-xs', TEXT.subtitle)}>
                       <span>{pool.resource_type}</span>
-                      {pool.config?.router_ip && <span>· {pool.config.router_ip}</span>}
+                      {configString(pool.config?.router_ip) && <span>· {configString(pool.config?.router_ip)}</span>}
                     </div>
 
                     <div className="mt-3 flex items-center gap-1">

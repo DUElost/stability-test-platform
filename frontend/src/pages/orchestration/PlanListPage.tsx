@@ -8,7 +8,7 @@ import { planKeys } from '@/utils/api/queryKeys';
 import { useToast } from '@/hooks/useToast';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
-import { api, type Plan } from '@/utils/api';
+import { api, toApiError, type Plan } from '@/utils/api';
 import { LoadingGrid, CardSkeleton } from '@/components/ui/loading-skeleton';
 import { EmptyState, SearchEmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -44,7 +44,7 @@ export default function PlanListPage() {
       queryClient.invalidateQueries({ queryKey: planKeys.allLists() });
       toast.success('Plan 已删除');
     },
-    onError: (err: any) => toast.error(err.message || '删除失败'),
+    onError: (err: unknown) => toast.error(toApiError(err).message),
   });
 
   const filtered = useMemo(() => {

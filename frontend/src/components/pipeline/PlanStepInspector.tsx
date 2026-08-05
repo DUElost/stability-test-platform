@@ -314,8 +314,10 @@ function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFor
 
   // Sort: required first, then optional
   const sortedKeys = [...schemaKeys].sort((a, b) => {
-    const aReq = schema[a].required ? 0 : 1;
-    const bReq = schema[b].required ? 0 : 1;
+    const aField = schema[a] as ParamFieldSchema | undefined;
+    const bField = schema[b] as ParamFieldSchema | undefined;
+    const aReq = aField?.required ? 0 : 1;
+    const bReq = bField?.required ? 0 : 1;
     return aReq - bReq;
   });
 
@@ -331,7 +333,7 @@ function ParamFormCard({ step, matchedScript, onUpdateStep, readOnly }: ParamFor
       </CardHead>
       <CardBody>
         {sortedKeys.map(key => {
-          const field = schema[key];
+          const field = schema[key] as ParamFieldSchema | undefined;
           if (!field) return null;
           return (
             <ParamFieldRow

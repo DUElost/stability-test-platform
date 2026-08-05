@@ -1,5 +1,6 @@
 import type { Host } from '@/utils/api/types';
 import type { HotUpdateResult } from '@/utils/api/hosts';
+import { toApiError } from '@/utils/api';
 
 export interface BulkHotUpdateTarget {
   id: string | number;
@@ -83,8 +84,8 @@ export async function executeBulkHotUpdate(
     try {
       await trigger(target.id);
       succeeded.push(target);
-    } catch (error: any) {
-      if (error?.response?.status === 409) {
+    } catch (error: unknown) {
+      if (toApiError(error).status === 409) {
         skipped.push({ ...target, reason: 'state_changed' });
       } else {
         failed.push(target);

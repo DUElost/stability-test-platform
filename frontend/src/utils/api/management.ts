@@ -22,18 +22,18 @@ export const users = {
 export const notifications = {
   listChannels: (skip = 0, limit = 50) =>
     apiClient.get<PaginatedResponse<NotificationChannel>>('/notifications/channels', { params: { skip, limit } }).then(r => r.data),
-  createChannel: (data: { name: string; type: string; config: Record<string, any>; enabled?: boolean }) =>
+  createChannel: (data: { name: string; type: string; config: Record<string, unknown>; enabled?: boolean }) =>
     apiClient.post<NotificationChannel>('/notifications/channels', data).then(r => r.data),
-  updateChannel: (id: number, data: Partial<{ name: string; type: string; config: Record<string, any>; enabled: boolean }>) =>
+  updateChannel: (id: number, data: Partial<{ name: string; type: string; config: Record<string, unknown>; enabled: boolean }>) =>
     apiClient.put<NotificationChannel>(`/notifications/channels/${id}`, data).then(r => r.data),
   deleteChannel: (id: number) => apiClient.delete<void>(`/notifications/channels/${id}`).then(r => r.data),
   testChannel: (id: number) =>
     apiClient.post<{ ok: boolean; message: string }>(`/notifications/channels/${id}/test`).then(r => r.data),
   listRules: (skip = 0, limit = 50) =>
     apiClient.get<PaginatedResponse<AlertRule>>('/notifications/rules', { params: { skip, limit } }).then(r => r.data),
-  createRule: (data: { name: string; event_type: string; channel_id: number; filters?: Record<string, any>; enabled?: boolean }) =>
+  createRule: (data: { name: string; event_type: string; channel_id: number; filters?: Record<string, unknown>; enabled?: boolean }) =>
     apiClient.post<AlertRule>('/notifications/rules', data).then(r => r.data),
-  updateRule: (id: number, data: Partial<{ name: string; event_type: string; channel_id: number; filters: Record<string, any>; enabled: boolean }>) =>
+  updateRule: (id: number, data: Partial<{ name: string; event_type: string; channel_id: number; filters: Record<string, unknown>; enabled: boolean }>) =>
     apiClient.put<AlertRule>(`/notifications/rules/${id}`, data).then(r => r.data),
   deleteRule: (id: number) => apiClient.delete<void>(`/notifications/rules/${id}`).then(r => r.data),
   listLogs: (skip = 0, limit = 50, unreadOnly = false) =>
@@ -69,12 +69,12 @@ export const audit = {
       end_time?: string;
     }
   ) => {
-    const params: Record<string, any> = { skip, limit };
+    const params: Record<string, unknown> = { skip, limit };
     if (filters) {
       Object.entries(filters).forEach(([k, v]) => {
         if (v !== '' && v !== undefined) params[k] = v;
       });
     }
-    return apiClient.get<PaginatedResponse<any>>('/audit-logs', { params }).then(r => r.data);
+    return apiClient.get<PaginatedResponse<Record<string, unknown>>>('/audit-logs', { params }).then(r => r.data);
   },
 };

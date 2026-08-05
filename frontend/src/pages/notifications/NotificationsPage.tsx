@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { api, NotificationChannel, AlertRule } from '@/utils/api';
+import { api, toApiError, NotificationChannel, AlertRule } from '@/utils/api';
 import { notificationKeys } from '@/utils/api/queryKeys';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -107,7 +107,7 @@ export default function NotificationsPage() {
   const handleSaveChannel = async () => {
     setActionLoading(true);
     try {
-      const config: Record<string, any> = {};
+      const config: Record<string, unknown> = {};
       if (channelForm.type === 'WEBHOOK' || channelForm.type === 'DINGTALK') {
         config.url = channelForm.url;
       } else if (channelForm.type === 'EMAIL') {
@@ -153,17 +153,19 @@ export default function NotificationsPage() {
     try {
       await api.notifications.testChannel(id);
       toast.success('测试通知已发送');
-    } catch (err: any) {
-      toast.error(err.response?.data?.detail || '发送失败');
+    } catch (err: unknown) {
+      toast.error(toApiError(err).message);
     }
   };
 
   const openEditChannel = (ch: NotificationChannel) => {
     setEditingChannel(ch);
+    const url = typeof ch.config?.url === 'string' ? ch.config.url
+      : typeof ch.config?.to === 'string' ? ch.config.to : '';
     setChannelForm({
       name: ch.name,
       type: ch.type,
-      url: ch.config?.url || ch.config?.to || '',
+      url,
       enabled: ch.enabled,
     });
     setShowChannelForm(true);
@@ -280,7 +282,8 @@ export default function NotificationsPage() {
                     )}
                   </div>
                   <p className={cn('text-xs mt-1', TEXT.subtitle)}>
-                    {ch.config?.url || ch.config?.to || '-'}
+                    {typeof ch.config?.url === 'string' ? ch.config.url
+                      : typeof ch.config?.to === 'string' ? ch.config.to : '-'}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

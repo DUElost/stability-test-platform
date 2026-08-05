@@ -30,7 +30,7 @@ export interface SocketIOMessage<T = unknown> {
 let _dashSocket: Socket | null = null;
 let _dashStatus: ConnectionStatus = 'disconnected';
 const _dashStatusListeners = new Set<(s: ConnectionStatus) => void>();
-const _dashEventListeners = new Map<string, Set<(data: any) => void>>();
+const _dashEventListeners = new Map<string, Set<(data: unknown) => void>>();
 
 let _authRecoveryInFlight = false;
 
@@ -172,7 +172,7 @@ function _getDashSocket(): Socket {
     SOCKET_EVENT_NAMES.consoleStatus,
   ];
   for (const event of EVENTS) {
-    socket.on(event, (data: any) => {
+    socket.on(event, (data: unknown) => {
       const listeners = _dashEventListeners.get(event);
       if (listeners) {
         listeners.forEach(fn => fn(data));
@@ -209,7 +209,7 @@ function _unsubscribeRoom(room: string): void {
   }
 }
 
-function _addEventListener(event: string, fn: (data: any) => void): void {
+function _addEventListener(event: string, fn: (data: unknown) => void): void {
   let set = _dashEventListeners.get(event);
   if (!set) {
     set = new Set();
@@ -218,7 +218,7 @@ function _addEventListener(event: string, fn: (data: any) => void): void {
   set.add(fn);
 }
 
-function _removeEventListener(event: string, fn: (data: any) => void): void {
+function _removeEventListener(event: string, fn: (data: unknown) => void): void {
   const set = _dashEventListeners.get(event);
   if (set) {
     set.delete(fn);
@@ -391,7 +391,7 @@ export function useSocketIO<T = unknown>(
       _subscribeRoom(config.room);
     }
 
-    const eventHandler = (data: any) => {
+    const eventHandler = (data: unknown) => {
       const msg = data as SocketIOMessage<T>;
       setLastMessage(msg);
       callbacksRef.current.onMessage?.(msg);

@@ -47,7 +47,7 @@ export function coerceHostList(data: unknown): Host[] {
 }
 
 export const heartbeat = {
-  send: (hostId: number, data: { status: string; mount_status?: Record<string, any> }) =>
+  send: (hostId: number, data: { status: string; mount_status?: Record<string, unknown> }) =>
     apiClient.post('/heartbeat', { host_id: hostId, ...data }).then(r => r.data),
 };
 

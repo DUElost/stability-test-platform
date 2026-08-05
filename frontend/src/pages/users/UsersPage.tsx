@@ -8,7 +8,7 @@ import { useConfirm } from '@/hooks/useConfirm';
 import { useAuthSession } from '@/hooks/useAuthSession';
 import { UserTable } from './components/UserTable';
 import { UserModal } from './components/UserModal';
-import { api, type User } from '@/utils/api';
+import { api, toApiError, type User } from '@/utils/api';
 import { PageContainer, PageHeader } from '@/components/layout';
 import { InlineError } from '@/components/ui/error-state';
 import { TEXT } from '@/design-system';
@@ -37,8 +37,8 @@ export default function UsersPage() {
       setIsModalOpen(false);
       toast.success('用户创建成功');
     },
-    onError: (error: any) => {
-      toast.error(`创建用户失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      toast.error(`创建用户失败: ${toApiError(error).message}`);
     },
   });
 
@@ -51,8 +51,8 @@ export default function UsersPage() {
       setEditUser(null);
       toast.success('用户更新成功');
     },
-    onError: (error: any) => {
-      toast.error(`更新用户失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      toast.error(`更新用户失败: ${toApiError(error).message}`);
     },
   });
 
@@ -63,8 +63,8 @@ export default function UsersPage() {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast.success('用户删除成功');
     },
-    onError: (error: any) => {
-      toast.error(`删除用户失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      toast.error(`删除用户失败: ${toApiError(error).message}`);
     },
   });
 
@@ -74,8 +74,8 @@ export default function UsersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
     },
-    onError: (error: any) => {
-      toast.error(`切换用户状态失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      toast.error(`切换用户状态失败: ${toApiError(error).message}`);
     },
   });
 
@@ -99,8 +99,8 @@ export default function UsersPage() {
     setEditUser(null);
   };
 
-  const handleModalSubmit = (data: { username: string; password: string; role: string }) => {
-    createMutation.mutate(data);
+  const handleModalSubmit = (data: { username: string; password?: string; role: string }) => {
+    createMutation.mutate({ ...data, password: data.password || '' });
   };
 
   const handleModalUpdate = (data: { username?: string; password?: string; role?: string }) => {
@@ -177,7 +177,7 @@ export default function UsersPage() {
       <UserModal
         isOpen={isModalOpen}
         onClose={handleModalClose}
-        onSubmit={handleModalSubmit as any}
+        onSubmit={handleModalSubmit}
         isSubmitting={createMutation.isPending}
       />
 

@@ -8,7 +8,8 @@ import DeviceBulkActionBar from '@/components/device/DeviceBulkActionBar';
 import { AddDeviceModal } from './components/AddDeviceModal';
 import { BatchEditDeviceTagsDialog, type DeviceTagOperation } from './components/BatchEditDeviceTagsDialog';
 import { DeviceMetricsModal } from './components/DeviceMetricsModal';
-import { api, fetchHostList } from '@/utils/api';
+import { api, fetchHostList, toApiError } from '@/utils/api';
+import type { Host } from '@/utils/api/types';
 import { deviceKeys, hostKeys } from '@/utils/api/queryKeys';
 import { Button } from '@/components/ui/button';
 import { PageContainer, PageHeader } from '@/components/layout';
@@ -55,20 +56,20 @@ export default function DevicesPage() {
       setIsModalOpen(false);
       toast.success('设备添加成功');
     },
-    onError: (error: any) => {
-      toast.error(`添加设备失败: ${error.response?.data?.detail || error.message}`);
+    onError: (error: unknown) => {
+      toast.error(`添加设备失败: ${toApiError(error).message}`);
     },
   });
 
   const hostMap = useMemo(() => {
-    if (!hosts) return new Map<number, any>();
-    return new Map(hosts.map((h: any) => [h.id, h]));
+    if (!hosts) return new Map<string | number, Host>();
+    return new Map(hosts.map((h) => [h.id, h]));
   }, [hosts]);
 
   const formattedDevices: DeviceTableData[] = useMemo(() => {
     if (!devices) return [];
-    return devices.map((device: any) => {
-      const host = device.host_id ? hostMap.get(device.host_id) : null;
+    return devices.map((device) => {
+      const host = typeof device.host_id === 'number' ? hostMap.get(device.host_id) : null;
       return {
         id: device.id,
         serial: device.serial,
@@ -78,10 +79,10 @@ export default function DevicesPage() {
         temperature: device.temperature ?? device.battery_temp ?? undefined,
         network_latency: device.network_latency ?? null,
         build_display_id: device.build_display_id ?? null,
-        host_id: device.host_id,
+        host_id: typeof device.host_id === 'number' ? device.host_id : undefined,
         host_name: host?.name || host?.ip || null,
         current_task: device.current_task?.name,
-        last_seen: device.last_seen,
+        last_seen: device.last_seen ?? undefined,
         tags: Array.isArray(device.tags) ? device.tags : [],
       };
     });
@@ -166,8 +167,8 @@ export default function DevicesPage() {
         toast.error(`标签更新完成：成功 ${succeeded} 台，失败 ${failed.length} 台`);
       }
     },
-    onError: (error: any) => {
-      toast.error(`批量更新标签失败: ${error?.message || '未知错误'}`);
+    onError: (error: unknown) => {
+      toast.error(`批量更新标签失败: ${toApiError(error).message}`);
     },
   });
 
