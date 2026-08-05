@@ -18,6 +18,7 @@ from __future__ import annotations
 import threading
 import time
 from typing import Any, Dict, List, Optional
+from pathlib import Path
 
 import pytest
 
@@ -118,6 +119,26 @@ def uploader_and_session():
     u.stop(drain=False, timeout=0.5)
 
 
+@pytest.fixture
+def uploader_with_shared_root(tmp_path):
+    """带 aee_shared_root 的 uploader（#97 promote 场景）。"""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    sess = _FakeSession()
+    u = ArtifactUploader.instance()
+    u.configure(
+        api_url="http://fake-api:8000",
+        agent_secret="s3cr3t",
+        host_id=_AUTH_KW["host_id"],
+        agent_instance_id=_AUTH_KW["agent_instance_id"],
+        session=sess,
+        aee_shared_root=str(shared),
+    )
+    u.start()
+    yield u, sess, shared
+    u.stop(drain=False, timeout=0.5)
+
+
 # ----------------------------------------------------------------------
 # 1. happy path
 # ----------------------------------------------------------------------
@@ -151,6 +172,108 @@ def test_submit_then_post_increments_posts_ok(uploader_and_session):
     assert body["agent_instance_id"] == _AUTH_KW["agent_instance_id"]
     assert body["host_id"] == _AUTH_KW["host_id"]
     assert body["device_serial"] == _AUTH_KW["device_serial"]
+
+
+# ----------------------------------------------------------------------
+# #97: LOCAL → 共享根 promote 后再登记
+# ----------------------------------------------------------------------
+
+def test_no_shared_root_passes_local_uri_through(uploader_and_session):
+    """未配置共享根 → 保持原行为：LOCAL 原样发（由控制面校验拒绝）。"""
+    u, sess = uploader_and_session
+    _submit(u, job_id=201, storage_uri="/tmp/aee/201/exp_main.txt")
+    assert _wait_for(lambda: len(sess.posts) == 1)
+    assert sess.posts[0]["json"]["storage_uri"] == "/tmp/aee/201/exp_main.txt"
+    assert u.stats.promotes_ok == 0
+    assert u.stats.promote_failed == 0
+
+
+def test_local_file_is_promoted_before_post(uploader_with_shared_root, tmp_path):
+    """LOCAL 文件必须 copy 到共享根 jobs/{job_id}/ 后再 POST。"""
+    u, sess, shared = uploader_with_shared_root
+    src = tmp_path / "local-aee" / "1700000000_exp_main.txt"
+    src.parent.mkdir(parents=True)
+    src.write_text("hello aee")
+
+    _submit(u, job_id=301, storage_uri=str(src))
+    assert _wait_for(lambda: len(sess.posts) == 1)
+
+    body = sess.posts[0]["json"]
+    dest = Path(body["storage_uri"])
+    assert dest.is_relative_to(Path(str(shared)))
+    assert dest == Path(str(shared)) / "jobs" / "301" / src.name
+    assert dest.read_text() == "hello aee"
+    assert u.stats.promotes_ok == 1
+    assert u.stats.promote_failed == 0
+
+
+def test_promote_reuses_existing_dest(uploader_with_shared_root, tmp_path, monkeypatch):
+    """目标已存在 → 复用不覆盖（幂等友好），仍按共享路径登记。"""
+    u, sess, shared = uploader_with_shared_root
+    src = tmp_path / "local-b" / "exp_main.txt"
+    src.parent.mkdir(parents=True)
+    src.write_text("v1")
+    dest = Path(str(shared)) / "jobs" / "302" / "exp_main.txt"
+    dest.parent.mkdir(parents=True)
+    dest.write_text("v1-existing")
+
+    import backend.agent.artifact_uploader as au
+    copied = []
+    monkeypatch.setattr(au.shutil, "copy2", lambda s, d: copied.append((str(s), str(d))))
+
+    _submit(u, job_id=302, storage_uri=str(src))
+    assert _wait_for(lambda: len(sess.posts) == 1)
+    assert copied == []          # 未触发 copy
+    assert Path(sess.posts[0]["json"]["storage_uri"]) == dest
+    assert dest.read_text() == "v1-existing"
+    assert u.stats.promotes_ok == 1
+
+
+def test_uri_already_in_shared_root_is_passed_through(uploader_with_shared_root):
+    """已在共享根的 uri 不 copy、不改写。"""
+    u, sess, shared = uploader_with_shared_root
+    already = Path(str(shared)) / "jobs" / "303" / "exp_main.txt"
+    already.parent.mkdir(parents=True)
+    already.write_text("x")
+    _submit(u, job_id=303, storage_uri=str(already))
+    assert _wait_for(lambda: len(sess.posts) == 1)
+    assert sess.posts[0]["json"]["storage_uri"] == str(already)
+    assert u.stats.promotes_ok == 0
+    assert u.stats.promote_failed == 0
+
+
+def test_directory_and_missing_are_dropped_not_posted(uploader_with_shared_root, tmp_path):
+    """目录 / 不存在 → promote_failed，绝不把 LOCAL 发给控制面。"""
+    u, sess, shared = uploader_with_shared_root
+    d = tmp_path / "local-dir"
+    d.mkdir()
+    _submit(u, job_id=401, storage_uri=str(d))
+    _submit(u, job_id=402, storage_uri="/nonexistent/exp_main.txt")
+
+    assert _wait_for(lambda: u.stats.promote_failed == 2)
+    time.sleep(0.2)
+    assert sess.posts == []
+    assert u.stats.promotes_ok == 0
+
+
+def test_copy_failure_drops_without_post(uploader_with_shared_root, tmp_path, monkeypatch):
+    """copy 异常 → 丢弃 + promote_failed，不 POST LOCAL。"""
+    u, sess, shared = uploader_with_shared_root
+    src = tmp_path / "local-c" / "exp_main.txt"
+    src.parent.mkdir(parents=True)
+    src.write_text("x")
+
+    import backend.agent.artifact_uploader as au
+
+    def _boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(au.shutil, "copy2", _boom)
+    _submit(u, job_id=501, storage_uri=str(src))
+    assert _wait_for(lambda: u.stats.promote_failed == 1)
+    time.sleep(0.2)
+    assert sess.posts == []
+    assert u.stats.promotes_ok == 0
 
 
 # ----------------------------------------------------------------------

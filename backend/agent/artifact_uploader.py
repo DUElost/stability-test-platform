@@ -22,8 +22,10 @@ from __future__ import annotations
 
 import logging
 import queue
+import shutil
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import requests
@@ -39,6 +41,8 @@ logger = logging.getLogger(__name__)
 class UploaderStats:
     submits_total: int = 0
     submits_dropped: int = 0     # 未 configure / 队列满 / 已 stop
+    promotes_ok: int = 0         # LOCAL → 共享根 promote 成功（#97）
+    promote_failed: int = 0      # promote 失败/非文件 → 丢弃，绝不发 LOCAL
     posts_ok: int = 0
     posts_failed: int = 0
     posts_conflict: int = 0      # 后端返回 created=False（幂等命中）
@@ -47,6 +51,8 @@ class UploaderStats:
         return {
             "submits_total":   self.submits_total,
             "submits_dropped": self.submits_dropped,
+            "promotes_ok":     self.promotes_ok,
+            "promote_failed":  self.promote_failed,
             "posts_ok":        self.posts_ok,
             "posts_failed":    self.posts_failed,
             "posts_conflict":  self.posts_conflict,
@@ -88,6 +94,7 @@ class ArtifactUploader:
         self._agent_secret: str = ""
         self._host_id: str = ""
         self._agent_instance_id: str = ""
+        self._aee_shared_root: str = ""
         self._http_timeout: float = self.DEFAULT_TIMEOUT
         self._queue: "queue.Queue[_ArtifactJob]" = queue.Queue(
             maxsize=self.DEFAULT_QUEUE_MAXSIZE,
@@ -136,6 +143,7 @@ class ArtifactUploader:
         http_timeout_seconds: float = DEFAULT_TIMEOUT,
         queue_maxsize: int = DEFAULT_QUEUE_MAXSIZE,
         session: Optional[requests.Session] = None,
+        aee_shared_root: str = "",
     ) -> None:
         """由 Agent main.py 注入依赖；start() 之前必须先 configure。"""
         if self._started:
@@ -144,14 +152,17 @@ class ArtifactUploader:
         self._agent_secret = agent_secret or ""
         self._host_id = str(host_id or "")
         self._agent_instance_id = str(agent_instance_id or "")
+        self._aee_shared_root = (aee_shared_root or "").strip()
         self._http_timeout = max(1.0, float(http_timeout_seconds))
         if queue_maxsize != self.DEFAULT_QUEUE_MAXSIZE:
             self._queue = queue.Queue(maxsize=int(queue_maxsize))
         self._session = session or requests.Session()
         self._configured = True
         logger.info(
-            "artifact_uploader_configured api_url=%s timeout=%.1f queue_max=%d",
+            "artifact_uploader_configured api_url=%s timeout=%.1f queue_max=%d "
+            "aee_shared_root=%s",
             self._api_url, self._http_timeout, self._queue.maxsize,
+            self._aee_shared_root or "<unset>",
         )
 
     def start(self) -> None:
@@ -288,6 +299,8 @@ class ArtifactUploader:
                 )
 
     def _post_one(self, job: _ArtifactJob) -> None:
+        if not self._promote_to_shared(job):
+            return
         if self._session is None:
             self.stats.posts_failed += 1
             return
@@ -342,6 +355,55 @@ class ArtifactUploader:
             "artifact_uploader_http_error job_id=%d uri=%s status=%d body=%s",
             job.job_id, job.storage_uri, resp.status_code, resp.text[:200],
         )
+
+    def _promote_to_shared(self, job: _ArtifactJob) -> bool:
+        """#97: 登记前把 LOCAL 第一落点 promote 到共享根，控制面只认共享路径。
+
+        ADR-0025 方案 C：Agent 把 AEE 产物拉到 HDD（STP_AEE_LOCAL_ROOT），
+        但 JobArtifact 登记 URI 必须落在控制面可读的共享根
+        （STP_AEE_NFS_ROOT / STP_WATCHER_NFS_BASE_DIR）下——控制面读不到
+        HDD，放行 LOCAL 只会把 400 变成静默 404。
+
+        - 未配置共享根（aee_shared_root 为空）→ 保持原行为：直发，由控制面
+          校验拒绝 LOCAL（回归契约不变）。
+        - uri 已在共享根 → 放行，不改。
+        - 本地文件 → copy 到 ``{root}/jobs/{job_id}/{name}``，成功则改写
+          storage_uri；目标已存在则复用（幂等友好）。
+        - 目录 / 不存在 / copy 失败 → **丢弃**（promote_failed++），绝不把
+          LOCAL 发给控制面。
+
+        返回 False 时 worker 跳过 POST。永不抛：异常全部落 promote_failed。
+        """
+        root = self._aee_shared_root
+        if not root:
+            return True
+        try:
+            src = Path(job.storage_uri)
+            shared_root = Path(root).resolve()
+            if src.resolve().is_relative_to(shared_root):
+                return True
+            if not src.is_file():
+                self.stats.promote_failed += 1
+                logger.warning(
+                    "artifact_uploader_promote_skip_not_file job_id=%d uri=%s",
+                    job.job_id, job.storage_uri,
+                )
+                return False
+            dest_dir = shared_root / "jobs" / str(job.job_id)
+            dest = dest_dir / src.name
+            if not dest.exists():
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(str(src), str(dest))
+            job.storage_uri = str(dest)
+            self.stats.promotes_ok += 1
+            return True
+        except Exception as exc:
+            self.stats.promote_failed += 1
+            logger.warning(
+                "artifact_uploader_promote_failed job_id=%d uri=%s err=%s",
+                job.job_id, job.storage_uri, exc,
+            )
+            return False
 
 
 __all__ = [
