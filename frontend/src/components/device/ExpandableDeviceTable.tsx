@@ -55,7 +55,7 @@ export interface DeviceTableData {
   temperature?: number;
   network_latency?: number | null;
   build_display_id?: string | null;
-  host_id?: number;
+  host_id?: string | number;
   host_name?: string | null;
   current_task?: string;
   last_seen?: string;

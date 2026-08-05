@@ -62,14 +62,18 @@ export default function DevicesPage() {
   });
 
   const hostMap = useMemo(() => {
-    if (!hosts) return new Map<string | number, Host>();
-    return new Map(hosts.map((h) => [h.id, h]));
+    if (!hosts) return new Map<string, Host>();
+    return new Map(hosts.map((h) => [String(h.id), h]));
   }, [hosts]);
 
   const formattedDevices: DeviceTableData[] = useMemo(() => {
     if (!devices) return [];
     return devices.map((device) => {
-      const host = typeof device.host_id === 'number' ? hostMap.get(device.host_id) : null;
+      const hostKey =
+        device.host_id != null && String(device.host_id).trim() !== ''
+          ? String(device.host_id)
+          : null;
+      const host = hostKey ? hostMap.get(hostKey) : null;
       return {
         id: device.id,
         serial: device.serial,
@@ -79,7 +83,7 @@ export default function DevicesPage() {
         temperature: device.temperature ?? device.battery_temp ?? undefined,
         network_latency: device.network_latency ?? null,
         build_display_id: device.build_display_id ?? null,
-        host_id: typeof device.host_id === 'number' ? device.host_id : undefined,
+        host_id: hostKey ?? undefined,
         host_name: host?.name || host?.ip || null,
         current_task: device.current_task?.name,
         last_seen: device.last_seen ?? undefined,
