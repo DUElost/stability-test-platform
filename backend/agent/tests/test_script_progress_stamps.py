@@ -1,4 +1,4 @@
-"""monkey_setup v2.3.1 的 PROGRESS 打戳（#115 阶段 2 / #133）。
+"""monkey_setup v2.3.2 的 PROGRESS 打戳（#115 阶段 2 / #133 / #138 / #139）。
 
 用**假 adb 可执行**验证 `adb_push_progress` / `_dd_with_progress`，不碰真设备。
 
@@ -11,6 +11,7 @@
 """
 
 import importlib.util
+import hashlib
 import json
 import subprocess
 import sys
@@ -19,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.1"
+_SCRIPT_DIR = Path(__file__).resolve().parents[2] / "agent" / "scripts" / "monkey_setup" / "v2.3.2"
 
 
 def _load_module(name: str, path: Path):
@@ -37,9 +38,9 @@ def _load_module(name: str, path: Path):
 
 
 # monkey_setup 模块级 `from _adb import ...`，必须先把 _adb 放进 sys.modules
-_adb = _load_module("_adb_v230", _SCRIPT_DIR / "_adb.py")
+_adb = _load_module("_adb_v232", _SCRIPT_DIR / "_adb.py")
 sys.modules["_adb"] = _adb
-monkey_setup = _load_module("monkey_setup_v230", _SCRIPT_DIR / "monkey_setup.py")
+monkey_setup = _load_module("monkey_setup_v232", _SCRIPT_DIR / "monkey_setup.py")
 
 
 @pytest.fixture
@@ -70,12 +71,22 @@ def fake_adb(tmp_path: Path, request) -> Path:
             sys.exit(0)
         if "shell" in args:
             cmd = args[args.index("shell") + 1]
+            if "tar xf" in cmd:
+                time.sleep(float(os.environ.get("FAKE_TAR_SLEEP", "0.15")))
+                sys.exit(0)
             if cmd.startswith("cat "):
                 part = cmd.split()[1].strip("'").strip('"')
-                dst = re.search(r">> (\\S+)", cmd).group(1).strip("'").strip('"')
-                with open(dst, "ab") as fh:
-                    fh.write(open(part, "rb").read())
-                os.unlink(part)
+                m = re.search(r">> (\\S+)", cmd)
+                if m:
+                    dst = m.group(1).strip("'").strip('"')
+                    with open(dst, "ab") as fh:
+                        fh.write(open(part, "rb").read())
+                    os.unlink(part)
+                else:
+                    try:
+                        sys.stdout.write(open(part, "rb").read().decode())
+                    except FileNotFoundError:
+                        pass
                 sys.exit(0)
             if cmd.startswith("dd "):
                 if variant == "dd-fail":
@@ -181,6 +192,69 @@ class TestProgressStampFormat:
         assert seqs == [1, 2], "seq 必须严格递增"
         # 打戳走 stderr——stdout 是结果契约
         assert capsys.readouterr().out == ""
+
+
+class TestMakeProgressCompatibility:
+    def test_emit_accepts_positional_pct(self, capsys):
+        """#138: `on_progress(pct)` 位置参数风格不再 TypeError。"""
+        emit = monkey_setup._make_progress("push")
+        emit(50)
+        emit(written_bytes=100)
+        err = capsys.readouterr().err
+        stamps = [
+            json.loads(line[len("PROGRESS "):])
+            for line in err.splitlines() if line.startswith("PROGRESS ")
+        ]
+        assert stamps[0]["pct"] == 50
+        assert stamps[1]["written_bytes"] == 100
+        assert [s["seq"] for s in stamps] == [1, 2]
+
+
+class TestTarProgress:
+    def test_tar_emits_start_periodic_end_stamps(
+        self, fake_adb, monkeypatch, tmp_path, capsys
+    ):
+        """#139: tar 解包期间必须持续打戳，停滞钟才不会误杀慢解包。"""
+        monkeypatch.setenv("STP_ADB_PATH", str(fake_adb))
+        monkeypatch.setenv("FAKE_TAR_SLEEP", "0.3")
+        monkeypatch.setattr(monkey_setup, "_TAR_PROGRESS_INTERVAL_S", 0.05)
+        monkeypatch.setattr(_adb, "_PROGRESS_POLL_S", 0.02)
+
+        bundle = _make_source(tmp_path, 1024)
+        digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps({"bundle_sha256": digest, "name": "t", "file_count": 1}),
+            encoding="utf-8",
+        )
+        remote_dir = tmp_path / "remote"
+        remote_dir.mkdir()
+        cfg = {
+            "bundle": str(bundle),
+            "manifest": str(manifest),
+            "remote_dir": str(remote_dir),
+            "timeout_seconds": 5,
+            "push_timeout_seconds": 5,
+        }
+
+        result = monkey_setup.step_push("FAKESERIAL", cfg)
+        assert result["success"] is True
+
+        err = capsys.readouterr().err
+        stamps = [
+            json.loads(line[len("PROGRESS "):])
+            for line in err.splitlines() if line.startswith("PROGRESS ")
+        ]
+        tar_stamps = [s for s in stamps if s.get("phase")]
+        phases = [s["phase"] for s in tar_stamps]
+        assert phases[0] == "tar_start"
+        assert "tar" in phases, "解包期间必须有周期心跳戳"
+        assert phases[-1] == "tar_end"
+        seqs = [s["seq"] for s in stamps]
+        assert seqs == sorted(seqs), "seq 必须严格递增"
+        assert len(set(seqs)) == len(seqs), "seq 不得重复"
+        # 0.3s 解包 / 0.05s 间隔 → 至少 3 枚周期心跳
+        assert sum(1 for p in phases if p == "tar") >= 3, phases
 
 
 class TestFillAccumulates:
