@@ -1,15 +1,16 @@
 import { useCallback, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle } from 'lucide-react';
 import { api } from '@/utils/api';
 import { planRunKeys } from '@/utils/api/queryKeys';
 import type { EventSeverity, EventStage, PlanRunStatus } from '@/utils/api/types';
-import PlanRunTabs from '@/components/plan-run/PlanRunTabs';
 import PlanRunEventStream from '@/components/plan-run/PlanRunEventStream';
-import { PageContainer, PageHeader } from '@/components/layout';
+import { PageContainer } from '@/components/layout';
 import { TEXT } from '@/design-system';
 import { cn } from '@/lib/utils';
+import { useDocumentTitle } from '@/hooks/useDocumentTitle';
+import { usePlanRunHeaderSlot } from '@/hooks/plan-run/usePlanRunHeaderSlot';
 
 const PAGE_SIZE = 50;
 const SLOW_REFETCH_MS = 30_000;
@@ -24,6 +25,7 @@ const TERMINAL: ReadonlyArray<PlanRunStatus> = [
 export default function PlanRunLogsPage() {
   const { runId } = useParams<{ runId: string }>();
   const id = Number(runId);
+  const qc = useQueryClient();
 
   const [stageFilter, setStageFilter] = useState<EventStage | 'all'>('all');
   const [severityFilter, setSeverityFilter] = useState<EventSeverity | 'all'>('all');
@@ -49,6 +51,30 @@ export default function PlanRunLogsPage() {
     refetchInterval: isTerminal ? false : SLOW_REFETCH_MS,
   });
 
+  const refreshAll = useCallback(() => {
+    qc.invalidateQueries({ queryKey: planRunKeys.detail(id) });
+    qc.invalidateQueries({ queryKey: planRunKeys.logsByRun(id) });
+  }, [qc, id]);
+
+  const isAnyFetching = runQ.isFetching || eventsQ.isFetching;
+  const dataUpdatedAt = Math.max(runQ.dataUpdatedAt, eventsQ.dataUpdatedAt);
+
+  usePlanRunHeaderSlot({
+    runId: id,
+    active: 'logs',
+    dataUpdatedAt,
+    isAnyFetching,
+    refreshAll,
+  });
+
+  useDocumentTitle(
+    runQ.data?.plan_name
+      ? `${runQ.data.plan_name} · 日志`
+      : id
+        ? `Plan Run #${id} · 日志`
+        : 'Plan Run 日志',
+  );
+
   const handleStageChange = useCallback((s: EventStage | 'all') => {
     setStageFilter(s);
     setPage(0);
@@ -68,17 +94,7 @@ export default function PlanRunLogsPage() {
   }
 
   return (
-    <PageContainer width="logs">
-      <PageHeader
-        title={`PlanRun #${id}`}
-        breadcrumbs={[
-          { label: 'Plan Runs', path: '/execution/plan-runs' },
-          { label: `#${id}` },
-        ]}
-      />
-      <div className="px-4 pb-2">
-        <PlanRunTabs runId={id} active="logs" />
-      </div>
+    <PageContainer width="logs" fullBleed>
       <PlanRunEventStream
         events={eventsQ.data}
         stageFilter={stageFilter}

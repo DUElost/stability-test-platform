@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import PlanRunLogsPage from './PlanRunLogsPage';
+import { HeaderSlotProvider, useHeaderSlot } from '@/contexts/HeaderSlotContext';
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
@@ -28,16 +29,24 @@ vi.mock('@/utils/api', () => ({
   },
 }));
 
+function HeaderSlotOutlet() {
+  const { headerSlot } = useHeaderSlot();
+  return <>{headerSlot}</>;
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
   });
   return render(
-    <MemoryRouter>
-      <QueryClientProvider client={queryClient}>
-        <PlanRunLogsPage />
-      </QueryClientProvider>
-    </MemoryRouter>,
+    <HeaderSlotProvider>
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <HeaderSlotOutlet />
+          <PlanRunLogsPage />
+        </QueryClientProvider>
+      </MemoryRouter>
+    </HeaderSlotProvider>,
   );
 }
 

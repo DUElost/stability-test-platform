@@ -10,15 +10,17 @@ import { formatTimeFromMs } from '@/utils/format';
 
 interface Options {
   runId: number;
+  active: 'overview' | 'logs';
   dataUpdatedAt: number;
   isAnyFetching: boolean;
   refreshAll: () => void;
-  onToggleLeftPanel: () => void;
+  onToggleLeftPanel?: () => void;
 }
 
 /** Inject PlanRun detail toolbar into AppShell top bar (back / tabs / refresh). */
 export function usePlanRunHeaderSlot({
   runId,
+  active,
   dataUpdatedAt,
   isAnyFetching,
   refreshAll,
@@ -31,16 +33,18 @@ export function usePlanRunHeaderSlot({
     if (!runId || Number.isNaN(runId)) return;
     setHeaderSlot(
       <div className="flex w-full min-w-0 items-center gap-3">
-        <Button
-          variant="ghost"
-          size="sm"
-          data-testid="plan-run-left-panel-toggle"
-          onClick={onToggleLeftPanel}
-          aria-label="切换状态面板"
-          className="-ml-1 px-1.5 text-muted-foreground lg:hidden"
-        >
-          <PanelLeft className="h-4 w-4" />
-        </Button>
+        {onToggleLeftPanel && (
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="plan-run-left-panel-toggle"
+            onClick={onToggleLeftPanel}
+            aria-label="切换状态面板"
+            className="-ml-1 px-1.5 text-muted-foreground lg:hidden"
+          >
+            <PanelLeft className="h-4 w-4" />
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -49,7 +53,7 @@ export function usePlanRunHeaderSlot({
         >
           <ArrowLeft className="mr-1 h-3.5 w-3.5" /> 返回执行列表
         </Button>
-        <PlanRunTabs runId={runId} active="overview" />
+        <PlanRunTabs runId={runId} active={active} />
         <div className="ml-auto flex items-center gap-2">
           <span className={cn('hidden text-[11px] sm:inline', TEXT.caption)}>
             最后更新{' '}
@@ -74,6 +78,7 @@ export function usePlanRunHeaderSlot({
     return () => setHeaderSlot(null);
   }, [
     runId,
+    active,
     navigate,
     setHeaderSlot,
     dataUpdatedAt,

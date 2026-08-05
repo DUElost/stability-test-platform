@@ -158,6 +158,7 @@ export default function PlanRunDetailPage() {
 
   usePlanRunHeaderSlot({
     runId: id,
+    active: 'overview',
     dataUpdatedAt: runQ.dataUpdatedAt,
     isAnyFetching,
     refreshAll,
